@@ -1,0 +1,79 @@
+name: CI
+
+# Runs what was previously only ever run by hand. Two client/server mismatches
+# reached the repo undetected — mobile posting a field the API had stopped
+# accepting, and a navigate() target with no screen behind it — because
+# nothing checked either seam automatically. Both now have tests; this is what
+# makes them count.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+
+    # The suite truncates between files and needs a real Postgres — the same
+    # arrangement backend/package.json's test:db:up creates locally.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: finsight_test
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # The contract tests import the mobile and web payload builders across
+      # project boundaries, so those installs are not optional here.
+      - run: npm ci --prefix backend
+      - run: npm ci --prefix mobile
+      - run: npm ci --prefix web
+
+      - run: npm run typecheck --prefix backend
+      - run: npx prisma generate --prefix backend
+        working-directory: backend
+      - run: npm test --prefix backend
+        env:
+          DATABASE_URL: postgresql://testuser:testpass@localhost:55432/finsight_test
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci --prefix web
+      - run: npm run typecheck --prefix web
+      - run: npm run lint --prefix web
+      - run: npm test --prefix web
+
+  mobile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci --prefix mobile
+      # tsc was run by hand throughout the work that added these screens —
+      # mobile had no typecheck script at all until now.
+      - run: npm run typecheck --prefix mobile
+      # oxlint mirrors what the web job runs. The typography token guard rides
+      # along in the same script because tsc cannot see the drift it catches —
+      # a raw fontSize is just a number.
+      - run: npm run lint --prefix mobile
+      - run: npm test --prefix mobile

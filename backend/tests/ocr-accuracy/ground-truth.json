@@ -1,0 +1,793 @@
+[
+  {
+    "id": "real-01-ph-pos-photo",
+    "file": "real-01-ph-pos-photo.jpeg",
+    "kind": "real",
+    "conditions": "Real phone photo, PH POS thermal receipt, on wooden table, slight crumple, store name cropped out of frame",
+    "expected": {
+      "date": "2026-07-11",
+      "vendor": null,
+      "amount": 188.0,
+      "items": [
+        {
+          "name": "Spareribs Meal",
+          "quantity": null,
+          "amount": 129.0
+        },
+        {
+          "name": "Iced Latte 16oz",
+          "quantity": null,
+          "amount": 59.0
+        }
+      ]
+    },
+    "vendor_note": "Store name is not present in the image (top cropped). No extractable ground truth."
+  },
+  {
+    "id": "real-02-clean-digital",
+    "file": "real-02-clean-digital.jpg",
+    "kind": "real",
+    "conditions": "Clean digitally-generated receipt, high contrast, US layout, vendor at top, no TOTAL keyword (uses AMT/BALANCE)",
+    "expected": {
+      "date": "2019-12-27",
+      "vendor": "AROMA CAFE",
+      "amount": 8.7,
+      "items": [
+        {
+          "name": "Americano",
+          "quantity": 1,
+          "amount": 3.19
+        },
+        {
+          "name": "Almond Scone",
+          "quantity": 1,
+          "amount": 1.99
+        },
+        {
+          "name": "16oz Bottle Water",
+          "quantity": 1,
+          "amount": 2.99
+        }
+      ]
+    }
+  },
+  {
+    "id": "real-03-ph-sales-invoice",
+    "file": "real-03-ph-sales-invoice.jpeg",
+    "kind": "real",
+    "conditions": "Real phone photo, PH thermal SALES INVOICE, 8 items with a quantity column and per-item unit prices on a wrapped second line, a discount line, and two emoji stickers overlaid on one item row by whoever shared it",
+    "known_ambiguous": true,
+    "expected": {
+      "date": "2026-04-06",
+      "vendor": null,
+      "amount": 2180.0,
+      "items": [
+        {
+          "name": "338 CANISTER STUFF EM ALL 1.6L LARGE",
+          "quantity": 2,
+          "amount": 110.0
+        },
+        {
+          "name": "0921 45CM BASIN 555 MAKAPAL",
+          "quantity": 1,
+          "amount": 225.0
+        },
+        {
+          "name": "348 TRAY (HI-TOP)",
+          "quantity": 1,
+          "amount": 65.0
+        },
+        {
+          "name": "804 STOCK BOX W/ HANDLE 10L",
+          "quantity": 8,
+          "amount": 1480.0
+        },
+        {
+          "name": "2010 XL WATER DIPPER MOCHA",
+          "quantity": 1,
+          "amount": 40.0
+        },
+        {
+          "name": "8742 PEELER",
+          "quantity": 1,
+          "amount": 55.0
+        },
+        {
+          "name": "1133 14INCH FOOD TONG (245)",
+          "quantity": 1,
+          "amount": 60.0
+        },
+        {
+          "name": "HX116/CFZ-15 CHOPPING BOARD",
+          "quantity": 1,
+          "amount": 145.0
+        }
+      ]
+    },
+    "vendor_note": "Store name is cropped out of the top of the photo. No extractable ground truth."
+  },
+  {
+    "id": "syn-01-vendor-top-iso-date",
+    "file": "syn-01-vendor-top-iso-date.png",
+    "kind": "synthetic",
+    "conditions": "Printed, vendor at top, ISO date (YYYY-MM-DD), TOTAL keyword, no thousands separator",
+    "expected": {
+      "date": "2026-07-20",
+      "vendor": "ALING NENA SARI-SARI STORE",
+      "amount": 1220.0,
+      "items": [
+        {
+          "name": "Rice 25kg",
+          "quantity": null,
+          "amount": 1050.0
+        },
+        {
+          "name": "Cooking oil 1L",
+          "quantity": null,
+          "amount": 170.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "syn-02-vendor-bottom",
+    "file": "syn-02-vendor-bottom.png",
+    "kind": "synthetic",
+    "conditions": "Printed, vendor at BOTTOM of receipt (known layout weakness), ISO date",
+    "expected": {
+      "date": "2026-07-18",
+      "vendor": "TINDAHAN NI MANG JOSE",
+      "amount": 845.5,
+      "items": [
+        {
+          "name": "Softdrinks case",
+          "quantity": null,
+          "amount": 540.0
+        },
+        {
+          "name": "Bread",
+          "quantity": null,
+          "amount": 305.5
+        }
+      ]
+    }
+  },
+  {
+    "id": "syn-03-ambiguous-slash-date",
+    "file": "syn-03-ambiguous-slash-date.png",
+    "kind": "synthetic",
+    "conditions": "Printed, ambiguous numeric date 03/09/2026 (both components <= 12) \u2014 read as DD/MM per PH convention",
+    "expected": {
+      "date": "2026-09-03",
+      "vendor": "CEBU MINI GROCERY",
+      "amount": 2340.75,
+      "items": [
+        {
+          "name": "Assorted goods",
+          "quantity": null,
+          "amount": 2340.75
+        }
+      ]
+    },
+    "known_ambiguous": true
+  },
+  {
+    "id": "syn-04-month-name-date",
+    "file": "syn-04-month-name-date.png",
+    "kind": "synthetic",
+    "conditions": "Printed, month-name date (Jul 05, 2026)",
+    "expected": {
+      "date": "2026-07-05",
+      "vendor": "BARANGAY SUPPLY DEPOT",
+      "amount": 675.0,
+      "items": [
+        {
+          "name": "Cleaning supplies",
+          "quantity": null,
+          "amount": 675.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "syn-05-thousands-separator",
+    "file": "syn-05-thousands-separator.png",
+    "kind": "synthetic",
+    "conditions": "Printed, amount with thousands separator (12,450.00)",
+    "expected": {
+      "date": "2026-07-12",
+      "vendor": "METRO WHOLESALE TRADING",
+      "amount": 12450.0,
+      "items": [
+        {
+          "name": "Bulk inventory",
+          "quantity": null,
+          "amount": 12450.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "syn-06-subtotal-then-total",
+    "file": "syn-06-subtotal-then-total.png",
+    "kind": "synthetic",
+    "conditions": "Printed, SUBTOTAL present before TOTAL (must not pick subtotal)",
+    "expected": {
+      "date": "2026-07-14",
+      "vendor": "SARI-SARI EXPRESS",
+      "amount": 1120.0,
+      "items": [
+        {
+          "name": "Goods",
+          "quantity": null,
+          "amount": 1000.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "syn-07-no-total-keyword",
+    "file": "syn-07-no-total-keyword.png",
+    "kind": "synthetic",
+    "conditions": "Printed, NO 'TOTAL' keyword at all (uses 'Amount Due') \u2014 tests the max-value fallback",
+    "expected": {
+      "date": "2026-07-16",
+      "vendor": "JAH GENERAL MERCHANDISE",
+      "amount": 3400.0,
+      "items": [
+        {
+          "name": "Stock purchase",
+          "quantity": null,
+          "amount": 3400.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "syn-08-peso-sign",
+    "file": "syn-08-peso-sign.png",
+    "kind": "synthetic",
+    "conditions": "Printed, peso sign prefixes every amount",
+    "expected": {
+      "date": "2026-07-19",
+      "vendor": "VISAYAS FOOD SUPPLY",
+      "amount": 980.25,
+      "items": [
+        {
+          "name": "Frozen goods",
+          "quantity": null,
+          "amount": 980.25
+        }
+      ]
+    }
+  },
+  {
+    "id": "syn-09-two-digit-year",
+    "file": "syn-09-two-digit-year.png",
+    "kind": "synthetic",
+    "conditions": "Printed, two-digit year (07/22/26)",
+    "expected": {
+      "date": "2026-07-22",
+      "vendor": "QUICK MART APAS",
+      "amount": 455.0,
+      "items": [
+        {
+          "name": "Snacks",
+          "quantity": null,
+          "amount": 455.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "syn-10-dd-mm-yyyy",
+    "file": "syn-10-dd-mm-yyyy.png",
+    "kind": "synthetic",
+    "conditions": "Printed, DD/MM/YYYY date (25/07/2026) \u2014 resolvable by validity, since 25 cannot be a month",
+    "expected": {
+      "date": "2026-07-25",
+      "vendor": "MANDAUE DRY GOODS",
+      "amount": 1875.0,
+      "items": [
+        {
+          "name": "Dry goods",
+          "quantity": null,
+          "amount": 1875.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "syn-11-long-header",
+    "file": "syn-11-long-header.png",
+    "kind": "synthetic",
+    "conditions": "Printed, several administrative lines before the vendor name (TIN/permit block first)",
+    "expected": {
+      "date": "2026-07-21",
+      "vendor": "LAPU-LAPU TRADING CO",
+      "amount": 5600.0,
+      "items": [
+        {
+          "name": "Hardware",
+          "quantity": null,
+          "amount": 5600.0
+        }
+      ]
+    },
+    "known_layout_risk": true
+  },
+  {
+    "id": "syn-12-tiny-amount",
+    "file": "syn-12-tiny-amount.png",
+    "kind": "synthetic",
+    "conditions": "Printed, very small amount (single-digit pesos)",
+    "expected": {
+      "date": "2026-07-23",
+      "vendor": "CORNER STORE APAS",
+      "amount": 8.5,
+      "items": [
+        {
+          "name": "Candy",
+          "quantity": null,
+          "amount": 8.5
+        }
+      ]
+    }
+  },
+  {
+    "id": "syn-13-many-items",
+    "file": "syn-13-many-items.png",
+    "kind": "synthetic",
+    "conditions": "Printed, 7 plain name+price item lines (a grocery run) \u2014 the common multi-item shape",
+    "expected": {
+      "date": "2026-07-24",
+      "vendor": "PUREGOLD APAS BRANCH",
+      "amount": 1147.0,
+      "items": [
+        {
+          "name": "Buns",
+          "quantity": null,
+          "amount": 60.0
+        },
+        {
+          "name": "Ground beef patty",
+          "quantity": null,
+          "amount": 320.0
+        },
+        {
+          "name": "Eggs tray",
+          "quantity": null,
+          "amount": 215.0
+        },
+        {
+          "name": "Lettuce",
+          "quantity": null,
+          "amount": 85.0
+        },
+        {
+          "name": "Cheese slices",
+          "quantity": null,
+          "amount": 175.0
+        },
+        {
+          "name": "Cooking oil 1L",
+          "quantity": null,
+          "amount": 172.0
+        },
+        {
+          "name": "Dishwashing liquid",
+          "quantity": null,
+          "amount": 120.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "syn-14-qty-columns",
+    "file": "syn-14-qty-columns.png",
+    "kind": "synthetic",
+    "conditions": "Printed, QTY / UNIT PRICE / AMOUNT columns per item line",
+    "expected": {
+      "date": "2026-07-26",
+      "vendor": "CEBU MEAT SUPPLY",
+      "amount": 1450.0,
+      "items": [
+        {
+          "name": "Chicken whole",
+          "quantity": 2,
+          "amount": 300.0
+        },
+        {
+          "name": "Pork belly kg",
+          "quantity": 3,
+          "amount": 900.0
+        },
+        {
+          "name": "Beef cubes kg",
+          "quantity": 1,
+          "amount": 250.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "syn-15-vat-flags",
+    "file": "syn-15-vat-flags.png",
+    "kind": "synthetic",
+    "conditions": "Printed, BIR-style VAT class flag appended to every item amount (129.00V)",
+    "expected": {
+      "date": "2026-07-27",
+      "vendor": "MANDAUE FOOD HAUS",
+      "amount": 188.0,
+      "items": [
+        {
+          "name": "Spareribs Meal",
+          "quantity": null,
+          "amount": 129.0
+        },
+        {
+          "name": "Iced Latte 16oz",
+          "quantity": null,
+          "amount": 59.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "syn-16-multiplier-prefix",
+    "file": "syn-16-multiplier-prefix.png",
+    "kind": "synthetic",
+    "conditions": "Printed, '2 x Item' multiplier prefix on each line",
+    "expected": {
+      "date": "2026-07-28",
+      "vendor": "TALAMBAN BEVERAGE CENTER",
+      "amount": 465.0,
+      "items": [
+        {
+          "name": "Softdrinks 1.5L",
+          "quantity": 3,
+          "amount": 195.0
+        },
+        {
+          "name": "Bottled water",
+          "quantity": 4,
+          "amount": 120.0
+        },
+        {
+          "name": "Juice pack",
+          "quantity": 2,
+          "amount": 150.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "syn-17-total-only",
+    "file": "syn-17-total-only.png",
+    "kind": "synthetic",
+    "conditions": "Printed, NO itemised lines at all \u2014 only a total. Tests the fallback: item extraction must return nothing rather than invent lines",
+    "expected": {
+      "date": "2026-07-29",
+      "vendor": "MANG JOSE HANDWRITTEN",
+      "amount": 750.0,
+      "items": []
+    }
+  },
+  {
+    "id": "syn-19-savemore-payment-and-tax-lines",
+    "file": "syn-19-savemore-payment-and-tax-lines.png",
+    "kind": "synthetic",
+    "conditions": "Real PH grocery receipt structure: 6 items followed by a VAT summary block, a TOTAL, and a 'BDO ATM' payment line carrying the same total, plus AuthCode/Order ID",
+    "expected": {
+      "date": "2026-07-26",
+      "vendor": "SAVEMORE MARKET",
+      "amount": 371.0,
+      "items": [
+        {
+          "name": "COKE MISMO 300ML",
+          "quantity": null,
+          "amount": 45.0
+        },
+        {
+          "name": "SKYFLAKES CRACKERS",
+          "quantity": null,
+          "amount": 38.0
+        },
+        {
+          "name": "TISSUE 2PLY 12S",
+          "quantity": null,
+          "amount": 89.0
+        },
+        {
+          "name": "GARDENIA WHITE BREAD",
+          "quantity": null,
+          "amount": 72.0
+        },
+        {
+          "name": "SPRITE 1.5L",
+          "quantity": null,
+          "amount": 85.0
+        },
+        {
+          "name": "CENTURY TUNA 155G",
+          "quantity": null,
+          "amount": 42.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "syn-18-discount-line",
+    "file": "syn-18-discount-line.png",
+    "kind": "synthetic",
+    "conditions": "Printed, a DISCOUNT line sits among the items \u2014 must not be read as a purchase",
+    "expected": {
+      "date": "2026-07-30",
+      "vendor": "SOUTH CITY PHARMACY",
+      "amount": 430.0,
+      "items": [
+        {
+          "name": "Paracetamol box",
+          "quantity": null,
+          "amount": 250.0
+        },
+        {
+          "name": "Vitamins bottle",
+          "quantity": null,
+          "amount": 230.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "deg-01-blur",
+    "file": "deg-01-blur.png",
+    "kind": "degraded",
+    "derived_from": "syn-01-vendor-top-iso-date",
+    "conditions": "Synthetic + Gaussian blur r=1.6 (simulates out-of-focus capture)",
+    "expected": {
+      "date": "2026-07-20",
+      "vendor": "ALING NENA SARI-SARI STORE",
+      "amount": 1220.0,
+      "items": [
+        {
+          "name": "Rice 25kg",
+          "quantity": null,
+          "amount": 1050.0
+        },
+        {
+          "name": "Cooking oil 1L",
+          "quantity": null,
+          "amount": 170.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "deg-02-low-contrast",
+    "file": "deg-02-low-contrast.png",
+    "kind": "degraded",
+    "derived_from": "syn-01-vendor-top-iso-date",
+    "conditions": "Synthetic + contrast reduced to 35% (simulates faded thermal print)",
+    "expected": {
+      "date": "2026-07-20",
+      "vendor": "ALING NENA SARI-SARI STORE",
+      "amount": 1220.0,
+      "items": [
+        {
+          "name": "Rice 25kg",
+          "quantity": null,
+          "amount": 1050.0
+        },
+        {
+          "name": "Cooking oil 1L",
+          "quantity": null,
+          "amount": 170.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "deg-03-rotated",
+    "file": "deg-03-rotated.png",
+    "kind": "degraded",
+    "derived_from": "syn-05-thousands-separator",
+    "conditions": "Synthetic + rotated 4 degrees (simulates handheld skew)",
+    "expected": {
+      "date": "2026-07-12",
+      "vendor": "METRO WHOLESALE TRADING",
+      "amount": 12450.0,
+      "items": [
+        {
+          "name": "Bulk inventory",
+          "quantity": null,
+          "amount": 12450.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "deg-04-low-resolution",
+    "file": "deg-04-low-resolution.png",
+    "kind": "degraded",
+    "derived_from": "syn-05-thousands-separator",
+    "conditions": "Synthetic + downscaled to 45% then back up (simulates a distant/low-res photo)",
+    "expected": {
+      "date": "2026-07-12",
+      "vendor": "METRO WHOLESALE TRADING",
+      "amount": 12450.0,
+      "items": [
+        {
+          "name": "Bulk inventory",
+          "quantity": null,
+          "amount": 12450.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "deg-05-dark",
+    "file": "deg-05-dark.png",
+    "kind": "degraded",
+    "derived_from": "syn-06-subtotal-then-total",
+    "conditions": "Synthetic + brightness reduced to 45% (simulates poor lighting)",
+    "expected": {
+      "date": "2026-07-14",
+      "vendor": "SARI-SARI EXPRESS",
+      "amount": 1120.0,
+      "items": [
+        {
+          "name": "Goods",
+          "quantity": null,
+          "amount": 1000.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "deg-06-jpeg-artifacts",
+    "file": "deg-06-jpeg-artifacts.jpg",
+    "kind": "degraded",
+    "derived_from": "syn-06-subtotal-then-total",
+    "conditions": "Synthetic + heavy JPEG compression (quality 12)",
+    "expected": {
+      "date": "2026-07-14",
+      "vendor": "SARI-SARI EXPRESS",
+      "amount": 1120.0,
+      "items": [
+        {
+          "name": "Goods",
+          "quantity": null,
+          "amount": 1000.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "deg-07-many-items-blur",
+    "file": "deg-07-many-items-blur.png",
+    "kind": "degraded",
+    "derived_from": "syn-13-many-items",
+    "conditions": "7-item receipt + Gaussian blur r=1.6",
+    "expected": {
+      "date": "2026-07-24",
+      "vendor": "PUREGOLD APAS BRANCH",
+      "amount": 1147.0,
+      "items": [
+        {
+          "name": "Buns",
+          "quantity": null,
+          "amount": 60.0
+        },
+        {
+          "name": "Ground beef patty",
+          "quantity": null,
+          "amount": 320.0
+        },
+        {
+          "name": "Eggs tray",
+          "quantity": null,
+          "amount": 215.0
+        },
+        {
+          "name": "Lettuce",
+          "quantity": null,
+          "amount": 85.0
+        },
+        {
+          "name": "Cheese slices",
+          "quantity": null,
+          "amount": 175.0
+        },
+        {
+          "name": "Cooking oil 1L",
+          "quantity": null,
+          "amount": 172.0
+        },
+        {
+          "name": "Dishwashing liquid",
+          "quantity": null,
+          "amount": 120.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "deg-08-many-items-low-contrast",
+    "file": "deg-08-many-items-low-contrast.png",
+    "kind": "degraded",
+    "derived_from": "syn-13-many-items",
+    "conditions": "7-item receipt + contrast reduced to 35%",
+    "expected": {
+      "date": "2026-07-24",
+      "vendor": "PUREGOLD APAS BRANCH",
+      "amount": 1147.0,
+      "items": [
+        {
+          "name": "Buns",
+          "quantity": null,
+          "amount": 60.0
+        },
+        {
+          "name": "Ground beef patty",
+          "quantity": null,
+          "amount": 320.0
+        },
+        {
+          "name": "Eggs tray",
+          "quantity": null,
+          "amount": 215.0
+        },
+        {
+          "name": "Lettuce",
+          "quantity": null,
+          "amount": 85.0
+        },
+        {
+          "name": "Cheese slices",
+          "quantity": null,
+          "amount": 175.0
+        },
+        {
+          "name": "Cooking oil 1L",
+          "quantity": null,
+          "amount": 172.0
+        },
+        {
+          "name": "Dishwashing liquid",
+          "quantity": null,
+          "amount": 120.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "deg-09-qty-columns-rotated",
+    "file": "deg-09-qty-columns-rotated.png",
+    "kind": "degraded",
+    "derived_from": "syn-14-qty-columns",
+    "conditions": "Quantity-column receipt + rotated 4 degrees",
+    "expected": {
+      "date": "2026-07-26",
+      "vendor": "CEBU MEAT SUPPLY",
+      "amount": 1450.0,
+      "items": [
+        {
+          "name": "Chicken whole",
+          "quantity": 2,
+          "amount": 300.0
+        },
+        {
+          "name": "Pork belly kg",
+          "quantity": 3,
+          "amount": 900.0
+        },
+        {
+          "name": "Beef cubes kg",
+          "quantity": 1,
+          "amount": 250.0
+        }
+      ]
+    }
+  }
+]

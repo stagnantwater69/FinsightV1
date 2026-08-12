@@ -1,0 +1,653 @@
+[
+  {
+    "id": "real-01-ph-pos-photo",
+    "kind": "real",
+    "overall": 33,
+    "amountConfidence": 77,
+    "vendorConfidence": 28,
+    "verdict": {
+      "date": "correct",
+      "vendor": "n/a",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 2,
+      "matched": 0,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": null,
+    "itemsSum": null,
+    "total": 188
+  },
+  {
+    "id": "real-02-clean-digital",
+    "kind": "real",
+    "overall": 94,
+    "amountConfidence": 95,
+    "vendorConfidence": 96,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 3,
+      "matched": 3,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 95,
+    "itemsSum": 8.17,
+    "total": 8.7
+  },
+  {
+    "id": "real-03-ph-sales-invoice",
+    "kind": "real",
+    "overall": 56,
+    "amountConfidence": 86,
+    "vendorConfidence": 64,
+    "verdict": {
+      "date": "correct",
+      "vendor": "n/a",
+      "amount": "wrong"
+    },
+    "items": {
+      "expected": 8,
+      "matched": 0,
+      "falsePositives": 1
+    },
+    "anyError": true,
+    "weakestItem": 51,
+    "itemsSum": 5,
+    "total": 2185
+  },
+  {
+    "id": "syn-01-vendor-top-iso-date",
+    "kind": "synthetic",
+    "overall": 94,
+    "amountConfidence": 95,
+    "vendorConfidence": 93,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 2,
+      "matched": 2,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 96,
+    "itemsSum": 1220,
+    "total": 1220
+  },
+  {
+    "id": "syn-02-vendor-bottom",
+    "kind": "synthetic",
+    "overall": 89,
+    "amountConfidence": 96,
+    "vendorConfidence": 67,
+    "verdict": {
+      "date": "correct",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 2,
+      "matched": 2,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": 94,
+    "itemsSum": 845.5,
+    "total": 845.5
+  },
+  {
+    "id": "syn-03-ambiguous-slash-date",
+    "kind": "synthetic",
+    "overall": 95,
+    "amountConfidence": 95,
+    "vendorConfidence": 96,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 1,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 95,
+    "itemsSum": 2340.75,
+    "total": 2340.75
+  },
+  {
+    "id": "syn-04-month-name-date",
+    "kind": "synthetic",
+    "overall": 95,
+    "amountConfidence": 96,
+    "vendorConfidence": 96,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 1,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 96,
+    "itemsSum": 675,
+    "total": 675
+  },
+  {
+    "id": "syn-05-thousands-separator",
+    "kind": "synthetic",
+    "overall": 95,
+    "amountConfidence": 95,
+    "vendorConfidence": 96,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 1,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 95,
+    "itemsSum": 12450,
+    "total": 12450
+  },
+  {
+    "id": "syn-06-subtotal-then-total",
+    "kind": "synthetic",
+    "overall": 94,
+    "amountConfidence": 91,
+    "vendorConfidence": 93,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 1,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 95,
+    "itemsSum": 1000,
+    "total": 1120
+  },
+  {
+    "id": "syn-07-no-total-keyword",
+    "kind": "synthetic",
+    "overall": 95,
+    "amountConfidence": 95,
+    "vendorConfidence": 96,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 1,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 95,
+    "itemsSum": 3400,
+    "total": 3400
+  },
+  {
+    "id": "syn-08-peso-sign",
+    "kind": "synthetic",
+    "overall": 90,
+    "amountConfidence": 84,
+    "vendorConfidence": 95,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 1,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 84,
+    "itemsSum": 980.25,
+    "total": 980.25
+  },
+  {
+    "id": "syn-09-two-digit-year",
+    "kind": "synthetic",
+    "overall": 94,
+    "amountConfidence": 96,
+    "vendorConfidence": 93,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 1,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 96,
+    "itemsSum": 455,
+    "total": 455
+  },
+  {
+    "id": "syn-10-dd-mm-yyyy",
+    "kind": "synthetic",
+    "overall": 94,
+    "amountConfidence": 96,
+    "vendorConfidence": 93,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 1,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 96,
+    "itemsSum": 1875,
+    "total": 1875
+  },
+  {
+    "id": "syn-11-long-header",
+    "kind": "synthetic",
+    "overall": 94,
+    "amountConfidence": 95,
+    "vendorConfidence": 94,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 1,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 95,
+    "itemsSum": 5600,
+    "total": 5600
+  },
+  {
+    "id": "syn-12-tiny-amount",
+    "kind": "synthetic",
+    "overall": 94,
+    "amountConfidence": 96,
+    "vendorConfidence": 94,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 1,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 96,
+    "itemsSum": 8.5,
+    "total": 8.5
+  },
+  {
+    "id": "syn-13-many-items",
+    "kind": "synthetic",
+    "overall": 94,
+    "amountConfidence": 96,
+    "vendorConfidence": 93,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 7,
+      "matched": 7,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 95,
+    "itemsSum": 1147,
+    "total": 1147
+  },
+  {
+    "id": "syn-14-qty-columns",
+    "kind": "synthetic",
+    "overall": 95,
+    "amountConfidence": 93,
+    "vendorConfidence": 95,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 3,
+      "matched": 3,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 92,
+    "itemsSum": 1450,
+    "total": 1450
+  },
+  {
+    "id": "syn-15-vat-flags",
+    "kind": "synthetic",
+    "overall": 92,
+    "amountConfidence": 96,
+    "vendorConfidence": 94,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 2,
+      "matched": 2,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 87,
+    "itemsSum": 188,
+    "total": 188
+  },
+  {
+    "id": "syn-16-multiplier-prefix",
+    "kind": "synthetic",
+    "overall": 95,
+    "amountConfidence": 96,
+    "vendorConfidence": 95,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 3,
+      "matched": 3,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 95,
+    "itemsSum": 465,
+    "total": 465
+  },
+  {
+    "id": "syn-17-total-only",
+    "kind": "synthetic",
+    "overall": 94,
+    "amountConfidence": 93,
+    "vendorConfidence": 95,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 0,
+      "matched": 0,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": null,
+    "itemsSum": null,
+    "total": 750
+  },
+  {
+    "id": "syn-19-savemore-payment-and-tax-lines",
+    "kind": "synthetic",
+    "overall": 92,
+    "amountConfidence": 96,
+    "vendorConfidence": 94,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 6,
+      "matched": 6,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 94,
+    "itemsSum": 371,
+    "total": 371
+  },
+  {
+    "id": "syn-18-discount-line",
+    "kind": "synthetic",
+    "overall": 95,
+    "amountConfidence": 96,
+    "vendorConfidence": 96,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 2,
+      "matched": 2,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 95,
+    "itemsSum": 480,
+    "total": 430
+  },
+  {
+    "id": "deg-01-blur",
+    "kind": "degraded",
+    "overall": 93,
+    "amountConfidence": 95,
+    "vendorConfidence": 93,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 2,
+      "matched": 2,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 93,
+    "itemsSum": 1220,
+    "total": 1220
+  },
+  {
+    "id": "deg-02-low-contrast",
+    "kind": "degraded",
+    "overall": 94,
+    "amountConfidence": 96,
+    "vendorConfidence": 93,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 2,
+      "matched": 2,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 96,
+    "itemsSum": 1220,
+    "total": 1220
+  },
+  {
+    "id": "deg-03-rotated",
+    "kind": "degraded",
+    "overall": 93,
+    "amountConfidence": 80,
+    "vendorConfidence": 95,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 1,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 80,
+    "itemsSum": 12450,
+    "total": 12450
+  },
+  {
+    "id": "deg-04-low-resolution",
+    "kind": "degraded",
+    "overall": 95,
+    "amountConfidence": 96,
+    "vendorConfidence": 96,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 1,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 96,
+    "itemsSum": 12450,
+    "total": 12450
+  },
+  {
+    "id": "deg-05-dark",
+    "kind": "degraded",
+    "overall": 94,
+    "amountConfidence": 92,
+    "vendorConfidence": 92,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 1,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 95,
+    "itemsSum": 1000,
+    "total": 1120
+  },
+  {
+    "id": "deg-06-jpeg-artifacts",
+    "kind": "degraded",
+    "overall": 94,
+    "amountConfidence": 94,
+    "vendorConfidence": 94,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 1,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 96,
+    "itemsSum": 1000,
+    "total": 1120
+  },
+  {
+    "id": "deg-07-many-items-blur",
+    "kind": "degraded",
+    "overall": 94,
+    "amountConfidence": 91,
+    "vendorConfidence": 93,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 7,
+      "matched": 7,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 94,
+    "itemsSum": 1147,
+    "total": 1147
+  },
+  {
+    "id": "deg-08-many-items-low-contrast",
+    "kind": "degraded",
+    "overall": 95,
+    "amountConfidence": 96,
+    "vendorConfidence": 93,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 7,
+      "matched": 7,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 95,
+    "itemsSum": 1147,
+    "total": 1147
+  },
+  {
+    "id": "deg-09-qty-columns-rotated",
+    "kind": "degraded",
+    "overall": 90,
+    "amountConfidence": 89,
+    "vendorConfidence": 96,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 3,
+      "matched": 3,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 36,
+    "itemsSum": 1450,
+    "total": 1450
+  }
+]

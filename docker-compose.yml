@@ -1,0 +1,64 @@
+services:
+  backend:
+    build: ./backend
+    env_file: ./backend/.env
+    # `expose`, NOT `ports`, and the difference is a security control.
+    #
+    # Published on the host, the API answered on :4000 as well as through nginx
+    # — which bypassed anything nginx does, including TLS once it terminates
+    # here, and split every IP-keyed rate limit into two bucket spaces:
+    # TRUST_PROXY_HOPS=1 reads X-Forwarded-For on the proxied path and the raw
+    # socket address on the direct one, so one caller counted as two identities
+    # against the same limiter.
+    #
+    # For local debugging against the container, add this DELIBERATELY and bind
+    # it to the loopback interface so it is not reachable off the machine:
+    #   ports:
+    #     - "127.0.0.1:4000:4000"
+    expose:
+      - "4000"
+    restart: unless-stopped
+    healthcheck:
+      # `restart: unless-stopped` only catches a process that has EXITED. The
+      # failure that actually happens is a process still running and no longer
+      # answering — an exhausted pool, a wedged event loop. This is what
+      # notices that, and what stops nginx routing to a backend that has not
+      # finished booting.
+      #
+      # Node rather than curl or wget: the runtime image is `-slim` and has
+      # neither, and adding one to run a healthcheck would put a whole HTTP
+      # client in the image for the sake of a status code.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4000/api/v1/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # Generous, because a cold start runs Prisma's connection setup and the
+      # first worker pass. Failures during this window do not count.
+      start_period: 40s
+
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "8080:80"
+      # Uncomment together with the HTTPS server block in nginx/nginx.conf.
+      # - "8443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # Certificates are never committed. Mount them here when TLS terminates
+      # at this container:
+      # - /etc/letsencrypt/live/your-domain.example:/etc/nginx/certs:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

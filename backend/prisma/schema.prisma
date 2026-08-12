@@ -1,0 +1,790 @@
+// FinSight — Prisma schema
+//
+// Modeled directly from the project's Data Dictionary (9 tables). Model/field
+// names use Prisma/TS conventions (camelCase); @map/@@map preserve the exact
+// physical column/table names from the dictionary so the DB matches the ERD.
+//
+// Deliberate deviations from the dictionary (flagged per project convention
+// — do not "fix" these back to the dictionary without checking with the
+// project owner first):
+//   1. User_Type (Owner/Admin) is DROPPED. This project is single-role only
+//      (Small Business Owner) — see CLAUDE-CODE-PROMPT.md section 1.
+//   2. User_Password is DROPPED. Supabase Auth is the system of record for
+//      credentials (see tech stack); duplicating a password hash here would
+//      be redundant and could drift out of sync with the real one.
+//   3. User.authId [ADDED] — bridges a User row to its Supabase Auth user
+//      (UUID). Required because Supabase Auth issues UUIDs, not the
+//      dictionary's INT User_ID.
+//   4. ReceiptScan.businessProfileId [ADDED] — the dictionary has no FK from
+//      ReceiptScan to BusinessProfile, only ExpenseRecord -> ReceiptScan.
+//      Without it, a scanned-but-not-yet-confirmed receipt has no way to
+//      know which of an owner's business profiles it belongs to. Nullable
+//      until confirmed, at which point ExpenseRecord.receiptScanId links it.
+//   5. BusinessProfile.largeExpenseThresholdPercent [ADDED] — not in the
+//      dictionary at all. Records Management originally hardcoded a 25%
+//      global threshold for the ExpenseRecord.largeExpenseFlag rule; a
+//      single global number is wrong for a meaningful share of businesses,
+//      so it's now a per-profile setting (default 20%) alongside the
+//      other configurable profile parameters (funds, expenses, days).
+//      Still a placeholder default, not an adviser-confirmed number.
+//   6. Notification.businessProfileId [ADDED] — the dictionary only links
+//      Notification to User, not BusinessProfile. An owner with multiple
+//      businesses would have one business's duplicate/large-expense/
+//      needs-review alerts bleeding into every other business's Dashboard
+//      without this — every notification this app creates originates from
+//      a specific business-profile-scoped event, so it's NOT NULL.
+//   7. Notification.expenseRecordId [ADDED] — the dictionary has no link
+//      from Notification to the specific record it's about, only the free-
+//      text message. Clicking a "possible duplicate" or "large expense"
+//      notification had nowhere to go beyond the general flagged-records
+//      list. Nullable and onDelete: SetNull — a deleted record shouldn't
+//      take its notification history down with it, and older notifications
+//      (or ones about something other than an expense record) simply have
+//      no link.
+//   8. User.avatarUrl / BusinessProfile.logoUrl [ADDED] — not in the
+//      dictionary. Both are nullable public-bucket Supabase Storage paths;
+//      absent, the UI falls back to an initials monogram, so neither is
+//      required at signup or business creation.
+//   9. ExpenseRecord.receiptScanId is NO LONGER @unique [CHANGED]. The
+//      dictionary's 1:1 ReceiptScan -> ExpenseRecord assumed one receipt is
+//      one expense in one category. Real receipts routinely are not: a
+//      hardware-store slip holding P1,200 of nails (Equipment) and P800 of
+//      cleaning supplies (Supplies) was unrepresentable, so the owner had to
+//      file the whole total under one category and every category-based
+//      insight downstream was then wrong by construction. One scan may now
+//      produce several records, each with its own category and amount, whose
+//      sum the API requires to equal the receipt total.
+//  10. ReceiptScan.rawText [ADDED] — the OCR text the extracted fields were
+//      parsed out of. Kept so the line-item splitter can re-read a receipt
+//      without paying for a second OCR pass over the stored image (Tesseract
+//      is by far the slowest step in the app), and so any future change to
+//      the parsing rules can be replayed against receipts already scanned.
+//      Nullable: scans taken before this column existed have none.
+//  11. ReceiptScanItem [ADDED] — the individual lines read off a receipt,
+//      with the category each was assigned and the ExpenseRecord each ended
+//      up in. A real table rather than a JSON column on ReceiptScan so an
+//      item stays queryable: "which items made up this PHP 1,850 Ingredients
+//      entry" is a question about rows, and answering it from a blob would
+//      mean parsing JSON in every query that asks. expenseRecordId is null
+//      until the owner confirms, and onDelete: SetNull — deleting a record
+//      must not destroy the reading of the receipt it came from.
+//  12. ReceiptScanItem.addedByOwner [ADDED] — false for a line OCR read off
+//      the image, true for one the owner typed in on the confirm screen to
+//      close a gap. The two must stay distinguishable: the review panel
+//      claims "FinSight read these items off your receipt", and that claim
+//      has to be false for a row a human supplied. It also keeps the OCR
+//      accuracy figures honest, since owner-added rows are not extractions
+//      and must never be counted as ones.
+//  13. ExpenseRecord.allocatedCharges [ADDED] — the share of a receipt's
+//      tax, service charge or discount folded into this record's amount.
+//      Receipts routinely do not sum: a VAT-exclusive register prints items
+//      totalling 1,000.00 under a TOTAL of 1,120.00. The total is what left
+//      the owner's pocket, so it is the anchor and the difference has to go
+//      somewhere. Storing the allocated share (rather than only the merged
+//      amount) is what lets the record say "1,000.00 of items + 120.00 tax"
+//      instead of presenting 1,120.00 as though the items added up to it.
+//      Null on records predating this column and on any receipt that
+//      reconciled exactly. Signed: negative for a discount.
+//  14. ReceiptScanPage [ADDED] — a long receipt that does not fit one
+//      photograph is now several pages of one scan rather than several
+//      unrelated scans. ReceiptScan.imageFile stays the page-1 cover (every
+//      caller written against it — signed URLs, the origin panels, source
+//      cleanup — keeps working unchanged); this table holds every page,
+//      including the first, so "every page of this scan" is always one
+//      query rather than a special case for scans with exactly one photo.
+//      onDelete: Cascade on the DB row — the Storage OBJECT is a separate
+//      system and still has to be deleted explicitly by whatever deletes the
+//      scan; see cleanUpReceiptScanIfOrphaned.
+//  15. ReceiptScan.processingStatus / processingError [ADDED] — reading a
+//      receipt (Tesseract per page, sometimes a vision model, then the
+//      categoriser) used to run inline in the HTTP request, so an owner's
+//      upload held a connection open for as long as the whole pipeline took
+//      and the single Node process could not serve anyone else meanwhile. The
+//      row is now created immediately as "Processing" and the pipeline
+//      continues in the background, so the request returns at once and the
+//      client polls. Kept SEPARATE from confirmationStatus on purpose: that
+//      field means "has the owner accepted this yet", and a scan can be fully
+//      read but unconfirmed, or still being read and therefore not yet
+//      confirmable. One field for both would make those indistinguishable.
+//      A scan interrupted by a restart stays "Processing" forever — accepted,
+//      since re-scanning is cheap and a durable job store is not warranted at
+//      this scale; see docs/multi-page-receipts-plan.md for where that line
+//      is drawn.
+//  16. ReceiptFieldCorrection [ADDED] — what FinSight read, against what the
+//      owner confirmed, one row per reviewed field. Not in the dictionary at
+//      all; it exists because the confirm screen is the only place in this
+//      app where a human tells us whether an extraction was right, and until
+//      now that answer was thrown away the instant it was given.
+//      A row is written for every reviewed field, NOT only for edited ones.
+//      Logging just the edits would record a numerator with no denominator:
+//      "vendor was corrected 40 times" cannot become an accuracy figure, and
+//      the low-confidence-but-correct case — the one that says a confidence
+//      score is miscalibrated rather than that OCR is bad — leaves no trace
+//      at all, because nothing was edited.
+//      Append-only. Nothing in the app updates or deletes these rows; they
+//      are an observation of what happened at one moment, and a correction
+//      that changed retroactively would make every figure computed from it
+//      irreproducible.
+//      onDelete: Cascade — a deleted scan takes its observations with it.
+//      The alternative, keeping them as anonymous rows to preserve the
+//      metrics, would mean an owner deleting a receipt does not actually
+//      delete what we recorded about it, which is not a promise this app
+//      should quietly break for a percentage point of accuracy data.
+//  17. ReceiptScan.vendorConfidence / amountConfidence [ADDED] — how sure OCR
+//      was about those two fields specifically. ocrConfidence (note: the
+//      whole-scan figure) cannot answer "is confidence well calibrated for
+//      VENDOR", because one number per scan says nothing about which field on
+//      it was doubtful. Both are computed by confidenceForValue, which the
+//      pipeline already ran; they were simply not persisted. Null on
+//      vision-assisted reads and on scans predating the columns, for the same
+//      reason ocrConfidence is.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum ExpenseRecordSource {
+  MANUAL_ENTRY @map("Manual Entry")
+  CSV_UPLOAD   @map("CSV Upload")
+  RECEIPT_SCAN @map("Receipt Scan")
+
+  @@map("ExpenseRecordSource")
+}
+
+enum SalesRecordSource {
+  MANUAL_ENTRY @map("Manual Entry")
+  CSV_UPLOAD   @map("CSV Upload")
+
+  @@map("SalesRecordSource")
+}
+
+enum AnomalyFindingType {
+  AMOUNT_OUTLIER
+  POSSIBLE_DUPLICATE
+  VELOCITY_ANOMALY
+  RECURRING_CHANGE
+  TREND_CHANGE
+  BEHAVIORAL_NOVELTY
+
+  @@map("AnomalyFindingType")
+}
+
+enum AnomalyFindingSeverity {
+  LOW
+  MEDIUM
+  HIGH
+
+  @@map("AnomalyFindingSeverity")
+}
+
+enum AnomalyFindingStatus {
+  OPEN
+  CONFIRMED
+  DISMISSED
+  RESOLVED
+  SUPERSEDED
+
+  @@map("AnomalyFindingStatus")
+}
+
+enum AnomalyFindingFeedback {
+  CONFIRMED_UNUSUAL
+  EXPECTED_TRANSACTION
+  DUPLICATE
+  INCORRECT_MATCH
+  NO_LONGER_RELEVANT
+
+  @@map("AnomalyFindingFeedback")
+}
+
+enum RecurringPatternStatus {
+  CANDIDATE
+  CONFIRMED
+  DISMISSED
+  DISABLED
+
+  @@map("RecurringPatternStatus")
+}
+
+enum AnalysisJobKind {
+  TRANSACTION
+  PROFILE_REFRESH
+
+  @@map("AnalysisJobKind")
+}
+
+enum AnalysisJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETE
+  FAILED
+
+  @@map("AnalysisJobStatus")
+}
+
+// [ADDED] The account lifecycle, as an enum rather than the dictionary's free
+// text. User_Status was a VarChar(50) defaulting to 'Active' that nothing ever
+// wrote and only the profile response ever read — so it looked like an access
+// control and was not one. Every transition below is now enforced in
+// accountLifecycle.service.ts and checked in requireAuth.
+//
+//   PENDING_VERIFICATION — registered, email not yet proven. No session, no API.
+//   ACTIVE               — the only state that may hold a session.
+//   SUSPENDED            — access revoked, data intact. Support-reversible.
+//   DELETION_PENDING     — deletion requested; the background job is draining it.
+enum AccountStatus {
+  PENDING_VERIFICATION
+  ACTIVE
+  SUSPENDED
+  DELETION_PENDING
+
+  @@map("AccountStatus")
+}
+
+// [ADDED] How far a deletion has irreversibly progressed. Recorded BEFORE each
+// stage runs, so a crash resumes at the stage that was in flight rather than
+// replaying one that already destroyed something.
+enum AccountDeletionStage {
+  REQUESTED
+  STORAGE_CLEARED
+  AUTH_DELETED
+
+  @@map("AccountDeletionStage")
+}
+
+model User {
+  id          Int           @id @default(autoincrement()) @map("User_ID")
+  authId      String        @unique @map("User_AuthID") @db.Uuid
+  firstName   String        @map("User_FirstName") @db.VarChar(100)
+  middleName  String?       @map("User_MiddleName") @db.VarChar(100)
+  lastName    String        @map("User_LastName") @db.VarChar(100)
+  // Stored lowercase. Supabase Auth lowercases addresses on its side, and a
+  // case-sensitive unique column here would otherwise drift out of step with
+  // the identity it is supposed to mirror. Normalized in the Zod schemas so
+  // there is exactly one place it can be forgotten.
+  email       String        @unique @map("User_Email") @db.VarChar(150)
+  phoneNumber String?       @map("User_PhoneNumber") @db.VarChar(20)
+  status      AccountStatus @default(ACTIVE) @map("User_Status")
+  avatarUrl   String?       @map("User_AvatarURL") @db.VarChar(500) // [ADDED] see schema header note
+  createdAt   DateTime      @default(now()) @map("User_CreatedAt")
+
+  // [ADDED] Deletion bookkeeping. Null on every account that has not asked to
+  // be deleted; see accountDeletion.service.ts for how the job drains them.
+  deletionRequestedAt DateTime?             @map("User_DeletionRequestedAt")
+  deletionStage       AccountDeletionStage? @map("User_DeletionStage")
+  deletionAttempts    Int                   @default(0) @map("User_DeletionAttempts")
+  deletionLastError   String?               @map("User_DeletionLastError") @db.VarChar(500)
+
+  businessProfiles BusinessProfile[]
+  notifications    Notification[]
+  aiInteractions   AIInteraction[]
+
+  // The deletion worker claims the oldest unfinished request on every pass.
+  @@index([status, deletionRequestedAt], map: "User_DeletionQueue_idx")
+  @@map("User")
+}
+
+model BusinessProfile {
+  id                           Int       @id @default(autoincrement()) @map("BusinessProfile_ID")
+  userId                       Int       @map("User_ID")
+  name                         String    @map("BusinessProfile_Name") @db.VarChar(150)
+  type                         String    @map("BusinessProfile_Type") @db.VarChar(100)
+  availableFunds               Decimal   @map("BusinessProfile_AvailableFunds") @db.Decimal(12, 2)
+  expectedMonthlyExpenses      Decimal   @map("BusinessProfile_ExpectedMonthlyExpenses") @db.Decimal(12, 2)
+  operatingDays                Int       @map("BusinessProfile_OperatingDays")
+  largeExpenseThresholdPercent Decimal   @default(20) @map("BusinessProfile_LargeExpenseThresholdPercent") @db.Decimal(5, 2) // [ADDED] see schema header note
+  logoUrl                      String?   @map("BusinessProfile_LogoURL") @db.VarChar(500) // [ADDED] see schema header note
+  createdAt                    DateTime  @default(now()) @map("BusinessProfile_CreatedAt")
+  // [ADDED] Soft delete. Null = active. Archiving hides a profile from the
+  // switcher without touching its records, insights or AI history. A hard
+  // delete would cascade and destroy the owner's entire financial history for
+  // that business — too destructive to expose as an accidental click in a tool
+  // whose whole value is the history it holds.
+  archivedAt                   DateTime? @map("BusinessProfile_ArchivedAt")
+
+  user                  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  categories            ExpenseCategory[]
+  expenseRecords        ExpenseRecord[]
+  salesReferenceRecords SalesReferenceRecord[]
+  receiptScans          ReceiptScan[]
+  csvImportBatches      CSVImportBatch[]
+  aiInteractions        AIInteraction[]
+  notifications         Notification[]
+  anomalyFindings       AnomalyFinding[]
+  categoryStatistics    CategoryStatistics[]
+  recurringPatterns     RecurringPattern[]
+  analysisJobs          AnalysisJob[]
+
+  @@index([userId])
+  @@map("BusinessProfile")
+}
+
+model ExpenseCategory {
+  id                Int      @id @default(autoincrement()) @map("Category_ID")
+  businessProfileId Int      @map("BusinessProfile_ID")
+  name              String   @map("Category_Name") @db.VarChar(100)
+  description       String?  @map("Category_Description") @db.VarChar(255)
+  createdAt         DateTime @default(now()) @map("Category_CreatedAt")
+
+  businessProfile   BusinessProfile      @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+  expenseRecords    ExpenseRecord[]
+  receiptScanItems  ReceiptScanItem[]
+  statistics        CategoryStatistics[]
+  recurringPatterns RecurringPattern[]
+
+  @@index([businessProfileId])
+  @@map("ExpenseCategory")
+}
+
+model ExpenseRecord {
+  id                  Int                 @id @default(autoincrement()) @map("ExpenseRecord_ID")
+  businessProfileId   Int                 @map("BusinessProfile_ID")
+  categoryId          Int                 @map("Category_ID")
+  receiptScanId       Int?                @map("ReceiptScan_ID") // [CHANGED] no longer @unique — see schema header note 9
+  importBatchId       Int?                @map("ImportBatch_ID")
+  duplicateOfRecordId Int?                @map("DuplicateOf_RecordID")
+  date                DateTime            @map("ExpenseRecord_Date") @db.Date
+  description         String              @map("ExpenseRecord_Description") @db.VarChar(255)
+  vendor              String?             @map("ExpenseRecord_Vendor") @db.VarChar(150)
+  amount              Decimal             @map("ExpenseRecord_Amount") @db.Decimal(12, 2)
+  /// The part of `amount` that is this record's share of receipt-level tax,
+  /// service charge or discount rather than the price of its own items.
+  /// See schema header note 13. Signed — negative for a discount.
+  allocatedCharges    Decimal?            @map("ExpenseRecord_AllocatedCharges") @db.Decimal(12, 2)
+  source              ExpenseRecordSource @map("ExpenseRecord_Source")
+  reviewStatus        String              @default("Needs Review") @map("ExpenseRecord_ReviewStatus") @db.VarChar(50)
+  duplicateStatus     String              @default("Not a Duplicate") @map("ExpenseRecord_DuplicateStatus") @db.VarChar(50)
+  largeExpenseFlag    Boolean             @default(false) @map("ExpenseRecord_LargeExpenseFlag")
+  createdAt           DateTime            @default(now()) @map("ExpenseRecord_CreatedAt")
+
+  businessProfile BusinessProfile   @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+  category        ExpenseCategory   @relation(fields: [categoryId], references: [id])
+  receiptScan     ReceiptScan?      @relation(fields: [receiptScanId], references: [id])
+  importBatch     CSVImportBatch?   @relation(fields: [importBatchId], references: [id])
+  duplicateOf     ExpenseRecord?    @relation("ExpenseRecordDuplicates", fields: [duplicateOfRecordId], references: [id])
+  duplicates      ExpenseRecord[]   @relation("ExpenseRecordDuplicates")
+  notifications   Notification[]
+  receiptItems    ReceiptScanItem[]
+  anomalyFindings AnomalyFinding[]
+  analysisJobs    AnalysisJob[]
+
+  @@index([businessProfileId])
+  @@index([categoryId])
+  @@index([importBatchId])
+  @@index([receiptScanId])
+  @@index([duplicateOfRecordId])
+  @@index([businessProfileId, date, id])
+  @@map("ExpenseRecord")
+}
+
+model AnomalyFinding {
+  id                Int                     @id @default(autoincrement()) @map("AnomalyFinding_ID")
+  businessProfileId Int                     @map("BusinessProfile_ID")
+  expenseRecordId   Int?                    @map("ExpenseRecord_ID")
+  fingerprint       String                  @map("AnomalyFinding_Fingerprint") @db.VarChar(191)
+  type              AnomalyFindingType      @map("AnomalyFinding_Type")
+  method            String                  @map("AnomalyFinding_Method") @db.VarChar(100)
+  severity          AnomalyFindingSeverity  @map("AnomalyFinding_Severity")
+  score             Decimal?                @map("AnomalyFinding_Score") @db.Decimal(12, 6)
+  title             String                  @map("AnomalyFinding_Title") @db.VarChar(180)
+  reasons           Json                    @map("AnomalyFinding_Reasons")
+  metadata          Json?                   @map("AnomalyFinding_Metadata")
+  detectorVersion   String                  @map("AnomalyFinding_DetectorVersion") @db.VarChar(50)
+  status            AnomalyFindingStatus    @default(OPEN) @map("AnomalyFinding_Status")
+  feedback          AnomalyFindingFeedback? @map("AnomalyFinding_Feedback")
+  detectedAt        DateTime                @default(now()) @map("AnomalyFinding_DetectedAt")
+  reviewedAt        DateTime?               @map("AnomalyFinding_ReviewedAt")
+  updatedAt         DateTime                @updatedAt @map("AnomalyFinding_UpdatedAt")
+
+  businessProfile BusinessProfile @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+  expenseRecord   ExpenseRecord?  @relation(fields: [expenseRecordId], references: [id], onDelete: Cascade)
+
+  @@unique([businessProfileId, fingerprint])
+  @@index([businessProfileId, status, detectedAt])
+  @@index([businessProfileId, type, detectedAt])
+  @@index([expenseRecordId])
+  @@map("AnomalyFinding")
+}
+
+model CategoryStatistics {
+  id                Int      @id @default(autoincrement()) @map("CategoryStatistics_ID")
+  businessProfileId Int      @map("BusinessProfile_ID")
+  categoryId        Int      @map("Category_ID")
+  windowDays        Int      @map("CategoryStatistics_WindowDays")
+  windowStart       DateTime @map("CategoryStatistics_WindowStart") @db.Date
+  windowEnd         DateTime @map("CategoryStatistics_WindowEnd") @db.Date
+  recordCount       Int      @map("CategoryStatistics_RecordCount")
+  sum               Decimal  @map("CategoryStatistics_Sum") @db.Decimal(18, 2)
+  sumOfSquares      Decimal  @map("CategoryStatistics_SumOfSquares") @db.Decimal(24, 2)
+  mean              Decimal  @map("CategoryStatistics_Mean") @db.Decimal(18, 6)
+  standardDeviation Decimal  @map("CategoryStatistics_StandardDeviation") @db.Decimal(18, 6)
+  q1                Decimal  @map("CategoryStatistics_Q1") @db.Decimal(18, 6)
+  q3                Decimal  @map("CategoryStatistics_Q3") @db.Decimal(18, 6)
+  minimum           Decimal? @map("CategoryStatistics_Minimum") @db.Decimal(18, 2)
+  maximum           Decimal? @map("CategoryStatistics_Maximum") @db.Decimal(18, 2)
+  calculatedAt      DateTime @default(now()) @map("CategoryStatistics_CalculatedAt")
+  updatedAt         DateTime @updatedAt @map("CategoryStatistics_UpdatedAt")
+
+  businessProfile BusinessProfile @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+  category        ExpenseCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([categoryId, windowDays])
+  @@index([businessProfileId, windowDays])
+  @@map("CategoryStatistics")
+}
+
+model RecurringPattern {
+  id                Int                    @id @default(autoincrement()) @map("RecurringPattern_ID")
+  businessProfileId Int                    @map("BusinessProfile_ID")
+  categoryId        Int                    @map("Category_ID")
+  normalizedKey     String                 @map("RecurringPattern_NormalizedKey") @db.VarChar(64)
+  vendor            String?                @map("RecurringPattern_Vendor") @db.VarChar(150)
+  description       String                 @map("RecurringPattern_Description") @db.VarChar(255)
+  intervalDays      Int                    @map("RecurringPattern_IntervalDays")
+  expectedAmount    Decimal                @map("RecurringPattern_ExpectedAmount") @db.Decimal(18, 2)
+  amountTolerance   Decimal                @map("RecurringPattern_AmountTolerance") @db.Decimal(8, 6)
+  confidence        Decimal                @map("RecurringPattern_Confidence") @db.Decimal(8, 6)
+  observationCount  Int                    @map("RecurringPattern_ObservationCount")
+  lastOccurrence    DateTime               @map("RecurringPattern_LastOccurrence") @db.Date
+  nextExpectedDate  DateTime               @map("RecurringPattern_NextExpectedDate") @db.Date
+  status            RecurringPatternStatus @default(CANDIDATE) @map("RecurringPattern_Status")
+  createdAt         DateTime               @default(now()) @map("RecurringPattern_CreatedAt")
+  updatedAt         DateTime               @updatedAt @map("RecurringPattern_UpdatedAt")
+
+  businessProfile BusinessProfile @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+  category        ExpenseCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([businessProfileId, normalizedKey])
+  @@index([businessProfileId, status, nextExpectedDate])
+  @@index([categoryId])
+  @@map("RecurringPattern")
+}
+
+model AnalysisJob {
+  id                  Int               @id @default(autoincrement()) @map("AnalysisJob_ID")
+  businessProfileId   Int               @map("BusinessProfile_ID")
+  expenseRecordId     Int?              @map("ExpenseRecord_ID")
+  idempotencyKey      String            @unique @map("AnalysisJob_IdempotencyKey") @db.VarChar(191)
+  kind                AnalysisJobKind   @map("AnalysisJob_Kind")
+  status              AnalysisJobStatus @default(PENDING) @map("AnalysisJob_Status")
+  attemptCount        Int               @default(0) @map("AnalysisJob_AttemptCount")
+  nextAttemptAt       DateTime          @default(now()) @map("AnalysisJob_NextAttemptAt")
+  processingStartedAt DateTime?         @map("AnalysisJob_ProcessingStartedAt")
+  heartbeatAt         DateTime?         @map("AnalysisJob_HeartbeatAt")
+  workerId            String?           @map("AnalysisJob_WorkerID") @db.VarChar(100)
+  lastError           String?           @map("AnalysisJob_LastError") @db.VarChar(1000)
+  createdAt           DateTime          @default(now()) @map("AnalysisJob_CreatedAt")
+  updatedAt           DateTime          @updatedAt @map("AnalysisJob_UpdatedAt")
+
+  businessProfile BusinessProfile @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+  expenseRecord   ExpenseRecord?  @relation(fields: [expenseRecordId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt, heartbeatAt])
+  @@index([businessProfileId, kind])
+  @@index([expenseRecordId])
+  @@map("AnalysisJob")
+}
+
+model SalesReferenceRecord {
+  id                  Int               @id @default(autoincrement()) @map("SalesReferenceRecord_ID")
+  businessProfileId   Int               @map("BusinessProfile_ID")
+  importBatchId       Int?              @map("ImportBatch_ID")
+  duplicateOfRecordId Int?              @map("DuplicateOf_RecordID")
+  date                DateTime          @map("SalesReferenceRecord_Date") @db.Date
+  description         String            @map("SalesReferenceRecord_Description") @db.VarChar(255)
+  amount              Decimal           @map("SalesReferenceRecord_Amount") @db.Decimal(12, 2)
+  source              SalesRecordSource @map("SalesReferenceRecord_Source")
+  reviewStatus        String            @default("Needs Review") @map("SalesReferenceRecord_ReviewStatus") @db.VarChar(50)
+  duplicateStatus     String            @default("Not a Duplicate") @map("SalesReferenceRecord_DuplicateStatus") @db.VarChar(50)
+  createdAt           DateTime          @default(now()) @map("SalesReferenceRecord_CreatedAt")
+
+  businessProfile BusinessProfile        @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+  importBatch     CSVImportBatch?        @relation(fields: [importBatchId], references: [id])
+  duplicateOf     SalesReferenceRecord?  @relation("SalesRecordDuplicates", fields: [duplicateOfRecordId], references: [id])
+  duplicates      SalesReferenceRecord[] @relation("SalesRecordDuplicates")
+
+  @@index([businessProfileId])
+  @@index([importBatchId])
+  @@index([duplicateOfRecordId])
+  @@index([businessProfileId, date, id])
+  @@map("SalesReferenceRecord")
+}
+
+model ReceiptScan {
+  id                      Int       @id @default(autoincrement()) @map("ReceiptScan_ID")
+  businessProfileId       Int?      @map("BusinessProfile_ID") // [ADDED] see schema header note
+  imageFile               String    @map("ReceiptScan_ImageFile") @db.VarChar(255)
+  extractedDate           DateTime? @map("ReceiptScan_ExtractedDate") @db.Date
+  extractedVendor         String?   @map("ReceiptScan_ExtractedVendor") @db.VarChar(150)
+  extractedDescription    String?   @map("ReceiptScan_ExtractedDescription") @db.VarChar(255)
+  extractedAmount         Decimal?  @map("ReceiptScan_ExtractedAmount") @db.Decimal(12, 2)
+  confirmationStatus      String    @default("Pending") @map("ReceiptScan_ConfirmationStatus") @db.VarChar(50)
+  /// [ADDED] see schema header note 15. How far the READ has got:
+  /// "Processing" | "Complete" | "Failed". Deliberately separate from
+  /// confirmationStatus, which is about the OWNER's decision afterwards —
+  /// conflating them would make "still being read" and "read, awaiting the
+  /// owner" the same state, and they need different screens.
+  processingStatus        String    @default("Processing") @map("ReceiptScan_ProcessingStatus") @db.VarChar(50)
+  /// Why the read failed, for the owner. Null unless processingStatus is
+  /// "Failed".
+  processingError         String?   @map("ReceiptScan_ProcessingError") @db.VarChar(500)
+  /// Durable worker metadata. A worker owns a scan only while its heartbeat
+  /// is fresh; after a crash another worker can safely reclaim the same row.
+  processingAttemptCount  Int       @default(0) @map("ReceiptScan_ProcessingAttemptCount")
+  processingStartedAt     DateTime? @map("ReceiptScan_ProcessingStartedAt")
+  processingHeartbeatAt   DateTime? @map("ReceiptScan_ProcessingHeartbeatAt")
+  nextProcessingAttemptAt DateTime  @default(now()) @map("ReceiptScan_NextProcessingAttemptAt")
+  processingWorkerId      String?   @map("ReceiptScan_ProcessingWorkerID") @db.VarChar(100)
+  rawText                 String?   @map("ReceiptScan_RawText") @db.Text // [ADDED] see schema header note 10
+  /// True when the deterministic OCR parse came back empty and a vision model
+  /// was asked to interpret the photo instead. The confirm screen says so
+  /// plainly — these values were guessed from an image, not read off text,
+  /// and the owner is told to check them harder than usual.
+  visionAssisted          Boolean   @default(false) @map("ReceiptScan_VisionAssisted")
+  /// How sure the OCR engine was about this page overall, 0-100. Null on
+  /// scans read before this was recorded, and on vision-assisted reads, where
+  /// the figure would describe text tesseract could not read anyway.
+  ocrConfidence           Int?      @map("ReceiptScan_OcrConfidence")
+  /// [ADDED] see schema header note 17. How sure OCR was about the VENDOR and
+  /// the TOTAL specifically, 0-100 — the per-field figures ocrConfidence
+  /// cannot give, and the ones calibration needs to say whether a confidence
+  /// score predicts a wrong answer for that particular field.
+  vendorConfidence        Int?      @map("ReceiptScan_VendorConfidence")
+  amountConfidence        Int?      @map("ReceiptScan_AmountConfidence")
+  createdAt               DateTime  @default(now()) @map("ReceiptScan_CreatedAt")
+
+  businessProfile BusinessProfile?         @relation(fields: [businessProfileId], references: [id], onDelete: SetNull)
+  expenseRecords  ExpenseRecord[]
+  items           ReceiptScanItem[]
+  pages           ReceiptScanPage[]
+  corrections     ReceiptFieldCorrection[]
+
+  @@index([businessProfileId])
+  @@index([processingStatus, nextProcessingAttemptAt, processingHeartbeatAt])
+  @@map("ReceiptScan")
+}
+
+/// [ADDED] see schema header note 14. Every page of a scan, in the order the
+/// owner photographed them — including the first, so a single-photo receipt
+/// (still the common case) and a five-page one are read the same way.
+model ReceiptScanPage {
+  id                Int      @id @default(autoincrement()) @map("ReceiptScanPage_ID")
+  receiptScanId     Int      @map("ReceiptScan_ID")
+  pageNumber        Int      @map("ReceiptScanPage_Number")
+  imageFile         String   @map("ReceiptScanPage_ImageFile") @db.VarChar(255)
+  /// This page's own OCR text. ReceiptScan.rawText holds all pages
+  /// concatenated in order — the shape every parser already reads — so this
+  /// is kept only for per-page re-processing (a retaken page 2 must not force
+  /// re-reading pages 1 and 3), not as the primary text store.
+  rawText           String?  @map("ReceiptScanPage_RawText") @db.Text
+  /// This page's own OCR confidence, for a per-page "this one looks rough"
+  /// signal. ReceiptScan.ocrConfidence remains the whole-scan figure.
+  ocrConfidence     Int?     @map("ReceiptScanPage_OcrConfidence")
+  /// How readable the photograph itself was — see lib/imageQuality.
+  ///
+  /// STORED, where it deliberately was not before. The old reasoning was that
+  /// this answers "should you retake it?", which is only worth asking while
+  /// the owner still holds the receipt, so it rode on the upload response and
+  /// was never persisted. That held only while the response WAS the finished
+  /// scan. Now the read happens in the background and the client polls for it,
+  /// so anything not written down is simply lost before it can be shown. The
+  /// lifespan argument was about how long it stays USEFUL, not about whether
+  /// it can be stored, and the two came apart when the pipeline went async.
+  sharpness         Float?   @map("ReceiptScanPage_Sharpness")
+  brightness        Float?   @map("ReceiptScanPage_Brightness")
+  tooBlurredToTrust Boolean? @map("ReceiptScanPage_TooBlurredToTrust")
+
+  receiptScan ReceiptScan @relation(fields: [receiptScanId], references: [id], onDelete: Cascade)
+
+  @@unique([receiptScanId, pageNumber])
+  @@index([receiptScanId])
+  @@map("ReceiptScanPage")
+}
+
+/// [ADDED] see schema header note 11
+model ReceiptScanItem {
+  id                    Int      @id @default(autoincrement()) @map("ReceiptScanItem_ID")
+  receiptScanId         Int      @map("ReceiptScan_ID")
+  categoryId            Int?     @map("Category_ID")
+  expenseRecordId       Int?     @map("ExpenseRecord_ID")
+  /// Position on the receipt, so the review screen can show items in the
+  /// order they were printed rather than in insertion order.
+  lineNumber            Int      @map("ReceiptScanItem_LineNumber")
+  name                  String   @map("ReceiptScanItem_Name") @db.VarChar(255)
+  /// Null when the receipt prints no quantity column, which is common on
+  /// small sari-sari store receipts. Not the same as a quantity of 1.
+  quantity              Decimal? @map("ReceiptScanItem_Quantity") @db.Decimal(10, 2)
+  unitPrice             Decimal? @map("ReceiptScanItem_UnitPrice") @db.Decimal(12, 2)
+  /// The line's own total, which is what the category subtotals sum.
+  amount                Decimal  @map("ReceiptScanItem_Amount") @db.Decimal(12, 2)
+  /// True when the owner typed this line in on the confirm screen rather
+  /// than OCR reading it off the image. See schema header note 12.
+  addedByOwner          Boolean  @default(false) @map("ReceiptScanItem_AddedByOwner")
+  /// A category name the AI proposed when NOTHING on the business's existing
+  /// list fit this item. Only ever a suggestion for the owner to accept or
+  /// ignore — never auto-created, because a category the owner never asked
+  /// for appearing in their books is exactly what the classifier's
+  /// "never invent a category" rule exists to prevent. Null when the item
+  /// matched an existing category, when the model declined to propose one,
+  /// or when it was unreachable.
+  suggestedCategoryName String?  @map("ReceiptScanItem_SuggestedCategoryName") @db.VarChar(100)
+  /// True when a vision model produced this line because the deterministic
+  /// parser could read no items at all. Parallel to addedByOwner: both exist
+  /// so the claim "FinSight read this off your receipt" is never quietly
+  /// stretched to cover a line it did not read that way.
+  extractedByVision     Boolean  @default(false) @map("ReceiptScanItem_ExtractedByVision")
+  /// How sure the OCR engine was about this line's AMOUNT, 0-100 — the field
+  /// the books actually depend on. Null when it was derived rather than read.
+  amountConfidence      Int?     @map("ReceiptScanItem_AmountConfidence")
+  createdAt             DateTime @default(now()) @map("ReceiptScanItem_CreatedAt")
+
+  receiptScan   ReceiptScan      @relation(fields: [receiptScanId], references: [id], onDelete: Cascade)
+  category      ExpenseCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  expenseRecord ExpenseRecord?   @relation(fields: [expenseRecordId], references: [id], onDelete: SetNull)
+
+  @@unique([receiptScanId, lineNumber])
+  @@index([receiptScanId])
+  @@index([expenseRecordId])
+  @@index([categoryId])
+  @@map("ReceiptScanItem")
+}
+
+/// Persistent fixed-window counters used for costly/API-abuse limits. They
+/// live in Postgres so limits do not reset on a deploy or multiply when the
+/// backend is scaled horizontally.
+model ApiRateLimit {
+  key         String   @id @map("ApiRateLimit_Key") @db.VarChar(255)
+  windowStart DateTime @map("ApiRateLimit_WindowStart")
+  count       Int      @default(0) @map("ApiRateLimit_Count")
+  expiresAt   DateTime @map("ApiRateLimit_ExpiresAt")
+
+  @@index([expiresAt])
+  @@map("ApiRateLimit")
+}
+
+/// [ADDED] see schema header note 16. One row per field the owner reviewed on
+/// the confirm screen, recording what FinSight read and what the owner settled
+/// on — whether or not those differ.
+///
+/// This is the only ground truth this app will ever get for free. Everything
+/// downstream (per-field accuracy, whether a confidence score predicts a wrong
+/// answer, which items the categoriser keeps misfiling) is an aggregation over
+/// these rows, so what is NOT captured here cannot be measured later.
+model ReceiptFieldCorrection {
+  id            Int  @id @default(autoincrement()) @map("ReceiptFieldCorrection_ID")
+  receiptScanId Int  @map("ReceiptScan_ID")
+  /// Which printed line this is about, for item-level fields; null for the
+  /// receipt-level ones. Stored as the NUMBER rather than a FK because the
+  /// row it refers to may not survive: a line the owner deleted as register
+  /// furniture is hard-deleted, and that deletion is precisely the
+  /// observation being recorded.
+  lineNumber    Int? @map("ReceiptFieldCorrection_LineNumber")
+
+  /// What was compared: "date" | "vendor" | "amount" | "itemCategory" |
+  /// "itemPresence". A string rather than an enum because this list will grow
+  /// as more of the confirm screen becomes reviewable, and a migration per
+  /// new field would be friction with nothing to show for it — nothing
+  /// branches on the value, it is only ever grouped by.
+  field         String  @map("ReceiptFieldCorrection_Field") @db.VarChar(30)
+  /// Who produced the original: "ocr" (tesseract + the deterministic parsers),
+  /// "vision" (a model read the photo), or "ai-category" (the categoriser).
+  /// Without this the figures would blame OCR for a vision model's guess and
+  /// average two unrelated error rates into one meaningless number.
+  source        String  @map("ReceiptFieldCorrection_Source") @db.VarChar(20)
+  /// What FinSight read, and what the owner confirmed, as displayed text.
+  ///
+  /// Text rather than typed columns because one table holds dates, pesos and
+  /// category names, and five nullable typed columns of which four are always
+  /// null is a worse trade than formatting on the way in. Nothing recomputes
+  /// money from these — they are evidence for a human reading a report, and
+  /// the authoritative values remain on ExpenseRecord.
+  ///
+  /// Null on either side means absence, and the two are different findings:
+  /// a null original is something FinSight failed to read, a null final is
+  /// something it read that was never there.
+  originalValue String? @map("ReceiptFieldCorrection_OriginalValue") @db.VarChar(255)
+  finalValue    String? @map("ReceiptFieldCorrection_FinalValue") @db.VarChar(255)
+  /// The item's name, for item-level fields. Denormalised on purpose: it is
+  /// what makes "the categoriser files pandesal under Supplies every time"
+  /// answerable by grouping, and for a deleted line it is the only surviving
+  /// record of what the line said.
+  itemName      String? @map("ReceiptFieldCorrection_ItemName") @db.VarChar(255)
+  /// How sure the engine was about this field, 0-100. Null where no
+  /// confidence was recorded — a vision-assisted read, a derived value, or a
+  /// scan from before the per-field columns existed. Rows with a null here
+  /// still count towards accuracy; they are only excluded from calibration.
+  confidence    Int?    @map("ReceiptFieldCorrection_Confidence")
+  /// The answer. False is the interesting case as often as true: a false row
+  /// on a low-confidence field is evidence the THRESHOLD is wrong, not the
+  /// extraction.
+  wasEdited     Boolean @map("ReceiptFieldCorrection_WasEdited")
+
+  createdAt DateTime @default(now()) @map("ReceiptFieldCorrection_CreatedAt")
+
+  receiptScan ReceiptScan @relation(fields: [receiptScanId], references: [id], onDelete: Cascade)
+
+  @@index([receiptScanId])
+  @@index([field])
+  @@index([createdAt])
+  @@map("ReceiptFieldCorrection")
+}
+
+model CSVImportBatch {
+  id                Int      @id @default(autoincrement()) @map("ImportBatch_ID")
+  businessProfileId Int      @map("BusinessProfile_ID")
+  title             String   @map("ImportBatch_Title") @db.VarChar(150)
+  uploadDate        DateTime @map("ImportBatch_UploadDate") @db.Date
+  fileReference     String   @map("ImportBatch_FileReference") @db.VarChar(255)
+  status            String   @default("Needs Review") @map("ImportBatch_Status") @db.VarChar(50)
+  createdAt         DateTime @default(now()) @map("ImportBatch_CreatedAt")
+
+  businessProfile       BusinessProfile        @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+  expenseRecords        ExpenseRecord[]
+  salesReferenceRecords SalesReferenceRecord[]
+
+  @@index([businessProfileId])
+  @@map("CSVImportBatch")
+}
+
+model Notification {
+  id                Int      @id @default(autoincrement()) @map("Notification_ID")
+  userId            Int      @map("User_ID")
+  businessProfileId Int      @map("BusinessProfile_ID") // [ADDED] see schema header note
+  expenseRecordId   Int?     @map("ExpenseRecord_ID") // [ADDED] see schema header note
+  message           String   @map("Notification_Message") @db.VarChar(255)
+  type              String   @map("Notification_Type") @db.VarChar(50)
+  dateCreated       DateTime @default(now()) @map("Notification_DateCreated")
+  readStatus        Boolean  @default(false) @map("Notification_ReadStatus")
+
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  businessProfile BusinessProfile @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+  expenseRecord   ExpenseRecord?  @relation(fields: [expenseRecordId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([businessProfileId])
+  @@index([expenseRecordId])
+  @@map("Notification")
+}
+
+model AIInteraction {
+  id                Int      @id @default(autoincrement()) @map("Interaction_ID")
+  userId            Int      @map("User_ID")
+  businessProfileId Int      @map("BusinessProfile_ID")
+  module            String   @map("Interaction_Module") @db.VarChar(50)
+  question          String   @map("Interaction_Question") @db.VarChar(500)
+  aiResponse        String   @map("Interaction_AIResponse") @db.VarChar(1000)
+  timestamp         DateTime @default(now()) @map("Interaction_Timestamp")
+
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  businessProfile BusinessProfile @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([businessProfileId])
+  @@map("AIInteraction")
+}

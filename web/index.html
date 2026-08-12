@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FinSight — Know where your money actually goes</title>
+    <meta name="description" content="FinSight helps small business owners track expenses and sales, spot unusual spending, and see how much they need to cover the month — in plain language." />
+    <meta name="theme-color" content="#0e655c" />
+    <!--
+      Theme boot — runs before first paint, deliberately blocking.
+
+      The saved theme lives in localStorage, which React cannot read until its
+      bundle has downloaded and executed. Without this the page paints in
+      Classic and then snaps to Dark a few hundred milliseconds later: a white
+      flash straight into the eyes of the person who specifically chose dark.
+
+      So it is inline (no network round-trip), synchronous (blocks the first
+      paint rather than racing it), and in <head> before any stylesheet is
+      applied. It only ever sets one attribute; ThemeContext owns everything
+      afterwards and re-reads the same key, so the two cannot disagree.
+    -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("finsight.theme");
+          document.documentElement.dataset.theme =
+            t === "dark" || t === "light" || t === "classic" ? t : "classic";
+        } catch (e) {
+          document.documentElement.dataset.theme = "classic";
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

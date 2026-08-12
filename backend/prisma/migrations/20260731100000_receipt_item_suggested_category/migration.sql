@@ -1,0 +1,12 @@
+-- A category the AI proposed for an item that fit nothing on the business's
+-- existing list.
+--
+-- Additive and nullable, so this is safe to apply to a database with existing
+-- rows: nothing is rewritten and no existing query changes meaning. Existing
+-- rows correctly get NULL — no scan before this column existed ever captured
+-- a proposal, so there is nothing to backfill.
+--
+-- This is a SUGGESTION only. It deliberately does NOT reference
+-- ExpenseCategory: the whole point is that the category does not exist yet,
+-- and it is only created if the owner accepts it on the confirm screen.
+ALTER TABLE "ReceiptScanItem" ADD COLUMN "ReceiptScanItem_SuggestedCategoryName" VARCHAR(100);

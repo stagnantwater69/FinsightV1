@@ -1,0 +1,1727 @@
+[
+  {
+    "id": "real-01-ph-pos-photo",
+    "kind": "real",
+    "conditions": "Real phone photo, PH POS thermal receipt, on wooden table, slight crumple, store name cropped out of frame",
+    "expected": {
+      "date": "2026-07-11",
+      "vendor": null,
+      "amount": 188,
+      "items": [
+        {
+          "name": "Spareribs Meal",
+          "quantity": null,
+          "amount": 129
+        },
+        {
+          "name": "Iced Latte 16oz",
+          "quantity": null,
+          "amount": 59
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-11",
+      "vendor": "NEW | PILS, TRADERS CORP, Ey Go fo",
+      "amount": 188,
+      "items": []
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "n/a",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 2,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "f H:FRID2024~080-N473287-0E03 eg + <P\nPTU leased: 10/14 124 - ~ dy a NG o\n: sty POS HH: 100016445004 ee oA RR\nMIN a2 00 0312997038 Bs ry\n’ - A - r J sh.\nIAL E h [ i t Fr RY:\nJul 11 2026 (Sat) LIlE fn os ie as\na is i LE ~\n114 ill \" en Ba\nde Wh TPC\n- Snasreribs Meal 4 = a\nIced Latle 160% WT Fa = - foe\n! wr - - . J\nTOTAL 188.00 : SS Krona\nCASH 200.1 Bm 0 A\na < EEN - Faas\nCHANGE 12.00 er pr\nNy aw ete =: » - lo t ®ad\n: IAT Batec 1567.86 —— = ~\n= dia » ~e = - |! > Ir ) Se bo\nAT Exempt Sales UR a als\n‘57 Zerp-Rated Sales 3.00 ee SE\nal orn-Taxable Sales 0.00 pn Ae at SN\nBT [12% 20,14 Eo TS em ST\nCharaoe ag.0e Ea Sr Ey = et Seay\nour Pavable 188.00 Py Cdk = - : = SE >\nF ranEaciile 119085 fr Sr CL PR\nnecting) 3 i\n# CUSTON 4 2 itenis CE 2 a : bay\nURDER BREEN 7 iia cats\nCHBHIER tho, Ayieshs 2\n= # rR Sale Se ST x\nbs Ja To CE TE\nLIT ARETE. JN SE. oe 0 vi ce EE\n=f 3 we Goo CRE a,\nADDRE 5 EE\nER SE—— rio CSR Se\n- Ri ETT ae RAE\n: CWE Be “gp RE\nTONES LS Fe SIR\n== Te == Sars a or CA\nv oS Wemiz 2, Lr. ry\nGEE SCE Xs La\n- = SL Se FL\nNEW | PILS, TRADERS CORP, Ey Go fo\n: ETN Nant\n\\ . LiiE - a — ad, Fo pe\nUs RET -00TVAT co a OO J\n= ~ ~~ — E ht A}\nsory 1 Be Forturs Bt . BP Ni 3\n{ L . CARRS a i ot a TER\n] : 3 we Tove Gadi nee,\nBaha Lit EL 1\nCab 3 mm oO Ba =m EE\" 3\nPCCPEGLSNE EN ol =000r 0-197 Cpu 4\n. om ST8 lccup! | - .\nPOCO X656 Issue: alid 11/07/2026 11:04\ni 9 > Wa\n"
+  },
+  {
+    "id": "real-02-clean-digital",
+    "kind": "real",
+    "conditions": "Clean digitally-generated receipt, high contrast, US layout, vendor at top, no TOTAL keyword (uses AMT/BALANCE)",
+    "expected": {
+      "date": "2019-12-27",
+      "vendor": "AROMA CAFE",
+      "amount": 8.7,
+      "items": [
+        {
+          "name": "Americano",
+          "quantity": 1,
+          "amount": 3.19
+        },
+        {
+          "name": "Almond Scone",
+          "quantity": 1,
+          "amount": 1.99
+        },
+        {
+          "name": "16oz Bottle Water",
+          "quantity": 1,
+          "amount": 2.99
+        }
+      ]
+    },
+    "actual": {
+      "date": "2019-12-27",
+      "vendor": "AROMA CAFE",
+      "amount": 8.7,
+      "items": [
+        {
+          "name": "Americano",
+          "quantity": 1,
+          "amount": 3.19
+        },
+        {
+          "name": "Almond Scone",
+          "quantity": 1,
+          "amount": 1.99
+        },
+        {
+          "name": "160z Bottle Water",
+          "quantity": 1,
+          "amount": 2.99
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 3,
+      "matched": 3,
+      "nameCorrect": 3,
+      "quantityCorrect": 3,
+      "quantityScored": 3,
+      "falsePositives": 0
+    },
+    "rawText": "AROMA CAFE\n1211 Green Street\nNew York, NY 10005\n\n12/27/2019 08:26 PM\nTAB 8 HOST MAGGIE\nAMEX #########19883\nQTY DESC AMT\n1 Americano $3.19\n1 Almond Scone $1.99\n1 160z Bottle Water $2.99\n\nAMT $8.70\n\nSUBTOTAL $8.17\n\nTAX $0.53\n\nBALANCE $8.70\n"
+  },
+  {
+    "id": "real-03-ph-sales-invoice",
+    "kind": "real",
+    "conditions": "Real phone photo, PH thermal SALES INVOICE, 8 items with a quantity column and per-item unit prices on a wrapped second line, a discount line, and two emoji stickers overlaid on one item row by whoever shared it",
+    "expected": {
+      "date": "2026-04-06",
+      "vendor": null,
+      "amount": 2180,
+      "items": [
+        {
+          "name": "338 CANISTER STUFF EM ALL 1.6L LARGE",
+          "quantity": 2,
+          "amount": 110
+        },
+        {
+          "name": "0921 45CM BASIN 555 MAKAPAL",
+          "quantity": 1,
+          "amount": 225
+        },
+        {
+          "name": "348 TRAY (HI-TOP)",
+          "quantity": 1,
+          "amount": 65
+        },
+        {
+          "name": "804 STOCK BOX W/ HANDLE 10L",
+          "quantity": 8,
+          "amount": 1480
+        },
+        {
+          "name": "2010 XL WATER DIPPER MOCHA",
+          "quantity": 1,
+          "amount": 40
+        },
+        {
+          "name": "8742 PEELER",
+          "quantity": 1,
+          "amount": 55
+        },
+        {
+          "name": "1133 14INCH FOOD TONG (245)",
+          "quantity": 1,
+          "amount": 60
+        },
+        {
+          "name": "HX116/CFZ-15 CHOPPING BOARD",
+          "quantity": 1,
+          "amount": 145
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-04-06",
+      "vendor": "1 1133 14INCH FOOD TONG 80.00 ©",
+      "amount": 2185,
+      "items": [
+        {
+          "name": "B742 PEELER BP55.00ea",
+          "quantity": 1,
+          "amount": 5
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "n/a",
+      "amount": "wrong"
+    },
+    "itemScore": {
+      "expected": 8,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 1
+    },
+    "rawText": "iagohoy, Bf 2, tort\nny\nTNs 279-400: 700-0000\nine 20061918480698497\npag, Serial Not KINSPCIZI3F0102000065\n38cua Ridg. National Wighway Poblacion\nBataraza Palavan 5306\nSALES INVOICE\nlH 3\n4: 9503/0463755  TRANN: 3/0463755\nCASHIER: 14-005 HARYIDH: 14-\nAW _ROYO Li\nDATE: 6/4/2026 TINE: 4:11:36 PH\nQTY DESCRIPTION mont 8\n2 338 CANISTER STUFF EX 110.00 EB\nALL 1.6L LARGE BP55,00ea 5\n1 0921 45CH BASIN 555 25.00 88\nNAKAPAL BP225.00ea 5\n1 348 TRAY (KI-TOP) £5.00 |\n765.0082 &\ng 804 STOCK BOX W/ HANDLE 1,480.00~ \"5\n10L 8P185.00ea P\n1 2010 XL WATER DIPPER 0.00 ©\nKOCHA BP40.00e3 |\n1 B742 PEELER BP55.00ea 5.00\n1 1133 14INCH FOOD TONG 80.00 ©\n(245) 8P60. 0023 |\n1 HX118/CFZ-15 CHOPPING uso 8\nk BOARD BP145,00e2 Ts\ni (150.00 - 3.33%) |\niii oooccmcoomzessesmemssssszx\nTotal gross value: 2,185.00 2\nProd. Discounts: 5.00\nAdjust 20 i\nTotal TY:\nANAT DE: LRN\nCash: 2%\nChange: or Ld\n"
+  },
+  {
+    "id": "syn-01-vendor-top-iso-date",
+    "kind": "synthetic",
+    "conditions": "Printed, vendor at top, ISO date (YYYY-MM-DD), TOTAL keyword, no thousands separator",
+    "expected": {
+      "date": "2026-07-20",
+      "vendor": "ALING NENA SARI-SARI STORE",
+      "amount": 1220,
+      "items": [
+        {
+          "name": "Rice 25kg",
+          "quantity": null,
+          "amount": 1050
+        },
+        {
+          "name": "Cooking oil 1L",
+          "quantity": null,
+          "amount": 170
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-20",
+      "vendor": "ALING NENA SARI-SARI STORE",
+      "amount": 1220,
+      "items": [
+        {
+          "name": "Rice 25kg",
+          "quantity": null,
+          "amount": 1050
+        },
+        {
+          "name": "Cooking oil 1L",
+          "quantity": null,
+          "amount": 170
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 2,
+      "matched": 2,
+      "nameCorrect": 2,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "ALING NENA SARI-SARI STORE\nApas, Cebu City\n\nDate: 2026-07-20\n\nRice 25kg 1050.00\nCooking oil 1L 170.00\nTOTAL 1220.00\nCASH 1500.00\nCHANGE 280.00\n"
+  },
+  {
+    "id": "syn-02-vendor-bottom",
+    "kind": "synthetic",
+    "conditions": "Printed, vendor at BOTTOM of receipt (known layout weakness), ISO date",
+    "expected": {
+      "date": "2026-07-18",
+      "vendor": "TINDAHAN NI MANG JOSE",
+      "amount": 845.5,
+      "items": [
+        {
+          "name": "Softdrinks case",
+          "quantity": null,
+          "amount": 540
+        },
+        {
+          "name": "Bread",
+          "quantity": null,
+          "amount": 305.5
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-18",
+      "vendor": "*xx GALES INVOICE ***",
+      "amount": 845.5,
+      "items": [
+        {
+          "name": "Softdrinks case",
+          "quantity": null,
+          "amount": 540
+        },
+        {
+          "name": "Bread",
+          "quantity": null,
+          "amount": 305.5
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 2,
+      "matched": 2,
+      "nameCorrect": 2,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "*xx GALES INVOICE ***\nDate: 2026-07-18\nSoftdrinks case 540.00\nBread 305.50\nTOTAL 845.50\nTINDAHAN NI MANG JOSE\nThank you, come again!\n"
+  },
+  {
+    "id": "syn-03-ambiguous-slash-date",
+    "kind": "synthetic",
+    "conditions": "Printed, ambiguous numeric date 03/09/2026 (both components <= 12) — read as DD/MM per PH convention",
+    "expected": {
+      "date": "2026-09-03",
+      "vendor": "CEBU MINI GROCERY",
+      "amount": 2340.75,
+      "items": [
+        {
+          "name": "Assorted goods",
+          "quantity": null,
+          "amount": 2340.75
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-09-03",
+      "vendor": "CEBU MINI GROCERY",
+      "amount": 2340.75,
+      "items": [
+        {
+          "name": "Assorted goods",
+          "quantity": null,
+          "amount": 2340.75
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 1,
+      "nameCorrect": 1,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "CEBU MINI GROCERY\nDate: 03/09/2026\nAssorted goods 2340.75\nTOTAL 2340.75\n"
+  },
+  {
+    "id": "syn-04-month-name-date",
+    "kind": "synthetic",
+    "conditions": "Printed, month-name date (Jul 05, 2026)",
+    "expected": {
+      "date": "2026-07-05",
+      "vendor": "BARANGAY SUPPLY DEPOT",
+      "amount": 675,
+      "items": [
+        {
+          "name": "Cleaning supplies",
+          "quantity": null,
+          "amount": 675
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-05",
+      "vendor": "BARANGAY SUPPLY DEPOT",
+      "amount": 675,
+      "items": [
+        {
+          "name": "Cleaning supplies",
+          "quantity": null,
+          "amount": 675
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 1,
+      "nameCorrect": 1,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "BARANGAY SUPPLY DEPOT\nJul 05, 2026\nCleaning supplies 675.00\nTOTAL 675.00\n"
+  },
+  {
+    "id": "syn-05-thousands-separator",
+    "kind": "synthetic",
+    "conditions": "Printed, amount with thousands separator (12,450.00)",
+    "expected": {
+      "date": "2026-07-12",
+      "vendor": "METRO WHOLESALE TRADING",
+      "amount": 12450,
+      "items": [
+        {
+          "name": "Bulk inventory",
+          "quantity": null,
+          "amount": 12450
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-12",
+      "vendor": "METRO WHOLESALE TRADING",
+      "amount": 12450,
+      "items": [
+        {
+          "name": "Bulk inventory",
+          "quantity": null,
+          "amount": 12450
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 1,
+      "nameCorrect": 1,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "METRO WHOLESALE TRADING\nDate: 2026-07-12\nBulk inventory 12,450.00\nTOTAL 12,450.00\n"
+  },
+  {
+    "id": "syn-06-subtotal-then-total",
+    "kind": "synthetic",
+    "conditions": "Printed, SUBTOTAL present before TOTAL (must not pick subtotal)",
+    "expected": {
+      "date": "2026-07-14",
+      "vendor": "SARI-SARI EXPRESS",
+      "amount": 1120,
+      "items": [
+        {
+          "name": "Goods",
+          "quantity": null,
+          "amount": 1000
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-14",
+      "vendor": "SARI-SARI EXPRESS",
+      "amount": 1120,
+      "items": [
+        {
+          "name": "Goods",
+          "quantity": null,
+          "amount": 1000
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 1,
+      "nameCorrect": 1,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "SARI-SARI EXPRESS\nDate: 2026-07-14\nGoods 1000.00\nSUBTOTAL 1000.00\nVAT 12% 120.00\nTOTAL 1120.00\n"
+  },
+  {
+    "id": "syn-07-no-total-keyword",
+    "kind": "synthetic",
+    "conditions": "Printed, NO 'TOTAL' keyword at all (uses 'Amount Due') — tests the max-value fallback",
+    "expected": {
+      "date": "2026-07-16",
+      "vendor": "JAH GENERAL MERCHANDISE",
+      "amount": 3400,
+      "items": [
+        {
+          "name": "Stock purchase",
+          "quantity": null,
+          "amount": 3400
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-16",
+      "vendor": "JAH GENERAL MERCHANDISE",
+      "amount": 3400,
+      "items": [
+        {
+          "name": "Stock purchase",
+          "quantity": null,
+          "amount": 3400
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 1,
+      "nameCorrect": 1,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "JAH GENERAL MERCHANDISE\nDate: 2026-07-16\nStock purchase 3400.00\nAmount Due 3400.00\n"
+  },
+  {
+    "id": "syn-08-peso-sign",
+    "kind": "synthetic",
+    "conditions": "Printed, peso sign prefixes every amount",
+    "expected": {
+      "date": "2026-07-19",
+      "vendor": "VISAYAS FOOD SUPPLY",
+      "amount": 980.25,
+      "items": [
+        {
+          "name": "Frozen goods",
+          "quantity": null,
+          "amount": 980.25
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-19",
+      "vendor": "VISAYAS FOOD SUPPLY",
+      "amount": 980.25,
+      "items": [
+        {
+          "name": "Frozen goods £",
+          "quantity": null,
+          "amount": 980.25
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 1,
+      "nameCorrect": 1,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "VISAYAS FOOD SUPPLY\nDate: 2026-07-19\nFrozen goods £980.25\nTOTAL £980.25\n"
+  },
+  {
+    "id": "syn-09-two-digit-year",
+    "kind": "synthetic",
+    "conditions": "Printed, two-digit year (07/22/26)",
+    "expected": {
+      "date": "2026-07-22",
+      "vendor": "QUICK MART APAS",
+      "amount": 455,
+      "items": [
+        {
+          "name": "Snacks",
+          "quantity": null,
+          "amount": 455
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-22",
+      "vendor": "QUICK MART APAS",
+      "amount": 455,
+      "items": [
+        {
+          "name": "Snacks",
+          "quantity": null,
+          "amount": 455
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 1,
+      "nameCorrect": 1,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "QUICK MART APAS\nDate: 07/22/26\nSnacks 455.00\nTOTAL 455.00\n"
+  },
+  {
+    "id": "syn-10-dd-mm-yyyy",
+    "kind": "synthetic",
+    "conditions": "Printed, DD/MM/YYYY date (25/07/2026) — resolvable by validity, since 25 cannot be a month",
+    "expected": {
+      "date": "2026-07-25",
+      "vendor": "MANDAUE DRY GOODS",
+      "amount": 1875,
+      "items": [
+        {
+          "name": "Dry goods",
+          "quantity": null,
+          "amount": 1875
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-25",
+      "vendor": "MANDAUE DRY GOODS",
+      "amount": 1875,
+      "items": [
+        {
+          "name": "Dry goods",
+          "quantity": null,
+          "amount": 1875
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 1,
+      "nameCorrect": 1,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "MANDAUE DRY GOODS\nDate: 25/07/2026\nDry goods 1875.00\nTOTAL 1875.00\n"
+  },
+  {
+    "id": "syn-11-long-header",
+    "kind": "synthetic",
+    "conditions": "Printed, several administrative lines before the vendor name (TIN/permit block first)",
+    "expected": {
+      "date": "2026-07-21",
+      "vendor": "LAPU-LAPU TRADING CO",
+      "amount": 5600,
+      "items": [
+        {
+          "name": "Hardware",
+          "quantity": null,
+          "amount": 5600
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-21",
+      "vendor": "LAPU-LAPU TRADING CO",
+      "amount": 5600,
+      "items": [
+        {
+          "name": "Hardware",
+          "quantity": null,
+          "amount": 5600
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 1,
+      "nameCorrect": 1,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "VAT REG TIN: 123-456-789-00000\nPERMIT NO: FP102026-080-0473287\nPOS SN: 1000104650067\nLAPU-LAPU TRADING CO\nDate: 2026-07-21\nHardware 5600.00\nTOTAL 5600.00\n"
+  },
+  {
+    "id": "syn-12-tiny-amount",
+    "kind": "synthetic",
+    "conditions": "Printed, very small amount (single-digit pesos)",
+    "expected": {
+      "date": "2026-07-23",
+      "vendor": "CORNER STORE APAS",
+      "amount": 8.5,
+      "items": [
+        {
+          "name": "Candy",
+          "quantity": null,
+          "amount": 8.5
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-23",
+      "vendor": "CORNER STORE APAS",
+      "amount": 8.5,
+      "items": [
+        {
+          "name": "Candy",
+          "quantity": null,
+          "amount": 8.5
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 1,
+      "nameCorrect": 1,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "CORNER STORE APAS\nDate: 2026-07-23\nCandy 8.50\nTOTAL 8.50\n"
+  },
+  {
+    "id": "syn-13-many-items",
+    "kind": "synthetic",
+    "conditions": "Printed, 7 plain name+price item lines (a grocery run) — the common multi-item shape",
+    "expected": {
+      "date": "2026-07-24",
+      "vendor": "PUREGOLD APAS BRANCH",
+      "amount": 1147,
+      "items": [
+        {
+          "name": "Buns",
+          "quantity": null,
+          "amount": 60
+        },
+        {
+          "name": "Ground beef patty",
+          "quantity": null,
+          "amount": 320
+        },
+        {
+          "name": "Eggs tray",
+          "quantity": null,
+          "amount": 215
+        },
+        {
+          "name": "Lettuce",
+          "quantity": null,
+          "amount": 85
+        },
+        {
+          "name": "Cheese slices",
+          "quantity": null,
+          "amount": 175
+        },
+        {
+          "name": "Cooking oil 1L",
+          "quantity": null,
+          "amount": 172
+        },
+        {
+          "name": "Dishwashing liquid",
+          "quantity": null,
+          "amount": 120
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-24",
+      "vendor": "PUREGOLD APAS BRANCH",
+      "amount": 1147,
+      "items": [
+        {
+          "name": "Buns",
+          "quantity": null,
+          "amount": 60
+        },
+        {
+          "name": "Ground beef patty",
+          "quantity": null,
+          "amount": 320
+        },
+        {
+          "name": "Eggs tray",
+          "quantity": null,
+          "amount": 215
+        },
+        {
+          "name": "Lettuce",
+          "quantity": null,
+          "amount": 85
+        },
+        {
+          "name": "Cheese slices",
+          "quantity": null,
+          "amount": 175
+        },
+        {
+          "name": "Cooking oil 1L",
+          "quantity": null,
+          "amount": 172
+        },
+        {
+          "name": "Dishwashing liquid",
+          "quantity": null,
+          "amount": 120
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 7,
+      "matched": 7,
+      "nameCorrect": 7,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "PUREGOLD APAS BRANCH\n\nDate: 2026-07-24\n\nBuns 60.00\nGround beef patty 320.00\nEggs tray 215.00\nLettuce 85.00\nCheese slices 175.00\nCooking oil 1L 172.00\nDishwashing liquid 120.00\nTOTAL 1147.00\n"
+  },
+  {
+    "id": "syn-14-qty-columns",
+    "kind": "synthetic",
+    "conditions": "Printed, QTY / UNIT PRICE / AMOUNT columns per item line",
+    "expected": {
+      "date": "2026-07-26",
+      "vendor": "CEBU MEAT SUPPLY",
+      "amount": 1450,
+      "items": [
+        {
+          "name": "Chicken whole",
+          "quantity": 2,
+          "amount": 300
+        },
+        {
+          "name": "Pork belly kg",
+          "quantity": 3,
+          "amount": 900
+        },
+        {
+          "name": "Beef cubes kg",
+          "quantity": 1,
+          "amount": 250
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-26",
+      "vendor": "CEBU MEAT SUPPLY",
+      "amount": 1450,
+      "items": [
+        {
+          "name": "Chicken whole",
+          "quantity": 2,
+          "amount": 300
+        },
+        {
+          "name": "Pork belly kg",
+          "quantity": 3,
+          "amount": 900
+        },
+        {
+          "name": "Beef cubes kg",
+          "quantity": 1,
+          "amount": 250
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 3,
+      "matched": 3,
+      "nameCorrect": 3,
+      "quantityCorrect": 3,
+      "quantityScored": 3,
+      "falsePositives": 0
+    },
+    "rawText": "CEBU MEAT SUPPLY\nDate: 2026-07-26\nChicken whole 2 150.00 300.00\nPork belly kg 3 300.00 900.00\nBeef cubes kg 1 250.00 250.00\nTOTAL 1450.00\n"
+  },
+  {
+    "id": "syn-15-vat-flags",
+    "kind": "synthetic",
+    "conditions": "Printed, BIR-style VAT class flag appended to every item amount (129.00V)",
+    "expected": {
+      "date": "2026-07-27",
+      "vendor": "MANDAUE FOOD HAUS",
+      "amount": 188,
+      "items": [
+        {
+          "name": "Spareribs Meal",
+          "quantity": null,
+          "amount": 129
+        },
+        {
+          "name": "Iced Latte 16oz",
+          "quantity": null,
+          "amount": 59
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-27",
+      "vendor": "MANDAUE FOOD HAUS",
+      "amount": 188,
+      "items": [
+        {
+          "name": "Spareribs Meal",
+          "quantity": null,
+          "amount": 129
+        },
+        {
+          "name": "Iced Latte 160z",
+          "quantity": null,
+          "amount": 59
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 2,
+      "matched": 2,
+      "nameCorrect": 2,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "MANDAUE FOOD HAUS\nDate: 2026-07-27\nSpareribs Meal 129.00V\nIced Latte 160z 59.00V\nTOTAL 188.00\nVAT Sales 167.86\nVAT (12%) 20.14\n"
+  },
+  {
+    "id": "syn-16-multiplier-prefix",
+    "kind": "synthetic",
+    "conditions": "Printed, '2 x Item' multiplier prefix on each line",
+    "expected": {
+      "date": "2026-07-28",
+      "vendor": "TALAMBAN BEVERAGE CENTER",
+      "amount": 465,
+      "items": [
+        {
+          "name": "Softdrinks 1.5L",
+          "quantity": 3,
+          "amount": 195
+        },
+        {
+          "name": "Bottled water",
+          "quantity": 4,
+          "amount": 120
+        },
+        {
+          "name": "Juice pack",
+          "quantity": 2,
+          "amount": 150
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-28",
+      "vendor": "TALAMBAN BEVERAGE CENTER",
+      "amount": 465,
+      "items": [
+        {
+          "name": "Softdrinks 1.5L",
+          "quantity": 3,
+          "amount": 195
+        },
+        {
+          "name": "Bottled water",
+          "quantity": 4,
+          "amount": 120
+        },
+        {
+          "name": "Juice pack",
+          "quantity": 2,
+          "amount": 150
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 3,
+      "matched": 3,
+      "nameCorrect": 3,
+      "quantityCorrect": 3,
+      "quantityScored": 3,
+      "falsePositives": 0
+    },
+    "rawText": "TALAMBAN BEVERAGE CENTER\nDate: 2026-07-28\n3 x Softdrinks 1.5L 195.00\n4 x Bottled water 120.00\n2 x Juice pack 150.00\nTOTAL 465.00\n"
+  },
+  {
+    "id": "syn-17-total-only",
+    "kind": "synthetic",
+    "conditions": "Printed, NO itemised lines at all — only a total. Tests the fallback: item extraction must return nothing rather than invent lines",
+    "expected": {
+      "date": "2026-07-29",
+      "vendor": "MANG JOSE HANDWRITTEN",
+      "amount": 750,
+      "items": []
+    },
+    "actual": {
+      "date": "2026-07-29",
+      "vendor": "MANG JOSE HANDWRITTEN",
+      "amount": 750,
+      "items": []
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 0,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "MANG JOSE HANDWRITTEN\nDate: 2026-07-29\nTOTAL 750.00\n"
+  },
+  {
+    "id": "syn-19-savemore-payment-and-tax-lines",
+    "kind": "synthetic",
+    "conditions": "Real PH grocery receipt structure: 6 items followed by a VAT summary block, a TOTAL, and a 'BDO ATM' payment line carrying the same total, plus AuthCode/Order ID",
+    "expected": {
+      "date": "2026-07-26",
+      "vendor": "SAVEMORE MARKET",
+      "amount": 371,
+      "items": [
+        {
+          "name": "COKE MISMO 300ML",
+          "quantity": null,
+          "amount": 45
+        },
+        {
+          "name": "SKYFLAKES CRACKERS",
+          "quantity": null,
+          "amount": 38
+        },
+        {
+          "name": "TISSUE 2PLY 12S",
+          "quantity": null,
+          "amount": 89
+        },
+        {
+          "name": "GARDENIA WHITE BREAD",
+          "quantity": null,
+          "amount": 72
+        },
+        {
+          "name": "SPRITE 1.5L",
+          "quantity": null,
+          "amount": 85
+        },
+        {
+          "name": "CENTURY TUNA 155G",
+          "quantity": null,
+          "amount": 42
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-26",
+      "vendor": "SAVEMORE MARKET",
+      "amount": 371,
+      "items": [
+        {
+          "name": "COKE MISMO 300ML",
+          "quantity": null,
+          "amount": 45
+        },
+        {
+          "name": "SKYFLAKES CRACKERS",
+          "quantity": null,
+          "amount": 38
+        },
+        {
+          "name": "TISSUE 2PLY 12S",
+          "quantity": null,
+          "amount": 89
+        },
+        {
+          "name": "GARDENIA WHITE BREAD",
+          "quantity": null,
+          "amount": 72
+        },
+        {
+          "name": "SPRITE 1.5L",
+          "quantity": null,
+          "amount": 85
+        },
+        {
+          "name": "CENTURY TUNA 155G",
+          "quantity": null,
+          "amount": 42
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 6,
+      "matched": 6,
+      "nameCorrect": 6,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "SAVEMORE MARKET\nBanilad, Cebu City\n\nVAT REG TIN: 005-070-943-00000\n\nDate: 2026-07-26\n\nCOKE MISMO 300ML 45.00\nSKYFLAKES CRACKERS 38.00\nTISSUE 2PLY 12S 89.00\nGARDENIA WHITE BREAD 72.00\nSPRITE 1.5L 85.00\nCENTURY TUNA 155G 42.00\nVATable Sales 331.25\nVAT Amount 39.75\nZero-Rated Sales 0.00\nVAT-Exempt Sales 0.00\nTOTAL 371.00\nBDO ATM 371.00\nAuthCode 123456\nOrder ID A9921-004\n"
+  },
+  {
+    "id": "syn-18-discount-line",
+    "kind": "synthetic",
+    "conditions": "Printed, a DISCOUNT line sits among the items — must not be read as a purchase",
+    "expected": {
+      "date": "2026-07-30",
+      "vendor": "SOUTH CITY PHARMACY",
+      "amount": 430,
+      "items": [
+        {
+          "name": "Paracetamol box",
+          "quantity": null,
+          "amount": 250
+        },
+        {
+          "name": "Vitamins bottle",
+          "quantity": null,
+          "amount": 230
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-30",
+      "vendor": "SOUTH CITY PHARMACY",
+      "amount": 430,
+      "items": [
+        {
+          "name": "Paracetamol box",
+          "quantity": null,
+          "amount": 250
+        },
+        {
+          "name": "Vitamins bottle",
+          "quantity": null,
+          "amount": 230
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 2,
+      "matched": 2,
+      "nameCorrect": 2,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "SOUTH CITY PHARMACY\nDate: 2026-07-30\nParacetamol box 250.00\nVitamins bottle 230.00\nLess Senior Discount 50.00\nTOTAL 430.00\n"
+  },
+  {
+    "id": "deg-01-blur",
+    "kind": "degraded",
+    "conditions": "Synthetic + Gaussian blur r=1.6 (simulates out-of-focus capture)",
+    "expected": {
+      "date": "2026-07-20",
+      "vendor": "ALING NENA SARI-SARI STORE",
+      "amount": 1220,
+      "items": [
+        {
+          "name": "Rice 25kg",
+          "quantity": null,
+          "amount": 1050
+        },
+        {
+          "name": "Cooking oil 1L",
+          "quantity": null,
+          "amount": 170
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-20",
+      "vendor": "ALING NENA SARI-SARI STORE",
+      "amount": 1220,
+      "items": [
+        {
+          "name": "Rice 25kg",
+          "quantity": null,
+          "amount": 1050
+        },
+        {
+          "name": "Cooking oil 1L",
+          "quantity": null,
+          "amount": 170
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 2,
+      "matched": 2,
+      "nameCorrect": 2,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "ALING NENA SARI-SARI STORE\nApas, Cebu City\n\nDate: 2026-07-20\n\nRice 25kg 1050.00\nCooking oil 1L 170.00\nTOTAL 1220.00\nCASH 1500.00\nCHANGE 280.00\n"
+  },
+  {
+    "id": "deg-02-low-contrast",
+    "kind": "degraded",
+    "conditions": "Synthetic + contrast reduced to 35% (simulates faded thermal print)",
+    "expected": {
+      "date": "2026-07-20",
+      "vendor": "ALING NENA SARI-SARI STORE",
+      "amount": 1220,
+      "items": [
+        {
+          "name": "Rice 25kg",
+          "quantity": null,
+          "amount": 1050
+        },
+        {
+          "name": "Cooking oil 1L",
+          "quantity": null,
+          "amount": 170
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-20",
+      "vendor": "ALING NENA SARI-SARI STORE",
+      "amount": 1220,
+      "items": [
+        {
+          "name": "Rice 25kg",
+          "quantity": null,
+          "amount": 1050
+        },
+        {
+          "name": "Cooking oil 1L",
+          "quantity": null,
+          "amount": 170
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 2,
+      "matched": 2,
+      "nameCorrect": 2,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "ALING NENA SARI-SARI STORE\nApas, Cebu City\n\nDate: 2026-07-20\n\nRice 25kg 1050.00\nCooking oil 1L 170.00\nTOTAL 1220.00\nCASH 1500.00\nCHANGE 280.00\n"
+  },
+  {
+    "id": "deg-03-rotated",
+    "kind": "degraded",
+    "conditions": "Synthetic + rotated 4 degrees (simulates handheld skew)",
+    "expected": {
+      "date": "2026-07-12",
+      "vendor": "METRO WHOLESALE TRADING",
+      "amount": 12450,
+      "items": [
+        {
+          "name": "Bulk inventory",
+          "quantity": null,
+          "amount": 12450
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-12",
+      "vendor": "METRO WHOLESALE TRADING",
+      "amount": 12450,
+      "items": [
+        {
+          "name": "Bulk inventory",
+          "quantity": null,
+          "amount": 12450
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 1,
+      "nameCorrect": 1,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "METRO WHOLESALE TRADING\nDate: 2026-07-12\nBulk inventory 12,450.00\nTOTAL 12,450.00\n"
+  },
+  {
+    "id": "deg-04-low-resolution",
+    "kind": "degraded",
+    "conditions": "Synthetic + downscaled to 45% then back up (simulates a distant/low-res photo)",
+    "expected": {
+      "date": "2026-07-12",
+      "vendor": "METRO WHOLESALE TRADING",
+      "amount": 12450,
+      "items": [
+        {
+          "name": "Bulk inventory",
+          "quantity": null,
+          "amount": 12450
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-12",
+      "vendor": "METRO WHOLESALE TRADING",
+      "amount": 12450,
+      "items": [
+        {
+          "name": "Bulk inventory",
+          "quantity": null,
+          "amount": 12450
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 1,
+      "nameCorrect": 1,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "METRO WHOLESALE TRADING\nDate: 2026-07-12\nBulk inventory 12,450.00\nTOTAL 12,450.00\n"
+  },
+  {
+    "id": "deg-05-dark",
+    "kind": "degraded",
+    "conditions": "Synthetic + brightness reduced to 45% (simulates poor lighting)",
+    "expected": {
+      "date": "2026-07-14",
+      "vendor": "SARI-SARI EXPRESS",
+      "amount": 1120,
+      "items": [
+        {
+          "name": "Goods",
+          "quantity": null,
+          "amount": 1000
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-14",
+      "vendor": "SARI-SARI EXPRESS",
+      "amount": 1120,
+      "items": [
+        {
+          "name": "Goods",
+          "quantity": null,
+          "amount": 1000
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 1,
+      "nameCorrect": 1,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "SARI-SARI EXPRESS\nDate: 2026-07-14\nGoods 1000.00\nSUBTOTAL 1000.00\nVAT 12% 120.00\nTOTAL 1120.00\n"
+  },
+  {
+    "id": "deg-06-jpeg-artifacts",
+    "kind": "degraded",
+    "conditions": "Synthetic + heavy JPEG compression (quality 12)",
+    "expected": {
+      "date": "2026-07-14",
+      "vendor": "SARI-SARI EXPRESS",
+      "amount": 1120,
+      "items": [
+        {
+          "name": "Goods",
+          "quantity": null,
+          "amount": 1000
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-14",
+      "vendor": "SARI-SARI EXPRESS",
+      "amount": 1120,
+      "items": [
+        {
+          "name": "Goods",
+          "quantity": null,
+          "amount": 1000
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 1,
+      "nameCorrect": 1,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "SARI-SARI EXPRESS\nDate: 2026-07-14\nGoods 1000.00\nSUBTOTAL 1000.00\nVAT 12% 120.00\nTOTAL 1120.00\n"
+  },
+  {
+    "id": "deg-07-many-items-blur",
+    "kind": "degraded",
+    "conditions": "7-item receipt + Gaussian blur r=1.6",
+    "expected": {
+      "date": "2026-07-24",
+      "vendor": "PUREGOLD APAS BRANCH",
+      "amount": 1147,
+      "items": [
+        {
+          "name": "Buns",
+          "quantity": null,
+          "amount": 60
+        },
+        {
+          "name": "Ground beef patty",
+          "quantity": null,
+          "amount": 320
+        },
+        {
+          "name": "Eggs tray",
+          "quantity": null,
+          "amount": 215
+        },
+        {
+          "name": "Lettuce",
+          "quantity": null,
+          "amount": 85
+        },
+        {
+          "name": "Cheese slices",
+          "quantity": null,
+          "amount": 175
+        },
+        {
+          "name": "Cooking oil 1L",
+          "quantity": null,
+          "amount": 172
+        },
+        {
+          "name": "Dishwashing liquid",
+          "quantity": null,
+          "amount": 120
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-24",
+      "vendor": "PUREGOLD APAS BRANCH",
+      "amount": 1147,
+      "items": [
+        {
+          "name": "Buns",
+          "quantity": null,
+          "amount": 60
+        },
+        {
+          "name": "Ground beef patty",
+          "quantity": null,
+          "amount": 320
+        },
+        {
+          "name": "Eggs tray",
+          "quantity": null,
+          "amount": 215
+        },
+        {
+          "name": "Lettuce",
+          "quantity": null,
+          "amount": 85
+        },
+        {
+          "name": "Cheese slices",
+          "quantity": null,
+          "amount": 175
+        },
+        {
+          "name": "Cooking oil 1L",
+          "quantity": null,
+          "amount": 172
+        },
+        {
+          "name": "Dishwashing liquid",
+          "quantity": null,
+          "amount": 120
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 7,
+      "matched": 7,
+      "nameCorrect": 7,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "PUREGOLD APAS BRANCH\n\nDate: 2026-07-24\n\nBuns 60.00\nGround beef patty 320.00\nEggs tray 215.00\nLettuce 85.00\nCheese slices 175.00\nCooking oil 1L 172.00\nDishwashing liquid 120.00\nTOTAL 1147.00\n"
+  },
+  {
+    "id": "deg-08-many-items-low-contrast",
+    "kind": "degraded",
+    "conditions": "7-item receipt + contrast reduced to 35%",
+    "expected": {
+      "date": "2026-07-24",
+      "vendor": "PUREGOLD APAS BRANCH",
+      "amount": 1147,
+      "items": [
+        {
+          "name": "Buns",
+          "quantity": null,
+          "amount": 60
+        },
+        {
+          "name": "Ground beef patty",
+          "quantity": null,
+          "amount": 320
+        },
+        {
+          "name": "Eggs tray",
+          "quantity": null,
+          "amount": 215
+        },
+        {
+          "name": "Lettuce",
+          "quantity": null,
+          "amount": 85
+        },
+        {
+          "name": "Cheese slices",
+          "quantity": null,
+          "amount": 175
+        },
+        {
+          "name": "Cooking oil 1L",
+          "quantity": null,
+          "amount": 172
+        },
+        {
+          "name": "Dishwashing liquid",
+          "quantity": null,
+          "amount": 120
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-24",
+      "vendor": "PUREGOLD APAS BRANCH",
+      "amount": 1147,
+      "items": [
+        {
+          "name": "Buns",
+          "quantity": null,
+          "amount": 60
+        },
+        {
+          "name": "Ground beef patty",
+          "quantity": null,
+          "amount": 320
+        },
+        {
+          "name": "Eggs tray",
+          "quantity": null,
+          "amount": 215
+        },
+        {
+          "name": "Lettuce",
+          "quantity": null,
+          "amount": 85
+        },
+        {
+          "name": "Cheese slices",
+          "quantity": null,
+          "amount": 175
+        },
+        {
+          "name": "Cooking oil 1L",
+          "quantity": null,
+          "amount": 172
+        },
+        {
+          "name": "Dishwashing liquid",
+          "quantity": null,
+          "amount": 120
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 7,
+      "matched": 7,
+      "nameCorrect": 7,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "PUREGOLD APAS BRANCH\n\nDate: 2026-07-24\n\nBuns 60.00\nGround beef patty 320.00\nEggs tray 215.00\nLettuce 85.00\nCheese slices 175.00\nCooking oil 1L 172.00\nDishwashing liquid 120.00\nTOTAL 1147.00\n"
+  },
+  {
+    "id": "deg-09-qty-columns-rotated",
+    "kind": "degraded",
+    "conditions": "Quantity-column receipt + rotated 4 degrees",
+    "expected": {
+      "date": "2026-07-26",
+      "vendor": "CEBU MEAT SUPPLY",
+      "amount": 1450,
+      "items": [
+        {
+          "name": "Chicken whole",
+          "quantity": 2,
+          "amount": 300
+        },
+        {
+          "name": "Pork belly kg",
+          "quantity": 3,
+          "amount": 900
+        },
+        {
+          "name": "Beef cubes kg",
+          "quantity": 1,
+          "amount": 250
+        }
+      ]
+    },
+    "actual": {
+      "date": "2026-07-26",
+      "vendor": "CEBU MEAT SUPPLY",
+      "amount": 1450,
+      "items": [
+        {
+          "name": "Chicken whole",
+          "quantity": 2,
+          "amount": 300
+        },
+        {
+          "name": "Pork belly kg",
+          "quantity": 3,
+          "amount": 900
+        },
+        {
+          "name": "Beef cubes kg 1 250.09",
+          "quantity": null,
+          "amount": 250
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 3,
+      "matched": 3,
+      "nameCorrect": 3,
+      "quantityCorrect": 2,
+      "quantityScored": 3,
+      "falsePositives": 0
+    },
+    "rawText": "CEBU MEAT SUPPLY\nDate: 2026-07-26\nChicken whole 2 150.00 300.00\nPork belly kg 3 300.00 900.00\nBeef cubes kg 1 250.09 250.00\nTOTAL 1450.00\n"
+  }
+]

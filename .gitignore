@@ -1,0 +1,30 @@
+node_modules/
+dist/
+build/
+.env
+.env.local
+.mcp.json
+*.log
+.DS_Store
+coverage/
+web/test-results/
+web/playwright-report/
+.vscode/
+web/dist/
+backend/dist/
+
+# OCR corpus images — one is a real receipt photograph (personal data), and the
+# synthetic ones are regenerable via tests/ocr-accuracy/generate-corpus.py.
+# ground-truth.json and the generated reports ARE tracked.
+backend/tests/ocr-accuracy/images/
+backend/tests/ocr-accuracy/.html-tmp/
+# Staging area for receipt photos being added to the corpus. Real receipts
+# carry a business's name, address and purchases — they stay off the remote.
+backend/tests/ocr-accuracy/inbox/
+# Live feedback output, UNLIKE the corpus reports above, which are tracked.
+# These are generated from real confirmed receipts: the recurring-error tables
+# name the vendors an owner buys from and the items they bought. Same rule as
+# the inbox — real transaction data stays off the remote. Regenerate locally
+# with live-feedback-report.ts whenever it is needed.
+backend/tests/ocr-accuracy/LIVE-FEEDBACK-REPORT.md
+backend/tests/ocr-accuracy/live-feedback.json

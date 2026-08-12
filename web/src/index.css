@@ -1,0 +1,716 @@
+/* Self-hosted — no runtime CDN request, which matters on slow mobile data. */
+/* LATIN SUBSETS ONLY.
+
+   The unqualified `@fontsource/inter/400.css` imports every subset the
+   family ships — latin, latin-ext, cyrillic, cyrillic-ext, greek, greek-ext
+   and vietnamese. Across ten weights that was 96 font files and 1.4 MB in
+   the build output, for an app whose entire interface and audience are in
+   English and Filipino. Both are covered by latin.
+
+   Add a subset back the day the interface is translated into a script that
+   needs it, not before. */
+@import "@fontsource/inter/latin-400.css";
+@import "@fontsource/inter/latin-500.css";
+@import "@fontsource/inter/latin-600.css";
+@import "@fontsource/sora/latin-600.css";
+@import "@fontsource/sora/latin-700.css";
+@import "@fontsource/sora/latin-800.css";
+@import "@fontsource/ibm-plex-sans/latin-600.css";
+@import "@fontsource/ibm-plex-mono/latin-400.css";
+@import "@fontsource/ibm-plex-mono/latin-500.css";
+@import "@fontsource/ibm-plex-mono/latin-600.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ===================================================================
+   THEMES — Classic, Light, Dark
+   ===================================================================
+   Every reading surface (`paper`), every piece of text (`ink`) and every
+   status chip (`tint`/`tone`/`edge`) in the app resolves to one of these
+   variables through the Tailwind scales in tailwind.config.js. Nothing else
+   needs to know a theme exists: `bg-paper` is a white card in Classic and a
+   dark card in Dark, from the same class.
+
+   Values are space-separated RGB channels, not hex, because Tailwind's
+   `<alpha-value>` slot needs them that way — that is what keeps `bg-paper/90`
+   and `border-ink-200/50` working.
+
+   `brand` and `accent` are NOT here. They are fixed hexes in the config: the
+   teal and the amber are the brand, and a brand that changes colour with a
+   theme toggle isn't one.
+
+   CONTRAST: every `tone-*` clears 4.5:1 on its own `tint-*`, and ink-500 and
+   darker clear 4.5:1 on paper, in all three themes. ink-400 is the muted step
+   and is only ever used for decorative or duplicated text.
+   ------------------------------------------------------------------- */
+
+@layer base {
+  /* ---------------------------------------------------------------
+     CLASSIC — the original FinSight surface, unchanged.
+     ---------------------------------------------------------------
+     Warm near-white page, pure white cards, and neutrals cooled very
+     slightly toward teal so text sits with the brand rather than against it.
+     This is the default: an existing user who never touches the switcher
+     sees exactly the app they saw before. */
+  :root,
+  [data-theme="classic"] {
+    --paper: 255 255 255;
+    --paper-50: 251 253 252;
+    --paper-100: 244 248 247;
+    --paper-200: 232 239 237;
+
+    --ink-50: 246 248 248;
+    --ink-100: 236 239 240;
+    --ink-200: 213 219 221;
+    --ink-300: 176 187 190;
+    --ink-400: 127 143 148;
+    --ink-500: 93 109 114;
+    --ink-600: 74 88 92;
+    --ink-700: 61 71 73;
+    --ink-800: 44 52 54;
+    --ink-900: 26 32 34;
+    --ink-950: 14 18 19;
+
+    --tint-brand: 239 252 249;
+    --tone-brand: 15 80 75;
+    --edge-brand: 200 247 236;
+    --tint-accent: 255 249 237;
+    --tone-accent: 148 82 11;
+    --edge-accent: 251 216 148;
+    --tint-danger: 255 241 242;
+    --tone-danger: 159 18 57;
+    --edge-danger: 254 205 211;
+    --tint-info: 240 249 255;
+    --tone-info: 12 74 110;
+    --edge-info: 186 230 253;
+    --tint-neutral: 244 248 247;
+    --tone-neutral: 74 88 92;
+    --edge-neutral: 213 219 221;
+
+    /* Alert severities — see the note in the DARK block below. */
+    --sev-critical-bg: 254 242 242;
+    --sev-critical-edge: 254 226 226;
+    --sev-critical-ink: 192 47 47;
+    --sev-serious-bg: 255 247 237;
+    --sev-serious-edge: 255 237 213;
+    --sev-serious-ink: 168 68 42;
+    --sev-warning-bg: 255 251 235;
+    --sev-warning-edge: 254 243 199;
+    --sev-warning-ink: 138 90 0;
+    --sev-info-bg: 239 252 249;
+    --sev-info-edge: 200 247 236;
+    --sev-info-ink: 14 101 92;
+    --sev-good-ink: 10 125 10;
+
+    /* Chart emphasis pair — "this period" vs "last period".
+       A comparison chart is emphasis, not identity: one series is the point
+       and the other is context, so it is one hue plus a recessive grey rather
+       than two competing colours. Both steps move with the theme, because
+       brand-600 is a strong fill on white and a muddy one on a near-black
+       card. */
+    --chart-emphasis: 13 127 114;
+    --chart-muted: 205 213 215;
+
+    /* Deep green-teal, near-black at the foot. */
+    --sidebar-from: 15 66 63;
+    --sidebar-to: 5 38 36;
+
+    /* The rail's own text/wash colours — see the sidebar note in
+       tailwind.config.js. White text and a white wash source, because this
+       is still the dark teal rail every version of FinSight has had. */
+    --sidebar-ink: 255 255 255;
+    --sidebar-muted: 200 247 236;
+    --sidebar-accent: 90 220 196;
+    --sidebar-fg: 255 255 255;
+
+    /* Shadow tinted toward the brand hue — see the config's note. */
+    --shadow: 6 45 35;
+    --shadow-sm-a: 0.06;
+    --shadow-sm-b: 0.05;
+    --shadow-md-a: 0.08;
+    --shadow-lg-a: 0.16;
+  }
+
+  /* ---------------------------------------------------------------
+     LIGHT — cooler and crisper than Classic.
+     ---------------------------------------------------------------
+     Not a duplicate of Classic: the neutrals are true blue-greys rather than
+     teal-cooled, and the page sits a step brighter. For anyone who finds
+     Classic's warmth muddy, or who is reading in bright light. */
+  [data-theme="light"] {
+    --paper: 255 255 255;
+    --paper-50: 248 250 252;
+    --paper-100: 241 245 249;
+    --paper-200: 226 232 240;
+
+    --ink-50: 248 250 252;
+    --ink-100: 241 245 249;
+    --ink-200: 226 232 240;
+    --ink-300: 203 213 225;
+    --ink-400: 148 163 184;
+    --ink-500: 100 116 139;
+    --ink-600: 71 85 105;
+    --ink-700: 51 65 85;
+    --ink-800: 30 41 59;
+    --ink-900: 15 23 42;
+    --ink-950: 2 6 23;
+
+    --tint-brand: 239 252 249;
+    --tone-brand: 15 80 75;
+    --edge-brand: 200 247 236;
+    --tint-accent: 255 249 237;
+    --tone-accent: 148 82 11;
+    --edge-accent: 251 216 148;
+    --tint-danger: 255 241 242;
+    --tone-danger: 159 18 57;
+    --edge-danger: 254 205 211;
+    --tint-info: 240 249 255;
+    --tone-info: 12 74 110;
+    --edge-info: 186 230 253;
+    --tint-neutral: 241 245 249;
+    --tone-neutral: 71 85 105;
+    --edge-neutral: 226 232 240;
+
+    --sev-critical-bg: 254 242 242;
+    --sev-critical-edge: 254 226 226;
+    --sev-critical-ink: 192 47 47;
+    --sev-serious-bg: 255 247 237;
+    --sev-serious-edge: 255 237 213;
+    --sev-serious-ink: 168 68 42;
+    --sev-warning-bg: 255 251 235;
+    --sev-warning-edge: 254 243 199;
+    --sev-warning-ink: 138 90 0;
+    --sev-info-bg: 239 252 249;
+    --sev-info-edge: 200 247 236;
+    --sev-info-ink: 14 101 92;
+    --sev-good-ink: 10 125 10;
+
+    /* Chart emphasis pair — "this period" vs "last period".
+       A comparison chart is emphasis, not identity: one series is the point
+       and the other is context, so it is one hue plus a recessive grey rather
+       than two competing colours. Both steps move with the theme, because
+       brand-600 is a strong fill on white and a muddy one on a near-black
+       card. */
+    --chart-emphasis: 13 127 114;
+    --chart-muted: 205 213 215;
+
+    /* The one theme where the rail itself goes light rather than staying the
+       fixed dark teal — a near-white surface instead of the deep gradient,
+       so it reads as part of this theme's cooler, brighter surface rather
+       than a fixed dark panel bolted onto a light page. The gradient's foot
+       is brand-50 rather than a neutral grey — a faint mint wash top-to-
+       bottom is the "still FinSight" cue a flat white panel would lose. */
+    --sidebar-from: 255 255 255;
+    --sidebar-to: 239 252 249;
+
+    /* Dark text and a dark wash source, because the rail is light here —
+       see the sidebar note in tailwind.config.js. sidebar-accent reuses the
+       same brand-600 the .eyebrow rule below already uses on light surfaces. */
+    --sidebar-ink: 15 23 42;
+    --sidebar-muted: 71 85 105;
+    --sidebar-accent: 13 127 114;
+    --sidebar-fg: 15 23 42;
+
+    /* Neutral rather than green-tinted, to match the cooler neutrals. */
+    --shadow: 15 23 42;
+    --shadow-sm-a: 0.06;
+    --shadow-sm-b: 0.05;
+    --shadow-md-a: 0.08;
+    --shadow-lg-a: 0.14;
+  }
+
+  /* ---------------------------------------------------------------
+     DARK
+     ---------------------------------------------------------------
+     The `ink` scale INVERTS here — ink-900 is the near-white headings step
+     and ink-50 is nearly black. That is the whole reason a component can say
+     `text-ink-900` once and be correct in every theme.
+
+     Surfaces are lifted rather than pure black: #0e1415 page, #151d1e cards.
+     Pure black plus a bright card is a harsher edge than an OLED saving is
+     worth, and the near-black keeps the teal shadow from disappearing. */
+  [data-theme="dark"] {
+    --paper: 21 29 30;
+    --paper-50: 14 20 21;
+    --paper-100: 29 39 41;
+    --paper-200: 43 55 57;
+
+    --ink-50: 14 20 21;
+    --ink-100: 29 39 41;
+    --ink-200: 43 55 57;
+    --ink-300: 70 88 91;
+    --ink-400: 124 144 149;
+    --ink-500: 156 175 179;
+    --ink-600: 182 197 200;
+    --ink-700: 204 216 218;
+    --ink-800: 226 234 235;
+    --ink-900: 241 246 246;
+    --ink-950: 255 255 255;
+
+    /* Deep wash, bright tone — the inverse of the light relationship. */
+    --tint-brand: 15 47 43;
+    --tone-brand: 90 220 196;
+    --edge-brand: 27 74 68;
+    --tint-accent: 51 38 12;
+    --tone-accent: 248 189 85;
+    --edge-accent: 89 67 26;
+    --tint-danger: 58 22 33;
+    --tone-danger: 253 164 175;
+    --edge-danger: 91 36 50;
+    --tint-info: 13 43 60;
+    --tone-info: 125 211 252;
+    --edge-info: 22 64 88;
+    --tint-neutral: 29 39 41;
+    --tone-neutral: 182 197 200;
+    --edge-neutral: 43 55 57;
+
+    /* Alert severities.
+       The four severities keep their hue in every theme — red is critical,
+       orange is serious, amber is a warning, teal is informational — because
+       that mapping is learned, and rotating it in one theme would mean
+       relearning it. What changes is which end of the scale carries which
+       job: a pale wash under dark text in Classic, a deep wash under a light
+       one here. The solid parts (the severity bar, the badge fill) stay the
+       same saturated colour in both, so a flagged row is recognisably the
+       same flag whichever theme you are in. */
+    --sev-critical-bg: 58 22 22;
+    --sev-critical-edge: 92 38 38;
+    --sev-critical-ink: 248 145 145;
+    --sev-serious-bg: 55 30 20;
+    --sev-serious-edge: 88 50 34;
+    --sev-serious-ink: 246 168 140;
+    --sev-warning-bg: 51 40 12;
+    --sev-warning-edge: 84 65 20;
+    --sev-warning-ink: 240 197 90;
+    --sev-info-bg: 15 47 43;
+    --sev-info-edge: 27 74 68;
+    --sev-info-ink: 90 220 196;
+    --sev-good-ink: 110 219 110;
+
+    /* Chart emphasis pair — "this period" vs "last period".
+       A comparison chart is emphasis, not identity: one series is the point
+       and the other is context, so it is one hue plus a recessive grey rather
+       than two competing colours. Both steps move with the theme, because
+       brand-600 is a strong fill on white and a muddy one on a near-black
+       card. */
+    --chart-emphasis: 46 194 172;
+    --chart-muted: 70 88 91;
+
+    /* Darker than the page, so the sidebar still reads as its own plane. */
+    --sidebar-from: 10 22 21;
+    --sidebar-to: 5 13 12;
+
+    /* Same white-based rail text/wash as Classic — Dark's page goes to near-
+       black, but the rail was already the darkest surface in the app, so it
+       doesn't need its own inverted treatment the way Light's does. */
+    --sidebar-ink: 255 255 255;
+    --sidebar-muted: 200 247 236;
+    --sidebar-accent: 90 220 196;
+    --sidebar-fg: 255 255 255;
+
+    /* Pure black and much heavier: a tinted shadow at 6% is invisible on a
+       near-black page, so depth here comes from the shadow plus the border
+       on every card rather than from the shadow alone. */
+    --shadow: 0 0 0;
+    --shadow-sm-a: 0.4;
+    --shadow-sm-b: 0.3;
+    --shadow-md-a: 0.45;
+    --shadow-lg-a: 0.6;
+  }
+
+  /* Native widgets — date pickers, scrollbars, form controls — follow the
+     theme too. Without this a dark page still gets a white date picker and
+     white scrollbars, which is the tell that a dark mode was only skin-deep. */
+  [data-theme="dark"] {
+    color-scheme: dark;
+  }
+
+  :root,
+  [data-theme="classic"],
+  [data-theme="light"] {
+    color-scheme: light;
+  }
+}
+
+@layer base {
+  html {
+    /* The topbar's height, as a variable because two other things have to
+       agree with it: the sticky table header offsets by it (so a sorted
+       column's header doesn't slide under the topbar), and the sidebar's
+       collapse control aligns to it. Hard-coding it in three places is how
+       those quietly drift apart. */
+    --topbar-h: 3.5rem;
+
+    /* The content measure. Deliberately large: the old 1152px cap left roughly
+       a third of a 1920px display empty beside a 256px sidebar. At this width
+       the content area uses ~95% of the space next to the sidebar, and the cap
+       only engages on very wide displays, where an unbounded table row becomes
+       hard to track across.
+
+       Lives here rather than only in tailwind.config.js because `.shell` is
+       the layout every page depends on, and `@apply`-ing a custom theme key
+       makes it fail hard — a blank page with a PostCSS error — whenever a
+       running dev server is holding a stale copy of the Tailwind config. A CSS
+       variable is resolved by the browser, so it cannot break that way. The
+       config's `maxWidth.content` reads this same variable, so `max-w-content`
+       still works as a utility and there is still only one number. */
+    --content-max: 1720px;
+
+    /* Stops the layout shifting sideways when a scrollbar appears or
+       disappears, which otherwise reads as a one-frame horizontal jitter on
+       route change.
+
+       Desktop only, deliberately: reserving a gutter costs ~15px of width,
+       which is real estate a 320px phone cannot spare — and mobile browsers
+       overlay their scrollbars instead of reserving space, so there is no
+       jitter to prevent there in the first place. */
+    @media (min-width: 768px) {
+      scrollbar-gutter: stable;
+    }
+  }
+
+  body {
+    @apply bg-paper-50 font-sans text-ink-900 antialiased;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    /* Sora runs wide by default; the negative tracking is what makes it read
+       as a designed heading rather than as stretched UI text. Matches the
+       mockup's `letter-spacing:-.01em` on its display face. */
+    @apply font-display tracking-[-0.01em];
+  }
+
+  /* ---------------------------------------------------------------
+     Keyboard focus — visible on everything interactive.
+     ---------------------------------------------------------------
+     :focus-visible rather than :focus, so a mouse click doesn't leave a ring
+     behind but tabbing always shows exactly where you are. Declared globally
+     so no individual component can forget it. */
+  :focus-visible {
+    /* ring-offset-transparent, not the default white.
+       The offset is drawn as a box-shadow OUTSIDE the element, so a hard
+       white offset punched a white halo around every focused control on the
+       dark theme and on the dark sidebar. Transparent lets the actual parent
+       background show through the gap, which is what the offset is for — and
+       it is correct in all three themes without knowing which one is on. */
+    @apply outline-none ring-2 ring-brand-500 ring-offset-2 ring-offset-transparent;
+  }
+
+  /* On the dark sidebar (Classic and Dark), brand-500 sits too close to the
+     surface to read as a focus ring, so white is unambiguous there instead.
+     Light's rail is the exception — it goes light along with the rest of
+     that theme (see the sidebar note in tailwind.config.js), and a white
+     ring on a near-white rail is exactly the invisible-ring problem this
+     rule exists to avoid. The base rule's default (ring-brand-500) already
+     reads fine there, so Light overrides back to it. */
+  .surface-sidebar :focus-visible {
+    @apply ring-white;
+  }
+
+  [data-theme="light"] .surface-sidebar :focus-visible {
+    @apply ring-brand-600;
+  }
+
+  /* The active field in a dense form should be obvious from its border too,
+     not only from the ring. */
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    @apply border-brand-500;
+  }
+}
+
+@layer components {
+  /* ---------------------------------------------------------------
+     Currency figures — tabular, monospaced.
+     ---------------------------------------------------------------
+     Every peso amount in the app uses this. `tabular-nums` gives each digit
+     the same advance width so columns of figures align vertically, and the
+     mono face gives the ledger feel the product is going for rather than a
+     generic dashboard look. Applied through the <Money> component, never by
+     hand. */
+  .figure {
+    font-family: theme("fontFamily.mono");
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+
+  /* ---------------------------------------------------------------
+     Number inputs without the stepper arrows.
+
+     They step by 0.01 on a money field, which is a meaningless
+     increment on a figure like 500,000, and they sit on top of the
+     right edge of every amount in the app. `type="number"` is kept for
+     the numeric keypad it brings up on a phone — this only removes the
+     control nobody was going to use. Keyboard arrows still work.
+     --------------------------------------------------------------- */
+  .no-spinner::-webkit-outer-spin-button,
+  .no-spinner::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  .no-spinner {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
+
+  /* ---------------------------------------------------------------
+     Skeleton loaders (Doherty Threshold).
+     ---------------------------------------------------------------
+     For work that genuinely cannot finish inside 400ms — AI calls, OCR, CSV
+     parsing. The interface commits to a shape immediately, so the wait reads
+     as "loading this" rather than "nothing happened". */
+  .skeleton {
+    @apply relative overflow-hidden rounded bg-ink-100;
+  }
+
+  .skeleton::after {
+    @apply absolute inset-0;
+    content: "";
+    transform: translateX(-100%);
+    background-image: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.6), transparent);
+    animation: shimmer 1.6s infinite;
+  }
+
+  /* ---------------------------------------------------------------
+     Tap targets (Fitts's Law).
+     ---------------------------------------------------------------
+     44x44 CSS px minimum. `.tap` is for controls that should physically be
+     that big. `.tap-inline` is for text-style links inside prose, where
+     growing the box would wreck the line height — it expands the hit area
+     with an invisible overlay instead. */
+  .tap {
+    @apply inline-flex min-h-tap min-w-tap items-center justify-center;
+  }
+
+  .tap-inline {
+    @apply relative;
+  }
+
+  .tap-inline::after {
+    content: "";
+    position: absolute;
+    inset: 50% 0 50% 0;
+    min-height: 44px;
+    transform: translateY(-50%);
+  }
+
+  /* ---------------------------------------------------------------
+     Surfaces adopted from the mockup
+     ---------------------------------------------------------------
+     Two dark green gradients recur often enough to be worth naming rather
+     than repeating a long arbitrary-value class at every call site. */
+
+  /* The sidebar. Vertical, deep green-teal, near-black at the foot.
+     Theme-driven so Dark can take it further down than Classic does — see
+     --sidebar-from / --sidebar-to in the theme blocks. */
+  .surface-sidebar {
+    background-image: linear-gradient(
+      180deg,
+      rgb(var(--sidebar-from)) 0%,
+      rgb(var(--sidebar-to)) 100%
+    );
+  }
+
+  /* Classic and Dark don't need this — the dark rail already reads as its
+     own plane against the page next to it. Light's rail is close enough in
+     value to the page beside it that without a seam it can look like it
+     forgot to render; a hairline in the brand tint is enough to frame it
+     without drawing a hard line down the screen. */
+  [data-theme="light"] .surface-sidebar {
+    border-right: 1px solid rgb(var(--edge-brand));
+  }
+
+  /* AI / explanation cards, and the auth brand panel. Diagonal, lighter, so
+     it reads as a distinct "this is FinSight speaking" surface rather than as
+     more chrome. */
+  .surface-ai {
+    background-image: linear-gradient(135deg, theme("colors.brand.900") 0%, theme("colors.brand.700") 100%);
+  }
+
+  /* The soft radial bloom the mockup floats over its AI cards. Purely
+     decorative, so it is always aria-hidden at the call site. */
+  .surface-ai-glow {
+    background-image: radial-gradient(circle, rgba(146, 238, 218, 0.28), transparent 70%);
+  }
+
+  /* ---------------------------------------------------------------
+     The confirmation dialog.
+     ---------------------------------------------------------------
+     Only two things need styling here, because <dialog> + showModal()
+     supplies the rest — the focus trap, Escape, and inertness behind it.
+
+     The backdrop is the reason this lives in CSS rather than in the
+     component: ::backdrop is a pseudo-element, so no React className can
+     reach it. It reads the same --shadow channel the elevation scale uses,
+     so the scrim deepens with the theme instead of being a fixed black that
+     is too heavy on Classic and too weak on Dark.
+
+     The entrance reuses the existing pop-in timing and is decorative only,
+     so the global prefers-reduced-motion rule switches it off. */
+  /* Shared by every native <dialog> in the app — ConfirmDialog and the
+     general-purpose Modal (components/Modal.tsx) both get this centering,
+     entrance and backdrop treatment from one place. */
+  .confirm-dialog,
+  .modal-dialog {
+    margin: auto;
+    animation: pop-in 160ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
+  }
+
+  .confirm-dialog::backdrop,
+  .modal-dialog::backdrop {
+    background-color: rgb(var(--shadow) / 0.55);
+  }
+
+  /* ---------------------------------------------------------------
+     Eyebrow — the small uppercase kicker above a panel title.
+     ---------------------------------------------------------------
+     The mockup leans on this to give each panel a two-level heading without
+     spending a second line of large type on it.
+
+     brand-600 on a white card measures 4.89:1, but on the dark theme's #151d1e
+     card it is only 2.6:1 — so Dark steps up to brand-300, which measures
+     10.2:1 there. Same class, legible in both. */
+  .eyebrow {
+    @apply text-[11px] font-bold uppercase tracking-[0.14em] text-brand-600;
+  }
+
+  [data-theme="dark"] .eyebrow {
+    @apply text-brand-300;
+  }
+
+  /* ---------------------------------------------------------------
+     The shell measure.
+     ---------------------------------------------------------------
+     ONE class, used by the topbar's inner row and by <main>. That is the
+     entire mechanism behind "every page has the same left and right
+     boundary": page titles, search bars, tables, charts and forms all sit
+     inside it, so none of them can pick its own margin and drift.
+
+     Padding steps 24px -> 32px rather than growing with the viewport, so the
+     gutter stays a constant, recognisable rhythm instead of ballooning on a
+     wide display. */
+  .shell {
+    /* max-width is plain CSS, NOT `@apply max-w-content`.
+       `@apply` on a custom theme key fails hard — the whole stylesheet errors
+       and the page goes blank — whenever Tailwind has not reloaded its config,
+       which is every time a dev server outlives an edit to tailwind.config.js.
+       This class is the layout every page depends on, so it must not have that
+       failure mode. The variable is defined on `html` above; the config's
+       `maxWidth.content` reads the same variable, so `max-w-content` still
+       exists as a utility and there is still one number. */
+    max-width: var(--content-max);
+    @apply mx-auto w-full px-4 sm:px-6 xl:px-8;
+  }
+
+  /* ---------------------------------------------------------------
+     Themed native scrollbars.
+     ---------------------------------------------------------------
+     `color-scheme` already handles this in Firefox and on the main document.
+     This covers WebKit's inner scrollers — the notification list, the sidebar
+     nav, the table's horizontal overflow — where a default light scrollbar
+     inside a dark panel is very visible. */
+  .scroll-slim {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--ink-300)) transparent;
+  }
+
+  .scroll-slim::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .scroll-slim::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scroll-slim::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-ink-300/60;
+  }
+
+  .scroll-slim::-webkit-scrollbar-thumb:hover {
+    @apply bg-ink-400/70;
+  }
+}
+
+/* ---------------------------------------------------------------
+   Theme transition
+   ---------------------------------------------------------------
+   Switching theme repaints essentially every element on the page. Left
+   unmanaged that is a hard flash; a short colour-only transition makes it
+   read as a deliberate change of lighting.
+
+   Two deliberate limits. It is scoped to colour properties only — animating
+   `all` here would drag every layout property along with it and cause a
+   visible reflow. And it is applied only while the `.theme-switching` class
+   is on <html> (ThemeContext adds it for the duration of the switch), so it
+   never interferes with the ordinary hover transitions components declare
+   for themselves, and never delays the very first paint. */
+.theme-switching,
+.theme-switching *,
+.theme-switching *::before,
+.theme-switching *::after {
+  transition:
+    background-color 220ms ease,
+    border-color 220ms ease,
+    color 220ms ease,
+    fill 220ms ease,
+    stroke 220ms ease,
+    box-shadow 220ms ease !important;
+}
+
+/* ---------------------------------------------------------------
+   A NOTE ON `transition-all`
+   ---------------------------------------------------------------
+   Don't. Tailwind's `transition-all` sets `transition-property: all`, which
+   includes the layout properties — width, height, top, left, margin. Animating
+   any of those makes the browser re-run layout on every frame of the
+   transition, which is what turns a hover effect into jank on a budget phone.
+
+   The bare `transition` utility covers colour, background, border, opacity,
+   box-shadow, transform and filter — everything the interface actually
+   animates — and none of the layout ones. Nineteen `transition-all` uses on
+   the landing page were replaced with it, and not one of them was animating a
+   property the narrower list leaves out.
+
+   --------------------------------------------------------------- */
+
+/* ---------------------------------------------------------------
+   prefers-reduced-motion
+   ---------------------------------------------------------------
+   Users who ask for less motion get none of the decorative kind: no
+   confirmation pop, no meter fill, no skeleton shimmer. Everything stays
+   fully functional and fully legible — only the movement goes. Kept as one
+   global rule so any animation added later is covered by default. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* Restated at the same specificity as the theme-transition rule above.
+     That rule has to carry `!important` to beat component-level transitions,
+     which would otherwise let it survive this block — a class selector with
+     !important outranks the bare `*` above it. The theme still switches, it
+     just switches instantly. */
+  .theme-switching,
+  .theme-switching *,
+  .theme-switching *::before,
+  .theme-switching *::after {
+    transition-duration: 0.01ms !important;
+  }
+
+  .skeleton::after {
+    display: none;
+  }
+}

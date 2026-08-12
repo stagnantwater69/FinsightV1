@@ -1,0 +1,13 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    // Expo's base sets customConditions: ["react-native"], which stops
+    // @types/node from resolving on its own. Named explicitly so the checks
+    // under tests/ — which read source files off disk to verify every
+    // navigate() target is a registered screen — are typechecked rather than
+    // quietly excluded. "react" is listed too because naming `types` at all
+    // switches off automatic @types inclusion.
+    "types": ["node", "react"]
+  }
+}
