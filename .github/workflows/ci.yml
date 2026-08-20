@@ -42,7 +42,10 @@ jobs:
       - run: npm ci --prefix mobile
       - run: npm ci --prefix web
 
-      - run: npx prisma generate --prefix backend
+      # working-directory already cds into backend; npx has no --prefix flag
+      # (that's an npm-only flag), so passing it here just gets forwarded to
+      # prisma itself, which doesn't recognize it and prints its help text.
+      - run: npx prisma generate
         working-directory: backend
       - run: npm run typecheck --prefix backend
       - run: npm run lint --prefix backend
