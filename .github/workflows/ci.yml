@@ -42,10 +42,10 @@ jobs:
       - run: npm ci --prefix mobile
       - run: npm ci --prefix web
 
-      - run: npm run typecheck --prefix backend
-      - run: npm run lint --prefix backend
       - run: npx prisma generate --prefix backend
         working-directory: backend
+      - run: npm run typecheck --prefix backend
+      - run: npm run lint --prefix backend
       - run: npm test --prefix backend
         env:
           DATABASE_URL: postgresql://testuser:testpass@localhost:55432/finsight_test
