@@ -60,7 +60,15 @@ jobs:
       - run: npm ci --prefix web
       - run: npm run typecheck --prefix web
       - run: npm run lint --prefix web
+      # supabaseClient.ts throws at import time if either is empty, which
+      # takes down any unit test that imports it transitively (api.ts,
+      # AuthContext.tsx, ...) before a single test in the file can run —
+      # same reason the e2e step below sets them.
       - run: npm test --prefix web
+        env:
+          VITE_SUPABASE_URL: "https://example.supabase.co"
+          VITE_SUPABASE_ANON_KEY: "ci-placeholder-anon-key"
+          VITE_API_BASE_URL: "http://localhost:4000/api/v1"
       # The Playwright browser Chromium ships needs its own OS deps installed
       # on the runner image; --with-deps handles both in one step.
       - run: npx --prefix web playwright install --with-deps chromium
@@ -109,6 +117,10 @@ jobs:
         with:
           node-version: "22"
       - run: npm ci --prefix mobile
+      # webParity.test.ts and helpContent.test.ts import straight from
+      # web/src for parity checks, so tsc needs web's own deps (react) on
+      # disk to resolve types when it follows those imports.
+      - run: npm ci --prefix web
       # tsc was run by hand throughout the work that added these screens —
       # mobile had no typecheck script at all until now.
       - run: npm run typecheck --prefix mobile
