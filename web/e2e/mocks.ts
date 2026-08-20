@@ -169,3 +169,19 @@ export async function loginViaUi(page: Page, email = TEST_PROFILE.email, passwor
   await page.getByRole("button", { name: "Log in" }).click();
   await page.waitForURL("**/business-profiles");
 }
+
+/**
+ * Marks the guided product tour as already completed for the given test
+ * user, matching an already-onboarded real user rather than a first-time
+ * one. Without this, TourContext's auto-start effect (see
+ * src/context/TourContext.tsx) finds `status: "not_started"` and opens the
+ * full-screen tour overlay on the dashboard mid-test, which intercepts
+ * pointer events and breaks any click the spec makes afterwards. Must run
+ * before the first navigation — `addInitScript` seeds localStorage on
+ * every subsequent page load, including the one login redirects to.
+ */
+export async function skipTour(page: Page, userId = TEST_PROFILE.id) {
+  await page.addInitScript((id) => {
+    window.localStorage.setItem(`finsight.tour.${id}`, JSON.stringify({ status: "completed" }));
+  }, userId);
+}

@@ -8,7 +8,7 @@
  * `web/src/lib/types.ts`. See mocks.ts for the shared session/context setup.
  */
 import { expect, test } from "@playwright/test";
-import { loginViaUi, mockBackendSession, mockSupabaseAuth, TEST_BUSINESS_PROFILE } from "./mocks";
+import { loginViaUi, mockBackendSession, mockSupabaseAuth, skipTour, TEST_BUSINESS_PROFILE } from "./mocks";
 import type { DashboardSummary, ExpenseBehavior } from "../src/lib/types";
 
 function summaryFor(periodDays: number): DashboardSummary {
@@ -70,6 +70,7 @@ const EMPTY_BEHAVIOR: ExpenseBehavior = {
 };
 
 test.beforeEach(async ({ page }) => {
+  await skipTour(page);
   await mockSupabaseAuth(page);
   await mockBackendSession(page);
   await loginViaUi(page);
