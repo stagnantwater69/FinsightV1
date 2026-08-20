@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateVisionReceipt } from "../../src/services/visionOcr.service";
+import { validateVisionReceipt, type VisionReceipt } from "../../src/services/visionOcr.service";
 
 /**
  * The boundary between a model's answer and the owner's books.
@@ -11,8 +11,21 @@ import { validateVisionReceipt } from "../../src/services/visionOcr.service";
  * layer treats every response as hostile input and drops whatever does not
  * survive checking.
  *
+ * The result is now a DISCRIMINATED one rather than a bare null: a scan whose
+ * rescue bought nothing needs to record whether the model's answer failed to
+ * parse, failed the schema, or never carried text at all — three different
+ * problems with three different owners. Every refusal these tests pin was a
+ * refusal before the change too; only the spelling of "no" moved.
+ *
  * These are pure-function tests: no network, no key, no model behaviour.
  */
+
+/** Unwraps an accepted reading, failing loudly when the input was refused. */
+function accept(raw: string): VisionReceipt {
+  const result = validateVisionReceipt(raw);
+  expect(result.ok, `expected an accepted reading, got ${JSON.stringify(result)}`).toBe(true);
+  return (result as Extract<ReturnType<typeof validateVisionReceipt>, { ok: true }>).receipt;
+}
 
 const good = JSON.stringify({
   date: "2026-07-11",
@@ -26,7 +39,7 @@ const good = JSON.stringify({
 
 describe("reading a well-formed answer", () => {
   it("accepts it", () => {
-    const out = validateVisionReceipt(good)!;
+    const out = accept(good);
     expect(out.date).toBe("2026-07-11");
     expect(out.vendor).toBe("ABC SARI-SARI STORE");
     expect(out.amount).toBe(188);
@@ -34,7 +47,7 @@ describe("reading a well-formed answer", () => {
   });
 
   it("survives a ```json fence", () => {
-    expect(validateVisionReceipt("```json\n" + good + "\n```")!.amount).toBe(188);
+    expect(accept("```json\n" + good + "\n```").amount).toBe(188);
   });
 
   /**
@@ -44,33 +57,44 @@ describe("reading a well-formed answer", () => {
    * times — the unhandled envelope was what scored it as unreadable.
    */
   it("unwraps a single-element array, which the model really does emit", () => {
-    const out = validateVisionReceipt(`[${good}]`)!;
+    const out = accept(`[${good}]`);
     expect(out.amount).toBe(188);
     expect(out.items).toHaveLength(2);
   });
 });
 
-describe("refusing what cannot be trusted", () => {
-  it("returns null for prose", () => {
-    expect(validateVisionReceipt("This looks like a receipt for 188 pesos!")).toBeNull();
+describe("refusing what cannot be trusted, and saying why", () => {
+  it("refuses prose as unparseable", () => {
+    expect(validateVisionReceipt("This looks like a receipt for 188 pesos!")).toEqual({ ok: false, reason: "parse" });
   });
 
-  it("returns null for invalid JSON", () => {
-    expect(validateVisionReceipt("{ntotally broken")).toBeNull();
+  it("refuses invalid JSON as unparseable", () => {
+    expect(validateVisionReceipt("{ntotally broken")).toEqual({ ok: false, reason: "parse" });
   });
 
-  it("returns null for a bare array of several objects", () => {
+  it("refuses a bare array of several objects as a schema failure", () => {
     // Ambiguous — which receipt is it? Refusing beats picking one.
-    expect(validateVisionReceipt('[{"total":1},{"total":2}]')).toBeNull();
+    expect(validateVisionReceipt('[{"total":1},{"total":2}]')).toEqual({ ok: false, reason: "schema" });
   });
 
-  it("returns null for a JSON scalar", () => {
-    expect(validateVisionReceipt('"188.00"')).toBeNull();
+  it("refuses a JSON scalar as a schema failure", () => {
+    expect(validateVisionReceipt('"188.00"')).toEqual({ ok: false, reason: "schema" });
+  });
+
+  it("refuses JSON null as a schema failure", () => {
+    expect(validateVisionReceipt("null")).toEqual({ ok: false, reason: "schema" });
+  });
+
+  it("refuses an empty answer as empty, distinctly from a malformed one", () => {
+    expect(validateVisionReceipt("")).toEqual({ ok: false, reason: "empty" });
+    expect(validateVisionReceipt("   \n ")).toEqual({ ok: false, reason: "empty" });
+    // An empty code fence is an empty answer wearing punctuation.
+    expect(validateVisionReceipt("```json\n```")).toEqual({ ok: false, reason: "empty" });
   });
 });
 
 describe("items — where an invented line would do the damage", () => {
-  const withItems = (items: unknown) => validateVisionReceipt(JSON.stringify({ total: 100, items }))!;
+  const withItems = (items: unknown) => accept(JSON.stringify({ total: 100, items }));
 
   it("drops a line with no readable price", () => {
     expect(withItems([{ name: "Mystery", quantity: null, amount: null }]).items).toEqual([]);
@@ -119,8 +143,48 @@ describe("items — where an invented line would do the damage", () => {
   });
 });
 
+describe("per-item evidence — page number and source text", () => {
+  const withItems = (items: unknown) => accept(JSON.stringify({ total: 100, items }));
+
+  it("carries the model's reported page and visible text", () => {
+    const out = withItems([{ name: "Rice 25kg", amount: 50, pageNumber: 2, sourceText: "Rice 25kg  50.00" }]);
+    expect(out.items[0]!.pageNumber).toBe(2);
+    expect(out.items[0]!.sourceText).toBe("Rice 25kg  50.00");
+  });
+
+  it("treats an implausible page number as not stated, never inventing one", () => {
+    expect(withItems([{ name: "Rice", amount: 50, pageNumber: 0 }]).items[0]!.pageNumber).toBeNull();
+    expect(withItems([{ name: "Rice", amount: 50, pageNumber: 1.5 }]).items[0]!.pageNumber).toBeNull();
+    expect(withItems([{ name: "Rice", amount: 50, pageNumber: "two" }]).items[0]!.pageNumber).toBeNull();
+  });
+
+  it("treats missing or blank source text as not stated", () => {
+    expect(withItems([{ name: "Rice", amount: 50 }]).items[0]!.sourceText).toBeNull();
+    expect(withItems([{ name: "Rice", amount: 50, sourceText: "  " }]).items[0]!.sourceText).toBeNull();
+  });
+});
+
+describe("warnings — the model's own admissions, validated like everything else", () => {
+  it("keeps a warning carrying a known code", () => {
+    const out = accept(
+      JSON.stringify({ total: 1, warnings: [{ code: "AMBIGUOUS_DATE", field: "date", detail: "05/03/2026" }] }),
+    );
+    expect(out.warnings).toEqual([{ code: "AMBIGUOUS_DATE", field: "date", detail: "05/03/2026" }]);
+  });
+
+  it("drops a model-invented code rather than passing it to the clients", () => {
+    const out = accept(JSON.stringify({ total: 1, warnings: [{ code: "SOMETHING_MADE_UP", field: "date" }] }));
+    expect(out.warnings).toEqual([]);
+  });
+
+  it("tolerates warnings being absent or not an array", () => {
+    expect(accept('{"total":1}').warnings).toEqual([]);
+    expect(accept('{"total":1,"warnings":"oh no"}').warnings).toEqual([]);
+  });
+});
+
 describe("dates — an impossible one fails the whole upload at Prisma", () => {
-  const withDate = (date: unknown) => validateVisionReceipt(JSON.stringify({ date, total: 1 }))!;
+  const withDate = (date: unknown) => accept(JSON.stringify({ date, total: 1 }));
 
   it("rejects a non-calendar date", () => {
     expect(withDate("2026-13-45").date).toBeNull();
@@ -142,24 +206,23 @@ describe("dates — an impossible one fails the whole upload at Prisma", () => {
 
 describe("vendor and total", () => {
   it("ignores a blank vendor", () => {
-    expect(validateVisionReceipt('{"vendor":"   ","total":1}')!.vendor).toBeNull();
+    expect(accept('{"vendor":"   ","total":1}').vendor).toBeNull();
   });
 
   it("truncates an over-long vendor to what the column holds", () => {
-    const out = validateVisionReceipt(JSON.stringify({ vendor: "y".repeat(400), total: 1 }))!;
+    const out = accept(JSON.stringify({ vendor: "y".repeat(400), total: 1 }));
     expect(out.vendor!.length).toBeLessThanOrEqual(150);
   });
 
   it("ignores a zero or negative total", () => {
-    expect(validateVisionReceipt('{"total":0}')!.amount).toBeNull();
-    expect(validateVisionReceipt('{"total":-5}')!.amount).toBeNull();
+    expect(accept('{"total":0}').amount).toBeNull();
+    expect(accept('{"total":-5}').amount).toBeNull();
   });
 
-  it("returns an empty reading rather than null when the model found nothing", () => {
+  it("returns an empty reading rather than a refusal when the model found nothing", () => {
     // Distinct from a malformed answer: the model replied properly and said
     // it could not read anything, which the caller treats as "no rescue".
-    const out = validateVisionReceipt('{"date":null,"vendor":null,"total":null,"items":[]}')!;
-    expect(out).not.toBeNull();
+    const out = accept('{"date":null,"vendor":null,"total":null,"items":[]}');
     expect(out.amount).toBeNull();
     expect(out.items).toEqual([]);
   });

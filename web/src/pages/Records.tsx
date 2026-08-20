@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
 import { api } from "../lib/api";
@@ -8,7 +8,7 @@ import { Money } from "../components/Money";
 import { Button, ButtonLink } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
 import { DataTable, type Column } from "../components/DataTable";
-import { IconEdit, IconSearch, IconTrash } from "../components/icons";
+import { IconDuplicate, IconEdit, IconSearch, IconTrash } from "../components/icons";
 import { RECORD_SOURCE_LABELS, type ImportBatchSummary, type RecordItem, type RecordSource } from "../lib/types";
 import { PageHead, Pill, Tag, type PillTone } from "../components/ui";
 import { SelectInput, TextInput } from "../components/Field";
@@ -102,6 +102,7 @@ function filtersFromParams(params: URLSearchParams): Filters {
 }
 
 export function Records() {
+  const navigate = useNavigate();
   const { selected } = useBusinessProfiles();
   const { categories } = useExpenseCategories();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -413,6 +414,21 @@ export function Records() {
   const editPath = (r: RecordItem) =>
     r.type === "expense" ? `/records/expenses/${r.id}/edit` : `/records/sales/${r.id}/edit`;
 
+  // Date is deliberately not carried over — a duplicate is almost always
+  // "the same thing, today", and the Add forms already default the date
+  // field to today on their own.
+  function handleDuplicate(r: RecordItem) {
+    if (r.type === "expense") {
+      navigate("/records/expenses/new", {
+        state: { duplicateFrom: { description: r.description, vendor: r.vendor ?? "", categoryId: r.categoryId, amount: r.amount } },
+      });
+    } else {
+      navigate("/records/sales/new", {
+        state: { duplicateFrom: { description: r.description, amount: r.amount } },
+      });
+    }
+  }
+
   // ---------------------------------------------------------------
   // Columns
   // ---------------------------------------------------------------
@@ -441,7 +457,11 @@ export function Records() {
       header: "Description",
       width: "grow",
       sortValue: (r) => r.description,
-      cell: (r) => <span className="min-w-0 font-medium text-ink-900">{r.description}</span>,
+      cell: (r) => (
+        <span className="line-clamp-2 min-w-0 font-medium text-ink-900" title={r.description}>
+          {r.description}
+        </span>
+      ),
     },
     {
       key: "category",
@@ -525,6 +545,15 @@ export function Records() {
           >
             <IconEdit className="h-4 w-4" />
           </Link>
+          <button
+            type="button"
+            onClick={() => handleDuplicate(r)}
+            title="Duplicate"
+            aria-label={`Duplicate ${r.description}`}
+            className="tap flex h-9 w-9 min-h-0 min-w-0 items-center justify-center rounded-lg text-ink-500 transition hover:bg-paper-100 hover:text-ink-800"
+          >
+            <IconDuplicate className="h-4 w-4" />
+          </button>
           <button
             type="button"
             onClick={() => handleDelete(r)}
@@ -834,6 +863,14 @@ export function Records() {
                     Edit
                     <span className="sr-only"> {r.description}</span>
                   </Link>
+                  <button
+                    type="button"
+                    onClick={() => handleDuplicate(r)}
+                    className="tap rounded-lg px-3 text-sm font-medium text-ink-500 transition hover:bg-paper-100 hover:text-ink-800"
+                  >
+                    Duplicate
+                    <span className="sr-only"> {r.description}</span>
+                  </button>
                   <button
                     type="button"
                     onClick={() => handleDelete(r)}

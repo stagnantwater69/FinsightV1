@@ -1,9 +1,9 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as haptics from "../lib/haptics";
 import { useFocusEffect } from "@react-navigation/native";
-import { Alert as AlertBanner, Button, Callout, Card, DropdownPill, EmptyState, ErrorNote, Money, Screen, SegmentedControl, T } from "../components/ui";
+import { Alert as AlertBanner, Button, Callout, Card, DropdownPill, EmptyState, ErrorNote, Money, OptionSheet, Screen, SegmentedControl, T } from "../components/ui";
 import { RecoveryMeter } from "../components/RecoveryMeter";
 import { SkeletonCard } from "../components/Skeleton";
 import { CategoryChange, CategoryComparison, CoverageColumns, SpendTrend } from "../components/charts";
@@ -11,9 +11,27 @@ import { AskFinSight } from "../components/AskFinSight";
 import { AskFinSightFab, FAB_CLEARANCE } from "../components/AskFinSightFab";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { api, errorMessage } from "../lib/api";
+import { takeFlash } from "../lib/flash";
 import { formatMoney } from "../lib/money";
+import {
+  agendaGroupOf,
+  formatDueDate,
+  groupSchedules,
+  recurringAvailability,
+  type AgendaGroupKey,
+} from "../lib/recurringAgenda";
+import { SIGNAL_COPY, findingSignalStrength } from "../lib/confidenceBands";
+import { feedbackActions, findingCategory, quickActions, type FeedbackAction } from "../lib/findingFeedback";
 import { ACCENT, brand, font, ink, paper, radius, space, status, statusText, TAP, typeScale } from "../theme/tokens";
-import type { AnomalyFindingPage, ExpenseBehavior, RecoveryInsight, RecurringPattern, SpendingImpact } from "../lib/types";
+import type {
+  AnomalyFinding,
+  AnomalyFindingPage,
+  ExpenseBehavior,
+  RecoveryInsight,
+  RecurringPattern,
+  RecurringSchedule,
+  SpendingImpact,
+} from "../lib/types";
 
 /**
  * The soft surfaces a status pill sits on.
@@ -309,6 +327,90 @@ function SubTabs<Value extends string>({
   );
 }
 
+/**
+ * One declared repeating payment, as a row in the agenda.
+ *
+ * Same shape as a record row in RecordsScreens — Pressable wrapping a Card,
+ * medallion on the left, the figure in `Money` on the right, one caption line
+ * of meta joined with " · ". Two lists of money-with-a-date should not be two
+ * different objects, and the owner has already learnt this one.
+ *
+ * The medallion carries the group: an overdue payment is not read, it is
+ * spotted. Colour is never the only signal — the row sits under a written
+ * "Overdue" heading, and a paused one says so in words.
+ */
+const AGENDA_LOOK: Record<AgendaGroupKey, { icon: keyof typeof Ionicons.glyphMap; tint: string; surface: string }> = {
+  OVERDUE: { icon: "alert-circle-outline", tint: statusText.critical, surface: STATUS_SURFACE.critical },
+  DUE_SOON: { icon: "time-outline", tint: statusText.warning, surface: STATUS_SURFACE.warning },
+  SCHEDULED: { icon: "repeat-outline", tint: brand[700], surface: brand[50] },
+  PAUSED: { icon: "pause-outline", tint: ink[500], surface: paper[100] },
+};
+
+function ScheduleRow({ schedule, onPress }: { schedule: RecurringSchedule; onPress: () => void }) {
+  const look = AGENDA_LOOK[agendaGroupOf(schedule)];
+  const due = formatDueDate(schedule.nextDueDate);
+  const meta = [
+    schedule.categoryName,
+    schedule.vendor,
+    `Every ${schedule.intervalDays} days`,
+    `Due ${due}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  /*
+   * Composed rather than left to the layout, for the same reason the record
+   * card composes its own: read in layout order this announces the label, then
+   * a caption full of middle dots, then the amount. What matters is what it is,
+   * what it costs, and when — in that order, without the separators.
+   */
+  const spoken = [
+    schedule.label,
+    formatMoney(schedule.expectedAmount),
+    `due ${due}`,
+    schedule.categoryName,
+    schedule.isActive ? null : "paused",
+  ]
+    .filter(Boolean)
+    .join(", ");
+
+  return (
+    <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={`${spoken}. Edit this payment.`}>
+      <Card style={{ marginBottom: space.sm }}>
+        <View style={{ flexDirection: "row", gap: space.md, alignItems: "center" }}>
+          <Medallion icon={look.icon} tint={look.tint} surface={look.surface} size={38} />
+          <View style={{ flex: 1 }}>
+            <View style={{ flexDirection: "row", gap: space.sm }}>
+              <T style={{ flex: 1, fontFamily: font.sansMedium, color: ink[900] }} numberOfLines={2}>
+                {schedule.label}
+              </T>
+              <Money value={schedule.expectedAmount} size={15} weight="semibold" decimals />
+            </View>
+            <T variant="caption" style={{ marginTop: 2 }}>
+              {meta}
+            </T>
+            {schedule.isActive ? null : (
+              <View
+                style={{
+                  alignSelf: "flex-start",
+                  marginTop: space.sm,
+                  paddingHorizontal: space.sm,
+                  paddingVertical: 2,
+                  borderRadius: radius.full,
+                  backgroundColor: paper[100],
+                }}
+              >
+                <T style={{ fontSize: typeScale.micro, color: ink[500] }}>Paused</T>
+              </View>
+            )}
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={ink[300]} style={{ alignSelf: "center" }} />
+        </View>
+      </Card>
+    </Pressable>
+  );
+}
+
 function useInsight<T>(path: string, query: Record<string, any>, deps: any[]) {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
@@ -393,6 +495,55 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
   const patternState = useInsight<RecurringPattern[]>(
     "/insights/recurring-patterns", { businessProfileId: selected?.id }, [selected?.id]
   );
+  /*
+   * The owner's own declared schedules — what the Recurring tab is actually
+   * about. The patterns above are only the candidates FinSight offers.
+   */
+  const scheduleState = useInsight<RecurringSchedule[]>(
+    "/insights/recurring-schedules", { businessProfileId: selected?.id }, [selected?.id]
+  );
+  /**
+   * Why a confirm or dismiss failed.
+   *
+   * Kept apart from the two fetch errors: confirming can come back 409 when
+   * the same candidate was already promoted in another session, and that is a
+   * sentence about the button just pressed, not about the list.
+   */
+  const [patternActionError, setPatternActionError] = useState<string | null>(null);
+  /** Why recording an answer to a finding failed. Same reasoning as above. */
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
+  /**
+   * The finding whose full answer list is open.
+   *
+   * A phone card carries the two most likely answers as buttons; the other
+   * three live behind "Something else…" in a sheet. Five buttons on a card is
+   * a wall, and dropping the three least likely would put the app back where
+   * it was — with three of five feedback values unreachable.
+   */
+  const [feedbackFor, setFeedbackFor] = useState<AnomalyFinding | null>(null);
+
+  /*
+   * The confirmation handed back by the recurring-payment form.
+   *
+   * Collected here rather than left for whichever screen asks next: `takeFlash`
+   * is app-wide and clears as it reads, so a message set by a form that
+   * returns to THIS screen would otherwise surface days later on the records
+   * list. Same shape as RecordsScreen's own notice, including dropping it on
+   * blur so a confirmation never outlives the visit it belongs to.
+   */
+  const [notice, setNotice] = useState<string | null>(null);
+  useFocusEffect(
+    useCallback(() => {
+      const handed = takeFlash();
+      if (handed) setNotice(handed);
+      return () => setNotice(null);
+    }, []),
+  );
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(null), 4000);
+    return () => clearTimeout(timer);
+  }, [notice]);
 
   /**
    * The month this business's expenses actually end in, when the ordinary
@@ -421,17 +572,72 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
     ? [...PERIODS, { label: anchorMonth.label, value: ANCHOR_PERIOD }]
     : PERIODS;
 
-  async function reviewFinding(id: number, confirmed: boolean, duplicate: boolean) {
-    await api.patch(`/insights/findings/${id}/review`, {
-      status: confirmed ? "CONFIRMED" : "DISMISSED",
-      feedback: confirmed ? (duplicate ? "DUPLICATE" : "CONFIRMED_UNUSUAL") : "EXPECTED_TRANSACTION",
-    });
-    await findingState.load();
+  /**
+   * Records what the owner actually said about a finding.
+   *
+   * ONE FUNCTION, FIVE ANSWERS. It used to take two booleans and derive the
+   * feedback from them, which is why only two of the five values were ever
+   * written from a phone: `confirmed ? (duplicate ? "DUPLICATE" :
+   * "CONFIRMED_UNUSUAL") : "EXPECTED_TRANSACTION"`. INCORRECT_MATCH — the most
+   * valuable signal the duplicate detector can get, and a different fact from
+   * "this is normal for me" — had no path at all. The status is not a separate
+   * decision either; it follows from the answer (lib/findingFeedback.ts).
+   */
+  async function reviewFinding(id: number, action: FeedbackAction) {
+    setFeedbackError(null);
+    try {
+      await api.patch(`/insights/findings/${id}/review`, {
+        status: action.status,
+        feedback: action.feedback,
+      });
+      haptics.succeeded();
+      // Echoes what they said rather than "Saved" — the list is about to lose
+      // the card, and a confirmation that does not name the answer leaves them
+      // unsure which button they hit.
+      setNotice(action.toast);
+      await findingState.load();
+    } catch (err) {
+      setFeedbackError(errorMessage(err));
+    }
   }
 
-  async function reviewPattern(id: number, status: "CONFIRMED" | "DISMISSED") {
-    await api.patch(`/insights/recurring-patterns/${id}`, { status });
-    await patternState.load();
+  /**
+   * Promotes a candidate into a schedule the owner owns.
+   *
+   * POST .../confirm, not the old PATCH { status: "CONFIRMED" }. The PATCH
+   * only marked the pattern and left nothing behind that could be seen or
+   * edited — the confirmed row vanished from every screen, which is the defect
+   * this whole section was rebuilt to fix. The endpoint creates the schedule
+   * and marks the pattern in one transaction, and seeds the label server-side
+   * from the pattern's description, so nothing is sent in the body.
+   *
+   * Both lists are refetched because one write changed both of them.
+   */
+  async function confirmPattern(id: number) {
+    setPatternActionError(null);
+    try {
+      await api.post(`/insights/recurring-patterns/${id}/confirm`);
+      haptics.succeeded();
+      await Promise.all([patternState.load(), scheduleState.load()]);
+    } catch (err) {
+      setPatternActionError(errorMessage(err));
+    }
+  }
+
+  /** "Not recurring". Still the PATCH — dismissing creates nothing. */
+  async function dismissPattern(id: number) {
+    setPatternActionError(null);
+    try {
+      await api.patch(`/insights/recurring-patterns/${id}`, { status: "DISMISSED" });
+      await patternState.load();
+    } catch (err) {
+      setPatternActionError(errorMessage(err));
+    }
+  }
+
+  function openSchedule(scheduleId?: number) {
+    haptics.tapped();
+    navigation.navigate("RecurringSchedule", scheduleId ? { scheduleId } : {});
   }
 
   if (!selected) return null;
@@ -463,14 +669,31 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
   /*
    * The badges count things that need a DECISION, not things worth reading.
    *
-   * Findings and recurring candidates both end in two buttons; unusual
-   * expenses are shown for context and ask nothing, so they live under Alerts
-   * without inflating its number. A badge that counts reading material is a
-   * badge nobody clears, and then it stops meaning anything.
+   * Findings end in two buttons; unusual expenses are shown for context and
+   * ask nothing, so they live under Alerts without inflating its number. A
+   * badge that counts reading material is a badge nobody clears, and then it
+   * stops meaning anything.
+   *
+   * RECURRING NOW COUNTS OVERDUE SCHEDULES RATHER THAN CANDIDATES, which is a
+   * narrowing of that same rule rather than a departure from it. A candidate
+   * does end in two buttons, but the decision it asks for costs nothing to
+   * defer — FinSight is offering to watch something, and next week is as good
+   * as today. A payment that was due and has not been recorded is the opposite:
+   * every day it sits there is a day the owner may be about to be surprised by
+   * it. So the badge is spent on the one that has a deadline. The candidates
+   * are still on the tab, listed under the agenda.
    */
   const openFindings = findingState.data?.items.length ?? 0;
-  const recurringCandidates =
-    patternState.data?.filter((pattern) => pattern.status === "CANDIDATE").length ?? 0;
+  const candidates = patternState.data?.filter((pattern) => pattern.status === "CANDIDATE") ?? [];
+  /*
+   * `schedules` IS NULLABLE HERE, and every use of it below has to say what it
+   * does when the agenda could not be read — see recurringAvailability. The
+   * short version: the schedules endpoint is dark unless the server's
+   * ANOMALY_RECURRING_ENABLED flag is on, so a 404 is its ordinary answer
+   * today, and the agenda, its add buttons, its empty state and its badge all
+   * come off rather than any of them being drawn from nothing.
+   */
+  const { schedules, canConfirm, overdueCount } = recurringAvailability(scheduleState);
 
   /*
    * The period-on-period change, or null when there is nothing to compare
@@ -491,11 +714,30 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
   const rankedTrends = [...(data?.categoryTrends ?? [])].sort((a, b) => b.current - a.current);
   const visibleTrends = showAllTrends ? rankedTrends : rankedTrends.slice(0, TREND_PREVIEW_COUNT);
 
+  /*
+   * THE RECURRING TAB COMES OFF WHEN IT WOULD OPEN ON NOTHING.
+   *
+   * With the agenda unavailable, all that tab can still hold is the candidate
+   * list — ungated detector output, which is often empty. A tab that opens on
+   * blank space reads as a screen that failed to load, which is the same
+   * misreading the empty state was causing one level down. Overview and Alerts
+   * are untouched by any of this: they are separate reads and a dark schedules
+   * endpoint has nothing to say about them.
+   */
   const sections = [
     { label: "Overview", value: "overview" as const },
     { label: "Alerts", value: "alerts" as const, count: openFindings },
-    { label: "Recurring", value: "recurring" as const, count: recurringCandidates },
+    ...(schedules !== null || candidates.length > 0
+      ? [{ label: "Recurring", value: "recurring" as const, count: overdueCount }]
+      : []),
   ];
+
+  /*
+   * Derived rather than corrected in an effect: the tab an owner is standing on
+   * can vanish under them when a refetch comes back 404, and `setSection` from
+   * a render would be a second render pass to reach the same place.
+   */
+  const activeSection = sections.some((tab) => tab.value === section) ? section : "overview";
 
   return (
     <Screen safeTop>
@@ -508,17 +750,23 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
 
         <SubTabs
           tabs={sections}
-          value={section}
+          value={activeSection}
           onChange={setSection}
           accessibilityLabel="Expense insight sections"
         />
+
+        {notice ? (
+          <View style={{ marginBottom: space.md }}>
+            <Callout tone="info">{notice}</Callout>
+          </View>
+        ) : null}
 
         {/*
           The period governs the figures on Overview and nothing else — the
           findings and recurring patterns are fetched without it. Showing it
           on those tabs would imply it filtered them.
         */}
-        {section === "overview" ? (
+        {activeSection === "overview" ? (
           <View style={{ marginBottom: space.lg }}>
             <DropdownPill
               options={periodOptions}
@@ -549,7 +797,7 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
               The shape first, the figures second: the chart answers "is this
               period unusual"; the list below answers "by how much, and where".
             */}
-            {section === "overview" ? (
+            {activeSection === "overview" ? (
               <>
               {/*
                 THE WINDOW IS EMPTY BUT THE BUSINESS IS NOT.
@@ -636,7 +884,10 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
                     <T variant="caption" style={{ flexShrink: 1 }}>
                       {periodDelta >= 0 ? "more" : "less"} than the {periodDays === 7 ? "week" : "month"} before
                       {" ("}
-                      {formatMoney(Math.abs(data.totals.current - data.totals.previous))}
+                      {/* Money in prose still wears the mono figure face — the one hard typographic rule this app has for currency. */}
+                      <T variant="caption" style={{ fontFamily: font.mono }}>
+                        {formatMoney(Math.abs(data.totals.current - data.totals.previous))}
+                      </T>
                       {")"}
                     </T>
                   </View>
@@ -785,7 +1036,7 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
               had failed to load. A clean month is the outcome an owner wants,
               and it should look like one rather than like a blank.
             */}
-            {section === "alerts" && openFindings === 0 && data.unusualExpenses.length === 0 ? (
+            {activeSection === "alerts" && openFindings === 0 && data.unusualExpenses.length === 0 ? (
               <Card>
                 <View style={{ alignItems: "center", paddingVertical: space.xxl, paddingHorizontal: space.lg }}>
                   <View
@@ -812,7 +1063,7 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
               </Card>
             ) : null}
 
-            {section === "alerts" && (openFindings > 0 || data.unusualExpenses.length > 0) ? (
+            {activeSection === "alerts" && (openFindings > 0 || data.unusualExpenses.length > 0) ? (
               <>
               <Card>
                 <T variant="heading" accessibilityRole="header" style={{ marginBottom: space.md }}>Unusual expenses</T>
@@ -854,14 +1105,25 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
                 {!findingState.loading && (findingState.data?.items.length ?? 0) === 0 ? (
                   <T variant="caption">No findings need review.</T>
                 ) : null}
+                {feedbackError ? <ErrorNote>{feedbackError}</ErrorNote> : null}
                 <View style={{ gap: space.sm }}>
                   {findingState.data?.items.map((finding) => {
                     /*
                       A duplicate and an unusual amount are different questions
                       with different answers, so they are told apart before they
-                      are read — colour, glyph and the wording of both buttons.
+                      are read — colour, glyph and the wording of the buttons.
                     */
-                    const duplicate = finding.type === "POSSIBLE_DUPLICATE";
+                    const category = findingCategory(finding.type);
+                    const duplicate = category === "duplicate";
+                    /*
+                      How much attention the finding is asking for, in words.
+                      ADR-4: the detector's severity grade and its raw score
+                      are internal, and "HIGH" reads as an accusation — the
+                      band says what the owner should do instead. The score
+                      only ever breaks a tie inside the mapping.
+                    */
+                    const signal = SIGNAL_COPY[findingSignalStrength(finding.severity, finding.score)];
+                    const quick = quickActions(category);
                     return (
                       <View
                         key={finding.id}
@@ -882,33 +1144,56 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
                             <T style={{ fontSize: typeScale.bodySm, color: ink[900], fontFamily: font.sansSemibold }}>
                               {finding.title}
                             </T>
-                            {finding.reasons.map((reason) => (
-                              <T
-                                key={reason}
-                                variant="caption"
-                                style={{ marginTop: 2, color: duplicate ? statusText.warning : statusText.critical }}
-                              >
-                                {reason}
+                            {/*
+                              The band, in words — never colour alone, and
+                              never the raw score.
+                            */}
+                            <T
+                              style={{
+                                marginTop: 2,
+                                fontSize: typeScale.micro,
+                                fontFamily: font.sansSemibold,
+                                color: signal.tone === "info" ? brand[700] : statusText[signal.tone],
+                              }}
+                            >
+                              {signal.label}
+                            </T>
+                            {/*
+                              WHY, capped at three. The detectors write these
+                              in the owner's own figures; a fourth line is
+                              where a card stops being read.
+                            */}
+                            {finding.reasons.slice(0, 3).map((reason) => (
+                              <T key={reason} variant="caption" style={{ marginTop: 2, color: ink[700] }}>
+                                • {reason}
                               </T>
                             ))}
+                            <T variant="caption" style={{ marginTop: 4 }}>
+                              {signal.detail}
+                            </T>
                           </View>
                         </View>
                         <View style={{ flexDirection: "row", gap: space.sm, marginTop: space.md }}>
-                          <View style={{ flex: 1 }}>
-                            <Button
-                              title={duplicate ? "Duplicate" : "Unusual"}
-                              variant="brand"
-                              onPress={() => void reviewFinding(finding.id, true, duplicate)}
-                            />
-                          </View>
-                          <View style={{ flex: 1 }}>
-                            <Button
-                              title={duplicate ? "Not duplicate" : "Expected"}
-                              variant="secondary"
-                              onPress={() => void reviewFinding(finding.id, false, false)}
-                            />
-                          </View>
+                          {quick.map((action, i) => (
+                            <View key={action.feedback} style={{ flex: 1 }}>
+                              <Button
+                                title={action.label}
+                                variant={i === 0 ? "brand" : "secondary"}
+                                onPress={() => void reviewFinding(finding.id, action)}
+                              />
+                            </View>
+                          ))}
                         </View>
+                        <Pressable
+                          onPress={() => setFeedbackFor(finding)}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Other answers for ${finding.title}`}
+                          style={{ minHeight: TAP, justifyContent: "center" }}
+                        >
+                          <T variant="caption" style={{ color: brand[700] }}>
+                            Something else…
+                          </T>
+                        </Pressable>
                       </View>
                     );
                   })}
@@ -917,82 +1202,213 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
               </>
             ) : null}
 
-            {/* RECURRING — payments FinSight thinks repeat. */}
-            {section === "recurring" ? (
-              patternState.data?.some((pattern) => pattern.status === "CANDIDATE") ? (
-              <Card>
-                <View style={{ flexDirection: "row", gap: space.sm, alignItems: "flex-start", marginBottom: space.md }}>
-                  <Medallion icon="repeat-outline" tint={brand[700]} surface={brand[50]} />
-                  <View style={{ flex: 1 }}>
-                    <T variant="heading" accessibilityRole="header">Expected payments</T>
-                    <T variant="caption" style={{ marginTop: 2 }}>
-                      Confirm repeating expenses so FinSight can spot changes.
-                    </T>
-                  </View>
-                </View>
-                <View style={{ gap: space.sm }}>
-                  {patternState.data.filter((pattern) => pattern.status === "CANDIDATE").map((pattern) => (
-                    <View
-                      key={pattern.id}
-                      style={{
-                        borderWidth: 1,
-                        borderColor: paper[200],
-                        borderRadius: radius.md,
-                        padding: space.md,
-                      }}
+            {/*
+              RECURRING — the payments the owner has told FinSight to watch,
+              and under them the ones FinSight is offering to watch.
+
+              THAT ORDER IS THE POINT OF THIS SECTION. It used to show only
+              candidates, so a schedule disappeared the moment it was confirmed
+              and there was no screen anywhere that listed what FinSight was
+              actually watching. An owner who had confirmed five payments saw
+              the same "none found yet" empty state as one who had never seen
+              a candidate at all.
+            */}
+            {activeSection === "recurring" ? (
+              <>
+                {/*
+                  NO ERROR NOTE FOR THE SCHEDULES READ. It used to print the
+                  server's own "Not found" here, which is the 404 the feature
+                  flag returns by design — an owner was being shown the
+                  plumbing of a feature that has not shipped. The agenda's
+                  absence IS the message; see recurringAvailability.
+
+                  `patternActionError` stays: that one is about a button the
+                  owner just pressed, and it is still reachable through
+                  "Not recurring", which is ungated.
+                */}
+                {patternActionError ? <ErrorNote>{patternActionError}</ErrorNote> : null}
+                {scheduleState.loading && scheduleState.data === null && schedules !== null ? (
+                  <ActivityIndicator color={brand[600]} />
+                ) : null}
+
+                {/*
+                  THE ONLY STATE THAT MAY SAY "NOTHING HERE".
+
+                  Both lists empty — nothing declared and nothing offered. The
+                  old condition tested candidates alone, which told an owner
+                  with schedules on file that none had been found.
+
+                  `schedules !== null` is the second half of that same rule and
+                  the more important one: an unread agenda is not an empty one.
+                */}
+                {schedules !== null && schedules.length === 0 && candidates.length === 0 && !scheduleState.loading ? (
+                  <EmptyState
+                    title="No repeating payments yet"
+                    // `icon`, not a mascot: docs/mascot-scenario-library.md maps
+                    // this state to a pose, but 04-empty-states/ ships no files
+                    // on either client, and require()-ing a path that is not
+                    // there is a build error rather than a missing picture.
+                    icon="↻"
+                    body="Rent, wages, a delivery you pay every week — add one and FinSight will tell you when it's late. It also offers them here once it notices the same expense a few times."
+                    action={
+                      <Button
+                        title="Add a repeating payment"
+                        variant="primary"
+                        onPress={() => openSchedule()}
+                      />
+                    }
+                  />
+                ) : null}
+
+                {/*
+                  THE AGENDA. Grouped on the server's own `dueState` — see
+                  lib/recurringAgenda.ts for why none of this is worked out
+                  from the date here.
+                */}
+                {groupSchedules(schedules ?? []).map((group) => (
+                  <View key={group.key}>
+                    <T
+                      variant="heading"
+                      accessibilityRole="header"
+                      style={{ color: brand[900], marginBottom: 2 }}
                     >
-                      <T style={{ fontSize: typeScale.bodySm, color: ink[900], fontFamily: font.sansSemibold }}>
-                        {pattern.description}
-                      </T>
-                      <T variant="caption" style={{ marginTop: 2 }}>
-                        {pattern.category.name} · About every {pattern.intervalDays} days
-                      </T>
-                      {/*
-                        "Confirm recurring" and "Not recurring" in two
-                        half-width buttons wrapped to two lines each on a
-                        normal phone, which made a routine yes/no look like a
-                        paragraph. The question is already asked by the card
-                        above them, so the answers can be the one word that
-                        differs: Confirm, and Not recurring.
-                      */}
-                      <View style={{ flexDirection: "row", gap: space.sm, marginTop: space.md }}>
-                        <View style={{ flex: 1 }}>
-                          <Button
-                            title="Confirm"
-                            variant="brand"
-                            onPress={() => void reviewPattern(pattern.id, "CONFIRMED")}
-                          />
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <Button
-                            title="Not recurring"
-                            variant="secondary"
-                            onPress={() => void reviewPattern(pattern.id, "DISMISSED")}
-                          />
-                        </View>
+                      {group.title}
+                    </T>
+                    <T variant="caption" style={{ marginBottom: space.sm }}>
+                      {group.caption}
+                    </T>
+                    {group.items.map((schedule) => (
+                      <ScheduleRow
+                        key={schedule.id}
+                        schedule={schedule}
+                        onPress={() => openSchedule(schedule.id)}
+                      />
+                    ))}
+                  </View>
+                ))}
+
+                {/*
+                  The add button goes with the agenda, not beside it: creating
+                  a schedule is POST /insights/recurring-schedules, behind the
+                  same gate as the read, so offering it while the agenda is
+                  unavailable would walk the owner into a form that cannot save.
+                */}
+                {schedules !== null && schedules.length > 0 ? (
+                  <Button
+                    title="Add a repeating payment"
+                    variant="secondary"
+                    onPress={() => openSchedule()}
+                  />
+                ) : null}
+
+                {/*
+                  CANDIDATES, kept but demoted. They are FinSight's suggestions,
+                  not the owner's list, and a suggestion should not outrank a
+                  commitment.
+                */}
+                {candidates.length > 0 ? (
+                  <Card>
+                    <View style={{ flexDirection: "row", gap: space.sm, alignItems: "flex-start", marginBottom: space.md }}>
+                      <Medallion icon="sparkles-outline" tint={brand[700]} surface={brand[50]} />
+                      <View style={{ flex: 1 }}>
+                        <T variant="heading" accessibilityRole="header">FinSight noticed these repeat</T>
+                        {/*
+                          The caption promises what the buttons below can
+                          actually do. With confirming unavailable there is no
+                          "list above" to join, and repeating the promise
+                          anyway would send the owner looking for a button
+                          that is deliberately not there.
+                        */}
+                        <T variant="caption" style={{ marginTop: 2 }}>
+                          {canConfirm
+                            ? "Confirm one and it joins the list above, where you can edit or pause it."
+                            : "Spotted in your records. Tell FinSight which of these aren't worth a second look."}
+                        </T>
                       </View>
                     </View>
-                  ))}
-                </View>
+                    <View style={{ gap: space.sm }}>
+                      {candidates.map((pattern) => (
+                        <View
+                          key={pattern.id}
+                          style={{
+                            borderWidth: 1,
+                            borderColor: paper[200],
+                            borderRadius: radius.md,
+                            padding: space.md,
+                          }}
+                        >
+                          <T style={{ fontSize: typeScale.bodySm, color: ink[900], fontFamily: font.sansSemibold }}>
+                            {pattern.description}
+                          </T>
+                          <T variant="caption" style={{ marginTop: 2 }}>
+                            {pattern.category.name} · About every {pattern.intervalDays} days
+                          </T>
+                          {/*
+                            "Confirm recurring" and "Not recurring" in two
+                            half-width buttons wrapped to two lines each on a
+                            normal phone, which made a routine yes/no look like a
+                            paragraph. The question is already asked by the card
+                            above them, so the answers can be the one word that
+                            differs: Confirm, and Not recurring.
+                          */}
+                          {/*
+                            CONFIRM IS HIDDEN, NOT DISABLED, when the agenda is
+                            unavailable. POST .../confirm creates a schedule, so
+                            it is behind the same server gate as the read and
+                            can only 404 — and a greyed-out button still
+                            advertises a capability, sending the owner hunting
+                            for whatever would switch it back on. Web hides it
+                            the same way, for the same reason
+                            (web/src/pages/ExpenseInsight.tsx).
+
+                            "Not recurring" stays either way: PATCH
+                            /insights/recurring-patterns/:id is ungated, so
+                            dismissing a bad guess still works.
+                          */}
+                          <View style={{ flexDirection: "row", gap: space.sm, marginTop: space.md }}>
+                            {canConfirm ? (
+                              <View style={{ flex: 1 }}>
+                                <Button
+                                  title="Confirm"
+                                  variant="brand"
+                                  onPress={() => void confirmPattern(pattern.id)}
+                                />
+                              </View>
+                            ) : null}
+                            <View style={{ flex: 1 }}>
+                              <Button
+                                title="Not recurring"
+                                variant="secondary"
+                                onPress={() => void dismissPattern(pattern.id)}
+                              />
+                            </View>
+                          </View>
+                        </View>
+                      ))}
+                    </View>
+                  </Card>
+                ) : null}
+
                 {/*
-                  What confirming actually buys, said once at the bottom
-                  rather than on every card — it is the same promise for all
-                  of them, and repeating it per row would crowd out the
-                  figures the decision rests on.
+                  WHAT WATCHING ACTUALLY BUYS, and only what it buys.
+
+                  This used to promise a notification for late, early AND
+                  changed amounts. Only the first is delivered: the backend
+                  emits a notification when a scheduled payment goes unrecorded
+                  past its date, and when one is coming up. An early repeat or
+                  a changed amount is raised as a finding on the Alerts tab and
+                  nothing is sent. Said accurately here rather than generously,
+                  because a promise of an alert that never arrives is worse
+                  than no promise — the owner stops watching for it themselves.
                 */}
-                <View style={{ marginTop: space.md }}>
+                {schedules !== null && (schedules.length > 0 || candidates.length > 0) ? (
                   <Callout tone="info">
-                    You'll be notified if a confirmed payment is late, early, or changes amount.
+                    You'll be notified when a payment on this list is due or goes unrecorded past its date.
+                    A different amount, or an extra payment sooner than expected, shows up under Alerts
+                    rather than as a notification.
                   </Callout>
-                </View>
-              </Card>
-              ) : (
-                <EmptyState
-                  title="No repeating payments found yet"
-                  icon="↻"
-                  body="Once the same expense shows up a few times, FinSight will offer it here so you can confirm it repeats."
-                />
-              )
+                ) : null}
+              </>
             ) : null}
           </View>
         )}
@@ -1008,6 +1424,34 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
       <AskFinSightFab onPress={() => setAskOpen(true)} />
 
       <AskFinSight visible={askOpen} onClose={() => setAskOpen(false)} businessProfileId={selected.id} module="Expense Insights" />
+
+      {/*
+        All five answers, in one sheet, reached from any finding card. The
+        card's two buttons are the likely ones; this is what makes the other
+        three sayable at all on a phone — and one of them, "Wrong match", is
+        the single most useful thing the duplicate detector can be told.
+
+        The existing OptionSheet rather than a new surface: the app already has
+        one bottom sheet and a second, slightly different one is exactly the
+        drift the chip consolidation exists to prevent.
+      */}
+      <OptionSheet
+        visible={feedbackFor !== null}
+        title="What was this, really?"
+        options={
+          feedbackFor
+            ? feedbackActions(findingCategory(feedbackFor.type)).map((a) => ({ id: a.feedback, name: a.label }))
+            : []
+        }
+        value={feedbackFor?.feedback ?? null}
+        onChoose={(id) => {
+          if (!feedbackFor) return;
+          const action = feedbackActions(findingCategory(feedbackFor.type)).find((a) => a.feedback === id);
+          if (action) void reviewFinding(feedbackFor.id, action);
+        }}
+        onClose={() => setFeedbackFor(null)}
+        emptyText="No answers available."
+      />
     </Screen>
   );
 }

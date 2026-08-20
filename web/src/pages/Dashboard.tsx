@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
@@ -10,6 +10,7 @@ import { RecoveryMeter } from "../components/RecoveryMeter";
 import { AskFinSightButton, AskFinSightDrawer } from "../components/AskFinSightDrawer";
 import { SkeletonDashboard } from "../components/Skeleton";
 import { EmptyState, SetupProgress } from "../components/EmptyState";
+import { GreetingHero } from "../components/GreetingHero";
 import { ButtonLink } from "../components/Button";
 import { formatMoney } from "../components/Money";
 import { DonutChart } from "../components/DonutChart";
@@ -108,8 +109,8 @@ export function Dashboard() {
       <div>
         <PageHead title="Welcome to FinSight" subtitle="One short step and your dashboard comes to life." />
         <EmptyState
+          image="/mascot/01-onboarding/businessprofilesetup.webp"
           title="Finish setting up your business"
-          icon="◎"
           action={<ButtonLink to="/onboarding" variant="primary">Continue setup</ButtonLink>}
         >
           FinSight needs your business name and a few figures before it can work out your sales
@@ -168,7 +169,7 @@ export function Dashboard() {
    * entered expected monthly expenses is not failing a target, they simply
    * have not set one, and telling them they are "behind" would be wrong.
    */
-  const recovery: { label: string; meta: string; tone: "brand" | "accent" | "danger" | "info" } = !summary
+  const recovery: { label: string; meta: ReactNode; tone: "brand" | "accent" | "danger" | "info" } = !summary
     ? { label: "—", meta: "", tone: "info" }
     : summary.recoveryStatus.expectedMonthlyExpenses <= 0
       ? { label: "Not set up", meta: "Add expected monthly expenses", tone: "info" }
@@ -180,7 +181,11 @@ export function Dashboard() {
           }
         : {
             label: "Behind pace",
-            meta: `${formatMoney(summary.recoveryStatus.remainingTarget)} still needed`,
+            meta: (
+              <>
+                <span className="figure">{formatMoney(summary.recoveryStatus.remainingTarget)}</span> still needed
+              </>
+            ),
             tone: "danger",
           };
 
@@ -224,15 +229,28 @@ export function Dashboard() {
                 </button>
               ))}
             </div>
-            <AskFinSightButton
-              onClick={() => {
-                setDrawerQuestion(undefined);
-                setDrawerOpen(true);
-              }}
-            />
           </>
         }
       />
+
+      {/*
+        Fin opens the page, above the checklist and the figures alike: it names
+        the reader and says the one thing that most wants acting on, which is
+        the question someone arriving at a dashboard is actually asking. It
+        renders during loading too — `summary` is null then, and the panel holds
+        its shape with skeleton lines rather than appearing a beat late.
+      */}
+      {/* data-tour="dashboard-summary" is the product tour's "dashboard
+          overview" spotlight — the greeting panel is the page's summary
+          sentence and the first thing the tour should point at. */}
+      <div data-tour="dashboard-summary">
+        <GreetingHero summary={loading ? null : summary} />
+      </div>
+
+      {/* Invisible marker for the tour's auto-start gate: present only once
+          the dashboard fetch has settled, so the tour never opens over a
+          skeleton. Zero-size, aria-hidden — costs nothing. */}
+      {!loading ? <span data-tour="dashboard-loaded" aria-hidden className="hidden" /> : null}
 
       {/* Goal-Gradient: a brand-new business sees how close it is to a first
           insight, rather than three unrelated empty panels. */}
@@ -383,7 +401,11 @@ export function Dashboard() {
               {topCategory ? (
                 <>
                   <Kw>{topCategory.categoryName}</Kw> is your largest expense category{" "}
-                  {periodLabel.toLowerCase()}, at <Kw>{formatMoney(topCategory.total)}</Kw>.{" "}
+                  {periodLabel.toLowerCase()}, at{" "}
+                  <Kw>
+                    <span className="figure">{formatMoney(topCategory.total)}</span>
+                  </Kw>
+                  .{" "}
                 </>
               ) : (
                 <>No expenses recorded {periodLabel.toLowerCase()} yet. </>
@@ -391,8 +413,14 @@ export function Dashboard() {
               {summary.recoveryStatus.expectedMonthlyExpenses > 0 ? (
                 <>
                   Sales reference so far this month is{" "}
-                  <Kw>{formatMoney(summary.recoveryStatus.salesThisMonth)}</Kw> against a monthly target of{" "}
-                  <Kw>{formatMoney(summary.recoveryStatus.expectedMonthlyExpenses)}</Kw>.{" "}
+                  <Kw>
+                    <span className="figure">{formatMoney(summary.recoveryStatus.salesThisMonth)}</span>
+                  </Kw>{" "}
+                  against a monthly target of{" "}
+                  <Kw>
+                    <span className="figure">{formatMoney(summary.recoveryStatus.expectedMonthlyExpenses)}</span>
+                  </Kw>
+                  .{" "}
                 </>
               ) : null}
               {summary.recordsNeedingReview > 0 ? (
@@ -429,7 +457,7 @@ export function Dashboard() {
                   to="/records/flagged"
                   className="flex min-h-tap items-center gap-2 rounded-xl border border-paper-200 px-3.5 text-sm font-semibold text-tone-brand transition hover:border-brand-300 hover:bg-tint-brand"
                 >
-                  Review flagged records
+                  Open your review queue
                   <IconArrowRight className="ml-auto h-4 w-4" />
                 </Link>
               )}
@@ -519,6 +547,7 @@ export function Dashboard() {
 
           {!hasAnyRecords ? (
             <EmptyState
+              image="/mascot/01-onboarding/emptydashboard.webp"
               title="Nothing recorded in this period yet"
               action={
                 <ButtonLink to="/records/expenses/new" variant="primary">
@@ -532,6 +561,13 @@ export function Dashboard() {
           ) : null}
         </div>
       )}
+
+      <AskFinSightButton
+        onClick={() => {
+          setDrawerQuestion(undefined);
+          setDrawerOpen(true);
+        }}
+      />
 
       <AskFinSightDrawer
         businessProfileId={selected.id}

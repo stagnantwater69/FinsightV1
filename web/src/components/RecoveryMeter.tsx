@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { STATUS_COLORS, STATUS_INK, STATUS_TEXT_COLORS } from "../lib/chartPalette";
 import { Money } from "./Money";
 import type { RecoveryTargets } from "../lib/types";
@@ -38,7 +39,34 @@ export function RecoveryMeter({
     onTrack,
   } = recoveryStatus;
 
-  const monthRatio = Math.min(monthCoveragePercent / 100, 1);
+  /*
+   * The two bars already transition their width whenever `recoveryStatus`
+   * changes (period switch, refetch) — but on the very first mount there was
+   * nothing to transition FROM, so the meter's signature moment just
+   * appeared fully filled. `animateIn` holds both bars at 0 for one paint,
+   * then releases them to their real width on the next frame so the same
+   * `transition-[width] duration-700` sweeps in on first load too, the way
+   * the rest of the app treats an entrance as something to notice rather
+   * than something that just happens. Runs once — later prop changes still
+   * animate on their own via the width transition already in place.
+   */
+  const [animateIn, setAnimateIn] = useState(false);
+  const innerFrame = useRef(0);
+  useEffect(() => {
+    // Two frames, not one: the first commits the 0% state to the DOM, the
+    // second is where the browser has actually painted it — starting the
+    // transition inside the first callback risks the two style writes
+    // coalescing into a single paint, which would skip the sweep entirely.
+    const outerFrame = requestAnimationFrame(() => {
+      innerFrame.current = requestAnimationFrame(() => setAnimateIn(true));
+    });
+    return () => {
+      cancelAnimationFrame(outerFrame);
+      cancelAnimationFrame(innerFrame.current);
+    };
+  }, []);
+
+  const monthRatio = animateIn ? Math.min(monthCoveragePercent / 100, 1) : 0;
   const monthFill = onTrack ? STATUS_COLORS.good : STATUS_COLORS.critical;
   // Two different colours for two different jobs — see STATUS_INK's note.
   // `monthSolid` fills the status disc and carries white text on it, so it has
@@ -54,10 +82,19 @@ export function RecoveryMeter({
       : todaysStatus === "at"
         ? STATUS_INK.warning
         : STATUS_INK.good;
-  const todayRatio = todaysTarget > 0 ? Math.min(todaysSales / todaysTarget, 1) : todaysSales > 0 ? 1 : 0;
+  const todayRatio = animateIn
+    ? todaysTarget > 0
+      ? Math.min(todaysSales / todaysTarget, 1)
+      : todaysSales > 0
+        ? 1
+        : 0
+    : 0;
 
   return (
     <div>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        <span className="text-xs text-ink-500">This month</span>
+      </div>
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <span
           aria-hidden

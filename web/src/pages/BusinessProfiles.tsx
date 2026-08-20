@@ -39,6 +39,7 @@ export function BusinessProfiles() {
       <div>
         <PageHead eyebrow="Management" title="Business profile" />
         <EmptyState
+          image="/mascot/01-onboarding/businessprofilesetup.webp"
           title="Let's set up your first business"
           action={
             <ButtonLink to="/business-profiles/new" variant="primary">
@@ -102,7 +103,11 @@ export function BusinessProfiles() {
           <StatTile
             label="Large-expense threshold"
             value={`${selected.largeExpenseThresholdPercent}%`}
-            sublabel={`= ${formatMoney(threshold)} of expected monthly expenses`}
+            sublabel={
+              <>
+                = <span className="figure">{formatMoney(threshold)}</span> of expected monthly expenses
+              </>
+            }
           />
         </div>
 

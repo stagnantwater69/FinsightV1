@@ -439,3 +439,185 @@ export async function simulateSpendingImpact(
     resultingFunds,
   };
 }
+
+
+// ============================================================
+// Price context — "is this a fair price?", answered from their own records
+// ============================================================
+
+/**
+ * What this owner has actually paid, next to what they are about to pay.
+ *
+ * WHY THIS IS NOT AN AI ANSWER. "Is ₱11,000 the right price for a display
+ * fridge?" is a question about the Cebu appliance market on the day it is
+ * asked, and a language model does not know that — it would produce a
+ * confident range with nothing behind it, which is the one failure this
+ * codebase spends most of its grounding rules preventing. What FinSight
+ * genuinely knows is the owner's OWN history: what they paid the last time
+ * they bought something described this way, and what a purchase in this
+ * category usually costs them. That is a real answer to "is this normal for
+ * me", computed here and never written by a model.
+ *
+ * TWO SIGNALS, strongest first:
+ *   1. Records whose description contains the same significant words — the
+ *      closest thing to "the last time I bought this exact thing".
+ *   2. The spread of amounts in the category the item would be filed under.
+ *
+ * A business with no history gets `comparison: "no-history"` and the card says
+ * so, rather than a comparison against a median of nothing.
+ */
+
+export type PriceComparison = "no-history" | "no-amount" | "below" | "in-line" | "above" | "far-above";
+
+export interface SimilarPurchase {
+  description: string;
+  amount: number;
+  date: Date;
+  categoryName: string;
+}
+
+export interface PurchasePriceContext {
+  categoryId: number | null;
+  categoryName: string | null;
+  /** Records in that category over the window, whatever the description. */
+  recordCount: number;
+  /** The median, which a single ₱80,000 outlier cannot drag around. */
+  typicalAmount: number | null;
+  smallestAmount: number | null;
+  largestAmount: number | null;
+  /** The planned amount over the median. Null without an amount or a history. */
+  multipleOfTypical: number | null;
+  comparison: PriceComparison;
+  /** Up to three past records that look like the same item, newest first. */
+  similar: SimilarPurchase[];
+  /** How far back this looked. */
+  windowDays: number;
+}
+
+/** A year: long enough to catch an annual repurchase, short enough to still be today's prices. */
+const PRICE_HISTORY_DAYS = 365;
+
+/**
+ * The words worth searching on.
+ *
+ * "Display fridge for the drinks" searches for "display" and "fridge" and
+ * ignores the rest — three-letter-and-under words match half the ledger, and
+ * a handful of common filler words ("for", "the", "new") are worse than
+ * useless because they match everything while looking specific.
+ */
+const PRICE_STOP_WORDS = new Set([
+  "and", "for", "the", "with", "new", "old", "our", "from", "this", "that", "one", "two",
+  "buy", "buying", "purchase", "get", "some", "more", "extra", "pcs", "set", "unit", "units",
+]);
+
+export function significantWords(description: string): string[] {
+  return description
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((word) => word.length > 3 && !PRICE_STOP_WORDS.has(word))
+    // Three is plenty: each one is a LIKE over the description column, and the
+    // fourth word of a phrase rarely narrows anything the first three did not.
+    .slice(0, 3);
+}
+
+/**
+ * Where the planned amount sits against what this owner usually pays.
+ *
+ * The bands are deliberately wide. Prices move, sizes differ, and a 15%
+ * difference from a median of four records is noise — calling that "above
+ * what you usually pay" would train the owner to ignore the line entirely.
+ */
+export function comparePrice(plannedAmount: number | null, typicalAmount: number | null): PriceComparison {
+  if (plannedAmount === null) return "no-amount";
+  if (typicalAmount === null || typicalAmount <= 0) return "no-history";
+  const multiple = plannedAmount / typicalAmount;
+  if (multiple < 0.7) return "below";
+  if (multiple <= 1.4) return "in-line";
+  if (multiple <= 2.5) return "above";
+  return "far-above";
+}
+
+function median(sorted: number[]): number | null {
+  if (sorted.length === 0) return null;
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[middle - 1]! + sorted[middle]!) / 2 : sorted[middle]!;
+}
+
+export async function buildPurchasePriceContext(
+  userId: number,
+  businessProfileId: number,
+  description: string,
+  plannedAmount: number | null,
+  categoryId: number | null,
+): Promise<PurchasePriceContext> {
+  await requireOwnedBusinessProfile(userId, businessProfileId);
+
+  const since = utcAddDays(utcToday(), -PRICE_HISTORY_DAYS);
+  const words = significantWords(description);
+
+  /*
+   * Every query here is scoped to this business profile, which the ownership
+   * check above has already tied to this user. A description search that
+   * reached across profiles would be a data leak wearing a helpful face.
+   */
+  const [similarRecords, categoryRecords] = await Promise.all([
+    words.length
+      ? prisma.expenseRecord.findMany({
+          where: {
+            businessProfileId,
+            date: { gte: since },
+            // AND, not OR: "display fridge" should find the fridge, not every
+            // record with the word "display" in it.
+            AND: words.map((word) => ({
+              description: { contains: word, mode: "insensitive" as const },
+            })),
+          },
+          select: { description: true, amount: true, date: true, category: { select: { name: true } } },
+          orderBy: { date: "desc" },
+          take: 3,
+        })
+      : Promise.resolve([]),
+    categoryId
+      ? prisma.expenseRecord.findMany({
+          where: { businessProfileId, categoryId, date: { gte: since } },
+          select: { amount: true },
+          // Bounded: a busy category can hold thousands, and a median over the
+          // most recent 200 is the same answer for a fraction of the read.
+          orderBy: { date: "desc" },
+          take: 200,
+        })
+      : Promise.resolve([]),
+  ]);
+
+  const category = categoryId
+    ? await prisma.expenseCategory.findFirst({
+        where: { id: categoryId, businessProfileId },
+        select: { id: true, name: true },
+      })
+    : null;
+
+  const amounts = categoryRecords.map((r) => Number(r.amount)).sort((a, b) => a - b);
+  const typicalAmount = median(amounts);
+
+  return {
+    categoryId: category?.id ?? null,
+    categoryName: category?.name ?? null,
+    recordCount: amounts.length,
+    typicalAmount,
+    smallestAmount: amounts[0] ?? null,
+    largestAmount: amounts[amounts.length - 1] ?? null,
+    multipleOfTypical:
+      plannedAmount !== null && typicalAmount && typicalAmount > 0
+        ? Number((plannedAmount / typicalAmount).toFixed(2))
+        : null,
+    comparison: comparePrice(plannedAmount, typicalAmount),
+    similar: similarRecords.map((r) => ({
+      description: r.description,
+      amount: Number(r.amount),
+      date: r.date,
+      categoryName: r.category.name,
+    })),
+    windowDays: PRICE_HISTORY_DAYS,
+  };
+}

@@ -24,6 +24,9 @@ import {
 
 import { AuthProvider, useAuth } from "./src/context/AuthContext";
 import { BusinessProfileProvider, useBusinessProfiles } from "./src/context/BusinessProfileContext";
+import { TourProvider, useTourOptional } from "./src/context/TourContext";
+import { useTourTarget } from "./src/components/tour/targets";
+import { QUICK_ADD_STEP_IDS, type TourTargetKey } from "./src/components/tour/steps";
 import { OnboardingResumeScreen, OnboardingScreen } from "./src/screens/OnboardingScreens";
 import { readOnboarding } from "./src/lib/onboardingDraft";
 import {
@@ -59,6 +62,7 @@ import {
   RecoveryTargetScreen,
   SpendingImpactScreen,
 } from "./src/screens/InsightsScreens";
+import { RecurringScheduleScreen } from "./src/screens/RecurringScheduleScreen";
 import {
   BusinessProfileFormScreen,
   BusinessProfilesScreen,
@@ -185,6 +189,17 @@ function InsightsStack() {
       <Stack.Screen name="ExpenseBehavior" component={ExpenseBehaviorScreen} />
       <Stack.Screen name="SpendingImpact" component={SpendingImpactScreen} />
       <Stack.Screen name="RecoveryTarget" component={RecoveryTargetScreen} />
+      {/*
+        The one screen in this stack that IS pushed onto something, so it is
+        the one that keeps a header: it has a parent to go back to (the
+        Recurring tab of Expense insight), and without the native header the
+        only way out would be the hardware back button.
+      */}
+      <Stack.Screen
+        name="RecurringSchedule"
+        component={RecurringScheduleScreen}
+        options={{ headerShown: true, title: "Repeating payment" }}
+      />
     </Stack.Navigator>
   );
 }
@@ -240,6 +255,50 @@ const TAB_ICONS: Record<string, [keyof typeof Ionicons.glyphMap, keyof typeof Io
 };
 
 /**
+ * The two tabs the product tour points at.
+ *
+ * REGISTERED ON THE ICON, not on the tab button. bottom-tabs renders its own
+ * button and gives no ref to it, and replacing `tabBarButton` wholesale to get
+ * one would mean re-implementing the label, the press feedback and the
+ * accessibility state that the library already gets right. The icon is inside
+ * the button, so a spotlight around it (plus the overlay's own padding) lands
+ * on the tab — see components/tour/targets.ts.
+ */
+const TAB_TOUR_TARGETS: Record<string, TourTargetKey | undefined> = {
+  Records: "tab-records",
+  Insights: "tab-insights",
+};
+
+/** A tab icon that the tour can measure. Its own component for the hook. */
+function TabIcon({
+  routeName,
+  color,
+  focused,
+}: {
+  routeName: string;
+  color: string;
+  focused: boolean;
+}) {
+  /*
+   * The spotlight is padded down and out to take in the LABEL as well as the
+   * glyph. What is registered here is the 22pt icon, because bottom-tabs hands
+   * out no ref to the button around it; a ring drawn tight to the icon points
+   * at half a control and reads as a misaligned overlay rather than as "this
+   * tab". The numbers are the tab item's own metrics: the icon-to-label gap
+   * plus the label's line box, and enough width for the widest of the four.
+   */
+  const tourTarget = useTourTarget(TAB_TOUR_TARGETS[routeName], {
+    pad: { top: 8, bottom: 26, left: 26, right: 26 },
+  });
+  const pair = TAB_ICONS[routeName];
+  return (
+    <View {...tourTarget}>
+      <Ionicons name={pair ? pair[focused ? 1 : 0] : "ellipse-outline"} size={22} color={color} />
+    </View>
+  );
+}
+
+/**
  * Adding something, given the middle of the bar.
  *
  * Recording what was spent and earned is what this app is FOR and the reason
@@ -256,6 +315,10 @@ const TAB_ICONS: Record<string, [keyof typeof Ionicons.glyphMap, keyof typeof Io
  * rather than a fifth destination.
  */
 function ScanTabButton({ onPress, active }: { onPress: () => void; active: boolean }) {
+  // The tour's "Receipt scanner" step points here: on a phone this raised
+  // button IS the quick-add menu web spotlights.
+  const tourTarget = useTourTarget("quick-add", { pad: { top: 8, bottom: 8, left: 8, right: 8 }, radius: 999 });
+
   return (
     <View style={{ flex: 1, alignItems: "center", justifyContent: "flex-start" }}>
       {/*
@@ -283,6 +346,7 @@ function ScanTabButton({ onPress, active }: { onPress: () => void; active: boole
         />
       ) : null}
       <Pressable
+        {...tourTarget}
         onPress={onPress}
         accessibilityRole="button"
         accessibilityLabel={active ? "Close the actions menu" : "Add a record"}
@@ -357,6 +421,15 @@ function MainTabs() {
   const [menuOpen, setMenuOpen] = useState(false);
 
   /*
+   * The product tour's two Quick-add steps spotlight items inside that menu,
+   * so while one of them is the active step the menu is held open by the tour
+   * rather than by the owner. `activeStepId` is the whole of the coupling —
+   * the tab bar knows nothing else about the tour.
+   */
+  const tour = useTourOptional();
+  const tourHoldsMenu = QUICK_ADD_STEP_IDS.includes(tour?.activeStepId ?? "");
+
+  /*
    * The nested-params form, because it is the only one that crosses tabs.
    *
    * A bare `dispatch(push(screen))` after switching tabs looks cleaner and
@@ -378,6 +451,8 @@ function MainTabs() {
       key: "expense",
       label: "Expense",
       icon: "receipt-outline",
+      // The tour's "Record an expense by hand" step.
+      tourTarget: "quick-add-expense",
       color: ACCENT.fill,
       // Amber takes DARK ink, never white — measured, and the same rule the
       // primary button follows.
@@ -388,6 +463,10 @@ function MainTabs() {
       key: "sales",
       label: "Sales",
       icon: "cash-outline",
+      // And "Add a sales reference" — the two ways money is recorded without
+      // a receipt or a spreadsheet, which is why the phone teaches them and
+      // web does not have to.
+      tourTarget: "quick-add-sales",
       color: categorical[2],
       onColor: categoricalOnColor[2],
       onPress: () => openInRecords("AddSales"),
@@ -396,6 +475,9 @@ function MainTabs() {
       key: "scan",
       label: "Scan receipt",
       icon: "camera-outline",
+      // The tour's "Receipt scanner" step spotlights this circle, with the
+      // menu held open around it — see components/tour/steps.ts.
+      tourTarget: "quick-add-scan",
       // The middle of the arc, in FinSight's own green: still the action the
       // button is for, just no longer the only one it can reach.
       color: brand[700],
@@ -406,6 +488,10 @@ function MainTabs() {
       key: "csv",
       label: "Import CSV",
       icon: "cloud-upload-outline",
+      // Likewise "Import a spreadsheet", which used to point at Home's own
+      // Import CSV tile — a shortcut on one screen rather than the control the
+      // owner will find on every screen.
+      tourTarget: "quick-add-csv",
       color: categorical[0],
       onColor: categoricalOnColor[0],
       onPress: () => openInRecords("ImportCsv"),
@@ -446,10 +532,9 @@ function MainTabs() {
           paddingBottom: 8 + insets.bottom,
         },
         tabBarLabelStyle: { fontFamily: font.sansMedium, fontSize: 11 },
-        tabBarIcon: ({ color, focused }) => {
-          const pair = TAB_ICONS[route.name];
-          return <Ionicons name={pair ? pair[focused ? 1 : 0] : "ellipse-outline"} size={22} color={color} />;
-        },
+        tabBarIcon: ({ color, focused }) => (
+          <TabIcon routeName={route.name} color={color} focused={focused} />
+        ),
       })}
     >
       {/*
@@ -519,7 +604,19 @@ function MainTabs() {
       <Tab.Screen name="More" component={MoreStack} />
     </Tab.Navigator>
 
-    <QuickActionMenu visible={menuOpen} actions={quickActions} onClose={() => setMenuOpen(false)} />
+    {/*
+      The two tour steps that point INSIDE this menu hold it open themselves.
+      Held open by the tour it is not the owner's menu: it ignores taps outside
+      and the back button, both of which belong to the tour while a step is up.
+      When the step moves on it closes again, restoring exactly the state the
+      owner had. Web's AppShell does the same for the same two steps.
+    */}
+    <QuickActionMenu
+      visible={menuOpen || tourHoldsMenu}
+      heldOpen={tourHoldsMenu}
+      actions={quickActions}
+      onClose={() => setMenuOpen(false)}
+    />
 
     {/*
       `statusBarTranslucent` so the preview runs edge to edge; the camera's
@@ -757,7 +854,20 @@ function MainOrOnboarding() {
     );
   }
 
-  return <MainTabs />;
+  /*
+   * The product tour is mounted HERE and nowhere else.
+   *
+   * Inside BusinessProfileProvider, because the start gate needs the selected
+   * business; around MainTabs rather than inside a screen, because the tour
+   * points at the tab bar as well as at Home; and past the onboarding branch
+   * above, so a brand-new owner finishes setup before being toured — the same
+   * order web uses. One mount is what makes two overlays impossible.
+   */
+  return (
+    <TourProvider>
+      <MainTabs />
+    </TourProvider>
+  );
 }
 
 export default function App() {

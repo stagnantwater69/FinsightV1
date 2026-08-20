@@ -43,6 +43,7 @@ jobs:
       - run: npm ci --prefix web
 
       - run: npm run typecheck --prefix backend
+      - run: npm run lint --prefix backend
       - run: npx prisma generate --prefix backend
         working-directory: backend
       - run: npm test --prefix backend
@@ -60,6 +61,45 @@ jobs:
       - run: npm run typecheck --prefix web
       - run: npm run lint --prefix web
       - run: npm test --prefix web
+      # The Playwright browser Chromium ships needs its own OS deps installed
+      # on the runner image; --with-deps handles both in one step.
+      - run: npx --prefix web playwright install --with-deps chromium
+      # auth-shell.spec.ts only exercises the public login/recover/register
+      # shell — it never calls Supabase — so these are placeholder values,
+      # not secrets. supabaseClient.ts throws at import time if either is
+      # empty, which would otherwise take the whole dev server down before
+      # Playwright could load a single page.
+      - run: npm run test:e2e --prefix web
+        env:
+          VITE_SUPABASE_URL: "https://example.supabase.co"
+          VITE_SUPABASE_ANON_KEY: "ci-placeholder-anon-key"
+          VITE_API_BASE_URL: "http://localhost:4000/api/v1"
+
+  docker:
+    runs-on: ubuntu-latest
+    # Verifies the two things docs/DEPLOYMENT-HARDENING-PLAN.md's own
+    # Verification section requires and that, until now, only ran by hand:
+    # `docker compose config` parses, and nginx/nginx.conf passes `nginx -t`
+    # in the same image tag docker-compose.yml pins.
+    steps:
+      - uses: actions/checkout@v4
+      # docker-compose.yml points backend's env_file at backend/.env, which is
+      # gitignored and never present in CI. `docker compose config` refuses to
+      # even parse without it — not because the values are read, only because
+      # the file must exist — so a placeholder copy of the example file is
+      # enough. Nothing here starts a container.
+      - run: cp backend/.env.example backend/.env
+      - run: docker compose config
+      # nginx.conf's upstream block names the backend service by its
+      # docker-compose hostname. `nginx -t` resolves upstream hosts as part of
+      # loading the config even though it never connects to them, so bare
+      # `nginx -t` fails outside the compose network with "host not found".
+      # --add-host satisfies that resolution without needing the backend
+      # service actually running.
+      - run: |
+          docker run --rm --add-host backend:127.0.0.1 \
+            -v "$(pwd)/nginx/nginx.conf:/etc/nginx/nginx.conf:ro" \
+            nginx:1.27-alpine nginx -t
 
   mobile:
     runs-on: ubuntu-latest

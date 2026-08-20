@@ -11,8 +11,8 @@ just a random tax on the API budget.
 
 | | n | mean | min | max |
 |---|---|---|---|---|
-| Receipts that parsed cleanly | 28 | 93.8 | 90 | 95 |
-| Receipts with any error | 3 | 59.3 | 33 | 89 |
+| Receipts that parsed cleanly | 29 | 93.7 | 89 | 95 |
+| Receipts with any error | 2 | 44.5 | 33 | 56 |
 
 The separation is real and stark. **It is also narrower evidence than it looks**: every low-confidence
 image in this corpus is one of its few real photographs, and every synthetic render scores 89-95
@@ -55,7 +55,7 @@ with no false alarms.
 | `real-02-clean-digital` | 94% | 95 | 95 | ✅ |
 | `real-03-ph-sales-invoice` | 56% | 86 | 51 | ❌ |
 | `syn-01-vendor-top-iso-date` | 94% | 95 | 96 | ✅ |
-| `syn-02-vendor-bottom` | 89% | 96 | 94 | ❌ |
+| `syn-02-vendor-bottom` | 89% | 96 | 94 | ✅ |
 | `syn-03-ambiguous-slash-date` | 95% | 95 | 95 | ✅ |
 | `syn-04-month-name-date` | 95% | 96 | 96 | ✅ |
 | `syn-05-thousands-separator` | 95% | 95 | 95 | ✅ |

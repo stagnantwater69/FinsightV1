@@ -19,6 +19,17 @@ export default defineConfig({
      */
     environment: 'node',
     include: ['src/**/*.test.{ts,tsx}'],
+    /*
+     * `*.types.test.ts` files assert things the runtime can't see — that a
+     * union does NOT admit a value the API rejects, for instance. Those live
+     * or die on tsc, so vitest runs one over them; without this they'd pass
+     * silently while the type they guard drifted.
+     */
+    typecheck: {
+      enabled: true,
+      include: ['src/**/*.types.test.ts'],
+      tsconfig: './tsconfig.app.json',
+    },
     setupFiles: ['./src/test/setup.ts'],
   },
 })

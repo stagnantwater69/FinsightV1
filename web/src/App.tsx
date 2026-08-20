@@ -40,6 +40,8 @@ const Dashboard = lazy(() => import("./pages/Dashboard").then((m) => ({ default:
 const ExpenseInsight = lazy(() => import("./pages/ExpenseInsight").then((m) => ({ default: m.ExpenseInsight })));
 const RecoveryInsightPage = lazy(() => import("./pages/RecoveryInsightPage").then((m) => ({ default: m.RecoveryInsightPage })));
 const SpendingImpact = lazy(() => import("./pages/SpendingImpact").then((m) => ({ default: m.SpendingImpact })));
+const AddRecurringSchedule = lazy(() => import("./pages/RecurringScheduleForm").then((m) => ({ default: m.AddRecurringSchedule })));
+const EditRecurringSchedule = lazy(() => import("./pages/RecurringScheduleForm").then((m) => ({ default: m.EditRecurringSchedule })));
 const Categories = lazy(() => import("./pages/Categories").then((m) => ({ default: m.Categories })));
 const Notifications = lazy(() => import("./pages/Notifications").then((m) => ({ default: m.Notifications })));
 const Onboarding = lazy(() => import("./pages/Onboarding").then((m) => ({ default: m.Onboarding })));
@@ -146,6 +148,10 @@ function App() {
                   <Route path="/insights/expense-behavior" element={<ExpenseInsight />} />
                   <Route path="/insights/recovery" element={<RecoveryInsightPage />} />
                   <Route path="/insights/spending-impact" element={<SpendingImpact />} />
+                  {/* The agenda itself lives on Expense insight; these are the
+                      declare/edit forms behind it. */}
+                  <Route path="/insights/recurring-schedules/new" element={<AddRecurringSchedule />} />
+                  <Route path="/insights/recurring-schedules/:id/edit" element={<EditRecurringSchedule />} />
                 </Route>
               </Routes>
               </Suspense>

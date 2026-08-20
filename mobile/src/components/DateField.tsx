@@ -58,6 +58,7 @@ export function DateField({
   onChange,
   optional = false,
   onClear,
+  allowFuture = false,
 }: {
   label: string;
   /** ISO "YYYY-MM-DD", or "" when not set. */
@@ -66,6 +67,18 @@ export function DateField({
   optional?: boolean;
   /** Shown only when provided and a value is set — for filters, not forms. */
   onClear?: () => void;
+  /**
+   * Lets the picker reach past today.
+   *
+   * OFF BY DEFAULT, and it must stay that way: every other date in this app is
+   * evidence of something that already happened — an expense, a sale, a filter
+   * over those — and a receipt dated next Tuesday is a typo, not a plan.
+   *
+   * The one date that is genuinely forward-looking is a recurring payment's
+   * next due date, which is unsettable without this: the cap silently refused
+   * every date the field exists to hold.
+   */
+  allowFuture?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const hasValue = /^\d{4}-\d{2}-\d{2}$/.test(value);
@@ -126,7 +139,7 @@ export function DateField({
           // Spinner on iOS reads better inside a form than the compact chip;
           // Android ignores this and shows its own dialog either way.
           display={Platform.OS === "ios" ? "spinner" : "default"}
-          maximumDate={new Date()}
+          maximumDate={allowFuture ? undefined : new Date()}
           onChange={(event, picked) => {
             /*
              * Android fires this once for the whole dialog and reports

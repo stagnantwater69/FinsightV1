@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import type { Request, Response } from "express";
 import { z } from "zod";
 import * as csvImportService from "../services/csvImport.service";
 import { ApiError } from "../middleware/error.middleware";
+import { logger } from "../config/logger";
 
 const columnMappingSchema = z.object({
   date: z.string().min(1).max(255),
@@ -67,6 +69,17 @@ export const confirmSchema = z.object({
   title: z.string().min(1).max(150),
   columnMapping: jsonField("columnMapping", columnMappingSchema),
   corrections: jsonField("corrections", correctionsSchema).optional(),
+  /**
+   * The client's replay token for this confirm. Optional in the SCHEMA but
+   * effectively required in practice — see the shim in `confirm` below.
+   */
+  idempotencyKey: z.string().min(8).max(100).optional(),
+  /**
+   * The owner's answer to "are these dates day-first or month-first?", sent
+   * only when the preview reported the file ambiguous. Absent means "the file
+   * speaks for itself", and confirm refuses a file that does not.
+   */
+  dateFormat: z.enum(["iso", "dmy", "mdy"]).optional(),
 });
 
 export async function preview(req: Request, res: Response) {
@@ -127,6 +140,29 @@ export async function confirm(req: Request, res: Response) {
     }
   }
 
+  /*
+   * IDEMPOTENCY KEY — required in spirit, shimmed in practice.
+   *
+   * A confirm that is retried without a key (a refresh, a proxy retry, an
+   * impatient second click) imports the file twice, and doubling a month of
+   * books is the worst outcome this endpoint has. So the key is what makes a
+   * retry safe, and every client should send one.
+   *
+   * It is not yet REJECTED when missing, because the web client does not send
+   * one until the Phase 4 UI work lands, and a 400 here would break importing
+   * altogether in between. A generated key still produces a well-formed batch;
+   * it simply cannot recognise a replay, which is exactly the old behaviour.
+   *
+   * PHASE 4 FOLLOW-UP: once both clients send a key, drop the `??` below and
+   * make the schema field required.
+   */
+  if (!input.idempotencyKey) {
+    logger.warn(
+      { businessProfileId: input.businessProfileId },
+      "csv confirm without an idempotency key — retries of this import cannot be deduplicated",
+    );
+  }
+
   const result = await csvImportService.confirmImport(req.user!.id, {
     businessProfileId: input.businessProfileId,
     recordType: input.recordType,
@@ -136,7 +172,22 @@ export async function confirm(req: Request, res: Response) {
     originalname: req.file.originalname,
     columnMapping: input.columnMapping,
     corrections: input.corrections,
+    idempotencyKey: input.idempotencyKey ?? `http-${randomUUID()}`,
+    dateFormat: input.dateFormat,
   });
 
-  res.status(201).json(result);
+  /*
+   * 202 when the file was too large to import inside the request: the batch
+   * exists and the worker has it, but no records are written yet. The client
+   * polls the status route below. 201 keeps its old meaning — the import is
+   * finished and the counts in the body are final.
+   */
+  const accepted = result.processingStatus === "PENDING" || result.processingStatus === "PROCESSING";
+  res.status(accepted ? 202 : 201).json(result);
+}
+
+export async function batchStatus(req: Request, res: Response) {
+  const params = batchParamsSchema.parse(req.params);
+  const status = await csvImportService.getImportBatchStatus(req.user!.id, params.batchId);
+  res.status(200).json(status);
 }

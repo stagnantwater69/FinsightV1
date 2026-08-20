@@ -1,86 +1,86 @@
-import { PenLine, BarChart2, Sparkles, ArrowRight } from "lucide-react";
+import { Card, Eyebrow, MEASURE, Rise, SectionHead } from "./grid";
+import { FinancialTrail } from "./FinancialTrail";
+
+/**
+ * How it works: three numbered cards joined by a dotted Financial Trail with
+ * gold nodes at the joins. Horizontal on desktop, a vertical trail when the
+ * cards stack.
+ */
 
 const STEPS = [
   {
-    n: 1,
-    icon: PenLine,
+    n: "01",
     title: "Record daily sales & expenses",
-    body: "Type sales in seconds, snap receipt photos with your phone camera, or bring in spreadsheets you already use.",
-    highlight: "2 minutes a day",
+    body: "Type sales, or scan and snap receipt photos with your phone or web — FinSight logs them automatically.",
+    highlight: "3 minutes a day",
   },
   {
-    n: 2,
-    icon: BarChart2,
-    title: "See your actual profit & recovery pace",
-    body: "FinSight calculates your exact daily target to cover monthly bills and alerts you if expenses jump unexpectedly.",
-    highlight: "Real-time daily target",
+    n: "02",
+    title: "See your actual profit & recovery space",
+    body: "FinSight calculates your profit daily to help you run wisely: a real buffer for expenses, loans and goals.",
+    highlight: "Real time. Daily. Trusted.",
   },
   {
-    n: 3,
-    icon: Sparkles,
+    n: "03",
     title: "Ask FinSight anything in plain language",
-    body: "Ask questions like 'Why were expenses higher this week?' and get answers generated solely from your records.",
-    highlight: "Tagalog & English AI",
+    body: "Ask questions like “Why was expenses higher this week?” and get answers you can act on today.",
+    highlight: "Answers in seconds",
   },
 ];
 
+/** The dotted trail joining two step cards, with a gold node at its middle. */
+function TrailJoin() {
+  return (
+    <div aria-hidden className="flex items-center justify-center py-1 md:py-0">
+      {/* horizontal on md+, vertical when stacked */}
+      <svg viewBox="0 0 56 24" className="hidden h-6 w-14 md:block">
+        <line x1="0" y1="12" x2="56" y2="12" stroke="#A9DEC9" strokeWidth="2" strokeDasharray="1 6" strokeLinecap="round" />
+        <circle cx="28" cy="12" r="4" fill="#F5AD19" />
+      </svg>
+      <svg viewBox="0 0 24 40" className="h-10 w-6 md:hidden">
+        <line x1="12" y1="0" x2="12" y2="40" stroke="#A9DEC9" strokeWidth="2" strokeDasharray="1 6" strokeLinecap="round" />
+        <circle cx="12" cy="20" r="4" fill="#F5AD19" />
+      </svg>
+    </div>
+  );
+}
+
 export function ProcessTimeline() {
   return (
-    <section className="border-t border-paper-200/80 bg-paper py-16 lg:py-24">
-      <div className="mx-auto max-w-6xl px-4 lg:px-6">
-        <div className="mx-auto max-w-2xl text-center">
-          <div className="inline-flex items-center gap-1.5 rounded-full border border-brand-200 bg-tint-brand px-3.5 py-1 text-xs font-semibold text-brand-800">
-            <span>Simple 3-Step Process</span>
-          </div>
-          <h2 className="mt-3 font-display text-3xl font-bold tracking-tight text-ink-900 sm:text-4xl">
-            How FinSight works for your shop
-          </h2>
-          <p className="mt-3 text-base text-ink-600 sm:text-lg">
-            Three sequential steps. Step 3 works because of the solid foundation created by steps 1 and 2.
-          </p>
-        </div>
+    <section id="how-it-works" aria-labelledby="process-title" className="relative scroll-mt-20 overflow-hidden bg-landing-cream">
+      <FinancialTrail variant="receipt" className="absolute -right-4 bottom-8 hidden h-32 w-32 opacity-[0.06] xl:block" />
 
-        {/* Connected Steps Grid */}
-        <div className="relative mt-14 grid gap-8 md:grid-cols-3">
-          {/* Horizontal Connector Line for Desktop */}
-          <div
-            aria-hidden
-            className="absolute left-1/6 right-1/6 top-10 hidden h-0.5 bg-gradient-to-r from-brand-300 via-brand-500 to-accent-400 md:block"
-          />
+      <div className={`${MEASURE} relative py-16 sm:py-24`}>
+        <SectionHead
+          eyebrow="How it works"
+          id="process-title"
+          title="How FinSight works for your shop"
+        />
 
-          {STEPS.map((s) => {
-            const Icon = s.icon;
-            return (
-              <div
-                key={s.n}
-                className="group relative flex flex-col justify-between rounded-3xl border border-paper-200 bg-paper-50/70 p-6 shadow-xs transition duration-300 hover:-translate-y-1 hover:border-brand-300 hover:bg-paper hover:shadow-xl sm:p-8"
-              >
-                <div>
-                  <div className="flex items-center justify-between">
-                    <div className="relative z-10 flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-700 font-display text-lg font-bold text-white shadow-md transition-transform group-hover:scale-110">
-                      {s.n}
-                    </div>
-                    <span className="rounded-full bg-paper border border-paper-200 px-3 py-1 text-xs font-semibold text-brand-700 shadow-2xs">
-                      {s.highlight}
-                    </span>
+        <ol className="mt-10 grid items-stretch gap-0 md:grid-cols-[1fr_auto_1fr_auto_1fr] md:gap-1">
+          {STEPS.map((s, i) => (
+            <li key={s.n} className="contents">
+              {i > 0 ? <TrailJoin /> : null}
+              <Rise delay={i * 100} className="h-full">
+                <Card hover className="flex h-full flex-col p-6">
+                  <span
+                    aria-hidden
+                    className="figure block font-display text-[2.6rem] font-extrabold leading-none tracking-[-0.03em] text-landing-green"
+                  >
+                    {s.n}
+                  </span>
+                  <h3 className="mt-4 max-w-[18ch] font-display text-[17px] font-bold leading-snug text-landing-charcoal">
+                    {s.title}
+                  </h3>
+                  <p className="mt-2.5 flex-1 text-[14px] leading-relaxed text-landing-muted">{s.body}</p>
+                  <div className="mt-5 border-t border-landing-mint-light/70 pt-3">
+                    <Eyebrow>{s.highlight}</Eyebrow>
                   </div>
-
-                  <div className="mt-6 flex items-center gap-2">
-                    <Icon className="h-5 w-5 text-brand-600" />
-                    <h3 className="font-display text-lg font-bold text-ink-900">{s.title}</h3>
-                  </div>
-
-                  <p className="mt-3 text-sm leading-relaxed text-ink-600">{s.body}</p>
-                </div>
-
-                <div className="mt-6 flex items-center gap-1 text-xs font-bold text-brand-700 opacity-0 transition-opacity group-hover:opacity-100">
-                  <span>Explore step details</span>
-                  <ArrowRight className="h-3.5 w-3.5" />
-                </div>
-              </div>
-            );
-          })}
-        </div>
+                </Card>
+              </Rise>
+            </li>
+          ))}
+        </ol>
       </div>
     </section>
   );

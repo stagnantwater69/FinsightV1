@@ -1,0 +1,4 @@
+# Pinned exactly — the model/feature versions recorded on findings assume
+# these builds. Python: 3.14 (see ml/README.md).
+scikit-learn==1.9.0
+numpy==2.5.2

@@ -1,6 +1,8 @@
 import { forwardRef, useState, type ReactNode } from "react";
 import {
   ActivityIndicator,
+  Image,
+  ImageSourcePropType,
   Modal,
   Pressable,
   ScrollView,
@@ -144,10 +146,14 @@ export function Button({
     brand: "#ffffff",
     secondary: ink[700],
     ghost: ink[500],
-    danger: "#b91c1c",
+    // statusText.critical, not a one-off red — this used to be an
+    // independent Tailwind red scale (b91c1c/fca5a5) sitting beside the
+    // token this app already has for "critical", the exact drift this
+    // skill's token table warns about.
+    danger: statusText.critical,
   }[variant];
   const border =
-    variant === "secondary" ? ink[200] : variant === "danger" ? "#fca5a5" : "transparent";
+    variant === "secondary" ? ink[200] : variant === "danger" ? statusText.critical + "40" : "transparent";
 
   return (
     <Pressable
@@ -1005,6 +1011,8 @@ const ALERT_SPEC: Record<AlertKind, { label: string; glyph: string; ink: string;
   "needs-review": { label: "Needs review", glyph: "!", ink: statusText.critical, surface: "#fef2f2" },
   "large-expense": { label: "Large expense", glyph: "▲", ink: statusText.serious, surface: "#fff7ed" },
   duplicate: { label: "Possible duplicate", glyph: "⧉", ink: statusText.warning, surface: "#fffbeb" },
+  // Serious, not informational — mirrors web's `recurring` spec.
+  recurring: { label: "Recurring payment", glyph: "↻", ink: statusText.serious, surface: "#fff7ed" },
   info: { label: "For your information", glyph: "i", ink: brand[700], surface: brand[50] },
 };
 
@@ -1064,17 +1072,33 @@ export function EmptyState({
   body,
   action,
   icon = "＋",
+  image,
 }: {
   title: string;
   body?: string;
   action?: ReactNode;
   icon?: string;
+  /**
+   * A mascot illustration to show instead of the glyph circle, for the
+   * states `docs/mascot-scenario-library.md` maps to a specific pose rather
+   * than a generic icon. Takes over from `icon` when present.
+   */
+  image?: ImageSourcePropType;
 }) {
   return (
     <Card style={{ alignItems: "center", paddingVertical: space.xxl }}>
-      <View style={styles.emptyIcon}>
-        <Text style={{ fontSize: 20, color: brand[600] }}>{icon}</Text>
-      </View>
+      {image ? (
+        <Image
+          source={image}
+          style={{ width: 96, height: 96 }}
+          resizeMode="contain"
+          accessibilityIgnoresInvertColors
+        />
+      ) : (
+        <View style={styles.emptyIcon}>
+          <Text style={{ fontSize: 20, color: brand[600] }}>{icon}</Text>
+        </View>
+      )}
       {/*
         A header even though nothing follows it. When a list comes back empty
         this line is the only thing naming the region, so a reader moving by
@@ -1171,7 +1195,7 @@ export function Callout({
 export function ErrorNote({ children }: { children: ReactNode }) {
   return (
     <View style={styles.errorNote}>
-      <T style={{ color: "#991b1b", fontSize: typeScale.bodySm }}>{children}</T>
+      <T style={{ color: statusText.critical, fontSize: typeScale.bodySm }}>{children}</T>
     </View>
   );
 }
@@ -1349,8 +1373,11 @@ const styles = StyleSheet.create({
     marginBottom: space.lg,
   },
   errorNote: {
-    backgroundColor: "#fef2f2",
-    borderColor: "#fecaca",
+    // Same critical token as the text, washed to a surface and a hairline —
+    // the alpha-suffix technique Callout already uses below, rather than a
+    // second, independent red scale living beside statusText.critical.
+    backgroundColor: statusText.critical + "12",
+    borderColor: statusText.critical + "40",
     borderWidth: 1,
     borderRadius: radius.md,
     padding: space.md,

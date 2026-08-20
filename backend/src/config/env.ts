@@ -51,6 +51,17 @@ const envSchema = z.object({
   ANOMALY_VELOCITY_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
   ANOMALY_TRENDS_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
   ANOMALY_BEHAVIORAL_NOVELTY_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+  ANOMALY_RECURRING_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+  /**
+   * Isolation Forest (shadow mode). Unlike the other detector flags, enabling
+   * this produces SHADOW-status findings only — nothing owner-visible — and it
+   * additionally requires the ML worker at ML_WORKER_URL to be running. If the
+   * worker is down the analysis job still completes on the deterministic
+   * detectors (fail open).
+   */
+  ANOMALY_ISOLATION_FOREST_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+  /** The Python scoring sidecar (ml/worker/server.py). Local-only by default. */
+  ML_WORKER_URL: z.string().url().default("http://127.0.0.1:8321"),
 });
 
 const parsed = envSchema.safeParse(process.env);

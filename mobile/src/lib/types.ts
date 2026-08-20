@@ -278,16 +278,41 @@ export interface ExpenseBehavior {
 export type AnomalyFindingStatus = "OPEN" | "CONFIRMED" | "DISMISSED" | "RESOLVED" | "SUPERSEDED";
 export type AnomalyFindingFeedback = "CONFIRMED_UNUSUAL" | "EXPECTED_TRANSACTION" | "DUPLICATE" | "INCORRECT_MATCH" | "NO_LONGER_RELEVANT";
 
+/**
+ * The detector types a finding card can be handed.
+ *
+ * ML_OUTLIER is the Isolation Forest detector's own member (ADR-1/ADR-4). It
+ * is listed because the card must render one if it ever arrives, NOT because
+ * one is expected today: that detector writes SHADOW-status findings and
+ * `listFindings` excludes SHADOW server-side, so this client never sees them
+ * until promotion out of shadow is a deliberate release decision.
+ */
+export type AnomalyFindingType =
+  | "AMOUNT_OUTLIER"
+  | "POSSIBLE_DUPLICATE"
+  | "VELOCITY_ANOMALY"
+  | "RECURRING_CHANGE"
+  | "TREND_CHANGE"
+  | "BEHAVIORAL_NOVELTY"
+  | "ML_OUTLIER";
+
 export interface AnomalyFinding {
   id: number;
   expenseRecordId: number | null;
-  type: "AMOUNT_OUTLIER" | "POSSIBLE_DUPLICATE" | "VELOCITY_ANOMALY" | "RECURRING_CHANGE" | "TREND_CHANGE" | "BEHAVIORAL_NOVELTY";
+  type: AnomalyFindingType;
   severity: "LOW" | "MEDIUM" | "HIGH";
+  /**
+   * The detector's own raw number. NEVER the primary cue on screen — ADR-4
+   * forbids showing a model score as the explanation; it only ever breaks a
+   * tie inside `findingSignalStrength`.
+   */
   score: number | null;
   title: string;
   reasons: string[];
   status: AnomalyFindingStatus;
   detectedAt: string;
+  /** What the owner already said about it, when they have said something. */
+  feedback?: AnomalyFindingFeedback | null;
 }
 
 export interface AnomalyFindingPage { items: AnomalyFinding[]; nextCursor: number | null; }
@@ -297,6 +322,54 @@ export interface RecurringPattern {
   expectedAmount: number; confidence: number; nextExpectedDate: string;
   status: "CANDIDATE" | "CONFIRMED" | "DISMISSED" | "DISABLED";
   category: { name: string };
+}
+
+/**
+ * Where a schedule sits relative to today, as the SERVER computed it.
+ *
+ * Never derived on the client. Web and mobile both group the agenda by this,
+ * and two independent implementations of "is it due soon" drift the moment one
+ * of them is edited — the same bill would then sit under "Due soon" on the
+ * phone and under "Later" on the laptop. One rule, one place, shipped in the
+ * payload.
+ */
+export type RecurringDueState = "OVERDUE" | "DUE_SOON" | "SCHEDULED";
+
+/**
+ * A repeating payment the OWNER declared, as opposed to `RecurringPattern`
+ * above, which is one FinSight noticed and is only ever a candidate to review.
+ *
+ * The distinction is the whole point of the two shapes existing: a pattern is
+ * an inference and carries `confidence`; a schedule is a fact, is editable,
+ * and is what the watchdog actually watches.
+ */
+export interface RecurringSchedule {
+  id: number;
+  businessProfileId: number;
+  categoryId: number;
+  categoryName: string;
+  /** What the owner calls this payment. */
+  label: string;
+  vendor: string | null;
+  intervalDays: number;
+  expectedAmount: number;
+  /** A fraction of the amount, 0..1 — how far it may move before it is a change. */
+  amountTolerance: number;
+  /**
+   * A date-only value. Serialized from a `@db.Date`, so it arrives as
+   * midnight UTC and MUST be rendered with `timeZone: "UTC"` or it shows the
+   * previous day anywhere behind UTC. See lib/recurringAgenda.ts.
+   */
+  nextDueDate: string;
+  /** Detector-maintained tracking only; the owner never sets this. */
+  lastRecordedDate: string | null;
+  /** False means paused — watched by nobody, but not deleted. */
+  isActive: boolean;
+  /** The pattern this was promoted from, when it came from one. Provenance only. */
+  sourcePatternId: number | null;
+  dueState: RecurringDueState;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface DailyCoverageRow {

@@ -62,9 +62,9 @@ async function clearStorage(userId: number): Promise<void> {
   const receiptPaths = user.businessProfiles.flatMap((profile) =>
     profile.receiptScans.flatMap((scan) => scan.pages.map((page) => page.imageFile)),
   );
-  const csvPaths = user.businessProfiles.flatMap((profile) =>
-    profile.csvImportBatches.map((batch) => batch.fileReference),
-  );
+  const csvPaths = user.businessProfiles
+    .flatMap((profile) => profile.csvImportBatches.map((batch) => batch.fileReference))
+    .filter((path): path is string => Boolean(path));
   const publicUrls = [user.avatarUrl, ...user.businessProfiles.map((profile) => profile.logoUrl)].filter(
     (url): url is string => Boolean(url),
   );

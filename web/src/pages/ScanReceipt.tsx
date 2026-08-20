@@ -14,7 +14,22 @@ import type { CategorySuggestion } from "../lib/types";
  */
 import { buildReceiptConfirmPayload, type GapPlan } from "../lib/receiptConfirm";
 import { everyLineIsReady, groupByCategory, sumCentavos, toReviewLines } from "../lib/receiptReview";
-import { Callout, Card, PageHead, FormPage } from "../components/ui";
+/*
+ * The confidence BAND, not the raw percentage, is what the owner is shown —
+ * ADR-4. One mapping for the whole product replaces the three inconsistent
+ * cutoffs this screen used to carry (80/60 for the page, 75 per item).
+ */
+import { BAND_COPY, confidenceBand, scanConfidenceBand } from "../lib/confidenceBands";
+import {
+  fieldsNeedingAttention,
+  warningHeadline,
+  warningPageSuffix,
+  warningTone,
+  type FieldEvidence,
+  type ReceiptField,
+  type ReceiptWarning,
+} from "../lib/receiptWarnings";
+import { Callout, Card, PageHead, FormPage, Pill } from "../components/ui";
 import { Button } from "../components/Button";
 import { Field, FormError, MoneyInput, TextInput } from "../components/Field";
 import { Money } from "../components/Money";
@@ -73,6 +88,23 @@ interface ScanResult {
   processingStatus?: "Processing" | "Complete" | "Failed";
   /** Why the read failed. Present only when processingStatus is "Failed". */
   processingError?: string | null;
+  /**
+   * Machine-readable warnings the pipeline recorded, each carrying the
+   * server's own actionable guidance sentence.
+   *
+   * These REPLACE the hardcoded prose this screen used to keep per boolean.
+   * Web and mobile each wrote their own wording for the same signals and the
+   * two had already drifted; the sentence is now the server's, and rendering
+   * anything else here re-creates that bug. See lib/receiptWarnings.ts.
+   */
+  warnings?: ReceiptWarning[];
+  /**
+   * Where each extracted value was read from — page, the visible line, and
+   * which engine read it. Null for scans read before evidence was recorded,
+   * and nulls inside an entry where the origin could not be located. Never
+   * invented.
+   */
+  fieldEvidence?: Record<string, FieldEvidence> | null;
 }
 
 interface ScannedItem {
@@ -104,6 +136,8 @@ interface ScannedItem {
   suggestedCategoryName?: string | null;
   /** How sure OCR was about THIS amount, 0-100, or null if not measured. */
   amountConfidence?: number | null;
+  /** Which page and printed line this item was read from, and by what. */
+  evidence?: FieldEvidence | null;
 }
 
 /**
@@ -231,6 +265,8 @@ function ScannedField({
   origin,
   required,
   optional,
+  attention,
+  evidence,
   children,
 }: {
   label: string;
@@ -238,6 +274,10 @@ function ScannedField({
   origin: Origin;
   required?: boolean;
   optional?: boolean;
+  /** True when the band said this is one of the values to look at. */
+  attention?: boolean;
+  /** Where this value was read from, when the server could locate it. */
+  evidence?: FieldEvidence | null;
   children: ReactNode;
 }) {
   return (
@@ -247,9 +287,156 @@ function ScannedField({
       required={required}
       optional={optional}
       labelAction={<OriginChip origin={origin} />}
+      hint={
+        attention || evidence ? (
+          <>
+            {attention ? (
+              <span className="font-medium text-tone-accent">Check this one against the receipt. </span>
+            ) : null}
+            <EvidenceNote evidence={evidence} />
+          </>
+        ) : undefined
+      }
     >
       {children}
     </Field>
+  );
+}
+
+/**
+ * The exact fields to look at, so "Check a few fields" can name them.
+ *
+ * Three sources, in the order they are trusted: a warning that NAMES a field
+ * (the server said so, and its guidance says what to do), an extracted value
+ * that came back empty (there is nothing to compare against the paper), and —
+ * for the single-total flow only — a page reading bad enough that the amount
+ * itself is in doubt. Per-item confidence is handled on the item rows, where
+ * the owner is already looking at that line.
+ *
+ * Module-level rather than inline so the focus effect and the render agree by
+ * construction: the field that gets focus is the same one the callout names.
+ */
+function attentionFieldsFor(scan: ScanResult | null): ReceiptField[] {
+  if (!scan) return [];
+  const named = new Set<ReceiptField>(fieldsNeedingAttention(scan.warnings ?? []));
+  if (!scan.extractedDate) named.add("date");
+  if (scan.extractedAmount === null || scan.extractedAmount === undefined) named.add("amount");
+  if (scanConfidenceBand(scan) === "review" && (scan.items?.length ?? 0) <= 1) named.add("amount");
+  const order: ReceiptField[] = ["date", "description", "vendor", "amount"];
+  return order.filter((f) => named.has(f));
+}
+
+/** Human names for the extracted fields, used wherever one is named in prose. */
+const FIELD_LABELS: Record<ReceiptField, string> = {
+  date: "Date",
+  description: "Description",
+  vendor: "Vendor",
+  amount: "Amount",
+};
+
+/**
+ * Where a value came from, quoted.
+ *
+ * "Read from page 2: 'TOTAL 1,220.00'" is the difference between asking the
+ * owner to trust a number and showing them the line it came off. It is also
+ * the honest way to mark a model's contribution: a value an AI interpreted
+ * says so, in the same place, in the same shape.
+ *
+ * Renders nothing rather than something vague when the origin could not be
+ * located — an invented provenance would be worse than none.
+ */
+function EvidenceNote({ evidence }: { evidence?: FieldEvidence | null }) {
+  if (!evidence || (!evidence.sourceText && evidence.pageNumber === null)) return null;
+  const where =
+    evidence.pageNumber === null ? "Read from the receipt" : `Read from page ${evidence.pageNumber}`;
+  const how = evidence.source === "vision" ? " by AI, from the photo" : "";
+  return (
+    <span className="block text-ink-400">
+      {where}
+      {how}
+      {evidence.sourceText ? (
+        <>
+          : <span className="figure text-ink-500">“{evidence.sourceText}”</span>
+        </>
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * The stages of a read, in the order they happen.
+ *
+ * Each one corresponds to something the client can actually OBSERVE:
+ *
+ *   uploading    — the multipart POST is in flight.
+ *   reading      — the server accepted the photos and is running OCR; this is
+ *                  what `processingStatus: "Processing"` means, and it is what
+ *                  the poll is waiting on.
+ *   checking     — the read came back Complete. The arithmetic reconciliation
+ *                  and warnings are already in that response, so this stage is
+ *                  the client resolving them against the owner's categories.
+ *   categorising — the category list is being refreshed so every item's
+ *                  assigned category has an option to render into.
+ *
+ * There is no fifth "checking duplicates" stage because duplicate detection
+ * happens after the record is SAVED, not during the read — showing it here
+ * would be describing work that is not being done.
+ */
+const SCAN_STAGES = ["uploading", "reading", "checking", "categorising"] as const;
+type ScanStage = (typeof SCAN_STAGES)[number];
+
+const STAGE_LABELS: Record<ScanStage, string> = {
+  uploading: "Uploading",
+  reading: "Reading text",
+  checking: "Checking totals",
+  categorising: "Categorising",
+};
+
+/**
+ * The wait, told honestly.
+ *
+ * A list of named stages with a done/doing/waiting state each, rather than a
+ * bar. The owner can see which part is slow, and nothing on screen claims to
+ * know how much longer it will take — because nothing here does.
+ */
+function ScanProgress({ stage }: { stage: ScanStage }) {
+  const current = SCAN_STAGES.indexOf(stage);
+  return (
+    <div aria-busy="true" className="space-y-3 rounded-xl bg-paper-100 p-4">
+      <p aria-live="polite" className="text-xs font-medium text-ink-600">
+        {STAGE_LABELS[stage]}…
+      </p>
+      <ol className="space-y-1.5">
+        {SCAN_STAGES.map((s, i) => {
+          const done = i < current;
+          const active = i === current;
+          return (
+            <li key={s} className="flex items-center gap-2 text-xs">
+              <span
+                aria-hidden
+                className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-bold ${
+                  done
+                    ? "bg-tint-brand text-tone-brand ring-1 ring-edge-brand"
+                    : active
+                      ? "bg-brand-600 text-white motion-safe:animate-pulse"
+                      : "bg-paper-200 text-ink-400"
+                }`}
+              >
+                {done ? "✓" : i + 1}
+              </span>
+              <span className={done ? "text-ink-500" : active ? "font-medium text-ink-800" : "text-ink-400"}>
+                {STAGE_LABELS[s]}
+              </span>
+              <span className="sr-only">
+                {done ? " — done" : active ? " — in progress" : " — waiting"}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+      <SkeletonLine className="w-2/3" />
+      <SkeletonLine className="w-full" />
+    </div>
   );
 }
 
@@ -513,6 +700,18 @@ export function ScanReceipt() {
 
   const [file, setFile] = useState<File | null>(null);
   const [scanning, setScanning] = useState(false);
+  /**
+   * Which stage of the read is actually happening right now.
+   *
+   * Four honest stages replacing one flat "Reading your receipt…". Every
+   * transition below is tied to a real event — the upload responding, the
+   * server's own processingStatus turning Complete, the category list coming
+   * back — and NOT to a timer. There is deliberately no determinate bar: the
+   * server reports no percentage, so any bar drawn here would be an animation
+   * pretending to be a measurement, which is the specific thing ADR-4's
+   * "never fake determinate progress" rule forbids.
+   */
+  const [scanStage, setScanStage] = useState<ScanStage>("uploading");
   const [scanError, setScanError] = useState<string | null>(null);
   const [scan, setScan] = useState<ScanResult | null>(null);
 
@@ -665,6 +864,25 @@ export function ScanReceipt() {
     return () => URL.revokeObjectURL(url);
   }, [file]);
 
+  /**
+   * Focus lands on the first field that needs a decision.
+   *
+   * "Check a few fields" that leaves the keyboard at the top of the form makes
+   * the owner hunt for what it meant. Only ever moves focus when there IS
+   * something to check — a clean read leaves focus alone, because taking it
+   * for no reason is its own accessibility problem. Keyed on the scan id, so
+   * it happens once per receipt rather than on every keystroke.
+   */
+  useEffect(() => {
+    if (!scan) return;
+    const first = attentionFieldsFor(scan)[0];
+    if (!first) return;
+    // The Field wrapper puts its `htmlFor` straight onto the control, so the
+    // field's own name is the element id.
+    const el = document.getElementById(first);
+    if (el instanceof HTMLElement) el.focus({ preventScroll: false });
+  }, [scan]);
+
   if (!selected) return null;
 
   function ensureScanned(file: File): Promise<ScanResult> {
@@ -678,6 +896,9 @@ export function ScanReceipt() {
       const { data } = await api.post<ScanResult>("/records/receipts", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
+      // The photos are on the server. Whether OCR has started is the server's
+      // business; what the client knows is that the upload is over.
+      setScanStage("reading");
       return pollUntilRead(data);
     })();
     scanPromises.current.set(file, promise);
@@ -755,6 +976,7 @@ export function ScanReceipt() {
   async function scanFiles(filesToSend: File[], representativeFile: File) {
     setFile(representativeFile);
     setScanning(true);
+    setScanStage("uploading");
     setScanError(null);
     try {
       // A single photo — the common case, and every "separate receipts"
@@ -776,6 +998,7 @@ export function ScanReceipt() {
               const res = await api.post<ScanResult>("/records/receipts", formData, {
                 headers: { "Content-Type": "multipart/form-data" },
               });
+              setScanStage("reading");
               // Polled here too, not only in ensureScanned: this branch is a
               // multi-page receipt, which is the SLOWEST read there is (up to
               // MAX_RECEIPT_FILES pages of OCR). It has no single File to key
@@ -795,7 +1018,20 @@ export function ScanReceipt() {
        * looked exactly like the AI having assigned one category to the whole
        * receipt while the database in fact held the right per-item values.
        */
+      /*
+       * The read came back. The reconciliation and the warnings are already
+       * IN that response, so "checking totals" is the client resolving them —
+       * and "categorising" is the category refresh below, which exists
+       * precisely because the read may have created a category.
+       *
+       * Both are genuinely fast on a small receipt, and neither is padded to
+       * be visible. A stage that took no time simply does not paint, which is
+       * the honest outcome; the alternative — a bar timed to look busy — is
+       * what ADR-4 rules out.
+       */
+      setScanStage("checking");
       await refreshCategories();
+      setScanStage("categorising");
 
       latestScanId.current = data.id;
       setScan(data);
@@ -1169,6 +1405,14 @@ export function ScanReceipt() {
   const itemsAreFromPhoto = items.some((i) => i.extractedByVision);
 
   /**
+   * The one confidence cue this screen shows, resolved from the page reading,
+   * every item amount and whether a model was involved. See
+   * lib/confidenceBands.ts for why the cutoffs are what they are.
+   */
+  const receiptBand = scanConfidenceBand(scan ?? {});
+  const attentionFields = attentionFieldsFor(scan);
+
+  /**
    * Items grouped by the category the owner currently has them in, with a
    * subtotal each. Recomputed on every render, so moving one row between
    * categories updates both subtotals immediately — there is no separate
@@ -1382,20 +1626,12 @@ export function ScanReceipt() {
 
           {/*
             The OCR wait is the app's slowest interaction and it cannot be made
-            fast, so the interface commits to the shape of the answer instead —
-            the reason Skeleton.tsx exists. Previously the only feedback was the
-            button's label changing.
+            fast, so the interface says which PART of it is happening instead of
+            one flat "Reading your receipt…". Each stage is driven by a real
+            event — see ScanProgress — and there is no percentage anywhere,
+            because the server reports none.
           */}
-          {scanning ? (
-            <div aria-busy="true" aria-live="polite" className="space-y-3 rounded-xl bg-paper-100 p-4">
-              <span className="sr-only">Reading your receipt…</span>
-              <p className="text-xs font-medium text-ink-500">Reading your receipt…</p>
-              <SkeletonLine className="w-1/3" />
-              <SkeletonLine className="w-full" />
-              <SkeletonLine className="w-2/3" />
-              <SkeletonLine className="w-1/2" />
-            </div>
-          ) : null}
+          {scanning ? <ScanProgress stage={scanStage} /> : null}
 
           <Button type="submit" variant="primary" fullWidth disabled={scanning || pickedFiles.length === 0}>
             {scanning
@@ -1481,171 +1717,96 @@ export function ScanReceipt() {
         <Card className="p-5 sm:p-6">
           <form onSubmit={handleConfirm} className="space-y-4">
             {/*
-              Promoted from a 12px tinted line to a real callout. Item 29 exists
-              because the design assumes owners notice they can correct these,
-              and it was previously the quietest element on the screen. The
-              warning about creased printing is not hedging — the OCR accuracy
-              measured on the corpus was against mostly clean printed receipts.
-            */}
-            {/*
-              A receipt whose text could not be read at all.
+              THE PRIMARY CUE IS A BAND, NOT A PERCENTAGE.
 
-              This is a genuinely different claim from the ordinary one below,
-              and it gets its own words rather than a softer adverb. Normally
-              FinSight reads characters and parses them by rule. Here it could
-              not, so it asked a model what the photograph appeared to show —
-              that is interpretation, not reading, and the owner is entitled to
-              know which one produced the numbers they are about to accept.
-            */}
-            {/*
-              The photograph itself, before anything about what was read from
-              it. Placed first because it is the only warning with a cheaper
-              answer than checking every field: the owner is still holding the
-              receipt, and taking another picture costs seconds.
+              This used to read "FinSight's reading confidence for this photo:
+              87%". A percentage is a grade, and a grade invites the owner to
+              accept it — 87 sounds like a pass. It also disagreed with itself:
+              the page number was coloured on 80/60 while the per-item badges
+              below used 75, so a green header could sit above amber items.
 
-              Sits alongside the reading warnings rather than replacing them —
-              a blurred photo and an AI-interpreted result are different
-              problems and can happen together.
+              lib/confidenceBands.ts now owns the single mapping (ADR-4), and
+              what the owner reads is an instruction: Looks clear / Check a few
+              fields / Review carefully. The band is TEXT, not a hue, so it
+              survives greyscale and colourblindness. The raw figure stays in
+              the title attribute, where it is evidence rather than a grade.
             */}
-            {scan.captureQuality?.tooBlurredToTrust ? (
-              <Callout tone="warn">
-                <b className="font-semibold">This photo came out blurry.</b> FinSight read it
-                anyway, but blurred print is where it makes the most mistakes. If you still have the
-                receipt, taking another picture is usually quicker than correcting the figures
-                below.
-              </Callout>
-            ) : null}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <Pill tone={BAND_COPY[receiptBand].tone === "ok" ? "ok" : BAND_COPY[receiptBand].tone === "warn" ? "warn" : "danger"}>
+                {BAND_COPY[receiptBand].label}
+              </Pill>
+              <p className="min-w-0 flex-1 text-xs leading-relaxed text-ink-500">
+                {BAND_COPY[receiptBand].detail}
+              </p>
+            </div>
 
             {/*
-              A multi-page receipt's OTHER pages coming out blurry — page 1's
-              own reading is already covered above via captureQuality. Listed
-              by number rather than repeating the single-page wording once per
-              page, since a long receipt can have several.
-            */}
-            {scan.pageQualities && scan.pageQualities.length > 1
-              ? (() => {
-                  const blurryPages = scan.pageQualities
-                    .map((q, i) => (q?.tooBlurredToTrust ? i + 1 : null))
-                    .filter((n): n is number => n !== null && n !== 1);
-                  if (blurryPages.length === 0) return null;
-                  return (
-                    <Callout tone="warn">
-                      <b className="font-semibold">
-                        Page{blurryPages.length === 1 ? "" : "s"} {blurryPages.join(", ")} came out blurry.
-                      </b>{" "}
-                      Check the figures from {blurryPages.length === 1 ? "that page" : "those pages"} carefully
-                      below.
-                    </Callout>
-                  );
-                })()
-              : null}
+              WHICH fields, not just "some fields".
 
-            {/*
-              Two adjacent photos that look like the same page shot twice.
-              Advisory, like looksLikeMultipleReceipts below — FinSight cannot
-              tell which photo to discard, only that it noticed.
+              "Check a few fields" is only useful if the screen says which, so
+              the warnings that name a field, the low-confidence item amounts
+              and the missing values are resolved into one list — and the first
+              of them takes focus when the review screen appears, so the
+              keyboard lands on the thing that needs a decision.
             */}
-            {scan.duplicatePages && scan.duplicatePages.length > 0 ? (
+            {receiptBand !== "clear" && attentionFields.length > 0 ? (
               <Callout tone="warn">
                 <b className="font-semibold">
-                  Page{scan.duplicatePages.length === 1 ? "" : "s"}{" "}
-                  {scan.duplicatePages.map((p) => `${p - 1} and ${p}`).join(", ")} look the same.
+                  Check {attentionFields.map((f) => FIELD_LABELS[f]).join(", ").toLowerCase()} before
+                  saving.
                 </b>{" "}
-                If one is a repeat photo of the other, the figures below may be double-counted — check the
-                items against the photo, or rescan without the repeat.
+                {attentionFields.length === 1
+                  ? "FinSight was least sure about this one."
+                  : "These are the values FinSight was least sure about."}
               </Callout>
             ) : null}
 
             {/*
-              Two receipts in one photograph, which produces one record holding
-              two purchases — the items of both against the total of one. The
-              figures below will not add up and the owner is left correcting an
-              arithmetic problem whose real cause is upstream of every field on
-              this screen.
+              THE WARNINGS, IN THE SERVER'S OWN WORDS.
 
-              Stated as an observation with a question, not a verdict: the
-              check reads a date label appearing twice, which is evidence and
-              not proof (see looksLikeMultipleReceipts). The owner is holding
-              the paper and can settle it in a second.
+              What stood here before was a prose ladder: one hardcoded
+              paragraph per boolean (blurry page, duplicate page, two receipts
+              in one photo, vision-assisted, vision-assisted-but-only-the-
+              names). Mobile kept its own copy of the same ladder and the two
+              had already drifted, so the same receipt could be described
+              differently on the two clients.
 
-              Separate from the reading warnings below rather than folded into
-              them, because it has a different remedy — those say "check the
-              figures", this says "take two photos instead".
+              The pipeline now emits CODES and the server owns one guidance
+              sentence per code (backend/src/lib/receiptWarnings.ts). This
+              renders `warning.guidance` verbatim. Writing a sentence here
+              instead — however small — puts the drift straight back.
             */}
-            {scan.looksLikeMultipleReceipts ? (
-              <Callout tone="warn">
-                <b className="font-semibold">This photo may hold two receipts.</b> If it does, saving
-                now would put both purchases into one record, and the items won't add up to the
-                total. Photograph each receipt on its own and they'll be recorded separately — if
-                it's really one receipt, carry on.
+            {(scan.warnings ?? []).map((warning, i) => (
+              <Callout key={`${warning.code}-${warning.pageNumber ?? "x"}-${i}`} tone={warningTone(warning.code)}>
+                <b className="font-semibold">
+                  {warningHeadline(warning.code)}
+                  {warningPageSuffix(warning)}.
+                </b>{" "}
+                {warning.guidance}
+                {warning.detail ? (
+                  <span className="mt-1 block text-[11px] opacity-80">{warning.detail}</span>
+                ) : null}
               </Callout>
-            ) : null}
-
-            {scan.items.some((i) => i.extractedByVision) ? (
-              <Callout tone="warn">
-                <b className="font-semibold">FinSight couldn't read this receipt's text.</b> These
-                values were interpreted from the photo by AI, so treat them as a first guess rather
-                than something read off the paper — check every one, including the total, against the
-                photo before saving.
-              </Callout>
-            ) : scan.visionAssisted ? (
-              /*
-                The middle case, and it needs its own words rather than the
-                strongest ones.
-
-                Here FinSight DID read the receipt — the amounts came off the
-                paper and they add up to the printed total, which is the
-                arithmetic corroborating them. What it was unsure of was the
-                wording beside them, so it asked a model to name the lines.
-                Telling this owner "FinSight couldn't read this receipt" would
-                be false, and false in the direction that makes every warning
-                on this screen worth less.
-              */
-              <Callout tone="warn">
-                <b className="font-semibold">Some item names were filled in by AI.</b> The amounts
-                were read from the receipt and match its total, but the printing was faint enough
-                that FinSight wasn't sure of the wording — check the item names against the photo.
-              </Callout>
-            ) : (
-              <Callout tone="warn">
-                <b className="font-semibold">Check these against your receipt before saving.</b>{" "}
-                FinSight often misreads creased, faded or thermal-printed receipts. Anything you change
-                here is what gets saved.
-              </Callout>
-            )}
-
+            ))}
 
             {/*
-              How sure the engine was, stated as a number rather than left to
-              the owner to infer from how mangled the names look. Only shown
-              when it was actually measured — a vision-assisted read has no
-              tesseract confidence, and a missing figure must not read as a
-              low one.
+              The standing reminder, which is not a warning about THIS receipt
+              and so is not part of the list above. It stays because the design
+              assumes owners know they can correct these values, and item 29
+              exists because they did not.
             */}
-            {scan.ocrConfidence !== null && scan.ocrConfidence !== undefined ? (
-              <p className="-mt-1 text-xs text-ink-500">
-                FinSight's reading confidence for this photo:{" "}
-                <b
-                  className={`font-semibold ${
-                    scan.ocrConfidence >= 80
-                      ? "text-tone-brand"
-                      : scan.ocrConfidence >= 60
-                        ? "text-tone-accent"
-                        : "text-tone-danger"
-                  }`}
-                >
-                  {scan.ocrConfidence}%
-                </b>
-                {scan.ocrConfidence < 80
-                  ? " — check the figures below especially carefully."
-                  : " — still worth a glance against the photo."}
-              </p>
-            ) : null}
+            <Callout tone="warn">
+              <b className="font-semibold">Check these against your receipt before saving.</b>{" "}
+              FinSight often misreads creased, faded or thermal-printed receipts. Anything you change here
+              is what gets saved.
+            </Callout>
 
             <ScannedField
               label="Date"
               htmlFor="date"
               required
+              attention={attentionFields.includes("date")}
+              evidence={scan.fieldEvidence?.date}
               origin={originOf(date, scan.extractedDate ? scan.extractedDate.slice(0, 10) : null)}
             >
               <TextInput
@@ -1659,7 +1820,13 @@ export function ScanReceipt() {
               />
             </ScannedField>
 
-            <ScannedField label="Description" htmlFor="description" required origin={descriptionOrigin}>
+            <ScannedField
+              label="Description"
+              htmlFor="description"
+              required
+              attention={attentionFields.includes("description")}
+              origin={descriptionOrigin}
+            >
               <TextInput
                 required
                 value={description}
@@ -1673,6 +1840,8 @@ export function ScanReceipt() {
               label="Vendor"
               htmlFor="vendor"
               optional
+              attention={attentionFields.includes("vendor")}
+              evidence={scan.fieldEvidence?.vendor}
               origin={originOf(vendor, scan.extractedVendor)}
             >
               <TextInput
@@ -1686,6 +1855,8 @@ export function ScanReceipt() {
               label="Amount"
               htmlFor="amount"
               required
+              attention={attentionFields.includes("amount")}
+              evidence={scan.fieldEvidence?.amount}
               origin={originOf(String(amount), scan.extractedAmount === null ? null : String(scan.extractedAmount))}
             >
               <MoneyInput
@@ -1794,6 +1965,17 @@ export function ScanReceipt() {
                                 AI read this from the photo
                               </span>
                             ) : null}
+                            {/*
+                              The printed line this row came off, quoted. It is
+                              the cheapest possible way to check a row: the
+                              owner compares two strings instead of hunting the
+                              paper for a number.
+                            */}
+                            {item.evidence ? (
+                              <span className="mt-0.5 block text-[10px] leading-relaxed text-ink-400">
+                                <EvidenceNote evidence={item.evidence} />
+                              </span>
+                            ) : null}
                           </td>
                           <td className="figure px-3 py-2 text-right text-ink-600">
                             {item.quantity ?? "—"}
@@ -1811,12 +1993,29 @@ export function ScanReceipt() {
                               percentage beside every correct price would be
                               noise, and noise is what stops people checking.
                             */}
-                            {typeof item.amountConfidence === "number" && item.amountConfidence < 75 ? (
+                            {/*
+                              The engine's own doubt about THIS figure, as a
+                              band rather than "72% sure". Same mapping as the
+                              header cue (lib/confidenceBands.ts) — before
+                              this, the page used 80/60 and the item badge used
+                              75, so a receipt could read "clear" above a row
+                              the same engine was unsure of. The raw figure
+                              stays in the title, as evidence.
+                            */}
+                            {confidenceBand({
+                              confidence: item.amountConfidence,
+                              visionAssisted: item.extractedByVision,
+                            }) !== "clear" && typeof item.amountConfidence === "number" ? (
                               <span
                                 className="mt-0.5 block text-[10px] font-medium text-tone-accent"
-                                title="How sure FinSight was when it read this amount"
+                                title={`FinSight's own confidence reading this amount: ${item.amountConfidence}%`}
                               >
-                                {item.amountConfidence}% sure
+                                {BAND_COPY[
+                                  confidenceBand({
+                                    confidence: item.amountConfidence,
+                                    visionAssisted: item.extractedByVision,
+                                  })
+                                ].label}
                               </span>
                             ) : null}
                           </td>

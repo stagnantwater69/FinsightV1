@@ -665,6 +665,53 @@
     box-shadow 220ms ease !important;
 }
 
+/* Spending Impact's amount scrubber is a primary input, so its native track
+   and thumb use the same themed surfaces and focus language as text fields. */
+.spending-range {
+  height: 2.75rem;
+  cursor: pointer;
+  appearance: none;
+  background: transparent;
+}
+
+.spending-range::-webkit-slider-runnable-track {
+  height: 0.5rem;
+  border-radius: 9999px;
+  background: rgb(var(--paper-200));
+}
+
+.spending-range::-webkit-slider-thumb {
+  width: 1.5rem;
+  height: 1.5rem;
+  margin-top: -0.5rem;
+  appearance: none;
+  border: 4px solid rgb(var(--paper));
+  border-radius: 9999px;
+  background: #0d7f72;
+  box-shadow: 0 2px 8px rgb(var(--shadow) / 0.2);
+}
+
+.spending-range::-moz-range-track {
+  height: 0.5rem;
+  border-radius: 9999px;
+  background: rgb(var(--paper-200));
+}
+
+.spending-range::-moz-range-thumb {
+  width: 1rem;
+  height: 1rem;
+  border: 4px solid rgb(var(--paper));
+  border-radius: 9999px;
+  background: #0d7f72;
+  box-shadow: 0 2px 8px rgb(var(--shadow) / 0.2);
+}
+
+.spending-range:focus-visible {
+  outline: 2px solid #0d7f72;
+  outline-offset: 2px;
+  border-radius: 9999px;
+}
+
 /* ---------------------------------------------------------------
    A NOTE ON `transition-all`
    ---------------------------------------------------------------
@@ -693,6 +740,10 @@
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
+    /* Stagger delays go too — a `fill: both` entrance holds its hidden
+       "from" state for the whole delay, so an element staggered by 200ms
+       would flash invisible even though its animation is instant. */
+    animation-delay: 0s !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;

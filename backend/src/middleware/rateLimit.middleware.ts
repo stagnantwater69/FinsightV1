@@ -231,9 +231,33 @@ export const LIMITS = {
   // the edge detection nobody depends on. Same size, same reasoning — one
   // pass over an image already in memory, no OCR, no write.
   EDGE_DETECT_BURST: { name: "edge-detect-burst", limit: 40, windowMs: 60_000 },
+  /*
+   * CSV import. Both endpoints parse an up-to-5MB file in memory, and confirm
+   * additionally writes to Storage and can enqueue tens of thousands of rows —
+   * the second-most expensive request in the product after a receipt scan, and
+   * previously the only expensive one with no limit at all.
+   *
+   * Preview is the looser of the two because it is genuinely iterative: an
+   * owner re-uploads while sorting out which column is which, and that is the
+   * flow working as intended. Confirm is the one that writes, and nobody
+   * legitimately confirms ten imports a minute.
+   */
+  CSV_PREVIEW_BURST: { name: "csv-preview-burst", limit: 20, windowMs: 60_000 },
+  CSV_CONFIRM_BURST: { name: "csv-confirm-burst", limit: 10, windowMs: 60_000 },
+  CSV_CONFIRM_HOURLY: { name: "csv-confirm-hourly", limit: 60, windowMs: 60 * 60_000 },
   ASK_BURST: { name: "ai-ask-burst", limit: 20, windowMs: 60_000 },
   ASK_HOURLY: { name: "ai-ask-hourly", limit: 200, windowMs: 60 * 60_000 },
   SUGGEST_CATEGORY: { name: "ai-suggest-category", limit: 60, windowMs: 60_000 },
+  /*
+   * PURCHASE_REVIEW: Spending Impact's "what is this thing, and what should I
+   * be asking about it" call. Pressed deliberately, one item at a time, and
+   * read before the next one — so it is nowhere near as chatty as
+   * SUGGEST_CATEGORY, which fires from a typing debounce. Sized for someone
+   * comparing a handful of options in one sitting, with an hourly cap because
+   * it is a billed model call and the button is easy to hold down.
+   */
+  PURCHASE_REVIEW_BURST: { name: "ai-purchase-review-burst", limit: 12, windowMs: 60_000 },
+  PURCHASE_REVIEW_HOURLY: { name: "ai-purchase-review-hourly", limit: 120, windowMs: 60 * 60_000 },
   /*
    * THE AUTH LIMITS COME IN PAIRS, and the pairing is the point.
    *

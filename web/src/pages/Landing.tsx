@@ -1,5 +1,8 @@
+import { useEffect } from "react";
+import { useLocation } from "react-router-dom";
 import { PublicLayout } from "../components/PublicLayout";
 import { HeroSection } from "../components/landing/HeroSection";
+import { TrustMetrics } from "../components/landing/TrustMetrics";
 import { ProductShowcase } from "../components/landing/ProductShowcase";
 import { BentoGridFeatures } from "../components/landing/BentoGridFeatures";
 import { ProcessTimeline } from "../components/landing/ProcessTimeline";
@@ -8,50 +11,59 @@ import { FaqAccordion } from "../components/landing/FaqAccordion";
 import { ClosingCta } from "../components/landing/ClosingCta";
 
 /**
- * The public landing page.
+ * The public landing page — the approved emerald/mint/cream card design.
  *
  * EVERY CLAIM ON THIS PAGE HAS TO BE TRUE. That is not a style note — it is
- * the constraint the section list is built around, and it is why two sections
- * that used to sit here are gone:
+ * the constraint the section list is built around. Two things have already
+ * been deleted from earlier versions of this page for violating it:
  *
- *   - a statistics strip reading "500+ Local Merchants", "₱2.5M+ Expenses
- *     Tracked" and "99.4% OCR Recognition". None of those numbers came from
- *     anywhere. The OCR one was also contradicted by the project's own
- *     measurements (see tests/ocr-accuracy), which put item extraction at 87%
- *     on a corpus that is mostly synthetic.
- *   - three testimonials from named shop owners in Pasig, Quezon City and
- *     Cebu, with peso amounts they had supposedly recovered, under a heading
- *     that called them "Real stories". No such people were interviewed.
+ *   - a statistics strip with invented usage numbers ("500+ Local Merchants",
+ *     "99.4% OCR Recognition" — contradicted by the project's own tests)
+ *   - testimonials from shop owners who were never interviewed
  *
- * Invented social proof is the easiest thing on a landing page to write and
- * the worst to be asked about. What replaces it is evidence that survives the
- * question "where did that come from": a hero running the REAL RecoveryMeter
- * component on figures labelled as an example, safeguards that each describe
- * something the code actually does, and an FAQ that answers "no" where the
- * answer is no.
+ * The redesign's reference mockup showed "20,000+ small businesses" and
+ * "5M+ receipts processed"; those numbers do not exist, so TrustMetrics
+ * carries truthful statements in the same layout instead (see the comment
+ * there). Product mockups on this page are labelled as example figures, and
+ * the privacy section's claims each describe something the code enforces.
  */
 export function Landing() {
+  const { hash } = useLocation();
+
+  // Arriving at "/#features" from another page: scroll to the section once
+  // it exists. Same-page clicks are handled by the header (PublicLayout).
+  useEffect(() => {
+    if (!hash) return;
+    const el = document.getElementById(hash.slice(1));
+    if (!el) return;
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    el.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "start" });
+  }, [hash]);
+
   return (
     <PublicLayout>
-      {/* 1. Hero Section */}
+      {/* Hero: pitch + layered dashboard preview */}
       <HeroSection />
 
-      {/* 3. Interactive Product & AI Showcase */}
+      {/* Trust strip — truthful statements, no invented counts */}
+      <TrustMetrics />
+
+      {/* Receipt workflow: snap → extract → recorded */}
       <ProductShowcase />
 
-      {/* 4. Bento Grid Feature Architecture */}
+      {/* Bento feature grid */}
       <BentoGridFeatures />
 
-      {/* 5. 3-Step Connected Process Timeline */}
+      {/* Three-step how-it-works with the Financial Trail */}
       <ProcessTimeline />
 
-      {/* Privacy & security safeguards */}
+      {/* Privacy & security safeguards — deep emerald */}
       <SafeguardsGrid />
 
-      {/* 8. Frequently Asked Questions Accordion */}
+      {/* FAQ accordion */}
       <FaqAccordion />
 
-      {/* 9. Closing Conversion Call-To-Action */}
+      {/* Closing conversion banner */}
       <ClosingCta />
     </PublicLayout>
   );

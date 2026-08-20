@@ -8,6 +8,7 @@ import { prisma } from "../../src/config/prisma";
 const TABLES = [
   "ApiRateLimit",
   "CategoryStatistics",
+  "RecurringSchedule",
   "RecurringPattern",
   "AnalysisJob",
   "AnomalyFinding",

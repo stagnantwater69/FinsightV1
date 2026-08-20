@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Image, Modal, Pressable, ScrollView, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { T } from "./ui";
+import { useTourTarget } from "./tour/targets";
 import { brand, font, ink, paper, radius, space, statusText, TAP, typeScale } from "../theme/tokens";
 import type { BusinessProfile } from "../lib/types";
 import * as haptics from "../lib/haptics";
@@ -67,10 +68,19 @@ export function HomeHeader({
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const canSwitch = profiles.length > 1;
 
+  /*
+   * The two elements the product tour spotlights on this header. Registering
+   * them costs a ref and `collapsable: false`; nothing else about either
+   * control changes, and neither knows the tour exists beyond the key.
+   */
+  const switcherTourTarget = useTourTarget("business-switcher", { scrolls: true });
+  const bellTourTarget = useTourTarget("notifications", { scrolls: true, radius: radius.full });
+
   return (
     <View>
       <View style={{ flexDirection: "row", alignItems: "center", gap: space.md }}>
         <Pressable
+          {...switcherTourTarget}
           onPress={() => {
             if (!canSwitch) return;
             haptics.tapped();
@@ -106,6 +116,7 @@ export function HomeHeader({
         </Pressable>
 
         <Pressable
+          {...bellTourTarget}
           onPress={onBellPress}
           accessibilityRole="button"
           accessibilityLabel={unreadCount > 0 ? `Alerts, ${unreadCount} unread` : "Alerts"}

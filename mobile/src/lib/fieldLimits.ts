@@ -35,6 +35,8 @@ export const FIELD_LIMITS = {
   categoryName: 100,
   /** ExpenseCategory.description — VARCHAR(255). */
   categoryDescription: 255,
+  /** RecurringSchedule.label — what the owner calls the payment, VARCHAR(255). */
+  recurringScheduleLabel: 255,
   /** CSV import batch title — VARCHAR(150). */
   importTitle: 150,
   /** The Ask FinSight question. Not a column — it is a cost ceiling on the model call. */

@@ -230,6 +230,60 @@ describe("registration proves the address before the account works", () => {
     expect(await prisma.user.findUnique({ where: { email: "taken@shop.ph" } })).toBeNull();
   });
 
+  /**
+   * THE SAME PROPERTY, WITHOUT DEPENDING ON SUPABASE TO NOTICE.
+   *
+   * The test above passes because the fake `signUp` returns GoTrue's empty
+   * `identities` for one hard-coded address. That convention is a behaviour of
+   * a hosted service, not a contract, and it changes shape with a DASHBOARD
+   * SETTING this repository cannot see: with "Confirm email" switched off it
+   * stops being the signal at all. Resting uniqueness on it meant our own
+   * constraint was enforced by somebody else's configuration.
+   *
+   * So this registers the same address twice through the REAL path, where the
+   * fake happily hands back a fresh auth user the second time — a Supabase that
+   * does not report the duplicate. The profile mirror has to catch it alone.
+   * `signUp` is asserted NOT to have run again, which is what distinguishes our
+   * own check from a lucky rejection downstream.
+   */
+  it("refuses a second registration of the same address even when Supabase does not", async () => {
+    const first = await request(app).post("/api/v1/auth/register").send(registration());
+    expect(first.status).toBe(202);
+    supabaseCalls.length = 0;
+
+    const second = await request(app).post("/api/v1/auth/register").send(registration());
+
+    expect(second.status).toBe(first.status);
+    expect(second.body).toEqual(first.body);
+    // Never handed to Supabase at all: we already knew the answer.
+    expect(callsTo("signUp").length).toBe(0);
+    expect(await prisma.user.count({ where: { email: "new-owner@shop.ph" } })).toBe(1);
+  });
+
+  /**
+   * The window the check above cannot close, and why the answer is 202.
+   *
+   * A check-then-insert always has a gap; the unique index on `User_Email` is
+   * what actually closes it. What matters is the ANSWER when it fires. This
+   * used to be a 500 — which put the enumeration oracle straight back, whatever
+   * else the endpoint did: a taken address got a server error and a free one
+   * got the acknowledgement, so anyone could ask about any address they liked.
+   */
+  it("answers a constraint collision the same way as everything else, and leaves nothing behind", async () => {
+    await request(app).post("/api/v1/auth/register").send(registration());
+    // Slip past the lookup so the insert is what discovers the duplicate.
+    const lookup = vi.spyOn(prisma.user, "findUnique").mockResolvedValueOnce(null);
+    supabaseCalls.length = 0;
+
+    const collided = await request(app).post("/api/v1/auth/register").send(registration());
+    lookup.mockRestore();
+
+    expect(collided.status).toBe(202);
+    // The auth user created moments earlier is rolled back rather than orphaned.
+    expect(callsTo("deleteUser").length).toBe(1);
+    expect(await prisma.user.count({ where: { email: "new-owner@shop.ph" } })).toBe(1);
+  });
+
   it("refuses a password under the minimum", async () => {
     const short = await request(app).post("/api/v1/auth/register").send(registration({ password: "short" }));
     expect(short.status).toBe(400);

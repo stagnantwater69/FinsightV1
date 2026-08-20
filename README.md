@@ -4,8 +4,6 @@ AI-assisted financial monitoring for small-business owners. FinSight is a
 single-role product with web and mobile clients backed by an Express API,
 Prisma/PostgreSQL, and Supabase Auth and Storage.
 
-
-
 ## Repository layout
 
 ```text
@@ -20,7 +18,7 @@ nginx/     Reverse-proxy configuration
 ## Getting the code
 
 ```bash
-git clone <repo-url>
+git clone git@github.com:stagnantwater69/FinsightV1.git
 cd FinsightV1
 ```
 
@@ -64,8 +62,8 @@ commit Supabase service-role keys or other secrets.
 
 This project is developed in **VS Code**. Recommended extensions:
 
-- **ESLint** (`dbaeumer.vscode-eslint`) — web/mobile use `oxlint`, which
-  reuses the ESLint UI conventions
+- **ESLint** (`dbaeumer.vscode-eslint`) — backend/web/mobile use `oxlint`,
+  which reuses the ESLint UI conventions
 - **Prisma** (`Prisma.prisma`) — syntax highlighting/formatting for
   `backend/prisma/schema.prisma`
 - **Tailwind CSS IntelliSense** (`bradlc.vscode-tailwindcss`) — for `web/`
@@ -125,18 +123,34 @@ Run the complete candidate gate before internal acceptance testing or a demo:
 ```bash
 cd backend
 npm run typecheck
+npm run lint
 npm run build
 npx prisma validate
 npm test
 
 cd ../web
 npm run typecheck
+npm run lint
 npm test
 npm run build
+npx playwright test
 
 cd ../mobile
 npm run typecheck
+npm run lint
 npm test
+```
+
+CI additionally validates `docker compose config` and `nginx -t` against
+`nginx/nginx.conf` on every push — see `.github/workflows/ci.yml`. Run the
+same checks locally with:
+
+```bash
+cp backend/.env.example backend/.env   # only if backend/.env doesn't exist yet
+docker compose config
+docker run --rm --add-host backend:127.0.0.1 \
+  -v "$(pwd)/nginx/nginx.conf:/etc/nginx/nginx.conf:ro" \
+  nginx:1.27-alpine nginx -t
 ```
 
 Backend integration tests are destructive by design and refuse to run unless

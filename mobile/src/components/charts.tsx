@@ -140,7 +140,7 @@ export function CategoryBreakdown({
                     {row.categoryName}
                   </T>
                 </View>
-                <T style={{ fontSize: typeScale.label, color: ink[900] }}>{formatMoney(row.total)}</T>
+                <Money value={row.total} size={typeScale.label} color={ink[900]} weight="regular" />
               </View>
 
               {/*
@@ -1065,17 +1065,25 @@ export function CategoryComparison({
                 <Svg width="100%" height={7} viewBox="0 0 100 7" preserveAspectRatio="none" style={{ flex: 1 }}>
                   <Path d={barPath(0, 0, Math.max((row.previous / max) * 100, 0.5), 7, 3.5, true)} fill={ink[300]} />
                 </Svg>
-                <T variant="caption" style={{ width: 74, textAlign: "right" }}>
-                  {formatMoney(row.previous)}
-                </T>
+                <Money
+                  value={row.previous}
+                  size={typeScale.caption}
+                  color={ink[500]}
+                  weight="regular"
+                  style={{ width: 74, textAlign: "right" }}
+                />
               </View>
               <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
                 <Svg width="100%" height={7} viewBox="0 0 100 7" preserveAspectRatio="none" style={{ flex: 1 }}>
                   <Path d={barPath(0, 0, Math.max((row.current / max) * 100, 0.5), 7, 3.5, true)} fill={brand[600]} />
                 </Svg>
-                <T style={{ width: 74, textAlign: "right", fontSize: typeScale.caption, color: ink[800] }}>
-                  {formatMoney(row.current)}
-                </T>
+                <Money
+                  value={row.current}
+                  size={typeScale.caption}
+                  color={ink[800]}
+                  weight="regular"
+                  style={{ width: 74, textAlign: "right" }}
+                />
               </View>
             </View>
           </View>

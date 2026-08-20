@@ -1,6 +1,8 @@
 import { useState, type FormEvent } from "react";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
+import { useTourOptional } from "../context/TourContext";
 import { api } from "../lib/api";
 import { getErrorMessage, getFieldErrors } from "../lib/errors";
 import {
@@ -15,6 +17,7 @@ import { Button } from "../components/Button";
 import { Field, FormError, TextInput, PasswordInput } from "../components/Field";
 import { AvatarUpload } from "../components/Avatar";
 import { useConfirm } from "../components/ConfirmDialog";
+import { SkeletonPanel } from "../components/Skeleton";
 
 export function Profile() {
   const { profile, updateProfile, uploadAvatar, logout, logoutEverywhere } = useAuth();
@@ -29,7 +32,21 @@ export function Profile() {
   const [saved, setSaved] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  if (!profile) return null;
+  if (!profile) {
+    return (
+      <div>
+        <PageHead eyebrow="Account" title="My Profile" subtitle="Manage your personal account details." />
+        <div className="skeleton mb-6 h-24 rounded-2xl" aria-hidden />
+        <div className="grid gap-6 lg:grid-cols-2">
+          <SkeletonPanel lines={5} />
+          <SkeletonPanel lines={5} />
+        </div>
+        <span className="sr-only" aria-live="polite">
+          Loading your profile…
+        </span>
+      </div>
+    );
+  }
 
   const fullName = [profile.firstName, profile.middleName, profile.lastName].filter(Boolean).join(" ");
   const businessCount = profiles.length;
@@ -124,12 +141,89 @@ export function Profile() {
         </Card>
 
         <div className="space-y-6">
+          <GuidedTourPanel />
           <SecurityPanel />
           <SessionsPanel onLogOutEverywhere={logoutEverywhere} />
           <DeleteAccountPanel onDeleted={logout} />
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * The guided tour's own settings.
+ *
+ * WHY THIS EXISTS AT ALL. The tour is deliberately once-per-account: it starts
+ * itself for a new owner and never interrupts again. That is right for a real
+ * owner and impossible for everyone else — showing the tour to someone, or
+ * re-checking a change to it, meant registering a fresh account or clearing
+ * browser storage by hand. The toggle is the supported way to keep it on.
+ *
+ * It sits on Profile rather than in the account menu because a menu is for
+ * actions and this is a preference — and it keeps the one-shot "Restart" next
+ * to the standing "Always show" so the two are read together rather than
+ * hunted for in different places.
+ *
+ * Renders nothing when the tour provider is absent (the public pages, tests
+ * that mount Profile alone), so it can never be the reason a page fails.
+ */
+function GuidedTourPanel() {
+  const tour = useTourOptional();
+  const navigate = useNavigate();
+  if (!tour) return null;
+
+  return (
+    <Card className="p-6 sm:p-7">
+      <h2 className="mb-1 text-base font-semibold text-ink-900">Guided tour</h2>
+      <p className="mb-5 text-xs text-ink-500">
+        The walkthrough that introduces the dashboard, records, receipt scanning and insights.
+      </p>
+
+      {/*
+        A real checkbox with `role="switch"`, not a styled div: it arrives in
+        the tab order, answers the space bar, and reports its own state to a
+        screen reader without any of that having to be re-implemented. The
+        visual track is drawn from the peer's checked state.
+      */}
+      <label className="flex min-h-tap cursor-pointer items-start justify-between gap-4 rounded-xl border border-paper-200 p-3.5">
+        <span className="min-w-0">
+          <span className="block text-sm font-medium text-ink-900">Always show the tour when I sign in</span>
+          <span className="mt-0.5 block text-xs text-ink-500">
+            Replays the walkthrough on every sign-in instead of only the first. Useful for demonstrating FinSight or
+            setting it up for someone else — turn it off and the tour goes back to appearing once.
+          </span>
+        </span>
+        <input
+          type="checkbox"
+          role="switch"
+          className="peer sr-only"
+          checked={tour.alwaysShow}
+          onChange={(e) => tour.setAlwaysShow(e.target.checked)}
+        />
+        <span
+          aria-hidden
+          className="relative mt-0.5 h-6 w-11 shrink-0 rounded-full bg-ink-200 transition-colors peer-checked:bg-brand-600 peer-focus-visible:ring-2 peer-focus-visible:ring-brand-500 peer-focus-visible:ring-offset-2"
+        >
+          <span className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-paper shadow-sm transition-transform peer-checked:translate-x-5" />
+        </span>
+      </label>
+
+      <div className="mt-4 flex justify-end">
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={() => {
+            // Rewind first, then land on the dashboard — the tour's targets
+            // are that page and its chrome, so it opens once the data is in.
+            tour.restart();
+            navigate("/dashboard");
+          }}
+        >
+          Start the tour now
+        </Button>
+      </div>
+    </Card>
   );
 }
 

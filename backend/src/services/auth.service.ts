@@ -1,4 +1,4 @@
-import { AccountStatus, type User } from "@prisma/client";
+import { AccountStatus, Prisma, type User } from "@prisma/client";
 import { supabaseAdmin, createAnonAuthClient, createPasswordAuthClient } from "../config/supabase";
 import { prisma } from "../config/prisma";
 import { env } from "../config/env";
@@ -118,6 +118,33 @@ export async function registerUser(input: RegisterInput, platform: ClientPlatfor
     securityEvent("register.disposable_domain", { email: input.email });
   }
 
+  /*
+   * OUR OWN ANSWER to "is this address taken", asked before Supabase is.
+   *
+   * Everything below used to rest on GoTrue's empty-`identities` convention
+   * (see the note further down) — a behaviour of a hosted service, undocumented
+   * as a contract, and one that changes shape with a DASHBOARD SETTING this
+   * repository cannot see or enforce. With confirmation switched off it stops
+   * being the signal at all. Depending on it alone meant our uniqueness was
+   * enforced by somebody else's configuration, and the failure mode was silent:
+   * a duplicate registration that looked like it worked.
+   *
+   * The profile mirror is a fact we own, backed by the unique index on
+   * `User_Email`. Checking it first is not a replacement for that index — a
+   * check-then-insert always has a window, and the constraint is what closes it
+   * (handled below) — it is what makes the ORDINARY case decidable here rather
+   * than remotely.
+   *
+   * Note the answer is the neutral acknowledgement, not an error. "That email
+   * is already registered" is a working oracle for whether a given person banks
+   * with us, and the whole endpoint is built to refuse that question.
+   */
+  const alreadyRegistered = await prisma.user.findUnique({ where: { email: input.email } });
+  if (alreadyRegistered) {
+    securityEvent("register.rejected", { email: input.email, reason: "address already has a profile" });
+    return REGISTRATION_ACKNOWLEDGEMENT;
+  }
+
   const { data, error } = await createAnonAuthClient().auth.signUp({
     email: input.email,
     password: input.password,
@@ -201,6 +228,25 @@ export async function registerUser(input: RegisterInput, platform: ClientPlatfor
       email: input.email,
       reason: err instanceof Error ? err.message : "profile insert failed",
     });
+
+    /*
+     * P2002 on this insert means the unique index caught a duplicate the
+     * lookup above did not — the window between the two, or a profile whose
+     * auth identity had been removed from Supabase separately. Either way the
+     * address IS registered, so the answer has to be the one every other
+     * "already registered" branch gives.
+     *
+     * Answering 500 here, as this used to, put the enumeration oracle back
+     * regardless of everything else in this function: a taken address got a
+     * server error and a free one got the acknowledgement, which is a reliable
+     * way to ask this endpoint about any address you like. The rollback above
+     * has already run, so nothing is left behind by returning quietly.
+     */
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      securityEvent("register.rejected", { email: input.email, reason: "address already registered (unique constraint)" });
+      return REGISTRATION_ACKNOWLEDGEMENT;
+    }
+
     throw new ApiError(500, "Could not finish creating your account. Please try again.");
   }
 

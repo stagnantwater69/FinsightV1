@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 import * as aiService from "../services/ai.service";
+import * as insightsService from "../services/insights.service";
 
 /*
  * EXPORTED for the contract tests, the same reason auth.controller.ts exports
@@ -48,6 +49,67 @@ export async function suggestCategory(req: Request, res: Response) {
     input.description
   );
   res.status(200).json({ suggestion });
+}
+
+/*
+ * Exported for the contract tests like `askSchema` above: Spending Impact's
+ * description box carries the same 255-character limit as the record
+ * descriptions this mirrors, and the client's `maxLength` is checked against
+ * this rule rather than a copy of it.
+ */
+export const purchaseReviewSchema = z.object({
+  businessProfileId: z.number().int().positive(),
+  description: z.string().min(3).max(255),
+  /*
+   * Optional, and deliberately so: an owner may know what they want before
+   * they know what it costs, and the review of the ITEM is useful either way.
+   * When it is given it only colours the answer's language — every figure the
+   * page shows about their funds is computed structurally elsewhere.
+   */
+  plannedAmount: z.number().positive().max(999_999_999).optional(),
+  /*
+   * The category the owner has picked or accepted on the page, used ONLY to
+   * choose which of their own records the amount is compared against. It is
+   * still not part of the impact calculation — see the note on Spending
+   * Impact's category field.
+   */
+  categoryId: z.number().int().positive().optional(),
+});
+
+/**
+ * Two halves of one answer, deliberately kept apart.
+ *
+ * `review` is written by a model: what the item is, what it is for, what it
+ * drags along in running costs, and what to check about the price of a thing
+ * like this.
+ *
+ * `priceContext` is arithmetic over the owner's OWN expense records: what they
+ * paid the last time they bought something described this way, and what a
+ * purchase in this category usually costs them. No model sees these figures
+ * and no model produces them — which is what lets the page label the two
+ * halves honestly, and what lets the price half survive the AI being down.
+ *
+ * Run together rather than in sequence: they share nothing, and the button
+ * that calls this is one an owner is waiting on.
+ */
+export async function purchaseReview(req: Request, res: Response) {
+  const input = purchaseReviewSchema.parse(req.body);
+  const [review, priceContext] = await Promise.all([
+    aiService.reviewPurchaseForProfile(
+      req.user!.id,
+      input.businessProfileId,
+      input.description,
+      input.plannedAmount ?? null
+    ),
+    insightsService.buildPurchasePriceContext(
+      req.user!.id,
+      input.businessProfileId,
+      input.description,
+      input.plannedAmount ?? null,
+      input.categoryId ?? null
+    ),
+  ]);
+  res.status(200).json({ review, priceContext });
 }
 
 const historyQuerySchema = z.object({

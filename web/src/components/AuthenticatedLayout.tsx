@@ -3,6 +3,7 @@ import { ProtectedRoute } from "./ProtectedRoute";
 import { BusinessProfileProvider } from "../context/BusinessProfileContext";
 import { ExpenseCategoryProvider } from "../context/ExpenseCategoryContext";
 import { NotificationProvider } from "../context/NotificationContext";
+import { TourProvider } from "../context/TourContext";
 import { AppShell } from "./AppShell";
 import { RequireBusinessProfile } from "./RequireBusinessProfile";
 
@@ -21,9 +22,13 @@ export function AuthenticatedLayout() {
       <BusinessProfileProvider>
         <ExpenseCategoryProvider>
           <NotificationProvider>
-            <AppShell>
-              <RequireBusinessProfile />
-            </AppShell>
+            {/* TourProvider wraps AppShell so the shell can hold its Quick-add
+                menu open for the tour steps that highlight items inside it. */}
+            <TourProvider>
+              <AppShell>
+                <RequireBusinessProfile />
+              </AppShell>
+            </TourProvider>
           </NotificationProvider>
         </ExpenseCategoryProvider>
       </BusinessProfileProvider>

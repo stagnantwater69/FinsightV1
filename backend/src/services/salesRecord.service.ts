@@ -5,7 +5,7 @@ import { ApiError } from "../middleware/error.middleware";
 import { cleanUpImportBatchIfOrphaned } from "../lib/sourceCleanup";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
 import { createNotification, NOTIFICATION_TYPES } from "./notification.service";
-import { duplicateKeyOf } from "./expenseRecord.service";
+import { duplicateKeyOf, type BulkDbClient } from "./expenseRecord.service";
 
 interface CreateInput {
   businessProfileId: number;
@@ -117,11 +117,12 @@ export async function bulkCreateSalesRecords(
   businessProfileId: number,
   importBatchId: number,
   rows: BulkSalesRow[],
+  db: BulkDbClient = prisma,
 ) {
   if (rows.length === 0) return [];
 
   const dates = [...new Set(rows.map((r) => r.date))].map((d) => new Date(d));
-  const candidates = await prisma.salesReferenceRecord.findMany({
+  const candidates = await db.salesReferenceRecord.findMany({
     where: { businessProfileId, date: { in: dates } },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     select: { id: true, date: true, amount: true, description: true },
@@ -162,7 +163,7 @@ export async function bulkCreateSalesRecords(
     };
   });
 
-  const created = await prisma.salesReferenceRecord.createManyAndReturn({ data });
+  const created = await db.salesReferenceRecord.createManyAndReturn({ data });
   if (created.length !== rows.length) {
     throw new ApiError(500, "Import did not create the expected number of records");
   }
@@ -178,14 +179,25 @@ export async function bulkCreateSalesRecords(
       else rowsByTarget.set(targetId, [created[rowIndex]!.id]);
     }
 
-    await prisma.$transaction(
-      [...rowsByTarget].map(([targetId, ids]) =>
-        prisma.salesReferenceRecord.updateMany({
+    if (db === prisma) {
+      await prisma.$transaction(
+        [...rowsByTarget].map(([targetId, ids]) =>
+          prisma.salesReferenceRecord.updateMany({
+            where: { id: { in: ids } },
+            data: { duplicateOfRecordId: targetId },
+          }),
+        ),
+      );
+    } else {
+      // Inside the CSV chunk transaction — see the same branch in
+      // bulkCreateExpenseRecords.
+      for (const [targetId, ids] of rowsByTarget) {
+        await db.salesReferenceRecord.updateMany({
           where: { id: { in: ids } },
           data: { duplicateOfRecordId: targetId },
-        }),
-      ),
-    );
+        });
+      }
+    }
   }
 
   /*

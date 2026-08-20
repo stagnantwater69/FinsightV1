@@ -192,6 +192,14 @@ export interface BulkExpenseRow {
 }
 
 /**
+ * Either the shared client or a transaction handed down by the CSV import's
+ * chunked path, so a whole chunk (records + duplicate links + the batch's
+ * resume checkpoint) commits or rolls back as one unit — the checkpoint must
+ * never claim rows that did not land, or a retry would re-insert them.
+ */
+export type BulkDbClient = Prisma.TransactionClient | typeof prisma;
+
+/**
  * Creates a whole CSV batch in a fixed number of queries instead of a
  * per-row handful.
  *
@@ -220,6 +228,7 @@ export async function bulkCreateExpenseRecords(
   profile: { id: number; expectedMonthlyExpenses: Prisma.Decimal; largeExpenseThresholdPercent: Prisma.Decimal },
   importBatchId: number,
   rows: BulkExpenseRow[],
+  db: BulkDbClient = prisma,
 ) {
   if (rows.length === 0) return [];
 
@@ -230,7 +239,7 @@ export async function bulkCreateExpenseRecords(
   // duplicate of one, so the candidate set is bounded by the file's date range
   // rather than by the business's whole history.
   const dates = [...new Set(rows.map((r) => r.date))].map((d) => new Date(d));
-  const candidates = await prisma.expenseRecord.findMany({
+  const candidates = await db.expenseRecord.findMany({
     where: { businessProfileId, date: { in: dates } },
     // findDuplicate takes the OLDEST match; id breaks createdAt ties, which a
     // previous bulk import can now produce since its rows share a timestamp.
@@ -284,7 +293,7 @@ export async function bulkCreateExpenseRecords(
   // Postgres returns INSERT ... RETURNING rows in insertion order, so
   // created[i] is data[i]. The length check is cheap insurance on an
   // assumption the index-based links below depend on completely.
-  const created = await prisma.expenseRecord.createManyAndReturn({ data });
+  const created = await db.expenseRecord.createManyAndReturn({ data });
   if (created.length !== rows.length) {
     throw new ApiError(500, "Import did not create the expected number of records");
   }
@@ -310,14 +319,25 @@ export async function bulkCreateExpenseRecords(
       else rowsByTarget.set(targetId, [created[rowIndex]!.id]);
     }
 
-    await prisma.$transaction(
-      [...rowsByTarget].map(([targetId, ids]) =>
-        prisma.expenseRecord.updateMany({
+    if (db === prisma) {
+      await prisma.$transaction(
+        [...rowsByTarget].map(([targetId, ids]) =>
+          prisma.expenseRecord.updateMany({
+            where: { id: { in: ids } },
+            data: { duplicateOfRecordId: targetId },
+          }),
+        ),
+      );
+    } else {
+      // Already inside the caller's transaction — a nested $transaction is
+      // not a thing, and the outer one is what makes these atomic anyway.
+      for (const [targetId, ids] of rowsByTarget) {
+        await db.expenseRecord.updateMany({
           where: { id: { in: ids } },
           data: { duplicateOfRecordId: targetId },
-        }),
-      ),
-    );
+        });
+      }
+    }
   }
 
   /*
@@ -340,9 +360,20 @@ export async function bulkCreateExpenseRecords(
    * (createExpenseRecord / updateExpenseRecord) keep their notifications,
    * because there one record IS the whole event.
    */
-  await enqueueExpenseAnalyses(businessProfileId, created.map((record) => record.id)).catch((error) => {
-    logger.error({ err: error, importBatchId }, "failed to enqueue imported expense analysis");
-  });
+  /*
+   * Skipped when running inside a caller's transaction: the analysis jobs
+   * carry a foreign key to records that are not committed yet, so writing
+   * them through the shared client here would hit an FK violation every
+   * time. The CSV chunk loop enqueues the same ids itself, AFTER its
+   * transaction commits — and the hourly reconcile in
+   * enqueueDailyProfileAnalyses backstops the narrow crash window between
+   * that commit and the enqueue.
+   */
+  if (db === prisma) {
+    await enqueueExpenseAnalyses(businessProfileId, created.map((record) => record.id)).catch((error) => {
+      logger.error({ err: error, importBatchId }, "failed to enqueue imported expense analysis");
+    });
+  }
 
   return created.map(toDTO);
 }
@@ -392,7 +423,7 @@ type RecordWithOrigin = ExpenseRecord & {
     id: number;
     title: string;
     uploadDate: Date;
-    fileReference: string;
+    fileReference: string | null;
     status: string;
   } | null;
 };
@@ -480,7 +511,7 @@ async function buildOrigin(record: RecordWithOrigin) {
        * link cannot be minted, which the panel reads as "no file to offer"
        * rather than as an error.
        */
-      fileUrl: await signedCsvFileUrl(record.importBatch.fileReference),
+      fileUrl: record.importBatch.fileReference ? await signedCsvFileUrl(record.importBatch.fileReference) : null,
       status: record.importBatch.status,
       rowCount,
     };

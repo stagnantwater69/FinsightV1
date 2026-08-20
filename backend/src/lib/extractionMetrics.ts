@@ -91,6 +91,38 @@ export function accuracyBySource(rows: CorrectionObservation[]): { source: strin
     .sort((a, b) => (a.unchangedRate ?? 1) - (b.unchangedRate ?? 1));
 }
 
+/**
+ * The same split by EXTRACTOR VERSION — which prompt/schema/parser read the
+ * scan, resolved by the caller from ReceiptScan.extractorVersions.
+ *
+ * Takes a resolver rather than joining rows itself so this stays a pure
+ * function over observations, like everything else here: the caller decides
+ * what "version" means for its question ("vision-prompt-v2", "gemini-x @
+ * prompt-v2", the parser tag) by what it puts in the string. Kept separate
+ * from accuracyBySource for the same reason that is kept separate from
+ * fieldAccuracy — averaging two prompts' error rates produces a number that
+ * describes neither, and recording versions per scan was the whole point.
+ */
+export function accuracyByVersion(
+  rows: CorrectionObservation[],
+  versionOf: (scanId: number) => string | null,
+): { version: string; reviewed: number; edited: number; unchangedRate: number | null }[] {
+  const byVersion = new Map<string, { reviewed: number; edited: number }>();
+  for (const row of rows) {
+    // Scans from before version recording began are reported under their own
+    // bucket rather than dropped — they are still evidence, just evidence
+    // that cannot be attributed, and hiding them would overstate coverage.
+    const version = versionOf(row.receiptScanId) ?? "unversioned";
+    const bucket = byVersion.get(version) ?? { reviewed: 0, edited: 0 };
+    bucket.reviewed += 1;
+    if (row.wasEdited) bucket.edited += 1;
+    byVersion.set(version, bucket);
+  }
+  return [...byVersion.entries()]
+    .map(([version, b]) => ({ version, reviewed: b.reviewed, edited: b.edited, unchangedRate: rate(b.reviewed - b.edited, b.reviewed) }))
+    .sort((a, b) => (a.unchangedRate ?? 1) - (b.unchangedRate ?? 1));
+}
+
 export interface ScanAccuracy {
   receiptScanId: number;
   fieldsReviewed: number;

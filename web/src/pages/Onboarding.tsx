@@ -268,6 +268,22 @@ export function Onboarding() {
 
           {step === 3 ? (
             <div className="space-y-4">
+              {/*
+                The profile is already created by the time this step renders
+                (see the file header), so this is the completion moment even
+                though one optional step remains. Fin marks it here rather than
+                after the import, which an owner may never run.
+              */}
+              <img
+                src="/mascot/01-onboarding/onboardingcomplete.webp"
+                alt=""
+                aria-hidden
+                width={96}
+                height={96}
+                className="mx-auto h-24 w-24 select-none"
+                draggable={false}
+              />
+
               <div className="rounded-2xl border border-paper-200 bg-tint-brand p-4">
                 <p className="text-sm font-semibold text-ink-900">Already have sales or expense records?</p>
                 <p className="mt-1 text-sm text-ink-600">

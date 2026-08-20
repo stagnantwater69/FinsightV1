@@ -258,7 +258,7 @@
     },
     "actual": {
       "date": "2026-07-18",
-      "vendor": "*xx GALES INVOICE ***",
+      "vendor": "TINDAHAN NI MANG JOSE",
       "amount": 845.5,
       "items": [
         {
@@ -275,7 +275,7 @@
     },
     "verdict": {
       "date": "correct",
-      "vendor": "wrong",
+      "vendor": "correct",
       "amount": "correct"
     },
     "itemScore": {

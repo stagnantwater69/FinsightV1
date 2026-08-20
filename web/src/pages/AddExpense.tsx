@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { CategorySelect } from "../components/CategorySelect";
 import { Celebration } from "../components/Confirmation";
@@ -18,15 +18,26 @@ function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
+interface DuplicateExpenseState {
+  description: string;
+  vendor: string;
+  categoryId?: number;
+  amount: number;
+}
+
 export function AddExpense() {
   const { selected } = useBusinessProfiles();
   const navigate = useNavigate();
   const toast = useToast();
-  const [categoryId, setCategoryId] = useState<number | "">("");
+  // Prefilled by the "Duplicate" action on Records — the date is left at
+  // today() below rather than copied, since a duplicate is almost always
+  // "the same thing, today".
+  const duplicateFrom = (useLocation().state as { duplicateFrom?: DuplicateExpenseState } | null)?.duplicateFrom;
+  const [categoryId, setCategoryId] = useState<number | "">(duplicateFrom?.categoryId ?? "");
   const [date, setDate] = useState(today());
-  const [description, setDescription] = useState("");
-  const [vendor, setVendor] = useState("");
-  const [amount, setAmount] = useState<number | "">("");
+  const [description, setDescription] = useState(duplicateFrom?.description ?? "");
+  const [vendor, setVendor] = useState(duplicateFrom?.vendor ?? "");
+  const [amount, setAmount] = useState<number | "">(duplicateFrom?.amount ?? "");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   // Peak-End: the first expense a business ever records is the moment the

@@ -164,14 +164,6 @@ export function RecoveryInsightPage() {
             target, and how much is still needed?"
           </>
         }
-        actions={
-          <AskFinSightButton
-            onClick={() => {
-              setDrawerQuestion(undefined);
-              setDrawerOpen(true);
-            }}
-          />
-        }
       />
 
       <InsightsTabs />
@@ -395,14 +387,26 @@ export function RecoveryInsightPage() {
               </button>
             }
           >
-            Your sales reference for today is <Kw>{formatMoney(Math.abs(data.todaysGap))}</Kw>{" "}
+            Your sales reference for today is{" "}
+            <Kw>
+              <span className="figure">{formatMoney(Math.abs(data.todaysGap))}</span>
+            </Kw>{" "}
             {statusLabel(data.todaysStatus).toLowerCase()}. Based on your expected monthly expenses and
             recorded sales references so far, FinSight estimates that you need around{" "}
-            <Kw>{formatMoney(data.adjustedDailyTarget)}</Kw> per remaining operating day to still reach the
-            monthly target.
+            <Kw>
+              <span className="figure">{formatMoney(data.adjustedDailyTarget)}</span>
+            </Kw>{" "}
+            per remaining operating day to still reach the monthly target.
           </AiCard>
         </div>
       )}
+
+      <AskFinSightButton
+        onClick={() => {
+          setDrawerQuestion(undefined);
+          setDrawerOpen(true);
+        }}
+      />
 
       <AskFinSightDrawer
         businessProfileId={selected.id}

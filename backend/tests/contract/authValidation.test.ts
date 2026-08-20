@@ -327,4 +327,5 @@ describe("the server normalises addresses before anything else sees them", () =>
     expect(registerSchema.safeParse({ ...base, email: "someone@mailinator.com" }).success).toBe(true);
     expect(registerSchema.safeParse({ ...base, email: "owner@shop.ph" }).success).toBe(true);
   });
+
 });

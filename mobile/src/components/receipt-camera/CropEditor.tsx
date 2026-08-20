@@ -1,8 +1,8 @@
 import { useMemo, useRef, useState } from "react";
-import { Image, PanResponder, useWindowDimensions, View } from "react-native";
+import { Image, PanResponder, Pressable, useWindowDimensions, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { Button, T } from "../ui";
-import { brand, ink, radius, space } from "../../theme/tokens";
+import { Button, SelectChip, T } from "../ui";
+import { brand, ink, radius, space, TAP } from "../../theme/tokens";
 import { CORNER_ORDER, DetectedOutline } from "./DetectedOutline";
 import {
   clampToImage,
@@ -86,6 +86,26 @@ export function CropEditor({
 
   const toScreen = (p: Point) => ({ x: p.x * scale + offsetX, y: p.y * scale + offsetY });
 
+  /** Which corner the step buttons (and the screen reader) are working on. */
+  const [activeCorner, setActiveCorner] = useState<(typeof CORNER_ORDER)[number]>("topLeft");
+
+  /**
+   * One step, in IMAGE pixels.
+   *
+   * Derived from a fixed distance ON GLASS so a step feels the same on any
+   * screen density and at any zoom — the same reason a drag divides by
+   * `scale`. Never below one pixel, or a step on a small preview would do
+   * nothing at all.
+   */
+  const step = Math.max(1, Math.round(NUDGE_SCREEN_POINTS / scale));
+
+  function nudge(key: (typeof CORNER_ORDER)[number], dx: number, dy: number) {
+    setCorners((prev) => ({
+      ...prev,
+      [key]: clampToImage({ x: prev[key].x + dx, y: prev[key].y + dy }, imageWidth, imageHeight),
+    }));
+  }
+
   const rect = cornersToCropRect(corners, imageWidth, imageHeight);
   const preselected = detectedCorners !== null && corners !== undefined && edgeConfidence !== null;
 
@@ -130,6 +150,8 @@ export function CropEditor({
             key={key}
             position={toScreen(corners[key])}
             label={CORNER_LABELS[key]}
+            selected={activeCorner === key}
+            onSelect={() => setActiveCorner(key)}
             onDrag={(dx, dy, start) => {
               setCorners((prev) => ({
                 ...prev,
@@ -143,9 +165,57 @@ export function CropEditor({
                 ),
               }));
             }}
+            /*
+             * The screen-reader path. "adjustable" already promised increment
+             * and decrement and neither did anything, so the control announced
+             * itself as operable and then was not. Outward/inward along the
+             * diagonal is the meaning that fits a crop corner: it grows or
+             * shrinks the kept area from that corner, which is what dragging
+             * one actually does.
+             */
+            onAdjust={(direction) => {
+              const towards = direction === "increment" ? 1 : -1;
+              nudge(key, outwardX(key) * towards * step, outwardY(key) * towards * step);
+            }}
             startValue={corners[key]}
           />
         ))}
+      </View>
+
+      {/*
+        MOVING A CORNER WITHOUT A PRECISE DRAG.
+        The handles are the fastest way and, for a lot of people, not a usable
+        way: this is the most precision-demanding gesture in the app, on a
+        photograph of a receipt held in the other hand. These buttons do the
+        same thing in fixed steps, are each a full tap target, and give the
+        screen-reader path above something visible to correspond to.
+      */}
+      <View style={{ paddingHorizontal: space.lg, paddingTop: space.sm }}>
+        <T style={{ color: "rgba(255,255,255,0.66)", fontSize: 11.5, marginBottom: 6 }}>
+          Or move a corner step by step:
+        </T>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: space.sm }}>
+          {CORNER_ORDER.map((key) => (
+            <SelectChip
+              key={key}
+              label={CORNER_LABELS[key]}
+              selected={activeCorner === key}
+              onPress={() => setActiveCorner(key)}
+              accessibilityLabel={`Adjust the ${CORNER_LABELS[key].toLowerCase()}`}
+            />
+          ))}
+        </View>
+        <View style={{ flexDirection: "row", gap: space.sm }}>
+          {NUDGES.map((n) => (
+            <NudgeButton
+              key={n.name}
+              icon={n.icon}
+              label={`Move the ${CORNER_LABELS[activeCorner].toLowerCase()} ${n.name}`}
+              onPress={() => nudge(activeCorner, n.dx * step, n.dy * step)}
+              disabled={busy}
+            />
+          ))}
+        </View>
       </View>
 
       <View style={{ padding: space.lg, gap: space.sm }}>
@@ -186,6 +256,66 @@ const CORNER_LABELS: Record<(typeof CORNER_ORDER)[number], string> = {
   bottomLeft: "Bottom left corner",
 };
 
+/** How far one step moves a corner, measured on glass rather than in the file. */
+const NUDGE_SCREEN_POINTS = 8;
+
+/** The four step directions, in the order a d-pad reads. */
+const NUDGES = [
+  { name: "left", icon: "chevron-back" as const, dx: -1, dy: 0 },
+  { name: "up", icon: "chevron-up" as const, dx: 0, dy: -1 },
+  { name: "down", icon: "chevron-down" as const, dx: 0, dy: 1 },
+  { name: "right", icon: "chevron-forward" as const, dx: 1, dy: 0 },
+];
+
+/** Which way is "outward" for each corner — away from the middle of the crop. */
+function outwardX(key: (typeof CORNER_ORDER)[number]): number {
+  return key === "topLeft" || key === "bottomLeft" ? -1 : 1;
+}
+function outwardY(key: (typeof CORNER_ORDER)[number]): number {
+  return key === "topLeft" || key === "topRight" ? -1 : 1;
+}
+
+/**
+ * One step button.
+ *
+ * TAP square exactly, not "about right": these sit under a photograph the
+ * owner is squinting at, and they exist precisely for the person who could not
+ * hit a 28-point handle.
+ */
+function NudgeButton({
+  icon,
+  label,
+  onPress,
+  disabled,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  onPress: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      style={({ pressed }) => ({
+        flex: 1,
+        minHeight: TAP,
+        alignItems: "center",
+        justifyContent: "center",
+        borderRadius: radius.md,
+        borderWidth: 1,
+        borderColor: "rgba(255,255,255,0.28)",
+        backgroundColor: pressed ? "rgba(255,255,255,0.16)" : "rgba(255,255,255,0.06)",
+        opacity: disabled ? 0.5 : 1,
+      })}
+    >
+      <Ionicons name={icon} size={18} color="#ffffff" />
+    </Pressable>
+  );
+}
+
 /**
  * One handle.
  *
@@ -205,16 +335,29 @@ function CornerHandle({
   position,
   label,
   startValue,
+  selected,
+  onSelect,
   onDrag,
+  onAdjust,
 }: {
   position: Point;
   label: string;
   startValue: Point;
+  /** True when the step buttons below are pointed at this corner. */
+  selected: boolean;
+  onSelect: () => void;
   onDrag: (dx: number, dy: number, start: Point) => void;
+  /** The screen-reader path: grow or shrink the crop from this corner. */
+  onAdjust: (direction: "increment" | "decrement") => void;
 }) {
   const start = useRef<Point>(startValue);
   const latest = useRef<Point>(startValue);
   latest.current = startValue;
+  /* The responder is built once, so it must reach the CURRENT callback rather
+   * than the one that existed on first render — the same reason `latest`
+   * exists for the position. */
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
 
   const responder = useRef(
     PanResponder.create({
@@ -222,6 +365,9 @@ function CornerHandle({
       onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: () => {
         start.current = latest.current;
+        // Touching a corner also points the step buttons at it, so the two
+        // ways of moving it never disagree about which one is being moved.
+        onSelectRef.current();
       },
       onPanResponderMove: (_event, gesture) => {
         onDrag(gesture.dx, gesture.dy, start.current);
@@ -230,14 +376,34 @@ function CornerHandle({
   ).current;
 
   const size = 28;
+  /*
+   * TAP is 44 and the laid-out handle is 28, so this is the 8 points a side
+   * that makes up the difference. The DOT stays 16: a corner sitting on the
+   * edge of a receipt has to be grabbable without covering the print the owner
+   * is aligning it to, which is why the visible mark and the touch area were
+   * different sizes in the first place — the mistake was stopping at 28 and
+   * calling that the touch area. The same hitSlop pattern is at
+   * CapturePreview.tsx's zoom toggle.
+   */
+  const slop = Math.ceil((TAP - size) / 2);
   return (
     <View
       {...responder.panHandlers}
       accessibilityRole="adjustable"
       accessibilityLabel={label}
-      // Hit area is 28pt but the visible dot is 16pt: a corner sitting on the
-      // edge of a receipt needs to be grabbable without covering the print
-      // the owner is aligning it to.
+      accessibilityHint="Swipe up or down to grow or shrink the crop from this corner, or use the step buttons below."
+      accessibilityState={{ selected }}
+      accessibilityActions={[
+        { name: "increment", label: "Move this corner outward" },
+        { name: "decrement", label: "Move this corner inward" },
+        { name: "activate", label: "Adjust this corner with the step buttons" },
+      ]}
+      onAccessibilityAction={(event) => {
+        if (event.nativeEvent.actionName === "increment") onAdjust("increment");
+        else if (event.nativeEvent.actionName === "decrement") onAdjust("decrement");
+        else onSelect();
+      }}
+      hitSlop={slop}
       style={{
         position: "absolute",
         left: position.x - size / 2,
@@ -254,7 +420,9 @@ function CornerHandle({
           height: 16,
           borderRadius: radius.full,
           backgroundColor: brand[400],
-          borderWidth: 2.5,
+          // A ring on the corner the step buttons are pointed at, so the two
+          // controls visibly refer to the same thing.
+          borderWidth: selected ? 3.5 : 2.5,
           borderColor: "#ffffff",
         }}
       />

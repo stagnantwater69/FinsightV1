@@ -6,7 +6,8 @@ import { utcToday } from "../../lib/dates";
 import { detectAmountOutlierForExpense } from "./amountOutlier.service";
 import { detectBehavioralNoveltyForExpense } from "./behavioralNovelty.service";
 import { refreshOwnedCategoryStatistics } from "./categoryStatistics.service";
-import { RUNTIME_DETECTION_CONFIG } from "./config";
+import { meetsNotificationSeverity, RUNTIME_DETECTION_CONFIG } from "./config";
+import { refreshIsolationForestFindings } from "./isolationForest.service";
 import { detectNearDuplicateForExpense } from "./nearDuplicate.service";
 import { refreshRecurringPatterns } from "./recurring.service";
 import { refreshTrendFindings } from "./trend.service";
@@ -17,10 +18,8 @@ const WORKER_ID = `analysis-${process.pid}-${randomUUID().slice(0, 8)}`;
 const LEASE_MS = 5 * 60_000;
 const MAX_ATTEMPTS = 5;
 
-const SEVERITY_RANK = { LOW: 0, MEDIUM: 1, HIGH: 2 } as const;
-function meetsNotificationSeverity(severity: keyof typeof SEVERITY_RANK): boolean {
-  return SEVERITY_RANK[severity] >= SEVERITY_RANK[RUNTIME_DETECTION_CONFIG.notificationMinimumSeverity];
-}
+// Severity gate moved to ./config so the recurring watchdog, which emits from
+// the PROFILE_REFRESH path, applies the identical rule. Behaviour unchanged.
 
 export async function enqueueExpenseAnalysis(businessProfileId: number, expenseRecordId: number) {
   return prisma.analysisJob.upsert({
@@ -35,6 +34,25 @@ export async function enqueueExpenseAnalyses(businessProfileId: number, expenseR
   await prisma.analysisJob.createMany({
     data: expenseRecordIds.map((id) => ({ businessProfileId, expenseRecordId: id, idempotencyKey: `transaction:${id}`, kind: AnalysisJobKind.TRANSACTION })),
     skipDuplicates: true,
+  });
+}
+
+/**
+ * One coalesced PROFILE_REFRESH for a single profile, keyed by UTC day.
+ *
+ * Exists for bulk writes — a committed CSV import changes category statistics,
+ * recurring patterns and trends all at once, and waiting for the hourly
+ * scheduler would leave Insights describing the pre-import books for up to an
+ * hour. The daily idempotency key means ten imports in one day still cost one
+ * refresh; the upsert's update arm re-arms a job that already ran today, the
+ * same way enqueueExpenseAnalysis re-arms a completed transaction job.
+ */
+export async function enqueueProfileRefresh(businessProfileId: number, today = utcToday()) {
+  const date = today.toISOString().slice(0, 10);
+  return prisma.analysisJob.upsert({
+    where: { idempotencyKey: `profile:${businessProfileId}:${date}` },
+    create: { businessProfileId, idempotencyKey: `profile:${businessProfileId}:${date}`, kind: AnalysisJobKind.PROFILE_REFRESH },
+    update: { status: AnalysisJobStatus.PENDING, attemptCount: 0, nextAttemptAt: new Date(), lastError: null },
   });
 }
 
@@ -102,7 +120,7 @@ async function processJob(job: ClaimedJob) {
     ]);
     const owner = await prisma.businessProfile.findUnique({ where: { id: job.businessProfileId }, select: { userId: true } });
     for (const finding of findings.filter((value): value is NonNullable<typeof value> => value !== null)) {
-      if (!owner || !meetsNotificationSeverity(finding.severity)) continue;
+      if (!owner || !meetsNotificationSeverity(finding.severity, RUNTIME_DETECTION_CONFIG)) continue;
       const message = `${finding.title}: review this transaction in Expense Insights`.slice(0, 255);
       const exists = await prisma.notification.findFirst({
         where: { businessProfileId: job.businessProfileId, expenseRecordId: job.expenseRecordId, type: NOTIFICATION_TYPES.ANOMALY_FINDING, message },
@@ -119,8 +137,16 @@ async function processJob(job: ClaimedJob) {
   const profile = await prisma.businessProfile.findUnique({ where: { id: job.businessProfileId }, select: { userId: true } });
   if (!profile) return;
   await refreshOwnedCategoryStatistics(profile.userId, job.businessProfileId);
-  await refreshRecurringPatterns(profile.userId, job.businessProfileId);
+  await refreshRecurringPatterns(profile.userId, job.businessProfileId, RUNTIME_DETECTION_CONFIG);
   await refreshTrendFindings(profile.userId, job.businessProfileId, utcToday(), RUNTIME_DETECTION_CONFIG);
+  // Shadow-only ML pass, last: it reads the same bounded history the refreshers
+  // just summarised, writes only SHADOW findings, and fails open — a dead
+  // sidecar must not fail the job the deterministic refreshers completed.
+  try {
+    await refreshIsolationForestFindings(profile.userId, job.businessProfileId, RUNTIME_DETECTION_CONFIG);
+  } catch (error) {
+    logger.warn({ err: error, businessProfileId: job.businessProfileId }, "isolation forest shadow pass failed");
+  }
 }
 
 export async function runAnalysisWorkerOnce() {

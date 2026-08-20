@@ -75,6 +75,7 @@ export function BusinessSwitcher({ collapsed = false }: { collapsed?: boolean })
       <button
         ref={triggerRef}
         type="button"
+        data-tour="business-profile"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-haspopup="menu"

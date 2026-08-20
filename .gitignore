@@ -28,3 +28,7 @@ backend/tests/ocr-accuracy/inbox/
 # with live-feedback-report.ts whenever it is needed.
 backend/tests/ocr-accuracy/LIVE-FEEDBACK-REPORT.md
 backend/tests/ocr-accuracy/live-feedback.json
+
+# Python (ml worker)
+ml/.venv/
+__pycache__/

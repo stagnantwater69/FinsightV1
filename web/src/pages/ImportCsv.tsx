@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useMemo, useRef, useState, type FormEvent } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
@@ -6,12 +6,14 @@ import { api } from "../lib/api";
 import { getErrorMessage } from "../lib/errors";
 import { Callout, Card, FormPage, PageHead, Tag } from "../components/ui";
 import { classifyTypeValue, parseSignedAmount, type RowRecordType } from "../lib/recordTypeDetection";
+import { parseCsvDate } from "../lib/csvDates";
 import { Button, ButtonLink } from "../components/Button";
 import { Celebration } from "../components/Confirmation";
 import { Field, FileInput, FormError, SelectInput, TextInput } from "../components/Field";
 import { Money } from "../components/Money";
-import { SkeletonLine, SkeletonRows } from "../components/Skeleton";
+import { SkeletonLine } from "../components/Skeleton";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
+import type { CsvConfirmDateFormat, CsvDateFormat, CsvImportStatus, CsvProcessingStatus } from "../lib/types";
 
 interface PreviewResult {
   headers: string[];
@@ -21,6 +23,17 @@ interface PreviewResult {
   detectedTypeColumn?: string | null;
   /** Columns mixing negative and positive numbers — candidates for the sign convention. */
   columnsWithNegatives?: string[];
+  /**
+   * The date convention the file appears to use, read off its first
+   * date-shaped column.
+   */
+  detectedDateFormat?: CsvDateFormat;
+  /**
+   * True when every sampled date fits BOTH day-first and month-first readings.
+   * Confirm refuses such a file until the owner says which, so this screen has
+   * to ask before it will let them import — see the date-convention card.
+   */
+  dateFormatAmbiguous?: boolean;
 }
 
 interface ImportResult {
@@ -35,7 +48,57 @@ interface ImportResult {
   importedExpenses?: number;
   importedSales?: number;
   uncategorised?: number;
+  /** Where the WRITE got to, as opposed to the owner-facing review status. */
+  processingStatus?: CsvProcessingStatus;
+  /**
+   * Another completed import of this profile carried byte-identical content.
+   * A warning, never a block: re-importing a corrected export is legitimate,
+   * but importing the same file twice by accident is the single most common
+   * way an owner doubles a month of records.
+   */
+  duplicateOfBatchId?: number;
+  /** Total skipped rows. Exceeds `skipped.length` when the worker capped its list. */
+  skippedCount?: number;
+  skippedTruncated?: boolean;
 }
+
+/**
+ * The summary, rebuilt from a finished asynchronous import.
+ *
+ * A large file's confirm returns 202 with zero counts — the numbers only exist
+ * once the worker is done, and they arrive through the status endpoint. This
+ * maps that shape onto the one the summary screen already renders, so there is
+ * exactly one summary screen rather than a second one for big files.
+ */
+function resultFromStatus(status: CsvImportStatus, title: string): ImportResult {
+  const summary = status.resultSummary ?? {};
+  return {
+    batchId: status.batchId,
+    title,
+    status: status.status,
+    processingStatus: status.processingStatus,
+    totalRows: status.totalRows,
+    imported: status.importedRows,
+    skipped: summary.skipped ?? [],
+    skippedCount: status.skippedRows,
+    skippedTruncated: summary.skippedTruncated ?? false,
+    flagged: status.flaggedRows,
+    largeExpenseFlagged: summary.largeExpenseFlagged ?? 0,
+    importedExpenses: summary.importedExpenses,
+    importedSales: summary.importedSales,
+    uncategorised: summary.uncategorised,
+  };
+}
+
+/**
+ * How often the import status is asked for while a large file runs.
+ *
+ * The endpoint is two indexed reads with no parsing and no writes, and is
+ * deliberately NOT rate limited on the server for exactly this reason — a
+ * limit sized for confirms would start rejecting the polling the async import
+ * depends on.
+ */
+const STATUS_POLL_INTERVAL_MS = 1500;
 
 /** What the file is being read as. "mixed" splits it row by row. */
 type ImportRecordType = "expense" | "sales" | "mixed";
@@ -77,12 +140,24 @@ const HEADER_SYNONYMS: Record<"date" | "description" | "amount" | "category" | "
  */
 export type RowProblem = { field: MappedField; reason: string } | null;
 
-function problemWith(values: Record<MappedField, string>, needsCategory: boolean): RowProblem {
+function problemWith(
+  values: Record<MappedField, string>,
+  needsCategory: boolean,
+  dateFormat: CsvDateFormat,
+): RowProblem {
   if (!values.Description.trim()) return { field: "Description", reason: "Missing description" };
 
+  /*
+   * Parsed with the shared calendar parser, NOT `new Date(rawDate)`.
+   *
+   * The string constructor guessed month-first, parsed in browser-local time
+   * and rolled Feb 31 over into March — so this check used to pass rows the
+   * server then skipped and flag rows it would have accepted. A preview that
+   * disagrees with the import is worse than no preview: the owner "fixes" a
+   * row that was never wrong. See lib/csvDates.ts.
+   */
   const rawDate = values.Date.trim();
-  const parsed = rawDate ? new Date(rawDate) : null;
-  if (!rawDate || !parsed || Number.isNaN(parsed.getTime())) {
+  if (!rawDate || parseCsvDate(rawDate, dateFormat) === null) {
     return { field: "Date", reason: `Invalid date: "${rawDate}"` };
   }
 
@@ -138,6 +213,34 @@ export function ImportCsv() {
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
+  /**
+   * THE THING THAT MAKES A RETRY SAFE.
+   *
+   * Generated ONCE per chosen file and reused for every confirm attempt on
+   * that file, including retries after an error. The server keys the import on
+   * it: a replayed key returns the SAME logical import at whatever stage it
+   * reached, never a second copy of the records (ADR-3). A key regenerated per
+   * attempt would defeat the whole mechanism — an impatient second click, a
+   * proxy retry or a refresh would each look like a brand-new import and
+   * double a month of books, which is the worst outcome this endpoint has.
+   *
+   * Cleared only when a different file is chosen, because at that point it IS
+   * a different import.
+   */
+  const [idempotencyKey, setIdempotencyKey] = useState<string | null>(null);
+  /**
+   * The owner's answer to "are these dates day-first or month-first?".
+   *
+   * Only asked when the preview reports the file ambiguous, and confirm is
+   * blocked until it is answered — the server refuses such a file outright
+   * rather than guessing, and guessing here would silently move every
+   * transaction in the file by up to eleven months.
+   */
+  const [dateFormat, setDateFormat] = useState<CsvConfirmDateFormat | "">("");
+  /** Live counts while a large import runs on the worker. */
+  const [progress, setProgress] = useState<CsvImportStatus | null>(null);
+  /** Invalidates an in-flight poll loop when the owner starts over. */
+  const pollToken = useRef(0);
   /** Which fields were guessed rather than chosen, so each can say so. */
   const [autoMapped, setAutoMapped] = useState<Set<string>>(new Set());
   /**
@@ -219,6 +322,15 @@ export function ImportCsv() {
 
   const mappingIsComplete = requiredMapping.every(([, col]) => col !== "");
   const mappingIsValid = mappingIsComplete && duplicateColumns.size === 0;
+
+  /**
+   * A file whose dates read both ways cannot be imported until the owner says
+   * which. The server refuses it outright (naming both readings) rather than
+   * picking one, so blocking here is not extra strictness — it is asking the
+   * question at the only moment the answer is cheap.
+   */
+  const dateChoiceNeeded = preview?.dateFormatAmbiguous === true && dateFormat === "";
+  const readyToImport = mappingIsValid && !dateChoiceNeeded;
 
 
   function duplicateError(col: string): string | null {
@@ -308,6 +420,21 @@ export function ImportCsv() {
   }
 
   /**
+   * A chosen file, and the replay token that will identify its import.
+   *
+   * The key is minted HERE — at the moment the import becomes a distinct
+   * thing — rather than at confirm time, which is what makes every confirm
+   * attempt for this file, retries included, the same logical import.
+   */
+  function handleSelectFile(next: File | null) {
+    setFile(next);
+    setIdempotencyKey(next ? crypto.randomUUID() : null);
+    setDateFormat("");
+    setProgress(null);
+    setConfirmError(null);
+  }
+
+  /**
    * Back to the file picker, clearing the mapping with it.
    *
    * The mapping used to survive into the next file, whose headers may not
@@ -315,6 +442,13 @@ export function ImportCsv() {
    * value that looked like a choice the owner had made.
    */
   function handleChooseDifferentFile() {
+    // A different file is a different import, so the replay token goes with
+    // it — reusing one across files would make the server answer with the
+    // FIRST file's import.
+    pollToken.current += 1;
+    setIdempotencyKey(null);
+    setDateFormat("");
+    setProgress(null);
     setPreview(null);
     setFile(null);
     setTitle("");
@@ -333,7 +467,7 @@ export function ImportCsv() {
 
   async function handleConfirm(e: FormEvent) {
     e.preventDefault();
-    if (!file || !mappingIsValid) return;
+    if (!file || !mappingIsValid || dateChoiceNeeded) return;
     setConfirming(true);
     setConfirmError(null);
     try {
@@ -371,10 +505,42 @@ export function ImportCsv() {
           ),
         );
       }
-      const { data } = await api.post<ImportResult>("/records/csv-imports/confirm", formData, {
+      // Sent on EVERY attempt, retries included. See the state declaration.
+      if (idempotencyKey) formData.append("idempotencyKey", idempotencyKey);
+      // Sent only when the owner was asked. An unambiguous file speaks for
+      // itself, and overriding it with a convention nobody chose would be a
+      // guess wearing a decision's clothes.
+      if (dateFormat) formData.append("dateFormat", dateFormat);
+
+      const response = await api.post<ImportResult>("/records/csv-imports/confirm", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
-      setResult(data);
+
+      /*
+       * 202 — TOO BIG TO IMPORT INSIDE THE REQUEST.
+       *
+       * The batch exists and the durable worker has it, but no records are
+       * written yet and every count in the body is zero. Rendering that as a
+       * summary would tell the owner their 20,000-row file imported nothing.
+       * So the screen switches to the progress view and follows the status
+       * endpoint until the worker finishes, then renders the same summary
+       * from the real counts.
+       *
+       * Detected on BOTH the status code and processingStatus: the status code
+       * is the contract, and the field is what survives a proxy that rewrites
+       * it.
+       */
+      const accepted =
+        response.status === 202 ||
+        response.data.processingStatus === "PENDING" ||
+        response.data.processingStatus === "PROCESSING";
+
+      if (accepted) {
+        await followImport(response.data.batchId, response.data);
+        return;
+      }
+
+      setResult(response.data);
     } catch (err) {
       setConfirmError(getErrorMessage(err));
     } finally {
@@ -382,9 +548,70 @@ export function ImportCsv() {
     }
   }
 
+  /**
+   * Follows a worker-run import to its end, showing REAL progress.
+   *
+   * processedRows/totalRows is a genuine measurement the server keeps as it
+   * commits each chunk, which is the only reason this screen shows a
+   * determinate bar at all — the receipt reader, which has no such number,
+   * deliberately shows named stages instead.
+   *
+   * `token` guards against the owner starting over mid-import: an abandoned
+   * loop stops writing to state rather than reviving a screen they left.
+   */
+  async function followImport(batchId: number, initial: ImportResult) {
+    pollToken.current += 1;
+    const token = pollToken.current;
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      if (pollToken.current !== token) return;
+      let status: CsvImportStatus;
+      try {
+        const { data } = await api.get<CsvImportStatus>(
+          `/records/csv-imports/batches/${batchId}/status`,
+        );
+        status = data;
+      } catch (err) {
+        /*
+         * A dropped poll is not a failed import. The worker owns the batch and
+         * carries on; what is lost is this screen's view of it. Saying so, and
+         * naming the batch, is better than either a false failure or a
+         * spinner that never resolves.
+         */
+        setProgress(null);
+        setConfirmError(
+          `${getErrorMessage(err)} — your import is still running on the server. Reopen your records in a moment to see it.`,
+        );
+        return;
+      }
+
+      if (pollToken.current !== token) return;
+      setProgress(status);
+
+      if (status.processingStatus === "COMPLETE") {
+        setResult(resultFromStatus(status, initial.title || title));
+        return;
+      }
+      if (status.processingStatus === "FAILED") {
+        setProgress(null);
+        setConfirmError(
+          `This import stopped during the ${status.failureStage ?? "import"} step after ${status.processedRows} of ${status.totalRows} rows. Press Import again — FinSight will pick up the same import rather than starting a second one.`,
+        );
+        return;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, STATUS_POLL_INTERVAL_MS));
+    }
+  }
+
   if (result) {
     const flaggedTotal = result.flagged + (result.largeExpenseFlagged ?? 0);
-    const clean = result.skipped.length === 0 && flaggedTotal === 0;
+    // The COUNT, not the length of the list: a worker-run import caps the list
+    // of skipped rows it persists, so `skipped.length` under-reports a large
+    // file and "0 skipped" over a file that skipped 400 rows would be a lie.
+    const skippedTotal = result.skippedCount ?? result.skipped.length;
+    const clean = skippedTotal === 0 && flaggedTotal === 0 && result.duplicateOfBatchId === undefined;
 
     return (
       <FormPage eyebrow="Records" title="Import complete">
@@ -433,7 +660,7 @@ export function ImportCsv() {
           ) : null}
           <div className="flex justify-between gap-3">
             <dt className="text-ink-500">Skipped</dt>
-            <dd className="figure font-medium text-ink-900">{result.skipped.length}</dd>
+            <dd className="figure font-medium text-ink-900">{skippedTotal}</dd>
           </div>
           <div className="flex justify-between gap-3">
             <dt className="text-ink-500">Flagged as possible duplicates</dt>
@@ -444,6 +671,35 @@ export function ImportCsv() {
             <dd className="figure font-medium text-ink-900">{result.largeExpenseFlagged ?? 0}</dd>
           </div>
         </dl>
+
+        {/*
+          THE SAME FILE, IMPORTED TWICE.
+
+          The server hashes the file's bytes and tells us when a previous
+          COMPLETE import of this profile carried identical content. It is a
+          warning and never a block — re-importing a corrected export is
+          legitimate — but importing the same file twice by accident is the
+          single most common way an owner doubles a month of records, and the
+          only cheap moment to notice is now.
+
+          The duplicate detector will also have flagged the rows individually;
+          this says the thing those individual flags are all about.
+        */}
+        {result.duplicateOfBatchId !== undefined ? (
+          <div className="mt-4">
+            <Callout tone="warn">
+              <b className="font-semibold">This file was imported before.</b> An earlier import of this
+              business had byte-for-byte the same contents, so these records are probably a second copy
+              of ones you already have.{" "}
+              <Link
+                to="/records/flagged"
+                className="tap-inline font-semibold text-tone-accent underline underline-offset-2"
+              >
+                Review the duplicates →
+              </Link>
+            </Callout>
+          </div>
+        ) : null}
 
         {/*
           The flag counts used to be dead numbers. A count of things needing
@@ -493,7 +749,7 @@ export function ImportCsv() {
           </div>
         ) : null}
 
-        {result.skipped.length > 0 ? (
+        {skippedTotal > 0 ? (
           <div className="mt-4 rounded-lg bg-tint-danger p-3 text-xs text-tone-danger ring-1 ring-edge-danger">
             <p className="mb-1 font-medium">
               These rows couldn't be read and were not imported. Fix them in your spreadsheet and import
@@ -506,6 +762,14 @@ export function ImportCsv() {
                 </li>
               ))}
             </ul>
+            {/* A worker-run import caps the list it keeps. Saying so is the
+                difference between "these are the skipped rows" and "these are
+                some of them". */}
+            {result.skipped.length < skippedTotal ? (
+              <p className="mt-1.5 font-medium">
+                Showing {result.skipped.length} of {skippedTotal} skipped rows.
+              </p>
+            ) : null}
           </div>
         ) : null}
 
@@ -558,10 +822,16 @@ export function ImportCsv() {
               accept=".csv,text/csv"
               maxBytes={5 * 1024 * 1024}
               file={file}
-              onSelect={setFile}
+              onSelect={handleSelectFile}
               hintText="A .csv export from your spreadsheet, up to 5MB. The first row should be your column headings."
             />
           </Field>
+          <p className="text-xs text-ink-500">
+            Not sure what to include?{" "}
+            <a href="/sample-import.csv" download className="font-medium text-brand-700 hover:text-brand-800">
+              Download an example CSV
+            </a>
+          </p>
           {previewError ? <FormError>{previewError}</FormError> : null}
 
           {/* Parsing a real export can take a moment — commit to the shape of
@@ -660,7 +930,14 @@ export function ImportCsv() {
     const values = Object.fromEntries(
       columns.map((c) => [c.field, corrections[rowNumber]?.[c.field] ?? (c.value ? (row[c.value] ?? "") : "")]),
     ) as Record<MappedField, string>;
-    return { rowNumber, values, problem: problemWith(values, recordType === "expense") };
+    return {
+      rowNumber,
+      values,
+      // The owner's stated convention when they were asked for one, otherwise
+      // whatever the server detected from the file itself — the same answer
+      // the import will use, so the two cannot disagree.
+      problem: problemWith(values, recordType === "expense", dateFormat || (preview.detectedDateFormat ?? "iso")),
+    };
   });
   const brokenRows = mappingIsValid ? analysed.filter((r) => r.problem !== null) : [];
   const fixedCount = Object.keys(corrections).length;
@@ -700,6 +977,11 @@ export function ImportCsv() {
     }
     return [...seen.values()];
   })();
+
+  /** A real date from the file, so the question above is about their data. */
+  const sampleDate = dateCol
+    ? (preview.previewRows.find((row) => (row[dateCol] ?? "").trim() !== "")?.[dateCol] ?? "")
+    : "";
 
   function correct(rowNumber: number, field: MappedField, value: string) {
     setCorrections((prev) => ({ ...prev, [rowNumber]: { ...prev[rowNumber], [field]: value } }));
@@ -830,6 +1112,73 @@ export function ImportCsv() {
             </div>
           ) : null}
         </Card>
+
+        {/*
+          THE DATE QUESTION, ASKED BEFORE ANYTHING IS WRITTEN.
+
+          "03/04/2026" is either the 3rd of April or the 4th of March, and
+          nothing in the file settles it. The server refuses a file whose dates
+          fit both readings rather than guessing — a wrong guess moves every
+          transaction by up to eleven months, silently, and the owner would
+          find out from a report weeks later.
+
+          Shown only when the preview says the file is genuinely ambiguous. A
+          file with a month spelled out, or with any date past the 12th, is
+          unambiguous and is never asked about.
+        */}
+        {preview.dateFormatAmbiguous ? (
+          <Card className="border-edge-accent p-5">
+            <fieldset>
+              <legend className="text-sm font-semibold text-ink-900">
+                Which way round are your dates?
+              </legend>
+              <p className="mt-1 text-xs leading-relaxed text-ink-500">
+                {sampleDate ? (
+                  <>
+                    Your file has dates like <b className="figure font-semibold text-ink-700">{sampleDate}</b>,
+                    which could be read either way. FinSight won't guess — every date in the file is read the
+                    way you choose here.
+                  </>
+                ) : (
+                  <>
+                    The dates in this file could be read either way. FinSight won't guess — every date is read
+                    the way you choose here.
+                  </>
+                )}
+              </p>
+              <div className="mt-3 space-y-2">
+                {(
+                  [
+                    { value: "dmy", label: "Day first — 03/04 means 3 April", hint: "Usual in the Philippines, the UK and most of Europe." },
+                    { value: "mdy", label: "Month first — 03/04 means 4 March", hint: "Usual in the United States, and in some POS exports." },
+                  ] as { value: CsvConfirmDateFormat; label: string; hint: string }[]
+                ).map((option) => (
+                  <label
+                    key={option.value}
+                    className={`flex min-h-tap cursor-pointer items-start gap-2.5 rounded-xl border p-3 transition-colors ${
+                      dateFormat === option.value
+                        ? "border-edge-brand bg-tint-brand"
+                        : "border-paper-200 hover:bg-paper-100"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="csv-date-format"
+                      value={option.value}
+                      checked={dateFormat === option.value}
+                      onChange={() => setDateFormat(option.value)}
+                      className="mt-0.5 h-4 w-4 shrink-0 accent-brand-600"
+                    />
+                    <span className="min-w-0">
+                      <span className="block text-sm font-medium text-ink-800">{option.label}</span>
+                      <span className="block text-xs text-ink-500">{option.hint}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          </Card>
+        ) : null}
 
         {/*
           The mapping lives in the table header rather than in four selects
@@ -1040,14 +1389,21 @@ export function ImportCsv() {
 
         {confirmError ? <FormError>{confirmError}</FormError> : null}
 
-        {/* The insert is a batch write over every row, not instant for a
-            large file — same reasoning as the "reading file" skeleton above,
-            now for the write instead of the read. */}
+        {/*
+          REAL PROGRESS, OR NONE.
+
+          A large file leaves the request (202) and runs on the durable worker,
+          which records processedRows as it commits each chunk. That is a
+          genuine measurement, so this is one of the few places in FinSight
+          that draws a determinate bar — and the number beside it is the
+          server's own count, not an animation.
+
+          Before the first status comes back there is nothing to measure, so
+          the same block says what is happening in words instead of drawing an
+          empty bar and calling it 0%.
+        */}
         {confirming ? (
-          <div aria-busy="true" aria-live="polite" className="rounded-2xl border border-paper-200 bg-paper shadow-sm">
-            <span className="sr-only">Importing your records…</span>
-            <SkeletonRows rows={4} />
-          </div>
+          <ImportProgress progress={progress} totalRows={preview.totalRows} />
         ) : null}
 
         {/*
@@ -1074,7 +1430,7 @@ export function ImportCsv() {
               preview is capped, so it is only a reliable count when the whole
               file is on screen.
             */}
-            <Button type="submit" variant="primary" disabled={confirming || !mappingIsValid}>
+            <Button type="submit" variant="primary" disabled={confirming || !readyToImport}>
               {confirming
                 ? "Importing…"
                 : brokenRows.length > 0 && preview.previewRows.length === preview.totalRows
@@ -1094,6 +1450,76 @@ export function ImportCsv() {
           </p>
         </div>
       </form>
+    </div>
+  );
+}
+
+/**
+ * A running import, as the owner sees it.
+ *
+ * Two states, and the difference between them matters: before the first status
+ * response there is no measurement, so there is no bar. Drawing an empty one
+ * and calling it 0% would be the same lie as an indeterminate bar that fills
+ * on a timer.
+ */
+function ImportProgress({
+  progress,
+  totalRows,
+}: {
+  progress: CsvImportStatus | null;
+  totalRows: number;
+}) {
+  const total = progress?.totalRows || totalRows;
+  const processed = progress?.processedRows ?? 0;
+  const percent = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0;
+
+  if (!progress) {
+    return (
+      <div aria-busy="true" className="space-y-3 rounded-2xl border border-paper-200 bg-paper p-5 shadow-sm">
+        <p aria-live="polite" className="text-sm font-medium text-ink-700">
+          Importing your records…
+        </p>
+        <p className="text-xs text-ink-500">
+          FinSight is validating every row before it writes any of them.
+        </p>
+        <SkeletonLine className="w-full" />
+        <SkeletonLine className="w-2/3" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3 rounded-2xl border border-paper-200 bg-paper p-5 shadow-sm">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p aria-live="polite" className="text-sm font-medium text-ink-700">
+          Importing your records…
+        </p>
+        <p className="figure text-sm text-ink-600">
+          {processed.toLocaleString()} of {total.toLocaleString()} rows
+        </p>
+      </div>
+      {/*
+        `motion-safe:` on the width transition, not on the bar itself — the bar
+        must still move for someone who asked for reduced motion, it just
+        should not glide.
+      */}
+      <div
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={total}
+        aria-valuenow={processed}
+        aria-valuetext={`${processed} of ${total} rows imported`}
+        className="h-2 w-full overflow-hidden rounded-full bg-paper-200"
+      >
+        <div
+          className="h-full rounded-full bg-brand-600 motion-safe:transition-[width] motion-safe:duration-500"
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+      <p className="text-xs text-ink-500">
+        This file is large enough that FinSight is importing it in the background. You can leave this
+        page — the import finishes either way.
+      </p>
     </div>
   );
 }

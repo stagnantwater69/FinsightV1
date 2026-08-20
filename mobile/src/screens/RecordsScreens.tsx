@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ActivityIndicator,
   Alert as RNAlert,
+  FlatList,
   Image,
   KeyboardAvoidingView,
   Modal,
@@ -16,7 +17,7 @@ import {
 import { useFocusEffect } from "@react-navigation/native";
 import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
-import { Alert as AlertBanner, AlertBadge, Button, Callout, Card, CategorySelect, EmptyState, ErrorNote, Field, Money, Screen, ScreenHeader, SegmentedControl, SelectChip, T } from "../components/ui";
+import { Alert as AlertBanner, AlertBadge, Button, Callout, Card, CategorySelect, ConfirmSheet, EmptyState, ErrorNote, Field, Money, OptionSheet, Screen, ScreenHeader, SegmentedControl, SelectChip, T } from "../components/ui";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { api, errorMessage } from "../lib/api";
 import {
@@ -26,7 +27,41 @@ import {
   type ReconciliationPlan,
 } from "../lib/receiptConfirm";
 import { rowsToApplySuggestionTo, suggestedNewCategory } from "../lib/categorySuggestion";
-import { classifyTypeValue, parseSignedAmount, type RowRecordType } from "../lib/recordTypeDetection";
+import {
+  EMPTY_MAPPING,
+  analyseRows,
+  checkMapping,
+  columnMappingPayload,
+  correctionsPayload,
+  defaultImportTitle,
+  guessMapping,
+  importProgress,
+  newCategoryNames,
+  newIdempotencyKey,
+  offeredFields,
+  problemsFirst,
+  requiredFields,
+  reviewCounts,
+  type AnalysedRow,
+  type ColumnMapping,
+  type CorrectableField,
+  type Corrections,
+  type ImportRecordType,
+  type MappedField,
+  type MixedStrategy,
+  type RowRules,
+} from "../lib/csvImport";
+import { DATE_FORMAT_LABELS, type ChosenDateFormat, type CsvDateFormat } from "../lib/csvDates";
+import { BAND_COPY, confidenceBand, needsAttention, scanConfidenceBand } from "../lib/confidenceBands";
+import {
+  evidenceSummary,
+  fieldsNeedingAttention,
+  warningHeadline,
+  warningPageSuffix,
+  warningTone,
+  type FieldEvidence,
+  type ReceiptWarning,
+} from "../lib/receiptWarnings";
 import { ReceiptCamera } from "../components/receipt-camera";
 import { takeHandedOffSections } from "../lib/receiptHandoff";
 import {
@@ -38,7 +73,7 @@ import {
 import { formatMoney } from "../lib/money";
 import { useDebounced } from "../lib/useDebounced";
 import { setFlash, takeFlash } from "../lib/flash";
-import { SkeletonBox, SkeletonCard, SkeletonList } from "../components/Skeleton";
+import { SkeletonBox, SkeletonList } from "../components/Skeleton";
 import { DateField, DateRangeChips } from "../components/DateField";
 import { Swipeable } from "react-native-gesture-handler";
 import { Ionicons } from "@expo/vector-icons";
@@ -977,6 +1012,65 @@ function ReviewNotices({ notices }: { notices: ReviewNotice[] }) {
 }
 
 /**
+ * How much of this reading the owner should distrust, said in words.
+ *
+ * WHAT IT REPLACES: "Reading confidence 87%", which is not a sentence anyone
+ * can act on — 87 of what, out of what, and is that good? It was tesseract's
+ * mean per-word certainty for the page, a property of the ENGINE rather than a
+ * probability that the total is right, and owners read it as the latter. The
+ * band says what to DO instead; the number survives only where it is evidence
+ * (an item's own reading), never as the headline.
+ *
+ * The mapping is lib/confidenceBands.ts, shared with the website and pinned
+ * against it by tests/webParity.test.ts — the same receipt must not be called
+ * clear on a laptop and suspect on a phone.
+ */
+function ScanBand({ band, fields }: { band: ReturnType<typeof scanConfidenceBand>; fields: string[] }) {
+  const copy = BAND_COPY[band];
+  const tint = statusText[copy.tone];
+  return (
+    <Card style={{ borderColor: status[copy.tone] }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+        {/* A glyph and words as well as the tint — never colour alone. */}
+        <T style={{ fontSize: typeScale.label, color: tint, fontFamily: font.sansSemibold }}>
+          {band === "clear" ? "✓" : "⚠"}
+        </T>
+        <T
+          accessibilityRole="header"
+          style={{ flex: 1, fontSize: typeScale.bodyLg, color: tint, fontFamily: font.sansSemibold }}
+        >
+          {copy.label}
+        </T>
+      </View>
+      <T style={{ fontSize: typeScale.label, lineHeight: 19, color: ink[700], marginTop: 4 }}>{copy.detail}</T>
+      {fields.length > 0 ? (
+        <T variant="caption" style={{ marginTop: space.sm, color: tint }}>
+          Worth checking first: {fields.join(", ")}.
+        </T>
+      ) : null}
+    </Card>
+  );
+}
+
+/**
+ * Where one extracted value came from, in the owner's own terms.
+ *
+ * "From page 2: TOTAL 1,250.00" is the difference between a figure taken on
+ * faith and one that can be found on the paper. Rendered only where the server
+ * actually located something — an absent origin says nothing rather than
+ * "unknown".
+ */
+function EvidenceNote({ evidence }: { evidence: FieldEvidence | null | undefined }) {
+  const summary = evidenceSummary(evidence);
+  if (!summary) return null;
+  return (
+    <T variant="caption" style={{ marginTop: -space.sm, marginBottom: space.md }}>
+      {summary}
+    </T>
+  );
+}
+
+/**
  * One answer to "what is this difference".
  *
  * A single decision with mutually exclusive answers, so it behaves as a radio
@@ -1395,6 +1489,24 @@ interface ReceiptScanResult {
    */
   overlappingPages?: number[];
   /**
+   * Machine-readable warnings the pipeline recorded, each carrying the
+   * SERVER's own actionable sentence in `guidance`.
+   *
+   * Rendered verbatim. Both clients used to hardcode their own prose for these
+   * same signals and the two copies had already drifted apart —
+   * backend/src/lib/receiptWarnings.ts is now the single source. Empty for
+   * scans read before warnings existed, which is why the derived notices
+   * further down still exist as a fallback.
+   */
+  warnings?: ReceiptWarning[];
+  /**
+   * Where each extracted value was read from: page, the visible source line,
+   * and which engine read it. Null for scans read before evidence was
+   * recorded; a null INSIDE an entry means that part could not be located and
+   * is shown as absent rather than invented.
+   */
+  fieldEvidence?: Record<string, FieldEvidence> | null;
+  /**
    * How far the server has got READING this scan: "Processing" | "Complete" |
    * "Failed". Distinct from confirmationStatus, which is the owner's own
    * decision afterwards. The upload responds before the read finishes, so
@@ -1421,6 +1533,9 @@ interface ReceiptScanResult {
     suggestedCategoryName?: string | null;
     /** How sure OCR was about THIS amount, 0-100, or null if not measured. */
     amountConfidence?: number | null;
+    /** Which page and printed line this item came from, and by what. Null
+     *  where nothing could be located, including every older scan. */
+    evidence?: FieldEvidence | null;
   }[];
 }
 
@@ -1991,18 +2106,66 @@ export function ScanReceiptScreen({ navigation, route }: any) {
   /**
    * Everything worth checking about this reading, in the order it matters.
    *
-   * Gathered into one list rather than rendered as six separate callouts —
-   * see ReviewNotices for why. The ORDER is the argument: the photograph
-   * comes first because it has the cheapest answer on the screen and the
-   * camera is one tap away, then the things that make figures wrong, then the
-   * things that only make them uncertain.
+   * TWO SOURCES, AND ONLY ONE OF THEM AT A TIME.
    *
-   * Every sentence is the one that was there before. They were written to say
-   * what to DO about each case, and the reason to group them was never that
-   * they were too wordy.
+   * The server now emits machine-readable warning CODES, each carrying its
+   * own actionable sentence (`guidance`). When a scan has them, they ARE this
+   * list and their wording is the server's — which is the whole point of the
+   * contract: the app and the website used to write their own prose for the
+   * same signals, and the two had already drifted apart. A client that
+   * rewrites a sentence here re-creates that bug.
+   *
+   * The hand-derived notices below it are the fallback for scans read before
+   * warnings were recorded. They are NOT merged with the codes: a blurry page
+   * reported once by the server and once by this screen reads as two separate
+   * problems with the same photograph.
+   *
+   * The ORDER, in both cases, is the argument: the photograph comes first
+   * because it has the cheapest answer on the screen and the camera is one tap
+   * away, then the things that make figures wrong, then the things that only
+   * make them uncertain.
    */
+  /**
+   * The one cue at the top: how much of this reading to doubt.
+   *
+   * Derived from the page reading, every item amount and whether a model was
+   * involved — a receipt is only as clear as its worst part, and a scan whose
+   * page read cleanly but whose amounts did not is not "clear".
+   */
+  const scanBand = scanConfidenceBand({
+    ocrConfidence: scan?.ocrConfidence,
+    visionAssisted: scan?.visionAssisted,
+    items: scan?.items,
+  });
+
+  /**
+   * The fields the server's warnings actually point at, in form order.
+   *
+   * This is what turns "Check a few fields" into something the owner can act
+   * on — naming the two that need looking at beats asking them to re-read all
+   * four.
+   */
+  const attentionFields = fieldsNeedingAttention(scan?.warnings ?? []);
+
   const reviewNotices: ReviewNotice[] = (() => {
     if (!scan) return [];
+
+    const warnings = scan.warnings ?? [];
+    if (warnings.length > 0) {
+      return warnings.map((w) => ({
+        tone: warningTone(w.code),
+        text: [
+          `${warningHeadline(w.code)}${warningPageSuffix(w)}.`,
+          // Verbatim, or nothing — a code this build has no guidance for is
+          // shown with its evidence rather than with an invented instruction.
+          w.guidance ?? "",
+          w.detail ? `(${w.detail})` : "",
+        ]
+          .filter(Boolean)
+          .join(" "),
+      }));
+    }
+
     const notices: ReviewNotice[] = [];
 
     if (scan.captureQuality?.tooBlurredToTrust) {
@@ -2257,7 +2420,11 @@ export function ScanReceiptScreen({ navigation, route }: any) {
                                 onPress={() => removePage(p.key)}
                                 accessibilityRole="button"
                                 accessibilityLabel={`Remove page ${i + 1}`}
-                                hitSlop={8}
+                                // The visible chip stays 22px so it doesn't
+                                // swallow the thumbnail, but hitSlop brings
+                                // the actual tap target up to TAP (44px) —
+                                // 8px was 6px short even with hitSlop.
+                                hitSlop={11}
                                 style={{
                                   position: "absolute",
                                   top: 4,
@@ -2423,6 +2590,14 @@ export function ScanReceiptScreen({ navigation, route }: any) {
                 </Card>
               )}
 
+              {/*
+                The band goes ABOVE the warnings: it is the one-line answer to
+                "how much of this should I doubt", and the warnings are the
+                detail behind it. The other way round buries the summary under
+                its own footnotes.
+              */}
+              <ScanBand band={scanBand} fields={attentionFields} />
+
               <ReviewNotices notices={reviewNotices} />
 
               <ReviewSection
@@ -2442,6 +2617,13 @@ export function ScanReceiptScreen({ navigation, route }: any) {
                 />
               ) : null}
               <DateField label="Date" value={date} onChange={setDate} />
+              {/*
+                Where the value above came from. Shown under the field it
+                describes rather than in a panel of its own — the question
+                "where did this date come from" is only ever asked while
+                looking at the date.
+              */}
+              <EvidenceNote evidence={scan.fieldEvidence?.date} />
               <Field
                 label="Description"
                 value={description}
@@ -2461,6 +2643,7 @@ export function ScanReceiptScreen({ navigation, route }: any) {
                 submitBehavior="submit"
                 onSubmitEditing={() => amountRef.current?.focus()}
               />
+              <EvidenceNote evidence={scan.fieldEvidence?.vendor} />
               {/*
                 "done" closes the keyboard rather than confirming. Amount is the
                 last thing to TYPE but not the last thing to decide — an itemised
@@ -2476,6 +2659,7 @@ export function ScanReceiptScreen({ navigation, route }: any) {
                 keyboardType="decimal-pad"
                 returnKeyType="done"
               />
+              <EvidenceNote evidence={scan.fieldEvidence?.amount} />
               </ReviewSection>
 
               {isItemised ? (
@@ -2525,7 +2709,10 @@ export function ScanReceiptScreen({ navigation, route }: any) {
                           disabled={removingItemId === item.id}
                           accessibilityRole="button"
                           accessibilityLabel={`Remove ${item.name} — this was not a purchase`}
-                          hitSlop={6}
+                          // 24px visible, but the actual tap target needs to
+                          // clear TAP (44px) — 6px of hitSlop left it 8px
+                          // short.
+                          hitSlop={10}
                           style={{
                             width: 24,
                             height: 24,
@@ -2566,10 +2753,28 @@ export function ScanReceiptScreen({ navigation, route }: any) {
                         <T variant="caption" style={{ marginTop: 2, color: statusText.warning }}>
                           ⚠ Check this one first — the items don't add up to the total
                         </T>
-                      ) : typeof item.amountConfidence === "number" && item.amountConfidence < 75 ? (
-                        <T variant="caption" style={{ marginTop: 2 }}>
-                          FinSight was {item.amountConfidence}% sure of this amount
+                      ) : needsAttention({
+                          confidence: item.amountConfidence,
+                          visionAssisted: item.extractedByVision,
+                        }) && typeof item.amountConfidence === "number" ? (
+                        /*
+                          The BAND, not "FinSight was 62% sure of this amount".
+                          A percentage against one line invited the owner to
+                          grade it, and it used its own 75 cutoff — a third
+                          opinion about the same number. Same mapping as the
+                          heading now (lib/confidenceBands.ts).
+                        */
+                        <T variant="caption" style={{ marginTop: 2, color: statusText.warning }}>
+                          {BAND_COPY[confidenceBand({
+                            confidence: item.amountConfidence,
+                            visionAssisted: item.extractedByVision,
+                          })].label} — check this amount against the receipt
                         </T>
+                      ) : null}
+                      {/* Which printed line this came from, where the server
+                          could locate it. Never invented. */}
+                      {evidenceSummary(item.evidence) ? (
+                        <T variant="caption" style={{ marginTop: 2 }}>{evidenceSummary(item.evidence)}</T>
                       ) : null}
 
                       <View style={{ marginTop: space.sm }}>
@@ -2720,9 +2925,11 @@ export function ScanReceiptScreen({ navigation, route }: any) {
                         <T variant="heading" accessibilityRole="header" style={{ color: brand[900] }}>
                           What gets saved
                         </T>
-                        {scan.ocrConfidence != null ? (
-                          <T variant="caption">Reading confidence {scan.ocrConfidence}%</T>
-                        ) : null}
+                        {/* The band, not the percentage — the number is at the
+                            top of the screen in words already, and repeating
+                            it here as "87%" would put the two cues back into
+                            competition. */}
+                        <T variant="caption">{BAND_COPY[scanBand].label}</T>
                       </View>
                       {/*
                         Whether the receipt balances, stated as a badge rather
@@ -2898,93 +3105,114 @@ export function ScanReceiptScreen({ navigation, route }: any) {
 
 // ---------------------------------------------------------------- CSV import
 
+/**
+ * Importing a spreadsheet, in the three steps the website has always had:
+ * choose a file, map the columns, review the rows.
+ *
+ * WHAT WAS MISSING BEFORE, and why each absence mattered on a phone
+ * specifically — this is the client most FinSight owners actually have:
+ *
+ *   - NO ROW REVIEW AT ALL. The app posted a mapping and found out afterwards
+ *     which rows had been thrown away, listed as "Row 47: Invalid date" with
+ *     no way to fix one except editing the file on a computer the owner may
+ *     not own.
+ *   - NO CORRECTIONS. The server has accepted a `corrections` patch since the
+ *     web review panel was built. Mobile never sent one.
+ *   - NO VENDOR COLUMN. A supplier column in the file was silently dropped.
+ *   - NO EDITABLE TITLE. `file.name` was posted raw, so a long export name —
+ *     the kind a bank app or a phone's Downloads folder produces — failed the
+ *     whole import with a 400 naming a field the screen never showed.
+ *   - NO IDEMPOTENCY KEY. A retried confirm imported the file twice.
+ *
+ * The rules behind the review step are in lib/csvImport.ts, mirrored from the
+ * server's own `validateRows`, and unit-tested there — this file is the
+ * interface over them.
+ */
 export function ImportCsvScreen({ navigation }: any) {
   const { selected, categories } = useBusinessProfiles();
   const [file, setFile] = useState<DocumentPicker.DocumentPickerAsset | null>(null);
-  const [headers, setHeaders] = useState<string[]>([]);
   /**
-   * The rows the preview returned, kept so the screen can say which category
-   * names in the file this business does not have yet. Previously only
-   * `headers` was read off the same response and the rows were discarded.
+   * The replay token for THIS file, generated once when it is chosen and
+   * reused on every retry — which is the entire point of it. Regenerating per
+   * attempt would let a retry import the file a second time, and doubling a
+   * month of books is the worst thing this screen can do.
    */
+  const [idempotencyKey, setIdempotencyKey] = useState<string | null>(null);
+  const [headers, setHeaders] = useState<string[]>([]);
   const [previewRows, setPreviewRows] = useState<Record<string, string>[]>([]);
   const [totalRows, setTotalRows] = useState(0);
-  const [mapping, setMapping] = useState({ date: "", description: "", amount: "", category: "", recordType: "" });
+  const [mapping, setMapping] = useState<ColumnMapping>(EMPTY_MAPPING);
+  const [autoMapped, setAutoMapped] = useState<MappedField[]>([]);
   /**
-   * What the file is read as. Mobile could previously only import expenses —
-   * `recordType` was hardcoded — so a phone could not bring in sales history at
-   * all, and a combined sheet had to be split on a computer first.
+   * What the file is read as. Mobile could once only import expenses, so a
+   * phone could not bring in sales history at all and a combined sheet had to
+   * be split on a computer first.
    */
-  const [recordType, setRecordType] = useState<"expense" | "sales" | "mixed">("expense");
-  const [mixedStrategy, setMixedStrategy] = useState<"column" | "sign">("column");
+  const [recordType, setRecordType] = useState<ImportRecordType>("expense");
+  const [mixedStrategy, setMixedStrategy] = useState<MixedStrategy>("column");
+  const [title, setTitle] = useState("");
+  /** What the server read off the file, and whether it could be read two ways. */
+  const [detectedFormat, setDetectedFormat] = useState<CsvDateFormat>("iso");
+  const [dateAmbiguous, setDateAmbiguous] = useState(false);
+  /** The owner's answer. Only sent when the file is genuinely ambiguous. */
+  const [dateFormat, setDateFormat] = useState<ChosenDateFormat | null>(null);
+  const [dateSheetOpen, setDateSheetOpen] = useState(false);
+  const [corrections, setCorrections] = useState<Corrections>({});
+  const [step, setStep] = useState<"map" | "review">("map");
   const [result, setResult] = useState<any | null>(null);
+  /** The polled status of a large import the server took off the request. */
+  const [batchStatus, setBatchStatus] = useState<any | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (!selected) return null;
+  const dateRules: RowRules = useMemo(
+    () => ({
+      recordType,
+      mixedStrategy,
+      // The owner's answer wins; otherwise the file speaks for itself.
+      dateFormat: dateFormat ?? detectedFormat,
+    }),
+    [recordType, mixedStrategy, dateFormat, detectedFormat],
+  );
 
-  const isMixed = recordType === "mixed";
-  const usesCategory = recordType === "expense" || isMixed;
-
+  const analysed = useMemo(
+    () => analyseRows(previewRows, mapping, corrections, dateRules),
+    [previewRows, mapping, corrections, dateRules],
+  );
   /**
-   * What each previewed row becomes, using the SAME readers the server will —
-   * so the label against a row and the record it turns into cannot disagree.
-   * `null` means the file does not say, and those rows are skipped rather than
-   * guessed.
+   * The order the review list is shown in, FROZEN when the step opens.
+   *
+   * Problem rows come first — a phone shows about two cards at a time, and
+   * leaving the four that need fixing scattered through three hundred that do
+   * not is the same as hiding them. But the order must then STOP moving: if it
+   * were recomputed as the owner typed, the row being corrected would jump to
+   * the bottom of the list the moment it became valid, taking the keyboard and
+   * their place on screen with it.
    */
-  const previewRowTypes: (RowRecordType | null)[] | null = !isMixed
-    ? null
-    : previewRows.map((row) => {
-        if (mixedStrategy === "sign") {
-          const amount = mapping.amount ? parseSignedAmount(row[mapping.amount]) : null;
-          if (amount === null || amount === 0) return null;
-          return amount < 0 ? "expense" : "sales";
+  const [reviewOrder, setReviewOrder] = useState<number[]>([]);
+  const reviewRows = useMemo(() => {
+    const byRow = new Map(analysed.map((r) => [r.rowNumber, r]));
+    const ordered = reviewOrder.map((n) => byRow.get(n)).filter((r): r is AnalysedRow => r !== undefined);
+    // Anything the frozen order does not know about (a mapping changed after
+    // the freeze) is appended rather than dropped.
+    return ordered.length === analysed.length ? ordered : problemsFirst(analysed);
+  }, [analysed, reviewOrder]);
+  const counts = reviewCounts(analysed, corrections);
+  const mappingCheck = checkMapping(mapping, recordType, mixedStrategy);
+  const newCategories = newCategoryNames(analysed, categories.map((c) => c.name));
+  const typeSplit =
+    recordType === "mixed"
+      ? {
+          sales: analysed.filter((r) => r.rowType === "sales").length,
+          expenses: analysed.filter((r) => r.rowType === "expense").length,
+          unknown: analysed.filter((r) => r.rowType === null).length,
         }
-        return mapping.recordType ? classifyTypeValue(row[mapping.recordType]) : null;
-      });
+      : null;
+  /** True until the owner has answered a question only they can answer. */
+  const needsDateAnswer = dateAmbiguous && dateFormat === null;
 
-  const typeSplit = previewRowTypes
-    ? {
-        sales: previewRowTypes.filter((t) => t === "sales").length,
-        expenses: previewRowTypes.filter((t) => t === "expense").length,
-        unknown: previewRowTypes.filter((t) => t === null).length,
-      }
-    : null;
-
-  /**
-   * Category names in the file that this business does not have yet.
-   *
-   * WHY THIS IS WORTH SAYING OUT LOUD: confirmImport CREATES every category
-   * name it cannot match (resolveCategories), silently. That is the right
-   * behaviour — an import must not fail because a category does not exist
-   * yet — but it means one typo becomes a permanent second category. A file
-   * reading "Inventroy" against a business that already has "Inventory"
-   * imports perfectly cleanly, and the owner finds the near-duplicate weeks
-   * later in a report that has quietly split their stock spending in two.
-   *
-   * Matched case-insensitively because resolveCategories matches that way; a
-   * warning that flagged "inventory" as new when the server will match it to
-   * "Inventory" would be a lie about what is about to happen.
-   *
-   * Computed from the rows on screen, not the whole file, which is why the
-   * callout says so whenever the preview is truncated — a category first
-   * appearing at row 300 of a 500-row file is not something this can see.
-   */
-  const newCategoryNames = (() => {
-    if (!mapping.category) return [];
-    const existing = new Set(categories.map((c) => c.name.trim().toLowerCase()));
-    const seen = new Map<string, string>();
-    for (const row of previewRows) {
-      const raw = row[mapping.category]?.trim();
-      if (!raw) continue;
-      const key = raw.toLowerCase();
-      // Deduplicated on the same key resolveCategories uses, so a file
-      // spelling it "Inventory" and "inventory" reports one new category
-      // rather than two — which is also what the server will create.
-      if (!existing.has(key) && !seen.has(key)) seen.set(key, raw);
-    }
-    return [...seen.values()];
-  })();
+  if (!selected) return null;
 
   function formFor(f: DocumentPicker.DocumentPickerAsset) {
     const form = new FormData();
@@ -2992,13 +3220,38 @@ export function ImportCsvScreen({ navigation }: any) {
     return form;
   }
 
+  function reset() {
+    setFile(null);
+    setIdempotencyKey(null);
+    setHeaders([]);
+    setPreviewRows([]);
+    setTotalRows(0);
+    setMapping(EMPTY_MAPPING);
+    setAutoMapped([]);
+    setRecordType("expense");
+    setMixedStrategy("column");
+    setTitle("");
+    setDetectedFormat("iso");
+    setDateAmbiguous(false);
+    setDateFormat(null);
+    setCorrections({});
+    setReviewOrder([]);
+    setStep("map");
+    setResult(null);
+    setBatchStatus(null);
+    setError(null);
+  }
+
   async function pick() {
     const res = await DocumentPicker.getDocumentAsync({ type: ["text/csv", "text/comma-separated-values", "*/*"] });
     if (res.canceled || !res.assets?.[0]) return;
     const f = res.assets[0];
+    reset();
     setFile(f);
+    // Minted with the file, not with the request — see the state declaration.
+    setIdempotencyKey(newIdempotencyKey());
+    setTitle(defaultImportTitle(f.name));
     setBusy(true);
-    setError(null);
     try {
       const preview = await api.upload<{
         headers: string[];
@@ -3006,39 +3259,105 @@ export function ImportCsvScreen({ navigation }: any) {
         totalRows: number;
         detectedTypeColumn?: string | null;
         columnsWithNegatives?: string[];
+        detectedDateFormat?: CsvDateFormat;
+        dateFormatAmbiguous?: boolean;
       }>("/records/csv-imports/preview", formFor(f));
+
       setHeaders(preview.headers);
       setPreviewRows(preview.previewRows ?? []);
       setTotalRows(preview.totalRows ?? 0);
-      // Best-effort auto-match, so the common case needs no tapping at all.
-      const guess = (want: RegExp) => preview.headers.find((h) => want.test(h)) ?? "";
-      const detectedType = preview.detectedTypeColumn ?? "";
-      const amountCol = guess(/amount|cash|total/i);
-      /*
-       * A detected type column takes itself back from `category`, whose guess
-       * matches /type/ — otherwise a Sale/Expense column would be imported as
-       * category names and quietly create categories called "Sale" and
-       * "Expense".
-       */
-      const categoryGuess = guess(/categ|class|type/i);
-      setMapping({
-        date: guess(/date/i),
-        description: guess(/desc|particular|item/i),
-        amount: amountCol,
-        category: categoryGuess === detectedType ? "" : categoryGuess,
-        recordType: detectedType,
-      });
+      setDetectedFormat(preview.detectedDateFormat ?? "iso");
+      setDateAmbiguous(preview.dateFormatAmbiguous === true);
 
-      // Offered, not applied silently: the owner still sees the choice, and
-      // every row is labelled below before anything is written.
-      if (detectedType) {
-        setRecordType("mixed");
-        setMixedStrategy("column");
-      } else if (amountCol && (preview.columnsWithNegatives ?? []).includes(amountCol)) {
-        setRecordType("mixed");
-        setMixedStrategy("sign");
+      const guess = guessMapping(preview.headers, {
+        detectedTypeColumn: preview.detectedTypeColumn,
+        columnsWithNegatives: preview.columnsWithNegatives,
+      });
+      // Offered, not applied silently: the owner still sees every choice, and
+      // the review step labels each row before anything is written.
+      setMapping(guess.mapping);
+      setAutoMapped(guess.autoMapped);
+      setRecordType(guess.recordType);
+      setMixedStrategy(guess.mixedStrategy);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * Follows a large import the server took off the request.
+   *
+   * The counts are the SERVER's — processedRows out of totalRows — so the bar
+   * moves because rows were committed, not because time passed. ADR-4's rule:
+   * never fake determinate progress.
+   */
+  async function pollBatch(batchId: number) {
+    const deadline = Date.now() + IMPORT_POLL_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, IMPORT_POLL_INTERVAL_MS));
+      const status = await api.get<any>(`/records/csv-imports/batches/${batchId}/status`);
+      setBatchStatus(status);
+      if (status.processingStatus === "COMPLETE") {
+        const summary = status.resultSummary ?? {};
+        setResult({
+          batchId,
+          title,
+          totalRows: status.totalRows,
+          imported: status.importedRows,
+          skipped: summary.skipped ?? [],
+          skippedCount: status.skippedRows,
+          flagged: status.flaggedRows,
+          largeExpenseFlagged: summary.largeExpenseFlagged ?? 0,
+          importedExpenses: summary.importedExpenses ?? 0,
+          importedSales: summary.importedSales ?? 0,
+          uncategorised: summary.uncategorised ?? 0,
+        });
+        return;
+      }
+      if (status.processingStatus === "FAILED") {
+        throw new Error(
+          status.failureStage
+            ? `The import stopped while it was ${IMPORT_STAGE_WORDS[status.failureStage] ?? status.failureStage}. Nothing was half-saved — try importing the same file again.`
+            : "The import could not be finished. Try importing the same file again.",
+        );
+      }
+    }
+    throw new Error(
+      "This import is taking longer than expected. It is still running on FinSight's side — check your records in a few minutes before trying again.",
+    );
+  }
+
+  async function confirm() {
+    if (!file || !idempotencyKey) return;
+    setConfirmOpen(false);
+    setBusy(true);
+    setError(null);
+    try {
+      const form = formFor(file);
+      form.append("businessProfileId", String(selected!.id));
+      form.append("recordType", recordType);
+      if (recordType === "mixed") form.append("mixedStrategy", mixedStrategy);
+      form.append("title", title.trim());
+      form.append("columnMapping", JSON.stringify(columnMappingPayload(mapping, recordType, mixedStrategy)));
+      const patch = correctionsPayload(corrections);
+      if (Object.keys(patch).length > 0) form.append("corrections", JSON.stringify(patch));
+      // The same key on every attempt: the server returns the SAME logical
+      // import for a replay rather than a second copy of the records.
+      form.append("idempotencyKey", idempotencyKey);
+      // Sent only when the file cannot say for itself — otherwise confirm
+      // refuses the file, which is the server asking this exact question.
+      if (dateAmbiguous && dateFormat) form.append("dateFormat", dateFormat);
+
+      const confirmed = await api.upload<any>("/records/csv-imports/confirm", form);
+      if (confirmed.processingStatus === "PENDING" || confirmed.processingStatus === "PROCESSING") {
+        // 202: the batch exists and the worker has it, but no records are
+        // written yet. Nothing here is final until the poll says so.
+        setBatchStatus({ ...confirmed, processedRows: 0 });
+        await pollBatch(confirmed.batchId);
       } else {
-        setRecordType("expense");
+        setResult({ ...confirmed, skippedCount: confirmed.skipped?.length ?? 0 });
       }
     } catch (err) {
       setError(errorMessage(err));
@@ -3047,65 +3366,41 @@ export function ImportCsvScreen({ navigation }: any) {
     }
   }
 
-  async function confirm() {
-    if (!file) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const form = formFor(file);
-      form.append("businessProfileId", String(selected!.id));
-      form.append("recordType", recordType);
-      if (isMixed) form.append("mixedStrategy", mixedStrategy);
-      form.append("title", file.name);
-      // Optional fields are omitted rather than sent empty — the server's
-      // schema takes them as absent, not as "".
-      form.append(
-        "columnMapping",
-        JSON.stringify({
-          date: mapping.date,
-          description: mapping.description,
-          amount: mapping.amount,
-          ...(usesCategory && mapping.category ? { category: mapping.category } : {}),
-          ...(isMixed && mixedStrategy === "column" && mapping.recordType
-            ? { recordType: mapping.recordType }
-            : {}),
-        }),
-      );
-      setResult(await api.upload<any>("/records/csv-imports/confirm", form));
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
+  function correct(rowNumber: number, field: CorrectableField, value: string) {
+    setCorrections((prev) => ({ ...prev, [rowNumber]: { ...prev[rowNumber], [field]: value } }));
   }
 
-  return (
-    <Screen>
-      <ScrollView contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}>
-        <Card>
-          <T variant="title" style={{ marginBottom: 4 }}>Import a spreadsheet</T>
-          <T variant="caption" style={{ marginBottom: space.lg }}>
-            Bring in sales and expenses from a CSV you already keep — one file can hold both.
-          </T>
+  // ---- What is on screen right now -------------------------------------
 
-          {result ? (
+  if (result) {
+    return (
+      <Screen>
+        <ScrollView contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}>
+          <Card>
+            <T variant="title" style={{ marginBottom: space.sm }}>Import complete</T>
+            <T style={{ fontSize: typeScale.body, marginBottom: space.sm }}>
+              Imported {result.imported} of {result.totalRows} rows.
+              {result.importedExpenses > 0 && result.importedSales > 0
+                ? ` ${result.importedExpenses} as expenses, ${result.importedSales} as sales.`
+                : ""}
+            </T>
             <View style={{ gap: space.sm }}>
-              <T style={{ fontSize: typeScale.body }}>
-                Imported {result.imported} of {result.totalRows} rows.
-                {result.importedExpenses > 0 && result.importedSales > 0
-                  ? ` ${result.importedExpenses} as expenses, ${result.importedSales} as sales.`
-                  : ""}
-              </T>
+              {result.duplicateOfBatchId ? (
+                <AlertBanner kind="duplicate" label="You have imported this file before">
+                  Every row in it matches an import you already have. Nothing was blocked — but if this was
+                  an accident, the new rows are the ones to delete.
+                </AlertBanner>
+              ) : null}
               {result.uncategorised > 0 ? (
                 <Callout tone="info">
-                  {result.uncategorised} expense(s) had no category and went into "Uncategorised".
-                  They're imported and counted — sorting them is what makes them show up in your
-                  spending breakdown.
+                  {result.uncategorised} expense(s) had no category and went into "Uncategorised". They're
+                  imported and counted — sorting them is what makes them show up in your spending breakdown.
                 </Callout>
               ) : null}
-              {result.skipped?.length ? (
-                <AlertBanner kind="needs-review" label="Some rows were skipped">
-                  {result.skipped.map((s: any) => `Row ${s.row}: ${s.reason}`).join("\n")}
+              {result.skippedCount > 0 ? (
+                <AlertBanner kind="needs-review" label={`${result.skippedCount} row(s) were skipped`}>
+                  {(result.skipped ?? []).slice(0, 20).map((s: any) => `Row ${s.row}: ${s.reason}`).join("\n") ||
+                    "Open the import in your records to see which rows they were."}
                 </AlertBanner>
               ) : null}
               {result.flagged > 0 ? (
@@ -3116,195 +3411,553 @@ export function ImportCsvScreen({ navigation }: any) {
                   {result.largeExpenseFlagged} row(s) were flagged as large expenses.
                 </AlertBanner>
               ) : null}
+              {result.flagged > 0 || result.largeExpenseFlagged > 0 ? (
+                <Button
+                  title="Review the flagged rows"
+                  variant="secondary"
+                  onPress={() => navigation.navigate("FlaggedRecords")}
+                />
+              ) : null}
               <Button title="Done" variant="primary" onPress={() => navigation.goBack()} />
             </View>
-          ) : !file ? (
-            <Button title="Choose a CSV file" variant="primary" onPress={pick} />
-          ) : busy && headers.length === 0 ? (
-            // Reading and mapping-guessing the file, before there's a mapping
-            // screen to show — same reasoning as web's ImportCsv read
-            // skeleton: commit to the shape of the mapping list about to
-            // appear rather than leaving a bare spinner up.
-            <View style={{ gap: space.md }}>
-              <T variant="caption">Reading {file.name}…</T>
-              <SkeletonList count={4} />
-            </View>
-          ) : (
-            <View>
-              <T variant="label" style={{ marginBottom: space.sm }}>{file.name}</T>
-              <T variant="caption" style={{ marginBottom: space.md }}>
-                Match your columns to FinSight's fields.
-              </T>
+          </Card>
+        </ScrollView>
+      </Screen>
+    );
+  }
 
-              <T variant="label" style={{ marginBottom: 4 }}>
-                Import as
-              </T>
-              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm, marginBottom: space.md }}>
-                {(
-                  [
-                    ["expense", "Expenses"],
-                    ["sales", "Sales"],
-                    ["mixed", "Both in one file"],
-                  ] as const
-                ).map(([value, label]) => (
-                  <SelectChip
-                    key={value}
-                    label={label}
-                    selected={recordType === value}
-                    onPress={() => setRecordType(value)}
+  /*
+   * A large file, still being written. The figures are the server's own row
+   * counts — an honest bar or none at all.
+   */
+  if (batchStatus && !result) {
+    const progress = importProgress(batchStatus);
+    return (
+      <Screen>
+        <ScrollView contentContainerStyle={{ padding: space.lg }}>
+          <Card>
+            <T variant="title" style={{ marginBottom: 4 }}>Importing your records</T>
+            <T variant="caption" style={{ marginBottom: space.md }}>
+              This file is large enough that FinSight is importing it in the background. You can leave this
+              screen — the import carries on without you.
+            </T>
+            {progress ? (
+              <>
+                <View
+                  accessibilityRole="progressbar"
+                  accessibilityValue={{ min: 0, max: progress.total, now: progress.done }}
+                  style={{ height: 8, borderRadius: radius.sm, backgroundColor: paper[200], overflow: "hidden" }}
+                >
+                  <View
+                    style={{
+                      width: `${Math.round(progress.fraction * 100)}%`,
+                      height: "100%",
+                      backgroundColor: brand[500],
+                    }}
                   />
-                ))}
-              </View>
+                </View>
+                <T variant="caption" style={{ marginTop: space.sm }}>
+                  {progress.done} of {progress.total} rows checked and saved.
+                </T>
+              </>
+            ) : (
+              <T variant="caption">FinSight is reading the file. It will start counting rows in a moment.</T>
+            )}
+            {error ? <View style={{ marginTop: space.md }}><ErrorNote>{error}</ErrorNote></View> : null}
+            {error ? (
+              <Button
+                title="Try again"
+                variant="secondary"
+                onPress={() => {
+                  setBatchStatus(null);
+                  setError(null);
+                }}
+                style={{ marginTop: space.md }}
+              />
+            ) : null}
+          </Card>
+        </ScrollView>
+      </Screen>
+    );
+  }
 
-              {/*
-                Asked as a question about the FILE, not about FinSight: an owner
-                knows whether their sheet has a "type" column or writes expenses
-                with a minus sign; they do not know what a "strategy" is.
-              */}
-              {isMixed ? (
-                <>
-                  <T variant="label" style={{ marginBottom: 4 }}>
-                    How does your file say which is which?
+  if (!file) {
+    return (
+      <Screen>
+        <ScrollView contentContainerStyle={{ padding: space.lg }}>
+          <Card>
+            <T variant="title" style={{ marginBottom: 4 }}>Import a spreadsheet</T>
+            <T variant="caption" style={{ marginBottom: space.lg }}>
+              Bring in sales and expenses from a CSV you already keep — one file can hold both. You'll map
+              the columns and check the rows before anything is saved.
+            </T>
+            <ImportSteps current={0} />
+            {error ? <View style={{ marginBottom: space.md }}><ErrorNote>{error}</ErrorNote></View> : null}
+            <Button title="Choose a CSV file" variant="primary" onPress={pick} />
+          </Card>
+        </ScrollView>
+      </Screen>
+    );
+  }
+
+  if (busy && headers.length === 0) {
+    return (
+      <Screen>
+        <ScrollView contentContainerStyle={{ padding: space.lg }}>
+          <Card>
+            <ImportSteps current={0} />
+            <T variant="caption" style={{ marginBottom: space.md }}>Reading {file.name}…</T>
+            <SkeletonList count={4} />
+          </Card>
+        </ScrollView>
+      </Screen>
+    );
+  }
+
+  if (step === "review") {
+    return (
+      <Screen>
+        <FlatList
+          /*
+           * VIRTUALIZED, unlike the mapping list above it. A preview is up to
+           * fifty rows and each card here carries up to four text inputs — a
+           * ScrollView would mount every one of them, and the inputs are the
+           * expensive part. This is also the screen an owner scrolls hardest.
+           */
+          data={reviewRows}
+          keyExtractor={(row) => String(row.rowNumber)}
+          contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2, gap: space.sm }}
+          keyboardShouldPersistTaps="handled"
+          ListHeaderComponent={
+            <View style={{ gap: space.sm, marginBottom: space.sm }}>
+              <Card>
+                <ImportSteps current={2} />
+                <T variant="title" style={{ marginBottom: 4 }}>Check your rows</T>
+                <T variant="caption">
+                  {counts.problems === 0
+                    ? `All ${counts.total} rows read cleanly.`
+                    : `${counts.problems} of ${counts.total} rows can't be imported as they are. They're first in the list — fix them here and FinSight will import them.`}
+                  {previewRows.length < totalRows
+                    ? ` This is the first ${previewRows.length} of ${totalRows} rows; the rest are checked when you import.`
+                    : ""}
+                </T>
+                {counts.corrected > 0 ? (
+                  <T variant="caption" style={{ marginTop: space.sm, color: brand[700] }}>
+                    {counts.corrected} row{counts.corrected === 1 ? "" : "s"} corrected. Your fixes are sent
+                    with the file — the original stays as it is.
                   </T>
-                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm, marginBottom: space.md }}>
-                    <SelectChip
-                      label={'A column says "sale" or "expense"'}
-                      selected={mixedStrategy === "column"}
-                      onPress={() => setMixedStrategy("column")}
-                    />
-                    <SelectChip
-                      label="Expenses are negative (−)"
-                      selected={mixedStrategy === "sign"}
-                      onPress={() => setMixedStrategy("sign")}
-                    />
-                  </View>
+                ) : null}
+              </Card>
 
-                  {/*
-                    The count is the check. A file the owner believes is half
-                    sales that reads as all sales is a mapping mistake they can
-                    see here in a second, rather than in their dashboard a week
-                    later.
-                  */}
-                  {typeSplit ? (
-                    <View style={{ marginBottom: space.md }}>
-                      <Callout tone={typeSplit.unknown > 0 ? "warn" : "info"}>
-                        {previewRows.length < totalRows
-                          ? `In the first ${previewRows.length} rows: `
-                          : "In this file: "}
-                        {typeSplit.sales} sales · {typeSplit.expenses} expenses
-                        {typeSplit.unknown > 0
-                          ? ` · ${typeSplit.unknown} unrecognised. Rows FinSight can't read a type from are skipped, never guessed.`
-                          : "."}
-                      </Callout>
-                    </View>
-                  ) : null}
-                </>
+              {typeSplit ? (
+                <Callout tone={typeSplit.unknown > 0 ? "warn" : "info"}>
+                  In these rows: {typeSplit.sales} sales · {typeSplit.expenses} expenses
+                  {typeSplit.unknown > 0
+                    ? ` · ${typeSplit.unknown} unrecognised. Rows FinSight can't read a type from are skipped, never guessed.`
+                    : "."}
+                </Callout>
               ) : null}
 
-              {(
-                [
-                  "date",
-                  "description",
-                  "amount",
-                  // Sales rows carry no category, and a mixed file's expense
-                  // rows fall back to "Uncategorised" when the column is absent.
-                  ...(usesCategory ? (["category"] as const) : []),
-                  ...(isMixed && mixedStrategy === "column" ? (["recordType"] as const) : []),
-                ] as const
-              ).map((field) => (
-                <View key={field} style={{ marginBottom: space.md }}>
-                  {/* Named for the owner, not for the payload key — "recordType"
-                      through `capitalize` reads "Recordtype". */}
-                  <T variant="label" style={{ marginBottom: 4, textTransform: "capitalize" }}>
-                    {field === "recordType" ? "Sale or expense column" : field}
-                  </T>
-                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
-                    {headers.map((h) => (
-                      <SelectChip
-                        key={h}
-                        label={h}
-                        selected={mapping[field] === h}
-                        onPress={() => setMapping((m) => ({ ...m, [field]: h }))}
-                        // Every column name appears once per field, so the
-                        // chip has to say which field it would fill —
-                        // otherwise four identical "Amount" chips read out
-                        // identically.
-                        accessibilityLabel={`${h}, for ${field}`}
-                      />
-                    ))}
-                  </View>
-                </View>
-              ))}
-              {/*
-                What this import will ADD, not just what it will bring in.
-
-                Creating a category is a side effect the owner never asked
-                for and previously never saw — they asked to import expenses
-                and got new entries in a list they curate elsewhere. Naming
-                them here makes a typo obvious while the mapping can still be
-                changed, which is the only moment it is cheap to fix.
-
-                An observation, never a blocker: a genuinely new category is
-                the normal case for a first import.
-              */}
-              {newCategoryNames.length > 0 ? (
-                <View style={{ marginBottom: space.md }}>
-                  <Callout tone="info">
-                    This import will create {newCategoryNames.length} new categor
-                    {newCategoryNames.length === 1 ? "y" : "ies"}: {newCategoryNames.join(", ")}.
-                    {previewRows.length < totalRows
-                      ? ` That is from the ${previewRows.length} rows checked — later rows may add more.`
-                      : ""}{" "}
-                    If one is a misspelling of a category you already have, change the Category column above,
-                    or you'll end up with two categories for the same thing.
-                  </Callout>
-                </View>
+              {newCategories.length > 0 ? (
+                <Callout tone="info">
+                  This import will create {newCategories.length} new categor
+                  {newCategories.length === 1 ? "y" : "ies"}: {newCategories.join(", ")}.
+                  {previewRows.length < totalRows
+                    ? ` That is from the ${previewRows.length} rows checked — later rows may add more.`
+                    : ""}{" "}
+                  If one is a misspelling of a category you already have, fix it here or change the Category
+                  column, or you'll end up with two categories for the same thing.
+                </Callout>
               ) : null}
+            </View>
+          }
+          renderItem={({ item }) => (
+            <ReviewRowCard
+              row={item}
+              onCorrect={(field, value) => correct(item.rowNumber, field, value)}
+              corrected={corrections[item.rowNumber] ?? {}}
+            />
+          )}
+          ListFooterComponent={
+            <View style={{ marginTop: space.md, gap: space.sm }}>
               {error ? <ErrorNote>{error}</ErrorNote> : null}
               <Button
-                title="Import these rows"
+                title={counts.problems > 0 ? `Import the other ${counts.total - counts.problems} rows` : "Import these rows"}
                 variant="primary"
-                onPress={confirm}
+                onPress={() => setConfirmOpen(true)}
                 loading={busy}
-                disabled={
-                  !mapping.date ||
-                  !mapping.description ||
-                  !mapping.amount ||
-                  // Required only for a pure expense import: a mixed file may
-                  // legitimately have no category column at all.
-                  (recordType === "expense" && !mapping.category) ||
-                  (isMixed && mixedStrategy === "column" && !mapping.recordType)
-                }
-                style={{ marginTop: space.sm }}
               />
-              {/* The insert is a batch write over every row, not instant for
-                  a large file — the button's own spinner covers the tap
-                  feedback, this covers the wait. */}
-              {busy ? (
-                <View style={{ marginTop: space.md }}>
-                  <T variant="caption" style={{ marginBottom: space.sm }}>Importing your records…</T>
-                  <SkeletonCard style={{ height: 90 }} />
-                </View>
-              ) : null}
-              <Button
-                title="Choose a different file"
-                variant="ghost"
-                onPress={() => {
-                  setFile(null);
-                  setHeaders([]);
-                  // Cleared with the file they describe — leaving them behind
-                  // would let the next file's callout be computed from the
-                  // previous file's rows.
-                  setPreviewRows([]);
-                  setTotalRows(0);
-                }}
-              />
+              <Button title="Back to the columns" variant="ghost" onPress={() => setStep("map")} />
             </View>
-          )}
-          {error && !file ? <View style={{ marginTop: space.md }}><ErrorNote>{error}</ErrorNote></View> : null}
-        </Card>
-      </ScrollView>
+          }
+        />
+        <ConfirmSheet
+          visible={confirmOpen}
+          title="Import this file?"
+          body={
+            `${totalRows} row${totalRows === 1 ? "" : "s"} will be checked and added to your records as "${title.trim()}".` +
+            (counts.problems > 0
+              ? ` The ${counts.problems} row${counts.problems === 1 ? "" : "s"} still marked below will be skipped and listed afterwards.`
+              : "") +
+            (newCategories.length > 0 ? ` ${newCategories.length} new categor${newCategories.length === 1 ? "y" : "ies"} will be created.` : "")
+          }
+          confirmLabel="Import"
+          onConfirm={confirm}
+          onCancel={() => setConfirmOpen(false)}
+        />
+      </Screen>
+    );
+  }
+
+  // ---- Step 2: map the columns -----------------------------------------
+
+  return (
+    <Screen>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
+        <ScrollView
+          contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}
+          keyboardShouldPersistTaps="handled"
+        >
+          <Card>
+            <ImportSteps current={1} />
+            <T variant="label" style={{ marginBottom: 4 }}>{file.name}</T>
+            <T variant="caption" style={{ marginBottom: space.md }}>
+              Match your columns to FinSight's fields. Every field says what it will be filled from.
+            </T>
+
+            {/*
+              A file with a header row and nothing under it. Caught here rather
+              than at confirm: uploading it, storing it and creating a batch
+              row for it just to report "0 imported" is work nobody needed and
+              an empty import in the owner's records afterwards.
+            */}
+            {totalRows === 0 ? (
+              <View style={{ marginBottom: space.md }}>
+                <Callout tone="warn">
+                  This file has column headings but no rows under them. There is nothing to import — check
+                  you picked the right file.
+                </Callout>
+              </View>
+            ) : null}
+
+            <Field
+              label="What to call this import"
+              value={title}
+              onChangeText={setTitle}
+              maxLength={FIELD_LIMITS.importTitle}
+            />
+            <T variant="caption" style={{ marginTop: -space.sm, marginBottom: space.md }}>
+              So you can find it again in your records. Starts from the file's name, shortened to fit.
+            </T>
+
+            <T variant="label" style={{ marginBottom: 4 }}>Import as</T>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm, marginBottom: space.md }}>
+              {(
+                [
+                  ["expense", "Expenses"],
+                  ["sales", "Sales"],
+                  ["mixed", "Both in one file"],
+                ] as const
+              ).map(([value, label]) => (
+                <SelectChip
+                  key={value}
+                  label={label}
+                  selected={recordType === value}
+                  onPress={() => setRecordType(value)}
+                />
+              ))}
+            </View>
+
+            {/*
+              Asked as a question about the FILE, not about FinSight: an owner
+              knows whether their sheet has a "type" column or writes expenses
+              with a minus sign; they do not know what a "strategy" is.
+            */}
+            {recordType === "mixed" ? (
+              <>
+                <T variant="label" style={{ marginBottom: 4 }}>How does your file say which is which?</T>
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm, marginBottom: space.md }}>
+                  <SelectChip
+                    label={'A column says "sale" or "expense"'}
+                    selected={mixedStrategy === "column"}
+                    onPress={() => setMixedStrategy("column")}
+                  />
+                  <SelectChip
+                    label="Expenses are negative (−)"
+                    selected={mixedStrategy === "sign"}
+                    onPress={() => setMixedStrategy("sign")}
+                  />
+                </View>
+              </>
+            ) : null}
+
+            {/*
+              THE ONE QUESTION ONLY THE OWNER CAN ANSWER. When every sampled
+              date fits both readings, "05/01/2026" is either 5 January or
+              1 May, and no amount of parsing settles it. The server refuses
+              the file until it is told, which is the right refusal — a month
+              of records filed into the wrong months is not recoverable by
+              looking at them.
+            */}
+            {dateAmbiguous ? (
+              <View style={{ marginBottom: space.md, gap: space.sm }}>
+                <Callout tone="warn">
+                  The dates in this file can be read two ways — 05/01/2026 is either 5 January or 1 May.
+                  FinSight will not guess. Tell it which your file uses.
+                </Callout>
+                <Pressable
+                  onPress={() => setDateSheetOpen(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Choose how the dates in this file should be read"
+                  style={{
+                    minHeight: TAP,
+                    justifyContent: "center",
+                    borderWidth: 1,
+                    borderColor: dateFormat ? brand[600] : statusText.warning,
+                    borderRadius: radius.md,
+                    paddingHorizontal: space.md,
+                  }}
+                >
+                  <T style={{ fontSize: typeScale.bodySm, color: dateFormat ? ink[900] : statusText.warning }}>
+                    {dateFormat ? DATE_FORMAT_LABELS[dateFormat] : "Choose how to read these dates"}
+                  </T>
+                </Pressable>
+              </View>
+            ) : null}
+
+            {offeredFields(recordType, mixedStrategy).map((field) => (
+              <View key={field} style={{ marginBottom: space.md }}>
+                <T variant="label" style={{ marginBottom: 4 }}>
+                  {FIELD_LABELS[field]}
+                  {requiredFields(recordType, mixedStrategy).includes(field) ? "" : " (optional)"}
+                </T>
+                {autoMapped.includes(field) && mapping[field] ? (
+                  <T variant="caption" style={{ marginBottom: 4 }}>
+                    Matched automatically — change it if that's the wrong column.
+                  </T>
+                ) : null}
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
+                  {headers.map((h) => (
+                    <SelectChip
+                      key={h}
+                      label={h}
+                      selected={mapping[field] === h}
+                      onPress={() => {
+                        // Tapping the chosen column again clears it, which is
+                        // the only way to UNMAP an optional field.
+                        setMapping((m) => ({ ...m, [field]: m[field] === h ? "" : h }));
+                        setAutoMapped((prev) => prev.filter((f) => f !== field));
+                      }}
+                      // Every column name appears once per field, so the chip
+                      // has to say which field it would fill — otherwise four
+                      // identical "Amount" chips read out identically.
+                      accessibilityLabel={`${h}, for ${FIELD_LABELS[field]}`}
+                    />
+                  ))}
+                </View>
+                {mapping[field] && mappingCheck.duplicated.includes(mapping[field]) ? (
+                  <T variant="caption" style={{ marginTop: 4, color: statusText.critical }}>
+                    "{mapping[field]}" is already filling another field. Each one needs its own column.
+                  </T>
+                ) : null}
+              </View>
+            ))}
+
+            {error ? <ErrorNote>{error}</ErrorNote> : null}
+            <Button
+              title="Check the rows"
+              variant="primary"
+              onPress={() => {
+                setReviewOrder(problemsFirst(analysed).map((r) => r.rowNumber));
+                setStep("review");
+              }}
+              disabled={!mappingCheck.ready || needsDateAnswer || title.trim().length === 0 || totalRows === 0}
+              style={{ marginTop: space.sm }}
+            />
+            {!mappingCheck.ready || needsDateAnswer ? (
+              <T variant="caption" style={{ marginTop: space.sm }}>
+                {needsDateAnswer
+                  ? "Choose how the dates should be read first."
+                  : mappingCheck.duplicated.length > 0
+                    ? "Two fields are pointing at the same column."
+                    : `Still to map: ${mappingCheck.missing.map((f) => FIELD_LABELS[f]).join(", ")}.`}
+              </T>
+            ) : null}
+            <Button title="Choose a different file" variant="ghost" onPress={reset} />
+          </Card>
+        </ScrollView>
+      </KeyboardAvoidingView>
+
+      <OptionSheet
+        visible={dateSheetOpen}
+        title="How should these dates be read?"
+        options={(["dmy", "mdy", "iso"] as const).map((id) => ({ id, name: DATE_FORMAT_LABELS[id] }))}
+        value={dateFormat}
+        onChoose={(id) => setDateFormat(id as ChosenDateFormat)}
+        onClose={() => setDateSheetOpen(false)}
+        emptyText="No date formats available."
+      />
     </Screen>
+  );
+}
+
+/** How often, and for how long, to ask a large import how far it has got. */
+const IMPORT_POLL_INTERVAL_MS = 1500;
+const IMPORT_POLL_TIMEOUT_MS = 10 * 60 * 1000;
+
+/** The worker's failure stages, in words an owner can act on. */
+const IMPORT_STAGE_WORDS: Record<string, string> = {
+  download: "fetching the file back",
+  parse: "reading the file",
+  validate: "checking the rows",
+  insert: "saving the rows",
+};
+
+const FIELD_LABELS: Record<MappedField, string> = {
+  date: "Date",
+  description: "Description",
+  amount: "Amount",
+  category: "Category",
+  vendor: "Vendor",
+  recordType: "Sale or expense column",
+};
+
+/**
+ * Where the owner is in the three steps.
+ *
+ * Bars rather than filled circles, matching SetupProgress — a fully-rounded
+ * brand-filled shape is this app's SELECTION CHIP, and borrowing its look for
+ * something that cannot be tapped is exactly the drift chipConsistency exists
+ * to stop.
+ */
+function ImportSteps({ current }: { current: 0 | 1 | 2 }) {
+  const labels = ["Choose file", "Map columns", "Review rows"];
+  return (
+    <View style={{ marginBottom: space.md }}>
+      <View style={{ flexDirection: "row", gap: 6 }}>
+        {labels.map((label, i) => (
+          <View
+            key={label}
+            style={{ flex: 1, height: 6, borderRadius: radius.sm, backgroundColor: i <= current ? brand[500] : brand[200] }}
+          />
+        ))}
+      </View>
+      <T variant="caption" style={{ marginTop: 6 }}>
+        Step {current + 1} of 3 · {labels[current]}
+      </T>
+    </View>
+  );
+}
+
+/**
+ * One row of the file, as FinSight will read it.
+ *
+ * A CARD PER ROW, not a copy of the web table. A phone cannot show five
+ * columns of a spreadsheet legibly, and the thing the owner is actually doing
+ * here is answering "is this row right, and if not, what should it say" —
+ * which is a form, not a grid.
+ *
+ * Only the four correctable fields get inputs, because those are the four the
+ * server's `corrections` schema accepts. A problem with the vendor or the
+ * sale/expense column is reported and sent back to the mapping step instead of
+ * offering an edit the server would ignore.
+ */
+function ReviewRowCard({
+  row,
+  corrected,
+  onCorrect,
+}: {
+  row: AnalysedRow;
+  corrected: Partial<Record<CorrectableField, string>>;
+  onCorrect: (field: CorrectableField, value: string) => void;
+}) {
+  const [open, setOpen] = useState(row.problem !== null);
+  const broken = row.problem !== null;
+
+  return (
+    <Card style={{ borderColor: broken ? status.warning : paper[200] }}>
+      <Pressable
+        onPress={() => setOpen((v) => !v)}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel={
+          broken
+            ? `Row ${row.rowNumber}, ${row.problem!.reason}. ${open ? "Hide" : "Show"} the fields to fix it`
+            : `Row ${row.rowNumber}, ${row.values.description || "no description"}. ${open ? "Hide" : "Show"} its values`
+        }
+        style={{ minHeight: TAP, justifyContent: "center" }}
+      >
+        <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+          <T style={{ fontSize: typeScale.micro, fontFamily: font.monoMedium, color: ink[500] }}>
+            Row {row.rowNumber}
+          </T>
+          {/* Words and a glyph, never colour alone. */}
+          {broken ? (
+            <T style={{ fontSize: typeScale.micro, color: statusText.warning, fontFamily: font.sansSemibold }}>
+              ⚠ Needs fixing
+            </T>
+          ) : Object.keys(corrected).length > 0 ? (
+            <T style={{ fontSize: typeScale.micro, color: statusText.good, fontFamily: font.sansSemibold }}>
+              ✓ Fixed
+            </T>
+          ) : null}
+          {row.rowType ? (
+            <T style={{ fontSize: typeScale.micro, color: ink[500] }}>
+              {row.rowType === "sales" ? "Sale" : "Expense"}
+            </T>
+          ) : null}
+          <View style={{ flex: 1 }} />
+          <Ionicons name={open ? "chevron-up" : "chevron-down"} size={16} color={ink[400]} />
+        </View>
+        <T style={{ fontSize: typeScale.bodySm, color: ink[900], marginTop: 2 }} numberOfLines={1}>
+          {row.values.description || "(no description)"}
+        </T>
+        {broken ? (
+          <T variant="caption" style={{ marginTop: 2, color: statusText.warning }}>
+            {row.problem!.reason}
+          </T>
+        ) : (
+          <T variant="caption" style={{ marginTop: 2 }}>
+            {row.values.date} · {row.values.amount}
+            {row.values.category ? ` · ${row.values.category}` : ""}
+          </T>
+        )}
+      </Pressable>
+
+      {open ? (
+        <View style={{ marginTop: space.sm }}>
+          {(["date", "description", "amount", "category"] as CorrectableField[]).map((field) => (
+            <Field
+              key={field}
+              label={FIELD_LABELS[field]}
+              value={row.values[field]}
+              onChangeText={(v: string) => onCorrect(field, v)}
+              keyboardType={field === "amount" ? "decimal-pad" : "default"}
+              error={row.problem?.field === field ? row.problem.reason : undefined}
+              maxLength={
+                field === "description"
+                  ? FIELD_LIMITS.recordDescription
+                  : field === "category"
+                    ? FIELD_LIMITS.categoryName
+                    : undefined
+              }
+            />
+          ))}
+          {row.values.vendor ? (
+            <T variant="caption">Vendor: {row.values.vendor}</T>
+          ) : null}
+          {row.problem && !(["date", "description", "amount", "category"] as string[]).includes(row.problem.field) ? (
+            <Callout tone="warn">
+              This one can't be fixed here — it comes from the {FIELD_LABELS[row.problem.field]} column. Go
+              back to the columns, or leave the row to be skipped.
+            </Callout>
+          ) : null}
+        </View>
+      ) : null}
+    </Card>
   );
 }
 

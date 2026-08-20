@@ -1,8 +1,13 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 // The REAL client constants, imported across the project boundary — not copies.
 import { FIELD_LIMITS as mobileLimits } from "../../../mobile/src/lib/fieldLimits";
 import { FIELD_LIMITS as webLimits } from "../../../web/src/lib/fieldLimits";
+// Mobile's real interval ceiling, imported for the same reason. recurringAgenda.ts
+// is deliberately free of React Native imports so it can be loaded here.
+import { MAX_INTERVAL_DAYS as mobileMaxIntervalDays } from "../../../mobile/src/lib/recurringAgenda";
 
 /**
  * The `maxLength` on every free-text box, pinned to the schema behind it.
@@ -35,6 +40,21 @@ function schemaMax(schema: z.ZodTypeAny, field: string, base: Record<string, unk
   const accepts = (length: number) => schema.safeParse({ ...base, [field]: "a".repeat(length) }).success;
   let low = 0;
   let high = 4096;
+  if (accepts(high)) throw new Error(`${field} has no upper bound below ${high}`);
+  while (low + 1 < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (accepts(mid)) low = mid;
+    else high = mid;
+  }
+  return low;
+}
+
+/** The largest number a schema accepts for `field`, found by bisection. */
+function schemaMaxNumber(schema: z.ZodTypeAny, field: string, base: Record<string, unknown>): number {
+  const accepts = (value: number) => schema.safeParse({ ...base, [field]: value }).success;
+  let low = 1;
+  let high = 1_000_000;
+  if (!accepts(low)) throw new Error(`${field} rejects ${low}, so there is no accepted value to bisect up from`);
   if (accepts(high)) throw new Error(`${field} has no upper bound below ${high}`);
   while (low + 1 < high) {
     const mid = Math.floor((low + high) / 2);
@@ -88,6 +108,18 @@ describe("each client cap equals the server rule behind it", () => {
     expect(schemaMax(createSchema, "description", base)).toBe(webLimits.categoryDescription);
   });
 
+  it("recurring schedule label — RecurringSchedule, VARCHAR(255)", async () => {
+    const { createRecurringScheduleSchema } = await import("../../src/controllers/insights.controller");
+    const base = {
+      businessProfileId: 1,
+      categoryId: 1,
+      intervalDays: 30,
+      expectedAmount: 9500,
+      nextDueDate: "2026-01-31",
+    };
+    expect(schemaMax(createRecurringScheduleSchema, "label", base)).toBe(webLimits.recurringScheduleLabel);
+  });
+
   /**
    * Used on web only today — mobile has no CSV import screen yet — but pinned
    * here anyway, because the constant exists in both mirrors and the moment it
@@ -115,5 +147,51 @@ describe("each client cap equals the server rule behind it", () => {
     const { askSchema } = await import("../../src/controllers/ai.controller");
     const base = { businessProfileId: 1, module: "Dashboard" };
     expect(schemaMax(askSchema, "question", base)).toBe(webLimits.aiQuestion);
+  });
+});
+
+/**
+ * The one client cap that is a NUMERIC bound rather than a string length.
+ *
+ * Same failure mode as the lengths above, worse consequence: the server's
+ * refusal for an over-long interval is a bare `{ error: "Validation failed" }`,
+ * so a client ceiling higher than the server's leaves the owner staring at a
+ * message that names neither the box nor the limit. A ceiling LOWER than the
+ * server's turns back an interval the API would have taken.
+ *
+ * Until now the figure was restated in three places — the controller, mobile's
+ * MAX_INTERVAL_DAYS and web's `max={366}` — and the only test on it asserted
+ * `MAX_INTERVAL_DAYS === 366`, which is the constant agreeing with itself. The
+ * probe below reads the bound off the real schema, so widening the controller
+ * without moving the clients fails here.
+ */
+describe("the interval ceiling on a recurring schedule", () => {
+  const base = {
+    businessProfileId: 1,
+    categoryId: 1,
+    label: "Rent",
+    expectedAmount: 9500,
+    nextDueDate: "2026-01-31",
+  };
+
+  it("mobile's MAX_INTERVAL_DAYS equals the server's own bound", async () => {
+    const { createRecurringScheduleSchema } = await import("../../src/controllers/insights.controller");
+    expect(schemaMaxNumber(createRecurringScheduleSchema, "intervalDays", base)).toBe(mobileMaxIntervalDays);
+  });
+
+  /**
+   * Web states the same figure as a `max` attribute inside a .tsx page, which
+   * cannot be imported into a backend test, so it is read out of the source
+   * text instead. If the form is ever refactored to reference a shared
+   * constant, this case will fail for want of the literal — at which point the
+   * right move is to import that constant here, NOT to drop the check.
+   */
+  it("web's max attribute on the interval input carries the same figure", async () => {
+    const { createRecurringScheduleSchema } = await import("../../src/controllers/insights.controller");
+    const formPath = fileURLToPath(new URL("../../../web/src/pages/RecurringScheduleForm.tsx", import.meta.url));
+    const source = readFileSync(formPath, "utf8");
+    const match = /\bmax=\{(\d+)\}/.exec(source);
+    expect(match, "no numeric max={n} found in RecurringScheduleForm.tsx").not.toBeNull();
+    expect(Number(match![1])).toBe(schemaMaxNumber(createRecurringScheduleSchema, "intervalDays", base));
   });
 });

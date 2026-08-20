@@ -32,6 +32,33 @@ export async function anomalyEvaluation(userId: number, businessProfileId: numbe
   });
   const totalFindings = detectors.reduce((sum, detector) => sum + detector.total, 0);
   const reviewLatencies = reviewed.map((finding) => finding.reviewedAt!.getTime() - finding.detectedAt.getTime());
+
+  /*
+   * Shadow-mode overlap (A4). The promotion question for the ML detector is
+   * "does it find anything the rules missed?" — which the per-method counts
+   * above cannot answer. This joins the ML detector's active shadow findings
+   * against every other detector's findings on the same records:
+   *   overlapping = the forest agreed with a rule (redundant),
+   *   mlOnly      = candidate incremental value, the number that has to be
+   *                 non-trivial (and later, confirmed by owners) before any
+   *                 promotion out of shadow mode.
+   */
+  const shadowRecords = await prisma.anomalyFinding.findMany({
+    where: { businessProfileId, method: "isolation-forest", status: "SHADOW", expenseRecordId: { not: null } },
+    select: { expenseRecordId: true },
+  });
+  const shadowIds = shadowRecords.map((finding) => finding.expenseRecordId!) ;
+  const overlapping = shadowIds.length
+    ? await prisma.anomalyFinding.count({
+        where: {
+          businessProfileId,
+          expenseRecordId: { in: shadowIds },
+          method: { not: "isolation-forest" },
+          status: { not: "SUPERSEDED" },
+        },
+      })
+    : 0;
+
   return {
     transactionCount,
     totalFindings,
@@ -40,6 +67,11 @@ export async function anomalyEvaluation(userId: number, businessProfileId: numbe
       ? reviewLatencies.reduce((sum, value) => sum + value, 0) / reviewLatencies.length / 3_600_000
       : null,
     detectors,
+    shadow: {
+      mlShadowFindings: shadowIds.length,
+      overlappingWithRules: Math.min(overlapping, shadowIds.length),
+      mlOnly: Math.max(shadowIds.length - overlapping, 0),
+    },
     jobs: Object.fromEntries(jobs.map((job) => [job.status, job._count._all])),
   };
 }

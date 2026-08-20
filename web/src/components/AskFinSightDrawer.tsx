@@ -59,6 +59,26 @@ const MODULE_COPY: Record<InteractionModule, ModuleCopy> = {
     greeting:
       'Describe a planned expense in your own words and I\'ll run the real numbers. For example: "What if I spend ₱11,000 on a fridge?"',
   },
+  /*
+    The review queue's "Explain this flag" entry point. The starters are
+    questions about FinSight's own reasoning rather than about the money —
+    this drawer opens from a card the owner is already looking at, and what
+    they want is why it is there. The server's context for this module is the
+    open findings and flagged counts, so every answer is phrasing evidence
+    that already exists rather than judging a record.
+  */
+  "Records Review": {
+    title: "Ask FinSight about this flag",
+    scope:
+      "Scoped to Needs review — I can explain the comparison behind a flag. A flag is never a claim that something is wrong.",
+    starters: [
+      "Why was this flagged?",
+      "What does FinSight compare against?",
+      "How do I stop this being flagged again?",
+    ],
+    greeting:
+      "I can explain why something is in your review queue and what FinSight compared it against. What would you like to know?",
+  },
   "Recovery Target": {
     title: "Ask FinSight about recovery",
     scope: "Scoped to Recovery Target — I can explain today's gap and how the remaining target spreads across your remaining operating days.",
@@ -213,7 +233,27 @@ export function AskFinSightDrawer({ businessProfileId, module, open, onClose, in
         </header>
 
         <div ref={bodyRef} className="flex-1 space-y-3 overflow-y-auto bg-paper-50 p-4">
-          <Bubble from="ai">{copy.greeting}</Bubble>
+          {/*
+            The opening line gets Fin at full size rather than the 24px avatar
+            every later reply carries — this is the "ready to listen" moment in
+            docs/mascot-scenario-library.md, and it is the one point in the
+            drawer with room for the whole scene (head, question bubble,
+            sparkles). Deliberately NOT a <Bubble>: stacking the small avatar
+            under the large mascot would put Fin on screen twice, saying the
+            same thing.
+          */}
+          <div className="flex flex-col items-center pb-1 text-center">
+            <img
+              src="/mascot/ask-fin.webp"
+              alt=""
+              aria-hidden
+              width={104}
+              height={83}
+              className="h-[83px] w-[104px] select-none"
+              draggable={false}
+            />
+            <p className="mt-2 max-w-[90%] text-sm leading-relaxed text-ink-700">{copy.greeting}</p>
+          </div>
 
           {loadingHistory ? <p className="text-center text-xs text-ink-400">Loading earlier messages…</p> : null}
 
@@ -264,7 +304,7 @@ export function AskFinSightDrawer({ businessProfileId, module, open, onClose, in
             onChange={(e) => setInput(e.target.value)}
             placeholder="Ask about your numbers…"
             maxLength={FIELD_LIMITS.aiQuestion}
-            className="min-h-tap flex-1 rounded-full border border-ink-200 px-4 text-sm"
+            className="min-h-tap flex-1 rounded-full border border-ink-200 bg-paper px-4 text-sm text-ink-900 placeholder:text-ink-400"
           />
           <button
             type="submit"
@@ -293,12 +333,23 @@ function Bubble({ from, children }: { from: "ai" | "user"; children: React.React
   }
   return (
     <div className="flex items-start gap-2">
-      <span
+      {/*
+        Fin's face rather than a ✦, so the column of replies reads as coming
+        from someone. The head is cropped away from the question bubble and
+        sparkle marks it ships with (see scripts/convert-mascot-assets.py):
+        the whole scene at this size leaves the face about fourteen pixels
+        wide, which is a smudge rather than a character.
+      */}
+      <img
+        src="/mascot/ask-fin-avatar.webp"
+        alt=""
         aria-hidden
-        className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-tint-brand text-xs text-tone-brand"
-      >
-        ✦
-      </span>
+        width={24}
+        height={24}
+        className="mt-0.5 h-6 w-6 shrink-0 select-none"
+        draggable={false}
+      />
+
       <p className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-bl-sm bg-paper px-3.5 py-2.5 text-sm text-ink-700 border border-paper-200">
         {children}
       </p>
@@ -306,16 +357,85 @@ function Bubble({ from, children }: { from: "ai" | "user"; children: React.React
   );
 }
 
-// The trigger button that opens the drawer. Kept next to the drawer so the
-// four call sites stay one-liners.
+/**
+ * The trigger that opens the drawer, as a floating mascot — matching
+ * mobile/src/components/AskFinSightFab.tsx.
+ *
+ * WHY IT LEFT THE HEADER. It used to be a small `✦ Ask FinSight` chip in each
+ * page's action row, where it competed with the period selector for the same
+ * glance and scrolled out of reach the moment an owner moved down the page.
+ * The question someone wants to ask is usually prompted by something they have
+ * just scrolled PAST, so the trigger has to still be there when they think of
+ * it. That is the same reasoning mobile's FAB was built on, and it is why this
+ * is a port rather than a second design.
+ *
+ * NO BUTTON CHROME. The art is a transparent cutout — head, glasses, question
+ * bubble — with its own soft shadow painted in, so there is nothing for a
+ * container to hide. Filling a teal pill behind it was tried and measured
+ * worse: the owl's dark outline has too little separation from `brand-600`,
+ * and the face turns to a smudge below about 24px. The button here is a
+ * transparent hit-box sized to the touch target; everything visible is the
+ * artwork.
+ *
+ * IT IS PORTALLED TO <body>, AND HAS TO BE. `position: fixed` is relative to
+ * the viewport only while no ancestor establishes a containing block, and
+ * AppShell's <main> carries `animate-fade-up` — a page transition on
+ * `transform` with `fill-mode: both`. Filling forwards leaves the computed
+ * transform as `matrix(1, 0, 0, 1, 0, 0)`: an identity matrix, but NOT `none`,
+ * which is enough to make <main> the containing block. Rendered in place the
+ * owl therefore pinned to the bottom of the PAGE and only appeared once the
+ * owner scrolled to the end — the opposite of a trigger that is meant to be
+ * permanently in reach. The drawer below portals for its own reasons; this
+ * one is not cosmetic.
+ */
 export function AskFinSightButton({ onClick }: { onClick: () => void }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="tap inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-3 text-sm font-medium text-white hover:bg-brand-700"
-    >
-      <span aria-hidden>✦</span> Ask FinSight
-    </button>
+    <>
+      {/*
+        The FAB is fixed, so it is out of flow and would sit on top of whatever
+        a page happens to end with. This is mobile's FAB_CLEARANCE idea as a
+        spacer instead of an exported constant: it rides along with the trigger,
+        so a page cannot render one without the other and no call site has to
+        remember a magic number. <main> already reserves pb-24 / lg:pb-12 for
+        the bottom nav; these make up the difference to the owl's full height.
+      */}
+      <div aria-hidden className="h-14 lg:h-12" />
+
+      {createPortal(
+        <button
+          type="button"
+          data-tour="ask-finsight"
+          onClick={onClick}
+          aria-label="Ask FinSight"
+          /*
+           * bottom-20 clears the fixed bottom nav (AppShell renders it under
+           * `lg:hidden`, roughly 56px plus the safe-area inset); from `lg` up
+           * there is no bar, so it drops back to the page's own margin.
+           *
+           * z-30 matches that nav and sits UNDER the drawer's own overlay
+           * (z-40), so opening the drawer covers the trigger instead of
+           * leaving it floating over the panel it just opened.
+           */
+          className="fixed bottom-20 right-4 z-30 transition-transform duration-150 ease-shell hover:scale-105 active:scale-95 lg:bottom-6 lg:right-6"
+        >
+          <img
+            src="/mascot/ask-fin.webp"
+            alt=""
+            aria-hidden
+            width={76}
+            height={60}
+            // Height follows the art's own 1.26 aspect rather than being
+            // forced square — the composition is wider than it is tall, and
+            // padding it out would only render it smaller.
+            //
+            // No CSS shadow: the soft one under the owl and the bubble is
+            // painted into the art already, and a second would double it.
+            className="h-[60px] w-[76px] animate-bob select-none"
+            draggable={false}
+          />
+        </button>,
+        document.body,
+      )}
+    </>
   );
 }

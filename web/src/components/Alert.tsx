@@ -17,7 +17,7 @@ import { STATUS_TEXT_COLORS } from "../lib/chartPalette";
  * Severity is never carried by colour alone — every variant ships a distinct
  * glyph and a written label, so it survives colourblindness and greyscale.
  */
-export type AlertKind = "duplicate" | "large-expense" | "needs-review" | "info";
+export type AlertKind = "duplicate" | "large-expense" | "needs-review" | "recurring" | "info";
 
 interface KindSpec {
   label: string;
@@ -58,6 +58,19 @@ const KINDS: Record<AlertKind, KindSpec> = {
     solid: STATUS_TEXT_COLORS.warning,
     severity: "warning",
   },
+  /*
+    A payment the owner asked FinSight to watch is late, or came in at an
+    amount they did not expect. Serious rather than informational: the whole
+    reason a schedule exists is that the owner said "tell me if this is
+    missed", and answering that with the same grey "For your information"
+    treatment a finished CSV import gets is the app forgetting its own promise.
+  */
+  recurring: {
+    label: "Recurring payment",
+    glyph: "↻",
+    solid: STATUS_TEXT_COLORS.serious,
+    severity: "serious",
+  },
   info: {
     label: "For your information",
     glyph: "i",
@@ -82,6 +95,8 @@ export function alertKindFromType(type: string): AlertKind {
   if (t.includes("duplicate")) return "duplicate";
   if (t.includes("large")) return "large-expense";
   if (t.includes("review")) return "needs-review";
+  // NOTIFICATION_TYPES.RECURRING_SCHEDULE — "Recurring Schedule".
+  if (t.includes("recurring")) return "recurring";
   return "info";
 }
 

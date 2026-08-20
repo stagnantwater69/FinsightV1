@@ -19,6 +19,12 @@ export interface DetectionFinding {
   reasons: string[];
   metadata?: FindingMetadata;
   detectorVersion: string;
+  /**
+   * Storage status. Omitted → OPEN (owner-visible). Detectors under
+   * evaluation write SHADOW, which listFindings/summaries/notifications/AI
+   * context all exclude — see the enum comment in schema.prisma.
+   */
+  status?: Extract<AnomalyFindingStatus, "OPEN" | "SHADOW">;
 }
 
 export interface TransactionForDetection {

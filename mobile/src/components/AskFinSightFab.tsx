@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Animated, Image, Pressable } from "react-native";
 import { space } from "../theme/tokens";
+import { useTourTarget } from "./tour/targets";
 import { cropArtToBox, FAB_ART_BOUNDS } from "../lib/artCrop";
 import { useReducedMotion } from "../lib/useReducedMotion";
 import * as haptics from "../lib/haptics";
@@ -45,6 +46,9 @@ export function AskFinSightFab({ onPress }: { onPress: () => void }) {
   const bob = useRef(new Animated.Value(0)).current;
   const press = useRef(new Animated.Value(1)).current;
   const reduceMotion = useReducedMotion();
+  // Round button, round ring — a rounded square around a circle reads as a
+  // near miss rather than as a deliberate highlight.
+  const tourTarget = useTourTarget("ask-finsight", { radius: 999 });
 
   useEffect(() => {
     /*
@@ -82,7 +86,16 @@ export function AskFinSightFab({ onPress }: { onPress: () => void }) {
         transform: [{ translateY }, { scale: press }],
       }}
     >
+      {/*
+        The product tour spotlights this button, and it is measured off the
+        Pressable rather than the Animated.View around it: the bob is a
+        native-driven transform, which `measureInWindow` does not see, so
+        measuring the animated parent would report a position up to
+        BOB_DISTANCE out. Neither is exact mid-bob; the spotlight's own padding
+        covers those five points either way.
+      */}
       <Pressable
+        {...tourTarget}
         onPress={() => {
           haptics.tapped();
           onPress();

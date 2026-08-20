@@ -87,5 +87,6 @@ export async function cleanUpImportBatchIfOrphaned(importBatchId: number | null 
   if (expenses > 0 || sales > 0) return;
 
   await prisma.cSVImportBatch.delete({ where: { id: importBatchId } });
-  await deleteCsvFile(batch.fileReference);
+  // Null when the upload stage never completed — there is no object to delete.
+  if (batch.fileReference) await deleteCsvFile(batch.fileReference);
 }

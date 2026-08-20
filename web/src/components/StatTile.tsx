@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 /**
  * A single headline figure.
  *
@@ -17,7 +19,7 @@ export function StatTile({
 }: {
   label: string;
   value: string;
-  sublabel?: string;
+  sublabel?: ReactNode;
   emphasis?: boolean;
 }) {
   return (

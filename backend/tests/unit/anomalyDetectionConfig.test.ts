@@ -11,6 +11,7 @@ describe("anomaly detection configuration", () => {
       recurring: false,
       trends: false,
       behavioralNovelty: false,
+      isolationForest: false,
     });
   });
 

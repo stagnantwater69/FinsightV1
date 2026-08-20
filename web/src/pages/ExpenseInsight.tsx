@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
@@ -14,8 +14,9 @@ import { EmptyState } from "../components/EmptyState";
 import { Button, ButtonLink } from "../components/Button";
 import { formatMoney } from "../components/Money";
 import { STATUS_INK } from "../lib/chartPalette";
+import { RecurringAgenda } from "../components/RecurringAgenda";
 import { AiCard, KpiCard, Kw, PageHead, Panel, Callout, Pill } from "../components/ui";
-import type { AnomalyFinding, AnomalyFindingFeedback, AnomalyFindingPage, AnomalyFindingStatus, ExpenseBehavior as ExpenseInsightData, RecordItem, RecurringPattern } from "../lib/types";
+import type { AnomalyFinding, AnomalyFindingFeedback, AnomalyFindingPage, AnomalyFindingStatus, ExpenseBehavior as ExpenseInsightData, RecordItem, RecurringPattern, RecurringSchedule } from "../lib/types";
 
 const PERIOD_OPTIONS = [
   { label: "This week", days: 7 },
@@ -55,12 +56,18 @@ const PERIOD_OPTIONS = [
  * "this seemed big". A record can carry a large-expense flag, a duplicate
  * flag, or both — the sentence says whichever actually applied.
  */
-function flagReason(record: RecordItem, profile: { expectedMonthlyExpenses: number; largeExpenseThresholdPercent: number }): string {
-  const reasons: string[] = [];
+function flagReasons(
+  record: RecordItem,
+  profile: { expectedMonthlyExpenses: number; largeExpenseThresholdPercent: number },
+): ReactNode[] {
+  const reasons: ReactNode[] = [];
   if (record.largeExpenseFlag) {
     const thresholdAmount = profile.expectedMonthlyExpenses * (profile.largeExpenseThresholdPercent / 100);
     reasons.push(
-      `above your large-expense threshold (${profile.largeExpenseThresholdPercent}% of expected monthly expenses = ${formatMoney(thresholdAmount)})`,
+      <>
+        above your large-expense threshold ({profile.largeExpenseThresholdPercent}% of expected monthly expenses
+        = <span className="figure">{formatMoney(thresholdAmount)}</span>)
+      </>,
     );
   }
   if (record.duplicateStatus === "Flagged") {
@@ -70,7 +77,28 @@ function flagReason(record: RecordItem, profile: { expectedMonthlyExpenses: numb
         : "a possible duplicate of another record",
     );
   }
-  return reasons.length > 0 ? reasons.join(" · ") : "flagged for a second look";
+  return reasons.length > 0 ? reasons : ["flagged for a second look"];
+}
+
+/** Renders `flagReasons` joined with " · ", the same separator the plain-string version used. */
+function FlagReason({
+  record,
+  profile,
+}: {
+  record: RecordItem;
+  profile: { expectedMonthlyExpenses: number; largeExpenseThresholdPercent: number };
+}) {
+  const reasons = flagReasons(record, profile);
+  return (
+    <>
+      {reasons.map((reason, i) => (
+        <Fragment key={i}>
+          {i > 0 ? " · " : null}
+          {reason}
+        </Fragment>
+      ))}
+    </>
+  );
 }
 
 /** "▲ PHP 7,000" in the right status colour, or an em-dash for no movement. */
@@ -101,6 +129,39 @@ function ChangeFigure({ change, percent }: { change: number; percent: number | n
 // disagree about what "a short list" means.
 const MAX_FLAGGED_SHOWN = 5;
 
+/**
+ * Runs one SUPPLEMENTARY fetch in a way that cannot take the page down with it.
+ *
+ * This page draws from five endpoints, and it used to await all five in a
+ * single `Promise.all`. `Promise.all` is all-or-nothing: one rejection
+ * discarded the four responses that had already arrived, so a disabled
+ * `/insights/recurring-schedules` — an optional panel at the very bottom —
+ * replaced the KPI row, every chart, the category table and the flags with an
+ * error banner. A transient 500 on `/insights/findings` would have done exactly
+ * the same thing, which is why the fix is structural rather than a check for
+ * status 404: nothing here asks WHY a supplement failed, only that its failure
+ * stays inside its own panel. Status-sniffing would have left the identical
+ * defect in place for every other failure mode.
+ *
+ * The core read (`/insights/expense-behavior`) deliberately does NOT go through
+ * this. Without it there is no page to degrade, so its failure is still the
+ * page's error.
+ */
+async function loadPanel<T>(
+  request: Promise<{ data: T }>,
+  apply: (value: T) => void,
+  onUnavailable: () => void,
+): Promise<void> {
+  try {
+    apply((await request).data);
+  } catch {
+    // Swallowed on purpose. The panel's own state now says "unavailable", and
+    // an error banner for a secondary panel over a page that rendered fine
+    // would be telling the owner their numbers are suspect when they are not.
+    onUnavailable();
+  }
+}
+
 export function ExpenseInsight() {
   const { selected } = useBusinessProfiles();
   const { categories } = useExpenseCategories();
@@ -126,6 +187,18 @@ export function ExpenseInsight() {
   const [flaggedExpenses, setFlaggedExpenses] = useState<RecordItem[]>([]);
   const [findings, setFindings] = useState<AnomalyFinding[]>([]);
   const [recurringPatterns, setRecurringPatterns] = useState<RecurringPattern[]>([]);
+  /**
+   * Owner-declared schedules — the agenda. Distinct from the patterns above,
+   * which are only what the detector suspects.
+   *
+   * NULL IS NOT THE EMPTY LIST. Null means the schedules endpoint did not
+   * answer (the feature is switched off server-side, or the request failed),
+   * and the agenda is then hidden outright. Rendering the empty state instead
+   * would tell an owner "nothing scheduled yet" — a claim about their business
+   * that we have no basis for, and one that is flatly false for anyone who has
+   * schedules the server simply would not hand over.
+   */
+  const [recurringSchedules, setRecurringSchedules] = useState<RecurringSchedule[] | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   // Set only by the "expand on this" link — the plain header button opens
   // the drawer with this left undefined, same as always.
@@ -133,30 +206,47 @@ export function ExpenseInsight() {
 
   async function load() {
     if (!selected) return;
+    const businessProfileId = selected.id;
     setLoading(true);
     setError(null);
-    try {
-      const [behavior, flagged, findingPage, patterns] = await Promise.all([
-        api.get<ExpenseInsightData>("/insights/expense-behavior", {
-          params: { businessProfileId: selected.id, periodDays, ...(endDate ? { endDate } : {}) },
+
+    // Still fired together, so the page costs one round trip's worth of
+    // latency as before — they are only SETTLED apart.
+    const supplements = Promise.all([
+      loadPanel(
+        api.get<RecordItem[]>("/records/flagged", { params: { businessProfileId } }),
+        (rows) =>
+          setFlaggedExpenses(
+            rows.filter((r) => r.type === "expense").sort((a, b) => (a.date < b.date ? 1 : -1)),
+          ),
+        () => setFlaggedExpenses([]),
+      ),
+      loadPanel(
+        api.get<AnomalyFindingPage>("/insights/findings", {
+          params: { businessProfileId, status: "OPEN", take: 20 },
         }),
-        api.get<RecordItem[]>("/records/flagged", { params: { businessProfileId: selected.id } }),
-        api.get<AnomalyFindingPage>("/insights/findings", { params: { businessProfileId: selected.id, status: "OPEN", take: 20 } }),
-        api.get<RecurringPattern[]>("/insights/recurring-patterns", { params: { businessProfileId: selected.id } }),
-      ]);
+        (page) => setFindings(page.items),
+        () => setFindings([]),
+      ),
+      loadRecurring(),
+    ]);
+
+    try {
+      const behavior = await api.get<ExpenseInsightData>("/insights/expense-behavior", {
+        params: { businessProfileId, periodDays, ...(endDate ? { endDate } : {}) },
+      });
       setData(behavior.data);
-      setFlaggedExpenses(
-        flagged.data
-          .filter((r) => r.type === "expense")
-          .sort((a, b) => (a.date < b.date ? 1 : -1)),
-      );
-      setFindings(findingPage.data.items);
-      setRecurringPatterns(patterns.data);
     } catch (err) {
+      // The core read. Nothing on this page is readable without it, so this one
+      // failure IS the page's failure.
       setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
+
+    // Awaited so the page is not still writing state after the caller believes
+    // the load is done — `loadPanel` never rejects, so this cannot throw.
+    await supplements;
   }
 
   async function reviewFinding(id: number, status: AnomalyFindingStatus, feedback: AnomalyFindingFeedback) {
@@ -164,9 +254,68 @@ export function ExpenseInsight() {
     setFindings((current) => current.filter((finding) => finding.id !== id));
   }
 
-  async function reviewPattern(id: number, status: RecurringPattern["status"]) {
-    await api.patch(`/insights/recurring-patterns/${id}`, { status });
-    setRecurringPatterns((current) => current.map((pattern) => pattern.id === id ? { ...pattern, status } : pattern));
+  /**
+   * Promotes a detector candidate into an owner-owned schedule.
+   *
+   * A POST to /confirm, not the old PATCH to `{ status: "CONFIRMED" }`. That
+   * PATCH marked the pattern confirmed and nothing else, which made it vanish
+   * from this panel with no schedule behind it and nowhere in the app to see it
+   * again — the exact defect the agenda below exists to close. The server does
+   * both writes in one transaction and seeds the label from the pattern's own
+   * description, so nothing is sent in the body.
+   */
+  async function confirmPattern(id: number) {
+    setError(null);
+    try {
+      await api.post(`/insights/recurring-patterns/${id}/confirm`);
+      // Both lists move: the candidate leaves this panel and a schedule appears
+      // in the agenda. Refetched rather than patched in state because the new
+      // schedule's `dueState` is server-computed and this page must not guess it.
+      await loadRecurring();
+    } catch (err) {
+      // 409 when the pattern already has a schedule — which happens if the
+      // owner has this page open in two tabs. Said out loud rather than left
+      // as an unhandled rejection with a button that appears to do nothing.
+      setError(getErrorMessage(err));
+    }
+  }
+
+  async function dismissPattern(id: number) {
+    setError(null);
+    try {
+      await api.patch(`/insights/recurring-patterns/${id}`, { status: "DISMISSED" });
+      setRecurringPatterns((current) =>
+        current.map((pattern) => (pattern.id === id ? { ...pattern, status: "DISMISSED" } : pattern)),
+      );
+    } catch (err) {
+      setError(getErrorMessage(err));
+    }
+  }
+
+  /**
+   * The two recurring reads, settled independently.
+   *
+   * They are different endpoints with different availability: patterns is
+   * ungated detector output, schedules is behind a server feature flag. Bundled
+   * in a `Promise.all` they failed as one, so a dark schedules endpoint also
+   * emptied the candidates panel that was working perfectly.
+   */
+  async function loadRecurring() {
+    if (!selected) return;
+    const businessProfileId = selected.id;
+    await Promise.all([
+      loadPanel(
+        api.get<RecurringPattern[]>("/insights/recurring-patterns", { params: { businessProfileId } }),
+        setRecurringPatterns,
+        () => setRecurringPatterns([]),
+      ),
+      loadPanel(
+        api.get<RecurringSchedule[]>("/insights/recurring-schedules", { params: { businessProfileId } }),
+        setRecurringSchedules,
+        // Null, not []. See the state declaration: hidden, not "none".
+        () => setRecurringSchedules(null),
+      ),
+    ]);
   }
 
   useEffect(() => {
@@ -214,6 +363,17 @@ export function ExpenseInsight() {
       ? "this week"
       : "this month";
   const previousLabel = periodDays === 7 ? "Last week" : "Last month";
+
+  /**
+   * The schedules read doubles as the availability probe for everything that
+   * WRITES a schedule — confirming a candidate creates one, and the server gates
+   * both together. So if the agenda could not be read, "Watch this" cannot work
+   * either, and it is not offered.
+   */
+  const canWatchPatterns = recurringSchedules !== null;
+  const hasCandidates = recurringPatterns.some((pattern) => pattern.status === "CANDIDATE");
+  // With no agenda and no candidates the whole block is an empty container.
+  const showRecurringBlock = recurringSchedules !== null || hasCandidates;
 
   // ---- headline figures, all from one denominator ----
   const summary = useMemo(() => {
@@ -272,8 +432,10 @@ export function ExpenseInsight() {
       {summary.biggestIncrease ? (
         <>
           <Kw>{summary.biggestIncrease.categoryName}</Kw> rose the most, up{" "}
-          <Kw>{formatMoney(summary.biggestIncrease.change)}</Kw> compared with{" "}
-          {previousLabel.toLowerCase()}, so it may be worth reviewing.
+          <Kw>
+            <span className="figure">{formatMoney(summary.biggestIncrease.change)}</span>
+          </Kw>{" "}
+          compared with {previousLabel.toLowerCase()}, so it may be worth reviewing.
         </>
       ) : null}
     </>
@@ -344,17 +506,7 @@ export function ExpenseInsight() {
             Expense Behavior Analysis — answers "What is happening with my expenses?"
           </>
         }
-        actions={
-          <>
-            {periodPicker}
-            <AskFinSightButton
-              onClick={() => {
-                setDrawerQuestion(undefined);
-                setDrawerOpen(true);
-              }}
-            />
-          </>
-        }
+        actions={periodPicker}
       />
 
       <InsightsTabs />
@@ -491,7 +643,8 @@ export function ExpenseInsight() {
               meta={
                 summary.top ? (
                   <>
-                    {summary.topShare.toFixed(1)}% of total · {formatMoney(summary.top.current)}
+                    {summary.topShare.toFixed(1)}% of total ·{" "}
+                    <span className="figure">{formatMoney(summary.top.current)}</span>
                   </>
                 ) : (
                   "No spending yet"
@@ -537,7 +690,8 @@ export function ExpenseInsight() {
                   "Add available funds to your business profile"
                 ) : (
                   <>
-                    {formatMoney(summary.total)} of {formatMoney(selected.availableFunds)}
+                    <span className="figure">{formatMoney(summary.total)}</span> of{" "}
+                    <span className="figure">{formatMoney(selected.availableFunds)}</span>
                   </>
                 )
               }
@@ -703,7 +857,7 @@ export function ExpenseInsight() {
                           </div>
                           <p className="mt-1 text-xs text-tone-danger opacity-90">
                             {categoryName(r.categoryId)} · {r.date.slice(0, 10)} ·{" "}
-                            {flagReason(r, selected)}
+                            <FlagReason record={r} profile={selected} />
                           </p>
                         </div>
                       </li>
@@ -791,9 +945,16 @@ export function ExpenseInsight() {
                           lands; "z-score 3.2" does not. */}
                       <p className="mt-1 text-xs text-tone-accent opacity-90">
                         {u.categoryName} · {u.date.slice(0, 10)} ·{" "}
-                        {times && times >= 1.5
-                          ? `about ${times.toFixed(1)}× your usual ${formatMoney(u.categoryMean)}`
-                          : `usually around ${formatMoney(u.categoryMean)}`}
+                        {times && times >= 1.5 ? (
+                          <>
+                            about {times.toFixed(1)}× your usual{" "}
+                            <span className="figure">{formatMoney(u.categoryMean)}</span>
+                          </>
+                        ) : (
+                          <>
+                            usually around <span className="figure">{formatMoney(u.categoryMean)}</span>
+                          </>
+                        )}
                       </p>
                     </li>
                   );
@@ -822,7 +983,7 @@ export function ExpenseInsight() {
             ) : (
               <ul className="space-y-3">
                 {findings.map((finding) => (
-                  <li key={finding.id} className="rounded-xl border border-edge-subtle p-3.5">
+                  <li key={finding.id} className="rounded-xl border border-paper-200 p-3.5">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <p className="text-sm font-semibold text-ink-800">{finding.title}</p>
                       <Pill>{finding.severity.toLowerCase()}</Pill>
@@ -830,15 +991,46 @@ export function ExpenseInsight() {
                     <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-ink-500">
                       {finding.reasons.map((reason) => <li key={reason}>{reason}</li>)}
                     </ul>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <button type="button" className="rounded-lg bg-brand-700 px-3 py-2 text-xs font-semibold text-white"
-                        onClick={() => void reviewFinding(finding.id, "CONFIRMED", finding.type === "POSSIBLE_DUPLICATE" ? "DUPLICATE" : "CONFIRMED_UNUSUAL")}>
+                    {/*
+                      Button primitives, not hand-rolled ones. These two were
+                      the last raw <button>s carrying their own colour classes:
+                      they missed the 44px tap floor every other button in the
+                      app clears, and one of them named an `edge` step that
+                      generates no CSS at all, so it silently fell back to
+                      Tailwind's hard-coded #e5e7eb — a fixed grey that ignores
+                      the theme and is wrong in Dark.
+
+                      Only two of the five feedback values are reachable here,
+                      on purpose: this panel is a SUMMARY beside the expense
+                      figures, and the full set of answers (including "wrong
+                      match", the one the duplicate detector most needs) lives
+                      on the review queue, which the link below leads to.
+                    */}
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => void reviewFinding(finding.id, "CONFIRMED", finding.type === "POSSIBLE_DUPLICATE" ? "DUPLICATE" : "CONFIRMED_UNUSUAL")}
+                      >
                         Confirm
-                      </button>
-                      <button type="button" className="rounded-lg border border-edge-subtle px-3 py-2 text-xs font-semibold text-ink-600"
-                        onClick={() => void reviewFinding(finding.id, "DISMISSED", "EXPECTED_TRANSACTION")}>
+                        <span className="sr-only"> — {finding.title}</span>
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => void reviewFinding(finding.id, "DISMISSED", "EXPECTED_TRANSACTION")}
+                      >
                         Expected / dismiss
-                      </button>
+                        <span className="sr-only"> — {finding.title}</span>
+                      </Button>
+                      <Link
+                        to="/records/flagged"
+                        className="tap-inline text-xs font-medium text-brand-700 underline-offset-2 hover:underline"
+                      >
+                        More options
+                        <span className="sr-only"> for {finding.title}, on the review queue</span>
+                      </Link>
                     </div>
                   </li>
                 ))}
@@ -846,20 +1038,72 @@ export function ExpenseInsight() {
             )}
           </Panel>
 
-          {recurringPatterns.some((pattern) => pattern.status === "CANDIDATE") ? (
-            <Panel eyebrow="Recurring expenses" title="Confirm expected payments">
-              <ul className="space-y-3">
+        </div>
+      )}
+
+      {/*
+        THE RECURRING BLOCK SITS OUTSIDE THE PERIOD-SCOPED PAGE ABOVE, on
+        purpose. Everything above is a reading of one window of expenses; a
+        schedule is not — an overdue salary run is overdue whether or not
+        anything was recorded in the last thirty days. Nested inside, it
+        disappeared for exactly the owner most likely to have forgotten a
+        payment: the one with an empty window.
+
+        Agenda first, candidates second. The agenda is what the owner asked
+        FinSight to watch; the candidates are FinSight asking a question back.
+      */}
+      {isInitialLoad || !showRecurringBlock ? null : (
+        <div className="mt-6 space-y-6">
+          {/* Hidden outright when the schedules read did not answer — an agenda
+              saying "nothing scheduled yet" to an owner we cannot see the
+              schedules of is a worse lie than showing nothing at all. */}
+          {recurringSchedules !== null ? <RecurringAgenda schedules={recurringSchedules} /> : null}
+
+          {hasCandidates ? (
+            <Panel
+              eyebrow="Suggested by FinSight"
+              title="Does this repeat?"
+              action={
+                <span className="text-xs text-ink-400">
+                  {canWatchPatterns ? "Not watched until you confirm" : "Detected from your records"}
+                </span>
+              }
+            >
+              <ul className="space-y-2">
                 {recurringPatterns.filter((pattern) => pattern.status === "CANDIDATE").map((pattern) => (
-                  <li key={pattern.id} className="rounded-xl border border-edge-subtle p-3.5">
-                    <p className="text-sm font-semibold text-ink-800">{pattern.description}</p>
+                  <li
+                    key={pattern.id}
+                    className="rounded-xl border border-paper-200 bg-paper-100/60 px-3.5 py-3"
+                  >
+                    <p className="text-sm font-semibold text-ink-900">{pattern.description}</p>
                     <p className="mt-1 text-xs text-ink-500">
-                      {pattern.category.name} · about every {pattern.intervalDays} days · {formatMoney(pattern.expectedAmount)}
+                      {pattern.category.name} · about every {pattern.intervalDays} days ·{" "}
+                      <span className="figure">{formatMoney(pattern.expectedAmount)}</span>
                     </p>
-                    <div className="mt-3 flex gap-2">
-                      <button type="button" className="rounded-lg bg-brand-700 px-3 py-2 text-xs font-semibold text-white"
-                        onClick={() => void reviewPattern(pattern.id, "CONFIRMED")}>Confirm recurring</button>
-                      <button type="button" className="rounded-lg border border-edge-subtle px-3 py-2 text-xs font-semibold text-ink-600"
-                        onClick={() => void reviewPattern(pattern.id, "DISMISSED")}>Not recurring</button>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {/* HIDDEN, not disabled, when schedules are unavailable.
+                          POST /recurring-patterns/:id/confirm sits behind the
+                          same server gate as the schedules read, so the button
+                          would 404 — and a disabled control still advertises a
+                          capability, inviting the owner to hunt for what would
+                          re-enable it. "Not recurring" stays: PATCH
+                          /recurring-patterns/:id is ungated and still works, so
+                          dismissing a bad guess remains available. */}
+                      {canWatchPatterns ? (
+                        <Button type="button" size="sm" onClick={() => void confirmPattern(pattern.id)}>
+                          Watch this
+                          <span className="sr-only"> — {pattern.description}</span>
+                        </Button>
+                      ) : null}
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => void dismissPattern(pattern.id)}
+                      >
+                        Not recurring
+                        <span className="sr-only"> — {pattern.description}</span>
+                      </Button>
                     </div>
                   </li>
                 ))}
@@ -868,6 +1112,13 @@ export function ExpenseInsight() {
           ) : null}
         </div>
       )}
+
+      <AskFinSightButton
+        onClick={() => {
+          setDrawerQuestion(undefined);
+          setDrawerOpen(true);
+        }}
+      />
 
       <AskFinSightDrawer
         businessProfileId={selected.id}

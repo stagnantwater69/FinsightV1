@@ -4,6 +4,19 @@ import { env } from "../config/env";
 import { logger } from "../config/logger";
 
 /**
+ * Version tags for the deterministic half of the extraction pipeline,
+ * recorded on every scan (ReceiptScan.extractorVersions).
+ *
+ * The defect these prevent: a parser or preprocessing change silently changes
+ * what gets extracted, and weeks later a regression in the correction metrics
+ * cannot be attributed to anything — every scan looks like it was read by
+ * "the parser". Bump the tag with any behaviour-relevant change to the
+ * corresponding code, so accuracy reports can split before/after.
+ */
+export const PARSER_VERSION = "ocr-parser-v1";
+export const PREPROCESS_VERSION = "ocr-preprocess-v1";
+
+/**
  * The width a receipt photo is reduced to before OCR.
  *
  * Only ever DOWN. A modern phone camera produces a 3000-4000px image of a
@@ -211,6 +224,17 @@ export interface ParsedReceiptFields {
   vendor: string | null;
   description: string | null;
   amount: number | null;
+  /**
+   * True when the date was a numeric one BOTH of whose components could be
+   * the month (05/03/2026) — resolved DD/MM by convention, not by reading.
+   * The convention is right for this market and still applied; this flag is
+   * what lets the confirm screen say "check the day and month" on exactly
+   * the receipts where the convention, not the paper, chose the answer.
+   * Always false when `date` is null or was unambiguous.
+   */
+  dateAmbiguous: boolean;
+  /** The visible text the date was read from ("05/03/2026"), or null when no date was found. */
+  dateSourceText: string | null;
 }
 
 const MONTHS: Record<string, string> = {
@@ -253,12 +277,27 @@ function transactionLines(text: string): string[] {
   return text.split("\n").filter((line) => !ADMINISTRATIVE_LINE.test(line));
 }
 
-function findDateInText(text: string): string | null {
+/**
+ * A date reading plus the honesty metadata about how it was reached.
+ *
+ * `ambiguous` and `sourceText` exist because "05/03/2026" resolved as 5 March
+ * is a CONVENTION applied, not a fact read — and the scan needs to be able to
+ * say so (an AMBIGUOUS_DATE warning carrying the visible text) instead of
+ * presenting the convention's answer with the same confidence as an ISO date.
+ */
+interface FoundDate {
+  iso: string;
+  ambiguous: boolean;
+  /** The exact text the date was matched from, for evidence and warnings. */
+  sourceText: string;
+}
+
+function findDateInText(text: string): FoundDate | null {
   const isoMatch = text.match(/\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/);
   if (isoMatch) {
     const [, y, m, d] = isoMatch;
     const iso = isoIfValid(Number(y), Number(m), Number(d));
-    if (iso) return iso;
+    if (iso) return { iso, ambiguous: false, sourceText: isoMatch[0] };
   }
 
   const monthNameMatch = text.match(
@@ -267,34 +306,40 @@ function findDateInText(text: string): string | null {
   if (monthNameMatch) {
     const [, mon, d, y] = monthNameMatch;
     const iso = isoIfValid(Number(y), Number(MONTHS[mon!.toLowerCase()]), Number(d));
-    if (iso) return iso;
+    if (iso) return { iso, ambiguous: false, sourceText: monthNameMatch[0] };
   }
 
   // Numeric slash/dash dates are locale-ambiguous. Resolve by validity first,
   // then by locale:
   //   - second > 12 -> the second component can only be the day, so MM/DD
   //   - first > 12  -> the first can only be the day, so DD/MM
-  //   - both <= 12  -> genuinely ambiguous; assume DD/MM
+  //   - both <= 12  -> genuinely ambiguous; assume DD/MM, and SAY SO
   //
   // DD/MM is the Philippine convention and this app's target market. The
   // previous MM/DD default was measured getting a real Cebu receipt exactly
   // wrong: "11/07/2026" (11 July) was read as 7 November. The cost of this
   // choice is that a US-format receipt is now misread instead — unavoidable
   // without a locale setting, and the wrong way round for these users. The
-  // confirm screen is where the owner corrects either case.
+  // confirm screen is where the owner corrects either case — which is exactly
+  // why the genuinely ambiguous case (both components <= 12 and different) is
+  // flagged rather than silently resolved: the answer came from a convention,
+  // and the owner deserves to be pointed at it. 05/05/2026 is NOT flagged —
+  // both readings agree, so there is nothing to check.
   const slashMatch = text.match(/\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b/);
   if (slashMatch) {
     const [, aRaw, bRaw, yRaw] = slashMatch;
     const a = Number(aRaw);
     const b = Number(bRaw);
     const year = yRaw!.length === 2 ? Number(`20${yRaw}`) : Number(yRaw);
-    return b > 12 ? isoIfValid(year, a, b) : isoIfValid(year, b, a);
+    const iso = b > 12 ? isoIfValid(year, a, b) : isoIfValid(year, b, a);
+    if (iso === null) return null;
+    return { iso, ambiguous: a <= 12 && b <= 12 && a !== b, sourceText: slashMatch[0] };
   }
 
   return null;
 }
 
-function parseDate(text: string): string | null {
+function parseDate(text: string): FoundDate | null {
   // Prefer a date from the receipt's own transaction lines; only fall back to
   // the full text (administrative lines included) if that finds nothing, since
   // a wrong-but-plausible date still beats no date for the owner to correct.
@@ -329,14 +374,34 @@ function parseAmount(text: string): number | null {
 const NOT_A_VENDOR =
   /^[\W_]*(sales\s+invoice|official\s+receipt|invoice|receipt|cash\s+invoice|statement|order\s+slip)[\W_]*$/i;
 
+// Decorative banner punctuation ("*** SALES INVOICE ***", "=== STORE COPY ===",
+// "~~~ Thank you ~~~"). These characters never appear in a printed business
+// name, so a line carrying one is document furniture regardless of what the
+// letters inside it say — which matters because OCR frequently mangles the
+// header text itself: "*** SALES INVOICE ***" was read as "*xx GALES INVOICE
+// ***" on a real corpus image, and the garbled spelling slipped past
+// NOT_A_VENDOR's exact-phrase match while the asterisks were still intact.
+// Catching the decoration instead of the (unreliable) wording is what let the
+// genuine footer vendor name on that same receipt win instead.
+const DECORATIVE_BANNER = /[*~]|={2,}/;
+
+/**
+ * Closing/farewell boilerplate a receipt prints below the last item — never
+ * the store's name, but ordinary prose that would otherwise pass every other
+ * filter (real letters, multiple words, no digits).
+ */
+const CLOSING_LINE = /\b(thank\s*you|come\s+again|please\s+come\s+back|salamat|maraming\s+salamat)\b/i;
+
 /**
  * Words that mark a line as a business name rather than an address or a
  * scrap of OCR noise. Deliberately Philippine-retail flavoured, because that
  * is the market — a "sari-sari store" or a "marketing corporation" is a shop,
- * a line reading "Dore" is almost certainly a mangled logo.
+ * a line reading "Dore" is almost certainly a mangled logo. "Tindahan" is the
+ * Filipino word for "store" and appears as often as the English word on
+ * small-shop receipts.
  */
 const VENDOR_KEYWORD =
-  /\b(store|shop|mart|market|supermarket|grocery|groceries|trading|enterprise|enterprises|corporation|corp|incorporated|inc|company|co|merchandise|merchandising|pharmacy|bakery|hardware|sari-?sari|foods?|restaurant|cafe|coffee|eatery|carinderia|depot|supply|supplies|center|centre)\b/i;
+  /\b(store|shop|mart|market|supermarket|grocery|groceries|trading|enterprise|enterprises|corporation|corp|incorporated|inc|company|co|merchandise|merchandising|pharmacy|bakery|hardware|sari-?sari|tindahan|foods?|restaurant|cafe|coffee|eatery|carinderia|depot|supply|supplies|center|centre)\b/i;
 
 /**
  * Best guess at the store name.
@@ -353,9 +418,13 @@ const VENDOR_KEYWORD =
  * counts — the name really is usually near the top — but it no longer decides
  * on its own.
  *
- * KNOWN LIMITATION, unchanged: a store name printed only in the FOOTER is
- * still read wrong when something plausible sits at the top. The confirm
- * screen is where the owner fixes it.
+ * A store name printed only in the FOOTER is no longer disqualified by
+ * position alone (see the scoring notes below) — a footer name with a
+ * recognisable business-type word, or one left as the only real candidate
+ * once decorative banners and closing boilerplate are excluded, wins. This
+ * is not a promise the footer always wins: two equally plausible bare names,
+ * one top and one bottom, still resolve toward the top. The confirm screen
+ * is where the owner fixes whichever draft is wrong.
  */
 function parseVendor(text: string): string | null {
   const lines = text.split("\n").map((l) => l.trim());
@@ -367,6 +436,11 @@ function parseVendor(text: string): string | null {
     // store name, and skip bare "SALES INVOICE"-style headers.
     .filter(({ line }) => !ADMINISTRATIVE_LINE.test(line))
     .filter(({ line }) => !NOT_A_VENDOR.test(line.replace(/[*=~-]/g, " ").trim()))
+    // Decorative banners are document furniture even when OCR has mangled
+    // the wording inside them (see DECORATIVE_BANNER above), and a "thank
+    // you, come again" footer line is never the store's name either.
+    .filter(({ line }) => !DECORATIVE_BANNER.test(line))
+    .filter(({ line }) => !CLOSING_LINE.test(line))
     // A line that is mostly digits/punctuation is a reference number, not a name.
     .filter(({ line }) => {
       const letters = (line.match(/[a-zA-Z]/g) ?? []).length;
@@ -955,11 +1029,14 @@ export function joinPagesWithoutSeams(pageTexts: string[]): string {
 
 export function parseReceiptFields(text: string): ParsedReceiptFields {
   const vendor = parseVendor(text);
+  const date = parseDate(text);
   return {
-    date: parseDate(text),
+    date: date?.iso ?? null,
     vendor,
     description: vendor ? `Purchase from ${vendor}` : "Receipt purchase",
     amount: parseAmount(text),
+    dateAmbiguous: date?.ambiguous ?? false,
+    dateSourceText: date?.sourceText ?? null,
   };
 }
 
@@ -1017,6 +1094,92 @@ export function confidenceForValue(lines: OcrLine[], value: string | number | nu
  */
 export function overallConfidence(result: OcrResult): number {
   return Math.round(result.confidence);
+}
+
+// ============================================================
+// Evidence — WHERE a parsed value came from
+// ============================================================
+// confidenceForValue answers "how sure was the engine about this value";
+// these answer the companion question the review screen could never answer
+// before: WHICH PAGE and WHICH PRINTED LINE the value was read from. The
+// defect this fixes: the write path re-derived value locations to score
+// confidence and then threw the location away, so "read from page 2:
+// 'TOTAL 1,220.00'" was computed and discarded on every scan.
+
+/** Where a value was found. pageNumber is 1-indexed; null means "only locatable in the concatenated document". */
+export interface ValueEvidence {
+  pageNumber: number | null;
+  sourceText: string;
+}
+
+/**
+ * Finds the printed line a parsed value came from, page by page.
+ *
+ * Same normalised-containment matching as confidenceForValue, so the line
+ * this points at is the same line the confidence describes. Returns null
+ * when the value cannot be located — a value the parser DERIVED rather than
+ * read has no line to point at, and inventing one would be evidence-shaped
+ * fiction. The >= 3 length floor mirrors confidenceForValue's: a one- or
+ * two-character target matches half the receipt and proves nothing.
+ */
+export function locateValue(pageTexts: string[], value: string | number | null): ValueEvidence | null {
+  if (value === null || value === "") return null;
+  const target = normaliseToken(String(value));
+  if (target.length < 3) return null;
+
+  for (let page = 0; page < pageTexts.length; page++) {
+    for (const line of (pageTexts[page] ?? "").split("\n")) {
+      if (normaliseToken(line).includes(target)) {
+        return { pageNumber: page + 1, sourceText: line.trim() };
+      }
+    }
+  }
+
+  // A value only locatable in the concatenated document (it straddled a page
+  // boundary, or the caller passed a single combined text) keeps its source
+  // text but honestly reports no page.
+  for (const line of pageTexts.join("\n").split("\n")) {
+    if (normaliseToken(line).includes(target)) {
+      return { pageNumber: null, sourceText: line.trim() };
+    }
+  }
+  return null;
+}
+
+/**
+ * Evidence for each parsed line item, located by its AMOUNT.
+ *
+ * The amount rather than the name, because the stored name has been through
+ * cleanItemName (brackets restored to letters, bullets stripped) and often no
+ * longer matches the raw line character-for-character — the amount survives
+ * verbatim. Two guards keep the pointing honest:
+ *
+ *   - lines the item parser itself would never admit (totals, VAT, payment
+ *     lines) are excluded, so an item costing exactly the receipt total is
+ *     not "evidenced" by the TOTAL line; and
+ *   - each line is consumed once, so two items at the same price cannot both
+ *     claim the same printed line — the same discipline repairItemNames
+ *     applies when matching vision names by amount.
+ *
+ * Null per item where no line qualifies. Never invented.
+ */
+export function locateItemLines(pageTexts: string[], amounts: number[]): (ValueEvidence | null)[] {
+  const candidates: { pageNumber: number; sourceText: string; normalised: string; used: boolean }[] = [];
+  for (let page = 0; page < pageTexts.length; page++) {
+    for (const line of (pageTexts[page] ?? "").split("\n")) {
+      if (!line.trim()) continue;
+      if (ADMINISTRATIVE_LINE.test(line) || NOT_AN_ITEM.test(line)) continue;
+      candidates.push({ pageNumber: page + 1, sourceText: line.trim(), normalised: normaliseToken(line), used: false });
+    }
+  }
+
+  return amounts.map((amount) => {
+    const target = normaliseToken(amount.toFixed(2));
+    const hit = candidates.find((c) => !c.used && c.normalised.includes(target));
+    if (!hit) return null;
+    hit.used = true;
+    return { pageNumber: hit.pageNumber, sourceText: hit.sourceText };
+  });
 }
 
 // ============================================================

@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { api } from "../lib/api";
 import { getErrorMessage } from "../lib/errors";
@@ -13,13 +13,20 @@ function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
+interface DuplicateSalesState {
+  description: string;
+  amount: number;
+}
+
 export function AddSalesRecord() {
   const { selected } = useBusinessProfiles();
   const navigate = useNavigate();
   const toast = useToast();
+  // Prefilled by the "Duplicate" action on Records — date is left at today().
+  const duplicateFrom = (useLocation().state as { duplicateFrom?: DuplicateSalesState } | null)?.duplicateFrom;
   const [date, setDate] = useState(today());
-  const [description, setDescription] = useState("Daily sales");
-  const [amount, setAmount] = useState<number | "">("");
+  const [description, setDescription] = useState(duplicateFrom?.description ?? "Daily sales");
+  const [amount, setAmount] = useState<number | "">(duplicateFrom?.amount ?? "");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 

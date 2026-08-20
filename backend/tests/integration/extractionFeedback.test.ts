@@ -440,12 +440,17 @@ describe("per-field confidence", () => {
 
   it("stays null on a vision-assisted read, where it would describe unread text", async () => {
     extractTextMock.mockResolvedValue("~~~ unreadable ~~~");
+    // The extraction envelope: an ACCEPTED reading, as opposed to null
+    // ("provider never reached") or a rejectReason ("answered, refused").
     visionMock.mockResolvedValue({
-      date: "2026-07-20",
-      vendor: "ABC SARI-SARI STORE",
-      amount: 1400,
-      description: null,
-      items: [{ name: "Rice 25kg", quantity: null, unitPrice: null, amount: 1400 }],
+      receipt: {
+        date: "2026-07-20",
+        vendor: "ABC SARI-SARI STORE",
+        amount: 1400,
+        warnings: [],
+        items: [{ name: "Rice 25kg", quantity: null, amount: 1400, pageNumber: null, sourceText: null }],
+      },
+      rejectReason: null,
     });
 
     const scan = await upload();

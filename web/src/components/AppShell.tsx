@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ComponentType, type ReactNode } from 
 import { Link, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
+import { useTourOptional } from "../context/TourContext";
 import { usePersistentState, useDismiss, useFocusTrap, useMenuKeys } from "../lib/hooks";
 import { BusinessSwitcher } from "./BusinessSwitcher";
 import { GlobalSearch } from "./GlobalSearch";
@@ -74,6 +75,8 @@ interface NavItem {
   match?: string;
   /** Renders as a nested disclosure rather than a plain link. */
   children?: { to: string; label: string }[];
+  /** `data-tour` anchor for the product tour — a stable selector, not a class. */
+  tour?: string;
 }
 
 interface NavGroup {
@@ -101,7 +104,7 @@ const NAV_GROUPS: NavGroup[] = [
     heading: "Overview",
     items: [
       { to: "/dashboard", label: "Dashboard", Icon: IconDashboard },
-      { to: "/records", label: "Records", Icon: IconRecords },
+      { to: "/records", label: "Records", Icon: IconRecords, tour: "records" },
     ],
   },
   {
@@ -113,6 +116,7 @@ const NAV_GROUPS: NavGroup[] = [
         Icon: IconInsights,
         match: "/insights",
         children: INSIGHTS_LINKS,
+        tour: "insights",
       },
     ],
   },
@@ -159,16 +163,16 @@ function pageTitleFor(pathname: string): string {
 /** The four bottom-nav destinations on mobile. Mirrors the mobile app's tabs. */
 const BOTTOM_NAV: NavItem[] = [
   { to: "/dashboard", label: "Dashboard", Icon: IconDashboard },
-  { to: "/records", label: "Records", Icon: IconRecords },
-  { to: "/insights/expense-behavior", label: "Insights", Icon: IconInsights, match: "/insights" },
+  { to: "/records", label: "Records", Icon: IconRecords, tour: "records" },
+  { to: "/insights/expense-behavior", label: "Insights", Icon: IconInsights, match: "/insights", tour: "insights" },
   { to: "/business-profiles", label: "Business", Icon: IconBusiness },
 ];
 
-const QUICK_ADD = [
+const QUICK_ADD: { to: string; Icon: IconComponent; tone: string; title: string; sub: string; tour?: string }[] = [
   { to: "/records/expenses/new", Icon: IconExpense, tone: "bg-tint-accent text-tone-accent", title: "Add expense", sub: "Money spent by the business" },
   { to: "/records/sales/new", Icon: IconSales, tone: "bg-tint-brand text-tone-brand", title: "Add sales reference", sub: "A recorded sales amount" },
-  { to: "/records/receipts/new", Icon: IconCamera, tone: "bg-tint-info text-tone-info", title: "Scan receipt", sub: "Extract details from a photo" },
-  { to: "/records/csv-imports/new", Icon: IconUpload, tone: "bg-tint-brand text-tone-brand", title: "Import CSV", sub: "Upload existing records" },
+  { to: "/records/receipts/new", Icon: IconCamera, tone: "bg-tint-info text-tone-info", title: "Scan receipt", sub: "Extract details from a photo", tour: "scan-receipt" },
+  { to: "/records/csv-imports/new", Icon: IconUpload, tone: "bg-tint-brand text-tone-brand", title: "Import CSV", sub: "Upload existing records", tour: "import-csv" },
 ];
 
 const isBool = (v: unknown): v is boolean => typeof v === "boolean";
@@ -216,6 +220,7 @@ function SidebarLink({
     <li className="group relative">
       <Link
         to={item.to}
+        data-tour={item.tour}
         aria-current={active ? "page" : undefined}
         className={`mb-0.5 flex min-h-tap items-center rounded-xl text-sm font-medium transition ${
           collapsed ? "justify-center px-0" : "gap-3 px-3"
@@ -239,9 +244,24 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [addOpen, setAddOpen] = useState(false);
   const [mobileSearch, setMobileSearch] = useState(false);
 
+  /*
+   * The product tour's two Quick-add steps highlight items INSIDE this menu,
+   * so while one of them is active the menu is held open by the tour rather
+   * than by the user. Held open this way it must not behave like a menu the
+   * user opened: useDismiss would close it the moment they click the tour's
+   * own Next button (an "outside" click), and useFocusTrap would fight the
+   * tour tooltip's trap for focus — so both stay wired to `addOpen` only.
+   * When the step moves on, `tourHoldsAddMenu` goes false and the menu
+   * disappears again, restoring exactly the state the user had.
+   */
+  const tour = useTourOptional();
+  const tourHoldsAddMenu =
+    tour?.activeStepId === "receipt-scanner" || tour?.activeStepId === "csv-import";
+  const addMenuVisible = addOpen || tourHoldsAddMenu;
+
   const { ref: addRef, triggerRef: addTriggerRef } = useDismiss(addOpen, () => setAddOpen(false));
   const onMenuKeys = useMenuKeys();
-  const addTrapRef = useFocusTrap<HTMLDivElement>(addOpen);
+  const addTrapRef = useFocusTrap<HTMLDivElement>(addOpen && !tourHoldsAddMenu);
 
   // Close transient chrome on navigation, or a menu lingers over the new page.
   useEffect(() => {
@@ -419,6 +439,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                           <>
                             <Link
                               to={item.to}
+                              data-tour={item.tour}
                               aria-current={isActive(item.to, item.match) ? "page" : undefined}
                               className={`mb-0.5 flex min-h-tap items-center justify-center rounded-xl transition ${
                                 isActive(item.to, item.match)
@@ -435,6 +456,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                           <>
                             <button
                               type="button"
+                              data-tour={item.tour}
                               onClick={() => setInsightsOpen((v) => !v)}
                               aria-expanded={insightsOpen}
                               aria-controls="sidebar-insights"
@@ -588,8 +610,9 @@ export function AppShell({ children }: { children: ReactNode }) {
                   <button
                     ref={addTriggerRef}
                     type="button"
+                    data-tour="quick-add"
                     onClick={() => setAddOpen((v) => !v)}
-                    aria-expanded={addOpen}
+                    aria-expanded={addMenuVisible}
                     aria-haspopup="menu"
                     className="tap gap-1.5 rounded-xl bg-brand-700 px-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-800 sm:px-3"
                   >
@@ -597,7 +620,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                     <span className="hidden sm:inline">Quick add</span>
                     <span className="sr-only sm:hidden">Quick add</span>
                   </button>
-                  {addOpen ? (
+                  {addMenuVisible ? (
                     // useDismiss closes this on Escape and outside click, and
                     // useMenuKeys drives the arrow keys — but neither stopped
                     // Tab from leaving the menu while it stayed open over the
@@ -617,6 +640,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                         <Link
                           key={entry.to}
                           to={entry.to}
+                          data-tour={entry.tour}
                           role="menuitem"
                           className="flex min-h-tap items-center gap-2.5 rounded-xl px-2.5 transition hover:bg-paper-100"
                         >
@@ -684,6 +708,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <li key={item.to} className="flex-1">
                   <Link
                     to={item.to}
+                    data-tour={item.tour}
                     aria-current={active ? "page" : undefined}
                     className={`flex min-h-tap flex-col items-center justify-center gap-0.5 py-1.5 text-[11px] font-medium transition-colors ${
                       active ? "text-brand-700" : "text-ink-500"

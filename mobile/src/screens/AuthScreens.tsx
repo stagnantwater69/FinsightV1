@@ -30,7 +30,7 @@ function AuthShell({ title, subtitle, children }: { title: string; subtitle?: st
   return (
     <Screen>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={{ padding: space.lg, justifyContent: "center", flexGrow: 1 }}>
+        <ScrollView contentContainerStyle={{ padding: space.lg, paddingTop: space.xxl, flexGrow: 1 }}>
           <T variant="titleLg" style={{ textAlign: "center", marginBottom: 4 }}>
             FinSight
           </T>

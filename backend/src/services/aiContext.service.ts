@@ -15,8 +15,19 @@ import { extractScenario, type ExtractedScenario } from "../lib/scenario";
 import { utcDateKey, utcToday } from "../lib/dates";
 import { getDashboardSummary } from "./dashboard.service";
 import { getExpenseBehavior, getRecoveryInsight, loadRecoveryTargets, simulateSpendingImpact } from "./insights.service";
+import { NOTICEABLE_BAND_FRACTION } from "./analysis.service";
 
-export const INTERACTION_MODULES = ["Expense Insights", "Spending Impact", "Recovery Target", "Dashboard"] as const;
+export const INTERACTION_MODULES = [
+  "Expense Insights",
+  "Spending Impact",
+  "Recovery Target",
+  "Dashboard",
+  // The unified review queue's "Explain this flag" entry point. Context is the
+  // owner's open findings and flagged records — bounded, server-derived
+  // evidence only, per the strategy doc's rule that the model phrases
+  // already-calculated facts rather than judging records itself.
+  "Records Review",
+] as const;
 export type InteractionModule = (typeof INTERACTION_MODULES)[number];
 
 // The period the drawer reasons over when the question doesn't name one.
@@ -189,7 +200,7 @@ async function recoveryLines(userId: number, profile: BusinessProfile): Promise<
   return lines;
 }
 
-async function spendingImpactLines(
+export async function spendingImpactLines(
   userId: number,
   profile: BusinessProfile,
   scenario: ExtractedScenario
@@ -201,7 +212,7 @@ async function spendingImpactLines(
       `An expense is treated as High Impact once it exceeds ${Number(
         profile.largeExpenseThresholdPercent
       )}% of available business funds, Noticeable Impact from ${(
-        Number(profile.largeExpenseThresholdPercent) * 0.4
+        Number(profile.largeExpenseThresholdPercent) * NOTICEABLE_BAND_FRACTION
       ).toFixed(1)}% up to that, and Low Impact below.`
     );
     if (scenario.looksLikeScenario) {
@@ -279,6 +290,49 @@ export interface ModuleContext {
   scenario?: ExtractedScenario;
 }
 
+/**
+ * Context for the review queue's "Explain this flag" action.
+ *
+ * The evidence is entirely server-derived: open findings with their
+ * detector-written reasons, plus the legacy record-level flags. The framing
+ * line matters as much as the data — every finding is "unusual", never
+ * "fraudulent", and the model is told so explicitly because a review screen
+ * is exactly where an over-eager wording would do the most damage.
+ */
+async function recordsReviewLines(profile: BusinessProfile): Promise<string[]> {
+  const [findings, flaggedDuplicates, largeExpenses] = await Promise.all([
+    prisma.anomalyFinding.findMany({
+      where: { businessProfileId: profile.id, status: "OPEN" },
+      orderBy: [{ severity: "desc" }, { detectedAt: "desc" }],
+      take: 10,
+      include: { expenseRecord: { select: { description: true, amount: true, date: true, vendor: true } } },
+    }),
+    prisma.expenseRecord.count({ where: { businessProfileId: profile.id, duplicateStatus: "Flagged" } }),
+    prisma.expenseRecord.count({ where: { businessProfileId: profile.id, largeExpenseFlag: true } }),
+  ]);
+
+  const lines = ["", "=== RECORDS NEEDING REVIEW ==="];
+  lines.push(`Possible duplicate records awaiting review: ${flaggedDuplicates}`);
+  lines.push(`Records over the owner's large-expense threshold: ${largeExpenses}`);
+  if (findings.length === 0) {
+    lines.push("No open detector findings.");
+  } else {
+    lines.push("Open findings (each is a review prompt, NOT confirmed fraud or a confirmed error):");
+    for (const finding of findings) {
+      const record = finding.expenseRecord;
+      const subject = record
+        ? `${record.description} — ${peso(Number(record.amount))} on ${utcDateKey(record.date)}${record.vendor ? ` (${record.vendor})` : ""}`
+        : "profile-level pattern";
+      const reasons = Array.isArray(finding.reasons) ? (finding.reasons as string[]).slice(0, 3).join("; ") : "";
+      lines.push(`- [${finding.severity}] ${finding.title}: ${subject}. Why flagged: ${reasons}`);
+    }
+  }
+  lines.push(
+    "When the owner asks about a flag, explain the comparison behind it in plain language and suggest checking the record — never assert wrongdoing, and never invent findings not listed above.",
+  );
+  return lines;
+}
+
 export async function buildModuleContext(
   userId: number,
   profile: BusinessProfile,
@@ -296,7 +350,9 @@ export async function buildModuleContext(
         ? recoveryLines(userId, profile)
         : module === "Spending Impact"
           ? spendingImpactLines(userId, profile, scenario!)
-          : dashboardLines(userId, profile),
+          : module === "Records Review"
+            ? recordsReviewLines(profile)
+            : dashboardLines(userId, profile),
   ]);
 
   const lines = [

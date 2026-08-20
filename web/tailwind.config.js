@@ -148,6 +148,35 @@ export default {
           accent: "rgb(var(--sidebar-accent) / <alpha-value>)",
           fg: "rgb(var(--sidebar-fg) / <alpha-value>)",
         },
+
+        // ============================================================
+        // landing — the public landing page's own palette. DELIBERATE
+        // exception to the brand teal scale: the approved landing design
+        // is built on a warmer emerald/mint/cream scheme with a gold CTA.
+        // Scoped by name so it cannot leak into app chrome — nothing
+        // outside web/src/components/landing/ and PublicLayout should
+        // reference `landing-*`.
+        //
+        // Contrast notes (measured):
+        //   charcoal on cream        ~15.5:1  body text
+        //   muted on cream            ~5.6:1  secondary text
+        //   green (#0C7A62) on cream  ~5.2:1  links / eyebrows
+        //   white on emerald         ~13.9:1  dark-section text
+        //   charcoal on gold          ~8.1:1  primary CTA ink (white FAILS)
+        //   red (#D95C54) small text  ~3.9:1  — icons/large text only
+        landing: {
+          emerald: "#063F35",
+          "emerald-2": "#0A5445", // raised surfaces on the emerald sections
+          green: "#0C7A62",
+          mint: "#A9DEC9",
+          "mint-light": "#CDEEE0",
+          "mint-pale": "#E8F7F0",
+          cream: "#FBFAF4",
+          charcoal: "#142321",
+          muted: "#5D6B67",
+          gold: "#F5AD19",
+          red: "#D95C54",
+        },
       },
 
       fontFamily: {
@@ -256,6 +285,68 @@ export default {
           "70%": { transform: "scale(1.15)", opacity: "1" },
           "100%": { transform: "scale(1)", opacity: "1" },
         },
+        // Fin's idle breath on the dashboard greeting.
+        //
+        // Mobile plays a 103-frame flipbook of the full wave. On web those
+        // frames would be a download on every dashboard load, for decoration,
+        // so the web mascot holds the sequence's own rest pose and breathes
+        // instead. The movement is deliberately under a pixel of drift and
+        // ~1.5% of scale: at 88px that is felt rather than watched, which is
+        // the point — a mascot that visibly bobs next to a page of figures
+        // pulls the eye away from them every four seconds.
+        breathe: {
+          "0%, 100%": { transform: "translateY(0) scale(1)" },
+          "50%": { transform: "translateY(-1.5px) scale(1.015)" },
+        },
+        // ============================================================
+        // The landing page's one authored motion idea
+        // ============================================================
+        // Swiss layout is built from rules and a column grid, so the page
+        // announces itself by DRAWING itself: each hairline scales out from
+        // its left edge, and the content it separates rises just behind it.
+        //
+        // One idea, staggered — not a different effect per section. The
+        // easing is a real exponential ease-out (cubic-bezier(.16,1,.3,1)),
+        // which decelerates far harder than `ease-out` and is what makes the
+        // motion read as settling into place rather than sliding to a stop.
+        //
+        // Both start from an ALREADY-VISIBLE default in the reduced-motion
+        // case: index.css's global rule collapses duration to 0.01ms, and
+        // because these animations end at the natural state, collapsing them
+        // leaves the page correct rather than blank.
+        "rule-draw": {
+          from: { transform: "scaleX(0)" },
+          to: { transform: "scaleX(1)" },
+        },
+        rise: {
+          from: { opacity: "0", transform: "translateY(14px)" },
+          to: { opacity: "1", transform: "none" },
+        },
+        // Ask FinSight's idle bob, matching the mobile FAB's own loop
+        // (mobile/src/components/AskFinSightFab.tsx: 5px over 1400ms each
+        // way). Larger than `breathe` on purpose: this one is asking to be
+        // noticed, where the greeting mascot is only keeping company.
+        bob: {
+          "0%, 100%": { transform: "translateY(0)" },
+          "50%": { transform: "translateY(-5px)" },
+        },
+        // ============================================================
+        // Landing "Financial Trail" motion
+        // ============================================================
+        // The trail SVGs set `pathLength="1"` with `stroke-dasharray: 1`, so
+        // one keyframe draws any path regardless of its real length. Ends at
+        // the natural state, so the global reduced-motion collapse leaves the
+        // trail fully drawn rather than invisible.
+        "trail-draw": {
+          from: { strokeDashoffset: "1" },
+          to: { strokeDashoffset: "0" },
+        },
+        // The one sanctioned alert-node pulse — runs a finite 3 beats, never
+        // an endless loop on a large element.
+        "soft-pulse": {
+          "0%, 100%": { transform: "scale(1)", opacity: "1" },
+          "50%": { transform: "scale(1.12)", opacity: "0.85" },
+        },
       },
       animation: {
         "pop-in": "pop-in 380ms cubic-bezier(.2,.9,.3,1) both",
@@ -266,6 +357,12 @@ export default {
         "toast-in": "toast-in 250ms ease both",
         "slide-in-right": "slide-in-right 180ms ease both",
         "badge-in": "badge-in 260ms cubic-bezier(.2,.9,.3,1) both",
+        breathe: "breathe 4s ease-in-out infinite",
+        bob: "bob 2.8s ease-in-out infinite",
+        "rule-draw": "rule-draw 700ms cubic-bezier(.16,1,.3,1) both",
+        rise: "rise 620ms cubic-bezier(.16,1,.3,1) both",
+        "trail-draw": "trail-draw 900ms cubic-bezier(.16,1,.3,1) both",
+        "soft-pulse": "soft-pulse 1.6s ease-in-out 3 both",
       },
     },
   },

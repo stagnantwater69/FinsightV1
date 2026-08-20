@@ -88,10 +88,10 @@
     "kind": "synthetic",
     "overall": 89,
     "amountConfidence": 96,
-    "vendorConfidence": 67,
+    "vendorConfidence": 93,
     "verdict": {
       "date": "correct",
-      "vendor": "wrong",
+      "vendor": "correct",
       "amount": "correct"
     },
     "items": {
@@ -99,7 +99,7 @@
       "matched": 2,
       "falsePositives": 0
     },
-    "anyError": true,
+    "anyError": false,
     "weakestItem": 94,
     "itemsSum": 845.5,
     "total": 845.5

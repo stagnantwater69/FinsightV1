@@ -24,6 +24,9 @@ export async function saveFinding(finding: DetectionFinding) {
     metadata: finding.metadata === undefined ? Prisma.JsonNull : json(finding.metadata),
     detectorVersion: finding.detectorVersion,
     detectedAt: new Date(),
+    // Explicit on update too: a re-scored SHADOW finding must stay SHADOW,
+    // not silently keep whatever status a previous version wrote.
+    ...(finding.status ? { status: finding.status } : {}),
   };
 
   return prisma.anomalyFinding.upsert({
@@ -47,7 +50,15 @@ export async function listFindings(
   if (!owned) throw new ApiError(404, "Business profile not found");
 
   return prisma.anomalyFinding.findMany({
-    where: { businessProfileId, type: filters.type, status: filters.status, severity: filters.severity },
+    where: {
+      businessProfileId,
+      type: filters.type,
+      // SHADOW findings are evaluation data, not owner-facing content. They
+      // are unreachable through this API even by asking for them explicitly —
+      // shadow-mode exposure is a release decision, not a query parameter.
+      status: filters.status && filters.status !== "SHADOW" ? filters.status : { not: "SHADOW" },
+      severity: filters.severity,
+    },
     orderBy: { id: "desc" },
     take: Math.max(1, Math.min(filters.take ?? 50, 100)),
     ...(filters.cursorId ? { cursor: { id: filters.cursorId }, skip: 1 } : {}),

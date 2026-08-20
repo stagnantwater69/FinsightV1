@@ -171,6 +171,10 @@ enum AnomalyFindingType {
   RECURRING_CHANGE
   TREND_CHANGE
   BEHAVIORAL_NOVELTY
+  // [ADDED] Multivariate ML detector (Isolation Forest). Its own member rather
+  // than reusing BEHAVIORAL_NOVELTY so summaries and the review queue can
+  // distinguish rule-based from model-based findings.
+  ML_OUTLIER
 
   @@map("AnomalyFindingType")
 }
@@ -189,6 +193,12 @@ enum AnomalyFindingStatus {
   DISMISSED
   RESOLVED
   SUPERSEDED
+  // [ADDED] Shadow-mode findings: persisted for evaluation, invisible to the
+  // owner. OPEN findings are rendered by both clients and injected into Ask
+  // FinSight context, so a detector under evaluation must use a storage-level
+  // state — never a severity trick — to stay silent. Excluded from
+  // listFindings, summaries, notifications, and AI context by construction.
+  SHADOW
 
   @@map("AnomalyFindingStatus")
 }
@@ -226,6 +236,19 @@ enum AnalysisJobStatus {
   FAILED
 
   @@map("AnalysisJobStatus")
+}
+
+// [ADDED] CSV import machine progress (ADR-3). Deliberately the same shape as
+// AnalysisJobStatus: PENDING (accepted, not started), PROCESSING (a worker
+// holds the lease), COMPLETE (every stage committed), FAILED (attempts
+// exhausted; failureStage says where).
+enum CsvImportProcessingStatus {
+  PENDING
+  PROCESSING
+  COMPLETE
+  FAILED
+
+  @@map("CsvImportProcessingStatus")
 }
 
 // [ADDED] The account lifecycle, as an enum rather than the dictionary's free
@@ -319,6 +342,7 @@ model BusinessProfile {
   anomalyFindings       AnomalyFinding[]
   categoryStatistics    CategoryStatistics[]
   recurringPatterns     RecurringPattern[]
+  recurringSchedules    RecurringSchedule[]
   analysisJobs          AnalysisJob[]
 
   @@index([userId])
@@ -332,12 +356,20 @@ model ExpenseCategory {
   description       String?  @map("Category_Description") @db.VarChar(255)
   createdAt         DateTime @default(now()) @map("Category_CreatedAt")
 
-  businessProfile   BusinessProfile      @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
-  expenseRecords    ExpenseRecord[]
-  receiptScanItems  ReceiptScanItem[]
-  statistics        CategoryStatistics[]
-  recurringPatterns RecurringPattern[]
+  businessProfile    BusinessProfile      @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+  expenseRecords     ExpenseRecord[]
+  receiptScanItems   ReceiptScanItem[]
+  statistics         CategoryStatistics[]
+  recurringPatterns  RecurringPattern[]
+  recurringSchedules RecurringSchedule[]
 
+  // [ADDED] Closes the CSV-import category race: two concurrent imports that
+  // both miss the same new name in findMany used to both insert it, leaving
+  // duplicate categories the owner's spending then split across. The service
+  // still matches case-insensitively first; this constraint is the backstop
+  // that turns the race's second insert into a catchable conflict. The
+  // migration merges any pre-existing exact duplicates before adding it.
+  @@unique([businessProfileId, name])
   @@index([businessProfileId])
   @@map("ExpenseCategory")
 }
@@ -457,13 +489,65 @@ model RecurringPattern {
   createdAt         DateTime               @default(now()) @map("RecurringPattern_CreatedAt")
   updatedAt         DateTime               @updatedAt @map("RecurringPattern_UpdatedAt")
 
-  businessProfile BusinessProfile @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
-  category        ExpenseCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  businessProfile BusinessProfile    @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+  category        ExpenseCategory    @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  derivedSchedule RecurringSchedule?
 
   @@unique([businessProfileId, normalizedKey])
   @@index([businessProfileId, status, nextExpectedDate])
   @@index([categoryId])
   @@map("RecurringPattern")
+}
+
+// [ADDED] RecurringSchedule — owner intent, kept deliberately separate from
+// RecurringPattern (detector inference). "FinSight noticed this repeats" and
+// "I told FinSight this repeats" are different claims with different owners,
+// and merging them is what made a confirmed pattern invisible in the first
+// place.
+//
+// A second table rather than nullable columns on RecurringPattern because an
+// owner-declared schedule cannot satisfy that table's DB-level CHECKs: it has
+// zero observations (CHECK ObservationCount >= 3), no confidence (NOT NULL,
+// 0..1), and no normalizedKey — which is sha256(categoryId|vendor|description)
+// derived from the expense RECORDS a declared schedule does not yet have.
+// Relaxing those constraints to make owner rows fit would weaken the guarantees
+// that protect the detector's own data quality.
+//
+// Deliberately absent: confidence, observationCount, normalizedKey. Those are
+// properties of an inference and belong only to RecurringPattern.
+//
+// sourcePatternId is provenance only, ON DELETE SET NULL: deleting the
+// inference that suggested a schedule must never delete the owner's schedule.
+// @@unique on it so one pattern cannot spawn two schedules.
+model RecurringSchedule {
+  id                Int       @id @default(autoincrement()) @map("RecurringSchedule_ID")
+  businessProfileId Int       @map("BusinessProfile_ID")
+  categoryId        Int       @map("Category_ID")
+  /// What the owner calls this payment. Owner-written; never machine-written.
+  label             String    @map("RecurringSchedule_Label") @db.VarChar(255)
+  vendor            String?   @map("RecurringSchedule_Vendor") @db.VarChar(150)
+  intervalDays      Int       @map("RecurringSchedule_IntervalDays")
+  expectedAmount    Decimal   @map("RecurringSchedule_ExpectedAmount") @db.Decimal(18, 2)
+  amountTolerance   Decimal   @default(0.15) @map("RecurringSchedule_AmountTolerance") @db.Decimal(8, 6)
+  /// The owner's due date. The detector may only advance it by intervalDays
+  /// once a matching record arrives; it must never overwrite it otherwise.
+  nextDueDate       DateTime  @map("RecurringSchedule_NextDueDate") @db.Date
+  /// Detector-maintained tracking only.
+  lastRecordedDate  DateTime? @map("RecurringSchedule_LastRecordedDate") @db.Date
+  /// Pause without deleting — replaces the never-implemented DISABLED status.
+  isActive          Boolean   @default(true) @map("RecurringSchedule_IsActive")
+  sourcePatternId   Int?      @map("RecurringPattern_ID")
+  createdAt         DateTime  @default(now()) @map("RecurringSchedule_CreatedAt")
+  updatedAt         DateTime  @updatedAt @map("RecurringSchedule_UpdatedAt")
+
+  businessProfile BusinessProfile   @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+  category        ExpenseCategory   @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  sourcePattern   RecurringPattern? @relation(fields: [sourcePatternId], references: [id], onDelete: SetNull)
+
+  @@unique([sourcePatternId])
+  @@index([businessProfileId, isActive, nextDueDate])
+  @@index([categoryId])
+  @@map("RecurringSchedule")
 }
 
 model AnalysisJob {
@@ -557,6 +641,21 @@ model ReceiptScan {
   /// score predicts a wrong answer for that particular field.
   vendorConfidence        Int?      @map("ReceiptScan_VendorConfidence")
   amountConfidence        Int?      @map("ReceiptScan_AmountConfidence")
+  /// [ADDED] Which code read this receipt: provider, model, prompt version,
+  /// response-schema version, parser version, preprocessing version. Null on
+  /// scans read before recording began. Without this, a model or prompt change
+  /// silently changes extraction with no way to attribute a regression.
+  extractorVersions       Json?     @map("ReceiptScan_ExtractorVersions")
+  /// [ADDED] Per-field evidence: for date/vendor/amount, the page number, the
+  /// visible source text the value was read from, the extraction source
+  /// (ocr | vision | owner), and the confidence band. What lets the review
+  /// screen say "read from page 2: 'TOTAL 1,220.00'" instead of a bare number.
+  fieldEvidence           Json?     @map("ReceiptScan_FieldEvidence")
+  /// [ADDED] Machine-readable warning codes (BLURRY_PAGE, AMBIGUOUS_DATE,
+  /// UNEXPLAINED_GAP, VISION_INTERPRETED, ...) with optional field/page
+  /// detail. The clients render prose FROM these; they had already drifted
+  /// apart by hardcoding the prose twice.
+  warnings                Json?     @map("ReceiptScan_Warnings")
   createdAt               DateTime  @default(now()) @map("ReceiptScan_CreatedAt")
 
   businessProfile BusinessProfile?         @relation(fields: [businessProfileId], references: [id], onDelete: SetNull)
@@ -642,6 +741,9 @@ model ReceiptScanItem {
   /// How sure the OCR engine was about this line's AMOUNT, 0-100 — the field
   /// the books actually depend on. Null when it was derived rather than read.
   amountConfidence      Int?     @map("ReceiptScanItem_AmountConfidence")
+  /// [ADDED] Per-line evidence mirror of ReceiptScan.fieldEvidence: page
+  /// number and the source line text this item was parsed from, when known.
+  evidence              Json?    @map("ReceiptScanItem_Evidence")
   createdAt             DateTime @default(now()) @map("ReceiptScanItem_CreatedAt")
 
   receiptScan   ReceiptScan      @relation(fields: [receiptScanId], references: [id], onDelete: Cascade)
@@ -740,15 +842,60 @@ model CSVImportBatch {
   businessProfileId Int      @map("BusinessProfile_ID")
   title             String   @map("ImportBatch_Title") @db.VarChar(150)
   uploadDate        DateTime @map("ImportBatch_UploadDate") @db.Date
-  fileReference     String   @map("ImportBatch_FileReference") @db.VarChar(255)
+  /// Nullable since the state machine landed: the batch row is now created
+  /// BEFORE the storage upload (so a failed upload cannot orphan an object
+  /// that nothing references), and the reference is filled in once the upload
+  /// succeeds.
+  fileReference     String?  @map("ImportBatch_FileReference") @db.VarChar(255)
+  /// The OWNER-facing review status ("Needs Review" | "Completed") — kept
+  /// exactly as it was. How far the MACHINE got lives in processingStatus,
+  /// the same separation ReceiptScan documents: "still importing" and
+  /// "imported, awaiting review" need different screens.
   status            String   @default("Needs Review") @map("ImportBatch_Status") @db.VarChar(50)
   createdAt         DateTime @default(now()) @map("ImportBatch_CreatedAt")
+
+  // [ADDED] Import state machine — see docs/ML-OCR-CSV-UI-PROGRAM.md ADR-3.
+  processingStatus CsvImportProcessingStatus @default(PENDING) @map("ImportBatch_ProcessingStatus")
+  /// Client-supplied idempotency key. A retry with the same key returns the
+  /// same logical import at whatever stage it reached — never a second import.
+  idempotencyKey   String?   @unique @map("ImportBatch_IdempotencyKey") @db.VarChar(100)
+  /// sha256 of the uploaded bytes: detects an accidental re-upload of the
+  /// identical file under a different key (surfaced, not blocked).
+  fileHash         String?   @map("ImportBatch_FileHash") @db.VarChar(64)
+  fileSizeBytes    Int?      @map("ImportBatch_FileSizeBytes")
+  totalRows        Int?      @map("ImportBatch_TotalRows")
+  /// Resume checkpoint: rows already validated-and-committed. A reclaimed
+  /// batch continues from here rather than starting over.
+  processedRows    Int       @default(0) @map("ImportBatch_ProcessedRows")
+  importedRows     Int       @default(0) @map("ImportBatch_ImportedRows")
+  skippedRows      Int       @default(0) @map("ImportBatch_SkippedRows")
+  flaggedRows      Int       @default(0) @map("ImportBatch_FlaggedRows")
+  /// Which stage failed ("upload" | "validate" | "insert-expenses" | ...) —
+  /// the difference between a diagnosable failure and a mystery 500.
+  failureStage     String?   @map("ImportBatch_FailureStage") @db.VarChar(50)
+  lastError        String?   @map("ImportBatch_LastError") @db.VarChar(1000)
+  attemptCount     Int       @default(0) @map("ImportBatch_AttemptCount")
+  nextAttemptAt    DateTime  @default(now()) @map("ImportBatch_NextAttemptAt")
+  heartbeatAt      DateTime? @map("ImportBatch_HeartbeatAt")
+  workerId         String?   @map("ImportBatch_WorkerID") @db.VarChar(100)
+  startedAt        DateTime? @map("ImportBatch_StartedAt")
+  completedAt      DateTime? @map("ImportBatch_CompletedAt")
+  /// Everything needed to audit or replay the import: column mapping, record
+  /// type, mixed strategy, detected delimiter/encoding, date format, parser
+  /// version, and the actor. Json because it is write-once provenance, not
+  /// something queried by column.
+  mappingMeta      Json?     @map("ImportBatch_MappingMeta")
+  /// Bounded result evidence: per-row skip/flag reasons (capped), counts by
+  /// record type. What the response body used to carry and then lose.
+  resultSummary    Json?     @map("ImportBatch_ResultSummary")
 
   businessProfile       BusinessProfile        @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
   expenseRecords        ExpenseRecord[]
   salesReferenceRecords SalesReferenceRecord[]
 
   @@index([businessProfileId])
+  // The async-import worker's claim scan, mirroring AnalysisJob's.
+  @@index([processingStatus, nextAttemptAt, heartbeatAt])
   @@map("CSVImportBatch")
 }
 

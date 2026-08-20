@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useNotifications } from "../context/NotificationContext";
 import { useDismiss, useMenuKeys } from "../lib/hooks";
+import { STATUS_TEXT_COLORS } from "../lib/chartPalette";
 import { alertKindFromType } from "./Alert";
 import { IconBell } from "./icons";
 import type { Notification } from "../lib/types";
@@ -23,6 +24,7 @@ const KIND_STYLES: Record<string, { chip: string; glyph: string }> = {
   duplicate: { chip: "bg-tint-info text-tone-info", glyph: "⧉" },
   "needs-review": { chip: "bg-tint-accent text-tone-accent", glyph: "⚑" },
   "large-expense": { chip: "bg-tint-danger text-tone-danger", glyph: "▲" },
+  recurring: { chip: "bg-tint-accent text-tone-accent", glyph: "↻" },
   info: { chip: "bg-tint-neutral text-tone-neutral", glyph: "ⓘ" },
 };
 
@@ -129,6 +131,7 @@ export function NotificationBell() {
       <button
         ref={triggerRef}
         type="button"
+        data-tour="notifications"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-haspopup="menu"
@@ -141,7 +144,8 @@ export function NotificationBell() {
         {unreadCount > 0 ? (
           <span
             aria-hidden
-            className="absolute right-1 top-1 flex h-[17px] min-w-[17px] animate-badge-in items-center justify-center rounded-full bg-rose-600 px-1 text-[10px] font-bold leading-none text-white ring-2 ring-paper"
+            className="absolute right-1 top-1 flex h-[17px] min-w-[17px] animate-badge-in items-center justify-center rounded-full px-1 text-[10px] font-bold leading-none text-white ring-2 ring-paper"
+            style={{ backgroundColor: STATUS_TEXT_COLORS.critical }}
           >
             {unreadCount > 9 ? "9+" : unreadCount}
           </span>

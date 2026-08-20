@@ -13,12 +13,31 @@ export function EmptyState({
   children,
   action,
   icon = "＋",
+  image,
+  imageAlt = "",
   compact = false,
 }: {
   title: string;
   children?: ReactNode;
   action?: ReactNode;
   icon?: string;
+  /**
+   * A mascot pose, which takes over from `icon` when supplied — the same seam
+   * mobile's `ui.tsx` EmptyState has, so a state illustrated on one client can
+   * be illustrated on the other without a second component.
+   *
+   * Pass a path under `/mascot/`; look the pose up in
+   * `docs/mascot-scenario-library.md` rather than picking one by eye. Ignored
+   * by the `compact` variant, which is a line of text inside an existing panel
+   * and has no room for art.
+   */
+  image?: string;
+  /**
+   * Left empty by default because the art is decorative in this slot: `title`
+   * and the body copy already say what the state is, so a screen reader
+   * announcing the pose as well would be repeating the same fact twice.
+   */
+  imageAlt?: string;
   /** Inline variant for inside an existing panel, rather than a full page. */
   compact?: boolean;
 }) {
@@ -34,12 +53,24 @@ export function EmptyState({
 
   return (
     <div className="rounded-2xl bg-paper p-8 text-center border border-paper-200 shadow-sm">
-      <span
-        aria-hidden
-        className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-tint-brand text-xl text-brand-600"
-      >
-        {icon}
-      </span>
+      {image ? (
+        <img
+          src={image}
+          alt={imageAlt}
+          width={96}
+          height={96}
+          aria-hidden={imageAlt === "" ? true : undefined}
+          className="mx-auto mb-4 h-24 w-24 select-none"
+          draggable={false}
+        />
+      ) : (
+        <span
+          aria-hidden
+          className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-tint-brand text-xl text-brand-600"
+        >
+          {icon}
+        </span>
+      )}
       <h2 className="font-display text-base font-semibold text-ink-900">{title}</h2>
       {children ? <p className="mx-auto mt-2 max-w-md text-sm text-ink-500">{children}</p> : null}
       {action ? <div className="mt-6 flex flex-wrap justify-center gap-3">{action}</div> : null}

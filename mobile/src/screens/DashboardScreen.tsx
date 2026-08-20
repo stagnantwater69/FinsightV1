@@ -12,6 +12,8 @@ import { AskFinSight } from "../components/AskFinSight";
 import { SpendingBreakdownCard } from "../components/SpendingBreakdownCard";
 import { SkeletonBox, SkeletonDashboard } from "../components/Skeleton";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
+import { useTourHomeStage } from "../context/TourContext";
+import { useTourScrollView, useTourTarget } from "../components/tour/targets";
 import { api, errorMessage } from "../lib/api";
 import { brand, ink, paper, radius, space, statusText, TAP, typeScale } from "../theme/tokens";
 import type { CashflowGranularity, DashboardCashflow, DashboardSummary } from "../lib/types";
@@ -62,8 +64,11 @@ function FlowCard({
       style={{
         flex: 1,
         minWidth: 150,
-        backgroundColor: isIn ? brand[50] : "#fef2f2",
-        borderColor: isIn ? brand[200] : "#fecaca",
+        // Outflow washes statusText.critical rather than a standalone red —
+        // same alpha-suffix technique ErrorNote and Button's danger variant
+        // use, so there is one critical scale in the app, not two.
+        backgroundColor: isIn ? brand[50] : statusText.critical + "12",
+        borderColor: isIn ? brand[200] : statusText.critical + "40",
       }}
     >
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
@@ -212,6 +217,22 @@ export function DashboardScreen({ navigation }: any) {
   const [askOpen, setAskOpen] = useState(false);
 
   /*
+   * The product tour's start gate.
+   *
+   * Both halves are needed and neither is guessable from outside this screen:
+   * that Home is the tab being looked at, and that its figures have actually
+   * arrived. Starting on focus alone would spotlight a skeleton — see
+   * context/TourContext.tsx.
+   */
+  useTourHomeStage(!loading && !!summary);
+
+  /** The block of figures the "Dashboard overview" step points at. */
+  const summaryTourTarget = useTourTarget("dashboard-summary", { scrolls: true });
+
+  /** Lets the tour scroll this page to whatever the current step is about. */
+  const tourScroll = useTourScrollView();
+
+  /*
    * Split from the cashflow fetch on purpose. They used to be one
    * Promise.all, which meant toggling the Daily/Monthly dropdown re-fetched
    * the summary too and dropped the whole screen back to the full skeleton
@@ -290,7 +311,7 @@ export function DashboardScreen({ navigation }: any) {
           ) : (
             <EmptyState
               title="Finish setting up your business"
-              icon="◎"
+              image={require("../../assets/mascot/01-onboarding/emptydashboard.png")}
               body="FinSight needs your business name and a few figures before it can work out your sales target, track your recovery or flag large expenses. Anything you already typed was kept."
               action={
                 <Button
@@ -397,6 +418,10 @@ export function DashboardScreen({ navigation }: any) {
   return (
     <Screen safeTop>
       <ScrollView
+        // Lets the product tour bring a step's target into view before the
+        // step is shown — Home is taller than the phone, and half the tour was
+        // describing things that were off screen.
+        {...tourScroll}
         // The FAB floats over this list, so the scroll has to end far enough
         // up that it can never cover the last card.
         contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl + FAB_CLEARANCE, gap: space.lg }}
@@ -486,11 +511,20 @@ export function DashboardScreen({ navigation }: any) {
               available funds takes the primacy slot here, the figure owners
               check most.
             */}
-            <StatTile label="Available business funds" value={summary.overview.availableFunds} emphasis />
+            {/*
+              Funds, sales and expenses are one group for the tour: the
+              "Dashboard overview" step is about the figures as a set, and
+              spotlighting only the first tile would describe three things
+              while pointing at one. Grouping them costs a wrapper View with
+              the gap the ScrollView was already applying between them.
+            */}
+            <View {...summaryTourTarget} style={{ gap: space.lg }}>
+              <StatTile label="Available business funds" value={summary.overview.availableFunds} emphasis />
 
-            <View style={{ flexDirection: "row", gap: space.md }}>
-              <FlowCard label="Sales" value={summary.overview.totalSalesReference} sublabel="This month" direction="in" />
-              <FlowCard label="Expenses" value={summary.overview.totalExpenses} sublabel="This month" direction="out" />
+              <View style={{ flexDirection: "row", gap: space.md }}>
+                <FlowCard label="Sales" value={summary.overview.totalSalesReference} sublabel="This month" direction="in" />
+                <FlowCard label="Expenses" value={summary.overview.totalExpenses} sublabel="This month" direction="out" />
+              </View>
             </View>
 
             <QuickActions actions={quickActions} />

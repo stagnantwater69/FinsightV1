@@ -23,12 +23,17 @@ export function formatPercent(value: number, decimals = 1): string {
 }
 
 /** Maps a backend Notification.type onto the shared alert family. */
-export type AlertKind = "duplicate" | "large-expense" | "needs-review" | "info";
+export type AlertKind = "duplicate" | "large-expense" | "needs-review" | "recurring" | "info";
 
 export function alertKindFromType(type: string): AlertKind {
   const t = type.toLowerCase();
   if (t.includes("duplicate")) return "duplicate";
   if (t.includes("large")) return "large-expense";
   if (t.includes("review")) return "needs-review";
+  // NOTIFICATION_TYPES.RECURRING_SCHEDULE — "Recurring Schedule". Kept in step
+  // with web/src/components/Alert.tsx: a watched payment that is late or off
+  // its expected amount is the whole reason the owner set up the schedule, so
+  // it must not fall through to the informational treatment.
+  if (t.includes("recurring")) return "recurring";
   return "info";
 }

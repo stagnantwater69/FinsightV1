@@ -3,6 +3,7 @@ import { env } from "./config/env";
 import { prisma } from "./config/prisma";
 import { logger } from "./config/logger";
 import { runReceiptWorkerOnce } from "./services/receiptScan.service";
+import { runCsvImportWorkerOnce, sweepStalledCsvImports } from "./services/csvImport.service";
 import { cleanUpExpiredRateLimits } from "./middleware/rateLimit.middleware";
 import { enqueueDailyProfileAnalyses, runAnalysisWorkerOnce } from "./services/anomalyDetection/job.service";
 import { purgeUnverifiedRegistrations, runAccountDeletionWorkerOnce } from "./services/accountDeletion.service";
@@ -19,6 +20,13 @@ async function work(): Promise<void> {
     // Drain immediately available jobs but cap each pass so the event loop
     // returns regularly under a backlog.
     for (let i = 0; i < 5 && (await runReceiptWorkerOnce()); i++);
+    /*
+     * Two imports per pass, not five: one large import can be tens of
+     * thousands of rows, and it yields between chunks rather than at the end,
+     * so a low cap here is what keeps a big import from starving the receipt
+     * and analysis work that share this loop.
+     */
+    for (let i = 0; i < 2 && (await runCsvImportWorkerOnce()); i++);
     for (let i = 0; i < 10 && (await runAnalysisWorkerOnce()); i++);
     // One stage per pass rather than draining: each stage of a deletion is
     // irreversible, and a bug that ran them back to back would get through all
@@ -38,6 +46,22 @@ const rateLimitCleanupTimer = setInterval(() => {
 }, 60 * 60_000);
 rateLimitCleanupTimer.unref();
 void cleanUpExpiredRateLimits().catch((error) => logger.error({ err: error }, "initial rate-limit cleanup failed"));
+/*
+ * Imports that were claimed and then abandoned — the process died mid-chunk,
+ * or a lease expired with attempts exhausted. Hourly rather than per-pass
+ * because it is a scan for wreckage, not part of the normal path: the worker's
+ * own lease reclaim handles the ordinary crash, and this only catches what has
+ * stayed stuck long enough to be certainly dead.
+ */
+const csvSweepTimer = setInterval(() => {
+  void sweepStalledCsvImports()
+    .then((swept) => {
+      if (swept > 0) logger.warn({ swept }, "swept stalled CSV imports");
+    })
+    .catch((error) => logger.error({ err: error }, "CSV import sweep failed"));
+}, 60 * 60_000);
+csvSweepTimer.unref();
+
 const dailyAnalysisTimer = setInterval(() => {
   void enqueueDailyProfileAnalyses().catch((error) => logger.error({ err: error }, "daily analysis enqueue failed"));
 }, 60 * 60_000);
@@ -70,6 +94,7 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   clearInterval(workerTimer);
   clearInterval(rateLimitCleanupTimer);
+  clearInterval(csvSweepTimer);
   clearInterval(dailyAnalysisTimer);
   clearInterval(unverifiedPurgeTimer);
   logger.info({ signal }, "graceful shutdown started");

@@ -73,11 +73,42 @@ vi.mock("../../src/services/visionOcr.service", async (importOriginal) => {
 });
 
 import { prisma } from "../../src/config/prisma";
+import type { VisionReceipt } from "../../src/services/visionOcr.service";
 import { confirmReceipt, deleteScanItem, getScan, uploadAndScan } from "../../src/services/receiptScan.service";
 import { getExpenseRecord } from "../../src/services/expenseRecord.service";
 import { disconnectDb, makeOwnerWithProfile, resetDb, utcDayString, waitForScanProcessing } from "../setup/testDb";
 
 let ctx: Awaited<ReturnType<typeof makeOwnerWithProfile>>;
+
+/**
+ * Wraps a plain reading in the extraction envelope the service now receives.
+ *
+ * The envelope distinguishes "the provider was never reached" (null) from
+ * "the provider answered and the answer was refused" ({receipt: null,
+ * rejectReason}) — a distinction the per-scan version record needs. These
+ * tests are about what the pipeline DOES with an accepted reading, so they
+ * state the reading and let this fill in the rest; the per-field evidence
+ * fields default to null exactly as a model that did not report them would
+ * leave them.
+ */
+function visionReply(receipt: Partial<VisionReceipt> & { items?: Partial<VisionReceipt["items"][number]>[] }) {
+  return {
+    receipt: {
+      date: receipt.date ?? null,
+      vendor: receipt.vendor ?? null,
+      amount: receipt.amount ?? null,
+      warnings: receipt.warnings ?? [],
+      items: (receipt.items ?? []).map((item) => ({
+        name: item!.name!,
+        quantity: item!.quantity ?? null,
+        amount: item!.amount!,
+        pageNumber: item!.pageNumber ?? null,
+        sourceText: item!.sourceText ?? null,
+      })),
+    },
+    rejectReason: null,
+  };
+}
 
 const RECEIPT_TEXT = [
   "ABC SARI-SARI STORE",
@@ -348,7 +379,7 @@ describe("vision rescue for receipts OCR could not read", () => {
 
   it("stores the items the model recovered, flagged as model-derived", async () => {
     extractTextMock.mockResolvedValue(TOTAL_ONLY);
-    visionMock.mockResolvedValue({
+    visionMock.mockResolvedValue(visionReply({
       date: "2026-07-18",
       vendor: "MANG JOSE STORE",
       amount: 845.5,
@@ -356,7 +387,7 @@ describe("vision rescue for receipts OCR could not read", () => {
         { name: "Spareribs Meal", quantity: null, amount: 129 },
         { name: "Iced Latte 16oz", quantity: 2, amount: 118 },
       ],
-    });
+    }));
 
     const scan = await upload();
     expect(scan.items.map((i) => i.name)).toEqual(["Spareribs Meal", "Iced Latte 16oz"]);
@@ -366,7 +397,7 @@ describe("vision rescue for receipts OCR could not read", () => {
 
   it("derives a unit price from the quantity, and leaves it null without one", async () => {
     extractTextMock.mockResolvedValue(TOTAL_ONLY);
-    visionMock.mockResolvedValue({
+    visionMock.mockResolvedValue(visionReply({
       date: null,
       vendor: null,
       amount: null,
@@ -374,7 +405,7 @@ describe("vision rescue for receipts OCR could not read", () => {
         { name: "Two of these", quantity: 2, amount: 118 },
         { name: "No quantity printed", quantity: null, amount: 129 },
       ],
-    });
+    }));
 
     const scan = await upload();
     expect(scan.items[0]!.unitPrice).toBe(59);
@@ -393,12 +424,12 @@ describe("vision rescue for receipts OCR could not read", () => {
    */
   it("keeps the deterministic date even when the model disagrees", async () => {
     extractTextMock.mockResolvedValue(["MANG JOSE STORE", "Date: 03/09/2026", "TOTAL 845.50"].join("\n"));
-    visionMock.mockResolvedValue({
+    visionMock.mockResolvedValue(visionReply({
       date: "2026-03-09", // the MM/DD reading — wrong for this market
       vendor: "MANG JOSE STORE",
       amount: 845.5,
       items: [{ name: "Assorted goods", quantity: null, amount: 845.5 }],
-    });
+    }));
 
     const scan = await upload();
     expect(scan.extractedDate?.toISOString().slice(0, 10)).toBe("2026-09-03");
@@ -406,14 +437,14 @@ describe("vision rescue for receipts OCR could not read", () => {
 
   it("uses the model's date only when OCR found none", async () => {
     extractTextMock.mockResolvedValue(UNREADABLE);
-    visionMock.mockResolvedValue({ date: "2026-07-18", vendor: null, amount: 845.5, items: [] });
+    visionMock.mockResolvedValue(visionReply({ date: "2026-07-18", vendor: null, amount: 845.5, items: [] }));
     const scan = await upload();
     expect(scan.extractedDate?.toISOString().slice(0, 10)).toBe("2026-07-18");
   });
 
   it("never overwrites a total the deterministic parser read", async () => {
     extractTextMock.mockResolvedValue(TOTAL_ONLY);
-    visionMock.mockResolvedValue({ date: null, vendor: null, amount: 999.99, items: [] });
+    visionMock.mockResolvedValue(visionReply({ date: null, vendor: null, amount: 999.99, items: [] }));
     const scan = await upload();
     expect(scan.extractedAmount).toBe(845.5);
   });
@@ -422,12 +453,12 @@ describe("vision rescue for receipts OCR could not read", () => {
     // OCR found items but no total, so the rescue still runs — and must not
     // touch the items it already has.
     extractTextMock.mockResolvedValue(["ABC STORE", "Rice 25kg   1220.00"].join("\n"));
-    visionMock.mockResolvedValue({
+    visionMock.mockResolvedValue(visionReply({
       date: null,
       vendor: null,
       amount: 1220,
       items: [{ name: "Something else entirely", quantity: null, amount: 50 }],
-    });
+    }));
 
     const scan = await upload();
     expect(scan.items.map((i) => i.name)).toEqual(["Rice 25kg"]);
@@ -446,19 +477,19 @@ describe("vision rescue for receipts OCR could not read", () => {
 
   it("does not claim vision assistance when the model added nothing new", async () => {
     extractTextMock.mockResolvedValue(TOTAL_ONLY);
-    visionMock.mockResolvedValue({ date: null, vendor: null, amount: null, items: [] });
+    visionMock.mockResolvedValue(visionReply({ date: null, vendor: null, amount: null, items: [] }));
     const scan = await upload();
     expect(scan.visionAssisted).toBe(false);
   });
 
   it("still categorises items the model recovered", async () => {
     extractTextMock.mockResolvedValue(TOTAL_ONLY);
-    visionMock.mockResolvedValue({
+    visionMock.mockResolvedValue(visionReply({
       date: null,
       vendor: null,
       amount: null,
       items: [{ name: "Rice 25kg", quantity: null, amount: 845.5 }],
-    });
+    }));
     categoriseMock.mockResolvedValue([{ index: 0, match: "Inventory", suggestNew: null }]);
 
     const scan = await upload();
@@ -621,7 +652,7 @@ describe("vision re-read when the OCR result is doubtful", () => {
 
   it("takes the model's items when they settle the gap and OCR's did not", async () => {
     extractTextMock.mockResolvedValue(MISREAD);
-    visionMock.mockResolvedValue({
+    visionMock.mockResolvedValue(visionReply({
       date: "2026-07-20",
       vendor: "ABC SARI-SARI STORE",
       amount: 689.75,
@@ -629,7 +660,7 @@ describe("vision re-read when the OCR result is doubtful", () => {
         { name: "Del Monte Pineapple", quantity: null, amount: 82 },
         { name: "Rice 25kg", quantity: null, amount: 607.75 },
       ],
-    });
+    }));
 
     const scan = await upload();
     expect(scan.items.map((i) => i.amount)).toEqual([82, 607.75]);
@@ -645,7 +676,7 @@ describe("vision re-read when the OCR result is doubtful", () => {
    */
   it("keeps OCR's amounts when the model's items also fail to add up", async () => {
     extractTextMock.mockResolvedValue(MISREAD);
-    visionMock.mockResolvedValue({
+    visionMock.mockResolvedValue(visionReply({
       date: null,
       vendor: null,
       amount: null,
@@ -653,7 +684,7 @@ describe("vision re-read when the OCR result is doubtful", () => {
         { name: "Del Monte Pineapple Tidbits", quantity: null, amount: 62 },
         { name: "Rice 25kg", quantity: null, amount: 500 },
       ],
-    });
+    }));
 
     const scan = await upload();
     expect(scan.items.map((i) => i.amount)).toEqual([62, 607.75]);
@@ -669,7 +700,7 @@ describe("vision re-read when the OCR result is doubtful", () => {
     extractTextMock.mockResolvedValue(
       ["ABC SARI-SARI STORE", "Date: 2026-07-20", "Sey 82.00", "Rice 25kg 607.75", "TOTAL 689.75"].join("\n"),
     );
-    visionMock.mockResolvedValue({
+    visionMock.mockResolvedValue(visionReply({
       date: "2026-07-20",
       vendor: "ABC SARI-SARI STORE",
       amount: 689.75,
@@ -677,7 +708,7 @@ describe("vision re-read when the OCR result is doubtful", () => {
         { name: "Del Monte Pineapple Tidbits", quantity: null, amount: 82 },
         { name: "Rice 25kg", quantity: null, amount: 607.75 },
       ],
-    });
+    }));
 
     const scan = await upload();
     expect(scan.items.map((i) => i.name)).toEqual(["Del Monte Pineapple Tidbits", "Rice 25kg"]);
@@ -690,12 +721,12 @@ describe("vision re-read when the OCR result is doubtful", () => {
     extractTextMock.mockResolvedValue(
       ["ABC SARI-SARI STORE", "Date: 2026-07-20", "Sey 82.00", "Rice 25kg 607.75", "TOTAL 689.75"].join("\n"),
     );
-    visionMock.mockResolvedValue({
+    visionMock.mockResolvedValue(visionReply({
       date: null,
       vendor: null,
       amount: null,
       items: [{ name: "Del Monte Pineapple Tidbits", quantity: null, amount: 82 }],
-    });
+    }));
 
     const scan = await upload();
     expect(scan.items.map((i) => i.name)).toEqual(["Del Monte Pineapple Tidbits", "Rice 25kg"]);

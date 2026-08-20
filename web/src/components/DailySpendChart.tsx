@@ -137,6 +137,7 @@ export function DailySpendChart({ daily }: { daily: DailyExpenseTotal[] }) {
                   position: "insideTopRight",
                   fill: "rgb(var(--sev-warning-ink))",
                   fontSize: 10.5,
+                  fontFamily: "IBM Plex Mono, monospace",
                 }}
               />
             ) : null}

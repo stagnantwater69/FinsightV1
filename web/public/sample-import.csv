@@ -1,0 +1,5 @@
+Date,Type,Description,Category,Vendor,Amount
+2026-08-01,expense,Rice sacks,Inventory,ABC Wholesale,3200
+2026-08-01,sales,Daily sales,,,15000
+2026-08-02,expense,Electricity bill,Utilities,Meralco,4200
+2026-08-03,sales,Daily sales,,,12500

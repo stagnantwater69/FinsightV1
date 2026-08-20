@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Image, Pressable, ScrollView, useWindowDimensions, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Button, T } from "../ui";
-import { ACCENT, brand, font, ink, radius, space, typeScale } from "../../theme/tokens";
+import { brand, font, ink, radius, space, status, typeScale } from "../../theme/tokens";
 import { DetectedOutline } from "./DetectedOutline";
 import {
   canAddSection,
@@ -278,22 +278,31 @@ function Notice({
   icon: keyof typeof Ionicons.glyphMap;
   text: string;
 }) {
-  const color = tone === "warning" ? ACCENT.fill : "rgba(255,255,255,0.7)";
+  const color = tone === "warning" ? status.warning : "rgba(255,255,255,0.7)";
   return (
     <View
       style={{
         flexDirection: "row",
         alignItems: "flex-start",
         gap: 8,
-        backgroundColor: tone === "warning" ? "rgba(245,165,36,0.12)" : "rgba(255,255,255,0.06)",
+        backgroundColor: tone === "warning" ? "rgba(250,178,25,0.12)" : "rgba(255,255,255,0.06)",
         borderWidth: 1,
-        borderColor: tone === "warning" ? "rgba(245,165,36,0.35)" : "rgba(255,255,255,0.12)",
+        borderColor: tone === "warning" ? "rgba(250,178,25,0.35)" : "rgba(255,255,255,0.12)",
         borderRadius: radius.md,
         padding: space.md,
       }}
     >
       <Ionicons name={icon} size={16} color={color} style={{ marginTop: 1 }} />
-      <T style={{ flex: 1, fontSize: 12.5, lineHeight: 18, color: tone === "warning" ? "#ffe6b8" : "rgba(255,255,255,0.75)" }}>
+      {/*
+        `status.warning` rather than the darkened `statusText.warning`: this
+        notice sits on the dark camera-preview background (ink[900]), and
+        statusText's steps are calibrated as "safe as small text" only on the
+        light `paper` surfaces used elsewhere — here they fail contrast
+        outright. `status.warning` still carries the warning semantic (not
+        the reserved-for-CTA amber ACCENT this replaced) and reads clearly on
+        dark, the same way `brand[400]` is used as light-on-dark text above.
+      */}
+      <T style={{ flex: 1, fontSize: 12.5, lineHeight: 18, color: tone === "warning" ? status.warning : "rgba(255,255,255,0.75)" }}>
         {text}
       </T>
     </View>

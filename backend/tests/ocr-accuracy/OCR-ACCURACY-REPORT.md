@@ -1,6 +1,6 @@
 # FinSight OCR Accuracy Assessment
 
-Generated: 2026-08-01
+Generated: 2026-08-18
 
 Corpus: **31 receipt images**. Pipeline under test: `extractText()` (tesseract.js) followed by `parseReceiptFields()` and `parseLineItems()` — the same functions the receipt-scan endpoint calls.
 
@@ -11,10 +11,10 @@ A field is **correct** only on an exact match (amounts to the centavo, dates to 
 | Field | Correct | Wrong | Not extracted | Scored | Accuracy |
 |---|---|---|---|---|---|
 | Date | 31 | 0 | 0 | 31 | **100%** |
-| Vendor | 28 | 1 | 0 | 29 | **97%** |
+| Vendor | 29 | 0 | 0 | 29 | **100%** |
 | Amount | 30 | 1 | 0 | 31 | **97%** |
 
-All three fields correct on the same receipt: **29 of 31** (94%).
+All three fields correct on the same receipt: **30 of 31** (97%).
 
 `n/a` fields are excluded from the denominator — those are receipts where the information genuinely is not present in the image, so there is nothing to extract.
 
@@ -80,7 +80,7 @@ Receipts with **no itemised lines at all** (1): 1 of 1 correctly extracted nothi
 | Category | Images | Date | Vendor | Amount |
 |---|---|---|---|---|
 | real | 3 | 100% | 100% | 67% |
-| synthetic | 19 | 100% | 95% | 100% |
+| synthetic | 19 | 100% | 100% | 100% |
 | degraded | 9 | 100% | 100% | 100% |
 
 ## Per-image detail
@@ -91,7 +91,7 @@ Receipts with **no itemised lines at all** (1): 1 of 1 correctly extracted nothi
 | 2 | `real-02-clean-digital` | Clean digitally-generated receipt, high contrast, US layout, vendor at top, no TOTAL keyword (uses AMT/BALANCE) | ✅ | ✅ | ✅ |
 | 3 | `real-03-ph-sales-invoice` | Real phone photo, PH thermal SALES INVOICE, 8 items with a quantity column and per-item unit prices on a wrapped second line, a discount line, and two emoji stickers overlaid on one item row by whoever shared it | ✅ | — | ❌ |
 | 4 | `syn-01-vendor-top-iso-date` | Printed, vendor at top, ISO date (YYYY-MM-DD), TOTAL keyword, no thousands separator | ✅ | ✅ | ✅ |
-| 5 | `syn-02-vendor-bottom` | Printed, vendor at BOTTOM of receipt (known layout weakness), ISO date | ✅ | ❌ | ✅ |
+| 5 | `syn-02-vendor-bottom` | Printed, vendor at BOTTOM of receipt (known layout weakness), ISO date | ✅ | ✅ | ✅ |
 | 6 | `syn-03-ambiguous-slash-date` | Printed, ambiguous numeric date 03/09/2026 (both components <= 12) — read as DD/MM per PH convention | ✅ | ✅ | ✅ |
 | 7 | `syn-04-month-name-date` | Printed, month-name date (Jul 05, 2026) | ✅ | ✅ | ✅ |
 | 8 | `syn-05-thousands-separator` | Printed, amount with thousands separator (12,450.00) | ✅ | ✅ | ✅ |
@@ -131,14 +131,6 @@ Receipts with **no itemised lines at all** (1): 1 of 1 correctly extracted nothi
 |---|---|---|---|
 | amount | `2180` | `2185` | ❌ |
 
-### `syn-02-vendor-bottom`
-
-*Printed, vendor at BOTTOM of receipt (known layout weakness), ISO date*
-
-| Field | Expected | Got | |
-|---|---|---|---|
-| vendor | `"TINDAHAN NI MANG JOSE"` | `"*xx GALES INVOICE ***"` | ❌ |
-
 ## Corpus composition and what it does and does not prove
 
 | Category | Count | What it tests |
@@ -161,9 +153,11 @@ The default is now **DD/MM**, the Philippine convention and this app's target ma
 
 **The cost, stated plainly:** a genuinely US-format receipt is now misread instead. That trade is unavoidable without a per-profile locale setting, and it is the right way round for these users. `syn-03` in the corpus is that ambiguous case, and its ground truth is the DD/MM reading.
 
-### 2. Vendor name printed in the footer
+### 2. Vendor name printed in the footer — fixed, not eliminated
 
-The vendor heuristic takes the first substantive line, so a store name printed at the bottom is read wrong (it returns the document header instead). No cheap heuristic separates a footer store name from a "thank you, come again" line. Left to the confirm screen and recorded as a known limitation.
+`syn-02-vendor-bottom` used to fail: tesseract read `*** SALES INVOICE ***` as `*xx GALES INVOICE ***`, and the garbled spelling slipped past the exact-phrase filter that was supposed to discard it while the asterisks stayed intact. The header decoy then outscored the real footer name, `TINDAHAN NI MANG JOSE`, on position alone. Two additive changes fixed this specific failure: decorative banner punctuation (`*`, `~`, `===`) now disqualifies a candidate line regardless of what the (possibly OCR-mangled) words inside it say, and closing boilerplate ("thank you", "come again", "salamat") is excluded the same way "SALES INVOICE" already was. `syn-02` now passes.
+
+**This is not a general solve for footer vendors.** It closes the one reproducible failure mode in this corpus — a decorative document header beating a real name below it. A footer name competing against a *plausible, undecorated* line elsewhere on the receipt (a second business-looking phrase, an address that happens to read as words) can still lose on position; no case of that exists in this corpus to measure against. Continue treating vendor as a first draft the confirm screen may need to correct, especially on receipts this corpus does not cover.
 
 ### 3. OCR losing the transaction-date line entirely on a real photo
 
@@ -218,11 +212,13 @@ Re-run any of these with `OCR_PSM=<n> OCR_DPI=<n> npx tsx tests/ocr-accuracy/run
 
 4. **Ambiguous numeric dates defaulted to the wrong locale (fixed).** Changed from MM/DD to DD/MM — see failure pattern 1 above.
 
-Measured effect across all four: date accuracy 90% → **100%**, vendor accuracy 89% → **95%**, all-three-correct 16/20 → **19/20**. Every fix is pinned by regression tests in `tests/unit/ocrParsing.test.ts`.
+5. **A footer vendor name lost to a garbled document-header banner (defect, fixed).** See failure pattern 2 above — decorative banner punctuation and closing boilerplate ('thank you, come again') are now excluded from vendor candidates regardless of OCR spelling noise, and the Filipino 'tindahan' was added alongside 'store' as a recognised business-type word.
+
+Measured effect across all five: date accuracy 90% → **100%**, vendor accuracy 89% → **100%** on this corpus, all-three-correct 16/20 → **30/31**. Every fix is pinned by regression tests in `tests/unit/ocrParsing.test.ts`.
 
 ## Bottom line
 
-Amount extraction is the strongest and most important field, at 100% across the corpus including every degraded variant. Dates now also read 100% after the locale fix. The one remaining failure is a vendor name printed in a receipt footer.
+Amount extraction is the strongest and most important field, at 100% across the corpus including every degraded variant. Dates now also read 100% after the locale fix, and vendor reads 100% on this corpus after the footer/banner fix above. That vendor figure is a claim about this corpus's one footer-vendor layout, not a general solve — see failure pattern 2's caveat.
 
 These numbers should still not be read as "OCR is ~100% accurate". They are a claim about this corpus, which is 90% clean renders and only 2 real photographs, with no handwritten receipts at all. The design already assumes OCR will be wrong sometimes: every scan lands on a confirm screen as an editable draft and nothing is saved until the owner accepts it. Read these figures as "OCR gives a usable first draft on clean receipts, and needs correcting on difficult ones".
 

@@ -2,8 +2,10 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useNotifications } from "../context/NotificationContext";
+import { useTourOptional } from "../context/TourContext";
 import { THEMES, THEME_LABELS, useTheme } from "../context/ThemeContext";
 import { useDismiss, useMenuKeys } from "../lib/hooks";
+import { STATUS_TEXT_COLORS } from "../lib/chartPalette";
 import {
   IconBell,
   IconBusiness,
@@ -12,6 +14,7 @@ import {
   IconLogout,
   IconProfile,
   IconSettings,
+  IconSparkle,
 } from "./icons";
 
 /** Initials for the avatar. Falls back to "?" rather than rendering empty. */
@@ -35,6 +38,7 @@ export function AccountMenu() {
   const { profile: user, logout } = useAuth();
   const { unreadCount } = useNotifications();
   const { theme, setTheme } = useTheme();
+  const tour = useTourOptional();
   const navigate = useNavigate();
 
   const [open, setOpen] = useState(false);
@@ -117,7 +121,10 @@ export function AccountMenu() {
               <IconBell aria-hidden className="h-4 w-4 shrink-0 text-ink-400" />
               Notifications
               {unreadCount > 0 ? (
-                <span className="ml-auto rounded-full bg-rose-600 px-1.5 text-[10.5px] font-bold text-white">
+                <span
+                  className="ml-auto rounded-full px-1.5 text-[10.5px] font-bold text-white"
+                  style={{ backgroundColor: STATUS_TEXT_COLORS.critical }}
+                >
                   {unreadCount > 9 ? "9+" : unreadCount}
                 </span>
               ) : null}
@@ -158,6 +165,23 @@ export function AccountMenu() {
           </div>
 
           <div className="mt-1 border-t border-paper-200 pt-1.5">
+            {tour ? (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setOpen(false);
+                  // Rewind the stored state, then land on the dashboard —
+                  // the tour auto-resumes there once its data has loaded.
+                  tour.restart();
+                  navigate("/dashboard");
+                }}
+                className={item}
+              >
+                <IconSparkle aria-hidden className="h-4 w-4 shrink-0 text-ink-400" />
+                Restart product tour
+              </button>
+            ) : null}
             <a
               href="mailto:support@finsight.app?subject=FinSight%20help"
               role="menuitem"

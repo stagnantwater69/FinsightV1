@@ -13,6 +13,7 @@ export const NOTIFICATION_TYPES = {
   LARGE_EXPENSE_FLAG: "Large Expense Flag",
   NEEDS_REVIEW: "Needs Review",
   ANOMALY_FINDING: "Anomaly Finding",
+  RECURRING_SCHEDULE: "Recurring Schedule",
 } as const;
 
 /**

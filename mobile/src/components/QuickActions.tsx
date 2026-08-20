@@ -25,40 +25,53 @@ export function QuickActions({ actions }: { actions: QuickAction[] }) {
     <Card>
       <View style={{ flexDirection: "row", flexWrap: "wrap" }}>
         {actions.map((a) => (
-          <Pressable
-            key={a.key}
-            onPress={() => {
-              haptics.tapped();
-              a.onPress();
-            }}
-            accessibilityRole="button"
-            accessibilityLabel={a.label}
-            style={({ pressed }) => ({
-              width: "25%",
-              alignItems: "center",
-              gap: 6,
-              paddingVertical: space.sm,
-              opacity: pressed ? 0.7 : 1,
-            })}
-          >
-            <View
-              style={{
-                width: 44,
-                height: 44,
-                borderRadius: radius.md,
-                backgroundColor: brand[50],
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <Ionicons name={a.icon} size={20} color={brand[700]} />
-            </View>
-            <T style={{ fontSize: typeScale.micro, color: ink[700], textAlign: "center" }} numberOfLines={2}>
-              {a.label}
-            </T>
-          </Pressable>
+          <QuickActionTile key={a.key} action={a} />
         ))}
       </View>
     </Card>
+  );
+}
+
+/**
+ * One tile.
+ *
+ * The product tour used to spotlight the Import CSV tile here. It points at
+ * the "+" menu's own Import CSV action instead: the shortcut exists on Home
+ * only, while the menu is on every screen, and a tour should teach the route
+ * that always works.
+ */
+function QuickActionTile({ action }: { action: QuickAction }) {
+  return (
+    <Pressable
+      onPress={() => {
+        haptics.tapped();
+        action.onPress();
+      }}
+      accessibilityRole="button"
+      accessibilityLabel={action.label}
+      style={({ pressed }) => ({
+        width: "25%",
+        alignItems: "center",
+        gap: 6,
+        paddingVertical: space.sm,
+        opacity: pressed ? 0.7 : 1,
+      })}
+    >
+      <View
+        style={{
+          width: 44,
+          height: 44,
+          borderRadius: radius.md,
+          backgroundColor: brand[50],
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Ionicons name={action.icon} size={20} color={brand[700]} />
+      </View>
+      <T style={{ fontSize: typeScale.micro, color: ink[700], textAlign: "center" }} numberOfLines={2}>
+        {action.label}
+      </T>
+    </Pressable>
   );
 }

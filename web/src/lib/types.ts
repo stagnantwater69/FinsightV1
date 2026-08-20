@@ -177,6 +177,45 @@ export interface CsvBatchPreview {
   totalRows: number;
 }
 
+// ============================================================
+// CSV import lifecycle (ADR-3)
+// ============================================================
+
+/** The date conventions the owner may state. "month-name" is detected only —
+ *  a month spelled out cannot be ambiguous, so it is never a choice. */
+export type CsvDateFormat = "iso" | "dmy" | "mdy" | "month-name";
+export type CsvConfirmDateFormat = "iso" | "dmy" | "mdy";
+
+/** How far the server has got WRITING an import — separate from the owner-facing
+ *  review `status`, exactly as receipt scans separate the two. */
+export type CsvProcessingStatus = "PENDING" | "PROCESSING" | "COMPLETE" | "FAILED";
+
+/** GET /records/csv-imports/batches/:batchId/status. Safe to poll — not rate limited. */
+export interface CsvImportStatus {
+  batchId: number;
+  status: string;
+  processingStatus: CsvProcessingStatus;
+  totalRows: number;
+  processedRows: number;
+  importedRows: number;
+  skippedRows: number;
+  flaggedRows: number;
+  /** Which stage failed, when it did: "upload" | "validate" | "insert" | … */
+  failureStage: string | null;
+  /**
+   * Everything the synchronous response reports that isn't an Int column,
+   * accumulated across chunks by the worker so a resumed import still adds up.
+   */
+  resultSummary: {
+    importedExpenses?: number;
+    importedSales?: number;
+    largeExpenseFlagged?: number;
+    uncategorised?: number;
+    skipped?: { row: number; reason: string }[];
+    skippedTruncated?: boolean;
+  } | null;
+}
+
 export interface ExpenseRecordInput {
   businessProfileId: number;
   categoryId: number;
@@ -338,16 +377,44 @@ export interface ExpenseBehavior {
 export type AnomalyFindingStatus = "OPEN" | "CONFIRMED" | "DISMISSED" | "RESOLVED" | "SUPERSEDED";
 export type AnomalyFindingFeedback = "CONFIRMED_UNUSUAL" | "EXPECTED_TRANSACTION" | "DUPLICATE" | "INCORRECT_MATCH" | "NO_LONGER_RELEVANT";
 
+/**
+ * The detector types the review queue can be handed.
+ *
+ * ML_OUTLIER is the Isolation Forest detector's own member (ADR-1/ADR-4). It
+ * is listed here because the queue must render one if it ever arrives, NOT
+ * because one is expected today: that detector writes SHADOW-status findings,
+ * and `listFindings` excludes SHADOW server-side, so this client never sees
+ * them until promotion out of shadow is a deliberate release decision.
+ */
+export type AnomalyFindingType =
+  | "AMOUNT_OUTLIER"
+  | "POSSIBLE_DUPLICATE"
+  | "VELOCITY_ANOMALY"
+  | "RECURRING_CHANGE"
+  | "TREND_CHANGE"
+  | "BEHAVIORAL_NOVELTY"
+  | "ML_OUTLIER";
+
+/** Whatever the detector recorded as evidence. Shapes differ per detector, so
+ *  the queue reads it defensively and never requires a particular key. */
+export type AnomalyFindingMetadata = Record<string, unknown> | null;
+
 export interface AnomalyFinding {
   id: number;
   expenseRecordId: number | null;
-  type: "AMOUNT_OUTLIER" | "POSSIBLE_DUPLICATE" | "VELOCITY_ANOMALY" | "RECURRING_CHANGE" | "TREND_CHANGE" | "BEHAVIORAL_NOVELTY";
+  type: AnomalyFindingType;
   severity: "LOW" | "MEDIUM" | "HIGH";
   score: number | null;
   title: string;
   reasons: string[];
   status: AnomalyFindingStatus;
   detectedAt: string;
+  /** The detector that produced it, e.g. "zscore-iqr". Audit view only. */
+  method?: string;
+  /** The detector's own version string. Audit view only. */
+  detectorVersion?: string;
+  metadata?: AnomalyFindingMetadata;
+  feedback?: AnomalyFindingFeedback | null;
 }
 
 export interface AnomalyFindingPage {
@@ -363,8 +430,63 @@ export interface RecurringPattern {
   expectedAmount: number;
   confidence: number;
   nextExpectedDate: string;
-  status: "CANDIDATE" | "CONFIRMED" | "DISMISSED" | "DISABLED";
+  /**
+   * No DISABLED here on purpose. The Prisma enum still carries the value, but
+   * nothing on the server ever writes it and the review endpoint's schema now
+   * rejects it with a 400 — so a client modelling it would be offering a
+   * status the API refuses. Pausing lives on RecurringSchedule.isActive.
+   */
+  status: "CANDIDATE" | "CONFIRMED" | "DISMISSED";
   category: { name: string };
+}
+
+/**
+ * Where a schedule sits relative to today.
+ *
+ * COMPUTED ON THE SERVER (recurringSchedule.service.ts `dueStateOf`) and shipped
+ * in the payload. Web and mobile both group the agenda by this, and two
+ * independent implementations of "is it due soon" drift the moment one is
+ * edited — the same bill would then sit in "Due soon" on the phone and in
+ * "Scheduled" on the laptop. Never recompute it here.
+ */
+export type RecurringDueState = "OVERDUE" | "DUE_SOON" | "SCHEDULED";
+
+/**
+ * An owner-declared repeating payment — "I told FinSight this repeats".
+ *
+ * Distinct from RecurringPattern above, which is the detector's inference —
+ * "FinSight noticed this repeats". A pattern is a candidate to review; a
+ * schedule is editable, pausable, and is what the watchdog actually watches.
+ * Note the pattern type carries no `categoryId`, so it cannot back an edit
+ * form; this one does.
+ */
+export interface RecurringSchedule {
+  id: number;
+  businessProfileId: number;
+  categoryId: number;
+  categoryName: string;
+  /** What the owner calls this payment. */
+  label: string;
+  vendor: string | null;
+  intervalDays: number;
+  expectedAmount: number;
+  /** A fraction of the amount, 0..1 — how far it may move before it is a change. */
+  amountTolerance: number;
+  /**
+   * A date-only value. Serialized from a `@db.Date`, so it arrives as midnight
+   * UTC and MUST be rendered with `timeZone: "UTC"` or it shows the previous
+   * day anywhere behind UTC. See `formatDueDate` in components/RecurringAgenda.
+   */
+  nextDueDate: string;
+  /** Detector-maintained tracking only; the owner never sets this. */
+  lastRecordedDate: string | null;
+  /** False means paused — watched by nobody, but not deleted. */
+  isActive: boolean;
+  /** The RecurringPattern this was promoted from, if any. Provenance only. */
+  sourcePatternId: number | null;
+  dueState: RecurringDueState;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface DailyCoverageRow {
@@ -412,7 +534,75 @@ export interface SpendingImpact {
   resultingFunds: number;
 }
 
-export type InteractionModule = "Expense Insights" | "Spending Impact" | "Recovery Target" | "Dashboard";
+/**
+ * Spending Impact's read of the ITEM, alongside its read of the money.
+ *
+ * `kind` is the bookkeeping question in the owner's language rather than an
+ * accountant's: something the business keeps and uses, or something used up
+ * that has to be bought again. `questions` are for the owner to answer — the
+ * server refuses any answer that crosses from asking into advising, so a card
+ * that renders is a card that only describes and asks. See
+ * backend/src/services/ai.service.ts.
+ */
+export type PurchaseKind = "asset" | "running-cost" | "mixed" | "unclear";
+
+export interface PurchaseReview {
+  kind: PurchaseKind;
+  kindReason: string;
+  businessUse: string;
+  ongoingCosts: string | null;
+  /**
+   * What to CHECK about the price — never what the price should be. The server
+   * drops anything that names a figure or calls the amount fair, cheap or
+   * steep: FinSight has no price feed, and the "is this normal for me" half is
+   * answered by `PurchasePriceContext` below, from the owner's own records.
+   */
+  priceCheck: string | null;
+  questions: string[];
+}
+
+/**
+ * The planned amount against what this owner has actually paid.
+ *
+ * Every figure here is arithmetic over their own expense records — no model
+ * sees them and no model produces them, which is why this half of the answer
+ * still stands when the AI is unreachable.
+ */
+export type PriceComparison = "no-history" | "no-amount" | "below" | "in-line" | "above" | "far-above";
+
+export interface SimilarPurchase {
+  description: string;
+  amount: number;
+  date: string;
+  categoryName: string;
+}
+
+export interface PurchasePriceContext {
+  categoryId: number | null;
+  categoryName: string | null;
+  recordCount: number;
+  /** The median, which one outlier cannot drag around. */
+  typicalAmount: number | null;
+  smallestAmount: number | null;
+  largestAmount: number | null;
+  multipleOfTypical: number | null;
+  comparison: PriceComparison;
+  similar: SimilarPurchase[];
+  windowDays: number;
+}
+
+export type InteractionModule =
+  | "Expense Insights"
+  | "Spending Impact"
+  | "Recovery Target"
+  | "Dashboard"
+  /**
+   * The unified review queue's "Explain this flag" entry point. The server
+   * builds its context from the owner's OPEN findings and flagged-record
+   * counts (aiContext.service.ts) — bounded, already-calculated evidence, so
+   * the model phrases what FinSight found rather than judging records itself.
+   */
+  | "Records Review";
 
 export interface AIInteraction {
   id: number;

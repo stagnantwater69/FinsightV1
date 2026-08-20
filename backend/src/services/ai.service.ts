@@ -678,3 +678,276 @@ export async function suggestCategoryForDescription(
 
   return matchCategory(raw, suggestions);
 }
+
+// ============================================================
+// Purchase review — what the planned item IS, and what to ask about it
+// ============================================================
+
+/**
+ * Spending Impact's description box used to be inert: the owner typed "display
+ * fridge", and the only thing that happened was a category guess they could
+ * not see the reasoning for. The figures answered "what happens to my money";
+ * nothing answered "what am I actually buying".
+ *
+ * This does. It classifies the item the way a bookkeeper would — something the
+ * business keeps and uses, or something that is consumed and has to be bought
+ * again — names what a business of this type typically uses it for, lists the
+ * running costs it drags along behind it, and hands back the questions the
+ * owner is the only person able to answer.
+ *
+ * WHAT IT DELIBERATELY DOES NOT DO: tell the owner whether to buy it. That is
+ * not squeamishness, it is the product's standing rule (see SYSTEM_PROMPT's
+ * "you do not tell the owner what to decide") and it is also the honest
+ * position — the model does not know their pipeline, their landlord, or what
+ * broke last week. Structured reflection is a real answer to "is this worth
+ * it"; a verdict from a model that has seen one line of text is not.
+ * `stripsVerdict` below enforces that on the way out rather than trusting the
+ * prompt to hold, the same way the category classifier validates names back
+ * against the owner's own list rather than trusting the model not to invent
+ * one.
+ *
+ * NO BUSINESS FIGURES GO IN. The item, the amount and the business TYPE are
+ * the whole input. The page already shows what the purchase does to the
+ * owner's funds, computed structurally; sending balances here would only give
+ * a language model the chance to restate them slightly wrong.
+ */
+
+/** How the item behaves in the books, in the owner's language rather than an accountant's. */
+export type PurchaseKind = "asset" | "running-cost" | "mixed" | "unclear";
+
+export interface PurchaseReview {
+  kind: PurchaseKind;
+  /** One plain sentence on why it falls that way. */
+  kindReason: string;
+  /** What a business of this type typically uses the item for. */
+  businessUse: string;
+  /** Costs that come WITH it — power, refills, maintenance, a subscription. */
+  ongoingCosts: string | null;
+  /**
+   * What to CHECK about the price — never what the price should be.
+   *
+   * "Is ₱11,000 right for a display fridge?" is a question about one local
+   * market on one day, and the model does not know that. What it does know is
+   * what moves the price of a thing like this: whether delivery and
+   * installation are included, new versus second-hand, the size or capacity
+   * being quoted, whether a warranty comes with it. That is the useful,
+   * honest half — and FinSight answers the other half from the owner's own
+   * records (buildPurchasePriceContext in insights.service.ts) rather than
+   * from a model's guess at retail prices.
+   */
+  priceCheck: string | null;
+  /** Questions only the owner can answer. Two to four, each a real question. */
+  questions: string[];
+}
+
+const PURCHASE_REVIEW_SYSTEM_PROMPT = `You are FinSight, helping a small business owner think about something they are considering buying. They have no accounting background.
+
+Answer ONLY as JSON matching this shape, with no markdown fence:
+{"kind":"asset"|"running-cost"|"mixed"|"unclear","kindReason":string,"businessUse":string,"ongoingCosts":string|null,"priceCheck":string|null,"questions":[string,...]}
+
+What each field means:
+- kind: "asset" if it is something the business keeps and uses for a long time (equipment, furniture, a machine). "running-cost" if it is used up and has to be bought again (stock, ingredients, supplies, fuel, a monthly service). "mixed" if it is genuinely both. "unclear" if the description is too vague to tell.
+- kindReason: one short sentence, plain language, on why it falls that way. Do not use the words "asset" or "liability" as jargon — say what actually happens to the thing.
+- businessUse: one or two short sentences on what a business of the stated type would typically use this for. If the item makes no obvious sense for that kind of business, say so plainly.
+- ongoingCosts: the costs that come with owning or using it — electricity, refills, maintenance, staff time, a subscription. null if there genuinely are none.
+- priceCheck: one or two short sentences on what to CHECK about the amount they gave, for an item like this. What is included or not (delivery, installation, warranty, taxes), what changes the price (size, capacity, brand, new versus second-hand), and what to ask a seller. NEVER state, estimate, or imply what the item should cost, and never say the amount is high, low, fair or reasonable — you do not know today's local prices. null if the amount was not given, or if you have nothing specific to check for this item.
+- questions: 2 to 4 questions the OWNER must answer for themselves, each ending in a question mark. Make them specific to this item — "How many hours a day would it actually run?" not "Is it necessary?". Good questions ask about how often it would be used, what it replaces, what happens if it breaks, and whether a cheaper or second-hand version does the same job.
+
+Hard rules:
+- Never state a price, a price range, or "around" a figure. You have no price data and no way to check one. The only figure you may repeat is the amount they gave you.
+- Never say whether the amount is high, low, fair, cheap, expensive, reasonable or a good deal. FinSight compares the amount against the owner's own past records; that is not your job.
+- Never say whether to buy it. No "you should buy", "I recommend", "it is worth it", "skip this". You describe and you ask; the owner decides.
+- Never invent numbers. You are given an amount and an item description and nothing else about this business — do not state or estimate their sales, funds, or what they can afford.
+- Plain, everyday language. Short sentences. No accounting jargon.`;
+
+function purchaseReviewUserContent(item: string, amount: number | null, businessType: string): string {
+  return [
+    `BUSINESS TYPE: ${businessType}`,
+    `ITEM THEY ARE CONSIDERING: ${item}`,
+    amount === null ? "AMOUNT: not given" : `AMOUNT: PHP ${amount.toLocaleString("en-PH")}`,
+  ].join("\n");
+}
+
+async function reviewPurchaseWithGemini(item: string, amount: number | null, businessType: string): Promise<string> {
+  const res = await fetch(GEMINI_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-goog-api-key": env.GOOGLE_GEMINI_API_KEY },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: PURCHASE_REVIEW_SYSTEM_PROMPT }] },
+      contents: [{ role: "user", parts: [{ text: purchaseReviewUserContent(item, amount, businessType) }] }],
+      // A little warmth: the questions should read as though a person thought
+      // about this item, not as four rewordings of one template. Still low
+      // enough that the classification does not wander between calls.
+      generationConfig: { temperature: 0.4, maxOutputTokens: 700, responseMimeType: "application/json" },
+    }),
+  });
+  if (!res.ok) throw new Error(`Gemini responded ${res.status}: ${await res.text()}`);
+  const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error("Gemini returned no text content");
+  return text;
+}
+
+async function reviewPurchaseWithOpenRouter(item: string, amount: number | null, businessType: string): Promise<string> {
+  const res = await fetch(OPENROUTER_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.OPENROUTER_API_KEY}` },
+    body: JSON.stringify({
+      model: OPENROUTER_MODEL,
+      messages: [
+        { role: "system", content: PURCHASE_REVIEW_SYSTEM_PROMPT },
+        { role: "user", content: purchaseReviewUserContent(item, amount, businessType) },
+      ],
+      temperature: 0.4,
+      max_tokens: 700,
+    }),
+  });
+  if (!res.ok) throw new Error(`OpenRouter responded ${res.status}: ${await res.text()}`);
+  const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+  const text = data.choices?.[0]?.message?.content;
+  if (!text) throw new Error("OpenRouter returned no text content");
+  return text;
+}
+
+/**
+ * Verdict language, which the prompt forbids and this catches anyway.
+ *
+ * QUESTIONS ARE EXEMPT, and that exemption is the whole subtlety: "Is it worth
+ * buying now, or after the busy season?" is exactly the kind of thing the
+ * owner should be asking themselves, while "It is worth buying" is the one
+ * thing FinSight must not say. The difference is the question mark, so that is
+ * what the check keys on.
+ */
+const VERDICT_PATTERNS = [
+  /\byou should (buy|not buy|get|avoid|skip)\b/i,
+  /\bi (would |do )?(recommend|suggest|advise)\b/i,
+  /\bdo ?n[o']?t buy\b/i,
+  /\bit('s| is) (definitely |probably |certainly )?(worth|not worth) (it|buying|the money)\b/i,
+  /\b(go ahead|hold off) (and|on) (buy|purchas)/i,
+  /\bskip (this|the) purchase\b/i,
+];
+
+function readsAsVerdict(text: string): boolean {
+  if (text.trim().endsWith("?")) return false;
+  return VERDICT_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+/**
+ * Price talk the model is not entitled to.
+ *
+ * Two different overreaches, both caught here. Naming a figure ("expect around
+ * ₱15,000") is inventing data — the model has no price feed, and a made-up
+ * range beside the owner's real figures would be indistinguishable from the
+ * calculated ones. Judging the amount ("that seems fair for a fridge") is the
+ * same overreach wearing a softer word: FinSight answers "is this normal" by
+ * comparing against what this owner has actually paid, and a model's opinion
+ * would contradict that arithmetic in the same card.
+ *
+ * The one figure it may repeat is the amount the owner typed, so a currency
+ * mention is only rejected when it is not that number.
+ */
+const PRICE_JUDGEMENT_PATTERNS = [
+  /\b(fair|reasonable|steep|cheap|expensive|overpriced|underpriced|a good deal|a bargain|too (much|high|low))\b/i,
+  /\b(should|would|could) (only )?cost\b/i,
+  /\b(typically|usually|normally|generally) (costs?|sells? for|goes? for|priced)\b/i,
+  /\b(around|about|roughly|approximately|between)\s*(php|₱|p)?\s*[\d,]{3,}/i,
+  /\b(market|going|retail|street) (price|rate)\b/i,
+];
+
+function withoutPriceJudgement(text: string | null): string | null {
+  if (!text) return null;
+  return PRICE_JUDGEMENT_PATTERNS.some((pattern) => pattern.test(text)) ? null : text;
+}
+
+/** A model string, trimmed and capped — or null if it is empty or a verdict. */
+function cleanSentence(value: unknown, maxLength: number): string | null {
+  if (typeof value !== "string") return null;
+  const text = value.trim().replace(/\s+/g, " ");
+  if (!text) return null;
+  if (readsAsVerdict(text)) return null;
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1).trimEnd()}…` : text;
+}
+
+const PURCHASE_KINDS: readonly PurchaseKind[] = ["asset", "running-cost", "mixed", "unclear"];
+
+/**
+ * Turns whatever came back into a review, or into nothing.
+ *
+ * Nothing is a perfectly good outcome: the card simply does not appear and the
+ * page is what it was, which is the same contract every other AI accelerator
+ * in this codebase honours. What must never happen is a half-built card — a
+ * classification with no reason under it, or an empty question list under a
+ * heading promising questions.
+ */
+export function parsePurchaseReview(raw: string): PurchaseReview | null {
+  let parsed: unknown;
+  try {
+    parsed = parseJsonArray(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+
+  const { kind, kindReason, businessUse, ongoingCosts, priceCheck, questions } = parsed as Record<string, unknown>;
+
+  const kindReasonText = cleanSentence(kindReason, 220);
+  const businessUseText = cleanSentence(businessUse, 320);
+  if (!kindReasonText || !businessUseText) return null;
+
+  const questionList = (Array.isArray(questions) ? questions : [])
+    .map((q) => cleanSentence(q, 160))
+    .filter((q): q is string => q !== null && q.endsWith("?"))
+    .slice(0, 4);
+  if (questionList.length < 2) return null;
+
+  return {
+    kind: PURCHASE_KINDS.find((k) => k === kind) ?? "unclear",
+    kindReason: kindReasonText,
+    businessUse: businessUseText,
+    ongoingCosts: cleanSentence(ongoingCosts, 220),
+    // Dropped rather than shown when it slips into judging the amount — the
+    // same treatment a buy/don't-buy verdict gets, for the same reason: it is
+    // a claim FinSight has nothing behind.
+    priceCheck: withoutPriceJudgement(cleanSentence(priceCheck, 260)),
+    questions: questionList,
+  };
+}
+
+/** The model half, without the database — which is what makes it testable. */
+export async function reviewPlannedPurchase(
+  item: string,
+  amount: number | null,
+  businessType: string,
+): Promise<PurchaseReview | null> {
+  let raw: string;
+  try {
+    raw = await reviewPurchaseWithGemini(item, amount, businessType);
+  } catch (geminiError) {
+    logger.error({ err: geminiError }, "Gemini purchase review failed, falling back to OpenRouter");
+    try {
+      raw = await reviewPurchaseWithOpenRouter(item, amount, businessType);
+    } catch (openRouterError) {
+      logger.error({ err: openRouterError }, "OpenRouter purchase review also failed");
+      return null;
+    }
+  }
+  return parsePurchaseReview(raw);
+}
+
+/**
+ * The route's entry point: ownership first, then the business's own type as
+ * the only context the model is trusted with.
+ */
+export async function reviewPurchaseForProfile(
+  userId: number,
+  businessProfileId: number,
+  item: string,
+  amount: number | null,
+): Promise<PurchaseReview | null> {
+  await requireOwnedBusinessProfile(userId, businessProfileId);
+  const profile = await prisma.businessProfile.findUnique({
+    where: { id: businessProfileId },
+    select: { type: true },
+  });
+  return reviewPlannedPurchase(item, amount, profile?.type ?? "small business");
+}

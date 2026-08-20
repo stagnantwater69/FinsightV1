@@ -63,6 +63,14 @@ describe("alertKindFromType — maps backend Notification.type onto the alert fa
     expect(alertKindFromType("possible duplicate")).toBe("duplicate");
   });
 
+  it("gives NOTIFICATION_TYPES.RECURRING_SCHEDULE its own kind, not the info fallback", () => {
+    // Web maps the same string to "recurring" (web/src/components/Alert.tsx).
+    // A watched payment going missed is the reason the schedule exists, so it
+    // must not read as "For your information" on mobile.
+    expect(alertKindFromType("Recurring Schedule")).toBe("recurring");
+    expect(alertKindFromType("recurring schedule")).toBe("recurring");
+  });
+
   it("falls back to info for an unrecognised type rather than throwing", () => {
     // The backend column is VARCHAR, not an enum, so an unknown value is
     // possible and must still render.

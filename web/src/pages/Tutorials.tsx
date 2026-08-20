@@ -22,6 +22,21 @@ export function Tutorials() {
       />
 
       <div className="mx-auto max-w-4xl px-4 py-12 lg:px-6 lg:py-16">
+        {/*
+          Fin pointing, above the walkthroughs it is introducing — the
+          scenario library's "tutorial / feature walkthrough" pose. Decorative:
+          the page head above already says what this page is.
+        */}
+        <img
+          src="/mascot/01-onboarding/tutorial.webp"
+          alt=""
+          aria-hidden
+          width={112}
+          height={112}
+          className="mx-auto mb-8 h-28 w-28 select-none"
+          draggable={false}
+        />
+
         <div className="grid gap-4 sm:grid-cols-2">
           {TUTORIALS.map((t) => (
             <article key={t.n} className="rounded-2xl border border-paper-200 bg-paper p-5">

@@ -1,5 +1,4 @@
-import { ActivityIndicator, Linking, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { ActivityIndicator, Image, Linking, View } from "react-native";
 import { Button, T } from "../ui";
 import { brand, ink, space, typeScale } from "../../theme/tokens";
 
@@ -55,7 +54,12 @@ export function CameraPermissionState({
         gap: space.md,
       }}
     >
-      <Ionicons name="camera-outline" size={40} color={brand[400]} />
+      <Image
+        source={require("../../../assets/mascot/01-onboarding/permission.png")}
+        style={{ width: 96, height: 96 }}
+        resizeMode="contain"
+        accessibilityIgnoresInvertColors
+      />
 
       <T variant="title" style={{ color: "#ffffff", textAlign: "center" }}>
         FinSight needs the camera

@@ -115,10 +115,12 @@ export function CategoryComparisonChart({
                   role="tooltip"
                   className="pointer-events-none absolute right-0 top-full z-20 mt-1 whitespace-nowrap rounded-lg bg-ink-900 px-2.5 py-1.5 text-[11.5px] font-medium text-paper shadow-md"
                 >
-                  {formatMoney(t.previous)} → {formatMoney(t.current)}
+                  <span className="figure">{formatMoney(t.previous)}</span> →{" "}
+                  <span className="figure">{formatMoney(t.current)}</span>
                   {t.previous > 0 || t.current > 0 ? (
                     <span className="ml-1.5 opacity-80">
-                      {isUp ? "▲" : isDown ? "▼" : "—"} {formatMoney(Math.abs(t.change))}
+                      {isUp ? "▲" : isDown ? "▼" : "—"}{" "}
+                      <span className="figure">{formatMoney(Math.abs(t.change))}</span>
                       {t.percentChange !== null && t.previous > 0
                         ? ` (${Math.abs(t.percentChange).toFixed(0)}%)`
                         : " (new)"}

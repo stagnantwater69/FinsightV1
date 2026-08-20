@@ -4,6 +4,7 @@ import * as insightsService from "../services/insights.service";
 import { AnomalyFindingFeedback, AnomalyFindingSeverity, AnomalyFindingStatus, AnomalyFindingType, RecurringPatternStatus } from "@prisma/client";
 import * as findingService from "../services/anomalyDetection/finding.service";
 import * as recurringService from "../services/anomalyDetection/recurring.service";
+import * as recurringScheduleService from "../services/recurringSchedule.service";
 import { anomalyEvaluation } from "../services/anomalyDetection/evaluation.service";
 
 /**
@@ -119,10 +120,89 @@ export async function recurringPatterns(req: Request, res: Response) {
   })));
 }
 
+/*
+ * Narrowed from `z.nativeEnum(RecurringPatternStatus)`, the way findingReviewSchema
+ * above narrows its status: the enum also carries CANDIDATE (the detector's own
+ * starting state, not a review outcome) and DISABLED, which NO code in
+ * backend/src reads or writes. Accepting either let a client park a pattern in a
+ * state nothing would ever act on again. Pausing is `isActive` on the schedule.
+ */
+const recurringPatternReviewSchema = z.object({
+  status: z.enum([RecurringPatternStatus.CONFIRMED, RecurringPatternStatus.DISMISSED]),
+});
+
 export async function reviewRecurringPattern(req: Request, res: Response) {
   const id = z.coerce.number().int().positive().parse(req.params.id);
-  const input = z.object({ status: z.nativeEnum(RecurringPatternStatus) }).parse(req.body);
-  res.status(200).json(await recurringService.reviewRecurringPattern(req.user!.id, id, input.status));
+  const input = recurringPatternReviewSchema.parse(req.body);
+  const pattern = await recurringService.reviewRecurringPattern(req.user!.id, id, input.status);
+  // Coerced for the same reason the list above is: returned raw, the three
+  // Decimal columns serialize as `{ s, e, d }` objects, so the row this hands
+  // back has a different shape from the row the list handed out.
+  res.status(200).json({
+    ...pattern,
+    expectedAmount: Number(pattern.expectedAmount),
+    amountTolerance: Number(pattern.amountTolerance),
+    confidence: Number(pattern.confidence),
+  });
+}
+
+/*
+ * EXPORTED for the contract tests — the clients' `maxLength` on the label box is
+ * checked against this rule rather than against a copy of it. See
+ * expenseRecord.controller.ts for the full reasoning.
+ */
+export const createRecurringScheduleSchema = z.object({
+  businessProfileId: z.number().int().positive(),
+  categoryId: z.number().int().positive(),
+  label: z.string().min(1).max(255),
+  vendor: z.string().max(150).optional(),
+  // Bounded at a year: FinSight watches payments an owner can forget within a
+  // cycle, and a schedule longer than annual would raise its first finding
+  // after the business's own planning horizon.
+  intervalDays: z.number().int().positive().max(366),
+  expectedAmount: z.number().positive(),
+  // 0..1 mirrors the column's CHECK — a tolerance is a fraction of the amount.
+  amountTolerance: z.number().min(0).max(1).optional(),
+  nextDueDate: z.string().date(),
+  isActive: z.boolean().optional(),
+});
+
+const updateRecurringScheduleSchema = z.object({
+  categoryId: z.number().int().positive().optional(),
+  label: z.string().min(1).max(255).optional(),
+  vendor: z.string().max(150).nullable().optional(),
+  intervalDays: z.number().int().positive().max(366).optional(),
+  expectedAmount: z.number().positive().optional(),
+  amountTolerance: z.number().min(0).max(1).optional(),
+  nextDueDate: z.string().date().optional(),
+  isActive: z.boolean().optional(),
+});
+
+export async function recurringSchedules(req: Request, res: Response) {
+  const query = z.object({ businessProfileId: z.coerce.number().int().positive() }).parse(req.query);
+  res.status(200).json(await recurringScheduleService.listRecurringSchedules(req.user!.id, query.businessProfileId));
+}
+
+export async function createRecurringSchedule(req: Request, res: Response) {
+  const input = createRecurringScheduleSchema.parse(req.body);
+  res.status(201).json(await recurringScheduleService.createRecurringSchedule(req.user!.id, input));
+}
+
+export async function updateRecurringSchedule(req: Request, res: Response) {
+  const id = z.coerce.number().int().positive().parse(req.params.id);
+  const input = updateRecurringScheduleSchema.parse(req.body);
+  res.status(200).json(await recurringScheduleService.updateRecurringSchedule(req.user!.id, id, input));
+}
+
+export async function deleteRecurringSchedule(req: Request, res: Response) {
+  const id = z.coerce.number().int().positive().parse(req.params.id);
+  await recurringScheduleService.deleteRecurringSchedule(req.user!.id, id);
+  res.status(204).send();
+}
+
+export async function confirmRecurringPattern(req: Request, res: Response) {
+  const id = z.coerce.number().int().positive().parse(req.params.id);
+  res.status(201).json(await recurringScheduleService.confirmRecurringPattern(req.user!.id, id));
 }
 
 export async function findingsMetrics(req: Request, res: Response) {
