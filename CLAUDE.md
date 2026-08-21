@@ -22,6 +22,7 @@ Backend integration tests need the throwaway Postgres container: `npm run test:d
 
 - Never regress ownership isolation (every query scoped to the authenticated user's active business profile), the deny-all RLS posture, or durable DB-backed rate limiting.
 - Never commit `.env` files, Supabase service-role keys, or other secrets.
+- Never move, rename, or delete `backend/.env`, `web/.env`, or `mobile/.env` — they hold live credentials with no other copy in the repo (a local backup lives outside the repo at `~/.finsight-env-backup/`, but don't rely on that as a reason to be careless). If a task needs a scratch/throwaway env file (e.g. for a CI-simulation test), copy it to a differently-named file (`.env.citest`, `.env.bak`, etc.) and leave the original untouched — do not `mv` or overwrite the original, even temporarily. This has caused the real `backend/.env` to go missing at least four times.
 - Mobile camera/permission/lifecycle behavior has **no** automated coverage — say "needs physical-device verification," never claim test coverage it doesn't have.
 - Don't present the mostly-synthetic OCR corpus as real-receipt evidence.
 - Commits in this repo do **not** carry a Claude co-author trailer.
