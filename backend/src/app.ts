@@ -92,20 +92,59 @@ function maySeeHealthDetail(req: express.Request): boolean {
 app.get(["/api/v1/health", "/api/v1/health/ready"], async (req, res) => {
   try {
     await prisma.$queryRaw`SELECT 1`;
-    const [queuedScans, queuedAnalysisJobs, failedAnalysisJobs, stalledAccountDeletions] = await Promise.all([
+    const [
+      queuedScans,
+      oldestQueuedScan,
+      queuedCsvImports,
+      oldestQueuedCsvImport,
+      queuedAnalysisJobs,
+      oldestQueuedAnalysisJob,
+      failedAnalysisJobs,
+      stalledAccountDeletions,
+    ] = await Promise.all([
       prisma.receiptScan.count({ where: { processingStatus: "Processing" } }),
+      prisma.receiptScan.findFirst({
+        where: { processingStatus: "Processing" },
+        orderBy: { createdAt: "asc" },
+        select: { createdAt: true },
+      }),
+      prisma.cSVImportBatch.count({ where: { processingStatus: { in: ["PENDING", "PROCESSING"] } } }),
+      prisma.cSVImportBatch.findFirst({
+        where: { processingStatus: { in: ["PENDING", "PROCESSING"] } },
+        orderBy: { createdAt: "asc" },
+        select: { createdAt: true },
+      }),
       prisma.analysisJob.count({ where: { status: { in: ["PENDING", "PROCESSING"] } } }),
+      prisma.analysisJob.findFirst({
+        where: { status: { in: ["PENDING", "PROCESSING"] } },
+        orderBy: { createdAt: "asc" },
+        select: { createdAt: true },
+      }),
       prisma.analysisJob.count({ where: { status: "FAILED" } }),
       // Surfaced because a deletion that has exhausted its retries is a data
       // obligation nobody is working on. It is quiet by design — the owner was
       // already told their account was gone — so it needs somewhere to be loud.
       countStalledAccountDeletions(),
     ]);
+    // Age of the oldest job still waiting on a worker, per queue — a coarse
+    // backlog signal that doesn't need a dashboard: if this climbs, the
+    // worker process is behind or down.
+    const ageSeconds = (row: { createdAt: Date } | null): number | null =>
+      row ? Math.max(0, Math.floor((Date.now() - row.createdAt.getTime()) / 1000)) : null;
     res.status(200).json({
       status: "ready",
       database: "ok",
       ...(maySeeHealthDetail(req)
-        ? { queuedReceiptScans: queuedScans, queuedAnalysisJobs, failedAnalysisJobs, stalledAccountDeletions }
+        ? {
+            queuedReceiptScans: queuedScans,
+            oldestQueuedReceiptScanAgeSeconds: ageSeconds(oldestQueuedScan),
+            queuedCsvImports,
+            oldestQueuedCsvImportAgeSeconds: ageSeconds(oldestQueuedCsvImport),
+            queuedAnalysisJobs,
+            oldestQueuedAnalysisJobAgeSeconds: ageSeconds(oldestQueuedAnalysisJob),
+            failedAnalysisJobs,
+            stalledAccountDeletions,
+          }
         : {}),
     });
   } catch (error) {

@@ -74,4 +74,12 @@ EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:4000/api/v1/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
+# Default is the API process. The `worker` target below is the same image with
+# no HEALTHCHECK (it has no HTTP endpoint to probe) and a different CMD — the
+# background queue consumers, deployed and scaled as their own service. See
+# src/worker.ts.
 CMD ["node", "dist/server.js"]
+
+FROM runtime AS worker
+HEALTHCHECK NONE
+CMD ["node", "dist/worker.js"]

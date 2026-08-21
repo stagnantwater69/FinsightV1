@@ -42,6 +42,20 @@ services:
       # first worker pass. Failures during this window do not count.
       start_period: 40s
 
+  worker:
+    # Same image, `worker` target: the background queue consumers (receipt
+    # scans, CSV imports, anomaly analysis, account deletion) and periodic
+    # sweeps, split into their own process — see backend/src/worker.ts. No
+    # `expose`/`ports`: this process serves no HTTP traffic. Scale this
+    # service independently of `backend` to add worker throughput without
+    # adding API capacity, or vice versa.
+    build:
+      context: ./backend
+      target: worker
+    env_file: ./backend/.env
+    restart: unless-stopped
+    stop_grace_period: 35s
+
   nginx:
     image: nginx:1.27-alpine
     depends_on:
