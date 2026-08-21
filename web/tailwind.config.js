@@ -256,6 +256,64 @@ export default {
           "70%": { transform: "scale(1.15)", opacity: "1" },
           "100%": { transform: "scale(1)", opacity: "1" },
         },
+        // ============================================================
+        // Landing hero only
+        // ============================================================
+        // A longer, taller rise than `fade-up`. The hero is the first thing
+        // painted and has room for a movement you actually notice; `fade-up`
+        // is tuned for in-app view swaps, where the same 16px would read as
+        // sluggish on every navigation.
+        "hero-rise": {
+          from: { opacity: "0", transform: "translateY(16px)" },
+          to: { opacity: "1", transform: "none" },
+        },
+        // The demo cluster's cards arriving. Taller and slower than
+        // `hero-rise` with a touch of scale, because these are objects with
+        // edges — a card that only fades looks like it was always there at
+        // reduced opacity, where one that also grows looks like it landed.
+        "card-rise": {
+          from: { opacity: "0", transform: "translateY(24px) scale(0.97)" },
+          to: { opacity: "1", transform: "none" },
+        },
+        // A row arriving INSIDE an already-arriving card, so it is smaller and
+        // quicker than `card-rise` — the two are visible at the same time and
+        // the inner motion has to read as subordinate to the outer one.
+        "row-in": {
+          from: { opacity: "0", transform: "translateY(10px)" },
+          to: { opacity: "1", transform: "none" },
+        },
+        // The mini bar chart's columns growing out of the axis.
+        //
+        // Height rather than scaleY, which would be the cheaper property: at
+        // 3px the corner radius is a visible part of these bars' shape, and
+        // scaling squashes it into an ellipse for the whole animation. Each
+        // bar carries its own target as `--bar-h` since they all differ, and
+        // that same value is set as a plain `height` at the call site so the
+        // chart is still correct if the animation never runs.
+        "bar-grow": {
+          from: { height: "0%" },
+          to: { height: "var(--bar-h)" },
+        },
+        // The idle drift on the four flanking KPI cards.
+        //
+        // TRANSLATION ONLY. The stacks are also tilted, and the tilt lives on
+        // a static wrapper rather than in these keyframes: `transform` is one
+        // property, so a keyframe carrying both would have to restate the
+        // rotation — and with a start delay (the drift waits for the entrance
+        // to finish) the element would sit un-rotated and then snap.
+        //
+        // SYMMETRIC around the resting position — the card rises to `--float-amp`
+        // above it and sinks the same distance below, so it hovers about where
+        // the layout put it. Travelling in one direction only (0 to -Npx) made
+        // the card look like it was being lifted and released rather than
+        // floating, and halved the visible travel for the same amplitude.
+        //
+        // Amplitude is a variable and the duration is set per card, so this one
+        // keyframe serves all four with no two of them breathing in unison.
+        "float-y": {
+          "0%, 100%": { transform: "translateY(calc(var(--float-amp, 9px) * -1))" },
+          "50%": { transform: "translateY(var(--float-amp, 9px))" },
+        },
       },
       animation: {
         "pop-in": "pop-in 380ms cubic-bezier(.2,.9,.3,1) both",
@@ -266,6 +324,24 @@ export default {
         "toast-in": "toast-in 250ms ease both",
         "slide-in-right": "slide-in-right 180ms ease both",
         "badge-in": "badge-in 260ms cubic-bezier(.2,.9,.3,1) both",
+        "hero-rise": "hero-rise 600ms ease both",
+        // `both` on all three entrances, so an element staggered behind a
+        // delay holds its "from" state instead of flashing at full opacity
+        // and then jumping back to start.
+        "card-rise": "card-rise 620ms cubic-bezier(.2,.7,.3,1) both",
+        "row-in": "row-in 420ms ease-out both",
+        "bar-grow": "bar-grow 620ms cubic-bezier(.2,.7,.3,1) both",
+        // Infinite, so it is switched off wholesale by the global
+        // prefers-reduced-motion rule in index.css. The 10s is a default that
+        // every call site overrides with its own duration.
+        //
+        // No fill mode, deliberately: call sites offset the phase with a
+        // NEGATIVE delay, which starts the cycle already in progress. A
+        // positive delay would need `backwards` to avoid snapping from the
+        // resting position to the keyframe's start — and that fill would then
+        // survive the reduced-motion override and leave the card parked off
+        // its layout position.
+        "float-y": "float-y 10s ease-in-out infinite",
       },
     },
   },

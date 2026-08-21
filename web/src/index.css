@@ -569,6 +569,88 @@
   }
 
   /* ---------------------------------------------------------------
+     CTA glow — the lit halo under the landing page's call-to-action buttons.
+     ---------------------------------------------------------------
+     Lives here rather than in a className because it needs pseudo-elements,
+     which no React prop can reach — and because the two buttons that use it
+     sit in different files (the hero and the public header) and must not
+     drift apart.
+
+     WHY NOT box-shadow. A spread shadow is the obvious way to do this, but
+     the glow breathes, and animating box-shadow repaints the element on every
+     frame — the same cost the sticky header's backdrop-blur is restricted to
+     desktop to avoid. Two blurred pseudo-elements animate `opacity` and
+     `transform` instead, which the compositor handles without repainting
+     anything.
+
+     TWO LAYERS, because one cannot do both jobs: an animated property beats a
+     normal declaration, so a single layer whose opacity is in the keyframes
+     could never respond to hover. `::before` is the steady halo and owns the
+     hover transition; `::after` is the slow breath on top of it.
+
+     Both sit at z-index -10, which puts them behind the button but still
+     inside the nearest ancestor stacking context — the hero <section> and the
+     <header> respectively, both of which paint their own background first. So
+     the glow lands ON the dark surface and UNDER the button, which is the
+     only arrangement that reads as light coming off it. This is also why the
+     button must not be `isolate`.
+
+     Colour comes from --glow-color so the same class serves the mint primary
+     and the white secondary. */
+  .glow-cta {
+    position: relative;
+  }
+
+  .glow-cta::before,
+  .glow-cta::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -10;
+    border-radius: inherit;
+    background: var(--glow-color, #9be8a0);
+    pointer-events: none;
+  }
+
+  .glow-cta::before {
+    filter: blur(18px);
+    opacity: 0.5;
+    transition: opacity 250ms ease;
+  }
+
+  .glow-cta:hover::before {
+    opacity: 0.85;
+  }
+
+  /* The static opacity here is not decoration — it is what the layer falls
+     back to. The breath has no fill mode, so under prefers-reduced-motion
+     (where the global rule collapses it to a single 0.01ms run) the element
+     reverts to exactly this, leaving a steady glow rather than the fully
+     opaque blob an undeclared `opacity` would default to. */
+  .glow-cta::after {
+    filter: blur(26px);
+    opacity: 0.22;
+    animation: glow-breathe 3.6s ease-in-out infinite;
+  }
+
+  /* The secondary CTA beside the primary one. Dimmer, and it does not
+     breathe — two buttons pulsing side by side would read as two equal
+     invitations, which is the opposite of what a primary and a secondary are
+     for. */
+  .glow-cta-soft::before {
+    opacity: 0.16;
+  }
+
+  .glow-cta-soft:hover::before {
+    opacity: 0.32;
+  }
+
+  .glow-cta-soft::after {
+    animation: none;
+    opacity: 0;
+  }
+
+  /* ---------------------------------------------------------------
      Eyebrow — the small uppercase kicker above a panel title.
      ---------------------------------------------------------------
      The mockup leans on this to give each panel a two-level heading without
@@ -712,5 +794,34 @@
 
   .skeleton::after {
     display: none;
+  }
+}
+
+/* ---------------------------------------------------------------
+   glow-breathe — the slow swell under the landing CTAs (see .glow-cta).
+   ---------------------------------------------------------------
+   Declared here as plain CSS rather than in tailwind.config.js on purpose.
+   Tailwind only emits a config keyframe when something in the content globs
+   actually uses its `animate-*` utility, and this one is referenced from a
+   stylesheet rule instead — so a config entry would be dropped from the build
+   and the animation would silently never run.
+
+   (That is not hypothetical: `@keyframes shimmer` is configured, referenced
+   by `.skeleton::after` above, used by no `animate-shimmer` class anywhere,
+   and consequently absent from the compiled CSS. The skeleton shimmer has
+   been dead for exactly this reason.)
+
+   Scale as well as opacity, so the halo swells outward rather than just
+   brightening in place — both are compositor-only properties, so this costs
+   no repaints. */
+@keyframes glow-breathe {
+  0%,
+  100% {
+    opacity: 0.18;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(1.07);
   }
 }

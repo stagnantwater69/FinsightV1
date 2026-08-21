@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, ReactNode, Ref } from "react";
+import type { ButtonHTMLAttributes, CSSProperties, ReactNode, Ref } from "react";
 import { Link } from "react-router-dom";
 
 /**
@@ -35,10 +35,44 @@ const SIZES: Record<Size, string> = {
 };
 
 const BASE =
-  "inline-flex items-center justify-center gap-2 rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-60";
+  "inline-flex items-center justify-center gap-2 transition-colors disabled:cursor-not-allowed disabled:opacity-60";
+
+/** The default corner. Kept apart from BASE so a caller can displace it — see below. */
+const BASE_RADIUS = "rounded-lg";
+
+/**
+ * True if `className` sets a corner radius of its own.
+ *
+ * THE BUG THIS FIXES: passing `rounded-full` did nothing. Both classes landed
+ * on the element, and which one applies is decided by the order Tailwind
+ * emits them in its stylesheet, not by the order they appear in the
+ * attribute — they have identical specificity. Tailwind sorts that output by
+ * its own theme key order, where `lg` happens to come after `full`, so
+ * `.rounded-lg` won and the landing page's three pill buttons quietly
+ * rendered as 8px rectangles.
+ *
+ * So the base radius is dropped instead of being fought with. Nothing to
+ * remember at the call site, and no `!important` sprayed around to win an
+ * argument the component should not have been having.
+ *
+ * Matches variants and the important modifier too, so `md:rounded-xl` and
+ * `!rounded-full` are both recognised.
+ */
+function setsOwnRadius(className: string) {
+  return className.split(/\s+/).some((c) => /(^|:)!?rounded(-|$)/.test(c));
+}
 
 function classesFor(variant: Variant, size: Size, fullWidth: boolean, className: string) {
-  return [BASE, VARIANTS[variant], SIZES[size], fullWidth ? "w-full" : "", className].filter(Boolean).join(" ");
+  return [
+    BASE,
+    setsOwnRadius(className) ? "" : BASE_RADIUS,
+    VARIANTS[variant],
+    SIZES[size],
+    fullWidth ? "w-full" : "",
+    className,
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -78,6 +112,7 @@ export function ButtonLink({
   size = "md",
   fullWidth = false,
   className = "",
+  style,
   children,
 }: {
   to: string;
@@ -87,10 +122,17 @@ export function ButtonLink({
   size?: Size;
   fullWidth?: boolean;
   className?: string;
+  /**
+   * For colours that cannot come from the token scale. The landing hero is
+   * the only caller: it paints on a fixed deep-green surface that does not
+   * follow the theme, so its CTA fill is a literal. Reach for `variant` and
+   * `className` first — this is the escape hatch, not the door.
+   */
+  style?: CSSProperties;
   children: ReactNode;
 }) {
   return (
-    <Link to={to} state={state} className={classesFor(variant, size, fullWidth, className)}>
+    <Link to={to} state={state} className={classesFor(variant, size, fullWidth, className)} style={style}>
       {children}
     </Link>
   );

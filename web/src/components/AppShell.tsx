@@ -217,9 +217,8 @@ function SidebarLink({
       <Link
         to={item.to}
         aria-current={active ? "page" : undefined}
-        className={`mb-0.5 flex min-h-tap items-center rounded-xl text-sm font-medium transition ${
-          collapsed ? "justify-center px-0" : "gap-3 px-3"
-        } ${active ? "bg-sidebar-fg/15 font-semibold text-sidebar-ink" : "text-sidebar-muted hover:bg-sidebar-fg/10 hover:text-sidebar-ink"}`}
+        className={`mb-0.5 flex min-h-tap items-center rounded-xl text-sm font-medium transition ${collapsed ? "justify-center px-0" : "gap-3 px-3"
+          } ${active ? "bg-sidebar-fg/15 font-semibold text-sidebar-ink" : "text-sidebar-muted hover:bg-sidebar-fg/10 hover:text-sidebar-ink"}`}
       >
         <item.Icon className="h-[18px] w-[18px] shrink-0 opacity-90" />
         {collapsed ? <span className="sr-only">{item.label}</span> : item.label}
@@ -322,9 +321,8 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       {/* ============================ SIDEBAR ============================ */}
       <aside
-        className={`surface-sidebar sticky top-0 hidden h-screen flex-col lg:flex ${
-          railCollapsed ? "px-2 py-3.5" : "p-3.5"
-        }`}
+        className={`surface-sidebar sticky top-0 hidden h-screen flex-col lg:flex ${railCollapsed ? "px-2 py-3.5" : "p-3.5"
+          }`}
       >
         {/* Collapsed, the expand control gets its own full-width row above the
             logo — sharing one with the logo at 72px would make both too
@@ -349,9 +347,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className={`mb-3 flex items-center ${railCollapsed ? "justify-center" : "gap-1"}`}>
           <Link
             to="/dashboard"
-            className={`flex min-h-tap items-center rounded-xl transition hover:bg-sidebar-fg/10 ${
-              railCollapsed ? "justify-center px-1.5" : "flex-1 gap-2.5 px-2"
-            }`}
+            className={`flex min-h-tap items-center rounded-xl transition hover:bg-sidebar-fg/10 ${railCollapsed ? "justify-center px-1.5" : "flex-1 gap-2.5 px-2"
+              }`}
             aria-label="FinSight home"
           >
             {/* MASCOT SEAM — the owl badge mark replaces this monogram, 36px. */}
@@ -420,11 +417,10 @@ export function AppShell({ children }: { children: ReactNode }) {
                             <Link
                               to={item.to}
                               aria-current={isActive(item.to, item.match) ? "page" : undefined}
-                              className={`mb-0.5 flex min-h-tap items-center justify-center rounded-xl transition ${
-                                isActive(item.to, item.match)
+                              className={`mb-0.5 flex min-h-tap items-center justify-center rounded-xl transition ${isActive(item.to, item.match)
                                   ? "bg-sidebar-fg/15 text-sidebar-ink"
                                   : "text-sidebar-muted hover:bg-sidebar-fg/10 hover:text-sidebar-ink"
-                              }`}
+                                }`}
                             >
                               <item.Icon className="h-[18px] w-[18px] shrink-0 opacity-90" />
                               <span className="sr-only">{item.label}</span>
@@ -438,18 +434,16 @@ export function AppShell({ children }: { children: ReactNode }) {
                               onClick={() => setInsightsOpen((v) => !v)}
                               aria-expanded={insightsOpen}
                               aria-controls="sidebar-insights"
-                              className={`mb-0.5 flex min-h-tap w-full items-center gap-3 rounded-xl px-3 text-sm font-medium transition ${
-                                isActive(item.to, item.match)
+                              className={`mb-0.5 flex min-h-tap w-full items-center gap-3 rounded-xl px-3 text-sm font-medium transition ${isActive(item.to, item.match)
                                   ? "bg-sidebar-fg/15 font-semibold text-sidebar-ink"
                                   : "text-sidebar-muted hover:bg-sidebar-fg/10 hover:text-sidebar-ink"
-                              }`}
+                                }`}
                             >
                               <item.Icon className="h-[18px] w-[18px] shrink-0 opacity-90" />
                               {item.label}
                               <IconChevronDown
-                                className={`ml-auto h-4 w-4 shrink-0 transition-transform duration-200 ${
-                                  insightsOpen ? "rotate-180" : ""
-                                }`}
+                                className={`ml-auto h-4 w-4 shrink-0 transition-transform duration-200 ${insightsOpen ? "rotate-180" : ""
+                                  }`}
                               />
                             </button>
                             {showInsightsChildren ? (
@@ -464,11 +458,10 @@ export function AppShell({ children }: { children: ReactNode }) {
                                       <Link
                                         to={child.to}
                                         aria-current={active ? "page" : undefined}
-                                        className={`flex min-h-tap items-center rounded-lg px-3 text-[13.5px] transition ${
-                                          active
+                                        className={`flex min-h-tap items-center rounded-lg px-3 text-[13.5px] transition ${active
                                             ? "bg-sidebar-fg/15 font-semibold text-sidebar-ink"
                                             : "text-sidebar-muted hover:bg-sidebar-fg/10 hover:text-sidebar-ink"
-                                        }`}
+                                          }`}
                                       >
                                         {child.label}
                                       </Link>
@@ -685,9 +678,8 @@ export function AppShell({ children }: { children: ReactNode }) {
                   <Link
                     to={item.to}
                     aria-current={active ? "page" : undefined}
-                    className={`flex min-h-tap flex-col items-center justify-center gap-0.5 py-1.5 text-[11px] font-medium transition-colors ${
-                      active ? "text-brand-700" : "text-ink-500"
-                    }`}
+                    className={`flex min-h-tap flex-col items-center justify-center gap-0.5 py-1.5 text-[11px] font-medium transition-colors ${active ? "text-brand-700" : "text-ink-500"
+                      }`}
                   >
                     <item.Icon className="h-[18px] w-[18px]" />
                     {item.label}
@@ -723,9 +715,8 @@ export function InsightsTabs() {
               key={link.to}
               to={link.to}
               aria-current={active ? "page" : undefined}
-              className={`flex min-h-tap items-center whitespace-nowrap rounded-lg px-4 text-[13.5px] font-semibold transition ${
-                active ? "bg-paper text-brand-800 shadow-sm" : "text-ink-500 hover:text-brand-800"
-              }`}
+              className={`flex min-h-tap items-center whitespace-nowrap rounded-lg px-4 text-[13.5px] font-semibold transition ${active ? "bg-paper text-brand-800 shadow-sm" : "text-ink-500 hover:text-brand-800"
+                }`}
             >
               {link.label}
             </Link>

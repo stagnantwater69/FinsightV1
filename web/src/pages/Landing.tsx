@@ -1,7 +1,7 @@
 import { PublicLayout } from "../components/PublicLayout";
 import { HeroSection } from "../components/landing/HeroSection";
 import { ProductShowcase } from "../components/landing/ProductShowcase";
-import { BentoGridFeatures } from "../components/landing/BentoGridFeatures";
+import { CapabilitiesCarousel } from "../components/landing/CapabilitiesCarousel";
 import { ProcessTimeline } from "../components/landing/ProcessTimeline";
 import { SafeguardsGrid } from "../components/landing/SafeguardsGrid";
 import { FaqAccordion } from "../components/landing/FaqAccordion";
@@ -25,22 +25,25 @@ import { ClosingCta } from "../components/landing/ClosingCta";
  *
  * Invented social proof is the easiest thing on a landing page to write and
  * the worst to be asked about. What replaces it is evidence that survives the
- * question "where did that come from": a hero running the REAL RecoveryMeter
- * component on figures labelled as an example, safeguards that each describe
- * something the code actually does, and an FAQ that answers "no" where the
- * answer is no.
+ * question "where did that come from": a hero whose demo panel says outright
+ * that its stores are made up, safeguards that each describe something the
+ * code actually does, and an FAQ that answers "no" where the answer is no.
  */
 export function Landing() {
   return (
-    <PublicLayout>
+    /*
+      `overlay` floats the header on the hero's dark wash instead of sitting
+      above it on paper. Only this page passes it — see PublicLayout.
+    */
+    <PublicLayout overlay>
       {/* 1. Hero Section */}
       <HeroSection />
 
       {/* 3. Interactive Product & AI Showcase */}
       <ProductShowcase />
 
-      {/* 4. Bento Grid Feature Architecture */}
-      <BentoGridFeatures />
+      {/* 4. The seven capabilities, one card at a time */}
+      <CapabilitiesCarousel />
 
       {/* 5. 3-Step Connected Process Timeline */}
       <ProcessTimeline />

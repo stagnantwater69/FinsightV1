@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { ButtonLink } from "./Button";
 import { Menu, X, ChevronDown, Activity } from "lucide-react";
@@ -9,27 +9,72 @@ const RESOURCES = [
   { to: "/faqs", label: "FAQ Center" },
 ];
 
-function Brand({ size = "md" }: { size?: "sm" | "md" }) {
-  const box = size === "sm" ? "h-7 w-7 text-xs" : "h-9 w-9 text-base";
+/**
+ * `invert` is for the landing hero, where the bar floats on deep green and
+ * every ink-* token would resolve to something unreadable.
+ */
+type Tone = "ink" | "invert";
+
+/**
+ * One source of truth for a desktop nav item's look, because the same three
+ * states (default, hover, current page) now have to be expressed twice — once
+ * in ink on paper, once in white on green — and there are five call sites
+ * between the links and the Resources trigger.
+ *
+ * `active` is new: the inverted bar renders the current page as a filled white
+ * pill, which needs the router to say which page that is. On the ink tone it
+ * is a quiet tint, so the six pages that already used this header do not
+ * suddenly grow a loud selected state.
+ */
+function navLinkClasses(tone: Tone, active = false) {
+  const shape = "rounded-full px-[15px] py-2 text-[13.5px]";
+  if (tone === "invert") {
+    return active
+      ? `${shape} bg-white/[0.92] font-semibold text-[#06231c]`
+      : `${shape} font-medium text-white/[0.72] hover:bg-white/10 hover:text-white`;
+  }
+  return active
+    ? `${shape} bg-paper-100 font-semibold text-ink-900`
+    : `${shape} font-medium text-ink-600 hover:bg-paper-100 hover:text-ink-900`;
+}
+
+function Brand({ size = "md", tone = "ink" }: { size?: "sm" | "md"; tone?: Tone }) {
+  const box = size === "sm" ? "h-7 w-7" : "h-9 w-9";
   const text = size === "sm" ? "text-base" : "text-lg";
   return (
     <span className="flex items-center gap-2.5">
-      <span
+      {/*
+        The owl, replacing a rounded square with an "F" in it. The artwork was
+        already sitting in public/ unused; the wordmark beside it carries the
+        name, so the image is decorative and takes an empty alt rather than
+        making a screen reader announce "FinSight FinSight".
+
+        Width and height are set so the row reserves its space before the
+        image decodes — without them the wordmark jumps left on first paint.
+      */}
+      <img
+        src="/finsight-owl.webp"
+        alt=""
         aria-hidden
-        className={`flex items-center justify-center rounded-xl bg-gradient-to-br from-brand-600 to-brand-800 font-display font-extrabold text-white shadow-md shadow-brand-700/20 ${box}`}
+        width={36}
+        height={36}
+        className={`${box} shrink-0 object-contain`}
+      />
+      <span
+        className={`font-display font-bold tracking-tight ${text} ${tone === "invert" ? "text-white" : "text-ink-900"}`}
       >
-        F
+        FinSight
       </span>
-      <span className={`font-display font-bold text-ink-900 tracking-tight ${text}`}>FinSight</span>
     </span>
   );
 }
 
-function ResourcesMenu() {
+function ResourcesMenu({ tone = "ink" }: { tone?: Tone }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const { pathname } = useLocation();
+  const active = RESOURCES.some((r) => r.to === pathname);
 
   useEffect(() => setOpen(false), [pathname]);
 
@@ -116,7 +161,7 @@ function ResourcesMenu() {
         onClick={openNow}
         aria-expanded={open}
         aria-haspopup="menu"
-        className="tap flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-ink-600 hover:bg-paper-100 hover:text-ink-900 transition-colors"
+        className={`tap flex items-center gap-1.5 transition-colors ${navLinkClasses(tone, active)}`}
       >
         <span>Resources</span>
         <ChevronDown className={`h-3.5 w-3.5 transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
@@ -153,13 +198,54 @@ function ResourcesMenu() {
   );
 }
 
-export function PublicLayout({ children }: { children: ReactNode }) {
+export function PublicLayout({
+  children,
+  overlay = false,
+}: {
+  children: ReactNode;
+  /**
+   * Float the header ON the page's first section instead of sitting above it
+   * on paper. Opt-in, and currently only the landing page opts in: its hero
+   * paints a deep-green wash that runs up behind the bar, and the six other
+   * public pages start on a light surface where white nav text would vanish.
+   */
+  overlay?: boolean;
+}) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
   const { pathname } = useLocation();
 
   useEffect(() => {
     setMobileMenuOpen(false);
   }, [pathname]);
+
+  /**
+   * The overlay bar is transparent over the hero and opaque past it.
+   *
+   * Without this it stays transparent all the way down, so white nav text
+   * ends up floating over the white feature sections — unreadable, and the
+   * header is sticky, so it is on screen for the entire page.
+   *
+   * 24px rather than the hero's full height: the switch wants to happen as
+   * soon as the bar is no longer over the very top of the wash, and measuring
+   * the hero would couple this component to the landing page's markup.
+   * `passive` because the handler never calls preventDefault, which lets the
+   * browser keep scrolling without waiting on it.
+   */
+  useEffect(() => {
+    if (!overlay) return;
+    function onScroll() {
+      setScrolled(window.scrollY > 24);
+    }
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, [overlay]);
+
+  // Inverted for the whole scroll, not just over the hero: once past it the
+  // bar goes opaque dark green rather than turning into a paper bar, so the
+  // nav never has to change colour underneath the pointer.
+  const tone: Tone = overlay ? "invert" : "ink";
 
   /**
    * THE BUG: clicking "Home" while already on "/" did nothing.
@@ -199,52 +285,86 @@ export function PublicLayout({ children }: { children: ReactNode }) {
         composite and looks almost identical at 95% (the blur was only ever
         showing through 15% of a solid colour). Above `md`, where there is a
         real GPU, the glass comes back.
+
+        The overlay variant follows the same rule for the same reason — it
+        just resolves to green instead of paper, and to nothing at all while
+        it is still sitting on the hero.
       */}
-      <header className="sticky top-0 z-50 border-b border-paper-200/80 bg-paper/95 transition md:bg-paper/85 md:backdrop-blur-md">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3.5 lg:px-6">
+      <header
+        className={
+          overlay
+            ? `sticky top-0 z-50 border-b transition-colors duration-300 ${scrolled
+              ? "border-white/10 bg-[#04231a]/95 md:bg-[#04231a]/85 md:backdrop-blur-md"
+              : "border-transparent bg-transparent"
+            }`
+            : "sticky top-0 z-50 border-b border-paper-200/80 bg-paper/95 transition md:bg-paper/85 md:backdrop-blur-md"
+        }
+      >
+        <div
+          className={`mx-auto flex items-center justify-between px-4 py-3.5 lg:px-6 ${overlay ? "max-w-[1440px] lg:px-14" : "max-w-6xl"
+            }`}
+        >
           {/* Same fix as the Home link below — the logo is also a link to
               "/" and had the identical no-op-while-already-home bug. */}
           <Link to="/" onClick={handleHomeClick} className="tap rounded-xl">
-            <Brand />
+            <Brand tone={tone} />
           </Link>
 
-          {/* Desktop Navigation Links */}
-          <nav className="hidden items-center gap-1 md:flex">
+          {/*
+            Desktop Navigation Links. In overlay mode they sit inside a glass
+            capsule, which is what gives the current-page pill something to be
+            a pill *within*; on paper they stay as loose items, unchanged.
+          */}
+          <nav
+            className={`hidden items-center md:flex ${overlay
+                ? "gap-0.5 rounded-full border border-white/[0.09] bg-white/5 px-[7px] py-[5px] backdrop-blur-[14px]"
+                : "gap-1"
+              }`}
+          >
             <Link
               to="/"
               onClick={handleHomeClick}
-              className="tap rounded-lg px-3.5 py-2 text-sm font-medium text-ink-600 hover:bg-paper-100 hover:text-ink-900 transition-colors"
+              className={`tap transition-colors ${navLinkClasses(tone, pathname === "/")}`}
             >
               Home
             </Link>
-            <a
-              href="/#features"
-              className="tap rounded-lg px-3.5 py-2 text-sm font-medium text-ink-600 hover:bg-paper-100 hover:text-ink-900 transition-colors"
-            >
+            <a href="/#features" className={`tap transition-colors ${navLinkClasses(tone)}`}>
               Features
             </a>
-            <ResourcesMenu />
-            <Link
-              to="/contact"
-              className="tap rounded-lg px-3.5 py-2 text-sm font-medium text-ink-600 hover:bg-paper-100 hover:text-ink-900 transition-colors"
-            >
+            <ResourcesMenu tone={tone} />
+            <Link to="/contact" className={`tap transition-colors ${navLinkClasses(tone, pathname === "/contact")}`}>
               Contact
             </Link>
           </nav>
 
           {/* Desktop Right Action Buttons */}
-          <div className="hidden items-center gap-2 md:flex">
+          <div className={`hidden items-center md:flex ${overlay ? "gap-[18px]" : "gap-2"}`}>
             <Link
               to="/login"
-              className="tap rounded-xl px-4 py-2 text-sm font-semibold text-ink-700 hover:bg-paper-100 hover:text-ink-900 transition-colors"
+              className={`tap rounded-xl px-4 py-2 text-sm font-semibold transition-colors ${overlay ? "text-white/85 hover:text-white" : "text-ink-700 hover:bg-paper-100 hover:text-ink-900"
+                }`}
             >
               Log in
             </Link>
+            {/* Mint on the dark bar, amber on paper — see the accent-rule note
+                in landing/HeroSection.tsx. The two CTAs on the landing page
+                have to be the same colour as each other, and the hero's is
+                the one the mockup pins down. */}
             <ButtonLink
               to="/register"
               variant="primary"
               size="sm"
-              className="bg-accent-400 text-ink-950 hover:bg-accent-300 font-bold shadow-xs px-4 py-2 rounded-xl transition"
+              /* The glow is overlay-only. On the six paper-header pages this
+                 button is amber on near-white, where a halo has nothing dark
+                 to read against and just muddies the edge. */
+              className={
+                overlay
+                  ? "glow-cta rounded-full px-5 py-2.5 text-[13.5px] font-bold transition hover:brightness-95"
+                  : "bg-accent-400 text-ink-950 hover:bg-accent-300 font-bold shadow-xs px-4 py-2 rounded-xl transition"
+              }
+              style={
+                overlay ? ({ backgroundColor: "#9be8a0", color: "#06231c", "--glow-color": "#9be8a0" } as CSSProperties) : undefined
+              }
             >
               Get started free
             </ButtonLink>
@@ -254,14 +374,22 @@ export function PublicLayout({ children }: { children: ReactNode }) {
           <button
             type="button"
             onClick={() => setMobileMenuOpen((v) => !v)}
-            className="flex h-10 w-10 items-center justify-center rounded-xl border border-paper-200 bg-paper text-ink-700 hover:bg-paper-100 md:hidden"
+            className={`flex h-10 w-10 items-center justify-center rounded-xl border md:hidden ${overlay
+                ? "border-white/15 bg-white/10 text-white hover:bg-white/20"
+                : "border-paper-200 bg-paper text-ink-700 hover:bg-paper-100"
+              }`}
             aria-label="Toggle Navigation Menu"
           >
             {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
           </button>
         </div>
 
-        {/* Mobile Dropdown Menu */}
+        {/*
+          Mobile Dropdown Menu. Stays on paper even in overlay mode — it is an
+          opaque sheet covering the top of the page rather than something
+          floating on the hero, and inverting it would mean a second full set
+          of colours for no gain.
+        */}
         {mobileMenuOpen && (
           <div className="border-b border-paper-200 bg-paper p-4 md:hidden space-y-2 shadow-lg">
             <Link
@@ -327,7 +455,7 @@ export function PublicLayout({ children }: { children: ReactNode }) {
               <p className="mt-4 max-w-sm text-sm leading-relaxed text-ink-500">
                 FinSight is a financial monitoring and decision-support application built for small businesses in the Philippines. Turn daily sales and supplier receipts into actionable profit clarity.
               </p>
-              
+
               <div className="mt-6 flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50/80 px-3.5 py-1 text-xs font-semibold text-emerald-800 w-fit">
                 <Activity className="h-3.5 w-3.5 text-emerald-600 animate-pulse" />
                 <span>All Systems Operational</span>
