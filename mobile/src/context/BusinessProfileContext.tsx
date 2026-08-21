@@ -103,7 +103,7 @@ export function BusinessProfileProvider({ children }: { children: ReactNode }) {
     // here so a failed load is a message on screen rather than an unhandled
     // rejection in the console.
     load(takeBootstrapProfiles()).catch(() => undefined);
-  }, [user?.id, load, takeBootstrapProfiles]);
+  }, [user, load, takeBootstrapProfiles]);
 
   const refreshCategories = useCallback(async () => {
     if (!selectedId) {

@@ -46,7 +46,22 @@ export function BusinessProfilesScreen({ navigation }: any) {
     }
   }, [listArchived]);
 
-  useFocusEffect(useCallback(() => { if (archived !== null) loadArchived(); }, []));
+  // Refocusing this screen should refresh the archived panel if — and only
+  // if — it is currently expanded. Read through refs rather than closing
+  // over `archived`/`loadArchived` directly: both are recreated on every
+  // provider render (the context doesn't memoize `listArchived`), so an
+  // exhaustive-deps array here would refire the effect on unrelated
+  // re-renders instead of only on refocus.
+  const archivedRef = useRef(archived);
+  archivedRef.current = archived;
+  const loadArchivedRef = useRef(loadArchived);
+  loadArchivedRef.current = loadArchived;
+
+  useFocusEffect(
+    useCallback(() => {
+      if (archivedRef.current !== null) loadArchivedRef.current();
+    }, []),
+  );
 
   function confirmArchive(p: BusinessProfile) {
     // Archive is reversible but still pulls a business out of the switcher, so
@@ -242,7 +257,11 @@ export function BusinessProfileFormScreen({ navigation, route }: any) {
     setError(null);
     setBusy(true);
     try {
-      existing ? await updateProfile(existing.id, payload) : await createProfile(payload);
+      if (existing) {
+        await updateProfile(existing.id, payload);
+      } else {
+        await createProfile(payload);
+      }
       navigation.goBack();
     } catch (err) {
       setError(errorMessage(err));

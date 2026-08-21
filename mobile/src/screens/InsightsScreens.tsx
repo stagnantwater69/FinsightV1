@@ -22,7 +22,7 @@ import {
 } from "../lib/recurringAgenda";
 import { SIGNAL_COPY, findingSignalStrength } from "../lib/confidenceBands";
 import { feedbackActions, findingCategory, quickActions, type FeedbackAction } from "../lib/findingFeedback";
-import { ACCENT, brand, font, ink, paper, radius, space, status, statusText, TAP, typeScale } from "../theme/tokens";
+import { ACCENT, brand, font, ink, paper, radius, space, statusText, TAP, typeScale } from "../theme/tokens";
 import type {
   AnomalyFinding,
   AnomalyFindingPage,

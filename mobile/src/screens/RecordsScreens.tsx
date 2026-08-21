@@ -378,7 +378,13 @@ export function RecordsScreen({ navigation, route }: any) {
   const load = useCallback(
     async (isRefresh = false, cursor?: string) => {
       if (!selected) return;
-      cursor ? setLoadingMore(true) : isRefresh ? setRefreshing(true) : setLoading(true);
+      if (cursor) {
+        setLoadingMore(true);
+      } else if (isRefresh) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
+      }
       setError(null);
       try {
         const page = await api.get<{ items: RecordItem[]; nextCursor: string | null }>("/records/search", {
@@ -405,7 +411,7 @@ export function RecordsScreen({ navigation, route }: any) {
         setLoadingMore(false);
       }
     },
-    [selected?.id, type, searchTerm, categoryId, source, importBatchId, dateFrom, dateTo]
+    [selected, type, searchTerm, categoryId, source, importBatchId, dateFrom, dateTo]
   );
 
   /*
@@ -1664,7 +1670,7 @@ function sectionsFromPages(pages: CapturedPage[]): ReceiptSection[] {
   }));
 }
 
-export function ScanReceiptScreen({ navigation, route }: any) {
+export function ScanReceiptScreen({ navigation }: any) {
   const { selected, categories, refreshCategories, createCategory } = useBusinessProfiles();
   const [scan, setScan] = useState<ReceiptScanResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1897,7 +1903,11 @@ export function ScanReceiptScreen({ navigation, route }: any) {
       // A vision-assisted read is a guess, not a reading — it deserves a
       // different signal from a clean scan, so the owner is primed to check
       // it before they even look down.
-      result.visionAssisted ? haptics.warned() : haptics.succeeded();
+      if (result.visionAssisted) {
+        haptics.warned();
+      } else {
+        haptics.succeeded();
+      }
     } catch (err) {
       haptics.failed();
       setError(errorMessage(err));
@@ -4334,7 +4344,7 @@ export function FlaggedRecordsScreen() {
     } finally {
       setLoading(false);
     }
-  }, [selected?.id]);
+  }, [selected]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
@@ -4365,7 +4375,11 @@ export function FlaggedRecordsScreen() {
           expenseIds: group.records.filter((r) => r.type === "expense").map((r) => r.id),
           salesIds: group.records.filter((r) => r.type === "sales").map((r) => r.id),
         });
-        action === "discard" ? haptics.warned() : haptics.succeeded();
+        if (action === "discard") {
+          haptics.warned();
+        } else {
+          haptics.succeeded();
+        }
         // The server's count, not the group's — it excludes anything already
         // resolved elsewhere, and saying "40" when 38 were left would be a
         // small lie about the owner's own books.

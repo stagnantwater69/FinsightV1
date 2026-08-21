@@ -19,7 +19,7 @@ import {
 import { createRecoveryClient } from "../lib/supabase";
 import type { AuthLinkTokens } from "../lib/authLinkTokens";
 import { isSavingAccount, savedEmail, setSavedAccount } from "../lib/savedAccountStore";
-import { brand, ink, radius, space, TAP, typeScale } from "../theme/tokens";
+import { brand, ink, radius, space, typeScale } from "../theme/tokens";
 
 /**
  * Auth screens. Every input uses `minHeight: TAP` rather than a fixed height so

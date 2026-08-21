@@ -31,7 +31,11 @@ export function NotificationsScreen() {
   const load = useCallback(
     async (isRefresh = false) => {
       if (!selected) return;
-      isRefresh ? setRefreshing(true) : setLoading(true);
+      if (isRefresh) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
+      }
       setError(null);
       try {
         setNotifications(
@@ -44,7 +48,7 @@ export function NotificationsScreen() {
         setRefreshing(false);
       }
     },
-    [selected?.id],
+    [selected],
   );
 
   useFocusEffect(

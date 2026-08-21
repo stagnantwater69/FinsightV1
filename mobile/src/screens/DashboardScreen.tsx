@@ -253,7 +253,7 @@ export function DashboardScreen({ navigation }: any) {
     } finally {
       setLoading(false);
     }
-  }, [selected?.id, summaryPeriodDays]);
+  }, [selected, summaryPeriodDays]);
 
   const loadCashflow = useCallback(async () => {
     if (!selected) return;
@@ -272,7 +272,7 @@ export function DashboardScreen({ navigation }: any) {
     } finally {
       setCashflowLoading(false);
     }
-  }, [selected?.id, cashflowGranularity]);
+  }, [selected, cashflowGranularity]);
 
   // Refetch on focus so a record added on another tab is reflected when the
   // user comes back, rather than showing a stale figure. Two separate

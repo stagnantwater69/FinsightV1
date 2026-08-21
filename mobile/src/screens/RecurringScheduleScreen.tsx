@@ -95,7 +95,7 @@ export function RecurringScheduleScreen({ navigation, route }: any) {
       return () => {
         cancelled = true;
       };
-    }, [editing, scheduleId, selected?.id]),
+    }, [editing, scheduleId, selected]),
   );
 
   if (!selected) return null;

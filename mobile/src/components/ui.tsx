@@ -453,7 +453,6 @@ export function CategorySelect<Option extends { id: number; name: string }>({
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const insets = useSafeAreaInsets();
 
   const selected = options.find((o) => o.id === value) ?? null;
 
