@@ -76,6 +76,7 @@ export function Login() {
     <AuthLayout
       title="Log in"
       subtitle="Welcome back."
+      showBack
       heroBody={
         <>
           An AI-assisted financial monitoring platform that helps small business owners record expenses, track

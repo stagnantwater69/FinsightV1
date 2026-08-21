@@ -184,7 +184,14 @@ function GuidedTourPanel() {
         A real checkbox with `role="switch"`, not a styled div: it arrives in
         the tab order, answers the space bar, and reports its own state to a
         screen reader without any of that having to be re-implemented. The
-        visual track is drawn from the peer's checked state.
+        track and knob are drawn from the peer's checked state.
+
+        Tailwind's `peer-checked:` only matches a *sibling* of the checked
+        peer (it compiles to `.peer:checked ~ .peer-checked\:…`), so the
+        input, the track and the knob all have to sit at the same level —
+        nesting the knob inside the track breaks the selector and the
+        `translate-x-5` never applies, which is why the switch used to jump
+        with no slide at all instead of animating.
       */}
       <label className="flex min-h-tap cursor-pointer items-start justify-between gap-4 rounded-xl border border-paper-200 p-3.5">
         <span className="min-w-0">
@@ -194,18 +201,22 @@ function GuidedTourPanel() {
             setting it up for someone else — turn it off and the tour goes back to appearing once.
           </span>
         </span>
-        <input
-          type="checkbox"
-          role="switch"
-          className="peer sr-only"
-          checked={tour.alwaysShow}
-          onChange={(e) => tour.setAlwaysShow(e.target.checked)}
-        />
-        <span
-          aria-hidden
-          className="relative mt-0.5 h-6 w-11 shrink-0 rounded-full bg-ink-200 transition-colors peer-checked:bg-brand-600 peer-focus-visible:ring-2 peer-focus-visible:ring-brand-500 peer-focus-visible:ring-offset-2"
-        >
-          <span className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-paper shadow-sm transition-transform peer-checked:translate-x-5" />
+        <span className="relative mt-0.5 h-6 w-11 shrink-0">
+          <input
+            type="checkbox"
+            role="switch"
+            className="peer absolute inset-0 z-10 h-full w-full cursor-pointer appearance-none opacity-0"
+            checked={tour.alwaysShow}
+            onChange={(e) => tour.setAlwaysShow(e.target.checked)}
+          />
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-0 rounded-full bg-ink-200 transition-colors duration-200 ease-in-out peer-checked:bg-brand-600 peer-focus-visible:ring-2 peer-focus-visible:ring-brand-500 peer-focus-visible:ring-offset-2"
+          />
+          <span
+            aria-hidden
+            className="pointer-events-none absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-paper shadow-sm transition-transform duration-200 ease-in-out peer-checked:translate-x-5"
+          />
         </span>
       </label>
 

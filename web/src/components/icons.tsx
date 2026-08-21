@@ -199,6 +199,29 @@ export function IconArrowRight(p: IconProps) {
   );
 }
 
+export function IconArrowLeft(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M19 12H5M11 6l-6 6 6 6" strokeWidth={2} />
+    </Svg>
+  );
+}
+
+/**
+ * A refined chevron-left for standalone "back" controls — e.g. the pinned
+ * corner button on the auth pages. Distinct from `IconArrowLeft` (which
+ * pairs a full shaft with the point, sized for sitting beside a text
+ * label): this is a single closed wedge, so at a small size inside a round
+ * button it reads as a crisp mark rather than a stray line plus a hook.
+ */
+export function IconChevronLeft(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M14.5 5.5L8 12l6.5 6.5" strokeWidth={2.1} />
+    </Svg>
+  );
+}
+
 // ============================================================
 // Shell chrome — added for the topbar and the collapsible sidebar
 // ============================================================

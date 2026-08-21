@@ -144,6 +144,7 @@ export function Register() {
         "Start recording expenses and sales reference",
       ]}
       footnote="Your records stay organised per business profile."
+      showBack
     >
       <form onSubmit={handleSubmit} className="space-y-4">
         {/* Stacks below `sm`: at 320px two side-by-side name fields leave

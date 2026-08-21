@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
+import { IconChevronLeft } from "./icons";
 
 /**
  * The signed-in screens: one centred card, form on the left, context panel on
@@ -112,6 +114,7 @@ export function AuthLayout({
   heroBody,
   points,
   footnote = "FinSight supports decision awareness. It is not an accounting, tax, payroll, POS, or banking system.",
+  showBack = false,
   children,
 }: {
   title: string;
@@ -120,8 +123,16 @@ export function AuthLayout({
   heroBody?: ReactNode;
   points?: string[];
   footnote?: string;
+  /**
+   * Shows a "Back" control pinned to the top-left corner of the page that
+   * returns to the landing page. Off by default — RecoverPassword,
+   * ResetPassword and ConfirmEmail already have their own explicit "Back to
+   * log in" links that say exactly where they land.
+   */
+  showBack?: boolean;
   children: ReactNode;
 }) {
+  const navigate = useNavigate();
   return (
     // Pinned to Classic for the same reason the landing page is: these are
     // signed-out pages, and the app theme is a preference about the PRODUCT,
@@ -129,8 +140,18 @@ export function AuthLayout({
     // stored choice survives for the app itself.
     <div
       data-theme="classic"
-      className="flex min-h-screen items-center justify-center bg-paper-50 px-4 py-6 sm:px-6 sm:py-10"
+      className="relative flex min-h-screen items-center justify-center bg-paper-50 px-4 py-6 sm:px-6 sm:py-10"
     >
+      {showBack ? (
+        <button
+          type="button"
+          onClick={() => navigate("/")}
+          aria-label="Back to home"
+          className="tap-inline fixed left-4 top-4 z-10 flex h-10 w-10 items-center justify-center rounded-full border border-paper-200 bg-paper text-ink-500 shadow-sm transition duration-250 ease-shell hover:scale-105 hover:border-paper-300 hover:bg-paper-100 hover:text-ink-800 hover:shadow-md active:scale-95"
+        >
+          <IconChevronLeft className="h-4 w-4" />
+        </button>
+      ) : null}
       <div className="w-full max-w-5xl overflow-hidden rounded-2xl border border-paper-200 bg-paper shadow-lg">
         {/* `lg:grid-cols-2` with min-w-0 tracks: without the minmax(0,...) a
             long unbroken string in a field could force a column wider than its
