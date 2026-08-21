@@ -47,11 +47,38 @@ jobs:
       # prisma itself, which doesn't recognize it and prints its help text.
       - run: npx prisma generate
         working-directory: backend
+      # Explicit gate for "does the migration history apply cleanly to a
+      # brand-new database", run separately from the test suite so a
+      # migration failure shows up as its own red step instead of buried
+      # inside a `npm test` log. tests/setup/globalSetup.ts (below, via `npm
+      # test`) also runs `prisma migrate deploy` — that's not a duplicate
+      # mistake, it's idempotent and globalSetup needs it standalone so the
+      # test suite works the same way on a laptop with no separate CI step.
+      - run: npx prisma migrate deploy
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://testuser:testpass@localhost:55432/finsight_test
+          DIRECT_URL: postgresql://testuser:testpass@localhost:55432/finsight_test
       - run: npm run typecheck --prefix backend
       - run: npm run lint --prefix backend
+      # Compiles the actual production artifact (dist/) that Dockerfile's
+      # build stage and `npm start` both depend on. typecheck alone
+      # (--noEmit) does not catch every failure mode tsc's emit path can hit.
+      - run: npm run build --prefix backend
       - run: npm test --prefix backend
         env:
           DATABASE_URL: postgresql://testuser:testpass@localhost:55432/finsight_test
+      # Non-blocking: report-only, not a merge gate, until a maintainer
+      # triages these. As of 2026-08-21, `npm audit --audit-level=high`
+      # here finds 3 high findings, all inside `prisma`'s own dev-time CLI
+      # dependency chain (deepmerge-ts via @prisma/config via prisma) —
+      # nothing in the runtime dependency graph the built image ships (the
+      # Dockerfile's runtime stage never installs the `prisma` CLI, only the
+      # generated @prisma/client). continue-on-error surfaces the failed
+      # step (and its annotation) in the Actions UI without failing the job,
+      # so new findings stay visible instead of silently passing.
+      - run: npm audit --audit-level=high --prefix backend
+        continue-on-error: true
 
   web:
     runs-on: ubuntu-latest
@@ -63,6 +90,11 @@ jobs:
       - run: npm ci --prefix web
       - run: npm run typecheck --prefix web
       - run: npm run lint --prefix web
+      # Compiles the actual production bundle `vite build` emits (tsc -b +
+      # rollup), not just the --noEmit typecheck above. Confirmed this needs
+      # no Supabase env vars: nothing at module top level calls the client
+      # during a build, only when a component actually renders in a browser.
+      - run: npm run build --prefix web
       # supabaseClient.ts throws at import time if either is empty, which
       # takes down any unit test that imports it transitively (api.ts,
       # AuthContext.tsx, ...) before a single test in the file can run —
@@ -85,13 +117,36 @@ jobs:
           VITE_SUPABASE_URL: "https://example.supabase.co"
           VITE_SUPABASE_ANON_KEY: "ci-placeholder-anon-key"
           VITE_API_BASE_URL: "http://localhost:4000/api/v1"
+      # Non-blocking: report-only, not a merge gate, until a maintainer
+      # triages this. As of 2026-08-21, `npm audit --audit-level=high` here
+      # finds 1 high finding (nanoid, a transitive dev-tooling dependency —
+      # not shipped in the built bundle). continue-on-error surfaces the
+      # failed step in the Actions UI without failing the job.
+      - run: npm audit --audit-level=high --prefix web
+        continue-on-error: true
 
   docker:
     runs-on: ubuntu-latest
     # Verifies the two things docs/DEPLOYMENT-HARDENING-PLAN.md's own
     # Verification section requires and that, until now, only ran by hand:
     # `docker compose config` parses, and nginx/nginx.conf passes `nginx -t`
-    # in the same image tag docker-compose.yml pins.
+    # in the same image tag docker-compose.yml pins. Also builds the real
+    # backend image (Dockerfile) and proves it boots and answers a real
+    # request that round-trips to Postgres — not the compose topology (no
+    # nginx hop, no TLS), just the image itself.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: finsight_test
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       # docker-compose.yml points backend's env_file at backend/.env, which is
@@ -111,6 +166,83 @@ jobs:
           docker run --rm --add-host backend:127.0.0.1 \
             -v "$(pwd)/nginx/nginx.conf:/etc/nginx/nginx.conf:ro" \
             nginx:1.27-alpine nginx -t
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # The runtime image ships no `prisma` CLI on purpose (see the Dockerfile
+      # comment on the deps stage) — only the generated client. Migrations
+      # against the throwaway DB have to run from outside the image, the same
+      # as any real deploy would run them from a CI/CD step or operator
+      # shell, never from inside the running container.
+      - run: npm ci --prefix backend
+      - run: npx prisma migrate deploy
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://testuser:testpass@localhost:55432/finsight_test
+          DIRECT_URL: postgresql://testuser:testpass@localhost:55432/finsight_test
+
+      - run: docker build -t finsight-backend:ci ./backend
+
+      # --network host: the container needs to reach the postgres *service
+      # container*, which GitHub Actions publishes on the runner's own
+      # localhost, not on a user-defined bridge network the app container is
+      # also on. Confirmed locally that plain `docker run -p` on a bridge
+      # network can't reach a service container's published port here, and
+      # host networking is exactly what a real bare-metal/systemd deploy (the
+      # runbook's non-compose path) looks like anyway.
+      #
+      # Supabase vars are unreachable-but-well-formed placeholders: nothing
+      # this smoke test hits calls Supabase, and env.ts's zod schema rejects
+      # boot with a malformed SUPABASE_URL, so it has to be a real URL shape.
+      - run: |
+          docker run -d --name finsight-backend-smoke --network host \
+            -e DATABASE_URL="postgresql://testuser:testpass@127.0.0.1:55432/finsight_test" \
+            -e DIRECT_URL="postgresql://testuser:testpass@127.0.0.1:55432/finsight_test" \
+            -e SUPABASE_URL="https://example.supabase.co" \
+            -e SUPABASE_ANON_KEY="ci-placeholder-anon-key" \
+            -e SUPABASE_SERVICE_ROLE_KEY="ci-placeholder-service-role-key" \
+            -e PORT=4577 \
+            -e NODE_ENV=development \
+            finsight-backend:ci
+
+      # Polls rather than sleeping a fixed amount: the compose healthcheck
+      # gives the app a 40s start_period for Prisma's connection setup, and a
+      # flat sleep would either waste that budget every green run or flake
+      # under load. /health/live only proves the process is up; /health/ready
+      # is the actual API-to-database smoke journey — it runs `SELECT 1` and
+      # several real Prisma queries against the migrated schema above.
+      - run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:4577/api/v1/health/live > /dev/null; then break; fi
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:4577/api/v1/health/live
+          echo
+          echo "Checking /health/ready hits a real database round trip..."
+          response="$(curl -sf http://127.0.0.1:4577/api/v1/health/ready)"
+          echo "$response"
+          echo "$response" | grep -q '"database":"ok"'
+      - if: always()
+        run: docker logs finsight-backend-smoke || true
+      - if: always()
+        run: docker rm -f finsight-backend-smoke || true
+
+  ml:
+    runs-on: ubuntu-latest
+    # ml/ is the Python side of the Isolation Forest shadow detector (see
+    # ml/README.md). Nothing here previously ran its tests or checked its
+    # pinned dependencies actually install together.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pip install -r ml/requirements.txt
+      # Confirms the pinned versions in requirements.txt don't conflict with
+      # each other or with anything pip already resolved transitively.
+      - run: pip check
+      - run: python -m unittest discover -s ml/worker -v
 
   mobile:
     runs-on: ubuntu-latest
@@ -132,3 +264,13 @@ jobs:
       # a raw fontSize is just a number.
       - run: npm run lint --prefix mobile
       - run: npm test --prefix mobile
+      # Non-blocking: report-only, not a merge gate. As of 2026-08-21, `npm
+      # audit --audit-level=high --prefix mobile` finds 16 findings (8 high,
+      # 8 moderate), rooted in Expo's own config-plugins/xcode tooling chain
+      # (uuid, metro-transform-worker) — dev/build tooling, not runtime app
+      # code. `npm audit fix --force` there pulls a breaking Expo SDK bump,
+      # which is exactly the kind of change this pipeline should not make
+      # unilaterally. continue-on-error surfaces the failed step in the
+      # Actions UI without failing the job, so new findings stay visible.
+      - run: npm audit --audit-level=high --prefix mobile
+        continue-on-error: true
