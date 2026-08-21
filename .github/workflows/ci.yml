@@ -95,6 +95,11 @@ jobs:
       # no Supabase env vars: nothing at module top level calls the client
       # during a build, only when a component actually renders in a browser.
       - run: npm run build --prefix web
+      # Fails the job if any web/dist/assets/*.js chunk exceeds the budget in
+      # web/scripts/check-bundle-budget.mjs — a regression tripwire, not a
+      # target to chase down to zero (see that script's header comment for
+      # why the current large chunks are legitimate vendor weight).
+      - run: npm run check:bundle-budget --prefix web
       # supabaseClient.ts throws at import time if either is empty, which
       # takes down any unit test that imports it transitively (api.ts,
       # AuthContext.tsx, ...) before a single test in the file can run —
