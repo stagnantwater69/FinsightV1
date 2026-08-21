@@ -46,7 +46,7 @@ const ALLOWED = [
   { file: "components/receipt-camera/CameraPermissionState.tsx", sizes: [13.5] },
   { file: "components/QuickActionMenu.tsx", sizes: [11.5] },
   { file: "components/ui.tsx", sizes: [13.5] },
-  { file: "screens/InsightsScreens.tsx", sizes: [13.5, 10.5] },
+  { file: "components/InsightsShared.tsx", sizes: [13.5, 10.5] },
 ];
 
 const allowedFor = (rel) =>
