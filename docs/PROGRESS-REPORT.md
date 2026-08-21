@@ -1,10 +1,10 @@
 # FinSight System Project Progress Report
 
-**Reporting date:** 7 August 2026
+**Reporting date:** 7 August 2026 (test-count and working-tree sections refreshed 21 August 2026 — see note below; the rest of this report has not been re-verified line by line and may still describe the 7 August state)
 
-**Branch reviewed:** `feat/mobile-ui-refine`
+**Branch reviewed:** `finsightv1-main`
 
-**Branch HEAD:** `6ac5dd9`
+**Branch HEAD:** `132949c`
 **Current stage:** Feature-complete capstone candidate; internal acceptance and release-readiness work remain
 
 ## Executive summary
@@ -13,7 +13,9 @@ FinSight is a working financial-monitoring system for small-business owners. It 
 
 The project is suitable for a capstone demonstration after the remaining presentation-device checks are completed. It should not yet be described as production-ready: physical Android validation, backup and restore rehearsal, storage recovery, production hosting, and operational monitoring are still outstanding.
 
-Fresh verification on 7 August 2026 reports **845 passing automated tests**: 658 backend, 75 web, 111 mobile, and one Playwright browser journey. Backend and mobile typechecks, the backend and web production builds, Prisma schema validation, and all 18 local test-database migrations also passed. The workstation initially ran out of disk space; clearing only disposable npm cache and generated build artifacts restored the verification environment.
+Fresh verification on 7 August 2026 reported **845 passing automated tests**: 658 backend, 75 web, 111 mobile, and one Playwright browser journey. Backend and mobile typechecks, the backend and web production builds, Prisma schema validation, and all 18 local test-database migrations also passed. The workstation initially ran out of disk space; clearing only disposable npm cache and generated build artifacts restored the verification environment.
+
+**Update, 21 August 2026:** a whole-codebase audit and remediation pass re-ran the web and mobile suites directly (backend unit/integration tests still need the throwaway Postgres container, which wasn't available in that session — typecheck/build/lint stood in for backend verification instead). Current counts: **296 web tests** (up from 75) and **351 mobile tests** (up from 111), both passing; backend's count was not re-confirmed and the 658 figure above should not be treated as current. The backend/web/mobile figures in this report were never on a common measurement date to begin with — treat any single "845 total" figure as approximate, not a precise point-in-time count.
 
 ## Status overview
 
@@ -76,6 +78,8 @@ This is developer/internal acceptance evidence, not representative end-user UAT.
 
 ## Current working-tree position
 
+**Update, 21 August 2026:** the 41-path uncommitted change set described below has since been reviewed and committed in coherent units (release-control work, dependency-vuln triage, a backend worker/API process split, an API-contract drift fix between the web and mobile clients, and a breakup of the five largest hotspot files). The working tree is currently clean. The paragraph below is retained as a historical record of the 7 August state and should not be read as current.
+
 The reviewed branch contains six recent commits for internal acceptance evidence, Supabase table security, stabilization documentation, web content, mobile UI refinement, and extraction feedback. On top of branch HEAD, the working tree currently contains **41 modified, deleted, or untracked paths** spanning backend, schema/migrations, web, mobile, tests, lockfiles, and documentation.
 
 The uncommitted hardening work includes durable operations and indexes, receipt-worker changes, persistent rate limiting, account deletion, record pagination, web browser E2E coverage, and related client updates. These changes require review, a successful fresh gate, and coherent commits before integration.
@@ -84,7 +88,7 @@ The uncommitted hardening work includes durable operations and indexes, receipt-
 
 ### Capstone-critical
 
-1. The 41-path uncommitted change set is not yet release-controlled.
+1. ~~The 41-path uncommitted change set is not yet release-controlled.~~ Resolved 21 August 2026 — see the working-tree position note above.
 2. Physical Android camera capture, permission handling, backgrounding, network loss, and scan-to-confirm remain unverified. This now covers more surface than before: as of 8 August 2026 receipt capture uses FinSight's own Expo Camera interface with multi-section capture, manual cropping, and server-side edge detection (`docs/receipt-camera.md`). Its geometry, section limits, ordering, and overlap handling are unit- and integration-tested, but the camera components themselves are not — mobile still has no render harness, so permission states, camera lifecycle, gesture handling, and the physical-device matrix are verifiable only by hand. Report those as manual testing, never as suite coverage.
 3. The presentation network, restart procedure, and offline fallback evidence still need rehearsal.
 
