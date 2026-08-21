@@ -17,7 +17,16 @@ const WEB_TYPES = path.join(repoRoot, "web/src/lib/types.ts");
 const MOBILE_TYPES = path.join(repoRoot, "mobile/src/lib/types.ts");
 
 // Names intentionally present on only one side — document why when adding one.
-const EXEMPT = new Set([]);
+const EXEMPT = new Set([
+  // Mobile-only: backend/src/routes/dashboard.routes.ts exposes GET
+  // /dashboard/cashflow (backend/src/services/dashboard.service.ts) and
+  // mobile's DashboardScreen/charts.tsx actually renders it. Web has no code
+  // path that calls this endpoint, so there's nothing on the web side to
+  // keep these in sync with — porting them would be dead types.
+  "CashflowGranularity",
+  "CashflowPoint",
+  "DashboardCashflow",
+]);
 
 function exportedNames(filePath) {
   const src = readFileSync(filePath, "utf8");

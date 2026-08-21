@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Image, Linking, Pressable, View } from "react-native";
 import { Callout, Money, T } from "./ui";
 import { brand, font, ink, paper, radius, space, statusText, typeScale } from "../theme/tokens";
+import type { RecordOrigin } from "../lib/types";
 
 /**
  * Where a saved record came from.
@@ -17,41 +18,7 @@ import { brand, font, ink, paper, radius, space, statusText, typeScale } from ".
  * unable to show it back.
  */
 
-export interface OriginItem {
-  id: number;
-  lineNumber: number;
-  name: string;
-  quantity: number | null;
-  unitPrice: number | null;
-  amount: number;
-  categoryName: string | null;
-  addedByOwner: boolean;
-  extractedByVision?: boolean;
-}
-
-export type RecordOrigin =
-  | {
-      kind: "receipt_scan";
-      scanId: number;
-      scannedAt: string;
-      extractedVendor: string | null;
-      /** A short-lived signed link. Null when it couldn't be minted. */
-      imageUrl: string | null;
-      items: OriginItem[];
-      itemsSubtotal: number;
-      siblings: { id: number; description: string; amount: number; categoryName: string }[];
-    }
-  | {
-      kind: "csv_import";
-      batchId: number;
-      title: string;
-      uploadDate: string;
-      fileReference: string;
-      /** A short-lived signed download link. Null when it couldn't be minted. */
-      fileUrl: string | null;
-      status: string;
-      rowCount: number;
-    };
+export type { RecordOrigin } from "../lib/types";
 
 export function RecordOriginPanel({ origin, recordAmount }: { origin: RecordOrigin; recordAmount: number }) {
   if (origin.kind === "csv_import") {
