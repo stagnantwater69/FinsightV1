@@ -32,3 +32,11 @@ backend/tests/ocr-accuracy/live-feedback.json
 # Python (ml worker)
 ml/.venv/
 __pycache__/
+
+# Local agent-harness runtime state — not project source.
+.agent-chat/
+.claude/settings.local.json
+skill-observations/
+
+# Regenerable sample dataset — recreate with scripts/generate_coffee_shop_csv.js.
+/philippines_coffee_shop_2_year_transactions.csv
