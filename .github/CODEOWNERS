@@ -1,0 +1,32 @@
+# Ownership map for PR review routing. Mirrors AGENTS.md.
+# GitHub auto-requests the matching owner as a reviewer on any PR touching these paths.
+# Later, more specific rules win — keep broad rules first, narrow overrides after.
+
+# --- Web frontend ---
+/web/                                   @web-member-username
+
+# --- Mobile ---
+/mobile/                                @mobile-member-username
+
+# --- Backend (default owner: you) ---
+/backend/                               @ken-username
+/backend/prisma/                        @ken-username
+
+# --- AI / OCR / analytics services (narrower override inside backend/) ---
+/backend/src/services/ai.service.ts             @ken-username
+/backend/src/services/aiContext.service.ts      @ken-username
+/backend/src/services/ocr.service.ts            @ken-username
+/backend/src/services/visionOcr.service.ts      @ken-username
+/backend/src/services/analysis.service.ts       @ken-username
+/backend/src/services/insights.service.ts       @ken-username
+/backend/src/services/anomalyDetection/         @ken-username
+
+# --- Infra / CI / deployment ---
+/.github/workflows/                     @ken-username
+/docker-compose.yml                     @ken-username
+/nginx/                                 @ken-username
+/backend/Dockerfile                     @ken-username
+
+# --- Database / migrations ---
+/backend/prisma/schema.prisma           @ken-username
+/backend/prisma/migrations/             @ken-username
