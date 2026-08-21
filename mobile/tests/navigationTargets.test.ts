@@ -18,10 +18,24 @@ import { describe, expect, it } from "vitest";
 const ROOT = join(__dirname, "..");
 const SCREENS_DIR = join(ROOT, "src", "screens");
 
+/**
+ * Every .tsx file under a directory, at any depth.
+ *
+ * Recursive because screens now live in per-feature subdirectories (e.g.
+ * screens/records/) as well as directly in screens/ — a flat readdirSync
+ * would silently stop seeing an entire feature's navigate() calls the moment
+ * its screen was moved into one.
+ */
+function tsxFilesUnder(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) return tsxFilesUnder(full);
+    return entry.name.endsWith(".tsx") ? [full] : [];
+  });
+}
+
 function sourceFiles(): string[] {
-  return readdirSync(SCREENS_DIR)
-    .filter((f) => f.endsWith(".tsx"))
-    .map((f) => readFileSync(join(SCREENS_DIR, f), "utf8"));
+  return tsxFilesUnder(SCREENS_DIR).map((full) => readFileSync(full, "utf8"));
 }
 
 /** Names passed to navigation.navigate("X") anywhere in the screens. */

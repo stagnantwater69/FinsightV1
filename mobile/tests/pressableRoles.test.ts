@@ -25,12 +25,26 @@ const ROOT = join(__dirname, "..");
  */
 const TAG_WINDOW = 14;
 
+/**
+ * Every .tsx file under a directory, at any depth, named relative to it.
+ *
+ * Recursive because both screens and components now nest feature
+ * subdirectories (screens/records/, components/receipt-camera/) — a flat
+ * readdirSync would silently stop seeing an entire subdirectory's Pressables
+ * the moment it was moved into one.
+ */
+function tsxFilesUnder(dir: string, prefix = ""): { name: string; full: string }[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) return tsxFilesUnder(full, `${prefix}${entry.name}/`);
+    return entry.name.endsWith(".tsx") ? [{ name: `${prefix}${entry.name}`, full }] : [];
+  });
+}
+
 function sourceFiles(): { name: string; lines: string[] }[] {
   const dirs = [join(ROOT, "src", "screens"), join(ROOT, "src", "components")];
   return dirs.flatMap((dir) =>
-    readdirSync(dir)
-      .filter((f) => f.endsWith(".tsx"))
-      .map((f) => ({ name: f, lines: readFileSync(join(dir, f), "utf8").split("\n") })),
+    tsxFilesUnder(dir).map(({ name, full }) => ({ name, lines: readFileSync(full, "utf8").split("\n") })),
   );
 }
 

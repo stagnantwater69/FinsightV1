@@ -47,12 +47,26 @@ const CHIP_FILL = /backgroundColor:[^,]*brand\[600\]/;
  */
 const ALLOWED = new Set(["ui.tsx"]);
 
+/**
+ * Every .tsx file under a directory, at any depth, named relative to it.
+ *
+ * Recursive because both screens and components now nest feature
+ * subdirectories (screens/records/, components/receipt-camera/) — a flat
+ * readdirSync would silently stop seeing an entire subdirectory's chips the
+ * moment it was moved into one.
+ */
+function tsxFilesUnder(dir: string, prefix = ""): { name: string; full: string }[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) return tsxFilesUnder(full, `${prefix}${entry.name}/`);
+    return entry.name.endsWith(".tsx") ? [{ name: `${prefix}${entry.name}`, full }] : [];
+  });
+}
+
 function sourceFiles(): { name: string; src: string }[] {
   const dirs = [join(ROOT, "src", "screens"), join(ROOT, "src", "components")];
   return dirs.flatMap((dir) =>
-    readdirSync(dir)
-      .filter((f) => f.endsWith(".tsx"))
-      .map((f) => ({ name: f, src: readFileSync(join(dir, f), "utf8") })),
+    tsxFilesUnder(dir).map(({ name, full }) => ({ name, src: readFileSync(full, "utf8") })),
   );
 }
 
@@ -107,7 +121,8 @@ describe("chip consistency", () => {
     // specific file list: Home's Today/Week/Month selector was removed by
     // design (the dashboard redesign dropped period switching in favour of a
     // fixed monthly view), which is what took this from 4 down to 3 — the
-    // remaining call sites are InsightsScreens, DateField and RecordsScreens.
+    // remaining call sites are InsightsScreens, DateField and the records
+    // screens (records/RecordsListScreen.tsx and friends).
     const usage = sourceFiles().filter(
       ({ name, src }) => !ALLOWED.has(name) && /<(SelectChip|SegmentedControl)\b/.test(src),
     );

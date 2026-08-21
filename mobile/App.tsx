@@ -48,7 +48,7 @@ import {
   ImportCsvScreen,
   RecordsScreen,
   ScanReceiptScreen,
-} from "./src/screens/RecordsScreens";
+} from "./src/screens/records";
 import { CategoriesScreen } from "./src/screens/CategoriesScreen";
 import {
   ContactScreen,

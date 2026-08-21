@@ -38,10 +38,27 @@ const WRITE = /await api\.(post|patch|put|upload|delete)\b/;
  */
 const LOOKBACK = 20;
 
+/**
+ * Every screen file under src/screens, at any depth.
+ *
+ * Recursive because screens now live in per-feature subdirectories (e.g.
+ * screens/records/) as well as directly in screens/ — a flat readdirSync
+ * silently stopped seeing an entire feature's worth of save-and-leave sites
+ * the moment its screen was moved into one.
+ */
+function tsxFilesUnder(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) return tsxFilesUnder(full);
+    return entry.name.endsWith(".tsx") ? [full] : [];
+  });
+}
+
 function screenSources(): { name: string; lines: string[] }[] {
-  return readdirSync(SCREENS_DIR)
-    .filter((f) => f.endsWith(".tsx"))
-    .map((f) => ({ name: f, lines: readFileSync(join(SCREENS_DIR, f), "utf8").split("\n") }));
+  return tsxFilesUnder(SCREENS_DIR).map((full) => ({
+    name: full.slice(SCREENS_DIR.length + 1),
+    lines: readFileSync(full, "utf8").split("\n"),
+  }));
 }
 
 /** Every "wrote, then left" site, with whether it hands a message forward. */
