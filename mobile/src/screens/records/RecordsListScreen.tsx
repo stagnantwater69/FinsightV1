@@ -18,7 +18,8 @@ import { DateField, DateRangeChips } from "../../components/DateField";
 import { Ionicons } from "@expo/vector-icons";
 import * as haptics from "../../lib/haptics";
 import { recordUpdatePath } from "../../lib/recordUpdate";
-import { brand, font, ink, radius, space, TAP, typeScale } from "../../theme/tokens";
+import { TAP, font, radius, space, typeScale } from "../../theme/tokens";
+import { useTheme } from "../../context/ThemeContext";
 import { RECORD_SOURCE_LABELS, type RecordItem, type RecordSource } from "../../lib/types";
 import { RecordCard } from "./RecordCard";
 import { type ImportBatchSummary } from "./shared";
@@ -38,6 +39,8 @@ const RECORD_TYPES = [
 ] as const;
 
 export function RecordsScreen({ navigation, route }: any) {
+  const t = useTheme();
+  const { brand, ink } = t;
   const { selected, categories } = useBusinessProfiles();
   const [records, setRecords] = useState<RecordItem[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);

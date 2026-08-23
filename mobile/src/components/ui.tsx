@@ -16,7 +16,9 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ACCENT, brand, font, ink, paper, radius, space, status, statusText, TAP, typeScale } from "../theme/tokens";
+import { font, radius, space, TAP, typeScale } from "../theme/tokens";
+import type { Palette, ThemeMode } from "../theme/palette";
+import { useTheme } from "../context/ThemeContext";
 import { formatMoney, type AlertKind } from "../lib/money";
 import * as haptics from "../lib/haptics";
 
@@ -54,14 +56,21 @@ type Variant = "titleLg" | "title" | "heading" | "body" | "label" | "caption";
  * Inter at 15, which is exactly the dense-list size `heading` is used at. So
  * the display face stops at `title`.
  */
-const TEXT_VARIANTS: Record<Variant, TextStyle> = {
-  titleLg: { fontFamily: font.displayBold, fontSize: typeScale.titleLg, color: brand[900] },
-  title: { fontFamily: font.displayBold, fontSize: typeScale.title, color: brand[900] },
-  heading: { fontFamily: font.sansSemibold, fontSize: typeScale.body, color: ink[700] },
-  body: { fontFamily: font.sans, fontSize: typeScale.body, color: ink[700], lineHeight: 22 },
-  label: { fontFamily: font.sansMedium, fontSize: typeScale.label, color: ink[500] },
-  caption: { fontFamily: font.sans, fontSize: typeScale.caption, color: ink[500] },
-};
+/*
+ * A function of the palette rather than a constant, because the COLOUR in each
+ * variant moves with the theme while the family and the size do not. Cached
+ * per mode below (see `useStyles`) so the objects stay stable across renders —
+ * a fresh style object every render would defeat React Native's own style
+ * diffing for no benefit.
+ */
+const textVariants = (t: Palette): Record<Variant, TextStyle> => ({
+  titleLg: { fontFamily: font.displayBold, fontSize: typeScale.titleLg, color: t.brandHeading },
+  title: { fontFamily: font.displayBold, fontSize: typeScale.title, color: t.brandHeading },
+  heading: { fontFamily: font.sansSemibold, fontSize: typeScale.body, color: t.textSecondary },
+  body: { fontFamily: font.sans, fontSize: typeScale.body, color: t.textSecondary, lineHeight: 22 },
+  label: { fontFamily: font.sansMedium, fontSize: typeScale.label, color: t.textMuted },
+  caption: { fontFamily: font.sans, fontSize: typeScale.caption, color: t.textMuted },
+});
 
 export function T({
   variant = "body",
@@ -69,8 +78,9 @@ export function T({
   children,
   ...rest
 }: TextProps & { variant?: Variant; children?: ReactNode }) {
+  const { text } = useStyles();
   return (
-    <Text style={[TEXT_VARIANTS[variant], style]} {...rest}>
+    <Text style={[text[variant], style]} {...rest}>
       {children}
     </Text>
   );
@@ -90,7 +100,7 @@ export function Money({
   decimals = false,
   bare = false,
   size = typeScale.body,
-  color = ink[900],
+  color,
   weight = "medium",
   style,
 }: {
@@ -102,11 +112,18 @@ export function Money({
   weight?: "regular" | "medium" | "semibold";
   style?: TextStyle;
 }) {
+  const t = useTheme();
   const family =
     weight === "semibold" ? font.monoSemibold : weight === "medium" ? font.monoMedium : font.mono;
   return (
     <Text
-      style={[{ fontFamily: family, fontSize: size, color, fontVariant: ["tabular-nums"] }, style]}
+      style={[
+        // Defaulted here rather than in the signature: the default is the
+        // theme's primary text colour, which a module-level default parameter
+        // could not have named.
+        { fontFamily: family, fontSize: size, color: color ?? t.textPrimary, fontVariant: ["tabular-nums"] },
+        style,
+      ]}
     >
       {formatMoney(value, { decimals, bare })}
     </Text>
@@ -132,28 +149,36 @@ export function Button({
   loading?: boolean;
   style?: ViewStyle;
 }) {
+  const t = useTheme();
+  const styles = useStyles();
+
   // primary = the amber accent, with DARK ink on it. White on amber measures
-  // 2.04:1 and fails; this is the same rule the web app follows.
+  // 2.04:1 and fails; this is the same rule the web app follows — and it
+  // holds in Dark too, which is why ACCENT.fill/onFill do not move.
   const bg = {
-    primary: ACCENT.fill,
-    brand: brand[600],
-    secondary: paper.DEFAULT,
+    primary: t.ACCENT.fill,
+    brand: t.brandFill,
+    secondary: t.surface,
     ghost: "transparent",
-    danger: paper.DEFAULT,
+    danger: t.surface,
   }[variant];
   const fg = {
-    primary: ACCENT.onFill,
-    brand: "#ffffff",
-    secondary: ink[700],
-    ghost: ink[500],
+    primary: t.ACCENT.onFill,
+    brand: t.onBrandFill,
+    secondary: t.textSecondary,
+    ghost: t.textMuted,
     // statusText.critical, not a one-off red — this used to be an
     // independent Tailwind red scale (b91c1c/fca5a5) sitting beside the
     // token this app already has for "critical", the exact drift this
     // skill's token table warns about.
-    danger: statusText.critical,
+    danger: t.statusText.critical,
   }[variant];
   const border =
-    variant === "secondary" ? ink[200] : variant === "danger" ? statusText.critical + "40" : "transparent";
+    variant === "secondary"
+      ? t.borderStrong
+      : variant === "danger"
+        ? t.statusText.critical + "40"
+        : "transparent";
 
   return (
     <Pressable
@@ -224,6 +249,7 @@ export const Field = forwardRef<TextInput, FieldProps>(function Field(
   { label, value, onChangeText, onFocus, onBlur, secureTextEntry, error, ...rest },
   ref,
 ) {
+  const t = useTheme();
   const [focused, setFocused] = useState(false);
 
   /*
@@ -262,7 +288,7 @@ export const Field = forwardRef<TextInput, FieldProps>(function Field(
 
   return (
     <View style={{ marginBottom: space.md }}>
-      <T variant="label" style={{ marginBottom: 4, color: ink[700] }}>
+      <T variant="label" style={{ marginBottom: 4, color: t.textSecondary }}>
         {label}
       </T>
       <View style={{ justifyContent: "center" }}>
@@ -270,7 +296,7 @@ export const Field = forwardRef<TextInput, FieldProps>(function Field(
           ref={ref}
           value={value}
           onChangeText={onChangeText}
-          placeholderTextColor={ink[400]}
+          placeholderTextColor={t.textFaint}
           secureTextEntry={isPassword && !showing}
           onFocus={(e) => {
             setFocused(true);
@@ -288,7 +314,7 @@ export const Field = forwardRef<TextInput, FieldProps>(function Field(
             // An error outranks focus: the field an owner is fixing is the
             // one they are in, and losing the red the moment they tap it
             // takes the marker away exactly when it is being acted on.
-            borderColor: error ? statusText.critical : focused ? brand[600] : ink[200],
+            borderColor: error ? t.statusText.critical : focused ? t.brand[600] : t.borderStrong,
             borderRadius: radius.md,
             paddingHorizontal: space.md,
             // Room for the reveal button, so a long password never runs
@@ -296,8 +322,8 @@ export const Field = forwardRef<TextInput, FieldProps>(function Field(
             paddingRight: isPassword && hasText ? 48 : space.md,
             paddingVertical: space.sm,
             fontSize: typeScale.body,
-            color: ink[900],
-            backgroundColor: paper.DEFAULT,
+            color: t.textPrimary,
+            backgroundColor: t.surface,
           }}
           {...rest}
         />
@@ -324,7 +350,7 @@ export const Field = forwardRef<TextInput, FieldProps>(function Field(
             <Ionicons
               name={showing ? "eye-off-outline" : "eye-outline"}
               size={20}
-              color={ink[500]}
+              color={t.textMuted}
             />
           </Pressable>
         ) : null}
@@ -340,8 +366,8 @@ export const Field = forwardRef<TextInput, FieldProps>(function Field(
           accessibilityLiveRegion="polite"
           style={{ flexDirection: "row", gap: 5, marginTop: 5, alignItems: "flex-start" }}
         >
-          <T style={{ fontSize: typeScale.micro, color: statusText.critical }}>⚠</T>
-          <T style={{ flex: 1, fontSize: typeScale.caption, lineHeight: 17, color: statusText.critical }}>{error}</T>
+          <T style={{ fontSize: typeScale.micro, color: t.statusText.critical }}>⚠</T>
+          <T style={{ flex: 1, fontSize: typeScale.caption, lineHeight: 17, color: t.statusText.critical }}>{error}</T>
         </View>
       ) : null}
     </View>
@@ -369,6 +395,7 @@ export function Checkbox({
   checked: boolean;
   onChange: (checked: boolean) => void;
 }) {
+  const t = useTheme();
   return (
     <Pressable
       onPress={() => onChange(!checked)}
@@ -391,17 +418,17 @@ export function Checkbox({
           marginTop: 1,
           borderRadius: 5,
           borderWidth: checked ? 0 : 1.5,
-          borderColor: ink[300],
-          backgroundColor: checked ? brand[600] : paper.DEFAULT,
+          borderColor: t.ink[300],
+          backgroundColor: checked ? t.brandFill : t.surface,
           alignItems: "center",
           justifyContent: "center",
         }}
       >
         {/* The tick is not the only signal — the fill carries it too. */}
-        {checked ? <Ionicons name="checkmark" size={14} color="#ffffff" /> : null}
+        {checked ? <Ionicons name="checkmark" size={14} color={t.onBrandFill} /> : null}
       </View>
       <View style={{ flex: 1 }}>
-        <T style={{ fontSize: typeScale.bodySm, color: ink[700] }}>{label}</T>
+        <T style={{ fontSize: typeScale.bodySm, color: t.textSecondary }}>{label}</T>
         {hint ? (
           <T variant="caption" style={{ marginTop: 2 }}>
             {hint}
@@ -452,6 +479,7 @@ export function CategorySelect<Option extends { id: number; name: string }>({
   sheetTitle?: string;
   disabled?: boolean;
 }) {
+  const t = useTheme();
   const [open, setOpen] = useState(false);
 
   const selected = options.find((o) => o.id === value) ?? null;
@@ -482,9 +510,9 @@ export function CategorySelect<Option extends { id: number; name: string }>({
           justifyContent: "space-between",
           gap: space.sm,
           borderWidth: 1,
-          borderColor: selected ? ink[200] : status.warning,
+          borderColor: selected ? t.borderStrong : t.status.warning,
           borderRadius: radius.md,
-          backgroundColor: paper.DEFAULT,
+          backgroundColor: t.surface,
           paddingHorizontal: space.md,
           paddingVertical: space.sm,
           opacity: disabled ? 0.6 : pressed ? 0.85 : 1,
@@ -498,12 +526,12 @@ export function CategorySelect<Option extends { id: number; name: string }>({
             // An unset category is not a placeholder to be styled away — it is
             // the thing standing between the owner and saving, so it is
             // written in the colour the rest of the app uses for "needs you".
-            color: selected ? ink[900] : statusText.warning,
+            color: selected ? t.textPrimary : t.statusText.warning,
           }}
         >
           {selected ? selected.name : placeholder}
         </T>
-        <Ionicons name="chevron-down" size={16} color={ink[500]} />
+        <Ionicons name="chevron-down" size={16} color={t.textMuted} />
       </Pressable>
 
       <OptionSheet
@@ -551,6 +579,8 @@ export function SelectChip({
   disabled?: boolean;
   haptic?: boolean;
 }) {
+  const t = useTheme();
+  const styles = useStyles();
   return (
     <Pressable
       accessibilityRole="button"
@@ -567,13 +597,13 @@ export function SelectChip({
       style={({ pressed }) => [
         styles.chip,
         {
-          borderColor: selected ? brand[600] : ink[200],
-          backgroundColor: selected ? brand[600] : paper.DEFAULT,
+          borderColor: selected ? t.brandFill : t.borderStrong,
+          backgroundColor: selected ? t.brandFill : t.surface,
           opacity: disabled ? 0.6 : pressed ? 0.85 : 1,
         },
       ]}
     >
-      <T style={{ fontSize: typeScale.caption, color: selected ? "#fff" : ink[700] }}>{label}</T>
+      <T style={{ fontSize: typeScale.caption, color: selected ? t.onBrandFill : t.textSecondary }}>{label}</T>
     </Pressable>
   );
 }
@@ -611,6 +641,8 @@ export function SegmentedControl<Value extends string | number>({
   onChange: (v: Value) => void;
   accessibilityLabel?: string;
 }) {
+  const t = useTheme();
+  const styles = useStyles();
   return (
     <View style={styles.segmentTrack} accessibilityLabel={accessibilityLabel}>
       {options.map((option) => {
@@ -627,7 +659,7 @@ export function SegmentedControl<Value extends string | number>({
             style={({ pressed }) => [
               styles.segment,
               {
-                backgroundColor: selected ? brand[600] : "transparent",
+                backgroundColor: selected ? t.brandFill : "transparent",
                 opacity: pressed ? 0.85 : 1,
                 flexDirection: "row",
                 alignItems: "center",
@@ -644,9 +676,9 @@ export function SegmentedControl<Value extends string | number>({
               switchers that do not want them.
             */}
             {option.icon ? (
-              <Ionicons name={option.icon} size={14} color={selected ? "#fff" : ink[500]} />
+              <Ionicons name={option.icon} size={14} color={selected ? t.onBrandFill : t.textMuted} />
             ) : null}
-            <T style={{ fontSize: typeScale.label, color: selected ? "#fff" : ink[600] }}>{option.label}</T>
+            <T style={{ fontSize: typeScale.label, color: selected ? t.onBrandFill : t.ink[600] }}>{option.label}</T>
           </Pressable>
         );
       })}
@@ -685,6 +717,7 @@ export function OptionSheet<Option extends { id: number | string; name: string }
   onClose: () => void;
   emptyText: string;
 }) {
+  const t = useTheme();
   const insets = useSafeAreaInsets();
 
   return (
@@ -693,7 +726,7 @@ export function OptionSheet<Option extends { id: number | string; name: string }
         onPress={onClose}
         accessibilityRole="button"
         accessibilityLabel="Close without choosing"
-        style={{ flex: 1, backgroundColor: "rgba(26,32,34,0.45)", justifyContent: "flex-end" }}
+        style={{ flex: 1, backgroundColor: t.scrim, justifyContent: "flex-end" }}
       >
         {/*
           The sheet swallows touches so they never reach the backdrop behind —
@@ -707,7 +740,7 @@ export function OptionSheet<Option extends { id: number | string; name: string }
         <View
           onStartShouldSetResponder={() => true}
           style={{
-            backgroundColor: paper.DEFAULT,
+            backgroundColor: t.surfaceRaised,
             borderTopLeftRadius: radius.xl,
             borderTopRightRadius: radius.xl,
             paddingTop: space.md,
@@ -724,7 +757,7 @@ export function OptionSheet<Option extends { id: number | string; name: string }
               paddingBottom: space.sm,
             }}
           >
-            <T variant="heading" accessibilityRole="header" style={{ color: brand[900] }}>
+            <T variant="heading" accessibilityRole="header" style={{ color: t.brandHeading }}>
               {title}
             </T>
             <Pressable
@@ -734,7 +767,7 @@ export function OptionSheet<Option extends { id: number | string; name: string }
               hitSlop={10}
               style={{ padding: space.xs }}
             >
-              <Ionicons name="close" size={20} color={ink[500]} />
+              <Ionicons name="close" size={20} color={t.textMuted} />
             </Pressable>
           </View>
 
@@ -759,14 +792,14 @@ export function OptionSheet<Option extends { id: number | string; name: string }
                     minHeight: TAP,
                     paddingHorizontal: space.lg,
                     paddingVertical: space.sm,
-                    backgroundColor: pressed ? paper[100] : isSelected ? brand[50] : paper.DEFAULT,
+                    backgroundColor: pressed ? t.surfaceMuted : isSelected ? t.brandSurface : t.surfaceRaised,
                   })}
                 >
-                  <T style={{ flex: 1, fontSize: typeScale.body, color: isSelected ? brand[900] : ink[800] }}>
+                  <T style={{ flex: 1, fontSize: typeScale.body, color: isSelected ? t.brandHeading : t.ink[800] }}>
                     {option.name}
                   </T>
                   {/* A tick as well as the tint — never colour alone. */}
-                  {isSelected ? <Ionicons name="checkmark" size={18} color={brand[600]} /> : null}
+                  {isSelected ? <Ionicons name="checkmark" size={18} color={t.brand[600]} /> : null}
                 </Pressable>
               );
             })}
@@ -806,6 +839,7 @@ export function DropdownPill<Value extends string | number>({
   sheetTitle: string;
   accessibilityLabel?: string;
 }) {
+  const t = useTheme();
   const [open, setOpen] = useState(false);
   const current = options.find((o) => o.value === value);
 
@@ -829,14 +863,14 @@ export function DropdownPill<Value extends string | number>({
           paddingVertical: space.sm,
           borderRadius: radius.full,
           borderWidth: 1,
-          borderColor: ink[200],
-          backgroundColor: paper.DEFAULT,
+          borderColor: t.borderStrong,
+          backgroundColor: t.surface,
           opacity: pressed ? 0.85 : 1,
         })}
       >
-        {icon ? <Ionicons name={icon} size={15} color={ink[600]} /> : null}
-        <T style={{ fontSize: 13.5, color: ink[800], fontFamily: font.sansMedium }}>{current?.label}</T>
-        <Ionicons name="chevron-down" size={15} color={ink[500]} />
+        {icon ? <Ionicons name={icon} size={15} color={t.ink[600]} /> : null}
+        <T style={{ fontSize: 13.5, color: t.ink[800], fontFamily: font.sansMedium }}>{current?.label}</T>
+        <Ionicons name="chevron-down" size={15} color={t.textMuted} />
       </Pressable>
 
       <OptionSheet
@@ -894,6 +928,7 @@ export function ConfirmSheet({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const t = useTheme();
   const insets = useSafeAreaInsets();
 
   return (
@@ -902,7 +937,7 @@ export function ConfirmSheet({
         onPress={onCancel}
         accessibilityRole="button"
         accessibilityLabel="Dismiss without doing anything"
-        style={{ flex: 1, backgroundColor: "rgba(26,32,34,0.45)", justifyContent: "flex-end" }}
+        style={{ flex: 1, backgroundColor: t.scrim, justifyContent: "flex-end" }}
       >
         {/*
           Swallows touches so a tap on the sheet cannot reach the backdrop.
@@ -913,7 +948,7 @@ export function ConfirmSheet({
         <View
           onStartShouldSetResponder={() => true}
           style={{
-            backgroundColor: paper.DEFAULT,
+            backgroundColor: t.surfaceRaised,
             borderTopLeftRadius: radius.xl,
             borderTopRightRadius: radius.xl,
             paddingTop: space.md,
@@ -928,7 +963,7 @@ export function ConfirmSheet({
               width: 36,
               height: 4,
               borderRadius: 2,
-              backgroundColor: ink[200],
+              backgroundColor: t.borderStrong,
               marginBottom: space.lg,
             }}
           />
@@ -937,7 +972,7 @@ export function ConfirmSheet({
             {title}
           </T>
           {body ? (
-            <T style={{ fontSize: typeScale.bodySm, color: ink[600], textAlign: "center", marginTop: 6, lineHeight: 20 }}>
+            <T style={{ fontSize: typeScale.bodySm, color: t.ink[600], textAlign: "center", marginTop: 6, lineHeight: 20 }}>
               {body}
             </T>
           ) : null}
@@ -967,11 +1002,13 @@ export function Card({
   style?: ViewStyle;
   emphasis?: boolean;
 }) {
+  const t = useTheme();
+  const styles = useStyles();
   return (
     <View
       style={[
         styles.card,
-        emphasis && { backgroundColor: brand[50], borderColor: brand[200] },
+        emphasis && { backgroundColor: t.brandSurface, borderColor: t.brand[200] },
         style,
       ]}
     >
@@ -993,12 +1030,13 @@ export function StatTile({
   sublabel?: string;
   emphasis?: boolean;
 }) {
+  const t = useTheme();
   return (
     <Card emphasis={emphasis} style={{ flex: 1, minWidth: 150 }}>
-      <T variant="label" style={{ textTransform: "uppercase", letterSpacing: 0.4, color: emphasis ? brand[700] : ink[500] }}>
+      <T variant="label" style={{ textTransform: "uppercase", letterSpacing: 0.4, color: emphasis ? t.brandText : t.textMuted }}>
         {label}
       </T>
-      <Money value={value} size={22} weight="semibold" color={emphasis ? brand[900] : ink[900]} style={{ marginTop: 4 }} />
+      <Money value={value} size={22} weight="semibold" color={emphasis ? t.brandHeading : t.textPrimary} style={{ marginTop: 4 }} />
       {sublabel ? <T variant="caption" style={{ marginTop: 2 }}>{sublabel}</T> : null}
     </Card>
   );
@@ -1006,14 +1044,57 @@ export function StatTile({
 
 // ---------------------------------------------------------------- Alert family
 
-const ALERT_SPEC: Record<AlertKind, { label: string; glyph: string; ink: string; surface: string }> = {
-  "needs-review": { label: "Needs review", glyph: "!", ink: statusText.critical, surface: "#fef2f2" },
-  "large-expense": { label: "Large expense", glyph: "▲", ink: statusText.serious, surface: "#fff7ed" },
-  duplicate: { label: "Possible duplicate", glyph: "⧉", ink: statusText.warning, surface: "#fffbeb" },
+/**
+ * `ink` is the TEXT colour and `solid` is the FILL under white ink — the
+ * severity bar, the glyph disc, the badge. In Light they were the same value
+ * doing both jobs; in Dark they cannot be, because a red light enough to read
+ * on a near-black card cannot carry white text. See the split-roles note in
+ * theme/palette.ts.
+ *
+ * The two surface reds that used to sit here (#fef2f2 and #fdecec, and
+ * #fff7ed against #fdf0ea) were the same wash written twice, a percent apart.
+ * They are one `statusSurface` token now.
+ */
+const alertSpec = (
+  t: Palette,
+): Record<AlertKind, { label: string; glyph: string; ink: string; solid: string; surface: string }> => ({
+  "needs-review": {
+    label: "Needs review",
+    glyph: "!",
+    ink: t.statusText.critical,
+    solid: t.statusSolid.critical,
+    surface: t.statusSurface.critical,
+  },
+  "large-expense": {
+    label: "Large expense",
+    glyph: "▲",
+    ink: t.statusText.serious,
+    solid: t.statusSolid.serious,
+    surface: t.statusSurface.serious,
+  },
+  duplicate: {
+    label: "Possible duplicate",
+    glyph: "⧉",
+    ink: t.statusText.warning,
+    solid: t.statusSolid.warning,
+    surface: t.statusSurface.warning,
+  },
   // Serious, not informational — mirrors web's `recurring` spec.
-  recurring: { label: "Recurring payment", glyph: "↻", ink: statusText.serious, surface: "#fff7ed" },
-  info: { label: "For your information", glyph: "i", ink: brand[700], surface: brand[50] },
-};
+  recurring: {
+    label: "Recurring payment",
+    glyph: "↻",
+    ink: t.statusText.serious,
+    solid: t.statusSolid.serious,
+    surface: t.statusSurface.serious,
+  },
+  info: {
+    label: "For your information",
+    glyph: "i",
+    ink: t.brandText,
+    solid: t.brandSolid,
+    surface: t.brandSurface,
+  },
+});
 
 /**
  * Same visual grammar as web: severity bar, circled glyph, label, then detail.
@@ -1031,14 +1112,16 @@ export function Alert({
   children: ReactNode;
   meta?: string;
 }) {
-  const spec = ALERT_SPEC[kind];
+  const t = useTheme();
+  const styles = useStyles();
+  const spec = alertSpec(t)[kind];
   return (
     <View style={[styles.alert, { backgroundColor: spec.surface }]}>
-      <View style={{ width: 4, backgroundColor: spec.ink }} />
+      <View style={{ width: 4, backgroundColor: spec.solid }} />
       <View style={styles.alertBody}>
         <View style={{ flexDirection: "row", gap: space.sm }}>
-          <View style={[styles.glyph, { backgroundColor: spec.ink }]}>
-            <Text style={{ color: "#fff", fontSize: typeScale.micro, fontFamily: font.sansSemibold }}>{spec.glyph}</Text>
+          <View style={[styles.glyph, { backgroundColor: spec.solid }]}>
+            <Text style={{ color: t.textOnFill, fontSize: typeScale.micro, fontFamily: font.sansSemibold }}>{spec.glyph}</Text>
           </View>
           <View style={{ flex: 1 }}>
             <T variant="label" style={{ color: spec.ink, textTransform: "uppercase", letterSpacing: 0.3 }}>
@@ -1054,10 +1137,12 @@ export function Alert({
 }
 
 export function AlertBadge({ kind, label }: { kind: AlertKind; label?: string }) {
-  const spec = ALERT_SPEC[kind];
+  const t = useTheme();
+  const styles = useStyles();
+  const spec = alertSpec(t)[kind];
   return (
-    <View style={[styles.badge, { backgroundColor: spec.ink }]}>
-      <Text style={{ color: "#fff", fontSize: typeScale.micro, fontFamily: font.sansMedium }}>
+    <View style={[styles.badge, { backgroundColor: spec.solid }]}>
+      <Text style={{ color: t.textOnFill, fontSize: typeScale.micro, fontFamily: font.sansMedium }}>
         {spec.glyph} {label ?? spec.label}
       </Text>
     </View>
@@ -1084,6 +1169,8 @@ export function EmptyState({
    */
   image?: ImageSourcePropType;
 }) {
+  const t = useTheme();
+  const styles = useStyles();
   return (
     <Card style={{ alignItems: "center", paddingVertical: space.xxl }}>
       {image ? (
@@ -1095,7 +1182,7 @@ export function EmptyState({
         />
       ) : (
         <View style={styles.emptyIcon}>
-          <Text style={{ fontSize: 20, color: brand[600] }}>{icon}</Text>
+          <Text style={{ fontSize: 20, color: t.brand[600] }}>{icon}</Text>
         </View>
       )}
       {/*
@@ -1107,12 +1194,12 @@ export function EmptyState({
       <T
         accessibilityRole="header"
         variant="heading"
-        style={{ marginTop: space.md, textAlign: "center", color: ink[900] }}
+        style={{ marginTop: space.md, textAlign: "center", color: t.textPrimary }}
       >
         {title}
       </T>
       {body ? (
-        <T style={{ marginTop: space.sm, textAlign: "center", color: ink[500], fontSize: typeScale.bodySm }}>{body}</T>
+        <T style={{ marginTop: space.sm, textAlign: "center", color: t.textMuted, fontSize: typeScale.bodySm }}>{body}</T>
       ) : null}
       {action ? <View style={{ marginTop: space.lg, alignSelf: "stretch" }}>{action}</View> : null}
     </Card>
@@ -1121,24 +1208,26 @@ export function EmptyState({
 
 /** Goal-Gradient: how close a brand-new business is to its first insight. */
 export function SetupProgress({ steps }: { steps: { label: string; done: boolean }[] }) {
+  const t = useTheme();
+  const styles = useStyles();
   const done = steps.filter((s) => s.done).length;
   if (done === steps.length) return null;
   return (
     <View style={styles.progress}>
-      <T variant="label" style={{ color: brand[900], fontFamily: font.sansSemibold, fontSize: typeScale.bodySm }}>
+      <T variant="label" style={{ color: t.brandHeading, fontFamily: font.sansSemibold, fontSize: typeScale.bodySm }}>
         {done} of {steps.length} steps to your first insight
       </T>
       <View style={{ flexDirection: "row", gap: 6, marginTop: space.sm }}>
         {steps.map((s, i) => (
           <View
             key={s.label}
-            style={{ flex: 1, height: 6, borderRadius: 3, backgroundColor: i < done ? brand[500] : brand[200] }}
+            style={{ flex: 1, height: 6, borderRadius: 3, backgroundColor: i < done ? t.brand[500] : t.brand[200] }}
           />
         ))}
       </View>
       <View style={{ marginTop: space.md, gap: 6 }}>
         {steps.map((s) => (
-          <T key={s.label} style={{ fontSize: typeScale.label, color: s.done ? ink[400] : ink[700] }}>
+          <T key={s.label} style={{ fontSize: typeScale.label, color: s.done ? t.textFaint : t.textSecondary }}>
             {s.done ? "✓ " : "○ "}
             {s.label}
           </T>
@@ -1160,19 +1249,21 @@ export function SetupProgress({ steps }: { steps: { label: string; done: boolean
  * CTAs, and states that amber-as-warning is a different idea living in
  * `status`. Same rule as web.
  */
-const CALLOUT_TONES = {
-  info: { surface: brand[50], ink: brand[700], glyph: "ⓘ" },
-  warn: { surface: "#fffbeb", ink: statusText.warning, glyph: "⚠" },
-} as const;
+const calloutTones = (t: Palette) =>
+  ({
+    info: { surface: t.brandSurface, ink: t.brandText, glyph: "ⓘ" },
+    warn: { surface: t.statusSurface.warning, ink: t.statusText.warning, glyph: "⚠" },
+  }) as const;
 
 export function Callout({
   tone = "info",
   children,
 }: {
-  tone?: keyof typeof CALLOUT_TONES;
+  tone?: keyof ReturnType<typeof calloutTones>;
   children: ReactNode;
 }) {
-  const spec = CALLOUT_TONES[tone];
+  const t = useTheme();
+  const spec = calloutTones(t)[tone];
   return (
     <View
       style={{
@@ -1192,9 +1283,11 @@ export function Callout({
 }
 
 export function ErrorNote({ children }: { children: ReactNode }) {
+  const t = useTheme();
+  const styles = useStyles();
   return (
     <View style={styles.errorNote}>
-      <T style={{ color: statusText.critical, fontSize: typeScale.bodySm }}>{children}</T>
+      <T style={{ color: t.statusText.critical, fontSize: typeScale.bodySm }}>{children}</T>
     </View>
   );
 }
@@ -1217,11 +1310,12 @@ export function Screen({
   style?: ViewStyle;
   safeTop?: boolean;
 }) {
+  const t = useTheme();
   const insets = useSafeAreaInsets();
   return (
     <View
       style={[
-        { flex: 1, backgroundColor: paper[50] },
+        { flex: 1, backgroundColor: t.surfaceSunken },
         safeTop && { paddingTop: insets.top },
         style,
       ]}
@@ -1258,11 +1352,12 @@ export function ScreenHeader({
   subtitle?: string;
   action?: ReactNode;
 }) {
+  const t = useTheme();
   return (
     <View style={{ flexDirection: "row", alignItems: "flex-start", gap: space.md, marginBottom: space.lg }}>
       <View style={{ flex: 1 }}>
         {eyebrow ? (
-          <T variant="label" style={{ textTransform: "uppercase", letterSpacing: 0.6, color: ink[400] }}>
+          <T variant="label" style={{ textTransform: "uppercase", letterSpacing: 0.6, color: t.textFaint }}>
             {eyebrow}
           </T>
         ) : null}
@@ -1280,7 +1375,24 @@ export function ScreenHeader({
   );
 }
 
-const styles = StyleSheet.create({
+/**
+ * The one static `StyleSheet.create` in the app, now built per theme.
+ *
+ * WHY IT STAYS A STYLESHEET. Everything else in this codebase is an inline
+ * style object evaluated in render, which is what makes a context-based theme
+ * work without a structural rewrite. This block was the exception, and it
+ * baked in `paper[100]`, `paper.DEFAULT` and `ink[900]` at module load — a
+ * theme switch would have left the chip track, the card and the shadow in the
+ * old palette forever.
+ *
+ * Making it a function of the palette fixes that. It is still created once per
+ * MODE rather than once per render (the cache below), so the registered-style
+ * optimisation survives: at most two sheets ever exist, and switching back to
+ * a theme reuses the sheet it made the first time.
+ */
+const createStyles = (t: Palette) => ({
+  text: textVariants(t),
+  ...StyleSheet.create({
   button: {
     minHeight: TAP,
     paddingHorizontal: space.lg,
@@ -1301,7 +1413,7 @@ const styles = StyleSheet.create({
   },
   segmentTrack: {
     flexDirection: "row",
-    backgroundColor: paper[100],
+    backgroundColor: t.surfaceMuted,
     borderRadius: radius.md,
     padding: 3,
   },
@@ -1328,14 +1440,14 @@ const styles = StyleSheet.create({
    * devices it ships to.
    */
   card: {
-    backgroundColor: paper.DEFAULT,
+    backgroundColor: t.surface,
     borderRadius: radius.lg,
     borderWidth: 1,
-    borderColor: paper[200],
+    borderColor: t.border,
     padding: space.lg,
-    shadowColor: ink[900],
+    shadowColor: t.shadow,
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
+    shadowOpacity: 0.04 * t.shadowStrength,
     shadowRadius: 3,
     elevation: 1,
   },
@@ -1359,15 +1471,15 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: brand[50],
+    backgroundColor: t.brandSurface,
     alignItems: "center",
     justifyContent: "center",
   },
   progress: {
-    backgroundColor: brand[50],
+    backgroundColor: t.brandSurface,
     borderRadius: radius.lg,
     borderWidth: 1,
-    borderColor: brand[100],
+    borderColor: t.brandBorder,
     padding: space.lg,
     marginBottom: space.lg,
   },
@@ -1375,10 +1487,31 @@ const styles = StyleSheet.create({
     // Same critical token as the text, washed to a surface and a hairline —
     // the alpha-suffix technique Callout already uses below, rather than a
     // second, independent red scale living beside statusText.critical.
-    backgroundColor: statusText.critical + "12",
-    borderColor: statusText.critical + "40",
+    backgroundColor: t.statusText.critical + "12",
+    borderColor: t.statusText.critical + "40",
     borderWidth: 1,
     borderRadius: radius.md,
     padding: space.md,
   },
+  }),
 });
+
+/**
+ * The per-theme sheet, made once and kept.
+ *
+ * A plain `useMemo` would rebuild both sheets on every mount of every
+ * component that asks. Two modes exist and neither ever changes, so a module
+ * cache is the honest shape: the first `T` rendered in a theme pays for the
+ * sheet and everything after it reuses the same registered styles.
+ */
+const styleCache = new Map<ThemeMode, ReturnType<typeof createStyles>>();
+
+function useStyles() {
+  const t = useTheme();
+  let sheet = styleCache.get(t.mode);
+  if (!sheet) {
+    sheet = createStyles(t);
+    styleCache.set(t.mode, sheet);
+  }
+  return sheet;
+}

@@ -13,7 +13,9 @@ import {
 } from "../lib/greetingPlayback";
 import { pickHeadline } from "../lib/homeInsight";
 import { useReducedMotion } from "../lib/useReducedMotion";
-import { brand, font, ink, radius, space, statusText, typeScale } from "../theme/tokens";
+import { font, radius, space, typeScale } from "../theme/tokens";
+import type { Palette } from "../theme/palette";
+import { useTheme } from "../context/ThemeContext";
 import type { DashboardSummary } from "../lib/types";
 
 /**
@@ -79,10 +81,16 @@ const MASCOT_BOX = 92;
  * sitting in that colour would be claiming an urgency it does not have, on
  * every ordinary day.
  */
-const MESSAGE_TONE = {
-  plain: { surface: brand[50], border: brand[100], ink: ink[800], label: brand[700] },
-  warn: { surface: "#fffbeb", border: "#f2dda6", ink: statusText.warning, label: statusText.warning },
-} as const;
+const messageTone = (t: Palette) =>
+  ({
+    plain: { surface: t.brandSurface, border: t.brandBorder, ink: t.ink[800], label: t.brandText },
+    warn: {
+      surface: t.statusSurface.warning,
+      border: t.statusBorder.warning,
+      ink: t.statusText.warning,
+      label: t.statusText.warning,
+    },
+  }) as const;
 
 /**
  * Fin's flipbook: the complete greeting wave, on repeat.
@@ -222,19 +230,20 @@ function dateLine(now: Date): string {
  * panel simply has nothing in it until `summary` lands.
  */
 export function GreetingHero({ summary }: { summary: DashboardSummary | null }) {
+  const t = useTheme();
   const { profile } = useAuth();
   const now = new Date();
   const greeting = greetingFor(now.getHours());
   const firstName = profile?.firstName?.trim();
   const headline = summary ? pickHeadline(summary) : null;
-  const tone = MESSAGE_TONE[headline?.tone ?? "plain"];
+  const tone = messageTone(t)[headline?.tone ?? "plain"];
 
   return (
     <Card style={{ paddingVertical: space.md, gap: space.md }}>
       <View>
         <T
           variant="label"
-          style={{ textTransform: "uppercase", letterSpacing: 0.6, color: ink[400] }}
+          style={{ textTransform: "uppercase", letterSpacing: 0.6, color: t.textFaint }}
         >
           {dateLine(now)}
         </T>

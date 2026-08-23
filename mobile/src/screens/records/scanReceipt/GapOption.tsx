@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import { Pressable } from "react-native";
 import { T } from "../../../components/ui";
-import { brand, font, ink, paper, radius, space, typeScale } from "../../../theme/tokens";
+import { font, radius, space, typeScale } from "../../../theme/tokens";
+import { useTheme } from "../../../context/ThemeContext";
 
 /**
  * One answer to "what is this difference".
@@ -22,6 +23,8 @@ export function GapOption({
   detail: string;
   children?: ReactNode;
 }) {
+  const t = useTheme();
+  const { brand, ink, paper } = t;
   return (
     <Pressable
       onPress={onPress}

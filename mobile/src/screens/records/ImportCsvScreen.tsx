@@ -30,7 +30,8 @@ import {
 } from "../../lib/csvImport";
 import { DATE_FORMAT_LABELS, type ChosenDateFormat, type CsvDateFormat } from "../../lib/csvDates";
 import { SkeletonList } from "../../components/Skeleton";
-import { brand, ink, paper, radius, space, statusText, TAP, typeScale } from "../../theme/tokens";
+import { TAP, radius, space, typeScale } from "../../theme/tokens";
+import { useTheme } from "../../context/ThemeContext";
 import { FIELD_LIMITS } from "../../lib/fieldLimits";
 import { ImportSteps } from "./importCsv/ImportSteps";
 import { ReviewRowCard } from "./importCsv/ReviewRowCard";
@@ -61,6 +62,8 @@ import { FIELD_LABELS, IMPORT_POLL_INTERVAL_MS, IMPORT_POLL_TIMEOUT_MS, IMPORT_S
  * nothing else live in ./importCsv/.
  */
 export function ImportCsvScreen({ navigation }: any) {
+  const t = useTheme();
+  const { brand, ink, paper, statusText, status } = t;
   const { selected, categories } = useBusinessProfiles();
   const [file, setFile] = useState<DocumentPicker.DocumentPickerAsset | null>(null);
   /**

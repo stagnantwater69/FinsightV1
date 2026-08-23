@@ -3,7 +3,8 @@ import { View } from "react-native";
 import Svg, { Circle, Defs, LinearGradient, Path, Rect, Stop } from "react-native-svg";
 import { Money, T } from "./ui";
 import { formatMoney } from "../lib/money";
-import { brand, categorical, categoricalOnColor, font, ink, paper, space, status, statusText, typeScale } from "../theme/tokens";
+import { font, space, typeScale } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 
 /**
  * The chart kit.
@@ -86,6 +87,8 @@ export function CategoryBreakdown({
   title?: string;
   subtitle?: string;
 }) {
+  const t = useTheme();
+  const { ink, paper, categoricalOnColor, categorical } = t;
   const rows = [...data].sort((a, b) => b.total - a.total).slice(0, 8);
   const max = Math.max(...rows.map((r) => r.total), 1);
   const grandTotal = data.reduce((sum, r) => sum + r.total, 0);
@@ -275,6 +278,8 @@ export function SpendTrend({
   subtitle?: string;
   height?: number;
 }) {
+  const t = useTheme();
+  const { brand, ink, paper } = t;
   if (data.length < 2) {
     return (
       <ChartFrame title={title}>
@@ -340,9 +345,9 @@ export function SpendTrend({
               paddingRight: 6,
             }}
           >
-            {ticks.map((t) => (
-              <T key={t} variant="caption" style={{ fontSize: typeScale.axis, textAlign: "right" }} numberOfLines={1}>
-                {axisTick(t)}
+            {ticks.map((tick) => (
+              <T key={tick} variant="caption" style={{ fontSize: typeScale.axis, textAlign: "right" }} numberOfLines={1}>
+                {axisTick(tick)}
               </T>
             ))}
           </View>
@@ -361,13 +366,13 @@ export function SpendTrend({
                 and recessive: they exist so a point on the curve can be read
                 against a figure, not to be looked at.
               */}
-              {ticks.map((t) => (
+              {ticks.map((tick) => (
                 <Path
-                  key={t}
-                  d={`M0,${y(t).toFixed(1)} H${W}`}
-                  stroke={t === 0 ? ink[200] : ink[100]}
+                  key={tick}
+                  d={`M0,${y(tick).toFixed(1)} H${W}`}
+                  stroke={tick === 0 ? ink[200] : ink[100]}
                   strokeWidth={1}
-                  strokeDasharray={t === 0 ? undefined : "3 4"}
+                  strokeDasharray={tick === 0 ? undefined : "3 4"}
                   vectorEffect="non-scaling-stroke"
                 />
               ))}
@@ -491,6 +496,8 @@ export function CashflowChart({
   action?: ReactNode;
   height?: number;
 }) {
+  const t = useTheme();
+  const { brand, ink, status } = t;
   const header = (
     <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm }}>
       <View style={{ flexDirection: "row", alignItems: "baseline", flexWrap: "wrap", flex: 1, gap: 6 }}>
@@ -641,6 +648,8 @@ export function CategoryChange({
   title?: string;
   subtitle?: string;
 }) {
+  const t = useTheme();
+  const { ink, statusText, status } = t;
   if (data.length === 0) {
     return (
       <ChartFrame title={title}>
@@ -722,6 +731,8 @@ export function CoverageColumns({
   subtitle?: string;
   height?: number;
 }) {
+  const t = useTheme();
+  const { ink, statusText, status } = t;
   if (data.length === 0) {
     return (
       <ChartFrame title={title}>
@@ -779,27 +790,27 @@ export function CoverageColumns({
         <View
           style={{ width: AXIS_GUTTER, height: H, justifyContent: "space-between", paddingRight: 6 }}
         >
-          {axisTicks.map((t) => (
+          {axisTicks.map((tick) => (
             <T
-              key={t}
+              key={tick}
               variant="caption"
               style={{ fontSize: typeScale.axis, textAlign: "right", marginTop: -5 }}
               numberOfLines={1}
             >
-              {axisTick(t)}
+              {axisTick(tick)}
             </T>
           ))}
         </View>
         <View style={{ flex: 1 }}>
         <Svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
           {/* Gridlines under the columns, hairline and recessive. */}
-          {axisTicks.map((t) => (
+          {axisTicks.map((tick) => (
             <Path
-              key={t}
-              d={`M0,${((1 - t / axisMax) * H).toFixed(1)} H${W}`}
-              stroke={t === 0 ? ink[200] : ink[100]}
+              key={tick}
+              d={`M0,${((1 - tick / axisMax) * H).toFixed(1)} H${W}`}
+              stroke={tick === 0 ? ink[200] : ink[100]}
               strokeWidth={1}
-              strokeDasharray={t === 0 ? undefined : "3 4"}
+              strokeDasharray={tick === 0 ? undefined : "3 4"}
               vectorEffect="non-scaling-stroke"
             />
           ))}
@@ -850,7 +861,9 @@ export function CoverageColumns({
 
 const DONUT_TOP_N = 6;
 /** The remainder slice. Deliberately outside the categorical ramp. */
-const OTHER_COLOR = "#8b9a9e";
+// Moved to the palette as `chartOther` — a mid-grey that holds up on both
+// surfaces, kept outside the categorical set so it never reads as just
+// another category.
 
 const DONUT_RADIUS = 62;
 const DONUT_STROKE = 22;
@@ -880,6 +893,8 @@ export function DonutChart({
   title?: string;
   subtitle?: string;
 }) {
+  const t = useTheme();
+  const { ink, categorical } = t;
   const sorted = [...data].filter((d) => d.total > 0).sort((a, b) => b.total - a.total);
 
   if (sorted.length === 0) {
@@ -895,7 +910,7 @@ export function DonutChart({
   const slices = [
     ...head.map((d, i) => ({ name: d.categoryName, total: d.total, color: categorical[i] })),
     ...(tail.length > 0
-      ? [{ name: `Other (${tail.length})`, total: tail.reduce((s, d) => s + d.total, 0), color: OTHER_COLOR }]
+      ? [{ name: `Other (${tail.length})`, total: tail.reduce((s, d) => s + d.total, 0), color: t.chartOther }]
       : []),
   ];
 
@@ -998,6 +1013,8 @@ export function CategoryComparison({
   previousLabel?: string;
   currentLabel?: string;
 }) {
+  const t = useTheme();
+  const { brand, ink, statusText } = t;
   const rows = data.filter((r) => r.current > 0 || r.previous > 0).slice(0, 6);
 
   if (rows.length === 0) {

@@ -4,15 +4,18 @@ import { Ionicons } from "@expo/vector-icons";
 import { Alert as AlertBanner, Callout, Card, ErrorNote, Money, Screen, T } from "../components/ui";
 import { AskFinSight } from "../components/AskFinSight";
 import { AskFinSightFab, FAB_CLEARANCE } from "../components/AskFinSightFab";
-import { InsightHeader, STATUS_SURFACE } from "../components/InsightsShared";
+import { InsightHeader } from "../components/InsightsShared";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { api, errorMessage } from "../lib/api";
-import { ACCENT, brand, font, ink, paper, radius, space, statusText, TAP, typeScale } from "../theme/tokens";
+import { TAP, font, radius, space, typeScale } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 import type { SpendingImpact } from "../lib/types";
 
 // ---------------------------------------------------------------- Spending impact
 
 export function SpendingImpactScreen({ navigation }: any) {
+  const t = useTheme();
+  const { ACCENT, brand, ink, paper, statusText } = t;
   const { selected } = useBusinessProfiles();
   const [amount, setAmount] = useState("");
   const [data, setData] = useState<SpendingImpact | null>(null);
@@ -59,10 +62,10 @@ export function SpendingImpactScreen({ navigation }: any) {
   */
   const bandSurface = data
     ? data.impactBand === "High Impact"
-      ? STATUS_SURFACE.critical
+      ? t.statusSurface.critical
       : data.impactBand === "Noticeable Impact"
-        ? STATUS_SURFACE.warning
-        : STATUS_SURFACE.good
+        ? t.statusSurface.warning
+        : t.statusSurface.good
     : paper[100];
 
   return (
@@ -242,6 +245,8 @@ function BeforeAfter({
   before: number;
   after: number;
 }) {
+  const t = useTheme();
+  const { brand, ink, paper, statusText } = t;
   /*
    * Overspending is the case this has to get right. A negative `after` means
    * the purchase consumed everything and more, so the solid part is what
@@ -283,7 +288,7 @@ function BeforeAfter({
           height: BAR_HEIGHT,
           // The track IS the change: soft brand normally, alarm red when the
           // purchase runs past what there is.
-          backgroundColor: overspent ? STATUS_SURFACE.critical : brand[100],
+          backgroundColor: overspent ? t.statusSurface.critical : brand[100],
           // Radius from the height, matching RecoveryMeter's own Bar. A bar
           // is not a chip, and `radius.full` on a brand-filled pill is the
           // marker chipConsistency looks for.

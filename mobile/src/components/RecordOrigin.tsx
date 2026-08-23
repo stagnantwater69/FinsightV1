@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Image, Linking, Pressable, View } from "react-native";
 import { Callout, Money, T } from "./ui";
-import { brand, font, ink, paper, radius, space, statusText, typeScale } from "../theme/tokens";
+import { font, radius, space, typeScale } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 import type { RecordOrigin } from "../lib/types";
 
 /**
@@ -21,6 +22,8 @@ import type { RecordOrigin } from "../lib/types";
 export type { RecordOrigin } from "../lib/types";
 
 export function RecordOriginPanel({ origin, recordAmount }: { origin: RecordOrigin; recordAmount: number }) {
+  const t = useTheme();
+  const { brand, ink, paper, statusText } = t;
   if (origin.kind === "csv_import") {
     return (
       <View style={{ padding: space.md, backgroundColor: paper[100], borderRadius: radius.md }}>
@@ -173,6 +176,8 @@ export function RecordOriginPanel({ origin, recordAmount }: { origin: RecordOrig
  * produces something thousands of pixels long.
  */
 function ReceiptPhoto({ url }: { url: string }) {
+  const t = useTheme();
+  const { brand, paper } = t;
   const [open, setOpen] = useState(false);
 
   return (

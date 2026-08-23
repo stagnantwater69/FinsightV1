@@ -13,7 +13,8 @@ import {
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { api, errorMessage, getFieldErrors } from "../lib/api";
 import * as haptics from "../lib/haptics";
-import { brand, font, ink, radius, space, TAP, typeScale } from "../theme/tokens";
+import { TAP, font, radius, space, typeScale } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 import type { BusinessProfile, Profile } from "../lib/types";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
 import {
@@ -31,6 +32,8 @@ import {
 // ---------------------------------------------------------------- List / switcher
 
 export function BusinessProfilesScreen({ navigation }: any) {
+  const t = useTheme();
+  const { brand } = t;
   const { profiles, selected, selectProfile, loading, archiveProfile, restoreProfile, listArchived } =
     useBusinessProfiles();
   const [archived, setArchived] = useState<BusinessProfile[] | null>(null);
@@ -399,6 +402,8 @@ export function BusinessProfileFormScreen({ navigation, route }: any) {
 // ---------------------------------------------------------------- Profile / account
 
 export function ProfileScreen() {
+  const t = useTheme();
+  const { brand, ink } = t;
   const { profile, updateProfile, logout, logoutEverywhere, changePassword, setProfileFromServer } = useAuth();
   const [passwordChanged, setPasswordChanged] = useState(false);
   const [form, setForm] = useState({
@@ -684,7 +689,10 @@ export function ProfileScreen() {
           </Card>
 
           <Card>
-            <T variant="title" style={{ marginBottom: 4, color: "#b42318" }}>Delete account</T>
+            {/* `statusText.critical`, not the one-off #b42318 this carried — a second
+                independent red beside the token the app already has for
+                "critical" is exactly the drift the design system forbids. */}
+            <T variant="title" style={{ marginBottom: 4, color: t.statusText.critical }}>Delete account</T>
             <T variant="caption" style={{ marginBottom: space.md }}>
               Permanently removes every business, record, receipt image, import, and sign-in credential.
             </T>

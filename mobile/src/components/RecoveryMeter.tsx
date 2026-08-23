@@ -1,7 +1,8 @@
 import { View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Money, T } from "./ui";
-import { ACCENT, font, ink, paper, radius, space, status, statusText, typeScale } from "../theme/tokens";
+import { font, radius, space, typeScale } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 import type { RecoveryTargets } from "../lib/types";
 
 /**
@@ -17,6 +18,8 @@ import type { RecoveryTargets } from "../lib/types";
  * and web.
  */
 export function RecoveryMeter({ data }: { data: RecoveryTargets }) {
+  const t = useTheme();
+  const { ACCENT, ink, paper, statusText, status } = t;
   const monthRatio = Math.min(data.monthCoveragePercent / 100, 1);
   const monthFill = data.onTrack ? status.good : status.critical;
   const monthInk = data.onTrack ? statusText.good : statusText.critical;
@@ -38,7 +41,11 @@ export function RecoveryMeter({ data }: { data: RecoveryTargets }) {
     web's config — adding a scale on mobile alone would put the two out of step.
   */
   const todaySurface =
-    data.todaysStatus === "below" ? "#fdecec" : data.todaysStatus === "at" ? "#fffbeb" : "#eafaf1";
+    data.todaysStatus === "below"
+      ? t.statusSurface.critical
+      : data.todaysStatus === "at"
+        ? t.statusSurface.warning
+        : t.statusSurface.good;
 
   return (
     <View>
@@ -63,7 +70,7 @@ export function RecoveryMeter({ data }: { data: RecoveryTargets }) {
             justifyContent: "center",
           }}
         >
-          <T style={{ color: "#fff", fontSize: typeScale.micro }}>{data.onTrack ? "✓" : "!"}</T>
+          <T style={{ color: t.textOnFill, fontSize: typeScale.micro }}>{data.onTrack ? "✓" : "!"}</T>
         </View>
         <T style={{ color: monthInk, fontSize: typeScale.bodySm }}>
           {data.onTrack ? "On pace for the month" : "Behind pace for the month"}
@@ -157,6 +164,8 @@ export function RecoveryMeter({ data }: { data: RecoveryTargets }) {
 }
 
 function Bar({ ratio, color, height, label }: { ratio: number; color: string; height: number; label: string }) {
+  const t = useTheme();
+  const { ink } = t;
   return (
     <View
       accessibilityRole="progressbar"

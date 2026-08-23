@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Image, View, type ImageSourcePropType } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { brand, paper } from "../../theme/tokens";
+import { useTheme } from "../../context/ThemeContext";
 import type { TourPose, TourStep } from "./steps";
 
 /**
@@ -52,6 +52,8 @@ const POSE_SOURCES: Record<TourPose, ImageSourcePropType> = {
 export const POSE_FALLBACK: ImageSourcePropType = GREETING;
 
 export function TourMascot({ mascot, size = 72 }: { mascot: TourStep["mascot"]; size?: number }) {
+  const t = useTheme();
+  const { brand, paper } = t;
   const [source, setSource] = useState<ImageSourcePropType>(POSE_SOURCES[mascot.pose]);
   const [failed, setFailed] = useState(false);
 

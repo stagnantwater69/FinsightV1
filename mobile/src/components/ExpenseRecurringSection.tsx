@@ -2,7 +2,8 @@ import { ActivityIndicator, View } from "react-native";
 import { Button, Callout, Card, EmptyState, ErrorNote, T } from "./ui";
 import { Medallion, ScheduleRow } from "./InsightsShared";
 import { groupSchedules } from "../lib/recurringAgenda";
-import { brand, font, ink, paper, radius, space, typeScale } from "../theme/tokens";
+import { font, radius, space, typeScale } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 import type { RecurringPattern, RecurringSchedule } from "../lib/types";
 
 /**
@@ -43,6 +44,8 @@ export function ExpenseRecurringSection({
   confirmPattern: (id: number) => void | Promise<void>;
   dismissPattern: (id: number) => void | Promise<void>;
 }) {
+  const t = useTheme();
+  const { brand, ink, paper } = t;
   return (
     <>
       {/*

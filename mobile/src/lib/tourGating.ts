@@ -19,6 +19,9 @@ import type { TourStatus } from "./tourStorage";
  *     lives on Home. Starting before the figures land would spotlight a
  *     skeleton; starting on another tab would point at things that are not
  *     there.
+ *   - THE ACCOUNT'S OWN STATE, RECONCILED. The status below is the server's
+ *     once /auth/me has answered; until then no decision is made at all, so a
+ *     tour finished on another device is never re-offered here in the gap.
  *   - A STORED STATUS THAT IS NOT TERMINAL. completed and skipped both mean
  *     "I have dealt with this", and neither should be second-guessed.
  *
@@ -29,9 +32,21 @@ import type { TourStatus } from "./tourStorage";
  */
 
 export interface TourGateInput {
-  /** What the keystore says about this user's last run. */
+  /** What the reconciled record says about this account's last run. */
   status: TourStatus;
-  /** "Replay on every login", from the More screen's Preferences section. */
+  /**
+   * The account's own tour state has been read and either adopted or migrated
+   * up — see lib/tourStorage.ts's `reconcile`.
+   *
+   * REQUIRED, not defaulted, and it is the newest condition here. The keystore
+   * cache alone cannot tell "never toured" from "toured last month on the
+   * laptop": both read as not_started on a phone that has never run the tour.
+   * Starting on the cache while /auth/me is still in flight would throw the
+   * tour over the Home screen of someone who has already been through it,
+   * which is the exact failure moving this state to the server was for.
+   */
+  reconciled: boolean;
+  /** "Replay on every login", from Settings → Guided Tour. */
   alwaysShow: boolean;
   hasProfile: boolean;
   /** Home's summary has actually arrived — not merely that Home is mounted. */
@@ -41,11 +56,13 @@ export interface TourGateInput {
 
 export function shouldStartTour({
   status,
+  reconciled,
   alwaysShow,
   hasProfile,
   dashboardLoaded,
   onHomeTab,
 }: TourGateInput): boolean {
+  if (!reconciled) return false;
   if (!hasProfile || !onHomeTab || !dashboardLoaded) return false;
   if (alwaysShow) return true;
   return status !== "completed" && status !== "skipped";

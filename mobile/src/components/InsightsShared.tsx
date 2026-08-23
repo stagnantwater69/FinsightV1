@@ -4,25 +4,19 @@ import * as haptics from "../lib/haptics";
 import { Card, Money, SegmentedControl, T } from "./ui";
 import { agendaGroupOf, formatDueDate, type AgendaGroupKey } from "../lib/recurringAgenda";
 import { formatMoney } from "../lib/money";
-import { brand, font, ink, paper, radius, space, statusText, TAP, typeScale } from "../theme/tokens";
+import { TAP, font, radius, space, typeScale } from "../theme/tokens";
+import type { Palette } from "../theme/palette";
+import { useTheme } from "../context/ThemeContext";
 import type { RecurringSchedule } from "../lib/types";
 
-/**
- * The soft surfaces a status pill sits on.
- *
- * Literals rather than tokens because `theme/tokens.ts` carries the status
- * FILLS and the darkened TEXT steps but no tinted backgrounds, and that file
- * is a hand-kept mirror of web's Tailwind config — adding a scale here alone
- * would put the two out of step for the sake of one screen. These are the
- * same three values RecordsScreens already uses for the same purpose; naming
- * them once beats a fourth copy appearing next to a fifth.
+/*
+ * The soft surfaces a status pill sits on used to be four literals declared
+ * here and re-declared in RecordCard, because tokens.ts carried the status
+ * FILLS and the darkened TEXT steps but no tinted backgrounds. They are
+ * `statusSurface` in theme/palette.ts now — one name, resolved per theme, so
+ * a status wash is a deep tint on a dark card instead of a pale one that
+ * glows.
  */
-export const STATUS_SURFACE = {
-  good: "#eafaf1",
-  warning: "#fffbeb",
-  serious: "#fdf0ea",
-  critical: "#fdecec",
-} as const;
 
 /*
  * The tab values are screen names. Selection here is derived from the route
@@ -58,6 +52,8 @@ export function InsightHeader({
   active: string;
   title: string;
 }) {
+  const t = useTheme();
+  const { ink } = t;
   return (
     <View style={{ marginBottom: space.lg }}>
       {/*
@@ -135,6 +131,8 @@ export function Medallion({
  * not universally bad: an owner reading a rise in Inventory may be pleased.
  */
 export function DeltaPill({ percentChange, direction }: { percentChange: number | null; direction: string }) {
+  const t = useTheme();
+  const { ink, paper, statusText } = t;
   if (percentChange === null) {
     return (
       <View style={{ paddingHorizontal: space.sm, paddingVertical: 2, borderRadius: radius.full, backgroundColor: paper[100] }}>
@@ -146,7 +144,7 @@ export function DeltaPill({ percentChange, direction }: { percentChange: number 
   const up = direction === "up";
   const flat = direction !== "up" && direction !== "down";
   const tone = flat ? ink[500] : up ? statusText.serious : statusText.good;
-  const surface = flat ? paper[100] : up ? STATUS_SURFACE.serious : STATUS_SURFACE.good;
+  const surface = flat ? t.surfaceMuted : up ? t.statusSurface.serious : t.statusSurface.good;
 
   return (
     <View
@@ -195,6 +193,8 @@ export function SubTabs<Value extends string>({
   onChange: (v: Value) => void;
   accessibilityLabel?: string;
 }) {
+  const t = useTheme();
+  const { brand, ink, paper } = t;
   return (
     <View
       accessibilityRole="tablist"
@@ -286,7 +286,7 @@ export function SubTabs<Value extends string>({
                   style={{
                     fontSize: 10.5,
                     lineHeight: 14,
-                    color: selected ? "#fff" : ink[600],
+                    color: selected ? t.onBrandFill : ink[600],
                     fontFamily: font.sansSemibold,
                   }}
                 >
@@ -313,15 +313,18 @@ export function SubTabs<Value extends string>({
  * spotted. Colour is never the only signal — the row sits under a written
  * "Overdue" heading, and a paused one says so in words.
  */
-const AGENDA_LOOK: Record<AgendaGroupKey, { icon: keyof typeof Ionicons.glyphMap; tint: string; surface: string }> = {
-  OVERDUE: { icon: "alert-circle-outline", tint: statusText.critical, surface: STATUS_SURFACE.critical },
-  DUE_SOON: { icon: "time-outline", tint: statusText.warning, surface: STATUS_SURFACE.warning },
-  SCHEDULED: { icon: "repeat-outline", tint: brand[700], surface: brand[50] },
-  PAUSED: { icon: "pause-outline", tint: ink[500], surface: paper[100] },
-};
+const agendaLook = (
+  t: Palette,
+): Record<AgendaGroupKey, { icon: keyof typeof Ionicons.glyphMap; tint: string; surface: string }> => ({
+  OVERDUE: { icon: "alert-circle-outline", tint: t.statusText.critical, surface: t.statusSurface.critical },
+  DUE_SOON: { icon: "time-outline", tint: t.statusText.warning, surface: t.statusSurface.warning },
+  SCHEDULED: { icon: "repeat-outline", tint: t.brandText, surface: t.brandSurface },
+  PAUSED: { icon: "pause-outline", tint: t.textMuted, surface: t.surfaceMuted },
+});
 
 export function ScheduleRow({ schedule, onPress }: { schedule: RecurringSchedule; onPress: () => void }) {
-  const look = AGENDA_LOOK[agendaGroupOf(schedule)];
+  const t = useTheme();
+  const look = agendaLook(t)[agendaGroupOf(schedule)];
   const due = formatDueDate(schedule.nextDueDate);
   const meta = [
     schedule.categoryName,
@@ -355,7 +358,7 @@ export function ScheduleRow({ schedule, onPress }: { schedule: RecurringSchedule
           <Medallion icon={look.icon} tint={look.tint} surface={look.surface} size={38} />
           <View style={{ flex: 1 }}>
             <View style={{ flexDirection: "row", gap: space.sm }}>
-              <T style={{ flex: 1, fontFamily: font.sansMedium, color: ink[900] }} numberOfLines={2}>
+              <T style={{ flex: 1, fontFamily: font.sansMedium, color: t.textPrimary }} numberOfLines={2}>
                 {schedule.label}
               </T>
               <Money value={schedule.expectedAmount} size={15} weight="semibold" decimals />
@@ -371,14 +374,14 @@ export function ScheduleRow({ schedule, onPress }: { schedule: RecurringSchedule
                   paddingHorizontal: space.sm,
                   paddingVertical: 2,
                   borderRadius: radius.full,
-                  backgroundColor: paper[100],
+                  backgroundColor: t.surfaceMuted,
                 }}
               >
-                <T style={{ fontSize: typeScale.micro, color: ink[500] }}>Paused</T>
+                <T style={{ fontSize: typeScale.micro, color: t.textMuted }}>Paused</T>
               </View>
             )}
           </View>
-          <Ionicons name="chevron-forward" size={16} color={ink[300]} style={{ alignSelf: "center" }} />
+          <Ionicons name="chevron-forward" size={16} color={t.ink[300]} style={{ alignSelf: "center" }} />
         </View>
       </Card>
     </Pressable>

@@ -16,6 +16,7 @@ import type { TourStatus } from "../src/lib/tourStorage";
 
 const READY: TourGateInput = {
   status: "not_started",
+  reconciled: true,
   alwaysShow: false,
   hasProfile: true,
   dashboardLoaded: true,
@@ -25,6 +26,22 @@ const READY: TourGateInput = {
 describe("shouldStartTour", () => {
   it("opens for a signed-in owner who has not seen it, on a loaded Home", () => {
     expect(shouldStartTour(READY)).toBe(true);
+  });
+
+  /**
+   * The account's own answer has not arrived yet.
+   *
+   * This is the condition that carries the migration risk: tour state now
+   * lives on the user row and the keystore is only a cache. On a phone that
+   * has never run the tour, that cache says "not_started" whether the owner is
+   * new or finished the whole thing on a laptop last month — so until
+   * /auth/me has been reconciled, nothing here is safe to act on.
+   */
+  it("refuses to decide before the account's tour state has been reconciled", () => {
+    expect(shouldStartTour({ ...READY, reconciled: false })).toBe(false);
+    // Not even for the override: "always show on login" loosens WHICH
+    // statuses may start, not whether the status is known at all.
+    expect(shouldStartTour({ ...READY, reconciled: false, alwaysShow: true })).toBe(false);
   });
 
   it("resumes a run that was interrupted", () => {

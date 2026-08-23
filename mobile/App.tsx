@@ -41,6 +41,7 @@ import { parseAuthDeepLink, type AuthLinkResult } from "./src/lib/authLinkTokens
 import { DashboardScreen } from "./src/screens/DashboardScreen";
 import { NotificationsScreen } from "./src/screens/NotificationsScreen";
 import { MoreScreen } from "./src/screens/MoreScreen";
+import { SettingsScreen } from "./src/screens/SettingsScreen";
 import {
   AddExpenseScreen,
   AddSalesScreen,
@@ -69,7 +70,9 @@ import {
   BusinessProfilesScreen,
   ProfileScreen,
 } from "./src/screens/BusinessScreens";
-import { ACCENT, brand, categorical, categoricalOnColor, font, ink, paper } from "./src/theme/tokens";
+import { font } from "./src/theme/tokens";
+import type { Palette } from "./src/theme/palette";
+import { ThemeProvider, useTheme, useThemeControl } from "./src/context/ThemeContext";
 import { recordsTabPressAction, RECORDS_LIST_SCREEN } from "./src/lib/tabSelection";
 import { ReceiptCamera } from "./src/components/receipt-camera";
 import { QuickActionMenu, type RadialAction } from "./src/components/QuickActionMenu";
@@ -100,29 +103,48 @@ SplashScreen.preventAutoHideAsync().catch(() => undefined);
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
 
-const navTheme = {
+/**
+ * React Navigation's own colours, built from the palette.
+ *
+ * These are the surfaces the library paints itself — the card behind a
+ * screen during a push transition, the hairline under a native header, the
+ * default text colour. Left on `DefaultTheme` they stay white in Dark, which
+ * shows up as a white flash on every navigation and a white sliver under
+ * every header: the exact "dark mode is only skin-deep" tell.
+ */
+const navThemeFor = (t: Palette) => ({
   ...DefaultTheme,
+  dark: t.mode === "dark",
   colors: {
     ...DefaultTheme.colors,
-    primary: brand[600],
-    background: paper[50],
-    card: paper.DEFAULT,
-    text: ink[900],
-    border: brand[100],
+    primary: t.brand[600],
+    background: t.surfaceSunken,
+    card: t.surface,
+    text: t.textPrimary,
+    border: t.brandBorder,
   },
-};
+});
 
-const screenOptions = {
-  headerStyle: { backgroundColor: paper.DEFAULT },
-  headerTitleStyle: { fontFamily: font.display, color: brand[900] },
-  headerTintColor: brand[700],
-} as const;
+/**
+ * A hook rather than a constant, for the same reason: four stack navigators
+ * share these header options, and a module-level object would freeze the
+ * header in whichever theme was loaded first.
+ */
+function useScreenOptions() {
+  const t = useTheme();
+  return {
+    headerStyle: { backgroundColor: t.surface },
+    headerTitleStyle: { fontFamily: font.display, color: t.brandHeading },
+    headerTintColor: t.brandText,
+  } as const;
+}
 
 /**
  * The Dashboard needs a stack of its own so it can push the alerts list —
  * web reaches the same screen from the bell in its header.
  */
 function DashboardStack() {
+  const screenOptions = useScreenOptions();
   return (
     <Stack.Navigator screenOptions={screenOptions}>
       {/*
@@ -141,6 +163,7 @@ function DashboardStack() {
 }
 
 function RecordsStack() {
+  const screenOptions = useScreenOptions();
   return (
     <Stack.Navigator screenOptions={screenOptions}>
       {/*
@@ -175,6 +198,7 @@ function RecordsStack() {
 }
 
 function InsightsStack() {
+  const screenOptions = useScreenOptions();
   return (
     /*
       headerShown: false across the whole stack.
@@ -214,10 +238,17 @@ function InsightsStack() {
  * Dashboard.
  */
 function MoreStack() {
+  const screenOptions = useScreenOptions();
   return (
     <Stack.Navigator screenOptions={screenOptions}>
       <Stack.Screen name="MoreHome" component={MoreScreen} options={{ headerShown: false }} />
       <Stack.Screen name="Profile" component={ProfileScreen} options={{ title: "My account" }} />
+      {/*
+        How the app behaves for this owner: the guided tour, Fin's daily
+        message on Home, and light or dark. It replaces the "Preferences" card
+        that used to sit on the More screen itself — see SettingsScreen.tsx.
+      */}
+      <Stack.Screen name="Settings" component={SettingsScreen} options={{ title: "Settings" }} />
       <Stack.Screen name="BusinessProfiles" component={BusinessProfilesScreen} options={{ title: "Businesses" }} />
       <Stack.Screen name="BusinessProfileForm" component={BusinessProfileFormScreen} options={{ title: "Business profile" }} />
       <Stack.Screen name="Notifications" component={NotificationsScreen} options={{ title: "Alerts" }} />
@@ -316,6 +347,7 @@ function TabIcon({
  * rather than a fifth destination.
  */
 function ScanTabButton({ onPress, active }: { onPress: () => void; active: boolean }) {
+  const t = useTheme();
   // The tour's "Receipt scanner" step points here: on a phone this raised
   // button IS the quick-add menu web spotlights.
   const tourTarget = useTourTarget("quick-add", { pad: { top: 8, bottom: 8, left: 8, right: 8 }, radius: 999 });
@@ -342,7 +374,7 @@ function ScanTabButton({ onPress, active }: { onPress: () => void; active: boole
             width: 66,
             height: 66,
             borderRadius: 33,
-            backgroundColor: brand[100],
+            backgroundColor: t.brandBorder,
           }}
         />
       ) : null}
@@ -363,14 +395,18 @@ function ScanTabButton({ onPress, active }: { onPress: () => void; active: boole
           justifyContent: "center",
           // Deeper while scanning, so the button reads as engaged even where
           // the halo is hard to see — a dark phone in daylight, say.
-          backgroundColor: pressed || active ? brand[800] : brand[700],
+          // `brandSolid`, not the brand ramp: this disc is dark teal in BOTH
+          // themes. The ramp's 700 step lightens in Dark so brand TEXT stays
+          // legible on a dark card, which would have turned this button into
+          // a pale mint circle carrying white glyphs.
+          backgroundColor: pressed || active ? t.brandSolidPressed : t.brandSolid,
           // A ring in the bar's own colour so the circle reads as sitting
           // above the bar rather than punched through it.
           borderWidth: 4,
-          borderColor: paper.DEFAULT,
-          shadowColor: ink[900],
+          borderColor: t.surface,
+          shadowColor: t.shadow,
           shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.18,
+          shadowOpacity: 0.18 * t.shadowStrength,
           shadowRadius: 5,
           elevation: 5,
         })}
@@ -385,7 +421,7 @@ function ScanTabButton({ onPress, active }: { onPress: () => void; active: boole
           A plus is the universal "add something", which is exactly the set
           behind it, and it rotates into the X that closes the menu.
         */}
-        <Ionicons name={active ? "close" : "add"} size={30} color="#fff" />
+        <Ionicons name={active ? "close" : "add"} size={30} color={t.onBrandSolid} />
       </Pressable>
     </View>
   );
@@ -393,6 +429,8 @@ function ScanTabButton({ onPress, active }: { onPress: () => void; active: boole
 
 
 function MainTabs() {
+  const t = useTheme();
+  const { ACCENT, categorical, categoricalOnColor } = t;
   /*
    * The phone's own navigation bar sits under ours.
    *
@@ -481,8 +519,8 @@ function MainTabs() {
       tourTarget: "quick-add-scan",
       // The middle of the arc, in FinSight's own green: still the action the
       // button is for, just no longer the only one it can reach.
-      color: brand[700],
-      onColor: "#ffffff",
+      color: t.brandSolid,
+      onColor: t.onBrandSolid,
       onPress: () => setCameraOpen(true),
     },
     {
@@ -523,11 +561,11 @@ function MainTabs() {
        */
       screenOptions={({ route }) => ({
         headerShown: false,
-        tabBarActiveTintColor: brand[700],
-        tabBarInactiveTintColor: ink[500],
+        tabBarActiveTintColor: t.brandText,
+        tabBarInactiveTintColor: t.textMuted,
         tabBarStyle: {
-          backgroundColor: paper.DEFAULT,
-          borderTopColor: paper[200],
+          backgroundColor: t.surface,
+          borderTopColor: t.border,
           height: 60 + insets.bottom,
           paddingTop: 6,
           paddingBottom: 8 + insets.bottom,
@@ -721,6 +759,7 @@ function useAuthDeepLink() {
 }
 
 function Root({ fontsReady }: { fontsReady: boolean }) {
+  const t = useTheme();
   const { profile, loading, logout } = useAuth();
   const { link, dismiss } = useAuthDeepLink();
 
@@ -742,8 +781,8 @@ function Root({ fontsReady }: { fontsReady: boolean }) {
     // owner sees if the splash could not be held, so it stays a real view
     // rather than null.
     return (
-      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: paper[50] }}>
-        <ActivityIndicator color={brand[600]} />
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: t.surfaceSunken }}>
+        <ActivityIndicator color={t.brand[600]} />
       </View>
     );
   }
@@ -800,6 +839,7 @@ function Root({ fontsReady }: { fontsReady: boolean }) {
  * replaces it, which reads as a glitch.
  */
 function MainOrOnboarding() {
+  const t = useTheme();
   const { profile: user } = useAuth();
   const { profiles, loading } = useBusinessProfiles();
   const [dismissed, setDismissed] = useState<boolean | null>(null);
@@ -838,8 +878,8 @@ function MainOrOnboarding() {
 
   if (loading || dismissed === null) {
     return (
-      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: paper[50] }}>
-        <ActivityIndicator color={brand[600]} />
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: t.surfaceSunken }}>
+        <ActivityIndicator color={t.brand[600]} />
       </View>
     );
   }
@@ -917,14 +957,45 @@ export default function App() {
     // it — and fail silently rather than erroring, which is the worst way for
     // a gesture to be broken.
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <SafeAreaProvider>
-        <NavigationContainer ref={navigationRef} theme={navTheme}>
-          <AuthProvider>
-            <Root fontsReady={fontsReady} />
-          </AuthProvider>
-        </NavigationContainer>
-        <StatusBar style="dark" />
-      </SafeAreaProvider>
+      {/*
+        ThemeProvider sits above everything that paints, including the
+        NavigationContainer (whose own theme is built from the palette) and
+        AuthProvider (because the login screen is the first thing drawn on a
+        cold start and must already be the right colour).
+      */}
+      <ThemeProvider>
+        <SafeAreaProvider>
+          <Themed fontsReady={fontsReady} />
+        </SafeAreaProvider>
+      </ThemeProvider>
     </GestureHandlerRootView>
+  );
+}
+
+/**
+ * Everything below the theme, so it can read the palette.
+ *
+ * Its own component because `useTheme` cannot be called in `App` — the
+ * provider is rendered there, and a component cannot consume a context it is
+ * itself mounting.
+ */
+function Themed({ fontsReady }: { fontsReady: boolean }) {
+  const t = useTheme();
+  const { ready: themeReady } = useThemeControl();
+
+  return (
+    <>
+      <NavigationContainer ref={navigationRef} theme={navThemeFor(t)}>
+        <AuthProvider>
+          <Root fontsReady={fontsReady && themeReady} />
+        </AuthProvider>
+      </NavigationContainer>
+      {/*
+        The status bar follows the theme: dark glyphs on a light app, light
+        glyphs on a dark one. Hardcoded "dark" here was invisible against a
+        dark page — the clock and the battery simply disappeared.
+      */}
+      <StatusBar style={t.statusBarStyle} />
+    </>
   );
 }

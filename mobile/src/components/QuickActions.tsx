@@ -1,7 +1,8 @@
 import { Pressable, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Card, T } from "./ui";
-import { brand, ink, radius, space, typeScale } from "../theme/tokens";
+import { radius, space, typeScale } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 import * as haptics from "../lib/haptics";
 
 export interface QuickAction {
@@ -41,6 +42,8 @@ export function QuickActions({ actions }: { actions: QuickAction[] }) {
  * that always works.
  */
 function QuickActionTile({ action }: { action: QuickAction }) {
+  const t = useTheme();
+  const { brand, ink } = t;
   return (
     <Pressable
       onPress={() => {

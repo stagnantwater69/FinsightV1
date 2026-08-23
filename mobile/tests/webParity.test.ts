@@ -125,6 +125,15 @@ const COVERED: Record<string, string> = {
    */
   "/auth/reset-password": "ResetPassword",
   "/auth/confirm": "ConfirmEmail",
+  /*
+   * Web's account-settings page and the app's Settings screen (More →
+   * Settings) carry the same groups: the guided tour, the daily mascot
+   * message, and appearance. Appearance is the one difference in substance and
+   * it is deliberate — it is a per-device choice on both clients, so the app
+   * offers Light and Dark from its own keystore rather than dragging the
+   * laptop's theme onto the phone.
+   */
+  "/account-settings": "Settings",
   "/faqs": "Faqs",
   "/tutorials": "Tutorials",
   "/contact": "Contact",
@@ -340,12 +349,15 @@ describe("product tour matches web", () => {
    */
   it.skipIf(!existsSync(WEB_TOUR_CONTEXT))("refuses to start in the same situations web does", async () => {
     const source = readFileSync(WEB_TOUR_CONTEXT, "utf8");
-    for (const condition of ['=== "completed"', '=== "skipped"', "!selected", "loading"]) {
+    // `reconciled` joined this list when tour state moved onto the user row:
+    // both clients now refuse to decide until the account has answered.
+    for (const condition of ['=== "completed"', '=== "skipped"', "!selected", "loading", "reconciled"]) {
       expect(source, `web's start gate no longer mentions ${condition}`).toContain(condition);
     }
 
     const ready = {
       status: "not_started" as const,
+      reconciled: true,
       alwaysShow: false,
       hasProfile: true,
       dashboardLoaded: true,
@@ -356,21 +368,26 @@ describe("product tour matches web", () => {
     expect(shouldStartTour({ ...ready, status: "skipped" })).toBe(false);
     expect(shouldStartTour({ ...ready, hasProfile: false })).toBe(false);
     expect(shouldStartTour({ ...ready, dashboardLoaded: false })).toBe(false);
+    expect(shouldStartTour({ ...ready, reconciled: false })).toBe(false);
   });
 
   /**
    * ONE DELIBERATE DIVERGENCE, recorded here rather than left to be found.
    *
-   * The app has "Always show the tour on login" (More → Preferences) and web
-   * has no such preference. It exists so the first-run experience can be shown
-   * repeatedly — a demo, a new helper behind the counter — without creating a
-   * throwaway account, which is a phone problem rather than a laptop one. It
-   * only ever LOOSENS the gate, and only the two terminal statuses; the
-   * business-profile and loaded-Home conditions are untouched by it, which is
-   * what keeps the two clients' gates the same gate.
+   * "Always show the tour on login" (Settings → Guided Tour) is a preference
+   * web's START GATE does not consult. It exists so the first-run experience
+   * can be shown repeatedly — a demo, a new helper behind the counter —
+   * without creating a throwaway account, which is a phone problem rather than
+   * a laptop one. It is now stored on the account alongside the other tour
+   * fields, so both clients can read it; only the app acts on it.
+   *
+   * It only ever LOOSENS the gate, and only the two terminal statuses; the
+   * business-profile, loaded-Home and reconciled conditions are untouched by
+   * it, which is what keeps the two clients' gates the same gate.
    */
   it("adds only the always-show preference on top of web's rules", () => {
     const base = {
+      reconciled: true,
       alwaysShow: true,
       hasProfile: true,
       dashboardLoaded: true,
@@ -380,6 +397,7 @@ describe("product tour matches web", () => {
     expect(shouldStartTour({ ...base, status: "skipped" })).toBe(true);
     expect(shouldStartTour({ ...base, status: "completed", hasProfile: false })).toBe(false);
     expect(shouldStartTour({ ...base, status: "completed", dashboardLoaded: false })).toBe(false);
+    expect(shouldStartTour({ ...base, status: "completed", reconciled: false })).toBe(false);
   });
 });
 

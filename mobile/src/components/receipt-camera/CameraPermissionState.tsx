@@ -1,6 +1,7 @@
 import { ActivityIndicator, Image, Linking, View } from "react-native";
 import { Button, T } from "../ui";
-import { brand, ink, space, typeScale } from "../../theme/tokens";
+import { space, typeScale } from "../../theme/tokens";
+import { useTheme } from "../../context/ThemeContext";
 
 /**
  * What the camera screen shows when there is no camera to show.
@@ -30,9 +31,11 @@ export function CameraPermissionState({
   onPickFromGallery: () => void;
   onClose: () => void;
 }) {
+  const t = useTheme();
+  const { brand } = t;
   if (status === "pending") {
     return (
-      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: ink[900] }}>
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: t.cameraSurface }}>
         <ActivityIndicator color={brand[400]} />
         <T style={{ color: "rgba(255,255,255,0.7)", marginTop: space.md, fontSize: typeScale.label }}>
           Opening the camera…
@@ -47,7 +50,7 @@ export function CameraPermissionState({
     <View
       style={{
         flex: 1,
-        backgroundColor: ink[900],
+        backgroundColor: t.cameraSurface,
         alignItems: "center",
         justifyContent: "center",
         padding: space.xl,
@@ -61,7 +64,7 @@ export function CameraPermissionState({
         accessibilityIgnoresInvertColors
       />
 
-      <T variant="title" style={{ color: "#ffffff", textAlign: "center" }}>
+      <T variant="title" style={{ color: t.onCamera, textAlign: "center" }}>
         FinSight needs the camera
       </T>
 

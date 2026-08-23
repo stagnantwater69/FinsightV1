@@ -8,132 +8,19 @@
  *
  * The tradeoff is that these must be updated in both places. Anything that can
  * drift silently and matters is called out where it appears.
- */
-
-export const brand = {
-  50: "#effcf9",
-  100: "#c8f7ec",
-  200: "#92eeda",
-  300: "#5adcc4",
-  400: "#2ec2ac",
-  500: "#149e8d",
-  600: "#0d7f72",
-  700: "#0e655c",
-  800: "#0f504b",
-  900: "#0f423f",
-  950: "#052624",
-} as const;
-
-/**
- * The amber accent. Same two-places-only rule as web:
- *   1. the Recovery Meter's adjusted daily target
- *   2. primary calls to action
- * Never status or progress elements — amber-as-warning is a different idea and
- * lives in `status` below.
- */
-export const accent = {
-  50: "#fff9ed",
-  100: "#fdedcc",
-  200: "#fbd894",
-  300: "#f8bd55",
-  400: "#f5a524",
-  500: "#e08c0b",
-  600: "#b96c06",
-  700: "#94520b",
-  800: "#7a4210",
-  900: "#683810",
-} as const;
-
-/**
- * Measured on web: white text on amber fails contrast until accent-700 (which
- * reads brown). Dark ink on accent-400 is 8.08:1. So a primary CTA is an amber
- * fill with DARK ink, never white ink — the same rule, carried over.
- */
-export const ACCENT = {
-  fill: accent[400],
-  fillStrong: accent[500],
-  onFill: "#1a2022",
-  text: accent[700],
-  surface: accent[50],
-} as const;
-
-export const ink = {
-  50: "#f6f8f8",
-  100: "#eceff0",
-  200: "#d5dbdd",
-  300: "#b0bbbe",
-  400: "#7f8f94", // decorative / placeholder only — 3.36:1, not for body text
-  500: "#5d6d72",
-  600: "#4a585c",
-  700: "#3d4749",
-  800: "#2c3436",
-  900: "#1a2022",
-} as const;
-
-export const paper = {
-  DEFAULT: "#ffffff",
-  50: "#fbfdfc",
-  100: "#f4f8f7",
-  200: "#e8efed",
-} as const;
-
-/** Fills for bars and meters. Not safe to put text on — see statusText. */
-export const status = {
-  good: "#0ca30c",
-  warning: "#fab219",
-  serious: "#ec835a",
-  critical: "#d03b3b",
-} as const;
-
-/** Darkened steps: safe as small text, and safe under white text on a badge. */
-export const statusText = {
-  good: "#0a7d0a",
-  warning: "#8a5a00",
-  serious: "#a8442a",
-  critical: "#c02f2f",
-} as const;
-
-/** Validated categorical palette — fixed order, never cycled or reassigned. */
-export const categorical = [
-  "#2a78d6",
-  "#eb6834",
-  "#1baf7a",
-  "#eda100",
-  "#e87ba4",
-  "#008300",
-  "#4a3aa7",
-  "#e34948",
-] as const;
-
-/**
- * The text colour to put ON each categorical fill, index-paired with
- * `categorical` — needed wherever a label sits inside a coloured bar or
- * slice rather than beside it on the page background.
  *
- * NOT a single fixed choice. `ink[900]` reads fine on six of these hues but
- * fails outright on the dark green and the purple (1.9:1 and 3.3:1); white
- * reads fine on those two but fails on the other six. Each entry here is
- * WCAG's better of {white, ink[900]} against that specific fill, computed
- * from the actual hex values, not eyeballed.
+ * WHAT IS AND IS NOT IN HERE
+ * --------------------------
+ * Only the tokens a theme has no opinion about: the type scale, the font
+ * families, radius, space and the tap target. A card is 16pt round and a
+ * caption is 12pt in Light and in Dark alike.
  *
- * Even the better choice does not clear 4.5:1 everywhere — blue lands at
- * 4.42:1 and red at 4.17:1, both just under normal-text AA. Both clear
- * large-text AA (3:1) with room to spare, which is the honest bar for a
- * short, bold numeral rather than body copy. This does not relax the "text
- * wears ink tokens, never the series colour" rule above — ordinary chart
- * labels still must not use this. It exists only for text placed directly on
- * top of a fill, where the alternative is no label at all.
+ * COLOUR MOVED to theme/palette.ts, behind a resolved palette that
+ * `context/ThemeContext.tsx` hands out through `useTheme()`. It is not
+ * re-exported from here, so an unmigrated `import { ink } from
+ * "../theme/tokens"` is a typecheck failure rather than a component that
+ * quietly stays light on a dark device.
  */
-export const categoricalOnColor = [
-  "#ffffff",
-  ink[900],
-  ink[900],
-  ink[900],
-  ink[900],
-  "#ffffff",
-  "#ffffff",
-  ink[900],
-] as const;
 
 /**
  * Font families. Same three typefaces as web (Inter / Sora / IBM Plex Mono),

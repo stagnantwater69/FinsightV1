@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import type { ViewStyle } from "react-native";
 import { Card, T } from "../../../components/ui";
-import { brand, space } from "../../../theme/tokens";
+import { space } from "../../../theme/tokens";
+import { useTheme } from "../../../context/ThemeContext";
 
 /**
  * A heading for one section of the receipt review.
@@ -27,6 +28,8 @@ export function ReviewSection({
   children: ReactNode;
   style?: ViewStyle;
 }) {
+  const t = useTheme();
+  const { brand } = t;
   return (
     <Card style={style}>
       <T variant="heading" accessibilityRole="header" style={{ color: brand[900], marginBottom: caption ? 2 : space.md }}>

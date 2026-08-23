@@ -1,18 +1,26 @@
 import * as SecureStore from "expo-secure-store";
 
+import type { TourStatus, UserPreferences } from "./types";
+
 /**
  * Where the product tour's progress lives on a phone.
  *
- * WHY LOCAL AND NOT A COLUMN — the same reasoning web/src/lib/tourStorage.ts
- * carries, and deliberately unchanged. The User model has no settings or
- * preferences field, and adding one for a boolean-ish flag is a schema
- * migration plus an endpoint plus contract tests: real work the tour must not
- * block on. This module is the seam. It exposes read/write of one small record
- * and nothing else, so swapping the inside for an API call later touches
- * exactly one file per client. Until then the documented trade-off is that
- * tour state is per-device — someone who completes the tour on their laptop is
- * offered it again on their phone. For a guided tour that is one visible Skip
- * away, not data loss.
+ * THE SERVER IS NOW THE SOURCE OF TRUTH, exactly as web/src/lib/tourStorage.ts
+ * describes. `tourStatus`/`tourStep`/`tourAlwaysShow` are columns on the user
+ * row, read with GET /auth/me and written with PATCH /auth/me/preferences — so
+ * a tour finished on a laptop is not offered again on this phone, which is the
+ * trade-off this module used to document as accepted.
+ *
+ * THE KEYSTORE STAYS, AS A CACHE. It is what the start gate can consult
+ * without waiting on the network: without it the tour would either flash open
+ * over a Home screen someone already toured, or have to be suppressed until
+ * /auth/me settled. It is also what keeps the tour usable when that request
+ * fails outright.
+ *
+ * This file is the seam, and it makes no API calls. TourContext asks it what
+ * to believe (`reconcile`) and what to send (`preferencePatch`); the one
+ * writer of preferences is AuthContext, so the settings screen and the tour
+ * cannot end up holding two different answers.
  *
  * SecureStore rather than AsyncStorage, for the reason savedAccountStore.ts
  * gives: it is the key-value store the app already ships with, and none of
@@ -33,7 +41,13 @@ import * as SecureStore from "expo-secure-store";
  * small annoyance; a throw out of the dashboard is not.
  */
 
-export type TourStatus = "not_started" | "in_progress" | "completed" | "skipped";
+/*
+ * Re-exported rather than declared here: the four statuses are part of the API
+ * contract (TOUR_STATUSES in auth.controller.ts) now that the server stores
+ * them, and a second declaration is a second thing to keep in step. Callers
+ * that think of it as tour state keep importing it from this module.
+ */
+export type { TourStatus };
 
 export interface StoredTour {
   status: TourStatus;
@@ -93,7 +107,7 @@ export async function writeTour(userId: number, value: StoredTour) {
  * Record progress without disturbing the preference.
  *
  * The two are written from different places — the overlay advancing a step,
- * and a toggle on the More screen — and a plain `writeTour` from either would
+ * and a toggle on the Settings screen — and a plain `writeTour` from either would
  * drop whatever the other had just stored.
  */
 export async function saveTourProgress(userId: number, status: TourStatus, step: number) {
@@ -104,4 +118,62 @@ export async function saveTourProgress(userId: number, status: TourStatus, step:
 export async function saveAlwaysShowTour(userId: number, alwaysShow: boolean) {
   const current = await readTour(userId);
   await writeTour(userId, { ...current, alwaysShow: alwaysShow ? true : undefined });
+}
+
+/** The subset of UserPreferences this module ever writes. */
+export type TourPreferencePatch = Pick<UserPreferences, "tourStatus" | "tourStep" | "tourAlwaysShow">;
+
+/**
+ * The largest step index the API will store (MAX_TOUR_STEP in
+ * auth.controller.ts). Clamped rather than trusted, because a corrupt cache
+ * entry must not turn into a 400 that loses the whole migration.
+ */
+const MAX_TOUR_STEP = 100;
+
+/** What to send the server for a given local state. */
+export function preferencePatch(tour: StoredTour): TourPreferencePatch {
+  return {
+    tourStatus: tour.status,
+    tourStep: Math.min(Math.max(tour.step ?? 0, 0), MAX_TOUR_STEP),
+    tourAlwaysShow: tour.alwaysShow === true,
+  };
+}
+
+/** The account's stored preferences, read as local tour state. */
+export function fromPreferences(preferences: UserPreferences): StoredTour {
+  return {
+    status: preferences.tourStatus ?? "not_started",
+    step:
+      typeof preferences.tourStep === "number" && preferences.tourStep >= 0
+        ? preferences.tourStep
+        : undefined,
+    alwaysShow: preferences.tourAlwaysShow === true ? true : undefined,
+  };
+}
+
+export interface Reconciled {
+  /** What both the cache and the start gate should now believe. */
+  tour: StoredTour;
+  /** Non-null when the server has to be told about local state — see below. */
+  push: TourPreferencePatch | null;
+}
+
+/**
+ * Decides, once per signed-in account, whether local state goes up or server
+ * state comes down.
+ *
+ * MIGRATE UP EXACTLY ONCE. `tourStatus === null` is the server saying it has
+ * never been told anything about this account — every user row starts that
+ * way, including the rows of owners who finished the tour back when it lived
+ * only in this keystore. Reading that null as "not_started" and carrying on
+ * would re-offer the tour to all of them, and the first thing the tour then
+ * wrote would bury the completed state for good. So a null adopts whatever is
+ * cached on this phone and sends it up; anything else wins over the cache,
+ * because it is the account's answer and this device's may be from another era.
+ */
+export function reconcile(local: StoredTour, preferences: UserPreferences): Reconciled {
+  if (preferences.tourStatus === null) {
+    return { tour: local, push: preferencePatch(local) };
+  }
+  return { tour: fromPreferences(preferences), push: null };
 }

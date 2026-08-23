@@ -1,11 +1,17 @@
 import { useState } from "react";
-import { Image, Pressable, ScrollView, Switch, View } from "react-native";
+import { Image, Pressable, ScrollView, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Card, ConfirmSheet, Screen, T } from "../components/ui";
+/*
+ * The row and section primitives are shared with the Settings screen rather
+ * than declared here, which is where they used to live — see
+ * components/SettingsList.tsx.
+ */
+import { Row, Section } from "../components/SettingsList";
 import { useAuth } from "../context/AuthContext";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
-import { useTourOptional } from "../context/TourContext";
-import { brand, font, ink, paper, space, statusText, TAP, typeScale } from "../theme/tokens";
+import { font, space, typeScale } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 
 /**
  * Everything that is not a daily task.
@@ -23,144 +29,16 @@ import { brand, font, ink, paper, space, statusText, TAP, typeScale } from "../t
  * and a medallion, which is what the eye actually returns to.
  */
 
-/** A group of destinations, under a heading that says what they have in common. */
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <View>
-      <T
-        variant="heading"
-        accessibilityRole="header"
-        style={{ color: brand[900], marginBottom: space.sm }}
-      >
-        {title}
-      </T>
-      <Card>{children}</Card>
-    </View>
-  );
-}
-
-function Row({
-  icon,
-  label,
-  detail,
-  onPress,
-  first,
-  /**
-   * Signing out is the one row here that ends something rather than opening
-   * something, and it is the only one an accidental tap costs anything.
-   */
-  destructive,
-  /**
-   * Turns the row into a setting rather than a destination: the chevron is
-   * replaced by a Switch and the row announces itself as a switch.
-   *
-   * WHY THE SWITCH IS NOT THE CONTROL. It is rendered inside a
-   * `pointerEvents="none"` wrapper, so the whole row — icon, label,
-   * explanation and switch — is one 52-point target driven by the row's own
-   * `onPress`. Letting the Switch handle its own touches as well would mean
-   * two things to tap that do the same job, with a real risk of the press
-   * firing twice, and would shrink the reliable target to the switch itself.
-   * This keeps one control, one state, and the roomy target a phone wants.
-   *
-   * Extended here rather than as a second, parallel row component so the
-   * spacing, the medallion, the two-line explanation and the hairline stay
-   * exactly what every other row in this screen uses.
-   */
-  toggle,
-}: {
-  icon: keyof typeof Ionicons.glyphMap;
-  label: string;
-  detail?: string;
-  onPress: () => void;
-  first?: boolean;
-  destructive?: boolean;
-  toggle?: { value: boolean };
-}) {
-  const tint = destructive ? statusText.critical : brand[700];
-  const surface = destructive ? "#fdecec" : brand[50];
-
-  return (
-    <Pressable
-      onPress={onPress}
-      accessibilityRole={toggle ? "switch" : "button"}
-      accessibilityState={toggle ? { checked: toggle.value } : undefined}
-      accessibilityLabel={detail ? `${label}. ${detail}` : label}
-      style={({ pressed }) => ({
-        flexDirection: "row",
-        alignItems: "center",
-        gap: space.md,
-        minHeight: TAP + 8,
-        paddingVertical: space.sm,
-        borderTopWidth: first ? 0 : 1,
-        borderTopColor: paper[200],
-        backgroundColor: pressed ? paper[100] : "transparent",
-      })}
-    >
-      {/*
-        Circular rather than the rounded square it was. A squircle reads as an
-        app icon — a thing you launch — and every one of these opens a screen
-        inside FinSight.
-      */}
-      <View
-        style={{
-          width: 38,
-          height: 38,
-          borderRadius: 19,
-          backgroundColor: surface,
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        <Ionicons name={icon} size={19} color={tint} />
-      </View>
-      <View style={{ flex: 1 }}>
-        <T
-          style={{
-            fontSize: typeScale.body,
-            color: destructive ? statusText.critical : ink[900],
-            fontFamily: destructive ? font.sansSemibold : font.sans,
-          }}
-        >
-          {label}
-        </T>
-        {/*
-          Two lines, not one. These descriptions are the only thing telling a
-          first-time owner what sits behind a word like "Privacy", and
-          truncating them at one line cut most of them mid-sentence.
-        */}
-        {detail ? (
-          <T variant="caption" numberOfLines={2} style={{ marginTop: 1, lineHeight: 16 }}>
-            {detail}
-          </T>
-        ) : null}
-      </View>
-      {toggle ? (
-        <View pointerEvents="none">
-          <Switch
-            value={toggle.value}
-            // Purely a state display — the row handles the press. See above.
-            onValueChange={onPress}
-            trackColor={{ false: ink[200], true: brand[600] }}
-            thumbColor={paper.DEFAULT}
-            ios_backgroundColor={ink[200]}
-          />
-        </View>
-      ) : (
-        <Ionicons name="chevron-forward" size={18} color={ink[300]} />
-      )}
-    </Pressable>
-  );
-}
-
 /** Initials, for an owner who has not set a photo. */
 function initialsOf(first: string, last: string): string {
   return `${first.trim().charAt(0)}${last.trim().charAt(0)}`.toUpperCase() || "?";
 }
 
 export function MoreScreen({ navigation }: any) {
+  const t = useTheme();
+  const { brand, ink } = t;
   const { profile, logout } = useAuth();
   const { selected, profiles } = useBusinessProfiles();
-  const tour = useTourOptional();
   const [signOutOpen, setSignOutOpen] = useState(false);
 
   return (
@@ -262,44 +140,26 @@ export function MoreScreen({ navigation }: any) {
             detail="Duplicates, large expenses, anything worth a look"
             onPress={() => navigation.navigate("Notifications")}
           />
+          {/*
+            ONE ROW, NOT A SECTION. What used to sit below this card as
+            "Preferences" was two tour switches; it is now three groups — the
+            tour, the daily message on Home, and light or dark — which is more
+            than a card on the way to Help and legal should be spending. A
+            destination keeps this screen a list of places, and puts the
+            settings somewhere an owner can be sent to ("open Settings")
+            rather than somewhere they have to be scrolled to.
+
+            It sits in this group rather than under Help because these are all
+            things about THIS owner's app, and because Settings is where
+            someone looks after they have looked at their account.
+          */}
+          <Row
+            icon="settings-outline"
+            label="Settings"
+            detail="The guided tour, Fin's daily message, and light or dark"
+            onPress={() => navigation.navigate("Settings")}
+          />
         </Section>
-
-        {/*
-          PREFERENCES, above Help & support.
-
-          It sits here because both rows are about how the app behaves for
-          this owner, which is a settings question, not a help question — and
-          because someone setting a phone up for a demo should meet the tour
-          switch before the FAQ list.
-
-          Only rendered where the tour actually exists. `useTourOptional`
-          returns null outside the signed-in navigator, and a switch that
-          silently stores nothing is worse than no switch.
-        */}
-        {tour ? (
-          <Section title="Preferences">
-            <Row
-              first
-              icon="play-circle-outline"
-              label="Always show the tour on login"
-              detail="Replays the guided tour every time you sign in. Meant for demos and setting up a new phone — leave it off once you know your way around."
-              toggle={{ value: tour.alwaysShow }}
-              onPress={() => tour.setAlwaysShow(!tour.alwaysShow)}
-            />
-            <Row
-              icon="refresh-outline"
-              label="Restart product tour"
-              detail="Walks through the app again from the beginning, starting on your Home screen"
-              onPress={() => {
-                tour.restart();
-                // The tour's targets are Home's and the tab bar's, so it opens
-                // there — restart() only re-arms it, and the gate does the rest
-                // once Home is focused with its figures in.
-                navigation.navigate("Dashboard");
-              }}
-            />
-          </Section>
-        ) : null}
 
         {/*
           Help and legal, in the app rather than on the website. Most owners

@@ -1,6 +1,7 @@
 import { View } from "react-native";
 import { T } from "../../../components/ui";
-import { brand, radius, space } from "../../../theme/tokens";
+import { radius, space } from "../../../theme/tokens";
+import { useTheme } from "../../../context/ThemeContext";
 
 /**
  * Where the owner is in the three steps.
@@ -11,6 +12,8 @@ import { brand, radius, space } from "../../../theme/tokens";
  * to stop.
  */
 export function ImportSteps({ current }: { current: 0 | 1 | 2 }) {
+  const t = useTheme();
+  const { brand } = t;
   const labels = ["Choose file", "Map columns", "Review rows"];
   return (
     <View style={{ marginBottom: space.md }}>

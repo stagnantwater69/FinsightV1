@@ -11,11 +11,13 @@ import { AskFinSightFab, FAB_CLEARANCE } from "../components/AskFinSightFab";
 import { AskFinSight } from "../components/AskFinSight";
 import { SpendingBreakdownCard } from "../components/SpendingBreakdownCard";
 import { SkeletonBox, SkeletonDashboard } from "../components/Skeleton";
+import { useAuth } from "../context/AuthContext";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useTourHomeStage } from "../context/TourContext";
 import { useTourScrollView, useTourTarget } from "../components/tour/targets";
 import { api, errorMessage } from "../lib/api";
-import { brand, ink, paper, radius, space, statusText, TAP, typeScale } from "../theme/tokens";
+import { TAP, radius, space, typeScale } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 import type { CashflowGranularity, DashboardCashflow, DashboardSummary } from "../lib/types";
 
 /** The dashboard summary (available funds, sales, expenses) is always this month — the period selector was removed. */
@@ -58,6 +60,8 @@ function FlowCard({
   sublabel: string;
   direction: "in" | "out";
 }) {
+  const t = useTheme();
+  const { brand, statusText } = t;
   const isIn = direction === "in";
   return (
     <Card
@@ -112,6 +116,8 @@ function GranularityDropdown({
   value: CashflowGranularity;
   onChange: (v: CashflowGranularity) => void;
 }) {
+  const t = useTheme();
+  const { brand, ink, paper } = t;
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<{ top: number; right: number } | null>(null);
   const anchorRef = useRef<View>(null);
@@ -203,6 +209,9 @@ function GranularityDropdown({
 }
 
 export function DashboardScreen({ navigation }: any) {
+  const t = useTheme();
+  const { brand } = t;
+  const { preferences } = useAuth();
   const { selected, profiles, categories, error: profilesError, refresh: refreshProfiles, selectProfile } =
     useBusinessProfiles();
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
@@ -445,7 +454,20 @@ export function DashboardScreen({ navigation }: any) {
           Fin's one-line note waits on this — as a skeleton inside the panel, so
           the card does not change height when the figures land.
         */}
-        <GreetingHero summary={loading ? null : summary} />
+        {/*
+          OFF IS OFF. "Show Fin's daily message" (Settings → Daily mascot
+          message) hides this panel and nothing else — Fin still introduces the
+          tour, still sits on the empty-dashboard illustration, and still
+          answers in Ask FinSight. This is the one unprompted daily message,
+          which is the only thing an owner is turning off.
+
+          `preferences` reads as the defaults until /auth/me answers, and that
+          default is ON — so the panel does not blink out of the top of Home
+          for a beat on every cold start.
+        */}
+        {preferences.showDashboardMascotMessage ? (
+          <GreetingHero summary={loading ? null : summary} />
+        ) : null}
 
         {!loading && summary ? (
           <SetupProgress

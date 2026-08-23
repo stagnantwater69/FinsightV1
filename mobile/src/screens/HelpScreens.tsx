@@ -14,7 +14,8 @@ import {
   type LegalSection,
 } from "../lib/helpContent";
 import { Button, Callout, Card, Screen, ScreenHeader, T } from "../components/ui";
-import { brand, font, ink, radius, space, TAP, typeScale } from "../theme/tokens";
+import { TAP, font, radius, space, typeScale } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 
 /**
  * Help and legal, in the app.
@@ -44,6 +45,8 @@ import { brand, font, ink, radius, space, TAP, typeScale } from "../theme/tokens
  * readers.
  */
 export function FaqsScreen() {
+  const t = useTheme();
+  const { ink } = t;
   const [open, setOpen] = useState<string | null>(null);
 
   return (
@@ -124,6 +127,8 @@ export function FaqsScreen() {
 // ---------------------------------------------------------------- Tutorials
 
 export function TutorialsScreen() {
+  const t = useTheme();
+  const { brand, ink } = t;
   return (
     <Screen>
       <ScrollView contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}>
@@ -133,8 +138,8 @@ export function TutorialsScreen() {
           subtitle="Step by step, from setting up your business to reading what the dashboard is telling you."
         />
 
-        {TUTORIALS.map((t) => (
-          <Card key={t.n} style={{ marginBottom: space.sm }}>
+        {TUTORIALS.map((tut) => (
+          <Card key={tut.n} style={{ marginBottom: space.sm }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: space.md }}>
               <View
                 style={{
@@ -147,19 +152,19 @@ export function TutorialsScreen() {
                 }}
               >
                 {/* Decorative — the step number is already in the heading order. */}
-                <T style={{ color: "#fff", fontSize: typeScale.bodySm, fontFamily: font.sansSemibold }} accessibilityElementsHidden>
-                  {t.n}
+                <T style={{ color: t.onBrandSolid, fontSize: typeScale.bodySm, fontFamily: font.sansSemibold }} accessibilityElementsHidden>
+                  {tut.n}
                 </T>
               </View>
               <T
                 accessibilityRole="header"
                 style={{ flex: 1, fontSize: typeScale.body, color: ink[900], fontFamily: font.sansSemibold }}
               >
-                {t.title}
+                {tut.title}
               </T>
             </View>
 
-            <T style={{ fontSize: typeScale.bodySm, lineHeight: 21, color: ink[600], marginTop: space.sm }}>{t.body}</T>
+            <T style={{ fontSize: typeScale.bodySm, lineHeight: 21, color: ink[600], marginTop: space.sm }}>{tut.body}</T>
 
             {/*
               A written marker, not a play button. A control that looks live
@@ -186,6 +191,8 @@ export function TutorialsScreen() {
  * do that the website's cannot.
  */
 export function ContactScreen({ navigation }: { navigation: { navigate: (screen: string) => void } }) {
+  const t = useTheme();
+  const { brand, ink } = t;
   return (
     <Screen>
       <ScrollView contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}>
@@ -274,6 +281,8 @@ function LegalScreen({
   sections: LegalSection[];
   disclaimer: string;
 }) {
+  const t = useTheme();
+  const { brand, ink } = t;
   return (
     <Screen>
       <ScrollView contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}>

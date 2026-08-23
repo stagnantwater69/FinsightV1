@@ -1,7 +1,8 @@
 import { Image, Pressable, ScrollView, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { T } from "../ui";
-import { font, radius, space, statusText, typeScale } from "../../theme/tokens";
+import { font, radius, space, typeScale } from "../../theme/tokens";
+import { useTheme } from "../../context/ThemeContext";
 import { sectionOrdinal, type ReceiptSection } from "../../lib/receiptCapture";
 
 /**
@@ -31,6 +32,8 @@ export function CapturedSectionStrip({
   onMove: (localId: string, delta: number) => void;
   onPreview: (localId: string) => void;
 }) {
+  const t = useTheme();
+  const { status } = t;
   if (sections.length === 0) return null;
 
   return (
@@ -80,7 +83,7 @@ export function CapturedSectionStrip({
                 paddingVertical: 1,
               }}
             >
-              <T style={{ fontFamily: font.monoMedium, fontSize: 9, color: "#ffffff" }}>{index + 1}</T>
+              <T style={{ fontFamily: font.monoMedium, fontSize: 9, color: t.onCamera }}>{index + 1}</T>
             </View>
           </Pressable>
 
@@ -98,14 +101,14 @@ export function CapturedSectionStrip({
               borderRadius: radius.full,
               // status.critical, the same red the app already uses for
               // destructive actions — not a new red chosen for this screen.
-              backgroundColor: "#d03b3b",
+              backgroundColor: status.critical,
               borderWidth: 1.5,
-              borderColor: "#1a2022",
+              borderColor: t.cameraSurface,
               alignItems: "center",
               justifyContent: "center",
             }}
           >
-            <Ionicons name="close" size={11} color="#ffffff" />
+            <Ionicons name="close" size={11} color={t.onCamera} />
           </Pressable>
 
           {/*
@@ -154,7 +157,11 @@ export function CapturedSectionStrip({
  * purchase.
  */
 export function SectionQualityWarning({ text }: { text: string }) {
+  const t = useTheme();
+  // `statusSolid`, not `statusText`: this label sits on the viewfinder, which
+  // is the same near-black plane in both themes, so its colour must not move
+  // with the app's theme either.
   return (
-    <T style={{ fontSize: typeScale.axis, color: statusText.warning, marginTop: 2, textAlign: "center" }}>{text}</T>
+    <T style={{ fontSize: typeScale.axis, color: t.statusSolid.warning, marginTop: 2, textAlign: "center" }}>{text}</T>
   );
 }

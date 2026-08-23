@@ -1,10 +1,11 @@
 import { ActivityIndicator, Pressable, View } from "react-native";
 import { Alert as AlertBanner, Button, Card, ErrorNote, T } from "./ui";
-import { Medallion, STATUS_SURFACE } from "./InsightsShared";
+import { Medallion } from "./InsightsShared";
 import { Ionicons } from "@expo/vector-icons";
 import { SIGNAL_COPY, findingSignalStrength } from "../lib/confidenceBands";
 import { findingCategory, quickActions, type FeedbackAction } from "../lib/findingFeedback";
-import { brand, font, ink, paper, radius, space, statusText, TAP, typeScale } from "../theme/tokens";
+import { TAP, font, radius, space, typeScale } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 import type { AnomalyFinding, AnomalyFindingPage, ExpenseBehavior } from "../lib/types";
 
 /**
@@ -33,6 +34,8 @@ export function ExpenseAlertsSection({
   reviewFinding: (id: number, action: FeedbackAction) => void | Promise<void>;
   onOtherAnswers: (finding: AnomalyFinding) => void;
 }) {
+  const t = useTheme();
+  const { brand, ink, paper, statusText } = t;
   /*
     NOTHING FLAGGED is a result, not an absence.
 
@@ -50,7 +53,7 @@ export function ExpenseAlertsSection({
               width: 84,
               height: 84,
               borderRadius: 42,
-              backgroundColor: STATUS_SURFACE.good,
+              backgroundColor: t.statusSurface.good,
               alignItems: "center",
               justifyContent: "center",
               marginBottom: space.lg,
@@ -145,7 +148,7 @@ export function ExpenseAlertsSection({
                   <Medallion
                     icon={duplicate ? "copy-outline" : "alert-circle-outline"}
                     tint={duplicate ? statusText.warning : statusText.critical}
-                    surface={duplicate ? STATUS_SURFACE.warning : STATUS_SURFACE.critical}
+                    surface={duplicate ? t.statusSurface.warning : t.statusSurface.critical}
                   />
                   <View style={{ flex: 1 }}>
                     <T style={{ fontSize: typeScale.bodySm, color: ink[900], fontFamily: font.sansSemibold }}>

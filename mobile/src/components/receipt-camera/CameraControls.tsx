@@ -1,7 +1,8 @@
 import { ActivityIndicator, Pressable, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { T } from "../ui";
-import { ACCENT, brand, font, radius, space, TAP, typeScale } from "../../theme/tokens";
+import { TAP, font, radius, space, typeScale } from "../../theme/tokens";
+import { useTheme } from "../../context/ThemeContext";
 
 /**
  * The camera's chrome: the row above the preview and the row below it.
@@ -12,12 +13,19 @@ import { ACCENT, brand, font, radius, space, TAP, typeScale } from "../../theme/
  *   - the shutter wears `ACCENT.fill` with `ACCENT.onFill` on it, because the
  *     token file reserves amber for primary calls to action and capturing a
  *     section is unambiguously this screen's primary action;
- *   - "Finish" wears `brand[600]` and NOT amber, even though it is also a
+ *   - "Finish" wears `brandFill` and NOT amber, even though it is also a
  *     call to action. Two amber controls on one screen means neither is the
  *     one thing to press, and the shutter has the better claim: an owner
  *     mid-receipt presses it several times and Finish once.
  *
  * Nothing here introduces a colour that is not already in the token file.
+ *
+ * THEME-INDEPENDENT, DELIBERATELY. Everything on this screen sits over live
+ * video on a near-black plane (`cameraSurface`), which is the same in Light
+ * and in Dark — a viewfinder is a lens, not a page. So the three washes below
+ * stay literal, and the tokens used here are the ones that do not move
+ * between themes: `ACCENT.fill`/`onFill`, `brandFill`/`onBrandFill`, and
+ * `brand[400]`, which is the app's brand-on-a-dark-surface step in both.
  */
 
 const CONTROL_BG = "rgba(26,32,34,0.55)";
@@ -92,6 +100,8 @@ export function CameraBottomBar({
   /** False at the section ceiling. */
   canCapture: boolean;
 }) {
+  const t = useTheme();
+  const { ACCENT } = t;
   return (
     <View
       style={{
@@ -174,7 +184,7 @@ export function CameraBottomBar({
             flexDirection: "row",
             alignItems: "center",
             gap: 6,
-            backgroundColor: brand[600],
+            backgroundColor: t.brandFill,
             paddingVertical: 10,
             paddingLeft: 12,
             paddingRight: 14,
@@ -183,8 +193,8 @@ export function CameraBottomBar({
             opacity: pressed ? 0.85 : 1,
           })}
         >
-          <Ionicons name="checkmark" size={16} color="#ffffff" />
-          <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.caption, color: "#ffffff" }}>Finish</T>
+          <Ionicons name="checkmark" size={16} color={t.onBrandFill} />
+          <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.caption, color: t.onBrandFill }}>Finish</T>
         </Pressable>
       ) : (
         // Holds the shutter centred before there is anything to finish.
@@ -205,6 +215,8 @@ function RoundButton({
   onPress: () => void;
   active?: boolean;
 }) {
+  const t = useTheme();
+  const { ACCENT } = t;
   return (
     <Pressable
       onPress={onPress}
@@ -260,6 +272,8 @@ export function GuideToggle({ hidden, onToggle }: { hidden: boolean; onToggle: (
 
 /** The ceiling notice, shown in place of the instruction once eight are taken. */
 export function SectionLimitNotice() {
+  const t = useTheme();
+  const { ACCENT } = t;
   return (
     <View
       style={{

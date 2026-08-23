@@ -12,7 +12,8 @@ import { CropEditor } from "./CropEditor";
 import { GuideInstruction, ReceiptGuide } from "./ReceiptGuide";
 import { api } from "../../lib/api";
 import * as haptics from "../../lib/haptics";
-import { ink, space } from "../../theme/tokens";
+import { space } from "../../theme/tokens";
+import { useTheme } from "../../context/ThemeContext";
 import {
   CAPTURE_QUALITY,
   canAddSection,
@@ -74,6 +75,7 @@ export function ReceiptCamera({
   /** Handed the finished session, in reading order. Never called empty. */
   onDone: (sections: ReceiptSection[]) => void;
 }) {
+  const t = useTheme();
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null);
 
@@ -388,7 +390,7 @@ export function ReceiptCamera({
   const atLimit = !canAddSection(sections.length);
 
   return (
-    <View style={{ flex: 1, backgroundColor: ink[900] }}>
+    <View style={{ flex: 1, backgroundColor: t.cameraSurface }}>
       {/*
         The preview is mounted only in camera mode. Leaving a CameraView alive
         behind the crop editor keeps the sensor and the torch running for a

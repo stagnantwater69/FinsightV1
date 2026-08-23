@@ -1,7 +1,15 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, errorMessage } from "../lib/api";
 import { supabase } from "../lib/supabase";
-import type { BusinessProfile, LoginInput, Profile, RegisterInput, UpdateProfileInput } from "../lib/types";
+import { commitPreferences, DEFAULT_PREFERENCES } from "../lib/preferences";
+import type {
+  BusinessProfile,
+  LoginInput,
+  Profile,
+  RegisterInput,
+  UpdateProfileInput,
+  UserPreferences,
+} from "../lib/types";
 
 /**
  * Session state.
@@ -53,6 +61,24 @@ interface AuthValue {
    * it was fetched for.
    */
   takeBootstrapProfiles: () => Promise<BusinessProfile[]> | null;
+  /**
+   * Account-level preferences — Settings, Home's greeting panel and the
+   * product tour all read these, and they all read THIS copy.
+   *
+   * Never null: an account whose preferences have not arrived yet reads as the
+   * defaults, so no caller has to branch on a loading state to decide whether
+   * to render. `preferencesLoaded` exists for the one caller that genuinely
+   * must wait — the tour, which cannot safely reconcile local progress against
+   * an answer it does not have yet.
+   */
+  preferences: UserPreferences;
+  preferencesLoaded: boolean;
+  /**
+   * Writes a PARTIAL preference change, optimistically; rejects, having put
+   * the previous value back, if the account refuses it. See lib/preferences.ts
+   * for why it is partial and why it rolls back.
+   */
+  updatePreferences: (patch: Partial<UserPreferences>) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthValue | undefined>(undefined);
@@ -68,6 +94,10 @@ async function fetchProfile(): Promise<Profile | null> {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
+  // `null` is "not loaded", which is why this is not simply seeded with the
+  // defaults — the tour has to be able to tell the two apart before it decides
+  // whether to take over someone's screen.
+  const [preferences, setPreferences] = useState<UserPreferences | null>(null);
   const bootstrapProfiles = useRef<Promise<BusinessProfile[]> | null>(null);
 
   const takeBootstrapProfiles = useCallback(() => {
@@ -106,6 +136,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // shown to someone the app could not identify.
         bootstrapProfiles.current = profiles;
         setProfile(me);
+        // Preferences ride on /auth/me, so the cold start pays nothing extra
+        // for them.
+        setPreferences(me.preferences ?? DEFAULT_PREFERENCES);
       } finally {
         if (active) setLoading(false);
       }
@@ -115,6 +148,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (event === "SIGNED_OUT") {
         bootstrapProfiles.current = null;
         setProfile(null);
+        setPreferences(null);
       }
     });
 
@@ -141,6 +175,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       input
     );
     await applySession(data.session, data.profile);
+    /*
+     * POST /auth/login answers with the identity block only — preferences ride
+     * on GET /auth/me, and web does the same rather than widening the login
+     * response both clients ship against.
+     *
+     * Deliberately not awaited: nothing on the first screen after sign-in is
+     * blocked on a preference, and making the owner wait an extra round trip
+     * to get past the login form would be paying for the wrong thing. The one
+     * caller that must wait checks `preferencesLoaded`.
+     */
+    void api
+      .get<Profile>("/auth/me")
+      .then((me) => setPreferences(me.preferences ?? DEFAULT_PREFERENCES))
+      .catch(() => setPreferences(DEFAULT_PREFERENCES));
   }
 
   async function register(input: RegisterInput) {
@@ -179,11 +227,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Nothing fetched under the old token may survive into the next session.
     bootstrapProfiles.current = null;
     setProfile(null);
+    setPreferences(null);
   }
 
   async function updateProfile(input: UpdateProfileInput) {
     setProfile(await api.patch<Profile>("/auth/me", input));
   }
+
+  /*
+   * STABLE IDENTITY, deliberately — hence the ref rather than reading
+   * `preferences` from the closure.
+   *
+   * TourContext holds this in a `useCallback` and lists that callback in an
+   * effect's dependencies. A function rebuilt on every render would change
+   * that dependency every time a preference write re-rendered this provider,
+   * which is a PATCH per render for as long as the tour is on screen. The ref
+   * carries the current value in without putting it in the identity.
+   */
+  const preferencesRef = useRef<UserPreferences | null>(null);
+  preferencesRef.current = preferences;
+
+  const updatePreferences = useCallback(async (patch: Partial<UserPreferences>) => {
+    await commitPreferences({
+      current: preferencesRef.current,
+      patch,
+      apply: setPreferences,
+      // The response is the whole preferences object rather than an echo of
+      // the patch, so this also picks up anything another device changed.
+      send: (body) => api.patch<UserPreferences>("/auth/me/preferences", body),
+    });
+  }, []);
 
   /**
    * Changes the password and STAYS SIGNED IN. Other devices are signed out.
@@ -215,6 +288,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         changePassword,
         setProfileFromServer: setProfile,
         takeBootstrapProfiles,
+        preferences: preferences ?? DEFAULT_PREFERENCES,
+        preferencesLoaded: preferences !== null,
+        updatePreferences,
       }}
     >
       {children}

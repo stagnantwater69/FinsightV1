@@ -1,5 +1,5 @@
 import { View } from "react-native";
-import { brand } from "../../theme/tokens";
+import { useTheme } from "../../context/ThemeContext";
 import type { Corners, Point } from "../../lib/receiptCapture";
 
 /**
@@ -22,7 +22,7 @@ export function DetectedOutline({
   corners,
   toScreen,
   thickness = 2,
-  color = brand[400],
+  color,
 }: {
   corners: Corners;
   /** Maps a point in IMAGE pixels to a point in the drawing box. */
@@ -30,6 +30,12 @@ export function DetectedOutline({
   thickness?: number;
   color?: string;
 }) {
+  const t = useTheme();
+  // brand[400] is the app's brand-on-a-dark-surface step and does not move
+  // between themes — the viewfinder is black in both, so the outline is the
+  // same teal in both. Defaulted here rather than in the signature because a
+  // parameter default cannot read the palette.
+  const stroke = color ?? t.brand[400];
   const points = CORNER_ORDER.map((key) => toScreen(corners[key]));
 
   return (
@@ -55,7 +61,7 @@ export function DetectedOutline({
               top: from.y,
               width: length,
               height: thickness,
-              backgroundColor: color,
+              backgroundColor: stroke,
               transform: [{ translateY: -thickness / 2 }, { rotateZ: `${angle}deg` }],
               transformOrigin: "left center",
             }}

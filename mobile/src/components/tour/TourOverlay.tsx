@@ -11,7 +11,8 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Button, T } from "../ui";
-import { brand, ink, paper, radius, space, TAP } from "../../theme/tokens";
+import { TAP, radius, space } from "../../theme/tokens";
+import { useTheme } from "../../context/ThemeContext";
 import { useReducedMotion } from "../../lib/useReducedMotion";
 // From the context object rather than from the provider that renders this
 // component: importing the provider here would be a require cycle.
@@ -105,9 +106,13 @@ const SCROLL_SETTLE_MS = 420;
  */
 const QUICK_ADD_SETTLE_MS = 240;
 /** The scrim. ink[900] at the same weight the app's other modal backdrops use. */
+/** The scrim. Fixed rather than themed: the tour dims the whole app, and a
+ *  lighter dim on a dark page would not read as a spotlight at all. */
 const SCRIM = "rgba(26,32,34,0.55)";
 
 export function TourOverlay() {
+  const t = useTheme();
+  const { brand, ink, paper } = t;
   const tour = useTourOptional();
   const insets = useSafeAreaInsets();
   const reduceMotion = useReducedMotion();

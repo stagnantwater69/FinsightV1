@@ -2,7 +2,8 @@ import { useMemo, useRef, useState } from "react";
 import { Image, PanResponder, Pressable, useWindowDimensions, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Button, SelectChip, T } from "../ui";
-import { brand, ink, radius, space, TAP } from "../../theme/tokens";
+import { TAP, radius, space } from "../../theme/tokens";
+import { useTheme } from "../../context/ThemeContext";
 import { CORNER_ORDER, DetectedOutline } from "./DetectedOutline";
 import {
   clampToImage,
@@ -64,6 +65,8 @@ export function CropEditor({
   onApply: (corners: Corners) => void;
   busy: boolean;
 }) {
+  const t = useTheme();
+  const { brand } = t;
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
 
   const [corners, setCorners] = useState<Corners>(() =>
@@ -110,9 +113,9 @@ export function CropEditor({
   const preselected = detectedCorners !== null && corners !== undefined && edgeConfidence !== null;
 
   return (
-    <View style={{ flex: 1, backgroundColor: ink[900] }}>
+    <View style={{ flex: 1, backgroundColor: t.cameraSurface }}>
       <View style={{ paddingHorizontal: space.lg, paddingTop: space.md, paddingBottom: space.sm }}>
-        <T variant="title" style={{ color: "#ffffff" }}>
+        <T variant="title" style={{ color: t.onCamera }}>
           Crop the receipt
         </T>
         <T style={{ color: "rgba(255,255,255,0.66)", fontSize: 12.5, lineHeight: 18, marginTop: 2 }}>
@@ -350,6 +353,8 @@ function CornerHandle({
   /** The screen-reader path: grow or shrink the crop from this corner. */
   onAdjust: (direction: "increment" | "decrement") => void;
 }) {
+  const t = useTheme();
+  const { brand } = t;
   const start = useRef<Point>(startValue);
   const latest = useRef<Point>(startValue);
   latest.current = startValue;

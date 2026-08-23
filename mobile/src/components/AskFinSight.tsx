@@ -31,7 +31,8 @@ import { useAiChat } from "../context/AiChatContext";
 import * as haptics from "../lib/haptics";
 import { formatMoney } from "../lib/money";
 import { useReducedMotion } from "../lib/useReducedMotion";
-import { brand, font, ink, paper, radius, space, TAP, typeScale } from "../theme/tokens";
+import { TAP, font, radius, space, typeScale } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 import type { ChatMessage, InteractionModule } from "../lib/types";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
 
@@ -100,6 +101,8 @@ export function AskFinSight({
    */
   module: InteractionModule;
 }) {
+  const t = useTheme();
+  const { brand, ink, paper } = t;
   const chat = useAiChat();
   const active = chat.conversations.find((c) => c.id === chat.activeId) ?? null;
   const copy = MODULE_COPY[active?.originModule ?? module];
@@ -286,6 +289,9 @@ export function AskFinSight({
       <Animated.View
         style={[
           StyleSheet.absoluteFill,
+          // A literal rather than `scrim`: this backdrop is animated through
+          // `opacity`, so it needs an OPAQUE colour, and near-black is the
+          // right one behind a sheet on either theme.
           { backgroundColor: "#0b1416", opacity: backdrop },
         ]}
       >
@@ -311,7 +317,13 @@ export function AskFinSight({
           transform: [{ translateY }],
         }}
       >
-        <View style={{ backgroundColor: brand[800], paddingHorizontal: space.lg, paddingBottom: space.lg }}>
+        {/*
+          The header plane is dark teal in BOTH themes — `brandSolid`, not the
+          brand ramp, for the reason the raised + button gives in App.tsx.
+          Everything drawn on it therefore wears the fixed `onBrandSolid`
+          pair rather than a theme-resolved ink.
+        */}
+        <View style={{ backgroundColor: t.brandSolidPressed, paddingHorizontal: space.lg, paddingBottom: space.lg }}>
           {/*
             The drag handle, and the ONLY part that responds to a drag. Putting
             the pan responder on the whole sheet would make it fight the
@@ -319,7 +331,7 @@ export function AskFinSight({
             close the sheet instead.
           */}
           <View {...dragHandlers} style={{ paddingVertical: space.md, alignItems: "center" }}>
-            <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: brand[500] }} />
+            <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: t.brand[400] }} />
           </View>
 
           {/*
@@ -340,12 +352,12 @@ export function AskFinSight({
               hitSlop={8}
               style={{ minWidth: TAP, minHeight: TAP, alignItems: "flex-start", justifyContent: "center" }}
             >
-              <Ionicons name={historyOpen ? "chevron-back" : "time-outline"} size={22} color="#fff" />
+              <Ionicons name={historyOpen ? "chevron-back" : "time-outline"} size={22} color={t.onBrandSolid} />
             </Pressable>
 
             <T
               numberOfLines={1}
-              style={{ color: "#fff", fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg, flex: 1 }}
+              style={{ color: t.onBrandSolid, fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg, flex: 1 }}
             >
               {historyOpen ? "Chat history" : active ? active.title : `✦ ${copy.title}`}
             </T>
@@ -364,7 +376,7 @@ export function AskFinSight({
               hitSlop={8}
               style={{ minWidth: TAP, minHeight: TAP, alignItems: "center", justifyContent: "center" }}
             >
-              <Ionicons name="create-outline" size={22} color="#fff" />
+              <Ionicons name="create-outline" size={22} color={t.onBrandSolid} />
             </Pressable>
 
             <Pressable
@@ -374,10 +386,10 @@ export function AskFinSight({
               hitSlop={12}
               style={{ minWidth: TAP, minHeight: TAP, alignItems: "flex-end", justifyContent: "center" }}
             >
-              <T style={{ color: "#fff", fontSize: 22 }}>×</T>
+              <T style={{ color: t.onBrandSolid, fontSize: 22 }}>×</T>
             </Pressable>
           </View>
-          <T style={{ color: brand[50], fontSize: typeScale.caption, marginTop: space.sm, lineHeight: 18 }}>
+          <T style={{ color: t.onBrandSolidMuted, fontSize: typeScale.caption, marginTop: space.sm, lineHeight: 18 }}>
             {historyOpen ? "Pick up an earlier thread, or long-press one to rename or delete it." : copy.scope}
           </T>
         </View>
@@ -549,13 +561,15 @@ export function AskFinSight({
 }
 
 function Bubble({ from, children }: { from: "ai" | "user"; children: React.ReactNode }) {
+  const t = useTheme();
+  const { brand } = t;
   const isUser = from === "user";
   return (
     <View style={{ alignItems: isUser ? "flex-end" : "flex-start" }}>
       <View
         style={{
           maxWidth: "88%",
-          backgroundColor: isUser ? brand[600] : paper.DEFAULT,
+          backgroundColor: isUser ? t.brandFill : t.surface,
           borderWidth: isUser ? 0 : 1,
           borderColor: brand[100],
           borderRadius: radius.lg,
@@ -563,7 +577,7 @@ function Bubble({ from, children }: { from: "ai" | "user"; children: React.React
           paddingVertical: space.sm,
         }}
       >
-        <T style={{ color: isUser ? "#fff" : ink[700], fontSize: typeScale.bodySm, lineHeight: 20 }}>{children}</T>
+        <T style={{ color: isUser ? t.onBrandFill : t.textSecondary, fontSize: typeScale.bodySm, lineHeight: 20 }}>{children}</T>
       </View>
     </View>
   );

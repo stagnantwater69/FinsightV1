@@ -2,7 +2,8 @@ import { useState } from "react";
 import { Pressable, View } from "react-native";
 import { Card, Callout, Field, T } from "../../../components/ui";
 import { Ionicons } from "@expo/vector-icons";
-import { font, ink, paper, space, status, statusText, TAP, typeScale } from "../../../theme/tokens";
+import { TAP, font, space, typeScale } from "../../../theme/tokens";
+import { useTheme } from "../../../context/ThemeContext";
 import type { AnalysedRow, CorrectableField } from "../../../lib/csvImport";
 import { FIELD_LIMITS } from "../../../lib/fieldLimits";
 import { FIELD_LABELS } from "./constants";
@@ -29,6 +30,8 @@ export function ReviewRowCard({
   corrected: Partial<Record<CorrectableField, string>>;
   onCorrect: (field: CorrectableField, value: string) => void;
 }) {
+  const t = useTheme();
+  const { ink, paper, statusText, status } = t;
   const [open, setOpen] = useState(row.problem !== null);
   const broken = row.problem !== null;
 

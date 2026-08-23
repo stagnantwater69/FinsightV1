@@ -15,7 +15,8 @@ import * as haptics from "../lib/haptics";
 import { CONVERSATION_TITLE_MAX } from "../lib/chatStore";
 import { groupConversations } from "../lib/conversationGroups";
 import { useReducedMotion } from "../lib/useReducedMotion";
-import { brand, ink, paper, radius, space, TAP, typeScale } from "../theme/tokens";
+import { TAP, radius, space, typeScale } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 import type { Conversation } from "../lib/types";
 
 /**
@@ -54,6 +55,8 @@ export function ChatHistoryPanel({
   onRename: (id: number, title: string) => void;
   onDelete: (conversation: Conversation) => void;
 }) {
+  const t = useTheme();
+  const { brand, ink, paper } = t;
   const sections = groupConversations(conversations).map((group) => ({
     title: group.label,
     data: group.conversations,
@@ -186,6 +189,8 @@ function ConversationRow({
   onRename: (title: string) => void;
   onDelete: () => void;
 }) {
+  const t = useTheme();
+  const { brand, ink, paper } = t;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(conversation.title);
 

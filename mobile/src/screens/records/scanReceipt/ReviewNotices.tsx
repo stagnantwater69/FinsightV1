@@ -1,6 +1,7 @@
 import { View } from "react-native";
 import { Card, T } from "../../../components/ui";
-import { brand, font, ink, paper, space, status, statusText, typeScale } from "../../../theme/tokens";
+import { font, space, typeScale } from "../../../theme/tokens";
+import { useTheme } from "../../../context/ThemeContext";
 import type { ReviewNotice } from "./types";
 
 /**
@@ -20,6 +21,8 @@ import type { ReviewNotice } from "./types";
  * sit under a heading that says what they are.
  */
 export function ReviewNotices({ notices }: { notices: ReviewNotice[] }) {
+  const t = useTheme();
+  const { brand, ink, paper, statusText, status } = t;
   if (notices.length === 0) return null;
 
   const worst = notices.some((n) => n.tone === "warn") ? "warn" : "info";

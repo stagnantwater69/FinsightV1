@@ -4,7 +4,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { errorMessage } from "../lib/api";
 import { Button, Card, EmptyState, ErrorNote, Field, Screen, ScreenHeader, T } from "../components/ui";
-import { brand, font, ink, paper, radius, space, TAP, typeScale } from "../theme/tokens";
+import { TAP, font, radius, space, typeScale } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 import type { ExpenseCategory } from "../lib/types";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
 
@@ -27,6 +28,8 @@ import { FIELD_LIMITS } from "../lib/fieldLimits";
  * records a category holds.
  */
 export function CategoriesScreen({ navigation }: { navigation: { navigate: (screen: string, params?: object) => void } }) {
+  const t = useTheme();
+  const { brand, ink, paper } = t;
   const { selected, categories, createCategory } = useBusinessProfiles();
 
   const [keyword, setKeyword] = useState("");
@@ -213,6 +216,8 @@ function CategoryRow({
   category: ExpenseCategory;
   onOpenRecords: () => void;
 }) {
+  const t = useTheme();
+  const { brand, ink, paper } = t;
   return (
     <Pressable
       onPress={onOpenRecords}

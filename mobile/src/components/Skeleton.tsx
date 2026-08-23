@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
 import { Animated, View, ViewStyle } from "react-native";
 import { useReducedMotion } from "../lib/useReducedMotion";
-import { paper, radius, space } from "../theme/tokens";
+import { radius, space } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 
 /** The two ends of the pulse, and the point it rests at when it must not pulse. */
 const DIM = 0.3;
@@ -19,6 +20,8 @@ export function SkeletonBox({
   borderRadius?: number;
   style?: ViewStyle;
 }) {
+  const t = useTheme();
+  const { paper } = t;
   const opacity = useRef(new Animated.Value(DIM)).current;
   const reduceMotion = useReducedMotion();
 
@@ -75,6 +78,8 @@ export function SkeletonBox({
 }
 
 export function SkeletonCard({ style }: { style?: ViewStyle }) {
+  const t = useTheme();
+  const { paper } = t;
   return (
     <View
       style={[
@@ -113,6 +118,8 @@ export function SkeletonDashboard() {
 }
 
 export function SkeletonList({ count = 5 }: { count?: number }) {
+  const t = useTheme();
+  const { paper } = t;
   return (
     <View style={{ gap: space.sm }}>
       {Array.from({ length: count }).map((_, i) => (

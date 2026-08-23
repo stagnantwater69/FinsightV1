@@ -4,7 +4,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { Card, Money, T } from "../../components/ui";
 import { formatMoney } from "../../lib/money";
 import * as haptics from "../../lib/haptics";
-import { brand, font, ink, radius, space, statusText, typeScale } from "../../theme/tokens";
+import { font, radius, space, typeScale } from "../../theme/tokens";
+import { useTheme } from "../../context/ThemeContext";
 import { RECORD_SOURCE_LABELS, type RecordItem, type RecordSource } from "../../lib/types";
 import { badges } from "./shared";
 
@@ -75,6 +76,8 @@ export function RecordCard({
   onDelete?: () => void;
   onResolve?: () => void;
 }) {
+  const t = useTheme();
+  const { brand, ink, statusText } = t;
   /*
    * Swipe reveals; it never acts on its own.
    *

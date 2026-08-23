@@ -3,7 +3,8 @@ import { Image, Modal, Pressable, ScrollView, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { T } from "./ui";
 import { useTourTarget } from "./tour/targets";
-import { brand, font, ink, paper, radius, space, statusText, TAP, typeScale } from "../theme/tokens";
+import { TAP, font, radius, space, typeScale } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 import type { BusinessProfile } from "../lib/types";
 import * as haptics from "../lib/haptics";
 
@@ -13,11 +14,12 @@ import * as haptics from "../lib/haptics";
  * this is the thing a switcher's rows are told apart by.
  */
 function Avatar({ profile, size = 40 }: { profile: BusinessProfile; size?: number }) {
+  const t = useTheme();
   if (profile.logoUrl) {
     return (
       <Image
         source={{ uri: profile.logoUrl }}
-        style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: paper[200] }}
+        style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: t.surfaceStrong }}
       />
     );
   }
@@ -27,12 +29,12 @@ function Avatar({ profile, size = 40 }: { profile: BusinessProfile; size?: numbe
         width: size,
         height: size,
         borderRadius: size / 2,
-        backgroundColor: brand[600],
+        backgroundColor: t.brandFill,
         alignItems: "center",
         justifyContent: "center",
       }}
     >
-      <T style={{ color: "#fff", fontFamily: font.displayBold, fontSize: size * 0.42 }}>
+      <T style={{ color: t.onBrandFill, fontFamily: font.displayBold, fontSize: size * 0.42 }}>
         {profile.name.trim().charAt(0).toUpperCase() || "?"}
       </T>
     </View>
@@ -65,6 +67,8 @@ export function HomeHeader({
   unreadCount: number;
   onBellPress: () => void;
 }) {
+  const t = useTheme();
+  const { ink, paper } = t;
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const canSwitch = profiles.length > 1;
 
@@ -147,14 +151,16 @@ export function HomeHeader({
                   height: 16,
                   borderRadius: 8,
                   paddingHorizontal: 3,
-                  backgroundColor: statusText.critical,
+                  // `statusSolid`, not `statusText`: this pill carries white
+                  // ink, so it must stay a colour white can sit on.
+                  backgroundColor: t.statusSolid.critical,
                   alignItems: "center",
                   justifyContent: "center",
                   borderWidth: 1.5,
-                  borderColor: paper.DEFAULT,
+                  borderColor: t.surface,
                 }}
               >
-                <T style={{ color: "#fff", fontSize: 9, fontFamily: font.sansSemibold, lineHeight: 11 }}>
+                <T style={{ color: t.textOnFill, fontSize: 9, fontFamily: font.sansSemibold, lineHeight: 11 }}>
                   {unreadCount > 9 ? "9+" : unreadCount}
                 </T>
               </View>
@@ -169,7 +175,7 @@ export function HomeHeader({
         transparent
         onRequestClose={() => setSwitcherOpen(false)}
       >
-        <View style={{ flex: 1, backgroundColor: "rgba(10,16,17,0.5)" }}>
+        <View style={{ flex: 1, backgroundColor: t.scrim }}>
           <Pressable
             style={{ flex: 1 }}
             onPress={() => setSwitcherOpen(false)}
@@ -217,7 +223,7 @@ export function HomeHeader({
                   <T style={{ flex: 1, fontSize: typeScale.body, color: ink[900] }} numberOfLines={1}>
                     {p.name}
                   </T>
-                  {p.id === selected.id ? <Ionicons name="checkmark" size={18} color={brand[600]} /> : null}
+                  {p.id === selected.id ? <Ionicons name="checkmark" size={18} color={t.brand[600]} /> : null}
                 </Pressable>
               ))}
             </ScrollView>

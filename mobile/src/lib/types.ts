@@ -23,6 +23,36 @@ export interface Profile {
   /** A public URL for the owner's photo, or null if they haven't set one. */
   avatarUrl: string | null;
   createdAt: string;
+  /**
+   * Only GET /auth/me carries this. The sibling writers — PATCH /auth/me and
+   * the avatar upload — answer with the bare identity block, so this is
+   * optional at the type level rather than a lie the moment a name is saved.
+   * AuthContext keeps preferences in their own state for that reason; nothing
+   * should read them off `profile`.
+   */
+  preferences?: UserPreferences;
+}
+
+/** The four tour states the server accepts (TOUR_STATUSES in auth.controller.ts). */
+export type TourStatus = "not_started" | "in_progress" | "completed" | "skipped";
+
+/**
+ * Account-level preferences, stored on the user row and shared across devices.
+ *
+ * `tourStatus`/`tourStep` are nullable and that null is load-bearing: it means
+ * "the server has never been told anything about this account's tour", which is
+ * what lets a client push locally stored progress up exactly once instead of
+ * having a server default overwrite a tour someone already finished. See
+ * lib/tourStorage.ts.
+ *
+ * Appearance is deliberately NOT here — it is a per-device choice and stays in
+ * the keystore (see lib/themeStore.ts).
+ */
+export interface UserPreferences {
+  showDashboardMascotMessage: boolean;
+  tourStatus: TourStatus | null;
+  tourStep: number | null;
+  tourAlwaysShow: boolean;
 }
 
 export interface AuthSession {

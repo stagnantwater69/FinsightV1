@@ -7,7 +7,7 @@ import { Callout, Card, DropdownPill, ErrorNote, Money, OptionSheet, Screen, T }
 import { CategoryChange, CategoryComparison, SpendTrend } from "../components/charts";
 import { AskFinSight } from "../components/AskFinSight";
 import { AskFinSightFab, FAB_CLEARANCE } from "../components/AskFinSightFab";
-import { DeltaPill, InsightHeader, Medallion, STATUS_SURFACE, SubTabs } from "../components/InsightsShared";
+import { DeltaPill, InsightHeader, Medallion, SubTabs } from "../components/InsightsShared";
 import { ExpenseAlertsSection } from "../components/ExpenseAlertsSection";
 import { ExpenseRecurringSection } from "../components/ExpenseRecurringSection";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
@@ -17,7 +17,8 @@ import { formatMoney } from "../lib/money";
 import { recurringAvailability } from "../lib/recurringAgenda";
 import { findingCategory, feedbackActions, type FeedbackAction } from "../lib/findingFeedback";
 import { useInsight } from "../lib/useInsight";
-import { brand, font, ink, paper, space, statusText, TAP, typeScale } from "../theme/tokens";
+import { TAP, font, space, typeScale } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 import type {
   AnomalyFinding,
   AnomalyFindingPage,
@@ -52,6 +53,8 @@ const ANCHOR_PERIOD = -1;
 const TREND_PREVIEW_COUNT = 4;
 
 export function ExpenseBehaviorScreen({ navigation }: any) {
+  const t = useTheme();
+  const { brand, ink, paper, statusText } = t;
   const { selected } = useBusinessProfiles();
   const [periodDays, setPeriodDays] = useState(30);
   /**
@@ -456,7 +459,7 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
                         paddingHorizontal: space.sm,
                         paddingVertical: 2,
                         borderRadius: 11,
-                        backgroundColor: periodDelta >= 0 ? STATUS_SURFACE.serious : STATUS_SURFACE.good,
+                        backgroundColor: periodDelta >= 0 ? t.statusSurface.serious : t.statusSurface.good,
                       }}
                     >
                       <Ionicons

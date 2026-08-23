@@ -10,12 +10,15 @@ import { AskFinSightFab, FAB_CLEARANCE } from "../components/AskFinSightFab";
 import { InsightHeader, Medallion } from "../components/InsightsShared";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useInsight } from "../lib/useInsight";
-import { brand, font, paper, space, statusText, typeScale } from "../theme/tokens";
+import { font, space, typeScale } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 import type { RecoveryInsight } from "../lib/types";
 
 // ---------------------------------------------------------------- Recovery target
 
 export function RecoveryTargetScreen({ navigation }: any) {
+  const t = useTheme();
+  const { brand, paper, statusText } = t;
   const { selected } = useBusinessProfiles();
   const [askOpen, setAskOpen] = useState(false);
   const { data, loading, error } = useInsight<RecoveryInsight>(
@@ -191,6 +194,8 @@ function Row({
   /** Drops the top rule, so the list does not open with one under a caption. */
   first?: boolean;
 }) {
+  const t = useTheme();
+  const { brand, paper } = t;
   return (
     <View
       style={{

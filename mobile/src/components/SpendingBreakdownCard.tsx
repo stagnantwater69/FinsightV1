@@ -3,7 +3,8 @@ import { Animated, Pressable, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Card } from "./ui";
 import { CategoryBreakdown, DonutChart } from "./charts";
-import { ink, space } from "../theme/tokens";
+import { space } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 import { formatMoney } from "../lib/money";
 import { useReducedMotion } from "../lib/useReducedMotion";
 
@@ -30,6 +31,8 @@ const FLIP_DURATION = 180;
  * the same "this turned over" read without measuring either face.
  */
 export function SpendingBreakdownCard({ data }: { data: CategoryRow[] }) {
+  const t = useTheme();
+  const { ink } = t;
   const [showList, setShowList] = useState(false);
   const progress = useRef(new Animated.Value(0)).current;
   const reduceMotion = useReducedMotion();

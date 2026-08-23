@@ -4,7 +4,8 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { Ionicons } from "@expo/vector-icons";
 import { SelectChip, T } from "./ui";
 import * as haptics from "../lib/haptics";
-import { brand, ink, paper, radius, space, TAP, typeScale } from "../theme/tokens";
+import { TAP, radius, space, typeScale } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 
 /**
  * Picking a date, instead of typing one.
@@ -80,6 +81,8 @@ export function DateField({
    */
   allowFuture?: boolean;
 }) {
+  const t = useTheme();
+  const { brand, ink, paper } = t;
   const [open, setOpen] = useState(false);
   const hasValue = /^\d{4}-\d{2}-\d{2}$/.test(value);
 

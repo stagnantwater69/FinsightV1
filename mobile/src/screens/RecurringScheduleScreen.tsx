@@ -9,7 +9,8 @@ import { FIELD_LIMITS } from "../lib/fieldLimits";
 import { setFlash } from "../lib/flash";
 import * as haptics from "../lib/haptics";
 import { dueDateISO, intervalDaysError } from "../lib/recurringAgenda";
-import { brand, space } from "../theme/tokens";
+import { space } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 import type { RecurringSchedule } from "../lib/types";
 
 /**
@@ -34,6 +35,8 @@ import type { RecurringSchedule } from "../lib/types";
  * is advisory either way.
  */
 export function RecurringScheduleScreen({ navigation, route }: any) {
+  const t = useTheme();
+  const { brand } = t;
   const { selected, categories } = useBusinessProfiles();
   const scheduleId: number | undefined = route?.params?.scheduleId;
   const editing = typeof scheduleId === "number";

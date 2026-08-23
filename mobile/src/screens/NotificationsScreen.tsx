@@ -5,7 +5,8 @@ import { Alert, Button, EmptyState, ErrorNote, Screen, T } from "../components/u
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { api, errorMessage } from "../lib/api";
 import { alertKindFromType } from "../lib/money";
-import { brand, ink, paper, radius, space } from "../theme/tokens";
+import { radius, space } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 import type { Notification } from "../lib/types";
 
 /**
@@ -22,6 +23,8 @@ import type { Notification } from "../lib/types";
  * reported and rolled back below.
  */
 export function NotificationsScreen() {
+  const t = useTheme();
+  const { brand, ink, paper } = t;
   const { selected } = useBusinessProfiles();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);

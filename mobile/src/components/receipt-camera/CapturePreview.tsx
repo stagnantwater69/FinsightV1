@@ -2,7 +2,8 @@ import { useState } from "react";
 import { Image, Pressable, ScrollView, useWindowDimensions, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Button, T } from "../ui";
-import { brand, font, ink, radius, space, status, typeScale } from "../../theme/tokens";
+import { font, radius, space, typeScale } from "../../theme/tokens";
+import { useTheme } from "../../context/ThemeContext";
 import { DetectedOutline } from "./DetectedOutline";
 import {
   canAddSection,
@@ -63,6 +64,8 @@ export function CapturePreview({
   onUseAndFinish: () => void;
   busy: boolean;
 }) {
+  const t = useTheme();
+  const { brand } = t;
   const { width, height } = useWindowDimensions();
   const [zoomed, setZoomed] = useState(false);
 
@@ -94,7 +97,7 @@ export function CapturePreview({
   const detectionTrusted = detectedCorners !== null && shouldPreselectCorners(edgeConfidence);
 
   return (
-    <View style={{ flex: 1, backgroundColor: ink[900] }}>
+    <View style={{ flex: 1, backgroundColor: t.cameraSurface }}>
       <View
         style={{
           flexDirection: "row",
@@ -105,7 +108,7 @@ export function CapturePreview({
           paddingBottom: space.sm,
         }}
       >
-        <T variant="title" style={{ color: "#ffffff" }}>
+        <T variant="title" style={{ color: t.onCamera }}>
           {capturedCount === 0 ? "Check this photo" : `Section ${capturedCount + 1}`}
         </T>
         <Pressable
@@ -278,6 +281,8 @@ function Notice({
   icon: keyof typeof Ionicons.glyphMap;
   text: string;
 }) {
+  const t = useTheme();
+  const { status } = t;
   const color = tone === "warning" ? status.warning : "rgba(255,255,255,0.7)";
   return (
     <View
@@ -295,7 +300,7 @@ function Notice({
       <Ionicons name={icon} size={16} color={color} style={{ marginTop: 1 }} />
       {/*
         `status.warning` rather than the darkened `statusText.warning`: this
-        notice sits on the dark camera-preview background (ink[900]), and
+        notice sits on the dark camera-preview background (cameraSurface), and
         statusText's steps are calibrated as "safe as small text" only on the
         light `paper` surfaces used elsewhere — here they fail contrast
         outright. `status.warning` still carries the warning semantic (not

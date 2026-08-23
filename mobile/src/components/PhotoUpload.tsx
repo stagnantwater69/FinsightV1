@@ -3,7 +3,8 @@ import { ActivityIndicator, Image, Pressable, View } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { ErrorNote, T } from "./ui";
 import { api, errorMessage } from "../lib/api";
-import { brand, ink, paper, radius, space, typeScale } from "../theme/tokens";
+import { radius, space, typeScale } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 
 /**
  * Choosing a profile photo or a business logo.
@@ -31,6 +32,8 @@ export function PhotoUpload({
   shape?: "circle" | "square";
   onUploaded: (updated: unknown) => void;
 }) {
+  const t = useTheme();
+  const { brand, ink, paper } = t;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

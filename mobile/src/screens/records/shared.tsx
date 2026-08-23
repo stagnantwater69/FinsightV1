@@ -2,7 +2,8 @@ import { useState } from "react";
 import { TextInput, View } from "react-native";
 import { AlertBadge, Button, CategorySelect, T } from "../../components/ui";
 import { useBusinessProfiles } from "../../context/BusinessProfileContext";
-import { brand, ink, radius, space, TAP, typeScale } from "../../theme/tokens";
+import { TAP, radius, space, typeScale } from "../../theme/tokens";
+import { useTheme } from "../../context/ThemeContext";
 import type { ExpenseCategory, RecordItem } from "../../lib/types";
 
 /**
@@ -44,6 +45,8 @@ export function CategoryPicker({
   onChange: (id: number) => void;
   onCreated: () => void;
 }) {
+  const t = useTheme();
+  const { brand, ink } = t;
   // The business is read from context rather than passed in: the write itself
   // moved to createCategory, which is already scoped to the selected business,
   // so a prop naming it here would be a second source for the same fact.

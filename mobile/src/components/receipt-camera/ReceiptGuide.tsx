@@ -1,6 +1,7 @@
 import { Image, useWindowDimensions, View } from "react-native";
 import { T } from "../ui";
-import { brand, font, typeScale } from "../../theme/tokens";
+import { font, typeScale } from "../../theme/tokens";
+import { useTheme } from "../../context/ThemeContext";
 import { guideRect, overlapGuideHeight } from "../../lib/receiptCapture";
 
 /**
@@ -41,6 +42,8 @@ export function ReceiptGuide({
   previousUri: string | null;
   showOverlapGuide: boolean;
 }) {
+  const t = useTheme();
+  const { brand } = t;
   const { width, height } = useWindowDimensions();
   const rect = guideRect(width, height);
 
@@ -171,6 +174,8 @@ function Corner({
   left?: number;
   right?: number;
 }) {
+  const t = useTheme();
+  const { brand } = t;
   const size = 26;
   const thickness = 3;
   const isTop = corner === "tl" || corner === "tr";

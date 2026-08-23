@@ -5,7 +5,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { T } from "./ui";
 import { useTourTarget } from "./tour/targets";
 import type { TourTargetKey } from "./tour/steps";
-import { brand, font, ink, paper, radius, space } from "../theme/tokens";
+import { font, radius, space } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 import { useReducedMotion } from "../lib/useReducedMotion";
 import * as haptics from "../lib/haptics";
 
@@ -99,6 +100,8 @@ export function QuickActionMenu({
    */
   heldOpen?: boolean;
 }) {
+  const t = useTheme();
+  const { brand, paper } = t;
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const reduceMotion = useReducedMotion();
@@ -228,7 +231,7 @@ export function QuickActionMenu({
               left: 0,
               right: 0,
               bottom: tabBarHeight,
-              backgroundColor: "rgba(26,32,34,0.55)",
+              backgroundColor: t.scrimStrong,
             }}
           />
         )}
@@ -276,7 +279,7 @@ export function QuickActionMenu({
             justifyContent: "center",
           })}
         >
-          <Ionicons name="close" size={24} color="#ffffff" />
+          <Ionicons name="close" size={24} color={t.onBrandSolid} />
         </Pressable>
       </Pressable>
     </View>
@@ -314,6 +317,8 @@ function RadialItem({
   onTouch: (key: string | null) => void;
   onClose: () => void;
 }) {
+  const t = useTheme();
+  const { ink, paper } = t;
   // Round target, round ring. Registered on the circle itself rather than on
   // the container, so the spotlight is measured on the coloured disc the owner
   // is being shown.
@@ -345,7 +350,7 @@ function RadialItem({
             backgroundColor: ink[900],
           }}
         >
-          <T style={{ fontSize: 11.5, color: "#fff", fontFamily: font.sansMedium }} numberOfLines={1}>
+          <T style={{ fontSize: 11.5, color: t.textOnFill, fontFamily: font.sansMedium }} numberOfLines={1}>
             {action.label}
           </T>
         </View>

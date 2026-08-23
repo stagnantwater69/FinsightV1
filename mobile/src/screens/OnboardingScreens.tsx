@@ -35,7 +35,8 @@ import { useAuth } from "../context/AuthContext";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { errorMessage } from "../lib/api";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
-import { brand, ink, radius, space } from "../theme/tokens";
+import { radius, space } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 import {
   BUSINESS_TYPES,
   EMPTY_DRAFT,
@@ -66,6 +67,8 @@ const TOTAL_STEPS = 3;
  * no control.
  */
 function StepRail({ step }: { step: number }) {
+  const t = useTheme();
+  const { brand, ink } = t;
   return (
     <View style={{ marginBottom: space.lg }}>
       <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
@@ -121,6 +124,8 @@ export function OnboardingScreen({
   /** Leaves the wizard for the main app; "import" also opens the CSV importer. */
   onDone: (next?: "import") => void;
 }) {
+  const t = useTheme();
+  const { ink } = t;
   const { profile: user } = useAuth();
   const { createProfile } = useBusinessProfiles();
 

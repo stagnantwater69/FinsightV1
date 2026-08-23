@@ -6,7 +6,8 @@ import { useBusinessProfiles } from "../../context/BusinessProfileContext";
 import { api, errorMessage } from "../../lib/api";
 import { setFlash } from "../../lib/flash";
 import * as haptics from "../../lib/haptics";
-import { brand, font, space } from "../../theme/tokens";
+import { font, space } from "../../theme/tokens";
+import { useTheme } from "../../context/ThemeContext";
 import type { RecordItem } from "../../lib/types";
 import { badges, type ImportBatchSummary } from "./shared";
 
@@ -75,6 +76,8 @@ function groupDuplicates(
   };
 }
 export function FlaggedRecordsScreen() {
+  const t = useTheme();
+  const { brand } = t;
   const { selected, categories } = useBusinessProfiles();
   const [records, setRecords] = useState<RecordItem[]>([]);
   const [batches, setBatches] = useState<ImportBatchSummary[]>([]);

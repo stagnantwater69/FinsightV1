@@ -38,7 +38,8 @@ import { SkeletonBox } from "../../components/Skeleton";
 import { DateField } from "../../components/DateField";
 import { Ionicons } from "@expo/vector-icons";
 import * as haptics from "../../lib/haptics";
-import { brand, font, ink, paper, radius, space, statusText, TAP, typeScale } from "../../theme/tokens";
+import { TAP, font, radius, space, typeScale } from "../../theme/tokens";
+import { useTheme } from "../../context/ThemeContext";
 import { FIELD_LIMITS } from "../../lib/fieldLimits";
 import { CategoryPicker, todayISO } from "./shared";
 import { ScanBand } from "./scanReceipt/ScanBand";
@@ -88,6 +89,8 @@ import type { CapturedPage, ReceiptScanResult, ReviewNotice } from "./scanReceip
  * in ./scanReceipt/ — this file is the screen itself.
  */
 export function ScanReceiptScreen({ navigation }: any) {
+  const t = useTheme();
+  const { brand, ink, paper, statusText } = t;
   const { selected, categories, refreshCategories, createCategory } = useBusinessProfiles();
   const [scan, setScan] = useState<ReceiptScanResult | null>(null);
   const [busy, setBusy] = useState(false);

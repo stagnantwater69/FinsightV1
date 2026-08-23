@@ -19,7 +19,8 @@ import {
 import { createRecoveryClient } from "../lib/supabase";
 import type { AuthLinkTokens } from "../lib/authLinkTokens";
 import { isSavingAccount, savedEmail, setSavedAccount } from "../lib/savedAccountStore";
-import { brand, ink, radius, space, typeScale } from "../theme/tokens";
+import { radius, space, typeScale } from "../theme/tokens";
+import { useTheme } from "../context/ThemeContext";
 
 /**
  * Auth screens. Every input uses `minHeight: TAP` rather than a fixed height so
@@ -27,6 +28,8 @@ import { brand, ink, radius, space, typeScale } from "../theme/tokens";
  */
 
 function AuthShell({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
+  const t = useTheme();
+  const { ink } = t;
   return (
     <Screen>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
@@ -184,6 +187,8 @@ export function LoginScreen({ navigation }: any) {
 }
 
 export function RegisterScreen({ navigation }: any) {
+  const t = useTheme();
+  const { brand, ink } = t;
   const { register } = useAuth();
   const [form, setForm] = useState({ firstName: "", lastName: "", email: "", password: "", confirmPassword: "" });
   const [error, setError] = useState<string | null>(null);
@@ -368,6 +373,8 @@ export function RegisterScreen({ navigation }: any) {
 }
 
 export function RecoverPasswordScreen({ navigation }: any) {
+  const t = useTheme();
+  const { brand } = t;
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -482,6 +489,8 @@ export function ResetPasswordScreen({
   linkError: string | null;
   onDone: () => void;
 }) {
+  const t = useTheme();
+  const { brand } = t;
   const [form, setForm] = useState({ newPassword: "", confirmPassword: "" });
   const [fieldErrors, setFieldErrors] = useState<FieldErrors<ResetPasswordField>>({});
   const [error, setError] = useState<string | null>(null);
@@ -627,6 +636,8 @@ export function ConfirmEmailScreen({
   linkError: string | null;
   onDone: () => void;
 }) {
+  const t = useTheme();
+  const { brand, ink } = t;
   const [state, setState] = useState<"checking" | "confirmed" | "failed">(linkError ? "failed" : "checking");
   const [message, setMessage] = useState<string>(linkError ?? "");
 
