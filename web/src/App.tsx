@@ -7,6 +7,14 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ToastProvider } from "./components/Toast";
 import { ConfirmProvider } from "./components/ConfirmDialog";
 import { Landing } from "./pages/Landing";
+/*
+ * Eager, unlike every other page below. This one is the fallback for "routing
+ * has already gone wrong", so making it depend on a second network round trip
+ * to render is the wrong trade: a chunk that fails to fetch would put the
+ * silent blank page straight back, in exactly the situation this exists to
+ * explain. It is a few hundred bytes of markup with no imports of its own.
+ */
+import { NotFound } from "./pages/NotFound";
 import { Login } from "./pages/Login";
 import { Register } from "./pages/Register";
 const RecoverPassword = lazy(() => import("./pages/RecoverPassword").then((m) => ({ default: m.RecoverPassword })));
@@ -158,6 +166,15 @@ function App() {
                   <Route path="/insights/recurring-schedules/new" element={<AddRecurringSchedule />} />
                   <Route path="/insights/recurring-schedules/:id/edit" element={<EditRecurringSchedule />} />
                 </Route>
+
+                {/*
+                  Catch-all, and it must stay LAST and OUTSIDE the layouts
+                  above. `<Routes>` renders null when nothing matches, so
+                  without this an unmatched path was a silent blank page —
+                  no chrome, no message, no console error, indistinguishable
+                  from a crashed bundle. See pages/NotFound.tsx.
+                */}
+                <Route path="*" element={<NotFound />} />
               </Routes>
               </Suspense>
             </ConfirmProvider>
