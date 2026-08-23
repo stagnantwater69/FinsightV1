@@ -30,10 +30,17 @@ import { shouldStartTour } from "../src/lib/tourGating";
 const WEB_APP = join(__dirname, "..", "..", "web", "src", "App.tsx");
 const MOBILE_APP = join(__dirname, "..", "App.tsx");
 
-/** Every `<Route path="...">` in web's router. */
+/**
+ * Every `<Route path="...">` in web's router, except the catch-all.
+ *
+ * `path="*"` is not a page and has no mobile counterpart to argue about: it is
+ * web's 404 for a URL that matched nothing, and the app has no address bar for
+ * anyone to mistype into. Counting it would demand a written "why doesn't
+ * mobile have this?" decision about a concept that cannot exist there.
+ */
 function webRoutes(): string[] {
   const src = readFileSync(WEB_APP, "utf8");
-  return [...src.matchAll(/<Route\s+path="([^"]+)"/g)].map((m) => m[1]!);
+  return [...src.matchAll(/<Route\s+path="([^"]+)"/g)].map((m) => m[1]!).filter((p) => p !== "*");
 }
 
 /** Every `<Stack.Screen name="...">` / `<Tab.Screen name="...">` in the app. */
@@ -131,21 +138,6 @@ const COVERED: Record<string, string> = {
 const WEB_ONLY: Record<string, string> = {
   "/": "The marketing landing page. The app opens to a login or the dashboard — there is no equivalent surface, and an installed app has already done the job a landing page exists to do.",
   "/blogs": "Marketing content for visitors deciding whether to sign up. A signed-in owner opening the app is past that decision, and the app is not where they would look for it.",
-  /*
-   * DEFERRED, not rejected. The app already answers questions about the
-   * numbers — AskFinSight.tsx, reached from the FAB on the same screens — so
-   * an owner on a phone is not without the feature. What the web page adds is
-   * named, re-openable conversations, and the app has no equivalent yet.
-   *
-   * It was left out of the first pass deliberately: the web route replaced a
-   * per-module drawer with a two-rail page, and the drawer is exactly the
-   * shape the app kept (a full-screen sheet, chosen over a drawer because a
-   * drawer is a desktop pattern). Porting the rail would mean designing the
-   * conversation list as its own screen rather than translating a layout.
-   * /ai/ask and /ai/history are unchanged and still serve the app, so nothing
-   * here is broken while that waits.
-   */
-  "/ai-chat": "Named AI conversations, deferred to a later pass. The app covers asking itself through AskFinSight (the per-module sheet on /ai/ask), but has no conversation-history surface yet — that needs its own screen design, not a port of the web page's sidebar rail.",
 };
 
 describe("web feature parity", () => {

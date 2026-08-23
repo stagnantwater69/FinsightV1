@@ -16,10 +16,10 @@ import type { Conversation } from "../../lib/types";
 const TITLE_MAX = 120;
 
 /**
- * One row of the chat history rail, plus its Rename/Delete menu.
+ * One row of the chat history list, plus its Rename/Delete menu.
  *
- * THE ACTIVE STATE IS DELIBERATELY QUIET. A rail of a dozen rows with a
- * saturated brand fill on one of them turns the list into a stripe of colour
+ * THE ACTIVE STATE IS DELIBERATELY QUIET. A list of a dozen rows with a
+ * saturated brand fill on one of them turns it into a stripe of colour
  * that pulls the eye away from the conversation itself — which is the thing
  * the owner is actually reading. So "which one am I in" is carried by the row
  * lifting onto `paper` with a hairline, the same way an active tab does in
@@ -129,7 +129,7 @@ export function ConversationItem({ conversation, active, onSelect, onRename, onD
             aria-label={`More options for ${conversation.title}`}
             /*
              * Hidden until the row is hovered or the button itself is
-             * focused, so a rail of twelve rows is not a rail of twelve dot
+             * focused, so a list of twelve rows is not a column of twelve dot
              * clusters — but `focus-visible` keeps it reachable by Tab, which
              * `hidden until hover` alone would not.
              */

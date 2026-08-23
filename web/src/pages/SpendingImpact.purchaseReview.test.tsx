@@ -2,7 +2,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { MemoryRouter } from "react-router-dom";
 import { SpendingImpact } from "./SpendingImpact";
 import { discussionPrompt } from "../lib/purchaseConversation";
 import type {
@@ -96,36 +96,40 @@ vi.mock("../context/ExpenseCategoryContext", () => ({
 }));
 /*
  * The floating trigger portals itself to <body> and is not what these tests
- * are about; the hook beside it is left real, because navigating to /ai-chat
- * with the built question IS the behaviour under test.
+ * are about; the hook beside it is left real, because the question it hands to
+ * the drawer IS the behaviour under test.
  */
 vi.mock("../components/AskFinSightButton", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../components/AskFinSightButton")>()),
   AskFinSightButton: () => null,
 }));
 
-/**
- * Stands in for the chat page, rendering the question the card handed over in
- * `location.state`. "Talk this through" used to open a drawer in place and now
- * navigates, so the assertion has to follow the route.
+/*
+ * Ask FinSight is a drawer owned by AiChatContext up in the authenticated
+ * layout, not a route. Asserting on `openChat` is therefore asserting on the
+ * real seam this page talks through — the alternative, mounting the whole
+ * provider and drawer, would test the drawer rather than the card.
  */
-function AiChatProbe() {
-  const state = useLocation().state as { initialQuestion?: string } | null;
-  return <div data-testid="ask-chat">{state?.initialQuestion}</div>;
+const openChat = vi.fn();
+vi.mock("../context/AiChatContext", () => ({
+  useAiChat: () => ({ openChat }),
+}));
+
+/** The question the card handed to the drawer on the last open. */
+function askedQuestion(): string {
+  return String(openChat.mock.calls.at(-1)?.[1] ?? "");
 }
 
 function renderPage() {
   return render(
     <MemoryRouter initialEntries={["/insights/spending-impact"]}>
-      <Routes>
-        <Route path="/insights/spending-impact" element={<SpendingImpact />} />
-        <Route path="/ai-chat" element={<AiChatProbe />} />
-      </Routes>
+      <SpendingImpact />
     </MemoryRouter>,
   );
 }
 
 beforeEach(() => {
+  openChat.mockClear();
   postHandler = (url) => {
     if (url === "/ai/purchase-review") return { data: { review, priceContext: price } };
     // The category suggestion, which fires from its own typing debounce.
@@ -321,14 +325,15 @@ describe("carrying the card into a conversation", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /talk this through/i }));
 
-    const chat = await screen.findByTestId("ask-chat");
-    expect(chat).toHaveTextContent("Display fridge");
-    expect(chat).toHaveTextContent(/something the business keeps and uses/);
-    expect(chat).toHaveTextContent(/Electricity every month/);
+    await waitFor(() => expect(openChat).toHaveBeenCalled());
+    expect(openChat.mock.calls.at(-1)?.[0]).toBe("Spending Impact");
+    expect(askedQuestion()).toContain("Display fridge");
+    expect(askedQuestion()).toMatch(/something the business keeps and uses/);
+    expect(askedQuestion()).toMatch(/Electricity every month/);
   });
 
   /*
-   * PRIMED, NOT SENT. `initialQuestion` only fills the chat page's box — the
+   * PRIMED, NOT SENT. `initialQuestion` only fills the drawer's box — the
    * same contract the "expand on this" link honours — so the owner reads the
    * question and decides before anything reaches the model.
    */
@@ -352,7 +357,7 @@ describe("carrying the card into a conversation", () => {
 
 describe("the primed question itself", () => {
   /**
-   * The API caps a question at 500 characters and the chat page's input carries
+   * The API caps a question at 500 characters and the drawer's input carries
    * the same maxLength, so an over-long prompt would arrive as a sentence the
    * owner never wrote, cut mid-word.
    */

@@ -137,7 +137,6 @@ const NAV_GROUPS: NavGroup[] = [
 // announced title below rather than falling back to the generic "FinSight".
 const EXTRA_PAGE_TITLES: Record<string, string> = {
   "/notifications": "Notifications",
-  "/ai-chat": "Ask FinSight",
   "/records/categories": "Categories",
   "/business-profiles/all": "All businesses",
 };

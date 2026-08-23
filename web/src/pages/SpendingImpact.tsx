@@ -456,9 +456,9 @@ export function SpendingImpact() {
   // silently overwrite their choice — "editable" has to mean it stays edited.
   const [categoryTouched, setCategoryTouched] = useState(false);
   const [suggesting, setSuggesting] = useState(false);
-  // Sends the owner to /ai-chat. The plain floating trigger goes with no
-  // question; the two "ask about this" entry points below hand one through to
-  // be typed into the box for them — it is never sent on their behalf.
+  // Opens the Ask FinSight drawer over this page. The plain floating trigger
+  // goes with no question; the two "ask about this" entry points below hand one
+  // through to be typed into the box for them — it is never sent on their behalf.
   const askFinSight = useAskFinSight("Spending Impact");
 
   /*

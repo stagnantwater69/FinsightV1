@@ -30,8 +30,10 @@ These were settled with the user and are not re-opened here:
    behaviour unchanged so mobile's `AskFinSight.tsx` is untouched.
 3. **No migration.** Existing `AIInteraction` rows are left alone. Conversation
    history starts empty for existing users.
-4. **Dedicated page, not an overlay.** A new `/ai-chat` route inside the
-   authenticated app shell.
+4. ~~**Dedicated page, not an overlay.** A new `/ai-chat` route inside the
+   authenticated app shell.~~ **SUPERSEDED — see "Revision: back to a drawer"
+   at the end of this document.** The page was built, reviewed, and rejected in
+   favour of the drawer it replaced.
 5. **Client-side titles.** The title is the first user message trimmed at a word
    boundary. No extra model call.
 6. **New `Conversation` + `ChatMessage` tables.** `AIInteraction` is not
@@ -246,6 +248,37 @@ the nav list below.
 - The existing `AskFinSightDrawer.test.tsx` is replaced by tests against the new
   page rather than deleted outright, so the behaviours it covered (history
   loads, unavailable banner, starter chips prime the input) keep coverage.
+
+## Revision: back to a drawer
+
+Everything above about the DATA MODEL, the API, and conversation BEHAVIOUR
+(lazy creation, caching, ownership, context rebuilding) shipped as written and
+is still accurate. What changed is only the shell the chat renders in.
+
+The `/ai-chat` page was built and reviewed. Seen in use, a whole route for a
+question an owner asks *about the screen they are looking at* was the wrong
+trade: it takes the numbers being asked about off the screen. Ask FinSight is
+an aside, not a destination, which is what the original drawer had right.
+
+**What it is now.** The same narrow right-side drawer as before
+(`sm:max-w-md`, slide-in, scrim, portalled to `<body>` for the containing-block
+reason documented in the component). Chat history is not a second rail — it is
+an overlay *inside* the drawer behind a toggle in the header, so the panel stays
+narrow while the list still gets full width when opened. Date grouping and the
+per-row Rename/Delete menu are unchanged.
+
+**What the round trip was worth.** The old drawer's defining bug was that its
+open/closed flag *was* its conversation lifecycle — local `useState` per page
+instance, so navigating away silently reset the thread. Chat state now lives in
+`AiChatContext`, mounted in `AuthenticatedLayout` above the shell. Closing the
+drawer on the Dashboard and reopening it on Records shows the same conversation
+with the same messages. Verified end-to-end, not only in unit tests: one
+`POST /ai/conversations` across that whole journey, never two.
+
+**Superseded by this revision:** the "Layout: two rails" section, the
+`/ai-chat` route, `pages/AiChat.tsx`, and `ChatHistoryRail.tsx` (now
+`ChatHistoryOverlay.tsx`). The AppShell logo-as-toggle change is INDEPENDENT of
+all this and stands.
 
 ## Out of scope
 

@@ -1,7 +1,7 @@
 import type { Conversation } from "./types";
 
 /**
- * Buckets conversations into the five date headings the chat history rail
+ * Buckets conversations into the five date headings the chat history list
  * shows: Today, Yesterday, Previous 7 Days, Previous 30 Days, Older.
  *
  * WHY CALENDAR DAYS, NOT ELAPSED HOURS. "Yesterday" is a thing an owner says

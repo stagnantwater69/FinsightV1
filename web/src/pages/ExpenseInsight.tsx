@@ -199,9 +199,9 @@ export function ExpenseInsight() {
    * schedules the server simply would not hand over.
    */
   const [recurringSchedules, setRecurringSchedules] = useState<RecurringSchedule[] | null>(null);
-  // Sends the owner to /ai-chat. The plain floating trigger goes with no
-  // question; the "expand on this" link below hands one through to be typed
-  // into the box for them — it is never sent on their behalf.
+  // Opens the Ask FinSight drawer over this page. The plain floating trigger
+  // goes with no question; the "expand on this" link below hands one through to
+  // be typed into the box for them — it is never sent on their behalf.
   const askFinSight = useAskFinSight("Expense Insights");
 
   async function load() {

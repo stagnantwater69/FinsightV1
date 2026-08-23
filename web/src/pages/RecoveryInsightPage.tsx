@@ -115,9 +115,9 @@ export function RecoveryInsightPage() {
   const [data, setData] = useState<RecoveryInsight | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // Sends the owner to /ai-chat. The plain floating trigger goes with no
-  // question; the "expand on this" link below hands one through to be typed
-  // into the box for them — it is never sent on their behalf.
+  // Opens the Ask FinSight drawer over this page. The plain floating trigger
+  // goes with no question; the "expand on this" link below hands one through to
+  // be typed into the box for them — it is never sent on their behalf.
   const askFinSight = useAskFinSight("Recovery Target");
 
   async function load() {

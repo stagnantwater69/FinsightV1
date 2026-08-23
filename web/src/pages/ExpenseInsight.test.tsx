@@ -135,6 +135,9 @@ vi.mock("../components/AskFinSightButton", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../components/AskFinSightButton")>()),
   AskFinSightButton: () => null,
 }));
+// The page's "expand on this" link reaches Ask FinSight through the provider in
+// the authenticated layout, which this file does not mount.
+vi.mock("../context/AiChatContext", () => ({ useAiChat: () => ({ openChat: () => {} }) }));
 
 function renderPage() {
   return render(

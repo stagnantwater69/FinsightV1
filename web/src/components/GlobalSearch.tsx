@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
+import { useAiChat } from "../context/AiChatContext";
 import { useDebounced } from "../lib/hooks";
 import { Money } from "./Money";
 import { IconSearch } from "./icons";
@@ -31,8 +32,19 @@ import type { RecordItem } from "../lib/types";
  * you can type, arrow to a result and hit Enter without leaving the keyboard.
  */
 
+/**
+ * The one entry in the list below that is not a page.
+ *
+ * Ask FinSight is a drawer over the current screen rather than a route, so
+ * choosing it opens that drawer instead of navigating. It stays in search
+ * because "ask" is one of the first things people type, and dropping the row
+ * would make the feature findable only by spotting the floating owl.
+ */
+const ASK_FINSIGHT = "#ask-finsight";
+
 interface Destination {
   label: string;
+  /** A path, or ASK_FINSIGHT for the one action in the list. */
   to: string;
   section: string;
   keywords: string;
@@ -47,7 +59,7 @@ interface Destination {
 const DESTINATIONS: Destination[] = [
   { label: "Dashboard", to: "/dashboard", section: "Overview", keywords: "home summary overview alerts funds" },
   { label: "Records", to: "/records", section: "Overview", keywords: "expenses sales list table history" },
-  { label: "Ask FinSight", to: "/ai-chat", section: "Overview", keywords: "ai chat assistant conversation ask question explain history" },
+  { label: "Ask FinSight", to: ASK_FINSIGHT, section: "Overview", keywords: "ai chat assistant conversation ask question explain history" },
   { label: "Expense insight", to: "/insights/expense-behavior", section: "Insights", keywords: "expense behaviour trends categories unusual anomaly spending patterns where money went daily chart" },
   { label: "Spending impact", to: "/insights/spending-impact", section: "Insights", keywords: "simulate what if afford purchase plan impact" },
   { label: "Recovery target", to: "/insights/recovery", section: "Insights", keywords: "daily target sales goal month coverage break even" },
@@ -82,6 +94,7 @@ export function GlobalSearch({ className = "" }: { className?: string }) {
   const navigate = useNavigate();
   const { profiles, selected, selectProfile } = useBusinessProfiles();
   const { categories } = useExpenseCategories();
+  const { openChat } = useAiChat();
 
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -131,7 +144,13 @@ export function GlobalSearch({ className = "" }: { className?: string }) {
 
     for (const d of DESTINATIONS) {
       if (matches(d.label, q) || matches(d.keywords, q)) {
-        out.push({ id: `nav:${d.to}`, label: d.label, section: d.section, to: d.to, meta: "Go to page" });
+        out.push({
+          id: `nav:${d.to}`,
+          label: d.label,
+          section: d.section,
+          to: d.to,
+          meta: d.to === ASK_FINSIGHT ? "Open the assistant" : "Go to page",
+        });
       }
     }
 
@@ -226,6 +245,15 @@ export function GlobalSearch({ className = "" }: { className?: string }) {
     setOpen(false);
     setQuery("");
     inputRef.current?.blur();
+
+    // Ask FinSight opens over the page you are already on, so it must not
+    // navigate — sending someone somewhere else to ask about the screen they
+    // were just reading is the opposite of what they asked for.
+    if (result.to === ASK_FINSIGHT) {
+      openChat("Dashboard");
+      return;
+    }
+
     navigate(result.to);
   }
 

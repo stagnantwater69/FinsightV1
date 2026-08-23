@@ -1,14 +1,15 @@
 import { useCallback } from "react";
 import { createPortal } from "react-dom";
-import { useNavigate } from "react-router-dom";
+import { useAiChat } from "../context/AiChatContext";
 import type { InteractionModule } from "../lib/types";
 
 /**
- * What a page hands to /ai-chat when it sends someone there.
+ * What a page hands Ask FinSight when it opens the drawer.
  *
  * Both fields seed only the NEXT conversation to be created: once a thread
  * exists, its own stored originModule governs, and the question has already
- * been typed into the box. Nothing here is a persisted setting.
+ * been typed into the box. Nothing here is a persisted setting, and neither
+ * field can disturb a conversation already open — see AiChatContext.
  */
 export interface AskFinSightNavState {
   originModule: InteractionModule;
@@ -24,20 +25,19 @@ export interface AskFinSightNavState {
 }
 
 /**
- * `ask(question?)` — send the owner to the chat page from this module.
+ * `ask(question?)` — open Ask FinSight over this page, from this module.
  *
- * A hook rather than four copies of the same `navigate` call, because the
- * shape of `location.state` is a contract with AiChat.tsx and a fifth call
- * site getting the key names slightly wrong would fail silently: the page
- * would simply open on its generic Dashboard welcome with an empty box.
+ * A hook rather than five copies of the same `openChat` call, so a sixth call
+ * site cannot get the argument order slightly wrong and silently open on the
+ * generic Dashboard welcome with an empty box.
  */
 export function useAskFinSight(originModule: InteractionModule) {
-  const navigate = useNavigate();
+  const { openChat } = useAiChat();
   return useCallback(
     (initialQuestion?: string) => {
-      navigate("/ai-chat", { state: { originModule, initialQuestion } satisfies AskFinSightNavState });
+      openChat(originModule, initialQuestion);
     },
-    [navigate, originModule],
+    [openChat, originModule],
   );
 }
 
@@ -69,10 +69,8 @@ export function useAskFinSight(originModule: InteractionModule) {
  * which is enough to make <main> the containing block. Rendered in place the
  * owl therefore pinned to the bottom of the PAGE and only appeared once the
  * owner scrolled to the end — the opposite of a trigger that is meant to be
- * permanently in reach. This one is not cosmetic.
- *
- * It used to open a drawer over the page it was pressed on; it now navigates
- * to /ai-chat. The art, the portal and the clearance spacer are unchanged.
+ * permanently in reach. The drawer it opens portals for its own, separate
+ * reason; this one is not cosmetic either.
  */
 export function AskFinSightButton({ originModule, initialQuestion }: AskFinSightNavState) {
   const ask = useAskFinSight(originModule);

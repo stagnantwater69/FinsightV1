@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { MemoryRouter } from "react-router-dom";
 import { FlaggedRecords } from "./FlaggedRecords";
 import type { AnomalyFinding, BusinessProfile, RecordItem } from "../lib/types";
 
@@ -89,21 +89,17 @@ vi.mock("../context/BusinessProfileContext", () => ({
 }));
 
 /**
- * "Explain this flag" now NAVIGATES to /ai-chat rather than opening a drawer
- * in place, so what has to be proved is what it hands over in
- * `location.state`: the origin module, and a question naming the finding the
- * owner was looking at. This stands in for the chat page so the assertion is
- * against the real router rather than against a mocked navigate().
+ * "Explain this flag" opens the Ask FinSight drawer, which is owned by
+ * AiChatContext up in the authenticated layout rather than by this page. What
+ * has to be proved is what the card hands over: the origin module, and a
+ * question naming the finding the owner was looking at. Asserting on `openChat`
+ * is asserting on that real seam; mounting the provider and the drawer would
+ * test the drawer instead.
  */
-function AiChatProbe() {
-  const state = useLocation().state as { originModule?: string; initialQuestion?: string } | null;
-  return (
-    <div data-testid="ask-chat">
-      <span>{state?.originModule}</span>
-      <span>{state?.initialQuestion}</span>
-    </div>
-  );
-}
+const openChat = vi.fn();
+vi.mock("../context/AiChatContext", () => ({
+  useAiChat: () => ({ openChat }),
+}));
 
 vi.mock("../components/Toast", () => ({ useToast: () => () => {} }));
 vi.mock("../components/ConfirmDialog", () => ({ useConfirm: () => async () => true }));
@@ -111,15 +107,13 @@ vi.mock("../components/ConfirmDialog", () => ({ useConfirm: () => async () => tr
 function renderPage() {
   return render(
     <MemoryRouter initialEntries={["/records/flagged"]}>
-      <Routes>
-        <Route path="/records/flagged" element={<FlaggedRecords />} />
-        <Route path="/ai-chat" element={<AiChatProbe />} />
-      </Routes>
+      <FlaggedRecords />
     </MemoryRouter>,
   );
 }
 
 beforeEach(() => {
+  openChat.mockClear();
   patched.length = 0;
   getHandlers = {
     "/records/flagged": ok<RecordItem[]>([]),
@@ -232,12 +226,12 @@ describe("the unified review queue", () => {
     renderPage();
     await screen.findByText("Unusually large Inventory expense");
 
-    expect(screen.queryByTestId("ask-chat")).not.toBeInTheDocument();
+    expect(openChat).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: "Explain this flag" }));
 
-    const chat = await screen.findByTestId("ask-chat");
-    expect(within(chat).getByText("Records Review")).toBeInTheDocument();
-    expect(within(chat).getByText(/Unusually large Inventory expense/)).toBeInTheDocument();
+    await waitFor(() => expect(openChat).toHaveBeenCalled());
+    expect(openChat.mock.calls.at(-1)?.[0]).toBe("Records Review");
+    expect(String(openChat.mock.calls.at(-1)?.[1])).toMatch(/Unusually large Inventory expense/);
   });
 
   it("keeps one bulk decision for a whole imported duplicate group", async () => {

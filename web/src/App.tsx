@@ -52,7 +52,6 @@ const AddRecurringSchedule = lazy(() => import("./pages/RecurringScheduleForm").
 const EditRecurringSchedule = lazy(() => import("./pages/RecurringScheduleForm").then((m) => ({ default: m.EditRecurringSchedule })));
 const Categories = lazy(() => import("./pages/Categories").then((m) => ({ default: m.Categories })));
 const Notifications = lazy(() => import("./pages/Notifications").then((m) => ({ default: m.Notifications })));
-const AiChat = lazy(() => import("./pages/AiChat").then((m) => ({ default: m.AiChat })));
 const Onboarding = lazy(() => import("./pages/Onboarding").then((m) => ({ default: m.Onboarding })));
 
 /**
@@ -154,10 +153,10 @@ function App() {
                   <Route path="/records/csv-imports/new" element={<ImportCsv />} />
                   <Route path="/records/flagged" element={<FlaggedRecords />} />
                   <Route path="/dashboard" element={<Dashboard />} />
-                  {/* Ask FinSight. A route rather than an overlay, so a
-                      conversation survives navigating away and can be linked
-                      to from every screen's floating trigger. */}
-                  <Route path="/ai-chat" element={<AiChat />} />
+                  {/* Ask FinSight has no route of its own: it is a drawer over
+                      whatever page you are on, mounted once by
+                      AuthenticatedLayout. Its conversation survives navigation
+                      because the state lives in AiChatContext, not in a page. */}
                   <Route path="/insights/expense-behavior" element={<ExpenseInsight />} />
                   <Route path="/insights/recovery" element={<RecoveryInsightPage />} />
                   <Route path="/insights/spending-impact" element={<SpendingImpact />} />

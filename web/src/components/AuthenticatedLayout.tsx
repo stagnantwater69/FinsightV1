@@ -4,7 +4,9 @@ import { BusinessProfileProvider } from "../context/BusinessProfileContext";
 import { ExpenseCategoryProvider } from "../context/ExpenseCategoryContext";
 import { NotificationProvider } from "../context/NotificationContext";
 import { TourProvider } from "../context/TourContext";
+import { AiChatProvider } from "../context/AiChatContext";
 import { AppShell } from "./AppShell";
+import { AskFinSightDrawer } from "./AskFinSightDrawer";
 import { RequireBusinessProfile } from "./RequireBusinessProfile";
 
 /**
@@ -12,9 +14,16 @@ import { RequireBusinessProfile } from "./RequireBusinessProfile";
  * business profile, so NotificationProvider has to sit inside
  * BusinessProfileProvider to read it.
  *
- * RequireBusinessProfile sits inside the provider for the same reason — it
- * decides on the profile list — and inside AppShell so the redirect it may
- * issue happens without the chrome flashing in first.
+ * AiChatProvider sits inside BusinessProfileProvider for the same reason — a
+ * conversation belongs to one business — and OUTSIDE AppShell, so the shell's
+ * own GlobalSearch can open the drawer, and so the whole conversation survives
+ * every route change beneath it. Ask FinSight losing its thread on navigation
+ * is the exact bug this placement exists to prevent; moving it inside a page
+ * or inside RequireBusinessProfile would reintroduce it.
+ *
+ * RequireBusinessProfile sits inside the profile provider because it decides on
+ * the profile list, and inside AppShell so the redirect it may issue happens
+ * without the chrome flashing in first.
  */
 export function AuthenticatedLayout() {
   return (
@@ -25,9 +34,15 @@ export function AuthenticatedLayout() {
             {/* TourProvider wraps AppShell so the shell can hold its Quick-add
                 menu open for the tour steps that highlight items inside it. */}
             <TourProvider>
-              <AppShell>
-                <RequireBusinessProfile />
-              </AppShell>
+              <AiChatProvider>
+                <AppShell>
+                  <RequireBusinessProfile />
+                </AppShell>
+                {/* One instance for the whole authenticated app, not one per
+                    page: the drawer portals to <body> anyway, and four copies
+                    would be four open flags racing each other. */}
+                <AskFinSightDrawer />
+              </AiChatProvider>
             </TourProvider>
           </NotificationProvider>
         </ExpenseCategoryProvider>

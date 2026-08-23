@@ -159,7 +159,7 @@ export function FlaggedRecords() {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [filter, setFilter] = useState<ReviewFilter>("all");
   /*
-   * "Explain this flag" sends the owner to /ai-chat with a question built
+   * "Explain this flag" opens the Ask FinSight drawer with a question built
    * from the card they are looking at. This screen has no floating trigger of
    * its own — the entry point is the per-finding action, which is the only
    * place the question can be made specific.
