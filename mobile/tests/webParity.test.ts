@@ -3,6 +3,7 @@ import { join } from "path";
 import { describe, expect, it } from "vitest";
 import { BAND_COPY, confidenceBand, findingSignalStrength, scanConfidenceBand } from "../src/lib/confidenceBands";
 import { feedbackActions } from "../src/lib/findingFeedback";
+import { groupConversations } from "../src/lib/conversationGroups";
 import { TOUR_STEPS } from "../src/components/tour/steps";
 import { shouldStartTour } from "../src/lib/tourGating";
 
@@ -379,6 +380,72 @@ describe("product tour matches web", () => {
     expect(shouldStartTour({ ...base, status: "skipped" })).toBe(true);
     expect(shouldStartTour({ ...base, status: "completed", hasProfile: false })).toBe(false);
     expect(shouldStartTour({ ...base, status: "completed", dashboardLoaded: false })).toBe(false);
+  });
+});
+
+/**
+ * Chat history must be filed under the same headings on both clients.
+ *
+ * WHY THIS IS HERE AND NOT ONLY IN conversationGroups.test.ts: the app's
+ * lib/conversationGroups.ts is a DELIBERATE COPY of web's, exactly like
+ * confidenceBands.ts — the two projects share no build, so there is nothing
+ * except this file to stop one of them being edited alone. The failure mode is
+ * quiet and specific: an owner who moves an hour of enquiry between the phone
+ * and the laptop finds the same conversation under "Previous 7 Days" on one and
+ * "Previous 30 Days" on the other, and neither screen looks wrong.
+ *
+ * Both boundaries are counted from today because both headings name a window
+ * that includes today, so seven days ago has already LEFT "Previous 7 Days".
+ * That off-by-one is the thing most likely to be re-derived differently, so it
+ * is driven through both implementations rather than described.
+ */
+const WEB_CONVERSATION_GROUPS = join(__dirname, "..", "..", "web", "src", "lib", "conversationGroups.ts");
+
+describe("chat history grouping matches web", () => {
+  const NOW = new Date(2026, 7, 23, 9, 30);
+  const daysBefore = (days: number) =>
+    new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate() - days, 12);
+
+  /** One conversation per day offset, so every bucket and both edges are covered. */
+  const OFFSETS = [-1, 0, 1, 2, 6, 7, 8, 29, 30, 31, 400];
+  const rows = OFFSETS.map((days, index) => ({
+    id: index + 1,
+    title: `${days} days ago`,
+    originModule: "Dashboard" as const,
+    createdAt: daysBefore(days).toISOString(),
+    lastMessageAt: daysBefore(days).toISOString(),
+  }));
+
+  it("uses the five labels, in order, with the boundaries on web's side of the line", () => {
+    const groups = groupConversations(rows, NOW);
+    expect(groups.map((g) => g.label)).toEqual([
+      "Today",
+      "Yesterday",
+      "Previous 7 Days",
+      "Previous 30 Days",
+      "Older",
+    ]);
+
+    const labelOf = (days: number) =>
+      groups.find((g) => g.conversations.some((c) => c.title === `${days} days ago`))?.label;
+    expect(labelOf(0), "today").toBe("Today");
+    expect(labelOf(1), "yesterday").toBe("Yesterday");
+    expect(labelOf(6), "inside the seven-day window").toBe("Previous 7 Days");
+    expect(labelOf(7), "exactly seven days ago has left the seven-day window").toBe("Previous 30 Days");
+    expect(labelOf(29), "inside the thirty-day window").toBe("Previous 30 Days");
+    expect(labelOf(30), "exactly thirty days ago has left the thirty-day window").toBe("Older");
+  });
+
+  it.skipIf(!existsSync(WEB_CONVERSATION_GROUPS))("files every conversation exactly where web does", async () => {
+    const web = (await import(WEB_CONVERSATION_GROUPS)) as typeof import("../../web/src/lib/conversationGroups");
+
+    const mine = groupConversations(rows, NOW);
+    const theirs = web.groupConversations(rows, NOW);
+
+    expect(
+      mine.map((g) => ({ label: g.label, titles: g.conversations.map((c) => c.title) })),
+      "The same conversation would be filed under a different heading on the two clients",
+    ).toEqual(theirs.map((g) => ({ label: g.label, titles: g.conversations.map((c) => c.title) })));
   });
 });
 

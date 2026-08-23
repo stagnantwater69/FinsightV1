@@ -25,6 +25,7 @@ import {
 import { AuthProvider, useAuth } from "./src/context/AuthContext";
 import { BusinessProfileProvider, useBusinessProfiles } from "./src/context/BusinessProfileContext";
 import { TourProvider, useTourOptional } from "./src/context/TourContext";
+import { AiChatProvider } from "./src/context/AiChatContext";
 import { useTourTarget } from "./src/components/tour/targets";
 import { QUICK_ADD_STEP_IDS, type TourTargetKey } from "./src/components/tour/steps";
 import { OnboardingResumeScreen, OnboardingScreen } from "./src/screens/OnboardingScreens";
@@ -863,10 +864,21 @@ function MainOrOnboarding() {
    * above, so a brand-new owner finishes setup before being toured — the same
    * order web uses. One mount is what makes two overlays impossible.
    */
+  /*
+   * AiChatProvider wraps the tour and the tabs for one reason: an Ask FinSight
+   * conversation must outlive the screen it was started on. Held inside a
+   * screen — which is where it used to live, as that screen's useState — the
+   * thread was thrown away by the navigation that took the owner to the numbers
+   * they were asking about. Inside BusinessProfileProvider because a thread
+   * belongs to one business; above the navigator because it must survive every
+   * route change under it. Same placement web uses in AuthenticatedLayout.
+   */
   return (
-    <TourProvider>
-      <MainTabs />
-    </TourProvider>
+    <AiChatProvider>
+      <TourProvider>
+        <MainTabs />
+      </TourProvider>
+    </AiChatProvider>
   );
 }
 

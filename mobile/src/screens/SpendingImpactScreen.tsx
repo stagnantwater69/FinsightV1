@@ -205,7 +205,7 @@ export function SpendingImpactScreen({ navigation }: any) {
       */}
       <AskFinSightFab onPress={() => setAskOpen(true)} />
 
-      <AskFinSight visible={askOpen} onClose={() => setAskOpen(false)} businessProfileId={selected.id} module="Spending Impact" />
+      <AskFinSight visible={askOpen} onClose={() => setAskOpen(false)} module="Spending Impact" />
     </Screen>
   );
 }

@@ -677,7 +677,7 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
       */}
       <AskFinSightFab onPress={() => setAskOpen(true)} />
 
-      <AskFinSight visible={askOpen} onClose={() => setAskOpen(false)} businessProfileId={selected.id} module="Expense Insights" />
+      <AskFinSight visible={askOpen} onClose={() => setAskOpen(false)} module="Expense Insights" />
 
       {/*
         All five answers, in one sheet, reached from any finding card. The

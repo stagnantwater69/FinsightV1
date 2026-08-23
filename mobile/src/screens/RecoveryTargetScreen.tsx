@@ -171,7 +171,7 @@ export function RecoveryTargetScreen({ navigation }: any) {
       */}
       <AskFinSightFab onPress={() => setAskOpen(true)} />
 
-      <AskFinSight visible={askOpen} onClose={() => setAskOpen(false)} businessProfileId={selected.id} module="Recovery Target" />
+      <AskFinSight visible={askOpen} onClose={() => setAskOpen(false)} module="Recovery Target" />
     </Screen>
   );
 }

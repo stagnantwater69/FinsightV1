@@ -24,12 +24,15 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
  * sheet feel dismissible rather than like a new page.
  */
 const SHEET_HEIGHT = Math.round(Dimensions.get("window").height * 0.88);
-import { Button, ErrorNote, T } from "./ui";
-import { api, errorMessage } from "../lib/api";
+import { Ionicons } from "@expo/vector-icons";
+import { Button, Callout, ErrorNote, T } from "./ui";
+import { ChatHistoryPanel } from "./ChatHistoryPanel";
+import { useAiChat } from "../context/AiChatContext";
 import * as haptics from "../lib/haptics";
+import { formatMoney } from "../lib/money";
 import { useReducedMotion } from "../lib/useReducedMotion";
 import { brand, font, ink, paper, radius, space, TAP, typeScale } from "../theme/tokens";
-import type { AIInteraction, AskResponse, InteractionModule } from "../lib/types";
+import type { ChatMessage, InteractionModule } from "../lib/types";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
 
 /**
@@ -40,9 +43,20 @@ import { FIELD_LIMITS } from "../lib/fieldLimits";
  * full-screen view. This presents as a modal sheet instead, which is the native
  * idiom and gets the keyboard handling right.
  *
- * Everything else is identical to web: same endpoint, same per-module threading,
- * and no client-side context — the server rebuilds it from fresh data on every
- * message, which is what lets a follow-up see a record added seconds ago.
+ * WHAT THE SHEET NO LONGER OWNS. It used to hold the messages in its own
+ * `useState` and refetch `/ai/history` on every open, so the thread was tied to
+ * the sheet being on screen and to the screen it was opened from. Conversations
+ * now live in context/AiChatContext (see lib/chatStore for the reasoning), and
+ * this file is a view over them: opening and closing it, and moving between
+ * screens, cannot start a new conversation or reset the current one.
+ *
+ * CHAT HISTORY IS A MODE OF THIS SHEET, not a screen and not a second modal —
+ * see ChatHistoryPanel for why.
+ *
+ * Everything else is still identical to web: same endpoints, same lazy
+ * creation, and no client-side context — the server rebuilds it from fresh data
+ * on every message, which is what lets a follow-up see a record added seconds
+ * ago.
  */
 
 const MODULE_COPY: Record<InteractionModule, { title: string; scope: string; greeting: string; starters: string[] }> = {
@@ -75,15 +89,20 @@ const MODULE_COPY: Record<InteractionModule, { title: string; scope: string; gre
 export function AskFinSight({
   visible,
   onClose,
-  businessProfileId,
   module,
 }: {
   visible: boolean;
   onClose: () => void;
-  businessProfileId: number;
+  /**
+   * The screen the sheet was opened from. It seeds the origin of the NEXT new
+   * conversation and chooses the greeting copy — an existing thread keeps the
+   * `originModule` it was created with, so it stays readable from anywhere.
+   */
   module: InteractionModule;
 }) {
-  const copy = MODULE_COPY[module];
+  const chat = useAiChat();
+  const active = chat.conversations.find((c) => c.id === chat.activeId) ?? null;
+  const copy = MODULE_COPY[active?.originModule ?? module];
 
   /*
    * The sheet's own animation.
@@ -202,54 +221,62 @@ export function AskFinSight({
     }),
   ).current;
   const dragHandlers = pan.panHandlers;
-  const [messages, setMessages] = useState<AIInteraction[]>([]);
-  const [input, setInput] = useState("");
   const [inputFocused, setInputFocused] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [loadingHistory, setLoadingHistory] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [unavailable, setUnavailable] = useState(false);
-  const listRef = useRef<FlatList<AIInteraction>>(null);
+  /**
+   * Whether the history list is over the messages.
+   *
+   * A VIEW FLAG AND NOTHING ELSE. It reaches nothing that fetches and nothing
+   * that holds a conversation, which is what makes toggling it incapable of
+   * starting, clearing or reloading a thread — the same separation the store
+   * gives `visible`, one level down.
+   */
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const listRef = useRef<FlatList<ChatMessage>>(null);
 
+  /*
+   * Opening the sheet does two things, and creating a conversation is not one
+   * of them: it records which screen a NEW thread would start from, and it
+   * asks for the history list, which the store fetches once per business and
+   * then serves from memory. Reopening the sheet costs no request.
+   */
+  const { setSeedModule, ensureList } = chat;
   useEffect(() => {
-    if (!visible) return;
-    let cancelled = false;
-    setLoadingHistory(true);
-    setError(null);
-    api
-      .get<AIInteraction[]>("/ai/history", { businessProfileId, module, limit: 20 })
-      .then((data) => !cancelled && setMessages(data))
-      .catch((err) => !cancelled && setError(errorMessage(err)))
-      .finally(() => !cancelled && setLoadingHistory(false));
-    return () => {
-      cancelled = true;
-    };
-  }, [visible, businessProfileId, module]);
-
-  async function send(text: string) {
-    const question = text.trim();
-    if (!question || sending) return;
-    setInput("");
-    setSending(true);
-    setError(null);
-    setUnavailable(false);
-    try {
-      const data = await api.post<AskResponse>("/ai/ask", { businessProfileId, module, question });
-      setMessages((prev) => [...prev, data]);
-      // Both providers failed. The backend still returns 201 with a placeholder,
-      // so it is surfaced as an outage rather than allowed to read as a real
-      // considered answer.
-      if (data.provider === "unavailable") setUnavailable(true);
-      setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setSending(false);
+    if (!visible) {
+      // A view reset and nothing more: the sheet should reopen on the
+      // conversation, not on the list somebody was browsing last time.
+      setHistoryOpen(false);
+      return;
     }
+    setSeedModule(module);
+    ensureList();
+    // The store's own methods are stable for its lifetime, so this effect runs
+    // on open and on a module change — never on every state update, which
+    // would re-ask for the list after a failed fetch in a loop.
+  }, [visible, module, setSeedModule, ensureList]);
+
+  const messages = chat.messages;
+  useEffect(() => {
+    if (!visible || messages.length === 0) return;
+    const timer = setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
+    return () => clearTimeout(timer);
+  }, [visible, messages]);
+
+  function submit(text: string) {
+    if (!text.trim() || chat.sending) return;
+    haptics.pressed();
+    void chat.send(text);
   }
 
   return (
-    <Modal visible={visible} animationType="none" transparent onRequestClose={onClose}>
+    <Modal
+      visible={visible}
+      animationType="none"
+      transparent
+      // Android's back button. While the history list is up it closes the
+      // list, the way Escape does on web — backing out of the sheet entirely
+      // from a list you only opened to look at is a step too far.
+      onRequestClose={() => (historyOpen ? setHistoryOpen(false) : onClose())}
+    >
       {/*
         A dimmed backdrop that closes on tap. `pageSheet` gave this behaviour
         on iOS for free and nothing at all on Android, where it fell back to an
@@ -295,8 +322,51 @@ export function AskFinSight({
             <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: brand[500] }} />
           </View>
 
-          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" }}>
-            <T style={{ color: "#fff", fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg, flex: 1 }}>✦ {copy.title}</T>
+          {/*
+            Four controls on one line, in the order they are reached for: get
+            back to an earlier thread, see where you are, start a fresh one,
+            leave. Everything keeps the sheet's existing TAP target — a header
+            is exactly where controls get quietly shrunk to fit.
+          */}
+          <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs }}>
+            <Pressable
+              onPress={() => {
+                haptics.tapped();
+                setHistoryOpen((open) => !open);
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={historyOpen ? "Back to this conversation" : "Chat history"}
+              accessibilityState={{ expanded: historyOpen }}
+              hitSlop={8}
+              style={{ minWidth: TAP, minHeight: TAP, alignItems: "flex-start", justifyContent: "center" }}
+            >
+              <Ionicons name={historyOpen ? "chevron-back" : "time-outline"} size={22} color="#fff" />
+            </Pressable>
+
+            <T
+              numberOfLines={1}
+              style={{ color: "#fff", fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg, flex: 1 }}
+            >
+              {historyOpen ? "Chat history" : active ? active.title : `✦ ${copy.title}`}
+            </T>
+
+            <Pressable
+              onPress={() => {
+                haptics.tapped();
+                // Persists NOTHING — see lib/chatStore. It clears back to the
+                // greeting, and only the first send creates a conversation, so
+                // an abandoned empty chat never reaches the list.
+                chat.newChat();
+                setHistoryOpen(false);
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="New chat"
+              hitSlop={8}
+              style={{ minWidth: TAP, minHeight: TAP, alignItems: "center", justifyContent: "center" }}
+            >
+              <Ionicons name="create-outline" size={22} color="#fff" />
+            </Pressable>
+
             <Pressable
               onPress={close}
               accessibilityRole="button"
@@ -307,7 +377,9 @@ export function AskFinSight({
               <T style={{ color: "#fff", fontSize: 22 }}>×</T>
             </Pressable>
           </View>
-          <T style={{ color: brand[50], fontSize: typeScale.caption, marginTop: space.sm, lineHeight: 18 }}>{copy.scope}</T>
+          <T style={{ color: brand[50], fontSize: typeScale.caption, marginTop: space.sm, lineHeight: 18 }}>
+            {historyOpen ? "Pick up an earlier thread, or long-press one to rename or delete it." : copy.scope}
+          </T>
         </View>
 
         <KeyboardAvoidingView
@@ -315,70 +387,108 @@ export function AskFinSight({
           style={{ flex: 1 }}
           keyboardVerticalOffset={0}
         >
-          <FlatList
-            ref={listRef}
-            data={messages}
-            keyExtractor={(m) => String(m.id)}
-            contentContainerStyle={{ padding: space.lg, gap: space.md }}
-            ListHeaderComponent={
-              <View style={{ gap: space.md }}>
-                <Bubble from="ai">{copy.greeting}</Bubble>
-                {loadingHistory ? <T variant="caption" style={{ textAlign: "center" }}>Loading earlier messages…</T> : null}
-              </View>
-            }
-            renderItem={({ item }) => (
-              <View style={{ gap: space.md }}>
-                <Bubble from="user">{item.question}</Bubble>
-                <Bubble from="ai">{item.answer}</Bubble>
-              </View>
-            )}
-            ListFooterComponent={
-              <View style={{ gap: space.md, marginTop: space.md }}>
-                {sending ? (
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-                    <ActivityIndicator color={brand[600]} />
-                    <T variant="caption">Working from your records…</T>
-                  </View>
-                ) : null}
-                {unavailable ? (
-                  <ErrorNote>
-                    FinSight's AI assistant is unreachable right now, so the message above is a placeholder rather than
-                    a real answer. The figures on your other screens are unaffected — those are calculated by FinSight,
-                    not by AI.
-                  </ErrorNote>
-                ) : null}
-                {error ? <ErrorNote>{error}</ErrorNote> : null}
-                {messages.length === 0 && !loadingHistory ? (
-                  <View style={{ gap: space.sm }}>
-                    {copy.starters.map((s) => (
-                      <Pressable
-                        key={s}
-                        onPress={() => {
-                          haptics.tapped();
-                          setInput(s);
-                        }}
-                        accessibilityRole="button"
-                        // Read out bare, a starter sounds like a question that
-                        // has already been asked. The label says what the tap
-                        // actually does — it fills the box, it does not send.
-                        accessibilityLabel={`Use this question: ${s}`}
-                        style={{
-                          minHeight: TAP,
-                          justifyContent: "center",
-                          borderWidth: 1,
-                          borderColor: brand[200],
-                          borderRadius: radius.full,
-                          paddingHorizontal: space.md,
-                        }}
-                      >
-                        <T style={{ color: brand[700], fontSize: typeScale.label }}>{s}</T>
-                      </Pressable>
-                    ))}
-                  </View>
-                ) : null}
-              </View>
-            }
-          />
+          {/*
+            The message list and the history list share this one box, so the
+            keyboard handling, the safe area and the drag gesture above are
+            solved once for both. `historyOpen` swaps which is on top; neither
+            unmounts the other's state, because neither of them holds any.
+          */}
+          <View style={{ flex: 1 }}>
+            <FlatList
+              ref={listRef}
+              data={messages}
+              keyExtractor={(m) => String(m.id)}
+              contentContainerStyle={{ padding: space.lg, gap: space.md }}
+              ListHeaderComponent={
+                <View style={{ gap: space.md }}>
+                  {messages.length === 0 ? <Bubble from="ai">{copy.greeting}</Bubble> : null}
+                  {chat.messagesLoading ? (
+                    <T variant="caption" style={{ textAlign: "center" }}>Loading this conversation…</T>
+                  ) : null}
+                </View>
+              }
+              renderItem={({ item }) => <Bubble from={item.role === "user" ? "user" : "ai"}>{item.content}</Bubble>}
+              ListFooterComponent={
+                <View style={{ gap: space.md, marginTop: space.md }}>
+                  {chat.sending ? (
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+                      <ActivityIndicator color={brand[600]} />
+                      <T variant="caption">Working from your records…</T>
+                    </View>
+                  ) : null}
+                  {chat.unavailable ? (
+                    <ErrorNote>
+                      FinSight's AI assistant is unreachable right now, so the message above is a placeholder rather than
+                      a real answer. The figures on your other screens are unaffected — those are calculated by FinSight,
+                      not by AI.
+                    </ErrorNote>
+                  ) : null}
+                  {/*
+                    The figure drives a real calculation, so it is shown: if the
+                    server misread "11,000" the owner should be able to see that
+                    before trusting the answer built on it. Same disclosure web
+                    makes, in the app's own Callout.
+                  */}
+                  {chat.detectedAmount !== null ? (
+                    <Callout>
+                      FinSight read {formatMoney(chat.detectedAmount)} from your question and used that figure in its
+                      calculation.
+                    </Callout>
+                  ) : null}
+                  {chat.error ? <ErrorNote>{chat.error}</ErrorNote> : null}
+                  {messages.length === 0 && !chat.messagesLoading ? (
+                    <View style={{ gap: space.sm }}>
+                      {copy.starters.map((s) => (
+                        <Pressable
+                          key={s}
+                          onPress={() => {
+                            haptics.tapped();
+                            chat.setInput(s);
+                          }}
+                          accessibilityRole="button"
+                          // Read out bare, a starter sounds like a question that
+                          // has already been asked. The label says what the tap
+                          // actually does — it fills the box, it does not send.
+                          accessibilityLabel={`Use this question: ${s}`}
+                          style={{
+                            minHeight: TAP,
+                            justifyContent: "center",
+                            borderWidth: 1,
+                            borderColor: brand[200],
+                            borderRadius: radius.full,
+                            paddingHorizontal: space.md,
+                          }}
+                        >
+                          <T style={{ color: brand[700], fontSize: typeScale.label }}>{s}</T>
+                        </Pressable>
+                      ))}
+                    </View>
+                  ) : null}
+                </View>
+              }
+            />
+
+            {historyOpen ? (
+              <ChatHistoryPanel
+                conversations={chat.conversations}
+                activeId={chat.activeId}
+                loading={chat.listLoading}
+                error={chat.listError}
+                onSelect={(id) => {
+                  void chat.selectConversation(id);
+                  // Straight back to the messages: choosing a thread IS the
+                  // exit from the list, so a separate "close" tap would be one
+                  // the owner has already made.
+                  setHistoryOpen(false);
+                }}
+                onRename={(id, title) => void chat.rename(id, title)}
+                onDelete={(conversation) => {
+                  haptics.committed();
+                  void chat.remove(conversation.id);
+                }}
+              />
+            ) : null}
+          </View>
 
           {/*
             The composer clears the home indicator itself. The sheet is a bare
@@ -398,12 +508,12 @@ export function AskFinSight({
             }}
           >
             <TextInput
-              value={input}
-              onChangeText={setInput}
+              value={chat.input}
+              onChangeText={chat.setInput}
               placeholder="Ask about your numbers…"
               placeholderTextColor={ink[400]}
               maxLength={FIELD_LIMITS.aiQuestion}
-              onSubmitEditing={() => send(input)}
+              onSubmitEditing={() => submit(chat.input)}
               onFocus={() => setInputFocused(true)}
               onBlur={() => setInputFocused(false)}
               /*
@@ -426,7 +536,11 @@ export function AskFinSight({
                 color: ink[900],
               }}
             />
-            <Button title="Send" onPress={() => send(input)} disabled={!input.trim() || sending} />
+            <Button
+              title="Send"
+              onPress={() => submit(chat.input)}
+              disabled={!chat.input.trim() || chat.sending}
+            />
           </View>
         </KeyboardAvoidingView>
       </Animated.View>
