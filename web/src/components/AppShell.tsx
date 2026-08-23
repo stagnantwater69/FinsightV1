@@ -137,6 +137,7 @@ const NAV_GROUPS: NavGroup[] = [
 // announced title below rather than falling back to the generic "FinSight".
 const EXTRA_PAGE_TITLES: Record<string, string> = {
   "/notifications": "Notifications",
+  "/ai-chat": "Ask FinSight",
   "/records/categories": "Categories",
   "/business-profiles/all": "All businesses",
 };
@@ -346,47 +347,70 @@ export function AppShell({ children }: { children: ReactNode }) {
           railCollapsed ? "px-2 py-3.5" : "p-3.5"
         }`}
       >
-        {/* Collapsed, the expand control gets its own full-width row above the
-            logo — sharing one with the logo at 72px would make both too
-            small to hit, and it reads as "the rail's own control", not
-            something attached underneath the brand mark. */}
-        {railCollapsed ? (
-          <div className="group relative mb-3">
-            <button
-              type="button"
-              onClick={() => setCollapsed(false)}
-              aria-label="Expand sidebar"
-              aria-expanded={false}
-              className="tap h-10 w-full min-h-0 min-w-0 rounded-xl text-sidebar-muted transition hover:bg-sidebar-fg/10 hover:text-sidebar-ink"
-            >
-              <IconSidebar className="h-[18px] w-[18px]" />
-            </button>
-            <RailTip>Expand sidebar</RailTip>
-          </div>
-        ) : null}
-
         {/* ---- logo + collapse ---- */}
         <div className={`mb-3 flex items-center ${railCollapsed ? "justify-center" : "gap-1"}`}>
-          <Link
-            to="/dashboard"
-            className={`flex min-h-tap items-center rounded-xl transition hover:bg-sidebar-fg/10 ${
-              railCollapsed ? "justify-center px-1.5" : "flex-1 gap-2.5 px-2"
-            }`}
-            aria-label="FinSight home"
-          >
-            {/* MASCOT SEAM — the owl badge mark replaces this monogram, 36px. */}
-            <span
-              aria-hidden
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-sidebar-fg/15 font-display text-base font-extrabold text-sidebar-ink"
+          {railCollapsed ? (
+            /*
+              COLLAPSED, THE LOGO IS THE CONTROL.
+              -------------------------------------------------------------
+              There used to be a separate full-width "Expand sidebar" row
+              sitting above the badge. At 72px that row was the widest thing
+              in the rail and read as an unlabelled bar floating over the
+              brand mark — two controls stacked where the owner only ever
+              wanted one, and the one they instinctively clicked was the logo.
+
+              So the badge itself expands, and the affordance is taught on
+              hover: the `F` cross-fades to the sidebar glyph over 150ms with
+              the same RailTip every other collapsed control uses. Two stacked
+              absolutely-positioned layers rather than swapping the child, so
+              the box never changes size and the rail cannot shift under the
+              pointer mid-hover.
+
+              A BUTTON, NOT A LINK. It expands a region; announcing that as
+              navigation would be a lie, and /dashboard is one row down in the
+              nav list anyway.
+
+              Reduced motion is handled globally (index.css collapses
+              durations to 0.01ms), so the cross-fade degrades to an instant
+              swap without a second code path here.
+            */
+            <div className="group relative">
+              <button
+                type="button"
+                onClick={() => setCollapsed(false)}
+                aria-label="Open sidebar"
+                aria-expanded={false}
+                className="tap h-10 w-10 min-h-0 min-w-0 rounded-xl transition hover:bg-sidebar-fg/10"
+              >
+                <span aria-hidden className="relative flex h-9 w-9 items-center justify-center">
+                  <span className="absolute inset-0 flex items-center justify-center rounded-xl bg-sidebar-fg/15 font-display text-base font-extrabold text-sidebar-ink opacity-100 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0">
+                    F
+                  </span>
+                  <span className="absolute inset-0 flex items-center justify-center rounded-xl text-sidebar-muted opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+                    <IconSidebar className="h-[18px] w-[18px]" />
+                  </span>
+                </span>
+              </button>
+              <RailTip>Open sidebar</RailTip>
+            </div>
+          ) : (
+            <Link
+              to="/dashboard"
+              className="flex min-h-tap flex-1 items-center gap-2.5 rounded-xl px-2 transition hover:bg-sidebar-fg/10"
+              aria-label="FinSight home"
             >
-              F
-            </span>
-            {!railCollapsed ? (
+              {/* MASCOT SEAM — the owl badge mark replaces this monogram, 36px. */}
+              <span
+                aria-hidden
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-sidebar-fg/15 font-display text-base font-extrabold text-sidebar-ink"
+              >
+                F
+              </span>
               <span className="font-display text-xl font-extrabold tracking-[-0.02em] text-sidebar-ink">
                 Fin<span className="text-sidebar-accent">Sight</span>
               </span>
-            ) : null}
-          </Link>
+            </Link>
+          )}
 
           {!railCollapsed ? (
             <button

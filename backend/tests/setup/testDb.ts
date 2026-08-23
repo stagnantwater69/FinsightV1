@@ -13,6 +13,8 @@ const TABLES = [
   "AnalysisJob",
   "AnomalyFinding",
   "AIInteraction",
+  "ChatMessage",
+  "Conversation",
   "Notification",
   "CSVImportBatch",
   "ReceiptScan",

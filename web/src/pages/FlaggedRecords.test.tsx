@@ -2,7 +2,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { FlaggedRecords } from "./FlaggedRecords";
 import type { AnomalyFinding, BusinessProfile, RecordItem } from "../lib/types";
 
@@ -88,33 +88,33 @@ vi.mock("../context/BusinessProfileContext", () => ({
   useBusinessProfiles: () => ({ selected: profile }),
 }));
 
-// The drawer is portalled and fetches its own history; its own test file
-// covers it. Here it only has to prove it was opened with the right module.
-vi.mock("../components/AskFinSightDrawer", () => ({
-  AskFinSightDrawer: ({
-    open,
-    module,
-    initialQuestion,
-  }: {
-    open: boolean;
-    module: string;
-    initialQuestion?: string;
-  }) =>
-    open ? (
-      <div data-testid="ask-drawer">
-        <span>{module}</span>
-        <span>{initialQuestion}</span>
-      </div>
-    ) : null,
-}));
+/**
+ * "Explain this flag" now NAVIGATES to /ai-chat rather than opening a drawer
+ * in place, so what has to be proved is what it hands over in
+ * `location.state`: the origin module, and a question naming the finding the
+ * owner was looking at. This stands in for the chat page so the assertion is
+ * against the real router rather than against a mocked navigate().
+ */
+function AiChatProbe() {
+  const state = useLocation().state as { originModule?: string; initialQuestion?: string } | null;
+  return (
+    <div data-testid="ask-chat">
+      <span>{state?.originModule}</span>
+      <span>{state?.initialQuestion}</span>
+    </div>
+  );
+}
 
 vi.mock("../components/Toast", () => ({ useToast: () => () => {} }));
 vi.mock("../components/ConfirmDialog", () => ({ useConfirm: () => async () => true }));
 
 function renderPage() {
   return render(
-    <MemoryRouter>
-      <FlaggedRecords />
+    <MemoryRouter initialEntries={["/records/flagged"]}>
+      <Routes>
+        <Route path="/records/flagged" element={<FlaggedRecords />} />
+        <Route path="/ai-chat" element={<AiChatProbe />} />
+      </Routes>
     </MemoryRouter>,
   );
 }
@@ -232,12 +232,12 @@ describe("the unified review queue", () => {
     renderPage();
     await screen.findByText("Unusually large Inventory expense");
 
-    expect(screen.queryByTestId("ask-drawer")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("ask-chat")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Explain this flag" }));
 
-    const drawer = screen.getByTestId("ask-drawer");
-    expect(within(drawer).getByText("Records Review")).toBeInTheDocument();
-    expect(within(drawer).getByText(/Unusually large Inventory expense/)).toBeInTheDocument();
+    const chat = await screen.findByTestId("ask-chat");
+    expect(within(chat).getByText("Records Review")).toBeInTheDocument();
+    expect(within(chat).getByText(/Unusually large Inventory expense/)).toBeInTheDocument();
   });
 
   it("keeps one bulk decision for a whole imported duplicate group", async () => {

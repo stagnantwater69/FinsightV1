@@ -131,9 +131,9 @@ vi.mock("../context/ExpenseCategoryContext", () => ({
 vi.mock("../components/DonutChart", () => ({ DonutChart: () => null }));
 vi.mock("../components/CategoryComparisonChart", () => ({ CategoryComparisonChart: () => null }));
 vi.mock("../components/DailySpendChart", () => ({ DailySpendChart: () => null }));
-vi.mock("../components/AskFinSightDrawer", () => ({
+vi.mock("../components/AskFinSightButton", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../components/AskFinSightButton")>()),
   AskFinSightButton: () => null,
-  AskFinSightDrawer: () => null,
 }));
 
 function renderPage() {

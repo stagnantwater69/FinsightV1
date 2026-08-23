@@ -164,15 +164,21 @@ const MAX_ANSWER_LENGTH = 1000;
 // How many earlier turns of this module's conversation get replayed. Enough
 // for "why is that one so high?" to resolve, small enough to keep the token
 // cost and the risk of the model anchoring on stale phrasing down.
-const HISTORY_TURNS_FOR_CONTEXT = 6;
+// Exported so conversation.service threads exactly as many of ITS OWN turns
+// as the module drawer threads of the module log — one number, not two that
+// drift.
+export const HISTORY_TURNS_FOR_CONTEXT = 6;
 
 // Cut at a sentence boundary when truncating, so a clipped answer reads as
 // finished rather than as if the connection dropped mid-word.
-function truncateAnswer(answer: string): string {
-  if (answer.length <= MAX_ANSWER_LENGTH) return answer;
-  const clipped = answer.slice(0, MAX_ANSWER_LENGTH);
+// Exported for the same reason: a stored chat message is subject to the same
+// "we cannot reject our own output" problem, so it gets the same guard rather
+// than a second copy of it.
+export function truncateAnswer(answer: string, maxLength: number = MAX_ANSWER_LENGTH): string {
+  if (answer.length <= maxLength) return answer;
+  const clipped = answer.slice(0, maxLength);
   const lastBreak = Math.max(clipped.lastIndexOf(". "), clipped.lastIndexOf("\n"));
-  return lastBreak > MAX_ANSWER_LENGTH * 0.6 ? clipped.slice(0, lastBreak + 1) : clipped;
+  return lastBreak > maxLength * 0.6 ? clipped.slice(0, lastBreak + 1) : clipped;
 }
 
 function toInteractionDTO(interaction: AIInteraction) {

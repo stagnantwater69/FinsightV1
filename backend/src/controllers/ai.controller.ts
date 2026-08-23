@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 import * as aiService from "../services/ai.service";
+import * as conversationService from "../services/conversation.service";
 import * as insightsService from "../services/insights.service";
 
 /*
@@ -110,6 +111,92 @@ export async function purchaseReview(req: Request, res: Response) {
     ),
   ]);
   res.status(200).json({ review, priceContext });
+}
+
+/*
+ * AI Chat — named conversations.
+ *
+ * Exported for the contract tests alongside `askSchema`: the chat composer's
+ * `maxLength` is checked against THIS rule, and the question limit is
+ * deliberately the same 500 as `/ai/ask` so the two entry points cannot
+ * disagree about what a sendable question is.
+ */
+export const createConversationSchema = z.object({
+  businessProfileId: z.number().int().positive(),
+  originModule: z.enum(aiService.INTERACTION_MODULES),
+  question: z.string().min(1).max(500),
+  // Optional: derived server-side from `question` when omitted, so the stored
+  // title can never be empty regardless of client. 120 matches the column.
+  title: z.string().min(1).max(conversationService.TITLE_MAX_LENGTH).optional(),
+  // Same meaning and same trust argument as `askSchema.context`.
+  context: z.string().max(3000).optional(),
+});
+
+export const appendMessageSchema = z.object({
+  question: z.string().min(1).max(500),
+  context: z.string().max(3000).optional(),
+});
+
+export const renameConversationSchema = z.object({
+  title: z.string().trim().min(1).max(conversationService.TITLE_MAX_LENGTH),
+});
+
+const conversationListQuerySchema = z.object({
+  businessProfileId: z.coerce.number().int().positive(),
+  limit: z.coerce.number().int().positive().max(100).default(50),
+});
+
+const conversationIdSchema = z.object({
+  id: z.coerce.number().int().positive(),
+});
+
+export async function listConversations(req: Request, res: Response) {
+  const query = conversationListQuerySchema.parse(req.query);
+  const result = await conversationService.listConversations(
+    req.user!.id,
+    query.businessProfileId,
+    query.limit
+  );
+  res.status(200).json(result);
+}
+
+export async function getConversation(req: Request, res: Response) {
+  const { id } = conversationIdSchema.parse(req.params);
+  const result = await conversationService.getConversation(req.user!.id, id);
+  res.status(200).json(result);
+}
+
+export async function createConversation(req: Request, res: Response) {
+  const input = createConversationSchema.parse(req.body);
+  const result = await conversationService.createConversationWithFirstMessage(
+    req.user!.id,
+    input.businessProfileId,
+    input.originModule,
+    input.question,
+    input.title,
+    input.context
+  );
+  res.status(201).json(result);
+}
+
+export async function sendConversationMessage(req: Request, res: Response) {
+  const { id } = conversationIdSchema.parse(req.params);
+  const input = appendMessageSchema.parse(req.body);
+  const result = await conversationService.appendMessage(req.user!.id, id, input.question, input.context);
+  res.status(201).json(result);
+}
+
+export async function renameConversation(req: Request, res: Response) {
+  const { id } = conversationIdSchema.parse(req.params);
+  const input = renameConversationSchema.parse(req.body);
+  const result = await conversationService.renameConversation(req.user!.id, id, input.title);
+  res.status(200).json(result);
+}
+
+export async function deleteConversation(req: Request, res: Response) {
+  const { id } = conversationIdSchema.parse(req.params);
+  await conversationService.deleteConversation(req.user!.id, id);
+  res.status(204).send();
 }
 
 const historyQuerySchema = z.object({

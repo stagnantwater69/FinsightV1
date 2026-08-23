@@ -5,7 +5,7 @@ import { useExpenseCategories } from "../context/ExpenseCategoryContext";
 import { api } from "../lib/api";
 import { getErrorMessage } from "../lib/errors";
 import { InsightsTabs } from "../components/AppShell";
-import { AskFinSightButton, AskFinSightDrawer } from "../components/AskFinSightDrawer";
+import { AskFinSightButton, useAskFinSight } from "../components/AskFinSightButton";
 import { DonutChart } from "../components/DonutChart";
 import { CategoryComparisonChart } from "../components/CategoryComparisonChart";
 import { DailySpendChart } from "../components/DailySpendChart";
@@ -199,10 +199,10 @@ export function ExpenseInsight() {
    * schedules the server simply would not hand over.
    */
   const [recurringSchedules, setRecurringSchedules] = useState<RecurringSchedule[] | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  // Set only by the "expand on this" link — the plain header button opens
-  // the drawer with this left undefined, same as always.
-  const [drawerQuestion, setDrawerQuestion] = useState<string | undefined>(undefined);
+  // Sends the owner to /ai-chat. The plain floating trigger goes with no
+  // question; the "expand on this" link below hands one through to be typed
+  // into the box for them — it is never sent on their behalf.
+  const askFinSight = useAskFinSight("Expense Insights");
 
   async function load() {
     if (!selected) return;
@@ -885,10 +885,7 @@ export function ExpenseInsight() {
               footer={
                 <button
                   type="button"
-                  onClick={() => {
-                    setDrawerQuestion(expandQuestion);
-                    setDrawerOpen(true);
-                  }}
+                  onClick={() => askFinSight(expandQuestion)}
                   className="tap-inline font-semibold text-accent-200 underline-offset-2 hover:underline"
                 >
                   Ask FinSight to expand on this →
@@ -1113,20 +1110,7 @@ export function ExpenseInsight() {
         </div>
       )}
 
-      <AskFinSightButton
-        onClick={() => {
-          setDrawerQuestion(undefined);
-          setDrawerOpen(true);
-        }}
-      />
-
-      <AskFinSightDrawer
-        businessProfileId={selected.id}
-        module="Expense Insights"
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        initialQuestion={drawerQuestion}
-      />
+      <AskFinSightButton originModule="Expense Insights" />
     </div>
   );
 }

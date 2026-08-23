@@ -47,6 +47,7 @@ interface Destination {
 const DESTINATIONS: Destination[] = [
   { label: "Dashboard", to: "/dashboard", section: "Overview", keywords: "home summary overview alerts funds" },
   { label: "Records", to: "/records", section: "Overview", keywords: "expenses sales list table history" },
+  { label: "Ask FinSight", to: "/ai-chat", section: "Overview", keywords: "ai chat assistant conversation ask question explain history" },
   { label: "Expense insight", to: "/insights/expense-behavior", section: "Insights", keywords: "expense behaviour trends categories unusual anomaly spending patterns where money went daily chart" },
   { label: "Spending impact", to: "/insights/spending-impact", section: "Insights", keywords: "simulate what if afford purchase plan impact" },
   { label: "Recovery target", to: "/insights/recovery", section: "Insights", keywords: "daily target sales goal month coverage break even" },

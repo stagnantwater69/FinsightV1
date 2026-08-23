@@ -617,6 +617,55 @@ export interface AskResponse extends AIInteraction {
   detectedAmount: number | null;
 }
 
+/*
+ * ============================================================
+ * Chat conversations
+ * ============================================================
+ * The AIInteraction types above are NOT superseded by these. They back
+ * `/ai/ask` and `/ai/history`, which mobile's AskFinSight screen still calls
+ * and which this pass deliberately left untouched. The two have different
+ * semantics: an AIInteraction is one question-and-answer pair in a per-module
+ * log, a ChatMessage is one half of an exchange inside a named thread.
+ */
+
+/** A conversation as it appears in the history rail — no messages. */
+export interface Conversation {
+  id: number;
+  title: string;
+  /** Where the thread started. Metadata only — a conversation is not bound to it. */
+  originModule: InteractionModule;
+  createdAt: string;
+  lastMessageAt: string;
+}
+
+export interface ChatMessage {
+  id: number;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+}
+
+/** `GET /ai/conversations/:id` — the conversation plus its messages, oldest first. */
+export interface ConversationDetail extends Conversation {
+  messages: ChatMessage[];
+}
+
+/**
+ * The shared response of both send routes — `POST /ai/conversations` (which
+ * lazily creates the thread) and `POST /ai/conversations/:id/messages`.
+ *
+ * `provider` and `detectedAmount` are carried through from the existing ask
+ * path unchanged, so the page can show the same "AI is unreachable" banner and
+ * the same parsed-amount disclosure.
+ */
+export interface ChatSendResponse {
+  conversation: Conversation;
+  userMessage: ChatMessage;
+  assistantMessage: ChatMessage;
+  provider: "gemini" | "openrouter" | "unavailable";
+  detectedAmount: number | null;
+}
+
 export interface CategorySuggestion {
   categoryId: number;
   categoryName: string;

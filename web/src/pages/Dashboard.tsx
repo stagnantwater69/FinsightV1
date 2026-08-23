@@ -7,7 +7,7 @@ import { getErrorMessage } from "../lib/errors";
 import { CategoryBreakdownChart } from "../components/CategoryBreakdownChart";
 import { CategoryComparisonChart } from "../components/CategoryComparisonChart";
 import { RecoveryMeter } from "../components/RecoveryMeter";
-import { AskFinSightButton, AskFinSightDrawer } from "../components/AskFinSightDrawer";
+import { AskFinSightButton, useAskFinSight } from "../components/AskFinSightButton";
 import { SkeletonDashboard } from "../components/Skeleton";
 import { EmptyState, SetupProgress } from "../components/EmptyState";
 import { GreetingHero } from "../components/GreetingHero";
@@ -43,10 +43,10 @@ export function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [comparison, setComparison] = useState<ExpenseBehavior | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  // Set only by the "expand on this" link — the plain header button opens
-  // the drawer with this left undefined, same as always.
-  const [drawerQuestion, setDrawerQuestion] = useState<string | undefined>(undefined);
+  // Sends the owner to /ai-chat. The plain floating trigger goes with no
+  // question; the "expand on this" link below hands one through to be typed
+  // into the box for them — it is never sent on their behalf.
+  const askFinSight = useAskFinSight("Dashboard");
 
   async function load() {
     if (!selected) return;
@@ -388,10 +388,7 @@ export function Dashboard() {
               footer={
                 <button
                   type="button"
-                  onClick={() => {
-                    setDrawerQuestion(expandQuestion);
-                    setDrawerOpen(true);
-                  }}
+                  onClick={() => askFinSight(expandQuestion)}
                   className="tap-inline font-semibold text-accent-200 underline-offset-2 hover:underline"
                 >
                   Ask FinSight about any of this →
@@ -562,20 +559,7 @@ export function Dashboard() {
         </div>
       )}
 
-      <AskFinSightButton
-        onClick={() => {
-          setDrawerQuestion(undefined);
-          setDrawerOpen(true);
-        }}
-      />
-
-      <AskFinSightDrawer
-        businessProfileId={selected.id}
-        module="Dashboard"
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        initialQuestion={drawerQuestion}
-      />
+      <AskFinSightButton originModule="Dashboard" />
     </div>
   );
 }

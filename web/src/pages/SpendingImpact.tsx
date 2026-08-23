@@ -19,7 +19,7 @@ import { useExpenseCategories } from "../context/ExpenseCategoryContext";
 import { api } from "../lib/api";
 import { getErrorMessage } from "../lib/errors";
 import { InsightsTabs } from "../components/AppShell";
-import { AskFinSightButton, AskFinSightDrawer } from "../components/AskFinSightDrawer";
+import { AskFinSightButton, useAskFinSight } from "../components/AskFinSightButton";
 import type {
   CategorySuggestion,
   ImpactBand,
@@ -456,10 +456,10 @@ export function SpendingImpact() {
   // silently overwrite their choice — "editable" has to mean it stays edited.
   const [categoryTouched, setCategoryTouched] = useState(false);
   const [suggesting, setSuggesting] = useState(false);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  // Set only by the "expand on this" link — the plain header button opens
-  // the drawer with this left undefined, same as always.
-  const [drawerQuestion, setDrawerQuestion] = useState<string | undefined>(undefined);
+  // Sends the owner to /ai-chat. The plain floating trigger goes with no
+  // question; the two "ask about this" entry points below hand one through to
+  // be typed into the box for them — it is never sent on their behalf.
+  const askFinSight = useAskFinSight("Spending Impact");
 
   /*
    * The item review, and the description it was written about.
@@ -815,7 +815,7 @@ export function SpendingImpact() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => { setDrawerQuestion(expandQuestion); setDrawerOpen(true); }}
+                    onClick={() => askFinSight(expandQuestion)}
                     className="flex min-h-tap items-center justify-between gap-3 rounded-xl bg-brand-800 p-3.5 text-left text-brand-50 shadow-sm transition-colors hover:bg-brand-900"
                   >
                     <span><span className="block text-xs text-brand-200">Need more context?</span><span className="mt-1 block text-sm font-semibold">Ask FinSight about this</span></span>
@@ -879,10 +879,9 @@ export function SpendingImpact() {
             item={reviewedItem ?? description.trim()}
             stale={!!reviewedItem && reviewedItem !== description.trim()}
             onRefresh={fetchReview}
-            onDiscuss={() => {
-              setDrawerQuestion(discussionPrompt(reviewedItem ?? description.trim(), review, plannedAmount));
-              setDrawerOpen(true);
-            }}
+            onDiscuss={() =>
+              askFinSight(discussionPrompt(reviewedItem ?? description.trim(), review, plannedAmount))
+            }
             busy={reviewing}
           />
         </div>
@@ -906,20 +905,7 @@ export function SpendingImpact() {
         </div>
       ) : null}
 
-      <AskFinSightButton
-        onClick={() => {
-          setDrawerQuestion(undefined);
-          setDrawerOpen(true);
-        }}
-      />
-
-      <AskFinSightDrawer
-        businessProfileId={selected.id}
-        module="Spending Impact"
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        initialQuestion={drawerQuestion}
-      />
+      <AskFinSightButton originModule="Spending Impact" />
     </div>
   );
 }

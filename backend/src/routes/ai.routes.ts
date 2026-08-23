@@ -36,3 +36,31 @@ aiRouter.post(
   rateLimit(LIMITS.SUGGEST_CATEGORY),
   asyncHandler(aiController.suggestCategory),
 );
+
+/*
+ * AI Chat — named conversations.
+ *
+ * Declared after the fixed paths above so `/conversations/:id` cannot shadow
+ * any of them, and the two send routes carry the SAME limit pair as `/ask`:
+ * they call the same billed model through the same code path, so a second,
+ * looser budget for the chat page would just be the way around the first.
+ * The list/read/rename/delete routes are plain database work and are left
+ * unlimited for the same reason `/history` is — limiting them would only make
+ * the app feel broken while saving nothing.
+ */
+aiRouter.get("/conversations", asyncHandler(aiController.listConversations));
+aiRouter.post(
+  "/conversations",
+  rateLimit(LIMITS.ASK_BURST),
+  rateLimit(LIMITS.ASK_HOURLY),
+  asyncHandler(aiController.createConversation),
+);
+aiRouter.get("/conversations/:id", asyncHandler(aiController.getConversation));
+aiRouter.patch("/conversations/:id", asyncHandler(aiController.renameConversation));
+aiRouter.delete("/conversations/:id", asyncHandler(aiController.deleteConversation));
+aiRouter.post(
+  "/conversations/:id/messages",
+  rateLimit(LIMITS.ASK_BURST),
+  rateLimit(LIMITS.ASK_HOURLY),
+  asyncHandler(aiController.sendConversationMessage),
+);

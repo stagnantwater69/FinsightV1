@@ -23,7 +23,7 @@ import {
 import { SIGNAL_COPY } from "../lib/confidenceBands";
 import { Card, PageHead, Pill } from "../components/ui";
 import { Alert } from "../components/Alert";
-import { AskFinSightDrawer } from "../components/AskFinSightDrawer";
+import { useAskFinSight } from "../components/AskFinSightButton";
 import { Button } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
 import { FormError } from "../components/Field";
@@ -158,8 +158,13 @@ export function FlaggedRecords() {
   const [error, setError] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [filter, setFilter] = useState<ReviewFilter>("all");
-  const [drawerQuestion, setDrawerQuestion] = useState<string | undefined>(undefined);
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  /*
+   * "Explain this flag" sends the owner to /ai-chat with a question built
+   * from the card they are looking at. This screen has no floating trigger of
+   * its own — the entry point is the per-finding action, which is the only
+   * place the question can be made specific.
+   */
+  const askFinSight = useAskFinSight("Records Review");
   const queueId = useId();
 
   async function load() {
@@ -355,8 +360,7 @@ export function FlaggedRecords() {
   }
 
   function explain(question: string) {
-    setDrawerQuestion(question);
-    setDrawerOpen(true);
+    askFinSight(question);
   }
 
   if (!selected) return null;
@@ -464,14 +468,6 @@ export function FlaggedRecords() {
           ) : null}
         </div>
       )}
-
-      <AskFinSightDrawer
-        businessProfileId={selected.id}
-        module="Records Review"
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        initialQuestion={drawerQuestion}
-      />
     </div>
   );
 }

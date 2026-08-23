@@ -4,7 +4,7 @@ import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { api } from "../lib/api";
 import { getErrorMessage } from "../lib/errors";
 import { InsightsTabs } from "../components/AppShell";
-import { AskFinSightButton, AskFinSightDrawer } from "../components/AskFinSightDrawer";
+import { AskFinSightButton, useAskFinSight } from "../components/AskFinSightButton";
 import { RecoveryMeter } from "../components/RecoveryMeter";
 import { StatTile } from "../components/StatTile";
 import { DataTable, type Column } from "../components/DataTable";
@@ -115,10 +115,10 @@ export function RecoveryInsightPage() {
   const [data, setData] = useState<RecoveryInsight | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  // Set only by the "expand on this" link — the plain header button opens
-  // the drawer with this left undefined, same as always.
-  const [drawerQuestion, setDrawerQuestion] = useState<string | undefined>(undefined);
+  // Sends the owner to /ai-chat. The plain floating trigger goes with no
+  // question; the "expand on this" link below hands one through to be typed
+  // into the box for them — it is never sent on their behalf.
+  const askFinSight = useAskFinSight("Recovery Target");
 
   async function load() {
     if (!selected) return;
@@ -377,10 +377,7 @@ export function RecoveryInsightPage() {
             footer={
               <button
                 type="button"
-                onClick={() => {
-                  setDrawerQuestion(expandQuestion);
-                  setDrawerOpen(true);
-                }}
+                onClick={() => askFinSight(expandQuestion)}
                 className="tap-inline font-semibold text-accent-200 underline-offset-2 hover:underline"
               >
                 Ask about this gap →
@@ -401,20 +398,7 @@ export function RecoveryInsightPage() {
         </div>
       )}
 
-      <AskFinSightButton
-        onClick={() => {
-          setDrawerQuestion(undefined);
-          setDrawerOpen(true);
-        }}
-      />
-
-      <AskFinSightDrawer
-        businessProfileId={selected.id}
-        module="Recovery Target"
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        initialQuestion={drawerQuestion}
-      />
+      <AskFinSightButton originModule="Recovery Target" />
     </div>
   );
 }
