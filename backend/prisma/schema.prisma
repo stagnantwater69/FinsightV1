@@ -304,6 +304,31 @@ model User {
   deletionAttempts    Int                   @default(0) @map("User_DeletionAttempts")
   deletionLastError   String?               @map("User_DeletionLastError") @db.VarChar(500)
 
+  // [ADDED] User-level preferences, shared by web and mobile.
+  //
+  // These live on the account rather than in each client's local storage
+  // because they are the same preference wherever the owner signs in: someone
+  // who finished the guided tour on their laptop should not be offered it
+  // again on their phone, and dismissing the dashboard mascot should stay
+  // dismissed. Both previously lived in localStorage / SecureStore (see the
+  // module comments in web/src/lib/tourStorage.ts and mobile's copy, which
+  // named themselves the seam for exactly this swap).
+  //
+  // THEME IS DELIBERATELY NOT HERE. It is a per-device choice — a phone in
+  // dark mode and a desktop in light mode is the normal case, not drift —
+  // so it stays in client storage.
+  //
+  // Defaults are the pre-migration behaviour: the mascot message showed, and
+  // nobody had the tour pinned open. Existing rows therefore see no change.
+  showDashboardMascotMessage Boolean @default(true) @map("User_ShowDashboardMascotMessage")
+  // Nullable rather than defaulted to "not_started": null means "this account
+  // has never told the server anything about the tour", which is what lets a
+  // client migrate its locally stored progress up exactly once instead of
+  // overwriting it with a server default on first read.
+  tourStatus                 String? @map("User_TourStatus") @db.VarChar(20)
+  tourStep                   Int?    @map("User_TourStep")
+  tourAlwaysShow             Boolean @default(false) @map("User_TourAlwaysShow")
+
   businessProfiles BusinessProfile[]
   notifications    Notification[]
   aiInteractions   AIInteraction[]

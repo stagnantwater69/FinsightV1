@@ -73,7 +73,8 @@ const DESTINATIONS: Destination[] = [
   { label: "Business profile", to: "/business-profiles", section: "Management", keywords: "business shop branch company funds expenses operating days threshold" },
   { label: "All businesses", to: "/business-profiles/all", section: "Management", keywords: "business shop branch switch archive company list compare" },
   { label: "Add business profile", to: "/business-profiles/new", section: "Management", keywords: "new business create shop branch" },
-  { label: "My profile", to: "/profile", section: "Account", keywords: "account settings name email phone password personal details" },
+  { label: "My profile", to: "/profile", section: "Account", keywords: "account name email phone password personal details delete account devices" },
+  { label: "Account settings", to: "/account-settings", section: "Account", keywords: "settings preferences guided tour walkthrough tutorial mascot daily message greeting theme appearance dark light classic" },
   { label: "Notifications", to: "/notifications", section: "Account", keywords: "alerts bell unread messages announcements" },
 ];
 

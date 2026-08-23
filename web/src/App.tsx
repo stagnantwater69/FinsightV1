@@ -32,6 +32,7 @@ const Contact = lazy(() => import("./pages/Contact").then((m) => ({ default: m.C
 const Privacy = lazy(() => import("./pages/Privacy").then((m) => ({ default: m.Privacy })));
 const Terms = lazy(() => import("./pages/Terms").then((m) => ({ default: m.Terms })));
 const Profile = lazy(() => import("./pages/Profile").then((m) => ({ default: m.Profile })));
+const AccountSettings = lazy(() => import("./pages/AccountSettings").then((m) => ({ default: m.AccountSettings })));
 const BusinessProfiles = lazy(() => import("./pages/BusinessProfiles").then((m) => ({ default: m.BusinessProfiles })));
 const AllBusinessProfiles = lazy(() => import("./pages/AllBusinessProfiles").then((m) => ({ default: m.AllBusinessProfiles })));
 const CreateBusinessProfile = lazy(() => import("./pages/CreateBusinessProfile").then((m) => ({ default: m.CreateBusinessProfile })));
@@ -137,6 +138,7 @@ function App() {
 
                 <Route element={<AuthenticatedLayout />}>
                   <Route path="/profile" element={<Profile />} />
+                  <Route path="/account-settings" element={<AccountSettings />} />
                   <Route path="/notifications" element={<Notifications />} />
                   <Route path="/business-profiles" element={<BusinessProfiles />} />
                   <Route path="/business-profiles/all" element={<AllBusinessProfiles />} />

@@ -29,8 +29,47 @@ interface UpdateProfileInput {
   phoneNumber?: string | null;
 }
 
+/**
+ * The account-level preferences a caller may change about themselves.
+ *
+ * PARTIAL BY CONSTRUCTION, and the optionality is load-bearing: the two places
+ * that write these are a settings toggle and the tour overlay advancing a step,
+ * and neither knows what the other last stored. A whole-object write from the
+ * settings screen would restart an interrupted tour; one from the overlay would
+ * silently un-dismiss the mascot. `undefined` means "leave it alone" — which is
+ * exactly what Prisma's update does with an absent key, so nothing here has to
+ * read-modify-write.
+ *
+ * `tourStatus`/`tourStep` are nullable rather than merely optional so a client
+ * can explicitly CLEAR them (reset the tour) as distinct from not mentioning
+ * them at all.
+ */
+export interface UpdatePreferencesInput {
+  showDashboardMascotMessage?: boolean;
+  tourStatus?: string | null;
+  tourStep?: number | null;
+  tourAlwaysShow?: boolean;
+}
+
 /** Which client an auth email should send the recipient back to. */
 export type ClientPlatform = "web" | "mobile";
+
+/**
+ * The preferences half of a user row, in the one shape both clients see.
+ *
+ * Nested under `preferences` in the profile response rather than flattened into
+ * it, so the identity fields the two clients already destructure keep their
+ * exact names and a client can hand the whole block to its tour/settings layer
+ * without picking it apart field by field.
+ */
+function toPreferences(user: User) {
+  return {
+    showDashboardMascotMessage: user.showDashboardMascotMessage,
+    tourStatus: user.tourStatus,
+    tourStep: user.tourStep,
+    tourAlwaysShow: user.tourAlwaysShow,
+  };
+}
 
 function toProfile(user: User) {
   return {
@@ -485,12 +524,37 @@ export async function changePassword(
   securityEvent("sessions.revoked", { userId, scope: "others", reason: "password changed" });
 }
 
+/**
+ * ADDITIVE ONLY. `preferences` is a new key alongside everything GET /auth/me
+ * already returned; nothing was renamed or removed, because mobile ships
+ * against the old shape today and has to keep working until its own change
+ * lands. The sibling writers (updateProfile, updateAvatar) deliberately keep
+ * returning the bare identity block — preferences are changed through
+ * updatePreferences, and widening those responses would change a contract two
+ * clients already depend on for no gain.
+ */
 export async function getProfile(userId: number) {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) {
     throw new ApiError(404, "Profile not found");
   }
-  return toProfile(user);
+  return { ...toProfile(user), preferences: toPreferences(user) };
+}
+
+/**
+ * Writes the caller's own preferences, leaving unmentioned fields untouched.
+ *
+ * `where: { id: userId }` is the whole authorisation story, and it is enough
+ * because userId comes from the verified token rather than from the request
+ * body. There is no id parameter anywhere on this surface, so a body naming
+ * someone else's account has nowhere to put it.
+ */
+export async function updatePreferences(userId: number, input: UpdatePreferencesInput) {
+  const user = await prisma.user.update({
+    where: { id: userId },
+    data: input,
+  });
+  return toPreferences(user);
 }
 
 export async function updateProfile(userId: number, input: UpdateProfileInput) {

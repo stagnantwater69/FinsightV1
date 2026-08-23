@@ -1,8 +1,8 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useLocation } from "react-router-dom";
 import { useAuth } from "./AuthContext";
 import { useBusinessProfiles } from "./BusinessProfileContext";
-import { readTour, setAlwaysShowTour, writeTour } from "../lib/tourStorage";
+import { preferencePatch, readTour, reconcile, writeTour, type StoredTour } from "../lib/tourStorage";
 import { TOUR_STEPS } from "../components/tour/steps";
 import { TourOverlay } from "../components/tour/TourOverlay";
 
@@ -16,7 +16,11 @@ import { TourOverlay } from "../components/tour/TourOverlay";
  *
  * WHEN THE TOUR AUTO-STARTS — all of these, none negotiable:
  *   - a signed-in user whose stored status is neither completed nor skipped
- *     (localStorage keyed by user id; see lib/tourStorage.ts for why local),
+ *     (the account's own tourStatus, cached in localStorage per user id; see
+ *     lib/tourStorage.ts for how the two are reconciled),
+ *   - that account's preferences having arrived and been reconciled, so a
+ *     tour finished on another device is never re-offered here while
+ *     /auth/me is still in flight,
  *   - a selected business profile. An owner who skipped Business Profile
  *     Setup has an app whose nav, quick-add, bell and dashboard all render
  *     nothing — touring an empty shell teaches nothing, so the tour waits
@@ -33,7 +37,7 @@ import { TourOverlay } from "../components/tour/TourOverlay";
  * tour" in the account menu writes it back to step 0.
  */
 
-interface TourContextValue {
+export interface TourContextValue {
   /** id of the active step, or null — the shell reads this. */
   activeStepId: string | null;
   active: boolean;
@@ -45,7 +49,12 @@ interface TourContextValue {
   restart: () => void;
   /** Replay on every sign-in, regardless of a completed/skipped status. */
   alwaysShow: boolean;
-  setAlwaysShow: (value: boolean) => void;
+  /**
+   * Rejects if the account could not be told, having already put the switch
+   * back — so the settings screen can say so rather than showing a preference
+   * that only this browser believes.
+   */
+  setAlwaysShow: (value: boolean) => Promise<void>;
 }
 
 /** Exported for tests/harnesses that drive the overlay with a hand-built value. */
@@ -57,7 +66,7 @@ export function useTourOptional() {
 }
 
 export function TourProvider({ children }: { children: ReactNode }) {
-  const { profile } = useAuth();
+  const { profile, preferences, preferencesLoaded, updatePreferences } = useAuth();
   const { selected, loading } = useBusinessProfiles();
   const location = useLocation();
 
@@ -71,16 +80,82 @@ export function TourProvider({ children }: { children: ReactNode }) {
    */
   const [alwaysShow, setAlwaysShowState] = useState(false);
 
+  /*
+   * True once this account's server-side tour state has been read and either
+   * adopted or migrated up. The auto-start gate waits for it: the cache alone
+   * cannot tell "never toured" from "toured on the other laptop", and opening
+   * the tour over a dashboard someone already toured is the exact failure this
+   * whole move to the server was for.
+   */
+  const [reconciled, setReconciled] = useState(false);
+
   const userId = profile?.id;
   const onDashboard = location.pathname === "/dashboard";
 
+  /** Cache locally AND tell the account. One writer, so the two cannot drift. */
+  const persist = useCallback(
+    (next: StoredTour) => {
+      if (userId == null) return;
+      writeTour(userId, next);
+      // Fire and forget: the cache has already answered, and a tour must not
+      // stall or error out because a preference write did. The next reconcile
+      // (or the next advance) sends it again.
+      void updatePreferences(preferencePatch(next)).catch(() => undefined);
+    },
+    [userId, updatePreferences],
+  );
+
+  // Whose state has been reconciled. Keyed by user id rather than a bare
+  // boolean so switching accounts on a shared machine reconciles again
+  // instead of trusting the previous owner's answer.
+  const reconciledFor = useRef<number | null>(null);
+
+  // Seed from the cache the moment the user is known — before /auth/me has
+  // answered — so the settings switch renders the right way round rather than
+  // flicking on a beat later.
   useEffect(() => {
+    reconciledFor.current = null;
+    setReconciled(false);
     setAlwaysShowState(userId == null ? false : readTour(userId).alwaysShow === true);
   }, [userId]);
 
-  function setAlwaysShow(value: boolean) {
+  // Then reconcile against the account, exactly once per sign-in.
+  useEffect(() => {
+    if (userId == null || !preferencesLoaded || reconciledFor.current === userId) return;
+    reconciledFor.current = userId;
+    const { tour, push } = reconcile(readTour(userId), preferences);
+    writeTour(userId, tour);
+    setAlwaysShowState(tour.alwaysShow === true);
+    // The migrate-up: local progress the server has never heard about goes up
+    // as-is, rather than a server default coming down over it.
+    if (push) void updatePreferences(push).catch(() => undefined);
+    setReconciled(true);
+  }, [userId, preferencesLoaded, preferences, updatePreferences]);
+
+  /*
+   * The one tour write that is NOT fire-and-forget. Progress can afford to be
+   * (the cache answers, and the next advance sends it again), but this is a
+   * preference the owner deliberately set: leaving the switch on after the
+   * write failed would promise a replay that will not happen on their next
+   * device. So it is optimistic here and rolled back — cache included — if the
+   * account refuses it.
+   */
+  async function setAlwaysShow(value: boolean) {
+    if (userId == null) {
+      setAlwaysShowState(value);
+      return;
+    }
+    const previous = readTour(userId);
+    const next = { ...previous, alwaysShow: value };
     setAlwaysShowState(value);
-    if (userId != null) setAlwaysShowTour(userId, value);
+    writeTour(userId, next);
+    try {
+      await updatePreferences(preferencePatch(next));
+    } catch (err) {
+      setAlwaysShowState(previous.alwaysShow === true);
+      writeTour(userId, previous);
+      throw err;
+    }
   }
 
   // Persist progress on every change while active, so any interruption —
@@ -88,8 +163,8 @@ export function TourProvider({ children }: { children: ReactNode }) {
   // rides along on every write below: it is a preference, not progress, and
   // finishing or skipping the tour must never turn it off behind the owner.
   useEffect(() => {
-    if (active && userId != null) writeTour(userId, { status: "in_progress", step: stepIndex, alwaysShow });
-  }, [active, stepIndex, userId, alwaysShow]);
+    if (active && userId != null) persist({ status: "in_progress", step: stepIndex, alwaysShow });
+  }, [active, stepIndex, userId, alwaysShow, persist]);
 
   // Leaving the dashboard pauses the tour (status stays in_progress). The
   // targets live on that page and its chrome; a tooltip pointing at nothing
@@ -102,7 +177,7 @@ export function TourProvider({ children }: { children: ReactNode }) {
   // coupling to Dashboard's internals; gives up after ~20s without blocking
   // anything.
   useEffect(() => {
-    if (active || !onDashboard || userId == null || loading || !selected) return;
+    if (active || !onDashboard || userId == null || loading || !selected || !reconciled) return;
     const stored = readTour(userId);
     // `alwaysShow` is the deliberate override: it exists so the tour can be
     // demonstrated and re-checked without registering a new account, which is
@@ -124,15 +199,15 @@ export function TourProvider({ children }: { children: ReactNode }) {
       setActive(true);
     }, 400);
     return () => window.clearInterval(timer);
-  }, [active, onDashboard, userId, loading, selected]);
+  }, [active, onDashboard, userId, loading, selected, reconciled]);
 
   function stop(status: "completed" | "skipped") {
-    if (userId != null) writeTour(userId, { status, step: stepIndex, alwaysShow });
+    if (userId != null) persist({ status, step: stepIndex, alwaysShow });
     setActive(false);
   }
 
   function restart() {
-    if (userId != null) writeTour(userId, { status: "in_progress", step: 0, alwaysShow });
+    if (userId != null) persist({ status: "in_progress", step: 0, alwaysShow });
     setStepIndex(0);
     // On the dashboard the auto-start effect would race the loaded marker;
     // activate directly when it is already there. Elsewhere the caller

@@ -21,6 +21,7 @@ import {
   IconRecords,
   IconSales,
   IconSearch,
+  IconSettings,
   IconSidebar,
   IconUpload,
 } from "./icons";
@@ -126,7 +127,10 @@ const NAV_GROUPS: NavGroup[] = [
   },
   {
     heading: "Account",
-    items: [{ to: "/profile", label: "My profile", Icon: IconProfile }],
+    items: [
+      { to: "/profile", label: "My profile", Icon: IconProfile },
+      { to: "/account-settings", label: "Account settings", Icon: IconSettings },
+    ],
   },
 ];
 

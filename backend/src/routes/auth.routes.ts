@@ -69,3 +69,23 @@ authRouter.delete("/me", requireAuth, rateLimit(LIMITS.AUTH_REAUTH), asyncHandle
 authRouter.get("/me", requireAuth, asyncHandler(authController.getMe));
 authRouter.patch("/me", requireAuth, asyncHandler(authController.updateMe));
 authRouter.post("/me/avatar", requireAuth, uploadPhoto.single("file"), asyncHandler(authController.uploadAvatar));
+
+/*
+ * Preferences get their own path rather than widening PATCH /me, because they
+ * are a different kind of thing from the identity fields beside them: written
+ * by a toggle and by the tour overlay rather than by a form the owner submits,
+ * and carrying none of the "this is who I am" weight. Reads ride along on
+ * GET /me, which both clients already call on sign-in — a second fetch for
+ * four small values would only slow the first paint down.
+ *
+ * DELIBERATELY UNLIMITED, like GET/PATCH /me above it. Every existing entry in
+ * LIMITS is sized for a specific cost — an OCR pass, a billed model call, a
+ * password oracle, a 5MB parse — and none of them describes a one-row UPDATE
+ * behind requireAuth. Borrowing AUTH_REAUTH's 5-per-15-minutes, the only near
+ * miss, would break the normal case outright: an eleven-step tour saves its
+ * progress on every advance. A spammed toggle costs one indexed write by an
+ * authenticated owner against their own row, which is the exposure PATCH /me
+ * already carries. If this ever needs a bucket it wants its own budget, sized
+ * from tour advances plus toggle presses — not one of these inherited.
+ */
+authRouter.patch("/me/preferences", requireAuth, asyncHandler(authController.updateMyPreferences));

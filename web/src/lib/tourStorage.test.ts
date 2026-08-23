@@ -1,6 +1,15 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from "vitest";
-import { readTour, setAlwaysShowTour, writeTour } from "./tourStorage";
+import { fromPreferences, preferencePatch, readTour, reconcile, setAlwaysShowTour, writeTour } from "./tourStorage";
+import type { UserPreferences } from "./types";
+
+const prefs = (over: Partial<UserPreferences> = {}): UserPreferences => ({
+  showDashboardMascotMessage: true,
+  tourStatus: null,
+  tourStep: null,
+  tourAlwaysShow: false,
+  ...over,
+});
 
 describe("tourStorage", () => {
   beforeEach(() => window.localStorage.clear());
@@ -67,5 +76,48 @@ describe("tourStorage", () => {
       writeTour(7, { status: "completed", step: 9, alwaysShow: readTour(7).alwaysShow });
       expect(readTour(7)).toEqual({ status: "completed", step: 9, alwaysShow: true });
     });
+  });
+});
+
+/**
+ * The pure half of the server move. The provider-level wiring is asserted in
+ * context/TourContext.migration.test.tsx; this pins the decision itself, which
+ * is the part that must not be "fixed" by someone reading a null status as a
+ * fresh start.
+ */
+describe("reconciling with the account", () => {
+  it("adopts local state and pushes it up when the server has never been told", () => {
+    const local = { status: "completed" as const, step: 9, alwaysShow: true };
+    expect(reconcile(local, prefs({ tourStatus: null }))).toEqual({
+      tour: local,
+      push: { tourStatus: "completed", tourStep: 9, tourAlwaysShow: true },
+    });
+  });
+
+  it("takes the server's answer, and pushes nothing, once it has one", () => {
+    expect(
+      reconcile(
+        { status: "in_progress", step: 3, alwaysShow: false },
+        prefs({ tourStatus: "completed", tourStep: 9, tourAlwaysShow: true }),
+      ),
+    ).toEqual({
+      tour: { status: "completed", step: 9, alwaysShow: true },
+      push: null,
+    });
+  });
+
+  it("reads a null step as no saved progress rather than step zero", () => {
+    expect(fromPreferences(prefs({ tourStatus: "completed", tourStep: null }))).toEqual({
+      status: "completed",
+      step: undefined,
+      alwaysShow: false,
+    });
+  });
+
+  it("clamps the step it sends into the range the API accepts", () => {
+    // A corrupt cache entry must not turn into a 400 that loses the whole
+    // migration; MAX_TOUR_STEP is 100 on the server.
+    expect(preferencePatch({ status: "in_progress", step: 5000 }).tourStep).toBe(100);
+    expect(preferencePatch({ status: "not_started" }).tourStep).toBe(0);
   });
 });

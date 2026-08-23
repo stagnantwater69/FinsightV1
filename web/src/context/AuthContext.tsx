@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { api, setSessionExpiredHandler } from "../lib/api";
-import type { LoginInput, Profile, RegisterInput, UpdateProfileInput } from "../lib/types";
+import type { LoginInput, Profile, RegisterInput, UpdateProfileInput, UserPreferences } from "../lib/types";
 
 interface AuthContextValue {
   profile: Profile | null;
@@ -23,7 +23,42 @@ interface AuthContextValue {
   logoutEverywhere: () => Promise<void>;
   updateProfile: (input: UpdateProfileInput) => Promise<void>;
   uploadAvatar: (file: File) => Promise<void>;
+  /**
+   * Account-level preferences — the settings screen, the dashboard greeting
+   * and the product tour all read these, and they all read THIS copy.
+   *
+   * Never null: an account whose preferences have not arrived yet reads as the
+   * defaults, so no caller has to branch on a loading state to decide whether
+   * to render. `preferencesLoaded` exists for the one caller that genuinely
+   * must wait — the tour, which cannot safely reconcile local progress against
+   * an answer it does not have yet.
+   */
+  preferences: UserPreferences;
+  preferencesLoaded: boolean;
+  /**
+   * Writes a PARTIAL preference change, optimistically.
+   *
+   * Applied in memory first so a switch moves under the finger, then sent; a
+   * failure puts the previous value back and rethrows, so the caller can say
+   * so. The partial is not a convenience — the tour and the settings toggles
+   * write different fields from different places, and a whole-object write
+   * from either would clobber the other.
+   */
+  updatePreferences: (patch: Partial<UserPreferences>) => Promise<void>;
 }
+
+/**
+ * What an account looks like before its preferences arrive, and what a brand
+ * new one gets. The mascot greeting defaults ON: it is the dashboard's opening
+ * line today, and a preference that has not loaded yet must not read as "the
+ * owner turned this off".
+ */
+export const DEFAULT_PREFERENCES: UserPreferences = {
+  showDashboardMascotMessage: true,
+  tourStatus: null,
+  tourStep: null,
+  tourAlwaysShow: false,
+};
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
@@ -40,6 +75,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const [sessionExpired, setSessionExpired] = useState(false);
+  // `null` is "not loaded", which is why this is not simply seeded with the
+  // defaults — the tour has to be able to tell the two apart.
+  const [preferences, setPreferences] = useState<UserPreferences | null>(null);
 
   /*
    * Clearing `profile` is what performs the redirect: ProtectedRoute renders
@@ -57,6 +95,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // first-time visitor their session expired would be a lie.
       if (signedInRef.current) setSessionExpired(true);
       setProfile(null);
+      setPreferences(null);
       void supabase.auth.signOut();
     });
     return () => setSessionExpiredHandler(null);
@@ -81,7 +120,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .then(async ({ data }) => {
         if (!active) return;
         if (data.session) {
-          setProfile(await fetchProfile());
+          const me = await fetchProfile();
+          setProfile(me);
+          // A failed /auth/me leaves `profile` null and the app on the login
+          // screen, so there is nothing to hold preferences for.
+          if (me) setPreferences(me.preferences ?? DEFAULT_PREFERENCES);
         }
       })
       .catch((err) => {
@@ -95,6 +138,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data: subscription } = supabase.auth.onAuthStateChange((event) => {
       if (event === "SIGNED_OUT") {
         setProfile(null);
+        setPreferences(null);
       }
     });
 
@@ -115,6 +159,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     setSessionExpired(false);
     setProfile(data.profile);
+    /*
+     * POST /auth/login answers with the identity block only — preferences ride
+     * on GET /auth/me. Fetched here rather than widening the login response,
+     * because mobile ships against that response's current shape.
+     *
+     * Deliberately not awaited: nothing on the first screen after sign-in is
+     * blocked on a preference, and making the owner wait an extra round trip
+     * to get past the login form would be paying for the wrong thing. Callers
+     * that must wait check `preferencesLoaded`.
+     */
+    void api
+      .get<Profile>("/auth/me")
+      .then(({ data: me }) => setPreferences(me.preferences ?? DEFAULT_PREFERENCES))
+      .catch(() => setPreferences(DEFAULT_PREFERENCES));
   }
 
   async function register(input: RegisterInput) {
@@ -129,6 +187,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await supabase.auth.signOut();
     setSessionExpired(false);
     setProfile(null);
+    setPreferences(null);
   }
 
   async function logoutEverywhere() {
@@ -136,11 +195,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await supabase.auth.signOut();
     setSessionExpired(false);
     setProfile(null);
+    setPreferences(null);
   }
 
   async function updateProfile(input: UpdateProfileInput) {
     const { data } = await api.patch<Profile>("/auth/me", input);
     setProfile(data);
+  }
+
+  async function updatePreferences(patch: Partial<UserPreferences>) {
+    const previous = preferences;
+    setPreferences((prev) => ({ ...(prev ?? DEFAULT_PREFERENCES), ...patch }));
+    try {
+      const { data } = await api.patch<UserPreferences>("/auth/me/preferences", patch);
+      // The response is the whole preferences object, not the echo of the
+      // patch — so this also picks up anything another device changed.
+      setPreferences(data);
+    } catch (err) {
+      setPreferences(previous);
+      throw err;
+    }
   }
 
   async function uploadAvatar(file: File) {
@@ -154,7 +228,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ profile, loading, sessionExpired, login, register, logout, logoutEverywhere, updateProfile, uploadAvatar }}
+      value={{
+        profile,
+        loading,
+        sessionExpired,
+        login,
+        register,
+        logout,
+        logoutEverywhere,
+        updateProfile,
+        uploadAvatar,
+        preferences: preferences ?? DEFAULT_PREFERENCES,
+        preferencesLoaded: preferences !== null,
+        updatePreferences,
+      }}
     >
       {children}
     </AuthContext.Provider>

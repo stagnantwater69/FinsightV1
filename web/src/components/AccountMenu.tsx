@@ -113,7 +113,7 @@ export function AccountMenu() {
               <IconProfile aria-hidden className="h-4 w-4 shrink-0 text-ink-400" />
               My profile
             </Link>
-            <Link to="/business-profiles" role="menuitem" onClick={() => setOpen(false)} className={item}>
+            <Link to="/account-settings" role="menuitem" onClick={() => setOpen(false)} className={item}>
               <IconSettings aria-hidden className="h-4 w-4 shrink-0 text-ink-400" />
               Account settings
             </Link>

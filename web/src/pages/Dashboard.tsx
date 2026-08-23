@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
 import { api } from "../lib/api";
@@ -37,6 +38,11 @@ const PERIOD_OPTIONS = [
 
 export function Dashboard() {
   const { selected } = useBusinessProfiles();
+  // The ONE mascot this preference governs — Fin's daily line below. Every
+  // other appearance (Ask FinSight, the tour, empty states, onboarding) is a
+  // reply to something the owner just did, not an unprompted daily message,
+  // and stays put.
+  const { preferences } = useAuth();
   const { categories } = useExpenseCategories();
   const [periodDays, setPeriodDays] = useState(30);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
@@ -242,10 +248,17 @@ export function Dashboard() {
       */}
       {/* data-tour="dashboard-summary" is the product tour's "dashboard
           overview" spotlight — the greeting panel is the page's summary
-          sentence and the first thing the tour should point at. */}
-      <div data-tour="dashboard-summary">
-        <GreetingHero summary={loading ? null : summary} />
-      </div>
+          sentence and the first thing the tour should point at. The KPI row
+          below carries the same marker as a fallback, so an owner who has
+          turned the daily message off still gets that step pointed at
+          something rather than having it silently skipped (TourOverlay
+          resolves the first VISIBLE match, which is this one when it is
+          here). */}
+      {preferences.showDashboardMascotMessage ? (
+        <div data-tour="dashboard-summary">
+          <GreetingHero summary={loading ? null : summary} />
+        </div>
+      ) : null}
 
       {/* Invisible marker for the tour's auto-start gate: present only once
           the dashboard fetch has settled, so the tour never opens over a
@@ -343,7 +356,7 @@ export function Dashboard() {
             actionable "so what" of the whole screen, and recency makes it the
             thing an owner leaves with.
           */}
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div data-tour="dashboard-summary" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <KpiCard
               label="Available business funds"
               value={<span className="figure">{formatMoney(summary.overview.availableFunds)}</span>}

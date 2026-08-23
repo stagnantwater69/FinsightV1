@@ -136,6 +136,68 @@ const updateProfileSchema = z.object({
   phoneNumber: z.string().max(20).nullable().optional(),
 });
 
+/**
+ * The guided tour's four states, as the clients actually name them.
+ *
+ * NOT A FREE STRING. The value is written by web's TourContext and mobile's
+ * tourContextValue.ts and read back by both, so a typo'd status stored here
+ * would present as a tour that never starts on one client and never stops on
+ * the other, with nothing in the request to say which end was wrong. The union
+ * is the same one `TourStatus` declares in web/src/lib/tourStorage.ts and
+ * mobile/src/lib/tourStorage.ts; its longest member is 11 characters, which is
+ * why `User_TourStatus` is VARCHAR(20) rather than something tighter.
+ *
+ * EXPORTED for the reason the auth schemas above are: the contract tests check
+ * the clients against the real rule here rather than a restated copy, which
+ * would agree with itself forever.
+ */
+export const TOUR_STATUSES = ["not_started", "in_progress", "completed", "skipped"] as const;
+
+/**
+ * The furthest step index this will store.
+ *
+ * `tourStep` is an index into each client's own TOUR_STEPS array (11 entries on
+ * web today), saved so an interrupted tour resumes where it stopped. The cap is
+ * deliberately well above that rather than pinned to it: the two clients add and
+ * reorder steps independently of the API, and a bound that tracked the current
+ * step count would start rejecting a legitimate save the moment either client
+ * grew a step. What this has to stop is a value that is not a step index at all
+ * — negative, fractional, or large enough to look like an id — not an off-by-one.
+ */
+export const MAX_TOUR_STEP = 100;
+
+/**
+ * Account-level preferences, all of them optional.
+ *
+ * THE OPTIONALITY IS THE FEATURE. These are written from two unrelated places —
+ * a settings toggle and the tour overlay advancing a step — and neither knows
+ * what the other last stored. A whole-object write from the settings screen
+ * would restart an interrupted tour; one from the overlay would silently
+ * un-dismiss the mascot. An absent key means "leave it alone".
+ *
+ * `tourStatus` and `tourStep` additionally accept null, which is how a client
+ * resets the tour to "the server has never been told" — distinct from not
+ * mentioning it.
+ *
+ * THEME IS ABSENT ON PURPOSE. It is a per-device choice and stays in client
+ * storage; a phone in dark mode at night should not drag a desktop with it.
+ */
+export const updatePreferencesSchema = z
+  .object({
+    showDashboardMascotMessage: z.boolean().optional(),
+    tourStatus: z.enum(TOUR_STATUSES).nullable().optional(),
+    tourStep: z.number().int().min(0).max(MAX_TOUR_STEP).nullable().optional(),
+    tourAlwaysShow: z.boolean().optional(),
+  })
+  // `.strict()` because a misspelled key here is a client bug that would
+  // otherwise look like a preference which silently refuses to stick, and the
+  // refine catches the same bug's other shape: an empty body, where answering
+  // 200 would report success for a write that never happened.
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, {
+    message: "Provide at least one preference to update",
+  });
+
 /** The caller's own access token, for operations that act on their sessions. */
 function bearerToken(req: Request): string {
   const header = req.headers.authorization;
@@ -228,6 +290,24 @@ export async function updateMe(req: Request, res: Response) {
   const input = updateProfileSchema.parse(req.body);
   const profile = await authService.updateProfile(req.user!.id, input);
   res.status(200).json(profile);
+}
+
+/**
+ * Preferences are their own surface rather than more keys on PATCH /auth/me,
+ * because they are a different kind of thing: the identity fields there are the
+ * account's record of who the owner is, these are how the app should behave for
+ * them. Someone toggling the mascot off should not be sending a name change.
+ *
+ * Scoped by `req.user!.id` and nothing else. There is no id in the path, the
+ * query or the body — `.strict()` would reject one — so this route has no way to
+ * name another account's row, which is why there is no ownership check beyond
+ * requireAuth: there is no other row it could reach. Reads come back with the
+ * profile from GET /auth/me, which both clients already fetch on sign-in.
+ */
+export async function updateMyPreferences(req: Request, res: Response) {
+  const input = updatePreferencesSchema.parse(req.body);
+  const preferences = await authService.updatePreferences(req.user!.id, input);
+  res.status(200).json(preferences);
 }
 
 export async function uploadAvatar(req: Request, res: Response) {
