@@ -15,7 +15,7 @@ import { extractScenario, type ExtractedScenario } from "../lib/scenario";
 import { utcDateKey, utcToday } from "../lib/dates";
 import { getDashboardSummary } from "./dashboard.service";
 import { getExpenseBehavior, getRecoveryInsight, loadRecoveryTargets, simulateSpendingImpact } from "./insights.service";
-import { NOTICEABLE_BAND_FRACTION } from "./analysis.service";
+import { NOTICEABLE_BAND_FRACTION, type RecoveryTargets } from "./analysis.service";
 
 export const INTERACTION_MODULES = [
   "Expense Insights",
@@ -33,6 +33,44 @@ export type InteractionModule = (typeof INTERACTION_MODULES)[number];
 // The period the drawer reasons over when the question doesn't name one.
 const DEFAULT_PERIOD_DAYS = 30;
 const TOP_CATEGORIES_IN_SNAPSHOT = 5;
+// Days of daily-coverage history the Recovery Target block tabulates.
+const RECOVERY_COVERAGE_DAYS = 7;
+
+// ============================================================
+// Per-message loaders
+// ============================================================
+//
+// The snapshot and the detail blocks legitimately need some of the SAME
+// server-computed figures (expense behaviour; recovery targets). Before the
+// Dashboard was widened each context used a given figure once, so fetching it
+// per block cost nothing; a Dashboard message now assembles four blocks on top
+// of the snapshot and would otherwise pay for the same expensive reads twice
+// on a billed, latency-sensitive path.
+//
+// These loaders exist so blocks SHARE one in-flight promise instead of issuing
+// their own query. Two properties are load-bearing:
+//
+//   - Memoization is scoped to a single buildModuleContext call and dies with
+//     it. A process-wide cache would break rule 1 at the top of this file:
+//     every message is grounded in data read fresh at that moment, so an
+//     owner who records an expense mid-conversation sees it in the next reply.
+//   - Sharing must not serialize anything. Each block calls its loader
+//     synchronously before its first await, so the first caller starts the
+//     query and every later caller awaits that same promise inside the one
+//     Promise.all wave — nobody waits for another block to finish.
+type ExpenseBehavior = Awaited<ReturnType<typeof getExpenseBehavior>>;
+
+interface ContextLoaders {
+  behavior: () => Promise<ExpenseBehavior>;
+  recoveryTargets: () => Promise<RecoveryTargets>;
+}
+
+function once<T>(load: () => Promise<T>): () => Promise<T> {
+  let inFlight: Promise<T> | undefined;
+  // Caches the PROMISE, not the resolved value, so callers in the same wave
+  // share one query rather than racing to start a second one.
+  return () => (inFlight ??= load());
+}
 
 function peso(n: number): string {
   return `PHP ${n.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -56,14 +94,19 @@ function profileLines(profile: BusinessProfile): string[] {
 // Needed because "suggest ways to cut costs" and "interpret this scenario"
 // can't be answered from one screen's numbers. Without this the model has
 // no choice but to produce filler like "reduce unnecessary spending".
+//
+// `loaders` is optional and defaults to fetching everything itself, so the
+// exported signature stays source-compatible for any caller that doesn't
+// participate in a shared per-message wave.
 export async function buildFinancialSnapshot(
   userId: number,
   profile: BusinessProfile,
-  today: Date
+  today: Date,
+  loaders?: Partial<ContextLoaders>
 ): Promise<string[]> {
   const [behavior, recovery, flaggedExpenses, duplicateCount] = await Promise.all([
-    getExpenseBehavior(userId, profile.id, DEFAULT_PERIOD_DAYS),
-    loadRecoveryTargets(profile, today),
+    (loaders?.behavior ?? (() => getExpenseBehavior(userId, profile.id, DEFAULT_PERIOD_DAYS)))(),
+    (loaders?.recoveryTargets ?? (() => loadRecoveryTargets(profile, today)))(),
     prisma.expenseRecord.findMany({
       where: { businessProfileId: profile.id, largeExpenseFlag: true },
       orderBy: { date: "desc" },
@@ -133,9 +176,13 @@ export async function buildFinancialSnapshot(
 // Module-specific context
 // ============================================================
 
-async function expenseInsightsLines(userId: number, profile: BusinessProfile): Promise<string[]> {
+async function expenseInsightsLines(
+  userId: number,
+  profile: BusinessProfile,
+  loadBehavior?: () => Promise<ExpenseBehavior>
+): Promise<string[]> {
   const [behavior, findings] = await Promise.all([
-    getExpenseBehavior(userId, profile.id, DEFAULT_PERIOD_DAYS),
+    (loadBehavior ?? (() => getExpenseBehavior(userId, profile.id, DEFAULT_PERIOD_DAYS)))(),
     prisma.anomalyFinding.findMany({
       where: { businessProfileId: profile.id, status: "OPEN" },
       orderBy: [{ severity: "desc" }, { detectedAt: "desc" }],
@@ -180,8 +227,14 @@ async function expenseInsightsLines(userId: number, profile: BusinessProfile): P
   return lines;
 }
 
-async function recoveryLines(userId: number, profile: BusinessProfile): Promise<string[]> {
-  const recovery = await getRecoveryInsight(userId, profile.id, 7);
+type RecoveryInsight = Awaited<ReturnType<typeof getRecoveryInsight>>;
+
+async function recoveryLines(
+  userId: number,
+  profile: BusinessProfile,
+  loadInsight?: () => Promise<RecoveryInsight>
+): Promise<string[]> {
+  const recovery = await (loadInsight ?? (() => getRecoveryInsight(userId, profile.id, RECOVERY_COVERAGE_DAYS)))();
   const lines = [
     "",
     "=== RECOVERY TARGET DETAIL ===",
@@ -333,6 +386,74 @@ async function recordsReviewLines(profile: BusinessProfile): Promise<string[]> {
   return lines;
 }
 
+// The Dashboard is the one screen an owner opens without a question already in
+// mind, so its conversation wanders: "why is this so high", "am I on pace",
+// "what's in my review queue". A single dashboard summary can't answer any of
+// those, and the drawer has no way to switch modules mid-conversation, so the
+// Dashboard gets the union of the three detail blocks that back those
+// questions. Every other module stays deliberately narrow — that narrowness is
+// what stops an expense-behaviour question from being answered with recovery
+// arithmetic.
+//
+// Token cost of the union is small: the expensive shared part
+// (buildFinancialSnapshot) already runs for every module, and these blocks are
+// only ~5-11 lines each. The real cost is the extra DB round-trips, which is
+// why they are fetched concurrently in the same Promise.all as the snapshot
+// rather than awaited one after another — this sits on a per-message,
+// billed-model path where latency is user-visible.
+//
+// Spending Impact is deliberately NOT in the union. Its block is driven by
+// extractScenario(question): with no planned purchase in the message it
+// degrades to a generic banding blurb plus an instruction to ask for an
+// amount, which would be the largest block in the context and pure noise on a
+// dashboard question. Scenario parsing therefore stays where it was, on the
+// Spending Impact module only.
+function moduleDetailPromises(
+  userId: number,
+  profile: BusinessProfile,
+  module: InteractionModule,
+  scenario: ExtractedScenario | undefined,
+  loadBehavior: () => Promise<ExpenseBehavior>,
+  loadRecoveryInsight: () => Promise<RecoveryInsight>
+): Promise<string[]>[] {
+  switch (module) {
+    case "Expense Insights":
+      return [expenseInsightsLines(userId, profile, loadBehavior)];
+    case "Recovery Target":
+      return [recoveryLines(userId, profile, loadRecoveryInsight)];
+    case "Spending Impact":
+      return [spendingImpactLines(userId, profile, scenario!)];
+    case "Records Review":
+      return [recordsReviewLines(profile)];
+    case "Dashboard":
+    default:
+      // Dashboard's own summary first so it reads as the answer to "how am I
+      // doing"; the rest follow as supporting detail. Each block keeps its own
+      // === SECTION === header so the model can tell which numbers came from
+      // where instead of blending them.
+      return [
+        dashboardLines(userId, profile),
+        expenseInsightsLines(userId, profile, loadBehavior),
+        recoveryLines(userId, profile, loadRecoveryInsight),
+        recordsReviewLines(profile),
+      ];
+  }
+}
+
+// The steering line is what keeps a narrow module narrow, so widening the
+// Dashboard's context without widening its steering line would leave the model
+// refusing to use data it was just given.
+function steeringLine(module: InteractionModule): string {
+  if (module === "Dashboard") {
+    return (
+      "The owner is currently looking at the Dashboard screen. This context also covers their expense behaviour, " +
+      "recovery pace and review queue, so a question that ranges across those can be answered directly from what is above. " +
+      "Do not invite questions about planned purchases — no purchase scenario has been calculated for this message."
+    );
+  }
+  return `The owner is currently looking at the ${module} screen. Stay scoped to that unless they clearly ask about something else in this context.`;
+}
+
 export async function buildModuleContext(
   userId: number,
   profile: BusinessProfile,
@@ -342,25 +463,36 @@ export async function buildModuleContext(
   const today = utcToday();
   const scenario = module === "Spending Impact" ? extractScenario(question) : undefined;
 
-  const [snapshot, moduleDetail] = await Promise.all([
-    buildFinancialSnapshot(userId, profile, today),
-    module === "Expense Insights"
-      ? expenseInsightsLines(userId, profile)
-      : module === "Recovery Target"
-        ? recoveryLines(userId, profile)
-        : module === "Spending Impact"
-          ? spendingImpactLines(userId, profile, scenario!)
-          : module === "Records Review"
-            ? recordsReviewLines(profile)
-            : dashboardLines(userId, profile),
+  // One expense-behaviour read per message, shared by the snapshot and the
+  // Expense Insights block (identical arguments, so a second read could only
+  // return the same rows at more cost).
+  const loadBehavior = once(() => getExpenseBehavior(userId, profile.id, DEFAULT_PERIOD_DAYS));
+
+  // The recovery detail block already computes the snapshot's recovery targets
+  // on its way to the daily-coverage table — getRecoveryInsight returns those
+  // targets verbatim alongside its own figures. So when a module renders that
+  // block, the snapshot reads its targets off the same result instead of
+  // running loadRecoveryTargets a second time; when it doesn't, the snapshot
+  // keeps doing the cheaper targets-only read on its own. The numbers are the
+  // same either way — both paths anchor on the same UTC day and the same
+  // profile row.
+  const loadRecoveryInsight = once(() => getRecoveryInsight(userId, profile.id, RECOVERY_COVERAGE_DAYS));
+  const rendersRecoveryDetail = module === "Dashboard" || module === "Recovery Target";
+
+  const [snapshot, ...details] = await Promise.all([
+    buildFinancialSnapshot(userId, profile, today, {
+      behavior: loadBehavior,
+      recoveryTargets: rendersRecoveryDetail ? loadRecoveryInsight : undefined,
+    }),
+    ...moduleDetailPromises(userId, profile, module, scenario, loadBehavior, loadRecoveryInsight),
   ]);
 
   const lines = [
     ...profileLines(profile),
     ...snapshot,
-    ...moduleDetail,
+    ...details.flat(),
     "",
-    `The owner is currently looking at the ${module} screen. Stay scoped to that unless they clearly ask about something else in this context.`,
+    steeringLine(module),
     `Today's date: ${utcDateKey(today)}. All amounts are Philippine pesos.`,
   ];
 
