@@ -32,24 +32,3 @@ backend/tests/ocr-accuracy/live-feedback.json
 # Python (ml worker)
 ml/.venv/
 __pycache__/
-
-# Local agent-harness runtime state — not project source.
-.agent-chat/
-.claude/
-skill-observations/
-
-# Local docs/planning/agent-team files — not needed to run the system.
-/docs/
-/plan/
-/scripts/
-/DESIGN-IS-2026-08-02/
-/AGENTS.md
-/CLAUDE.md
-/FINSIGHT-QA-REPORT.md
-/cross-cutting-principles.md
-
-# Regenerable sample dataset — recreate with scripts/generate_coffee_shop_csv.js.
-/philippines_coffee_shop_2_year_transactions.csv
-
-# Local tooling artifacts (impeccable skill critiques) — not part of the app
-.impeccable/
