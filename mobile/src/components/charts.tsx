@@ -245,6 +245,8 @@ export function CategoryBreakdown({
  * it would round two different ticks to the same label.
  */
 function axisTick(value: number): string {
+  if (value >= 1_000_000_000_000) return `${(value / 1_000_000_000_000).toFixed(value % 1_000_000_000_000 === 0 ? 0 : 1)}T`;
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(value % 1_000_000_000 === 0 ? 0 : 1)}B`;
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value % 1_000_000 === 0 ? 0 : 1)}M`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(value % 1_000 === 0 ? 0 : 1)}K`;
   return `${Math.round(value)}`;
@@ -1014,7 +1016,7 @@ export function CategoryComparison({
   currentLabel?: string;
 }) {
   const t = useTheme();
-  const { brand, ink, statusText } = t;
+  const { brand, ink } = t;
   const rows = data.filter((r) => r.current > 0 || r.previous > 0).slice(0, 6);
 
   if (rows.length === 0) {
@@ -1026,6 +1028,15 @@ export function CategoryComparison({
   }
 
   const max = Math.max(...rows.flatMap((r) => [r.current, r.previous]), 1);
+  const plotHeight = 148;
+  const plotTop = 8;
+  const plotBottom = plotHeight - 8;
+  // Keep the end points away from the plot edges so their markers and angled
+  // labels remain inside the card on narrow phones.
+  const x = (index: number) => (rows.length === 1 ? 50 : 4 + (index / (rows.length - 1)) * 92);
+  const y = (value: number) => plotTop + (1 - value / max) * (plotBottom - plotTop);
+  const seriesPath = (key: "current" | "previous") =>
+    rows.map((row, index) => `${index === 0 ? "M" : "L"}${x(index)},${y(row[key])}`).join(" ");
 
   return (
     <ChartFrame title={title} subtitle={subtitle}>
@@ -1042,69 +1053,102 @@ export function CategoryComparison({
       </View>
 
       <View
+        accessible
+        accessibilityRole="image"
         accessibilityLabel={rows
-          .map(
-            (r) =>
-              `${r.categoryName}: ${formatMoney(r.previous)} then ${formatMoney(r.current)}`,
-          )
+          .map((r) => `${r.categoryName}: ${formatMoney(r.previous)} last period, ${formatMoney(r.current)} this period`)
           .join(". ")}
       >
-        {rows.map((row, i) => (
-          <View key={row.categoryName} style={{ marginBottom: i === rows.length - 1 ? 0 : space.md }}>
-            <View style={{ flexDirection: "row", justifyContent: "space-between", gap: space.sm }}>
-              <T style={{ fontSize: typeScale.label, color: ink[800], flex: 1 }} numberOfLines={1}>
+        <View style={{ flexDirection: "row", gap: space.sm }}>
+          <View
+            style={{
+              width: AXIS_GUTTER,
+              height: plotHeight,
+              justifyContent: "space-between",
+              alignItems: "flex-end",
+            }}
+          >
+            <T variant="caption" style={{ fontFamily: font.mono }}>{axisTick(max)}</T>
+            <T variant="caption" style={{ fontFamily: font.mono }}>{axisTick(max / 2)}</T>
+            <T variant="caption" style={{ fontFamily: font.mono }}>0</T>
+          </View>
+
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Svg width="100%" height={plotHeight} viewBox={`0 0 100 ${plotHeight}`} preserveAspectRatio="none">
+              {[plotTop, y(max / 2), plotBottom].map((lineY) => (
+                <Path key={lineY} d={`M0,${lineY} H100`} stroke={ink[200]} strokeWidth={0.5} />
+              ))}
+              <Path
+                d={seriesPath("previous")}
+                fill="none"
+                stroke={ink[300]}
+                strokeWidth={2.5}
+                strokeDasharray="5 4"
+                vectorEffect="non-scaling-stroke"
+              />
+              <Path
+                d={seriesPath("current")}
+                fill="none"
+                stroke={brand[600]}
+                strokeWidth={2.5}
+                vectorEffect="non-scaling-stroke"
+              />
+              {rows.map((row, index) => (
+                <Rect
+                  key={`previous-${row.categoryName}`}
+                  x={x(index) - 0.75}
+                  y={y(row.previous) - 2.5}
+                  width={1.5}
+                  height={5}
+                  rx={0.75}
+                  fill={ink[300]}
+                />
+              ))}
+              {rows.map((row, index) => (
+                <Rect
+                  key={`current-${row.categoryName}`}
+                  x={x(index) - 0.75}
+                  y={y(row.current) - 2.5}
+                  width={1.5}
+                  height={5}
+                  rx={0.75}
+                  fill={brand[600]}
+                />
+              ))}
+            </Svg>
+          </View>
+        </View>
+
+        <View
+          style={{
+            flexDirection: "row",
+            marginLeft: AXIS_GUTTER + space.sm,
+            marginTop: 2,
+            height: 78,
+          }}
+        >
+          {rows.map((row) => (
+            <View key={row.categoryName} style={{ flex: 1, alignItems: "center" }}>
+              <T
+                variant="caption"
+                numberOfLines={1}
+                style={{
+                  width: 82,
+                  marginTop: 27,
+                  textAlign: "left",
+                  color: ink[600],
+                  fontSize: typeScale.caption,
+                  transform: [{ rotate: "55deg" }],
+                }}
+              >
                 {row.categoryName}
               </T>
-              {row.percentChange !== null ? (
-                <T
-                  style={{
-                    fontSize: typeScale.caption,
-                    color:
-                      Math.abs(row.percentChange) < 0.5
-                        ? ink[500]
-                        : row.percentChange > 0
-                          ? statusText.serious
-                          : statusText.good,
-                  }}
-                >
-                  {Math.abs(row.percentChange) < 0.5
-                    ? "no change"
-                    : `${row.percentChange > 0 ? "↑" : "↓"} ${Math.abs(row.percentChange).toFixed(0)}%`}
-                </T>
-              ) : (
-                <T variant="caption">new</T>
-              )}
             </View>
-
-            {/* Previous sits above current, both from the same left baseline. */}
-            <View style={{ marginTop: 4, gap: 3 }}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-                <Svg width="100%" height={7} viewBox="0 0 100 7" preserveAspectRatio="none" style={{ flex: 1 }}>
-                  <Path d={barPath(0, 0, Math.max((row.previous / max) * 100, 0.5), 7, 3.5, true)} fill={ink[300]} />
-                </Svg>
-                <Money
-                  value={row.previous}
-                  size={typeScale.caption}
-                  color={ink[500]}
-                  weight="regular"
-                  style={{ width: 74, textAlign: "right" }}
-                />
-              </View>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-                <Svg width="100%" height={7} viewBox="0 0 100 7" preserveAspectRatio="none" style={{ flex: 1 }}>
-                  <Path d={barPath(0, 0, Math.max((row.current / max) * 100, 0.5), 7, 3.5, true)} fill={brand[600]} />
-                </Svg>
-                <Money
-                  value={row.current}
-                  size={typeScale.caption}
-                  color={ink[800]}
-                  weight="regular"
-                  style={{ width: 74, textAlign: "right" }}
-                />
-              </View>
-            </View>
-          </View>
-        ))}
+          ))}
+        </View>
+        <T variant="caption" style={{ marginTop: space.sm, color: ink[500] }}>
+          PHP · categories ordered by this period's spending
+        </T>
       </View>
     </ChartFrame>
   );

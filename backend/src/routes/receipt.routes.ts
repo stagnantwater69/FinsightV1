@@ -23,7 +23,10 @@ receiptRouter.post(
   "/",
   rateLimit(LIMITS.SCAN_RECEIPT_BURST),
   rateLimit(LIMITS.SCAN_RECEIPT_HOURLY),
-  uploadReceiptImage.array("files", MAX_PAGES),
+  uploadReceiptImage.fields([
+    { name: "files", maxCount: MAX_PAGES },
+    { name: "originalFiles", maxCount: MAX_PAGES },
+  ]),
   asyncHandler(receiptScanController.upload),
 );
 /*

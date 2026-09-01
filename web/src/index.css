@@ -19,6 +19,18 @@
 @import "@fontsource/ibm-plex-mono/latin-400.css";
 @import "@fontsource/ibm-plex-mono/latin-500.css";
 @import "@fontsource/ibm-plex-mono/latin-600.css";
+/* Landing-page-only faces — scoped via the `landing-sans`/`landing-display`
+   Tailwind font families, never the app-wide `sans`/`display` above. */
+@import "@fontsource/dm-sans/latin-400.css";
+@import "@fontsource/dm-sans/latin-500.css";
+@import "@fontsource/dm-sans/latin-700.css";
+@import "@fontsource/plus-jakarta-sans/latin-600.css";
+@import "@fontsource/plus-jakarta-sans/latin-700.css";
+@import "@fontsource/plus-jakarta-sans/latin-800.css";
+/* Real italic face for the hero headline's emphasised clause — without it the
+   browser synthesises an oblique from the 800 upright and the letterforms skew
+   rather than italicise. */
+@import "@fontsource/plus-jakarta-sans/latin-800-italic.css";
 
 @tailwind base;
 @tailwind components;
@@ -334,6 +346,194 @@
   }
 }
 
+/* ===================================================================
+   LANDING THEME — the public marketing page's own light/dark toggle
+   ===================================================================
+   Independent of the account THEMES above: the landing page renders before
+   login (no account to read a preference from) and uses its own warm
+   emerald/mint/cream/gold palette rather than `ink`/`paper`. A visitor's
+   choice here persists via `PublicLayout`'s own localStorage key and is
+   applied as `data-landing-theme` on the page's root element — never on
+   `<html>`, so it can never leak into the authenticated app's theming.
+
+   Same trick as `ink`/`paper`: every landing-* Tailwind color resolves to one
+   of these variables (see tailwind.config.js), so `bg-landing-surface` is a
+   white card in light mode and a dark card in dark mode from the same class.
+   ------------------------------------------------------------------- */
+@layer base {
+  :root,
+  [data-landing-theme="light"] {
+    --landing-emerald: 6 43 35;
+    --landing-emerald-2: 11 58 48;
+    --landing-green: 11 110 88;
+    --landing-mint: 169 222 201;
+    --landing-mint-light: 205 238 224;
+    --landing-mint-pale: 232 247 240;
+    --landing-cream: 251 250 244;
+    --landing-charcoal: 7 42 34;
+    --landing-muted: 68 96 87;
+    --landing-gold: 228 161 27;
+    --landing-red: 217 92 84;
+    --landing-surface: 255 255 255;
+    --landing-hero-top: 205 238 224;
+    --landing-hero-mid: 232 247 240;
+    --landing-hero-bottom: 251 250 244;
+    --landing-hero-glow: 169 222 201;
+    --landing-hero-glow-strength: 0.24;
+  }
+
+  [data-landing-theme="dark"] {
+    /* Lifted off near-black on purpose. The first pass resolved the page
+       ground to 7/23/20 and cards to 14/42/34 — a 7-point separation that
+       collapsed on any screen below the reference monitor, so everything
+       past the hero read as one unbroken black slab. Each surface role now
+       sits a visible step above the last (ground → section → card), which is
+       what gives the scroll its rhythm back without brightening the page
+       into the light theme. */
+    --landing-emerald: 6 38 30;
+    --landing-emerald-2: 13 62 50;
+    --landing-green: 53 192 143;
+    --landing-mint: 169 222 201;
+    /* Border/hairline role in dark — NOT an ink. Anything setting text with
+       this token has to use --landing-mint instead (see grid.tsx). */
+    --landing-mint-light: 46 96 79;
+    --landing-mint-pale: 24 60 49;
+    --landing-cream: 9 33 27;
+    --landing-charcoal: 234 246 240;
+    --landing-muted: 168 200 189;
+    --landing-gold: 228 161 27;
+    --landing-red: 224 110 102;
+    --landing-surface: 19 56 45;
+    --landing-hero-top: 4 74 53;
+    --landing-hero-mid: 3 48 38;
+    --landing-hero-bottom: 2 18 15;
+    --landing-hero-glow: 116 238 163;
+    --landing-hero-glow-strength: 0.42;
+  }
+}
+
+@layer components {
+  /*
+   * The landing hero is its own atmospheric region. In dark mode the mint
+   * light gathers above the headline, then falls away into a deep emerald
+   * base behind the product demo. Light mode resolves through the same roles
+   * and keeps its existing airy mint-to-cream progression.
+   */
+  .landing-hero-surface {
+    background:
+      radial-gradient(
+        ellipse 68% 38% at 50% -8%,
+        rgb(var(--landing-hero-glow) / var(--landing-hero-glow-strength)),
+        transparent 72%
+      ),
+      radial-gradient(
+        circle at 86% 18%,
+        rgb(var(--landing-hero-glow) / calc(var(--landing-hero-glow-strength) * 0.38)),
+        transparent 22%
+      ),
+      linear-gradient(
+        180deg,
+        rgb(var(--landing-hero-top)) 0%,
+        rgb(var(--landing-hero-mid)) 44%,
+        rgb(var(--landing-hero-bottom)) 100%
+      );
+  }
+
+  /* At the top of the landing page, the header borrows the hero's opening
+     color so it reads as navigation within the scene rather than a separate
+     full-width band. Its translucency is intentionally restrained: enough to
+     blend, still opaque enough for predictable contrast on budget devices
+     where the desktop backdrop blur is absent. */
+  .landing-header-at-hero {
+    background:
+      radial-gradient(
+        ellipse 68% 150% at 50% 130%,
+        rgb(var(--landing-hero-glow) / calc(var(--landing-hero-glow-strength) * 0.72)),
+        transparent 76%
+      ),
+      rgb(var(--landing-hero-top) / 0.9);
+  }
+
+  /*
+   * Keep the interactive financial preview crisp against the dark field.
+   * This local palette island changes colors only; spacing, hierarchy, and
+   * behavior remain identical between themes.
+   */
+  [data-landing-theme="dark"] .landing-hero-demo {
+    --landing-emerald: 6 72 56;
+    --landing-green: 11 110 88;
+    --landing-mint-light: 205 238 224;
+    --landing-mint-pale: 232 247 240;
+    --landing-charcoal: 7 42 34;
+    --landing-muted: 65 94 84;
+    --landing-surface: 247 251 248;
+  }
+
+  /*
+   * Dark landing sections alternate between related emerald atmospheres.
+   * Brighter values gather near content and taper toward darker edges, which
+   * restores rhythm without splitting the page into loud color bands. Light
+   * mode keeps the original solid section surfaces.
+   */
+  /*
+   * The page ground itself, under every section. The closing CTA band and the
+   * space around it belong to no section, so without this they resolved to a
+   * flat --landing-cream and the bottom of the page fell off a cliff. A single
+   * wide, very low-opacity wash keeps that region part of the same atmosphere.
+   */
+  /*
+   * The numbered step badge. Its light-mode gradient runs bright green into
+   * deep emerald, which white ink sits on comfortably. In dark mode
+   * --landing-green resolves to the bright mint-green used for links, so the
+   * same gradient would have started white-on-#35C08F — under 3:1. Dark mode
+   * therefore keeps the badge deep and adds a mint hairline to hold its edge
+   * against the lifted section ground.
+   */
+  .landing-step-badge {
+    background-image: linear-gradient(
+      to bottom right,
+      rgb(var(--landing-green)),
+      rgb(var(--landing-emerald))
+    );
+  }
+
+  [data-landing-theme="dark"] .landing-step-badge {
+    background-image: linear-gradient(to bottom right, rgb(17 96 73), rgb(9 48 38));
+    box-shadow: inset 0 0 0 1px rgb(var(--landing-mint) / 0.22);
+  }
+
+  [data-landing-theme="dark"] .landing-page-surface {
+    background:
+      radial-gradient(ellipse 90% 26% at 50% 88%, rgb(var(--landing-green) / 0.1), transparent 70%),
+      rgb(var(--landing-cream));
+  }
+
+  [data-landing-theme="dark"] .landing-section-gradient-raised {
+    background:
+      radial-gradient(ellipse 58% 42% at 16% 8%, rgb(var(--landing-mint) / 0.16), transparent 72%),
+      linear-gradient(150deg, rgb(27 96 75) 0%, rgb(20 74 59) 48%, rgb(15 57 46) 100%);
+  }
+
+  [data-landing-theme="dark"] .landing-section-gradient-mint {
+    background:
+      radial-gradient(circle at 82% 30%, rgb(var(--landing-mint) / 0.16), transparent 36%),
+      radial-gradient(circle at 14% 78%, rgb(var(--landing-green) / 0.15), transparent 40%),
+      linear-gradient(145deg, rgb(17 64 51) 0%, rgb(31 100 77) 52%, rgb(16 60 48) 100%);
+  }
+
+  [data-landing-theme="dark"] .landing-section-gradient-base {
+    background:
+      radial-gradient(ellipse 48% 30% at 72% 16%, rgb(var(--landing-mint) / 0.13), transparent 74%),
+      linear-gradient(180deg, rgb(13 50 41) 0%, rgb(23 82 64) 50%, rgb(13 50 41) 100%);
+  }
+
+  [data-landing-theme="dark"] .landing-section-gradient-deep {
+    background:
+      radial-gradient(ellipse 54% 44% at 84% 44%, rgb(var(--landing-green) / 0.15), transparent 72%),
+      linear-gradient(140deg, rgb(8 44 35) 0%, rgb(15 66 52) 54%, rgb(8 41 33) 100%);
+  }
+}
+
 @layer base {
   html {
     /* The topbar's height, as a variable because two other things have to
@@ -422,6 +622,21 @@
   select:focus-visible,
   textarea:focus-visible {
     @apply border-brand-500;
+  }
+
+  /* Chrome/Safari autofill paints its own yellow fill behind the text and
+     ignores `background-color` entirely — the only override that works is
+     this absurdly long inset box-shadow trick, matched to the paper/ink
+     tokens so an autofilled field still reads as the same themed control
+     instead of a stock browser yellow. The 9999s transition delay stops
+     Chrome's own fade-to-yellow animation from ever starting. */
+  input:-webkit-autofill,
+  input:-webkit-autofill:hover,
+  input:-webkit-autofill:focus {
+    -webkit-text-fill-color: rgb(var(--ink-900));
+    -webkit-box-shadow: 0 0 0 1000px rgb(var(--paper)) inset;
+    box-shadow: 0 0 0 1000px rgb(var(--paper)) inset;
+    transition: background-color 9999s ease-in-out 0s;
   }
 }
 

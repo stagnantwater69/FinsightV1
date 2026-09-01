@@ -1,9 +1,10 @@
 import { prisma } from "../../config/prisma";
+import { env } from "../../config/env";
 import { ApiError } from "../../middleware/error.middleware";
 import { requireOwnedBusinessProfile } from "../../lib/ownership";
 import { hostname } from "node:os";
 import { randomUUID } from "node:crypto";
-import { downloadReceiptImage, uploadReceiptImage } from "../storage.service";
+import { deleteReceiptImage, downloadReceiptImage, uploadReceiptImage } from "../storage.service";
 import {
   confidenceForValue,
   extractReceipt,
@@ -23,8 +24,17 @@ import type { Prisma } from "@prisma/client";
 import { logger } from "../../config/logger";
 import { toDTO } from "./dto";
 import { persistCategorisedItems } from "./categorisation";
-import { buildFieldEvidence, buildScanWarnings, rescueWithVision, snapVendorToHistory } from "./extraction";
+import {
+  buildFieldEvidence,
+  buildScanWarnings,
+  rescueWithVeryfi,
+  rescueWithVision,
+  snapVendorToHistory,
+} from "./extraction";
 import { MAX_PAGES, type UploadInput } from "./types";
+import { selectOcrCandidate } from "./ocrCandidateSelection";
+import { assessReceiptLikelihood } from "../../lib/receiptLikelihood";
+import { recordVeryfiUsage, veryfiQuotaAvailable } from "./veryfiQuota";
 
 const RECEIPT_WORKER_ID = `${hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`;
 const RECEIPT_LEASE_MS = 2 * 60 * 1000;
@@ -72,22 +82,49 @@ export async function uploadAndScan(userId: number, input: UploadInput) {
   // that order to mean anything, and nothing downstream re-derives it. The
   // order is the client's assertion, not something inferred here.
   const imagePaths: string[] = [];
-  for (const page of input.pages) {
-    imagePaths.push(await uploadReceiptImage(input.businessProfileId, page.buffer, page.mimetype, page.originalname));
+  const processedPaths: (string | null)[] = [];
+  try {
+    for (const page of input.pages) {
+      imagePaths.push(await uploadReceiptImage(input.businessProfileId, page.buffer, page.mimetype, page.originalname));
+      processedPaths.push(
+        page.processed
+          ? await uploadReceiptImage(
+              input.businessProfileId,
+              page.processed.buffer,
+              page.processed.mimetype,
+              page.processed.originalname,
+            )
+          : null,
+      );
+    }
+  } catch (error) {
+    await Promise.all([...imagePaths, ...processedPaths.filter((path): path is string => Boolean(path))].map(deleteReceiptImage));
+    throw error;
   }
 
-  const scan = await prisma.receiptScan.create({
-    data: {
-      businessProfileId: input.businessProfileId,
-      imageFile: imagePaths[0]!, // the page-1 cover — see schema header note 14
-      confirmationStatus: "Pending",
-      processingStatus: "Processing",
-      pages: {
-        create: imagePaths.map((imageFile, i) => ({ pageNumber: i + 1, imageFile })),
+  let scan;
+  try {
+    scan = await prisma.receiptScan.create({
+      data: {
+        businessProfileId: input.businessProfileId,
+        imageFile: imagePaths[0]!, // the page-1 cover — see schema header note 14
+        confirmationStatus: "Pending",
+        processingStatus: "Processing",
+        pages: {
+          create: imagePaths.map((imageFile, i) => ({
+            pageNumber: i + 1,
+            imageFile,
+            processedImageFile: processedPaths[i],
+            captureMetadata: input.pages[i]?.metadata as Prisma.InputJsonValue | undefined,
+          })),
+        },
       },
-    },
-    include: { pages: true },
-  });
+      include: { pages: true },
+    });
+  } catch (error) {
+    await Promise.all([...imagePaths, ...processedPaths.filter((path): path is string => Boolean(path))].map(deleteReceiptImage));
+    throw error;
+  }
 
   /*
    * Deliberately NOT awaited — this is the whole point of the change.
@@ -104,8 +141,10 @@ export async function uploadAndScan(userId: number, input: UploadInput) {
 }
 
 /**
- * The actual read: OCR every page, parse, rescue with vision where warranted,
- * categorise, and write the result back onto the scan row.
+ * The actual read: OCR every page, parse deterministically as a fallback
+ * read, then ask the AI vision model (the primary source — see
+ * rescueWithVision/rescueWithVeryfi) to read the same pages, categorise, and
+ * write the settled result back onto the scan row.
  *
  * Runs after the HTTP response has already gone out, so it CANNOT report a
  * failure by throwing — nobody is listening. Every failure path instead lands
@@ -134,8 +173,17 @@ async function processScan(scanId: number, input: UploadInput, attempt: number):
     // which figure it doubts instead of asking the owner to check everything
     // equally.
     const ocrResults: OcrResult[] = [];
+    const originalOcrResults: OcrResult[] = [];
+    const processedOcrResults: (OcrResult | null)[] = [];
+    const ocrSources: ("original" | "processed")[] = [];
     for (const page of input.pages) {
-      ocrResults.push(await extractReceipt(page.buffer));
+      const original = await extractReceipt(page.buffer);
+      const processed = page.processed ? await extractReceipt(page.processed.buffer) : null;
+      const selected = selectOcrCandidate(original, processed);
+      originalOcrResults.push(original);
+      processedOcrResults.push(processed);
+      ocrResults.push(selected.result);
+      ocrSources.push(selected.source);
       await heartbeatScan(scanId, attempt);
     }
 
@@ -165,11 +213,13 @@ async function processScan(scanId: number, input: UploadInput, attempt: number):
      * way.
      *
      * The obvious fix — find the repeat, drop it — is a heuristic deciding
-     * which money lines survive, and this codebase already fixed the rule for
-     * that situation one function down at rescueWithVision: a competing
-     * reading replaces the deterministic one "only on an OBJECTIVE test,
-     * never a preference." The objective test here is the receipt's own
-     * printed total. If the plain reading fails to account for it and the
+     * which money lines survive, so it is settled the same way this codebase
+     * settles any choice between two OCR readings of the same pages: an
+     * OBJECTIVE test, never a preference. (This is purely a choice between
+     * two DETERMINISTIC readings, both fallback-tier now that the AI vision
+     * model is the primary source — it happens before either rescue function
+     * is even called.) The objective test here is the receipt's own printed
+     * total. If the plain reading fails to account for it and the
      * de-overlapped reading does, that is arithmetic agreeing with the paper,
      * not a judgement that one reading looks tidier.
      *
@@ -198,7 +248,42 @@ async function processScan(scanId: number, input: UploadInput, attempt: number):
     // The worst page, not the average — see rescueWithVision's own note.
     const worstPageConfidence = Math.min(...ocrResults.map((r) => overallConfidence(r)));
 
-    const rescued = await rescueWithVision(input, parsed, deterministicItems, combinedText, worstPageConfidence);
+    const selectedInput: UploadInput = {
+      businessProfileId: input.businessProfileId,
+      pages: input.pages.map((page, index) =>
+        ocrSources[index] === "processed" && page.processed
+          ? { ...page.processed, metadata: page.metadata }
+          : { buffer: page.buffer, mimetype: page.mimetype, originalname: page.originalname, metadata: page.metadata },
+      ),
+    };
+    /*
+     * The AI model is the PRIMARY source now, so it is asked on every scan —
+     * not just when OCR looks doubtful. Veryfi tries first among the two
+     * providers — see
+     * docs/superpowers/specs/2026-09-01-veryfi-production-ocr-integration-design.md
+     * — gated only by `VERYFI_ENABLED` and the monthly quota, and falls
+     * through to Gemini's `rescueWithVision` whenever Veryfi is disabled,
+     * out of quota, or was never reached.
+     */
+    let rescued;
+    if (env.VERYFI_ENABLED && (await veryfiQuotaAvailable())) {
+      const veryfiRescued = await rescueWithVeryfi(selectedInput, parsed, deterministicItems, combinedText, worstPageConfidence);
+      if (veryfiRescued.visionProvider === "veryfi") {
+        // Counted here, not inside rescueWithVeryfi itself — this is the one
+        // place "Veryfi was actually called" and "record the call against
+        // this month's quota" are the same fact, rather than two places that
+        // could disagree about what counts as an attempt.
+        await recordVeryfiUsage();
+        rescued = veryfiRescued;
+      } else {
+        // Veryfi was never reached (network failure, no credentials) —
+        // falls through to the existing Gemini rescue exactly as if Veryfi
+        // did not exist. Not counted against the quota: nothing was billed.
+        rescued = await rescueWithVision(selectedInput, parsed, deterministicItems, combinedText, worstPageConfidence);
+      }
+    } else {
+      rescued = await rescueWithVision(selectedInput, parsed, deterministicItems, combinedText, worstPageConfidence);
+    }
     const vendor = await snapVendorToHistory(input.businessProfileId, combinedText, rescued.vendor);
 
     // Assessed per page, not once for the whole scan — the client can then say
@@ -235,7 +320,12 @@ async function processScan(scanId: number, input: UploadInput, attempt: number):
       visionLatencyMs: rescued.visionLatencyMs,
       visionRejectReason: rescued.visionRejectReason,
       verifier: rescued.verifier,
+      ocrCandidateSources: ocrSources,
     };
+    const receiptLikelihood = assessReceiptLikelihood({
+      rawText: combinedText,
+      documentConfidence: Math.max(...input.pages.map((page) => page.metadata?.documentConfidence ?? 0)),
+    });
 
     await heartbeatScan(scanId, attempt);
     await prisma.receiptScan.update({
@@ -268,6 +358,7 @@ async function processScan(scanId: number, input: UploadInput, attempt: number):
         // Always an array, even when empty: [] means "assessed, nothing to
         // warn about", which is a different statement from a legacy null.
         warnings: warnings as unknown as Prisma.InputJsonValue,
+        receiptLikelihood: receiptLikelihood as unknown as Prisma.InputJsonValue,
       },
     });
 
@@ -280,6 +371,11 @@ async function processScan(scanId: number, input: UploadInput, attempt: number):
         data: {
           rawText: ocrResults[i]!.text,
           ocrConfidence: overallConfidence(ocrResults[i]!),
+          originalRawText: originalOcrResults[i]!.text,
+          originalOcrConfidence: overallConfidence(originalOcrResults[i]!),
+          ocrSource: ocrSources[i]!,
+          processedRawText: processedOcrResults[i]?.text ?? null,
+          processedOcrConfidence: processedOcrResults[i] ? overallConfidence(processedOcrResults[i]!) : null,
           sharpness: pageQualities[i]?.sharpness ?? null,
           brightness: pageQualities[i]?.brightness ?? null,
           tooBlurredToTrust: pageQualities[i]?.tooBlurredToTrust ?? null,
@@ -372,6 +468,18 @@ async function storedInput(scanId: number, attempt: number): Promise<UploadInput
       buffer: await downloadReceiptImage(page.imageFile),
       mimetype,
       originalname: `page-${page.pageNumber}.${ext ?? "jpg"}`,
+      ...(page.processedImageFile
+        ? {
+            processed: {
+              buffer: await downloadReceiptImage(page.processedImageFile),
+              mimetype: page.processedImageFile.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg",
+              originalname: `page-${page.pageNumber}-processed.${page.processedImageFile.split(".").pop() ?? "jpg"}`,
+            },
+          }
+        : {}),
+      ...((page.captureMetadata as UploadInput["pages"][number]["metadata"] | null)
+        ? { metadata: page.captureMetadata as UploadInput["pages"][number]["metadata"] }
+        : {}),
     });
     await heartbeatScan(scanId, attempt);
   }

@@ -12,10 +12,11 @@
 import type { BusinessProfile } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { extractScenario, type ExtractedScenario } from "../lib/scenario";
-import { utcDateKey, utcToday } from "../lib/dates";
+import { resolveBusinessToday, utcDateKey } from "../lib/dates";
 import { getDashboardSummary } from "./dashboard.service";
 import { getExpenseBehavior, getRecoveryInsight, loadRecoveryTargets, simulateSpendingImpact } from "./insights.service";
-import { NOTICEABLE_BAND_FRACTION, type RecoveryTargets } from "./analysis.service";
+import { NOTICEABLE_BAND_FRACTION, type RecoveryChangeReason, type RecoveryStatus, type RecoveryTargets } from "./analysis.service";
+import { SUGGESTED_CHECK_CATALOGUE, type ReductionOpportunity } from "./reductionOpportunity.service";
 
 export const INTERACTION_MODULES = [
   "Expense Insights",
@@ -74,6 +75,33 @@ function once<T>(load: () => Promise<T>): () => Promise<T> {
 
 function peso(n: number): string {
   return `PHP ${n.toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+// Authoritative, server-decided phrasing for `recovery.status` (plan §8.1/§9.7)
+// — replaces the old needsSetup/onTrack special-casing here now that `status`
+// is finer-grained and covers cases (no_current_month_data, covered, ahead)
+// that boolean pair couldn't express.
+function recoveryStatusPhrase(status: RecoveryStatus): string {
+  switch (status) {
+    case "needs_setup":
+      return "SETUP NEEDED — expected monthly expenses hasn't been configured, so there is no target to be on/off track against";
+    case "no_current_month_data":
+      return "NO SALES RECORDED THIS MONTH — there is nothing to compare pace against yet";
+    case "data_incomplete":
+      return "DATA INCOMPLETE — some records need review before this can be trusted";
+    case "covered":
+      return "COVERED — the sales coverage target for this month has been reached";
+    case "ahead":
+      return "AHEAD OF PACE — recorded sales are running above the expected pace to date";
+    case "on_pace":
+      return "ON PACE — recorded sales are within the expected pace to date";
+    case "behind":
+      return "BEHIND — the adjusted daily target is now above the original daily target";
+    default: {
+      const exhaustive: never = status;
+      return exhaustive;
+    }
+  }
 }
 
 function profileLines(profile: BusinessProfile): string[] {
@@ -166,7 +194,7 @@ export async function buildFinancialSnapshot(
     )} needed (${recovery.monthCoveragePercent.toFixed(1)}% covered)`,
     `- Remaining target: ${peso(recovery.remainingTarget)} across ${recovery.remainingOperatingDays} remaining operating day(s)`,
     `- Adjusted daily target from here: ${peso(recovery.adjustedDailyTarget)}`,
-    `- Overall: ${recovery.onTrack ? "ON TRACK" : "BEHIND — the adjusted daily target is now above the original daily target"}`
+    `- Overall: ${recoveryStatusPhrase(recovery.status)}`
   );
 
   return lines;
@@ -229,6 +257,28 @@ async function expenseInsightsLines(
 
 type RecoveryInsight = Awaited<ReturnType<typeof getRecoveryInsight>>;
 
+// Short, human phrase for `RecoveryChangeReason` (plan §8.2/§10.3, Phase 3).
+// `no_material_change` deliberately has no phrase — recoveryLines never emits
+// a "why it changed" line for it; see the caller.
+function recoveryChangeReasonPhrase(reason: RecoveryChangeReason): string {
+  switch (reason) {
+    case "sales_added":
+      return "sales were recorded";
+    case "open_day_elapsed":
+      return "a day elapsed";
+    case "baseline_changed":
+    case "schedule_changed":
+    case "data_changed":
+      return "your setup or schedule changed";
+    case "no_material_change":
+      return "";
+    default: {
+      const exhaustive: never = reason;
+      return exhaustive;
+    }
+  }
+}
+
 async function recoveryLines(
   userId: number,
   profile: BusinessProfile,
@@ -248,8 +298,47 @@ async function recoveryLines(
     "Recent daily coverage:",
   ];
   for (const d of recovery.dailyCoverage) {
-    lines.push(`- ${d.date}: recorded ${peso(d.sales)} against ${peso(d.neededTarget)} needed — ${d.status} target`);
+    if (d.status === "closed") {
+      lines.push(`- ${d.date}: closed (not an operating day) — recorded ${peso(d.sales)}, no target applies`);
+      continue;
+    }
+    lines.push(`- ${d.date}: recorded ${peso(d.sales)} against ${peso(d.neededTarget as number)} needed — ${d.status} target`);
   }
+
+  // ---- Phase 3 additions (plan §10.3/§11): deterministic facts the Recovery
+  // Target page itself would show, provided as plain arithmetic strings —
+  // never as a prompt asking the model to interpret the underlying figures.
+  // Each is additive; none of them touch the status-derived lines above.
+  if (recovery.dataWarnings.length > 0 && recovery.provisionalSalesThisMonth > 0) {
+    lines.push(
+      `- Note: ${peso(
+        recovery.provisionalSalesThisMonth
+      )} of this month's recorded sales is pending review or flagged as a possible duplicate; the figures above include it.`
+    );
+  }
+
+  // Only surfaced when setup isn't already the bigger issue — the
+  // "SETUP NEEDED" status line (elsewhere in this context) already covers
+  // that more urgent case, and piling this on top of it would be noise.
+  if (!recovery.needsSetup && recovery.setupIssues.includes("operating_schedule_missing")) {
+    lines.push("- Operating days are approximated from a monthly count, not an exact weekly schedule.");
+  }
+
+  if (recovery.changeSincePreviousDay) {
+    const { adjustedDailyTargetDelta, primaryReason } = recovery.changeSincePreviousDay;
+    // Defensive: "no_material_change" already means "don't add this line",
+    // and a defensive zero-delta check covers any other case that would
+    // otherwise read as "increased/decreased by PHP 0.00".
+    if (primaryReason !== "no_material_change" && adjustedDailyTargetDelta !== 0) {
+      const direction = adjustedDailyTargetDelta > 0 ? "increased" : "decreased";
+      lines.push(
+        `- Since yesterday: adjusted daily target ${direction} by ${peso(
+          Math.abs(adjustedDailyTargetDelta)
+        )} (${recoveryChangeReasonPhrase(primaryReason)}).`
+      );
+    }
+  }
+
   return lines;
 }
 
@@ -311,6 +400,85 @@ export async function spendingImpactLines(
       `You may refer to the item as "${scenario.label}". Do not claim to know a category for it unless one of the owner's real categories in the snapshot above obviously matches — you have not been given a category assignment.`
     );
   }
+
+  return lines;
+}
+
+// ============================================================
+// Selected reduction opportunity (Ask FinSight integration — plan §11)
+// ============================================================
+//
+// The opportunity itself was computed deterministically by
+// reductionOpportunity.service (Phases 1-2) on an earlier, separate request.
+// This function does NOT recompute anything; it only renders the SAME
+// structured object the card already showed the owner into context lines,
+// exactly the way spendingImpactLines renders an already-computed
+// simulateSpendingImpact result rather than asking the model to produce one.
+//
+// Trust note: the object arrives from the client (echoing what the
+// reduction-opportunities endpoint returned earlier in this session), the
+// same trust boundary askSchema's `context` override already documents —
+// it only steers the wording of THIS owner's own conversation about their
+// own business, it grants no data access requireOwnedBusinessProfile didn't
+// already grant, and it is never used to calculate anything. suggestedChecks
+// is filtered back against the real controlled catalogue (§9.4) rather than
+// trusted verbatim, since that is the one field this function turns into an
+// imperative "do this" instruction to the model.
+export function reductionOpportunityLines(opportunity: ReductionOpportunity): string[] {
+  const ev = opportunity.evidence;
+  const lines = ["", "=== SELECTED REDUCTION OPPORTUNITY (from the Expense Insights card the owner opened) ==="];
+
+  lines.push(
+    `Category: ${opportunity.categoryName}`,
+    `Opportunity type: ${opportunity.type}`,
+    `Priority: ${opportunity.priority} — Confidence: ${opportunity.confidence}`,
+    `Observation (already decided by FinSight's deterministic rules, not by you): ${opportunity.observation}`,
+    `Why the rule selected it: ${opportunity.rationale}`
+  );
+
+  lines.push(
+    "",
+    "Evidence behind this opportunity. These are the ONLY figures for this opportunity — do not compute, estimate, or imply a savings amount from them:",
+    `- Current-period category total: ${peso(ev.currentAmount)}`,
+    ev.previousAmount === null
+      ? "- No previous-period baseline for this category."
+      : `- Previous-period category total: ${peso(ev.previousAmount)}`,
+    ev.changeAmount === null || ev.changePercent === null
+      ? "- No period-over-period change figure is available."
+      : `- Change vs. previous period: ${peso(Math.abs(ev.changeAmount))} (${ev.changePercent >= 0 ? "up" : "down"} ${Math.abs(ev.changePercent).toFixed(1)}%)`,
+    `- Share of this period's total expenses: ${ev.expenseSharePercent.toFixed(1)}%`,
+    `- Records counted this period: ${ev.recordCount}`,
+    `- Unusual records flagged in this category: ${ev.unusualRecordCount}`,
+    `- Possible duplicates flagged in this category: ${ev.possibleDuplicateCount}`,
+    `- Related records linked from the card: ${opportunity.relatedRecordIds.length} (you were not given their individual line items — do not describe specific records beyond the counts above)`
+  );
+
+  // Re-validated against the real catalogue rather than trusted verbatim —
+  // see the trust note above. A tampered or stale entry is dropped, not
+  // repaired, so the model never sees wording FinSight didn't author.
+  const controlledChecks = new Set(SUGGESTED_CHECK_CATALOGUE[opportunity.type]);
+  const checks = opportunity.suggestedChecks.filter((c) => controlledChecks.has(c));
+  lines.push("", "Suggested checks already produced by FinSight's rule catalogue (turn these into a short checklist if asked what to check first — do not invent additional checks):");
+  if (checks.length === 0) {
+    lines.push("- none carried over from the card; if asked, say you don't have specific checks for this one.");
+  } else {
+    for (const c of checks) lines.push(`- ${c}`);
+  }
+
+  if (opportunity.limitations.length > 0) {
+    lines.push("", "Limitations already disclosed on the card — repeat these where relevant instead of implying more certainty than FinSight has:");
+    for (const l of opportunity.limitations) lines.push(`- ${l}`);
+  }
+
+  lines.push(
+    "",
+    "STRICT RULES for this opportunity, in addition to your standing rules above:",
+    "- This is a review prompt, not a verdict. Never say this expense is unnecessary, wasteful, an error, or wrongdoing — a flag only means \"worth checking\", and a large or growing category can still be a necessary one.",
+    "- Do NOT produce, estimate, or imply a peso savings figure for this opportunity. No reduction simulation has been run — only say a simulated figure exists if one is literally present in this context.",
+    "- Do NOT recommend a supplier or alternative vendor, and do NOT claim or imply a market price or a fair price for anything.",
+    "- Do NOT re-rank this opportunity against others or suggest a different one is more important — FinSight's ranking already decided that; explain the one selected above only.",
+    "- If the owner asks something this context cannot answer (e.g. what caused a specific record), say so and point them to the suggested checks rather than guessing."
+  );
 
   return lines;
 }
@@ -414,11 +582,19 @@ function moduleDetailPromises(
   module: InteractionModule,
   scenario: ExtractedScenario | undefined,
   loadBehavior: () => Promise<ExpenseBehavior>,
-  loadRecoveryInsight: () => Promise<RecoveryInsight>
+  loadRecoveryInsight: () => Promise<RecoveryInsight>,
+  reductionOpportunity: ReductionOpportunity | undefined
 ): Promise<string[]>[] {
   switch (module) {
     case "Expense Insights":
-      return [expenseInsightsLines(userId, profile, loadBehavior)];
+      // The selected-opportunity block is additive to the normal Expense
+      // Insights detail, not a replacement for it — an owner can still ask
+      // about anything else on the screen in the same conversation. It only
+      // ever attaches to THIS module (plan §11.1/§5.4): no new
+      // InteractionModule value, no other module renders it.
+      return reductionOpportunity
+        ? [expenseInsightsLines(userId, profile, loadBehavior), Promise.resolve(reductionOpportunityLines(reductionOpportunity))]
+        : [expenseInsightsLines(userId, profile, loadBehavior)];
     case "Recovery Target":
       return [recoveryLines(userId, profile, loadRecoveryInsight)];
     case "Spending Impact":
@@ -443,12 +619,19 @@ function moduleDetailPromises(
 // The steering line is what keeps a narrow module narrow, so widening the
 // Dashboard's context without widening its steering line would leave the model
 // refusing to use data it was just given.
-function steeringLine(module: InteractionModule): string {
+function steeringLine(module: InteractionModule, hasReductionOpportunity: boolean): string {
   if (module === "Dashboard") {
     return (
       "The owner is currently looking at the Dashboard screen. This context also covers their expense behaviour, " +
       "recovery pace and review queue, so a question that ranges across those can be answered directly from what is above. " +
       "Do not invite questions about planned purchases — no purchase scenario has been calculated for this message."
+    );
+  }
+  if (module === "Expense Insights" && hasReductionOpportunity) {
+    return (
+      "The owner opened this conversation from a Reduction Opportunity card in Expense Insights — see the " +
+      "\"SELECTED REDUCTION OPPORTUNITY\" section above and its strict rules. Answer about that opportunity first; " +
+      "you may still use the rest of this context (their broader expense behaviour) if they ask something wider."
     );
   }
   return `The owner is currently looking at the ${module} screen. Stay scoped to that unless they clearly ask about something else in this context.`;
@@ -458,9 +641,18 @@ export async function buildModuleContext(
   userId: number,
   profile: BusinessProfile,
   module: InteractionModule,
-  question: string
+  question: string,
+  reductionOpportunity?: ReductionOpportunity
 ): Promise<ModuleContext> {
-  const today = utcToday();
+  // Business-local, not server-UTC — getRecoveryInsight/simulateRecoveryScenario
+  // resolve "today" this same way (see insights.service.ts), and this value
+  // feeds the unshared loadRecoveryTargets(profile, today) call below plus the
+  // "Today's date" line the model is given. A raw utcToday() here would drift
+  // out of sync with getRecoveryInsight's own resolution for roughly a third
+  // of every day (whenever the business's local calendar date has already
+  // turned over but the server's UTC date hasn't), silently showing the AI a
+  // different "today" than the Recovery Target screen itself uses.
+  const today = resolveBusinessToday(profile.timezone);
   const scenario = module === "Spending Impact" ? extractScenario(question) : undefined;
 
   // One expense-behaviour read per message, shared by the snapshot and the
@@ -474,8 +666,8 @@ export async function buildModuleContext(
   // block, the snapshot reads its targets off the same result instead of
   // running loadRecoveryTargets a second time; when it doesn't, the snapshot
   // keeps doing the cheaper targets-only read on its own. The numbers are the
-  // same either way — both paths anchor on the same UTC day and the same
-  // profile row.
+  // same either way — both paths anchor on the same business-local day and
+  // the same profile row.
   const loadRecoveryInsight = once(() => getRecoveryInsight(userId, profile.id, RECOVERY_COVERAGE_DAYS));
   const rendersRecoveryDetail = module === "Dashboard" || module === "Recovery Target";
 
@@ -484,7 +676,7 @@ export async function buildModuleContext(
       behavior: loadBehavior,
       recoveryTargets: rendersRecoveryDetail ? loadRecoveryInsight : undefined,
     }),
-    ...moduleDetailPromises(userId, profile, module, scenario, loadBehavior, loadRecoveryInsight),
+    ...moduleDetailPromises(userId, profile, module, scenario, loadBehavior, loadRecoveryInsight, reductionOpportunity),
   ]);
 
   const lines = [
@@ -492,7 +684,7 @@ export async function buildModuleContext(
     ...snapshot,
     ...details.flat(),
     "",
-    steeringLine(module),
+    steeringLine(module, module === "Expense Insights" && Boolean(reductionOpportunity)),
     `Today's date: ${utcDateKey(today)}. All amounts are Philippine pesos.`,
   ];
 

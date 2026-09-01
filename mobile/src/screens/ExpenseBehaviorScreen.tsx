@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, View } from "react-native";
+import { Pressable, ScrollView, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as haptics from "../lib/haptics";
 import { useFocusEffect } from "@react-navigation/native";
@@ -9,23 +9,35 @@ import { AskFinSight } from "../components/AskFinSight";
 import { AskFinSightFab, FAB_CLEARANCE } from "../components/AskFinSightFab";
 import { DeltaPill, InsightHeader, Medallion, SubTabs } from "../components/InsightsShared";
 import { ExpenseAlertsSection } from "../components/ExpenseAlertsSection";
+import { ReductionOpportunitiesSection } from "../components/ReductionOpportunitiesSection";
+import { ReductionSimulationSheet } from "../components/ReductionSimulationSheet";
 import { ExpenseRecurringSection } from "../components/ExpenseRecurringSection";
+import { SkeletonBox, SkeletonCard } from "../components/Skeleton";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
+import { useAiChat } from "../context/AiChatContext";
 import { api, errorMessage } from "../lib/api";
 import { takeFlash } from "../lib/flash";
 import { formatMoney } from "../lib/money";
 import { recurringAvailability } from "../lib/recurringAgenda";
 import { findingCategory, feedbackActions, type FeedbackAction } from "../lib/findingFeedback";
+import { REDUCTION_OPPORTUNITY_QUESTION } from "../lib/reductionOpportunityAsk";
 import { useInsight } from "../lib/useInsight";
-import { TAP, font, space, typeScale } from "../theme/tokens";
+import { font, space, typeScale } from "../theme/tokens";
+import { TAP_FLOOR } from "../components/touchTarget";
 import { useTheme } from "../context/ThemeContext";
 import type {
   AnomalyFinding,
   AnomalyFindingPage,
   ExpenseBehavior,
+  ReductionOpportunity,
+  ReductionOpportunityResponse,
   RecurringPattern,
   RecurringSchedule,
 } from "../lib/types";
+
+/** Keeps a one-line content row from collapsing. See its use — not a target. */
+const CONTENT_ROW_MIN = 32;
+
 
 // ---------------------------------------------------------------- Expense insight
 
@@ -52,6 +64,32 @@ const ANCHOR_PERIOD = -1;
  */
 const TREND_PREVIEW_COUNT = 4;
 
+/** Mirrors the overview's summary, actions, and charts to prevent a large layout jump. */
+function ExpenseInsightSkeleton() {
+  return (
+    <View
+      accessible
+      accessibilityLabel="Loading expense insight"
+      accessibilityState={{ busy: true }}
+      style={{ gap: space.lg }}
+    >
+      <SkeletonCard style={{ height: 190 }} />
+
+      <SkeletonCard style={{ height: 112 }} />
+
+      <View style={{ gap: space.md }}>
+        <SkeletonBox width="48%" height={18} />
+        <SkeletonCard style={{ height: 168 }} />
+      </View>
+
+      <View style={{ gap: space.md }}>
+        <SkeletonBox width="58%" height={18} />
+        <SkeletonCard style={{ height: 280 }} />
+      </View>
+    </View>
+  );
+}
+
 export function ExpenseBehaviorScreen({ navigation }: any) {
   const t = useTheme();
   const { brand, ink, paper, statusText } = t;
@@ -68,6 +106,16 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
    */
   const [endDate, setEndDate] = useState<string | null>(null);
   const [askOpen, setAskOpen] = useState(false);
+  const chat = useAiChat();
+  /**
+   * The reduction opportunity "Simulate reduction" is currently open for, or
+   * null when the sheet is closed — plan §12.4, Phase 4.
+   *
+   * A single value rather than a boolean beside the opportunity list index:
+   * it carries the opportunity itself, so the sheet stays correct even if
+   * the underlying list refetches or reorders while it is open.
+   */
+  const [simulateFor, setSimulateFor] = useState<ReductionOpportunity | null>(null);
   /**
    * Which sub-section is showing.
    *
@@ -80,6 +128,11 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
   const [showAllTrends, setShowAllTrends] = useState(false);
   const { data, loading, error } = useInsight<ExpenseBehavior>(
     "/insights/expense-behavior",
+    { businessProfileId: selected?.id, periodDays, ...(endDate ? { endDate } : {}) },
+    [selected?.id, periodDays, endDate]
+  );
+  const reductionState = useInsight<ReductionOpportunityResponse>(
+    "/insights/reduction-opportunities",
     { businessProfileId: selected?.id, periodDays, ...(endDate ? { endDate } : {}) },
     [selected?.id, periodDays, endDate]
   );
@@ -262,6 +315,36 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
     });
   }
 
+  /**
+   * "Ask FinSight about this" on a reduction-opportunity card — plan §11.1.
+   *
+   * `prepareQuestion` primes the composer AND queues the selected
+   * opportunity's own structured object — the same one this screen already
+   * fetched from `GET /insights/reduction-opportunities` — in a single
+   * atomic update. See lib/reductionOpportunityAsk.ts and lib/chatStore.ts.
+   * Nothing is sent here: opening the sheet only shows the owner what would
+   * be asked, same as every other deep-link in this app.
+   */
+  function askAboutOpportunity(opportunity: ReductionOpportunity) {
+    haptics.tapped();
+    chat.prepareQuestion(REDUCTION_OPPORTUNITY_QUESTION, opportunity);
+    setAskOpen(true);
+  }
+
+  /**
+   * "Simulate reduction" on a reduction-opportunity card — plan §12.4.
+   *
+   * Just opens the sheet on the selected opportunity; the sheet itself owns
+   * the form, the request and the result. `periodDays`/`endDate` are handed
+   * down as they stand right now, which is the same window the opportunity
+   * list was fetched for — the category baseline the sheet simulates against
+   * is then the same one the card's own evidence figure describes.
+   */
+  function simulateOpportunity(opportunity: ReductionOpportunity) {
+    haptics.tapped();
+    setSimulateFor(opportunity);
+  }
+
   /*
    * The badges count things that need a DECISION, not things worth reading.
    *
@@ -385,7 +468,7 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
 
         {error ? <ErrorNote>{error}</ErrorNote> : null}
         {loading || !data ? (
-          <ActivityIndicator color={brand[600]} style={{ marginTop: space.xl }} />
+          <ExpenseInsightSkeleton />
         ) : (
           <View style={{ gap: space.lg }}>
             {/*
@@ -500,6 +583,21 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
                 </View>
               </Card>
 
+              {/*
+                THE NEXT STEP after understanding what changed — plan §10.1.
+                After the headline summary, before the lower-priority
+                analytical detail (the comparison/change charts and the full
+                category list below).
+              */}
+              <ReductionOpportunitiesSection
+                state={reductionState}
+                businessProfileId={selected.id}
+                onViewRecords={openCategoryRecords}
+                onAskAboutThis={askAboutOpportunity}
+                onSimulate={simulateOpportunity}
+                historical={endDate !== null}
+              />
+
               <Card>
                 <CategoryComparison
                   data={data.categoryTrends.map((t) => ({
@@ -566,7 +664,11 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
                           alignItems: "center",
                           gap: space.sm,
                           paddingVertical: space.sm,
-                          minHeight: TAP,
+                          // TAP_FLOOR rather than the 44-point iOS token:
+                          // these rows stack with a hairline between them, so
+                          // the extra four points on Android cost nothing and
+                          // slop would cross the divider into the row above.
+                          minHeight: TAP_FLOOR,
                           borderTopWidth: i === 0 ? 0 : 1,
                           borderTopColor: paper[200],
                           opacity: pressed ? 0.7 : 1,
@@ -600,7 +702,18 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
                     style={({ pressed }) => ({ marginTop: space.sm, opacity: pressed ? 0.7 : 1 })}
                   >
                     <Card>
-                      <View style={{ flexDirection: "row", alignItems: "center", minHeight: TAP - 12 }}>
+                      {/*
+                        NOT a target. The tappable element is the Pressable
+                        wrapping this whole Card, and the Card's own space.lg
+                        padding already puts it far past the floor — this
+                        minHeight only stops the content row collapsing around
+                        a single line of text. Written as a plain constant
+                        rather than as a subtraction from the tap token,
+                        because that expression reads as a deliberate undercut
+                        of the floor, which is what put this file on the sweep
+                        list in the first place.
+                      */}
+                      <View style={{ flexDirection: "row", alignItems: "center", minHeight: CONTENT_ROW_MIN }}>
                         <T style={{ flex: 1, fontSize: typeScale.body, color: ink[900] }}>
                           {showAllTrends
                             ? "Show fewer categories"
@@ -681,6 +794,15 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
       <AskFinSightFab onPress={() => setAskOpen(true)} />
 
       <AskFinSight visible={askOpen} onClose={() => setAskOpen(false)} module="Expense Insights" />
+
+      <ReductionSimulationSheet
+        visible={simulateFor !== null}
+        opportunity={simulateFor}
+        businessProfileId={selected.id}
+        periodDays={periodDays}
+        endDate={endDate}
+        onClose={() => setSimulateFor(null)}
+      />
 
       {/*
         All five answers, in one sheet, reached from any finding card. The

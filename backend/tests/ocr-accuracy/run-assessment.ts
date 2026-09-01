@@ -293,7 +293,7 @@ function tally(results: Result[], field: "date" | "vendor" | "amount") {
   // Counted rather than hardcoded — the table said "2 real" for some time
   // after a third real photograph was added.
   const countOf = (kind: string) => results.filter((r) => r.kind === kind).length;
-  lines.push(`| real | ${countOf("real")} | Genuine receipt photographs, including two Philippine thermal receipts shot on a phone |`);
+  lines.push(`| real | ${countOf("real")} | Genuine receipt photographs — 3 Philippine, the remaining ${countOf("real") - 3} sourced from a licensed public dataset (CORD/SROIE/ExpressExpense/Zenodo, see CORPUS-ATTRIBUTION.md), independently hand-verified against the image rather than trusting that dataset's own AI-assisted annotations |`);
   lines.push(`| synthetic | ${countOf("synthetic")} | Parser robustness across layouts, date formats, amount formats, currency symbols, header styles |`);
   lines.push(`| degraded | ${countOf("degraded")} | Synthetic receipts degraded with blur, low contrast, rotation, downscaling, darkness and JPEG artifacts |`);
   lines.push("");
@@ -376,9 +376,13 @@ function tally(results: Result[], field: "date" | "vendor" | "amount") {
   lines.push("");
   lines.push("## Bottom line");
   lines.push("");
-  lines.push("Amount extraction is the strongest and most important field, at 100% across the corpus including every degraded variant. Dates now also read 100% after the locale fix, and vendor reads 100% on this corpus after the footer/banner fix above. That vendor figure is a claim about this corpus's one footer-vendor layout, not a general solve — see failure pattern 2's caveat.");
+  lines.push(
+    `Once the corpus stopped being 90% clean renders, the headline numbers dropped hard: date ${pct(d.correct, d.scored)}, vendor ${pct(v.correct, v.scored)}, amount ${pct(a.correct, a.scored)} overall (see "Results by image category" above for the real-only breakdown, which is materially lower than the synthetic/degraded rows). Synthetic and degraded images still score ~100% — that number was never wrong, it was just describing a narrow slice of conditions (clean renders, and uniform programmatic degradation of clean renders) that most real phone photos of a crumpled or glare-lit thermal receipt do not resemble. **The corpus was the thing hiding the gap, not the parser being newly broken.**`
+  );
   lines.push("");
-  lines.push("These numbers should still not be read as \"OCR is ~100% accurate\". They are a claim about this corpus, which is 90% clean renders and only 2 real photographs, with no handwritten receipts at all. The design already assumes OCR will be wrong sometimes: every scan lands on a confirm screen as an editable draft and nothing is saved until the owner accepts it. Read these figures as \"OCR gives a usable first draft on clean receipts, and needs correcting on difficult ones\".");
+  lines.push("This is not read as \"the parser regressed\" — nothing in `ocr.service.ts` changed between the 31-image and 73-image runs. It is read as \"the 31-image number was measuring the wrong thing.\" See the failure taxonomy in the plan/PR notes for this corpus-expansion pass for the specific, evidenced categories behind these numbers (blur/glare/obstruction, non-PH date locales, vendor-in-footer-or-cropped, unreconciled real subtotals, and more) — that taxonomy, not this summary paragraph, is the actionable input for Phase 3 fixes.");
+  lines.push("");
+  lines.push("The design already assumes OCR will be wrong sometimes: every scan lands on a confirm screen as an editable draft and nothing is saved until the owner accepts it. That safety net matters more, not less, in light of these numbers.");
   lines.push("");
 
   writeFileSync(join(HERE, "OCR-ACCURACY-REPORT.md"), lines.join("\n") + "\n");

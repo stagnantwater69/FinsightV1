@@ -69,9 +69,18 @@ export function Row({
   destructive?: boolean;
   toggle?: { value: boolean };
 }) {
-  const { brand, ink, paper, statusText } = useTheme();
+  const { brand, ink, paper, statusText, statusSurface, brandSurface } = useTheme();
   const tint = destructive ? statusText.critical : brand[700];
-  const surface = destructive ? "#fdecec" : brand[50];
+  /*
+   * THE DESTRUCTIVE MEDALLION'S WASH, from the palette rather than a literal.
+   *
+   * `#fdecec` was a third independent red surface beside the two that
+   * ui.tsx already consolidated into `statusSurface.critical` — a percent
+   * apart in Light, and in Dark a near-white plate under near-white ink,
+   * because a hard-coded hex cannot invert. It is the same wash the app uses
+   * behind every other critical thing, and now it says so.
+   */
+  const surface = destructive ? statusSurface.critical : brandSurface;
 
   return (
     <Pressable

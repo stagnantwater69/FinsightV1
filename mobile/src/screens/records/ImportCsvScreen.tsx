@@ -3,7 +3,8 @@ import { FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, View }
 import * as DocumentPicker from "expo-document-picker";
 import { Alert as AlertBanner, Button, Callout, Card, ConfirmSheet, ErrorNote, Field, OptionSheet, Screen, SelectChip, T } from "../../components/ui";
 import { useBusinessProfiles } from "../../context/BusinessProfileContext";
-import { api, errorMessage } from "../../lib/api";
+import { api } from "../../lib/api";
+import { describeActionFailure, saveFailureMessage, toLoadFailure } from "../../lib/connectionState";
 import {
   EMPTY_MAPPING,
   analyseRows,
@@ -215,7 +216,10 @@ export function ImportCsvScreen({ navigation }: any) {
       setRecordType(guess.recordType);
       setMixedStrategy(guess.mixedStrategy);
     } catch (err) {
-      setError(errorMessage(err));
+      // The file is still chosen and the idempotency key still minted, so
+      // "Try again" re-previews the same spreadsheet rather than sending the
+      // owner back to the file picker.
+      setError(describeActionFailure(toLoadFailure(err), "The file you chose is still selected."));
     } finally {
       setBusy(false);
     }
@@ -295,7 +299,18 @@ export function ImportCsvScreen({ navigation }: any) {
         setResult({ ...confirmed, skippedCount: confirmed.skipped?.length ?? 0 });
       }
     } catch (err) {
-      setError(errorMessage(err));
+      /*
+        THE MAPPING AND THE CORRECTIONS SURVIVE, and the message says so.
+
+        This is the failure with the most work behind it in the whole app — a
+        column mapping, a date-format answer, and possibly dozens of per-row
+        corrections typed on a phone. None of it is cleared here: `reset()` is
+        only ever called by the file picker and by "Choose a different file".
+        The idempotency key is the same on the retry too, so a confirm that
+        actually landed before the connection dropped comes back as the SAME
+        import rather than a second copy of the records.
+      */
+      setError(saveFailureMessage(err, "Import these rows"));
     } finally {
       setBusy(false);
     }
@@ -379,8 +394,23 @@ export function ImportCsvScreen({ navigation }: any) {
             {progress ? (
               <>
                 <View
+                  // Without `accessible`, RN leaves `isAccessibilityElement`
+                  // false and the role and value below sit on a view the
+                  // platform never surfaces — the bar is announced as nothing
+                  // at all. Same fix, same reason, as the Spending Impact
+                  // gauge and RecoveryMeter's Bar.
+                  accessible
                   accessibilityRole="progressbar"
-                  accessibilityValue={{ min: 0, max: progress.total, now: progress.done }}
+                  accessibilityLabel="Import progress"
+                  accessibilityValue={{
+                    min: 0,
+                    max: progress.total,
+                    now: progress.done,
+                    // The caption underneath says this in words; a reader
+                    // parked on the bar itself would otherwise get a bare
+                    // ratio with no unit.
+                    text: `${progress.done} of ${progress.total} rows checked and saved`,
+                  }}
                   style={{ height: 8, borderRadius: radius.sm, backgroundColor: paper[200], overflow: "hidden" }}
                 >
                   <View

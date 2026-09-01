@@ -3,11 +3,56 @@ import { z } from "zod";
 import * as receiptScanService from "../services/receiptScan.service";
 import { assessImageQuality } from "../lib/imageQuality";
 import { detectReceiptCorners } from "../lib/edgeDetection";
+import { assessReceiptLikelihood } from "../lib/receiptLikelihood";
 import { ApiError } from "../middleware/error.middleware";
 
 const uploadSchema = z.object({
   businessProfileId: z.coerce.number().int().positive(),
+  captureMetadata: z.string().max(50_000).optional(),
 });
+
+const pointSchema = z.object({ x: z.number().min(0).max(50_000), y: z.number().min(0).max(50_000) });
+const captureMetadataSchema = z.array(
+  z.object({
+    source: z.enum(["manual-camera", "native-document-scanner", "gallery"]).optional(),
+    processingMode: z.enum(["original", "manual-crop", "native-selected", "clear-colour", "grayscale", "black-white"]).optional(),
+    originalWidth: z.number().int().positive().max(50_000).optional(),
+    originalHeight: z.number().int().positive().max(50_000).optional(),
+    processedWidth: z.number().int().positive().max(50_000).optional(),
+    processedHeight: z.number().int().positive().max(50_000).optional(),
+    corners: z.object({
+      topLeft: pointSchema,
+      topRight: pointSchema,
+      bottomRight: pointSchema,
+      bottomLeft: pointSchema,
+    }).optional(),
+    transformVersion: z.string().min(1).max(80).optional(),
+    documentConfidence: z.number().min(0).max(1).optional(),
+    ownerOverrodeLikelihood: z.boolean().optional(),
+  }).strict(),
+).max(receiptScanService.MAX_PAGES);
+
+function parseCaptureMetadata(raw: string | undefined, pageCount: number) {
+  if (!raw) return [];
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(raw);
+  } catch {
+    throw new ApiError(400, "Receipt capture metadata must be valid JSON");
+  }
+  const metadata = captureMetadataSchema.parse(decoded);
+  if (metadata.length !== pageCount) {
+    throw new ApiError(400, "Receipt capture metadata must have one entry per page");
+  }
+  for (const page of metadata) {
+    if (!page.corners || !page.originalWidth || !page.originalHeight) continue;
+    const points = Object.values(page.corners);
+    if (points.some((point) => point.x > page.originalWidth! || point.y > page.originalHeight!)) {
+      throw new ApiError(400, "Receipt crop corners must stay inside the original image");
+    }
+  }
+  return metadata;
+}
 
 /**
  * Exported so the contract tests can check real client payloads against the
@@ -103,19 +148,30 @@ export async function upload(req: Request, res: Response) {
   // multer's .array() always sets req.files to an array (possibly empty),
   // never to req.file — checking both is what lets this controller serve
   // both the field name older clients might still send and the current one.
-  const files = Array.isArray(req.files) ? req.files : req.file ? [req.file] : [];
+  const grouped = !Array.isArray(req.files) && req.files ? req.files as Record<string, Express.Multer.File[]> : null;
+  const files = Array.isArray(req.files) ? req.files : grouped?.files ?? (req.file ? [req.file] : []);
+  const originals = grouped?.originalFiles ?? [];
   if (files.length === 0) {
     throw new ApiError(400, "At least one receipt photo is required");
   }
-  const { businessProfileId } = uploadSchema.parse(req.body);
+  const { businessProfileId, captureMetadata } = uploadSchema.parse(req.body);
+  if (originals.length > 0 && originals.length !== files.length) {
+    throw new ApiError(400, "Original and processed receipt page counts must match");
+  }
+  const metadata = parseCaptureMetadata(captureMetadata, files.length);
 
   const scan = await receiptScanService.uploadAndScan(req.user!.id, {
     businessProfileId,
-    pages: files.map((file) => ({
-      buffer: file.buffer,
-      mimetype: file.mimetype,
-      originalname: file.originalname,
-    })),
+    pages: files.map((file, index) => {
+      const original = originals[index];
+      return {
+        buffer: original?.buffer ?? file.buffer,
+        mimetype: original?.mimetype ?? file.mimetype,
+        originalname: original?.originalname ?? file.originalname,
+        ...(original ? { processed: { buffer: file.buffer, mimetype: file.mimetype, originalname: file.originalname } } : {}),
+        ...(metadata[index] ? { metadata: metadata[index] } : {}),
+      };
+    }),
   });
 
   /*
@@ -187,7 +243,13 @@ export async function detectEdges(req: Request, res: Response) {
     throw new ApiError(400, "A photo is required");
   }
   const result = await detectReceiptCorners(req.file.buffer);
-  res.status(200).json(result);
+  res.status(200).json({
+    ...result,
+    likelihood: assessReceiptLikelihood({
+      documentConfidence: result.confidence,
+      candidates: result.candidates,
+    }),
+  });
 }
 
 /**

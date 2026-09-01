@@ -1,17 +1,19 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 /**
- * The landing page's structural vocabulary.
+ * The landing page's structural vocabulary (2026 redesign).
  *
- * This is the approved emerald/mint/cream card design: warm cream and pale
- * mint section surfaces, rounded white cards with hairline borders and the
- * soft green-tinted shadow scale, a small uppercase green eyebrow above each
- * section heading, and gold reserved for primary calls to action.
+ * Warm cream/mint section surfaces, rounded white cards with hairline
+ * borders and the soft green-tinted shadow scale, a small uppercase green
+ * eyebrow above each section heading, fully pill-shaped nav/CTAs, and gold
+ * reserved for primary calls to action.
  *
  * Colours come from the `landing-*` token group in tailwind.config.js — a
  * named, deliberate exception to the app's teal brand scale, scoped to the
- * public landing surface only. Nothing here should reach for `brand-*`,
- * default Tailwind hues, or raw hex.
+ * public landing surface only. Type comes from `font-landing-sans` (DM Sans)
+ * and `font-landing-display` (Plus Jakarta Sans) — also landing-only, so the
+ * rest of the app keeps Inter/Sora. Nothing here should reach for `brand-*`,
+ * default Tailwind hues, raw hex, or the app-wide `font-sans`/`font-display`.
  */
 
 /** The page measure — the spec's 1180–1280px content container. */
@@ -80,7 +82,11 @@ export function Eyebrow({ children, tone = "green" }: { children: ReactNode; ton
   const color =
     tone === "mint" ? "text-landing-mint" : tone === "gold" ? "text-landing-gold" : "text-landing-green";
   return (
-    <span className={`block text-[11px] font-bold uppercase tracking-[0.16em] ${color}`}>{children}</span>
+    <span
+      className={`block font-landing-sans text-[11px] font-bold uppercase tracking-[0.16em] ${color}`}
+    >
+      {children}
+    </span>
   );
 }
 
@@ -110,7 +116,7 @@ export function SectionHead({
       <Rise delay={60}>
         <h2
           id={id}
-          className={`mt-3 max-w-[24ch] font-display text-[clamp(1.75rem,3.6vw,2.5rem)] font-extrabold leading-[1.1] tracking-[-0.025em] ${
+          className={`mt-3 max-w-[24ch] font-landing-display text-[clamp(1.75rem,3.6vw,2.5rem)] font-extrabold leading-[1.12] tracking-[-0.024em] ${
             tone === "dark" ? "text-white" : "text-landing-charcoal"
           }`}
         >
@@ -120,8 +126,8 @@ export function SectionHead({
       {lede ? (
         <Rise delay={120}>
           <p
-            className={`mt-4 max-w-[62ch] text-[15px] leading-relaxed sm:text-base ${
-              tone === "dark" ? "text-landing-mint-light/85" : "text-landing-muted"
+            className={`mt-4 max-w-[62ch] font-landing-sans text-[15px] leading-relaxed sm:text-base ${
+              tone === "dark" ? "text-landing-mint/85" : "text-landing-muted"
             }`}
           >
             {lede}
@@ -134,14 +140,16 @@ export function SectionHead({
 
 /**
  * The two CTA styles — one gold primary, one quiet secondary — shared by the
- * header, hero and closing banner so the page has exactly one of each.
- * Gold always carries charcoal ink: white on #F5AD19 fails contrast.
+ * header, hero and closing banner so the page has exactly one of each. Fully
+ * pill-shaped (2026 redesign), with a small lift on hover rather than a flat
+ * color swap. Gold always carries charcoal ink: white on #E4A11B fails
+ * contrast.
  */
 export const CTA_PRIMARY =
-  "inline-flex min-h-tap items-center justify-center gap-2 rounded-xl bg-landing-gold px-5 py-3 text-[15px] font-bold text-landing-charcoal shadow-sm transition duration-150 ease-shell hover:bg-accent-300 active:bg-accent-500";
+  "inline-flex min-h-tap items-center justify-center gap-2 rounded-full bg-landing-gold px-6 py-3 font-landing-sans text-[15px] font-bold text-landing-charcoal shadow-sm transition duration-150 ease-shell hover:-translate-y-0.5 hover:bg-accent-300 hover:shadow-md active:translate-y-0 active:bg-accent-500";
 
 export const CTA_SECONDARY =
-  "inline-flex min-h-tap items-center justify-center gap-2 rounded-xl border border-landing-mint-light bg-white px-5 py-3 text-[15px] font-semibold text-landing-charcoal transition duration-150 ease-shell hover:border-landing-mint hover:bg-landing-mint-pale active:bg-landing-mint-light";
+  "inline-flex min-h-tap items-center justify-center gap-2 rounded-full border border-landing-mint-light bg-landing-surface px-6 py-3 font-landing-sans text-[15px] font-semibold text-landing-charcoal transition duration-150 ease-shell hover:-translate-y-0.5 hover:border-landing-green hover:bg-landing-mint-pale active:translate-y-0 active:bg-landing-mint-light";
 
 /**
  * The rounded card — the page's one surface primitive. A hairline border, a
@@ -159,7 +167,7 @@ export function Card({
 }) {
   return (
     <div
-      className={`rounded-2xl border border-landing-mint-light/70 bg-white shadow-sm ${
+      className={`rounded-2xl border border-landing-mint-light/70 bg-landing-surface shadow-sm ${
         hover ? "transition duration-200 ease-shell hover:-translate-y-0.5 hover:shadow-md" : ""
       } ${className}`}
     >

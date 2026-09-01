@@ -6,6 +6,13 @@ import { feedbackActions } from "../src/lib/findingFeedback";
 import { groupConversations } from "../src/lib/conversationGroups";
 import { TOUR_STEPS } from "../src/components/tour/steps";
 import { shouldStartTour } from "../src/lib/tourGating";
+import {
+  BAND_TONE,
+  PERIOD_OPTIONS,
+  QUICK_AMOUNTS,
+  gaugeGeometry,
+  percentOfFundsText,
+} from "../src/lib/spendingImpactForm";
 
 /**
  * Every page the website has, the app has — or has a written reason not to.
@@ -83,6 +90,20 @@ const COVERED: Record<string, string> = {
   "/business-profiles/all": "BusinessProfiles",
   "/business-profiles/new": "BusinessProfileForm",
   "/business-profiles/:id/edit": "BusinessProfileForm",
+  /*
+   * Recovery Target Improvement Plan §11 Phase 2 — the weekly operating
+   * schedule and holiday/closure overrides. Reached from BusinessProfileForm
+   * (an existing business only) and from RecoveryTargetScreen's
+   * approximation-mode notice, the same two entry points web offers.
+   */
+  "/business-profiles/:id/operating-schedule": "OperatingSchedule",
+  /*
+   * Recovery Target Improvement Plan §7.5/§10.8/§11 Phase 6 — notification
+   * preferences for Recovery Target alerts. Reached from Settings ("Recovery
+   * target" > "Notification settings"), the mobile equivalent of web's
+   * per-business-profile settings route.
+   */
+  "/business-profiles/:id/recovery-notifications": "RecoveryNotificationPreferences",
   "/records": "RecordsList",
   "/records/categories": "Categories",
   "/records/expenses/new": "AddExpense",
@@ -94,6 +115,12 @@ const COVERED: Record<string, string> = {
   "/records/flagged": "FlaggedRecords",
   "/insights/expense-behavior": "ExpenseBehavior",
   "/insights/recovery": "RecoveryTarget",
+  /*
+   * Recovery Target Improvement Plan §10.9/§11 Phase 7 — the month-end
+   * review. Reached from RecoveryTargetScreen's "View last month's summary"
+   * link, the same entry point web offers.
+   */
+  "/insights/recovery/month-end-review": "MonthEndReview",
   "/insights/spending-impact": "SpendingImpact",
   /*
    * Web splits declaring a repeating payment from editing one; mobile serves
@@ -493,5 +520,255 @@ describe("finding feedback matches web", () => {
       const theirs = web.feedbackActions(category).map(({ feedback, status, label }) => ({ feedback, status, label }));
       expect(mine, `feedback actions for "${category}"`).toEqual(theirs);
     }
+  });
+});
+
+/**
+ * Spending Impact, checked as CAPABILITIES rather than as a route name.
+ *
+ * WHY THE ROUTE CHECK ABOVE WAS NOT ENOUGH. `"/insights/spending-impact":
+ * "SpendingImpact"` passed for months while the screen was an amount box, a
+ * Check button and a fixed 30-day window, and web's page had grown an item
+ * description, a category suggestion, a selectable period, quick amounts, an
+ * accessible gauge, an AI purchase review, the owner's own price history and a
+ * prepared chat prompt. The two clients had the same route and were not the
+ * same product — which is the exact failure this file exists to catch, one
+ * level down from where it was looking. The mobile plan's ticket §9.6 asks for
+ * this specifically: verify capability contracts, not route names only.
+ *
+ * WHAT THIS CAN AND CANNOT SEE. There is no render harness for mobile, so the
+ * capability checks read source for the call site rather than driving the UI.
+ * A source check proves the wiring EXISTS; it cannot prove it renders, that
+ * the segmented control is reachable by touch, or that TalkBack reads the
+ * gauge. Those are physical-device questions and are reported as such. The
+ * SHARED ARITHMETIC below is not a source check — the geometry and the band
+ * mapping are imported and driven, the same way the confidence bands are.
+ */
+const WEB_SPENDING_IMPACT = join(__dirname, "..", "..", "web", "src", "pages", "SpendingImpact.tsx");
+const MOBILE_SPENDING_IMPACT = join(__dirname, "..", "src", "screens", "SpendingImpactScreen.tsx");
+
+/** Web's `PERIOD_OPTIONS` day figures, read off its source. */
+function webPeriodDays(): number[] {
+  const src = readFileSync(WEB_SPENDING_IMPACT, "utf8");
+  const block = /const PERIOD_OPTIONS\s*=\s*\[([\s\S]*?)\];/.exec(src)?.[1] ?? "";
+  return [...block.matchAll(/days:\s*(\d+)/g)].map((m) => Number(m[1]));
+}
+
+/** Web's `QUICK_AMOUNTS`, likewise. */
+function webQuickAmounts(): number[] {
+  const src = readFileSync(WEB_SPENDING_IMPACT, "utf8");
+  const block = /const QUICK_AMOUNTS\s*=\s*\[([^\]]*)\]/.exec(src)?.[1] ?? "";
+  return block
+    .split(",")
+    .map((n) => Number(n.trim()))
+    .filter((n) => Number.isFinite(n));
+}
+
+/** Web's band -> Pill tone mapping, as pairs. */
+function webBandTones(): Record<string, string> {
+  const src = readFileSync(WEB_SPENDING_IMPACT, "utf8");
+  const block = /const BAND_TONE[^=]*=\s*\{([\s\S]*?)\};/.exec(src)?.[1] ?? "";
+  return Object.fromEntries([...block.matchAll(/"([^"]+)":\s*"([^"]+)"/g)].map((m) => [m[1]!, m[2]!]));
+}
+
+/**
+ * Web's Pill tones and the app's status families are the same three severities
+ * under two vocabularies. Named here so a fourth tone on either side fails
+ * rather than silently mapping to nothing.
+ */
+const WEB_TONE_TO_MOBILE: Record<string, string> = { ok: "good", warn: "warning", danger: "critical" };
+
+describe.skipIf(!existsSync(WEB_SPENDING_IMPACT))("Spending Impact capability parity", () => {
+  it("finds both implementations at all", () => {
+    // Guards the test itself: a page that moved, or constants that were
+    // renamed, would make every assertion below pass vacuously.
+    expect(webPeriodDays().length, "web's PERIOD_OPTIONS no longer parses").toBeGreaterThan(1);
+    expect(webQuickAmounts().length, "web's QUICK_AMOUNTS no longer parses").toBeGreaterThan(1);
+    expect(Object.keys(webBandTones()).length, "web's BAND_TONE no longer parses").toBe(3);
+  });
+
+  /*
+   * The DAYS must match; the labels deliberately need not. Web renders these
+   * in a <select> where "This week" reads as one of a list; the app renders
+   * them three-across in a segmented control on a 360dp screen, where the
+   * two-word labels wrap. A window the two clients name the same and count
+   * differently is the drift that matters — a window they name differently
+   * and count the same is a layout decision.
+   */
+  it("offers the same comparison windows web does", () => {
+    expect(PERIOD_OPTIONS.map((o) => o.days)).toEqual(webPeriodDays());
+  });
+
+  it("offers the same quick amounts", () => {
+    expect([...QUICK_AMOUNTS]).toEqual(webQuickAmounts());
+  });
+
+  it("agrees about which band is which severity", () => {
+    const theirs = webBandTones();
+    const drift: string[] = [];
+    for (const [band, webTone] of Object.entries(theirs)) {
+      const expected = WEB_TONE_TO_MOBILE[webTone];
+      expect(expected, `web uses a tone this mapping has never heard of: ${webTone}`).toBeTruthy();
+      const mine = BAND_TONE[band as keyof typeof BAND_TONE];
+      if (mine !== expected) drift.push(`${band}: app "${mine}" vs web "${webTone}"`);
+    }
+    expect(drift, `The same band would be presented at a different severity:\n${drift.join("\n")}`).toEqual([]);
+  });
+
+  /*
+   * The gauge geometry, driven rather than described. Web computes it inline
+   * inside ImpactGauge, so its two constants are read off the source and the
+   * app's imported function is checked against the arithmetic they define —
+   * if web retunes the ceiling or the "noticeable" fraction, the marker moves
+   * on one client only and this fails.
+   */
+  it("places the gauge marker exactly where web places it", () => {
+    const src = readFileSync(WEB_SPENDING_IMPACT, "utf8");
+    expect(src, "web's display ceiling is no longer 1.35x the threshold").toContain("thresholdPercent * 1.35");
+    expect(src, "web's noticeable zone no longer starts at 0.4x the threshold").toContain("thresholdPercent * 0.4");
+
+    for (const [percentOfFunds, thresholdPercent] of [
+      [0, 30],
+      [5, 30],
+      [29.9, 30],
+      [30, 30],
+      [84, 30],
+      [400, 30],
+      [12, 80],
+      [999999, 30],
+    ]) {
+      const ceiling = Math.max(thresholdPercent! * 1.35, percentOfFunds!, 1);
+      const web = {
+        markerPercent: Math.min(100, (percentOfFunds! / ceiling) * 100),
+        noticeablePercent: Math.min(100, ((thresholdPercent! * 0.4) / ceiling) * 100),
+        thresholdPercent: Math.min(100, (thresholdPercent! / ceiling) * 100),
+      };
+      const mine = gaugeGeometry(percentOfFunds!, thresholdPercent!);
+      expect(
+        {
+          markerPercent: mine.markerPercent,
+          noticeablePercent: mine.noticeablePercent,
+          thresholdPercent: mine.thresholdPercent,
+        },
+        `gauge for ${percentOfFunds}% against a ${thresholdPercent}% threshold`,
+      ).toEqual(web);
+    }
+  });
+
+  it("reads the same sentinel the same way", () => {
+    // Web's percentText and the app's percentOfFundsText both have to refuse
+    // to print 999999 as a percentage — it means "the funds are zero", not
+    // "999999% of your funds".
+    const src = readFileSync(WEB_SPENDING_IMPACT, "utf8");
+    expect(src).toContain("more than 100%");
+    expect(percentOfFundsText(999999)).toBe("more than 100%");
+    expect(percentOfFundsText(84)).toBe("84.0%");
+  });
+
+  /**
+   * Each capability from the plan's parity table (§4), as a marker that must
+   * be present in BOTH implementations.
+   *
+   * A source marker, not a rendered assertion — see the caveat at the top of
+   * this block. It is picked to be the thing that cannot be there by accident:
+   * an endpoint path, a request field, an imported helper.
+   */
+  const CAPABILITIES: { capability: string; web: RegExp; mobile: RegExp }[] = [
+    {
+      capability: "comparison period is selectable and sent to the server",
+      web: /periodDays/,
+      mobile: /periodDays,?\s*\n|periodDays:/,
+    },
+    {
+      capability: "quick amount presets",
+      web: /QUICK_AMOUNTS/,
+      mobile: /QUICK_AMOUNTS\.map/,
+    },
+    {
+      capability: "category suggested from the item description",
+      web: /"\/ai\/suggest-category"/,
+      mobile: /"\/ai\/suggest-category"/,
+    },
+    {
+      /*
+       * The divergence this closed: mobile used to send no categoryId, so its
+       * price context was matched on the description alone while web's was
+       * category-scoped — the same purchase could carry a different "Is this
+       * normal for you?" badge on the two clients.
+       */
+      capability: "the reference category is sent with the purchase review",
+      web: /categoryId/,
+      mobile: /body\.categoryId/,
+    },
+    {
+      capability: "AI purchase review",
+      web: /"\/ai\/purchase-review"/,
+      mobile: /"\/ai\/purchase-review"/,
+    },
+    {
+      capability: "record-derived price context, labelled as not written by AI",
+      web: /not written by AI|not by AI/,
+      mobile: /not written by AI/,
+    },
+    {
+      capability: "impact gauge",
+      web: /ImpactGauge/,
+      mobile: /ImpactGauge/,
+    },
+    {
+      capability: "current funds context with a path to edit the business",
+      web: /availableFunds/,
+      mobile: /selected\.availableFunds/,
+    },
+    {
+      capability: "thin-data explanation for an empty comparison window",
+      web: /No expenses are recorded for this period/,
+      mobile: /periodEvidenceNote/,
+    },
+    {
+      capability: "scenario reset",
+      web: /Reset/,
+      mobile: /resetScenario/,
+    },
+    {
+      capability: "a contextual question prepared for Ask FinSight",
+      web: /expandQuestion/,
+      mobile: /scenarioQuestion/,
+    },
+  ];
+
+  it("implements every Spending Impact capability the website has", () => {
+    const web = readFileSync(WEB_SPENDING_IMPACT, "utf8");
+    const mobile = readFileSync(MOBILE_SPENDING_IMPACT, "utf8");
+
+    const missingOnWeb = CAPABILITIES.filter((c) => !c.web.test(web)).map((c) => c.capability);
+    expect(
+      missingOnWeb,
+      `This guard no longer describes web's page — the marker for these capabilities is gone, so ` +
+        `either web dropped them (decide and record it) or the marker needs re-pointing: ${missingOnWeb.join(", ")}`,
+    ).toEqual([]);
+
+    const missingOnMobile = CAPABILITIES.filter((c) => !c.mobile.test(mobile)).map((c) => c.capability);
+    expect(
+      missingOnMobile,
+      `Spending Impact capabilities present on the website and absent from the app: ${missingOnMobile.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  /**
+   * The one rule that is not parity with web but a product rule of the app's
+   * own (plan §2): a contextual question may be PREPARED and must never be
+   * sent for the owner.
+   *
+   * Pinned here because it is invisible in review — `chat.setInput(question)`
+   * and `chat.send(question)` are one word apart, and the second one puts
+   * words in somebody's mouth and spends their model quota doing it.
+   */
+  it("prepares the chat question without sending it", () => {
+    const mobile = readFileSync(MOBILE_SPENDING_IMPACT, "utf8");
+    expect(mobile, "the prepared question must go into the composer").toContain("chat.setInput(preparedQuestion)");
+    expect(mobile, "Spending Impact must never send a question on the owner's behalf").not.toMatch(
+      /chat\.send\(/,
+    );
   });
 });

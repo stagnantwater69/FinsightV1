@@ -58,6 +58,19 @@ export interface EdgeDetectionResult {
    * here would make it one this file could not see the consequences of.
    */
   confidence: number;
+  /**
+   * Every distinct document-shaped region found in the same photograph.
+   * Additive for old clients: `corners` and `confidence` still describe the
+   * strongest candidate exactly as before.
+   */
+  candidates?: DocumentCandidate[];
+}
+
+export interface DocumentCandidate {
+  corners: DetectedCorners;
+  confidence: number;
+  /** Share of the analysed frame covered by the connected paper region. */
+  areaFraction: number;
 }
 
 const NOT_FOUND: EdgeDetectionResult = { corners: null, confidence: 0 };
@@ -113,10 +126,10 @@ function otsuThreshold(histogram: number[], total: number): number {
  * cluttered counter is how the paper and a bright coin beside it become one
  * "receipt" whose bounding quad covers both.
  */
-function largestComponent(mask: Uint8Array, width: number, height: number): number[] | null {
+function connectedComponents(mask: Uint8Array, width: number, height: number): number[][] {
   const seen = new Uint8Array(mask.length);
   const stack: number[] = [];
-  let best: number[] | null = null;
+  const components: number[][] = [];
 
   for (let start = 0; start < mask.length; start++) {
     if (mask[start] === 0 || seen[start] === 1) continue;
@@ -149,10 +162,10 @@ function largestComponent(mask: Uint8Array, width: number, height: number): numb
       }
     }
 
-    if (best === null || component.length > best.length) best = component;
+    components.push(component);
   }
 
-  return best;
+  return components;
 }
 
 /**
@@ -212,6 +225,9 @@ function quadArea(q: { tl: { x: number; y: number }; tr: { x: number; y: number 
  * their sensible default.
  */
 const MIN_AREA_FRACTION = 1 / 12;
+/** Smaller floor used only while looking for several documents in one frame. */
+const MIN_CANDIDATE_AREA_FRACTION = 0.04;
+export const MAX_DOCUMENT_CANDIDATES = 4;
 
 /**
  * The largest share of the frame a blob may occupy and still be a receipt.
@@ -235,18 +251,17 @@ function scorePolarity(
   height: number,
   threshold: number,
   paperIsBright: boolean,
-): { quad: ReturnType<typeof extremeCorners>; confidence: number } | null {
+): { quad: ReturnType<typeof extremeCorners>; confidence: number; areaFraction: number }[] {
   const mask = new Uint8Array(gray.length);
   for (let i = 0; i < gray.length; i++) {
     const bright = gray[i]! > threshold;
     mask[i] = bright === paperIsBright ? 1 : 0;
   }
 
-  const component = largestComponent(mask, width, height);
-  if (!component) return null;
-
+  const scored: { quad: ReturnType<typeof extremeCorners>; confidence: number; areaFraction: number }[] = [];
+  for (const component of connectedComponents(mask, width, height)) {
   const areaFraction = component.length / (width * height);
-  if (areaFraction < MIN_AREA_FRACTION) return null;
+  if (areaFraction < MIN_CANDIDATE_AREA_FRACTION) continue;
   /*
    * A blob covering essentially the whole frame is not a receipt someone
    * framed — it is the mask having flooded, which is what happens on a white
@@ -259,11 +274,11 @@ function scorePolarity(
    * up as an answer — and it is the kind of answer a later change might be
    * tempted to trust.
    */
-  if (areaFraction > MAX_AREA_FRACTION) return null;
+  if (areaFraction > MAX_AREA_FRACTION) continue;
 
   const quad = extremeCorners(component, width);
   const area = quadArea(quad);
-  if (area <= 0) return null;
+  if (area <= 0) continue;
 
   /*
    * CONFIDENCE, and what each term is actually asking.
@@ -298,7 +313,61 @@ function scorePolarity(
   const fill = Math.min(1, component.length / area);
   const coverage = Math.min(1, areaFraction / 0.6);
 
-  return { quad, confidence: Math.max(0, Math.min(1, fill * fill * coverage)) };
+  scored.push({
+    quad,
+    confidence: Math.max(0, Math.min(1, fill * fill * coverage)),
+    areaFraction,
+  });
+  }
+  return scored;
+}
+
+function toDetectedCorners(
+  quad: ReturnType<typeof extremeCorners>,
+  width: number,
+  height: number,
+): DetectedCorners {
+  return {
+    topLeft: { x: quad.tl.x / width, y: quad.tl.y / height },
+    topRight: { x: quad.tr.x / width, y: quad.tr.y / height },
+    bottomRight: { x: quad.br.x / width, y: quad.br.y / height },
+    bottomLeft: { x: quad.bl.x / width, y: quad.bl.y / height },
+  };
+}
+
+function bounds(corners: DetectedCorners) {
+  const points = Object.values(corners);
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  return { left: Math.min(...xs), top: Math.min(...ys), right: Math.max(...xs), bottom: Math.max(...ys) };
+}
+
+/** Axis-aligned IoU is sufficient for suppressing the same component found in both polarities. */
+export function candidateIntersectionOverUnion(a: DetectedCorners, b: DetectedCorners): number {
+  const aa = bounds(a);
+  const bb = bounds(b);
+  const left = Math.max(aa.left, bb.left);
+  const top = Math.max(aa.top, bb.top);
+  const right = Math.min(aa.right, bb.right);
+  const bottom = Math.min(aa.bottom, bb.bottom);
+  const intersection = Math.max(0, right - left) * Math.max(0, bottom - top);
+  const areaA = Math.max(0, aa.right - aa.left) * Math.max(0, aa.bottom - aa.top);
+  const areaB = Math.max(0, bb.right - bb.left) * Math.max(0, bb.bottom - bb.top);
+  const union = areaA + areaB - intersection;
+  return union > 0 ? intersection / union : 0;
+}
+
+function deduplicateCandidates(candidates: DocumentCandidate[]): DocumentCandidate[] {
+  const accepted: DocumentCandidate[] = [];
+  for (const candidate of [...candidates].sort((a, b) => b.confidence - a.confidence)) {
+    if (candidate.confidence < 0.35) continue;
+    if (accepted.some((existing) => candidateIntersectionOverUnion(existing.corners, candidate.corners) >= 0.72)) {
+      continue;
+    }
+    accepted.push(candidate);
+    if (accepted.length === MAX_DOCUMENT_CANDIDATES) break;
+  }
+  return accepted;
 }
 
 export async function detectReceiptCorners(buffer: Buffer): Promise<EdgeDetectionResult> {
@@ -352,21 +421,21 @@ export async function detectReceiptCorners(buffer: Buffer): Promise<EdgeDetectio
      * frame. Where neither reading manages that, both come back weak and the
      * client falls back to manual handles, which remains the correct answer.
      */
-    const bright = scorePolarity(gray, width, height, threshold, true);
-    const dark = scorePolarity(gray, width, height, threshold, false);
-
-    const best = !bright ? dark : !dark ? bright : bright.confidence >= dark.confidence ? bright : dark;
+    const candidates = deduplicateCandidates(
+      [...scorePolarity(gray, width, height, threshold, true), ...scorePolarity(gray, width, height, threshold, false)]
+        .map(({ quad, confidence, areaFraction }) => ({
+          corners: toDetectedCorners(quad, width, height),
+          confidence,
+          areaFraction,
+        })),
+    );
+    const best = candidates.find((candidate) => candidate.areaFraction >= MIN_AREA_FRACTION) ?? candidates[0];
     if (!best) return NOT_FOUND;
 
-    const { quad, confidence } = best;
     return {
-      corners: {
-        topLeft: { x: quad.tl.x / width, y: quad.tl.y / height },
-        topRight: { x: quad.tr.x / width, y: quad.tr.y / height },
-        bottomRight: { x: quad.br.x / width, y: quad.br.y / height },
-        bottomLeft: { x: quad.bl.x / width, y: quad.bl.y / height },
-      },
-      confidence,
+      corners: best.corners,
+      confidence: best.confidence,
+      candidates,
     };
   } catch (err) {
     // Same contract as assessImageQuality: never throw. A file sharp cannot

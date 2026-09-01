@@ -133,9 +133,24 @@ describe("lines that carry money but are not purchases", () => {
     ["CHANGE              280.00"],
     ["Discount            -50.00"],
     ["Less Senior Disc.    20.00"],
+    // REGRESSION (real-16-new-china-us-date, real image corpus): a plain
+    // "Amount: 24.95" summary label — not "Amount Due", just "Amount" —
+    // was read as a purchased item.
+    ["Amount: 24.95"],
   ])("does not read %s as an item", (line) => {
     expect(parseLineItems(line)).toEqual([]);
   });
+
+  // REGRESSION (real-38-super-seven-dot-noise-duplicate-lines and
+  // real-39-sanyu-stationery-clean, real image corpus): a GST/tax-summary
+  // breakdown row — the tax classification code (SR/ZR/IR) plus its rate —
+  // printed under a "GST Summary" header, read as a purchased item.
+  it.each([["SR @ 6% 8.21 0.49"], ["IR (0%) 4.99 0.20"]])(
+    "does not read a GST-summary breakdown row %s as an item",
+    (line) => {
+      expect(parseLineItems(line)).toEqual([]);
+    },
+  );
 
   it("keeps the items but drops the summary block around them", () => {
     const items = parseLineItems(

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -14,7 +14,8 @@ import { useFocusEffect } from "@react-navigation/native";
 import * as ImagePicker from "expo-image-picker";
 import { Button, Card, ErrorNote, Field, Money, Screen, T } from "../../components/ui";
 import { useBusinessProfiles } from "../../context/BusinessProfileContext";
-import { api, errorMessage } from "../../lib/api";
+import { api } from "../../lib/api";
+import { describeActionFailure, saveFailureMessage, toLoadFailure } from "../../lib/connectionState";
 import {
   buildItemisedConfirmPayload,
   buildReceiptConfirmPayload,
@@ -31,66 +32,68 @@ import {
   warningTone,
 } from "../../lib/receiptWarnings";
 import { ReceiptCamera } from "../../components/receipt-camera";
-import { takeHandedOffSections } from "../../lib/receiptHandoff";
 import { canAddSection, CAPTURE_QUALITY } from "../../lib/receiptCapture";
 import { setFlash } from "../../lib/flash";
 import { SkeletonBox } from "../../components/Skeleton";
 import { DateField } from "../../components/DateField";
 import { Ionicons } from "@expo/vector-icons";
 import * as haptics from "../../lib/haptics";
-import { TAP, font, radius, space, typeScale } from "../../theme/tokens";
+import { font, radius, space, typeScale } from "../../theme/tokens";
+import { TAP_FLOOR } from "../../components/touchTarget";
 import { useTheme } from "../../context/ThemeContext";
 import { FIELD_LIMITS } from "../../lib/fieldLimits";
 import { CategoryPicker, todayISO } from "./shared";
 import { ScanBand } from "./scanReceipt/ScanBand";
+import { ScanningThumbnail } from "./scanReceipt/ScanningThumbnail";
 import { ReviewNotices } from "./scanReceipt/ReviewNotices";
 import { ReviewSection } from "./scanReceipt/ReviewSection";
 import { EvidenceNote } from "./scanReceipt/EvidenceNote";
 import { CategoryChips } from "./scanReceipt/CategoryChips";
 import { GapOption } from "./scanReceipt/GapOption";
 import { pollUntilRead, pagesFromSections, sectionsFromPages } from "./scanReceipt/helpers";
+import { groupReceiptMembers } from "../../lib/receiptGrouping";
 import type { CapturedPage, ReceiptScanResult, ReviewNotice } from "./scanReceipt/types";
 
 /**
- * Capture in FinSight's own camera → approve each section → upload to the
- * existing backend receipt endpoint → editable review → confirm.
+ * Capture (Google ML Kit Document Scanner on Android; gallery elsewhere) →
+ * approve/reorder sections → upload to the existing backend receipt endpoint
+ * → editable review → confirm.
  *
- * WHAT THE CAMERA CHANGED, AND WHAT IT DID NOT. Photographs now come from
- * components/receipt-camera rather than from the system camera app: a receipt
- * frame to line the paper up in, a section counter that says these are parts
- * of ONE receipt, an overlap guide for long ones, an approval step before
- * anything is uploaded, and a crop editor. None of that reaches the server.
- * `scanPages` below sends the same `files` array in the same order to the
- * same endpoint it always has — see pagesFromSections for the seam. The
- * gallery path is untouched and remains the fallback for a phone whose owner
- * will not grant camera access.
+ * WHAT CHANGED, AND WHAT DID NOT. `components/receipt-camera` used to be
+ * FinSight's own camera on `expo-camera`. On Android it is now a thin
+ * launcher for the platform scanner (see `ReceiptCamera.tsx`'s own
+ * documentation for why there is no camera fallback any more): ML Kit does
+ * its own live document detection, automatic shutter, background removal,
+ * perspective correction and multi-page capture, then hands back approved
+ * page images. None of that reaches the server. `scanPages` below still
+ * sends the same `files` array in the same order to the same endpoint it
+ * always has — see pagesFromSections for the seam. "Choose from gallery" on
+ * the card below is unchanged and is a genuinely separate, explicitly chosen
+ * workflow — never a fallback opened automatically when the scanner fails.
  *
  * SECTION 0 DECISION: OCR runs SERVER-SIDE (Tesseract, already built and
  * accuracy-measured at 100% date / 95% vendor / 100% amount on a 20-image
- * corpus). Google ML Kit's on-device OCR needs native modules that don't run in
- * Expo Go, so adopting it would mean a dev-client or bare-workflow migration —
- * a large change for a capability the backend already provides and that has
- * measured accuracy behind it. On-device OCR is documented as a future
- * improvement instead.
+ * corpus). ML Kit Document Scanner produces a clean document image; it does
+ * not run text recognition, and adopting on-device OCR remains a distinct,
+ * undecided change. On-device OCR stays documented as a future improvement.
  *
- * THE SAME CONSTRAINT DECIDED EDGE DETECTION. Every way of finding a
- * receipt's corners on the phone — a document-scanner library, a custom
- * native module, OpenCV — needs a development build for exactly the reason
- * ML Kit did. So detection runs server-side, after the shutter, on the same
- * still the readability check already looks at, and it only ever proposes
- * corners the owner drags. Nothing is detected from live frames, which is why
- * there is no real-time outline and no automatic shutter.
+ * EDGE DETECTION for a gallery-picked image still runs server-side, on the
+ * same still the readability check already looks at — that endpoint and its
+ * reasoning are unchanged by the scanner replacement. It has no bearing on
+ * Android's scanner path, where ML Kit performs its own live detection.
  *
- * The one real difference from a browser upload: a phone camera returns a large,
- * possibly rotated JPEG. That is exactly why the review step below is editable
- * and nothing is saved until the owner confirms.
+ * The one real difference from a browser upload: a phone camera returns a
+ * large, possibly rotated JPEG, and ML Kit hands back its own approved
+ * document image rather than a raw sensor frame — see nativeReceiptScanner.ts.
+ * That is exactly why the review step below is editable and nothing is saved
+ * until the owner confirms.
  *
  * Its own supporting types, poll helper and capture-session conversions live
  * in ./scanReceipt/ — this file is the screen itself.
  */
 export function ScanReceiptScreen({ navigation }: any) {
   const t = useTheme();
-  const { brand, ink, paper, statusText } = t;
+  const { brand, ink, paper, statusText, statusSurface } = t;
   const { selected, categories, refreshCategories, createCategory } = useBusinessProfiles();
   const [scan, setScan] = useState<ReceiptScanResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -105,41 +108,27 @@ export function ScanReceiptScreen({ navigation }: any) {
    * photo is simply a one-page session; there is no separate code path for
    * the common case.
    */
-  /**
-   * Sections photographed in the tab bar's camera before this screen existed.
-   *
-   * Taken once, in a lazy initialiser, because `takeHandedOffSections` clears
-   * as it reads — calling it during an ordinary render would consume the
-   * session on the first render and find nothing on the second.
-   */
-  const [handedOff] = useState(() => takeHandedOffSections());
-
-  const [pages, setPages] = useState<CapturedPage[]>(() =>
-    handedOff ? pagesFromSections(handedOff) : [],
-  );
+  const [pages, setPages] = useState<CapturedPage[]>([]);
+  const [queuedReceiptGroups, setQueuedReceiptGroups] = useState<CapturedPage[][]>([]);
 
   /**
    * Whether FinSight's own camera is up.
    *
-   * Open unless the owner arrives with photographs already taken. There are
-   * two ways in and they want opposite things:
-   *
-   *   - from the tab bar's Scan button, the camera has ALREADY run and handed
-   *     its sections over; reopening it here would put a viewfinder in front
-   *     of someone who has just finished photographing;
-   *   - from "Scan receipt" on the records list, nothing has been captured,
-   *     and the screen's whole purpose is to capture something. Landing on a
-   *     card whose only content is a button saying "Open the camera" asks
-   *     someone to confirm the thing they just asked for.
+   * Closed on arrival — the capture card is the landing state, with "Scan
+   * receipt" and "Choose from gallery" both visible immediately rather than
+   * one behind the other. Closing the camera (a successful scan, a cancel, or
+   * backing out of an unsupported/failed scanner) reveals that same card
+   * instead of leaving this screen — see `onCancel`.
    *
    * A full-screen state rather than a route of its own, so backing out of the
    * camera is this screen's decision to make (see `onCancel`) rather than
    * something the Android back button and the header's back arrow each get
-   * their own opinion about. It also means the preview unmounts the moment
-   * this flips false, which keeps the sensor and torch from running behind
-   * the review form.
+   * their own opinion about. It also means the modal unmounts the moment this
+   * flips false — ML Kit owns its own native lifecycle while it is open, but
+   * nothing here should still be holding it mounted once the owner is back on
+   * this screen.
    */
-  const [cameraOpen, setCameraOpen] = useState(handedOff === null);
+  const [cameraOpen, setCameraOpen] = useState(false);
 
   const [categoryId, setCategoryId] = useState<number | null>(null);
   const [date, setDate] = useState(todayISO());
@@ -198,21 +187,6 @@ export function ScanReceiptScreen({ navigation }: any) {
    * become unresponsive.
    */
   useFocusEffect(useCallback(() => () => setCameraOpen(false), []));
-
-  /*
-   * A handed-over session is already photographed and already approved — the
-   * owner pressed "Scan" on the capture preview, not "hold this for me". So
-   * the read starts on arrival rather than behind one more button on a screen
-   * that would otherwise show them their own photographs and ask again.
-   *
-   * Mount-only. `scanPages` is given the pages explicitly because the state
-   * holding them was set in the same render this effect follows, and reading
-   * it through the closure would be reading it before React has committed.
-   */
-  useEffect(() => {
-    if (handedOff && handedOff.length > 0) void scanPages(pagesFromSections(handedOff));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   if (!selected) return null;
 
@@ -283,7 +257,7 @@ export function ScanReceiptScreen({ navigation }: any) {
    * Sends every captured page as ONE scan. A single photo is simply a
    * one-element page list — there is no separate upload path for it.
    */
-  async function scanPages(list: CapturedPage[] = pages) {
+  async function scanSingleReceipt(list: CapturedPage[]) {
     if (list.length === 0) return;
     setBusy(true);
     setError(null);
@@ -296,6 +270,28 @@ export function ScanReceiptScreen({ navigation }: any) {
       for (const p of list) {
         form.append("files", { uri: p.uri, name: p.fileName, type: p.mimeType } as any);
       }
+      const carriesOriginals = list.every((page) => Boolean(page.originalUri));
+      if (carriesOriginals && list.some((page) => page.originalUri !== page.uri)) {
+        for (const [index, page] of list.entries()) {
+          form.append("originalFiles", {
+            uri: page.originalUri!,
+            name: `receipt-section-${index + 1}-original.jpg`,
+            type: page.mimeType,
+          } as any);
+        }
+      }
+      form.append("captureMetadata", JSON.stringify(list.map((page) => ({
+        source: page.captureSource,
+        processingMode: page.processingMode ?? "original",
+        originalWidth: page.originalWidth ?? page.width,
+        originalHeight: page.originalHeight ?? page.height,
+        processedWidth: page.width,
+        processedHeight: page.height,
+        corners: page.cropCorners,
+        transformVersion: page.transformVersion,
+        documentConfidence: page.documentConfidence,
+        ownerOverrodeLikelihood: page.ownerOverrodeLikelihood,
+      }))));
 
       const accepted = await api.upload<ReceiptScanResult>("/records/receipts", form);
       // The upload returns as soon as the photos are stored; the read itself
@@ -330,10 +326,23 @@ export function ScanReceiptScreen({ navigation }: any) {
       }
     } catch (err) {
       haptics.failed();
-      setError(errorMessage(err));
+      // The captured pages are untouched by a failed read, so this offers the
+      // retry that costs nothing rather than sending the owner back to the
+      // camera for photographs they already have.
+      setError(
+        describeActionFailure(toLoadFailure(err), "Your photos are still here — try scanning them again."),
+      );
     } finally {
       setBusy(false);
     }
+  }
+
+  async function scanPages(list: CapturedPage[] = pages) {
+    const groups = groupReceiptMembers(list);
+    if (groups.length === 0) return;
+    setQueuedReceiptGroups(groups.slice(1));
+    setPages(groups[0]!);
+    await scanSingleReceipt(groups[0]!);
   }
 
   /**
@@ -443,10 +452,33 @@ export function ScanReceiptScreen({ navigation }: any) {
 
       await api.post(`/records/receipts/${scan!.id}/confirm`, payload);
       haptics.succeeded();
-      setFlash("Receipt saved to your records.");
-      navigation.goBack();
+      if (queuedReceiptGroups.length > 0) {
+        const [next, ...remaining] = queuedReceiptGroups;
+        setQueuedReceiptGroups(remaining);
+        setPages(next!);
+        setScan(null);
+        setCategoryId(null);
+        setDate(todayISO());
+        setDescription("");
+        setVendor("");
+        setAmount("");
+        setItemCategories({});
+        setAddedItems([]);
+        setPlan(null);
+        setGapCategoryId(null);
+        setFlash(`Receipt saved. ${remaining.length + 1} more receipt${remaining.length === 0 ? "" : "s"} to review.`);
+        await scanSingleReceipt(next!);
+      } else {
+        setFlash("Receipt saved to your records.");
+        navigation.goBack();
+      }
     } catch (err) {
-      setError(errorMessage(err));
+      // Every corrected field, every per-item category and the photographs
+      // themselves are still here — the screen only leaves on success — and
+      // the wording says so rather than leaving the owner to guess whether
+      // they have to rescan. It does not offer to save it later; nothing in
+      // this app would. See lib/connectionState.ts.
+      setError(saveFailureMessage(err, "Save this expense"));
     } finally {
       setBusy(false);
     }
@@ -496,7 +528,7 @@ export function ScanReceiptScreen({ navigation }: any) {
         return next;
       });
     } catch (err) {
-      setError(errorMessage(err));
+      setError(describeActionFailure(toLoadFailure(err), "The category wasn't created; your rows are unchanged."));
     } finally {
       setCreatingCategoryFor(null);
     }
@@ -527,7 +559,7 @@ export function ScanReceiptScreen({ navigation }: any) {
         return next;
       });
     } catch (err) {
-      setError(errorMessage(err));
+      setError(describeActionFailure(toLoadFailure(err), "The item is still on the receipt."));
     } finally {
       setRemovingItemId(null);
     }
@@ -581,8 +613,22 @@ export function ScanReceiptScreen({ navigation }: any) {
     if (!scan) return [];
 
     const warnings = scan.warnings ?? [];
+    const notices: ReviewNotice[] = [];
+
+    if (scan.receiptLikelihood?.outcome === "obvious-non-receipt") {
+      notices.push({
+        tone: "warn",
+        text: "FinSight found very little receipt evidence in this image. Keep it only if it is an unusual or handwritten receipt, and enter every field from the paper.",
+      });
+    } else if (scan.receiptLikelihood?.outcome === "uncertain") {
+      notices.push({
+        tone: "info",
+        text: "This image has limited receipt evidence. Check every extracted field; handwritten or faded fields may need manual entry.",
+      });
+    }
+
     if (warnings.length > 0) {
-      return warnings.map((w) => ({
+      notices.push(...warnings.map((w) => ({
         tone: warningTone(w.code),
         text: [
           `${warningHeadline(w.code)}${warningPageSuffix(w)}.`,
@@ -593,10 +639,9 @@ export function ScanReceiptScreen({ navigation }: any) {
         ]
           .filter(Boolean)
           .join(" "),
-      }));
+      })));
+      return notices;
     }
-
-    const notices: ReviewNotice[] = [];
 
     if (scan.captureQuality?.tooBlurredToTrust) {
       notices.push({
@@ -732,29 +777,25 @@ export function ScanReceiptScreen({ navigation }: any) {
       onRequestClose={() => setCameraOpen(false)}
     >
       {/*
-        Mounted only while visible, so the sensor and the torch are not left
-        running behind the review form.
+        Mounted only while visible. ML Kit runs as its own native activity
+        rather than an `expo-camera` preview this component owns, but there is
+        still no reason to hold `ReceiptCamera` mounted, or its launch effect
+        armed, behind the review form once the owner is back on it.
       */}
       {cameraOpen ? (
         <ReceiptCamera
           initialSections={sectionsFromPages(pages)}
-          onCancel={() => {
-            setCameraOpen(false);
-            /*
-             * Closing the camera with nothing photographed leaves this screen
-             * entirely, rather than revealing the capture card behind it.
-             *
-             * There is nothing on that card worth stopping at: no sections to
-             * review, no scan to check — just the "Open the camera" button the
-             * owner already pressed. Backing out of a scan should undo the
-             * scan, not park them one tap away from starting it again.
-             *
-             * Sections already captured are the opposite case and are left
-             * alone: those are work, and the card is where they get reviewed,
-             * reordered and sent.
-             */
-            if (pages.length === 0 && navigation.canGoBack()) navigation.goBack();
-          }}
+          /*
+           * Closing the camera — for any reason, including zero pages —
+           * reveals the capture card behind it rather than leaving this
+           * screen. That card is where "Choose from gallery" lives (see the
+           * card below), which matters most exactly when the scanner
+           * couldn't run at all: ML Kit's own unsupported/failure states
+           * deliberately offer no camera fallback themselves (see
+           * ReceiptCamera.tsx and ScannerStatusStates.tsx), so this is the
+           * only place that alternative is reachable from.
+           */
+          onCancel={() => setCameraOpen(false)}
           onDone={(sections) => {
             setPages(pagesFromSections(sections));
             setCameraOpen(false);
@@ -800,9 +841,12 @@ export function ScanReceiptScreen({ navigation }: any) {
               {busy ? (
                 // The OCR wait is the app's slowest interaction — commit to
                 // the shape of the answer instead of a bare spinner, same
-                // reasoning as web's ScanReceipt read skeleton.
+                // reasoning as web's ScanReceipt read skeleton. The scanning
+                // thumbnail shows the actual photo being read; the bars
+                // underneath still say which fields are about to fill in.
                 <View style={{ gap: space.sm, paddingVertical: space.md }}>
                   <T variant="caption" style={{ marginBottom: space.xs }}>Reading the receipt…</T>
+                  {pages[0] ? <ScanningThumbnail uri={pages[0].uri} /> : null}
                   <SkeletonBox width="40%" height={14} />
                   <SkeletonBox height={14} />
                   <SkeletonBox width="70%" height={14} />
@@ -915,10 +959,35 @@ export function ScanReceiptScreen({ navigation }: any) {
 
                   <View style={{ gap: space.sm }}>
                     {pages.length === 0 ? (
-                      <>
-                        <Button title="Open the camera" variant="primary" onPress={capturePage} />
-                        <Button title="Choose from gallery" variant="secondary" onPress={pickPage} />
-                      </>
+                      /*
+                       * Camera is the dominant action, gallery is a deliberate
+                       * secondary tap right beside it — not a second full-width
+                       * button stacked below, which read as two equally-weighted
+                       * choices when one of them (the camera) is what almost
+                       * every owner actually wants.
+                       */
+                      <View style={{ flexDirection: "row", gap: space.sm, alignItems: "stretch" }}>
+                        <View style={{ flex: 1 }}>
+                          <Button title="Scan receipt" variant="primary" onPress={capturePage} />
+                        </View>
+                        <Pressable
+                          onPress={pickPage}
+                          accessibilityRole="button"
+                          accessibilityLabel="Choose a photo from your gallery"
+                          style={{
+                            width: TAP_FLOOR,
+                            height: TAP_FLOOR,
+                            borderRadius: radius.md,
+                            backgroundColor: t.surface,
+                            borderWidth: 1,
+                            borderColor: t.border,
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}
+                        >
+                          <Ionicons name="image-outline" size={22} color={t.brandText} />
+                        </Pressable>
+                      </View>
                     ) : (
                       <>
                         <Button
@@ -984,6 +1053,9 @@ export function ScanReceiptScreen({ navigation }: any) {
                             source={{ uri: p.uri }}
                             style={{ width: "100%", height: "100%" }}
                             resizeMode="cover"
+                            // See PhotoUpload: an Image needs `accessible`
+                            // before its label is surfaced at all.
+                            accessible
                             accessibilityRole="image"
                             accessibilityLabel={
                               pages.length === 1 ? "The receipt you photographed" : `Section ${i + 1} of ${pages.length}`
@@ -1269,7 +1341,21 @@ export function ScanReceiptScreen({ navigation }: any) {
                           onPress={() => setAddedItems((prev) => prev.filter((x) => x.key !== added.key))}
                           accessibilityRole="button"
                           accessibilityLabel={`Remove added item ${i + 1}`}
-                          style={{ minWidth: TAP - 12, minHeight: TAP - 16, alignItems: "flex-end" }}
+                          /*
+                           * Was 32 x 28 with no hitSlop at all — the smallest
+                           * target left in the app, on a destructive control.
+                           * Laid out to the floor rather than slopped: it is
+                           * the right-hand end of a two-item `space-between`
+                           * row whose other item is a caption, so nothing
+                           * tappable is anywhere near it, and the block below
+                           * it is a form field rather than more chrome.
+                           */
+                          style={{
+                            minWidth: TAP_FLOOR,
+                            minHeight: TAP_FLOOR,
+                            alignItems: "flex-end",
+                            justifyContent: "center",
+                          }}
                         >
                           <T style={{ fontSize: typeScale.bodyLg, color: ink[400] }}>×</T>
                         </Pressable>
@@ -1375,7 +1461,13 @@ export function ScanReceiptScreen({ navigation }: any) {
                           paddingHorizontal: space.sm,
                           paddingVertical: 3,
                           borderRadius: radius.full,
-                          backgroundColor: gap === 0 ? "#eafaf1" : "#fffbeb",
+                          // The wash under the balance badge, paired with the
+                          // `statusText` step written on it. Both halves have
+                          // to come from the same family or the pair stops
+                          // clearing contrast the moment the page goes dark —
+                          // these were Light's literal surfaces, which left a
+                          // near-white pill behind light green text in Dark.
+                          backgroundColor: gap === 0 ? statusSurface.good : statusSurface.warning,
                         }}
                       >
                         <T

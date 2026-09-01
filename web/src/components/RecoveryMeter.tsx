@@ -1,7 +1,101 @@
 import { useEffect, useRef, useState } from "react";
-import { STATUS_COLORS, STATUS_INK, STATUS_TEXT_COLORS } from "../lib/chartPalette";
+import {
+  AlertTriangle,
+  Check,
+  CircleHelp,
+  Info,
+  type LucideIcon,
+} from "lucide-react";
+import {
+  STATUS_COLORS,
+  STATUS_INK,
+  STATUS_TEXT_COLORS,
+} from "../lib/chartPalette";
 import { Money } from "./Money";
-import type { RecoveryTargets } from "../lib/types";
+import type { RecoveryStatus, RecoveryTargets } from "../lib/types";
+
+/**
+ * The "info" severity's saturated solid — matching Alert.tsx's own `info`
+ * kind (`solid: "#149e8d"`), which is this codebase's one other place an
+ * informational (not warning, not critical) status needs a white-safe fill.
+ * Not exported from chartPalette.ts alongside STATUS_COLORS/STATUS_TEXT_COLORS
+ * because those four are specifically the good/warning/serious/critical
+ * severity ramp; info sits outside that ramp the same way it does in Alert.tsx.
+ */
+const INFO_SOLID = "#149e8d";
+
+/**
+ * One of the month-status tones the meter can render — a fifth reading beyond
+ * the amber/green/red triad the boolean-only contract could express. `info`
+ * covers month states that are neither a warning nor a pass/fail verdict
+ * (no sales yet this month; data still settling) — reusing the themed
+ * `--sev-info-*` variables Alert.tsx's `info` kind already draws from, rather
+ * than inventing a new palette entry.
+ */
+type MonthTone = "setup" | "info" | "good" | "critical";
+
+/** Maps the server's discriminated `status` (plan §8.1) to this meter's tone
+ *  and copy. Falls back to the boolean-derived tone when `status` is absent —
+ *  a cached/older response won't carry it, though the real server always
+ *  does now. */
+function monthToneAndCopy(
+  status: RecoveryStatus | undefined,
+  onTrack: boolean,
+  needsSetup: boolean | undefined,
+): { tone: MonthTone; label: string; icon: LucideIcon; helper?: string } {
+  switch (status) {
+    case "needs_setup":
+      return {
+        tone: "setup",
+        label: "Recovery Target isn't ready yet",
+        icon: CircleHelp,
+      };
+    case "no_current_month_data":
+      return {
+        tone: "info",
+        label: "No sales recorded yet this month",
+        icon: Info,
+      };
+    // Not sent by the server yet (Phase 2+) — given the same informational
+    // treatment as no_current_month_data until it is.
+    case "data_incomplete":
+      return {
+        tone: "info",
+        label: "No sales recorded yet this month",
+        icon: Info,
+      };
+    case "covered":
+      return {
+        tone: "good",
+        label: "Sales coverage target reached",
+        icon: Check,
+      };
+    case "ahead":
+      return { tone: "good", label: "Ahead of pace", icon: Check };
+    case "on_pace":
+      return { tone: "good", label: "On pace for the month", icon: Check };
+    case "behind":
+      return {
+        tone: "critical",
+        label: "Behind pace for the month",
+        icon: AlertTriangle,
+      };
+    default:
+      return needsSetup
+        ? {
+            tone: "setup",
+            label: "Recovery Target isn't ready yet",
+            icon: CircleHelp,
+          }
+        : onTrack
+          ? { tone: "good", label: "On pace for the month", icon: Check }
+          : {
+              tone: "critical",
+              label: "Behind pace for the month",
+              icon: AlertTriangle,
+            };
+  }
+}
 
 /**
  * The Recovery Meter — FinSight's signature component, and one of only two
@@ -37,7 +131,12 @@ export function RecoveryMeter({
     todaysStatus,
     monthCoveragePercent,
     onTrack,
+    needsSetup,
+    status,
   } = recoveryStatus;
+
+  const monthState = monthToneAndCopy(status, onTrack, needsSetup);
+  const MonthStatusIcon = monthState.icon;
 
   /*
    * The two bars already transition their width whenever `recoveryStatus`
@@ -67,15 +166,45 @@ export function RecoveryMeter({
   }, []);
 
   const monthRatio = animateIn ? Math.min(monthCoveragePercent / 100, 1) : 0;
-  const monthFill = onTrack ? STATUS_COLORS.good : STATUS_COLORS.critical;
+  // A missing baseline is neither "on pace" nor "behind" — it's incomplete
+  // setup, so it gets its own neutral (amber) treatment rather than borrowing
+  // the green success state or the red failure one. "No sales yet"/"data
+  // incomplete" are a fourth, distinct reading — informational rather than a
+  // warning or a verdict — so they get the teal `info` tone instead.
+  const monthFill =
+    monthState.tone === "setup"
+      ? STATUS_COLORS.warning
+      : monthState.tone === "info"
+        ? INFO_SOLID
+        : monthState.tone === "good"
+          ? STATUS_COLORS.good
+          : STATUS_COLORS.critical;
   // Two different colours for two different jobs — see STATUS_INK's note.
   // `monthSolid` fills the status disc and carries white text on it, so it has
   // to stay the saturated step in every theme. `monthInk` is the label beside
   // it, which has to follow the theme or it disappears on a dark card.
-  const monthSolid = onTrack ? STATUS_TEXT_COLORS.good : STATUS_TEXT_COLORS.critical;
-  const monthInk = onTrack ? STATUS_INK.good : STATUS_INK.critical;
+  const monthSolid =
+    monthState.tone === "setup"
+      ? STATUS_TEXT_COLORS.warning
+      : monthState.tone === "info"
+        ? INFO_SOLID
+        : monthState.tone === "good"
+          ? STATUS_TEXT_COLORS.good
+          : STATUS_TEXT_COLORS.critical;
+  const monthInk =
+    monthState.tone === "setup"
+      ? STATUS_INK.warning
+      : monthState.tone === "info"
+        ? "rgb(var(--sev-info-ink))"
+        : monthState.tone === "good"
+          ? STATUS_INK.good
+          : STATUS_INK.critical;
   const todayFill =
-    todaysStatus === "below" ? STATUS_COLORS.critical : todaysStatus === "at" ? STATUS_COLORS.warning : STATUS_COLORS.good;
+    todaysStatus === "below"
+      ? STATUS_COLORS.critical
+      : todaysStatus === "at"
+        ? STATUS_COLORS.warning
+        : STATUS_COLORS.good;
   const todayInk =
     todaysStatus === "below"
       ? STATUS_INK.critical
@@ -101,17 +230,24 @@ export function RecoveryMeter({
           className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white"
           style={{ backgroundColor: monthSolid }}
         >
-          {onTrack ? "✓" : "!"}
+          <MonthStatusIcon aria-hidden className="size-3" strokeWidth={2.2} />
         </span>
         <span className="text-sm font-medium" style={{ color: monthInk }}>
-          {onTrack ? "On pace for the month" : "Behind pace for the month"}
+          {monthState.label}
         </span>
       </div>
+      {monthState.tone === "setup" ? (
+        <p className="mb-2 text-xs text-ink-500">
+          Add your expected monthly expenses to calculate your target.
+        </p>
+      ) : null}
 
       <div
         className="h-3 w-full overflow-hidden rounded-full bg-ink-100"
         role="progressbar"
-        aria-valuenow={Math.round(monthCoveragePercent)}
+        aria-valuenow={Math.round(
+          Math.min(Math.max(monthCoveragePercent, 0), 100),
+        )}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-label="Month-to-date coverage of expected monthly expenses"
@@ -122,7 +258,8 @@ export function RecoveryMeter({
         />
       </div>
       <p className="mt-1.5 text-xs text-ink-500">
-        <Money value={salesThisMonth} /> of <Money value={expectedMonthlyExpenses} /> needed this month (
+        <Money value={salesThisMonth} /> of{" "}
+        <Money value={expectedMonthlyExpenses} /> needed this month (
         {monthCoveragePercent.toFixed(0)}%)
       </p>
 
@@ -137,17 +274,27 @@ export function RecoveryMeter({
         {/* Paired with the warning ink used on the two lines inside it, so the
             wash and the text stay in step across themes — ACCENT.surface is a
             fixed pale amber and would glare on the dark card. */}
-        <div className="rounded-lg px-2.5 py-1.5" style={{ backgroundColor: "rgb(var(--sev-warning-bg))" }}>
-          <p className="text-xs font-medium" style={{ color: "rgb(var(--sev-warning-ink))" }}>
+        <div
+          className="rounded-lg px-2.5 py-1.5"
+          style={{ backgroundColor: "rgb(var(--sev-warning-bg))" }}
+        >
+          <p
+            className="text-xs font-medium"
+            style={{ color: "rgb(var(--sev-warning-ink))" }}
+          >
             Adjusted daily target
           </p>
-          <p className="mt-0.5 text-sm font-semibold" style={{ color: "rgb(var(--sev-warning-ink))" }}>
+          <p
+            className="mt-0.5 text-sm font-semibold"
+            style={{ color: "rgb(var(--sev-warning-ink))" }}
+          >
             <Money value={adjustedDailyTarget} />
           </p>
         </div>
       </div>
       <p className="mt-1.5 text-xs text-ink-500">
-        <Money value={remainingTarget} /> still needed across about {remainingOperatingDays} remaining operating day
+        <Money value={remainingTarget} /> still needed across about{" "}
+        {remainingOperatingDays} remaining operating day
         {remainingOperatingDays === 1 ? "" : "s"}.
       </p>
 
@@ -175,11 +322,15 @@ export function RecoveryMeter({
           >
             <div
               className="h-full rounded-full transition-[width] duration-700 ease-out"
-              style={{ width: `${todayRatio * 100}%`, backgroundColor: todayFill }}
+              style={{
+                width: `${todayRatio * 100}%`,
+                backgroundColor: todayFill,
+              }}
             />
           </div>
           <p className="mt-1.5 text-xs text-ink-500">
-            <Money value={todaysSales} /> recorded of <Money value={todaysTarget} /> needed today
+            <Money value={todaysSales} /> recorded of{" "}
+            <Money value={todaysTarget} /> needed today
           </p>
         </div>
       ) : null}

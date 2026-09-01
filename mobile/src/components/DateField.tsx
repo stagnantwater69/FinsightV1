@@ -4,7 +4,8 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { Ionicons } from "@expo/vector-icons";
 import { SelectChip, T } from "./ui";
 import * as haptics from "../lib/haptics";
-import { TAP, radius, space, typeScale } from "../theme/tokens";
+import { radius, space, typeScale } from "../theme/tokens";
+import { TAP_FLOOR } from "./touchTarget";
 import { useTheme } from "../context/ThemeContext";
 
 /**
@@ -106,7 +107,7 @@ export function DateField({
             flexDirection: "row",
             alignItems: "center",
             gap: space.sm,
-            minHeight: TAP,
+            minHeight: TAP_FLOOR,
             paddingHorizontal: space.md,
             borderWidth: 1,
             borderColor: ink[200],
@@ -128,7 +129,16 @@ export function DateField({
             }}
             accessibilityRole="button"
             accessibilityLabel={`Clear ${label}`}
-            style={{ minHeight: TAP, minWidth: TAP - 8, alignItems: "center", justifyContent: "center" }}
+            /*
+             * Laid out to the floor in both directions rather than given a
+             * hitSlop. It was 44 x 36 — short of Android's 48 on both axes,
+             * and with no slop to make it up. There is room: the date button
+             * beside it is `flex: 1`, so the twelve points this takes come out
+             * of a control that is already several hundred wide, and the row
+             * is only two items so nothing here is dense enough for slop to be
+             * the better trade.
+             */
+            style={{ minHeight: TAP_FLOOR, minWidth: TAP_FLOOR, alignItems: "center", justifyContent: "center" }}
           >
             <Ionicons name="close-circle" size={20} color={ink[300]} />
           </Pressable>

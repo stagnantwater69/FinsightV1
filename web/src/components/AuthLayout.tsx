@@ -89,13 +89,7 @@ function PanelArt() {
 function Wordmark({ tone = "ink" }: { tone?: "ink" | "brand" }) {
   return (
     <span className="flex items-center gap-2.5">
-      {/* MASCOT SEAM — the owl badge mark replaces this monogram. */}
-      <span
-        aria-hidden
-        className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-700 font-display text-sm font-extrabold text-white"
-      >
-        F
-      </span>
+      <img src="/finsight-logo.png" alt="" aria-hidden className="h-10 w-10 rounded-lg object-contain" />
       <span
         className={`font-display text-lg font-extrabold tracking-[-0.02em] ${
           tone === "brand" ? "text-brand-900" : "text-ink-900"
@@ -108,6 +102,7 @@ function Wordmark({ tone = "ink" }: { tone?: "ink" | "brand" }) {
 }
 
 export function AuthLayout({
+  eyebrow,
   title,
   subtitle,
   heroTitle = "From scattered records to clearer decisions.",
@@ -117,6 +112,8 @@ export function AuthLayout({
   showBack = false,
   children,
 }: {
+  /** Small uppercase kicker above the title — the landing page's "eyebrow" idea, in brand ink rather than landing-green. */
+  eyebrow?: string;
   title: string;
   subtitle?: string;
   heroTitle?: string;
@@ -140,8 +137,18 @@ export function AuthLayout({
     // stored choice survives for the app itself.
     <div
       data-theme="classic"
-      className="relative flex min-h-screen items-center justify-center bg-paper-50 px-4 py-6 sm:px-6 sm:py-10"
+      className="relative flex min-h-screen items-center justify-center overflow-hidden bg-paper-50 px-4 py-6 sm:px-6 sm:py-10"
     >
+      {/* A soft brand-tinted glow behind the card — the one decorative touch
+          borrowed from the landing page's layered backgrounds, kept to brand
+          tokens (not the landing-only palette) since this shell lives outside
+          web/src/components/landing/. Purely a light wash: no shape reads as
+          a distinct element on its own. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute left-1/2 top-1/2 h-[36rem] w-[36rem] -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand-100/60 blur-3xl"
+      />
+
       {showBack ? (
         <button
           type="button"
@@ -152,7 +159,7 @@ export function AuthLayout({
           <IconChevronLeft className="h-4 w-4" />
         </button>
       ) : null}
-      <div className="w-full max-w-5xl overflow-hidden rounded-2xl border border-paper-200 bg-paper shadow-lg">
+      <div className="relative w-full max-w-5xl animate-rise overflow-hidden rounded-2xl border border-paper-200 bg-paper shadow-lg">
         {/* `lg:grid-cols-2` with min-w-0 tracks: without the minmax(0,...) a
             long unbroken string in a field could force a column wider than its
             share and push the card into a horizontal scroll. */}
@@ -161,28 +168,41 @@ export function AuthLayout({
           <div className="px-5 py-8 sm:px-9 sm:py-10">
             <Wordmark />
 
-            <div className="mt-7">
-              <h1 className="font-display text-2xl font-bold tracking-tight text-ink-900">{title}</h1>
+            {/* Staggered rise, same rhythm as the landing page's SectionHead
+                (eyebrow, then heading, then body) — each element already sits
+                above the fold, so this is a plain staggered delay rather than
+                a scroll-triggered reveal. */}
+            <div className="mt-7 animate-rise [animation-delay:80ms]">
+              {eyebrow ? (
+                <span className="block font-display text-[11px] font-bold uppercase tracking-[0.16em] text-brand-600">
+                  {eyebrow}
+                </span>
+              ) : null}
+              <h1 className="mt-1.5 font-display text-2xl font-bold tracking-tight text-ink-900">{title}</h1>
               {subtitle ? <p className="mt-1.5 text-sm text-ink-500">{subtitle}</p> : null}
             </div>
 
-            <div className="mt-6">{children}</div>
+            <div className="mt-6 animate-rise [animation-delay:160ms]">{children}</div>
           </div>
 
           {/* --------------------------- context panel --------------------------- */}
           <aside className="hidden flex-col justify-center gap-6 border-l border-paper-200 bg-paper-100/60 p-9 lg:flex">
-            <div className="flex justify-center">
+            <div className="flex animate-rise justify-center [animation-delay:140ms]">
               <PanelArt />
             </div>
 
-            <div>
+            <div className="animate-rise [animation-delay:220ms]">
               <h2 className="font-display text-xl font-bold leading-snug text-ink-900">{heroTitle}</h2>
               {heroBody ? <p className="mt-2.5 text-sm leading-relaxed text-ink-600">{heroBody}</p> : null}
 
               {points?.length ? (
                 <ul className="mt-5 flex flex-col gap-2.5">
-                  {points.map((p) => (
-                    <li key={p} className="flex items-start gap-2.5 text-sm text-ink-700">
+                  {points.map((p, i) => (
+                    <li
+                      key={p}
+                      className="flex animate-rise items-start gap-2.5 text-sm text-ink-700"
+                      style={{ animationDelay: `${280 + i * 60}ms` }}
+                    >
                       <span
                         aria-hidden
                         className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-brand-700 text-[10px] font-bold text-white"

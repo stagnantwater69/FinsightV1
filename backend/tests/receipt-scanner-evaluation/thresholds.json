@@ -1,0 +1,12 @@
+{
+  "version": "receipt-scanner-release-gates-v1",
+  "documentPrecisionMin": 0.95,
+  "documentRecallMin": 0.9,
+  "obviousNonReceiptFalseTriggerMax": 0.05,
+  "medianNormalizedCornerErrorMax": 0.04,
+  "multiReceiptCountAccuracyMin": 0.9,
+  "processedCompositeGainMin": 0.02,
+  "financialFieldRegressionMax": 0.01,
+  "handwrittenHardRejectMax": 0,
+  "analysisLatencyP95MsMax": 1500
+}

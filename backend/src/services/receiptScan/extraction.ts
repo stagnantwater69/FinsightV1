@@ -11,6 +11,7 @@ import {
 import { findKnownVendorInText } from "../../lib/historyMatching";
 import { assessImageQuality } from "../../lib/imageQuality";
 import { extractReceiptWithVision, verifyVisionReceipt, VISION_MODEL, type VisionPage } from "../visionOcr.service";
+import { extractReceiptWithVeryfi, type VeryfiPage } from "../veryfiOcr.service";
 import type { ReceiptWarning } from "../../lib/receiptWarnings";
 import type { FieldEvidenceEntry, RescuedFields, UploadInput } from "./types";
 
@@ -84,34 +85,64 @@ export async function snapVendorToHistory(
 /**
  * Page confidence at or below which tesseract is treated as having guessed.
  *
- * CHOSEN FROM MEASUREMENT, and the measurement is narrower than the number
- * looks — see tests/ocr-accuracy/confidence-calibration.ts, which reports the
- * confidence of every corpus image against whether its parse was right.
+ * CHOSEN FROM MEASUREMENT, re-derived as the corpus grew — see
+ * tests/ocr-accuracy/confidence-calibration.ts, which reports the confidence
+ * of every corpus image against whether its parse was right, and re-run it
+ * after any parser/preprocessing change; the constant below should track it.
  *
- * The separation is real and it is stark: every receipt that parsed cleanly
- * scored 90-95, and the two that were misread scored 33 and 56. But the clean
- * reads bottom out at 90 and the worst broken one is a 89, so a threshold
- * fitted to the corpus would sit one point from a correct read — precision
- * that 31 images cannot support.
+ * REVISED (Phase 4 of docs/receipt-ocr-accuracy-plan.md), from 75 to 88, once
+ * the corpus grew from 3 real photos (of 31) to 45 real photos (of 73) and
+ * Phase 3's parser fixes had already landed — the plan explicitly deferred
+ * this exact re-tuning until both of those were true, so a fitted threshold
+ * wasn't chasing bugs a parser fix should have removed instead.
  *
- * 75 sits in the middle of the empty band between 56 and 89 instead. It is
- * deliberately NOT the value that maximises corpus score; it is the value that
- * is furthest from being wrong in either direction if real receipts land
- * slightly differently than these did.
+ * At 3 real photos the clean/broken groups separated with an empty band (56
+ * to 89) wide enough that any pick in the middle was safe. That separation
+ * does not hold at 73 images: the broken group now reaches confidence 89, as
+ * high as some clean reads, so no threshold below 90 can be "safe" in the old
+ * all-or-nothing sense — every choice trades catch-rate against false
+ * triggers. What the fresh sweep (`confidence-calibration.json`, all 73
+ * images) actually shows:
  *
- * The corpus's low-confidence cases are its only two real photographs, which
- * is also the honest limit of this calibration: it rests on n=2. What keeps
- * that from mattering much is that this is the WEAKEST of the four triggers —
- * an empty read, a missing total and a receipt that does not add up all fire
- * on their own evidence, whatever the confidence says.
+ *   thresh  fires  catches-broken  wasted-on-clean  misses-broken
+ *       75     35              34                1              9
+ *       80     39              38                1              5
+ *       85     42              41                1              2
+ *       88     43              42                1              1
+ *       90     45              43                2              0
+ *
+ * One real clean receipt (`real-29-saska-paperclip-clipboard`, confidence 74)
+ * already fires below the OLD threshold of 75 — that single false trigger is
+ * not introduced by this change, and it stays exactly one false trigger all
+ * the way from 75 to 89, because no other clean receipt in the corpus scores
+ * below 90. So 88 catches 8 more real broken cases than 75 did — including
+ * all 3 of the wrong-AMOUNT cases the old threshold missed
+ * (real-25-boa-dark-background, real-27-pappadeaux-ambiguous-us-date,
+ * real-28-carls-jr-translucent-bleed) — for zero additional false-trigger
+ * cost. 90 is where that stops being true: the last remaining broken case
+ * (`real-21-jts-diner-clean`) sits at exactly the same confidence (89) as a
+ * clean synthetic receipt (`syn-02-vendor-bottom`), so no threshold can catch
+ * one without flagging the other — 90 is the first value that pays for that
+ * last catch with a second false trigger, which is why this stops at 88
+ * rather than 90.
+ *
+ * This is still the WEAKEST of the four triggers — an empty read, a missing
+ * total and a receipt that does not add up all fire on their own evidence,
+ * whatever the confidence says.
  */
-export const LOW_CONFIDENCE = 75;
+export const LOW_CONFIDENCE = 88;
 
 /**
- * Falls back to reading the photograph when the deterministic parse came up
- * short.
+ * The AI vision model (Gemini/Veryfi) is the PRIMARY source and is called on
+ * every scan, not only when this fires — see rescueWithVision/rescueWithVeryfi
+ * and worker.ts. What this still decides: which of four reasons, if any, the
+ * deterministic OCR/tesseract read looked doubtful BEFORE the model answered.
+ * That reason is persisted (`visionTrigger`) purely as audit/calibration
+ * evidence — "how much did the deterministic read need the model's help".
+ * `null` now means "OCR's own read looked fine", not "the model was never
+ * asked".
  *
- * WHEN THIS FIRES — four triggers, in descending order of how certain the
+ * WHEN A REASON FIRES — four triggers, in descending order of how certain the
  * evidence is that something is actually wrong:
  *
  *   no-items          tesseract's text yielded no line items at all
@@ -136,16 +167,27 @@ export const LOW_CONFIDENCE = 75;
  *   not something visible in the image. Measured across three runs the model
  *   answered that receipt inconsistently — 9 March twice, 3 September once —
  *   despite being told the convention in its prompt. The parser has the rule
- *   compiled in and is right every time. So a date tesseract found always
- *   wins, and the model's date is only used where there was none at all.
+ *   compiled in and is right every time. So where the PARSER flagged that
+ *   ambiguity (`dateAmbiguous`), its convention-resolved date wins even over
+ *   the model's; everywhere else — an unambiguous date, or none at all —
+ *   the model's reading wins like any other field, since only the ambiguous
+ *   case is a rule the image cannot supply.
  *
  * The model is better at READING what is printed; the parser is better at
  * APPLYING a rule the image cannot supply. This split reflects that.
  */
-export async function rescueWithVision(
-  input: UploadInput,
-  parsed: ParsedReceiptFields,
+/**
+ * The strongest reason the deterministic parse looks doubtful, or null when
+ * it needs no help — shared by every rescue provider (`rescueWithVision`,
+ * `rescueWithVeryfi`) so "how doubtful was OCR" has exactly one definition.
+ * Ordered most-certain-first, so a log line says the strongest reason rather
+ * than whichever check happened to run first. Does NOT gate whether the model
+ * is called — it always is — only what gets logged/persisted as
+ * `visionTrigger` for calibration.
+ */
+export function determineRescueTrigger(
   deterministicItems: ParsedLineItem[],
+  parsed: ParsedReceiptFields,
   combinedText: string,
   /**
    * The worst per-page confidence, not an average. One unreadable page in an
@@ -154,23 +196,27 @@ export async function rescueWithVision(
    * actually needs the model.
    */
   worstPageConfidence: number,
-): Promise<RescuedFields> {
+): "no-items" | "no-total" | "does-not-add-up" | "low-confidence" | null {
   const reconciliation = reconcileItems(combinedText, deterministicItems, parsed.amount);
+  return deterministicItems.length === 0
+    ? "no-items"
+    : parsed.amount === null
+      ? "no-total"
+      : !reconciliation.reconciled
+        ? "does-not-add-up"
+        : worstPageConfidence < LOW_CONFIDENCE
+          ? "low-confidence"
+          : null;
+}
 
-  /*
-   * Ordered most-certain-first, so the log says the strongest reason the call
-   * was made rather than whichever check happened to run first.
-   */
-  const trigger =
-    deterministicItems.length === 0
-      ? "no-items"
-      : parsed.amount === null
-        ? "no-total"
-        : !reconciliation.reconciled
-          ? "does-not-add-up"
-          : worstPageConfidence < LOW_CONFIDENCE
-            ? "low-confidence"
-            : null;
+export async function rescueWithVision(
+  input: UploadInput,
+  parsed: ParsedReceiptFields,
+  deterministicItems: ParsedLineItem[],
+  combinedText: string,
+  worstPageConfidence: number,
+): Promise<RescuedFields> {
+  const trigger = determineRescueTrigger(deterministicItems, parsed, combinedText, worstPageConfidence);
 
   /** The deterministic result, with the attempt's audit fields filled in. */
   const deterministic = (
@@ -191,10 +237,12 @@ export async function rescueWithVision(
     ...audit,
   });
 
-  if (trigger === null) {
-    return deterministic();
-  }
-
+  // The model is the PRIMARY source and is asked on every scan, `trigger` or
+  // no — the old short-circuit here (skip the call when OCR looked clean)
+  // was a cost optimisation that made sense while OCR was the source of
+  // record. It no longer is: OCR is now the fallback, so its own confidence
+  // in itself is not a reason to skip asking the source that wins conflicts.
+  //
   // Never throws — a failed rescue leaves the scan exactly as the
   // deterministic parse left it, which is still a correctable draft.
   const startedAt = Date.now();
@@ -278,57 +326,79 @@ export async function rescueWithVision(
   }));
 
   /*
-   * WHICH READING WINS.
+   * WHICH READING WINS — the model does, wherever it answered at all.
    *
-   * The old rule was "the deterministic answer wins wherever it exists", which
-   * was right while the only trigger was an EMPTY result — there was never a
-   * competing answer to choose between. Now that a doubtful-but-present read
-   * also triggers, there is, and "deterministic always wins" would fetch a
-   * better reading and then discard it.
+   * The AI vision read is the PRIMARY source; OCR is the supporting/fallback
+   * read, consulted only where the model came back empty for a field. This
+   * used to run the other way (OCR wins wherever it produced a non-null
+   * value, vision only fills gaps) on the reasoning that a wrong-but-present
+   * OCR figure still beat trusting a generative model unconditionally. That
+   * reasoning does not license OCR winning EVERY conflict by default just
+   * because it ran first — the two known failure modes it protects against
+   * are handled directly instead: a model total with nothing to corroborate
+   * it, and a wholesale item replacement that does not even add up, both
+   * still route through the verifier gate below rather than being trusted
+   * blind.
    *
-   * Vision replaces the items only on an OBJECTIVE test, never a preference:
-   * the deterministic items failed to account for the total and the model's
-   * items do. That is arithmetic agreeing with the receipt's own printed
-   * total, not a judgement that the model reads better. Where the model's
-   * items also fail to add up there is no evidence it did better, so the
-   * deterministic read stands.
+   * ONE exception: the DATE. See the doc comment on determineRescueTrigger's
+   * neighbourhood above — a day/month figure like "03/09" where both parts
+   * are <= 12 cannot be resolved by reading harder, only by applying the
+   * Philippine DD/MM convention the parser has compiled in; measured across
+   * repeat runs the model answers that same ambiguous date inconsistently
+   * despite being told the convention in its prompt. So the parser's
+   * convention-resolved date stands even against a model date, but ONLY when
+   * the parser actually flagged the ambiguity — an unambiguous OCR date that
+   * merely disagrees with the model is not this case, and the model wins it
+   * like any other field.
+   *
+   * ITEMS get one narrower guard than vendor/amount/date: the model wins
+   * whenever its item list is internally consistent (adds up to the
+   * receipt's own total) OR OCR had no items to fall back on at all — but
+   * where the model reports items that DON'T reconcile and OCR's own items
+   * DO, blind trust risks silently dropping a real purchase the owner
+   * actually made (an incomplete model item list reading as "the only two
+   * items" when a third was on the receipt). That specific shape still
+   * routes through the verifier gate below rather than being accepted
+   * unchecked — corroboration point 4 asks for, not a preference for OCR.
    */
   const visionReconciles =
     visionItems.length > 0 &&
     reconcileItems(combinedText, visionItems, parsed.amount ?? vision.amount).reconciled;
-  const visionSettlesTheGap = !reconciliation.reconciled && visionReconciles;
-
-  const itemsFromVision = visionItems.length > 0 && (deterministicItems.length === 0 || visionSettlesTheGap);
+  const itemsFromVision = visionItems.length > 0 && (visionReconciles || deterministicItems.length === 0);
   const items = itemsFromVision ? visionItems : repairItemNames(deterministicItems, visionItems, trigger);
-  const vendor = parsed.vendor ?? vision.vendor;
-  const amount = parsed.amount ?? vision.amount;
-  const date = parsed.date ?? vision.date;
+  const vendor = vision.vendor ?? parsed.vendor;
+  const amount = vision.amount ?? parsed.amount;
+  const date = parsed.dateAmbiguous && parsed.date !== null ? parsed.date : (vision.date ?? parsed.date);
 
   /*
-   * THE VERIFIER GATE — one extra model call, and only where the result is
-   * HIGH-RISK: the two shapes where a wrong vision answer has no independent
-   * corroboration at all.
+   * THE VERIFIER GATE — one extra model call, and only where the settled
+   * result is HIGH-RISK: shapes where a wrong model answer has no
+   * independent corroboration, or actively conflicts with what OCR read.
    *
-   *   - the TOTAL came from the model and OCR never read one, so there is no
-   *     printed figure the arithmetic can check it against; or
-   *   - the items were replaced wholesale and STILL fail to reconcile, so the
-   *     objective test that normally earns a replacement never passed (this
-   *     is the empty-deterministic-read case — a reconciling replacement is
-   *     already corroborated by the receipt's own total and is not re-asked).
+   *   - the TOTAL came from the model with nothing for the arithmetic to
+   *     check it against (OCR read none at all); or
+   *   - the model's total OUTRIGHT DISAGREES with a total OCR did read —
+   *     exactly the conflict case point 4 asks to have validated, not just
+   *     resolved by fiat; or
+   *   - the items came from the model and still fail to reconcile against
+   *     the settled total, so the one objective corroboration available
+   *     never passed.
    *
    * The verifier may only accept or reject — its response schema is a boolean
    * and a list of field names, so it is structurally incapable of writing a
-   * new number. On reject the DETERMINISTIC result stands, exactly as if the
-   * rescue had never answered, plus an UNREADABLE_FIELD warning per rejected
-   * field so the owner knows which values to supply from the paper. At most
-   * one verifier call per scan; when it cannot run (no key, provider down)
-   * the vision result stands unverified, as it always did before the gate
+   * new number. On reject the DETERMINISTIC (OCR) result stands for the
+   * rejected shape, plus an UNREADABLE_FIELD warning per rejected field so
+   * the owner knows which values to supply from the paper. At most one
+   * verifier call per scan; when it cannot run (no key, provider down) the
+   * vision result stands unverified, as it always did before the gate
    * existed — the gate must not regress the rescue into never working.
    */
   const visionSuppliedUncheckedTotal = parsed.amount === null && vision.amount !== null;
-  const itemsReplacedUnreconciled = itemsFromVision && !visionReconciles;
+  const visionAmountConflictsWithOcr =
+    parsed.amount !== null && vision.amount !== null && parsed.amount !== vision.amount;
+  const itemsUnreconciled = itemsFromVision && !visionReconciles;
   let verifier: string | null = null;
-  if (visionSuppliedUncheckedTotal || itemsReplacedUnreconciled) {
+  if (visionSuppliedUncheckedTotal || visionAmountConflictsWithOcr || itemsUnreconciled) {
     const verdict = await verifyVisionReceipt(
       input.pages.map((p): VisionPage => ({ buffer: p.buffer, mimetype: p.mimetype })),
       { date, vendor, amount, items: items.map((i) => ({ name: i.name, amount: i.amount })) },
@@ -340,8 +410,8 @@ export async function rescueWithVision(
         verdict.rejectedFields.length > 0
           ? verdict.rejectedFields
           : [
-              ...(visionSuppliedUncheckedTotal ? ["amount"] : []),
-              ...(itemsReplacedUnreconciled ? ["items"] : []),
+              ...(visionSuppliedUncheckedTotal || visionAmountConflictsWithOcr ? ["amount"] : []),
+              ...(itemsUnreconciled ? ["items"] : []),
             ];
       console.info(
         `[vision-verifier] business=${input.businessProfileId} verdict=rejected fields=${rejectedFields.join(",")}`,
@@ -374,9 +444,9 @@ export async function rescueWithVision(
     visionAssisted:
       itemsFromVision ||
       items.some((item, i) => item.name !== deterministicItems[i]?.name) ||
-      (parsed.amount === null && amount !== null) ||
-      (parsed.vendor === null && vendor !== null) ||
-      (parsed.date === null && date !== null),
+      vendor !== parsed.vendor ||
+      amount !== parsed.amount ||
+      date !== parsed.date,
     itemsFromVision,
     visionTrigger: trigger,
     visionLatencyMs: elapsedMs,
@@ -390,27 +460,165 @@ export async function rescueWithVision(
 }
 
 /**
- * Takes the model's wording for lines whose AMOUNTS both readings agree on.
+ * Veryfi's own model tag, recorded on `extractorVersions` the same way
+ * `VISION_MODEL` is for Gemini — a constant rather than parsed from an
+ * endpoint, because Veryfi's API version is fixed by the URL path
+ * (`veryfiOcr.service.ts`'s `ENDPOINT`), not a model name in the response.
+ */
+const VERYFI_MODEL = "veryfi-partner-v8";
+
+/**
+ * Tries Veryfi first among rescues — see
+ * docs/superpowers/specs/2026-09-01-veryfi-production-ocr-integration-design.md.
+ * Same trigger, same never-throws contract and `RescuedFields` shape as
+ * `rescueWithVision`, deliberately WITHOUT that function's verifier gate:
+ * Veryfi is a structured extraction API rather than a generative model asked
+ * to describe a photo, so the "could invent a plausible-sounding answer"
+ * risk the verifier exists for does not apply the same way, and adding a
+ * second Gemini call just to check Veryfi's output would spend the very
+ * budget this rescue is supposed to save.
  *
- * This is the narrow case the confidence trigger exists for. When the items
- * add up to the printed total, the arithmetic corroborates every amount — the
- * numbers are sound. What is not corroborated is the TEXT beside them, and on
- * a page tesseract read at 56% that text is where the damage is: a real
- * Savemore line reading "Del Monte Pineapple Tidbits" came back as "Sey".
+ * The caller (`worker.ts`) decides whether this ran at all — gated behind
+ * `VERYFI_ENABLED` and the monthly quota — and falls through to
+ * `rescueWithVision` whenever this returns a result whose `visionProvider`
+ * is not `"veryfi"` (disabled, quota-exhausted, or Veryfi was never reached).
+ */
+export async function rescueWithVeryfi(
+  input: UploadInput,
+  parsed: ParsedReceiptFields,
+  deterministicItems: ParsedLineItem[],
+  combinedText: string,
+  worstPageConfidence: number,
+): Promise<RescuedFields> {
+  const trigger = determineRescueTrigger(deterministicItems, parsed, combinedText, worstPageConfidence);
+
+  const deterministic = (
+    audit: Partial<Pick<RescuedFields, "visionLatencyMs" | "visionProvider" | "visionModel" | "visionRejectReason">> = {},
+  ): RescuedFields => ({
+    ...parsed,
+    items: deterministicItems,
+    visionAssisted: false,
+    itemsFromVision: false,
+    visionTrigger: trigger,
+    visionLatencyMs: null,
+    visionProvider: null,
+    visionModel: null,
+    visionRejectReason: null,
+    verifier: null,
+    visionWarnings: [],
+    itemEvidence: null,
+    ...audit,
+  });
+
+  // Primary source, asked on every scan — see the matching note in
+  // rescueWithVision.
+  const startedAt = Date.now();
+  const outcome = await extractReceiptWithVeryfi(
+    input.pages.map((p): VeryfiPage => ({ buffer: p.buffer, mimetype: p.mimetype })),
+  );
+  const elapsedMs = Date.now() - startedAt;
+  const veryfi = outcome?.receipt ?? null;
+
+  // Same billing-attribution reasoning as the `[vision-ocr]` line above —
+  // this call is billed and fires on receipts a human would call "fine".
+  console.info(
+    `[veryfi-ocr] business=${input.businessProfileId} trigger=${trigger} reached=${veryfi !== null} ` +
+      `pages=${input.pages.length} hadTotal=${parsed.amount !== null} confidence=${worstPageConfidence} ms=${elapsedMs}`,
+  );
+
+  if (!veryfi) {
+    // Same two-state distinction as rescueWithVision's own miss branch:
+    // `outcome` present with no receipt means Veryfi answered and nothing
+    // usable came back (attributable to Veryfi itself); no outcome at all
+    // means it was never reached (disabled, no credentials, network
+    // failure) — the caller's fallback-to-Gemini decision hinges on telling
+    // these apart via `visionProvider`.
+    return deterministic({
+      visionLatencyMs: elapsedMs,
+      visionProvider: outcome ? "veryfi" : null,
+      visionModel: outcome ? VERYFI_MODEL : null,
+      visionRejectReason: outcome?.rejectReason ?? null,
+    });
+  }
+
+  const veryfiItems: ParsedLineItem[] = veryfi.items.map((i) => ({
+    name: i.name,
+    quantity: i.quantity,
+    unitPrice: i.quantity && i.quantity > 0 ? Math.round((i.amount / i.quantity) * 100) / 100 : null,
+    amount: i.amount,
+  }));
+
+  // Veryfi is the PRIMARY source, same as the Gemini path in rescueWithVision
+  // — its reading wins conflicts with OCR; OCR only fills a field Veryfi left
+  // null. Same DATE exception too: the parser's DD/MM-convention resolution
+  // stands over Veryfi's when the parser flagged the date as ambiguous. Same
+  // narrower ITEMS guard too — see the matching comment in rescueWithVision —
+  // Veryfi has no verifier call to fall back on, so an unreconciled item
+  // replacement (Veryfi had SOMETHING to compare against and disagreed with
+  // it) keeps OCR's items rather than risk silently dropping a real line.
+  const veryfiReconciles =
+    veryfiItems.length > 0 &&
+    reconcileItems(combinedText, veryfiItems, parsed.amount ?? veryfi.amount).reconciled;
+  const itemsFromVision = veryfiItems.length > 0 && (veryfiReconciles || deterministicItems.length === 0);
+  const items = itemsFromVision ? veryfiItems : deterministicItems;
+  const vendor = veryfi.vendor ?? parsed.vendor;
+  const amount = veryfi.amount ?? parsed.amount;
+  const date = parsed.dateAmbiguous && parsed.date !== null ? parsed.date : (veryfi.date ?? parsed.date);
+
+  return {
+    date,
+    vendor,
+    description: vendor ? `Purchase from ${vendor}` : "Receipt purchase",
+    amount,
+    items,
+    dateAmbiguous: parsed.date !== null ? parsed.dateAmbiguous : false,
+    dateSourceText: parsed.date !== null ? parsed.dateSourceText : null,
+    visionAssisted:
+      itemsFromVision ||
+      vendor !== parsed.vendor ||
+      amount !== parsed.amount ||
+      date !== parsed.date,
+    itemsFromVision,
+    visionTrigger: trigger,
+    visionLatencyMs: elapsedMs,
+    visionProvider: "veryfi",
+    visionModel: VERYFI_MODEL,
+    visionRejectReason: null,
+    verifier: null,
+    visionWarnings: [],
+    // Veryfi does not report per-item page/source-text provenance the way
+    // the Gemini prompt asks the model to — null is the honest "not
+    // supplied", same as the deterministic path's own itemEvidence.
+    itemEvidence: null,
+  };
+}
+
+/**
+ * Takes the model's wording for lines whose AMOUNTS both readings agree on,
+ * for the case where the model's item list did NOT earn a full replacement
+ * (it's incomplete, or fails to reconcile on its own) but OCR's items already
+ * add up to the printed total on their own.
  *
- * So the amounts are kept exactly as OCR read them — they are the figures that
- * reach the owner's books, and they have independent corroboration the names
- * do not — while the names are taken from the model, which reads the same
- * receipt without tesseract's character-level guessing.
+ * This is the narrow case the low-confidence/does-not-add-up triggers exist
+ * for. When the OCR items already add up to the total, the arithmetic
+ * corroborates every amount — the numbers are sound. What is not corroborated
+ * is the TEXT beside them, and on a page tesseract read at 56% that text is
+ * where the damage is: a real Savemore line reading "Del Monte Pineapple
+ * Tidbits" came back as "Sey".
  *
- * Matching is by amount, and each vision line is consumed once so two items at
- * the same price cannot both claim the same name. A line the model did not
+ * So the amounts are kept exactly as OCR read them — they are the figures
+ * that reach the owner's books, and they have independent corroboration the
+ * names do not — while the names are taken from the model, which reads the
+ * same receipt without tesseract's character-level guessing.
+ *
+ * Matching is by amount, and each vision line is consumed once so two items
+ * at the same price cannot both claim the same name. A line the model did not
  * report keeps the name OCR gave it.
  */
 function repairItemNames(
   deterministic: ParsedLineItem[],
   visionItems: ParsedLineItem[],
-  trigger: string,
+  trigger: string | null,
 ): ParsedLineItem[] {
   // Only where the trigger was doubt about the READING. A receipt sent for a
   // missing total was never in doubt about its item names.

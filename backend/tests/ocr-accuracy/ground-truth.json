@@ -156,7 +156,7 @@
     "id": "syn-03-ambiguous-slash-date",
     "file": "syn-03-ambiguous-slash-date.png",
     "kind": "synthetic",
-    "conditions": "Printed, ambiguous numeric date 03/09/2026 (both components <= 12) \u2014 read as DD/MM per PH convention",
+    "conditions": "Printed, ambiguous numeric date 03/09/2026 (both components <= 12) — read as DD/MM per PH convention",
     "expected": {
       "date": "2026-09-03",
       "vendor": "CEBU MINI GROCERY",
@@ -229,7 +229,7 @@
     "id": "syn-07-no-total-keyword",
     "file": "syn-07-no-total-keyword.png",
     "kind": "synthetic",
-    "conditions": "Printed, NO 'TOTAL' keyword at all (uses 'Amount Due') \u2014 tests the max-value fallback",
+    "conditions": "Printed, NO 'TOTAL' keyword at all (uses 'Amount Due') — tests the max-value fallback",
     "expected": {
       "date": "2026-07-16",
       "vendor": "JAH GENERAL MERCHANDISE",
@@ -283,7 +283,7 @@
     "id": "syn-10-dd-mm-yyyy",
     "file": "syn-10-dd-mm-yyyy.png",
     "kind": "synthetic",
-    "conditions": "Printed, DD/MM/YYYY date (25/07/2026) \u2014 resolvable by validity, since 25 cannot be a month",
+    "conditions": "Printed, DD/MM/YYYY date (25/07/2026) — resolvable by validity, since 25 cannot be a month",
     "expected": {
       "date": "2026-07-25",
       "vendor": "MANDAUE DRY GOODS",
@@ -338,7 +338,7 @@
     "id": "syn-13-many-items",
     "file": "syn-13-many-items.png",
     "kind": "synthetic",
-    "conditions": "Printed, 7 plain name+price item lines (a grocery run) \u2014 the common multi-item shape",
+    "conditions": "Printed, 7 plain name+price item lines (a grocery run) — the common multi-item shape",
     "expected": {
       "date": "2026-07-24",
       "vendor": "PUREGOLD APAS BRANCH",
@@ -465,7 +465,7 @@
     "id": "syn-17-total-only",
     "file": "syn-17-total-only.png",
     "kind": "synthetic",
-    "conditions": "Printed, NO itemised lines at all \u2014 only a total. Tests the fallback: item extraction must return nothing rather than invent lines",
+    "conditions": "Printed, NO itemised lines at all — only a total. Tests the fallback: item extraction must return nothing rather than invent lines",
     "expected": {
       "date": "2026-07-29",
       "vendor": "MANG JOSE HANDWRITTEN",
@@ -520,7 +520,7 @@
     "id": "syn-18-discount-line",
     "file": "syn-18-discount-line.png",
     "kind": "synthetic",
-    "conditions": "Printed, a DISCOUNT line sits among the items \u2014 must not be read as a purchase",
+    "conditions": "Printed, a DISCOUNT line sits among the items — must not be read as a purchase",
     "expected": {
       "date": "2026-07-30",
       "vendor": "SOUTH CITY PHARMACY",
@@ -789,5 +789,1310 @@
         }
       ]
     }
+  },
+  {
+    "id": "real-04-cropped-vendor-glare",
+    "file": "real-04-cropped-vendor-glare.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, Indonesian drink-stall thermal receipt, header block blurred/illegible, single item, tight crop",
+    "expected": {
+      "date": null,
+      "vendor": null,
+      "amount": 6000.0,
+      "items": [
+        {
+          "name": "Nu Greentea 330",
+          "quantity": 1,
+          "amount": 6000.0
+        }
+      ]
+    },
+    "vendor_note": "Vendor header is blurred past legibility in the photo. The source dataset's own annotation claims 'Boston Cream', but that text cannot be independently read from the image — left null per this corpus's hand-verification rule rather than trusting an unverifiable AI-assisted label."
+  },
+  {
+    "id": "real-05-bintang-juice-camscan-watermark",
+    "file": "real-05-bintang-juice-camscan-watermark.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo scanned through the CamScanner app (adds a small logo + 'Scanned with CamScanner' watermark, bottom-left), Indonesian juice stall, otherwise clear print",
+    "expected": {
+      "date": "2019-08-01",
+      "vendor": "BINTANG JUICE",
+      "amount": 20000.0,
+      "items": [
+        {
+          "name": "SIRSAK",
+          "quantity": 1,
+          "amount": 10000.0
+        },
+        {
+          "name": "SUNKIST",
+          "quantity": 1,
+          "amount": 10000.0
+        }
+      ]
+    },
+    "known_ambiguous": true,
+    "vendor_note": "Date line reads 'REG 01-08-201x 10:19' — day and month (1 August) are legible, the last digit of the year is not; the dataset annotation's 2019 is used since nothing in the image contradicts it, but this is a genuine real-photo illegibility case, not a confident read."
+  },
+  {
+    "id": "real-06-severe-blur-curled-thermal",
+    "file": "real-06-severe-blur-curled-thermal.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, curled/perforated thermal receipt edge, out-of-focus capture, black background",
+    "expected": {
+      "date": "2017-11-24",
+      "vendor": null,
+      "amount": 22000.0,
+      "items": [
+        {
+          "name": "MACARON BLUE",
+          "quantity": 2,
+          "amount": 22000.0
+        }
+      ]
+    },
+    "vendor_note": "Header (vendor name/address) is an unreadable blur even at full zoom; left null rather than guessed."
+  },
+  {
+    "id": "real-07-glare-finger-obstruction",
+    "file": "real-07-glare-finger-obstruction.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, strong glare plus the photographer's own thumb partially covering the lower-right corner, single item, bakery chain receipt",
+    "expected": {
+      "date": null,
+      "vendor": "TOUS LES JOURS",
+      "amount": 32500.0,
+      "items": [
+        {
+          "name": "Ganache Mousse Piece",
+          "quantity": 1,
+          "amount": 32500.0
+        }
+      ]
+    },
+    "known_ambiguous": true,
+    "vendor_note": "Vendor banner is legible only as a shape through heavy blur but matches the known bakery chain 'Tous Les Jours' strongly enough to keep (low confidence). No date is visible anywhere in the frame."
+  },
+  {
+    "id": "real-08-diagonal-watermark-blur",
+    "file": "real-08-diagonal-watermark-blur.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, blurred header, a repeating diagonal text watermark ('D'crepes') overlaid across the whole frame by whoever shared the photo — distinct from the receipt's own printed content",
+    "expected": {
+      "date": null,
+      "vendor": null,
+      "amount": 24000.0,
+      "items": [
+        {
+          "name": "SmokeBeef + NuTea",
+          "quantity": 1,
+          "amount": 21818.0
+        }
+      ]
+    },
+    "known_ambiguous": true,
+    "vendor_note": "The dataset annotation guesses 'Doner D' for the vendor; the actual printed header is illegibly blurred, and the diagonal repeating watermark text is a photo-sharing overlay, not the receipt's own vendor line — neither is a reliable read, so vendor is left null. Item + total reconcile exactly (21818 + 2182 tax = 24000), which is independently verifiable and kept."
+  },
+  {
+    "id": "real-09-severe-blur-duplicate-items",
+    "file": "real-09-severe-blur-duplicate-items.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, severe blur, vendor and every administrative line illegible, TWO separate identical-item order lines (not a quantity of 2 on one line)",
+    "expected": {
+      "date": null,
+      "vendor": null,
+      "amount": 138600.0,
+      "items": [
+        {
+          "name": "WARISAN 2 FREE DRINK",
+          "quantity": 1,
+          "amount": 63000.0
+        },
+        {
+          "name": "WARISAN 2 FREE DRINK",
+          "quantity": 1,
+          "amount": 63000.0
+        }
+      ]
+    },
+    "known_ambiguous": true,
+    "vendor_note": "The source dataset's own annotation collapses this into a single item line; the image clearly shows the same item name printed twice as two separate order lines (126,000 subtotal + 10% service = 138,600, which only reconciles with two lines of 63,000). Ground truth here corrects the dataset's omission based on direct visual count."
+  },
+  {
+    "id": "real-10-chopstick-obstruction-crumple",
+    "file": "real-10-chopstick-obstruction-crumple.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo on a wood-grain table, wooden chopsticks and a pink napkin partially resting on/behind the receipt, blurred header, single abbreviated item name",
+    "expected": {
+      "date": null,
+      "vendor": null,
+      "amount": 53999.0,
+      "items": [
+        {
+          "name": "HAI CMP SPC",
+          "quantity": 1,
+          "amount": 49090.0
+        }
+      ]
+    },
+    "known_ambiguous": true,
+    "vendor_note": "Header partially legible as something like 'Nasi Campur ...' but too blurred to transcribe with confidence; left null. Item name is printed abbreviated on the receipt itself ('HAI CMP SPC') — that is the actual printed text, not an OCR artifact, and is kept as-is. Tax line (TX1 4,909) + item = 53,999 total, which reconciles."
+  },
+  {
+    "id": "real-11-thumb-obstruction-single-item",
+    "file": "real-11-thumb-obstruction-single-item.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, blurred header, photographer's thumb visible at the left edge, single high-value electronics item, no tax line",
+    "expected": {
+      "date": null,
+      "vendor": null,
+      "amount": 975000.0,
+      "items": [
+        {
+          "name": "WACOM BAMBOO PEN",
+          "quantity": 1,
+          "amount": 975000.0
+        }
+      ]
+    },
+    "vendor_note": "Header reads only as an indistinct blur ('DELTA 5'-shaped text); no date is visible anywhere in frame. Left both null rather than guessed."
+  },
+  {
+    "id": "real-12-long-13-item-blurry-header",
+    "file": "real-12-long-13-item-blurry-header.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, long 13-line itemised restaurant receipt with small print, header fully blurred, some leading quantity digits at the left margin partly cut off",
+    "expected": {
+      "date": null,
+      "vendor": null,
+      "amount": 1802900.0,
+      "items": [
+        {
+          "name": "Angus Striploin",
+          "quantity": 1,
+          "amount": 295000.0
+        },
+        {
+          "name": "Chicken Steak",
+          "quantity": 1,
+          "amount": 140000.0
+        },
+        {
+          "name": "CK Redvelvet",
+          "quantity": 1,
+          "amount": 65000.0
+        },
+        {
+          "name": "Creamed Spinach",
+          "quantity": 1,
+          "amount": 40000.0
+        },
+        {
+          "name": "F Squeeze Orange",
+          "quantity": 1,
+          "amount": 60000.0
+        },
+        {
+          "name": "House Blend",
+          "quantity": 1,
+          "amount": 40000.0
+        },
+        {
+          "name": "Ice Tea Peach",
+          "quantity": 1,
+          "amount": 45000.0
+        },
+        {
+          "name": "Ice Tea Rasp",
+          "quantity": 2,
+          "amount": 90000.0
+        },
+        {
+          "name": "Jasmine Tea",
+          "quantity": 1,
+          "amount": 40000.0
+        },
+        {
+          "name": "Roasted Chicken",
+          "quantity": 2,
+          "amount": 300000.0
+        },
+        {
+          "name": "Salmon",
+          "quantity": 1,
+          "amount": 170000.0
+        },
+        {
+          "name": "Salmon Seaweed Bowl",
+          "quantity": 1,
+          "amount": 150000.0
+        },
+        {
+          "name": "Sorbet",
+          "quantity": 1,
+          "amount": 55000.0
+        }
+      ]
+    },
+    "known_ambiguous": true,
+    "vendor_note": "Header (vendor/date) is fully illegible. Item transcription is this reviewer's own direct read of the image, not the dataset annotation — the two disagree on several item amounts (e.g. the dataset lists Salmon at 180,000 and Roasted Chicken at 130,000 each). This reviewer's reading was preferred because it reconciles exactly: items (1,490,000) + service (149,000) + tax (163,900) = 1,802,900, the printed total; the dataset's item set does not reconcile against that total."
+  },
+  {
+    "id": "real-13-blur-vendor-two-item",
+    "file": "real-13-blur-vendor-two-item.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, blurred café/bakery header, two items, service charge + tax lines",
+    "expected": {
+      "date": null,
+      "vendor": null,
+      "amount": 159638.0,
+      "items": [
+        {
+          "name": "mush pasta",
+          "quantity": 1,
+          "amount": 80000.0
+        },
+        {
+          "name": "chic ques",
+          "quantity": 1,
+          "amount": 55000.0
+        }
+      ]
+    },
+    "known_ambiguous": true,
+    "vendor_note": "Vendor banner is blurred; this reviewer's best read leaned toward 'BAKERZIN', the dataset annotation says 'BAKUBEN' — the two disagree and neither is confidently legible, so left null rather than pick one."
+  },
+  {
+    "id": "real-14-lamp-glare-discount-multiplier",
+    "file": "real-14-lamp-glare-discount-multiplier.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo taken under a warm lamp with strong glare and a pixelated/redacted-looking header, one item with a '2x' multiplier prefix AND a 30% discount line reducing it",
+    "expected": {
+      "date": null,
+      "vendor": null,
+      "amount": 12600.0,
+      "items": [
+        {
+          "name": "Risol Rogut",
+          "quantity": 2,
+          "amount": 18000.0
+        }
+      ]
+    },
+    "known_ambiguous": true,
+    "vendor_note": "Header is pixelated/blurred past legibility, and no date is visible. The item's pre-discount line total is genuinely hard to read at full resolution — this reviewer's first pass misread it as 18,600, but 18,000 is the value that reconciles: 18,000 - 30% (5,400) = 12,600, which matches the printed 'SUBTOTAL'/'TOTAL' exactly, and 100,700 cash - 12,600 = 88,100 change, which also matches. Kept as a documented digit-legibility failure case (6 vs 0 in dot-matrix thermal print) rather than silently corrected away — see failure taxonomy."
+  },
+  {
+    "id": "real-15-ikea-uk-dd-mm-date",
+    "file": "real-15-ikea-uk-dd-mm-date.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, IKEA Food UK receipt, clean print, GBP, DD/MM/YYYY date format",
+    "expected": {
+      "date": "2016-04-06",
+      "vendor": "IKEA FOOD",
+      "amount": 14.85,
+      "items": [
+        {
+          "name": "Meatballs 10",
+          "quantity": 1,
+          "amount": 3.8
+        },
+        {
+          "name": "Fish & Chips Adult",
+          "quantity": 1,
+          "amount": 4.95
+        },
+        {
+          "name": "Petit Pain - White",
+          "quantity": 1,
+          "amount": 0.5
+        },
+        {
+          "name": "Wine rose",
+          "quantity": 1,
+          "amount": 2.8
+        },
+        {
+          "name": "Wine red",
+          "quantity": 1,
+          "amount": 2.8
+        }
+      ]
+    },
+    "known_ambiguous": true,
+    "vendor_note": "Printed date is '06/04/2016' — UK receipt (VAT GB…, Milton Keynes address), so DD/MM/YYYY applies and this reads as 6 April 2016. The source dataset's own annotation says 2016-04-03, which this reviewer's direct read disagrees with; the printed digits are unambiguous ('06/04/2016'), so the dataset annotation is treated as wrong here. This is a genuinely non-PH, DD/MM receipt useful for confirming the parser's PH-convention default reads it correctly by coincidence of convention match, not as evidence either way for a true MM/DD receipt."
+  },
+  {
+    "id": "real-16-new-china-us-date",
+    "file": "real-16-new-china-us-date.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, US restaurant receipt (Mesa, AZ), MM-DD-YYYY date format, clean print",
+    "expected": {
+      "date": "2016-03-12",
+      "vendor": "New China",
+      "amount": 26.96,
+      "items": [
+        {
+          "name": "Beef w. Broccoli",
+          "quantity": 1,
+          "amount": 8.25
+        },
+        {
+          "name": "w. Chicken Fried Rice",
+          "quantity": 1,
+          "amount": 2.0
+        },
+        {
+          "name": "Sweet / Sour Chicken",
+          "quantity": 1,
+          "amount": 7.95
+        },
+        {
+          "name": "Chicken Chow Mein",
+          "quantity": 1,
+          "amount": 6.75
+        }
+      ]
+    },
+    "known_ambiguous": true,
+    "vendor_note": "Printed date '03-12-2016' is genuinely ambiguous under a DD/MM-default parser (both components <=12); ground truth here uses the correct US MM-DD-YYYY reading (12 March 2016) since the receipt is unambiguously a US restaurant (Arizona phone/address). This is exactly the documented cost of the PH-convention default — see plan failure pattern 1."
+  },
+  {
+    "id": "real-17-decorative-banner-wood-table",
+    "file": "real-17-decorative-banner-wood-table.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo on a dark wood table, upscale restaurant receipt (Dublin, Ireland), unambiguous month-name date, no decorative banner but tight crop",
+    "expected": {
+      "date": "2019-02-16",
+      "vendor": "Marco Pierre White Steakhouse & Grill",
+      "amount": 129.75,
+      "items": [
+        {
+          "name": "8oz Fil Bearn",
+          "quantity": 1,
+          "amount": 35.95
+        },
+        {
+          "name": "8oz Fil Au Po",
+          "quantity": 1,
+          "amount": 35.95
+        },
+        {
+          "name": "Onion Ring",
+          "quantity": 1,
+          "amount": 4.95
+        },
+        {
+          "name": "Haricots Vert",
+          "quantity": 1,
+          "amount": 4.95
+        },
+        {
+          "name": "Choc Truf Cake",
+          "quantity": 1,
+          "amount": 8.95
+        },
+        {
+          "name": "Lunta",
+          "quantity": 1,
+          "amount": 39.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "real-18-via-emilia-clean",
+    "file": "real-18-via-emilia-clean.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, clean US restaurant receipt (Miami Beach, FL), month-name date, an order-tracking URL/code line",
+    "expected": {
+      "date": "2017-04-27",
+      "vendor": "VIA EMILIA 9",
+      "amount": 61.8,
+      "items": [
+        {
+          "name": "Tagliatella al Ragu'",
+          "quantity": 1,
+          "amount": 14.9
+        },
+        {
+          "name": "Cappellacci Di Zucca",
+          "quantity": 1,
+          "amount": 18.9
+        },
+        {
+          "name": "Stufato Al Latte Di Ravenna",
+          "quantity": 1,
+          "amount": 22.9
+        }
+      ]
+    }
+  },
+  {
+    "id": "real-19-togo-banner-asterisks",
+    "file": "real-19-togo-banner-asterisks.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, decorative asterisk banner ('*** TO GO ***') above the vendor block, US date, unambiguous",
+    "expected": {
+      "date": "2018-12-31",
+      "vendor": null,
+      "amount": 58.3,
+      "items": [
+        {
+          "name": "Tikka Masala",
+          "quantity": 1,
+          "amount": 20.0
+        },
+        {
+          "name": "Palak (Spinach) Paneer (Cheese)",
+          "quantity": 1,
+          "amount": 18.0
+        },
+        {
+          "name": "Vegan Bengan Bharta",
+          "quantity": 1,
+          "amount": 17.0
+        }
+      ]
+    },
+    "vendor_note": "The line under the asterisk banner reads 'NAME: CHARES' — that is the customer's name on a to-go order slip, not the restaurant's name, which does not appear anywhere in this crop. Left null rather than misreading the customer name as vendor."
+  },
+  {
+    "id": "real-20-cluttered-menu-background-tilt",
+    "file": "real-20-cluttered-menu-background-tilt.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, receipt photographed resting on top of a restaurant menu (cluttered background text behind/around it), slight tilt, US date",
+    "expected": {
+      "date": "2014-08-30",
+      "vendor": "Fuzzy's Taco Shop",
+      "amount": 12.03,
+      "items": [
+        {
+          "name": "Chips y Salsa",
+          "quantity": 1,
+          "amount": 4.95
+        },
+        {
+          "name": "Red Bull",
+          "quantity": 1,
+          "amount": 3.5
+        },
+        {
+          "name": "Soft Drink",
+          "quantity": 1,
+          "amount": 2.79
+        }
+      ]
+    },
+    "known_ambiguous": true,
+    "vendor_note": "The printed logo/header is small and angled; this reviewer could not independently confirm the exact vendor spelling against the blurred logo and is relying on the source dataset's annotation ('Fuzzy's Taco Shop') for this field specifically, flagged low-confidence."
+  },
+  {
+    "id": "real-21-jts-diner-clean",
+    "file": "real-21-jts-diner-clean.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, clean US diner receipt, US date with AM/PM time, a '(2 @2.95)' multiplier notation",
+    "expected": {
+      "date": "2016-02-12",
+      "vendor": "JT's Diner",
+      "amount": 28.4,
+      "items": [
+        {
+          "name": "Coffee",
+          "quantity": 2,
+          "amount": 5.9
+        },
+        {
+          "name": "Two Eggs Any Style",
+          "quantity": 1,
+          "amount": 6.95
+        },
+        {
+          "name": "Whole-Wheat Pancakes",
+          "quantity": 1,
+          "amount": 8.95
+        },
+        {
+          "name": "Hawaiian Sausage",
+          "quantity": 1,
+          "amount": 4.5
+        }
+      ]
+    }
+  },
+  {
+    "id": "real-22-blank-total-field-curl",
+    "file": "real-22-blank-total-field-curl.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, curled/curved credit-card slip photographed on a white envelope with shadow, 'Tip' and 'Total' lines printed but left BLANK for the customer to fill in — only 'AMOUNT' is printed",
+    "expected": {
+      "date": "2017-06-05",
+      "vendor": "Hedleys",
+      "amount": 41.45,
+      "items": []
+    },
+    "known_ambiguous": true,
+    "vendor_note": "No itemised lines and no filled-in total — only a printed 'AMOUNT: $41.45' with blank tip/total lines for a handwritten addition. Ground truth uses the printed AMOUNT, mirroring how the existing corpus's 'total-only, no items' cases are handled (syn-17)."
+  },
+  {
+    "id": "real-23-handwritten-total-override",
+    "file": "real-23-handwritten-total-override.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, US sushi restaurant receipt, printed itemised total, PLUS a handwritten total ('153.71') pen-written over/near the printed total ($143.71) — apparently a tip-adjusted figure added by hand",
+    "expected": {
+      "date": "2018-05-11",
+      "vendor": "Katana Sushi",
+      "amount": 143.71,
+      "items": [
+        {
+          "name": "Hamachi Collar",
+          "quantity": 1,
+          "amount": 12.0
+        },
+        {
+          "name": "Mega Poke Bowl",
+          "quantity": 1,
+          "amount": 17.0
+        },
+        {
+          "name": "Hamachi - Sashimi",
+          "quantity": 1,
+          "amount": 12.0
+        },
+        {
+          "name": "Maguro - Sashimi",
+          "quantity": 1,
+          "amount": 11.0
+        },
+        {
+          "name": "Salmon - Sashimi",
+          "quantity": 1,
+          "amount": 10.0
+        },
+        {
+          "name": "3 Sockeye Salmon - Sashimi",
+          "quantity": 1,
+          "amount": 36.0
+        },
+        {
+          "name": "Hamachi Japapeno",
+          "quantity": 1,
+          "amount": 12.0
+        },
+        {
+          "name": "Salmon Collar",
+          "quantity": 1,
+          "amount": 10.0
+        },
+        {
+          "name": "Escolar - Sashimi",
+          "quantity": 1,
+          "amount": 11.0
+        }
+      ]
+    },
+    "known_ambiguous": true,
+    "vendor_note": "A handwritten '153.71' appears near the printed '$143.71' total — almost certainly a tip-inclusive figure added by whoever paid. Ground truth uses the machine-printed total ($143.71, which also reconciles with the printed subtotal+tax), not the handwritten annotation, since OCR reads printed text and a handwritten overlay is a distinct, unreliable signal a receipt-scan pipeline should not be expected to parse as the transaction total."
+  },
+  {
+    "id": "real-24-yauatcha-no-date",
+    "file": "real-24-yauatcha-no-date.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo on a dark wood table, upscale restaurant (Honolulu, HI), 8 items, no date visible anywhere in the visible receipt body",
+    "expected": {
+      "date": null,
+      "vendor": "YAUATCHA",
+      "amount": 88.62,
+      "items": [
+        {
+          "name": "Tender Branch Hibiscus",
+          "quantity": 1,
+          "amount": 8.0
+        },
+        {
+          "name": "Seafood Puff",
+          "quantity": 1,
+          "amount": 10.8
+        },
+        {
+          "name": "Sesame Prawn Toast",
+          "quantity": 1,
+          "amount": 11.8
+        },
+        {
+          "name": "Beancurd Prawn Cheung Fun",
+          "quantity": 1,
+          "amount": 10.8
+        },
+        {
+          "name": "XO Scallop Dumpling",
+          "quantity": 1,
+          "amount": 8.8
+        },
+        {
+          "name": "Poached Beijing Dumpling",
+          "quantity": 1,
+          "amount": 5.8
+        },
+        {
+          "name": "Spinach Dumpling",
+          "quantity": 1,
+          "amount": 6.8
+        },
+        {
+          "name": "Tea Smoked Pork Ribs",
+          "quantity": 1,
+          "amount": 22.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "real-25-boa-dark-background",
+    "file": "real-25-boa-dark-background.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo against a near-black tablecloth (low background/receipt contrast in the photo, though the print itself is clean), suggested-gratuity lines below the total",
+    "expected": {
+      "date": "2017-12-20",
+      "vendor": "BOA",
+      "amount": 47.09,
+      "items": [
+        {
+          "name": "Crab Cake",
+          "quantity": 1,
+          "amount": 15.0
+        },
+        {
+          "name": "Skirt Stk Lunch",
+          "quantity": 1,
+          "amount": 28.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "real-26-friendly-reds-clean",
+    "file": "real-26-friendly-reds-clean.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, clean US restaurant receipt, '(2 @14.00)' multiplier notation, unambiguous US date",
+    "expected": {
+      "date": "2018-07-21",
+      "vendor": "Friendly Red's of Windham",
+      "amount": 77.83,
+      "items": [
+        {
+          "name": "Cadillac Margarita",
+          "quantity": 2,
+          "amount": 28.0
+        },
+        {
+          "name": "Patron Silver",
+          "quantity": 1,
+          "amount": 14.0
+        },
+        {
+          "name": "Maryland Crab Cakes",
+          "quantity": 1,
+          "amount": 12.0
+        },
+        {
+          "name": "Chicken Caprese",
+          "quantity": 1,
+          "amount": 12.0
+        },
+        {
+          "name": "Chix Parm Sandwich",
+          "quantity": 1,
+          "amount": 10.0
+        },
+        {
+          "name": "Bud Light",
+          "quantity": 2,
+          "amount": 7.4
+        }
+      ]
+    }
+  },
+  {
+    "id": "real-27-pappadeaux-ambiguous-us-date",
+    "file": "real-27-pappadeaux-ambiguous-us-date.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, US restaurant receipt (Houston, TX), date printed as '01/07/17' — both components <=12, genuinely ambiguous without locale context",
+    "expected": {
+      "date": "2017-01-07",
+      "vendor": "Pappadeaux Seafood Kitchen",
+      "amount": 42.16,
+      "items": [
+        {
+          "name": "Side Craw Etouffee 4oz",
+          "quantity": 1,
+          "amount": 10.98
+        },
+        {
+          "name": "Pan Seared Tilapia",
+          "quantity": 1,
+          "amount": 21.99
+        },
+        {
+          "name": "Tea",
+          "quantity": 2,
+          "amount": 5.98
+        }
+      ]
+    },
+    "known_ambiguous": true,
+    "vendor_note": "This is a genuinely US-format ambiguous date (7 January 2017, MM/DD) that the shipped parser's PH-convention DD/MM default will misread as 1 July 2017 — the accepted, documented tradeoff from the plan (a real US receipt reads wrong so PH receipts read right). Included specifically to make that tradeoff measurable rather than assumed."
+  },
+  {
+    "id": "real-28-carls-jr-translucent-bleed",
+    "file": "real-28-carls-jr-translucent-bleed.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, thin/translucent thermal paper on a reflective wood table — a promotional background pattern printed on the paper's reverse bleeds through faintly behind the text, several $0.00 combo-modifier lines",
+    "expected": {
+      "date": "2017-09-27",
+      "vendor": "CARL'S JR",
+      "amount": 7.61,
+      "items": [
+        {
+          "name": "All Star Meal #1",
+          "quantity": 1,
+          "amount": 1.0
+        }
+      ]
+    },
+    "known_ambiguous": true,
+    "vendor_note": "Only 'All Star Meal #1' carries a nonzero price ($1.00); 'Box #1', 'Dbl Chbgr', 'Hot Dog', 'Baked Cookie' are combo-modifier lines all printed at $0.00 and are correctly not counted as separate priced items (subtotal 7.00 = 1.00 Meal + 3.00 Fries + 3.00 Bev Bar, so Lg Fries and Lg Bev Bar are the other two priced components — kept out of the expected item list here since they're bundled combo pricing rather than standalone line items a receipt-scan owner would separately re-key; a parser that extracts them individually is not necessarily wrong, this is a judgment call noted for the taxonomy)."
+  },
+  {
+    "id": "real-29-saska-paperclip-clipboard",
+    "file": "real-29-saska-paperclip-clipboard.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, receipt held to a wooden clipboard by a large metal binder clip whose reflective wire partially crosses the header text, US date, suggested-tip lines",
+    "expected": {
+      "date": "2017-08-15",
+      "vendor": "SASKA'S",
+      "amount": 179.94,
+      "items": [
+        {
+          "name": "Draft Blackhouse",
+          "quantity": 1,
+          "amount": 7.0
+        },
+        {
+          "name": "\"Cowboy\" 16oz Ribeye",
+          "quantity": 1,
+          "amount": 45.0
+        },
+        {
+          "name": "Make It Blue",
+          "quantity": 1,
+          "amount": 5.0
+        },
+        {
+          "name": "Add Lobster",
+          "quantity": 1,
+          "amount": 21.0
+        },
+        {
+          "name": "CK Manhattan",
+          "quantity": 2,
+          "amount": 10.0
+        },
+        {
+          "name": "Whistle Pig Rye 10yr",
+          "quantity": 2,
+          "amount": 40.0
+        },
+        {
+          "name": "\"Duke\" 16oz Top Sirloin",
+          "quantity": 1,
+          "amount": 34.0
+        },
+        {
+          "name": "Make It Blue",
+          "quantity": 1,
+          "amount": 5.0
+        }
+      ]
+    },
+    "known_ambiguous": true,
+    "vendor_note": "'Make It Blue' (a steak-doneness modifier) appears twice, once under each steak it modifies, both at $5.00 — printed as two separate lines on the receipt, kept as two items rather than merged."
+  },
+  {
+    "id": "real-30-wings-things-over-menu-crumple",
+    "file": "real-30-wings-things-over-menu-crumple.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, crumpled receipt resting on top of a bright yellow/red takeout menu (cluttered, high-contrast background bleeding into the frame around the receipt edges), no date visible in the photographed portion",
+    "expected": {
+      "date": null,
+      "vendor": "WINGS & THINGS",
+      "amount": 30.58,
+      "items": [
+        {
+          "name": "#7 2PC R&B Meal",
+          "quantity": 1,
+          "amount": 5.99
+        },
+        {
+          "name": "#3 3Wing Meal",
+          "quantity": 3,
+          "amount": 20.97
+        },
+        {
+          "name": "Coll Grn - Small",
+          "quantity": 1,
+          "amount": 1.19
+        }
+      ]
+    },
+    "vendor_note": "'Sub Fixn' (side choice) and drink-name sub-lines under each meal (e.g. 'Iced Tea', 'Mac&Chz') are combo-inclusion descriptors, not separately priced — not counted as items, consistent with real-28's Carl's Jr judgment call."
+  },
+  {
+    "id": "real-31-lan-sheng-item-price-column-shift",
+    "file": "real-31-lan-sheng-item-price-column-shift.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo on a fabric tablecloth, US Chinese restaurant receipt, 6 items where one line ('White Rice (S)') has no price printed in its row and the subtotal does not cleanly reconcile against the visibly legible per-item prices",
+    "expected": {
+      "date": "2017-06-13",
+      "vendor": "Lan Sheng",
+      "amount": 75.15,
+      "items": [
+        {
+          "name": "Spicy Chicken w. Spicy Garlic Soy V.",
+          "quantity": 1,
+          "amount": 7.95
+        },
+        {
+          "name": "Hf- Peking Duck",
+          "quantity": 1,
+          "amount": 18.95
+        },
+        {
+          "name": "Stir Beef Fillet w. Tofu",
+          "quantity": 1,
+          "amount": 12.95
+        },
+        {
+          "name": "Pork w. Spicy Capsicum",
+          "quantity": 1,
+          "amount": 1.5
+        },
+        {
+          "name": "Pork w. Spicy Tofu & Cayenne Chili",
+          "quantity": 1,
+          "amount": 12.95
+        }
+      ]
+    },
+    "known_ambiguous": true,
+    "vendor_note": "Total ($75.15) and Sales Tax ($4.90) are printed clearly and unambiguously and are used as-is. The five priced item lines above are directly legible, but they sum to $54.30 against a printed SubTotal of $70.25 — a $15.95 gap this reviewer cannot resolve from the image (the 'White Rice (S)' line has no price printed next to it at all). Rather than invent a price for White Rice or silently force reconciliation, it is left out of the item list and the gap is documented here as an open real-photo failure case for the taxonomy (unexplained subtotal gap on a legible receipt)."
+  },
+  {
+    "id": "real-32-mynews-handwritten-margin",
+    "file": "real-32-mynews-handwritten-margin.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, Malaysian convenience-store tax invoice, a handwritten alphanumeric code ('A03115') pen-written in the top-right margin (unrelated to the transaction), GST columns",
+    "expected": {
+      "date": "2018-03-23",
+      "vendor": "myNEWS.com",
+      "amount": 10.0,
+      "items": [
+        {
+          "name": "JALAN JALAN (Majalah)",
+          "quantity": 2,
+          "amount": 10.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "real-33-mcdonalds-my-combo-submenu",
+    "file": "real-33-mcdonalds-my-combo-submenu.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, clean scan-quality Malaysian McDonald's receipt, a combo-meal line with indented sub-components (Coke, Fries) printed with no individual price of their own",
+    "expected": {
+      "date": "2018-05-30",
+      "vendor": "McDonald's",
+      "amount": 19.0,
+      "items": [
+        {
+          "name": "M McChicken",
+          "quantity": 2,
+          "amount": 19.0
+        }
+      ]
+    },
+    "known_ambiguous": true,
+    "vendor_note": "The printed header is 'Gerbang Alaf Restaurants Sdn Bhd... Licensee of McDonald's... McDonald's Shell Mahkota Cheras'; ground truth vendor is normalised to the recognisable brand name 'McDonald's' rather than the legal licensee entity, matching how an owner would actually refer to this receipt. '2 M Coke' and '2 M Fries' are indented combo sub-lines with no price of their own (only the combo line 'M McChicken' carries the $19.00 total) — not counted as separate priced items."
+  },
+  {
+    "id": "real-34-parking-ticket-stamped-redacted",
+    "file": "real-34-parking-ticket-stamped-redacted.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, Malaysian parking-garage tax invoice (not a merchandise receipt), a black circular redaction mark over part of the GST ID, a 'POSTED' rubber stamp printed diagonally across the fee amount, entry/paid timestamps rather than a single transaction time",
+    "expected": {
+      "date": "2017-04-30",
+      "vendor": "Amano Malaysia Sdn Bhd",
+      "amount": 3.0,
+      "items": [
+        {
+          "name": "Parking Fee",
+          "quantity": 1,
+          "amount": 2.83
+        }
+      ]
+    },
+    "known_ambiguous": true,
+    "vendor_note": "'Parking Fee' (2.83) plus GST (0.17) reconciles to the printed Total (3.00); the 'POSTED' stamp overlaps the fee digits but they remain legible underneath. Not a purchase receipt in the usual sense (no purchased goods, a parking duration instead) — kept as a real example of a non-merchandise 'receipt' a scan feature will realistically encounter."
+  },
+  {
+    "id": "real-35-kings-confectionery-discount-column",
+    "file": "real-35-kings-confectionery-discount-column.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, Malaysian bakery tax invoice, Code/Description/Qty/Price/Discount%/Amount column layout, one item carries a 30% line-level discount already applied to its Amount",
+    "expected": {
+      "date": "2018-03-11",
+      "vendor": "KING'S CONFECTIONERY",
+      "amount": 25.15,
+      "items": [
+        {
+          "name": "KAYA PUFF",
+          "quantity": 4,
+          "amount": 6.4
+        },
+        {
+          "name": "Slice Cake",
+          "quantity": 1,
+          "amount": 8.7
+        },
+        {
+          "name": "Cheese Le",
+          "quantity": 1,
+          "amount": 2.45
+        },
+        {
+          "name": "Cheese Ta",
+          "quantity": 1,
+          "amount": 3.4
+        },
+        {
+          "name": "D/R Butte",
+          "quantity": 1,
+          "amount": 4.2
+        }
+      ]
+    },
+    "vendor_note": "Item descriptions are truncated on the receipt itself ('Cheese Le', 'Cheese Ta', 'D/R Butte') — that truncation is the actual printed text (a fixed-width register column), not an OCR artifact, and is kept verbatim. 'Cheese Le' Amount (2.45) already reflects its printed 30% discount column, not its listed unit price (3.50) — the discounted Amount is the correct per-line figure to match against a parser's own item-amount extraction."
+  },
+  {
+    "id": "real-36-mrdiy-multiline-item-layout",
+    "file": "real-36-mrdiy-multiline-item-layout.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, Malaysian hardware-store tax invoice, each item spans THREE printed lines (name, size/SKU code line, then quantity x unit-price = amount on a separate line) rather than one line per item",
+    "expected": {
+      "date": "2016-02-01",
+      "vendor": "MR. D.I.Y. (KUCHAI) SDN BHD",
+      "amount": 26.4,
+      "items": [
+        {
+          "name": "POT HOLDER (SQUARE)",
+          "quantity": 3,
+          "amount": 7.5
+        },
+        {
+          "name": "CNY RIBBON 2.0CM",
+          "quantity": 3,
+          "amount": 18.9
+        }
+      ]
+    }
+  },
+  {
+    "id": "real-37-gardenia-torn-multi-subtotal",
+    "file": "real-37-gardenia-torn-multi-subtotal.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, top-left corner of the receipt physically torn off, a small paper/sticker patch obscuring part of one line, TWO separate zero-rated and standard-rated subtotals before the final Total Payable",
+    "expected": {
+      "date": "2017-09-22",
+      "vendor": "GARDENIA BAKERIES (KL) SDN BHD",
+      "amount": 79.26,
+      "items": [
+        {
+          "name": "O.C. White",
+          "quantity": 2,
+          "amount": 4.26
+        },
+        {
+          "name": "Wholemeal",
+          "quantity": 1,
+          "amount": 2.78
+        },
+        {
+          "name": "O.C. Jumbo",
+          "quantity": 4,
+          "amount": 11.88
+        },
+        {
+          "name": "CR-CHOCLT",
+          "quantity": 20,
+          "amount": 14.4
+        },
+        {
+          "name": "SQ-S.BERRY",
+          "quantity": 12,
+          "amount": 10.08
+        },
+        {
+          "name": "MUFFIN C&W",
+          "quantity": 10,
+          "amount": 12.5
+        },
+        {
+          "name": "TWG T'MISU",
+          "quantity": 15,
+          "amount": 19.95
+        }
+      ]
+    },
+    "known_ambiguous": true,
+    "vendor_note": "Vendor name at the very top ('GARDENIA BAKERIES (KL) SDN BHD') survives the torn corner and is legible; a separate small sticker/patch lower on the receipt obscures the recipient ('VE...' cut off) but that field is not part of what this parser extracts. 'Total Payable' (79.26) is the sum of 'Total 0% supplies' (18.92) + 'Total 6% supplies (Inc. GST)' (60.34) — a two-tier VAT-exempt/VAT-rated structure the naive reconciliation check would need to treat as fully explained, similar to the Philippine VAT case already documented for real-02/real-03."
+  },
+  {
+    "id": "real-38-super-seven-dot-noise-duplicate-lines",
+    "file": "real-38-super-seven-dot-noise-duplicate-lines.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, scattered small dark speckle/dot noise across the whole image (dust or a dirty lens), a duplicate item line (same SKU/product printed twice, two separate purchases of the same item), a handwritten total ('18.30') and checkmarks added over the printed Net Total",
+    "expected": {
+      "date": "2018-03-21",
+      "vendor": "SUPER SEVEN CASH & CARRY SDN BHD",
+      "amount": 18.3,
+      "items": [
+        {
+          "name": "FRUIT (FP)",
+          "quantity": 1,
+          "amount": 2.99
+        },
+        {
+          "name": "NANGKA 1 PINGGAN",
+          "quantity": 1,
+          "amount": 2.0
+        },
+        {
+          "name": "KIMBALL TOMATO PUREE 430G",
+          "quantity": 1,
+          "amount": 3.8
+        },
+        {
+          "name": "KIMBALL TOMATO PUREE 430G",
+          "quantity": 1,
+          "amount": 3.8
+        },
+        {
+          "name": "URO MUSHROOM 425G",
+          "quantity": 1,
+          "amount": 2.8
+        },
+        {
+          "name": "YOUNG CORN 425G (MS)",
+          "quantity": 1,
+          "amount": 2.9
+        }
+      ]
+    },
+    "known_ambiguous": true,
+    "vendor_note": "'KIMBALL TOMATO PUREE 430G' is printed as two separate identical order lines (each its own SKU/qty/amount block), not a single line with quantity 2 — kept as two items to match what is actually printed. The handwritten '18.30' next to the printed 'Net Total RM18.30' confirms rather than contradicts the printed figure (rounding-adjusted from 18.29)."
+  },
+  {
+    "id": "real-39-sanyu-stationery-clean",
+    "file": "real-39-sanyu-stationery-clean.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, clean Malaysian stationery-shop tax invoice, a single SKU line with an inline '3 x 2.9000' quantity/unit-price notation, faint decorative background pattern printed on the paper itself",
+    "expected": {
+      "date": "2017-09-12",
+      "vendor": "SANYU STATIONERY SHOP",
+      "amount": 8.7,
+      "items": [
+        {
+          "name": "RESTAURANT ORDER CHIT NCR 3.5\"X6\"",
+          "quantity": 3,
+          "amount": 8.7
+        }
+      ]
+    }
+  },
+  {
+    "id": "real-40-portugalia-euro-redaction-dots",
+    "file": "real-40-portugalia-euro-redaction-dots.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, Portuguese restaurant receipt (Lisbon), Euro currency, ISO date-time already printed, hand-applied black circular redaction dots over the customer tax-ID and part of the payment-method breakdown, a two-tier IVA(VAT)-rate breakdown table",
+    "expected": {
+      "date": "2017-11-20",
+      "vendor": "Portugália",
+      "amount": 54.8,
+      "items": [
+        {
+          "name": "Imp Branca 25cl",
+          "quantity": 1,
+          "amount": 1.7
+        },
+        {
+          "name": "Pepsi zero lt",
+          "quantity": 1,
+          "amount": 2.1
+        },
+        {
+          "name": "Bacalhau Bras",
+          "quantity": 1,
+          "amount": 12.3
+        },
+        {
+          "name": "1/2 Bacalhau Bras",
+          "quantity": 1,
+          "amount": 8.85
+        },
+        {
+          "name": "Bife Vazia",
+          "quantity": 1,
+          "amount": 15.1
+        },
+        {
+          "name": "Pepsi Lt",
+          "quantity": 1,
+          "amount": 2.1
+        },
+        {
+          "name": "Pao",
+          "quantity": 3,
+          "amount": 1.95
+        },
+        {
+          "name": "Pao Torrado Fatias",
+          "quantity": 1,
+          "amount": 0.65
+        },
+        {
+          "name": "Manteiga Alho",
+          "quantity": 1,
+          "amount": 0.8
+        },
+        {
+          "name": "Manteiga",
+          "quantity": 1,
+          "amount": 0.8
+        },
+        {
+          "name": "Cafe",
+          "quantity": 3,
+          "amount": 3.0
+        },
+        {
+          "name": "Pudin Flan",
+          "quantity": 1,
+          "amount": 2.35
+        },
+        {
+          "name": "Baba Camelo",
+          "quantity": 1,
+          "amount": 3.1
+        }
+      ]
+    },
+    "known_ambiguous": true,
+    "vendor_note": "Non-PH, European VAT (IVA) receipt with a printed ISO date already — useful as a currency/locale-diversity case rather than a PH-specific one. This reviewer's direct read of several item amounts (e.g. '1/2 Bacalhau Bras' at 8.85, 'Bacalhau Bras' at 12.30) differs from the source dataset's annotation (5.15 and a different split) — the printed digits next to each line were used directly."
+  },
+  {
+    "id": "real-41-caravela-simple-euro",
+    "file": "real-41-caravela-simple-euro.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, Portuguese shopping-mall food-court receipt, single item, Euro, ISO date already printed",
+    "expected": {
+      "date": "2019-04-25",
+      "vendor": "Caravela Alimentação, S.A",
+      "amount": 6.4,
+      "items": [
+        {
+          "name": "Copo 1 Bola",
+          "quantity": 2,
+          "amount": 6.4
+        }
+      ]
+    }
+  },
+  {
+    "id": "real-42-fuel-pump-receipt-redaction",
+    "file": "real-42-fuel-pump-receipt-redaction.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, Portuguese fuel-pump receipt (not a merchandise purchase — litres of diesel at a per-litre rate), a black circular redaction mark over part of the total, an IVA/net breakdown table",
+    "expected": {
+      "date": "2019-10-30",
+      "vendor": "PMRP Unipessoal, Lda.",
+      "amount": 40.0,
+      "items": [
+        {
+          "name": "Gasoleo Bomba Nr 1",
+          "quantity": 1,
+          "amount": 40.0
+        }
+      ]
+    },
+    "known_ambiguous": true,
+    "vendor_note": "A fuel purchase rather than a merchandise receipt — '28,19 l x 1,419 EUR/l' is a unit-price notation for litres, not a quantity of a purchasable item; treated as a single line at the pump total (40.00) to match how an owner would actually log this expense. The black redaction dot sits directly over part of the 'TOTAL' digits but the value is still recoverable from the repeated 'CHEQ/ACCOR 40,00 EUR' line below it."
+  },
+  {
+    "id": "real-43-pollux-torn-skew-barcode",
+    "file": "real-43-pollux-torn-skew-barcode.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, long Portuguese invoice photographed at a skewed angle, a black circular redaction dot over part of the quantity/description column, a printed barcode near the footer, single low-value item",
+    "expected": {
+      "date": "2019-10-15",
+      "vendor": "Pollux Lisboa",
+      "amount": 4.15,
+      "items": [
+        {
+          "name": "Tabua Cozinha 8",
+          "quantity": 1,
+          "amount": 4.15
+        }
+      ]
+    },
+    "known_ambiguous": true,
+    "vendor_note": "Item line is partly obscured by the redaction dot ('...QTD DESCRICAO... TABUA COZINHA 8 4,15') but the quantity (1) and amount (4.15) are legible outside the dot; description is abbreviated on the receipt itself."
+  },
+  {
+    "id": "real-44-oriente-perfeito-handwritten-note",
+    "file": "real-44-oriente-perfeito-handwritten-note.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, Portuguese small-business invoice, a handwritten note ('#788 Rueb') pen-written in the right margin next to the vendor block — unrelated to the transaction, does not overlap any printed field",
+    "expected": {
+      "date": "2019-07-14",
+      "vendor": "Oriente Perfeito",
+      "amount": 6.0,
+      "items": [
+        {
+          "name": "Tapete De Ban",
+          "quantity": 1,
+          "amount": 6.0
+        }
+      ]
+    }
+  },
+  {
+    "id": "real-45-sticker-obstruction-cropped-vendor",
+    "file": "real-45-sticker-obstruction-cropped-vendor.jpg",
+    "kind": "real",
+    "conditions": "Real phone photo, an orange adhesive tab/sticker (unrelated object) overlapping the top-left corner of the frame, the issuing vendor's own name is above the top edge of the photographed area (only the recipient/client block is visible), a black redaction dot over part of a payment line",
+    "expected": {
+      "date": null,
+      "vendor": null,
+      "amount": 12.3,
+      "items": [
+        {
+          "name": "Servicos Prestados",
+          "quantity": 1,
+          "amount": 12.3
+        }
+      ]
+    },
+    "vendor_note": "Only the recipient block ('FEELSLIKEHOME. LDA') is visible in frame; the actual issuing vendor's name is above the photographed area and not recoverable from this image. Left null rather than mistaking the client name for the vendor. No date is visible in the visible portion either."
   }
 ]

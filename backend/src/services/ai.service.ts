@@ -6,6 +6,7 @@ import { buildModuleContext, type InteractionModule } from "./aiContext.service"
 import type { ExtractedScenario } from "../lib/scenario";
 import type { AIInteraction } from "@prisma/client";
 import { logger } from "../config/logger";
+import type { ReductionOpportunity } from "./reductionOpportunity.service";
 
 // Keep the model names as named constants — Google and OpenRouter rename
 // or deprecate models often. If a call starts failing with a 404/"model
@@ -214,7 +215,8 @@ export async function askAndRecord(
   businessProfileId: number,
   module: InteractionModule,
   question: string,
-  contextOverride?: string
+  contextOverride?: string,
+  reductionOpportunity?: ReductionOpportunity
 ) {
   const profile = await prisma.businessProfile.findFirst({
     where: { id: businessProfileId, userId },
@@ -232,6 +234,14 @@ export async function askAndRecord(
   // The Ask FinSight drawer passes no context. The context is built here,
   // server-side, from data queried at this moment. That's what makes a
   // follow-up see an expense the owner recorded 20 seconds ago.
+  //
+  // reductionOpportunity is a third, narrower case: the owner opened the
+  // drawer from a Reduction Opportunity card (plan §11). It is ignored
+  // whenever contextOverride is also given (an override already carries the
+  // final context text) and whenever module isn't "Expense Insights" — that
+  // module scoping is enforced here, not just in the controller, so this
+  // function can't be called into rendering the block somewhere it doesn't
+  // belong.
   let context: string;
   let priorTurns: ConversationTurn[] = [];
   let scenario: ExtractedScenario | undefined;
@@ -240,7 +250,13 @@ export async function askAndRecord(
     context = contextOverride;
   } else {
     const [built, recent] = await Promise.all([
-      buildModuleContext(userId, profile, module, question),
+      buildModuleContext(
+        userId,
+        profile,
+        module,
+        question,
+        module === "Expense Insights" ? reductionOpportunity : undefined
+      ),
       getHistory(userId, businessProfileId, module, HISTORY_TURNS_FOR_CONTEXT),
     ]);
     context = built.context;

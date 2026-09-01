@@ -38,7 +38,12 @@ export async function cleanUpReceiptScanIfOrphaned(receiptScanId: number | null 
 
   const scan = await prisma.receiptScan.findUnique({
     where: { id: receiptScanId },
-    select: { id: true, imageFile: true, confirmationStatus: true, pages: { select: { imageFile: true } } },
+    select: {
+      id: true,
+      imageFile: true,
+      confirmationStatus: true,
+      pages: { select: { imageFile: true, processedImageFile: true } },
+    },
   });
   if (!scan || scan.confirmationStatus !== "Confirmed") return;
 
@@ -59,7 +64,10 @@ export async function cleanUpReceiptScanIfOrphaned(receiptScanId: number | null 
    * (uploadAndScan writes the cover as page 1's own file) — deduplicated so
    * deleteReceiptImage is not asked to delete the same object twice.
    */
-  const files = new Set([scan.imageFile, ...scan.pages.map((p) => p.imageFile)]);
+  const files = new Set([
+    scan.imageFile,
+    ...scan.pages.flatMap((page) => [page.imageFile, page.processedImageFile]).filter((path): path is string => Boolean(path)),
+  ]);
   await prisma.receiptScan.delete({ where: { id: receiptScanId } });
   for (const file of files) await deleteReceiptImage(file);
 }

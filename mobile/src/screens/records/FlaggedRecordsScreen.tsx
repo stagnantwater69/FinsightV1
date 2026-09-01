@@ -3,7 +3,14 @@ import { ActivityIndicator, Alert as RNAlert, ScrollView, View } from "react-nat
 import { useFocusEffect } from "@react-navigation/native";
 import { Button, Callout, Card, EmptyState, ErrorNote, Money, Screen, T } from "../../components/ui";
 import { useBusinessProfiles } from "../../context/BusinessProfileContext";
-import { api, errorMessage } from "../../lib/api";
+import { api } from "../../lib/api";
+import { ConnectionNotice, LastUpdated } from "../../components/ConnectionNotice";
+import {
+  describeActionFailure,
+  describeLoadFailure,
+  toLoadFailure,
+  type LoadFailure,
+} from "../../lib/connectionState";
 import { setFlash } from "../../lib/flash";
 import * as haptics from "../../lib/haptics";
 import { font, space } from "../../theme/tokens";
@@ -83,11 +90,17 @@ export function FlaggedRecordsScreen() {
   const [batches, setBatches] = useState<ImportBatchSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyKey, setBusyKey] = useState<string | null>(null);
+  /** A failed resolve — reassures about the record, not about the list's age. */
   const [error, setError] = useState<string | null>(null);
+  /** A failed fetch of the review queue. See lib/connectionState.ts. */
+  const [loadFailure, setLoadFailure] = useState<LoadFailure | null>(null);
+  const [loadedAt, setLoadedAt] = useState<number | null>(null);
+  const [clock, setClock] = useState(() => Date.now());
 
   const load = useCallback(async () => {
     if (!selected) return;
     setLoading(true);
+    setClock(Date.now());
     try {
       // Together rather than in sequence: the batch list only supplies names
       // for the groups below, so waiting for one before asking for the other
@@ -102,8 +115,10 @@ export function FlaggedRecordsScreen() {
       ]);
       setRecords(flagged);
       setBatches(importBatches);
+      setLoadedAt(Date.now());
+      setLoadFailure(null);
     } catch (err) {
-      setError(errorMessage(err));
+      setLoadFailure(toLoadFailure(err));
     } finally {
       setLoading(false);
     }
@@ -154,7 +169,7 @@ export function FlaggedRecordsScreen() {
         await load();
       } catch (err) {
         haptics.failed();
-        setError(errorMessage(err));
+        setError(describeActionFailure(toLoadFailure(err), "These records are still waiting for review."));
       } finally {
         setBusyKey(null);
       }
@@ -240,8 +255,31 @@ export function FlaggedRecordsScreen() {
       <ScrollView contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}>
         <T variant="title" style={{ marginBottom: space.md }}>Records to review</T>
         {error ? <ErrorNote>{error}</ErrorNote> : null}
+
+        <ConnectionNotice
+          notice={describeLoadFailure(loadFailure, {
+            hasData: records.length > 0,
+            lastUpdatedAt: loadedAt,
+            now: clock,
+            subject: "the records to review",
+          })}
+          onRetry={load}
+          busy={loading}
+          style={{ marginBottom: space.md }}
+        />
+
+        {records.length > 0 ? (
+          <LastUpdated at={loadedAt} now={clock} style={{ marginBottom: space.sm }} />
+        ) : null}
+
         {loading ? (
           <ActivityIndicator color={brand[600]} />
+        ) : records.length === 0 && loadFailure ? (
+          /*
+            Same reason as Notifications: "Nothing needs your attention" over a
+            failed fetch is an all-clear this screen has no grounds to give.
+          */
+          null
         ) : records.length === 0 ? (
           <EmptyState
             title="Nothing needs your attention"

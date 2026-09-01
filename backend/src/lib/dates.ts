@@ -34,6 +34,38 @@ export function utcEndOfDay(d: Date): Date {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 23, 59, 59, 999));
 }
 
+/**
+ * "Today" as the business's own IANA timezone sees it right now, encoded the
+ * same way every other date-only value in this codebase is encoded: a Date
+ * pinned to UTC midnight of that calendar day.
+ *
+ * WHY THIS EXISTS ALONGSIDE utcToday(). Record dates (SalesReferenceRecord.date,
+ * ExpenseRecord.date) are date-only values stored as UTC-midnight instants —
+ * they encode a calendar day, not a real timezone-aware instant, and nothing
+ * about them changes here. What changes is which calendar day counts as
+ * "today" for month/day boundary queries. The server's own UTC clock is the
+ * wrong clock for that: a Manila business (UTC+8) has already turned over to
+ * its next local calendar day for roughly 16:00-23:59 UTC, and utcToday()
+ * would still report the previous day for that whole window.
+ *
+ * Resolved with Intl rather than a fixed offset so this is correct for any
+ * IANA zone (including ones with daylight saving), not just Manila's fixed
+ * +08:00 — see docs/RECOVERY-TARGET-IMPROVEMENT-PLAN.md §9.1.
+ */
+export function resolveBusinessToday(timezone: string): Date {
+  const now = new Date();
+  // en-CA formats as YYYY-MM-DD directly, so no separate re-ordering step is
+  // needed between the formatter's output and the UTC-midnight encoding below.
+  const localDateKey = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
+  const [year, month, day] = localDateKey.split("-").map(Number);
+  return new Date(Date.UTC(year!, month! - 1, day!));
+}
+
 export function utcAddDays(d: Date, days: number): Date {
   const copy = new Date(d);
   copy.setUTCDate(copy.getUTCDate() + days);
@@ -63,4 +95,15 @@ export function utcDateKey(d: Date): string {
 /** YYYY-MM key for grouping records by calendar month. */
 export function utcMonthKey(d: Date): string {
   return d.toISOString().slice(0, 7);
+}
+
+/**
+ * ISO weekday for `d`, read in UTC: 1=Monday ... 7=Sunday. This is the
+ * convention `BusinessOperatingDay.weekday` uses (RECOVERY-TARGET-IMPROVEMENT-PLAN.md
+ * §7.2) — `getUTCDay()` returns 0=Sunday..6=Saturday, so it is remapped here
+ * rather than at every call site.
+ */
+export function utcIsoWeekday(d: Date): number {
+  const jsDay = d.getUTCDay(); // 0=Sun..6=Sat
+  return jsDay === 0 ? 7 : jsDay;
 }

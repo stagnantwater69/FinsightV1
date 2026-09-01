@@ -1,4 +1,4 @@
-import type { SectionQuality } from "../../../lib/receiptCapture";
+import type { CaptureSource, Corners, ReceiptProcessingMode, SectionQuality } from "../../../lib/receiptCapture";
 import type { FieldEvidence, ReceiptWarning } from "../../../lib/receiptWarnings";
 
 /**
@@ -41,6 +41,16 @@ export interface ReceiptScanResult {
    * holding the paper — decides.
    */
   looksLikeMultipleReceipts?: boolean;
+  receiptLikelihood?: {
+    version: string;
+    score: number;
+    outcome: "likely-receipt" | "uncertain" | "obvious-non-receipt";
+  } | null;
+  pageProcessing?: {
+    source: "original" | "processed";
+    hasProcessedVariant: boolean;
+    captureMetadata: unknown;
+  }[];
   /**
    * Every page's own quality reading, in the order they were photographed.
    * Present only on the upload response, for the same reason captureQuality
@@ -133,6 +143,15 @@ export interface CapturedPage {
   height: number;
   /** The uncropped original, when one is still around. */
   originalUri?: string;
+  originalWidth?: number;
+  originalHeight?: number;
+  captureSource?: CaptureSource;
+  processingMode?: ReceiptProcessingMode;
+  transformVersion?: string;
+  cropCorners?: Corners;
+  documentConfidence?: number;
+  ownerOverrodeLikelihood?: boolean;
+  receiptGroupId?: string;
 }
 
 /** One thing the owner should look at before saving. */

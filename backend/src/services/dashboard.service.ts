@@ -2,7 +2,7 @@ import { prisma } from "../config/prisma";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
 import { listNotifications } from "./notification.service";
 import { loadRecoveryTargets } from "./insights.service";
-import { utcAddDays, utcDateKey, utcEndOfDay, utcMonthKey, utcToday } from "../lib/dates";
+import { resolveBusinessToday, utcAddDays, utcDateKey, utcEndOfDay, utcMonthKey, utcToday } from "../lib/dates";
 
 /**
  * The period selector's "All time" setting.
@@ -108,7 +108,14 @@ export async function getDashboardSummary(userId: number, businessProfileId: num
     // Recovery is deliberately NOT scoped to the dashboard's period
     // selector — it's a month-to-date tracker, so it reads the same
     // whether the user is looking at Today, This week, or This month.
-    loadRecoveryTargets(profile, today),
+    //
+    // Its own "today" is resolved in the business's local timezone rather
+    // than reusing the dashboard's UTC `today` above — see
+    // RECOVERY-TARGET-IMPROVEMENT-PLAN.md §9.1 and getRecoveryInsight's own
+    // resolution in insights.service.ts, which this must agree with so the
+    // Dashboard and the Recovery Target screen never disagree right at the
+    // UTC boundary.
+    loadRecoveryTargets(profile, resolveBusinessToday(profile.timezone)),
     /*
      * WHAT THIS BUSINESS HAS EVER RECORDED, deliberately outside the period.
      *

@@ -8,6 +8,7 @@ vi.mock("../../src/services/storage.service", () => ({
   uploadReceiptImage: vi.fn(async () => "1/mock-receipt.jpg"),
   uploadCsvFile: vi.fn(async () => "1/mock.csv"),
   signedReceiptImageUrl: vi.fn(async () => "https://example.test/signed-receipt.jpg"),
+  deleteReceiptImage: vi.fn(async () => true),
 }));
 
 const { extractTextMock, confidenceRef, linesRef } = vi.hoisted(() => ({

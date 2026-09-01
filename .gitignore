@@ -40,3 +40,6 @@ skill-observations/
 
 # Regenerable sample dataset — recreate with scripts/generate_coffee_shop_csv.js.
 /philippines_coffee_shop_2_year_transactions.csv
+
+# Local tooling artifacts (impeccable skill critiques) — not part of the app
+.impeccable/

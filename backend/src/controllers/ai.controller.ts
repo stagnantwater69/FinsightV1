@@ -3,6 +3,52 @@ import { z } from "zod";
 import * as aiService from "../services/ai.service";
 import * as conversationService from "../services/conversation.service";
 import * as insightsService from "../services/insights.service";
+import type { ReductionOpportunity } from "../services/reductionOpportunity.service";
+
+/*
+ * Selected reduction opportunity (plan §11.1) — the client echoes back the
+ * SAME structured object `GET /insights/reduction-opportunities` returned
+ * earlier for this profile, so the Ask FinSight drawer can ground an
+ * explanation in it. This is validated shape, not trusted free-form prose:
+ * every field is typed and bounded here, and aiContext.service further
+ * re-validates `suggestedChecks` against the real controlled catalogue
+ * before it reaches a prompt (see reductionOpportunityLines).
+ *
+ * Trust boundary: same one `context` below already documents. It only
+ * steers the wording of this owner's own conversation about their own
+ * business — it is never re-derived from the database, never used to
+ * calculate anything, and grants no access requireOwnedBusinessProfile
+ * didn't already grant. It attaches only to the "Expense Insights" module;
+ * ai.service/conversation.service enforce that server-side too, not just
+ * via `.refine` here.
+ */
+const reductionOpportunityEvidenceSchema = z.object({
+  currentAmount: z.number().finite(),
+  previousAmount: z.number().finite().nullable(),
+  changeAmount: z.number().finite().nullable(),
+  changePercent: z.number().finite().nullable(),
+  expenseSharePercent: z.number().finite(),
+  recordCount: z.number().int().nonnegative(),
+  unusualRecordCount: z.number().int().nonnegative(),
+  possibleDuplicateCount: z.number().int().nonnegative(),
+});
+
+const reductionOpportunitySchema: z.ZodType<ReductionOpportunity> = z.object({
+  id: z.string().min(1).max(200),
+  type: z.enum(["CATEGORY_PRESSURE", "FREQUENT_PURCHASE_ACCUMULATION", "RECORD_REVIEW_FIRST"]),
+  categoryId: z.number().int().positive(),
+  categoryName: z.string().min(1).max(120),
+  priority: z.enum(["high", "medium", "low"]),
+  confidence: z.enum(["strong", "moderate", "limited"]),
+  observation: z.string().min(1).max(400),
+  rationale: z.string().min(1).max(400),
+  evidence: reductionOpportunityEvidenceSchema,
+  // [ADDED] Plan §5.2/§15 Phase 5 — see ReductionOpportunity.costBehavior.
+  costBehavior: z.enum(["fixed", "variable", "mixed", "unclassified"]),
+  suggestedChecks: z.array(z.string().min(1).max(200)).max(10),
+  relatedRecordIds: z.array(z.number().int().positive()).max(20),
+  limitations: z.array(z.string().min(1).max(300)).max(10),
+});
 
 /*
  * EXPORTED for the contract tests, the same reason auth.controller.ts exports
@@ -23,6 +69,10 @@ export const askSchema = z.object({
   // authenticated owner, on their own business profile) didn't already
   // have via requireOwnedBusinessProfile.
   context: z.string().max(3000).optional(),
+  // The selected Reduction Opportunity card, when this ask originated there.
+  // Ignored server-side unless module is "Expense Insights" — see the note
+  // above reductionOpportunitySchema.
+  reductionOpportunity: reductionOpportunitySchema.optional(),
 });
 
 export async function ask(req: Request, res: Response) {
@@ -32,7 +82,8 @@ export async function ask(req: Request, res: Response) {
     input.businessProfileId,
     input.module,
     input.question,
-    input.context
+    input.context,
+    input.reductionOpportunity
   );
   res.status(201).json(result);
 }
@@ -130,11 +181,14 @@ export const createConversationSchema = z.object({
   title: z.string().min(1).max(conversationService.TITLE_MAX_LENGTH).optional(),
   // Same meaning and same trust argument as `askSchema.context`.
   context: z.string().max(3000).optional(),
+  // Same meaning as `askSchema.reductionOpportunity`.
+  reductionOpportunity: reductionOpportunitySchema.optional(),
 });
 
 export const appendMessageSchema = z.object({
   question: z.string().min(1).max(500),
   context: z.string().max(3000).optional(),
+  reductionOpportunity: reductionOpportunitySchema.optional(),
 });
 
 export const renameConversationSchema = z.object({
@@ -174,7 +228,8 @@ export async function createConversation(req: Request, res: Response) {
     input.originModule,
     input.question,
     input.title,
-    input.context
+    input.context,
+    input.reductionOpportunity
   );
   res.status(201).json(result);
 }
@@ -182,7 +237,13 @@ export async function createConversation(req: Request, res: Response) {
 export async function sendConversationMessage(req: Request, res: Response) {
   const { id } = conversationIdSchema.parse(req.params);
   const input = appendMessageSchema.parse(req.body);
-  const result = await conversationService.appendMessage(req.user!.id, id, input.question, input.context);
+  const result = await conversationService.appendMessage(
+    req.user!.id,
+    id,
+    input.question,
+    input.context,
+    input.reductionOpportunity
+  );
   res.status(201).json(result);
 }
 

@@ -1,7 +1,7 @@
 /**
  * What real receipts say about the extractor.
  *
- *   npx tsx tests/ocr-accuracy/live-feedback-report.ts [--days 30] [--threshold 75]
+ *   npx tsx tests/ocr-accuracy/live-feedback-report.ts [--days 30] [--threshold 88]
  *
  * The sibling scripts in this directory score a fixed corpus of 31 images with
  * hand-written ground truth. This one scores whatever owners actually scanned,
@@ -51,7 +51,7 @@ const num = (n: number | null) => (n === null ? "n/a" : n.toFixed(1));
 
 (async () => {
   const days = arg("days", 30);
-  const threshold = arg("threshold", 75);
+  const threshold = arg("threshold", 88);
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
   const rows = (await loadCorrections({ since })) as CorrectionObservation[];
@@ -73,7 +73,7 @@ const num = (n: number | null) => (n === null ? "n/a" : n.toFixed(1));
   const scans = perScanAccuracy(rows);
   const correctionRate = scanCorrectionRate(rows);
   const calib = calibration(rows, threshold);
-  const sweep = sweepThresholds(rows, [50, 60, 65, 70, 75, 80, 85, 90]);
+  const sweep = sweepThresholds(rows, [50, 60, 65, 70, 75, 80, 85, 88, 90]);
   const trend = accuracyTrend(rows);
 
   console.log(`\n${rows.length} reviewed fields across ${scans.length} confirmed scans, last ${days} days\n`);
@@ -188,9 +188,10 @@ bad ones and is only a tax on the API budget — whatever the corpus said, since
 |---|---|---|---|---|
 ${sweep.map((s) => `| ${s.threshold} | ${s.fires} | ${s.catchesEdited} | ${s.wastedOnUnchanged} | ${s.missesEdited} |`).join("\n")}
 
-Nothing here picks a winner. The corpus calibration deliberately shipped 75 rather than the
-value that maximised its score, because a threshold fitted to its data sat one point away from
-a correct read. A bigger sample does not retire that argument.
+Nothing here picks a winner. \`LOW_CONFIDENCE\` is currently **88** (see the rationale next to the
+constant in \`src/services/receiptScan/extraction.ts\`, re-derived from the OCR-accuracy corpus in
+Phase 4 of \`docs/receipt-ocr-accuracy-plan.md\`). This table is what production data says about
+that same choice, independent of the corpus — re-run this report periodically and compare the two.
 
 ## Mistakes that keep happening
 

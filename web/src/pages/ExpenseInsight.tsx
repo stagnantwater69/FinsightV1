@@ -1,22 +1,55 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
+import {
+  ArrowDownRight,
+  ArrowUpRight,
+  Boxes,
+  ChartPie,
+  Flag,
+  ListFilter,
+  MessageCircleQuestion,
+  SlidersHorizontal,
+  ThumbsDown,
+  ThumbsUp,
+  TrendingUp,
+  WalletCards,
+} from "lucide-react";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
 import { api } from "../lib/api";
 import { getErrorMessage } from "../lib/errors";
 import { InsightsTabs } from "../components/AppShell";
-import { AskFinSightButton, useAskFinSight } from "../components/AskFinSightButton";
+import {
+  AskFinSightButton,
+  useAskFinSight,
+} from "../components/AskFinSightButton";
 import { DonutChart } from "../components/DonutChart";
 import { CategoryComparisonChart } from "../components/CategoryComparisonChart";
 import { DailySpendChart } from "../components/DailySpendChart";
-import { SkeletonPanel, SkeletonStatTile } from "../components/Skeleton";
+import {
+  SkeletonLine,
+  SkeletonPanel,
+  SkeletonStatTile,
+} from "../components/Skeleton";
 import { EmptyState } from "../components/EmptyState";
 import { Button, ButtonLink } from "../components/Button";
 import { formatMoney } from "../components/Money";
 import { STATUS_INK } from "../lib/chartPalette";
 import { RecurringAgenda } from "../components/RecurringAgenda";
-import { AiCard, KpiCard, Kw, PageHead, Panel, Callout, Pill } from "../components/ui";
-import type { AnomalyFinding, AnomalyFindingFeedback, AnomalyFindingPage, AnomalyFindingStatus, ExpenseBehavior as ExpenseInsightData, RecordItem, RecurringPattern, RecurringSchedule } from "../lib/types";
+import { AiCard, Kw, PageHead, Panel, Callout, Pill } from "../components/ui";
+import { ReductionSimulationModal } from "../components/ReductionSimulationModal";
+import type {
+  AnomalyFinding,
+  AnomalyFindingFeedback,
+  AnomalyFindingPage,
+  AnomalyFindingStatus,
+  ExpenseBehavior as ExpenseInsightData,
+  RecordItem,
+  RecurringPattern,
+  RecurringSchedule,
+  ReductionOpportunity,
+  ReductionOpportunityResponse,
+} from "../lib/types";
 
 const PERIOD_OPTIONS = [
   { label: "This week", days: 7 },
@@ -58,15 +91,21 @@ const PERIOD_OPTIONS = [
  */
 function flagReasons(
   record: RecordItem,
-  profile: { expectedMonthlyExpenses: number; largeExpenseThresholdPercent: number },
+  profile: {
+    expectedMonthlyExpenses: number;
+    largeExpenseThresholdPercent: number;
+  },
 ): ReactNode[] {
   const reasons: ReactNode[] = [];
   if (record.largeExpenseFlag) {
-    const thresholdAmount = profile.expectedMonthlyExpenses * (profile.largeExpenseThresholdPercent / 100);
+    const thresholdAmount =
+      profile.expectedMonthlyExpenses *
+      (profile.largeExpenseThresholdPercent / 100);
     reasons.push(
       <>
-        above your large-expense threshold ({profile.largeExpenseThresholdPercent}% of expected monthly expenses
-        = <span className="figure">{formatMoney(thresholdAmount)}</span>)
+        above your large-expense threshold (
+        {profile.largeExpenseThresholdPercent}% of expected monthly expenses ={" "}
+        <span className="figure">{formatMoney(thresholdAmount)}</span>)
       </>,
     );
   }
@@ -86,7 +125,10 @@ function FlagReason({
   profile,
 }: {
   record: RecordItem;
-  profile: { expectedMonthlyExpenses: number; largeExpenseThresholdPercent: number };
+  profile: {
+    expectedMonthlyExpenses: number;
+    largeExpenseThresholdPercent: number;
+  };
 }) {
   const reasons = flagReasons(record, profile);
   return (
@@ -102,7 +144,13 @@ function FlagReason({
 }
 
 /** "▲ PHP 7,000" in the right status colour, or an em-dash for no movement. */
-function ChangeFigure({ change, percent }: { change: number; percent: number | null }) {
+function ChangeFigure({
+  change,
+  percent,
+}: {
+  change: number;
+  percent: number | null;
+}) {
   if (change === 0) {
     return <span className="figure text-ink-400">{formatMoney(0)}</span>;
   }
@@ -111,8 +159,16 @@ function ChangeFigure({ change, percent }: { change: number; percent: number | n
     // Spending MORE is the serious direction here, not the good one — this is
     // an expense screen, so up is bad. Colour is never the only signal: the
     // arrow and the sign say the same thing.
-    <span className="figure font-semibold" style={{ color: up ? STATUS_INK.serious : STATUS_INK.good }}>
-      <span aria-hidden>{up ? "▲" : "▼"}</span> {up ? "+" : "−"}
+    <span
+      className="figure inline-flex items-center font-semibold"
+      style={{ color: up ? STATUS_INK.serious : STATUS_INK.good }}
+    >
+      {up ? (
+        <ArrowUpRight aria-hidden className="mr-1 size-3.5" strokeWidth={2} />
+      ) : (
+        <ArrowDownRight aria-hidden className="mr-1 size-3.5" strokeWidth={2} />
+      )}
+      {up ? "+" : "−"}
       {formatMoney(Math.abs(change))}
       {percent !== null && percent !== 0 ? (
         <span className="ml-1 text-[11px] font-medium opacity-80">
@@ -123,11 +179,439 @@ function ChangeFigure({ change, percent }: { change: number; percent: number | n
   );
 }
 
+/**
+ * This page is intentionally comprehensive, but comprehensive should not mean
+ * forcing an owner to remember where a section sits in a long scroll. The
+ * compact index stays ordinary document navigation (real anchors, no hidden
+ * state), so it works with keyboard, browser history, and reduced motion.
+ */
+function ExpenseSectionNav({ showRecurring }: { showRecurring: boolean }) {
+  const items = [
+    { href: "#expense-overview", label: "Overview" },
+    { href: "#expense-categories", label: "Categories" },
+    { href: "#expense-opportunities", label: "Opportunities" },
+    { href: "#expense-review", label: "Review" },
+    ...(showRecurring
+      ? [{ href: "#expense-recurring", label: "Recurring" }]
+      : []),
+  ];
+
+  return (
+    <nav
+      aria-label="Expense insight sections"
+      className="scroll-slim -mx-1 overflow-x-auto px-1 pb-1"
+    >
+      <div className="flex min-w-max items-center gap-1 rounded-xl border border-paper-200 bg-paper-100 p-1">
+        <span className="px-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-500">
+          Jump to
+        </span>
+        {items.map((item) => (
+          <a
+            key={item.href}
+            href={item.href}
+            className="tap-inline rounded-lg px-3 text-[13px] font-semibold text-ink-600 transition hover:bg-paper hover:text-brand-800 focus-visible:bg-paper"
+          >
+            {item.label}
+          </a>
+        ))}
+      </div>
+    </nav>
+  );
+}
+
 // The panel is a summary, not the full review queue — FlaggedRecords already
 // owns that job. Capped the same way the AI context builder caps it
 // server-side (aiContext.service.ts: `take: 5`), so the two surfaces never
 // disagree about what "a short list" means.
 const MAX_FLAGGED_SHOWN = 5;
+
+// The backend already caps `opportunities` at three (plan §4.6, §8.3), but the
+// UI does not trust that as its only guarantee — a future server bug here
+// would otherwise overwhelm the exact owner this feature is meant to help.
+const MAX_OPPORTUNITIES_SHOWN = 3;
+
+const OPPORTUNITY_PRIORITY_LABEL: Record<
+  ReductionOpportunity["priority"],
+  string
+> = {
+  high: "High priority",
+  medium: "Medium priority",
+  low: "Low priority",
+};
+
+const OPPORTUNITY_PRIORITY_TONE: Record<
+  ReductionOpportunity["priority"],
+  "danger" | "warn" | "neutral"
+> = {
+  high: "danger",
+  medium: "warn",
+  low: "neutral",
+};
+
+const OPPORTUNITY_CONFIDENCE_LABEL: Record<
+  ReductionOpportunity["confidence"],
+  string
+> = {
+  strong: "Strong confidence",
+  moderate: "Moderate confidence",
+  limited: "Limited confidence",
+};
+
+/**
+ * Cost-behavior classification — plan §5.2/§15 Phase 5. The badge and the
+ * caution note below are evidence/copy only: the backend's suggested-check
+ * catalogue (`COST_BEHAVIOR_SUGGESTED_CHECK_CATALOGUE`) already tailors the
+ * checks this card renders per cost-behavior, so this file adds only what
+ * that catalogue does NOT already say — the label itself, and a short note
+ * for the two classifications where "review the usual way" undersells what's
+ * actually worth checking. `variant`/`unclassified` get no note: the base
+ * checks already cover ordinary review, and unclassified is the default for
+ * most categories today.
+ */
+const OPPORTUNITY_COST_BEHAVIOR_LABEL: Record<
+  ReductionOpportunity["costBehavior"],
+  string
+> = {
+  fixed: "Fixed cost",
+  variable: "Variable cost",
+  mixed: "Mixed cost",
+  unclassified: "",
+};
+
+const OPPORTUNITY_COST_BEHAVIOR_NOTE: Partial<
+  Record<ReductionOpportunity["costBehavior"], string>
+> = {
+  fixed:
+    "Classified as a fixed cost — reviewing this usually means checking the contract or the ongoing need for it, not recent usage.",
+  mixed:
+    "Classified as a mixed cost — part of this likely stays flat and part scales with activity. Consider separating the two before deciding what to review.",
+};
+
+/**
+ * The two or three evidence figures printed on each card, per plan §10.2.
+ *
+ * Chosen per opportunity type so the figures actually explain the type's own
+ * eligibility rule (§7.2) rather than repeating the same generic pair on every
+ * card regardless of why it appeared.
+ */
+function evidenceFigures(
+  o: ReductionOpportunity,
+): { label: string; value: ReactNode }[] {
+  const e = o.evidence;
+  const currentAmount = {
+    label: "Current spend",
+    value: <span className="figure">{formatMoney(e.currentAmount)}</span>,
+  };
+  const share = {
+    label: "Share of expenses",
+    value: <span className="figure">{e.expenseSharePercent.toFixed(1)}%</span>,
+  };
+  const change =
+    e.changeAmount !== null
+      ? {
+          label: "Change vs. previous period",
+          value: (
+            <ChangeFigure change={e.changeAmount} percent={e.changePercent} />
+          ),
+        }
+      : {
+          label: "Previous period",
+          value: <span className="text-ink-400">No prior baseline</span>,
+        };
+  const records = {
+    label: "Records this period",
+    value: <span className="figure">{e.recordCount}</span>,
+  };
+  const flagged = {
+    label: "Flagged for review",
+    value: (
+      <span className="figure">
+        {e.possibleDuplicateCount + e.unusualRecordCount}
+      </span>
+    ),
+  };
+
+  if (o.type === "RECORD_REVIEW_FIRST")
+    return [currentAmount, flagged, records];
+  if (o.type === "FREQUENT_PURCHASE_ACCUMULATION")
+    return [currentAmount, records, share];
+  return [currentAmount, share, change];
+}
+
+/** Plan §11.1's own worked example — kept as one constant so every card asks it identically. */
+const OPPORTUNITY_ASK_QUESTION =
+  "Why was this reduction opportunity selected, and what should I check first?";
+
+/**
+ * One opportunity card — priority/confidence, observation, evidence,
+ * rationale, suggested checks, limitations, and its three implemented
+ * actions in the plan's own order (§10.2: "Do not render disabled
+ * placeholder actions" — every action below has an implemented destination).
+ */
+function OpportunityCard({
+  opportunity,
+  businessProfileId,
+  periodDays,
+  endDate,
+}: {
+  opportunity: ReductionOpportunity;
+  businessProfileId: number;
+  periodDays: number;
+  endDate: string | null;
+}) {
+  // Its own hook instance rather than a prop threaded down from the page:
+  // the card is the thing that knows which opportunity was clicked, and the
+  // module never varies, so there is nothing for a shared instance to buy.
+  const askFinSight = useAskFinSight("Expense Insights");
+  const [simulateOpen, setSimulateOpen] = useState(false);
+
+  // Feedback — plan §15 Phase 5. Write-only: the backend has no read-back
+  // endpoint for prior feedback, so this always starts unset on load, even
+  // for an opportunity the owner already rated on a previous visit. Kept
+  // per-card rather than lifted to the page: nothing else on the page needs
+  // to know it.
+  const [feedbackRating, setFeedbackRating] = useState<
+    "helpful" | "not_relevant" | null
+  >(null);
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState<
+    "helpful" | "not_relevant" | null
+  >(null);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
+
+  async function submitFeedback(rating: "helpful" | "not_relevant") {
+    setFeedbackSubmitting(rating);
+    setFeedbackError(null);
+    try {
+      await api.post("/insights/reduction-opportunities/feedback", {
+        businessProfileId,
+        opportunityId: opportunity.id,
+        rating,
+      });
+      // Upserted server-side, so clicking the other button afterwards reads
+      // as "changing your answer" rather than an error — never blocked once
+      // a rating is already set.
+      setFeedbackRating(rating);
+    } catch (err) {
+      setFeedbackError(getErrorMessage(err));
+    } finally {
+      setFeedbackSubmitting(null);
+    }
+  }
+
+  const costBehaviorLabel =
+    OPPORTUNITY_COST_BEHAVIOR_LABEL[opportunity.costBehavior];
+  const costBehaviorNote =
+    OPPORTUNITY_COST_BEHAVIOR_NOTE[opportunity.costBehavior];
+
+  return (
+    <li className="overflow-hidden rounded-2xl border border-paper-200 bg-paper transition hover:border-brand-200">
+      <div className="p-4 sm:p-5">
+        <div className="flex items-start gap-3">
+          <span
+            aria-hidden
+            className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-paper-100 text-brand-700 ring-1 ring-paper-200"
+          >
+            <TrendingUp className="size-4" strokeWidth={1.9} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <p className="text-base font-semibold text-ink-900">
+                  {opportunity.categoryName}
+                </p>
+                <p className="mt-0.5 text-sm text-ink-600">
+                  {opportunity.observation}
+                </p>
+              </div>
+              <Pill tone={OPPORTUNITY_PRIORITY_TONE[opportunity.priority]}>
+                {OPPORTUNITY_PRIORITY_LABEL[opportunity.priority]}
+              </Pill>
+            </div>
+          </div>
+        </div>
+
+        <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-y border-paper-200 py-3 sm:grid-cols-3">
+          {evidenceFigures(opportunity).map((fig) => (
+            <div key={fig.label} className="min-w-0">
+              <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400">
+                {fig.label}
+              </dt>
+              <dd className="mt-0.5 text-sm font-semibold text-ink-900">
+                {fig.value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1">
+          <Link
+            to={`/records?type=expense&categoryId=${opportunity.categoryId}`}
+            aria-label={`View related records for ${opportunity.categoryName}`}
+            className="tap-inline inline-flex items-center text-xs font-semibold text-brand-700 underline-offset-2 hover:underline"
+          >
+            <ListFilter
+              aria-hidden
+              className="mr-1.5 size-3.5"
+              strokeWidth={1.9}
+            />
+            View records
+            <span className="sr-only"> for {opportunity.categoryName}</span>
+          </Link>
+          <button
+            type="button"
+            aria-label={`Ask FinSight about this reduction opportunity for ${opportunity.categoryName}`}
+            onClick={() => askFinSight(OPPORTUNITY_ASK_QUESTION, opportunity)}
+            className="tap-inline inline-flex items-center text-xs font-semibold text-brand-700 underline-offset-2 hover:underline"
+          >
+            <MessageCircleQuestion
+              aria-hidden
+              className="mr-1.5 size-3.5"
+              strokeWidth={1.9}
+            />
+            Ask FinSight
+            <span className="sr-only">
+              {" "}
+              reduction opportunity for {opportunity.categoryName}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setSimulateOpen(true)}
+            className="tap-inline inline-flex items-center text-xs font-semibold text-brand-700 underline-offset-2 hover:underline"
+          >
+            <SlidersHorizontal
+              aria-hidden
+              className="mr-1.5 size-3.5"
+              strokeWidth={1.9}
+            />
+            Simulate reduction
+            <span className="sr-only"> for {opportunity.categoryName}</span>
+          </button>
+        </div>
+
+        <details className="group mt-3 border-t border-paper-200 pt-3">
+          <summary className="tap-inline cursor-pointer list-none text-xs font-semibold text-ink-500 marker:hidden hover:text-brand-700">
+            <span className="group-open:hidden">Why this was selected +</span>
+            <span className="hidden group-open:inline">
+              Hide supporting details −
+            </span>
+          </summary>
+          <div className="mt-3 rounded-xl bg-paper-100 p-3.5">
+            <div className="flex flex-wrap gap-2">
+              <Pill tone="neutral">
+                {OPPORTUNITY_CONFIDENCE_LABEL[opportunity.confidence]}
+              </Pill>
+              {costBehaviorLabel ? (
+                <Pill tone="info">{costBehaviorLabel}</Pill>
+              ) : null}
+            </div>
+            <p className="mt-3 text-xs text-ink-500">
+              <span className="font-semibold text-ink-700">
+                Why this appeared:{" "}
+              </span>
+              {opportunity.rationale}
+            </p>
+            {costBehaviorNote ? (
+              <div className="mt-3">
+                <Callout tone="info">{costBehaviorNote}</Callout>
+              </div>
+            ) : null}
+            {opportunity.suggestedChecks.length > 0 ? (
+              <div className="mt-3">
+                <p className="text-xs font-semibold text-ink-700">
+                  Suggested checks
+                </p>
+                <ul className="mt-1 list-disc space-y-1 pl-5 text-xs text-ink-500">
+                  {opportunity.suggestedChecks.map((check) => (
+                    <li key={check}>{check}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {opportunity.limitations.length > 0 ? (
+              <div className="mt-3">
+                <p className="text-xs font-semibold text-ink-700">
+                  Limitations
+                </p>
+                <ul className="mt-1 list-disc space-y-1 pl-5 text-xs text-ink-500">
+                  {opportunity.limitations.map((limitation) => (
+                    <li key={limitation}>{limitation}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+        </details>
+
+        {/*
+        Helpful / Not relevant — plan §15 Phase 5. Two toggle-style buttons
+        rather than a single control: the question is "was this worth
+        showing you", and either answer is a legitimate, equally-weighted
+        response, not a default/override pair.
+      */}
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-paper-200 pt-3">
+          <span className="text-xs text-ink-500">
+            Was this worth reviewing?
+          </span>
+          <button
+            type="button"
+            aria-pressed={feedbackRating === "helpful"}
+            disabled={feedbackSubmitting !== null}
+            onClick={() => void submitFeedback("helpful")}
+            className={`tap-inline inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1 transition ${
+              feedbackRating === "helpful"
+                ? "bg-tint-brand text-tone-brand ring-edge-brand"
+                : "text-ink-500 ring-ink-200 hover:bg-paper-100"
+            }`}
+          >
+            <ThumbsUp aria-hidden className="mr-1 size-3.5" strokeWidth={1.9} />
+            Helpful
+            <span className="sr-only"> — {opportunity.categoryName}</span>
+          </button>
+          <button
+            type="button"
+            aria-pressed={feedbackRating === "not_relevant"}
+            disabled={feedbackSubmitting !== null}
+            onClick={() => void submitFeedback("not_relevant")}
+            className={`tap-inline inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1 transition ${
+              feedbackRating === "not_relevant"
+                ? "bg-tint-neutral text-tone-neutral ring-edge-neutral"
+                : "text-ink-500 ring-ink-200 hover:bg-paper-100"
+            }`}
+          >
+            <ThumbsDown
+              aria-hidden
+              className="mr-1 size-3.5"
+              strokeWidth={1.9}
+            />
+            Not relevant
+            <span className="sr-only"> — {opportunity.categoryName}</span>
+          </button>
+          {feedbackRating ? (
+            <span className="text-xs text-ink-400" role="status">
+              Thanks for the feedback.
+            </span>
+          ) : feedbackError ? (
+            <span className="text-xs text-tone-danger" role="alert">
+              {feedbackError}
+            </span>
+          ) : null}
+        </div>
+      </div>
+
+      <ReductionSimulationModal
+        open={simulateOpen}
+        onClose={() => setSimulateOpen(false)}
+        businessProfileId={businessProfileId}
+        categoryId={opportunity.categoryId}
+        categoryName={opportunity.categoryName}
+        periodDays={periodDays}
+        endDate={endDate}
+        baseline={opportunity.evidence.currentAmount}
+      />
+    </li>
+  );
+}
 
 /**
  * Runs one SUPPLEMENTARY fetch in a way that cannot take the page down with it.
@@ -186,7 +670,9 @@ export function ExpenseInsight() {
   const [error, setError] = useState<string | null>(null);
   const [flaggedExpenses, setFlaggedExpenses] = useState<RecordItem[]>([]);
   const [findings, setFindings] = useState<AnomalyFinding[]>([]);
-  const [recurringPatterns, setRecurringPatterns] = useState<RecurringPattern[]>([]);
+  const [recurringPatterns, setRecurringPatterns] = useState<
+    RecurringPattern[]
+  >([]);
   /**
    * Owner-declared schedules — the agenda. Distinct from the patterns above,
    * which are only what the detector suspects.
@@ -198,26 +684,80 @@ export function ExpenseInsight() {
    * that we have no basis for, and one that is flatly false for anyone who has
    * schedules the server simply would not hand over.
    */
-  const [recurringSchedules, setRecurringSchedules] = useState<RecurringSchedule[] | null>(null);
+  const [recurringSchedules, setRecurringSchedules] = useState<
+    RecurringSchedule[] | null
+  >(null);
+  /**
+   * Reduction opportunities — a self-contained panel with its own error/retry
+   * state (plan §10.3), unlike the supplements above that fail silently into
+   * "unavailable". A deterministic review prompt is useful enough on its own
+   * that a transient failure here deserves an explicit retry, not a quiet
+   * disappearance.
+   */
+  const [reductionOpportunities, setReductionOpportunities] =
+    useState<ReductionOpportunityResponse | null>(null);
+  const [reductionLoading, setReductionLoading] = useState(true);
+  const [reductionError, setReductionError] = useState<string | null>(null);
   // Opens the Ask FinSight drawer over this page. The plain floating trigger
   // goes with no question; the "expand on this" link below hands one through to
   // be typed into the box for them — it is never sent on their behalf.
   const askFinSight = useAskFinSight("Expense Insights");
+
+  /**
+   * Cleared and refetched on every `load()` — same trigger as everything
+   * else on this page (profile switch, period change, endDate change) — so a
+   * business-profile switch cannot leave the previous profile's opportunity
+   * cards on screen. Kept out of `loadPanel`'s silent-unavailable pattern
+   * because this panel needs a user-facing retry, not just a hidden state.
+   */
+  async function loadReductionOpportunities() {
+    if (!selected) return;
+    setReductionLoading(true);
+    setReductionError(null);
+    try {
+      const res = await api.get<ReductionOpportunityResponse>(
+        "/insights/reduction-opportunities",
+        {
+          params: {
+            businessProfileId: selected.id,
+            periodDays,
+            ...(endDate ? { endDate } : {}),
+          },
+        },
+      );
+      setReductionOpportunities(res.data);
+    } catch (err) {
+      setReductionOpportunities(null);
+      setReductionError(getErrorMessage(err));
+    } finally {
+      setReductionLoading(false);
+    }
+  }
 
   async function load() {
     if (!selected) return;
     const businessProfileId = selected.id;
     setLoading(true);
     setError(null);
+    // Stale cards from a previous profile/period must not linger while the
+    // new request is in flight — cleared up front rather than only on success.
+    setReductionOpportunities(null);
+    setReductionError(null);
+    setReductionLoading(true);
 
     // Still fired together, so the page costs one round trip's worth of
     // latency as before — they are only SETTLED apart.
     const supplements = Promise.all([
+      loadReductionOpportunities(),
       loadPanel(
-        api.get<RecordItem[]>("/records/flagged", { params: { businessProfileId } }),
+        api.get<RecordItem[]>("/records/flagged", {
+          params: { businessProfileId },
+        }),
         (rows) =>
           setFlaggedExpenses(
-            rows.filter((r) => r.type === "expense").sort((a, b) => (a.date < b.date ? 1 : -1)),
+            rows
+              .filter((r) => r.type === "expense")
+              .sort((a, b) => (a.date < b.date ? 1 : -1)),
           ),
         () => setFlaggedExpenses([]),
       ),
@@ -232,9 +772,16 @@ export function ExpenseInsight() {
     ]);
 
     try {
-      const behavior = await api.get<ExpenseInsightData>("/insights/expense-behavior", {
-        params: { businessProfileId, periodDays, ...(endDate ? { endDate } : {}) },
-      });
+      const behavior = await api.get<ExpenseInsightData>(
+        "/insights/expense-behavior",
+        {
+          params: {
+            businessProfileId,
+            periodDays,
+            ...(endDate ? { endDate } : {}),
+          },
+        },
+      );
       setData(behavior.data);
     } catch (err) {
       // The core read. Nothing on this page is readable without it, so this one
@@ -249,7 +796,11 @@ export function ExpenseInsight() {
     await supplements;
   }
 
-  async function reviewFinding(id: number, status: AnomalyFindingStatus, feedback: AnomalyFindingFeedback) {
+  async function reviewFinding(
+    id: number,
+    status: AnomalyFindingStatus,
+    feedback: AnomalyFindingFeedback,
+  ) {
     await api.patch(`/insights/findings/${id}/review`, { status, feedback });
     setFindings((current) => current.filter((finding) => finding.id !== id));
   }
@@ -283,9 +834,13 @@ export function ExpenseInsight() {
   async function dismissPattern(id: number) {
     setError(null);
     try {
-      await api.patch(`/insights/recurring-patterns/${id}`, { status: "DISMISSED" });
+      await api.patch(`/insights/recurring-patterns/${id}`, {
+        status: "DISMISSED",
+      });
       setRecurringPatterns((current) =>
-        current.map((pattern) => (pattern.id === id ? { ...pattern, status: "DISMISSED" } : pattern)),
+        current.map((pattern) =>
+          pattern.id === id ? { ...pattern, status: "DISMISSED" } : pattern,
+        ),
       );
     } catch (err) {
       setError(getErrorMessage(err));
@@ -305,12 +860,16 @@ export function ExpenseInsight() {
     const businessProfileId = selected.id;
     await Promise.all([
       loadPanel(
-        api.get<RecurringPattern[]>("/insights/recurring-patterns", { params: { businessProfileId } }),
+        api.get<RecurringPattern[]>("/insights/recurring-patterns", {
+          params: { businessProfileId },
+        }),
         setRecurringPatterns,
         () => setRecurringPatterns([]),
       ),
       loadPanel(
-        api.get<RecurringSchedule[]>("/insights/recurring-schedules", { params: { businessProfileId } }),
+        api.get<RecurringSchedule[]>("/insights/recurring-schedules", {
+          params: { businessProfileId },
+        }),
         setRecurringSchedules,
         // Null, not []. See the state declaration: hidden, not "none".
         () => setRecurringSchedules(null),
@@ -371,7 +930,9 @@ export function ExpenseInsight() {
    * either, and it is not offered.
    */
   const canWatchPatterns = recurringSchedules !== null;
-  const hasCandidates = recurringPatterns.some((pattern) => pattern.status === "CANDIDATE");
+  const hasCandidates = recurringPatterns.some(
+    (pattern) => pattern.status === "CANDIDATE",
+  );
   // With no agenda and no candidates the whole block is an empty container.
   const showRecurringBlock = recurringSchedules !== null || hasCandidates;
 
@@ -384,11 +945,15 @@ export function ExpenseInsight() {
 
     // Biggest increase by PESO movement, not by percentage — a 300% rise on a
     // PHP 200 category is noise, and percentage ranking puts it first.
-    const risen = [...data.categoryTrends].filter((t) => t.change > 0).sort((a, b) => b.change - a.change);
+    const risen = [...data.categoryTrends]
+      .filter((t) => t.change > 0)
+      .sort((a, b) => b.change - a.change);
 
     const periodDelta = total - data.totals.previous;
     const periodPercent =
-      data.totals.previous > 0 ? (periodDelta / data.totals.previous) * 100 : null;
+      data.totals.previous > 0
+        ? (periodDelta / data.totals.previous) * 100
+        : null;
 
     return {
       total,
@@ -403,7 +968,9 @@ export function ExpenseInsight() {
       // background: it turns an abstract total into "this is how much of my
       // money that is".
       fundsShare:
-        selected && selected.availableFunds > 0 ? (total / selected.availableFunds) * 100 : null,
+        selected && selected.availableFunds > 0
+          ? (total / selected.availableFunds) * 100
+          : null,
     };
   }, [data, selected]);
 
@@ -423,8 +990,9 @@ export function ExpenseInsight() {
     <>
       {summary.top ? (
         <>
-          <Kw>{summary.top.categoryName}</Kw> is your highest expense category {periodLabel}, making up{" "}
-          <Kw>{summary.topShare.toFixed(1)}%</Kw> of recorded expenses.{" "}
+          <Kw>{summary.top.categoryName}</Kw> is your highest expense category{" "}
+          {periodLabel}, making up <Kw>{summary.topShare.toFixed(1)}%</Kw> of
+          recorded expenses.{" "}
         </>
       ) : (
         <>No expenses recorded {periodLabel} yet. </>
@@ -433,9 +1001,12 @@ export function ExpenseInsight() {
         <>
           <Kw>{summary.biggestIncrease.categoryName}</Kw> rose the most, up{" "}
           <Kw>
-            <span className="figure">{formatMoney(summary.biggestIncrease.change)}</span>
+            <span className="figure">
+              {formatMoney(summary.biggestIncrease.change)}
+            </span>
           </Kw>{" "}
-          compared with {previousLabel.toLowerCase()}, so it may be worth reviewing.
+          compared with {previousLabel.toLowerCase()}, so it may be worth
+          reviewing.
         </>
       ) : null}
     </>
@@ -502,9 +1073,7 @@ export function ExpenseInsight() {
         eyebrow="Insights"
         title="Expense insight"
         subtitle={
-          <>
-            Expense Behavior Analysis — answers "What is happening with my expenses?"
-          </>
+          <>Understand where your money went and what needs attention.</>
         }
         actions={periodPicker}
       />
@@ -512,9 +1081,26 @@ export function ExpenseInsight() {
       <InsightsTabs />
 
       {error ? (
-        <p className="mb-4 rounded-xl bg-tint-danger px-3.5 py-3 text-sm text-tone-danger ring-1 ring-edge-danger">
-          {error}
-        </p>
+        <div
+          role="alert"
+          className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-tint-danger px-3.5 py-3 text-sm text-tone-danger ring-1 ring-edge-danger"
+        >
+          <div className="min-w-0">
+            <p className="font-semibold">
+              Expense insight could not be updated
+            </p>
+            <p className="mt-0.5 text-xs opacity-90">{error}</p>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={() => void load()}
+            disabled={loading}
+          >
+            {loading ? "Retrying…" : "Retry"}
+          </Button>
+        </div>
       ) : null}
 
       {/* Skeleton ONLY on the very first load.
@@ -576,8 +1162,8 @@ export function ExpenseInsight() {
               day: "numeric",
               timeZone: "UTC",
             })}
-            . This page reads a window ending today, and there's nothing in the last{" "}
-            {periodDays} days.
+            . This page reads a window ending today, and there's nothing in the
+            last {periodDays} days.
           </EmptyState>
         ) : (
           <EmptyState
@@ -594,8 +1180,9 @@ export function ExpenseInsight() {
               </>
             }
           >
-            Once you record a few expenses, this page shows where your money goes, what changed since
-            last period, and anything that looks unusual — in plain language.
+            Once you record a few expenses, this page shows where your money
+            goes, what changed since last period, and anything that looks
+            unusual — in plain language.
           </EmptyState>
         )
       ) : (
@@ -605,124 +1192,168 @@ export function ExpenseInsight() {
           }`}
           aria-busy={isRefreshing}
         >
-          {/* ============================ 1. KPI ROW ============================
-              Four headline numbers. These are stat tiles, not charts, because
-              each is a single current value — a one-bar bar chart would be a
-              worse way to show the same thing. */}
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <KpiCard
-              label="Total expenses"
-              value={<span className="figure">{formatMoney(summary.total)}</span>}
-              glyph="◆"
-              tone="brand"
-              meta={
-                <>
-                  Across {summary.categoryCount} categor{summary.categoryCount === 1 ? "y" : "ies"}
-                  {summary.periodPercent !== null ? (
-                    <>
-                      {" · "}
-                      <span
-                        style={{
-                          color: summary.periodDelta > 0 ? STATUS_INK.serious : STATUS_INK.good,
-                        }}
-                      >
-                        {summary.periodDelta > 0 ? "▲" : summary.periodDelta < 0 ? "▼" : "—"}{" "}
-                        {Math.abs(summary.periodPercent).toFixed(0)}% vs {previousLabel.toLowerCase()}
-                      </span>
-                    </>
-                  ) : null}
-                </>
-              }
-            />
-
-            <KpiCard
-              label="Highest category"
-              value={<span className="text-xl">{summary.top?.categoryName ?? "—"}</span>}
-              glyph="▣"
-              tone="info"
-              meta={
-                summary.top ? (
+          {/* One briefing band: the total leads; the other figures explain it. */}
+          <section
+            id="expense-overview"
+            aria-label="Expense summary"
+            className="scroll-mt-6 overflow-hidden rounded-2xl border border-paper-200 bg-paper shadow-sm"
+          >
+            <h2 className="sr-only">Total expenses</h2>
+            <div className="grid sm:grid-cols-2 xl:grid-cols-[1.15fr_0.85fr_1fr_1fr]">
+              <div className="relative min-w-0 border-b border-paper-200 p-5 pl-[4.5rem] sm:border-r xl:border-b-0">
+                <WalletCards
+                  aria-hidden
+                  className="absolute left-5 top-5 size-10 rounded-xl bg-tint-brand p-2 text-tone-brand ring-1 ring-edge-brand"
+                  strokeWidth={1.8}
+                />
+                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-brand-700">
+                  Total spent
+                </p>
+                <p className="figure mt-2 text-2xl font-bold text-ink-950 sm:text-3xl">
+                  {formatMoney(summary.total)}
+                </p>
+                <p className="mt-1 text-xs text-ink-500">
+                  {data.categoryTrends.reduce(
+                    (sum, trend) => sum + trend.recordCount,
+                    0,
+                  )}{" "}
+                  expenses · {summary.categoryCount} categor
+                  {summary.categoryCount === 1 ? "y" : "ies"}
+                </p>
+              </div>
+              <div className="relative min-w-0 border-b border-paper-200 p-5 pl-[4.5rem] xl:border-b-0 xl:border-r">
+                <ChartPie
+                  aria-hidden
+                  className="absolute left-5 top-5 size-10 rounded-xl bg-tint-brand p-2 text-tone-brand ring-1 ring-edge-brand"
+                  strokeWidth={1.8}
+                />
+                <p className="text-xs font-medium text-ink-500">
+                  Share of available funds
+                </p>
+                <p className="figure mt-2 text-2xl font-bold text-ink-900">
+                  {summary.fundsShare === null
+                    ? "—"
+                    : `${summary.fundsShare.toFixed(0)}%`}
+                </p>
+                <p className="mt-1 text-xs text-ink-500">
+                  {summary.fundsShare === null
+                    ? "Add funds in your business profile"
+                    : `${formatMoney(summary.total)} of ${formatMoney(selected.availableFunds)}`}
+                </p>
+              </div>
+              <div className="relative min-w-0 border-b border-paper-200 p-5 pl-[4.5rem] sm:border-r xl:border-b-0">
+                <Boxes
+                  aria-hidden
+                  className="absolute left-5 top-5 size-10 rounded-xl bg-tint-brand p-2 text-tone-brand ring-1 ring-edge-brand"
+                  strokeWidth={1.8}
+                />
+                <p className="text-xs font-medium text-ink-500">
+                  Largest category
+                </p>
+                <p className="mt-2 truncate text-xl font-bold text-ink-900">
+                  {summary.top?.categoryName ?? "—"}
+                </p>
+                <p className="figure mt-1 text-xs text-ink-500">
+                  {summary.top
+                    ? `${summary.topShare.toFixed(1)}% · ${formatMoney(summary.top.current)}`
+                    : "No spending yet"}
+                </p>
+              </div>
+              <div className="relative min-w-0 p-5 pl-[4.5rem]">
+                {summary.periodDelta > 0 ? (
+                  <ArrowUpRight
+                    aria-hidden
+                    className="absolute left-5 top-5 size-10 rounded-xl bg-tint-danger p-2 text-tone-danger ring-1 ring-edge-danger"
+                    strokeWidth={1.8}
+                  />
+                ) : summary.periodDelta < 0 ? (
+                  <ArrowDownRight
+                    aria-hidden
+                    className="absolute left-5 top-5 size-10 rounded-xl bg-tint-brand p-2 text-tone-brand ring-1 ring-edge-brand"
+                    strokeWidth={1.8}
+                  />
+                ) : (
+                  <TrendingUp
+                    aria-hidden
+                    className="absolute left-5 top-5 size-10 rounded-xl bg-paper-100 p-2 text-ink-500 ring-1 ring-paper-200"
+                    strokeWidth={1.8}
+                  />
+                )}
+                <p className="text-xs font-medium text-ink-500">
+                  Total vs {previousLabel.toLowerCase()}
+                </p>
+                {summary.periodDelta !== 0 ? (
                   <>
-                    {summary.topShare.toFixed(1)}% of total ·{" "}
-                    <span className="figure">{formatMoney(summary.top.current)}</span>
+                    <p
+                      className={`figure mt-2 text-xl font-bold ${
+                        summary.periodDelta > 0
+                          ? "text-tone-danger"
+                          : "text-tone-brand"
+                      }`}
+                    >
+                      {summary.periodDelta > 0 ? "+" : "−"}
+                      {formatMoney(Math.abs(summary.periodDelta))}
+                    </p>
+                    <p className="mt-1 text-xs text-ink-500">
+                      {summary.periodPercent === null
+                        ? "No previous-period baseline"
+                        : `${Math.abs(summary.periodPercent).toFixed(0)}% ${
+                            summary.periodDelta > 0 ? "more" : "less"
+                          } overall`}
+                    </p>
                   </>
                 ) : (
-                  "No spending yet"
-                )
-              }
-            />
-
-            <KpiCard
-              label="Biggest increase"
-              value={
-                summary.biggestIncrease ? (
-                  <span className="figure" style={{ color: STATUS_INK.serious }}>
-                    +{formatMoney(summary.biggestIncrease.change)}
-                  </span>
-                ) : (
-                  <span className="text-xl" style={{ color: STATUS_INK.good }}>
-                    Nothing rose
-                  </span>
-                )
-              }
-              glyph="▲"
-              tone={summary.biggestIncrease ? "danger" : "brand"}
-              meta={
-                summary.biggestIncrease
-                  ? `${summary.biggestIncrease.categoryName} vs ${previousLabel.toLowerCase()}`
-                  : `No category went up vs ${previousLabel.toLowerCase()}`
-              }
-            />
-
-            <KpiCard
-              label="Share of available funds"
-              value={
-                summary.fundsShare === null ? (
-                  <span className="text-xl">—</span>
-                ) : (
-                  <span className="figure">{summary.fundsShare.toFixed(0)}%</span>
-                )
-              }
-              glyph="◈"
-              tone={summary.fundsShare !== null && summary.fundsShare > 75 ? "danger" : "accent"}
-              meta={
-                summary.fundsShare === null ? (
-                  "Add available funds to your business profile"
-                ) : (
                   <>
-                    <span className="figure">{formatMoney(summary.total)}</span> of{" "}
-                    <span className="figure">{formatMoney(selected.availableFunds)}</span>
+                    <p className="mt-2 text-xl font-bold text-ink-900">
+                      No change
+                    </p>
+                    <p className="mt-1 text-xs text-ink-500">
+                      Same total as {previousLabel.toLowerCase()}
+                    </p>
                   </>
-                )
-              }
-            />
-          </div>
+                )}
+              </div>
+            </div>
+          </section>
+
+          <ExpenseSectionNav showRecurring={showRecurringBlock} />
 
           {/* A plain-language warning, only when it is actually warranted. The
               KPI above states the number; this says what to do about it. */}
           {summary.fundsShare !== null && summary.fundsShare > 75 ? (
             <Callout tone="warn">
               Your spending {periodLabel} is{" "}
-              <b className="font-semibold">{summary.fundsShare.toFixed(0)}%</b> of the funds you have on
-              hand. That doesn't mean anything is wrong — but if sales don't cover it, this is the pace
-              that runs the money down.
+              <b className="font-semibold">{summary.fundsShare.toFixed(0)}%</b>{" "}
+              of the funds you have on hand. That doesn't mean anything is wrong
+              — but if sales don't cover it, this is the pace that runs the
+              money down.
             </Callout>
           ) : null}
 
           {/* ================= 2 & 3. WHERE IT WENT / WHAT CHANGED ================= */}
-          <div className="grid gap-5 lg:grid-cols-2">
-            <Panel eyebrow="Category share" title="Category distribution" className="min-w-0">
+          <div
+            id="expense-categories"
+            className="scroll-mt-6 grid gap-5 xl:grid-cols-[0.8fr_1.2fr]"
+          >
+            <Panel
+              eyebrow="Category share"
+              title="Category distribution"
+              className="min-w-0 xl:order-2"
+            >
               <DonutChart
                 breakdown={data.categoryTrends
                   .filter((t) => t.current > 0)
-                  .map((t) => ({ categoryName: t.categoryName, total: t.current }))}
+                  .map((t) => ({
+                    categoryName: t.categoryName,
+                    total: t.current,
+                  }))}
               />
             </Panel>
 
             <Panel
               eyebrow={`Current vs previous period`}
-              title="Category comparison"
-              className="min-w-0"
+              title="Where your money went"
+              className="min-w-0 xl:order-1"
             >
               <CategoryComparisonChart
                 trends={data.categoryTrends}
@@ -746,73 +1377,174 @@ export function ExpenseInsight() {
             }
             bodyClassName="px-0 pb-0"
           >
-            <div className="scroll-slim overflow-x-auto">
+            {/* On a phone, a six-column table turns comparison into horizontal
+                scavenger hunting. The same values become compact category
+                records; the semantic table remains the desktop reading. */}
+            <ul className="space-y-2 px-4 pb-4 md:hidden">
+              {data.categoryTrends.map((trend) => (
+                <li
+                  key={trend.categoryId}
+                  className="rounded-xl border border-paper-200 bg-paper-100/50 p-3.5"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-ink-900">
+                        {trend.categoryName}
+                      </p>
+                      <p className="mt-0.5 text-xs text-ink-500">
+                        {trend.recordCount} expense
+                        {trend.recordCount === 1 ? "" : "s"} ·{" "}
+                        {summary.total > 0
+                          ? ((trend.current / summary.total) * 100).toFixed(1)
+                          : "0.0"}
+                        % of this period
+                      </p>
+                    </div>
+                    <p className="figure shrink-0 text-sm font-bold text-ink-900">
+                      {formatMoney(trend.current)}
+                    </p>
+                  </div>
+                  <dl className="mt-3 grid grid-cols-2 gap-3 border-t border-paper-200 pt-3">
+                    <div>
+                      <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-500">
+                        {previousLabel}
+                      </dt>
+                      <dd className="figure mt-1 text-sm text-ink-600">
+                        {formatMoney(trend.previous)}
+                      </dd>
+                    </div>
+                    <div className="text-right">
+                      <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-500">
+                        Change
+                      </dt>
+                      <dd className="mt-1 text-sm">
+                        <ChangeFigure
+                          change={trend.change}
+                          percent={trend.percentChange}
+                        />
+                      </dd>
+                    </div>
+                  </dl>
+                </li>
+              ))}
+              <li className="flex items-center justify-between gap-3 border-t border-paper-200 px-1 pt-3 text-sm">
+                <span className="font-semibold text-ink-600">Period total</span>
+                <span className="figure font-bold text-ink-900">
+                  {formatMoney(summary.total)}
+                </span>
+              </li>
+            </ul>
+
+            <div className="scroll-slim hidden overflow-x-auto md:block">
               <table className="w-full border-collapse text-left text-sm">
                 <caption className="sr-only">
-                  Expenses by category for {selected.name}, {periodLabel}, compared with the previous
-                  period.
+                  Expenses by category for {selected.name}, {periodLabel},
+                  compared with the previous period.
                 </caption>
                 <thead>
                   <tr className="border-y border-paper-200 bg-paper-100/60">
-                    <th scope="col" className="px-5 py-2.5 text-xs font-semibold uppercase tracking-[0.06em] text-ink-500">
+                    <th
+                      scope="col"
+                      className="px-5 py-2.5 text-xs font-semibold uppercase tracking-[0.06em] text-ink-500"
+                    >
                       Category
                     </th>
-                    <th scope="col" className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-500">
+                    <th
+                      scope="col"
+                      className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-500"
+                    >
                       This period
                     </th>
-                    <th scope="col" className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-500">
+                    <th
+                      scope="col"
+                      className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-500"
+                    >
                       Share
                     </th>
-                    <th scope="col" className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-500">
+                    <th
+                      scope="col"
+                      className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-500"
+                    >
                       {previousLabel}
                     </th>
-                    <th scope="col" className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-500">
+                    <th
+                      scope="col"
+                      className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-500"
+                    >
                       Change
                     </th>
-                    <th scope="col" className="px-5 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-500">
+                    <th
+                      scope="col"
+                      className="px-5 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-500"
+                    >
                       Count
                     </th>
                   </tr>
                 </thead>
                 <tbody>
                   {data.categoryTrends.map((t) => (
-                    <tr key={t.categoryId} className="border-b border-paper-200 last:border-0">
-                      <th scope="row" className="px-5 py-3 text-left font-medium text-ink-900">
+                    <tr
+                      key={t.categoryId}
+                      className="border-b border-paper-200 last:border-0"
+                    >
+                      <th
+                        scope="row"
+                        className="px-5 py-3 text-left font-medium text-ink-900"
+                      >
                         {t.categoryName}
                       </th>
                       <td className="figure px-4 py-3 text-right font-semibold text-ink-900">
                         {formatMoney(t.current)}
                       </td>
                       <td className="figure px-4 py-3 text-right text-ink-600">
-                        {summary.total > 0 ? ((t.current / summary.total) * 100).toFixed(1) : "0.0"}%
+                        {summary.total > 0
+                          ? ((t.current / summary.total) * 100).toFixed(1)
+                          : "0.0"}
+                        %
                       </td>
                       <td className="figure px-4 py-3 text-right text-ink-500">
                         {formatMoney(t.previous)}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <ChangeFigure change={t.change} percent={t.percentChange} />
+                        <ChangeFigure
+                          change={t.change}
+                          percent={t.percentChange}
+                        />
                       </td>
-                      <td className="figure px-5 py-3 text-right text-ink-600">{t.recordCount}</td>
+                      <td className="figure px-5 py-3 text-right text-ink-600">
+                        {t.recordCount}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
                 <tfoot>
                   <tr className="border-t border-paper-200 bg-paper-100/60">
-                    <th scope="row" className="px-5 py-3 text-left text-xs font-bold uppercase tracking-[0.06em] text-ink-600">
+                    <th
+                      scope="row"
+                      className="px-5 py-3 text-left text-xs font-bold uppercase tracking-[0.06em] text-ink-600"
+                    >
                       Total
                     </th>
                     <td className="figure px-4 py-3 text-right font-bold text-ink-900">
                       {formatMoney(summary.total)}
                     </td>
-                    <td className="figure px-4 py-3 text-right text-ink-500">100.0%</td>
+                    <td className="figure px-4 py-3 text-right text-ink-500">
+                      100.0%
+                    </td>
                     <td className="figure px-4 py-3 text-right text-ink-500">
                       {formatMoney(data.totals.previous)}
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <ChangeFigure change={summary.periodDelta} percent={summary.periodPercent} />
+                      <ChangeFigure
+                        change={summary.periodDelta}
+                        percent={summary.periodPercent}
+                      />
                     </td>
                     <td className="figure px-5 py-3 text-right text-ink-600">
-                      {data.categoryTrends.reduce((s, t) => s + t.recordCount, 0)}
+                      {data.categoryTrends.reduce(
+                        (s, t) => s + t.recordCount,
+                        0,
+                      )}
                     </td>
                   </tr>
                 </tfoot>
@@ -820,8 +1552,131 @@ export function ExpenseInsight() {
             </div>
           </Panel>
 
+          {/* ============ 4.5 REDUCTION OPPORTUNITIES — the next step ============
+              Placed right after "what changed" and before the lower-priority
+              analytical detail below (plan §10.1): understanding the numbers
+              naturally leads to "so what should I check first?", and this
+              panel is the deterministic answer to that question. */}
+          <div id="expense-opportunities" className="scroll-mt-6">
+            <Panel
+              eyebrow="Actionable review"
+              title="Needs attention"
+              action={
+                reductionOpportunities ? (
+                  <span className="text-xs text-ink-400">
+                    {reductionOpportunities.period.start.slice(0, 10)} →{" "}
+                    {reductionOpportunities.period.end.slice(0, 10)}
+                  </span>
+                ) : null
+              }
+            >
+              <span className="sr-only">Reduction opportunities</span>
+              {reductionLoading &&
+              !reductionOpportunities &&
+              !reductionError ? (
+                <div className="space-y-3" aria-busy="true" aria-live="polite">
+                  <span className="sr-only">
+                    Loading reduction opportunities…
+                  </span>
+                  {[0, 1].map((i) => (
+                    <div
+                      key={i}
+                      className="rounded-xl border border-paper-200 p-4"
+                    >
+                      <SkeletonLine className="w-32" />
+                      <SkeletonLine className="mt-3 w-1/2" />
+                      <SkeletonLine className="mt-2 w-full" />
+                      <SkeletonLine className="mt-2 w-3/4" />
+                    </div>
+                  ))}
+                </div>
+              ) : reductionError ? (
+                <Callout tone="warn">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <span>
+                      Couldn't load reduction opportunities: {reductionError}
+                    </span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => void loadReductionOpportunities()}
+                    >
+                      Retry
+                    </Button>
+                  </div>
+                </Callout>
+              ) : !reductionOpportunities ? null : reductionOpportunities
+                  .dataQuality.status === "insufficient" ? (
+                <EmptyState compact title="Not enough history yet" icon="◔">
+                  {reductionOpportunities.dataQuality.message ??
+                    "FinSight needs a bit more recorded history before it can suggest anything worth reviewing here."}
+                </EmptyState>
+              ) : reductionOpportunities.opportunities.length === 0 ? (
+                <EmptyState
+                  compact
+                  title="No material opportunities found"
+                  icon="✓"
+                >
+                  Nothing in this period crossed FinSight's review thresholds.
+                  That's a good sign — it does not mean spending is optimal,
+                  only that nothing stood out enough to flag.
+                </EmptyState>
+              ) : (
+                <>
+                  {reductionOpportunities.dataQuality.status === "limited" &&
+                  reductionOpportunities.dataQuality.message ? (
+                    <Callout tone="info">
+                      {reductionOpportunities.dataQuality.message}
+                    </Callout>
+                  ) : null}
+                  <ul
+                    className={`grid gap-3 xl:grid-cols-2 ${reductionOpportunities.dataQuality.status === "limited" ? "mt-3" : ""}`}
+                  >
+                    {reductionOpportunities.opportunities
+                      .slice(0, MAX_OPPORTUNITIES_SHOWN)
+                      .map((o) => (
+                        <OpportunityCard
+                          key={o.id}
+                          opportunity={o}
+                          businessProfileId={selected.id}
+                          periodDays={reductionOpportunities.period.days}
+                          endDate={
+                            isAnchored
+                              ? reductionOpportunities.period.end.slice(0, 10)
+                              : null
+                          }
+                        />
+                      ))}
+                  </ul>
+                </>
+              )}
+
+              {/* Historical-window state (plan §10.3): the response's own period,
+                not the picker's label, so this never disagrees with the dates
+                shown in the panel header above. */}
+              {isAnchored && reductionOpportunities ? (
+                <p className="mt-3 text-xs text-ink-400">
+                  Showing a past period ending{" "}
+                  {new Date(
+                    reductionOpportunities.period.end,
+                  ).toLocaleDateString(undefined, {
+                    year: "numeric",
+                    month: "long",
+                    day: "numeric",
+                    timeZone: "UTC",
+                  })}
+                  , not today.
+                </p>
+              ) : null}
+            </Panel>
+          </div>
+
           {/* ===================== 5. FLAGS + AI ===================== */}
-          <div className="grid gap-5 lg:grid-cols-2">
+          <div
+            id="expense-review"
+            className="scroll-mt-6 grid gap-5 lg:grid-cols-2"
+          >
             <Panel
               title="Large expense flags"
               action={
@@ -834,8 +1689,8 @@ export function ExpenseInsight() {
             >
               {flaggedExpenses.length === 0 ? (
                 <EmptyState compact title="Nothing flagged right now" icon="✓">
-                  Expenses land here once they cross your large-expense threshold or look like a possible
-                  duplicate.
+                  Expenses land here once they cross your large-expense
+                  threshold or look like a possible duplicate.
                 </EmptyState>
               ) : (
                 <>
@@ -845,19 +1700,23 @@ export function ExpenseInsight() {
                         key={r.id}
                         className="flex items-start gap-2.5 rounded-xl bg-tint-danger px-3.5 py-3 ring-1 ring-edge-danger"
                       >
-                        <span aria-hidden className="mt-0.5 shrink-0 text-tone-danger">
-                          ⚑
-                        </span>
+                        <Flag
+                          aria-hidden
+                          className="mt-0.5 size-4 shrink-0 text-tone-danger"
+                          strokeWidth={1.9}
+                        />
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                            <p className="min-w-0 text-sm font-semibold text-tone-danger">{r.description}</p>
+                            <p className="min-w-0 text-sm font-semibold text-tone-danger">
+                              {r.description}
+                            </p>
                             <p className="figure shrink-0 text-sm font-bold text-tone-danger">
                               {formatMoney(r.amount)}
                             </p>
                           </div>
                           <p className="mt-1 text-xs text-tone-danger opacity-90">
-                            {categoryName(r.categoryId)} · {r.date.slice(0, 10)} ·{" "}
-                            <FlagReason record={r} profile={selected} />
+                            {categoryName(r.categoryId)} · {r.date.slice(0, 10)}{" "}
+                            · <FlagReason record={r} profile={selected} />
                           </p>
                         </div>
                       </li>
@@ -868,12 +1727,13 @@ export function ExpenseInsight() {
                       to="/records/flagged"
                       className="tap-inline mt-3 block text-sm font-semibold text-brand-700 hover:text-brand-800"
                     >
-                      {flaggedExpenses.length - MAX_FLAGGED_SHOWN} more — review all flagged records →
+                      {flaggedExpenses.length - MAX_FLAGGED_SHOWN} more — review
+                      all flagged records →
                     </Link>
                   ) : null}
                   <p className="mt-3 text-xs text-ink-400">
-                    A large-expense flag marks records worth a second look. It does not mean the expense is
-                    wrong.
+                    A large-expense flag marks records worth a second look. It
+                    does not mean the expense is wrong.
                   </p>
                 </>
               )}
@@ -899,8 +1759,12 @@ export function ExpenseInsight() {
           {/* ===================== 6. WHEN IT LEFT ===================== */}
           <Panel
             eyebrow="Day by day"
-            title="When your money left"
-            action={<span className="text-xs text-ink-400">Last {data.periodDays} days</span>}
+            title="Spending over time"
+            action={
+              <span className="text-xs text-ink-400">
+                Last {data.periodDays} days
+              </span>
+            }
           >
             <DailySpendChart daily={data.dailyTotals} />
           </Panel>
@@ -918,21 +1782,28 @@ export function ExpenseInsight() {
             }
           >
             {data.unusualExpenses.length === 0 ? (
-              <EmptyState compact title="Nothing looks out of the ordinary" icon="✓">
-                FinSight compares each expense against what you usually spend in that category. Nothing
-                this period stood out.
+              <EmptyState
+                compact
+                title="Nothing looks out of the ordinary"
+                icon="✓"
+              >
+                FinSight compares each expense against what you usually spend in
+                that category. Nothing this period stood out.
               </EmptyState>
             ) : (
               <ul className="space-y-2">
                 {data.unusualExpenses.map((u) => {
-                  const times = u.categoryMean > 0 ? u.amount / u.categoryMean : null;
+                  const times =
+                    u.categoryMean > 0 ? u.amount / u.categoryMean : null;
                   return (
                     <li
                       key={u.id}
                       className="rounded-xl bg-tint-accent px-3.5 py-3 ring-1 ring-edge-accent"
                     >
                       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                        <p className="min-w-0 text-sm font-semibold text-tone-accent">{u.description}</p>
+                        <p className="min-w-0 text-sm font-semibold text-tone-accent">
+                          {u.description}
+                        </p>
                         <p className="figure shrink-0 text-sm font-bold text-tone-accent">
                           {formatMoney(u.amount)}
                         </p>
@@ -945,11 +1816,16 @@ export function ExpenseInsight() {
                         {times && times >= 1.5 ? (
                           <>
                             about {times.toFixed(1)}× your usual{" "}
-                            <span className="figure">{formatMoney(u.categoryMean)}</span>
+                            <span className="figure">
+                              {formatMoney(u.categoryMean)}
+                            </span>
                           </>
                         ) : (
                           <>
-                            usually around <span className="figure">{formatMoney(u.categoryMean)}</span>
+                            usually around{" "}
+                            <span className="figure">
+                              {formatMoney(u.categoryMean)}
+                            </span>
                           </>
                         )}
                       </p>
@@ -962,8 +1838,11 @@ export function ExpenseInsight() {
             {data.insufficientHistoryCategories.length > 0 ? (
               <p className="mt-3 text-xs text-ink-400">
                 Not enough history yet to check:{" "}
-                {data.insufficientHistoryCategories.map((c) => c.categoryName).join(", ")}. FinSight needs
-                a few expenses in a category before it can tell what "normal" looks like.
+                {data.insufficientHistoryCategories
+                  .map((c) => c.categoryName)
+                  .join(", ")}
+                . FinSight needs a few expenses in a category before it can tell
+                what "normal" looks like.
               </p>
             ) : null}
           </Panel>
@@ -971,22 +1850,36 @@ export function ExpenseInsight() {
           <Panel
             eyebrow="Review queue"
             title="FinSight findings"
-            action={findings.length > 0 ? <span className="text-xs text-ink-400">{findings.length} open</span> : null}
+            action={
+              findings.length > 0 ? (
+                <span className="text-xs text-ink-400">
+                  {findings.length} open
+                </span>
+              ) : null
+            }
           >
             {findings.length === 0 ? (
               <EmptyState compact title="No findings need review" icon="✓">
-                FinSight will place explainable amount, duplicate, frequency, recurring, trend, and behavior findings here.
+                FinSight will place explainable amount, duplicate, frequency,
+                recurring, trend, and behavior findings here.
               </EmptyState>
             ) : (
               <ul className="space-y-3">
                 {findings.map((finding) => (
-                  <li key={finding.id} className="rounded-xl border border-paper-200 p-3.5">
+                  <li
+                    key={finding.id}
+                    className="rounded-xl border border-paper-200 p-3.5"
+                  >
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-sm font-semibold text-ink-800">{finding.title}</p>
+                      <p className="text-sm font-semibold text-ink-800">
+                        {finding.title}
+                      </p>
                       <Pill>{finding.severity.toLowerCase()}</Pill>
                     </div>
                     <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-ink-500">
-                      {finding.reasons.map((reason) => <li key={reason}>{reason}</li>)}
+                      {finding.reasons.map((reason) => (
+                        <li key={reason}>{reason}</li>
+                      ))}
                     </ul>
                     {/*
                       Button primitives, not hand-rolled ones. These two were
@@ -1007,7 +1900,15 @@ export function ExpenseInsight() {
                       <Button
                         type="button"
                         size="sm"
-                        onClick={() => void reviewFinding(finding.id, "CONFIRMED", finding.type === "POSSIBLE_DUPLICATE" ? "DUPLICATE" : "CONFIRMED_UNUSUAL")}
+                        onClick={() =>
+                          void reviewFinding(
+                            finding.id,
+                            "CONFIRMED",
+                            finding.type === "POSSIBLE_DUPLICATE"
+                              ? "DUPLICATE"
+                              : "CONFIRMED_UNUSUAL",
+                          )
+                        }
                       >
                         Confirm
                         <span className="sr-only"> — {finding.title}</span>
@@ -1016,7 +1917,13 @@ export function ExpenseInsight() {
                         type="button"
                         size="sm"
                         variant="secondary"
-                        onClick={() => void reviewFinding(finding.id, "DISMISSED", "EXPECTED_TRANSACTION")}
+                        onClick={() =>
+                          void reviewFinding(
+                            finding.id,
+                            "DISMISSED",
+                            "EXPECTED_TRANSACTION",
+                          )
+                        }
                       >
                         Expected / dismiss
                         <span className="sr-only"> — {finding.title}</span>
@@ -1026,7 +1933,10 @@ export function ExpenseInsight() {
                         className="tap-inline text-xs font-medium text-brand-700 underline-offset-2 hover:underline"
                       >
                         More options
-                        <span className="sr-only"> for {finding.title}, on the review queue</span>
+                        <span className="sr-only">
+                          {" "}
+                          for {finding.title}, on the review queue
+                        </span>
                       </Link>
                     </div>
                   </li>
@@ -1034,7 +1944,6 @@ export function ExpenseInsight() {
               </ul>
             )}
           </Panel>
-
         </div>
       )}
 
@@ -1050,11 +1959,13 @@ export function ExpenseInsight() {
         FinSight to watch; the candidates are FinSight asking a question back.
       */}
       {isInitialLoad || !showRecurringBlock ? null : (
-        <div className="mt-6 space-y-6">
+        <div id="expense-recurring" className="mt-6 scroll-mt-6 space-y-6">
           {/* Hidden outright when the schedules read did not answer — an agenda
               saying "nothing scheduled yet" to an owner we cannot see the
               schedules of is a worse lie than showing nothing at all. */}
-          {recurringSchedules !== null ? <RecurringAgenda schedules={recurringSchedules} /> : null}
+          {recurringSchedules !== null ? (
+            <RecurringAgenda schedules={recurringSchedules} />
+          ) : null}
 
           {hasCandidates ? (
             <Panel
@@ -1062,23 +1973,32 @@ export function ExpenseInsight() {
               title="Does this repeat?"
               action={
                 <span className="text-xs text-ink-400">
-                  {canWatchPatterns ? "Not watched until you confirm" : "Detected from your records"}
+                  {canWatchPatterns
+                    ? "Not watched until you confirm"
+                    : "Detected from your records"}
                 </span>
               }
             >
               <ul className="space-y-2">
-                {recurringPatterns.filter((pattern) => pattern.status === "CANDIDATE").map((pattern) => (
-                  <li
-                    key={pattern.id}
-                    className="rounded-xl border border-paper-200 bg-paper-100/60 px-3.5 py-3"
-                  >
-                    <p className="text-sm font-semibold text-ink-900">{pattern.description}</p>
-                    <p className="mt-1 text-xs text-ink-500">
-                      {pattern.category.name} · about every {pattern.intervalDays} days ·{" "}
-                      <span className="figure">{formatMoney(pattern.expectedAmount)}</span>
-                    </p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {/* HIDDEN, not disabled, when schedules are unavailable.
+                {recurringPatterns
+                  .filter((pattern) => pattern.status === "CANDIDATE")
+                  .map((pattern) => (
+                    <li
+                      key={pattern.id}
+                      className="rounded-xl border border-paper-200 bg-paper-100/60 px-3.5 py-3"
+                    >
+                      <p className="text-sm font-semibold text-ink-900">
+                        {pattern.description}
+                      </p>
+                      <p className="mt-1 text-xs text-ink-500">
+                        {pattern.category.name} · about every{" "}
+                        {pattern.intervalDays} days ·{" "}
+                        <span className="figure">
+                          {formatMoney(pattern.expectedAmount)}
+                        </span>
+                      </p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {/* HIDDEN, not disabled, when schedules are unavailable.
                           POST /recurring-patterns/:id/confirm sits behind the
                           same server gate as the schedules read, so the button
                           would 404 — and a disabled control still advertises a
@@ -1086,24 +2006,34 @@ export function ExpenseInsight() {
                           re-enable it. "Not recurring" stays: PATCH
                           /recurring-patterns/:id is ungated and still works, so
                           dismissing a bad guess remains available. */}
-                      {canWatchPatterns ? (
-                        <Button type="button" size="sm" onClick={() => void confirmPattern(pattern.id)}>
-                          Watch this
-                          <span className="sr-only"> — {pattern.description}</span>
+                        {canWatchPatterns ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={() => void confirmPattern(pattern.id)}
+                          >
+                            Watch this
+                            <span className="sr-only">
+                              {" "}
+                              — {pattern.description}
+                            </span>
+                          </Button>
+                        ) : null}
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => void dismissPattern(pattern.id)}
+                        >
+                          Not recurring
+                          <span className="sr-only">
+                            {" "}
+                            — {pattern.description}
+                          </span>
                         </Button>
-                      ) : null}
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => void dismissPattern(pattern.id)}
-                      >
-                        Not recurring
-                        <span className="sr-only"> — {pattern.description}</span>
-                      </Button>
-                    </div>
-                  </li>
-                ))}
+                      </div>
+                    </li>
+                  ))}
               </ul>
             </Panel>
           ) : null}

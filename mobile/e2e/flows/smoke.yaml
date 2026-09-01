@@ -1,0 +1,114 @@
+# ---------------------------------------------------------------------------
+# THIS FLOW HAS NEVER BEEN RUN. See mobile/e2e/README.md before citing it.
+#
+# It was authored from the app's source in an environment with no device, no
+# emulator and no Maestro binary. Every selector below is a source-derived
+# guess that has not been confirmed against a running app. Treat the first real
+# execution as a debugging session, not a verification.
+# ---------------------------------------------------------------------------
+#
+# Ticket §9.13 — smoke path: splash -> login -> onboarding -> tabs ->
+# Spending Impact -> logout.
+#
+# Requires a seeded account that has NOT completed onboarding, since the
+# onboarding leg is part of the path being smoked.
+#
+appId: app.finsight.mobile
+env:
+  EMAIL: change-me@example.com
+  PASSWORD: change-me
+---
+# --- Splash -----------------------------------------------------------------
+# The app hides the splash once fonts and the stored session have resolved.
+# Reaching the login screen at all is what proves the splash released.
+- launchApp:
+    clearState: true
+
+- assertVisible: "Log in"
+
+# --- Login ------------------------------------------------------------------
+# Fields are found by their accessible label, which is what a screen reader
+# uses too — if these stop matching, the labels have regressed for everyone.
+- tapOn:
+    id: "Email"
+- inputText: ${EMAIL}
+
+- tapOn:
+    id: "Password"
+- inputText: ${PASSWORD}
+
+- tapOn: "Remember me"
+
+- tapOn: "Log in"
+
+# --- Onboarding -------------------------------------------------------------
+# The wizard names its own position; step 1 of 3 is "Your business".
+- assertVisible: "Your business"
+
+- tapOn: "Continue"
+- assertVisible: "Your numbers"
+
+- tapOn: "Continue"
+- assertVisible: "You're ready"
+
+# The honest exit from onboarding: nothing is recorded on the owner's behalf.
+- tapOn: "Not now — take me to Home"
+
+# --- Tabs -------------------------------------------------------------------
+- assertVisible: "Home"
+- assertVisible: "Records"
+- assertVisible: "Insights"
+- assertVisible: "More"
+
+- tapOn: "Records"
+- tapOn: "Home"
+
+# --- Spending Impact --------------------------------------------------------
+- tapOn: "Insights"
+- tapOn: "Spending"
+
+- assertVisible: "Spending impact"
+# The standing promise on this screen: it is a what-if, and it does not advise.
+- assertVisible:
+    text: "A what-if check.*"
+
+- tapOn:
+    id: "Planned amount, in Philippine pesos"
+- inputText: "11000"
+
+- tapOn:
+    id: "Check this planned amount"
+
+# The calculated half, which must land whether or not the AI is reachable.
+- assertVisible: "After this spending, you may have"
+- assertVisible: "Share of available funds"
+
+# The comparison window is part of the scenario, so changing it re-asks.
+- tapOn: "Week"
+- assertVisible: "After this spending, you may have"
+
+# --- Logout -----------------------------------------------------------------
+- tapOn: "More"
+- scrollUntilVisible:
+    element: "Sign out"
+    direction: DOWN
+
+- tapOn: "Sign out"
+
+# Confirmation is required — the sheet, not the tap, ends the session.
+- assertVisible: "Sign out of FinSight?"
+- assertVisible: "You'll need to sign in again to access your business data."
+
+- tapOn: "Cancel"
+- assertNotVisible: "Sign out of FinSight?"
+
+- tapOn: "Sign out"
+- tapOn:
+    text: "Sign out"
+    index: 1
+
+# Back at the auth stack with no history behind it: the signed-in tree
+# unmounted, so there is nothing for the system back button to return to.
+- assertVisible: "Log in"
+- back
+- assertVisible: "Log in"

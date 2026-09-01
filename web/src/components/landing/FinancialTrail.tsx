@@ -205,8 +205,24 @@ export function MintGlow({ className = "" }: { className?: string }) {
  * FIRST child of the lower section: the fill is the color of the section
  * ABOVE, arcing down into the new background so consecutive bands read as
  * one continuous surface instead of hard-cut blocks.
+ *
+ * `from` names a landing CSS variable rather than a literal hex, so the arc
+ * keeps matching its neighbour when the landing dark theme swaps that
+ * variable's value (see index.css `[data-landing-theme="dark"]`).
  */
-export function CurveDivider({ from, className = "" }: { from: string; className?: string }) {
+const CURVE_FILL: Record<"cream" | "surface" | "mint-pale", string> = {
+  cream: "var(--landing-cream)",
+  surface: "var(--landing-surface)",
+  "mint-pale": "var(--landing-mint-pale)",
+};
+
+export function CurveDivider({
+  from,
+  className = "",
+}: {
+  from: "cream" | "surface" | "mint-pale";
+  className?: string;
+}) {
   return (
     <svg
       aria-hidden
@@ -215,7 +231,7 @@ export function CurveDivider({ from, className = "" }: { from: string; className
       preserveAspectRatio="none"
       className={`pointer-events-none block h-6 w-full select-none sm:h-10 ${className}`}
     >
-      <path d="M0 0 H1440 V10 C 1050 48, 390 48, 0 10 Z" fill={from} />
+      <path d="M0 0 H1440 V10 C 1050 48, 390 48, 0 10 Z" fill={`rgb(${CURVE_FILL[from]})`} />
     </svg>
   );
 }

@@ -42,7 +42,7 @@ function FaqItem({
             onClick={onToggle}
             className="flex min-h-tap w-full items-center justify-between gap-4 px-5 py-4 text-left transition-colors duration-150 hover:bg-landing-mint-pale/50"
           >
-            <span className="font-display text-[15px] font-bold leading-snug text-landing-charcoal">{q}</span>
+            <span className="font-landing-display text-[15px] font-bold leading-snug text-landing-charcoal">{q}</span>
             <ChevronDown
               aria-hidden
               className={`h-4 w-4 shrink-0 text-landing-green transition-transform duration-250 ease-shell ${
@@ -76,7 +76,11 @@ export function FaqAccordion() {
   const columns = [shown.slice(0, mid), shown.slice(mid)];
 
   return (
-    <section id="faq" aria-labelledby="faq-title" className="scroll-mt-20 bg-landing-cream">
+    <section
+      id="faq"
+      aria-labelledby="faq-title"
+      className="landing-section-gradient-base scroll-mt-20 bg-landing-cream"
+    >
       <div className={`${MEASURE} py-16 sm:py-24`}>
         <div className="flex flex-wrap items-end justify-between gap-6">
           <SectionHead

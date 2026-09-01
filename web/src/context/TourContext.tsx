@@ -162,9 +162,19 @@ export function TourProvider({ children }: { children: ReactNode }) {
   // reload, crash, navigation — resumes from the right step. `alwaysShow`
   // rides along on every write below: it is a preference, not progress, and
   // finishing or skipping the tour must never turn it off behind the owner.
+  const persistRef = useRef(persist);
+  persistRef.current = persist;
   useEffect(() => {
-    if (active && userId != null) persist({ status: "in_progress", step: stepIndex, alwaysShow });
-  }, [active, stepIndex, userId, alwaysShow, persist]);
+    // Deliberately NOT depending on `persist`. What this effect is for is
+    // "progress changed, write it down"; a callback that changed identity
+    // would make it write on every render instead, and since the write sets
+    // state upstream in AuthContext that is a loop rather than an extra
+    // request. AuthContext keeps `updatePreferences` stable for the same
+    // reason — this is the second lock on the same door.
+    if (active && userId != null) {
+      persistRef.current({ status: "in_progress", step: stepIndex, alwaysShow });
+    }
+  }, [active, stepIndex, userId, alwaysShow]);
 
   // Leaving the dashboard pauses the tour (status stays in_progress). The
   // targets live on that page and its chrome; a tooltip pointing at nothing

@@ -93,12 +93,25 @@ export interface BusinessProfileInput {
   largeExpenseThresholdPercent: number;
 }
 
+/**
+ * Owner-controlled cost-behavior classification on `ExpenseCategory` — plan
+ * §5.2/§15 Phase 5. Uppercase, matching the Prisma enum `ExpenseCostBehavior`
+ * exactly, the same convention `costBehaviorSchema` uses server-side
+ * (backend/src/controllers/expenseCategory.controller.ts). Contrast with
+ * `ReductionOpportunity.costBehavior` below, which is lowercase — that
+ * response follows this file's existing lowercase convention for
+ * `priority`/`confidence`/etc. instead.
+ */
+export type ExpenseCostBehavior = "FIXED" | "VARIABLE" | "MIXED" | "UNCLASSIFIED";
+
 export interface ExpenseCategory {
   id: number;
   businessProfileId: number;
   name: string;
   description: string | null;
   createdAt: string;
+  /** Optional everywhere — omitted/undefined reads the same as "UNCLASSIFIED". */
+  costBehavior?: ExpenseCostBehavior;
 }
 
 export type ReviewStatus = "Reviewed" | "Needs Review";
@@ -328,6 +341,16 @@ export interface DashboardSummary {
 
 export type DayStatus = "above" | "at" | "below";
 
+/**
+ * `DailyCoverageRow.status` once an operating schedule is configured — plan
+ * §8.3. A superset of `DayStatus` rather than reusing it directly: every
+ * existing `DayStatus` call site (the scenario summaries, `todaysStatus`)
+ * only ever sees the original three values, and widening `DayStatus` itself
+ * would force each of those to handle a `"closed"` case that can never
+ * actually reach them.
+ */
+export type DailyRowStatus = DayStatus | "closed";
+
 // Month-to-date recovery tracker. Shared verbatim by the Dashboard summary
 // and the Insights Recovery Target screen — both read the same computed
 // object from the backend, so they can't disagree.
@@ -348,6 +371,205 @@ export interface RecoveryTargets {
   todaysStatus: DayStatus;
   monthCoveragePercent: number;
   onTrack: boolean;
+  /** True when there's no expected-monthly-expenses baseline configured yet —
+   * every other figure is still arithmetically valid but meaningless, since a
+   * zero baseline is missing setup, not a covered target. Optional for older servers. */
+  needsSetup?: boolean;
+
+  // ---- Phase 1 additions (RECOVERY-TARGET-IMPROVEMENT-PLAN.md §8.1/§8.2/§9.4/§9.7) ----
+  // All optional so older servers/clients keep working unchanged; a later task
+  // updates the UI to actually read these.
+  /** Explicit status, authoritative over `onTrack`/`needsSetup` once present. */
+  status?: RecoveryStatus;
+  confidence?: RecoveryConfidence;
+  /** Cumulative target allocated to the open days elapsed so far this month. */
+  expectedSalesToDate?: number;
+  /** Recorded sales minus expected-to-date — positive means ahead of pace. */
+  paceVarianceAmount?: number;
+  /** Stepping-stone toward the plan's eventual v2 contract — this Phase 1 slice is not yet that full shape. */
+  contractVersion?: 1;
+  /** IANA timezone identifier the calculation was anchored to. */
+  timezone?: string;
+  /** YYYY-MM-DD, business-local calendar day this calculation was anchored to. */
+  asOfDate?: string;
+
+  // ---- Phase 2 additions (RECOVERY-TARGET-IMPROVEMENT-PLAN.md §7.2-§7.4/§8.3) ----
+  /** True once the owner has saved a weekly operating schedule for this business.
+   * False (the default) means every day-count figure above is still the old
+   * approximation — see `remainingOperatingDaysIsApproximated`. Optional for
+   * older servers that predate schedules entirely. */
+  operatingScheduleConfigured?: boolean;
+  /** Exact count of open dates this month, derived from the schedule/overrides.
+   * Only meaningful once `operatingScheduleConfigured` is true. */
+  operatingDaysThisMonth?: number;
+
+  // ---- Phase 3 additions (RECOVERY-TARGET-IMPROVEMENT-PLAN.md §10.1-§10.3/§8.2) ----
+  // All optional so older servers/cached responses keep working unchanged.
+  /** `salesThisMonth`'s reviewed-and-not-flagged share. Sums with
+   * `provisionalSalesThisMonth` to `salesThisMonth`. */
+  confirmedSalesThisMonth?: number;
+  /** `salesThisMonth`'s pending-review or possible-duplicate share. */
+  provisionalSalesThisMonth?: number;
+  /** Missing setup that would improve confidence but does not itself trigger
+   * `needs_setup` — e.g. no operating schedule saved yet. Empty when nothing
+   * to flag. */
+  setupIssues?: Array<"expected_expenses_missing" | "operating_schedule_missing">;
+  /** Data-quality caveats affecting the figures already shown above — never a
+   * silent recalculation. Empty when nothing to flag. */
+  dataWarnings?: Array<"records_pending_review" | "possible_duplicates">;
+  /** Deterministic explanation of what moved the adjusted daily target since
+   * the previous local day. `null` on the 1st of the month, when setup is
+   * incomplete, or (per its own `primaryReason`) when nothing material moved. */
+  changeSincePreviousDay?: {
+    adjustedDailyTargetDelta: number;
+    salesAdded: number;
+    remainingOpenDaysDelta: number;
+    primaryReason:
+      | "sales_added"
+      | "open_day_elapsed"
+      | "baseline_changed"
+      | "schedule_changed"
+      | "data_changed"
+      | "no_material_change";
+  } | null;
+}
+
+/**
+ * One weekday's open/closed setting — `GET`/`PUT
+ * /business-profiles/:id/operating-schedule`. 1=Monday .. 7=Sunday, matching
+ * the backend's `BusinessOperatingDay.weekday` convention exactly so no
+ * client-side remapping is needed.
+ */
+export interface OperatingScheduleEntry {
+  weekday: number;
+  isOpen: boolean;
+}
+
+export type OperatingDayOverrideType = "OPEN" | "CLOSED";
+
+/**
+ * A single date exception — a holiday closure or a special opening —
+ * `GET`/`POST`/`DELETE /business-profiles/:id/operating-overrides`. Takes
+ * precedence over the weekly schedule for that one date.
+ */
+export interface OperatingDayOverride {
+  id: number;
+  businessProfileId: number;
+  date: string;
+  type: OperatingDayOverrideType;
+  reason: string | null;
+}
+
+export interface OperatingDayOverrideInput {
+  date: string;
+  type: OperatingDayOverrideType;
+  /** Owner-entered context only — never treated as financial evidence. Max 120 chars. */
+  reason?: string;
+}
+
+export type RecoveryStatus =
+  | "needs_setup"
+  | "no_current_month_data"
+  | "data_incomplete"
+  | "ahead"
+  | "on_pace"
+  | "behind"
+  | "covered";
+
+export type RecoveryConfidence = "unavailable" | "limited" | "moderate" | "strong";
+
+/**
+ * `POST /insights/recovery-scenario` — plan §13.2/§15 Phase 5. A read-only,
+ * non-persisting "what if expected monthly expenses were X" scenario — the
+ * ONLY valid Recovery Target hypothetical per the plan. `current` is the
+ * real, currently-configured target (unchanged); `hypothetical` is what it
+ * would be under the owner-supplied assumption. Neither writes anything —
+ * see insights.service.ts `simulateRecoveryScenario`.
+ */
+/**
+ * Comparisons between `current` and `hypothetical` — plan §8.4/§9.9, Phase 4.
+ * Optional so an older server response (predating this field) still renders.
+ */
+export interface RecoveryScenarioDelta {
+  /**
+   * `hypothetical.expectedMonthlyExpenses - current.expectedMonthlyExpenses`.
+   * No safety-buffer feature exists yet, so this is currently the same
+   * quantity as the expected-monthly-expenses delta itself.
+   */
+  totalCoverageGoal: number;
+  remainingTarget: number;
+  adjustedDailyTarget: number;
+  /**
+   * ALWAYS `null` for now — the backend cannot yet tell whether sales
+   * references are transaction-level or daily aggregates (plan §9.9/§19 #7),
+   * so it deliberately never guesses. See
+   * `estimatedTransactionsPerDayUnavailableReason`.
+   */
+  estimatedTransactionsPerDay: number | null;
+  /** Why `estimatedTransactionsPerDay` is null. */
+  estimatedTransactionsPerDayUnavailableReason: "transaction_provenance_unknown";
+}
+
+export interface RecoveryScenario {
+  /** The explicit hypothetical the owner supplied — never derived automatically. */
+  assumedExpectedMonthlyExpenses: number;
+  /** Unchanged passthrough of the real, currently-configured target. */
+  current: RecoveryTargets;
+  /** What the target would be if `expectedMonthlyExpenses` were the assumed value. Not saved anywhere. */
+  hypothetical: RecoveryTargets;
+  /** Phase 4 addition — optional for older servers. */
+  delta?: RecoveryScenarioDelta;
+  /** Always `false` when present — confirms nothing here was persisted. Optional for older servers. */
+  persisted?: false;
+}
+
+/**
+ * `GET`/`PUT /business-profiles/:id/recovery-notification-preferences` — plan
+ * §7.5/§10.8/§11 Phase 6. Purely owner-controlled opt-in settings for the
+ * Recovery Target notification triggers; GET returns sensible defaults (all
+ * enabled, 15% threshold, no quiet hours, 24h cooldown) even before the owner
+ * has ever saved anything — there is nothing to "initialize" first.
+ *
+ * Two triggers this type represents (`openDayNoSalesAlertEnabled`,
+ * `projectionShortfallAlertEnabled`) are permanently inert server-side for
+ * now — missing prerequisite capabilities — so the toggle can be shown and
+ * saved, but the UI must not claim they are currently doing anything.
+ */
+export interface RecoveryNotificationPreference {
+  targetIncreaseAlertEnabled: boolean;
+  /** 1-100. Only meaningful while `targetIncreaseAlertEnabled` is true. */
+  targetIncreaseThresholdPercent: number;
+  behindThreeDaysAlertEnabled: boolean;
+  /** Inert server-side for now — see the note above. */
+  openDayNoSalesAlertEnabled: boolean;
+  /** Inert server-side for now — see the note above. */
+  projectionShortfallAlertEnabled: boolean;
+  coverageReachedAlertEnabled: boolean;
+  /** "HH:MM" wall-clock, or `null`. Both-or-neither with `quietHoursEnd`. */
+  quietHoursStart: string | null;
+  quietHoursEnd: string | null;
+  /** 1-168 (one week). */
+  minHoursBetweenNotifications: number;
+}
+
+/**
+ * `GET`/`PUT`/`DELETE /business-profiles/:id/recovery-plans[/:month]` — plan
+ * §7.5/§10.7/§11 Phase 6.
+ *
+ * CRITICAL: purely a separate, owner-visible planning artifact. It has ZERO
+ * effect on the real Recovery Target calculation — never imply in UI copy
+ * that saving a plan changes the real target, the business profile, or any
+ * recorded sales.
+ */
+export interface RecoveryPlan {
+  /** "YYYY-MM" */
+  month: string;
+  bufferPercent: number | null;
+  /** "YYYY-MM-DD" */
+  deadline: string | null;
+  ownerTargetAmount: number | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface CategoryTrend {
@@ -402,6 +624,122 @@ export interface ExpenseBehavior {
    * identical screen, and identical (wrong) advice. Optional for older servers.
    */
   latestExpenseDate?: string | null;
+}
+
+/**
+ * Reduction-opportunity contract — Expense Reduction Opportunities plan §8.2.
+ *
+ * Copied verbatim from the approved plan (docs/EXPENSE-REDUCTION-OPPORTUNITIES-PLAN.md).
+ * This is the exact shape `GET /insights/reduction-opportunities` returns; keep
+ * it in lockstep with the backend contract rather than reshaping it client-side.
+ */
+export type ReductionOpportunityType =
+  | "CATEGORY_PRESSURE"
+  | "FREQUENT_PURCHASE_ACCUMULATION"
+  | "RECORD_REVIEW_FIRST";
+
+export interface ReductionOpportunityEvidence {
+  currentAmount: number;
+  previousAmount: number | null;
+  changeAmount: number | null;
+  changePercent: number | null;
+  expenseSharePercent: number;
+  recordCount: number;
+  unusualRecordCount: number;
+  possibleDuplicateCount: number;
+}
+
+/**
+ * The category's owner-controlled cost-behavior classification — plan
+ * §5.2/§15 Phase 5. Evidence/copy only: it never changes eligibility or
+ * ranking (§4.2 "review, not verdict"). Lowercase — see the note on
+ * `ExpenseCostBehavior` above for why this response's casing differs from
+ * `/records/categories`'.
+ */
+export type ReductionOpportunityCostBehavior = "fixed" | "variable" | "mixed" | "unclassified";
+
+export interface ReductionOpportunity {
+  id: string;
+  type: ReductionOpportunityType;
+  categoryId: number;
+  categoryName: string;
+  priority: "high" | "medium" | "low";
+  confidence: "strong" | "moderate" | "limited";
+  observation: string;
+  rationale: string;
+  evidence: ReductionOpportunityEvidence;
+  costBehavior: ReductionOpportunityCostBehavior;
+  suggestedChecks: string[];
+  relatedRecordIds: number[];
+  limitations: string[];
+}
+
+/**
+ * `POST /insights/reduction-opportunities/feedback` — plan §15 Phase 5. A
+ * lightweight, write-only "was this useful?" signal on a card that is itself
+ * computed-not-persisted (§4.4). The backend upserts by
+ * (businessProfileId, opportunityId, userId), so re-submitting is "change my
+ * answer", never an error — there is no read-back endpoint, so clients must
+ * not assume prior feedback state on load.
+ */
+export type ReductionOpportunityFeedbackRating = "helpful" | "not_relevant";
+
+export interface ReductionOpportunityFeedbackInput {
+  businessProfileId: number;
+  opportunityId: string;
+  rating: ReductionOpportunityFeedbackRating;
+}
+
+export interface ReductionOpportunityFeedbackResult {
+  opportunityId: string;
+  rating: ReductionOpportunityFeedbackRating;
+  createdAt: string;
+}
+
+export interface ReductionOpportunityResponse {
+  period: {
+    days: number;
+    start: string;
+    end: string;
+  };
+  dataQuality: {
+    status: "sufficient" | "limited" | "insufficient";
+    currentRecordCount: number;
+    previousRecordCount: number;
+    message: string | null;
+  };
+  opportunities: ReductionOpportunity[];
+  detectorVersion: string;
+}
+
+/**
+ * Reduction-simulation contract — plan §12.2. `POST /insights/reduction-simulation`.
+ *
+ * A hypothetical "what if this category's expenses were lower" read, not a
+ * change to any record: nothing here is persisted, and `availableFunds` is
+ * never part of this contract (see reductionOpportunity.service.ts). Copied
+ * verbatim from the approved plan, same discipline as `ReductionOpportunity`
+ * above — keep in lockstep with the backend rather than reshaping client-side.
+ */
+export type ReductionSpec = { kind: "percent"; value: number } | { kind: "amount"; value: number };
+
+export interface ReductionSimulationInput {
+  businessProfileId: number;
+  categoryId: number;
+  periodDays: number;
+  endDate?: string;
+  reduction: ReductionSpec;
+}
+
+export interface ReductionSimulation {
+  categoryId: number;
+  categoryName: string;
+  period: { days: number; start: string; end: string };
+  categoryExpenses: { before: number; after: number };
+  totalExpenses: { before: number; after: number };
+  hypotheticalReduction: number;
+  requestedReductionPercent: number;
+  assumptions: string[];
 }
 
 export type AnomalyFindingStatus = "OPEN" | "CONFIRMED" | "DISMISSED" | "RESOLVED" | "SUPERSEDED";
@@ -521,10 +859,34 @@ export interface RecurringSchedule {
 
 export interface DailyCoverageRow {
   date: string;
-  neededTarget: number;
+  /** Null on a closed day (`isOperatingDay: false`) — there is no target to hit. */
+  neededTarget: number | null;
   sales: number;
-  gap: number;
-  status: DayStatus;
+  /** Null on a closed day, alongside `neededTarget`. */
+  gap: number | null;
+  status: DailyRowStatus;
+  /** Defaults to true when no schedule is configured (the old approximation
+   * mode never had closed days). Optional for older servers. */
+  isOperatingDay?: boolean;
+}
+
+/**
+ * One bounded weekly checkpoint — plan §10.4, Phase 4. Checkpoints land on
+ * calendar day-of-month 7/14/21/28 plus the month's final day when it isn't
+ * already a multiple of 7. Derived fresh each call, never persisted — see
+ * `deriveRecoveryCheckpoints` in analysis.service.ts.
+ */
+export type RecoveryCheckpointStatus = "ahead" | "on_pace" | "behind" | "pending";
+
+export interface RecoveryCheckpoint {
+  /** YYYY-MM-DD, business-local. */
+  endDate: string;
+  cumulativeTarget: number;
+  /** Null for a checkpoint whose `endDate` is after today (a future/`pending` checkpoint). */
+  recordedAmount: number | null;
+  /** Null when `recordedAmount` is null. */
+  variance: number | null;
+  status: RecoveryCheckpointStatus;
 }
 
 export interface RecoveryInsight extends RecoveryTargets {
@@ -544,7 +906,64 @@ export interface RecoveryInsight extends RecoveryTargets {
   monthHasNoRecords?: boolean;
   /** The most recent sale on file, so an empty month can point at where the data is. */
   latestSaleDate?: string | null;
+  /** When this response was computed — lets a client label a cached/stale result. Optional for older servers. */
+  computedAt?: string;
+  /** Bounded weekly checkpoints for the current month — plan §10.4, Phase 4. Optional for older servers. */
+  weeklyCheckpoints?: RecoveryCheckpoint[];
 }
+
+/**
+ * One confirmed-sales open day, as returned inside `RecoveryMonthEndReview`'s
+ * `strongestOpenDay`/`weakestOpenDay` — plan §10.9, Phase 7. See
+ * `computeMonthEndReview` in insights.service.ts: in an all-zero-sales month
+ * this is still a real day (the earliest one), not `null` — `null` only
+ * happens when the month had zero open days at all.
+ */
+export interface MonthEndOpenDaySales {
+  /** YYYY-MM-DD, UTC-midnight-encoded like every other date in this app. */
+  date: string;
+  sales: number;
+}
+
+/**
+ * `GET /insights/recovery/month-end-review` — plan §10.9, Phase 7. READ-ONLY:
+ * there is no endpoint or client mutation anywhere that lets
+ * `suggestedQuestionsForNextMonth` change a business profile's settings —
+ * see insights.service.ts `computeMonthEndReview`'s doc comment. Any UI
+ * consuming this must never add one.
+ */
+export type RecoveryMonthEndReview =
+  | {
+      /** The requested month hasn't fully elapsed yet, business-locally. */
+      status: "not_yet_reviewable";
+      /** YYYY-MM, echoing the requested month. */
+      month: string;
+    }
+  | {
+      status: "reviewable";
+      /** YYYY-MM. */
+      month: string;
+      /** 0 when no baseline is configured, matching `RecoveryTargets.monthCoveragePercent`'s own guard. */
+      coveragePercent: number;
+      /** `salesThisMonth - expectedMonthlyExpenses`. Positive = surplus, negative = shortfall. */
+      surplusOrShortfall: number;
+      strongestOpenDay: MonthEndOpenDaySales | null;
+      weakestOpenDay: MonthEndOpenDaySales | null;
+      /** Count of open days that were either entirely missing or partially/fully provisional. */
+      missingOrProvisionalDayCount: number;
+      /** Total open days this month, out of which `missingOrProvisionalDayCount` is drawn. */
+      openDayCount: number;
+      /** The plain, un-adjusted daily target computable at month start. */
+      originalDailyTarget: number;
+      /** What the adjusted daily target would have read as on the month's own last day, or `null` when the month's literal last calendar day was closed. */
+      finalAdjustedDailyTarget: number | null;
+      /** True when `coveragePercent` lands materially away from 100% — an honest observation only, never a suggested replacement number. */
+      baselineAppearsOffFromPattern: boolean;
+      /** 2-4 plain, deterministic, templated strings — informational only, never an instruction or one-click "apply" action. */
+      suggestedQuestionsForNextMonth: string[];
+      /** True when an operating schedule was configured for this month. */
+      operatingScheduleConfigured: boolean;
+    };
 
 export type ImpactBand = "Low Impact" | "Noticeable Impact" | "High Impact";
 

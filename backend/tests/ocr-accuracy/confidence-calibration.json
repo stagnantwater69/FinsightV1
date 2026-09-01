@@ -649,5 +649,887 @@
     "weakestItem": 36,
     "itemsSum": 1450,
     "total": 1450
+  },
+  {
+    "id": "real-04-cropped-vendor-glare",
+    "kind": "real",
+    "overall": 46,
+    "amountConfidence": 79,
+    "vendorConfidence": 13,
+    "verdict": {
+      "date": "n/a",
+      "vendor": "n/a",
+      "amount": "wrong"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 0,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": null,
+    "itemsSum": null,
+    "total": 6.6
+  },
+  {
+    "id": "real-05-bintang-juice-camscan-watermark",
+    "kind": "real",
+    "overall": 47,
+    "amountConfidence": null,
+    "vendorConfidence": 0,
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "missed"
+    },
+    "items": {
+      "expected": 2,
+      "matched": 0,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": null,
+    "itemsSum": null,
+    "total": null
+  },
+  {
+    "id": "real-06-severe-blur-curled-thermal",
+    "kind": "real",
+    "overall": 59,
+    "amountConfidence": null,
+    "vendorConfidence": 70,
+    "verdict": {
+      "date": "missed",
+      "vendor": "n/a",
+      "amount": "missed"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 0,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": null,
+    "itemsSum": null,
+    "total": null
+  },
+  {
+    "id": "real-07-glare-finger-obstruction",
+    "kind": "real",
+    "overall": 60,
+    "amountConfidence": null,
+    "vendorConfidence": 71,
+    "verdict": {
+      "date": "n/a",
+      "vendor": "wrong",
+      "amount": "missed"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 0,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": null,
+    "itemsSum": null,
+    "total": null
+  },
+  {
+    "id": "real-08-diagonal-watermark-blur",
+    "kind": "real",
+    "overall": 44,
+    "amountConfidence": null,
+    "vendorConfidence": 61,
+    "verdict": {
+      "date": "n/a",
+      "vendor": "n/a",
+      "amount": "missed"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 0,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": null,
+    "itemsSum": null,
+    "total": null
+  },
+  {
+    "id": "real-09-severe-blur-duplicate-items",
+    "kind": "real",
+    "overall": 28,
+    "amountConfidence": null,
+    "vendorConfidence": 40,
+    "verdict": {
+      "date": "n/a",
+      "vendor": "n/a",
+      "amount": "missed"
+    },
+    "items": {
+      "expected": 2,
+      "matched": 0,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": null,
+    "itemsSum": null,
+    "total": null
+  },
+  {
+    "id": "real-10-chopstick-obstruction-crumple",
+    "kind": "real",
+    "overall": 65,
+    "amountConfidence": null,
+    "vendorConfidence": 86,
+    "verdict": {
+      "date": "n/a",
+      "vendor": "n/a",
+      "amount": "missed"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 0,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": null,
+    "itemsSum": null,
+    "total": null
+  },
+  {
+    "id": "real-11-thumb-obstruction-single-item",
+    "kind": "real",
+    "overall": 28,
+    "amountConfidence": 73,
+    "vendorConfidence": 25,
+    "verdict": {
+      "date": "n/a",
+      "vendor": "n/a",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 0,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": null,
+    "itemsSum": null,
+    "total": 975000
+  },
+  {
+    "id": "real-12-long-13-item-blurry-header",
+    "kind": "real",
+    "overall": 39,
+    "amountConfidence": 88,
+    "vendorConfidence": 60,
+    "verdict": {
+      "date": "n/a",
+      "vendor": "n/a",
+      "amount": "wrong"
+    },
+    "items": {
+      "expected": 13,
+      "matched": 0,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": null,
+    "itemsSum": null,
+    "total": 150
+  },
+  {
+    "id": "real-13-blur-vendor-two-item",
+    "kind": "real",
+    "overall": 17,
+    "amountConfidence": null,
+    "vendorConfidence": null,
+    "verdict": {
+      "date": "n/a",
+      "vendor": "n/a",
+      "amount": "missed"
+    },
+    "items": {
+      "expected": 2,
+      "matched": 0,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": null,
+    "itemsSum": null,
+    "total": null
+  },
+  {
+    "id": "real-14-lamp-glare-discount-multiplier",
+    "kind": "real",
+    "overall": 23,
+    "amountConfidence": null,
+    "vendorConfidence": 25,
+    "verdict": {
+      "date": "n/a",
+      "vendor": "n/a",
+      "amount": "missed"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 0,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": null,
+    "itemsSum": null,
+    "total": null
+  },
+  {
+    "id": "real-15-ikea-uk-dd-mm-date",
+    "kind": "real",
+    "overall": 74,
+    "amountConfidence": 94,
+    "vendorConfidence": 63,
+    "verdict": {
+      "date": "missed",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 5,
+      "matched": 5,
+      "falsePositives": 1
+    },
+    "anyError": true,
+    "weakestItem": 85,
+    "itemsSum": 17.33,
+    "total": 14.85
+  },
+  {
+    "id": "real-16-new-china-us-date",
+    "kind": "real",
+    "overall": 71,
+    "amountConfidence": 57,
+    "vendorConfidence": 96,
+    "verdict": {
+      "date": "wrong",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 4,
+      "matched": 4,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": 83,
+    "itemsSum": 24.95,
+    "total": 26.96
+  },
+  {
+    "id": "real-17-decorative-banner-wood-table",
+    "kind": "real",
+    "overall": 45,
+    "amountConfidence": 89,
+    "vendorConfidence": 0,
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 6,
+      "matched": 0,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": null,
+    "itemsSum": null,
+    "total": 129.75
+  },
+  {
+    "id": "real-18-via-emilia-clean",
+    "kind": "real",
+    "overall": 87,
+    "amountConfidence": 93,
+    "vendorConfidence": 91,
+    "verdict": {
+      "date": "missed",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 3,
+      "matched": 3,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": 93,
+    "itemsSum": 56.7,
+    "total": 61.8
+  },
+  {
+    "id": "real-19-togo-banner-asterisks",
+    "kind": "real",
+    "overall": 43,
+    "amountConfidence": 58,
+    "vendorConfidence": 76,
+    "verdict": {
+      "date": "missed",
+      "vendor": "n/a",
+      "amount": "wrong"
+    },
+    "items": {
+      "expected": 3,
+      "matched": 1,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": 58,
+    "itemsSum": 17,
+    "total": 17
+  },
+  {
+    "id": "real-20-cluttered-menu-background-tilt",
+    "kind": "real",
+    "overall": 48,
+    "amountConfidence": null,
+    "vendorConfidence": 43,
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "missed"
+    },
+    "items": {
+      "expected": 3,
+      "matched": 0,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": null,
+    "itemsSum": null,
+    "total": null
+  },
+  {
+    "id": "real-21-jts-diner-clean",
+    "kind": "real",
+    "overall": 89,
+    "amountConfidence": 96,
+    "vendorConfidence": 94,
+    "verdict": {
+      "date": "wrong",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 4,
+      "matched": 4,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": 94,
+    "itemsSum": 26.3,
+    "total": 28.4
+  },
+  {
+    "id": "real-22-blank-total-field-curl",
+    "kind": "real",
+    "overall": 53,
+    "amountConfidence": 89,
+    "vendorConfidence": 71,
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 0,
+      "matched": 0,
+      "falsePositives": 1
+    },
+    "anyError": true,
+    "weakestItem": 89,
+    "itemsSum": 41.45,
+    "total": 41.45
+  },
+  {
+    "id": "real-23-handwritten-total-override",
+    "kind": "real",
+    "overall": 83,
+    "amountConfidence": 95,
+    "vendorConfidence": 96,
+    "verdict": {
+      "date": "wrong",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 9,
+      "matched": 8,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": 39,
+    "itemsSum": 95,
+    "total": 143.71
+  },
+  {
+    "id": "real-24-yauatcha-no-date",
+    "kind": "real",
+    "overall": 82,
+    "amountConfidence": 90,
+    "vendorConfidence": 85,
+    "verdict": {
+      "date": "n/a",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 8,
+      "matched": 7,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": 86,
+    "itemsSum": 76.8,
+    "total": 88.62
+  },
+  {
+    "id": "real-25-boa-dark-background",
+    "kind": "real",
+    "overall": 78,
+    "amountConfidence": 96,
+    "vendorConfidence": 84,
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "items": {
+      "expected": 2,
+      "matched": 2,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": 96,
+    "itemsSum": 43,
+    "total": 43
+  },
+  {
+    "id": "real-26-friendly-reds-clean",
+    "kind": "real",
+    "overall": 69,
+    "amountConfidence": 93,
+    "vendorConfidence": 56,
+    "verdict": {
+      "date": "correct",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 6,
+      "matched": 5,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": 91,
+    "itemsSum": 71.4,
+    "total": 77.83
+  },
+  {
+    "id": "real-27-pappadeaux-ambiguous-us-date",
+    "kind": "real",
+    "overall": 84,
+    "amountConfidence": 95,
+    "vendorConfidence": 92,
+    "verdict": {
+      "date": "wrong",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "items": {
+      "expected": 3,
+      "matched": 2,
+      "falsePositives": 2
+    },
+    "anyError": true,
+    "weakestItem": 26,
+    "itemsSum": 42.06,
+    "total": 38.95
+  },
+  {
+    "id": "real-28-carls-jr-translucent-bleed",
+    "kind": "real",
+    "overall": 76,
+    "amountConfidence": 74,
+    "vendorConfidence": 14,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "wrong"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 1,
+      "falsePositives": 2
+    },
+    "anyError": true,
+    "weakestItem": 95,
+    "itemsSum": 7,
+    "total": 1.61
+  },
+  {
+    "id": "real-29-saska-paperclip-clipboard",
+    "kind": "real",
+    "overall": 74,
+    "amountConfidence": 95,
+    "vendorConfidence": 79,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 8,
+      "matched": 8,
+      "falsePositives": 0
+    },
+    "anyError": false,
+    "weakestItem": 94,
+    "itemsSum": 167,
+    "total": 179.94
+  },
+  {
+    "id": "real-30-wings-things-over-menu-crumple",
+    "kind": "real",
+    "overall": 50,
+    "amountConfidence": 87,
+    "vendorConfidence": 83,
+    "verdict": {
+      "date": "n/a",
+      "vendor": "correct",
+      "amount": "wrong"
+    },
+    "items": {
+      "expected": 3,
+      "matched": 1,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": 90,
+    "itemsSum": 1.19,
+    "total": 6.99
+  },
+  {
+    "id": "real-31-lan-sheng-item-price-column-shift",
+    "kind": "real",
+    "overall": 65,
+    "amountConfidence": 89,
+    "vendorConfidence": 95,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "wrong"
+    },
+    "items": {
+      "expected": 5,
+      "matched": 1,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": 66,
+    "itemsSum": 18.95,
+    "total": 973.77
+  },
+  {
+    "id": "real-32-mynews-handwritten-margin",
+    "kind": "real",
+    "overall": 72,
+    "amountConfidence": 75,
+    "vendorConfidence": 78,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 0,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": null,
+    "itemsSum": null,
+    "total": 10
+  },
+  {
+    "id": "real-33-mcdonalds-my-combo-submenu",
+    "kind": "real",
+    "overall": 71,
+    "amountConfidence": 88,
+    "vendorConfidence": 88,
+    "verdict": {
+      "date": "correct",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 1,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": 88,
+    "itemsSum": 19,
+    "total": 19
+  },
+  {
+    "id": "real-34-parking-ticket-stamped-redacted",
+    "kind": "real",
+    "overall": 62,
+    "amountConfidence": 70,
+    "vendorConfidence": 66,
+    "verdict": {
+      "date": "wrong",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 0,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": null,
+    "itemsSum": null,
+    "total": 3
+  },
+  {
+    "id": "real-35-kings-confectionery-discount-column",
+    "kind": "real",
+    "overall": 73,
+    "amountConfidence": 90,
+    "vendorConfidence": 65,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "wrong"
+    },
+    "items": {
+      "expected": 5,
+      "matched": 0,
+      "falsePositives": 2
+    },
+    "anyError": true,
+    "weakestItem": 71,
+    "itemsSum": 50.28,
+    "total": 29.15
+  },
+  {
+    "id": "real-36-mrdiy-multiline-item-layout",
+    "kind": "real",
+    "overall": 73,
+    "amountConfidence": 94,
+    "vendorConfidence": 78,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 2,
+      "matched": 1,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": 84,
+    "itemsSum": 7.5,
+    "total": 26.4
+  },
+  {
+    "id": "real-37-gardenia-torn-multi-subtotal",
+    "kind": "real",
+    "overall": 73,
+    "amountConfidence": 65,
+    "vendorConfidence": 93,
+    "verdict": {
+      "date": "wrong",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 7,
+      "matched": 5,
+      "falsePositives": 2
+    },
+    "anyError": true,
+    "weakestItem": 49,
+    "itemsSum": 75.85,
+    "total": 79.26
+  },
+  {
+    "id": "real-38-super-seven-dot-noise-duplicate-lines",
+    "kind": "real",
+    "overall": 78,
+    "amountConfidence": 84,
+    "vendorConfidence": 81,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 6,
+      "matched": 5,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": 50,
+    "itemsSum": 16.29,
+    "total": 18.3
+  },
+  {
+    "id": "real-39-sanyu-stationery-clean",
+    "kind": "real",
+    "overall": 79,
+    "amountConfidence": 88,
+    "vendorConfidence": 72,
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 0,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": null,
+    "itemsSum": null,
+    "total": 8.7
+  },
+  {
+    "id": "real-40-portugalia-euro-redaction-dots",
+    "kind": "real",
+    "overall": 48,
+    "amountConfidence": 65,
+    "vendorConfidence": 53,
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "items": {
+      "expected": 13,
+      "matched": 1,
+      "falsePositives": 2
+    },
+    "anyError": true,
+    "weakestItem": 65,
+    "itemsSum": 7.1,
+    "total": 48.07
+  },
+  {
+    "id": "real-41-caravela-simple-euro",
+    "kind": "real",
+    "overall": 28,
+    "amountConfidence": null,
+    "vendorConfidence": 7,
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "missed"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 0,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": null,
+    "itemsSum": null,
+    "total": null
+  },
+  {
+    "id": "real-42-fuel-pump-receipt-redaction",
+    "kind": "real",
+    "overall": 37,
+    "amountConfidence": null,
+    "vendorConfidence": 0,
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "missed"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 0,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": null,
+    "itemsSum": null,
+    "total": null
+  },
+  {
+    "id": "real-43-pollux-torn-skew-barcode",
+    "kind": "real",
+    "overall": 33,
+    "amountConfidence": 64,
+    "vendorConfidence": 5,
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 0,
+      "falsePositives": 1
+    },
+    "anyError": true,
+    "weakestItem": 20,
+    "itemsSum": 4.18,
+    "total": 19.1
+  },
+  {
+    "id": "real-44-oriente-perfeito-handwritten-note",
+    "kind": "real",
+    "overall": 51,
+    "amountConfidence": 71,
+    "vendorConfidence": 87,
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 0,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": null,
+    "itemsSum": null,
+    "total": 0
+  },
+  {
+    "id": "real-45-sticker-obstruction-cropped-vendor",
+    "kind": "real",
+    "overall": 52,
+    "amountConfidence": 92,
+    "vendorConfidence": 91,
+    "verdict": {
+      "date": "n/a",
+      "vendor": "n/a",
+      "amount": "correct"
+    },
+    "items": {
+      "expected": 1,
+      "matched": 0,
+      "falsePositives": 0
+    },
+    "anyError": true,
+    "weakestItem": null,
+    "itemsSum": null,
+    "total": 12.3
   }
 ]

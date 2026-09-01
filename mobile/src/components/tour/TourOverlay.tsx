@@ -11,7 +11,8 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Button, T } from "../ui";
-import { TAP, radius, space } from "../../theme/tokens";
+import { radius, space } from "../../theme/tokens";
+import { TAP_FLOOR } from "../touchTarget";
 import { useTheme } from "../../context/ThemeContext";
 import { useReducedMotion } from "../../lib/useReducedMotion";
 // From the context object rather than from the provider that renders this
@@ -34,6 +35,20 @@ import {
   type TourRect,
 } from "./geometry";
 import { TourMascot } from "./TourMascot";
+
+/**
+ * The overlay's two small controls, each as a visible size plus the slop that
+ * carries it to the platform tap floor.
+ *
+ * Written as pairs, computed rather than typed: both used a hand-picked
+ * `hitSlop={12}` that happened to reach 48 for one of them and overshoot for
+ * the other, and neither would have followed TAP_FLOOR if it moved.
+ */
+const CLOSE_SIZE = 32;
+const CLOSE_SLOP = Math.ceil((TAP_FLOOR - CLOSE_SIZE) / 2);
+const SKIP_HEIGHT = 24;
+const SKIP_SLOP = Math.ceil((TAP_FLOOR - SKIP_HEIGHT) / 2);
+
 
 /**
  * The tour's overlay: dim, spotlight, card, and Fin.
@@ -385,10 +400,14 @@ export function TourOverlay() {
                   onPress={() => tour.stop("skipped")}
                   accessibilityRole="button"
                   accessibilityLabel="Close the tour"
-                  hitSlop={12}
+                  // 32 visible plus a floor-derived slop on every side, so the
+                  // real target is 32 + 2 x slop — comfortably past 48 without
+                  // growing a close affordance that sits inside the card's own
+                  // padding.
+                  hitSlop={CLOSE_SLOP}
                   style={({ pressed }) => ({
-                    width: TAP - 12,
-                    height: TAP - 12,
+                    width: CLOSE_SIZE,
+                    height: CLOSE_SIZE,
                     marginTop: -space.xs,
                     marginRight: -space.xs,
                     alignItems: "center",
@@ -419,9 +438,19 @@ export function TourOverlay() {
               onPress={() => tour.stop("skipped")}
               accessibilityRole="button"
               accessibilityLabel="Skip the tour"
-              hitSlop={12}
+              /*
+               * The one control here that genuinely cannot be laid out to the
+               * floor: it shares a row with the "N of M" caption and the Back
+               * and Next buttons, and a 48-point Skip would set the height of
+               * that whole footer. So the visible link stays SKIP_HEIGHT and
+               * the slop makes up the difference — derived from TAP_FLOOR
+               * rather than the hand-picked 12 it used to be, which happened
+               * to land exactly on 48 and would have silently gone short the
+               * moment either number moved.
+               */
+              hitSlop={SKIP_SLOP}
               style={({ pressed }) => ({
-                minHeight: TAP - 20,
+                minHeight: SKIP_HEIGHT,
                 justifyContent: "center",
                 paddingHorizontal: space.xs,
                 opacity: pressed ? 0.6 : 1,

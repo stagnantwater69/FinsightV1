@@ -51,7 +51,7 @@ async function clearStorage(userId: number): Promise<void> {
       businessProfiles: {
         select: {
           logoUrl: true,
-          receiptScans: { select: { pages: { select: { imageFile: true } } } },
+          receiptScans: { select: { pages: { select: { imageFile: true, processedImageFile: true } } } },
           csvImportBatches: { select: { fileReference: true } },
         },
       },
@@ -60,7 +60,9 @@ async function clearStorage(userId: number): Promise<void> {
   if (!user) return;
 
   const receiptPaths = user.businessProfiles.flatMap((profile) =>
-    profile.receiptScans.flatMap((scan) => scan.pages.map((page) => page.imageFile)),
+    profile.receiptScans.flatMap((scan) =>
+      scan.pages.flatMap((page) => [page.imageFile, page.processedImageFile]).filter((path): path is string => Boolean(path)),
+    ),
   );
   const csvPaths = user.businessProfiles
     .flatMap((profile) => profile.csvImportBatches.map((batch) => batch.fileReference))

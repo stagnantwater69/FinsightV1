@@ -37,7 +37,10 @@ const SIZES: Record<Size, string> = {
 const BASE =
   "inline-flex items-center justify-center gap-2 rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-60";
 
-function classesFor(variant: Variant, size: Size, fullWidth: boolean, className: string) {
+/** Exported so a rare non-`<button>`/non-`<Link>` element (an in-page `<a href="#…">`
+ *  scroll anchor, e.g. Recovery Target's state-specific primary action) can still
+ *  match this exact visual language instead of hand-rolling a near-duplicate class list. */
+export function classesFor(variant: Variant, size: Size, fullWidth: boolean, className: string) {
   return [BASE, VARIANTS[variant], SIZES[size], fullWidth ? "w-full" : "", className].filter(Boolean).join(" ");
 }
 

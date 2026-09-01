@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../src/config/prisma";
+import { resolveBusinessToday } from "../../src/lib/dates";
 
 // Tables in dependency order isn't needed — one TRUNCATE ... CASCADE with
 // RESTART IDENTITY resets both rows and the id sequences, so tests can assert
@@ -19,8 +20,14 @@ const TABLES = [
   "CSVImportBatch",
   "ReceiptScan",
   "SalesReferenceRecord",
+  "ReductionOpportunityFeedback",
   "ExpenseRecord",
   "ExpenseCategory",
+  "RecoveryPlan",
+  "RecoveryNotificationTriggerState",
+  "RecoveryNotificationPreference",
+  "BusinessOperatingDayOverride",
+  "BusinessOperatingDay",
   "BusinessProfile",
   "User",
 ];
@@ -91,6 +98,8 @@ export interface ProfileOverrides {
   expectedMonthlyExpenses?: number;
   operatingDays?: number;
   largeExpenseThresholdPercent?: number;
+  /** IANA timezone identifier. Omitted means the schema default ("Asia/Manila"). */
+  timezone?: string;
 }
 
 export async function makeProfile(userId: number, overrides: ProfileOverrides = {}) {
@@ -103,6 +112,7 @@ export async function makeProfile(userId: number, overrides: ProfileOverrides = 
       expectedMonthlyExpenses: new Prisma.Decimal(overrides.expectedMonthlyExpenses ?? 125000),
       operatingDays: overrides.operatingDays ?? 25,
       largeExpenseThresholdPercent: new Prisma.Decimal(overrides.largeExpenseThresholdPercent ?? 25),
+      ...(overrides.timezone !== undefined ? { timezone: overrides.timezone } : {}),
     },
   });
 }
@@ -142,4 +152,27 @@ export function utcDay(offsetDays = 0): Date {
 /** "YYYY-MM-DD" for a day offset from today, as the API accepts. */
 export function utcDayString(offsetDays = 0): string {
   return utcDay(offsetDays).toISOString().slice(0, 10);
+}
+
+/**
+ * The `utcDay`/`utcDayString` offset that lands on `daysAgo` days before the
+ * BUSINESS's own current calendar day (`resolveBusinessToday`), not the
+ * server's raw UTC day.
+ *
+ * WHY THIS EXISTS ALONGSIDE utcDay. `utcDay`/`utcDayString` are deliberately
+ * server-UTC-based (see this file's own header) and that is correct for most
+ * tests, which only compare a record's date against a query window anchored
+ * to the SAME clock. It stops being correct the moment a test's expectation
+ * is instead phrased in terms of "the business's current month/day" — which
+ * is how insights.service.ts itself resolves "today" (resolveBusinessToday)
+ * for recovery-target logic. The default test profile's timezone is
+ * Asia/Manila (UTC+8), which is on its NEXT calendar day for roughly
+ * 16:00-23:59 UTC — a test asserting against a hardcoded total for "this
+ * month" during that window, using a UTC-anchored date, silently lands the
+ * seeded record in the wrong month from the business's point of view.
+ */
+export function businessDayOffset(timezone: string, daysAgo = 0): number {
+  const businessDay = resolveBusinessToday(timezone);
+  businessDay.setUTCDate(businessDay.getUTCDate() - daysAgo);
+  return Math.round((businessDay.getTime() - utcDay(0).getTime()) / 86_400_000);
 }

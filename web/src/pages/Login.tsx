@@ -74,6 +74,7 @@ export function Login() {
 
   return (
     <AuthLayout
+      eyebrow="Account access"
       title="Log in"
       subtitle="Welcome back."
       showBack

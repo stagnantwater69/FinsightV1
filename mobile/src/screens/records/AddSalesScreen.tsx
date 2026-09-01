@@ -2,7 +2,8 @@ import { useRef, useState } from "react";
 import { KeyboardAvoidingView, Platform, ScrollView, TextInput } from "react-native";
 import { Button, Card, ErrorNote, Field, Screen, T } from "../../components/ui";
 import { useBusinessProfiles } from "../../context/BusinessProfileContext";
-import { api, errorMessage } from "../../lib/api";
+import { api } from "../../lib/api";
+import { saveFailureMessage } from "../../lib/connectionState";
 import { setFlash } from "../../lib/flash";
 import { DateField } from "../../components/DateField";
 import * as haptics from "../../lib/haptics";
@@ -38,7 +39,9 @@ export function AddSalesScreen({ navigation }: any) {
       setFlash("Sales record saved.");
       navigation.goBack();
     } catch (err) {
-      setError(errorMessage(err));
+      // See the same catch in AddExpenseScreen: the typed figures survive, and
+      // the wording says that without implying a later sync.
+      setError(saveFailureMessage(err, "Save sales record"));
     } finally {
       setBusy(false);
     }

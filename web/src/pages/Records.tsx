@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
 import { api } from "../lib/api";
@@ -15,8 +15,8 @@ import { SelectInput, TextInput } from "../components/Field";
 import { useConfirm } from "../components/ConfirmDialog";
 import { useDebounced } from "../lib/hooks";
 import { useToast } from "../components/Toast";
-import { AddExpenseModal } from "../components/AddExpenseModal";
-import { AddSalesModal } from "../components/AddSalesModal";
+import { AddExpenseModal, type DuplicateExpenseSeed } from "../components/AddExpenseModal";
+import { AddSalesModal, type DuplicateSalesSeed } from "../components/AddSalesModal";
 import { DuplicateReviewModal } from "../components/DuplicateReviewModal";
 
 interface Filters {
@@ -102,7 +102,6 @@ function filtersFromParams(params: URLSearchParams): Filters {
 }
 
 export function Records() {
-  const navigate = useNavigate();
   const { selected } = useBusinessProfiles();
   const { categories } = useExpenseCategories();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -201,6 +200,13 @@ export function Records() {
   // since only here is the list already on screen and worth staying on.
   const [addExpenseOpen, setAddExpenseOpen] = useState(false);
   const [addSalesOpen, setAddSalesOpen] = useState(false);
+  // Edit and Duplicate reuse the same two modals as Add — see
+  // AddExpenseModal/AddSalesModal — rather than the full-page /edit routes,
+  // for the same "stay on the list" reason as Add above.
+  const [editingExpenseId, setEditingExpenseId] = useState<number | null>(null);
+  const [editingSalesId, setEditingSalesId] = useState<number | null>(null);
+  const [duplicateExpenseSeed, setDuplicateExpenseSeed] = useState<DuplicateExpenseSeed | null>(null);
+  const [duplicateSalesSeed, setDuplicateSalesSeed] = useState<DuplicateSalesSeed | null>(null);
   /**
    * The record whose duplicate flag is being decided, if any.
    *
@@ -411,21 +417,34 @@ export function Records() {
   const hasFilters = JSON.stringify(filters) !== JSON.stringify(emptyFilters);
   const advancedCount = activeAdvancedCount(filters);
 
-  const editPath = (r: RecordItem) =>
-    r.type === "expense" ? `/records/expenses/${r.id}/edit` : `/records/sales/${r.id}/edit`;
+  async function handleEdit(r: RecordItem) {
+    const ok = await confirm({
+      title: `Edit "${r.description}"?`,
+      body: <>You'll get a popup with this record's fields to change.</>,
+      confirmLabel: "Edit record",
+      tone: "brand",
+    });
+    if (!ok) return;
+    if (r.type === "expense") setEditingExpenseId(r.id);
+    else setEditingSalesId(r.id);
+  }
 
   // Date is deliberately not carried over — a duplicate is almost always
-  // "the same thing, today", and the Add forms already default the date
+  // "the same thing, today", and the Add modals already default the date
   // field to today on their own.
-  function handleDuplicate(r: RecordItem) {
+  async function handleDuplicate(r: RecordItem) {
+    const ok = await confirm({
+      title: `Duplicate "${r.description}"?`,
+      body: <>This opens a new draft record pre-filled with the same details. You can review it before saving.</>,
+      confirmLabel: "Duplicate record",
+      tone: "brand",
+    });
+    if (!ok) return;
+
     if (r.type === "expense") {
-      navigate("/records/expenses/new", {
-        state: { duplicateFrom: { description: r.description, vendor: r.vendor ?? "", categoryId: r.categoryId, amount: r.amount } },
-      });
+      setDuplicateExpenseSeed({ description: r.description, vendor: r.vendor ?? "", categoryId: r.categoryId ?? "", amount: r.amount });
     } else {
-      navigate("/records/sales/new", {
-        state: { duplicateFrom: { description: r.description, amount: r.amount } },
-      });
+      setDuplicateSalesSeed({ description: r.description, amount: r.amount });
     }
   }
 
@@ -537,14 +556,15 @@ export function Records() {
               </span>
             </button>
           ) : null}
-          <Link
-            to={editPath(r)}
+          <button
+            type="button"
+            onClick={() => handleEdit(r)}
             title="Edit"
             aria-label={`Edit ${r.description}`}
             className="tap flex h-9 w-9 min-h-0 min-w-0 items-center justify-center rounded-lg text-ink-500 transition hover:bg-paper-100 hover:text-ink-800"
           >
             <IconEdit className="h-4 w-4" />
-          </Link>
+          </button>
           <button
             type="button"
             onClick={() => handleDuplicate(r)}
@@ -856,13 +876,14 @@ export function Records() {
                       <span className="sr-only"> possible duplicate — {r.description}</span>
                     </button>
                   ) : null}
-                  <Link
-                    to={editPath(r)}
+                  <button
+                    type="button"
+                    onClick={() => handleEdit(r)}
                     className="tap rounded-lg px-3 text-sm font-medium text-tone-brand transition hover:bg-tint-brand"
                   >
                     Edit
                     <span className="sr-only"> {r.description}</span>
-                  </Link>
+                  </button>
                   <button
                     type="button"
                     onClick={() => handleDuplicate(r)}
@@ -896,8 +917,14 @@ export function Records() {
 
       <AddExpenseModal
         businessProfileId={selected.id}
-        open={addExpenseOpen}
-        onClose={() => setAddExpenseOpen(false)}
+        open={addExpenseOpen || editingExpenseId !== null || duplicateExpenseSeed !== null}
+        recordId={editingExpenseId ?? undefined}
+        duplicateFrom={duplicateExpenseSeed ?? undefined}
+        onClose={() => {
+          setAddExpenseOpen(false);
+          setEditingExpenseId(null);
+          setDuplicateExpenseSeed(null);
+        }}
         onSaved={() => {
           loadRecords();
           loadFlaggedCount();
@@ -905,8 +932,14 @@ export function Records() {
       />
       <AddSalesModal
         businessProfileId={selected.id}
-        open={addSalesOpen}
-        onClose={() => setAddSalesOpen(false)}
+        open={addSalesOpen || editingSalesId !== null || duplicateSalesSeed !== null}
+        recordId={editingSalesId ?? undefined}
+        duplicateFrom={duplicateSalesSeed ?? undefined}
+        onClose={() => {
+          setAddSalesOpen(false);
+          setEditingSalesId(null);
+          setDuplicateSalesSeed(null);
+        }}
         onSaved={() => {
           loadRecords();
           loadFlaggedCount();

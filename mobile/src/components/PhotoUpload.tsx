@@ -97,6 +97,11 @@ export function PhotoUpload({
             <Image
               source={{ uri: url }}
               style={{ width: size, height: size }}
+              // RN only sets `accessible` on an Image when `alt` is given;
+              // an `accessibilityLabel` alone leaves it a non-element and the
+              // label unread. Same class of defect as a View carrying a role
+              // without `accessible`.
+              accessible
               accessibilityRole="image"
               accessibilityLabel={label}
               accessibilityIgnoresInvertColors

@@ -49,11 +49,23 @@ function schemaMax(schema: z.ZodTypeAny, field: string, base: Record<string, unk
   return low;
 }
 
-/** The largest number a schema accepts for `field`, found by bisection. */
-function schemaMaxNumber(schema: z.ZodTypeAny, field: string, base: Record<string, unknown>): number {
+/**
+ * The largest number a schema accepts for `field`, found by bisection.
+ *
+ * `ceiling` is the figure the probe starts above — it only has to be a value
+ * the schema refuses, so that there is something to bisect down to. It is a
+ * parameter because the money bound on a purchase is three orders of magnitude
+ * above the day count on a schedule.
+ */
+function schemaMaxNumber(
+  schema: z.ZodTypeAny,
+  field: string,
+  base: Record<string, unknown>,
+  ceiling = 1_000_000
+): number {
   const accepts = (value: number) => schema.safeParse({ ...base, [field]: value }).success;
   let low = 1;
-  let high = 1_000_000;
+  let high = ceiling;
   if (!accepts(low)) throw new Error(`${field} rejects ${low}, so there is no accepted value to bisect up from`);
   if (accepts(high)) throw new Error(`${field} has no upper bound below ${high}`);
   while (low + 1 < high) {
@@ -193,5 +205,51 @@ describe("the interval ceiling on a recurring schedule", () => {
     const match = /\bmax=\{(\d+)\}/.exec(source);
     expect(match, "no numeric max={n} found in RecurringScheduleForm.tsx").not.toBeNull();
     expect(Number(match![1])).toBe(schemaMaxNumber(createRecurringScheduleSchema, "intervalDays", base));
+  });
+});
+
+/**
+ * The purchase-review payload — the one entry point with a bound at BOTH ends.
+ *
+ * `purchaseReviewSchema` says it is "exported for the contract tests like
+ * `askSchema`", and until now nothing imported it, so the item box on web's
+ * Spending Impact page and mobile's Spending Impact screen sent a shape no test
+ * compared against the rule that judges it.
+ *
+ * Both client mirrors now carry `purchaseDescription` for this field, so the
+ * upper bound is read off the real schema and pinned to that constant, exactly
+ * as the cases above do. The probe is what makes a widened controller fail here
+ * instead of in production, so it stays whatever the clients say.
+ *
+ * The lower bound matters as much as the upper one here, and is the reason this
+ * block exists apart from the rest. `min(3)` is not a column width — it is the
+ * point below which a description cannot be reviewed usefully or matched
+ * against the owner's own history, and both clients gate their submit button on
+ * it. A client that gated on a different figure would either send requests the
+ * API refuses, or sit disabled on input the API would have taken.
+ */
+describe("the purchase-review payload", () => {
+  const base = { businessProfileId: 1, description: "coffee grinder" };
+
+  it("takes a description of 3 to 255 characters", async () => {
+    const { purchaseReviewSchema } = await import("../../src/controllers/ai.controller");
+    expect(schemaMax(purchaseReviewSchema, "description", base)).toBe(webLimits.purchaseDescription);
+    expect(purchaseReviewSchema.safeParse({ ...base, description: "ab" }).success).toBe(false);
+    expect(purchaseReviewSchema.safeParse({ ...base, description: "abc" }).success).toBe(true);
+  });
+
+  /**
+   * A cost ceiling of a different kind from the AI question's: this one bounds
+   * the figure the answer talks about, not the size of the call. It is optional
+   * — an owner may know what they want before they know what it costs — so the
+   * absent case is pinned too, or a client could be "fixed" to send a zero and
+   * be refused for it.
+   */
+  it("takes an optional planned amount, positive and no greater than 999,999,999", async () => {
+    const { purchaseReviewSchema } = await import("../../src/controllers/ai.controller");
+    expect(schemaMaxNumber(purchaseReviewSchema, "plannedAmount", base, 1_000_000_000)).toBe(999_999_999);
+    expect(purchaseReviewSchema.safeParse({ ...base, plannedAmount: 0 }).success).toBe(false);
+    expect(purchaseReviewSchema.safeParse({ ...base, plannedAmount: -1 }).success).toBe(false);
+    expect(purchaseReviewSchema.safeParse(base).success).toBe(true);
   });
 });

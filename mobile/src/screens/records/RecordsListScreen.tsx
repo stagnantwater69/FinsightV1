@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert as RNAlert,
   Pressable,
@@ -10,7 +10,14 @@ import {
 import { useFocusEffect } from "@react-navigation/native";
 import { Button, Callout, Card, EmptyState, ErrorNote, Screen, ScreenHeader, SegmentedControl, SelectChip, T } from "../../components/ui";
 import { useBusinessProfiles } from "../../context/BusinessProfileContext";
-import { api, errorMessage } from "../../lib/api";
+import { api } from "../../lib/api";
+import { ConnectionNotice, LastUpdated } from "../../components/ConnectionNotice";
+import {
+  describeActionFailure,
+  describeLoadFailure,
+  toLoadFailure,
+  type LoadFailure,
+} from "../../lib/connectionState";
 import { useDebounced } from "../../lib/useDebounced";
 import { takeFlash } from "../../lib/flash";
 import { SkeletonList } from "../../components/Skeleton";
@@ -44,6 +51,11 @@ export function RecordsScreen({ navigation, route }: any) {
   const { selected, categories } = useBusinessProfiles();
   const [records, setRecords] = useState<RecordItem[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
+  // The search endpoint is cursor-based, so keep the cursor that opened each
+  // visited page. This gives mobile predictable Previous / Next navigation
+  // without inventing a total page count the API does not return.
+  const [pageIndex, setPageIndex] = useState(0);
+  const [pageCursors, setPageCursors] = useState<Array<string | undefined>>([undefined]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [keyword, setKeyword] = useState("");
   const [type, setType] = useState<"all" | "expense" | "sales">("all");
@@ -69,7 +81,20 @@ export function RecordsScreen({ navigation, route }: any) {
   const [rangeLabel, setRangeLabel] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  /**
+   * A failed DELETE or RESOLVE, as a finished sentence.
+   *
+   * Kept separate from `loadFailure` below because the two need opposite
+   * reassurances: a failed load is about the figures on screen being old, and
+   * a failed action is about the record NOT having changed. Collapsing them
+   * would attach one of those sentences to the other's failure.
+   */
   const [error, setError] = useState<string | null>(null);
+  /** A failed search, kept as a descriptor. See lib/connectionState.ts. */
+  const [loadFailure, setLoadFailure] = useState<LoadFailure | null>(null);
+  /** When the rows on screen arrived, and the clock the caption is read against. */
+  const [loadedAt, setLoadedAt] = useState<number | null>(null);
+  const [clock, setClock] = useState(() => Date.now());
   /**
    * The "that worked" line. Two sources feed it: an action completed here
    * (resolving a flag), and an action completed on a screen that then went
@@ -84,6 +109,7 @@ export function RecordsScreen({ navigation, route }: any) {
    * colour changes, width does not, so the card below it never shifts.
    */
   const [keywordFocused, setKeywordFocused] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
 
   // Typing "groceries" used to fire nine requests, each racing the last.
   const searchTerm = useDebounced(keyword);
@@ -91,16 +117,17 @@ export function RecordsScreen({ navigation, route }: any) {
   const isCompleteDate = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
 
   const load = useCallback(
-    async (isRefresh = false, cursor?: string) => {
+    async (isRefresh = false, cursor?: string, targetPage = 0, isPagination = false) => {
       if (!selected) return;
-      if (cursor) {
-        setLoadingMore(true);
-      } else if (isRefresh) {
+      if (isRefresh) {
         setRefreshing(true);
+      } else if (isPagination) {
+        setLoadingMore(true);
       } else {
         setLoading(true);
       }
       setError(null);
+      setClock(Date.now());
       try {
         const page = await api.get<{ items: RecordItem[]; nextCursor: string | null }>("/records/search", {
             businessProfileId: selected.id,
@@ -116,10 +143,23 @@ export function RecordsScreen({ navigation, route }: any) {
             limit: 50,
             cursor,
           });
-        setRecords((current) => (cursor ? [...current, ...page.items] : page.items));
+        setRecords(page.items);
         setNextCursor(page.nextCursor);
+        setPageIndex(targetPage);
+        setPageCursors((current) => {
+          if (targetPage === 0) return [undefined];
+          const visited = current.slice(0, targetPage + 1);
+          visited[targetPage] = cursor;
+          return visited;
+        });
+        setLoadedAt(Date.now());
+        setLoadFailure(null);
+        return true;
       } catch (err) {
-        setError(errorMessage(err));
+        // Not cleared before the request: a failing pull-to-refresh used to
+        // blink its own explanation away for the length of each attempt.
+        setLoadFailure(toLoadFailure(err));
+        return false;
       } finally {
         setLoading(false);
         setRefreshing(false);
@@ -266,7 +306,7 @@ export function RecordsScreen({ navigation, route }: any) {
               haptics.committed();
             } catch (err) {
               setRecords(previous);
-              setError(errorMessage(err));
+              setError(describeActionFailure(toLoadFailure(err), "The record is still in your books."));
               haptics.failed();
             }
           },
@@ -296,7 +336,7 @@ export function RecordsScreen({ navigation, route }: any) {
       setNotice("Marked reviewed and not a duplicate.");
     } catch (err) {
       setRecords(previous);
-      setError(errorMessage(err));
+      setError(describeActionFailure(toLoadFailure(err), "The record's flags are unchanged."));
       haptics.failed();
     }
   }
@@ -313,11 +353,38 @@ export function RecordsScreen({ navigation, route }: any) {
 
   const categoryName = (id?: number) => categories.find((c) => c.id === id)?.name ?? "—";
 
+  /*
+   * `hasData` is `records.length > 0`, NOT "a load has succeeded before".
+   *
+   * The two differ on a filter that legitimately matches nothing and then
+   * fails to refresh, and the row count is the honest one: there is nothing on
+   * screen to describe as stale, so the notice must be the one that explains a
+   * blank list rather than the one that ages the figures on it.
+   */
+  const loadNotice = describeLoadFailure(loadFailure, {
+    hasData: records.length > 0,
+    lastUpdatedAt: loadedAt,
+    now: clock,
+    subject: "your records",
+  });
+
+  async function changePage(targetPage: number, cursor?: string) {
+    const loaded = await load(false, cursor, targetPage, true);
+    if (loaded) scrollRef.current?.scrollTo({ y: 0, animated: true });
+  }
+
   return (
     <Screen safeTop>
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={{ padding: space.lg, paddingTop: space.md, paddingBottom: space.xxl * 2 }}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={brand[600]} />}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => load(true, pageCursors[pageIndex], pageIndex)}
+            tintColor={brand[600]}
+          />
+        }
       >
         <ScreenHeader title="Records" />
 
@@ -406,7 +473,7 @@ export function RecordsScreen({ navigation, route }: any) {
                 ? `${activeFilters} active`
                 : loading
                   ? ""
-                  : `${records.length}${nextCursor ? "+" : ""} record${records.length === 1 ? "" : "s"}`}
+                  : `Page ${pageIndex + 1} · ${records.length} record${records.length === 1 ? "" : "s"}`}
             </T>
           </View>
 
@@ -548,8 +615,32 @@ export function RecordsScreen({ navigation, route }: any) {
 
         {error ? <ErrorNote>{error}</ErrorNote> : null}
 
+        <ConnectionNotice
+          notice={loadNotice}
+          onRetry={() => load(true, pageCursors[pageIndex], pageIndex)}
+          busy={refreshing}
+          style={{ marginBottom: space.md }}
+        />
+
+        {/* The list is laid out by each card's own margin rather than a gap on
+            the container, so this carries its own. */}
+        {records.length > 0 ? (
+          <LastUpdated at={loadedAt} now={clock} style={{ marginBottom: space.sm }} />
+        ) : null}
+
         {loading ? (
           <SkeletonList />
+        ) : records.length === 0 && loadFailure ? (
+          /*
+            THE BUG THIS BRANCH FIXES. A search that failed left `records`
+            empty, which fell through to the empty state below — so an owner
+            whose wifi dropped was told "You haven't added any records yet"
+            about books that were fine. Being told your records are gone is not
+            a cosmetic error; it is the sentence that makes someone re-enter a
+            month of expenses. The notice above already says what happened and
+            offers the retry, so this branch draws nothing more.
+          */
+          null
         ) : records.length === 0 ? (
           <EmptyState
             title={keyword ? "No records match that search" : "You haven't added any records yet"}
@@ -572,13 +663,35 @@ export function RecordsScreen({ navigation, route }: any) {
                 onResolve={() => resolve(r)}
               />
             ))}
-            {nextCursor ? (
-              <Button
-                title={loadingMore ? "Loading…" : "Load more records"}
-                variant="secondary"
-                loading={loadingMore}
-                onPress={() => load(false, nextCursor)}
-              />
+            {pageIndex > 0 || nextCursor ? (
+              <Card style={{ marginTop: space.xs }}>
+                <T
+                  variant="caption"
+                  accessibilityLiveRegion="polite"
+                  style={{ textAlign: "center", color: ink[500], marginBottom: space.sm }}
+                >
+                  Page {pageIndex + 1}
+                </T>
+                <View style={{ flexDirection: "row", gap: space.sm }}>
+                  <View style={{ flex: 1 }}>
+                    <Button
+                      title="Previous"
+                      variant="secondary"
+                      disabled={pageIndex === 0 || loadingMore}
+                      onPress={() => changePage(pageIndex - 1, pageCursors[pageIndex - 1])}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Button
+                      title={loadingMore ? "Loading…" : "Next"}
+                      variant="secondary"
+                      loading={loadingMore}
+                      disabled={!nextCursor || loadingMore}
+                      onPress={() => changePage(pageIndex + 1, nextCursor ?? undefined)}
+                    />
+                  </View>
+                </View>
+              </Card>
             ) : null}
           </>
         )}

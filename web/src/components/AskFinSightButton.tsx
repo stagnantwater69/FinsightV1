@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useAiChat } from "../context/AiChatContext";
-import type { InteractionModule } from "../lib/types";
+import type { InteractionModule, ReductionOpportunity } from "../lib/types";
 
 /**
  * What a page hands Ask FinSight when it opens the drawer.
@@ -22,6 +22,16 @@ export interface AskFinSightNavState {
    * the question and decides before anything reaches the AI.
    */
   initialQuestion?: string;
+  /**
+   * The selected reduction opportunity card, echoed back verbatim so the
+   * server can ground an explanation in it (plan §11.1). Same lifetime rule
+   * as `initialQuestion`: only scopes the next message actually sent, never
+   * resent on later turns, never touches a conversation already open. See
+   * `askSchema.reductionOpportunity` on the backend for the trust boundary —
+   * this is validated shape, not free-form prose, and it steers wording
+   * only, never re-derived data.
+   */
+  reductionOpportunity?: ReductionOpportunity;
 }
 
 /**
@@ -34,8 +44,8 @@ export interface AskFinSightNavState {
 export function useAskFinSight(originModule: InteractionModule) {
   const { openChat } = useAiChat();
   return useCallback(
-    (initialQuestion?: string) => {
-      openChat(originModule, initialQuestion);
+    (initialQuestion?: string, reductionOpportunity?: ReductionOpportunity) => {
+      openChat(originModule, initialQuestion, reductionOpportunity);
     },
     [openChat, originModule],
   );
@@ -72,7 +82,7 @@ export function useAskFinSight(originModule: InteractionModule) {
  * permanently in reach. The drawer it opens portals for its own, separate
  * reason; this one is not cosmetic either.
  */
-export function AskFinSightButton({ originModule, initialQuestion }: AskFinSightNavState) {
+export function AskFinSightButton({ originModule, initialQuestion, reductionOpportunity }: AskFinSightNavState) {
   const ask = useAskFinSight(originModule);
 
   return (
@@ -91,7 +101,7 @@ export function AskFinSightButton({ originModule, initialQuestion }: AskFinSight
         <button
           type="button"
           data-tour="ask-finsight"
-          onClick={() => ask(initialQuestion)}
+          onClick={() => ask(initialQuestion, reductionOpportunity)}
           aria-label="Ask FinSight"
           /*
            * bottom-20 clears the fixed bottom nav (AppShell renders it under

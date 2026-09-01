@@ -1,6 +1,6 @@
 import { AlertCircle, ArrowRight, Check, FileSpreadsheet, FileText, RefreshCw } from "lucide-react";
 import { Card, MEASURE, Rise, SectionHead } from "./grid";
-import { CurveDivider, FinancialTrail, MintGlow } from "./FinancialTrail";
+import { CurveDivider, MintGlow } from "./FinancialTrail";
 
 /**
  * The bento feature grid: seven capabilities, each a card with a title, a
@@ -26,7 +26,7 @@ function OcrPreview() {
           <p className="text-[10px] text-landing-muted">Invoice #1602 · May 31, 2024</p>
           <p className="figure mt-1.5 text-sm font-bold text-landing-charcoal">₱4,600.00</p>
         </div>
-        <span className="flex items-center gap-1 rounded-full bg-landing-emerald px-2 py-0.5 text-[9px] font-bold text-landing-mint-light">
+        <span className="flex items-center gap-1 rounded-full bg-landing-emerald px-2 py-0.5 text-[9px] font-bold text-landing-mint">
           <Check className="h-2.5 w-2.5" strokeWidth={3} />
           Captured
         </span>
@@ -38,10 +38,16 @@ function OcrPreview() {
 function MeterPreview() {
   return (
     <PreviewFrame>
-      <p className="text-[10px] font-semibold text-landing-muted">Current Recovery Rate</p>
-      <p className="figure mt-0.5 text-lg font-bold text-landing-charcoal">61%</p>
-      <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-landing-mint-light">
-        <div className="h-full w-[61%] rounded-full bg-landing-green" />
+      <div className="flex items-baseline justify-between">
+        <p className="text-[10px] font-semibold text-landing-muted">Monthly target</p>
+        <p className="figure text-[11px] font-bold text-landing-green">67% covered</p>
+      </div>
+      <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-landing-mint-light">
+        <div className="h-full w-[67%] rounded-full bg-gradient-to-r from-landing-green to-accent-400" />
+      </div>
+      <div className="mt-2.5 flex items-baseline justify-between">
+        <p className="text-[10px] text-landing-muted">Today's needed pace</p>
+        <p className="figure text-[11px] font-bold text-landing-charcoal">₱4,500/day</p>
       </div>
     </PreviewFrame>
   );
@@ -50,10 +56,10 @@ function MeterPreview() {
 function AiPreview() {
   return (
     <PreviewFrame>
-      <p className="w-fit rounded-lg rounded-bl-sm bg-white px-2.5 py-1.5 text-[10px] font-medium text-landing-charcoal shadow-sm">
+      <p className="w-fit rounded-lg rounded-bl-sm bg-landing-surface px-2.5 py-1.5 text-[10px] font-medium text-landing-charcoal shadow-sm">
         How was my profit this week?
       </p>
-      <p className="ml-auto mt-2 w-fit max-w-[90%] rounded-lg rounded-br-sm bg-landing-emerald px-2.5 py-1.5 text-[10px] leading-snug text-landing-mint-light">
+      <p className="ml-auto mt-2 w-fit max-w-[90%] rounded-lg rounded-br-sm bg-landing-emerald px-2.5 py-1.5 text-[10px] leading-snug text-landing-mint">
         Your profit this week is <span className="figure font-bold text-white">₱7,314.00</span> with a margin of 27.9%.
       </p>
     </PreviewFrame>
@@ -110,7 +116,7 @@ function SyncPreview() {
         loading="lazy"
         className="h-28 w-full object-cover"
       />
-      <span className="absolute left-1/2 top-1/2 flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 shadow-sm">
+      <span className="absolute left-1/2 top-1/2 flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-landing-surface/90 shadow-sm">
         <RefreshCw className="h-4 w-4 text-landing-green" />
       </span>
     </div>
@@ -181,15 +187,16 @@ const FEATURES: { title: string; body: string; preview: () => React.ReactNode; s
 
 export function BentoGridFeatures() {
   return (
-    <section id="features" aria-labelledby="features-title" className="relative scroll-mt-20 overflow-hidden bg-landing-cream">
+    <section
+      id="features"
+      aria-labelledby="features-title"
+      className="landing-section-gradient-base relative scroll-mt-20 overflow-hidden bg-landing-cream"
+    >
       {/* the workflow's pale mint arcs down into the cream */}
-      <CurveDivider from="#E8F7F0" className="relative z-10" />
-      <FinancialTrail variant="watermark" className="absolute -left-8 top-24 hidden h-40 w-40 opacity-[0.04] xl:block" />
-      <FinancialTrail variant="dots" className="absolute right-6 top-10 hidden h-32 w-32 opacity-[0.05] lg:block" />
-
+      <CurveDivider from="mint-pale" className="relative z-10" />
       <div className={`${MEASURE} relative py-16 sm:py-24`}>
         <SectionHead
-          eyebrow="Powerful features"
+          eyebrow="Everything your shop needs"
           id="features-title"
           title="Designed for how small business owners actually work"
           lede="No accounting background required. From paper receipts to plain-language answers, FinSight handles the details so you can focus on running your shop."
@@ -200,7 +207,7 @@ export function BentoGridFeatures() {
           {FEATURES.map((f, i) => (
             <Rise key={f.title} delay={Math.min(i, 5) * 55} className={`relative ${f.span}`}>
               <Card hover className="flex h-full flex-col p-5">
-                <h3 className="mb-4 font-display text-[16px] font-bold leading-snug text-landing-charcoal">{f.title}</h3>
+                <h3 className="mb-4 font-landing-display text-[16px] font-bold leading-snug text-landing-charcoal">{f.title}</h3>
                 <div className="mt-auto">
                   {f.preview()}
                   <p className="text-[13.5px] leading-relaxed text-landing-muted">{f.body}</p>

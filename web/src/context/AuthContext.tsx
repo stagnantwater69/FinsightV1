@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { api, setSessionExpiredHandler } from "../lib/api";
 import type { LoginInput, Profile, RegisterInput, UpdateProfileInput, UserPreferences } from "../lib/types";
@@ -203,8 +203,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setProfile(data);
   }
 
-  async function updatePreferences(patch: Partial<UserPreferences>) {
-    const previous = preferences;
+  /*
+   * IDENTITY IS PART OF THE CONTRACT HERE, not an optimisation.
+   *
+   * Consumers put this function in dependency arrays — TourContext builds its
+   * `persist` callback from it, and an effect calls that callback whenever it
+   * changes. Declared as a plain function it was a NEW function on every
+   * render of this provider, and it sets state on this provider, so the two
+   * fed each other: persist → setPreferences → re-render → new
+   * updatePreferences → new persist → the effect fires again. On the dashboard
+   * with the guided tour open that ran until React gave up with "Maximum
+   * update depth exceeded" (surfacing inside the recharts panels, which were
+   * only the deepest thing subscribed), while firing a PATCH per turn of the
+   * loop.
+   *
+   * So: `useCallback` with no dependencies, and the rollback value read from a
+   * ref rather than closed over, because a dependency on `preferences` would
+   * change identity on every write and rebuild exactly the same cycle.
+   */
+  const preferencesRef = useRef<UserPreferences | null>(null);
+  preferencesRef.current = preferences;
+
+  const updatePreferences = useCallback(async (patch: Partial<UserPreferences>) => {
+    const previous = preferencesRef.current;
     setPreferences((prev) => ({ ...(prev ?? DEFAULT_PREFERENCES), ...patch }));
     try {
       const { data } = await api.patch<UserPreferences>("/auth/me/preferences", patch);
@@ -215,7 +236,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setPreferences(previous);
       throw err;
     }
-  }
+  }, []);
 
   async function uploadAvatar(file: File) {
     const formData = new FormData();

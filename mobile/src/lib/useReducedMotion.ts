@@ -25,9 +25,9 @@ import { AccessibilityInfo } from "react-native";
 /**
  * The subscription itself, as a plain function.
  *
- * WHY SEPARATE FROM THE HOOK: there is no render harness in this project — no
- * testing-library, no react-test-renderer — so a hook cannot be exercised in a
- * test at all. The part worth guarding is not the `useState` call, it is the
+ * WHY SEPARATE FROM THE HOOK: this predates the render harness (which now
+ * exists — see tests/render/), but the split still earns its place. The part
+ * worth guarding is not the `useState` call, it is the
  * lifecycle around the platform API: that the initial read is taken, that a
  * later system toggle is heard, that the subscription is removed, and that a
  * slow initial read cannot report back after the caller has gone away. All of

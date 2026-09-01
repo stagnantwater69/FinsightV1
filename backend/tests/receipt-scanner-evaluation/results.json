@@ -1,0 +1,107 @@
+{
+  "generatedAt": "2026-08-30T21:42:17.673Z",
+  "metrics": {
+    "releaseGateEligibleSamples": 0,
+    "documentPrecision": null,
+    "documentRecall": null,
+    "obviousNonReceiptFalseTriggerRate": null,
+    "multiReceiptCountAccuracy": null,
+    "handwrittenHardRejectRate": null,
+    "analysisLatencyP95Ms": 46.28311500000001
+  },
+  "results": [
+    {
+      "id": "real-01-ph-pos-photo",
+      "kind": "receipt",
+      "writing": "printed",
+      "releaseGateEligible": false,
+      "sourceStatus": "existing project fixture; consent status not recorded in this manifest",
+      "detectionLatencyMs": 46.28311500000001,
+      "expectedDocumentCount": 1,
+      "actualDocumentCount": 2,
+      "likelihood": {
+        "version": "receipt-likelihood-v1",
+        "score": 86,
+        "outcome": "likely-receipt",
+        "signals": {
+          "document": true,
+          "textLines": 58,
+          "moneyPatterns": 7,
+          "receiptKeywords": 3,
+          "datePatterns": 1,
+          "itemPatterns": 0,
+          "administrationPatterns": 0,
+          "handwrittenRelaxation": false
+        }
+      },
+      "selectedSource": "original",
+      "fields": {
+        "date": "correct",
+        "vendor": "n/a",
+        "amount": "correct"
+      }
+    },
+    {
+      "id": "real-02-clean-digital",
+      "kind": "receipt",
+      "writing": "printed",
+      "releaseGateEligible": false,
+      "sourceStatus": "existing project fixture; consent status not recorded in this manifest",
+      "detectionLatencyMs": 36.975586000000476,
+      "expectedDocumentCount": 1,
+      "actualDocumentCount": 1,
+      "likelihood": {
+        "version": "receipt-likelihood-v1",
+        "score": 92,
+        "outcome": "likely-receipt",
+        "signals": {
+          "document": true,
+          "textLines": 14,
+          "moneyPatterns": 7,
+          "receiptKeywords": 2,
+          "datePatterns": 1,
+          "itemPatterns": 1,
+          "administrationPatterns": 0,
+          "handwrittenRelaxation": false
+        }
+      },
+      "selectedSource": "original",
+      "fields": {
+        "date": "correct",
+        "vendor": "correct",
+        "amount": "correct"
+      }
+    },
+    {
+      "id": "real-03-ph-sales-invoice",
+      "kind": "receipt",
+      "writing": "printed",
+      "releaseGateEligible": false,
+      "sourceStatus": "existing project fixture; consent status not recorded in this manifest",
+      "detectionLatencyMs": 29.832800000000134,
+      "expectedDocumentCount": 1,
+      "actualDocumentCount": 1,
+      "likelihood": {
+        "version": "receipt-likelihood-v1",
+        "score": 99,
+        "outcome": "likely-receipt",
+        "signals": {
+          "document": true,
+          "textLines": 37,
+          "moneyPatterns": 11,
+          "receiptKeywords": 4,
+          "datePatterns": 1,
+          "itemPatterns": 1,
+          "administrationPatterns": 1,
+          "handwrittenRelaxation": false
+        }
+      },
+      "selectedSource": "original",
+      "fields": {
+        "date": "correct",
+        "vendor": "n/a",
+        "amount": "wrong"
+      }
+    }
+  ]
+}

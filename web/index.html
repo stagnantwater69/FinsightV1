@@ -2,7 +2,18 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!--
+      The same owl the app chrome uses (AppShell, AuthLayout, PublicLayout,
+      NotFound), re-cropped to the circle's own bounding box and scaled up
+      ~14% past the canvas (bleeding the outer ring slightly off-frame) so it
+      reads larger at 16-32px favicon size. The source file centers the badge
+      in a lot of transparent padding on a 1024×1024 canvas — fine at ~40px in
+      the header, but that padding was most of the frame at favicon size.
+      Transparent background, not a solid fill to the canvas edges — filling
+      to the corners read as a flat box rather than as the mark.
+    -->
+    <link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png" />
+    <link rel="apple-touch-icon" href="/favicon-180.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>FinSight — Know where your money actually goes</title>
     <meta name="description" content="FinSight helps small business owners track expenses and sales, spot unusual spending, and see how much they need to cover the month — in plain language." />
@@ -28,6 +39,22 @@
             t === "dark" || t === "light" || t === "classic" ? t : "classic";
         } catch (e) {
           document.documentElement.dataset.theme = "classic";
+        }
+      })();
+    </script>
+    <!--
+      Landing theme boot — same reasoning as the theme boot above, for the
+      public marketing page's own separate light/dark toggle (PublicLayout).
+      A different attribute (`data-landing-theme`) so it can never collide
+      with or be read by the authenticated app's `data-theme`.
+    -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("finsight.landingTheme");
+          document.documentElement.dataset.landingTheme = t === "dark" ? "dark" : "light";
+        } catch (e) {
+          document.documentElement.dataset.landingTheme = "light";
         }
       })();
     </script>

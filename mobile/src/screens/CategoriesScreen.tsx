@@ -3,11 +3,24 @@ import { Pressable, ScrollView, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { errorMessage } from "../lib/api";
-import { Button, Card, EmptyState, ErrorNote, Field, Screen, ScreenHeader, T } from "../components/ui";
+import { Button, Card, EmptyState, ErrorNote, Field, Screen, ScreenHeader, SelectChip, T } from "../components/ui";
 import { TAP, font, radius, space, typeScale } from "../theme/tokens";
 import { useTheme } from "../context/ThemeContext";
-import type { ExpenseCategory } from "../lib/types";
+import type { ExpenseCategory, ExpenseCostBehavior } from "../lib/types";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
+
+/**
+ * Cost-behavior classification — Expense Reduction Opportunities plan
+ * §5.2/§15 Phase 5. Owner-controlled, optional, and never guessed from the
+ * category name (see the plan's explicit warning against name heuristics).
+ * `null` is a real, distinct choice here — it means "leave unclassified",
+ * which is also what omitting the field from the create request does.
+ */
+const COST_BEHAVIOR_OPTIONS: { value: ExpenseCostBehavior; label: string }[] = [
+  { value: "FIXED", label: "Fixed" },
+  { value: "VARIABLE", label: "Variable" },
+  { value: "MIXED", label: "Mixed" },
+];
 
 /**
  * Expense categories, on a phone.
@@ -37,6 +50,7 @@ export function CategoriesScreen({ navigation }: { navigation: { navigate: (scre
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [costBehavior, setCostBehavior] = useState<ExpenseCostBehavior | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -61,9 +75,14 @@ export function CategoriesScreen({ navigation }: { navigation: { navigate: (scre
     setSaving(true);
     setError(null);
     try {
-      await createCategory({ name: trimmed, description: description.trim() || undefined });
+      await createCategory({
+        name: trimmed,
+        description: description.trim() || undefined,
+        costBehavior: costBehavior ?? undefined,
+      });
       setName("");
       setDescription("");
+      setCostBehavior(null);
       setAdding(false);
     } catch (err) {
       setError(errorMessage(err));
@@ -110,6 +129,33 @@ export function CategoriesScreen({ navigation }: { navigation: { navigate: (scre
               placeholder="What belongs in here"
             />
 
+            {/*
+              Low-friction and skippable — the plan is explicit that this
+              stays optional and never guessed from the name. Tapping the
+              already-selected chip clears it back to "leave unclassified",
+              same toggle-to-clear behavior the filter chips elsewhere use.
+            */}
+            <View style={{ marginBottom: space.md }}>
+              <T variant="label" style={{ marginBottom: 6, color: t.textSecondary }}>
+                How this cost behaves (optional)
+              </T>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.xs }}>
+                {COST_BEHAVIOR_OPTIONS.map((option) => (
+                  <SelectChip
+                    key={option.value}
+                    label={option.label}
+                    selected={costBehavior === option.value}
+                    onPress={() => setCostBehavior((v) => (v === option.value ? null : option.value))}
+                    accessibilityLabel={`${option.label} cost`}
+                  />
+                ))}
+              </View>
+              <T variant="caption" style={{ marginTop: 4 }}>
+                Helps FinSight tailor its review checks — rent or a lease is usually fixed, ingredients or supplies
+                usually vary. Leave this unset if you're not sure.
+              </T>
+            </View>
+
             {error ? <ErrorNote>{error}</ErrorNote> : null}
 
             <View style={{ flexDirection: "row", gap: space.sm, marginTop: space.sm }}>
@@ -130,6 +176,7 @@ export function CategoriesScreen({ navigation }: { navigation: { navigate: (scre
                     setAdding(false);
                     setName("");
                     setDescription("");
+                    setCostBehavior(null);
                     setError(null);
                   }}
                 />

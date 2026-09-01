@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useTourOptional } from "../context/TourContext";
 import { usePersistentState, useDismiss, useFocusTrap, useMenuKeys } from "../lib/hooks";
+import { AddExpenseModal } from "./AddExpenseModal";
+import { AddSalesModal } from "./AddSalesModal";
 import { BusinessSwitcher } from "./BusinessSwitcher";
 import { GlobalSearch } from "./GlobalSearch";
 import { NotificationBell } from "./NotificationBell";
@@ -21,7 +23,6 @@ import {
   IconRecords,
   IconSales,
   IconSearch,
-  IconSettings,
   IconSidebar,
   IconUpload,
 } from "./icons";
@@ -129,7 +130,6 @@ const NAV_GROUPS: NavGroup[] = [
     heading: "Account",
     items: [
       { to: "/profile", label: "My profile", Icon: IconProfile },
-      { to: "/account-settings", label: "Account settings", Icon: IconSettings },
     ],
   },
 ];
@@ -137,12 +137,15 @@ const NAV_GROUPS: NavGroup[] = [
 // Pages reachable without being a sidebar nav destination. Notifications
 // lives only behind the topbar bell now (the "one bell, not two places to
 // check" decision); Categories lost its tab too but is still linked from
-// GlobalSearch. Both routes are still real, so both still need a proper
-// announced title below rather than falling back to the generic "FinSight".
+// GlobalSearch, and Account settings now reaches people through the account
+// menu, My profile and search rather than a tab of its own. The routes are all
+// still real, so each still needs a proper announced title below rather than
+// falling back to the generic "FinSight".
 const EXTRA_PAGE_TITLES: Record<string, string> = {
   "/notifications": "Notifications",
   "/records/categories": "Categories",
   "/business-profiles/all": "All businesses",
+  "/account-settings": "Account settings",
 };
 
 /**
@@ -172,9 +175,24 @@ const BOTTOM_NAV: NavItem[] = [
   { to: "/business-profiles", label: "Business", Icon: IconBusiness },
 ];
 
-const QUICK_ADD: { to: string; Icon: IconComponent; tone: string; title: string; sub: string; tour?: string }[] = [
-  { to: "/records/expenses/new", Icon: IconExpense, tone: "bg-tint-accent text-tone-accent", title: "Add expense", sub: "Money spent by the business" },
-  { to: "/records/sales/new", Icon: IconSales, tone: "bg-tint-brand text-tone-brand", title: "Add sales reference", sub: "A recorded sales amount" },
+/**
+ * Add expense / Add sales open the same popup Records uses for its own "+"
+ * buttons — `modal` names which one instead of a route. Scan receipt and
+ * Import CSV stay full-page `to` links: both are involved enough (a camera,
+ * a file upload and preview table) that a modal would just be a cramped copy
+ * of the page, not a shortcut.
+ */
+const QUICK_ADD: {
+  to?: string;
+  modal?: "expense" | "sales";
+  Icon: IconComponent;
+  tone: string;
+  title: string;
+  sub: string;
+  tour?: string;
+}[] = [
+  { modal: "expense", Icon: IconExpense, tone: "bg-tint-accent text-tone-accent", title: "Add expense", sub: "Money spent by the business" },
+  { modal: "sales", Icon: IconSales, tone: "bg-tint-brand text-tone-brand", title: "Add sales reference", sub: "A recorded sales amount" },
   { to: "/records/receipts/new", Icon: IconCamera, tone: "bg-tint-info text-tone-info", title: "Scan receipt", sub: "Extract details from a photo", tour: "scan-receipt" },
   { to: "/records/csv-imports/new", Icon: IconUpload, tone: "bg-tint-brand text-tone-brand", title: "Import CSV", sub: "Upload existing records", tour: "import-csv" },
 ];
@@ -242,11 +260,18 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { profile: user } = useAuth();
   const { selected } = useBusinessProfiles();
   const location = useLocation();
+  const navigate = useNavigate();
 
   const [collapsed, setCollapsed] = usePersistentState("finsight.sidebarCollapsed", false, isBool);
   const [insightsOpen, setInsightsOpen] = useState(location.pathname.startsWith("/insights"));
   const [addOpen, setAddOpen] = useState(false);
   const [mobileSearch, setMobileSearch] = useState(false);
+  // Quick Add's own popup instances — separate from Records' own
+  // addExpenseOpen/addSalesOpen, which still exist for the page's own "+"
+  // buttons and its Edit/Duplicate flows. Landing back on /records after a
+  // save (below) is what Records' own mount-time load then picks up.
+  const [quickAddExpenseOpen, setQuickAddExpenseOpen] = useState(false);
+  const [quickAddSalesOpen, setQuickAddSalesOpen] = useState(false);
 
   /*
    * The product tour's two Quick-add steps highlight items INSIDE this menu,
@@ -383,14 +408,14 @@ export function AppShell({ children }: { children: ReactNode }) {
                 onClick={() => setCollapsed(false)}
                 aria-label="Open sidebar"
                 aria-expanded={false}
-                className="tap h-10 w-10 min-h-0 min-w-0 rounded-xl transition hover:bg-sidebar-fg/10"
+                className="tap h-12 w-12 min-h-0 min-w-0 rounded-xl transition hover:bg-sidebar-fg/10"
               >
-                <span aria-hidden className="relative flex h-9 w-9 items-center justify-center">
-                  <span className="absolute inset-0 flex items-center justify-center rounded-xl bg-sidebar-fg/15 font-display text-base font-extrabold text-sidebar-ink opacity-100 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0">
-                    F
+                <span aria-hidden className="relative flex h-11 w-11 items-center justify-center">
+                  <span className="absolute inset-0 flex items-center justify-center rounded-xl opacity-100 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0">
+                    <img src="/finsight-logo.png" alt="" className="h-11 w-11 rounded-xl object-contain" />
                   </span>
-                  <span className="absolute inset-0 flex items-center justify-center rounded-xl text-sidebar-muted opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
-                    <IconSidebar className="h-[18px] w-[18px]" />
+                  <span className="absolute inset-0 flex items-center justify-center rounded-xl bg-sidebar-fg/15 text-sidebar-muted opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+                    <IconSidebar className="h-5 w-5" />
                   </span>
                 </span>
               </button>
@@ -402,13 +427,12 @@ export function AppShell({ children }: { children: ReactNode }) {
               className="flex min-h-tap flex-1 items-center gap-2.5 rounded-xl px-2 transition hover:bg-sidebar-fg/10"
               aria-label="FinSight home"
             >
-              {/* MASCOT SEAM — the owl badge mark replaces this monogram, 36px. */}
-              <span
+              <img
+                src="/finsight-logo.png"
+                alt=""
                 aria-hidden
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-sidebar-fg/15 font-display text-base font-extrabold text-sidebar-ink"
-              >
-                F
-              </span>
+                className="h-11 w-11 shrink-0 rounded-xl object-contain"
+              />
               <span className="font-display text-xl font-extrabold tracking-[-0.02em] text-sidebar-ink">
                 Fin<span className="text-sidebar-accent">Sight</span>
               </span>
@@ -599,12 +623,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               className="flex shrink-0 items-center lg:hidden"
               aria-label="FinSight home"
             >
-              <span
-                aria-hidden
-                className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-700 font-display text-sm font-bold text-white"
-              >
-                F
-              </span>
+              <img src="/finsight-logo.png" alt="" aria-hidden className="h-10 w-10 rounded-lg object-contain" />
             </Link>
 
             {/* ---- global search ----
@@ -663,27 +682,44 @@ export function AppShell({ children }: { children: ReactNode }) {
                       <div className="px-2.5 pb-1.5 pt-2 text-[10.5px] font-bold uppercase tracking-[0.12em] text-ink-400">
                         Add a record
                       </div>
-                      {QUICK_ADD.map((entry) => (
-                        <Link
-                          key={entry.to}
-                          to={entry.to}
-                          data-tour={entry.tour}
-                          role="menuitem"
-                          className="flex min-h-tap items-center gap-2.5 rounded-xl px-2.5 transition hover:bg-paper-100"
-                        >
-                          <span
-                            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${entry.tone}`}
-                          >
-                            <entry.Icon className="h-4 w-4" />
-                          </span>
-                          <span className="min-w-0">
-                            <span className="block text-[13.5px] font-semibold text-ink-900">
-                              {entry.title}
+                      {QUICK_ADD.map((entry) => {
+                        const inner = (
+                          <>
+                            <span
+                              className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${entry.tone}`}
+                            >
+                              <entry.Icon className="h-4 w-4" />
                             </span>
-                            <span className="block truncate text-[11.5px] text-ink-500">{entry.sub}</span>
-                          </span>
-                        </Link>
-                      ))}
+                            <span className="min-w-0">
+                              <span className="block text-[13.5px] font-semibold text-ink-900">
+                                {entry.title}
+                              </span>
+                              <span className="block truncate text-[11.5px] text-ink-500">{entry.sub}</span>
+                            </span>
+                          </>
+                        );
+                        const itemClassName =
+                          "flex min-h-tap w-full items-center gap-2.5 rounded-xl px-2.5 text-left transition hover:bg-paper-100";
+                        return entry.modal ? (
+                          <button
+                            key={entry.modal}
+                            type="button"
+                            role="menuitem"
+                            className={itemClassName}
+                            onClick={() => {
+                              setAddOpen(false);
+                              if (entry.modal === "expense") setQuickAddExpenseOpen(true);
+                              else setQuickAddSalesOpen(true);
+                            }}
+                          >
+                            {inner}
+                          </button>
+                        ) : (
+                          <Link key={entry.to} to={entry.to!} data-tour={entry.tour} role="menuitem" className={itemClassName}>
+                            {inner}
+                          </Link>
+                        );
+                      })}
                     </div>
                   ) : null}
                 </div>
@@ -749,6 +785,24 @@ export function AppShell({ children }: { children: ReactNode }) {
             })}
           </ul>
         </nav>
+      ) : null}
+
+      {/* Quick Add's own instances of Records' popups — see QUICK_ADD above. */}
+      {selected ? (
+        <>
+          <AddExpenseModal
+            businessProfileId={selected.id}
+            open={quickAddExpenseOpen}
+            onClose={() => setQuickAddExpenseOpen(false)}
+            onSaved={() => navigate("/records")}
+          />
+          <AddSalesModal
+            businessProfileId={selected.id}
+            open={quickAddSalesOpen}
+            onClose={() => setQuickAddSalesOpen(false)}
+            onSaved={() => navigate("/records")}
+          />
+        </>
       ) : null}
     </div>
   );

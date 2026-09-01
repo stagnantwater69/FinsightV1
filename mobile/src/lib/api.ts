@@ -263,6 +263,8 @@ export const api = {
   get: <T>(path: string, query?: Record<string, string | number | boolean | undefined>) =>
     request<T>("GET", path, { query }),
   post: <T>(path: string, body?: unknown) => request<T>("POST", path, { body }),
+  /** Whole-resource replacement — used by the operating-schedule endpoint, which takes exactly seven entries at once rather than one field at a time (that's what `patch` is for). */
+  put: <T>(path: string, body?: unknown) => request<T>("PUT", path, { body }),
   /** POST authenticated by a one-off token from an auth deep link — see `authToken`. */
   postWithToken: <T>(path: string, authToken: string, body?: unknown) =>
     request<T>("POST", path, { body, authToken }),

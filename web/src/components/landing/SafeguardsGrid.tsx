@@ -1,6 +1,5 @@
 import { Bot, Camera, Lock, SquareCheck, type LucideIcon } from "lucide-react";
 import { MEASURE, Rise, SectionHead } from "./grid";
-import { FinancialTrail } from "./FinancialTrail";
 
 /**
  * The privacy section — the page's deep-emerald register change.
@@ -35,13 +34,15 @@ const SAFEGUARDS: { icon: LucideIcon; title: string; body: string }[] = [
 
 export function SafeguardsGrid() {
   return (
-    <section aria-labelledby="safeguards-title" className="relative overflow-hidden bg-landing-emerald">
-      {/* low-contrast mint grid + shield-and-receipt watermark */}
-      <FinancialTrail variant="grid" className="absolute inset-x-0 bottom-0 h-40 w-full opacity-[0.05]" />
-      <FinancialTrail variant="shield" className="absolute -right-6 top-1/2 hidden h-56 w-56 -translate-y-1/2 opacity-[0.07] lg:block" />
-
+    <section
+      aria-labelledby="safeguards-title"
+      className="landing-section-gradient-deep relative overflow-hidden bg-landing-emerald"
+    >
       <div className={`${MEASURE} relative py-16 sm:py-24`}>
-        <div className="grid gap-x-12 gap-y-10 lg:grid-cols-12">
+        {/* `items-center` on the split: the heading column is shorter than the
+            card block, and top-aligning it left the imbalance the eye reads as
+            dead space. */}
+        <div className="grid gap-x-12 gap-y-10 lg:grid-cols-12 lg:items-center">
           <div className="lg:col-span-4">
             <SectionHead
               tone="dark"
@@ -52,17 +53,23 @@ export function SafeguardsGrid() {
             />
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2 lg:col-span-8 xl:grid-cols-4">
+          {/* Two up, not four. Four columns inside the 8-col half left each card
+              barely 20 characters wide, so a two-sentence claim wrapped to six
+              ragged lines. At two the same copy sets in three. */}
+          <div className="grid gap-4 sm:grid-cols-2 lg:col-span-8">
             {SAFEGUARDS.map((s, i) => {
               const Icon = s.icon;
               return (
                 <Rise key={s.title} delay={i * 70} className="h-full">
-                  <div className="h-full rounded-2xl border border-landing-mint/20 bg-landing-emerald-2/80 p-5">
-                    <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-landing-mint/25 bg-landing-emerald">
+                  <div className="h-full rounded-2xl border border-landing-mint/20 bg-landing-emerald-2 p-6">
+                    {/* Mint, not gold: gold is the page's CTA colour, and four
+                        amber chips here read as warnings against the emerald
+                        instead of as part of it. */}
+                    <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-landing-mint/25 bg-gradient-to-br from-landing-mint/20 to-landing-mint/5">
                       <Icon className="h-5 w-5 text-landing-mint" aria-hidden />
                     </span>
-                    <h3 className="mt-4 font-display text-[15px] font-bold leading-snug text-white">{s.title}</h3>
-                    <p className="mt-2 text-[13px] leading-relaxed text-landing-mint-light/80">{s.body}</p>
+                    <h3 className="mt-4 font-landing-display text-base font-bold leading-snug text-white">{s.title}</h3>
+                    <p className="mt-2 text-sm leading-relaxed text-landing-mint/80">{s.body}</p>
                   </div>
                 </Rise>
               );

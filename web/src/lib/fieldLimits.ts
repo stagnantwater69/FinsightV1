@@ -41,4 +41,12 @@ export const FIELD_LIMITS = {
   importTitle: 150,
   /** The Ask FinSight question. Not a column — it is a cost ceiling on the model call. */
   aiQuestion: 500,
+  /**
+   * Spending Impact's "What are you planning to buy?" box —
+   * `purchaseReviewSchema.description` is `z.string().min(3).max(255)`. Not a
+   * column either: it is the description the purchase review is written about.
+   */
+  purchaseDescription: 255,
+  /** BusinessOperatingDayOverride.reason — VARCHAR(120). */
+  operatingOverrideReason: 120,
 } as const;

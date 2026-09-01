@@ -142,6 +142,57 @@ describe("amount parsing", () => {
   it("returns null when there is no money-shaped number", () => {
     expect(receipt(["MY STORE", "no amounts here"]).amount).toBeNull();
   });
+
+  // REGRESSION (real-33-mcdonalds-my-combo-submenu, real image corpus). The
+  // header "QTY ITEM TOTAL" matched the total keyword but carried no money,
+  // and the old code bailed out there instead of trying the next
+  // total-shaped line — falling through to the max-value fallback, where
+  // "Cash tendered 50.00" won over the real 19.00 total.
+  it("keeps looking past a total-shaped line with no money before falling back to tender/change", () => {
+    const parsed = receipt([
+      "QTY ITEM TOTAL",
+      "2 M McChicken 19.00",
+      "TakeOut Total (incl GST) 19.00",
+      "Cash tendered 50.00",
+      "Change 31.00",
+    ]);
+    expect(parsed.amount).toBe(19);
+  });
+
+  // REGRESSION (real-33 and real-35 in the real image corpus). A tax
+  // breakdown annotation stating the GST/VAT PORTION, not the amount paid,
+  // shares a line with the word "total" and used to win by being read first.
+  it("does not treat a tax-inclusive breakdown note as the total", () => {
+    expect(
+      receipt(["Item 1 19.00", "TakeOut Total (incl GST) 19.00", "TOTAL INCLUDES 6% GST 1.08"]).amount,
+    ).toBe(19);
+    expect(receipt(["Item 1 25.15", "Total 25.15", "(Total Included GST @ 6% : 1.42)"]).amount).toBe(25.15);
+  });
+
+  // REGRESSION (real-38-super-seven-dot-noise-duplicate-lines, real image
+  // corpus). A GST receipt printed a pre-rounding "Total Sales" figure
+  // before the post-rounding "Net Total" the owner actually paid, and
+  // first-match-wins picked the earlier, pre-rounding one.
+  it("prefers a Net Total line over an earlier pre-rounding Total Sales line", () => {
+    expect(
+      receipt(["Total Sales (Incl. GST @6%) RM18.29", "Rounding Adjustment RM0.01", "Net Total RM18.30"]).amount,
+    ).toBe(18.3);
+  });
+
+  // REGRESSION (real-37-gardenia-torn-multi-subtotal, real image corpus). A
+  // multi-tier VAT invoice prints several intermediate "Total X% supplies"
+  // breakdown lines before the actual "Total Payable" line, and first-match
+  // picked the first (zero-rated) subtotal instead of the payable figure.
+  it("prefers Total Payable over intermediate multi-tier VAT subtotal lines", () => {
+    const parsed = receipt([
+      "Total 0% supplies: 18.92",
+      "Total 6% supplies (excl. GST): 56.93",
+      "Total 6% supplies (Inc. GST): 60.34",
+      "Total 0% supplies: 13.92",
+      "Total Payable: 79.26",
+    ]);
+    expect(parsed.amount).toBe(79.26);
+  });
 });
 
 describe("vendor parsing", () => {
@@ -251,5 +302,79 @@ describe("choosing the vendor among several header lines", () => {
 
   it("still finds a plain vendor with no keyword at all", () => {
     expect(receipt(["ALING NENA", "Date: 2026-07-20", "TOTAL 100.00"]).vendor).toBe("ALING NENA");
+  });
+
+  // REGRESSION (real-33-mcdonalds-my-combo-submenu, real image corpus). A
+  // customer-service phone line read as a business-type phrase ("center" is a
+  // VENDOR_KEYWORD) and outscored "McDonald's" a few lines above it.
+  it("skips a customer-service phone line", () => {
+    const parsed = receipt([
+      "McDonald's Steli Mahkota Cheras DT (4736",
+      "TAX INVOICE",
+      "2 M McChicken 19.00",
+      "Total (incl GST) 19.00",
+      "Guest Relations Center : 1300-13-1300",
+    ]);
+    expect(parsed.vendor).toMatch(/McDonald/i);
+  });
+
+  // REGRESSION (real-29-saska-paperclip-clipboard, real image corpus). A
+  // garbled "before discounts" gratuity-table header outscored "SASKA'S" a
+  // few lines above it, and an address line ("... Mission Blvd") separately
+  // outscored it once the gratuity line was excluded — "Blvd" was missing
+  // from the address-word penalty list.
+  it("skips suggested-gratuity boilerplate and a Blvd address line", () => {
+    const parsed = receipt([
+      "SASKA'S",
+      "3788 Mission Blvd",
+      "Draft Blackhouse 7.00",
+      "Total 179.94",
+      "SUGGESTED TIP",
+      "i BEFORE DISCOUNTS A",
+      "18% =$30.06",
+    ]);
+    expect(parsed.vendor).toBe("SASKA'S");
+  });
+
+  // REGRESSION (real-28-carls-jr-translucent-bleed, real image corpus). A
+  // store-ID footer line ("i Restaurant 1100580 i") scored higher than the
+  // real name above it purely on the strength of the generic business-type
+  // word "Restaurant" plus its length. Gated on word count so a genuine
+  // business name that happens to carry a registration number (below) keeps
+  // scoring on its own merits.
+  it("skips a store-ID footer line but keeps a name with a registration number", () => {
+    const parsed = receipt(["CARL'S JR", "i Restaurant 1100580 i", "11961 Beach Blvd.", "Total 1.61"]);
+    expect(parsed.vendor).toBe("CARL'S JR");
+
+    const withRegNumber = receipt([
+      "KING'S CONFECTIONERY S/B 273500-U (KSB)",
+      "NO.41, JALAN SERI BINTANG 2",
+      "Total 25.15",
+    ]);
+    expect(withRegNumber.vendor).toMatch(/KING'S CONFECTIONERY/i);
+  });
+
+  // REGRESSION (real-37-gardenia-torn-multi-subtotal, real image corpus). The
+  // recipient/client's name printed further down the invoice outscored the
+  // issuing vendor's own name at the top — "BAKERIES" (plural) did not match
+  // the singular-only "bakery" keyword, so the real vendor lost its strongest
+  // signal.
+  it("prefers the issuing vendor at the top over a recipient block further down", () => {
+    // Position matters to the scoring, so this keeps the same line COUNT
+    // before the recipient block as the real receipt it is pinned to.
+    const parsed = receipt([
+      "GARDENIA BAKERIES (KL) SDN BHD (139386 X)",
+      "Lot 3, Jalan Pelabur 23/1,",
+      "40300 Shah Alam, Selangor.",
+      "Tel: 03-55423228",
+      "GST ID: 000351399040",
+      "TAX INVOICE",
+      "Cash Inv No.: 7922F711",
+      "Date: 22/09/2017",
+      "MAb noonR FRESH MARKET SON BHD",
+      "GROUND FLOOR, NO. 4 & 6,",
+      "Total Payable: 79.26",
+    ]);
+    expect(parsed.vendor).toMatch(/GARDENIA/i);
   });
 });

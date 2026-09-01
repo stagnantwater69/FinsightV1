@@ -9,3 +9,4 @@ expenseCategoryRouter.use(requireAuth);
 
 expenseCategoryRouter.post("/", asyncHandler(categoryController.create));
 expenseCategoryRouter.get("/", asyncHandler(categoryController.list));
+expenseCategoryRouter.patch("/:id", asyncHandler(categoryController.update));

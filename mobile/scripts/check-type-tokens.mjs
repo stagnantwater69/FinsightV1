@@ -35,15 +35,12 @@ const ALLOWED = [
   { file: "components/ui.tsx", sizes: [20] },
   { file: "components/AskFinSight.tsx", sizes: [22] },
   { file: "components/HomeHeader.tsx", sizes: [9] },
-  { file: "components/receipt-camera/CapturedSectionStrip.tsx", sizes: [9] },
 
-  // The receipt-camera overlay. This text sits on live video and was tuned as
-  // a set against a moving background; snapping it to the shared scale would
-  // trade legibility exactly where legibility is hardest for tidiness.
-  { file: "components/receipt-camera/CapturePreview.tsx", sizes: [11.5, 12.5] },
-  { file: "components/receipt-camera/CameraControls.tsx", sizes: [11.5] },
-  { file: "components/receipt-camera/CropEditor.tsx", sizes: [11.5, 12.5] },
-  { file: "components/receipt-camera/CameraPermissionState.tsx", sizes: [13.5] },
+  // Removed 31 August 2026 with the custom expo-camera receipt UI: the manual
+  // shutter/torch/guide/crop-editor components that carried these overlay
+  // sizes (CapturePreview, CameraControls, CropEditor, CapturedSectionStrip,
+  // CameraPermissionState) no longer exist. ML Kit Document Scanner is now
+  // the only Android capture path — see components/receipt-camera/ReceiptCamera.tsx.
   { file: "components/QuickActionMenu.tsx", sizes: [11.5] },
   { file: "components/ui.tsx", sizes: [13.5] },
   { file: "components/InsightsShared.tsx", sizes: [13.5, 10.5] },

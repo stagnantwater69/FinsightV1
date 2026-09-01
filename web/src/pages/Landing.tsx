@@ -11,7 +11,10 @@ import { FaqAccordion } from "../components/landing/FaqAccordion";
 import { ClosingCta } from "../components/landing/ClosingCta";
 
 /**
- * The public landing page — the approved emerald/mint/cream card design.
+ * The public landing page — the 2026 redesign: the same emerald/mint/cream
+ * card language, now with pill-shaped nav/CTAs, DM Sans/Plus Jakarta Sans
+ * type (see `font-landing-sans`/`font-landing-display` in grid.tsx), and an
+ * interactive hero demo in place of the old static dashboard mockup.
  *
  * EVERY CLAIM ON THIS PAGE HAS TO BE TRUE. That is not a style note — it is
  * the constraint the section list is built around. Two things have already

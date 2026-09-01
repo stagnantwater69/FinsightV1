@@ -63,6 +63,7 @@ const DESTINATIONS: Destination[] = [
   { label: "Expense insight", to: "/insights/expense-behavior", section: "Insights", keywords: "expense behaviour trends categories unusual anomaly spending patterns where money went daily chart" },
   { label: "Spending impact", to: "/insights/spending-impact", section: "Insights", keywords: "simulate what if afford purchase plan impact" },
   { label: "Recovery target", to: "/insights/recovery", section: "Insights", keywords: "daily target sales goal month coverage break even" },
+  { label: "Month-end review", to: "/insights/recovery/month-end-review", section: "Insights", keywords: "recovery month summary recap last month coverage surplus shortfall suggested questions" },
   { label: "Add expense", to: "/records/expenses/new", section: "Actions", keywords: "new create spend cost" },
   { label: "Add sales reference", to: "/records/sales/new", section: "Actions", keywords: "new create revenue income takings" },
   { label: "Scan receipt", to: "/records/receipts/new", section: "Actions", keywords: "ocr photo camera capture" },

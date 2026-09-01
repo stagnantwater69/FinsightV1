@@ -41,4 +41,24 @@ export const FIELD_LIMITS = {
   importTitle: 150,
   /** The Ask FinSight question. Not a column — it is a cost ceiling on the model call. */
   aiQuestion: 500,
+  /**
+   * Spending Impact's "What are you planning to buy?" box —
+   * `purchaseReviewSchema.description` is `z.string().min(3).max(255)`. Not a
+   * column either: it is the description the purchase review is written about.
+   */
+  purchaseDescription: 255,
+  /** BusinessOperatingDayOverride.reason — VARCHAR(120). */
+  operatingOverrideReason: 120,
 } as const;
+
+/**
+ * `purchaseDescription` above landed as a three-project edit in one batch —
+ * this object, web/src/lib/fieldLimits.ts and the backend probe that now pins
+ * the schema against it — because the contract suite asserts
+ * `expect(mobileLimits).toEqual(webLimits)` key for key, both ways. Adding a
+ * key to one client alone turns that assertion red, so anything added here is
+ * added on both sides at once.
+ *
+ * That is also why `CONVERSATION_TITLE_MAX` is still out of this object — see
+ * the note on it in lib/chatStore.ts.
+ */

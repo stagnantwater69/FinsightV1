@@ -84,6 +84,17 @@ export interface Corners {
   bottomLeft: Point;
 }
 
+export type CaptureSource = "manual-camera" | "native-document-scanner" | "gallery";
+export type ReceiptProcessingMode = "original" | "manual-crop" | "native-selected";
+
+export type ReceiptLikelihoodOutcome = "likely-receipt" | "uncertain" | "obvious-non-receipt";
+
+export interface ReceiptLikelihoodAssessment {
+  version: string;
+  score: number;
+  outcome: ReceiptLikelihoodOutcome;
+}
+
 /** One photograph in a capture session, before the receipt is scanned. */
 export interface ReceiptSection {
   /** Local only, for list keys — the server assigns nothing until upload. */
@@ -92,8 +103,20 @@ export interface ReceiptSection {
   originalUri: string;
   /** What will actually be uploaded: cropped and rotated, or the original. */
   processedUri: string;
+  /**
+   * How this section entered the session.
+   *
+   * Optional for sections created before native document scanning shipped.
+   * This remains local capture provenance; the current upload contract sends
+   * only the processed files in reading order.
+   */
+  captureSource?: CaptureSource;
+  processingMode?: ReceiptProcessingMode;
+  transformVersion?: string;
   width: number;
   height: number;
+  originalWidth?: number;
+  originalHeight?: number;
   /** Where the owner (or edge detection) put the corners. Absent if uncropped. */
   cropCorners?: Corners;
   /**
@@ -111,6 +134,11 @@ export interface ReceiptSection {
    * check could not run, which is a missing nicety and never an error.
    */
   quality: SectionQuality | null;
+  documentConfidence?: number;
+  receiptLikelihood?: ReceiptLikelihoodAssessment;
+  ownerOverrodeLikelihood?: boolean;
+  /** Sections with the same id are pages of one receipt; different ids are separate receipts. */
+  receiptGroupId?: string;
 }
 
 /** What /records/receipts/quality-check answers about one photograph. */
@@ -388,6 +416,55 @@ export function initialCorners(
 /** Whether another section may be photographed. */
 export function canAddSection(count: number): boolean {
   return count < MAX_SECTIONS;
+}
+
+/** How many pages a native scan may still add to this receipt session. */
+export function remainingScannerCapacity(count: number): number {
+  if (!Number.isFinite(count)) return 0;
+  return Math.max(0, MAX_SECTIONS - Math.max(0, Math.floor(count)));
+}
+
+/**
+ * Keeps only usable, unique file URIs from a native scanner response.
+ *
+ * Native code is outside TypeScript's runtime boundary. Treat its answer as
+ * unknown, enforce FinSight's own page ceiling again, and never hand an empty
+ * or duplicate page to the backend just because the bridge type promised it
+ * could not happen.
+ */
+export function scannerPageUris(pages: unknown, limit: number): string[] {
+  if (!Array.isArray(pages) || limit <= 0) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const page of pages) {
+    const uri =
+      typeof page === "object" && page !== null && typeof (page as { uri?: unknown }).uri === "string"
+        ? (page as { uri: string }).uri.trim()
+        : "";
+    if (!uri || seen.has(uri)) continue;
+    seen.add(uri);
+    result.push(uri);
+    if (result.length >= Math.floor(limit)) break;
+  }
+
+  return result;
+}
+
+/** Native iOS and Android scanners both report user cancellation as an error. */
+export function isScannerCancellation(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  return /cancel(?:led|ed)?/i.test(message);
+}
+
+/** Converts native/library errors into recovery copy without leaking internals. */
+export function scannerFailureMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message.trim() : typeof error === "string" ? error.trim() : "";
+  if (/^This receipt has more than the \d+ sections? FinSight can still add\./.test(message)) return message;
+  if (message === "The document scanner returned no receipt pages.") {
+    return "The scanner did not return a receipt image. Try again.";
+  }
+  return "Auto scan couldn't start on this device or build.";
 }
 
 /**

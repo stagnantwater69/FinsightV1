@@ -15,9 +15,9 @@ import { GreetingHero } from "../components/GreetingHero";
 import { ButtonLink } from "../components/Button";
 import { formatMoney } from "../components/Money";
 import { DonutChart } from "../components/DonutChart";
-import { AiCard, Callout, KpiCard, Kw, Panel, PageHead, Pill } from "../components/ui";
-import { IconArrowRight } from "../components/icons";
-import type { DashboardSummary, ExpenseBehavior } from "../lib/types";
+import { Callout, KpiCard, Panel, PageHead, Pill } from "../components/ui";
+import { IconArrowRight, IconCheck, IconExpense, IconInsights, IconSales } from "../components/icons";
+import type { DashboardSummary, ExpenseBehavior, ReductionOpportunity, ReductionOpportunityResponse } from "../lib/types";
 
 /**
  * `days: 0` is "All time" — the server drops the date filter entirely rather
@@ -49,6 +49,19 @@ export function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [comparison, setComparison] = useState<ExpenseBehavior | null>(null);
+  const [comparisonState, setComparisonState] = useState<"loading" | "ready" | "error">("loading");
+  const [opportunityState, setOpportunityState] = useState<"loading" | "ready" | "error">("loading");
+  const [showDetails, setShowDetails] = useState(false);
+  /**
+   * The single top-priority reduction opportunity — plan §13.1/§15 Phase 5.
+   * Reuses the existing `GET /insights/reduction-opportunities` endpoint (the
+   * list is already ranked; this just takes the first result) rather than a
+   * new backend endpoint. Deliberately NOT the full opportunity list — that
+   * stays owned by Expense Insights (§5.1). Null covers all three "don't show
+   * this card" cases the plan requires: no opportunities, insufficient
+   * history (which returns an empty list anyway), and limited confidence.
+   */
+  const [topOpportunity, setTopOpportunity] = useState<ReductionOpportunity | null>(null);
   // Opens the Ask FinSight drawer over this page. The plain floating trigger
   // goes with no question; the "expand on this" link below hands one through to
   // be typed into the box for them — it is never sent on their behalf.
@@ -58,6 +71,7 @@ export function Dashboard() {
     if (!selected) return;
     setLoading(true);
     setError(null);
+    setSummary(null);
     try {
       const { data } = await api.get<DashboardSummary>("/dashboard/summary", {
         params: { businessProfileId: selected.id, periodDays },
@@ -79,25 +93,60 @@ export function Dashboard() {
   // — "Today" or "This week" would make a month-over-month comparison
   // meaningless, so this always asks for the fixed 30-day window regardless
   // of what periodDays is currently set to.
-  useEffect(() => {
+  function loadComparison() {
     if (!selected) return;
     let cancelled = false;
+    setComparisonState("loading");
     api
       .get<ExpenseBehavior>("/insights/expense-behavior", {
         params: { businessProfileId: selected.id, periodDays: 30 },
       })
       .then(({ data }) => {
-        if (!cancelled) setComparison(data);
+        if (!cancelled) {
+          setComparison(data);
+          setComparisonState("ready");
+        }
       })
       .catch(() => {
-        // A quiet failure here — the KPI row and the rest of the dashboard
-        // already loaded successfully via a separate request, and this one
-        // panel degrading to its empty state is a much smaller problem than
-        // a page-level error banner over a dashboard that otherwise works.
+        if (!cancelled) setComparisonState("error");
       });
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
+  }
+
+  useEffect(() => {
+    return loadComparison();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id]);
+
+  function loadOpportunity() {
+    setTopOpportunity(null);
+    setOpportunityState("loading");
+    if (!selected) return;
+    let cancelled = false;
+    api
+      .get<ReductionOpportunityResponse>("/insights/reduction-opportunities", {
+        params: { businessProfileId: selected.id, periodDays: 30 },
+      })
+      .then(({ data }) => {
+        if (cancelled) return;
+        const top = data.opportunities[0];
+        // Plan §13.1: never show the card for limited confidence, or when
+        // the list is empty (which insufficient-history responses already
+        // are — no separate dataQuality check is needed here).
+        setTopOpportunity(top && top.confidence !== "limited" ? top : null);
+        setOpportunityState("ready");
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setTopOpportunity(null);
+          setOpportunityState("error");
+        }
+      });
+    return () => { cancelled = true; };
+  }
+
+  useEffect(() => {
+    return loadOpportunity();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id]);
 
@@ -161,7 +210,13 @@ export function Dashboard() {
   // All derived from `summary`, which the server computed. Nothing here
   // recalculates a financial figure; it only picks and phrases.
 
-  const periodLabel = `Last ${summary?.periodDays ?? 0} day${summary?.periodDays === 1 ? "" : "s"}`;
+  const periodLabel = periodDays === 0
+    ? "Across all records"
+    : periodDays === 1
+      ? "Today"
+      : periodDays === 7
+        ? "This week"
+        : "This month";
 
   const topCategory = summary?.expenseCategoryBreakdown?.length
     ? [...summary.expenseCategoryBreakdown].sort((a, b) => b.total - a.total)[0]
@@ -170,30 +225,76 @@ export function Dashboard() {
   /**
    * Recovery reduced to a KPI-sized verdict.
    *
-   * `onTrack` is the server's own judgement — this does not re-derive it.
+   * Prefers the server's explicit `status` (plan §8.1) once present — it is
+   * authoritative and strictly finer-grained than the old boolean pair (e.g.
+   * it can tell "no sales yet this month" apart from "behind pace", which
+   * `onTrack`/`needsSetup` alone cannot). Falls back to the boolean-derived
+   * verdict for a cached/older response that hasn't sent `status` yet.
+   *
    * The "not set up" case is distinct from "behind": an owner who never
    * entered expected monthly expenses is not failing a target, they simply
    * have not set one, and telling them they are "behind" would be wrong.
    */
   const recovery: { label: string; meta: ReactNode; tone: "brand" | "accent" | "danger" | "info" } = !summary
     ? { label: "—", meta: "", tone: "info" }
-    : summary.recoveryStatus.expectedMonthlyExpenses <= 0
-      ? { label: "Not set up", meta: "Add expected monthly expenses", tone: "info" }
-      : summary.recoveryStatus.onTrack
-        ? {
-            label: "On track",
-            meta: `${Math.round(summary.recoveryStatus.monthCoveragePercent)}% of the month covered`,
-            tone: "brand",
+    : summary.recoveryStatus.status
+      ? (() => {
+          const r = summary.recoveryStatus;
+          switch (r.status) {
+            case "needs_setup":
+              return { label: "Not set up", meta: "Add expected monthly expenses", tone: "info" as const };
+            case "no_current_month_data":
+              return { label: "No sales yet", meta: "No sales recorded this month", tone: "info" as const };
+            case "data_incomplete":
+              return { label: "Data incomplete", meta: "Some records need review", tone: "info" as const };
+            case "covered":
+              return {
+                label: "Target reached",
+                meta: `${Math.round(r.monthCoveragePercent)}% of the month covered`,
+                tone: "brand" as const,
+              };
+            case "ahead":
+              return {
+                label: "Ahead of pace",
+                meta: `${Math.round(r.monthCoveragePercent)}% of the month covered`,
+                tone: "brand" as const,
+              };
+            case "on_pace":
+              return {
+                label: "On track",
+                meta: `${Math.round(r.monthCoveragePercent)}% of the month covered`,
+                tone: "brand" as const,
+              };
+            case "behind":
+            default:
+              return {
+                label: "Behind pace",
+                meta: (
+                  <>
+                    <span className="figure">{formatMoney(r.remainingTarget)}</span> still needed
+                  </>
+                ),
+                tone: "danger" as const,
+              };
           }
-        : {
-            label: "Behind pace",
-            meta: (
-              <>
-                <span className="figure">{formatMoney(summary.recoveryStatus.remainingTarget)}</span> still needed
-              </>
-            ),
-            tone: "danger",
-          };
+        })()
+      : summary.recoveryStatus.expectedMonthlyExpenses <= 0
+        ? { label: "Not set up", meta: "Add expected monthly expenses", tone: "info" }
+        : summary.recoveryStatus.onTrack
+          ? {
+              label: "On track",
+              meta: `${Math.round(summary.recoveryStatus.monthCoveragePercent)}% of the month covered`,
+              tone: "brand",
+            }
+          : {
+              label: "Behind pace",
+              meta: (
+                <>
+                  <span className="figure">{formatMoney(summary.recoveryStatus.remainingTarget)}</span> still needed
+                </>
+              ),
+              tone: "danger",
+            };
 
   // Names whichever specific thing the card above actually flagged — the
   // records needing review if there are any (the most actionable item),
@@ -206,10 +307,17 @@ export function Dashboard() {
         : undefined
     : undefined;
 
+  const recoveryAction = !summary || summary.recoveryStatus.expectedMonthlyExpenses <= 0
+    ? { to: `/business-profiles/${selected.id}/edit`, label: "Set monthly expenses" }
+    : summary.recoveryStatus.status === "data_incomplete" || summary.recordsNeedingReview > 0
+      ? { to: "/records/flagged", label: "Review flagged records" }
+      : summary.recoveryStatus.status === "no_current_month_data"
+        ? { to: "/records/sales/new", label: "Add a sales record" }
+        : { to: "/insights/recovery", label: "View recovery plan" };
+
   return (
     <div>
       <PageHead
-        eyebrow="Financial summary"
         title="Dashboard"
         subtitle={
           <>
@@ -271,8 +379,8 @@ export function Dashboard() {
         <SetupProgress
           steps={[
             { label: "Set up your business profile", done: true },
-            { label: "Add an expense category", done: categories.length > 0 },
-            { label: "Record your first expense or sale", done: hasAnyRecords },
+            { label: "Add an expense category", done: categories.length > 0, href: "/categories" },
+            { label: "Record your first expense or sale", done: hasAnyRecords, href: "/records/expenses/new" },
           ]}
         />
       ) : null}
@@ -329,15 +437,24 @@ export function Dashboard() {
       ) : null}
 
       {error ? (
-        <p className="mb-4 rounded-lg bg-tint-danger p-3 text-sm text-tone-danger ring-1 ring-edge-danger">{error}</p>
+        <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-tint-danger p-4 text-sm text-tone-danger ring-1 ring-edge-danger">
+          <div>
+            <b className="font-semibold">Your dashboard couldn’t load.</b>
+            <p className="mt-0.5">{error}</p>
+          </div>
+          <button type="button" onClick={load} className="tap rounded-lg bg-paper px-3 py-2 font-semibold text-ink-800 shadow-sm">
+            Try again
+          </button>
+        </div>
       ) : null}
 
       {/* Doherty: the dashboard commits to its shape immediately on load and on
           every period / business switch, so the change feels instant even while
           the request is in flight. */}
-      {loading || !summary ? (
+      {loading ? (
         <SkeletonDashboard />
-      ) : (
+      ) : !summary ? null
+      : (
         // 8px scale throughout: 24px between the major bands, 20px inside a
         // band. Consistent vertical rhythm is what stops a dashboard reading
         // as a pile of unrelated cards.
@@ -356,34 +473,54 @@ export function Dashboard() {
             actionable "so what" of the whole screen, and recency makes it the
             thing an owner leaves with.
           */}
-          <div data-tour="dashboard-summary" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <KpiCard
-              label="Available business funds"
-              value={<span className="figure">{formatMoney(summary.overview.availableFunds)}</span>}
-              meta="Owner-entered reference"
-              glyph="◆"
-              tone="brand"
-            />
+          <Panel
+            title="Your recovery position"
+            className="overflow-hidden border-brand-200 bg-tint-brand"
+            action={<Pill tone={recovery.tone === "danger" ? "danger" : recovery.tone === "brand" ? "ok" : "info"}>{recovery.label}</Pill>}
+          >
+            <div data-tour="dashboard-summary" className="grid items-center gap-5 lg:grid-cols-[0.72fr_1.28fr]">
+              <div>
+                <p className="text-xs font-semibold text-ink-500">Available business funds</p>
+                <p className="figure mt-1 font-display text-3xl font-bold tracking-[-0.02em] text-ink-900">
+                  {formatMoney(summary.overview.availableFunds)}
+                </p>
+                <p className="mt-1 text-xs text-ink-500">Owner-entered reference · update it in your business profile</p>
+                {recovery.meta ? <p className="mt-2 text-sm font-medium text-ink-700">{recovery.meta}</p> : null}
+                <ButtonLink to={recoveryAction.to} variant="primary" className="mt-4">
+                  {recoveryAction.label}
+                </ButtonLink>
+              </div>
+              <div className="border-t border-paper-200 pt-5 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
+                {summary.recoveryStatus.expectedMonthlyExpenses > 0 ? (
+                  <RecoveryMeter recoveryStatus={summary.recoveryStatus} />
+                ) : (
+                  <p className="text-sm text-ink-600">Add expected monthly expenses to calculate a daily sales target and recovery pace.</p>
+                )}
+              </div>
+            </div>
+          </Panel>
+
+          <div className="grid gap-4 sm:grid-cols-3">
             <KpiCard
               label="Total expenses"
               value={<span className="figure">{formatMoney(summary.overview.totalExpenses)}</span>}
               meta={periodLabel}
-              glyph="▾"
+              glyph={<IconExpense className="h-5 w-5" />}
               tone="accent"
             />
             <KpiCard
               label="Total sales reference"
               value={<span className="figure">{formatMoney(summary.overview.totalSalesReference)}</span>}
               meta={periodLabel}
-              glyph="▴"
+              glyph={<IconSales className="h-5 w-5" />}
               tone="info"
             />
             <KpiCard
-              label="Recovery status"
-              value={<span className="text-xl">{recovery.label}</span>}
-              meta={recovery.meta}
-              glyph="◎"
-              tone={recovery.tone}
+              label="Records to review"
+              value={<span className="figure">{summary.recordsNeedingReview}</span>}
+              meta={summary.recordsNeedingReview ? "Needs your attention" : "Everything is clear"}
+              glyph={summary.recordsNeedingReview ? <IconInsights className="h-5 w-5" /> : <IconCheck className="h-5 w-5" />}
+              tone={summary.recordsNeedingReview ? "danger" : "brand"}
             />
           </div>
 
@@ -395,57 +532,18 @@ export function Dashboard() {
             answer is grounded and the disclaimer travels with it.
           */}
           <div className="grid gap-5 lg:grid-cols-[1.6fr_1fr] xl:grid-cols-[2fr_1fr]">
-            <AiCard
-              title="This month at a glance"
-              subtitle="Composed from your records — not AI-written"
-              footer={
-                <button
-                  type="button"
-                  onClick={() => askFinSight(expandQuestion)}
-                  className="tap-inline font-semibold text-accent-200 underline-offset-2 hover:underline"
-                >
-                  Ask FinSight about any of this →
-                </button>
-              }
-            >
-              {topCategory ? (
-                <>
-                  <Kw>{topCategory.categoryName}</Kw> is your largest expense category{" "}
-                  {periodLabel.toLowerCase()}, at{" "}
-                  <Kw>
-                    <span className="figure">{formatMoney(topCategory.total)}</span>
-                  </Kw>
-                  .{" "}
-                </>
-              ) : (
-                <>No expenses recorded {periodLabel.toLowerCase()} yet. </>
-              )}
-              {summary.recoveryStatus.expectedMonthlyExpenses > 0 ? (
-                <>
-                  Sales reference so far this month is{" "}
-                  <Kw>
-                    <span className="figure">{formatMoney(summary.recoveryStatus.salesThisMonth)}</span>
-                  </Kw>{" "}
-                  against a monthly target of{" "}
-                  <Kw>
-                    <span className="figure">{formatMoney(summary.recoveryStatus.expectedMonthlyExpenses)}</span>
-                  </Kw>
-                  .{" "}
-                </>
-              ) : null}
-              {summary.recordsNeedingReview > 0 ? (
-                <>
-                  <Kw>
-                    {summary.recordsNeedingReview} record
-                    {summary.recordsNeedingReview === 1 ? "" : "s"}
-                  </Kw>{" "}
-                  need{summary.recordsNeedingReview === 1 ? "s" : ""} review before being counted as settled.
-                </>
-              ) : (
-                <>Nothing is waiting for review.</>
-              )}
-            </AiCard>
-
+            <Panel title={`${periodLabel} at a glance`}>
+              <p className="text-sm leading-relaxed text-ink-600">
+                {topCategory ? (
+                  <>Your largest expense category is <b className="font-semibold text-ink-800">{topCategory.categoryName}</b> at <span className="figure font-semibold text-ink-800">{formatMoney(topCategory.total)}</span>.</>
+                ) : (
+                  <>No expenses are recorded for this period yet.</>
+                )}
+              </p>
+              <button type="button" onClick={() => askFinSight(expandQuestion)} className="tap-inline mt-3 min-h-tap text-sm font-semibold text-brand-700 hover:text-brand-800">
+                Ask FinSight for more context →
+              </button>
+            </Panel>
             <Panel
               title="Things to review"
               action={
@@ -474,8 +572,20 @@ export function Dashboard() {
             </Panel>
           </div>
 
-          <div className="grid gap-5 lg:grid-cols-2">
-            <Panel eyebrow="Where your money went" title="Expense distribution" className="min-w-0">
+          <div className="lg:hidden">
+            <button
+              type="button"
+              aria-expanded={showDetails}
+              onClick={() => setShowDetails((value) => !value)}
+              className="tap flex min-h-tap w-full items-center justify-between rounded-xl border border-paper-200 bg-paper px-4 text-sm font-semibold text-ink-700 shadow-sm"
+            >
+              {showDetails ? "Hide detailed charts" : "View detailed charts"}
+              <IconArrowRight className={`h-4 w-4 transition-transform ${showDetails ? "rotate-90" : ""}`} />
+            </button>
+          </div>
+
+          <div className={`${showDetails ? "grid" : "hidden"} gap-5 lg:grid lg:grid-cols-2`}>
+            <Panel title="Expense distribution" className="min-w-0">
               {summary.expenseCategoryBreakdown.length === 0 ? (
                 <EmptyState compact title="No expenses in this period yet" icon="◔">
                   Once you record an expense, this is where you'll see which categories use the most.
@@ -495,7 +605,6 @@ export function Dashboard() {
             </Panel>
 
             <Panel
-              eyebrow="This month vs last month"
               title="Expense comparison"
               className="min-w-0"
               action={
@@ -516,7 +625,21 @@ export function Dashboard() {
                 ) : null
               }
             >
-              {!comparison || comparison.categoryTrends.filter((t) => t.current > 0 || t.previous > 0).length === 0 ? (
+              {comparisonState === "loading" ? (
+                <div aria-live="polite" className="py-8 text-center text-sm text-ink-500">Loading comparison…</div>
+              ) : comparisonState === "error" ? (
+                <EmptyState
+                  compact
+                  title="Expense comparison couldn’t load"
+                  action={
+                    <button type="button" onClick={loadComparison} className="tap rounded-lg border border-paper-200 bg-paper px-3 py-2 text-sm font-semibold text-brand-700">
+                      Try again
+                    </button>
+                  }
+                >
+                  Your dashboard data is safe. Try loading this comparison again.
+                </EmptyState>
+              ) : !comparison || comparison.categoryTrends.filter((t) => t.current > 0 || t.previous > 0).length === 0 ? (
                 <EmptyState compact title="Not enough history yet" icon="◔">
                   Once you've recorded expenses in two consecutive months, this compares them side by side,
                   category by category.
@@ -531,29 +654,43 @@ export function Dashboard() {
             </Panel>
           </div>
 
-          {/* Recency slot — full width so it reads as the closing statement. */}
-          <Panel
-            eyebrow="Target-based recovery"
-            title="Recovery target"
-            action={<span className="text-xs text-ink-400">This month</span>}
-          >
-            {summary.recoveryStatus.expectedMonthlyExpenses > 0 ? (
-              <RecoveryMeter recoveryStatus={summary.recoveryStatus} />
-            ) : (
-              <EmptyState compact title="Add your expected monthly expenses" icon="◎">
-                FinSight needs to know roughly what a month costs you before it can work out a daily sales
-                target.
-              </EmptyState>
-            )}
-            <div className="mt-4 border-t border-paper-200 pt-3">
-              <Link
-                to="/insights/recovery"
-                className="tap-inline text-sm font-semibold text-brand-700 hover:text-brand-800"
-              >
-                See the full recovery breakdown →
-              </Link>
-            </div>
-          </Panel>
+          {/*
+            Top reduction opportunity — plan §13.1/§15 Phase 5. A compact
+            link-out, not the full opportunity list (that stays owned by
+            Expense Insights, §5.1). Hidden entirely rather than shown empty
+            when there's nothing worth a glance — see the `topOpportunity`
+            state comment above for exactly which cases that covers.
+          */}
+          {topOpportunity ? (
+            <Panel
+              title="Reduction opportunity"
+              action={<Pill tone="warn">{topOpportunity.categoryName}</Pill>}
+            >
+              <p className="text-sm text-ink-700">{topOpportunity.observation}</p>
+              <p className="mt-2 text-xs text-ink-500">
+                Current spend this period:{" "}
+                <span className="figure font-semibold text-ink-800">
+                  {formatMoney(topOpportunity.evidence.currentAmount)}
+                </span>
+              </p>
+              <div className="mt-4 border-t border-paper-200 pt-3">
+                <Link
+                  to="/insights/expense-behavior"
+                  className="tap-inline text-sm font-semibold text-brand-700 hover:text-brand-800"
+                >
+                  Review opportunity →
+                </Link>
+              </div>
+            </Panel>
+          ) : opportunityState === "error" ? (
+            <Callout tone="info">
+              <b className="font-semibold">Reduction opportunities are temporarily unavailable.</b>{" "}
+              The rest of your dashboard is current.{" "}
+              <button type="button" onClick={loadOpportunity} className="tap-inline min-h-tap font-semibold text-brand-700 underline underline-offset-2">
+                Try this insight again
+              </button>
+            </Callout>
+          ) : null}
 
           {!hasAnyRecords ? (
             <EmptyState

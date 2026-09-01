@@ -1,7 +1,35 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Menu, X, ChevronDown } from "lucide-react";
-import { CTA_PRIMARY } from "./landing/grid";
+import { Menu, Moon, Sun, X, ChevronDown } from "lucide-react";
+
+const LANDING_THEME_KEY = "finsight.landingTheme";
+
+/**
+ * The landing page's own light/dark toggle — independent of the
+ * authenticated app's account theme (ThemeContext), since a visitor here has
+ * no account yet. See index.html's landing-theme boot script for how the
+ * choice avoids a flash on first paint, and index.css's
+ * `[data-landing-theme]` block for where the actual colours live.
+ */
+function useLandingTheme() {
+  const [dark, setDark] = useState(() => document.documentElement.dataset.landingTheme === "dark");
+
+  function toggle() {
+    setDark((prev) => {
+      const next = !prev;
+      document.documentElement.dataset.landingTheme = next ? "dark" : "light";
+      try {
+        localStorage.setItem(LANDING_THEME_KEY, next ? "dark" : "light");
+      } catch {
+        // Private browsing / storage disabled — the toggle still works for
+        // this visit, it just won't be remembered for the next one.
+      }
+      return next;
+    });
+  }
+
+  return { dark, toggle };
+}
 
 const RESOURCES = [
   { to: "/blogs", label: "Blogs & Articles" },
@@ -10,24 +38,23 @@ const RESOURCES = [
 ];
 
 function Brand({ size = "md" }: { size?: "sm" | "md" }) {
-  const box = size === "sm" ? "h-7 w-7 text-xs" : "h-9 w-9 text-base";
+  const box = size === "sm" ? "h-9 w-9" : "h-11 w-11";
   const text = size === "sm" ? "text-base" : "text-lg";
   return (
     <span className="flex items-center gap-2.5">
-      <span
-        aria-hidden
-        className={`flex items-center justify-center rounded-xl bg-landing-emerald font-display font-extrabold text-landing-mint-light shadow-sm ${box}`}
-      >
-        F
-      </span>
-      <span className={`font-display font-bold tracking-tight text-landing-charcoal ${text}`}>FinSight</span>
+      <img src="/finsight-logo.png" alt="" aria-hidden className={`rounded-xl object-contain shadow-sm ${box}`} />
+      <span className={`font-landing-display font-bold tracking-tight text-landing-charcoal ${text}`}>FinSight</span>
     </span>
   );
 }
 
+// Fully pill-shaped, sitting inside the white nav pill — 2026 redesign.
 const NAV_LINK =
-  "tap rounded-lg px-3.5 py-2 text-sm font-medium text-landing-muted transition-colors hover:bg-landing-mint-pale hover:text-landing-charcoal";
-const NAV_LINK_ACTIVE = "tap rounded-lg px-3.5 py-2 text-sm font-semibold text-landing-green bg-landing-mint-pale";
+  "tap rounded-full px-4 py-2 font-landing-sans text-sm font-medium text-landing-muted transition-colors hover:bg-landing-mint-pale hover:text-landing-charcoal";
+const NAV_LINK_ACTIVE =
+  "tap rounded-full px-4 py-2 font-landing-sans text-sm font-semibold text-landing-surface bg-landing-charcoal";
+const NAV_LINK_ACTIVE_QUIET =
+  "tap rounded-full bg-landing-surface/40 px-4 py-2 font-landing-sans text-sm font-semibold text-landing-charcoal";
 
 function ResourcesMenu() {
   const [open, setOpen] = useState(false);
@@ -118,14 +145,14 @@ function ResourcesMenu() {
         <div className="absolute right-0 top-full z-30 pt-2">
           <div
             role="menu"
-            className="w-48 overflow-hidden rounded-2xl border border-landing-mint-light bg-white py-1.5 shadow-lg"
+            className="w-48 overflow-hidden rounded-2xl border border-landing-mint-light bg-landing-surface py-1.5 shadow-lg animate-fade-up"
           >
             {RESOURCES.map((r) => (
               <Link
                 key={r.to}
                 to={r.to}
                 role="menuitem"
-                className="block px-4 py-2.5 text-sm font-medium text-landing-charcoal transition-colors hover:bg-landing-mint-pale hover:text-landing-green"
+                className="block px-4 py-2.5 font-landing-sans text-sm font-medium text-landing-charcoal transition-colors hover:bg-landing-mint-pale hover:text-landing-green"
               >
                 {r.label}
               </Link>
@@ -187,6 +214,7 @@ export function PublicLayout({ children }: { children: ReactNode }) {
   const { pathname } = useLocation();
   const scrolled = useScrolled();
   const activeSection = useActiveSection(pathname);
+  const { dark, toggle: toggleLandingTheme } = useLandingTheme();
 
   useEffect(() => {
     setMobileMenuOpen(false);
@@ -238,10 +266,13 @@ export function PublicLayout({ children }: { children: ReactNode }) {
     };
   }
 
+  const atLandingTop = pathname === "/" && !scrolled;
+  const activeNavLink = atLandingTop ? NAV_LINK_ACTIVE_QUIET : NAV_LINK_ACTIVE;
+
   return (
     <div
       data-theme="classic"
-      className="flex min-h-screen flex-col bg-landing-cream font-sans text-landing-charcoal antialiased"
+      className="landing-page-surface flex min-h-screen flex-col bg-landing-cream font-landing-sans text-landing-charcoal antialiased"
     >
       <a
         href="#main-content"
@@ -251,8 +282,10 @@ export function PublicLayout({ children }: { children: ReactNode }) {
       </a>
 
       {/*
-        Sticky header. Starts on a lightly transparent cream surface; once the
-        page scrolls it firms up and gains the hairline + shadow. The frosted
+        Sticky header. At the top of the landing page it borrows the hero's
+        ambient color and drops its dividing line, so it does not read as a
+        separate banner. Once the page scrolls it firms up just enough to keep
+        controls readable over changing content. The frosted
         blur stays DESKTOP ONLY: backdrop-blur on a sticky element re-blurs on
         every scrolled frame, which is the single most reliable way to make a
         budget Android phone stutter — precisely the device most of these shop
@@ -260,23 +293,34 @@ export function PublicLayout({ children }: { children: ReactNode }) {
       */}
       <header
         className={`sticky top-0 z-50 border-b transition-colors duration-200 md:backdrop-blur-md ${
-          scrolled
-            ? "border-landing-mint-light/70 bg-landing-cream/95 shadow-sm md:bg-landing-cream/85"
-            : "border-transparent bg-landing-cream/80 md:bg-landing-cream/60"
+          atLandingTop
+            ? "landing-header-at-hero border-transparent shadow-none"
+            : scrolled
+              ? "border-landing-mint-light/50 bg-landing-surface/90 shadow-sm md:bg-landing-surface/78"
+              : "border-transparent bg-landing-cream/90 md:bg-landing-cream/78"
         }`}
       >
-        <div className="mx-auto flex max-w-[1240px] items-center justify-between px-4 py-3 lg:px-6">
+        <div className="mx-auto flex max-w-[1240px] items-center justify-between gap-4 px-4 py-3 lg:px-6">
           {/* The logo is also a link to "/" — same back-to-top fix as Home. */}
-          <Link to="/" onClick={handleHomeClick} className="tap rounded-xl">
+          <Link to="/" onClick={handleHomeClick} className="tap shrink-0 rounded-xl">
             <Brand />
           </Link>
 
-          <nav aria-label="Main" className="hidden items-center gap-1 md:flex">
+          {/* The pill recedes into the hero at the top, then gains a clearer
+              surface once content can scroll beneath it. */}
+          <nav
+            aria-label="Main"
+            className={`hidden items-center gap-1 rounded-full border p-1.5 md:flex ${
+              atLandingTop
+                ? "border-transparent bg-transparent shadow-none"
+                : "border-landing-mint-light/70 bg-landing-surface/90 shadow-sm"
+            }`}
+          >
             <Link
               to="/"
               onClick={handleHomeClick}
               aria-current={pathname === "/" && !activeSection ? "page" : undefined}
-              className={pathname === "/" && !activeSection ? NAV_LINK_ACTIVE : NAV_LINK}
+              className={pathname === "/" && !activeSection ? activeNavLink : NAV_LINK}
             >
               Home
             </Link>
@@ -284,7 +328,7 @@ export function PublicLayout({ children }: { children: ReactNode }) {
               href="/#features"
               onClick={handleSectionClick("features")}
               aria-current={activeSection === "features" ? "true" : undefined}
-              className={activeSection === "features" ? NAV_LINK_ACTIVE : NAV_LINK}
+              className={activeSection === "features" ? activeNavLink : NAV_LINK}
             >
               Features
             </a>
@@ -297,13 +341,23 @@ export function PublicLayout({ children }: { children: ReactNode }) {
           <div className="hidden items-center gap-2 md:flex">
             <Link
               to="/login"
-              className="tap rounded-xl px-4 py-2 text-sm font-semibold text-landing-charcoal transition-colors hover:bg-landing-mint-pale"
+              className="tap rounded-full px-4 py-2 font-landing-sans text-sm font-semibold text-landing-charcoal transition-colors hover:bg-landing-surface"
             >
               Log in
             </Link>
-            <Link to="/register" className={`${CTA_PRIMARY} !min-h-0 !px-4 !py-2 !text-sm`}>
-              Get Started Free
-            </Link>
+            <button
+              type="button"
+              onClick={toggleLandingTheme}
+              aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
+              aria-pressed={dark}
+              className={`tap flex h-11 w-11 shrink-0 items-center justify-center rounded-full border text-landing-charcoal transition-colors hover:bg-landing-mint-pale ${
+                atLandingTop
+                  ? "border-landing-charcoal/10 bg-transparent"
+                  : "border-landing-mint-light bg-landing-surface"
+              }`}
+            >
+              {dark ? <Sun className="h-[18px] w-[18px]" /> : <Moon className="h-[18px] w-[18px]" />}
+            </button>
           </div>
 
           <button
@@ -311,7 +365,11 @@ export function PublicLayout({ children }: { children: ReactNode }) {
             onClick={() => setMobileMenuOpen((v) => !v)}
             aria-expanded={mobileMenuOpen}
             aria-label="Toggle navigation menu"
-            className="flex h-11 w-11 items-center justify-center rounded-xl border border-landing-mint-light bg-white text-landing-charcoal transition-colors hover:bg-landing-mint-pale md:hidden"
+            className={`flex h-11 w-11 items-center justify-center rounded-xl border text-landing-charcoal transition-colors hover:bg-landing-mint-pale md:hidden ${
+              atLandingTop
+                ? "border-landing-charcoal/10 bg-transparent"
+                : "border-landing-mint-light bg-landing-surface"
+            }`}
           >
             {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
           </button>
@@ -358,9 +416,15 @@ export function PublicLayout({ children }: { children: ReactNode }) {
               >
                 Log in
               </Link>
-              <Link to="/register" className={`${CTA_PRIMARY} w-full`}>
-                Get Started Free
-              </Link>
+              <button
+                type="button"
+                onClick={toggleLandingTheme}
+                aria-pressed={dark}
+                className="tap flex w-full items-center justify-center gap-2 rounded-xl border border-landing-mint-light bg-landing-surface py-3 font-landing-sans text-sm font-semibold text-landing-charcoal"
+              >
+                {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                {dark ? "Switch to light mode" : "Switch to dark mode"}
+              </button>
             </div>
           </nav>
         )}
@@ -370,7 +434,7 @@ export function PublicLayout({ children }: { children: ReactNode }) {
         {children}
       </main>
 
-      <footer className="border-t border-landing-mint-light/70 bg-white py-12 lg:py-16">
+      <footer className="landing-section-gradient-raised border-t border-landing-mint-light/70 bg-landing-surface py-12 lg:py-16">
         <div className="mx-auto max-w-[1240px] px-4 lg:px-6">
           <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-4">
             <div className="lg:col-span-2">
@@ -382,7 +446,7 @@ export function PublicLayout({ children }: { children: ReactNode }) {
             </div>
 
             <div>
-              <h3 className="font-display text-sm font-bold uppercase tracking-wider text-landing-charcoal">
+              <h3 className="font-landing-display text-sm font-bold uppercase tracking-wider text-landing-charcoal">
                 Product & Help
               </h3>
               <ul className="mt-4 space-y-2.5 text-sm font-medium">
@@ -414,7 +478,7 @@ export function PublicLayout({ children }: { children: ReactNode }) {
             </div>
 
             <div>
-              <h3 className="font-display text-sm font-bold uppercase tracking-wider text-landing-charcoal">
+              <h3 className="font-landing-display text-sm font-bold uppercase tracking-wider text-landing-charcoal">
                 Company & Legal
               </h3>
               <ul className="mt-4 space-y-2.5 text-sm font-medium">
@@ -452,10 +516,10 @@ export function PublicLayout({ children }: { children: ReactNode }) {
 
 export function PublicPageHead({ eyebrow, title, lede }: { eyebrow: string; title: string; lede?: string }) {
   return (
-    <section className="border-b border-landing-mint-light/70 bg-white py-12 text-center lg:py-16">
+    <section className="border-b border-landing-mint-light/70 bg-landing-surface py-12 text-center lg:py-16">
       <div className="mx-auto max-w-4xl px-4 lg:px-6">
         <p className="text-xs font-bold uppercase tracking-wider text-landing-green">{eyebrow}</p>
-        <h1 className="mt-3 font-display text-3xl font-bold text-landing-charcoal sm:text-4xl">{title}</h1>
+        <h1 className="mt-3 font-landing-display text-3xl font-bold text-landing-charcoal sm:text-4xl">{title}</h1>
         {lede ? <p className="mx-auto mt-4 max-w-2xl text-base text-landing-muted">{lede}</p> : null}
       </div>
     </section>

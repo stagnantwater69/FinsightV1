@@ -46,6 +46,30 @@ const envSchema = z.object({
   MOBILE_APP_URL: z.string().default("finsight://"),
   GOOGLE_GEMINI_API_KEY: z.string().optional().default(""),
   OPENROUTER_API_KEY: z.string().optional().default(""),
+  /**
+   * Veryfi's receipt-OCR API. Used by the measurement spike at
+   * tests/ocr-accuracy/veryfi-spike.ts, and — only when VERYFI_ENABLED is
+   * true — as a real production rescue in receiptScan/worker.ts. See
+   * docs/superpowers/specs/2026-09-01-veryfi-production-ocr-integration-design.md.
+   */
+  VERYFI_CLIENT_ID: z.string().optional().default(""),
+  VERYFI_CLIENT_SECRET: z.string().optional().default(""),
+  VERYFI_USERNAME: z.string().optional().default(""),
+  VERYFI_API_KEY: z.string().optional().default(""),
+  /**
+   * Off by default on purpose. Turning this on sends real customer receipt
+   * photos to Veryfi's servers in production, not just the test corpus — a
+   * deliberate, separate decision from having credentials configured.
+   */
+  VERYFI_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+  /**
+   * How many Veryfi calls receiptScan/veryfiQuota.ts allows per calendar
+   * month before falling back to the Gemini vision-rescue for the rest of it.
+   * Unset means "no configured limit" — treated as unlimited, not zero, so a
+   * forgotten variable doesn't silently disable a deliberately-enabled
+   * integration.
+   */
+  VERYFI_MONTHLY_LIMIT: z.coerce.number().int().positive().optional(),
   TESSERACT_LANG: z.string().default("eng"),
   ANOMALY_NEAR_DUPLICATE_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
   ANOMALY_VELOCITY_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),

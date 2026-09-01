@@ -21,8 +21,8 @@
 import { recommendThreshold, sweepThresholds, calibration, type CorrectionObservation } from "../../src/lib/extractionMetrics";
 import { loadCorrections } from "../../src/services/extractionFeedback.service";
 
-/** Kept in step with receiptScan.service by hand — see the note below. */
-const SHIPPED = 75;
+/** Kept in step with receiptScan/extraction.ts's LOW_CONFIDENCE by hand — see the note below. */
+const SHIPPED = 88;
 
 function arg(name: string, fallback: number): number {
   const i = process.argv.indexOf(`--${name}`);
@@ -95,7 +95,7 @@ function arg(name: string, fallback: number): number {
   console.log(`    doubted and RIGHT:   ${calib.falseLowConfidence} of ${calib.lowConfidenceRows}`);
 
   console.log("\n  thresh  fires  catches-wrong  wasted-on-right  misses-wrong");
-  for (const s of sweepThresholds(rows, [50, 60, 65, 70, 75, 80, 85, 90])) {
+  for (const s of sweepThresholds(rows, [50, 60, 65, 70, 75, 80, 85, 88, 90])) {
     const marker = s.threshold === SHIPPED ? " <- shipped" : "";
     console.log(
       `  ${String(s.threshold).padStart(6)}  ${String(s.fires).padStart(5)}  ${String(s.catchesEdited).padStart(13)}  ` +
@@ -104,6 +104,6 @@ function arg(name: string, fallback: number): number {
   }
 
   console.log(`\nNothing was changed. To act on this, edit LOW_CONFIDENCE in`);
-  console.log(`src/services/receiptScan.service.ts and re-run the corpus assessment to check`);
+  console.log(`src/services/receiptScan/extraction.ts and re-run the corpus assessment to check`);
   console.log(`the change against fixed images before it ships.\n`);
 })();

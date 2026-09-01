@@ -3,7 +3,8 @@ import { Alert as RNAlert, KeyboardAvoidingView, Platform, ScrollView, TextInput
 import { useFocusEffect } from "@react-navigation/native";
 import { Button, Card, ErrorNote, Field, Screen, T } from "../../components/ui";
 import { useBusinessProfiles } from "../../context/BusinessProfileContext";
-import { api, errorMessage } from "../../lib/api";
+import { api } from "../../lib/api";
+import { describeActionFailure, saveFailureMessage, toLoadFailure } from "../../lib/connectionState";
 import { DateField } from "../../components/DateField";
 import * as haptics from "../../lib/haptics";
 import { RecordOriginPanel, type RecordOrigin } from "../../components/RecordOrigin";
@@ -101,7 +102,9 @@ export function EditRecordScreen({ route, navigation }: any) {
       setFlash("Record updated.");
       navigation.goBack();
     } catch (err) {
-      setError(errorMessage(err));
+      // Every edit is still in the fields — this screen only leaves on
+      // success — so the message says so, and says nothing about saving later.
+      setError(saveFailureMessage(err, "Save changes"));
     } finally {
       setBusy(false);
     }
@@ -133,7 +136,7 @@ export function EditRecordScreen({ route, navigation }: any) {
       setFlash("Marked reviewed and not a duplicate.");
       navigation.goBack();
     } catch (err) {
-      setError(errorMessage(err));
+      setError(describeActionFailure(toLoadFailure(err), "The record's flags are unchanged."));
       // Only on failure: the success path has already left this screen.
       setBusy(false);
     }
@@ -168,7 +171,7 @@ export function EditRecordScreen({ route, navigation }: any) {
               setFlash("Record deleted.");
               navigation.goBack();
             } catch (err) {
-              setError(errorMessage(err));
+              setError(describeActionFailure(toLoadFailure(err), "The record is still in your books."));
               setBusy(false);
             }
           },

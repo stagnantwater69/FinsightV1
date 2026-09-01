@@ -17,8 +17,9 @@
  * same order, same words — while keeping the platform's own shapes: chips
  * rather than a dropdown, a bottom sheet rather than a dialog.
  */
-import { useEffect, useRef, useState } from "react";
-import { KeyboardAvoidingView, Platform, ScrollView, TextInput, View } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AppState, BackHandler, KeyboardAvoidingView, Platform, ScrollView, TextInput, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import {
   Button,
   Callout,
@@ -31,10 +32,12 @@ import {
   SelectChip,
   T,
 } from "../components/ui";
+import { Mascot } from "../components/MascotState";
 import { useAuth } from "../context/AuthContext";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { errorMessage } from "../lib/api";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
+import { formatMoney } from "../lib/money";
 import { radius, space } from "../theme/tokens";
 import { useTheme } from "../context/ThemeContext";
 import {
@@ -58,22 +61,45 @@ import {
   saveOnboardingDraft,
 } from "../lib/onboardingDraft";
 
-const TOTAL_STEPS = 3;
+/**
+ * The steps, named.
+ *
+ * A bare "Step 2 of 3" says how far along but not what is coming, which is the
+ * question an owner deciding whether to carry on is actually asking. The names
+ * are also what the rail announces to a screen reader, where a row of bars is
+ * nothing at all.
+ */
+const STEP_NAMES = ["Your business", "Your numbers", "You're ready"] as const;
+const TOTAL_STEPS = STEP_NAMES.length;
+
+/** Where the owner can go straight from the end of setup. */
+export type OnboardingNext = "sale" | "expense" | "scan" | "import";
 
 /**
  * The progress rail: a count to decide by, bars to make finishing feel near.
  * Not tappable — jumping to step 2 before step 1 is valid would build a profile
  * that cannot be created, and a control that sometimes refuses is worse than
  * no control.
+ *
+ * ONE ACCESSIBLE ELEMENT, not five. The label, the counter and the three bars
+ * are one fact; read out separately they are "Step 2 of 3", "2/3", and three
+ * unnamed views. `accessibilityRole="progressbar"` with the sentence as its
+ * label is what a screen reader can actually use.
  */
 function StepRail({ step }: { step: number }) {
   const t = useTheme();
   const { brand, ink } = t;
   return (
-    <View style={{ marginBottom: space.lg }}>
-      <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
-        <T variant="label" style={{ color: ink[500] }}>
-          Step {step} of {TOTAL_STEPS}
+    <View
+      style={{ marginBottom: space.lg }}
+      accessible
+      accessibilityRole="progressbar"
+      accessibilityLabel={`Step ${step} of ${TOTAL_STEPS}: ${STEP_NAMES[step - 1]}`}
+      accessibilityValue={{ min: 1, max: TOTAL_STEPS, now: step }}
+    >
+      <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6, gap: space.sm }}>
+        <T variant="label" style={{ color: ink[500], flexShrink: 1 }} numberOfLines={1}>
+          Step {step} of {TOTAL_STEPS} · {STEP_NAMES[step - 1]}
         </T>
         <T variant="label" style={{ color: brand[700] }}>
           {step}/{TOTAL_STEPS}
@@ -97,6 +123,53 @@ function StepRail({ step }: { step: number }) {
 }
 
 /**
+ * WHY a question is being asked, said before it is asked.
+ *
+ * The figures on step 2 are the ones an owner is most likely to refuse — they
+ * are money, and nothing so far has explained what the app does with them.
+ * These captions used to sit UNDER their field, which is where an explanation
+ * arrives too late to help someone decide whether to answer.
+ */
+function WhyWeAsk({ children }: { children: React.ReactNode }) {
+  const t = useTheme();
+  return (
+    <T variant="caption" style={{ marginBottom: space.sm, color: t.textMuted }}>
+      {children}
+    </T>
+  );
+}
+
+/** One line of the readiness summary: what was saved, in the owner's own figures. */
+function ReadyLine({ label, value }: { label: string; value: string }) {
+  const t = useTheme();
+  return (
+    <View style={{ flexDirection: "row", alignItems: "flex-start", gap: space.sm }}>
+      <Ionicons
+        name="checkmark-circle"
+        size={18}
+        color={t.statusText.good}
+        // Decorative: every line here is a completed one, and the heading above
+        // already says so. Announcing "checkmark" four times says nothing.
+        accessibilityElementsHidden
+        importantForAccessibility="no"
+      />
+      <T variant="caption" style={{ flex: 1, color: t.textSecondary }}>
+        <T variant="caption" style={{ color: t.textPrimary }}>
+          {label}:{" "}
+        </T>
+        {value}
+      </T>
+    </View>
+  );
+}
+
+/** A number the owner typed, as pesos — or a dash where they left it blank. */
+function pesos(raw: string): string {
+  const value = Number(raw);
+  return raw.trim() === "" || Number.isNaN(value) ? "not set" : formatMoney(value);
+}
+
+/**
  * The same wizard reached deliberately, from the dashboard's "Continue setup"
  * prompt, rather than automatically on launch.
  *
@@ -105,14 +178,29 @@ function StepRail({ step }: { step: number }) {
  * dismissed it. Without it, an owner who skipped would have no way back in
  * short of reinstalling.
  */
+/**
+ * Where each end-of-setup action lands. One table, used by both entry points,
+ * so the resumed wizard and the first-run wizard cannot disagree about what
+ * "Scan a receipt" means.
+ *
+ * Every one of these is a screen in the Records stack — see App.tsx's
+ * `<Stack.Screen name=…>` list, which tests/navigationTargets.test.ts pins.
+ */
+export const ONBOARDING_NEXT_SCREENS: Record<OnboardingNext, string> = {
+  sale: "AddSales",
+  expense: "AddExpense",
+  scan: "ScanReceipt",
+  import: "ImportCsv",
+};
+
 export function OnboardingResumeScreen({ navigation }: any) {
   return (
     <OnboardingScreen
       onDone={(next) => {
         navigation.goBack();
-        // Resolved up the tree to the Records tab — the importer is a sibling
-        // of this stack, not a child of it.
-        if (next === "import") navigation.navigate("Records", { screen: "ImportCsv" });
+        // Resolved up the tree to the Records tab — all four destinations are
+        // siblings of this stack, not children of it.
+        if (next) navigation.navigate("Records", { screen: ONBOARDING_NEXT_SCREENS[next] });
       }}
     />
   );
@@ -121,8 +209,11 @@ export function OnboardingResumeScreen({ navigation }: any) {
 export function OnboardingScreen({
   onDone,
 }: {
-  /** Leaves the wizard for the main app; "import" also opens the CSV importer. */
-  onDone: (next?: "import") => void;
+  /**
+   * Leaves the wizard for the main app. A `next` also opens the screen the
+   * owner picked on the readiness step — see ONBOARDING_NEXT_SCREENS.
+   */
+  onDone: (next?: OnboardingNext) => void;
 }) {
   const t = useTheme();
   const { ink } = t;
@@ -165,6 +256,30 @@ export function OnboardingScreen({
   useEffect(() => {
     if (userId && touched.current && !created) void saveOnboardingDraft(userId, draft);
   }, [userId, draft, created]);
+
+  /*
+   * A FLUSH ON THE WAY TO THE BACKGROUND.
+   *
+   * The effect above already writes on every change, so in the normal case
+   * the keystore is current. What it does not cover is the write that was
+   * in flight — SecureStore is async — when Android decided to reclaim the
+   * process behind a phone call or a camera app. Writing once more as the app
+   * leaves the foreground costs nothing and closes that window; the write is
+   * idempotent, so a duplicate is harmless.
+   *
+   * A REF, not the state, is read here: this subscription is set up once, and
+   * capturing `draft` in the closure would freeze it at whatever was typed
+   * before the listener was attached.
+   */
+  const latestDraft = useRef(draft);
+  latestDraft.current = draft;
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (next) => {
+      if (next === "active") return;
+      if (userId && touched.current && !created) void saveOnboardingDraft(userId, latestDraft.current);
+    });
+    return () => subscription.remove();
+  }, [userId, created]);
 
   const fundsRef = useRef<TextInput>(null);
   const monthlyRef = useRef<TextInput>(null);
@@ -210,6 +325,43 @@ export function OnboardingScreen({
     onDone();
   }
 
+  /**
+   * What the Android back gesture does inside the wizard.
+   *
+   * WHY IT NEEDS HANDLING AT ALL. This screen renders three different steps in
+   * one component, so as far as the navigator is concerned there is nothing to
+   * go back to: on the first-run path the wizard is not even in a stack. Back
+   * from step 2 therefore did what back always does at the root — it dropped
+   * the app to the home screen, mid-setup, with the owner's answers still on
+   * screen. They survive (the draft is in the keystore), but nothing said so,
+   * and "I pressed back and lost it" is not a thing anyone tries twice.
+   *
+   * Now: back walks the wizard BACKWARDS a step, and only asks to leave from
+   * step 1 — through the same confirmation the Skip button uses, so there is
+   * one wording and one consequence. Step 3 does not intercept: the business
+   * exists by then and the step is optional, so back may leave.
+   */
+  const onBack = useCallback(() => {
+    if (confirmingSkip) {
+      setConfirmingSkip(false);
+      return true;
+    }
+    if (step === 2) {
+      setStep(1);
+      return true;
+    }
+    if (step === 1) {
+      setConfirmingSkip(true);
+      return true;
+    }
+    return false;
+  }, [confirmingSkip, step]);
+
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener("hardwareBackPress", onBack);
+    return () => subscription.remove();
+  }, [onBack]);
+
   const heading =
     step === 1
       ? { title: "Tell us about your business", subtitle: "Two quick questions to get started." }
@@ -219,8 +371,8 @@ export function OnboardingScreen({
             subtitle: "These let FinSight work out your targets. Rough figures are fine.",
           }
         : {
-            title: "Import your past records",
-            subtitle: "Bring in what you already have so your insights start with real history.",
+            title: "You're ready",
+            subtitle: "Your business is saved. Pick one thing to do first.",
           };
 
   return (
@@ -252,6 +404,20 @@ export function OnboardingScreen({
 
             {step === 1 ? (
               <>
+                {/*
+                  The approved business-setup pose, and the only mascot on the
+                  first two steps. Fin's notepad is literally "tell us about
+                  your business", which is the one place in this wizard where
+                  the art means the same thing the heading does.
+
+                  Step 2 is deliberately mascot-free: it is four money fields,
+                  and a character watching someone type their cash position adds
+                  nothing to it. Step 3 has the completion pose. One focal point
+                  per screen, as the plan requires.
+                */}
+                <View style={{ alignItems: "center", marginBottom: space.md }}>
+                  <Mascot state="businessSetup" size={72} />
+                </View>
                 <Field
                   label="Business name"
                   value={draft.name}
@@ -328,6 +494,25 @@ export function OnboardingScreen({
 
             {step === 2 ? (
               <>
+                {/*
+                  WHAT THE WHOLE STEP IS FOR, before the first money question.
+
+                  These three figures are the ones an owner is most likely to
+                  balk at, and the app had been asking for them cold. Naming the
+                  two things they produce — a daily sales target and a large-
+                  expense flag — is the difference between a form and a reason.
+                */}
+                <Callout tone="info">
+                  These three figures are what FinSight works your daily sales target from, and what tells it which
+                  expenses are big enough to set aside for review. Rough figures are fine — you can change any of them
+                  later from your business profile.
+                </Callout>
+                <View style={{ height: space.md }} />
+
+                <WhyWeAsk>
+                  The cash the business has to work with right now. It is the starting point for &ldquo;can I afford
+                  this?&rdquo; — FinSight never reads your bank.
+                </WhyWeAsk>
                 <Field
                   ref={fundsRef}
                   label="Available business funds (PHP)"
@@ -341,10 +526,11 @@ export function OnboardingScreen({
                   submitBehavior="submit"
                   onSubmitEditing={() => monthlyRef.current?.focus()}
                 />
-                <T variant="caption" style={{ marginTop: -space.sm, marginBottom: space.md }}>
-                  The cash the business has to work with right now. FinSight doesn't read your bank.
-                </T>
 
+                <WhyWeAsk>
+                  What a normal month costs you — rent, stock, wages, utilities. Divided by your operating days below,
+                  this becomes the daily sales target on your Home screen.
+                </WhyWeAsk>
                 <Field
                   ref={monthlyRef}
                   label="Expected monthly expenses (PHP)"
@@ -357,11 +543,11 @@ export function OnboardingScreen({
                   submitBehavior="submit"
                   onSubmitEditing={() => daysRef.current?.focus()}
                 />
-                <T variant="caption" style={{ marginTop: -space.sm, marginBottom: space.md }}>
-                  What a normal month costs you — rent, stock, wages, utilities. This drives your
-                  daily sales target.
-                </T>
 
+                <WhyWeAsk>
+                  How many days a month you are actually open. A stall that closes on Sundays needs a higher daily
+                  target than one that does not, for the same monthly costs.
+                </WhyWeAsk>
                 <Field
                   ref={daysRef}
                   label="Operating days per month"
@@ -373,9 +559,7 @@ export function OnboardingScreen({
                   submitBehavior="submit"
                   onSubmitEditing={() => thresholdRef.current?.focus()}
                 />
-                <T variant="caption" style={{ marginTop: -space.sm, marginBottom: space.md }}>
-                  How many days a month you're actually open.
-                </T>
+                <View style={{ height: space.md }} />
 
                 {/*
                   ASKED IN PESOS, STORED AS A PERCENT — see lib/largeExpenseThreshold.ts.
@@ -406,6 +590,7 @@ export function OnboardingScreen({
 
                 {error ? <ErrorNote>{error}</ErrorNote> : null}
 
+
                 <View style={{ flexDirection: "row", gap: space.sm, marginTop: space.md }}>
                   <Button
                     title="Back"
@@ -427,36 +612,94 @@ export function OnboardingScreen({
 
             {step === 3 ? (
               <>
-                <Callout tone="info">
-                  Already have sales or expense records? Upload your CSV report to bring your
-                  historical data into FinSight. You'll see a preview and confirm before anything is
-                  saved.
-                </Callout>
-                <T variant="caption" style={{ marginVertical: space.md }}>
-                  No file handy? Skip this — you can import records anytime from the Records tab, or
-                  add them one at a time.
-                </T>
                 {/*
-                  Both paths call onDone, which drops the owner into the main
-                  tabs. Import then navigates to the CSV screen that already
-                  exists rather than a second copy of it — it handles preview,
-                  column mapping, per-row correction and the failure report,
-                  none of which is worth reimplementing for onboarding.
+                  THE READINESS SUMMARY.
+
+                  This step used to be "Import your past records" — one
+                  optional task, presented as the third of three, which read as
+                  a chore standing between the owner and the app. It is now
+                  what the end of setup should be: a receipt for what was
+                  actually saved, then ONE obvious thing to do next.
+
+                  THE FIGURES ARE ECHOED BACK, not recomputed. Every line below
+                  is a value the owner typed on step 2, formatted; nothing here
+                  works out a target or a threshold, because both of those are
+                  the backend's to derive and a second implementation on this
+                  screen is exactly the drift the working agreement forbids.
+
+                  THE ONE MASCOT ON THIS SCREEN. The approved completion pose,
+                  shown once, after the profile is genuinely created — `created`
+                  is only true past a successful POST. It is static: the plan
+                  allows a one-shot for a milestone, and a one-shot that must
+                  also be suppressed under Reduce Motion is more machinery than
+                  a small celebration is worth.
                 */}
-                <Button title="Import CSV" variant="primary" onPress={() => onDone("import")} />
+                <View style={{ alignItems: "center", marginBottom: space.md }}>
+                  <Mascot state="onboardingComplete" size={104} />
+                </View>
+
+                <T accessibilityRole="header" variant="title" style={{ textAlign: "center" }}>
+                  {draft.name.trim() || "Your business"} is set up
+                </T>
+                <T variant="caption" style={{ textAlign: "center", marginTop: 4, marginBottom: space.lg }}>
+                  Here is what FinSight has. All of it is editable later from your business profile.
+                </T>
+
+                <View style={{ gap: space.sm, marginBottom: space.lg }}>
+                  <ReadyLine label="Business" value={draft.type.trim() || "Type not set"} />
+                  <ReadyLine label="Available funds" value={pesos(draft.availableFunds)} />
+                  <ReadyLine
+                    label="Monthly expenses"
+                    value={`${pesos(draft.expectedMonthlyExpenses)} over ${draft.operatingDays || "—"} operating days`}
+                  />
+                  <ReadyLine label="Large expenses flagged over" value={pesos(thresholdDisplayValue(draft))} />
+                </View>
+
+                {/*
+                  ONE PRIMARY ACTION, and it is recording a sale.
+
+                  Of the four honest first moves, this is the one an owner does
+                  several times a day and the one that makes the dashboard show
+                  something real fastest. The other three are present and equal
+                  in weight to each other, but quieter than this — a screen with
+                  four primary buttons has no primary action at all.
+                */}
+                <Button title="Add your first sale" variant="primary" onPress={() => onDone("sale")} />
+                <View style={{ flexDirection: "row", gap: space.sm, marginTop: space.sm }}>
+                  <Button
+                    title="Add an expense"
+                    variant="secondary"
+                    onPress={() => onDone("expense")}
+                    style={{ flex: 1 }}
+                  />
+                  <Button
+                    title="Scan a receipt"
+                    variant="secondary"
+                    onPress={() => onDone("scan")}
+                    style={{ flex: 1 }}
+                  />
+                </View>
+                {/*
+                  The CSV importer keeps its place, one level quieter. It is
+                  still the best first move for an owner who arrives with a
+                  spreadsheet, and it handles preview, column mapping, per-row
+                  correction and the failure report — none of which is worth
+                  reimplementing inside onboarding.
+                */}
                 <Button
-                  title="Skip for now"
-                  variant="secondary"
-                  onPress={() => onDone()}
+                  title="Import records from a CSV"
+                  variant="ghost"
+                  onPress={() => onDone("import")}
                   style={{ marginTop: space.sm }}
                 />
+                <Button title="Not now — take me to Home" variant="ghost" onPress={() => onDone()} />
               </>
             ) : null}
           </Card>
 
           {step === 3 ? (
             <T variant="caption" style={{ textAlign: "center", marginTop: space.md }}>
-              Your business profile is saved. This last step is optional.
+              Nothing here is required. Everything above is already saved.
             </T>
           ) : null}
         </ScrollView>

@@ -87,7 +87,7 @@ describe("the collapsed sidebar logo", () => {
 
     const toggle = screen.getByRole("button", { name: "Open sidebar" });
     // Both layers present at once — the hover state changes opacity only.
-    expect(toggle).toHaveTextContent("F");
+    expect(toggle.querySelector("img")).not.toBeNull();
     expect(toggle.querySelector("svg")).not.toBeNull();
   });
 

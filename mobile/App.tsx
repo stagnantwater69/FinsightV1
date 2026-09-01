@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Linking, Modal, Pressable, View } from "react-native";
+import { ActivityIndicator, Linking, Pressable, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { Ionicons } from "@expo/vector-icons";
 import {
@@ -7,6 +7,7 @@ import {
   CommonActions,
   DefaultTheme,
   createNavigationContainerRef,
+  getFocusedRouteNameFromRoute,
 } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
@@ -28,7 +29,12 @@ import { TourProvider, useTourOptional } from "./src/context/TourContext";
 import { AiChatProvider } from "./src/context/AiChatContext";
 import { useTourTarget } from "./src/components/tour/targets";
 import { QUICK_ADD_STEP_IDS, type TourTargetKey } from "./src/components/tour/steps";
-import { OnboardingResumeScreen, OnboardingScreen } from "./src/screens/OnboardingScreens";
+import {
+  ONBOARDING_NEXT_SCREENS,
+  OnboardingResumeScreen,
+  OnboardingScreen,
+  type OnboardingNext,
+} from "./src/screens/OnboardingScreens";
 import { readOnboarding } from "./src/lib/onboardingDraft";
 import {
   LoginScreen,
@@ -70,13 +76,14 @@ import {
   BusinessProfilesScreen,
   ProfileScreen,
 } from "./src/screens/BusinessScreens";
+import { OperatingScheduleScreen } from "./src/screens/OperatingScheduleScreen";
+import { RecoveryNotificationPreferencesScreen } from "./src/screens/RecoveryNotificationPreferencesScreen";
+import { MonthEndReviewScreen } from "./src/screens/MonthEndReviewScreen";
 import { font } from "./src/theme/tokens";
 import type { Palette } from "./src/theme/palette";
 import { ThemeProvider, useTheme, useThemeControl } from "./src/context/ThemeContext";
 import { recordsTabPressAction, RECORDS_LIST_SCREEN } from "./src/lib/tabSelection";
-import { ReceiptCamera } from "./src/components/receipt-camera";
 import { QuickActionMenu, type RadialAction } from "./src/components/QuickActionMenu";
-import { handOffSections } from "./src/lib/receiptHandoff";
 
 /**
  * Used to reach the navigator from the tab bar's camera modal, which sits
@@ -251,6 +258,17 @@ function MoreStack() {
       <Stack.Screen name="Settings" component={SettingsScreen} options={{ title: "Settings" }} />
       <Stack.Screen name="BusinessProfiles" component={BusinessProfilesScreen} options={{ title: "Businesses" }} />
       <Stack.Screen name="BusinessProfileForm" component={BusinessProfileFormScreen} options={{ title: "Business profile" }} />
+      <Stack.Screen name="OperatingSchedule" component={OperatingScheduleScreen} options={{ title: "Operating schedule" }} />
+      <Stack.Screen
+        name="RecoveryNotificationPreferences"
+        component={RecoveryNotificationPreferencesScreen}
+        options={{ title: "Notification settings" }}
+      />
+      <Stack.Screen
+        name="MonthEndReview"
+        component={MonthEndReviewScreen}
+        options={{ title: "Month-end review" }}
+      />
       <Stack.Screen name="Notifications" component={NotificationsScreen} options={{ title: "Alerts" }} />
       {/*
         Help and legal live IN the app, not behind a link to the website.
@@ -301,6 +319,13 @@ const TAB_TOUR_TARGETS: Record<string, TourTargetKey | undefined> = {
   Insights: "tab-insights",
 };
 
+/**
+ * The Records-stack screens reached only through the plus button's menu.
+ * While one of these is focused, the plus button glows instead of Records —
+ * see the `onQuickAddScreen` comment in MainTabs.
+ */
+const QUICK_ADD_DESTINATION_SCREENS = ["AddExpense", "AddSales", "ScanReceipt", "ImportCsv", "Categories"];
+
 /** A tab icon that the tour can measure. Its own component for the hook. */
 function TabIcon({
   routeName,
@@ -346,8 +371,21 @@ function TabIcon({
  * Raised out of the bar and drawn as a filled circle so it reads as an action
  * rather than a fifth destination.
  */
-function ScanTabButton({ onPress, active }: { onPress: () => void; active: boolean }) {
+function ScanTabButton({
+  onPress,
+  active,
+  glow,
+}: {
+  onPress: () => void;
+  active: boolean;
+  // Distinct from `active`: the halo turns on for a quick-add destination
+  // screen too (AddExpense, AddSales, ScanReceipt, ImportCsv, Categories),
+  // where the menu is already closed and the glyph must stay a plus, not
+  // rotate into the X that means "the menu is open".
+  glow?: boolean;
+}) {
   const t = useTheme();
+  const lit = active || glow;
   // The tour's "Receipt scanner" step points here: on a phone this raised
   // button IS the quick-add menu web spotlights.
   const tourTarget = useTourTarget("quick-add", { pad: { top: 8, bottom: 8, left: 8, right: 8 }, radius: 999 });
@@ -360,7 +398,7 @@ function ScanTabButton({ onPress, active }: { onPress: () => void; active: boole
         the white one that lifts it off the bar; a soft disc behind reads as
         the same highlight the other tabs get, in the same brand family.
       */}
-      {active ? (
+      {lit ? (
         <View
           pointerEvents="none"
           style={{
@@ -385,7 +423,7 @@ function ScanTabButton({ onPress, active }: { onPress: () => void; active: boole
         accessibilityLabel={active ? "Close the actions menu" : "Add a record"}
         // Announced as selected, so a screen reader says the same thing the
         // halo does rather than leaving the state visual-only.
-        accessibilityState={{ selected: active }}
+        accessibilityState={{ selected: lit }}
         style={({ pressed }) => ({
           width: 54,
           height: 54,
@@ -399,7 +437,7 @@ function ScanTabButton({ onPress, active }: { onPress: () => void; active: boole
           // themes. The ramp's 700 step lightens in Dark so brand TEXT stays
           // legible on a dark card, which would have turned this button into
           // a pale mint circle carrying white glyphs.
-          backgroundColor: pressed || active ? t.brandSolidPressed : t.brandSolid,
+          backgroundColor: pressed || lit ? t.brandSolidPressed : t.brandSolid,
           // A ring in the bar's own colour so the circle reads as sitting
           // above the bar rather than punched through it.
           borderWidth: 4,
@@ -444,16 +482,6 @@ function MainTabs() {
   const insets = useSafeAreaInsets();
 
   /**
-   * The receipt camera, owned by the tab bar rather than by a screen.
-   *
-   * This is what lets the Scan button be an ACTION instead of a destination.
-   * The camera opens over whatever the owner was already looking at, and
-   * closing it puts them back there with no navigation having happened at
-   * all — see receiptHandoff.ts for the full account of why the previous
-   * arrangement kept breaking the Records tab.
-   */
-  const [cameraOpen, setCameraOpen] = useState(false);
-  /**
    * The five actions the raised button now offers instead of going straight
    * to the camera. See components/QuickActionMenu for why it is an arc.
    */
@@ -467,6 +495,35 @@ function MainTabs() {
    */
   const tour = useTourOptional();
   const tourHoldsMenu = QUICK_ADD_STEP_IDS.includes(tour?.activeStepId ?? "");
+
+  /*
+   * AddExpense/AddSales/ScanReceipt/ImportCsv/Categories are screens on the
+   * Records stack (see `openInRecords` below), so React Navigation's own
+   * focus tracking genuinely and correctly marks the Records tab as focused
+   * once one of them is pushed. But the owner didn't get there by pressing
+   * Records — they pressed the plus button and picked one of its five
+   * actions, so that's the button that should read as "where you are."
+   *
+   * Read off `navigationRef` rather than `useNavigationState`: that hook only
+   * works in a component nested INSIDE a navigator (a screen), not in the
+   * component that renders the navigator itself — MainTabs renders
+   * Tab.Navigator below, so calling the hook here throws "Couldn't get the
+   * navigation state. Is your component inside a navigator?". The ref has no
+   * such restriction; a `state` listener keeps this in sync instead.
+   */
+  const [recordsFocusedScreen, setRecordsFocusedScreen] = useState<string | undefined>();
+  useEffect(() => {
+    const sync = () => {
+      if (!navigationRef.isReady()) return;
+      const recordsRoute = navigationRef.getRootState()?.routes.find((r) => r.name === "Records");
+      setRecordsFocusedScreen(recordsRoute ? getFocusedRouteNameFromRoute(recordsRoute) : undefined);
+    };
+    sync();
+    return navigationRef.addListener("state", sync);
+  }, []);
+  const onQuickAddScreen = recordsFocusedScreen
+    ? QUICK_ADD_DESTINATION_SCREENS.includes(recordsFocusedScreen)
+    : false;
 
   /*
    * The nested-params form, because it is the only one that crosses tabs.
@@ -521,7 +578,11 @@ function MainTabs() {
       // button is for, just no longer the only one it can reach.
       color: t.brandSolid,
       onColor: t.onBrandSolid,
-      onPress: () => setCameraOpen(true),
+      // ScanReceiptScreen owns its own camera and opens it on arrival — see
+      // that screen's `cameraOpen` comment for why backing out of an
+      // unsupported/failed scanner needs to land on a screen rather than a
+      // bare modal (that's where "Choose from gallery" lives).
+      onPress: () => openInRecords("ScanReceipt"),
     },
     {
       key: "csv",
@@ -549,15 +610,17 @@ function MainTabs() {
     <>
     <Tab.Navigator
       /*
-       * No special-casing of the Records tab any more.
+       * Records still gets special-cased, just not for the reason the old
+       * comment here used to give.
        *
-       * It used to have to surrender its highlight while the scanner was
-       * open, because the scanner was a screen ON the Records stack and so
-       * lit up Records rather than the button the owner had pressed. The
-       * camera is a modal now and lights its own button, and `ScanReceipt`
-       * is what it always should have been — an ordinary Records screen where
-       * a scanned receipt gets reviewed. Records highlighting there is
-       * correct rather than something to work around.
+       * AddExpense/AddSales/ScanReceipt/ImportCsv/Categories are ordinary
+       * screens on the Records stack, so React Navigation's real focus
+       * tracking correctly marks Records as focused for all five. But the
+       * owner reached them through the plus button's menu, not by pressing
+       * Records, so both the tint (via the Records Tab.Screen's own
+       * `options` below) and the glyph here are forced back to their
+       * unfocused look while `onQuickAddScreen` is true — the plus button
+       * glows instead, see `glow` on ScanTabButton.
        */
       screenOptions={({ route }) => ({
         headerShown: false,
@@ -572,7 +635,11 @@ function MainTabs() {
         },
         tabBarLabelStyle: { fontFamily: font.sansMedium, fontSize: 11 },
         tabBarIcon: ({ color, focused }) => (
-          <TabIcon routeName={route.name} color={color} focused={focused} />
+          <TabIcon
+            routeName={route.name}
+            color={color}
+            focused={route.name === "Records" && onQuickAddScreen ? false : focused}
+          />
         ),
       })}
     >
@@ -592,6 +659,12 @@ function MainTabs() {
       <Tab.Screen
         name="Records"
         component={RecordsStack}
+        options={{
+          // Muted to the same colour Insights/More get while unfocused, so
+          // the tab doesn't glow for a screen the owner reached via the plus
+          // button rather than by pressing Records itself.
+          tabBarActiveTintColor: onQuickAddScreen ? t.textMuted : t.brandText,
+        }}
         listeners={({ navigation, route }) => ({
           tabPress: (e) => {
             const sticky = (route.params as { screen?: string } | undefined)?.screen;
@@ -628,7 +701,8 @@ function MainTabs() {
           tabBarButton: (props) => (
             <ScanTabButton
               onPress={() => props.onPress?.({} as never)}
-              active={menuOpen || cameraOpen}
+              active={menuOpen}
+              glow={onQuickAddScreen}
             />
           ),
         }}
@@ -656,45 +730,6 @@ function MainTabs() {
       actions={quickActions}
       onClose={() => setMenuOpen(false)}
     />
-
-    {/*
-      `statusBarTranslucent` so the preview runs edge to edge; the camera's
-      own SafeAreaView keeps its controls clear of the status bar.
-
-      `onRequestClose` is the Android back button and must be handled, or the
-      modal dismisses without telling this component and `cameraOpen` stays
-      true — after which the Scan button appears permanently lit and does
-      nothing.
-    */}
-    <Modal
-      visible={cameraOpen}
-      animationType="fade"
-      statusBarTranslucent
-      onRequestClose={() => setCameraOpen(false)}
-    >
-      {/* Mounted only while visible, so the sensor and torch stop with it. */}
-      {cameraOpen ? (
-        <ReceiptCamera
-          onCancel={() => setCameraOpen(false)}
-          onDone={(sections) => {
-            setCameraOpen(false);
-            /*
-             * Handed over out of band, not as a route param — params persist
-             * on the route and get replayed by the tab handler, which is the
-             * exact fault this rearrangement removed. See receiptHandoff.ts.
-             *
-             * Navigating only on FINISH is the point: the owner is sent to
-             * the review screen because there is now a receipt to read, not
-             * because they pressed a button.
-             */
-            handOffSections(sections);
-            // Same route as every other action here — see openInRecords for
-            // why the nested-params form is the only one that arrives.
-            openInRecords("ScanReceipt");
-          }}
-        />
-      ) : null}
-    </Modal>
     </>
   );
 }
@@ -845,8 +880,13 @@ function MainOrOnboarding() {
   const [dismissed, setDismissed] = useState<boolean | null>(null);
   /** Latched once the wizard hands over, so finishing it does not re-enter it. */
   const [left, setLeft] = useState(false);
-  /** Set when the wizard's last step asked for the importer, consumed on mount below. */
-  const [pendingImport, setPendingImport] = useState(false);
+  /**
+   * Set when the wizard's readiness step picked a first action, consumed on
+   * mount below. Was a boolean for the importer alone; setup now ends with a
+   * choice of four, and a second boolean per destination would be four latches
+   * that can all be true at once.
+   */
+  const [pendingStart, setPendingStart] = useState<OnboardingNext | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -869,12 +909,14 @@ function MainOrOnboarding() {
    * silently dropped.
    */
   useEffect(() => {
-    if (!pendingImport) return;
-    setPendingImport(false);
+    if (!pendingStart) return;
+    setPendingStart(null);
     if (navigationRef.isReady()) {
-      navigationRef.dispatch(CommonActions.navigate("Records", { screen: "ImportCsv" }));
+      navigationRef.dispatch(
+        CommonActions.navigate("Records", { screen: ONBOARDING_NEXT_SCREENS[pendingStart] }),
+      );
     }
-  }, [pendingImport]);
+  }, [pendingStart]);
 
   if (loading || dismissed === null) {
     return (
@@ -888,7 +930,7 @@ function MainOrOnboarding() {
     return (
       <OnboardingScreen
         onDone={(next) => {
-          if (next === "import") setPendingImport(true);
+          if (next) setPendingStart(next);
           setLeft(true);
         }}
       />

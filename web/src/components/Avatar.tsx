@@ -60,11 +60,14 @@ export function AvatarUpload({
   label,
   onUpload,
   changeLabel = "Change photo",
+  details,
 }: {
   photoUrl: string | null | undefined;
   label: string;
   onUpload: (file: File) => Promise<void>;
   changeLabel?: ReactNode;
+  /** Optional identity copy shown beside the avatar and above the upload action. */
+  details?: ReactNode;
 }) {
   const toast = useToast();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -88,7 +91,8 @@ export function AvatarUpload({
   return (
     <div className="flex items-center gap-4">
       <Avatar photoUrl={photoUrl} label={label} size="lg" />
-      <div>
+      <div className="min-w-0">
+        {details ? <div className="mb-2 min-w-0">{details}</div> : null}
         <input
           ref={inputRef}
           type="file"
@@ -101,7 +105,7 @@ export function AvatarUpload({
           type="button"
           onClick={() => inputRef.current?.click()}
           disabled={uploading}
-          className="tap rounded-lg border border-ink-200 bg-paper px-3 text-sm font-medium text-ink-700 transition hover:bg-paper-100 disabled:cursor-not-allowed disabled:opacity-60"
+          className="tap rounded-lg border border-ink-200 bg-paper px-3 text-sm font-medium text-ink-700 transition-colors hover:bg-paper-100 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {uploading ? "Uploading…" : changeLabel}
         </button>

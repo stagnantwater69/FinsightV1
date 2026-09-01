@@ -6,6 +6,11 @@ import * as findingService from "../services/anomalyDetection/finding.service";
 import * as recurringService from "../services/anomalyDetection/recurring.service";
 import * as recurringScheduleService from "../services/recurringSchedule.service";
 import { anomalyEvaluation } from "../services/anomalyDetection/evaluation.service";
+import {
+  getReductionOpportunities,
+  simulateReductionOpportunity,
+  recordReductionOpportunityFeedback,
+} from "../services/reductionOpportunity.service";
 
 /**
  * The day a window ends on, as `YYYY-MM-DD`.
@@ -40,6 +45,11 @@ const recoveryQuerySchema = z.object({
   coverageDays: z.coerce.number().int().positive().max(31).default(14),
 });
 
+const monthEndReviewQuerySchema = z.object({
+  businessProfileId: z.coerce.number().int().positive(),
+  month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "month must be YYYY-MM"),
+});
+
 const spendingImpactQuerySchema = z.object({
   businessProfileId: z.coerce.number().int().positive(),
   plannedAmount: z.coerce.number().nonnegative(),
@@ -57,9 +67,86 @@ export async function expenseBehavior(req: Request, res: Response) {
   res.status(200).json(result);
 }
 
+export async function reductionOpportunities(req: Request, res: Response) {
+  const query = periodQuerySchema.parse(req.query);
+  const result = await getReductionOpportunities(
+    req.user!.id,
+    query.businessProfileId,
+    query.periodDays,
+    query.endDate,
+  );
+  res.status(200).json(result);
+}
+
+// Body, not query — POST /insights/reduction-simulation (§12.2 of the plan).
+// The client sends only category/period/reduction-kind/value; the server
+// derives every baseline figure from the owner's own records.
+const reductionSimulationBodySchema = z.object({
+  businessProfileId: z.number().int().positive(),
+  categoryId: z.number().int().positive(),
+  periodDays: z.number().int().positive().max(366),
+  endDate: endDateSchema,
+  reduction: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("percent"), value: z.number() }),
+    z.object({ kind: z.literal("amount"), value: z.number() }),
+  ]),
+});
+
+export async function reductionSimulation(req: Request, res: Response) {
+  const body = reductionSimulationBodySchema.parse(req.body);
+  const result = await simulateReductionOpportunity(req.user!.id, body);
+  res.status(200).json(result);
+}
+
+// Body, not query — POST /insights/reduction-opportunities/feedback (§15 Phase
+// 5). A lightweight "was this useful?" signal on a card that is itself
+// computed-not-persisted; only the feedback row is written.
+const reductionOpportunityFeedbackBodySchema = z.object({
+  businessProfileId: z.number().int().positive(),
+  opportunityId: z.string().min(1),
+  rating: z.enum(["helpful", "not_relevant"]),
+});
+
+export async function reductionOpportunityFeedback(req: Request, res: Response) {
+  const body = reductionOpportunityFeedbackBodySchema.parse(req.body);
+  const result = await recordReductionOpportunityFeedback(
+    req.user!.id,
+    body.businessProfileId,
+    body.opportunityId,
+    body.rating,
+  );
+  res.status(200).json(result);
+}
+
+// Body, not query — POST /insights/recovery-scenario, matching the same
+// sibling-simulation convention as POST /insights/reduction-simulation
+// (§12.2/§13.2): a hypothetical, non-persisting "what if expected monthly
+// expenses were X" scenario, not a data query, so it takes the single scalar
+// input in a request body rather than as a query-string parameter.
+const recoveryScenarioBodySchema = z.object({
+  businessProfileId: z.number().int().positive(),
+  assumedExpectedMonthlyExpenses: z.number(),
+});
+
+export async function recoveryScenario(req: Request, res: Response) {
+  const body = recoveryScenarioBodySchema.parse(req.body);
+  const result = await insightsService.simulateRecoveryScenario(
+    req.user!.id,
+    body.businessProfileId,
+    body.assumedExpectedMonthlyExpenses,
+  );
+  res.status(200).json(result);
+}
+
 export async function recoveryInsight(req: Request, res: Response) {
   const query = recoveryQuerySchema.parse(req.query);
   const result = await insightsService.getRecoveryInsight(req.user!.id, query.businessProfileId, query.coverageDays);
+  res.status(200).json(result);
+}
+
+export async function monthEndReview(req: Request, res: Response) {
+  const query = monthEndReviewQuerySchema.parse(req.query);
+  const result = await insightsService.getMonthEndReview(req.user!.id, query.businessProfileId, query.month);
   res.status(200).json(result);
 }
 

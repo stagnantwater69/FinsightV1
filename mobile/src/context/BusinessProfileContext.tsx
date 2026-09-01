@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { api, errorMessage } from "../lib/api";
 import { useAuth } from "./AuthContext";
-import type { BusinessProfile, BusinessProfileInput, ExpenseCategory } from "../lib/types";
+import type { BusinessProfile, BusinessProfileInput, ExpenseCategory, ExpenseCostBehavior } from "../lib/types";
 
 /**
  * Active business + its categories.
@@ -41,7 +41,12 @@ interface Value {
    * returned, so a second GET would be a round trip to learn something already
    * known, and the new category would flicker in a moment late.
    */
-  createCategory: (input: { name: string; description?: string }) => Promise<ExpenseCategory>;
+  createCategory: (input: {
+    name: string;
+    description?: string;
+    /** Optional, owner-controlled — Expense Reduction Opportunities plan §5.2/§15 Phase 5. Omitted means UNCLASSIFIED. */
+    costBehavior?: ExpenseCostBehavior;
+  }) => Promise<ExpenseCategory>;
   createProfile: (input: BusinessProfileInput) => Promise<BusinessProfile>;
   updateProfile: (id: number, input: Partial<BusinessProfileInput>) => Promise<BusinessProfile>;
   archiveProfile: (id: number) => Promise<void>;
@@ -145,6 +150,7 @@ export function BusinessProfileProvider({ children }: { children: ReactNode }) {
             businessProfileId: selectedId,
             name: input.name,
             ...(input.description ? { description: input.description } : {}),
+            ...(input.costBehavior ? { costBehavior: input.costBehavior } : {}),
           });
           setCategories((prev) => [...prev, created]);
           return created;

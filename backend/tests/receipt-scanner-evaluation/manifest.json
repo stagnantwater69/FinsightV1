@@ -1,0 +1,32 @@
+[
+  {
+    "id": "real-01-ph-pos-photo",
+    "file": "../ocr-accuracy/images/real-01-ph-pos-photo.jpeg",
+    "kind": "receipt",
+    "writing": "printed",
+    "expectedDocumentCount": 1,
+    "releaseGateEligible": false,
+    "sourceStatus": "existing project fixture; consent status not recorded in this manifest",
+    "expected": { "date": "2026-07-11", "vendor": null, "amount": 188.0 }
+  },
+  {
+    "id": "real-02-clean-digital",
+    "file": "../ocr-accuracy/images/real-02-clean-digital.jpg",
+    "kind": "receipt",
+    "writing": "printed",
+    "expectedDocumentCount": 1,
+    "releaseGateEligible": false,
+    "sourceStatus": "existing project fixture; consent status not recorded in this manifest",
+    "expected": { "date": "2019-12-27", "vendor": "AROMA CAFE", "amount": 8.7 }
+  },
+  {
+    "id": "real-03-ph-sales-invoice",
+    "file": "../ocr-accuracy/images/real-03-ph-sales-invoice.jpeg",
+    "kind": "receipt",
+    "writing": "printed",
+    "expectedDocumentCount": 1,
+    "releaseGateEligible": false,
+    "sourceStatus": "existing project fixture; consent status not recorded in this manifest",
+    "expected": { "date": "2026-04-06", "vendor": null, "amount": 2180.0 }
+  }
+]

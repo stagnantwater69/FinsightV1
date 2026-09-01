@@ -3,6 +3,7 @@ import { Alert as RNAlert, KeyboardAvoidingView, Platform, Pressable, ScrollView
 import { useFocusEffect } from "@react-navigation/native";
 import { Button, Callout, Card, EmptyState, ErrorNote, Field, Money, Screen, T } from "../components/ui";
 import { PhotoUpload } from "../components/PhotoUpload";
+import { SignOutSheet } from "../components/SignOutSheet";
 import { useAuth } from "../context/AuthContext";
 import {
   isValid,
@@ -13,7 +14,8 @@ import {
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { api, errorMessage, getFieldErrors } from "../lib/api";
 import * as haptics from "../lib/haptics";
-import { TAP, font, radius, space, typeScale } from "../theme/tokens";
+import { font, radius, space, typeScale } from "../theme/tokens";
+import { TAP_FLOOR } from "../components/touchTarget";
 import { useTheme } from "../context/ThemeContext";
 import type { BusinessProfile, Profile } from "../lib/types";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
@@ -28,6 +30,16 @@ import {
   type BusinessProfileDraft,
   type BusinessTextField,
 } from "../lib/businessProfileDraft";
+
+/**
+ * The archived-panel "Hide" link: what it looks like, and the slop that makes
+ * it reach the platform tap floor. Written as a pair so the two can never
+ * drift — the second is computed from the first and TAP_FLOOR, so raising the
+ * floor raises the slop rather than silently leaving a 32-point target.
+ */
+const HIDE_LINK_HEIGHT = 32;
+const HIDE_LINK_SLOP = Math.ceil((TAP_FLOOR - HIDE_LINK_HEIGHT) / 2);
+
 
 // ---------------------------------------------------------------- List / switcher
 
@@ -109,10 +121,19 @@ export function BusinessProfilesScreen({ navigation }: any) {
             <T variant="heading" accessibilityRole="header">Archived businesses</T>
             <Pressable
               onPress={() => setArchived(null)}
-              hitSlop={10}
+              /*
+               * hitSlop rather than height, and the slop is DERIVED from the
+               * floor rather than guessed at 10. This is a caption-sized link
+               * sitting opposite a heading in a card header row: laying it out
+               * to 48 would drag that header twenty-odd points taller for a
+               * secondary control, which is exactly the dense-layout case the
+               * audit allows slop for. HIDE_LINK_HEIGHT is the visual size and
+               * the slop makes up the rest, on both platforms.
+               */
+              hitSlop={HIDE_LINK_SLOP}
               accessibilityRole="button"
               accessibilityLabel="Hide archived businesses"
-              style={{ minHeight: TAP - 12, justifyContent: "center" }}
+              style={{ minHeight: HIDE_LINK_HEIGHT, justifyContent: "center" }}
             >
               <T variant="caption">Hide</T>
             </Pressable>
@@ -393,6 +414,27 @@ export function BusinessProfileFormScreen({ navigation, route }: any) {
             {error ? <ErrorNote>{error}</ErrorNote> : null}
             <Button title={existing ? "Save changes" : "Create business"} variant="primary" onPress={submit} loading={busy} style={{ marginTop: space.md }} />
           </Card>
+
+          {/*
+            Only on an existing business, for the same reason the logo upload
+            above is: the schedule endpoints are scoped to a business profile
+            id that does not exist until the business is created.
+            Recovery Target Improvement Plan §11 Phase 2.
+          */}
+          {existing ? (
+            <Card style={{ marginTop: space.lg }}>
+              <T variant="title" style={{ marginBottom: 4 }}>Operating schedule</T>
+              <T variant="caption" style={{ marginBottom: space.md }}>
+                Which days of the week this business is normally open, plus any holidays or one-off closures. FinSight
+                uses this to calculate exact operating days for your Recovery Target instead of an estimate.
+              </T>
+              <Button
+                title="Edit operating schedule"
+                variant="secondary"
+                onPress={() => navigation.navigate("OperatingSchedule")}
+              />
+            </Card>
+          ) : null}
         </ScrollView>
       </KeyboardAvoidingView>
     </Screen>
@@ -406,6 +448,7 @@ export function ProfileScreen() {
   const { brand, ink } = t;
   const { profile, updateProfile, logout, logoutEverywhere, changePassword, setProfileFromServer } = useAuth();
   const [passwordChanged, setPasswordChanged] = useState(false);
+  const [signOutOpen, setSignOutOpen] = useState(false);
   const [form, setForm] = useState({
     firstName: profile?.firstName ?? "",
     lastName: profile?.lastName ?? "",
@@ -706,9 +749,18 @@ export function ProfileScreen() {
             <Button title="Delete my account" variant="danger" onPress={confirmAccountDeletion} loading={busy} />
           </Card>
 
-          <Button title="Log out" variant="danger" onPress={logout} />
+          {/*
+            OPENS THE SHARED CONFIRMATION — it does not sign out on the tap.
+            It used to (`onPress={logout}`), which made this the one sign-out
+            in the app with no confirmation, no progress state and no guard
+            against a second tap, while More's row had all three. The sheet
+            they now share is components/SignOutSheet.tsx.
+          */}
+          <Button title="Sign out" variant="danger" onPress={() => setSignOutOpen(true)} />
         </ScrollView>
       </KeyboardAvoidingView>
+
+      <SignOutSheet visible={signOutOpen} onClose={() => setSignOutOpen(false)} />
     </Screen>
   );
 }

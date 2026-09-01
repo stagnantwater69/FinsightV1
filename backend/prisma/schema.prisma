@@ -281,6 +281,40 @@ enum AccountDeletionStage {
   @@map("AccountDeletionStage")
 }
 
+// [ADDED] Owner-controlled cost-behavior classification for
+// docs/EXPENSE-REDUCTION-OPPORTUNITIES-PLAN.md §5.2 (deferred in v1, added
+// once validated as useful post-UAT). UNCLASSIFIED is the default for every
+// category — old and new — until the owner explicitly sets one via the
+// category create/edit form; this must never be inferred from the category
+// name.
+enum ExpenseCostBehavior {
+  FIXED
+  VARIABLE
+  MIXED
+  UNCLASSIFIED
+
+  @@map("ExpenseCostBehavior")
+}
+
+// [ADDED] Lightweight "was this useful?" signal on a reduction-opportunity
+// card, per plan §15 Phase 5. An enum rather than a boolean so a future third
+// state (e.g. "already addressed") does not require a breaking column change.
+enum ReductionOpportunityFeedbackRating {
+  HELPFUL
+  NOT_RELEVANT
+
+  @@map("ReductionOpportunityFeedbackRating")
+}
+
+// [ADDED] Recovery Target plan §7.3 — a date override always takes
+// precedence over BusinessOperatingDay's weekly pattern for that date.
+enum OperatingDayOverrideType {
+  OPEN
+  CLOSED
+
+  @@map("OperatingDayOverrideType")
+}
+
 model User {
   id          Int           @id @default(autoincrement()) @map("User_ID")
   authId      String        @unique @map("User_AuthID") @db.Uuid
@@ -329,10 +363,11 @@ model User {
   tourStep                   Int?    @map("User_TourStep")
   tourAlwaysShow             Boolean @default(false) @map("User_TourAlwaysShow")
 
-  businessProfiles BusinessProfile[]
-  notifications    Notification[]
-  aiInteractions   AIInteraction[]
-  conversations    Conversation[]
+  businessProfiles             BusinessProfile[]
+  notifications                Notification[]
+  aiInteractions               AIInteraction[]
+  conversations                Conversation[]
+  reductionOpportunityFeedback ReductionOpportunityFeedback[]
 
   // The deletion worker claims the oldest unfinished request on every pass.
   @@index([status, deletionRequestedAt], map: "User_DeletionQueue_idx")
@@ -347,6 +382,12 @@ model BusinessProfile {
   availableFunds               Decimal   @map("BusinessProfile_AvailableFunds") @db.Decimal(12, 2)
   expectedMonthlyExpenses      Decimal   @map("BusinessProfile_ExpectedMonthlyExpenses") @db.Decimal(12, 2)
   operatingDays                Int       @map("BusinessProfile_OperatingDays")
+  // [ADDED] Recovery Target plan §7.1 — IANA timezone identifier (e.g.
+  // "Asia/Manila"), never a numeric UTC offset. Validated at the application
+  // layer against Node's Intl.supportedValuesOf("timeZone"); the DB layer
+  // only enforces length. Defaults every existing and new profile to
+  // "Asia/Manila".
+  timezone                     String    @default("Asia/Manila") @map("BusinessProfile_Timezone") @db.VarChar(64)
   largeExpenseThresholdPercent Decimal   @default(20) @map("BusinessProfile_LargeExpenseThresholdPercent") @db.Decimal(5, 2) // [ADDED] see schema header note
   logoUrl                      String?   @map("BusinessProfile_LogoURL") @db.VarChar(500) // [ADDED] see schema header note
   createdAt                    DateTime  @default(now()) @map("BusinessProfile_CreatedAt")
@@ -357,31 +398,43 @@ model BusinessProfile {
   // whose whole value is the history it holds.
   archivedAt                   DateTime? @map("BusinessProfile_ArchivedAt")
 
-  user                  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  categories            ExpenseCategory[]
-  expenseRecords        ExpenseRecord[]
-  salesReferenceRecords SalesReferenceRecord[]
-  receiptScans          ReceiptScan[]
-  csvImportBatches      CSVImportBatch[]
-  aiInteractions        AIInteraction[]
-  conversations         Conversation[]
-  notifications         Notification[]
-  anomalyFindings       AnomalyFinding[]
-  categoryStatistics    CategoryStatistics[]
-  recurringPatterns     RecurringPattern[]
-  recurringSchedules    RecurringSchedule[]
-  analysisJobs          AnalysisJob[]
+  user                         User                           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  categories                   ExpenseCategory[]
+  expenseRecords               ExpenseRecord[]
+  salesReferenceRecords        SalesReferenceRecord[]
+  receiptScans                 ReceiptScan[]
+  csvImportBatches             CSVImportBatch[]
+  aiInteractions               AIInteraction[]
+  conversations                Conversation[]
+  notifications                Notification[]
+  anomalyFindings              AnomalyFinding[]
+  categoryStatistics           CategoryStatistics[]
+  recurringPatterns            RecurringPattern[]
+  recurringSchedules           RecurringSchedule[]
+  analysisJobs                 AnalysisJob[]
+  reductionOpportunityFeedback ReductionOpportunityFeedback[]
+  operatingDaySchedule         BusinessOperatingDay[]
+  operatingDayOverrides        BusinessOperatingDayOverride[]
+  recoveryPlans                RecoveryPlan[]
+  recoveryNotificationPreference RecoveryNotificationPreference?
+  recoveryNotificationTriggerStates RecoveryNotificationTriggerState[]
 
   @@index([userId])
   @@map("BusinessProfile")
 }
 
 model ExpenseCategory {
-  id                Int      @id @default(autoincrement()) @map("Category_ID")
-  businessProfileId Int      @map("BusinessProfile_ID")
-  name              String   @map("Category_Name") @db.VarChar(100)
-  description       String?  @map("Category_Description") @db.VarChar(255)
-  createdAt         DateTime @default(now()) @map("Category_CreatedAt")
+  id                Int                 @id @default(autoincrement()) @map("Category_ID")
+  businessProfileId Int                 @map("BusinessProfile_ID")
+  name              String              @map("Category_Name") @db.VarChar(100)
+  description       String?             @map("Category_Description") @db.VarChar(255)
+  createdAt         DateTime            @default(now()) @map("Category_CreatedAt")
+  /// [ADDED] Owner-controlled cost-behavior classification, per
+  /// docs/EXPENSE-REDUCTION-OPPORTUNITIES-PLAN.md §5.2. Deliberately NOT
+  /// backfilled from the category name — the plan explicitly forbids
+  /// name-based heuristics, so every category (old and new) starts and stays
+  /// UNCLASSIFIED until an owner sets it via the category create/edit form.
+  costBehavior      ExpenseCostBehavior @default(UNCLASSIFIED) @map("Category_CostBehavior")
 
   businessProfile    BusinessProfile      @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
   expenseRecords     ExpenseRecord[]
@@ -683,6 +736,9 @@ model ReceiptScan {
   /// detail. The clients render prose FROM these; they had already drifted
   /// apart by hardcoding the prose twice.
   warnings                Json?     @map("ReceiptScan_Warnings")
+  /// Advisory receipt evidence produced after OCR. It never confirms an
+  /// expense and never replaces the owner's review decision.
+  receiptLikelihood       Json?     @map("ReceiptScan_ReceiptLikelihood")
   createdAt               DateTime  @default(now()) @map("ReceiptScan_CreatedAt")
 
   businessProfile BusinessProfile?         @relation(fields: [businessProfileId], references: [id], onDelete: SetNull)
@@ -704,14 +760,27 @@ model ReceiptScanPage {
   receiptScanId     Int      @map("ReceiptScan_ID")
   pageNumber        Int      @map("ReceiptScanPage_Number")
   imageFile         String   @map("ReceiptScanPage_ImageFile") @db.VarChar(255)
+  /// Optional derived scanner/crop output. `imageFile` always remains the
+  /// original evidence object and is never overwritten by this path.
+  processedImageFile String? @map("ReceiptScanPage_ProcessedImageFile") @db.VarChar(255)
+  /// Versioned, validated capture provenance supplied by the client.
+  captureMetadata   Json?    @map("ReceiptScanPage_CaptureMetadata")
+  /// Which OCR candidate objectively won for this page.
+  ocrSource         String   @default("original") @map("ReceiptScanPage_OcrSource") @db.VarChar(20)
   /// This page's own OCR text. ReceiptScan.rawText holds all pages
   /// concatenated in order — the shape every parser already reads — so this
   /// is kept only for per-page re-processing (a retaken page 2 must not force
   /// re-reading pages 1 and 3), not as the primary text store.
   rawText           String?  @map("ReceiptScanPage_RawText") @db.Text
+  /// Audit copy of OCR run against the unmodified evidence image.
+  originalRawText   String?  @map("ReceiptScanPage_OriginalRawText") @db.Text
+  /// Audit copy of OCR run against the derived image, whether or not it won.
+  processedRawText  String?  @map("ReceiptScanPage_ProcessedRawText") @db.Text
   /// This page's own OCR confidence, for a per-page "this one looks rough"
   /// signal. ReceiptScan.ocrConfidence remains the whole-scan figure.
   ocrConfidence     Int?     @map("ReceiptScanPage_OcrConfidence")
+  originalOcrConfidence Int? @map("ReceiptScanPage_OriginalOcrConfidence")
+  processedOcrConfidence Int? @map("ReceiptScanPage_ProcessedOcrConfidence")
   /// How readable the photograph itself was — see lib/imageQuality.
   ///
   /// STORED, where it deliberately was not before. The old reasoning was that
@@ -885,36 +954,36 @@ model CSVImportBatch {
   processingStatus CsvImportProcessingStatus @default(PENDING) @map("ImportBatch_ProcessingStatus")
   /// Client-supplied idempotency key. A retry with the same key returns the
   /// same logical import at whatever stage it reached — never a second import.
-  idempotencyKey   String?   @unique @map("ImportBatch_IdempotencyKey") @db.VarChar(100)
+  idempotencyKey   String?                   @unique @map("ImportBatch_IdempotencyKey") @db.VarChar(100)
   /// sha256 of the uploaded bytes: detects an accidental re-upload of the
   /// identical file under a different key (surfaced, not blocked).
-  fileHash         String?   @map("ImportBatch_FileHash") @db.VarChar(64)
-  fileSizeBytes    Int?      @map("ImportBatch_FileSizeBytes")
-  totalRows        Int?      @map("ImportBatch_TotalRows")
+  fileHash         String?                   @map("ImportBatch_FileHash") @db.VarChar(64)
+  fileSizeBytes    Int?                      @map("ImportBatch_FileSizeBytes")
+  totalRows        Int?                      @map("ImportBatch_TotalRows")
   /// Resume checkpoint: rows already validated-and-committed. A reclaimed
   /// batch continues from here rather than starting over.
-  processedRows    Int       @default(0) @map("ImportBatch_ProcessedRows")
-  importedRows     Int       @default(0) @map("ImportBatch_ImportedRows")
-  skippedRows      Int       @default(0) @map("ImportBatch_SkippedRows")
-  flaggedRows      Int       @default(0) @map("ImportBatch_FlaggedRows")
+  processedRows    Int                       @default(0) @map("ImportBatch_ProcessedRows")
+  importedRows     Int                       @default(0) @map("ImportBatch_ImportedRows")
+  skippedRows      Int                       @default(0) @map("ImportBatch_SkippedRows")
+  flaggedRows      Int                       @default(0) @map("ImportBatch_FlaggedRows")
   /// Which stage failed ("upload" | "validate" | "insert-expenses" | ...) —
   /// the difference between a diagnosable failure and a mystery 500.
-  failureStage     String?   @map("ImportBatch_FailureStage") @db.VarChar(50)
-  lastError        String?   @map("ImportBatch_LastError") @db.VarChar(1000)
-  attemptCount     Int       @default(0) @map("ImportBatch_AttemptCount")
-  nextAttemptAt    DateTime  @default(now()) @map("ImportBatch_NextAttemptAt")
-  heartbeatAt      DateTime? @map("ImportBatch_HeartbeatAt")
-  workerId         String?   @map("ImportBatch_WorkerID") @db.VarChar(100)
-  startedAt        DateTime? @map("ImportBatch_StartedAt")
-  completedAt      DateTime? @map("ImportBatch_CompletedAt")
+  failureStage     String?                   @map("ImportBatch_FailureStage") @db.VarChar(50)
+  lastError        String?                   @map("ImportBatch_LastError") @db.VarChar(1000)
+  attemptCount     Int                       @default(0) @map("ImportBatch_AttemptCount")
+  nextAttemptAt    DateTime                  @default(now()) @map("ImportBatch_NextAttemptAt")
+  heartbeatAt      DateTime?                 @map("ImportBatch_HeartbeatAt")
+  workerId         String?                   @map("ImportBatch_WorkerID") @db.VarChar(100)
+  startedAt        DateTime?                 @map("ImportBatch_StartedAt")
+  completedAt      DateTime?                 @map("ImportBatch_CompletedAt")
   /// Everything needed to audit or replay the import: column mapping, record
   /// type, mixed strategy, detected delimiter/encoding, date format, parser
   /// version, and the actor. Json because it is write-once provenance, not
   /// something queried by column.
-  mappingMeta      Json?     @map("ImportBatch_MappingMeta")
+  mappingMeta      Json?                     @map("ImportBatch_MappingMeta")
   /// Bounded result evidence: per-row skip/flag reasons (capped), counts by
   /// record type. What the response body used to carry and then lose.
-  resultSummary    Json?     @map("ImportBatch_ResultSummary")
+  resultSummary    Json?                     @map("ImportBatch_ResultSummary")
 
   businessProfile       BusinessProfile        @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
   expenseRecords        ExpenseRecord[]
@@ -1004,4 +1073,235 @@ model ChatMessage {
 
   @@index([conversationId, createdAt])
   @@map("ChatMessage")
+}
+
+/// [ADDED] Helpful/not-relevant signal on a reduction-opportunity card, per
+/// docs/EXPENSE-REDUCTION-OPPORTUNITIES-PLAN.md §15 Phase 5. Deliberately
+/// lightweight — this is UX signal for later evaluation, not a durable
+/// financial record, which is why it is keyed to the opportunity's
+/// computed, non-persisted id rather than a foreign key into a stored
+/// opportunities table (v1 does not store opportunity rows; see plan §17).
+///
+/// opportunityId matches the `${type}-${categoryId}-${periodEndKey}` format
+/// produced by computeReductionOpportunities in reductionOpportunity.service.ts
+/// (e.g. "category_pressure-14-2026-08-31"). Stored as opaque text rather than
+/// decomposed into its parts: nothing here queries by type or category alone,
+/// and decomposing it would let this table drift out of sync with however the
+/// service's id format evolves.
+///
+/// One row per (businessProfile, opportunity, user): a second submission
+/// updates the existing rating rather than accumulating duplicate rows, since
+/// this is a "what do you think right now" signal, not an append-only log —
+/// the caller should upsert on the unique constraint below rather than treat
+/// a resubmission as spam to block.
+model ReductionOpportunityFeedback {
+  id                Int                                @id @default(autoincrement()) @map("ReductionOpportunityFeedback_ID")
+  businessProfileId Int                                @map("BusinessProfile_ID")
+  userId            Int                                @map("User_ID")
+  opportunityId     String                             @map("ReductionOpportunityFeedback_OpportunityID") @db.VarChar(150)
+  rating            ReductionOpportunityFeedbackRating @map("ReductionOpportunityFeedback_Rating")
+  createdAt         DateTime                           @default(now()) @map("ReductionOpportunityFeedback_CreatedAt")
+
+  businessProfile BusinessProfile @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([businessProfileId, opportunityId, userId], map: "ReductionOpportunityFeedback_profile_opportunity_user_key")
+  @@index([businessProfileId, opportunityId], map: "ReductionOpportunityFeedback_profile_opportunity_idx")
+  @@map("ReductionOpportunityFeedback")
+}
+
+/// [ADDED] Recovery Target plan §7.2 / §7.4 step 1. Normalized weekly
+/// operating schedule, additive alongside the still-untouched
+/// BusinessProfile.operatingDays approximation — nothing here changes the
+/// current calculation. A profile with zero rows here means "no schedule
+/// configured yet" (approximation mode continues); the plan explicitly
+/// forbids backfilling rows or deriving weekdays from the existing
+/// operatingDays count, since several distinct weekly patterns can produce
+/// the same number. Once schedule setup completes, all seven weekdays
+/// should exist so an absent row is never overloaded to mean "closed" —
+/// that invariant is enforced by the service layer, not the DB.
+model BusinessOperatingDay {
+  id                Int     @id @default(autoincrement()) @map("BusinessOperatingDay_ID")
+  businessProfileId Int     @map("BusinessProfile_ID")
+  weekday           Int     @map("BusinessOperatingDay_Weekday") // 1=Monday ... 7=Sunday
+  isOpen            Boolean @map("BusinessOperatingDay_IsOpen")
+
+  businessProfile BusinessProfile @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([businessProfileId, weekday], map: "BusinessOperatingDay_profile_weekday_key")
+  @@index([businessProfileId], map: "BusinessOperatingDay_profile_idx")
+  @@map("BusinessOperatingDay")
+}
+
+/// [ADDED] Recovery Target plan §7.3 / §7.4 step 1. Per-date exception that
+/// always takes precedence over BusinessOperatingDay's weekly pattern for
+/// that date (holidays, temporary closures, special openings, emergencies).
+/// `reason` is owner-entered free text for display context only — it must
+/// never be interpreted as financial evidence by any calculation.
+model BusinessOperatingDayOverride {
+  id                Int                      @id @default(autoincrement()) @map("BusinessOperatingDayOverride_ID")
+  businessProfileId Int                      @map("BusinessProfile_ID")
+  date              DateTime                 @map("BusinessOperatingDayOverride_Date") @db.Date
+  type              OperatingDayOverrideType @map("BusinessOperatingDayOverride_Type")
+  reason            String?                  @map("BusinessOperatingDayOverride_Reason") @db.VarChar(120)
+
+  businessProfile BusinessProfile @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([businessProfileId, date], map: "BusinessOperatingDayOverride_profile_date_key")
+  @@index([businessProfileId, date], map: "BusinessOperatingDayOverride_profile_date_idx")
+  @@map("BusinessOperatingDayOverride")
+}
+
+/// [ADDED] Recovery Target plan §10.8 / §11 Phase 6 — the five candidate
+/// notification triggers, shared by RecoveryNotificationPreference (which
+/// trigger an owner allows) and RecoveryNotificationTriggerState (idempotency
+/// state per trigger). Kept as a real enum rather than five preference/state
+/// tables — adding a sixth trigger later is one enum value, not a migration
+/// per trigger.
+enum RecoveryNotificationTrigger {
+  TARGET_INCREASE
+  BEHIND_THREE_DAYS
+  OPEN_DAY_NO_SALES
+  PROJECTION_SHORTFALL
+  COVERAGE_REACHED
+}
+
+/// [ADDED] Recovery Target plan §10.8 / §11 Phase 6 — per-business-profile
+/// opt-in controls, quiet hours and a frequency cap for Recovery Target
+/// notifications. Deliberately scoped by businessProfileId only, matching
+/// BusinessOperatingDay/BusinessOperatingDayOverride and every other
+/// Recovery Target table: a BusinessProfile has exactly one owning User, so
+/// the owner for a durable Notification row (which the existing model keys
+/// by BOTH userId and businessProfileId) is resolved through the
+/// businessProfile relation at write time rather than duplicated here.
+///
+/// One row per business profile (@@unique below); absent means every
+/// trigger below defaults ON with no quiet hours and the default cooldown,
+/// exactly the "optional and owner-controlled" wording in §10.8 — an owner
+/// who never opens the settings screen still gets the alerts, and can turn
+/// individual ones off.
+///
+/// `targetIncreaseThresholdPercent` is a placeholder default (not an
+/// adviser-confirmed number), the same posture as
+/// BusinessProfile.largeExpenseThresholdPercent.
+///
+/// Quiet hours are stored as bare TIME-of-day values (no date, no UTC
+/// offset) and are deliberately NOT a third timezone field — the service
+/// layer resolves them against the business's own BusinessProfile.timezone
+/// (§7.1), per the task's explicit instruction not to add a second
+/// timezone. A null pair means quiet hours are off.
+model RecoveryNotificationPreference {
+  id                Int  @id @default(autoincrement()) @map("RecoveryNotificationPreference_ID")
+  businessProfileId Int  @unique @map("BusinessProfile_ID")
+
+  targetIncreaseAlertEnabled     Boolean @default(true) @map("RecoveryNotificationPreference_TargetIncreaseAlertEnabled")
+  targetIncreaseThresholdPercent Decimal @default(15) @map("RecoveryNotificationPreference_TargetIncreaseThresholdPercent") @db.Decimal(5, 2)
+  behindThreeDaysAlertEnabled    Boolean @default(true) @map("RecoveryNotificationPreference_BehindThreeDaysAlertEnabled")
+  openDayNoSalesAlertEnabled     Boolean @default(true) @map("RecoveryNotificationPreference_OpenDayNoSalesAlertEnabled")
+  projectionShortfallAlertEnabled Boolean @default(true) @map("RecoveryNotificationPreference_ProjectionShortfallAlertEnabled")
+  coverageReachedAlertEnabled    Boolean @default(true) @map("RecoveryNotificationPreference_CoverageReachedAlertEnabled")
+
+  // Local time-of-day (business timezone), null pair = disabled.
+  quietHoursStart DateTime? @map("RecoveryNotificationPreference_QuietHoursStart") @db.Time(0)
+  quietHoursEnd   DateTime? @map("RecoveryNotificationPreference_QuietHoursEnd") @db.Time(0)
+
+  // Frequency/cooldown cap shared by every trigger on this profile, e.g. 24
+  // = "at most once per day" (§10.8's "frequency controls" /
+  // "deduplication and cooldown"). Per-trigger last-fired timestamps live in
+  // RecoveryNotificationTriggerState; this is the configured WIDTH of that
+  // cooldown window, not the state itself.
+  minHoursBetweenNotifications Int @default(24) @map("RecoveryNotificationPreference_MinHoursBetweenNotifications")
+
+  createdAt DateTime @default(now()) @map("RecoveryNotificationPreference_CreatedAt")
+  updatedAt DateTime @updatedAt @map("RecoveryNotificationPreference_UpdatedAt")
+
+  businessProfile BusinessProfile @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+
+  @@map("RecoveryNotificationPreference")
+}
+
+/// [ADDED] Recovery Target plan §10.8 ("deduplication and cooldown") / §11
+/// Phase 6 ("generate notifications durably and idempotently... do not use
+/// in-memory scheduling"). One row per (businessProfileId, trigger),
+/// updated whenever that trigger is evaluated or fired, so re-evaluating the
+/// same condition on a later request/read (this app generates notifications
+/// at read/request time — see notification.service.ts and its callers in
+/// expenseRecord/salesRecord/csvImport services — never via an in-memory
+/// timer) can compare against durable state instead of re-deriving it from
+/// scratch or refiring within the cooldown window.
+///
+/// Deliberately NOT folded into the existing Notification table: that model
+/// (userId + businessProfileId + type + free-text message, per
+/// notification.service.ts) already covers simple "never repeat this exact
+/// string" dedup (see recurring.service.ts's notifyScheduleFinding) and
+/// plain time-window cooldown (query the latest row of a given `type` and
+/// compare `dateCreated`). It cannot express the trigger-specific
+/// STRUCTURED value some of these five need to detect a NEW condition
+/// rather than a repeat of the last one — e.g. "adjusted daily target
+/// increased beyond a configured percentage" needs the daily target amount
+/// at the last fire to compute the delta, and a free-text message is not a
+/// queryable number. `lastFiredValue`'s unit is trigger-dependent (a peso
+/// amount for TARGET_INCREASE/PROJECTION_SHORTFALL, a whole-day count for
+/// BEHIND_THREE_DAYS, unused for OPEN_DAY_NO_SALES/COVERAGE_REACHED) and is
+/// interpreted by the service layer, never by this schema.
+model RecoveryNotificationTriggerState {
+  id                Int                         @id @default(autoincrement()) @map("RecoveryNotificationTriggerState_ID")
+  businessProfileId Int                         @map("BusinessProfile_ID")
+  trigger           RecoveryNotificationTrigger @map("RecoveryNotificationTriggerState_Trigger")
+
+  lastEvaluatedAt DateTime? @map("RecoveryNotificationTriggerState_LastEvaluatedAt")
+  lastFiredAt     DateTime? @map("RecoveryNotificationTriggerState_LastFiredAt")
+  lastFiredValue  Decimal?  @map("RecoveryNotificationTriggerState_LastFiredValue") @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now()) @map("RecoveryNotificationTriggerState_CreatedAt")
+  updatedAt DateTime @updatedAt @map("RecoveryNotificationTriggerState_UpdatedAt")
+
+  businessProfile BusinessProfile @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([businessProfileId, trigger], map: "RecoveryNotificationTriggerState_profile_trigger_key")
+  @@index([businessProfileId], map: "RecoveryNotificationTriggerState_profile_idx")
+  @@map("RecoveryNotificationTriggerState")
+}
+
+/// [ADDED] Recovery Target plan §7.5 / §11 Phase 6 — an optional, owner-saved
+/// buffer/deadline plan, added exactly per the plan's proposed shape.
+///
+/// MUST NEVER be read by computeRecoveryTarget/getRecoveryInsight or any
+/// live calculation (§13.2/§10.7): it is a separate, owner-visible artifact
+/// a person chose to write down, never something that silently changes the
+/// real target. Enforcing that boundary is a service-layer contract, not a
+/// DB constraint — this table intentionally has NO relation back into any
+/// calculation path.
+model RecoveryPlan {
+  id                Int       @id @default(autoincrement()) @map("RecoveryPlan_ID")
+  businessProfileId Int       @map("BusinessProfile_ID")
+  month             DateTime  @map("RecoveryPlan_Month") @db.Date
+  bufferPercent     Decimal?  @map("RecoveryPlan_BufferPercent") @db.Decimal(5, 2)
+  deadline          DateTime? @map("RecoveryPlan_Deadline") @db.Date
+  ownerTargetAmount Decimal?  @map("RecoveryPlan_OwnerTargetAmount") @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now()) @map("RecoveryPlan_CreatedAt")
+  updatedAt DateTime @updatedAt @map("RecoveryPlan_UpdatedAt")
+
+  businessProfile BusinessProfile @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([businessProfileId, month], map: "RecoveryPlan_profile_month_key")
+  @@map("RecoveryPlan")
+}
+
+/// [ADDED] docs/superpowers/specs/2026-09-01-veryfi-production-ocr-integration-design.md
+///
+/// One row per calendar month a Veryfi call was ever attempted. `count` is
+/// incremented only on an actual attempt (a call skipped because the limit
+/// was already reached never increments it) — see
+/// receiptScan/veryfiQuota.ts, the only reader/writer of this table.
+model VeryfiUsage {
+  /// "2026-09" — a calendar month, not a timestamp, because the limit this
+  /// guards is monthly and a plain string key needs no timezone reasoning.
+  month String @id @map("VeryfiUsage_Month") @db.VarChar(7)
+  count Int    @default(0) @map("VeryfiUsage_Count")
+
+  updatedAt DateTime @updatedAt @map("VeryfiUsage_UpdatedAt")
+
+  @@map("VeryfiUsage")
 }

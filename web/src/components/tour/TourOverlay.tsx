@@ -58,6 +58,13 @@ function eligibleIndexes(): number[] {
 const prefersReducedMotion = () =>
   window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 
+/** Have two measurements of the target placed it in exactly the same box? */
+function sameGeometry(a: DOMRect | null, b: DOMRect): boolean {
+  return (
+    a !== null && a.top === b.top && a.left === b.left && a.width === b.width && a.height === b.height
+  );
+}
+
 /** Spotlight padding around the target, and tooltip clearance past it. */
 const PAD = 6;
 const GAP = 14;
@@ -119,7 +126,16 @@ export function TourOverlay() {
   // ---- keep the spotlight glued to the target while anything moves ----
   useEffect(() => {
     if (!targetEl) return;
-    const update = () => setRect(targetEl.getBoundingClientRect());
+    // `getBoundingClientRect` hands back a FRESH DOMRect every call, so storing
+    // it unconditionally is a state change on every scroll frame, resize and
+    // ResizeObserver callback — even when the target has not moved a pixel,
+    // and each one re-runs the placement layout effect below. Compare the
+    // geometry and keep the previous object when nothing actually moved.
+    const update = () =>
+      setRect((prev) => {
+        const next = targetEl.getBoundingClientRect();
+        return sameGeometry(prev, next) ? prev : next;
+      });
     update();
     window.addEventListener("resize", update);
     window.addEventListener("scroll", update, true);
@@ -216,7 +232,13 @@ export function TourOverlay() {
     top = Math.min(Math.max(top, EDGE), vh - th - EDGE);
     left = Math.min(Math.max(left, EDGE), vw - tw - EDGE);
 
-    setTipStyle({ position: "fixed", top, left, visibility: "visible" });
+    // Same reasoning as the rect above: an identical style object still
+    // re-renders, and this effect runs on every rect change.
+    setTipStyle((prev) =>
+      prev.top === top && prev.left === left && prev.visibility === "visible"
+        ? prev
+        : { position: "fixed", top, left, visibility: "visible" },
+    );
   }, [rect, isMobile, centered, stepIndex, confirmOpen, step.placement, tooltipRef]);
 
   if (!tour) return null;

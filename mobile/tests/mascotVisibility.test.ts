@@ -59,7 +59,11 @@ describe("the daily mascot message", () => {
     const others = [
       join(ROOT, "src", "components", "tour", "TourMascot.tsx"),
       join(ROOT, "src", "components", "AskFinSightFab.tsx"),
-      join(ROOT, "src", "components", "receipt-camera", "CameraPermissionState.tsx"),
+      // The camera permission illustration now lives on the scanner's
+      // "unsupported runtime" state — ML Kit handles its own permission
+      // prompt natively, so there is no FinSight-drawn permission screen
+      // left, but the same mascot pose is reused here.
+      join(ROOT, "src", "components", "receipt-camera", "ScannerStatusStates.tsx"),
     ];
     for (const file of others) {
       expect(

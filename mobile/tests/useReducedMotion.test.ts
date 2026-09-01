@@ -3,9 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 /**
  * The reduce-motion subscription, driven directly.
  *
- * WHY THIS AND NOT THE HOOK: there is no render harness in this project — no
- * testing-library, no react-test-renderer, no jsdom — so `useReducedMotion`
- * itself cannot be mounted in a test. What matters is not the `useState` call
+ * WHY THIS AND NOT THE HOOK: a render harness now exists (tests/render/), so
+ * mounting the hook is possible — but what matters is not the `useState` call
  * anyway; it is the lifecycle around the platform API, which is why that half
  * lives in a plain function. Four things can go wrong there and none of them
  * is visible on screen:

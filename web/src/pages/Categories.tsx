@@ -7,10 +7,70 @@ import { Button } from "../components/Button";
 import { DataTable, type Column } from "../components/DataTable";
 import { EmptyState } from "../components/EmptyState";
 import { Card, PageHead } from "../components/ui";
-import { Field, FormError, TextInput } from "../components/Field";
+import { Field, FormError, SelectInput, TextInput } from "../components/Field";
 import { IconArrowRight, IconSearch } from "../components/icons";
-import type { ExpenseCategory } from "../lib/types";
+import type { ExpenseCategory, ExpenseCostBehavior } from "../lib/types";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
+
+/**
+ * Cost-behavior classification — plan §5.2/§15 Phase 5. Owner-controlled,
+ * optional, never guessed from the category name. `UNCLASSIFIED` is the
+ * column default and reads as "not set" here rather than as a fourth
+ * meaningful choice — see the blank option in `COST_BEHAVIOR_OPTIONS`.
+ */
+const COST_BEHAVIOR_OPTIONS: { value: ExpenseCostBehavior; label: string }[] = [
+  { value: "UNCLASSIFIED", label: "Not set" },
+  { value: "FIXED", label: "Fixed" },
+  { value: "VARIABLE", label: "Variable" },
+  { value: "MIXED", label: "Mixed" },
+];
+
+const COST_BEHAVIOR_LABEL: Record<ExpenseCostBehavior, string> = {
+  FIXED: "Fixed",
+  VARIABLE: "Variable",
+  MIXED: "Mixed",
+  UNCLASSIFIED: "Not set",
+};
+
+/**
+ * One row's inline cost-behavior selector — used in both the table column
+ * and the mobile row. Its own component so the "saving…" state (a few
+ * hundred ms of a disabled select) is scoped to the row that changed rather
+ * than the whole table re-rendering.
+ */
+function CostBehaviorSelect({ category }: { category: ExpenseCategory }) {
+  const { updateCategory } = useExpenseCategories();
+  const [saving, setSaving] = useState(false);
+
+  return (
+    <SelectInput
+      aria-label={`Cost behavior for ${category.name}`}
+      value={category.costBehavior ?? "UNCLASSIFIED"}
+      disabled={saving}
+      onChange={async (e) => {
+        const value = e.target.value as ExpenseCostBehavior;
+        setSaving(true);
+        try {
+          await updateCategory(category.id, { costBehavior: value });
+        } catch {
+          // Left as a no-op error: the select just reverts to the category's
+          // last-known value on the next render, which is enough feedback for
+          // a low-stakes, easily-retried classification field — the same
+          // reasoning a required-field save would not get away with.
+        } finally {
+          setSaving(false);
+        }
+      }}
+      className="min-h-0 py-1.5 text-xs"
+    >
+      {COST_BEHAVIOR_OPTIONS.map((opt) => (
+        <option key={opt.value} value={opt.value}>
+          {opt.label}
+        </option>
+      ))}
+    </SelectInput>
+  );
+}
 
 /**
  * Expense categories.
@@ -32,6 +92,7 @@ export function Categories() {
   const [keyword, setKeyword] = useState("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [costBehavior, setCostBehavior] = useState<ExpenseCostBehavior>("UNCLASSIFIED");
   const [adding, setAdding] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -52,9 +113,17 @@ export function Categories() {
     setSaving(true);
     setError(null);
     try {
-      await createCategory({ name: trimmed, description: description.trim() || undefined });
+      await createCategory({
+        name: trimmed,
+        description: description.trim() || undefined,
+        // Omitted rather than sent as "UNCLASSIFIED": the column default
+        // already covers that case, and the omission form matches the other
+        // optional field (`description`) above.
+        costBehavior: costBehavior === "UNCLASSIFIED" ? undefined : costBehavior,
+      });
       setName("");
       setDescription("");
+      setCostBehavior("UNCLASSIFIED");
       setAdding(false);
     } catch (err) {
       setError(getErrorMessage(err));
@@ -84,6 +153,13 @@ export function Categories() {
         ) : (
           <span className="text-ink-400">—</span>
         ),
+    },
+    {
+      key: "costBehavior",
+      header: "Cost behavior",
+      width: "content",
+      sortValue: (c) => COST_BEHAVIOR_LABEL[c.costBehavior ?? "UNCLASSIFIED"],
+      cell: (c) => <CostBehaviorSelect category={c} />,
     },
     {
       key: "created",
@@ -170,6 +246,25 @@ export function Categories() {
                 placeholder="What belongs in here"
               />
             </Field>
+            <Field
+              label="Cost behavior"
+              htmlFor="cat-cost-behavior"
+              optional
+              hint="How this category tends to move — fixed costs stay roughly flat, variable costs scale with activity, mixed costs have both. Leave it not set if you're unsure; it doesn't block anything."
+              className="sm:col-span-2"
+            >
+              <SelectInput
+                id="cat-cost-behavior"
+                value={costBehavior}
+                onChange={(e) => setCostBehavior(e.target.value as ExpenseCostBehavior)}
+              >
+                {COST_BEHAVIOR_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </SelectInput>
+            </Field>
           </div>
 
           {error ? (
@@ -235,6 +330,9 @@ export function Categories() {
                 <p className="mt-0.5 text-sm text-ink-500">{c.description}</p>
               ) : null}
               <p className="mt-1 text-xs text-ink-400">Created {c.createdAt.slice(0, 10)}</p>
+              <div className="mt-2 max-w-[10rem]">
+                <CostBehaviorSelect category={c} />
+              </div>
             </div>
             <Link
               to={`/records?type=expense&categoryId=${c.id}`}

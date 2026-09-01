@@ -14,7 +14,7 @@ export function ClosingCta() {
   return (
     <section aria-labelledby="cta-title" className={`${MEASURE} pb-16 pt-4 sm:pb-24`}>
       <Rise>
-        <div className="relative overflow-hidden rounded-3xl bg-landing-emerald px-6 py-10 sm:px-10 sm:py-14">
+        <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-landing-emerald via-landing-emerald to-landing-emerald-2 px-6 py-10 sm:px-10 sm:py-14">
           {/* faint rising chart across the banner's foot */}
           <svg
             aria-hidden
@@ -44,11 +44,11 @@ export function ClosingCta() {
             <div className="md:col-span-5">
               <h2
                 id="cta-title"
-                className="max-w-[20ch] font-display text-[clamp(1.6rem,3.4vw,2.3rem)] font-extrabold leading-[1.12] tracking-[-0.02em] text-white"
+                className="max-w-[20ch] font-landing-display text-[clamp(1.6rem,3.4vw,2.3rem)] font-extrabold leading-[1.12] tracking-[-0.02em] text-white"
               >
                 Start with just one week of sales &amp; receipt records.
               </h2>
-              <p className="mt-4 max-w-[46ch] text-[14.5px] leading-relaxed text-landing-mint-light/85">
+              <p className="mt-4 max-w-[46ch] text-[14.5px] leading-relaxed text-landing-mint/85">
                 That's usually enough for the recovery meter and AI assistant to start telling you something you
                 didn't already know about your shop's profitability.
               </p>
@@ -61,7 +61,7 @@ export function ClosingCta() {
               </Link>
               <ul className="mt-6 space-y-2.5">
                 {REASSURANCES.map((r) => (
-                  <li key={r} className="flex items-center gap-2.5 text-[13.5px] font-medium text-landing-mint-light">
+                  <li key={r} className="flex items-center gap-2.5 text-[13.5px] font-medium text-landing-mint">
                     <Check className="h-4 w-4 shrink-0 text-landing-gold" aria-hidden />
                     {r}
                   </li>

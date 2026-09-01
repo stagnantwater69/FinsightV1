@@ -197,6 +197,14 @@ export function SubTabs<Value extends string>({
   const { brand, ink, paper } = t;
   return (
     <View
+      /*
+       * NOT `accessible`. `tablist` is a grouping role whose whole purpose is
+       * to have individually focusable children; setting `accessible` here
+       * would collapse every tab below into one element and make the set
+       * unusable. The tabs carry their own `tab` role and `selected` state,
+       * which is what a reader actually announces. Left non-accessible on
+       * purpose — see the progress bars for the opposite (leaf) case.
+       */
       accessibilityRole="tablist"
       accessibilityLabel={accessibilityLabel}
       style={{

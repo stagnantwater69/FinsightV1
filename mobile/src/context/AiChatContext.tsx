@@ -28,10 +28,16 @@ const transport: ChatTransport = {
     api.get<Conversation[]>("/ai/conversations", { businessProfileId, limit: 50 }),
   getConversation: (id) => api.get<ConversationDetail>(`/ai/conversations/${id}`),
   createConversation: (input) => api.post<ChatSendResponse>("/ai/conversations", input),
-  // Only the question: the server rebuilds the context from fresh data on
-  // every message. See the store's header.
-  sendMessage: (conversationId, question) =>
-    api.post<ChatSendResponse>(`/ai/conversations/${conversationId}/messages`, { question }),
+  // Only the question, almost always: the server rebuilds the context from
+  // fresh data on every message. See the store's header — `reductionOpportunity`
+  // is the one deliberate exception, and it is left `undefined` here on every
+  // path that does not queue one — matching `appendMessageSchema` in
+  // backend/src/controllers/ai.controller.ts field-for-field.
+  sendMessage: (conversationId, question, reductionOpportunity) =>
+    api.post<ChatSendResponse>(`/ai/conversations/${conversationId}/messages`, {
+      question,
+      reductionOpportunity,
+    }),
   renameConversation: async (conversationId, title) => {
     await api.patch(`/ai/conversations/${conversationId}`, { title });
   },

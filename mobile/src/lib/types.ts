@@ -109,12 +109,30 @@ export interface BusinessProfileInput {
   largeExpenseThresholdPercent: number;
 }
 
+/**
+ * Owner-controlled cost-behavior classification — Expense Reduction
+ * Opportunities plan §5.2/§15 Phase 5. Uppercase, mirroring the Prisma enum
+ * `ExpenseCostBehavior` exactly (see
+ * backend/src/controllers/expenseCategory.controller.ts's `costBehaviorSchema`).
+ * This is the CATEGORY-record casing; the reduction-opportunity response
+ * below uses a separate, lowercase `ExpenseCostBehaviorApi` for the same
+ * four values — that casing difference is the backend's own convention, not
+ * a mistake here.
+ */
+export type ExpenseCostBehavior = "FIXED" | "VARIABLE" | "MIXED" | "UNCLASSIFIED";
+
 export interface ExpenseCategory {
   id: number;
   businessProfileId: number;
   name: string;
   description: string | null;
   createdAt: string;
+  /**
+   * Always present on the server's response — the column defaults new and
+   * existing rows to `UNCLASSIFIED` — but optional here so any fixture or
+   * test double built before this field existed still type-checks.
+   */
+  costBehavior?: ExpenseCostBehavior;
 }
 
 export type ReviewStatus = "Reviewed" | "Needs Review";
@@ -353,6 +371,14 @@ export interface DashboardCashflow {
 
 export type DayStatus = "above" | "at" | "below";
 
+/**
+ * A daily-coverage row's status once an operating schedule exists — Recovery
+ * Target Improvement Plan §8.3/§10.5. Adds `"closed"` alongside the original
+ * three: a configured closed day is neither above, at, nor below a target,
+ * because it never had one.
+ */
+export type DailyCoverageStatus = DayStatus | "closed";
+
 // Month-to-date recovery tracker. Shared verbatim by the Dashboard summary
 // and the Insights Recovery Target screen — both read the same computed
 // object from the backend, so they can't disagree.
@@ -373,7 +399,82 @@ export interface RecoveryTargets {
   todaysStatus: DayStatus;
   monthCoveragePercent: number;
   onTrack: boolean;
+  /** True when there's no expected-monthly-expenses baseline configured yet —
+   * every other figure is still arithmetically valid but meaningless, since a
+   * zero baseline is missing setup, not a covered target. Optional for older servers. */
+  needsSetup?: boolean;
+
+  // ---- Phase 1 additions (RECOVERY-TARGET-IMPROVEMENT-PLAN.md §8.1/§8.2/§9.4/§9.7) ----
+  // All optional so older servers/clients keep working unchanged; a later task
+  // updates the UI to actually read these.
+  /** Explicit status, authoritative over `onTrack`/`needsSetup` once present. */
+  status?: RecoveryStatus;
+  confidence?: RecoveryConfidence;
+  /** Cumulative target allocated to the open days elapsed so far this month. */
+  expectedSalesToDate?: number;
+  /** Recorded sales minus expected-to-date — positive means ahead of pace. */
+  paceVarianceAmount?: number;
+  /** Stepping-stone toward the plan's eventual v2 contract — this Phase 1 slice is not yet that full shape. */
+  contractVersion?: 1;
+  /** IANA timezone identifier the calculation was anchored to. */
+  timezone?: string;
+  /** YYYY-MM-DD, business-local calendar day this calculation was anchored to. */
+  asOfDate?: string;
+
+  // ---- Phase 2 additions (RECOVERY-TARGET-IMPROVEMENT-PLAN.md §7.2/§8.2) ----
+  // Both optional, and both absent/false-shaped on an older server or a
+  // profile that has never set up a schedule — approximation mode continues
+  // exactly as before in that case (`remainingOperatingDaysIsApproximated`
+  // stays true).
+  /** True once the owner has configured a weekly operating schedule for this business. */
+  operatingScheduleConfigured?: boolean;
+  /** Exact count of open days this month, derived from the schedule/overrides — only meaningful when `operatingScheduleConfigured` is true. */
+  operatingDaysThisMonth?: number;
+
+  // ---- Phase 3 additions (RECOVERY-TARGET-IMPROVEMENT-PLAN.md §8.2/§9.6/§10.3/§10.5) ----
+  // All optional; sum of the two below equals the existing, unchanged `salesThisMonth`.
+  /** `salesThisMonth` restricted to reviewStatus "Reviewed" + duplicateStatus "Not a Duplicate". */
+  confirmedSalesThisMonth?: number;
+  /** `salesThisMonth - confirmedSalesThisMonth` — needs-review OR flagged-duplicate amounts. */
+  provisionalSalesThisMonth?: number;
+  /** Present when `provisionalSalesThisMonth > 0`; empty array when nothing to warn about. */
+  dataWarnings?: Array<"records_pending_review" | "possible_duplicates">;
+  /** Direct-action eligibility flags; empty array when nothing missing. */
+  setupIssues?: Array<"expected_expenses_missing" | "operating_schedule_missing">;
+  /**
+   * "Why your target changed" (§10.3) — day-over-day diff of this business's
+   * own previous computed target. `null` on the 1st of the month or when
+   * setup is incomplete (nothing meaningful to compare against).
+   */
+  changeSincePreviousDay?: RecoveryChangeSincePreviousDay | null;
 }
+
+/** §8.2/§10.3 "Why your target changed" delta shape. */
+export interface RecoveryChangeSincePreviousDay {
+  /** Peso change in `adjustedDailyTarget` since yesterday; negative means the target got easier. */
+  adjustedDailyTargetDelta: number;
+  /** Peso change in `salesThisMonth` since yesterday. */
+  salesAdded: number;
+  remainingOpenDaysDelta: number;
+  primaryReason:
+    | "sales_added"
+    | "open_day_elapsed"
+    | "baseline_changed"
+    | "schedule_changed"
+    | "data_changed"
+    | "no_material_change";
+}
+
+export type RecoveryStatus =
+  | "needs_setup"
+  | "no_current_month_data"
+  | "data_incomplete"
+  | "ahead"
+  | "on_pace"
+  | "behind"
+  | "covered";
+
+export type RecoveryConfidence = "unavailable" | "limited" | "moderate" | "strong";
 
 export interface CategoryTrend {
   categoryId: number;
@@ -434,6 +535,121 @@ export interface ExpenseBehavior {
    * identical screen and identical, wrong advice. Optional for older servers.
    */
   latestExpenseDate?: string | null;
+}
+
+/**
+ * Reduction-opportunity contract — Expense Reduction Opportunities plan §8.2.
+ *
+ * Copied verbatim from the approved plan (docs/EXPENSE-REDUCTION-OPPORTUNITIES-PLAN.md).
+ * This is the exact shape `GET /insights/reduction-opportunities` returns; keep
+ * it in lockstep with the backend contract rather than reshaping it client-side.
+ * MIRRORS web/src/lib/types.ts — same fields, same names.
+ */
+export type ReductionOpportunityType =
+  | "CATEGORY_PRESSURE"
+  | "FREQUENT_PURCHASE_ACCUMULATION"
+  | "RECORD_REVIEW_FIRST";
+
+export interface ReductionOpportunityEvidence {
+  currentAmount: number;
+  previousAmount: number | null;
+  changeAmount: number | null;
+  changePercent: number | null;
+  expenseSharePercent: number;
+  recordCount: number;
+  unusualRecordCount: number;
+  possibleDuplicateCount: number;
+}
+
+/**
+ * The category's owner-controlled cost-behavior classification, as returned
+ * on the opportunity itself — Phase 5, plan §5.2/§15. LOWERCASE: this is the
+ * API-response convention for this endpoint specifically (see
+ * `ExpenseCostBehaviorApi` in backend/src/services/reductionOpportunity.service.ts),
+ * distinct from the uppercase `ExpenseCostBehavior` a category record itself
+ * carries.
+ */
+export type ExpenseCostBehaviorApi = "fixed" | "variable" | "mixed" | "unclassified";
+
+export interface ReductionOpportunity {
+  id: string;
+  type: ReductionOpportunityType;
+  categoryId: number;
+  categoryName: string;
+  priority: "high" | "medium" | "low";
+  confidence: "strong" | "moderate" | "limited";
+  observation: string;
+  rationale: string;
+  evidence: ReductionOpportunityEvidence;
+  /** Never changes eligibility or ranking — evidence/copy only. See ReductionOpportunitiesSection.tsx. */
+  costBehavior: ExpenseCostBehaviorApi;
+  suggestedChecks: string[];
+  relatedRecordIds: number[];
+  limitations: string[];
+}
+
+/**
+ * "Helpful" / "Not relevant" feedback on one card — plan §15 Phase 5.
+ * `POST /insights/reduction-opportunities/feedback`. Write-only: resubmitting
+ * for the same opportunity is "changing your answer" (the server upserts),
+ * so the client never fetches prior feedback before showing the buttons.
+ */
+export type ReductionOpportunityFeedbackRating = "helpful" | "not_relevant";
+
+export interface ReductionOpportunityFeedbackResult {
+  opportunityId: string;
+  rating: ReductionOpportunityFeedbackRating;
+  createdAt: string;
+}
+
+export interface ReductionOpportunityResponse {
+  period: {
+    days: number;
+    start: string;
+    end: string;
+  };
+  dataQuality: {
+    status: "sufficient" | "limited" | "insufficient";
+    currentRecordCount: number;
+    previousRecordCount: number;
+    message: string | null;
+  };
+  opportunities: ReductionOpportunity[];
+  detectorVersion: string;
+}
+
+/**
+ * Reduction-simulation contract — plan §12.2. PHASE 4.
+ *
+ * `POST /insights/reduction-simulation`. Copied verbatim from the approved
+ * plan, same as the opportunity types above — keep in lockstep with the
+ * backend contract (backend/src/services/reductionOpportunity.service.ts).
+ * MIRRORS web/src/lib/types.ts — same fields, same names.
+ *
+ * Never carries `availableFunds` anywhere in this shape or in what the client
+ * sends: the server derives every baseline figure from the owner's own
+ * expense records for the category and period, and this simulation does not
+ * touch available funds at all — see §12.1.
+ */
+export type ReductionSpec = { kind: "percent"; value: number } | { kind: "amount"; value: number };
+
+export interface ReductionSimulationInput {
+  businessProfileId: number;
+  categoryId: number;
+  periodDays: number;
+  endDate?: string;
+  reduction: ReductionSpec;
+}
+
+export interface ReductionSimulation {
+  categoryId: number;
+  categoryName: string;
+  period: { days: number; start: string; end: string };
+  categoryExpenses: { before: number; after: number };
+  totalExpenses: { before: number; after: number };
+  hypotheticalReduction: number;
+  requestedReductionPercent: number;
+  assumptions: string[];
 }
 
 export type AnomalyFindingStatus = "OPEN" | "CONFIRMED" | "DISMISSED" | "RESOLVED" | "SUPERSEDED";
@@ -539,10 +755,14 @@ export interface RecurringSchedule {
 
 export interface DailyCoverageRow {
   date: string;
-  neededTarget: number;
+  /** Null on a closed day — see `DailyCoverageStatus`/§8.3. */
+  neededTarget: number | null;
   sales: number;
-  gap: number;
-  status: DayStatus;
+  /** Null on a closed day, same reasoning as `neededTarget`. */
+  gap: number | null;
+  status: DailyCoverageStatus;
+  /** Whether this date is actually open, once a schedule exists. Defaults true when unconfigured (approximation mode). */
+  isOperatingDay?: boolean;
 }
 
 export interface RecoveryInsight extends RecoveryTargets {
@@ -561,7 +781,157 @@ export interface RecoveryInsight extends RecoveryTargets {
   monthHasNoRecords?: boolean;
   /** The most recent sale on file, so an empty month can point at where the data is. */
   latestSaleDate?: string | null;
+  /** When this response was computed — lets a client label a cached/stale result. Optional for older servers. */
+  computedAt?: string;
+  /**
+   * Phase 4 addition (plan §10.4) — bounded, month-scoped weekly checkpoints.
+   * Optional for older servers.
+   */
+  weeklyCheckpoints?: RecoveryCheckpoint[];
 }
+
+/**
+ * The Recovery Target hypothetical scenario — plan §13.2/§15 Phase 5.
+ * `POST /insights/recovery-scenario`. `current` is the unchanged, real
+ * target (the same shape `loadRecoveryTargets` always returns);
+ * `hypothetical` is what the target would be if `expectedMonthlyExpenses`
+ * were `assumedExpectedMonthlyExpenses` instead — never persisted, never
+ * derived automatically from anything else (not from a reduction
+ * simulation, not from actual category spending).
+ */
+/**
+ * Phase 4 addition (plan §10.7/§11 Phase 4) — the server-computed
+ * hypothetical-minus-current differences for `RecoveryScenario`, so no
+ * client re-derives (and risks disagreeing with) the same subtraction.
+ * `estimatedTransactionsPerDay` is ALWAYS `null` today: whether sales
+ * references are transaction-level or daily-aggregate imports is an
+ * explicitly unresolved plan question (§19 #7), so the server deliberately
+ * never guesses rather than showing a misleading number. Optional on the
+ * TypeScript side only for older-server tolerance; a Phase-4 server always
+ * sends it.
+ */
+export interface RecoveryScenarioDelta {
+  totalCoverageGoal: number;
+  remainingTarget: number;
+  adjustedDailyTarget: number;
+  estimatedTransactionsPerDay: number | null;
+  estimatedTransactionsPerDayUnavailableReason: "transaction_provenance_unknown";
+}
+
+export interface RecoveryScenario {
+  assumedExpectedMonthlyExpenses: number;
+  current: RecoveryTargets;
+  hypothetical: RecoveryTargets;
+  /** Phase 4 addition — see `RecoveryScenarioDelta`. Optional for older servers. */
+  delta?: RecoveryScenarioDelta;
+  /** Always `false` when present — confirms nothing here was persisted. Optional for older servers. */
+  persisted?: false;
+}
+
+export type RecoveryCheckpointStatus = "ahead" | "on_pace" | "behind" | "pending";
+
+/**
+ * Phase 4 addition (plan §10.4/§11 Phase 4) — one weekly checkpoint on
+ * `RecoveryInsight.weeklyCheckpoints`. Checkpoints land on calendar
+ * day-of-month 7/14/21/28 plus the month's final day when that isn't
+ * already a multiple of 7.
+ */
+export interface RecoveryCheckpoint {
+  /** YYYY-MM-DD, business-local. */
+  endDate: string;
+  cumulativeTarget: number;
+  /** Null when `endDate` is still in the future (a `"pending"` checkpoint). */
+  recordedAmount: number | null;
+  /** Null exactly when `recordedAmount` is null. */
+  variance: number | null;
+  status: RecoveryCheckpointStatus;
+}
+
+/**
+ * Recovery Target notification preferences — plan §7.5/§10.8/§11 Phase 6.
+ * `GET`/`PUT /business-profiles/:id/recovery-notification-preferences`.
+ *
+ * `openDayNoSalesAlertEnabled` and `projectionShortfallAlertEnabled` are
+ * settable but currently INERT server-side — their trigger prerequisites
+ * (operating-hours data, a shortfall projection) don't exist yet, so a
+ * client must never claim they are actively doing anything today.
+ */
+export interface RecoveryNotificationPreference {
+  targetIncreaseAlertEnabled: boolean;
+  /** 1-100. */
+  targetIncreaseThresholdPercent: number;
+  behindThreeDaysAlertEnabled: boolean;
+  /** Coming soon — always inert today; see the interface note above. */
+  openDayNoSalesAlertEnabled: boolean;
+  /** Coming soon — always inert today; see the interface note above. */
+  projectionShortfallAlertEnabled: boolean;
+  coverageReachedAlertEnabled: boolean;
+  /** 24-hour "HH:MM", or null. Set together with `quietHoursEnd` or not at all. */
+  quietHoursStart: string | null;
+  quietHoursEnd: string | null;
+  /** 1-168 (one week). */
+  minHoursBetweenNotifications: number;
+}
+
+/**
+ * A saved Recovery Plan — plan §7.5/§10.7/§11 Phase 6.
+ * `GET`/`PUT`/`DELETE /business-profiles/:id/recovery-plans[/:month]`.
+ *
+ * CRITICAL: purely a separate, owner-visible planning artifact. It has zero
+ * effect on the real Recovery Target calculation — never read by
+ * `RecoveryInsight`/`RecoveryScenario`, and UI copy must never imply saving
+ * one changes the real target, the business profile, or recorded sales.
+ */
+export interface RecoveryPlan {
+  /** "YYYY-MM". */
+  month: string;
+  bufferPercent: number | null;
+  /** "YYYY-MM-DD", or null. */
+  deadline: string | null;
+  ownerTargetAmount: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Recovery Target month-end review — plan §10.9/§11 Phase 7.
+ * `GET /insights/recovery/month-end-review?businessProfileId=<id>&month=YYYY-MM`.
+ *
+ * `status: "not_yet_reviewable"` covers both the current in-progress month
+ * and any future month — the server never computes a partial/misleading
+ * summary for either. Everything else is only present once `status` is
+ * `"reviewable"`.
+ *
+ * CRITICAL: `suggestedQuestionsForNextMonth` are informational strings only.
+ * There is no apply/accept mechanism anywhere in this feature — a client
+ * must never let tapping a suggestion change `expectedMonthlyExpenses`,
+ * `operatingDays`, or any other setting. The only acceptable call-to-action
+ * is a plain link to the business-profile edit screen.
+ */
+export type RecoveryMonthEndReview =
+  | { status: "not_yet_reviewable"; month: string }
+  | {
+      status: "reviewable";
+      /** "YYYY-MM". */
+      month: string;
+      coveragePercent: number;
+      /** Positive = surplus, negative = shortfall. */
+      surplusOrShortfall: number;
+      /** Null only when there were truly zero open days this month. */
+      strongestOpenDay: { date: string; sales: number } | null;
+      weakestOpenDay: { date: string; sales: number } | null;
+      /** Combined missing + provisional day count, out of `openDayCount`. */
+      missingOrProvisionalDayCount: number;
+      openDayCount: number;
+      originalDailyTarget: number;
+      /** Null for the one edge case with no meaningful per-day rate — see the backend's own doc comment on `computeMonthEndReview`. */
+      finalAdjustedDailyTarget: number | null;
+      /** An honest signal only — never a suggested replacement number. */
+      baselineAppearsOffFromPattern: boolean;
+      /** 2-4 plain, deterministic strings, already fully composed server-side. Read-only — never wire a per-question action that mutates a setting. */
+      suggestedQuestionsForNextMonth: string[];
+      operatingScheduleConfigured: boolean;
+    };
 
 export type ImpactBand = "Low Impact" | "Noticeable Impact" | "High Impact";
 

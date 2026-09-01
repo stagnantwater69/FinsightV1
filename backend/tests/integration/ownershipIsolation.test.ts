@@ -14,6 +14,7 @@ import * as notifications from "../../src/services/notification.service";
 import * as insights from "../../src/services/insights.service";
 import { getDashboardSummary } from "../../src/services/dashboard.service";
 import { getHistory } from "../../src/services/ai.service";
+import { getReductionOpportunities } from "../../src/services/reductionOpportunity.service";
 import { disconnectDb, makeOwnerWithProfile, resetDb, utcDayString } from "../setup/testDb";
 
 // Multi-tenant isolation, asserted explicitly rather than assumed.
@@ -83,6 +84,32 @@ describe("business profiles", () => {
   // NOTE: there is deliberately no delete path for business profiles — no
   // route, controller or service exists. So there is nothing to isolate here.
   // Recorded as a coverage gap rather than tested: see the Phase 6 report.
+
+
+  /**
+   * RECOVERY-TARGET-IMPROVEMENT-PLAN.md §7.1 -- `timezone` is a plain column on
+   * BusinessProfile, scoped by the exact same `findOwned` ownership check as
+   * every other field on this model. Asserted explicitly rather than assumed:
+   * this is the field `resolveBusinessToday` reads to anchor Recovery Target's
+   * "today", so a cross-tenant read or write here would leak into another
+   * business's month-to-date figures, not just its settings screen.
+   */
+  it("does not leak another owner's timezone on read", async () => {
+    await prisma.businessProfile.update({ where: { id: alice.profile.id }, data: { timezone: "America/Los_Angeles" } });
+    const bobsOwn = await businessProfiles.getBusinessProfile(bob.user.id, bob.profile.id);
+    expect(bobsOwn.timezone).not.toBe("America/Los_Angeles");
+
+    await expect(businessProfiles.getBusinessProfile(bob.user.id, alice.profile.id)).rejects.toMatchObject(notFound);
+  });
+
+  it("cannot set another owner's timezone via an update", async () => {
+    await expect(
+      businessProfiles.updateBusinessProfile(bob.user.id, alice.profile.id, { timezone: "America/Los_Angeles" })
+    ).rejects.toMatchObject(notFound);
+
+    const untouched = await prisma.businessProfile.findUniqueOrThrow({ where: { id: alice.profile.id } });
+    expect(untouched.timezone).not.toBe("America/Los_Angeles");
+  });
 });
 
 describe("expense categories", () => {
@@ -177,6 +204,19 @@ describe("dashboard and insights", () => {
 
   it("cannot run a spending-impact simulation against another owner's funds", async () => {
     await expect(insights.simulateSpendingImpact(bob.user.id, alice.profile.id, 1000)).rejects.toMatchObject(notFound);
+  });
+
+  it("cannot read another owner's reduction opportunities", async () => {
+    await expect(getReductionOpportunities(bob.user.id, alice.profile.id, 30)).rejects.toMatchObject(notFound);
+  });
+
+  it("reduction opportunities never surface another owner's records", async () => {
+    // Alice has a material expense; Bob's own profile is empty. If ownership
+    // were not enforced inside the service, Bob's read could see Alice's
+    // category totals and evidence.
+    const bobOpportunities = await getReductionOpportunities(bob.user.id, bob.profile.id, 30);
+    expect(bobOpportunities.opportunities).toEqual([]);
+    expect(bobOpportunities.dataQuality.currentRecordCount).toBe(0);
   });
 
   it("a dashboard shows only its own profile's figures", async () => {
@@ -324,5 +364,10 @@ describe("non-existent ids behave identically to other owners' ids", () => {
   it("returns 404 for both a foreign record and a nonexistent one", async () => {
     await expect(expenses.getExpenseRecord(bob.user.id, aliceExpenseId)).rejects.toMatchObject(notFound);
     await expect(expenses.getExpenseRecord(bob.user.id, 999999)).rejects.toMatchObject(notFound);
+  });
+
+  it("returns 404 for reduction opportunities on both a foreign and a nonexistent profile", async () => {
+    await expect(getReductionOpportunities(bob.user.id, alice.profile.id, 30)).rejects.toMatchObject(notFound);
+    await expect(getReductionOpportunities(bob.user.id, 999999, 30)).rejects.toMatchObject(notFound);
   });
 });

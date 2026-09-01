@@ -9,9 +9,6 @@ import { useTheme } from "../../context/ThemeContext";
 import { RECORD_SOURCE_LABELS, type RecordItem, type RecordSource } from "../../lib/types";
 import { badges } from "./shared";
 
-/** The surface behind an expense medallion. See STATUS_SURFACE in Insights. */
-const STATUS_SURFACE_SERIOUS = "#fdf0ea";
-
 /**
  * One glyph per way a record can have arrived.
  *
@@ -36,11 +33,14 @@ function SwipeAction({
   label,
   icon,
   colour,
+  onColour,
   onPress,
 }: {
   label: string;
   icon: keyof typeof Ionicons.glyphMap;
   colour: string;
+  /** The ink for the glyph and the word sitting on `colour`. */
+  onColour: string;
   onPress: () => void;
 }) {
   return (
@@ -57,8 +57,8 @@ function SwipeAction({
         borderRadius: radius.lg,
       }}
     >
-      <Ionicons name={icon} size={20} color="#fff" />
-      <T style={{ color: "#fff", fontSize: typeScale.micro, marginTop: 2 }}>{label}</T>
+      <Ionicons name={icon} size={20} color={onColour} />
+      <T style={{ color: onColour, fontSize: typeScale.micro, marginTop: 2 }}>{label}</T>
     </Pressable>
   );
 }
@@ -77,7 +77,7 @@ export function RecordCard({
   onResolve?: () => void;
 }) {
   const t = useTheme();
-  const { brand, ink, statusText } = t;
+  const { brand, ink, statusText, statusSolid, statusSurface, textOnFill } = t;
   /*
    * Swipe reveals; it never acts on its own.
    *
@@ -136,7 +136,7 @@ export function RecordCard({
               width: 38,
               height: 38,
               borderRadius: 19,
-              backgroundColor: r.type === "expense" ? STATUS_SURFACE_SERIOUS : brand[50],
+              backgroundColor: r.type === "expense" ? statusSurface.serious : brand[50],
               alignItems: "center",
               justifyContent: "center",
             }}
@@ -198,7 +198,22 @@ export function RecordCard({
       onSwipeableWillOpen={() => haptics.tapped()}
       renderRightActions={
         onDelete
-          ? () => <SwipeAction label="Delete" icon="trash-outline" colour={statusText.critical} onPress={onDelete} />
+          ? () => (
+              /*
+                `statusSolid`, not `statusText`: this is a block of colour with
+                white ink on it, which is the solid family's whole job. The
+                text family lightens in Dark — the red step becomes #f89191 —
+                and white on that is unreadable, so the fill has to come from
+                the fixed steps that are guaranteed to carry `textOnFill`.
+              */
+              <SwipeAction
+                label="Delete"
+                icon="trash-outline"
+                colour={statusSolid.critical}
+                onColour={textOnFill}
+                onPress={onDelete}
+              />
+            )
           : undefined
       }
       renderLeftActions={
@@ -207,7 +222,8 @@ export function RecordCard({
               <SwipeAction
                 label="Resolve"
                 icon="checkmark-circle-outline"
-                colour={statusText.good}
+                colour={statusSolid.good}
+                onColour={textOnFill}
                 onPress={onResolve}
               />
             )

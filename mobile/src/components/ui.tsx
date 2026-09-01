@@ -16,7 +16,8 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { font, radius, space, TAP, typeScale } from "../theme/tokens";
+import { font, radius, space, typeScale } from "../theme/tokens";
+import { TAP_FLOOR } from "./touchTarget";
 import type { Palette, ThemeMode } from "../theme/palette";
 import { useTheme } from "../context/ThemeContext";
 import { formatMoney, type AlertKind } from "../lib/money";
@@ -183,7 +184,29 @@ export function Button({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityState={{ disabled: !!disabled || !!loading }}
+      /*
+       * THE NAME IS STATED, NOT INFERRED.
+       *
+       * With no label, a Pressable's accessible name comes from the Text it
+       * contains — and `loading` swaps that Text out for an ActivityIndicator,
+       * which has no text at all. So a reader parked on a button at the exact
+       * moment it becomes busy lost the name of the control it was on: it
+       * announced the busy state of *something*, with nothing to say what.
+       * Pinning the label to `title` makes the name survive the visual swap.
+       *
+       * It is set unconditionally rather than only while loading, because a
+       * name that appears and disappears is its own bug — and because the
+       * label then always equals the visible text, which is what keeps the
+       * resend control's countdown ("Send again in 12s") readable: that title
+       * changes every second and the announced name changes with it.
+       */
+      accessibilityLabel={title}
+      /*
+       * `busy` is what carries the loading state now. `disabled` stays true as
+       * well because the button genuinely cannot be pressed while loading, and
+       * a reader that offers to activate it would be lying.
+       */
+      accessibilityState={{ disabled: !!disabled || !!loading, busy: !!loading }}
       onPress={onPress}
       disabled={disabled || loading}
       style={({ pressed }) => [
@@ -217,6 +240,8 @@ type FieldProps = {
   label: string;
   value: string;
   onChangeText: (v: string) => void;
+  /** Optional leading symbol from the app's Ionicons family. */
+  icon?: keyof typeof Ionicons.glyphMap;
   /**
    * What is wrong with this field, shown under it.
    *
@@ -246,7 +271,7 @@ type FieldProps = {
  * needs to, compose it as an array here rather than at the call site.
  */
 export const Field = forwardRef<TextInput, FieldProps>(function Field(
-  { label, value, onChangeText, onFocus, onBlur, secureTextEntry, error, ...rest },
+  { label, value, onChangeText, onFocus, onBlur, secureTextEntry, error, icon, ...rest },
   ref,
 ) {
   const t = useTheme();
@@ -292,12 +317,35 @@ export const Field = forwardRef<TextInput, FieldProps>(function Field(
         {label}
       </T>
       <View style={{ justifyContent: "center" }}>
+        {icon ? (
+          <Ionicons
+            name={icon}
+            size={19}
+            color={error ? t.statusText.critical : focused ? t.brandText : t.textMuted}
+            style={{ position: "absolute", left: space.md, zIndex: 1 }}
+            accessibilityElementsHidden
+            importantForAccessibility="no"
+          />
+        ) : null}
         <TextInput
           ref={ref}
           value={value}
           onChangeText={onChangeText}
           placeholderTextColor={t.textFaint}
           secureTextEntry={isPassword && !showing}
+          // Programmatically ties the input to the `label` text above it —
+          // React Native has no `htmlFor`, so the input's own accessible name
+          // has to carry the label. A caller with a more specific reading
+          // (e.g. naming which line of a receipt this is for) can still
+          // override it through `rest`.
+          //
+          // THE ERROR IS PART OF THE NAME while there is one. A failed submit
+          // moves focus to the first invalid field (see AuthScreens'
+          // focusFirstInvalid), and the message below is a POLITE live region
+          // — which queues behind the focus announcement and, in practice,
+          // gets cut off by it. The owner was landed on a box that said
+          // "Email, edit box" and nothing about why they were sent there.
+          accessibilityLabel={error ? `${label}, ${error}` : label}
           onFocus={(e) => {
             setFocused(true);
             onFocus?.(e);
@@ -307,7 +355,7 @@ export const Field = forwardRef<TextInput, FieldProps>(function Field(
             onBlur?.(e);
           }}
           style={{
-            minHeight: TAP,
+            minHeight: TAP_FLOOR,
             // Width stays at 1 either way: a thicker focus border would reflow
             // every field below it each time focus moves. Colour alone carries it.
             borderWidth: 1,
@@ -317,6 +365,7 @@ export const Field = forwardRef<TextInput, FieldProps>(function Field(
             borderColor: error ? t.statusText.critical : focused ? t.brand[600] : t.borderStrong,
             borderRadius: radius.md,
             paddingHorizontal: space.md,
+            paddingLeft: icon ? 44 : space.md,
             // Room for the reveal button, so a long password never runs
             // underneath it.
             paddingRight: isPassword && hasText ? 48 : space.md,
@@ -366,7 +415,13 @@ export const Field = forwardRef<TextInput, FieldProps>(function Field(
           accessibilityLiveRegion="polite"
           style={{ flexDirection: "row", gap: 5, marginTop: 5, alignItems: "flex-start" }}
         >
-          <T style={{ fontSize: typeScale.micro, color: t.statusText.critical }}>⚠</T>
+          <Ionicons
+            name="alert-circle-outline"
+            size={16}
+            color={t.statusText.critical}
+            accessibilityElementsHidden
+            importantForAccessibility="no"
+          />
           <T style={{ flex: 1, fontSize: typeScale.caption, lineHeight: 17, color: t.statusText.critical }}>{error}</T>
         </View>
       ) : null}
@@ -388,12 +443,14 @@ export function Checkbox({
   hint,
   checked,
   onChange,
+  style,
 }: {
   label: string;
   /** Optional line under the label, for saying what the choice actually does. */
   hint?: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
+  style?: ViewStyle;
 }) {
   const t = useTheme();
   return (
@@ -402,14 +459,17 @@ export function Checkbox({
       accessibilityRole="checkbox"
       accessibilityState={{ checked }}
       accessibilityLabel={hint ? `${label}. ${hint}` : label}
-      style={{
-        flexDirection: "row",
-        alignItems: "flex-start",
-        gap: space.sm,
-        minHeight: TAP,
-        paddingVertical: space.sm,
-        marginBottom: space.md,
-      }}
+      style={[
+        {
+          flexDirection: "row",
+          alignItems: "flex-start",
+          gap: space.sm,
+          minHeight: TAP_FLOOR,
+          paddingVertical: space.sm,
+          marginBottom: space.md,
+        },
+        style,
+      ]}
     >
       <View
         style={{
@@ -504,7 +564,7 @@ export function CategorySelect<Option extends { id: number; name: string }>({
         }
         accessibilityState={{ disabled: !!disabled, expanded: open }}
         style={({ pressed }) => ({
-          minHeight: TAP,
+          minHeight: TAP_FLOOR,
           flexDirection: "row",
           alignItems: "center",
           justifyContent: "space-between",
@@ -789,7 +849,7 @@ export function OptionSheet<Option extends { id: number | string; name: string }
                     alignItems: "center",
                     justifyContent: "space-between",
                     gap: space.sm,
-                    minHeight: TAP,
+                    minHeight: TAP_FLOOR,
                     paddingHorizontal: space.lg,
                     paddingVertical: space.sm,
                     backgroundColor: pressed ? t.surfaceMuted : isSelected ? t.brandSurface : t.surfaceRaised,
@@ -858,7 +918,9 @@ export function DropdownPill<Value extends string | number>({
           flexDirection: "row",
           alignItems: "center",
           gap: 6,
-          minHeight: TAP - 6,
+          // A pill that changes what the screen shows is still a full target.
+          // It was `TAP - 6` (38) with no hitSlop to make up the difference.
+          minHeight: TAP_FLOOR,
           paddingHorizontal: space.md,
           paddingVertical: space.sm,
           borderRadius: radius.full,
@@ -910,6 +972,8 @@ export function ConfirmSheet({
   confirmLabel,
   cancelLabel = "Cancel",
   confirmVariant = "brand",
+  busy = false,
+  error,
   onConfirm,
   onCancel,
 }: {
@@ -925,16 +989,30 @@ export function ConfirmSheet({
    * green, not a red that would imply data is about to be lost.
    */
   confirmVariant?: "brand" | "primary" | "danger";
+  /**
+   * True while the confirmed action is running. It puts a spinner on the
+   * confirm button, and it LOCKS THE SHEET: cancel, the backdrop and the
+   * system back button all stop dismissing, because an owner who taps away
+   * mid-sign-out is left on a screen that looks signed in over a session that
+   * may already be half torn down — the double-tap and the mis-tap are the
+   * same hazard here.
+   */
+  busy?: boolean;
+  /** What went wrong the last time confirm ran, shown inside the sheet. */
+  error?: string | null;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
   const t = useTheme();
   const insets = useSafeAreaInsets();
+  const dismiss = () => {
+    if (!busy) onCancel();
+  };
 
   return (
-    <Modal visible={visible} transparent animationType="slide" statusBarTranslucent onRequestClose={onCancel}>
+    <Modal visible={visible} transparent animationType="slide" statusBarTranslucent onRequestClose={dismiss}>
       <Pressable
-        onPress={onCancel}
+        onPress={dismiss}
         accessibilityRole="button"
         accessibilityLabel="Dismiss without doing anything"
         style={{ flex: 1, backgroundColor: t.scrim, justifyContent: "flex-end" }}
@@ -977,12 +1055,18 @@ export function ConfirmSheet({
             </T>
           ) : null}
 
+          {error ? (
+            <View style={{ marginTop: space.md }}>
+              <ErrorNote>{error}</ErrorNote>
+            </View>
+          ) : null}
+
           <View style={{ flexDirection: "row", gap: space.sm, marginTop: space.lg }}>
             <View style={{ flex: 1 }}>
-              <Button title={cancelLabel} variant="secondary" onPress={onCancel} />
+              <Button title={cancelLabel} variant="secondary" onPress={onCancel} disabled={busy} />
             </View>
             <View style={{ flex: 1 }}>
-              <Button title={confirmLabel} variant={confirmVariant} onPress={onConfirm} />
+              <Button title={confirmLabel} variant={confirmVariant} onPress={onConfirm} loading={busy} />
             </View>
           </View>
         </View>
@@ -1206,6 +1290,70 @@ export function EmptyState({
   );
 }
 
+/**
+ * A section that is closed until it is wanted — the app's `<details>`.
+ *
+ * WHY IT IS A SHARED PRIMITIVE rather than a boolean and a chevron at the
+ * call site: this is a control whose whole job is to have a STATE, and the
+ * state is the part that gets dropped. A hand-rolled version is a Pressable
+ * with a rotating chevron and nothing in `accessibilityState`, which reads to
+ * VoiceOver and TalkBack as a button that does something unspecified — the
+ * exact failure SelectChip and SegmentedControl were consolidated to stop.
+ *
+ * `summary` is what the section says while it is CLOSED. A disclosure whose
+ * closed state shows only its own title makes the owner open it to find out
+ * whether it was worth opening; showing the current value there means the
+ * common case never needs the tap.
+ */
+export function Disclosure({
+  title,
+  summary,
+  defaultOpen = false,
+  children,
+}: {
+  title: string;
+  summary?: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const t = useTheme();
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel={summary ? `${title}: ${summary}` : title}
+        accessibilityHint={open ? "Hides this section" : "Shows this section"}
+        onPress={() => {
+          haptics.tapped();
+          setOpen((v) => !v);
+        }}
+        style={({ pressed }) => ({
+          flexDirection: "row",
+          alignItems: "center",
+          gap: space.sm,
+          minHeight: TAP_FLOOR,
+          opacity: pressed ? 0.85 : 1,
+        })}
+      >
+        <Ionicons name={open ? "chevron-down" : "chevron-forward"} size={16} color={t.textMuted} />
+        <View style={{ flex: 1 }}>
+          <T variant="label" style={{ color: t.textSecondary }}>
+            {title}
+          </T>
+          {summary && !open ? (
+            <T variant="caption" numberOfLines={1} style={{ marginTop: 1 }}>
+              {summary}
+            </T>
+          ) : null}
+        </View>
+      </Pressable>
+      {open ? <View style={{ paddingBottom: space.xs }}>{children}</View> : null}
+    </View>
+  );
+}
+
 /** Goal-Gradient: how close a brand-new business is to its first insight. */
 export function SetupProgress({ steps }: { steps: { label: string; done: boolean }[] }) {
   const t = useTheme();
@@ -1286,7 +1434,22 @@ export function ErrorNote({ children }: { children: ReactNode }) {
   const t = useTheme();
   const styles = useStyles();
   return (
-    <View style={styles.errorNote}>
+    // `assertive` rather than Field's `polite`: this is a form-level failure
+    // rather than one box among several, so it should interrupt whatever a
+    // screen reader is announcing instead of waiting its turn behind it.
+    <View
+      style={styles.errorNote}
+      // `alert` only surfaces on an element the platform treats as one, and a
+      // View is not one until `accessible` is set — RN maps it straight onto
+      // `isAccessibilityElement`. Safe to set here, and only here among the
+      // app's alert surfaces, because the note is a single line of text: there
+      // is no button inside it for `accessible` to swallow. ConnectionNotice
+      // and the camera's CaptureFailureNotice both carry a retry button, so
+      // they deliberately stay non-accessible containers.
+      accessible
+      accessibilityLiveRegion="assertive"
+      accessibilityRole="alert"
+    >
       <T style={{ color: t.statusText.critical, fontSize: typeScale.bodySm }}>{children}</T>
     </View>
   );
@@ -1394,7 +1557,7 @@ const createStyles = (t: Palette) => ({
   text: textVariants(t),
   ...StyleSheet.create({
   button: {
-    minHeight: TAP,
+    minHeight: TAP_FLOOR,
     paddingHorizontal: space.lg,
     borderRadius: radius.md,
     borderWidth: 1,
@@ -1403,8 +1566,21 @@ const createStyles = (t: Palette) => ({
     flexDirection: "row",
     gap: space.sm,
   },
+  /*
+   * A chip is a full-height target, not a small one with room around it.
+   *
+   * It was `TAP - 10` (34). The tempting fix was hitSlop, since a chip is
+   * small on purpose — but every chip row in the app wraps with `gap: space.xs`
+   * (4) between rows, so the vertical slop needed to reach the floor (7 a side)
+   * would overlap the chip in the row above and below. Overlapping slop does
+   * not enlarge a target, it makes which control you hit depend on stacking
+   * order, and these rows are filters and category pickers where the wrong hit
+   * silently changes what the owner is looking at. So the visual height moves
+   * instead. Horizontal size was never the problem: `space.md` a side plus a
+   * label clears the floor on the shortest label in the app ("Any").
+   */
   chip: {
-    minHeight: TAP - 10,
+    minHeight: TAP_FLOOR,
     paddingHorizontal: space.md,
     borderRadius: radius.full,
     borderWidth: 1,
@@ -1417,9 +1593,15 @@ const createStyles = (t: Palette) => ({
     borderRadius: radius.md,
     padding: 3,
   },
+  /*
+   * Segments were `TAP - 8` (36). hitSlop is not available to them at all:
+   * they sit flush against each other inside the track, so any horizontal slop
+   * overlaps the neighbouring segment, and the track's own 3-point padding is
+   * all there is vertically.
+   */
   segment: {
     flex: 1,
-    minHeight: TAP - 8,
+    minHeight: TAP_FLOOR,
     paddingHorizontal: space.md,
     borderRadius: radius.sm,
     alignItems: "center",

@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Appearance } from "react-native";
 
-import { palettes, type Palette, type ThemeMode } from "../theme/palette";
-import { DEFAULT_THEME, readThemeMode, writeThemeMode } from "../lib/themeStore";
+import { palettes, resolveThemeMode, type Palette, type ThemeMode, type ThemePreference } from "../theme/palette";
+import { DEFAULT_THEME, DEFAULT_THEME_PREFERENCE, readThemePreference, writeThemePreference } from "../lib/themeStore";
 
 /**
  * The one place a colour is chosen.
@@ -24,20 +25,59 @@ import { DEFAULT_THEME, readThemeMode, writeThemeMode } from "../lib/themeStore"
  * splash → correctly-themed app, and nothing is painted in the wrong palette
  * in between. Rendering a default-Light tree first and correcting it a beat
  * later is precisely the flash this avoids.
+ *
+ * THREE CHOICES, TWO PALETTES. "Use device setting" is a PREFERENCE, not a
+ * palette — there is no third set of colours. It is resolved against
+ * `Appearance` here and nowhere else, so every consumer keeps receiving one of
+ * the two real palettes and no component has to know the option exists. The
+ * device's scheme is subscribed to rather than sampled once: a phone that goes
+ * dark on a schedule has to repaint the running app, not the next launch.
+ *
+ * The NATIVE side of the same decision is `userInterfaceStyle: "automatic"` in
+ * app.config.ts, which is what themes the keyboard and native alerts. The two
+ * can legitimately disagree — an owner may pin Light on a dark phone — and
+ * that is the owner's call, not a bug.
  */
 
 export interface ThemeContextValue {
-  /** Which theme is in force. */
+  /**
+   * Which theme is in force — always a real palette, never "system".
+   * Everything that paints reads this.
+   */
   mode: ThemeMode;
+  /**
+   * What the owner CHOSE, which is what the Appearance control has to show
+   * selected. With "Use device setting" picked this is `"system"` while `mode`
+   * is whichever of the two the phone is currently doing, and a control bound
+   * to `mode` would silently move its own selection to Light or Dark.
+   */
+  preference: ThemePreference;
   /** The resolved colours for that mode. */
   palette: Palette;
   /** Choose a theme. Applies immediately; persisted in the background. */
+  setPreference: (preference: ThemePreference) => void;
+  /**
+   * The narrow setter, kept for callers that can only mean one of the two
+   * palettes. `setPreference` is the general form.
+   */
   setMode: (mode: ThemeMode) => void;
   /**
    * False until the stored preference has been read. App.tsx holds the splash
    * until this is true.
    */
   ready: boolean;
+}
+
+/**
+ * What the phone is doing right now.
+ *
+ * `getColorScheme()` returns null when the platform has no opinion (and in
+ * some simulators), which is not "dark" — falling back to the app's own
+ * default keeps an unknown system scheme looking like an app nobody has
+ * configured, rather than like a choice the owner did not make.
+ */
+function systemMode(): ThemeMode {
+  return Appearance.getColorScheme() === "dark" ? "dark" : DEFAULT_THEME;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -54,15 +94,33 @@ export function ThemeProvider({
   children: ReactNode;
   initialMode?: ThemeMode;
 }) {
-  const [mode, setModeState] = useState<ThemeMode>(initialMode ?? DEFAULT_THEME);
+  const [preference, setPreferenceState] = useState<ThemePreference>(initialMode ?? DEFAULT_THEME_PREFERENCE);
   const [ready, setReady] = useState(initialMode !== undefined);
+
+  /**
+   * The device's scheme, mirrored into state so a change repaints.
+   *
+   * `Appearance.getColorScheme()` is a read, not a subscription — without the
+   * listener below, an owner on "Use device setting" whose phone switches to
+   * Dark on a schedule would keep the Light app until the next cold start.
+   * Tracked even when the preference is Light or Dark, because switching TO
+   * "system" has to have an answer ready rather than a frame of the wrong one.
+   */
+  const [scheme, setScheme] = useState<ThemeMode>(systemMode);
+
+  useEffect(() => {
+    const subscription = Appearance.addChangeListener(({ colorScheme }) => {
+      setScheme(colorScheme === "dark" ? "dark" : DEFAULT_THEME);
+    });
+    return () => subscription.remove();
+  }, []);
 
   useEffect(() => {
     if (initialMode !== undefined) return;
     let active = true;
-    void readThemeMode().then((stored) => {
+    void readThemePreference().then((stored) => {
       if (!active) return;
-      setModeState(stored);
+      setPreferenceState(stored);
       setReady(true);
     });
     return () => {
@@ -73,17 +131,21 @@ export function ThemeProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const setMode = useCallback((next: ThemeMode) => {
+  const setPreference = useCallback((next: ThemePreference) => {
     // State first, write second, and the write is not awaited: the switch has
     // to feel instant, and a keystore that refuses the write is not a reason
     // to leave the owner staring at the theme they just turned off.
-    setModeState(next);
-    void writeThemeMode(next);
+    setPreferenceState(next);
+    void writeThemePreference(next);
   }, []);
 
+  const setMode = useCallback((next: ThemeMode) => setPreference(next), [setPreference]);
+
+  const mode = resolveThemeMode(preference, scheme);
+
   const value = useMemo<ThemeContextValue>(
-    () => ({ mode, palette: palettes[mode], setMode, ready }),
-    [mode, setMode, ready],
+    () => ({ mode, preference, palette: palettes[mode], setPreference, setMode, ready }),
+    [mode, preference, setPreference, setMode, ready],
   );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;

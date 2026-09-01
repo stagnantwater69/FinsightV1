@@ -1723,5 +1723,2465 @@
       "falsePositives": 0
     },
     "rawText": "CEBU MEAT SUPPLY\nDate: 2026-07-26\nChicken whole 2 150.00 300.00\nPork belly kg 3 300.00 900.00\nBeef cubes kg 1 250.09 250.00\nTOTAL 1450.00\n"
+  },
+  {
+    "id": "real-04-cropped-vendor-glare",
+    "kind": "real",
+    "conditions": "Real phone photo, Indonesian drink-stall thermal receipt, header block blurred/illegible, single item, tight crop",
+    "expected": {
+      "date": null,
+      "vendor": null,
+      "amount": 6000,
+      "items": [
+        {
+          "name": "Nu Greentea 330",
+          "quantity": 1,
+          "amount": 6000
+        }
+      ]
+    },
+    "actual": {
+      "date": null,
+      "vendor": "Subtotal RT",
+      "amount": 6.6,
+      "items": []
+    },
+    "verdict": {
+      "date": "n/a",
+      "vendor": "n/a",
+      "amount": "wrong"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "wo 6.000 6.000\nSubtotal RT\nPajak p=\nTotal 6.600\nTunal 6.608,\n\n| St a\n"
+  },
+  {
+    "id": "real-05-bintang-juice-camscan-watermark",
+    "kind": "real",
+    "conditions": "Real phone photo scanned through the CamScanner app (adds a small logo + 'Scanned with CamScanner' watermark, bottom-left), Indonesian juice stall, otherwise clear print",
+    "expected": {
+      "date": "2019-08-01",
+      "vendor": "BINTANG JUICE",
+      "amount": 20000,
+      "items": [
+        {
+          "name": "SIRSAK",
+          "quantity": 1,
+          "amount": 10000
+        },
+        {
+          "name": "SUNKIST",
+          "quantity": 1,
+          "amount": 10000
+        }
+      ]
+    },
+    "actual": {
+      "date": null,
+      "vendor": "BINT ANG",
+      "amount": null,
+      "items": []
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "missed"
+    },
+    "itemScore": {
+      "expected": 2,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "BINT ANG\nSUTOE\nlL UE\nSEAR ANNE Ras\nwE Gan NN WN 2\nAes\n1 SIRSAK 10, 000\n1 SUNKIST 10,000\nig GRY\nTOTAL = 20. 000\nCASH 20,000\n=r PH\n"
+  },
+  {
+    "id": "real-06-severe-blur-curled-thermal",
+    "kind": "real",
+    "conditions": "Real phone photo, curled/perforated thermal receipt edge, out-of-focus capture, black background",
+    "expected": {
+      "date": "2017-11-24",
+      "vendor": null,
+      "amount": 22000,
+      "items": [
+        {
+          "name": "MACARON BLUE",
+          "quantity": 2,
+          "amount": 22000
+        }
+      ]
+    },
+    "actual": {
+      "date": null,
+      "vendor": "2 MACARON BLUE -22,000",
+      "amount": null,
+      "items": []
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "n/a",
+      "amount": "missed"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "2 MACARON BLUE -22,000\nSUBTOTAL -20, 000\nTree da 2,000\nTata |\n\n22, 000\nCASH -52, 000\nCHANGE +30, 000\n"
+  },
+  {
+    "id": "real-07-glare-finger-obstruction",
+    "kind": "real",
+    "conditions": "Real phone photo, strong glare plus the photographer's own thumb partially covering the lower-right corner, single item, bakery chain receipt",
+    "expected": {
+      "date": null,
+      "vendor": "TOUS LES JOURS",
+      "amount": 32500,
+      "items": [
+        {
+          "name": "Ganache Mousse Piece",
+          "quantity": 1,
+          "amount": 32500
+        }
+      ]
+    },
+    "actual": {
+      "date": null,
+      "vendor": "CHANGE 67,500",
+      "amount": null,
+      "items": []
+    },
+    "verdict": {
+      "date": "n/a",
+      "vendor": "wrong",
+      "amount": "missed"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "ny! 1\nAra\nTOTAL 32,500\nCASH 110,000\nCHANGE 67,500\n"
+  },
+  {
+    "id": "real-08-diagonal-watermark-blur",
+    "kind": "real",
+    "conditions": "Real phone photo, blurred header, a repeating diagonal text watermark ('D'crepes') overlaid across the whole frame by whoever shared the photo — distinct from the receipt's own printed content",
+    "expected": {
+      "date": null,
+      "vendor": null,
+      "amount": 24000,
+      "items": [
+        {
+          "name": "SmokeBeef + NuTea",
+          "quantity": 1,
+          "amount": 21818
+        }
+      ]
+    },
+    "actual": {
+      "date": null,
+      "vendor": "1 SmokeBeef + NuTea Go |",
+      "amount": null,
+      "items": []
+    },
+    "verdict": {
+      "date": "n/a",
+      "vendor": "n/a",
+      "amount": "missed"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "— 3\nfar\n=]\n: K\npil ©\n1 SmokeBeef + NuTea Go |\nSubTotal: 21,818\n: PRs \"2,182\n: Aq1 AAS\nTotal: 4,009\nTA a: cash: 50,0099\n7 ET Change: 24,000\n4 aes Ci Bn & |\n: hee\n"
+  },
+  {
+    "id": "real-09-severe-blur-duplicate-items",
+    "kind": "real",
+    "conditions": "Real phone photo, severe blur, vendor and every administrative line illegible, TWO separate identical-item order lines (not a quantity of 2 on one line)",
+    "expected": {
+      "date": null,
+      "vendor": null,
+      "amount": 138600,
+      "items": [
+        {
+          "name": "WARISAN 2 FREE DRINK",
+          "quantity": 1,
+          "amount": 63000
+        },
+        {
+          "name": "WARISAN 2 FREE DRINK",
+          "quantity": 1,
+          "amount": 63000
+        }
+      ]
+    },
+    "actual": {
+      "date": null,
+      "vendor": "IEEE fe ve co we -— = - - . .-",
+      "amount": null,
+      "items": []
+    },
+    "verdict": {
+      "date": "n/a",
+      "vendor": "n/a",
+      "amount": "missed"
+    },
+    "itemScore": {
+      "expected": 2,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "a Lal. iT :\nin\nBR mmm :\n. RHARTOAN 2 Cher Tne h3 [Of\nBE to hon Eis bod\nRANE FREE [RINK\nIEEE fe ve co we -— = - - . .-\ni\nBR a oe. ow a . .\nEs ear NAN\nad\n”\" ore . - ™ 4\n- J Tv Rel\nWo .\nL Ly\nje (es 5\nNi p\nRE 0\n7\nFel\nEe\n"
+  },
+  {
+    "id": "real-10-chopstick-obstruction-crumple",
+    "kind": "real",
+    "conditions": "Real phone photo on a wood-grain table, wooden chopsticks and a pink napkin partially resting on/behind the receipt, blurred header, single abbreviated item name",
+    "expected": {
+      "date": null,
+      "vendor": null,
+      "amount": 53999,
+      "items": [
+        {
+          "name": "HAI CMP SPC",
+          "quantity": 1,
+          "amount": 49090
+        }
+      ]
+    },
+    "actual": {
+      "date": null,
+      "vendor": "1 HAI CMP SPC £9,090",
+      "amount": null,
+      "items": []
+    },
+    "verdict": {
+      "date": "n/a",
+      "vendor": "n/a",
+      "amount": "missed"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "VL\n1 HAI CMP SPC £9,090\nTX : 4,809\npl S23, 999\nCASH 44, 000\n"
+  },
+  {
+    "id": "real-11-thumb-obstruction-single-item",
+    "kind": "real",
+    "conditions": "Real phone photo, blurred header, photographer's thumb visible at the left edge, single high-value electronics item, no tax line",
+    "expected": {
+      "date": null,
+      "vendor": null,
+      "amount": 975000,
+      "items": [
+        {
+          "name": "WACOM BAMBOO PEN",
+          "quantity": 1,
+          "amount": 975000
+        }
+      ]
+    },
+    "actual": {
+      "date": null,
+      "vendor": "Bere - BBW",
+      "amount": 975000,
+      "items": []
+    },
+    "verdict": {
+      "date": "n/a",
+      "vendor": "n/a",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": ".\nEh\nET.\n- - N ~~\nBere - BBW\n0430246001\ng WACO BAMBOO FEM 000\ni be a3 . 975,000.00 9734 00\nNTS Va Ln TEAR\nTo ce 2, fg ly i\nLa wT RC\nBL\nEe\n"
+  },
+  {
+    "id": "real-12-long-13-item-blurry-header",
+    "kind": "real",
+    "conditions": "Real phone photo, long 13-line itemised restaurant receipt with small print, header fully blurred, some leading quantity digits at the left margin partly cut off",
+    "expected": {
+      "date": null,
+      "vendor": null,
+      "amount": 1802900,
+      "items": [
+        {
+          "name": "Angus Striploin",
+          "quantity": 1,
+          "amount": 295000
+        },
+        {
+          "name": "Chicken Steak",
+          "quantity": 1,
+          "amount": 140000
+        },
+        {
+          "name": "CK Redvelvet",
+          "quantity": 1,
+          "amount": 65000
+        },
+        {
+          "name": "Creamed Spinach",
+          "quantity": 1,
+          "amount": 40000
+        },
+        {
+          "name": "F Squeeze Orange",
+          "quantity": 1,
+          "amount": 60000
+        },
+        {
+          "name": "House Blend",
+          "quantity": 1,
+          "amount": 40000
+        },
+        {
+          "name": "Ice Tea Peach",
+          "quantity": 1,
+          "amount": 45000
+        },
+        {
+          "name": "Ice Tea Rasp",
+          "quantity": 2,
+          "amount": 90000
+        },
+        {
+          "name": "Jasmine Tea",
+          "quantity": 1,
+          "amount": 40000
+        },
+        {
+          "name": "Roasted Chicken",
+          "quantity": 2,
+          "amount": 300000
+        },
+        {
+          "name": "Salmon",
+          "quantity": 1,
+          "amount": 170000
+        },
+        {
+          "name": "Salmon Seaweed Bowl",
+          "quantity": 1,
+          "amount": 150000
+        },
+        {
+          "name": "Sorbet",
+          "quantity": 1,
+          "amount": 55000
+        }
+      ]
+    },
+    "actual": {
+      "date": null,
+      "vendor": "I fnaus Strinloin 140,000",
+      "amount": 150,
+      "items": []
+    },
+    "verdict": {
+      "date": "n/a",
+      "vendor": "n/a",
+      "amount": "wrong"
+    },
+    "itemScore": {
+      "expected": 13,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "LITE]\n— Wi ha\nI fnaus Strinloin 140,000\ni Chicken Steak 65,000\nIK Redvalyat ; 40,000\n1 Creaped Spinach 60,000\nLF Baueaze range 43,000\ni House Blend 45,000\n1 Ice Teg French 0,000\na foe [E55 HAL ; 40.000\n“= mO3Eted Chicken 170,000\nLoEa Lh iL 150.000\ni Salmon Sezweed Rould ; £51000\nI Sorbet EC\neer 1,496,000\nWH TOT ; ? 7\n| Ligh : 149,000\n4 DLA SE pt { 163,500\nTax rem SE\nTSR EEL OLR . Ene Hl]\ntubdedel BEY MON ACOHTD 215,00\nSubtotal BEV WON ALCOHOL {Got \"000\nSutbotal Fou fed Y 0\nSubtotal HODIFIER 120,000\nPl ATTY :\nSubtotal PASTRY\n: =\n| a i.802 a FOO\nii | ai =\n"
+  },
+  {
+    "id": "real-13-blur-vendor-two-item",
+    "kind": "real",
+    "conditions": "Real phone photo, blurred café/bakery header, two items, service charge + tax lines",
+    "expected": {
+      "date": null,
+      "vendor": null,
+      "amount": 159638,
+      "items": [
+        {
+          "name": "mush pasta",
+          "quantity": 1,
+          "amount": 80000
+        },
+        {
+          "name": "chic ques",
+          "quantity": 1,
+          "amount": 55000
+        }
+      ]
+    },
+    "actual": {
+      "date": null,
+      "vendor": null,
+      "amount": null,
+      "items": []
+    },
+    "verdict": {
+      "date": "n/a",
+      "vendor": "n/a",
+      "amount": "missed"
+    },
+    "itemScore": {
+      "expected": 2,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "j\n"
+  },
+  {
+    "id": "real-14-lamp-glare-discount-multiplier",
+    "kind": "real",
+    "conditions": "Real phone photo taken under a warm lamp with strong glare and a pixelated/redacted-looking header, one item with a '2x' multiplier prefix AND a 30% discount line reducing it",
+    "expected": {
+      "date": null,
+      "vendor": null,
+      "amount": 12600,
+      "items": [
+        {
+          "name": "Risol Rogut",
+          "quantity": 2,
+          "amount": 18000
+        }
+      ]
+    },
+    "actual": {
+      "date": null,
+      "vendor": "GEA Ae iy FONE 7) ELE ral",
+      "amount": null,
+      "items": []
+    },
+    "verdict": {
+      "date": "n/a",
+      "vendor": "n/a",
+      "amount": "missed"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "KN 3\n1 oR: . 4 - A\ni 2 gee E\nrely 3 By A\nA . a i a CSE SE\nGEA Ae iy FONE 7) ELE ral\nEee pore RETR\nic ET Soar Sil :\nAR S20 Ele | i\n\nSh te) TO 4\n\nJE 3 Seas me\n\nCe lh aT\n\nhe lam\n\nER\n\nat\n\nTHe\n\neR\n\nwi\n\n}\nXY 75\nA Bo aes\nFey\n\nRISA Bann GRE\nEU Natl Td Bad\n“eigen Ohba 3 3%\nDIS6 THEM CER Lh\n"
+  },
+  {
+    "id": "real-15-ikea-uk-dd-mm-date",
+    "kind": "real",
+    "conditions": "Real phone photo, IKEA Food UK receipt, clean print, GBP, DD/MM/YYYY date format",
+    "expected": {
+      "date": "2016-04-06",
+      "vendor": "IKEA FOOD",
+      "amount": 14.85,
+      "items": [
+        {
+          "name": "Meatballs 10",
+          "quantity": 1,
+          "amount": 3.8
+        },
+        {
+          "name": "Fish & Chips Adult",
+          "quantity": 1,
+          "amount": 4.95
+        },
+        {
+          "name": "Petit Pain - White",
+          "quantity": 1,
+          "amount": 0.5
+        },
+        {
+          "name": "Wine rose",
+          "quantity": 1,
+          "amount": 2.8
+        },
+        {
+          "name": "Wine red",
+          "quantity": 1,
+          "amount": 2.8
+        }
+      ]
+    },
+    "actual": {
+      "date": null,
+      "vendor": "IKEA FOOD",
+      "amount": 14.85,
+      "items": [
+        {
+          "name": "Meatballs 10 3.80",
+          "quantity": 1,
+          "amount": 3.8
+        },
+        {
+          "name": "Fish & Chips Adult 4.95",
+          "quantity": 1,
+          "amount": 4.95
+        },
+        {
+          "name": "Petit Pain - White 0.50",
+          "quantity": 1,
+          "amount": 0.5
+        },
+        {
+          "name": "Wine rose 2.80",
+          "quantity": 1,
+          "amount": 2.8
+        },
+        {
+          "name": "Wine red 2.80",
+          "quantity": 1,
+          "amount": 2.8
+        },
+        {
+          "name": "204VAT",
+          "quantity": null,
+          "amount": 2.48
+        }
+      ]
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 5,
+      "matched": 5,
+      "nameCorrect": 5,
+      "quantityCorrect": 5,
+      "quantityScored": 5,
+      "falsePositives": 1
+    },
+    "rawText": "Pages; 1\n! IEA\nIKEA FOOD\nTKEA MILTON KEYNES 185\nVAT: GB 527773320\nAddrossd\naty Meme Price Total £\n1 Meatballs 10 3.80 3.80\n1 Fish & Chips Adult 4.95 4.95\n1 Petit Pain - White 0.50 0.50\n1 Wine rose 2.80 2.80\n1 Wine red 2.80 2.80\nNet SubTotal : 12.37\nTax =\n204VAT 2.48\nBT\nTotal to Pay: 14.85\nReceived: 1\n-\nVISA Bh, &\na\nVisa Credit\n"
+  },
+  {
+    "id": "real-16-new-china-us-date",
+    "kind": "real",
+    "conditions": "Real phone photo, US restaurant receipt (Mesa, AZ), MM-DD-YYYY date format, clean print",
+    "expected": {
+      "date": "2016-03-12",
+      "vendor": "New China",
+      "amount": 26.96,
+      "items": [
+        {
+          "name": "Beef w. Broccoli",
+          "quantity": 1,
+          "amount": 8.25
+        },
+        {
+          "name": "w. Chicken Fried Rice",
+          "quantity": 1,
+          "amount": 2
+        },
+        {
+          "name": "Sweet / Sour Chicken",
+          "quantity": 1,
+          "amount": 7.95
+        },
+        {
+          "name": "Chicken Chow Mein",
+          "quantity": 1,
+          "amount": 6.75
+        }
+      ]
+    },
+    "actual": {
+      "date": "2016-12-03",
+      "vendor": "New China",
+      "amount": 26.96,
+      "items": [
+        {
+          "name": "Beef w. Broccoli",
+          "quantity": 1,
+          "amount": 8.25
+        },
+        {
+          "name": "w. Chicken Fried Rice",
+          "quantity": null,
+          "amount": 2
+        },
+        {
+          "name": "Sweet / Sour Chicken",
+          "quantity": 1,
+          "amount": 7.95
+        },
+        {
+          "name": "Chicken Chow Mein",
+          "quantity": 1,
+          "amount": 6.75
+        }
+      ]
+    },
+    "verdict": {
+      "date": "wrong",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 4,
+      "matched": 4,
+      "nameCorrect": 4,
+      "quantityCorrect": 3,
+      "quantityScored": 4,
+      "falsePositives": 0
+    },
+    "rawText": "New China\n130 North Higley Re Suite#7-102\n‘Mesa, AZ 85205\nTol 4BOI218-9888/9892'\nWalk In\nDole: 03-12-2016 Time: 402PM #23\nSven BOD A 9\n1 Beef w. Broccoli 8.25\nw. Chicken Fried Rice 2.00\n1 Sweet / Sour Chicken 7.95\n1 Chicken Chow Mein 6.75\nAmount: 24.95\nTAX(8 05%) : 2.01\nBt RR TOTAL : 26.96\nThank you very much. 5\n"
+  },
+  {
+    "id": "real-17-decorative-banner-wood-table",
+    "kind": "real",
+    "conditions": "Real phone photo on a dark wood table, upscale restaurant receipt (Dublin, Ireland), unambiguous month-name date, no decorative banner but tight crop",
+    "expected": {
+      "date": "2019-02-16",
+      "vendor": "Marco Pierre White Steakhouse & Grill",
+      "amount": 129.75,
+      "items": [
+        {
+          "name": "8oz Fil Bearn",
+          "quantity": 1,
+          "amount": 35.95
+        },
+        {
+          "name": "8oz Fil Au Po",
+          "quantity": 1,
+          "amount": 35.95
+        },
+        {
+          "name": "Onion Ring",
+          "quantity": 1,
+          "amount": 4.95
+        },
+        {
+          "name": "Haricots Vert",
+          "quantity": 1,
+          "amount": 4.95
+        },
+        {
+          "name": "Choc Truf Cake",
+          "quantity": 1,
+          "amount": 8.95
+        },
+        {
+          "name": "Lunta",
+          "quantity": 1,
+          "amount": 39
+        }
+      ]
+    },
+    "actual": {
+      "date": null,
+      "vendor": "Rercmicraita totoman ke",
+      "amount": 129.75,
+      "items": []
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 6,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "rari\nelo ers\nRercmicraita totoman ke\n4000 rye TE\nmE aT\nStation wenn\n\"Gaz £11 pearn 5.5 Be\n1 as FI) a 22 EE\n1 tion Ring 0%\n1 faricots ort pic\n1 roe Tru Cake 5.3\n1 Lnta 1.0\n22:57 Balance Due 129.75\nfe\nic a\nThank you for your custon,\nPlease cal) again\nTSE\n"
+  },
+  {
+    "id": "real-18-via-emilia-clean",
+    "kind": "real",
+    "conditions": "Real phone photo, clean US restaurant receipt (Miami Beach, FL), month-name date, an order-tracking URL/code line",
+    "expected": {
+      "date": "2017-04-27",
+      "vendor": "VIA EMILIA 9",
+      "amount": 61.8,
+      "items": [
+        {
+          "name": "Tagliatella al Ragu'",
+          "quantity": 1,
+          "amount": 14.9
+        },
+        {
+          "name": "Cappellacci Di Zucca",
+          "quantity": 1,
+          "amount": 18.9
+        },
+        {
+          "name": "Stufato Al Latte Di Ravenna",
+          "quantity": 1,
+          "amount": 22.9
+        }
+      ]
+    },
+    "actual": {
+      "date": null,
+      "vendor": "VIA EMILIA 9",
+      "amount": 61.8,
+      "items": [
+        {
+          "name": "Tagliatella al Ragu’",
+          "quantity": 1,
+          "amount": 14.9
+        },
+        {
+          "name": "Cappellacci Di Zucca",
+          "quantity": 1,
+          "amount": 18.9
+        },
+        {
+          "name": "Stufato Al Latte Di Ravenna",
+          "quantity": 1,
+          "amount": 22.9
+        }
+      ]
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 3,
+      "matched": 3,
+      "nameCorrect": 3,
+      "quantityCorrect": 3,
+      "quantityScored": 3,
+      "falsePositives": 0
+    },
+    "rawText": "VIA EMILIA 9\n112015TH ST\nMIAMI BEACH, FL 33139\n7862167150\nORDER: Table 11\nCashier: V.\n27-Apr-2017 6:21:59P\n1 Tagliatella al Ragu’ $14.90\n1 Cappellacci Di Zucca $18.90\n1 Stufato Al Latte Di Ravenna $22.90\nSubtotal $56.70\nTax. $5.10\nTotal $61.80\nOrder QGVRTH3NM28YC\nShow us your review on TripAdvisor or Yelp\nand you'll get a free glass of wine!\n"
+  },
+  {
+    "id": "real-19-togo-banner-asterisks",
+    "kind": "real",
+    "conditions": "Real phone photo, decorative asterisk banner ('*** TO GO ***') above the vendor block, US date, unambiguous",
+    "expected": {
+      "date": "2018-12-31",
+      "vendor": null,
+      "amount": 58.3,
+      "items": [
+        {
+          "name": "Tikka Masala",
+          "quantity": 1,
+          "amount": 20
+        },
+        {
+          "name": "Palak (Spinach) Paneer (Cheese)",
+          "quantity": 1,
+          "amount": 18
+        },
+        {
+          "name": "Vegan Bengan Bharta",
+          "quantity": 1,
+          "amount": 17
+        }
+      ]
+    },
+    "actual": {
+      "date": null,
+      "vendor": "Closed to Credit Card",
+      "amount": 17,
+      "items": [
+        {
+          "name": "co 1 VEGAN BENGAN BHARTAF",
+          "quantity": null,
+          "amount": 17
+        }
+      ]
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "n/a",
+      "amount": "wrong"
+    },
+    "itemScore": {
+      "expected": 3,
+      "matched": 1,
+      "nameCorrect": 1,
+      "quantityCorrect": 0,
+      "quantityScored": 1,
+      "falsePositives": 0
+    },
+    "rawText": "EER LET\ny we, ows\nCHECKS 7128.1\nClosed to Credit Card\ni pate/TIne: 12/31 i\nDee prsi/aoe sis py\n2 Siow: of\n55 so rapny about your visit\nor BL SR\nETT TS\nio CHICKEN. (WURGH)\nwv PAM Heese) Mt\nco 1 VEGAN BENGAN BHARTAF $17.00\ni ee\nTE 7\n% Total before tip: 20\n2 Tip anount Lh,\n"
+  },
+  {
+    "id": "real-20-cluttered-menu-background-tilt",
+    "kind": "real",
+    "conditions": "Real phone photo, receipt photographed resting on top of a restaurant menu (cluttered background text behind/around it), slight tilt, US date",
+    "expected": {
+      "date": "2014-08-30",
+      "vendor": "Fuzzy's Taco Shop",
+      "amount": 12.03,
+      "items": [
+        {
+          "name": "Chips y Salsa",
+          "quantity": 1,
+          "amount": 4.95
+        },
+        {
+          "name": "Red Bull",
+          "quantity": 1,
+          "amount": 3.5
+        },
+        {
+          "name": "Soft Drink",
+          "quantity": 1,
+          "amount": 2.79
+        }
+      ]
+    },
+    "actual": {
+      "date": null,
+      "vendor": "Can seas § Soft Drink in",
+      "amount": null,
+      "items": []
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "missed"
+    },
+    "itemScore": {
+      "expected": 3,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "SA\nREE\n5 RT\non 12H\n1 Fe Bul i)\nCan seas § Soft Drink in\nViera ess § ton ne\n4 sbtotal na\nTax on\nime Pie, Car Total Paid 7.0\nstate Tax on\n—\n"
+  },
+  {
+    "id": "real-21-jts-diner-clean",
+    "kind": "real",
+    "conditions": "Real phone photo, clean US diner receipt, US date with AM/PM time, a '(2 @2.95)' multiplier notation",
+    "expected": {
+      "date": "2016-02-12",
+      "vendor": "JT's Diner",
+      "amount": 28.4,
+      "items": [
+        {
+          "name": "Coffee",
+          "quantity": 2,
+          "amount": 5.9
+        },
+        {
+          "name": "Two Eggs Any Style",
+          "quantity": 1,
+          "amount": 6.95
+        },
+        {
+          "name": "Whole-Wheat Pancakes",
+          "quantity": 1,
+          "amount": 8.95
+        },
+        {
+          "name": "Hawaiian Sausage",
+          "quantity": 1,
+          "amount": 4.5
+        }
+      ]
+    },
+    "actual": {
+      "date": "2016-12-02",
+      "vendor": "JT's Diner",
+      "amount": 28.4,
+      "items": [
+        {
+          "name": "Coffee (2 62.95)",
+          "quantity": null,
+          "amount": 5.9
+        },
+        {
+          "name": "Two Eggs Any Style",
+          "quantity": null,
+          "amount": 6.95
+        },
+        {
+          "name": "Wihole-Wheat Pancakes",
+          "quantity": null,
+          "amount": 8.95
+        },
+        {
+          "name": "Hawaiian Sausage",
+          "quantity": null,
+          "amount": 4.5
+        }
+      ]
+    },
+    "verdict": {
+      "date": "wrong",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 4,
+      "matched": 4,
+      "nameCorrect": 3,
+      "quantityCorrect": 0,
+      "quantityScored": 4,
+      "falsePositives": 0
+    },
+    "rawText": "JT's Diner\n37011 Cook Street\n(760) 797-2100\nServer: Braulio 02/12/2016\n102/1 10:28 AM\nGuests: 2 50022\nCoffee (2 62.95) 5.90\nTwo Eggs Any Style 6.95\nWihole-Wheat Pancakes 8.95\nHawaiian Sausage 4.50\nSubtotal 26.30\nTax 2.10\nTotal 28.40\n"
+  },
+  {
+    "id": "real-22-blank-total-field-curl",
+    "kind": "real",
+    "conditions": "Real phone photo, curled/curved credit-card slip photographed on a white envelope with shadow, 'Tip' and 'Total' lines printed but left BLANK for the customer to fill in — only 'AMOUNT' is printed",
+    "expected": {
+      "date": "2017-06-05",
+      "vendor": "Hedleys",
+      "amount": 41.45,
+      "items": []
+    },
+    "actual": {
+      "date": null,
+      "vendor": "| WEST HOLLYWOOD CA 9006",
+      "amount": 41.45,
+      "items": [
+        {
+          "name": "OUNT ;",
+          "quantity": null,
+          "amount": 41.45
+        }
+      ]
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 0,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 1
+    },
+    "rawText": "\"es\nw | - ww\n\" F\n/ HEDLEYS\n640 N ROBERTSON BLVD\n| WEST HOLLYWOOD CA 9006\n310-659-2009\n| terminal 10: 01528251 3430\nN SER ¢ 2:52 PM\nLv sy\na\n| um: 7 15615506682 REF #: 9395 \\\n( Mie AUTH #: 065231\nhe\nOUNT ; $41.45\n{ 2\n[Sy feo\nL a Ti mm mm mm\nPPROVED\n"
+  },
+  {
+    "id": "real-23-handwritten-total-override",
+    "kind": "real",
+    "conditions": "Real phone photo, US sushi restaurant receipt, printed itemised total, PLUS a handwritten total ('153.71') pen-written over/near the printed total ($143.71) — apparently a tip-adjusted figure added by hand",
+    "expected": {
+      "date": "2018-05-11",
+      "vendor": "Katana Sushi",
+      "amount": 143.71,
+      "items": [
+        {
+          "name": "Hamachi Collar",
+          "quantity": 1,
+          "amount": 12
+        },
+        {
+          "name": "Mega Poke Bowl",
+          "quantity": 1,
+          "amount": 17
+        },
+        {
+          "name": "Hamachi - Sashimi",
+          "quantity": 1,
+          "amount": 12
+        },
+        {
+          "name": "Maguro - Sashimi",
+          "quantity": 1,
+          "amount": 11
+        },
+        {
+          "name": "Salmon - Sashimi",
+          "quantity": 1,
+          "amount": 10
+        },
+        {
+          "name": "3 Sockeye Salmon - Sashimi",
+          "quantity": 1,
+          "amount": 36
+        },
+        {
+          "name": "Hamachi Japapeno",
+          "quantity": 1,
+          "amount": 12
+        },
+        {
+          "name": "Salmon Collar",
+          "quantity": 1,
+          "amount": 10
+        },
+        {
+          "name": "Escolar - Sashimi",
+          "quantity": 1,
+          "amount": 11
+        }
+      ]
+    },
+    "actual": {
+      "date": "2018-11-05",
+      "vendor": "Katana Sushi",
+      "amount": 143.71,
+      "items": [
+        {
+          "name": "Hamachi Collar £",
+          "quantity": null,
+          "amount": 12
+        },
+        {
+          "name": "Mega Poke Bowl",
+          "quantity": null,
+          "amount": 17
+        },
+        {
+          "name": "Hamachi - Sashimi £",
+          "quantity": null,
+          "amount": 12
+        },
+        {
+          "name": "Maguro - Sashimi",
+          "quantity": null,
+          "amount": 11
+        },
+        {
+          "name": "Salmon - Sashini",
+          "quantity": null,
+          "amount": 10
+        },
+        {
+          "name": "Hamachi Japapeno",
+          "quantity": null,
+          "amount": 12
+        },
+        {
+          "name": "Salmon Collar",
+          "quantity": null,
+          "amount": 10
+        },
+        {
+          "name": "Escolar - Sashimi",
+          "quantity": null,
+          "amount": 11
+        }
+      ]
+    },
+    "verdict": {
+      "date": "wrong",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 9,
+      "matched": 8,
+      "nameCorrect": 8,
+      "quantityCorrect": 0,
+      "quantityScored": 8,
+      "falsePositives": 0
+    },
+    "rawText": "——\nKatana Sushi\n2818 Hewitt Ave\nEverett, WA 98201\n425-512-9361 .\nPEE n\nServer: Michael C :\n05/11/18 8:47 PH\nCheck #93 Table D2 |\nHamachi Collar £12.00\nMega Poke Bowl $17.00\nHamachi - Sashimi £12.00\nMaguro - Sashimi $11.00\nSalmon - Sashini $10.00\n3 Sockeye Salmon - Sashimi\n$36.00\nHamachi Japapeno $12.00\nSalmon Collar $10.00\nEscolar - Sashimi $11.00\nSubtotal $131.00\nTax $12.71\nTotal $143.71\nHK A AK KKK [57.4\nThank You for your visit.\n"
+  },
+  {
+    "id": "real-24-yauatcha-no-date",
+    "kind": "real",
+    "conditions": "Real phone photo on a dark wood table, upscale restaurant (Honolulu, HI), 8 items, no date visible anywhere in the visible receipt body",
+    "expected": {
+      "date": null,
+      "vendor": "YAUATCHA",
+      "amount": 88.62,
+      "items": [
+        {
+          "name": "Tender Branch Hibiscus",
+          "quantity": 1,
+          "amount": 8
+        },
+        {
+          "name": "Seafood Puff",
+          "quantity": 1,
+          "amount": 10.8
+        },
+        {
+          "name": "Sesame Prawn Toast",
+          "quantity": 1,
+          "amount": 11.8
+        },
+        {
+          "name": "Beancurd Prawn Cheung Fun",
+          "quantity": 1,
+          "amount": 10.8
+        },
+        {
+          "name": "XO Scallop Dumpling",
+          "quantity": 1,
+          "amount": 8.8
+        },
+        {
+          "name": "Poached Beijing Dumpling",
+          "quantity": 1,
+          "amount": 5.8
+        },
+        {
+          "name": "Spinach Dumpling",
+          "quantity": 1,
+          "amount": 6.8
+        },
+        {
+          "name": "Tea Smoked Pork Ribs",
+          "quantity": 1,
+          "amount": 22
+        }
+      ]
+    },
+    "actual": {
+      "date": null,
+      "vendor": "2 International Market Place",
+      "amount": 88.62,
+      "items": [
+        {
+          "name": "Seafood Puff",
+          "quantity": 1,
+          "amount": 10.8
+        },
+        {
+          "name": "Sesame Prawn Toast",
+          "quantity": 1,
+          "amount": 11.8
+        },
+        {
+          "name": "Beancurd Prawn Cheung Fun",
+          "quantity": 1,
+          "amount": 10.8
+        },
+        {
+          "name": "X0 Scallop Dumpling",
+          "quantity": 1,
+          "amount": 8.8
+        },
+        {
+          "name": "Poached Beijing Dumpling",
+          "quantity": 1,
+          "amount": 5.8
+        },
+        {
+          "name": "Spinach Dumpling",
+          "quantity": 1,
+          "amount": 6.8
+        },
+        {
+          "name": "Tea Smoked Pork Ribs",
+          "quantity": 1,
+          "amount": 22
+        }
+      ]
+    },
+    "verdict": {
+      "date": "n/a",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 8,
+      "matched": 7,
+      "nameCorrect": 7,
+      "quantityCorrect": 7,
+      "quantityScored": 7,
+      "falsePositives": 0
+    },
+    "rawText": "a\nm2 YAUATCHA\nYauatcha\n110578007 Kakin\nCHK 1867 TBL 84/1 GST 3\n84\nRestaurant\n1 Tender Branch Hibiscus 8.00\n1 Seafood Puff 10.80\n1 Sesame Prawn Toast 11.80\n1 Beancurd Prawn Cheung Fun 10.80\n1 X0 Scallop Dumpling 8.80\n1 Poached Beijing Dumpling 5.80\n1 Spinach Dumpling 6.80\n1 Tea Smoked Pork Ribs 22.00\nSubtotal $84.80\nTax $3.82\nTotal Due $88.62\n2 International Market Place\n2330 Kalakaua Ave Ste 326\nHonolulu, Hawaii 96815\nReservat jons@Yauatchallaik iki .com\nPhone: 808-739-9318\n*¥GRATUITY NOT INCLUDED*\n| pS SURE, — ome el eT\n"
+  },
+  {
+    "id": "real-25-boa-dark-background",
+    "kind": "real",
+    "conditions": "Real phone photo against a near-black tablecloth (low background/receipt contrast in the photo, though the print itself is clean), suggested-gratuity lines below the total",
+    "expected": {
+      "date": "2017-12-20",
+      "vendor": "BOA",
+      "amount": 47.09,
+      "items": [
+        {
+          "name": "Crab Cake",
+          "quantity": 1,
+          "amount": 15
+        },
+        {
+          "name": "Skirt Stk Lunch",
+          "quantity": 1,
+          "amount": 28
+        }
+      ]
+    },
+    "actual": {
+      "date": null,
+      "vendor": "Separate checks: 1-of-3",
+      "amount": 43,
+      "items": [
+        {
+          "name": "CRAB CAKE",
+          "quantity": 1,
+          "amount": 15
+        },
+        {
+          "name": "SKIRT STK LUNCH",
+          "quantity": 1,
+          "amount": 28
+        }
+      ]
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "itemScore": {
+      "expected": 2,
+      "matched": 2,
+      "nameCorrect": 2,
+      "quantityCorrect": 2,
+      "quantityScored": 2,
+      "falsePositives": 0
+    },
+    "rawText": "BOA\n(310) 278-20: h\nO05 1a TABLE 308 #Pa AL\nBAR L Svrlks 13 1354 120/11\nSeparate checks: 1-of-3\n1 CRAB CAKE 15.00\n1 SKIRT STK LUNCH 28.00\nSub Total: 43.00\nTax: 4.08\nSub Total: 47.08\n12/20 14:29 TOTAL = 47 .09\nSUGGESTED GRATUITY\n18% 8.48\n20% 9.42\nbard\n"
+  },
+  {
+    "id": "real-26-friendly-reds-clean",
+    "kind": "real",
+    "conditions": "Real phone photo, clean US restaurant receipt, '(2 @14.00)' multiplier notation, unambiguous US date",
+    "expected": {
+      "date": "2018-07-21",
+      "vendor": "Friendly Red's of Windham",
+      "amount": 77.83,
+      "items": [
+        {
+          "name": "Cadillac Margarita",
+          "quantity": 2,
+          "amount": 28
+        },
+        {
+          "name": "Patron Silver",
+          "quantity": 1,
+          "amount": 14
+        },
+        {
+          "name": "Maryland Crab Cakes",
+          "quantity": 1,
+          "amount": 12
+        },
+        {
+          "name": "Chicken Caprese",
+          "quantity": 1,
+          "amount": 12
+        },
+        {
+          "name": "Chix Parm Sandwich",
+          "quantity": 1,
+          "amount": 10
+        },
+        {
+          "name": "Bud Light",
+          "quantity": 2,
+          "amount": 7.4
+        }
+      ]
+    },
+    "actual": {
+      "date": "2018-07-21",
+      "vendor": "23 Friendly Red's",
+      "amount": 77.83,
+      "items": [
+        {
+          "name": "Cadillac Margarita (2614.00)",
+          "quantity": null,
+          "amount": 28
+        },
+        {
+          "name": "Maryland Crab Cakes",
+          "quantity": null,
+          "amount": 14
+        },
+        {
+          "name": "~~ Chicken Caprese",
+          "quantity": null,
+          "amount": 12
+        },
+        {
+          "name": "Chix Par Sandwich",
+          "quantity": null,
+          "amount": 10
+        },
+        {
+          "name": "~~ Bud Light (2 03.70)",
+          "quantity": null,
+          "amount": 7.4
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 6,
+      "matched": 5,
+      "nameCorrect": 3,
+      "quantityCorrect": 0,
+      "quantityScored": 5,
+      "falsePositives": 0
+    },
+    "rawText": "as]\n5\n23 Friendly Red's\ni of Windham\n3 22 Haverhill Rd\n9 Windham Ni\nSo 603-437-7251\n3]\nN Server: Giancarlo 07/21/2018\n104/17 12:56 PM\nx Guests: 2 10076\nie Reprint #: 1\n| Cadillac Margarita (2614.00) 28.00\nA Patron Silver\nMaryland Crab Cakes 14.00\n~~ Chicken Caprese 12.00\n| Chix Par Sandwich 10.00\n~~ Bud Light (2 03.70) 7.40\nie\n7g Subtotal 7.40\n4 Tax 6.43\nTotal 77.83\nBalance Due lo B3\nJoin us on\nFacebook &\n"
+  },
+  {
+    "id": "real-27-pappadeaux-ambiguous-us-date",
+    "kind": "real",
+    "conditions": "Real phone photo, US restaurant receipt (Houston, TX), date printed as '01/07/17' — both components <=12, genuinely ambiguous without locale context",
+    "expected": {
+      "date": "2017-01-07",
+      "vendor": "Pappadeaux Seafood Kitchen",
+      "amount": 42.16,
+      "items": [
+        {
+          "name": "Side Craw Etouffee 4oz",
+          "quantity": 1,
+          "amount": 10.98
+        },
+        {
+          "name": "Pan Seared Tilapia",
+          "quantity": 1,
+          "amount": 21.99
+        },
+        {
+          "name": "Tea",
+          "quantity": 2,
+          "amount": 5.98
+        }
+      ]
+    },
+    "actual": {
+      "date": "2017-07-01",
+      "vendor": "P SEAFOOD KITCHEN X",
+      "amount": 38.95,
+      "items": [
+        {
+          "name": "Side Craw Etouffee 4oz",
+          "quantity": 1,
+          "amount": 10.98
+        },
+        {
+          "name": "1 Pan Seared Tilapia",
+          "quantity": 5,
+          "amount": 21.89
+        },
+        {
+          "name": "i 2 Tea",
+          "quantity": null,
+          "amount": 5.98
+        },
+        {
+          "name": "faxes",
+          "quantity": null,
+          "amount": 3.21
+        }
+      ]
+    },
+    "verdict": {
+      "date": "wrong",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "itemScore": {
+      "expected": 3,
+      "matched": 2,
+      "nameCorrect": 2,
+      "quantityCorrect": 1,
+      "quantityScored": 2,
+      "falsePositives": 2
+    },
+    "rawText": "P SEAFOOD KITCHEN X\nPappadeaux Seafood Kitchen (612)\n7800 Airport Blvd (HOU)\nHouston, Tx 77061\n(713) 847-7622\n0089 Table 7 #Party 2\nDANIEL O SvrCk: 7 12:46 01/07/17\nDINE IN\n1 Side Craw Etouffee 4oz 10.98\n5 1 Pan Seared Tilapia 21.89\ni 2 Tea 5.98\nSub Total: 38.95\nfaxes 3.21\nSub Total: 42.16\n01/07 13:29 TOTAL : 42.16\n| Thank you for dining at Pappadeaux!\n1 Tip Not Included\n15% ul\n18%\n| 20% =\n"
+  },
+  {
+    "id": "real-28-carls-jr-translucent-bleed",
+    "kind": "real",
+    "conditions": "Real phone photo, thin/translucent thermal paper on a reflective wood table — a promotional background pattern printed on the paper's reverse bleeds through faintly behind the text, several $0.00 combo-modifier lines",
+    "expected": {
+      "date": "2017-09-27",
+      "vendor": "CARL'S JR",
+      "amount": 7.61,
+      "items": [
+        {
+          "name": "All Star Meal #1",
+          "quantity": 1,
+          "amount": 1
+        }
+      ]
+    },
+    "actual": {
+      "date": "2017-09-27",
+      "vendor": "- CARL'S JR",
+      "amount": 1.61,
+      "items": [
+        {
+          "name": "All Star Meal #1",
+          "quantity": 1,
+          "amount": 1
+        },
+        {
+          "name": "Lg Fries",
+          "quantity": null,
+          "amount": 3
+        },
+        {
+          "name": "Lg Bev Bar",
+          "quantity": null,
+          "amount": 3
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "wrong"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 1,
+      "nameCorrect": 1,
+      "quantityCorrect": 1,
+      "quantityScored": 1,
+      "falsePositives": 2
+    },
+    "rawText": "- CARL'S JR\ni Restaurant 1100580 i\n4 11961 Beach Blvd.\n: Stanton, CA 90680\nie (714)895-5114\n9/27/2017 12:13:06 PH\n8 Order 375719 Cashier: Alvaro I\n: 1 Box #1 0.00\n1 All Star Meal #1 1.00\nDbl Chbgr 0.00\nHot Dog 0.00\nBaked Cookie 0.00\nLg Fries 3.00\nLg Bev Bar 3.00\nSubTotal 7.00\nTax 0.61\nTotal 1.61\nCash 8.00\nChange 0.39\nTo Go\nThank you for visiting!\nTicket 1\nEE * Lo Di p \\ Beg i E\n"
+  },
+  {
+    "id": "real-29-saska-paperclip-clipboard",
+    "kind": "real",
+    "conditions": "Real phone photo, receipt held to a wooden clipboard by a large metal binder clip whose reflective wire partially crosses the header text, US date, suggested-tip lines",
+    "expected": {
+      "date": "2017-08-15",
+      "vendor": "SASKA'S",
+      "amount": 179.94,
+      "items": [
+        {
+          "name": "Draft Blackhouse",
+          "quantity": 1,
+          "amount": 7
+        },
+        {
+          "name": "\"Cowboy\" 16oz Ribeye",
+          "quantity": 1,
+          "amount": 45
+        },
+        {
+          "name": "Make It Blue",
+          "quantity": 1,
+          "amount": 5
+        },
+        {
+          "name": "Add Lobster",
+          "quantity": 1,
+          "amount": 21
+        },
+        {
+          "name": "CK Manhattan",
+          "quantity": 2,
+          "amount": 10
+        },
+        {
+          "name": "Whistle Pig Rye 10yr",
+          "quantity": 2,
+          "amount": 40
+        },
+        {
+          "name": "\"Duke\" 16oz Top Sirloin",
+          "quantity": 1,
+          "amount": 34
+        },
+        {
+          "name": "Make It Blue",
+          "quantity": 1,
+          "amount": 5
+        }
+      ]
+    },
+    "actual": {
+      "date": "2017-08-15",
+      "vendor": "/ SASKA'S §",
+      "amount": 179.94,
+      "items": [
+        {
+          "name": "Draft Blackhouse",
+          "quantity": null,
+          "amount": 7
+        },
+        {
+          "name": "“Cowboy” 1602 Ribeye",
+          "quantity": null,
+          "amount": 45
+        },
+        {
+          "name": "Make It Blue",
+          "quantity": null,
+          "amount": 5
+        },
+        {
+          "name": "Add Lobster",
+          "quantity": null,
+          "amount": 21
+        },
+        {
+          "name": "CK Manhattan (2 65,00)",
+          "quantity": null,
+          "amount": 10
+        },
+        {
+          "name": "Whistle Pig Rye 10yr (2 620.00)",
+          "quantity": null,
+          "amount": 40
+        },
+        {
+          "name": "\"Duke\" 1602 Top Sirloin",
+          "quantity": null,
+          "amount": 34
+        },
+        {
+          "name": "Make It Blue",
+          "quantity": null,
+          "amount": 5
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 8,
+      "matched": 8,
+      "nameCorrect": 8,
+      "quantityCorrect": 0,
+      "quantityScored": 8,
+      "falsePositives": 0
+    },
+    "rawText": "= 2 >\n—\n7 9\n|\n/ SASKA'S §\n/f 3788 Mission Blvd\nSan Diego CA 92109\n/ (858) 488-7311\nServer: Sue 08/15/2017\nTable 103/1 5:51 PM\nGuests: 2 10005\nLs Reprint #: 2\nDraft Blackhouse 7.00\n“Cowboy” 1602 Ribeye 45.00\nMake It Blue 5.00\nAdd Lobster 21.00\nCK Manhattan (2 65,00) 10.00\nWhistle Pig Rye 10yr (2 620.00) 40.00\n(2)BMOD Up\n\"Duke\" 1602 Top Sirloin 34.00\nMake It Blue 5.00\nSubtotal 167.00\nTax 12,94\n; Total 179.94\n/\nJ Balance Due 179.94\ndrt\nSUGGESTED TIP. Ie\ni BEFORE DISCOUNTS A\n4 18% =$30.06 sabes]\n20% =$33.40 ail]\nyy 2% 4%.\n7. pr a\n"
+  },
+  {
+    "id": "real-30-wings-things-over-menu-crumple",
+    "kind": "real",
+    "conditions": "Real phone photo, crumpled receipt resting on top of a bright yellow/red takeout menu (cluttered, high-contrast background bleeding into the frame around the receipt edges), no date visible in the photographed portion",
+    "expected": {
+      "date": null,
+      "vendor": "WINGS & THINGS",
+      "amount": 30.58,
+      "items": [
+        {
+          "name": "#7 2PC R&B Meal",
+          "quantity": 1,
+          "amount": 5.99
+        },
+        {
+          "name": "#3 3Wing Meal",
+          "quantity": 3,
+          "amount": 20.97
+        },
+        {
+          "name": "Coll Grn - Small",
+          "quantity": 1,
+          "amount": 1.19
+        }
+      ]
+    },
+    "actual": {
+      "date": null,
+      "vendor": "| WINGS & THINGS 4",
+      "amount": 6.99,
+      "items": [
+        {
+          "name": "El",
+          "quantity": null,
+          "amount": 1.19
+        }
+      ]
+    },
+    "verdict": {
+      "date": "n/a",
+      "vendor": "correct",
+      "amount": "wrong"
+    },
+    "itemScore": {
+      "expected": 3,
+      "matched": 1,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 1,
+      "falsePositives": 0
+    },
+    "rawText": "| Rr \\\nah kee\n| WINGS & THINGS 4\n| 519 FULTON AVE. HEMPSTEAD NY\n\\ THANKS CALL AGAIN 516-483-0936\n\\ s0PS’ #195 IN\nNS 1009 147 2PC R&B HEAL 5,99\nBl 200P ICED TEA h\nSUB CORNBREAD =\n50p 1 43 GHING MEAL 6.99 ==\na0p SIERRA a\n= 700 1 SUB Fx Le\nHACGCHL a\n{ 1 #3 SWING MEAL 6.99 FL\n| I0ED TEA .\n| 1 SUB FIXN Lo\n; SP RICE he\n| 1 #3 SUING MEAL o\nCED Te 2 Lo\n1 SUB FIxN 1\nMAC&CHZ \\\n1 COLL GRN = SMaLL\nEl 1.19\n\\ TIL TE i vy\nTL oil 4\nCASH i\n\\ CHNR 0.00\n"
+  },
+  {
+    "id": "real-31-lan-sheng-item-price-column-shift",
+    "kind": "real",
+    "conditions": "Real phone photo on a fabric tablecloth, US Chinese restaurant receipt, 6 items where one line ('White Rice (S)') has no price printed in its row and the subtotal does not cleanly reconcile against the visibly legible per-item prices",
+    "expected": {
+      "date": "2017-06-13",
+      "vendor": "Lan Sheng",
+      "amount": 75.15,
+      "items": [
+        {
+          "name": "Spicy Chicken w. Spicy Garlic Soy V.",
+          "quantity": 1,
+          "amount": 7.95
+        },
+        {
+          "name": "Hf- Peking Duck",
+          "quantity": 1,
+          "amount": 18.95
+        },
+        {
+          "name": "Stir Beef Fillet w. Tofu",
+          "quantity": 1,
+          "amount": 12.95
+        },
+        {
+          "name": "Pork w. Spicy Capsicum",
+          "quantity": 1,
+          "amount": 1.5
+        },
+        {
+          "name": "Pork w. Spicy Tofu & Cayenne Chili",
+          "quantity": 1,
+          "amount": 12.95
+        }
+      ]
+    },
+    "actual": {
+      "date": "2017-06-13",
+      "vendor": "Lan Sheng",
+      "amount": 973.77,
+      "items": [
+        {
+          "name": "c Soy V",
+          "quantity": null,
+          "amount": 18.95
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "wrong"
+    },
+    "itemScore": {
+      "expected": 5,
+      "matched": 1,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 1,
+      "falsePositives": 0
+    },
+    "rawText": "Lan Sheng\n209 Paterson Ave.\nWallington N. J. 07057 7103\nTel ; 973.773.7100 Fax : 973.773\n[ B2 |\nDine In # 1011\nServer: Mary 06/13/17 171F\n© 2 Person ossg EM 0%\nee g0s\nI Spicy Chicken w. Spicy Garll $7\nc Soy V. 18.95\n1 Hf- Peking Duck $505 . =\n1 Stir Beef Fillet w. Tofu Seis ae\n1 Pork w. Spicy Capsicum 25 50 a\n1 White Rice (S) 12.95 Sh\n1 Pork w. Spicy Tofu & Cayen $12. =\n/ ne Chili o : Se\ni ooemmmooeniee 0.25 = 3\n- 90 a\n"
+  },
+  {
+    "id": "real-32-mynews-handwritten-margin",
+    "kind": "real",
+    "conditions": "Real phone photo, Malaysian convenience-store tax invoice, a handwritten alphanumeric code ('A03115') pen-written in the top-right margin (unrelated to the transaction), GST columns",
+    "expected": {
+      "date": "2018-03-23",
+      "vendor": "myNEWS.com",
+      "amount": 10,
+      "items": [
+        {
+          "name": "JALAN JALAN (Majalah)",
+          "quantity": 2,
+          "amount": 10
+        }
+      ]
+    },
+    "actual": {
+      "date": "2018-03-23",
+      "vendor": "TQFOR SHOPPING WITH myNEWS com",
+      "amount": 10,
+      "items": []
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "4) 52\nHONE\n0415\nTQFOR SHOPPING WITH myNEWS com\nPAGOH REST AND SERVICE AREA.\nLOT R1, KWS REHAT & RAWAT PAGOH ARAH UTARA,\nSIMPANG AMPAT PAGOH, LEBUHRAYA UTARA SELATAN,\nR4600,PAGOH JOHOR\nmyNEWScareline : 1800 88 1231\nmyNEWScareline@mynews com.my\nMYNEWS RETAIL SB(306265-X) FKA BISON STORES 58\nTAY REG ID CBP 000709361664\nary PRICE DISC AMT\nJALAN ALAN {Maia fo)\n02 1 10.00 0.00 10.00 ZRL\nSUB TOTAL 10.00\nGRAND TOTAL 1000\nCASH 20.00 MYR 20.00\nCHANGE DUE 10.00\nJotALary i ee\nZRL:0% GOODS: 10.00 TAX: 0.00\n23/03/2018 9:34:40 AM\nBILL 18550 - 385 - 476% - 2303180113\nPRICE IS GST INCLUSIVE\n"
+  },
+  {
+    "id": "real-33-mcdonalds-my-combo-submenu",
+    "kind": "real",
+    "conditions": "Real phone photo, clean scan-quality Malaysian McDonald's receipt, a combo-meal line with indented sub-components (Coke, Fries) printed with no individual price of their own",
+    "expected": {
+      "date": "2018-05-30",
+      "vendor": "McDonald's",
+      "amount": 19,
+      "items": [
+        {
+          "name": "M McChicken",
+          "quantity": 2,
+          "amount": 19
+        }
+      ]
+    },
+    "actual": {
+      "date": "2018-05-30",
+      "vendor": "Gerbang Alaf Restaurants Sdn Bhd",
+      "amount": 19,
+      "items": [
+        {
+          "name": "M McChicken",
+          "quantity": 2,
+          "amount": 19
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 1,
+      "nameCorrect": 1,
+      "quantityCorrect": 1,
+      "quantityScored": 1,
+      "falsePositives": 0
+    },
+    "rawText": "Gerbang Alaf Restaurants Sdn Bhd\n(65351-M)\nLicenses of McDonald's\nLevel 6, Bangunan TH, Damansara ptown3\nNo.3, Jalan $521/39,47400 Petaling Java\n. Seltanoor\n(GST ID No: 00DE046640G4)\nMcDonald's Steli Mahkota Cheras DT (4736\n| Tel No. (3-9010-9849\n| TAY INVOICE\nMFY Side 1\nINV# 003621300044540\nORD #54 -REG #19- 30/05/2018 16:07:06\nQTY ITEM TOTAL\n2 M McChicken 19.00\nZW Coke\n2 M Fries\nTakeQut Total (inci GST) 19.00\nTotal Rounded 19.00\nCash tendered 50.00\nChange 31.00\nTOTAL INCLUDES 6% GST 1.08\nThank You and Please Come Again.\nGuest Relations Center : 1300-13-1300\nBT peri es., 8 EES CSE CCR oe =\n"
+  },
+  {
+    "id": "real-34-parking-ticket-stamped-redacted",
+    "kind": "real",
+    "conditions": "Real phone photo, Malaysian parking-garage tax invoice (not a merchandise receipt), a black circular redaction mark over part of the GST ID, a 'POSTED' rubber stamp printed diagonally across the fee amount, entry/paid timestamps rather than a single transaction time",
+    "expected": {
+      "date": "2017-04-30",
+      "vendor": "Amano Malaysia Sdn Bhd",
+      "amount": 3,
+      "items": [
+        {
+          "name": "Parking Fee",
+          "quantity": 1,
+          "amount": 2.83
+        }
+      ]
+    },
+    "actual": {
+      "date": "2017-08-30",
+      "vendor": "TEMASYA INDUSTRIAL PARK",
+      "amount": 3,
+      "items": []
+    },
+    "verdict": {
+      "date": "wrong",
+      "vendor": "wrong",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "oN <& z, =\nConon 8a\nAMANO MALAYSIA SON BHD (682288-V)\n12 JALAN PENGACARA U1/48\nTEMASYA INDUSTRIAL PARK\n40150 SHAH ALAM SELANGOR\nTEL: 0B3-56695002/5003\n@ 10: 001137704980)\nTAX TNVOTCE\nP/S #02 A INV-No. 00023004 i 7000148\n1/0 #11 Ticket No 7446\nEntry Time 30/08/2017 {Sun Ans\nPaid Tim: 30/08/2017 (Sa) “5\nParking Tine 3:24\nTyre Ripka A 7 RA3. 00\nPUS J ED”\nParking Fee Re 83\nGST(Ircluded) 6.00 % 210. 17/\nTotal RM3.00\nPaid M3.00\nChange RMO0.00\nThark You\nInclusive 6% GST\n"
+  },
+  {
+    "id": "real-35-kings-confectionery-discount-column",
+    "kind": "real",
+    "conditions": "Real phone photo, Malaysian bakery tax invoice, Code/Description/Qty/Price/Discount%/Amount column layout, one item carries a 30% line-level discount already applied to its Amount",
+    "expected": {
+      "date": "2018-03-11",
+      "vendor": "KING'S CONFECTIONERY",
+      "amount": 25.15,
+      "items": [
+        {
+          "name": "KAYA PUFF",
+          "quantity": 4,
+          "amount": 6.4
+        },
+        {
+          "name": "Slice Cake",
+          "quantity": 1,
+          "amount": 8.7
+        },
+        {
+          "name": "Cheese Le",
+          "quantity": 1,
+          "amount": 2.45
+        },
+        {
+          "name": "Cheese Ta",
+          "quantity": 1,
+          "amount": 3.4
+        },
+        {
+          "name": "D/R Butte",
+          "quantity": 1,
+          "amount": 4.2
+        }
+      ]
+    },
+    "actual": {
+      "date": "2018-03-11",
+      "vendor": "KING'S CONFECTIONERY §/B 273500-U (KSB)",
+      "amount": 29.15,
+      "items": [
+        {
+          "name": "Bty 8",
+          "quantity": null,
+          "amount": 25.15
+        },
+        {
+          "name": "Fay",
+          "quantity": null,
+          "amount": 25.13
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "wrong"
+    },
+    "itemScore": {
+      "expected": 5,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 2
+    },
+    "rawText": "KING'S CONFECTIONERY §/B 273500-U (KSB)\nNO.41, JALAN SERI BINTANG 2\nTAMAN SRI BINTANG,\n92100 KUALA LUNFLR.\nTEL NO:- 012 - 402 8832\n(GST IU : 000294040032)\nTax Imvoioce ‘\nInv No :KSBEDOS1978 Date:11/03/18 21:30\nCashier:F78303 Ctr 202\nCode esr Bty RM DX Amt\n201019 KAYA PUFF 4 1.40 0 4.408\n231027 Slice Cak 1 8.70 0 8.706\n101110 Cheese Le 1 3.50 30 2.45 §\n251030 Cheese Ta 1 3.40 0 3.408\n171153 D/R BUTTE 1 4.20 0 4.20 8\nBty 8 25.15\nRounding Adj - 0.00\nJ\n| Dug 29.15\nFay 25.13\nChange 0.00\nSRnNESZNEEEnISIIEnED !\n(Total Included GST @ &X : 1.42)\nGOODS SOLD NOT RETURNABLE /EXCHANGEABLE! j\nTHANK YOU FLEASE COME AGAIN!!\nTASTY BAKING HEALTHY NATION!!\n==Vigit us online at wew.kings.com.my==\n|\n"
+  },
+  {
+    "id": "real-36-mrdiy-multiline-item-layout",
+    "kind": "real",
+    "conditions": "Real phone photo, Malaysian hardware-store tax invoice, each item spans THREE printed lines (name, size/SKU code line, then quantity x unit-price = amount on a separate line) rather than one line per item",
+    "expected": {
+      "date": "2016-02-01",
+      "vendor": "MR. D.I.Y. (KUCHAI) SDN BHD",
+      "amount": 26.4,
+      "items": [
+        {
+          "name": "POT HOLDER (SQUARE)",
+          "quantity": 3,
+          "amount": 7.5
+        },
+        {
+          "name": "CNY RIBBON 2.0CM",
+          "quantity": 3,
+          "amount": 18.9
+        }
+      ]
+    },
+    "actual": {
+      "date": "2016-02-01",
+      "vendor": "MR. D.I.Y, (KUCHAI) SDN BHD",
+      "amount": 26.4,
+      "items": [
+        {
+          "name": "9047844 IX 2.50",
+          "quantity": null,
+          "amount": 7.5
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 2,
+      "matched": 1,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 1,
+      "falsePositives": 0
+    },
+    "rawText": "MR. D.I.Y, (KUCHAI) SDN BHD\nCo-REG:750441-W\nLOT 1851-4 & 1851-B, JALAN KPE 6,\nKAWASAN PERINDUSTRIAN BALAKONG,\n43300 SERT KENBANGAN, SELANGOR\n(BST ID No :000473792512)\n{KEPONG)\n~TAX INVOICE-\n\nPOT HOLDER (SBUARE) x5\n\nE1172 - 10/300\n\n9047844 IX 2.50 7.50\n\nCNY RIEBON 2.0CH £5\n\nC3172 - 10/600\n8711015 3X 6.30 18.90\nTtem{s) : 2 Bty(s) : &\nTOTAL INCL. GST@X RM 26.40\n\nCASH RM 30.40\nCHANGE RM 4.00\n\nGST 86% included in total RM 1.49\n\n01-02-16 13:10 SHO1 R003  T1 RODO383271\n\nOPERATOR TRAINEE\n\nEXCHANGE ARE ALLOWED WITHIN\n3 DAY WITH RECEIPT,\nSTRICTLY NO CASH REFUND.\n"
+  },
+  {
+    "id": "real-37-gardenia-torn-multi-subtotal",
+    "kind": "real",
+    "conditions": "Real phone photo, top-left corner of the receipt physically torn off, a small paper/sticker patch obscuring part of one line, TWO separate zero-rated and standard-rated subtotals before the final Total Payable",
+    "expected": {
+      "date": "2017-09-22",
+      "vendor": "GARDENIA BAKERIES (KL) SDN BHD",
+      "amount": 79.26,
+      "items": [
+        {
+          "name": "O.C. White",
+          "quantity": 2,
+          "amount": 4.26
+        },
+        {
+          "name": "Wholemeal",
+          "quantity": 1,
+          "amount": 2.78
+        },
+        {
+          "name": "O.C. Jumbo",
+          "quantity": 4,
+          "amount": 11.88
+        },
+        {
+          "name": "CR-CHOCLT",
+          "quantity": 20,
+          "amount": 14.4
+        },
+        {
+          "name": "SQ-S.BERRY",
+          "quantity": 12,
+          "amount": 10.08
+        },
+        {
+          "name": "MUFFIN C&W",
+          "quantity": 10,
+          "amount": 12.5
+        },
+        {
+          "name": "TWG T'MISU",
+          "quantity": 15,
+          "amount": 19.95
+        }
+      ]
+    },
+    "actual": {
+      "date": "201-09-22",
+      "vendor": "GARDENIA BAKERIES (KL) SDN BHD (139386 X)",
+      "amount": 79.26,
+      "items": [
+        {
+          "name": "0.C. WIITE 2.13 3 1 8 2",
+          "quantity": null,
+          "amount": 4.26
+        },
+        {
+          "name": "WHOLEMEAL 2.78 3 2 0 1",
+          "quantity": null,
+          "amount": 2.78
+        },
+        {
+          "name": "0.C JUMBO 2.97 4 © © 4 _",
+          "quantity": null,
+          "amount": 11.88
+        },
+        {
+          "name": "CCR-CHOCLT 0.72 20 @ © 20",
+          "quantity": null,
+          "amount": 14.4
+        },
+        {
+          "name": "SQ-u BERRY 0.84 12 © © 12",
+          "quantity": null,
+          "amount": 10.08
+        },
+        {
+          "name": "MUFFIN CBW 1.25 10 © 0 10",
+          "quantity": null,
+          "amount": 17.5
+        },
+        {
+          "name": "TWG T'MISU 1.33 20 5 @ 15 _",
+          "quantity": null,
+          "amount": 14.95
+        }
+      ]
+    },
+    "verdict": {
+      "date": "wrong",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 7,
+      "matched": 5,
+      "nameCorrect": 2,
+      "quantityCorrect": 0,
+      "quantityScored": 5,
+      "falsePositives": 2
+    },
+    "rawText": "GARDENIA BAKERIES (KL) SDN BHD (139386 X)\nLot 3, Jalan Pelabur 23/1,\n40300 Shah Alam, Selangor.\nTel: 03- 55423228 Faux:03- 554232138\nGST ID: 000351399040\nTAX INVOICE / ADIUSTUENT NOTE\nCash Inv No.: 7922F711\nVE Date: 22/09/201\nMAb noonR FRESH MARKET SON BHD\nGROUND FLOOR, NO. 4 & 6,\nJALAN S5 15/48,\n47500 SUBANG JAYA, SELANGOR\nVES: Ridzuan (11900)\nas 0) Lc EL\n| Description U.P Tss Exc D Sale Amt(R)\n| 0.C. WIITE 2.13 3 1 8 2 4.26\n| WHOLEMEAL 2.78 3 2 0 1 2.78\n| 0.C JUMBO 2.97 4 © © 4 _ 11.88\n| Total @% supplies: 18.92\nCCR-CHOCLT 0.72 20 @ © 20 14.40\nSQ-u BERRY 0.84 12 © © 12 10.08\nMUFFIN CBW 1.25 10 © 0 10 17.50\n| TWG T'MISU 1.33 20 5 @ 15 _ 14.95\nTotal 6% supplies (excl. GST): 56.93\nor dl\nTotal 6% supplies (Inc. GST): 60.34\nTotal 0% supplies: 13.92\nTotal Payable: 79.26\nE.L.0.F\nReceived above goods in good order condition.\nThe recipient of Gardenias products 1s\nrequired to make necessary adjustments to its\ninput tax claims, on the basic of the\nadjustments shown in this Tax Ii vee /\nAdjustment Note .\nCUSTOMER'S COPY\n"
+  },
+  {
+    "id": "real-38-super-seven-dot-noise-duplicate-lines",
+    "kind": "real",
+    "conditions": "Real phone photo, scattered small dark speckle/dot noise across the whole image (dust or a dirty lens), a duplicate item line (same SKU/product printed twice, two separate purchases of the same item), a handwritten total ('18.30') and checkmarks added over the printed Net Total",
+    "expected": {
+      "date": "2018-03-21",
+      "vendor": "SUPER SEVEN CASH & CARRY SDN BHD",
+      "amount": 18.3,
+      "items": [
+        {
+          "name": "FRUIT (FP)",
+          "quantity": 1,
+          "amount": 2.99
+        },
+        {
+          "name": "NANGKA 1 PINGGAN",
+          "quantity": 1,
+          "amount": 2
+        },
+        {
+          "name": "KIMBALL TOMATO PUREE 430G",
+          "quantity": 1,
+          "amount": 3.8
+        },
+        {
+          "name": "KIMBALL TOMATO PUREE 430G",
+          "quantity": 1,
+          "amount": 3.8
+        },
+        {
+          "name": "URO MUSHROOM 425G",
+          "quantity": 1,
+          "amount": 2.8
+        },
+        {
+          "name": "YOUNG CORN 425G (MS)",
+          "quantity": 1,
+          "amount": 2.9
+        }
+      ]
+    },
+    "actual": {
+      "date": "2018-03-21",
+      "vendor": "Hi SEVEN CASH & CARRY SDN BHD",
+      "amount": 18.3,
+      "items": [
+        {
+          "name": "FRUIT (FP) @",
+          "quantity": null,
+          "amount": 2.99
+        },
+        {
+          "name": "KIMBALL TOMATO PUREE 430G €",
+          "quantity": null,
+          "amount": 3.8
+        },
+        {
+          "name": "KIMBALL TOMATO PUREE 430G €",
+          "quantity": null,
+          "amount": 3.8
+        },
+        {
+          "name": "URD MUSHROOM 425G @",
+          "quantity": null,
+          "amount": 2.8
+        },
+        {
+          "name": "YOUNG CORN 425G (MS) €",
+          "quantity": null,
+          "amount": 2.9
+        }
+      ]
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 6,
+      "matched": 5,
+      "nameCorrect": 5,
+      "quantityCorrect": 0,
+      "quantityScored": 5,
+      "falsePositives": 0
+    },
+    "rawText": "@ . i e A\nHi SEVEN CASH & CARRY SDN BHD\n(590150-4)\nPASARAYA BORONG SUPER SEVEN\nNO. 1 Jalan Euro 1\nOff Jalan Batu Tiga\nSungai Buloh Seksyen U3 Shah Alam,40150\nhttp://w. super7.com.my\nTEL : 03-78590861\nFAX : 03-78590864\nGST ID : 000639090688 b\nTAX INVOICE\nCustomer ; [77853745]\nMrs. ONG GUAT CHYE\nTaX INVOICE NO : 203225 COUNTER :002\nOPERATOR :[SYED AHMAD FALLAH BI-CUSTOMER SERVICE\nCLERK]\n21-03-2018 11:25:07 AM\n(RM)\nFRUIT (FP) @2.99\n41595 ¥1 2.99 IR\nNANGKA 1 PINGGAN @2.00 )\nFM415000303 x1 2.00 ZR\nKIMBALL TOMATO PUREE 430G €3.80\n9556191030230  *1 3.80 SR\nKIMBALL TOMATO PUREE 430G €3.80\n9556191030230  *1 3.80 SR\nURD MUSHROOM 425G @2.80\n9555227500563 #1 2.80 SR\nYOUNG CORN 425G (MS) €2.90\n+» 9555654400513 ¥1 2.90 SR\nQUANTITY ; 6 Units\nTotal Sales (Incl. GST @6%) RM18.29\nRounding Adjustment RMO.01 's\nNet Total h RM18.30\nPayment Method \\%-Hro MASTER CARD\nGST Summary Sales Amt Tax Amt\n(RM) (RM)\nIR (0%) 4.99 0.20\nSR (€:) 12.54 0.76~\"\nPLEASE VERIFY YOUR RECEIPT\nBEFORE LEAVING THE COUNTER. x\nGOODS SOLD ARE NOT RETURNABLE. r\n\\ THANK YOU\n"
+  },
+  {
+    "id": "real-39-sanyu-stationery-clean",
+    "kind": "real",
+    "conditions": "Real phone photo, clean Malaysian stationery-shop tax invoice, a single SKU line with an inline '3 x 2.9000' quantity/unit-price notation, faint decorative background pattern printed on the paper itself",
+    "expected": {
+      "date": "2017-09-12",
+      "vendor": "SANYU STATIONERY SHOP",
+      "amount": 8.7,
+      "items": [
+        {
+          "name": "RESTAURANT ORDER CHIT NCR 3.5\"X6\"",
+          "quantity": 3,
+          "amount": 8.7
+        }
+      ]
+    },
+    "actual": {
+      "date": "2017-09-12",
+      "vendor": "SANY(J STATIONERY SHOP",
+      "amount": 8.7,
+      "items": []
+    },
+    "verdict": {
+      "date": "correct",
+      "vendor": "correct",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "SANY(J STATIONERY SHOP\nNO. 31G&33G, JALAN SETIA INDAH X ,U13/X\n40170 SETIA ALAM\nMobile /Whatsapps : +6012-918 7937\nTel: +603-3362 4137 ¥ ’\n| 2 606\n| GST ID flo: 001531760840 TAX INVOICE\nOwned By :\nSANYU SUPPLY SDN BHD (1135772-K)\nCASH SALES COUNTER\nTV 5012-0028 RESTAURANT ORDER CHIT Hck\n3.5\"x6\" |\n3 4 2.9000 : 870 SR |\nTotal Sales Inclusive GST @6% 8.70\nDiscount 0.00\nTotal 8.70\nRound Adj 0.00\nFinal Total \"8.70\nCASH 10.00\nCHANGE 1.30\nGST Summary Amount(RM) Tax(RM)\nSR @ 6% 8.21 0.49\nINV NO: CSSAN110469 Date: 12/09/2017\nGoods sold are not Returnable & Refundable\n|\n| THANK YOU FOR YOUR PATRONAGE\nPLEASE COME AGAIN\n| TERIMA KASIi! SILA DATANG LAGI\n** PLEASE KEEP THIS RECEIPT FOR PROVE OF\nPURCHASE DATE FOR I.T PRODUCT WARRANTY\nPURPOSE **\nFollow usin Facebook: Sanyu.Stationery\nCrt NS ee MR PROS py, Oo RI Rr\n"
+  },
+  {
+    "id": "real-40-portugalia-euro-redaction-dots",
+    "kind": "real",
+    "conditions": "Real phone photo, Portuguese restaurant receipt (Lisbon), Euro currency, ISO date-time already printed, hand-applied black circular redaction dots over the customer tax-ID and part of the payment-method breakdown, a two-tier IVA(VAT)-rate breakdown table",
+    "expected": {
+      "date": "2017-11-20",
+      "vendor": "Portugália",
+      "amount": 54.8,
+      "items": [
+        {
+          "name": "Imp Branca 25cl",
+          "quantity": 1,
+          "amount": 1.7
+        },
+        {
+          "name": "Pepsi zero lt",
+          "quantity": 1,
+          "amount": 2.1
+        },
+        {
+          "name": "Bacalhau Bras",
+          "quantity": 1,
+          "amount": 12.3
+        },
+        {
+          "name": "1/2 Bacalhau Bras",
+          "quantity": 1,
+          "amount": 8.85
+        },
+        {
+          "name": "Bife Vazia",
+          "quantity": 1,
+          "amount": 15.1
+        },
+        {
+          "name": "Pepsi Lt",
+          "quantity": 1,
+          "amount": 2.1
+        },
+        {
+          "name": "Pao",
+          "quantity": 3,
+          "amount": 1.95
+        },
+        {
+          "name": "Pao Torrado Fatias",
+          "quantity": 1,
+          "amount": 0.65
+        },
+        {
+          "name": "Manteiga Alho",
+          "quantity": 1,
+          "amount": 0.8
+        },
+        {
+          "name": "Manteiga",
+          "quantity": 1,
+          "amount": 0.8
+        },
+        {
+          "name": "Cafe",
+          "quantity": 3,
+          "amount": 3
+        },
+        {
+          "name": "Pudin Flan",
+          "quantity": 1,
+          "amount": 2.35
+        },
+        {
+          "name": "Baba Camelo",
+          "quantity": 1,
+          "amount": 3.1
+        }
+      ]
+    },
+    "actual": {
+      "date": null,
+      "vendor": "Wyily Prt ya par progr ana",
+      "amount": 48.07,
+      "items": [
+        {
+          "name": "Manteiya AlLho } e",
+          "quantity": null,
+          "amount": 0.8
+        },
+        {
+          "name": "Ma k \\ 14 ¢e",
+          "quantity": null,
+          "amount": 0.4
+        },
+        {
+          "name": "} (if ¢ 4.t g 1.1 ¢",
+          "quantity": null,
+          "amount": 5.9
+        }
+      ]
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "itemScore": {
+      "expected": 13,
+      "matched": 1,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 1,
+      "falsePositives": 2
+    },
+    "rawText": "L) \\LI/\\\nal i\nnN g Q\ni\n$ | ) }\ny 12 3\ni 6\ni {15.10\n-\n1 Pau | \\ t1as ¢€ UDO\nManteiya AlLho } e 0.80\nMa k \\ 14 ¢e 0.40\n1 ] 2 3,00\n{ Ra Lame 4 g 3:10\nTot | ¢ 54 ,80\n= ee 949 30)\nI ¢ O00\n[£] ganento\n1! 164,50\naxd Haut {V# [ota\n} (if ¢ 4.t g 1.1 ¢ 5.90\n14.00 ¢ 43.27 ¢ Bb pa ¢ 4b 90\nfotal e 48.07 e 6.73 ¢ hd .80\nfl { fr (9%\nIVA | jo\nonsulta\nDC 113/36149/1\nObr 1gado\n-«\nWyily Prt ya par progr ana\ncertif do nn, O0/71/A1\n{ yrigit | } SA\n"
+  },
+  {
+    "id": "real-41-caravela-simple-euro",
+    "kind": "real",
+    "conditions": "Real phone photo, Portuguese shopping-mall food-court receipt, single item, Euro, ISO date already printed",
+    "expected": {
+      "date": "2019-04-25",
+      "vendor": "Caravela Alimentação, S.A",
+      "amount": 6.4,
+      "items": [
+        {
+          "name": "Copo 1 Bola",
+          "quantity": 2,
+          "amount": 6.4
+        }
+      ]
+    },
+    "actual": {
+      "date": null,
+      "vendor": "at - »aidll BU (SE IRN PRL",
+      "amount": null,
+      "items": []
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "missed"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "7)\n' \\ 4\n1] {\nRJ nll '\n1 1\nIX :\nya MA y : ep\nM '\nWi AAT aa\nne MN '\n5 (NOI L7 I SRN\ni {i D1\n: i} Tl ’ rp\noho Je = jo yo\n| La Me. :\nol r p\nmar Thm pm TILA - sox\n= PRR ANCE Ard yo\n17 1n CSR | £m oma A\n(RA PERTH RS 14 EE A | AEP 14]\n7 0 Ha gy\n§vILs { red | 111 i\nET i BS PL BY PR\n0 io cooling elie o 1p Ar\noT i ¥ Oo Lai\nwe mit AL 8 - gin\nHE ~~ mn Fl sc\ni ER IER = YUy\n14 a. C1 rs ; aA\n&. 44 wy yn ; a\n: : a3\n®\nLEE re ~~ 3 1%) FEN E SiR\nat - »aidll BU (SE IRN PRL\nBE | Ira aT\nA rer ~\n"
+  },
+  {
+    "id": "real-42-fuel-pump-receipt-redaction",
+    "kind": "real",
+    "conditions": "Real phone photo, Portuguese fuel-pump receipt (not a merchandise purchase — litres of diesel at a per-litre rate), a black circular redaction mark over part of the total, an IVA/net breakdown table",
+    "expected": {
+      "date": "2019-10-30",
+      "vendor": "PMRP Unipessoal, Lda.",
+      "amount": 40,
+      "items": [
+        {
+          "name": "Gasoleo Bomba Nr 1",
+          "quantity": 1,
+          "amount": 40
+        }
+      ]
+    },
+    "actual": {
+      "date": null,
+      "vendor": "be bp 11Y ET i1Geira",
+      "amount": null,
+      "items": []
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "missed"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "E. Us am\n/ -\nbe bp 11Y ET i1Geira\nHl A118 Fé i REAL\nTHREES ncial S.000 00) FH\n¢ 1 Rel :n0bd up Mar tana ban\nEi | 10 WIY 10-30 16:04:17\nPEER Rr Rk PRE PAG sor dk dond Af ok 44\n(0 BUMBA NK; i, 00 EUR 4\n[3 | X 1,419 EUR/ |\n' FEY EEE E EEE EN FEES PERS EERE ERE EEN\nJ ! 40) ti i\"\n¥ 3 LIK 40,00 FUR\n[VAS eh ws [L1G\n(VA 4 23,00 [40 32 ,5¢ 40, 00\nneglie part. tabaco. DL346/85\nFatUra-Kec ing FR 270773001 /001161\nOG/m~Fi oc {hn Proarama Certificad\nFuttiosalt Jul Frograia ver tli icado\n> - IY JAS\nno. U177/A1\nMIE oo DTEI1N7 7401 4\n(Lr: Hla J\"\nN\nYU od\nFE LIKE HUM!\nMs i\nFi quid\nll NA »TOCDOARDE M 35 1 AMDA\nAY DA TIBERDADUE N 3c | ANDAR B\n"
+  },
+  {
+    "id": "real-43-pollux-torn-skew-barcode",
+    "kind": "real",
+    "conditions": "Real phone photo, long Portuguese invoice photographed at a skewed angle, a black circular redaction dot over part of the quantity/description column, a printed barcode near the footer, single low-value item",
+    "expected": {
+      "date": "2019-10-15",
+      "vendor": "Pollux Lisboa",
+      "amount": 4.15,
+      "items": [
+        {
+          "name": "Tabua Cozinha 8",
+          "quantity": 1,
+          "amount": 4.15
+        }
+      ]
+    },
+    "actual": {
+      "date": null,
+      "vendor": "—— potLUK | ISBUA",
+      "amount": 19.1,
+      "items": [
+        {
+          "name": "1,000 TABUA tod iheh i 418",
+          "quantity": 29,
+          "amount": 4.18
+        }
+      ]
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 1
+    },
+    "rawText": "—— potLUK | ISBUA\niy 1\na anuued\nNr [148 01 | 1ShiR\nJeet 208611200 Fax. oe 1220\ni Putt ud 1 HBUA canton Sughd\nSede RUA Uns FaiNubir The\nF4y 091 [LS BUk\n| (580K\nTelefoane: Abo G0 Fay HB TZN\nFatura Recibo N182/121049 de 20149 [01h\nAteadrde por: Lucinda farvdl 10.0604 (Bonn LarAndd\nNose FLIKE OBE HEIR TAB LL Ini\nHorada. HU. 6p LIBEROADE, 36 11s\nCod rostai: 1250-145\nlocatdade, | ISEUH\nCant © B10770414 Chente huhery 10444\n| SiHigz/12304y\n1a fl, 1ue/ 100A\n®. bho tbio FEV H RUTIRIIN\n29 1,000 TABUA tod iheh i 418 4.18\nDate efetios de entrega dus bens: 19.10.2019\nSoftoare PRU ROG Tuseshado Pur\nvast dng cer toficoda ni DOUGH (20178464)\nuv ba 1 fetal d |\n0.00\n0.004\n13,00%\n29, 00% iu 0, 40\notal de Gesc (UA 0,76\nlala] yy hguido 2,90 TOTAL : 4,15\nlag nic lindo\n® de pagalienits\nPrimero 5,00 Lheyue i6/V15h\ndale Ext £ Damcihg C.Presente\nHBV ISH Vale Carton\nFal AD/N.Cred WN Lraditu\ntntregue ® 5,00 1100 0.4\ngig R02 2048 (\nlaldo indi glisdue) paia tio ou\nvalida por 10 dias\nBLr1gadn PETG Sua LIkTE ENOIE\n"
+  },
+  {
+    "id": "real-44-oriente-perfeito-handwritten-note",
+    "kind": "real",
+    "conditions": "Real phone photo, Portuguese small-business invoice, a handwritten note ('#788 Rueb') pen-written in the right margin next to the vendor block — unrelated to the transaction, does not overlap any printed field",
+    "expected": {
+      "date": "2019-07-14",
+      "vendor": "Oriente Perfeito",
+      "amount": 6,
+      "items": [
+        {
+          "name": "Tapete De Ban",
+          "quantity": 1,
+          "amount": 6
+        }
+      ]
+    },
+    "actual": {
+      "date": null,
+      "vendor": "Entreposto Serva Bloco 1 Fracao F",
+      "amount": 0,
+      "items": []
+    },
+    "verdict": {
+      "date": "missed",
+      "vendor": "wrong",
+      "amount": "wrong"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "(lrionta Parfait\nUl CHC FRITRI0\nEntreposto Serva Bloco 1 Fracao F\nApartado 0M vale Parai: 0\n8200-567 Ferreiras Albufeirg\nCONT: 509183760\nLonser. Registo Comercial v.F.Xira\n| 2019-0714 FATURA RECTIBO N:\nuriginal FIOTAT905E 1/33832\n\\ 13:57 BAL AO §\nx | Flikehome Algarve, Lda\n\\ I Lisboa YA\n§ 1250 14% Lisboa He\nE | Contribuinte: 514407395\nE |\n| > Ui UNI DESURICAD [VA VALOR\na Un TAPETE DE BAN 23% 6,00\n4 Preco: 6,00/Un\nbi TAXA IVA INCID.\nE 7\" 1,12 4,88\n- 23% : : 4'%3\nbt TOTAL INCIDENCIAS: 1,12\nol : comm EEA\n3 kr |\nTIA: ir 0\nfle \\ 3 ]\n{\n# Page em Numerario 00\n: 7 6,00\nEe valor entregue. 0.00\nf 1 rocco: bo E ) Na\n- IROCAS NO PRAZO DE 15 DIAS\n> pl SET 8 EMOS DINHEIRD\nNAD DEVOLVEMU U1RREAE\noI sua visita :\nObrigado pela sw rechaul pt Albufeira\n3 NN Wik cNSUl .PL AL\n| jcenciado PO WK. (EL = 1) GI Ae. FO\n1 1i-Processado por programa\nmL) ficado n. 196/AT\na T1Cadu RETR PES\" 2 = ~\ncert ee Sl5s realizados e/o\n* _ vicas efou bens foram fect L\nOs Servicos SIE “=. do adquirente nes\nTE Yaradnt 8 BIRR UARS TH rn £)\nU GOI 86 dg CIVA, Nab alien’\nDartoit add\n: rienie re git >»\n"
+  },
+  {
+    "id": "real-45-sticker-obstruction-cropped-vendor",
+    "kind": "real",
+    "conditions": "Real phone photo, an orange adhesive tab/sticker (unrelated object) overlapping the top-left corner of the frame, the issuing vendor's own name is above the top edge of the photographed area (only the recipient/client block is visible), a black redaction dot over part of a payment line",
+    "expected": {
+      "date": null,
+      "vendor": null,
+      "amount": 12.3,
+      "items": [
+        {
+          "name": "Servicos Prestados",
+          "quantity": 1,
+          "amount": 12.3
+        }
+      ]
+    },
+    "actual": {
+      "date": null,
+      "vendor": "FEELSLIKEHOME. LDA",
+      "amount": 12.3,
+      "items": []
+    },
+    "verdict": {
+      "date": "n/a",
+      "vendor": "n/a",
+      "amount": "correct"
+    },
+    "itemScore": {
+      "expected": 1,
+      "matched": 0,
+      "nameCorrect": 0,
+      "quantityCorrect": 0,
+      "quantityScored": 0,
+      "falsePositives": 0
+    },
+    "rawText": "\\ : Pc 1 218877455,\nNIF 2164579849\n48 Lj:00 FT.SIMPLICADA =\n~s4b ORIGINAL AJ 3171\nLliente 2 71 NIF:510774914\nFEELSLIKEHOME. LDA\nLISBOA\nLISEDA\nLISBOA\nod. 223 SERVIZOS PRESTADOS\n“42.000 X 6,13 4 12.30\nSUB-TOTAL 12.30\n® 12.30\nT 0 T A k B . a 1 2 bp a 1\nTaxa Incidencias Iva Yalor Iva\n1 - 23.002 10.00 2.4\nRR ATH] pL 8 Hisiig\nORIG yu TELA vidiin\n~, A HH\n: ] |.3rtinos - roc ghe\nN.registos : 1 N.artigo\nOperador : BAVA ERNE aera\nProc. p/prog. certifticadi uJob/nt Jas\n"
   }
 ]

@@ -7,7 +7,7 @@ import { AiChatProvider } from "../context/AiChatContext";
 import { AskFinSightDrawer } from "./AskFinSightDrawer";
 import { useAskFinSight } from "./AskFinSightButton";
 import { ToastProvider } from "./Toast";
-import type { ChatMessage, Conversation, InteractionModule } from "../lib/types";
+import type { ChatMessage, Conversation, InteractionModule, ReductionOpportunity } from "../lib/types";
 
 /**
  * WHAT THIS FILE GUARDS.
@@ -127,6 +127,31 @@ beforeEach(() => {
  * mounts. Navigation has to be real here: "the thread survived a route change"
  * is not something a single-page render can prove.
  */
+const reductionOpportunity: ReductionOpportunity = {
+  id: "opp-1",
+  type: "CATEGORY_PRESSURE",
+  categoryId: 3,
+  categoryName: "Office Supplies",
+  priority: "high",
+  confidence: "strong",
+  observation: "Office Supplies made up a large share of expenses this period.",
+  rationale: "Office Supplies crossed the high-share threshold this period.",
+  evidence: {
+    currentAmount: 7654,
+    previousAmount: 5000,
+    changeAmount: 2654,
+    changePercent: 53.1,
+    expenseSharePercent: 22.5,
+    recordCount: 4,
+    unusualRecordCount: 0,
+    possibleDuplicateCount: 0,
+  },
+  costBehavior: "unclassified",
+  suggestedChecks: ["Review the records contributing most to this category."],
+  relatedRecordIds: [101, 102],
+  limitations: [],
+};
+
 function Page({ name, module }: { name: string; module: InteractionModule }) {
   const ask = useAskFinSight(module);
   return (
@@ -137,6 +162,14 @@ function Page({ name, module }: { name: string; module: InteractionModule }) {
       </button>
       <button type="button" onClick={() => ask("Why did Supplies rise 32%?")}>
         Explain this from {name}
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          ask("Why was this reduction opportunity selected, and what should I check first?", reductionOpportunity)
+        }
+      >
+        Ask about opportunity from {name}
       </button>
       <Link to={name === "Dashboard" ? "/records" : "/dashboard"}>Go elsewhere</Link>
     </main>
@@ -294,6 +327,39 @@ describe("lazy conversation creation", () => {
         expect.objectContaining({ originModule: "Expense Insights" }),
       ),
     );
+  });
+});
+
+describe("the selected reduction opportunity handed over with a primed question", () => {
+  it("posts the selected opportunity's structured fields alongside the first send that uses it", async () => {
+    renderApp();
+    await userEvent.click(screen.getByRole("button", { name: "Ask about opportunity from Dashboard" }));
+
+    expect(box()).toHaveValue("Why was this reduction opportunity selected, and what should I check first?");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await screen.findByText("Here is what I found.");
+    expect(post).toHaveBeenCalledWith("/ai/conversations", {
+      businessProfileId: 7,
+      originModule: "Dashboard",
+      question: "Why was this reduction opportunity selected, and what should I check first?",
+      reductionOpportunity,
+    });
+  });
+
+  it("does not resend the reduction opportunity on a second message in the same conversation", async () => {
+    renderApp();
+    await userEvent.click(screen.getByRole("button", { name: "Ask about opportunity from Dashboard" }));
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByText("Here is what I found.");
+    post.mockClear();
+
+    await userEvent.type(box(), "And what about last month?");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(post).toHaveBeenCalled());
+    const [, body] = post.mock.calls[0];
+    expect(body).not.toHaveProperty("reductionOpportunity");
   });
 });
 

@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Image, Pressable, ScrollView, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { Card, ConfirmSheet, Screen, T } from "../components/ui";
+import { Card, Screen, T } from "../components/ui";
+import { SignOutSheet } from "../components/SignOutSheet";
 /*
  * The row and section primitives are shared with the Settings screen rather
  * than declared here, which is where they used to live — see
@@ -36,8 +37,8 @@ function initialsOf(first: string, last: string): string {
 
 export function MoreScreen({ navigation }: any) {
   const t = useTheme();
-  const { brand, ink } = t;
-  const { profile, logout } = useAuth();
+  const { ink } = t;
+  const { profile } = useAuth();
   const { selected, profiles } = useBusinessProfiles();
   const [signOutOpen, setSignOutOpen] = useState(false);
 
@@ -66,12 +67,24 @@ export function MoreScreen({ navigation }: any) {
           >
             <Card>
               <View style={{ flexDirection: "row", alignItems: "center", gap: space.md }}>
+                {/*
+                  THE AVATAR DISC, in semantic roles rather than a ramp step
+                  and a literal white.
+
+                  `brand[700]` LIGHTENS in Dark — that is the whole point of
+                  the inverting ramp — so the disc was drifting to a pale teal
+                  while the initials on it stayed a hard-coded `#fff`, which is
+                  the pairing palette.ts calls out by name: the avatar disc is
+                  the fixed dark-teal chrome plane (`brandSolid`), not brand
+                  text, and what sits on it is `onBrandSolid`. Same colour in
+                  Light, correct in Dark, and the two can no longer move apart.
+                */}
                 <View
                   style={{
                     width: 52,
                     height: 52,
                     borderRadius: 26,
-                    backgroundColor: brand[700],
+                    backgroundColor: t.brandSolid,
                     alignItems: "center",
                     justifyContent: "center",
                     overflow: "hidden",
@@ -84,7 +97,7 @@ export function MoreScreen({ navigation }: any) {
                       accessibilityIgnoresInvertColors
                     />
                   ) : (
-                    <T style={{ color: "#fff", fontSize: typeScale.title, fontFamily: font.sansSemibold }}>
+                    <T style={{ color: t.onBrandSolid, fontSize: typeScale.title, fontFamily: font.sansSemibold }}>
                       {initialsOf(profile.firstName, profile.lastName)}
                     </T>
                   )}
@@ -226,18 +239,12 @@ export function MoreScreen({ navigation }: any) {
         just open something, so it is the one place a mis-tap has a cost. And
         on a phone with the address saved but not the password, "sign in
         again" can mean finding a password nobody has typed in months.
+
+        The sheet itself is shared with the account screen — see
+        components/SignOutSheet.tsx for the confirmation, the busy lock and
+        the failure handling, which used to differ between the two.
       */}
-      <ConfirmSheet
-        visible={signOutOpen}
-        title="Sign out of FinSight?"
-        body="You'll need to sign in again to access your business data."
-        confirmLabel="Sign out"
-        onConfirm={() => {
-          setSignOutOpen(false);
-          void logout();
-        }}
-        onCancel={() => setSignOutOpen(false)}
-      />
+      <SignOutSheet visible={signOutOpen} onClose={() => setSignOutOpen(false)} />
     </Screen>
   );
 }

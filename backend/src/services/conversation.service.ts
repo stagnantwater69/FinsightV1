@@ -4,6 +4,7 @@ import { ApiError } from "../middleware/error.middleware";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
 import { buildModuleContext, type InteractionModule } from "./aiContext.service";
 import { askFinSight, HISTORY_TURNS_FOR_CONTEXT, truncateAnswer, type ConversationTurn } from "./ai.service";
+import type { ReductionOpportunity } from "./reductionOpportunity.service";
 
 /*
  * Named chat threads for the web AI Chat page.
@@ -186,6 +187,7 @@ async function askInConversation(
   question: string,
   priorTurns: ConversationTurn[],
   contextOverride?: string,
+  reductionOpportunity?: ReductionOpportunity,
 ) {
   const profile = await requireOwnedBusinessProfile(userId, businessProfileId);
 
@@ -194,7 +196,18 @@ async function askInConversation(
     return { answer, provider, detectedAmount: null as number | null };
   }
 
-  const built = await buildModuleContext(userId, profile, originModule, question);
+  // reductionOpportunity only ever renders on the Expense Insights module —
+  // enforced here (not just by the controller schema) so this function
+  // can't be made to attach a selected-opportunity block to a conversation
+  // that didn't originate there. See plan §11.1/§5.4: no new
+  // InteractionModule, the block is additive to that one module's context.
+  const built = await buildModuleContext(
+    userId,
+    profile,
+    originModule,
+    question,
+    originModule === "Expense Insights" ? reductionOpportunity : undefined,
+  );
   const { answer, provider } = await askFinSight({ context: built.context, question, priorTurns });
   return { answer, provider, detectedAmount: built.scenario?.amount ?? null };
 }
@@ -214,6 +227,7 @@ export async function createConversationWithFirstMessage(
   question: string,
   title?: string,
   context?: string,
+  reductionOpportunity?: ReductionOpportunity,
 ): Promise<ChatSendResult> {
   const { answer, provider, detectedAmount } = await askInConversation(
     userId,
@@ -222,6 +236,7 @@ export async function createConversationWithFirstMessage(
     question,
     [],
     context,
+    reductionOpportunity,
   );
 
   const storedTitle = title?.trim() ? title.trim().slice(0, TITLE_MAX_LENGTH) : deriveTitle(question);
@@ -258,6 +273,7 @@ export async function appendMessage(
   conversationId: number,
   question: string,
   context?: string,
+  reductionOpportunity?: ReductionOpportunity,
 ): Promise<ChatSendResult> {
   const conversation = await requireOwnedConversation(userId, conversationId);
 
@@ -277,6 +293,7 @@ export async function appendMessage(
     question,
     priorTurns,
     context,
+    reductionOpportunity,
   );
 
   const storedAnswer = truncateAnswer(answer, MESSAGE_MAX_LENGTH);

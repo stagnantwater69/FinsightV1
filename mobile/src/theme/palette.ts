@@ -85,6 +85,36 @@
 
 export type ThemeMode = "light" | "dark";
 
+/**
+ * What the OWNER chose, which is not the same thing as what is PAINTED.
+ *
+ * `ThemeMode` is a resolved answer — there is a Light palette and a Dark one
+ * and nothing else, so every component that reads a colour keeps taking a
+ * `ThemeMode`. `ThemePreference` adds the one thing a person can pick that is
+ * not a palette: "whatever this phone is doing". That resolves to a
+ * `ThemeMode` at read time (see context/ThemeContext.tsx) and re-resolves when
+ * the phone changes its mind at sunset.
+ *
+ * KEPT AS TWO TYPES rather than widening `ThemeMode` to three values: widening
+ * it would put `"system"` into `palettes[...]`, which has no entry for it, and
+ * into every component that switches on the mode. The split is what makes
+ * "there is no system palette" a typecheck failure instead of a runtime hole.
+ */
+export type ThemePreference = ThemeMode | "system";
+
+/**
+ * The preference, against what the device is currently doing, as the palette
+ * to paint.
+ *
+ * LIVES HERE rather than in context/ThemeContext.tsx — which is where it is
+ * used — because that file imports React Native's `Appearance`, and the test
+ * runner has no React Native. This module is plain data, so the one branch
+ * worth pinning ("system" defers, an explicit choice does not) can be pinned.
+ */
+export function resolveThemeMode(preference: ThemePreference, deviceScheme: ThemeMode): ThemeMode {
+  return preference === "system" ? deviceScheme : preference;
+}
+
 export type StatusKey = "good" | "warning" | "serious" | "critical";
 export type StatusFamily = Record<StatusKey, string>;
 
@@ -203,6 +233,17 @@ export interface Palette {
   cameraSurface: string;
   /** Text and icons on the viewfinder. */
   onCamera: string;
+
+  /**
+   * The plate a mascot illustration is framed on. FIXED in both themes, for
+   * the same reason `cameraSurface` is: it is not a page, it is a property of
+   * the artwork. The mascot PNGs are opaque with a near-white background baked
+   * in, so the frame has to be that colour or there is a seam — a themed value
+   * here would be a dark plate around a white picture. See
+   * components/MascotState.tsx, which is the only thing that reads it, and
+   * which explains what replacing the art would let us delete.
+   */
+  mascotPlate: string;
 
   /**
    * Card/button shadow. Near-black tinted toward the ink in Light; pure black
@@ -437,6 +478,13 @@ const CHART_OTHER = "#8b9a9e";
 /** The viewfinder's plane. Light's ink[900] — a lens is not a page. */
 const CAMERA_SURFACE = "#1a2022";
 
+/**
+ * The mascot plate. Measured off the artwork itself, not chosen: all four
+ * corners of all 33 pose PNGs in assets/mascot/ sit at 252–255 on every
+ * channel. See `mascotPlate` in the Palette interface for why it is fixed.
+ */
+const MASCOT_PLATE = "#fdfdfd";
+
 export const lightPalette: Palette = {
   mode: "light",
 
@@ -503,6 +551,7 @@ export const lightPalette: Palette = {
   scrimStrong: "rgba(26,32,34,0.55)",
   cameraSurface: CAMERA_SURFACE,
   onCamera: "#ffffff",
+  mascotPlate: MASCOT_PLATE,
 
   shadow: LIGHT_INK[900],
   shadowStrength: 1,
@@ -595,6 +644,7 @@ export const darkPalette: Palette = {
   scrimStrong: "rgba(0,0,0,0.72)",
   cameraSurface: CAMERA_SURFACE,
   onCamera: "#ffffff",
+  mascotPlate: MASCOT_PLATE,
 
   // A tinted shadow at 4% is invisible on a near-black page, so depth here
   // comes from pure black at roughly three times the opacity, plus the border

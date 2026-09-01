@@ -9,6 +9,16 @@ import { ApiError } from "../middleware/error.middleware";
  * rule here rather than against a copy of it, so a widened column cannot leave
  * a form quietly truncating what the API would have accepted.
  */
+// Intl.supportedValuesOf("timeZone") returns the full IANA tz database as
+// known to the running Node/ICU build. Validating against it (rather than a
+// regex) means we can never accept a fixed numeric offset like "+08:00" —
+// only real zone identifiers, per the "never apply a fixed offset" rule.
+const IANA_TIME_ZONES = new Set(Intl.supportedValuesOf("timeZone"));
+
+const timezoneSchema = z
+  .string()
+  .refine((tz) => IANA_TIME_ZONES.has(tz), { message: "Invalid IANA timezone identifier" });
+
 export const createSchema = z.object({
   name: z.string().min(1).max(150),
   type: z.string().min(1).max(100),
@@ -16,6 +26,7 @@ export const createSchema = z.object({
   expectedMonthlyExpenses: z.number().nonnegative(),
   operatingDays: z.number().int().min(1).max(31),
   largeExpenseThresholdPercent: z.number().positive().max(999.99).optional(),
+  timezone: timezoneSchema.optional(),
 });
 
 const updateSchema = createSchema.partial();

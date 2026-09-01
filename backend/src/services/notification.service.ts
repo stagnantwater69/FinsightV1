@@ -3,6 +3,9 @@ import { ApiError } from "../middleware/error.middleware";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
 import type { Notification } from "@prisma/client";
 
+/** Anything with the same `.notification.create(...)` shape — the default global client, or a `$transaction` callback's `tx`. */
+type NotificationWriteClient = Pick<typeof prisma, "notification">;
+
 // Matches the dictionary's own example text for Notification_Type
 // ("Possible Duplicate, Needs Review, Large Expense Flag") — kept as
 // Title Case strings for consistency with every other status field in
@@ -14,6 +17,9 @@ export const NOTIFICATION_TYPES = {
   NEEDS_REVIEW: "Needs Review",
   ANOMALY_FINDING: "Anomaly Finding",
   RECURRING_SCHEDULE: "Recurring Schedule",
+  // [ADDED] Recovery Target plan §10.8/§11 Phase 6 — see
+  // recoveryNotification.service.ts, the only writer of this type.
+  RECOVERY_TARGET: "Recovery Target",
 } as const;
 
 /**
@@ -43,9 +49,15 @@ export async function createNotification(
   businessProfileId: number,
   type: string,
   message: string,
-  expenseRecordId?: number
+  expenseRecordId?: number,
+  // Optional so every existing caller (which passes the global `prisma`
+  // implicitly) is unaffected; a caller that needs this write to commit
+  // atomically with other writes (recoveryNotification.service.ts's
+  // per-trigger advisory-lock transaction, see its doc comment) passes its
+  // `tx` here instead.
+  client: NotificationWriteClient = prisma
 ) {
-  await prisma.notification.create({
+  await client.notification.create({
     data: { userId, businessProfileId, type, message: message.slice(0, 255), expenseRecordId },
   });
 }

@@ -164,18 +164,27 @@ export default {
         //   white on emerald         ~13.9:1  dark-section text
         //   charcoal on gold          ~8.1:1  primary CTA ink (white FAILS)
         //   red (#D95C54) small text  ~3.9:1  — icons/large text only
+        // Resolved from CSS variables (see index.css `[data-landing-theme]`)
+        // rather than literal hex, exactly like `ink`/`paper` above — that is
+        // what lets the landing page's own light/dark toggle (independent of
+        // the authenticated app's account theme) flip every landing surface
+        // and every piece of landing text without a single `dark:` variant at
+        // any call site.
         landing: {
-          emerald: "#063F35",
-          "emerald-2": "#0A5445", // raised surfaces on the emerald sections
-          green: "#0C7A62",
-          mint: "#A9DEC9",
-          "mint-light": "#CDEEE0",
-          "mint-pale": "#E8F7F0",
-          cream: "#FBFAF4",
-          charcoal: "#142321",
-          muted: "#5D6B67",
-          gold: "#F5AD19",
-          red: "#D95C54",
+          emerald: "rgb(var(--landing-emerald) / <alpha-value>)",
+          "emerald-2": "rgb(var(--landing-emerald-2) / <alpha-value>)", // raised surfaces on the emerald sections
+          green: "rgb(var(--landing-green) / <alpha-value>)",
+          mint: "rgb(var(--landing-mint) / <alpha-value>)",
+          "mint-light": "rgb(var(--landing-mint-light) / <alpha-value>)",
+          "mint-pale": "rgb(var(--landing-mint-pale) / <alpha-value>)",
+          cream: "rgb(var(--landing-cream) / <alpha-value>)",
+          charcoal: "rgb(var(--landing-charcoal) / <alpha-value>)",
+          muted: "rgb(var(--landing-muted) / <alpha-value>)",
+          gold: "rgb(var(--landing-gold) / <alpha-value>)",
+          red: "rgb(var(--landing-red) / <alpha-value>)",
+          // The white-card ground — was literal `bg-white` everywhere on the
+          // page; now themed so cards go dark in `[data-landing-theme="dark"]`.
+          surface: "rgb(var(--landing-surface) / <alpha-value>)",
         },
       },
 
@@ -193,6 +202,11 @@ export default {
         sans: ["Inter", "system-ui", "-apple-system", "Segoe UI", "sans-serif"],
         display: ["Sora", "IBM Plex Sans", "Inter", "system-ui", "sans-serif"],
         mono: ["IBM Plex Mono", "ui-monospace", "SFMono-Regular", "monospace"],
+        // Landing-page-only faces (2026 redesign) — scoped so the rest of the
+        // app keeps Inter/Sora. Never reference these outside
+        // web/src/components/landing/ and PublicLayout.
+        "landing-sans": ["DM Sans", "Inter", "system-ui", "sans-serif"],
+        "landing-display": ["Plus Jakarta Sans", "Sora", "Inter", "system-ui", "sans-serif"],
       },
 
       // ============================================================

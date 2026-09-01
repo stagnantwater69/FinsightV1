@@ -1,10 +1,12 @@
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as expenses from "../../src/services/expenseRecord.service";
 import * as sales from "../../src/services/salesRecord.service";
 import * as insights from "../../src/services/insights.service";
+import * as businessProfile from "../../src/services/businessProfile.service";
 import { ALL_TIME_PERIOD, getDashboardCashflow, getDashboardSummary } from "../../src/services/dashboard.service";
 import { Z_SCORE_THRESHOLD } from "../../src/services/analysis.service";
-import { disconnectDb, makeOwnerWithProfile, resetDb, utcDayString } from "../setup/testDb";
+import { resolveBusinessToday, utcDateKey } from "../../src/lib/dates";
+import { businessDayOffset, disconnectDb, makeOwnerWithProfile, resetDb, utcDayString } from "../setup/testDb";
 
 // Dashboard and Insights computed from real rows in a real database. This is
 // where the UTC date-boundary regression lives: records dated TODAY were being
@@ -62,7 +64,20 @@ describe("REGRESSION: records dated today must be included", () => {
   });
 
   it("counts today's sale in the recovery tracker's month-to-date figures", async () => {
-    await addSale(4500, 0);
+    // getRecoveryInsight resolves "today" in the business's own local
+    // timezone (Asia/Manila, this fixture profile's default), not the
+    // server's raw UTC day — the two disagree for roughly a third of every
+    // day (whenever Manila has already turned over to the next calendar
+    // date but UTC hasn't). `addSale`/`utcDayString` build a UTC-anchored
+    // date, so this test has to date its sale the same business-local way
+    // the function under test resolves "today", or it goes stale exactly at
+    // that boundary.
+    await sales.createSalesRecord(ctx.user.id, {
+      businessProfileId: ctx.profile.id,
+      date: utcDateKey(resolveBusinessToday("Asia/Manila")),
+      description: "Daily sales",
+      amount: 4500,
+    });
     const recovery = await insights.getRecoveryInsight(ctx.user.id, ctx.profile.id, 14);
     expect(recovery.todaysSales).toBe(4500);
     expect(recovery.salesThisMonth).toBeGreaterThanOrEqual(4500);
@@ -646,8 +661,193 @@ describe("recovery reports an empty month rather than implying a missed target",
   });
 
   it("does not flag a month that has sales in it", async () => {
-    await addSale(5000, 0);
+    // "This month" is the business's own current month — see
+    // businessDayOffset's own comment.
+    await addSale(5000, businessDayOffset(ctx.profile.timezone));
     const result = await insights.getRecoveryInsight(ctx.user.id, ctx.profile.id, 31);
     expect(result.monthHasNoRecords).toBe(false);
+  });
+
+  /**
+   * REGRESSION: `monthHasNoRecords` used to be derived from the same
+   * capped `dailyCoverage` window the client asked for (mobile asks for
+   * 14 days), rather than a full-month count. A sale recorded on the 1st
+   * of a month more than 14 days old fell outside that window and the
+   * month was reported as empty even though `salesThisMonth` was correctly
+   * nonzero — a confident, wrong "no sales this month" for an owner who
+   * had, in fact, recorded sales.
+   */
+  it("does not report a false empty month when a sale falls outside a short coverage window", async () => {
+    // "The 1st of the current month" has to mean the business's own current
+    // month — see businessDayOffset's own comment for why a UTC day-of-month
+    // disagrees with it for roughly a third of every day.
+    const businessToday = resolveBusinessToday(ctx.profile.timezone);
+    const daysSinceTheFirst = businessToday.getUTCDate() - 1;
+    await addSale(5000, businessDayOffset(ctx.profile.timezone, daysSinceTheFirst));
+
+    const result = await insights.getRecoveryInsight(ctx.user.id, ctx.profile.id, 14);
+    expect(result.monthHasNoRecords).toBe(false);
+    expect(result.salesThisMonth).toBe(5000);
+  });
+});
+
+describe("recovery target isn't ready without an expenses baseline", () => {
+  it("flags needsSetup and never reports on-track when expected monthly expenses is 0", async () => {
+    await businessProfile.updateBusinessProfile(ctx.user.id, ctx.profile.id, {
+      expectedMonthlyExpenses: 0,
+    });
+    const result = await insights.getRecoveryInsight(ctx.user.id, ctx.profile.id, 14);
+    expect(result.needsSetup).toBe(true);
+    expect(result.onTrack).toBe(false);
+  });
+
+  it("does not flag needsSetup once a positive baseline is configured", async () => {
+    const result = await insights.getRecoveryInsight(ctx.user.id, ctx.profile.id, 14);
+    expect(result.needsSetup).toBe(false);
+  });
+});
+
+// ============================================================
+// Phase 3 — confirmed/provisional sales split (plan §9.6/§8.2)
+// ============================================================
+
+describe("recovery target — confirmed vs. provisional sales split (§9.6)", () => {
+  it("treats a plain reviewed, non-duplicate sale as fully confirmed", async () => {
+    // "Today" here has to be the business's own current day — see
+    // businessDayOffset's own comment.
+    await addSale(4500, businessDayOffset(ctx.profile.timezone));
+    const result = await insights.getRecoveryInsight(ctx.user.id, ctx.profile.id, 14);
+    expect(result.confirmedSalesThisMonth).toBe(4500);
+    expect(result.provisionalSalesThisMonth).toBe(0);
+    expect(result.dataWarnings).toEqual([]);
+  });
+
+  it("counts a needs-review sale as provisional but still includes it in salesThisMonth", async () => {
+    const confirmed = await addSale(4500, businessDayOffset(ctx.profile.timezone), "Confirmed sale");
+    const needsReview = await addSale(1000, businessDayOffset(ctx.profile.timezone), "Needs review sale");
+    await sales.updateSalesRecord(ctx.user.id, needsReview.id, { reviewStatus: "Needs Review" });
+
+    const result = await insights.getRecoveryInsight(ctx.user.id, ctx.profile.id, 14);
+    // salesThisMonth is UNCHANGED by review state — it's still the full total.
+    expect(result.salesThisMonth).toBe(5500);
+    expect(result.confirmedSalesThisMonth).toBe(4500);
+    expect(result.provisionalSalesThisMonth).toBe(1000);
+    expect(result.dataWarnings).toEqual(["records_pending_review"]);
+    void confirmed;
+  });
+
+  it("counts a flagged-duplicate sale as provisional and reports possible_duplicates", async () => {
+    // Both dated the business's current day, not "today and yesterday" —
+    // the two dates only need to land in the SAME month for this test's
+    // assertions, and "yesterday" can fall in the previous month whenever
+    // today happens to be the 1st (see businessDayOffset's own comment).
+    // duplicateStatus is set explicitly below, not inferred from the dates
+    // matching, so there is no need for these two to differ.
+    await addSale(4500, businessDayOffset(ctx.profile.timezone), "Confirmed sale");
+    const flagged = await addSale(1000, businessDayOffset(ctx.profile.timezone), "Flagged sale");
+    await sales.updateSalesRecord(ctx.user.id, flagged.id, { duplicateStatus: "Flagged" });
+
+    const result = await insights.getRecoveryInsight(ctx.user.id, ctx.profile.id, 14);
+    expect(result.salesThisMonth).toBe(5500);
+    expect(result.confirmedSalesThisMonth).toBe(4500);
+    expect(result.provisionalSalesThisMonth).toBe(1000);
+    expect(result.dataWarnings).toEqual(["possible_duplicates"]);
+  });
+
+  it("dashboard and insights still agree on the new confirmed/provisional fields", async () => {
+    await addSale(4500, 0, "Confirmed sale");
+    const needsReview = await addSale(1000, 0, "Needs review sale");
+    await sales.updateSalesRecord(ctx.user.id, needsReview.id, { reviewStatus: "Needs Review" });
+
+    const dash = await getDashboardSummary(ctx.user.id, ctx.profile.id, 30);
+    const ins = await insights.getRecoveryInsight(ctx.user.id, ctx.profile.id, 14);
+    expect(dash.recoveryStatus.confirmedSalesThisMonth).toEqual(ins.confirmedSalesThisMonth);
+    expect(dash.recoveryStatus.provisionalSalesThisMonth).toEqual(ins.provisionalSalesThisMonth);
+  });
+});
+
+// ============================================================
+// Phase 3 — "Why your target changed" (plan §8.2/§10.3)
+// ============================================================
+
+describe("recovery target — changeSincePreviousDay (§8.2/§10.3)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("is null on the 1st of the (business-local) month — no 'yesterday' in the same month", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-01T10:00:00.000Z")); // Asia/Manila local: 2026-08-01 18:00
+    const result = await insights.getRecoveryInsight(ctx.user.id, ctx.profile.id, 14);
+    expect(result.changeSincePreviousDay).toBeNull();
+  });
+
+  it("is null when the recovery target still needs setup", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-15T10:00:00.000Z"));
+    await businessProfile.updateBusinessProfile(ctx.user.id, ctx.profile.id, { expectedMonthlyExpenses: 0 });
+    const result = await insights.getRecoveryInsight(ctx.user.id, ctx.profile.id, 14);
+    expect(result.changeSincePreviousDay).toBeNull();
+  });
+
+  it("reconciles salesAdded and adjustedDailyTargetDelta against two real getRecoveryInsight calls a day apart", async () => {
+    vi.useFakeTimers();
+
+    // Business-local (Asia/Manila, UTC+8) 2026-07-15 18:00 — safely mid-month
+    // so remainingOperatingDays isn't clamped by an edge-of-month case.
+    vi.setSystemTime(new Date("2026-07-15T10:00:00.000Z"));
+    await addSale(4500, 0, "Day 15 sale");
+    const dayFifteen = await insights.getRecoveryInsight(ctx.user.id, ctx.profile.id, 14);
+    expect(dayFifteen.today.toISOString().slice(0, 10)).toBe("2026-07-15");
+
+    // Advance one full business-local day and add more sales "today". Every
+    // day that elapses also removes one remaining operating day, which by
+    // itself pushes the adjusted daily target UP (the same remaining pesos
+    // spread across one fewer day) — so the sales added today have to more
+    // than offset that to make `sales_added` the dominant, correctly
+    // classified cause. 20,000 comfortably clears day 15's ~8,607 adjusted
+    // daily target (125,000-4,500)/14, which is the break-even point below
+    // which one fewer remaining day would dominate instead.
+    vi.setSystemTime(new Date("2026-07-16T10:00:00.000Z"));
+    await addSale(20000, 0, "Day 16 sale");
+    const daySixteen = await insights.getRecoveryInsight(ctx.user.id, ctx.profile.id, 14);
+    expect(daySixteen.today.toISOString().slice(0, 10)).toBe("2026-07-16");
+
+    expect(daySixteen.changeSincePreviousDay).not.toBeNull();
+    const change = daySixteen.changeSincePreviousDay!;
+
+    // salesAdded reconciles exactly with the real difference between the two
+    // independently computed getRecoveryInsight snapshots.
+    expect(daySixteen.salesThisMonth - dayFifteen.salesThisMonth).toBeCloseTo(20000, 6);
+    expect(change.salesAdded).toBeCloseTo(20000, 6);
+
+    // adjustedDailyTargetDelta reconciles against the two real snapshots too —
+    // not just against the internal "yesterday" re-run's own arithmetic.
+    expect(change.adjustedDailyTargetDelta).toBeCloseTo(
+      daySixteen.adjustedDailyTarget - dayFifteen.adjustedDailyTarget,
+      6,
+    );
+    expect(change.remainingOpenDaysDelta).toBeCloseTo(
+      daySixteen.remainingOperatingDays - dayFifteen.remainingOperatingDays,
+      6,
+    );
+
+    // A material amount of new sales that reduced the adjusted daily target
+    // is exactly the sales_added case.
+    expect(change.primaryReason).toBe("sales_added");
+  });
+
+  it("classifies open_day_elapsed when a day passes with no new sales", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-15T10:00:00.000Z"));
+    await addSale(4500, 0, "Only sale this month");
+    vi.setSystemTime(new Date("2026-07-16T10:00:00.000Z"));
+
+    const result = await insights.getRecoveryInsight(ctx.user.id, ctx.profile.id, 14);
+    expect(result.changeSincePreviousDay).not.toBeNull();
+    const change = result.changeSincePreviousDay!;
+    expect(change.salesAdded).toBe(0);
+    expect(change.remainingOpenDaysDelta).not.toBe(0);
+    expect(change.primaryReason).toBe("open_day_elapsed");
   });
 });

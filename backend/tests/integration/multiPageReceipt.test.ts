@@ -6,12 +6,21 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
  * does this (a random UUID per upload), and a test asserting page ORDER needs
  * distinguishable paths to assert against.
  */
-const { uploadCallCount } = vi.hoisted(() => ({ uploadCallCount: { value: 0 } }));
+const { uploadCallCount, uploadFailureAt, deletedReceiptPaths } = vi.hoisted(() => ({
+  uploadCallCount: { value: 0 },
+  uploadFailureAt: { value: null as number | null },
+  deletedReceiptPaths: [] as string[],
+}));
 vi.mock("../../src/services/storage.service", () => ({
-  uploadReceiptImage: vi.fn(async () => `1/mock-page-${++uploadCallCount.value}.jpg`),
+  uploadReceiptImage: vi.fn(async () => {
+    const call = ++uploadCallCount.value;
+    if (uploadFailureAt.value === call) throw new Error("storage upload failed");
+    return `1/mock-page-${call}.jpg`;
+  }),
   downloadReceiptImage: vi.fn(async () => Buffer.from("stored-page")),
   uploadCsvFile: vi.fn(async () => "1/mock.csv"),
   signedReceiptImageUrl: vi.fn(async () => "https://example.test/signed.jpg"),
+  deleteReceiptImage: vi.fn(async (path: string) => (deletedReceiptPaths.push(path), true)),
 }));
 
 /*
@@ -60,6 +69,8 @@ beforeEach(async () => {
     "Inventory",
   ]);
   uploadCallCount.value = 0;
+  uploadFailureAt.value = null;
+  deletedReceiptPaths.length = 0;
   pageQueue.length = 0;
   categoriseMock.mockReset();
   categoriseMock.mockResolvedValue([]);
@@ -69,7 +80,7 @@ beforeEach(async () => {
 
 afterAll(disconnectDb);
 
-function page(text: string, confidence = 95) {
+function page(text: string) {
   return { buffer: Buffer.from(`fake-bytes-${text.length}`), mimetype: "image/jpeg", originalname: "page.jpg" };
 }
 
@@ -135,6 +146,19 @@ describe("multi-page receipt upload", () => {
     await expect(
       uploadAndScan(ctx.user.id, { businessProfileId: ctx.profile.id, pages: [] }),
     ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("removes already-uploaded variants when a later storage write fails", async () => {
+    uploadFailureAt.value = 2;
+    await expect(uploadAndScan(ctx.user.id, {
+      businessProfileId: ctx.profile.id,
+      pages: [{
+        ...page("original"),
+        processed: { ...page("processed") },
+      }],
+    })).rejects.toThrow("storage upload failed");
+    expect(deletedReceiptPaths).toEqual(["1/mock-page-1.jpg"]);
+    expect(await prisma.receiptScan.count()).toBe(0);
   });
 });
 
@@ -264,29 +288,36 @@ describe("background processing", () => {
   });
 
   /**
-   * The design decision rescueWithVision's own comment states: the WORST
-   * page decides whether the model gets asked, not an average. Chosen so the
+   * The AI model is the primary source and is asked on every scan regardless
+   * of confidence — see receiptScan.test.ts's "is called even when the
+   * deterministic parser already read the receipt cleanly". What the WORST
+   * page (not an average) still decides is `visionTrigger`, the diagnostic
+   * persisted on `extractorVersions` for billing/calibration. Chosen so the
    * two readings actually disagree — average(95, 60) is 77.5, ABOVE
    * LOW_CONFIDENCE (75), so an average-based trigger would stay silent here;
    * min(95, 60) is 60, below it. If this test passes under both an average
    * and a minimum implementation, it is not testing the claim at all.
    */
-  it("triggers the vision rescue on the worst page even when the average would look fine", async () => {
-    await uploadPages([
+  it("attributes the trigger to the worst page even when the average would look fine", async () => {
+    const scan = await uploadPages([
       { text: "Date: 2026-07-20\nItem A   10.00\nTOTAL 30.00", confidence: 95 },
       { text: "Item B   20.00", confidence: 60 }, // reconciles, so only confidence can trigger this
     ]);
 
     expect(visionMock).toHaveBeenCalledTimes(1);
+    const stored = await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } });
+    expect((stored.extractorVersions as { visionTrigger: string | null }).visionTrigger).toBe("low-confidence");
   });
 
-  it("does not trigger the vision rescue when every page reads well and reconciles", async () => {
-    await uploadPages([
+  it("asks the model anyway, but leaves no trigger, when every page reads well and reconciles", async () => {
+    const scan = await uploadPages([
       { text: "Date: 2026-07-20\nItem A   10.00", confidence: 92 },
       { text: "Item B   20.00\nTOTAL 30.00", confidence: 90 },
     ]);
 
-    expect(visionMock).not.toHaveBeenCalled();
+    expect(visionMock).toHaveBeenCalledTimes(1);
+    const stored = await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } });
+    expect((stored.extractorVersions as { visionTrigger: string | null }).visionTrigger).toBeNull();
   });
 
   it("sends every page to the vision model in a single call, not one call per page", async () => {

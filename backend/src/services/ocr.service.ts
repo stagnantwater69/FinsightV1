@@ -13,7 +13,7 @@ import { logger } from "../config/logger";
  * "the parser". Bump the tag with any behaviour-relevant change to the
  * corresponding code, so accuracy reports can split before/after.
  */
-export const PARSER_VERSION = "ocr-parser-v1";
+export const PARSER_VERSION = "ocr-parser-v2";
 export const PREPROCESS_VERSION = "ocr-preprocess-v1";
 
 /**
@@ -346,6 +346,30 @@ function parseDate(text: string): FoundDate | null {
   return findDateInText(transactionLines(text).join("\n")) ?? findDateInText(text);
 }
 
+/**
+ * A tax-breakdown annotation that happens to contain the word "total", but
+ * states the TAX portion, not the amount paid — "TOTAL INCLUDES 6% GST 1.08",
+ * "(Total Included GST @ 6%: 1.42)". The tell is "total" and the tax name
+ * (gst/vat) sharing a line with a full "includ-" word; the genuine total line
+ * on the same receipts reads "Total (incl GST) 19.00" — "incl", not
+ * "include[sd]" — with the amount trailing the parenthetical rather than
+ * being introduced by it, so this does not also catch that line. Measured:
+ * a McDonald's receipt's GST note (1.08) and a Malaysian bakery's GST note
+ * (1.42) both outscored the receipt's real total by being read first.
+ */
+const TAX_INCLUSIVE_NOTE = /\btotal\b[^\n]*\binclud(?:e[sd]?|ing)\b[^\n]*\b(gst|vat)\b/i;
+
+/**
+ * A payment/tender line — "Cash Tendered 50.00", "Change Due 0.39" — carries
+ * money that is not the transaction total and must never win the max-value
+ * fallback used when no line reads as a total at all. Mirrors the equivalent
+ * guard already applied to line items (NOT_AN_ITEM) — extended here to the
+ * receipt-level amount for the same reason: a register that prints a tender
+ * amount larger than the total (change owed, or a round banknote handed
+ * over) would otherwise be picked as "the" amount.
+ */
+const TENDER_LINE = /\b(cash\s+tendered|tendered|amount\s+tendered|change\s+due)\b/i;
+
 function parseAmount(text: string): number | null {
   const lines = text.split("\n");
   // \d{1,3} on its own before the optional comma groups would truncate a
@@ -354,15 +378,55 @@ function parseAmount(text: string): number | null {
   // greedily consumes the whole integer part first.
   const moneyPattern = /(\d+(?:,\d{3})*\.\d{2})/;
 
-  const totalLine = lines.find((line) => /\btotal\b/i.test(line) && !/subtotal/i.test(line));
-  if (totalLine) {
-    const match = totalLine.match(moneyPattern);
+  const totalCandidates = lines.filter(
+    (line) => /\btotal\b/i.test(line) && !/subtotal/i.test(line) && !TAX_INCLUSIVE_NOTE.test(line),
+  );
+
+  /*
+   * A few phrasings name the FINAL figure explicitly, and take priority over
+   * any other total-shaped line further up the same receipt when both are
+   * present — checked in this order, not blended with a general
+   * "prefer-the-last-total-line" rule, because the last total-shaped line is
+   * NOT reliably the right one (a trailing "GST included in total: 1.49"
+   * annotation loses to an earlier plain total on a real receipt in this
+   * corpus, which a blanket "prefer last" would have got wrong):
+   *
+   *   - "Net Total" — the post-rounding figure some GST receipts print after
+   *     an earlier "Total Sales (Incl. GST)" subtotal. Measured: a real
+   *     receipt printed "Total Sales (Incl. GST @6%) RM18.29" before "Net
+   *     Total RM18.30" (the rounded figure actually paid), and first-match
+   *     picked the pre-rounding one.
+   *   - "Total Payable" — the figure a multi-tier VAT breakdown (zero-rated
+   *     and standard-rated subtotals, each printed as its own "Total ...
+   *     supplies" line) resolves to. Measured: a real invoice printed "Total
+   *     0% supplies: 18.92", "Total 6% supplies (excl. GST): 56.93", "Total
+   *     6% supplies (Inc. GST): 60.34" and "Total 0% supplies: 13.92" before
+   *     the actual "Total Payable: 79.26", and first-match picked the first
+   *     zero-rated subtotal instead of the payable figure at the end.
+   */
+  const priority = [/\bnet\s*total\b/i, /\btotal\s+payable\b/i]
+    .map((pattern) => totalCandidates.find((line) => pattern.test(line)))
+    .find((line): line is string => line !== undefined);
+  const ordered = priority ? [priority, ...totalCandidates.filter((line) => line !== priority)] : totalCandidates;
+
+  // Try every total-shaped line in order, not just the first — a header like
+  // "QTY ITEM TOTAL" matches the keyword but carries no money, and bailing
+  // out there (rather than trying the next candidate) used to fall all the
+  // way through to the max-value fallback below, where a "Cash Tendered"
+  // line could win instead. Measured on a real McDonald's receipt.
+  for (const line of ordered) {
+    const match = line.match(moneyPattern);
     if (match) return Number(match[1]!.replace(/,/g, ""));
   }
 
   // Fall back to the largest decimal-looking number anywhere in the
   // receipt — usually the total is the biggest line-item-shaped number.
-  const allMatches = [...text.matchAll(new RegExp(moneyPattern, "g"))].map((m) => Number(m[1]!.replace(/,/g, "")));
+  // Tender/change lines are excluded so a banknote handed over, or change
+  // owed, cannot be mistaken for the total when no line reads as one.
+  const allMatches = lines
+    .filter((line) => !TENDER_LINE.test(line))
+    .flatMap((line) => [...line.matchAll(new RegExp(moneyPattern, "g"))])
+    .map((m) => Number(m[1]!.replace(/,/g, "")));
   if (allMatches.length > 0) {
     return Math.max(...allMatches);
   }
@@ -393,6 +457,30 @@ const DECORATIVE_BANNER = /[*~]|={2,}/;
 const CLOSING_LINE = /\b(thank\s*you|come\s+again|please\s+come\s+back|salamat|maraming\s+salamat)\b/i;
 
 /**
+ * Customer-service phone lines ("Guest Relations Center : 1300-13-1300").
+ * These read as a business-type phrase to VENDOR_KEYWORD ("center" is one of
+ * the words) and are printed in the footer — the same place a real footer
+ * vendor name is expected — so they can outscore the true name on keyword
+ * plus position alone. Requires BOTH a contact-role phrase and a
+ * phone-number-shaped digit run, so an address or reference line with either
+ * signal alone is not caught by this. Measured: a real McDonald's receipt
+ * read "Guest Relations Center : 1300-13-1300" as the vendor over
+ * "McDonald's" a few lines above it.
+ */
+const CONTACT_CENTER_LINE =
+  /\b(guest\s+relations|customer\s+(service|care|support)|call\s*center|contact\s*(center|us)|hotline|helpline)\b.*\d{3,4}[-\s]\d{2,4}[-\s]\d{3,4}/i;
+
+/**
+ * Suggested-gratuity boilerplate ("SUGGESTED TIP", "BEFORE DISCOUNTS" — the
+ * header some US POS systems print above a table of 18%/20%/22% tip
+ * suggestions). Never the store's name, but ordinary prose with real letters
+ * and multiple words that would otherwise pass every other filter. Measured:
+ * a real steakhouse receipt read the (OCR-garbled) "BEFORE DISCOUNTS" line as
+ * the vendor over "SASKA'S" a few lines above it.
+ */
+const GRATUITY_BOILERPLATE_LINE = /\b(suggested\s+(tip|gratuity)|before\s+discounts?)\b/i;
+
+/**
  * Words that mark a line as a business name rather than an address or a
  * scrap of OCR noise. Deliberately Philippine-retail flavoured, because that
  * is the market — a "sari-sari store" or a "marketing corporation" is a shop,
@@ -401,7 +489,7 @@ const CLOSING_LINE = /\b(thank\s*you|come\s+again|please\s+come\s+back|salamat|m
  * small-shop receipts.
  */
 const VENDOR_KEYWORD =
-  /\b(store|shop|mart|market|supermarket|grocery|groceries|trading|enterprise|enterprises|corporation|corp|incorporated|inc|company|co|merchandise|merchandising|pharmacy|bakery|hardware|sari-?sari|tindahan|foods?|restaurant|cafe|coffee|eatery|carinderia|depot|supply|supplies|center|centre)\b/i;
+  /\b(store|shop|mart|market|supermarket|grocery|groceries|trading|enterprise|enterprises|corporation|corp|incorporated|inc|company|co|merchandise|merchandising|pharmacy|bakery|bakeries|hardware|sari-?sari|tindahan|foods?|restaurant|cafe|coffee|eatery|carinderia|depot|supply|supplies|center|centre)\b/i;
 
 /**
  * Best guess at the store name.
@@ -441,6 +529,10 @@ function parseVendor(text: string): string | null {
     // you, come again" footer line is never the store's name either.
     .filter(({ line }) => !DECORATIVE_BANNER.test(line))
     .filter(({ line }) => !CLOSING_LINE.test(line))
+    // A customer-service phone line or a suggested-gratuity table header is
+    // footer boilerplate, same reasoning as CLOSING_LINE just above.
+    .filter(({ line }) => !CONTACT_CENTER_LINE.test(line))
+    .filter(({ line }) => !GRATUITY_BOILERPLATE_LINE.test(line))
     // A line that is mostly digits/punctuation is a reference number, not a name.
     .filter(({ line }) => {
       const letters = (line.match(/[a-zA-Z]/g) ?? []).length;
@@ -491,12 +583,27 @@ function parseVendor(text: string): string | null {
      */
     if (
       !VENDOR_KEYWORD.test(line) &&
-      /\b(st|street|ave|avenue|rd|road|blk|block|brgy|barangay|city|purok|zone|highway|bldg|building)\b/i.test(line)
+      /\b(st|street|ave|avenue|blvd|boulevard|rd|road|blk|block|brgy|barangay|city|purok|zone|highway|bldg|building)\b/i.test(
+        line,
+      )
     ) {
       points -= 30;
     }
     // Digits belong to addresses and reference numbers far more than to names.
     points -= (line.match(/\d/g) ?? []).length * 2;
+
+    /*
+     * A standalone run of 5+ digits next to little else is a store/location
+     * ID line, not a name — "i Restaurant 1100580 i" is the generic word
+     * "Restaurant" plus a store number and OCR-noise filler characters, with
+     * nothing that reads as an actual proper name. Gated on word count (<= 2
+     * real words) so it does NOT catch a genuine business name that happens
+     * to carry a registration number, e.g. "KING'S CONFECTIONERY S/B
+     * 273500-U (KSB)" — that line has four real words and must keep scoring
+     * on its own merits. Measured: the Carl's Jr. store-ID line outscored
+     * "CARL'S JR" itself a few lines above it.
+     */
+    if (/\b\d{5,}\b/.test(line) && words.length <= 2) points -= 60;
 
     return points;
   };
@@ -547,12 +654,21 @@ export interface ParsedLineItem {
  */
 const NOT_AN_ITEM = new RegExp(
   [
-    // Summary and total lines.
-    String.raw`\b(sub\s*-?\s*total|total|amt|amount\s+due|amount\s+payable|balance)\b`,
+    // Summary and total lines. Bare "amount" (not just "amt") is needed for
+    // the plain "Amount: 24.95" label some US receipts print on its own line
+    // above the total — found reading as a purchased item on a real receipt.
+    String.raw`\b(sub\s*-?\s*total|total|amt|amount|balance)\b`,
     // Tax lines. [VY] for the V->Y misread; the trailing part covers
     // "VATable Sales", "VAT-Exempt Sales", "Zero-Rated Sales".
     String.raw`\b[vy]at(able)?\b`,
     String.raw`\b(tax|zero\s*-?\s*rated|vat\s*-?\s*exempt|exempt|non\s*-?\s*taxable)\b`,
+    // A GST/tax-summary breakdown row, printed under a "GST Summary" or
+    // similar header on Malaysian receipts — the tax classification code
+    // (SR/ZR/IR/ES) followed by its rate, e.g. "SR @ 6% 8.21 0.49" or
+    // "IR (0%) 4.99 0.20". These carry the receipt's SALES total by tax
+    // class, not a purchase, and were found reading as purchased items on
+    // two real receipts.
+    String.raw`\b(sr|zr|ir|es)\s*(@|\()\s*\d{1,3}%`,
     // Discounts and adjustments.
     //
     // The plurals are not decoration. A real receipt prints "Prod. Discounts:
@@ -1158,8 +1274,7 @@ export function locateValue(pageTexts: string[], value: string | number | null):
  *     lines) are excluded, so an item costing exactly the receipt total is
  *     not "evidenced" by the TOTAL line; and
  *   - each line is consumed once, so two items at the same price cannot both
- *     claim the same printed line — the same discipline repairItemNames
- *     applies when matching vision names by amount.
+ *     claim the same printed line.
  *
  * Null per item where no line qualifies. Never invented.
  */

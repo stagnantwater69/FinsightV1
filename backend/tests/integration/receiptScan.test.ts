@@ -9,6 +9,7 @@ vi.mock("../../src/services/storage.service", () => ({
   uploadReceiptImage: vi.fn(async () => "1/mock-receipt.jpg"),
   uploadCsvFile: vi.fn(async () => "1/mock.csv"),
   signedReceiptImageUrl: vi.fn(async () => "https://example.test/signed-receipt.jpg"),
+  deleteReceiptImage: vi.fn(async () => true),
 }));
 
 // vi.mock is hoisted above ordinary declarations, so the spy has to be created
@@ -342,16 +343,19 @@ describe("proposed new categories", () => {
 });
 
 /**
- * The vision rescue.
+ * The vision rescue — now the PRIMARY read, not a fallback.
  *
  * This is the one place a language model is allowed near EXTRACTION, which
  * ai.service otherwise forbids outright. The whole safety case rests on three
  * properties, and these tests exist to pin each of them:
  *
- *   1. it never runs on a receipt the deterministic parser could read;
- *   2. the deterministic answer wins wherever it exists — especially the
- *      date, which is a convention the parser applies reliably and the model
- *      does not;
+ *   1. it is asked on every scan, whether or not the deterministic parser
+ *      could read the receipt on its own;
+ *   2. the model's answer wins wherever it answers at all — except the date,
+ *      which is a convention the parser applies reliably and the model does
+ *      not, and except an item list that fails to reconcile against the
+ *      receipt's own total while OCR's own items already do (point 4's
+ *      validation guard, not a preference for OCR);
  *   3. anything it produces is flagged as model-derived, all the way out.
  */
 describe("vision rescue for receipts OCR could not read", () => {
@@ -360,9 +364,9 @@ describe("vision rescue for receipts OCR could not read", () => {
   /** A receipt tesseract got nothing usable from at all. */
   const UNREADABLE = "~~~ unreadable ~~~";
 
-  it("is never called when the deterministic parser read the receipt", async () => {
+  it("is called even when the deterministic parser already read the receipt cleanly", async () => {
     await upload(); // RECEIPT_TEXT parses to 2 items and a total
-    expect(visionMock).not.toHaveBeenCalled();
+    expect(visionMock).toHaveBeenCalledTimes(1);
   });
 
   it("is called when OCR found no line items", async () => {
@@ -442,11 +446,11 @@ describe("vision rescue for receipts OCR could not read", () => {
     expect(scan.extractedDate?.toISOString().slice(0, 10)).toBe("2026-07-18");
   });
 
-  it("never overwrites a total the deterministic parser read", async () => {
+  it("the model's total overrides OCR's own reading when they disagree", async () => {
     extractTextMock.mockResolvedValue(TOTAL_ONLY);
     visionMock.mockResolvedValue(visionReply({ date: null, vendor: null, amount: 999.99, items: [] }));
     const scan = await upload();
-    expect(scan.extractedAmount).toBe(845.5);
+    expect(scan.extractedAmount).toBe(999.99);
   });
 
   it("never replaces items the deterministic parser already read", async () => {
@@ -631,23 +635,30 @@ describe("vision re-read when the OCR result is doubtful", () => {
   });
 
   /**
-   * The false-alarm guard, and the reason reconciliation is not a bare
-   * `sum !== total`: on a 12% VAT receipt the items never equal the total, so
-   * a naive check would send every VAT receipt in the country to a billed API.
+   * The model is still asked — it is the primary source now, so a confident
+   * OCR read is no longer a reason to skip the call — but the false-alarm
+   * guard still matters for what gets LOGGED/PERSISTED as `visionTrigger`
+   * (billing attribution) and for `repairItemNames`' narrower gate: a 12% VAT
+   * receipt's items never equal the total, so a naive check would mark every
+   * VAT receipt in the country as doubtful. The default mock (the model
+   * answers nothing) means OCR's own reading survives untouched here.
    */
-  it("does not re-read a confident receipt whose gap is explained by VAT", async () => {
+  it("still asks the model on a confident receipt whose gap is explained by VAT, but its own reading survives", async () => {
     extractTextMock.mockResolvedValue(
       ["ABC STORE", "Date: 2026-07-20", "Goods 1000.00", "SUBTOTAL 1000.00", "VAT 12% 120.00", "TOTAL 1120.00"].join(
         "\n",
       ),
     );
-    await upload();
-    expect(visionMock).not.toHaveBeenCalled();
+    const scan = await upload();
+    expect(visionMock).toHaveBeenCalledTimes(1);
+    expect(scan.extractedAmount).toBe(1120);
+    expect(scan.items.map((i) => i.amount)).toEqual([1000]);
   });
 
-  it("does not re-read a confident receipt that adds up", async () => {
-    await upload();
-    expect(visionMock).not.toHaveBeenCalled();
+  it("still asks the model on a receipt that already adds up, but its own reading survives", async () => {
+    const scan = await upload();
+    expect(visionMock).toHaveBeenCalledTimes(1);
+    expect(scan.extractedAmount).toBe(1400);
   });
 
   it("takes the model's items when they settle the gap and OCR's did not", async () => {

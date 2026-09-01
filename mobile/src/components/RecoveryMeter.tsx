@@ -17,12 +17,56 @@ import type { RecoveryTargets } from "../lib/types";
  * Dashboard and the Recovery screen cannot drift apart, and neither can mobile
  * and web.
  */
+
+/**
+ * Resolves the month status pill's tone, glyph and copy from the backend's
+ * `status` field (Improvement Plan §8.1/§9.7), falling back to the older
+ * `needsSetup`/`onTrack` booleans only when an older/cached response has no
+ * `status` at all. `data_incomplete` isn't sent yet (Phase 2+) but is mapped
+ * here so the switch stays exhaustive when it starts arriving.
+ *
+ * There is no "info" entry in this theme's status palette (`StatusKey` is
+ * just good/warning/serious/critical) — states that are informational rather
+ * than a warning or a success still use `status.warning`/`statusText.warning`
+ * rather than inventing a new palette entry.
+ */
+function resolveMonthStatus(
+  data: RecoveryTargets,
+): { tone: "warning" | "good" | "critical"; glyph: string; copy: string } {
+  const status = data.status;
+  if (status) {
+    switch (status) {
+      case "needs_setup":
+        return { tone: "warning", glyph: "?", copy: "Recovery Target isn't ready yet" };
+      case "no_current_month_data":
+      case "data_incomplete":
+        return { tone: "warning", glyph: "i", copy: "No sales recorded yet this month" };
+      case "covered":
+        return { tone: "good", glyph: "✓", copy: "Sales coverage target reached" };
+      case "ahead":
+        return { tone: "good", glyph: "✓", copy: "Ahead of pace" };
+      case "on_pace":
+        return { tone: "good", glyph: "✓", copy: "On pace for the month" };
+      case "behind":
+        return { tone: "critical", glyph: "!", copy: "Behind pace for the month" };
+    }
+  }
+  // Back-compat: older/cached responses with no `status` field at all.
+  if (data.needsSetup) return { tone: "warning", glyph: "?", copy: "Recovery Target isn't ready yet" };
+  if (data.onTrack) return { tone: "good", glyph: "✓", copy: "On pace for the month" };
+  return { tone: "critical", glyph: "!", copy: "Behind pace for the month" };
+}
+
 export function RecoveryMeter({ data }: { data: RecoveryTargets }) {
   const t = useTheme();
   const { ACCENT, ink, paper, statusText, status } = t;
   const monthRatio = Math.min(data.monthCoveragePercent / 100, 1);
-  const monthFill = data.onTrack ? status.good : status.critical;
-  const monthInk = data.onTrack ? statusText.good : statusText.critical;
+  const monthStatus = resolveMonthStatus(data);
+  const monthFill = status[monthStatus.tone];
+  const monthInk = statusText[monthStatus.tone];
+  // Kept for the one remaining boolean-driven line below (the "add expected
+  // expenses" hint), which only applies to `needs_setup`.
+  const needsSetupNow = data.status ? data.status === "needs_setup" : !!data.needsSetup;
 
   const todayFill =
     data.todaysStatus === "below" ? status.critical : data.todaysStatus === "at" ? status.warning : status.good;
@@ -49,16 +93,6 @@ export function RecoveryMeter({ data }: { data: RecoveryTargets }) {
 
   return (
     <View>
-      {/*
-        "Recovery target" is FinSight's own name for the figure, and existing
-        owners know it — so it stays, with one line saying what it means. It
-        lives here rather than on each caller so the Dashboard card and the
-        Recovery Target screen cannot end up explaining it differently.
-      */}
-      <T variant="caption" style={{ marginBottom: space.md }}>
-        Your recovery target is what you still need to earn this month to cover your expected expenses.
-      </T>
-
       <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, marginBottom: space.sm }}>
         <View
           style={{
@@ -70,12 +104,15 @@ export function RecoveryMeter({ data }: { data: RecoveryTargets }) {
             justifyContent: "center",
           }}
         >
-          <T style={{ color: t.textOnFill, fontSize: typeScale.micro }}>{data.onTrack ? "✓" : "!"}</T>
+          <T style={{ color: t.textOnFill, fontSize: typeScale.micro }}>{monthStatus.glyph}</T>
         </View>
-        <T style={{ color: monthInk, fontSize: typeScale.bodySm }}>
-          {data.onTrack ? "On pace for the month" : "Behind pace for the month"}
-        </T>
+        <T style={{ color: monthInk, fontSize: typeScale.bodySm }}>{monthStatus.copy}</T>
       </View>
+      {needsSetupNow ? (
+        <T variant="caption" style={{ marginBottom: space.sm }}>
+          Add your expected monthly expenses to calculate your target.
+        </T>
+      ) : null}
 
       <Bar ratio={monthRatio} color={monthFill} height={12} label="Month-to-date coverage" />
       <T variant="caption" style={{ marginTop: 6 }}>
@@ -99,16 +136,8 @@ export function RecoveryMeter({ data }: { data: RecoveryTargets }) {
       </View>
 
       <T variant="caption" style={{ marginTop: 6 }}>
-        <Money value={data.remainingTarget} size={12} weight="regular" color={ink[500]} /> still needed across about{" "}
-        {data.remainingOperatingDays} remaining operating day{data.remainingOperatingDays === 1 ? "" : "s"}.
-      </T>
-      {/*
-        The distinction owners miss: the divisor is operating days, not
-        calendar days, so the adjusted figure is higher than dividing by the
-        days left on a wall calendar would suggest.
-      */}
-      <T variant="caption" style={{ marginTop: 4 }}>
-        The adjusted daily target spreads that across the days you are open, not every day left on the calendar.
+        <Money value={data.remainingTarget} size={12} weight="regular" color={ink[500]} /> across{" "}
+        {data.remainingOperatingDays} remaining open day{data.remainingOperatingDays === 1 ? "" : "s"}.
       </T>
 
       {/*
@@ -168,6 +197,11 @@ function Bar({ ratio, color, height, label }: { ratio: number; color: string; he
   const { ink } = t;
   return (
     <View
+      // Without `accessible`, RN leaves `isAccessibilityElement` false and the
+      // role/label/value below are set on a view the platform never surfaces —
+      // the bar is announced as nothing at all. Same fix, same reason, as the
+      // Spending Impact gauge.
+      accessible
       accessibilityRole="progressbar"
       accessibilityLabel={label}
       accessibilityValue={{ min: 0, max: 100, now: Math.round(ratio * 100) }}

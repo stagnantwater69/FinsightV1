@@ -187,4 +187,22 @@ describe("detectReceiptCorners", () => {
     expect(result.corners!.topLeft.y).toBeCloseTo(0.188, 1);
     expect(result.corners!.bottomRight.x).toBeCloseTo(0.833, 1);
   });
+
+  it("returns distinct candidates when two receipts share one photograph", async () => {
+    const width = 900;
+    const height = 700;
+    const pixels = Buffer.alloc(width * height, 30);
+    for (let y = 100; y < 600; y++) {
+      pixels.fill(240, y * width + 60, y * width + 380);
+      pixels.fill(240, y * width + 520, y * width + 840);
+    }
+    const image = await sharp(pixels, { raw: { width, height, channels: 1 } }).png().toBuffer();
+    const result = await detectReceiptCorners(image);
+
+    expect(result.candidates).toHaveLength(2);
+    expect(result.candidates![0]!.corners.topLeft.x).not.toBeCloseTo(
+      result.candidates![1]!.corners.topLeft.x,
+      1,
+    );
+  });
 });

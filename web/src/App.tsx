@@ -37,6 +37,10 @@ const BusinessProfiles = lazy(() => import("./pages/BusinessProfiles").then((m) 
 const AllBusinessProfiles = lazy(() => import("./pages/AllBusinessProfiles").then((m) => ({ default: m.AllBusinessProfiles })));
 const CreateBusinessProfile = lazy(() => import("./pages/CreateBusinessProfile").then((m) => ({ default: m.CreateBusinessProfile })));
 const EditBusinessProfile = lazy(() => import("./pages/EditBusinessProfile").then((m) => ({ default: m.EditBusinessProfile })));
+const OperatingSchedule = lazy(() => import("./pages/OperatingSchedule").then((m) => ({ default: m.OperatingSchedule })));
+const RecoveryNotificationPreferences = lazy(() =>
+  import("./pages/RecoveryNotificationPreferences").then((m) => ({ default: m.RecoveryNotificationPreferences })),
+);
 const Records = lazy(() => import("./pages/Records").then((m) => ({ default: m.Records })));
 const AddExpense = lazy(() => import("./pages/AddExpense").then((m) => ({ default: m.AddExpense })));
 const AddSalesRecord = lazy(() => import("./pages/AddSalesRecord").then((m) => ({ default: m.AddSalesRecord })));
@@ -48,6 +52,9 @@ const FlaggedRecords = lazy(() => import("./pages/FlaggedRecords").then((m) => (
 const Dashboard = lazy(() => import("./pages/Dashboard").then((m) => ({ default: m.Dashboard })));
 const ExpenseInsight = lazy(() => import("./pages/ExpenseInsight").then((m) => ({ default: m.ExpenseInsight })));
 const RecoveryInsightPage = lazy(() => import("./pages/RecoveryInsightPage").then((m) => ({ default: m.RecoveryInsightPage })));
+const RecoveryMonthEndReviewPage = lazy(() =>
+  import("./pages/RecoveryMonthEndReview").then((m) => ({ default: m.RecoveryMonthEndReviewPage })),
+);
 const SpendingImpact = lazy(() => import("./pages/SpendingImpact").then((m) => ({ default: m.SpendingImpact })));
 const AddRecurringSchedule = lazy(() => import("./pages/RecurringScheduleForm").then((m) => ({ default: m.AddRecurringSchedule })));
 const EditRecurringSchedule = lazy(() => import("./pages/RecurringScheduleForm").then((m) => ({ default: m.EditRecurringSchedule })));
@@ -144,6 +151,11 @@ function App() {
                   <Route path="/business-profiles/all" element={<AllBusinessProfiles />} />
                   <Route path="/business-profiles/new" element={<CreateBusinessProfile />} />
                   <Route path="/business-profiles/:id/edit" element={<EditBusinessProfile />} />
+                  <Route path="/business-profiles/:id/operating-schedule" element={<OperatingSchedule />} />
+                  <Route
+                    path="/business-profiles/:id/recovery-notifications"
+                    element={<RecoveryNotificationPreferences />}
+                  />
 
                   <Route path="/records" element={<Records />} />
                   <Route path="/records/categories" element={<Categories />} />
@@ -161,6 +173,7 @@ function App() {
                       because the state lives in AiChatContext, not in a page. */}
                   <Route path="/insights/expense-behavior" element={<ExpenseInsight />} />
                   <Route path="/insights/recovery" element={<RecoveryInsightPage />} />
+                  <Route path="/insights/recovery/month-end-review" element={<RecoveryMonthEndReviewPage />} />
                   <Route path="/insights/spending-impact" element={<SpendingImpact />} />
                   {/* The agenda itself lives on Expense insight; these are the
                       declare/edit forms behind it. */}

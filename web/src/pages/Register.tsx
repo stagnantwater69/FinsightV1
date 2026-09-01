@@ -134,6 +134,7 @@ export function Register() {
 
   return (
     <AuthLayout
+      eyebrow="Get started"
       title="Create your account"
       subtitle="Track your business finances with FinSight."
       heroTitle="Set up your account in minutes."

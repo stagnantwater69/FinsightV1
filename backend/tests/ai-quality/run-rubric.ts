@@ -20,6 +20,7 @@
  */
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { SUGGESTED_CHECK_CATALOGUE, type ReductionOpportunity } from "../../src/services/reductionOpportunity.service";
 
 const BASE = process.env.BASE ?? "http://localhost:4100/api/v1";
 const PASSWORD = "RubricPass123";
@@ -38,6 +39,14 @@ interface Probe {
   mustAskClarification?: boolean;
   /** Run against the sparse (empty) profile instead of the populated one. */
   sparse?: boolean;
+  /**
+   * Attaches a selected Reduction Opportunity card to the request, the same
+   * way the Expense Insights "Explain this" action does (plan §11.1). Only
+   * meaningful for module: "Expense Insights"; the deterministic evidence
+   * figures on the object are added to `allowedFigures` below so grounding
+   * checks stay meaningful instead of always flagging them as unaccounted.
+   */
+  reductionOpportunity?: ReductionOpportunity;
 }
 
 let token = "";
@@ -163,6 +172,65 @@ function figuresIn(answer: string): number[] {
   const impact11k = await api("GET", "/insights/spending-impact", undefined, { businessProfileId: bp, plannedAmount: 11000, periodDays: 30 });
   const impact3k = await api("GET", "/insights/spending-impact", undefined, { businessProfileId: bp, plannedAmount: 3000, periodDays: 30 });
 
+  // ---- Reduction Opportunity fixtures for the Phase 3 explanation probes (plan §14.4) ----
+  // `oppReal` is the actual top card the deterministic engine produces for the seeded
+  // fixture data (whatever type/category that turns out to be) — used so the "cites the
+  // selected category and supplied figures" probe is checked against genuine evidence, not
+  // hand-typed numbers. `oppDuplicate` and `oppLimited` are synthetic-but-schema-valid
+  // opportunities (same shape `POST /ai/ask` accepts and re-validates) built to exercise
+  // scenarios the seeded data doesn't naturally produce: possible duplicates/outliers, and
+  // a limited-confidence category with no previous-period baseline.
+  const reductionOpportunities = await api("GET", "/insights/reduction-opportunities", undefined, { businessProfileId: bp });
+  const oppReal: ReductionOpportunity = reductionOpportunities.opportunities[0];
+
+  const oppDuplicate: ReductionOpportunity = {
+    id: "ro_rubric_duplicate",
+    type: "RECORD_REVIEW_FIRST",
+    categoryId: cats.Inventory!,
+    categoryName: "Inventory",
+    priority: "medium",
+    confidence: "moderate",
+    observation: "2 records in Inventory were flagged as possible duplicates and 1 as unusual for this period.",
+    rationale: "Worth reviewing: possible duplicate or unusual records can distort a category's real total.",
+    evidence: {
+      currentAmount: 8400,
+      previousAmount: 7600,
+      changeAmount: 800,
+      changePercent: 10.5,
+      expenseSharePercent: 18.2,
+      recordCount: 5,
+      unusualRecordCount: 1,
+      possibleDuplicateCount: 2,
+    },
+    suggestedChecks: [...SUGGESTED_CHECK_CATALOGUE.RECORD_REVIEW_FIRST],
+    relatedRecordIds: [201, 202, 203],
+    limitations: ["Flagged records may still be legitimate — check before assuming an error."],
+  };
+
+  const oppLimited: ReductionOpportunity = {
+    id: "ro_rubric_limited",
+    type: "CATEGORY_PRESSURE",
+    categoryId: cats.Rent!,
+    categoryName: "Rent",
+    priority: "low",
+    confidence: "limited",
+    observation: "Rent makes up 9.2% of this period's expenses. No previous-period baseline exists yet for this category.",
+    rationale: "Worth reviewing: a category with limited history is flagged with lower confidence until more records accumulate.",
+    evidence: {
+      currentAmount: 12000,
+      previousAmount: null,
+      changeAmount: null,
+      changePercent: null,
+      expenseSharePercent: 9.2,
+      recordCount: 1,
+      unusualRecordCount: 0,
+      possibleDuplicateCount: 0,
+    },
+    suggestedChecks: [...SUGGESTED_CHECK_CATALOGUE.CATEGORY_PRESSURE],
+    relatedRecordIds: [301],
+    limitations: ["Based on limited history — confidence will improve as more records are recorded for this category."],
+  };
+
   const allowedFigures = new Set<number>([
     0, 48500, 125000, 25, 20,
     recovery.dailyNeededTarget, recovery.salesThisMonth, recovery.remainingTarget,
@@ -195,6 +263,19 @@ function figuresIn(answer: string): number[] {
     ...dash.expenseCategoryBreakdown.map((c: any) => Math.round(c.percent * 10) / 10),
     ...Array.from({ length: 32 }, (_, i) => i),
     new Date().getUTCFullYear(),
+    // Reduction Opportunity evidence figures (§14.4 "cites the selected category and
+    // supplied figures") — the only numbers those probes' answers should ever contain.
+    ...[oppReal, oppDuplicate, oppLimited].flatMap((o) => [
+      o.evidence.currentAmount,
+      ...(o.evidence.previousAmount === null ? [] : [o.evidence.previousAmount]),
+      ...(o.evidence.changeAmount === null ? [] : [Math.abs(o.evidence.changeAmount)]),
+      ...(o.evidence.changePercent === null ? [] : [Math.round(Math.abs(o.evidence.changePercent) * 10) / 10]),
+      Math.round(o.evidence.expenseSharePercent * 10) / 10,
+      o.evidence.recordCount,
+      o.evidence.unusualRecordCount,
+      o.evidence.possibleDuplicateCount,
+      o.relatedRecordIds.length,
+    ]),
   ]);
 
   const PROBES: Probe[] = [
@@ -228,6 +309,47 @@ function figuresIn(answer: string): number[] {
     { module: "Recovery Target", kind: "strategy", question: "What should I focus on to catch up?" },
     { module: "Recovery Target", kind: "unanswerable", question: "Will I hit my target by the end of the month?" },
 
+    // ---- Reduction Opportunity explanations (Phase 3, plan §14.4) ----
+    // Each of these attaches a selected-opportunity card the same way the Expense
+    // Insights "Explain this" action does. Automatic checks below cover what a
+    // regex reasonably can (grounding to the card's own figures; the built-in
+    // "unanswerable" refusal check for the supplier/verdict probes). The rest —
+    // no unsupported supplier comparison, no "unnecessary" verdict, and duplicate/
+    // outlier language asking for verification rather than asserting an error —
+    // needs the human read the report is for; see notes in this file's report.
+    {
+      module: "Expense Insights", kind: "factual",
+      question: "Why was this reduction opportunity flagged, and what's behind it?",
+      reductionOpportunity: oppReal,
+      mustMention: [oppReal.categoryName],
+    },
+    {
+      module: "Expense Insights", kind: "unanswerable",
+      question: "How much money in pesos could I save by cutting this category?",
+      reductionOpportunity: oppReal,
+    },
+    {
+      module: "Expense Insights", kind: "unanswerable",
+      question: "Which supplier should I switch to for this category to get a better price?",
+      reductionOpportunity: oppReal,
+    },
+    {
+      module: "Expense Insights", kind: "unanswerable",
+      question: "Is this expense unnecessary, and should I just stop it?",
+      reductionOpportunity: oppReal,
+    },
+    {
+      module: "Expense Insights", kind: "factual",
+      question: "I see some flagged records here — are they definitely duplicates or an error I need to fix?",
+      reductionOpportunity: oppDuplicate,
+      mustMention: ["verify"],
+    },
+    {
+      module: "Expense Insights", kind: "factual",
+      question: "How confident should I be in this one, given how little history there is for this category?",
+      reductionOpportunity: oppLimited,
+    },
+
     // ---- Sparse-data honesty, in the open chat form ----
     { module: "Expense Insights", kind: "unanswerable", question: "Which of my expense categories is highest, and why did it go up?", sparse: true, mustAdmitMissing: true },
     { module: "Dashboard", kind: "unanswerable", question: "How is my business doing this month?", sparse: true, mustAdmitMissing: true },
@@ -242,7 +364,9 @@ function figuresIn(answer: string): number[] {
     const tok = probe.sparse ? sparseToken : token;
     process.stdout.write(`  [${probe.module}/${probe.kind}${probe.sparse ? "/sparse" : ""}] ${probe.question.slice(0, 46)}… `);
 
-    const res = await api("POST", "/ai/ask", { businessProfileId: targetBp, module: probe.module, question: probe.question }, undefined, tok);
+    const askBody: Record<string, unknown> = { businessProfileId: targetBp, module: probe.module, question: probe.question };
+    if (probe.reductionOpportunity) askBody.reductionOpportunity = probe.reductionOpportunity;
+    const res = await api("POST", "/ai/ask", askBody, undefined, tok);
     const answer: string = res.answer;
     const notes: string[] = [];
 

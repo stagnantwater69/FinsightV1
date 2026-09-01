@@ -31,7 +31,12 @@ insightsRouter.use("/recurring-schedules", (_req, _res, next) => {
 });
 
 insightsRouter.get("/expense-behavior", asyncHandler(insightsController.expenseBehavior));
+insightsRouter.get("/reduction-opportunities", asyncHandler(insightsController.reductionOpportunities));
+insightsRouter.post("/reduction-simulation", asyncHandler(insightsController.reductionSimulation));
+insightsRouter.post("/reduction-opportunities/feedback", asyncHandler(insightsController.reductionOpportunityFeedback));
+insightsRouter.post("/recovery-scenario", asyncHandler(insightsController.recoveryScenario));
 insightsRouter.get("/recovery", asyncHandler(insightsController.recoveryInsight));
+insightsRouter.get("/recovery/month-end-review", asyncHandler(insightsController.monthEndReview));
 insightsRouter.get("/spending-impact", asyncHandler(insightsController.spendingImpact));
 insightsRouter.get("/findings", asyncHandler(insightsController.findings));
 insightsRouter.get("/findings/summary", asyncHandler(insightsController.findingsSummary));

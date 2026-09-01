@@ -4,6 +4,7 @@ import type {
   Conversation,
   ConversationDetail,
   InteractionModule,
+  ReductionOpportunity,
 } from "./types";
 
 /**
@@ -46,11 +47,23 @@ import type {
  * ---------------------------------------------------------------------
  * Context is still rebuilt server-side
  * ---------------------------------------------------------------------
- * Sends carry the question and nothing else. The server rebuilds the module
- * context from fresh data on every message and threads this conversation's own
- * recent turns into it, which is what lets a follow-up see a record added
- * seconds ago. Posting a snapshot captured when the sheet opened is exactly the
- * staleness bug that avoids — the same reasoning the original sheet carried.
+ * Almost every send carries the question and nothing else: the server rebuilds
+ * the module context from fresh data on every message and threads this
+ * conversation's own recent turns into it, which is what lets a follow-up see
+ * a record added seconds ago. Posting a snapshot captured when the sheet
+ * opened is exactly the staleness bug that avoids — the same reasoning the
+ * original sheet carried.
+ *
+ * `pendingReductionOpportunity` is the one deliberate exception. It carries
+ * the SAME structured object `GET /insights/reduction-opportunities` already
+ * returned for a SINGLE deep-linked question — see
+ * lib/reductionOpportunityAsk.ts — and is queued only for the next send,
+ * never replayed on a later one. It does not undo the rule above: the server
+ * still rebuilds everything else fresh; it only adds this one flat field to
+ * the request body, matching `askSchema`/`createConversationSchema`/
+ * `appendMessageSchema`'s `reductionOpportunity` field in
+ * backend/src/controllers/ai.controller.ts exactly — never free-form prose
+ * serialized client-side (see the plan's §11.1 warning against that).
  */
 
 /** Everything the store needs from the network, so a test can supply its own. */
@@ -61,8 +74,21 @@ export interface ChatTransport {
     businessProfileId: number;
     originModule: InteractionModule;
     question: string;
+    /**
+     * The selected Reduction Opportunity card for THIS one message — see
+     * lib/reductionOpportunityAsk.ts for the entry point that fills it. Sent
+     * as the verbatim structured object, matching
+     * `createConversationSchema.reductionOpportunity` server-side; the
+     * server only honours it on the "Expense Insights" module and still
+     * rebuilds the rest of the context fresh.
+     */
+    reductionOpportunity?: ReductionOpportunity;
   }): Promise<ChatSendResponse>;
-  sendMessage(conversationId: number, question: string): Promise<ChatSendResponse>;
+  sendMessage(
+    conversationId: number,
+    question: string,
+    reductionOpportunity?: ReductionOpportunity,
+  ): Promise<ChatSendResponse>;
   renameConversation(conversationId: number, title: string): Promise<void>;
   deleteConversation(conversationId: number): Promise<void>;
 }
@@ -85,6 +111,14 @@ export interface ChatState {
 
   // --- the composer ---
   input: string;
+  /**
+   * The reduction opportunity queued for the NEXT send only — see
+   * `ChatTransport.createConversation`'s `reductionOpportunity` field.
+   * Cleared the moment a send is attempted (successful or not), so it can
+   * never bleed into a later, unrelated question the way `input` deliberately
+   * can.
+   */
+  pendingReductionOpportunity: ReductionOpportunity | null;
   sending: boolean;
   error: string | null;
   unavailable: boolean;
@@ -101,6 +135,7 @@ const EMPTY: ChatState = {
   messages: [],
   messagesLoading: false,
   input: "",
+  pendingReductionOpportunity: null,
   sending: false,
   error: null,
   unavailable: false,
@@ -131,6 +166,13 @@ export interface ChatStore {
   setBusinessProfile(id: number | null): void;
   setSeedModule(module: InteractionModule): void;
   setInput(value: string): void;
+  /**
+   * Primes `input` AND `pendingReductionOpportunity` together, in one update
+   * — see lib/reductionOpportunityAsk.ts. A separate setter call would leave
+   * a window where the two could be set in the wrong order, or where a caller
+   * sets one and forgets the other.
+   */
+  prepareQuestion(question: string, reductionOpportunity?: ReductionOpportunity): void;
 
   /** Fetch the history list once per business profile. Safe to call on every open. */
   ensureList(): void;
@@ -162,7 +204,7 @@ export function createChatStore(transport: ChatTransport): ChatStore {
   }
 
   function clearExchangeState(): Partial<ChatState> {
-    return { error: null, unavailable: false, detectedAmount: null };
+    return { error: null, unavailable: false, detectedAmount: null, pendingReductionOpportunity: null };
   }
 
   return {
@@ -203,6 +245,10 @@ export function createChatStore(transport: ChatTransport): ChatStore {
 
     setInput(value) {
       if (value !== state.input) set({ input: value });
+    },
+
+    prepareQuestion(question, reductionOpportunity) {
+      set({ input: question, pendingReductionOpportunity: reductionOpportunity ?? null });
     },
 
     /*
@@ -266,6 +312,9 @@ export function createChatStore(transport: ChatTransport): ChatStore {
       const creating = state.activeId === null;
       const previous = creating ? [] : state.messages;
       const conversationId = state.activeId;
+      // Read before `clearExchangeState()` wipes it below — queued for this
+      // send only, so it must not survive to ground a later, unrelated one.
+      const reductionOpportunity = state.pendingReductionOpportunity ?? undefined;
 
       set({ input: "", sending: true, ...clearExchangeState() });
 
@@ -275,8 +324,11 @@ export function createChatStore(transport: ChatTransport): ChatStore {
               businessProfileId,
               originModule: state.seedModule,
               question,
+              reductionOpportunity,
             })
-          : await transport.sendMessage(conversationId as number, question);
+          : reductionOpportunity
+            ? await transport.sendMessage(conversationId as number, question, reductionOpportunity)
+            : await transport.sendMessage(conversationId as number, question);
 
         const next = [...previous, data.userMessage, data.assistantMessage];
         cache.set(data.conversation.id, next);
@@ -300,8 +352,15 @@ export function createChatStore(transport: ChatTransport): ChatStore {
       } catch (err) {
         // The question goes back in the box rather than being lost with the
         // failure — retyping it is the last thing anyone wants after a network
-        // error on a phone.
-        set({ error: messageOf(err), input: question, sending: false });
+        // error on a phone. Its opportunity goes back with it, so pressing
+        // Send again re-sends the same grounded question rather than a bare
+        // one.
+        set({
+          error: messageOf(err),
+          input: question,
+          pendingReductionOpportunity: reductionOpportunity ?? null,
+          sending: false,
+        });
       }
     },
 

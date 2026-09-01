@@ -79,6 +79,15 @@ export function pagesFromSections(sections: ReceiptSection[]): CapturedPage[] {
     width: section.width,
     height: section.height,
     originalUri: section.originalUri,
+    originalWidth: section.originalWidth ?? section.width,
+    originalHeight: section.originalHeight ?? section.height,
+    captureSource: section.captureSource,
+    processingMode: section.processingMode,
+    transformVersion: section.transformVersion,
+    cropCorners: section.cropCorners,
+    documentConfidence: section.documentConfidence ?? section.edgeConfidence,
+    ownerOverrodeLikelihood: section.ownerOverrodeLikelihood,
+    receiptGroupId: section.receiptGroupId,
   }));
 }
 
@@ -96,7 +105,16 @@ export function sectionsFromPages(pages: CapturedPage[]): ReceiptSection[] {
   return pages.map((page) => ({
     localId: page.key,
     originalUri: page.originalUri ?? page.uri,
+    originalWidth: page.originalWidth ?? page.width,
+    originalHeight: page.originalHeight ?? page.height,
     processedUri: page.uri,
+    captureSource: page.captureSource,
+    processingMode: page.processingMode,
+    transformVersion: page.transformVersion,
+    cropCorners: page.cropCorners,
+    documentConfidence: page.documentConfidence,
+    ownerOverrodeLikelihood: page.ownerOverrodeLikelihood,
+    receiptGroupId: page.receiptGroupId,
     width: page.width,
     height: page.height,
     quality: page.quality,

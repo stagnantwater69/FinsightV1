@@ -146,7 +146,7 @@ describe("receipt image cleanup", () => {
         pages: {
           create: [
             { pageNumber: 1, imageFile: "1/page-1.jpg" },
-            { pageNumber: 2, imageFile: "1/page-2.jpg" },
+            { pageNumber: 2, imageFile: "1/page-2.jpg", processedImageFile: "1/page-2-processed.jpg" },
             { pageNumber: 3, imageFile: "1/page-3.jpg" },
           ],
         },
@@ -166,11 +166,12 @@ describe("receipt image cleanup", () => {
 
     expect(deleteReceiptImageMock).toHaveBeenCalledWith("1/page-1.jpg");
     expect(deleteReceiptImageMock).toHaveBeenCalledWith("1/page-2.jpg");
+    expect(deleteReceiptImageMock).toHaveBeenCalledWith("1/page-2-processed.jpg");
     expect(deleteReceiptImageMock).toHaveBeenCalledWith("1/page-3.jpg");
     // Deduplicated: page 1's file and the scan's own cover are the same path
     // in real usage (uploadAndScan writes the cover as page 1), so a scan
     // with 3 pages must ask Storage to delete 3 objects, not 4.
-    expect(deleteReceiptImageMock).toHaveBeenCalledTimes(3);
+    expect(deleteReceiptImageMock).toHaveBeenCalledTimes(4);
     expect(await prisma.receiptScan.findUnique({ where: { id: scan.id } })).toBeNull();
     expect(await prisma.receiptScanPage.count({ where: { receiptScanId: scan.id } })).toBe(0);
   });

@@ -145,6 +145,12 @@ export function toDTO(scan: ReceiptScan, items: ReceiptScanItem[] = [], pages: R
       ...w,
       guidance: WARNING_GUIDANCE[w.code] ?? null,
     }))),
+    receiptLikelihood: scan.receiptLikelihood ?? null,
+    pageProcessing: ordered.map((page) => ({
+      source: page.ocrSource,
+      hasProcessedVariant: Boolean(page.processedImageFile),
+      captureMetadata: page.captureMetadata ?? null,
+    })),
     /**
      * Where each extracted field was read from: page number, the visible
      * source line, and which engine read it ("ocr" | "vision"). Null for

@@ -11,11 +11,15 @@ import {
   EDGE_CONFIDENCE_FLOOR,
   fullFrameCorners,
   initialCorners,
+  isScannerCancellation,
   MAX_SECTIONS,
   moveSection,
   newSectionId,
   OVERLAP_TARGET,
   overlapGuideHeight,
+  remainingScannerCapacity,
+  scannerFailureMessage,
+  scannerPageUris,
   sectionLabel,
   sectionOrdinal,
   shouldPreselectCorners,
@@ -55,6 +59,60 @@ describe("the section ceiling", () => {
     expect(canAddSection(MAX_SECTIONS - 1)).toBe(true);
     expect(canAddSection(MAX_SECTIONS)).toBe(false);
     expect(canAddSection(MAX_SECTIONS + 1)).toBe(false);
+  });
+
+  it("gives the native scanner only the capacity left in this session", () => {
+    expect(remainingScannerCapacity(0)).toBe(MAX_SECTIONS);
+    expect(remainingScannerCapacity(3)).toBe(MAX_SECTIONS - 3);
+    expect(remainingScannerCapacity(MAX_SECTIONS)).toBe(0);
+    expect(remainingScannerCapacity(MAX_SECTIONS + 2)).toBe(0);
+    expect(remainingScannerCapacity(-2)).toBe(MAX_SECTIONS);
+  });
+});
+
+describe("native document-scanner results", () => {
+  it("keeps unique usable page URIs in capture order and enforces the limit", () => {
+    expect(
+      scannerPageUris(
+        [
+          { uri: " file:///receipt-1.jpg " },
+          { uri: "file:///receipt-1.jpg" },
+          null,
+          { uri: "" },
+          { uri: "file:///receipt-2.jpg" },
+          { uri: "file:///receipt-3.jpg" },
+        ],
+        2,
+      ),
+    ).toEqual(["file:///receipt-1.jpg", "file:///receipt-2.jpg"]);
+  });
+
+  it("treats malformed bridge output as no pages", () => {
+    expect(scannerPageUris(null, 8)).toEqual([]);
+    expect(scannerPageUris({ pages: [] }, 8)).toEqual([]);
+    expect(scannerPageUris([{ nope: "file:///x.jpg" }], 8)).toEqual([]);
+    expect(scannerPageUris([{ uri: "file:///x.jpg" }], 0)).toEqual([]);
+  });
+
+  it("distinguishes owner cancellation from scanner failure", () => {
+    expect(isScannerCancellation(new Error("User cancelled the scanner"))).toBe(true);
+    expect(isScannerCancellation("Scan canceled")).toBe(true);
+    expect(isScannerCancellation(new Error("Google Play Services unavailable"))).toBe(false);
+    expect(isScannerCancellation(null)).toBe(false);
+  });
+
+  it("turns native failures into safe recovery copy", () => {
+    expect(scannerFailureMessage(new Error("Missing NitroModules native implementation"))).toBe(
+      "Auto scan couldn't start on this device or build.",
+    );
+    expect(scannerFailureMessage(new Error("The document scanner returned no receipt pages."))).toBe(
+      "The scanner did not return a receipt image. Try again.",
+    );
+    expect(
+      scannerFailureMessage(
+        new Error("This receipt has more than the 3 sections FinSight can still add. Remove a page in the scanner and try again."),
+      ),
+    ).toMatch(/more than the 3 sections/);
   });
 });
 

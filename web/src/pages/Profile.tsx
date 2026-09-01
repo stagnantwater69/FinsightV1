@@ -33,7 +33,7 @@ export function Profile() {
   if (!profile) {
     return (
       <div>
-        <PageHead eyebrow="Account" title="My Profile" subtitle="Manage your personal account details." />
+        <PageHead title="My Profile" subtitle="Manage your personal account details and sign-in security." />
         <div className="skeleton mb-6 h-24 rounded-2xl" aria-hidden />
         <div className="grid gap-6 lg:grid-cols-2">
           <SkeletonPanel lines={5} />
@@ -76,30 +76,39 @@ export function Profile() {
 
   return (
     <div>
-      <PageHead eyebrow="Account" title="My Profile" subtitle="Manage your personal account details." />
+      <PageHead title="My Profile" subtitle="Manage your personal account details and sign-in security." />
 
-      <Card className="mb-6 flex flex-wrap items-center justify-between gap-4 p-6">
-        <AvatarUpload photoUrl={profile.avatarUrl} label={fullName} onUpload={uploadAvatar} />
-        <div className="min-w-0 flex-1">
-          <h2 className="truncate text-lg font-bold text-ink-900">{fullName}</h2>
-          <p className="text-sm text-ink-500">
-            Small Business Owner · {businessCount} business {businessCount === 1 ? "profile" : "profiles"}
-          </p>
-        </div>
+      <Card className="mb-6 flex flex-col gap-5 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
+        <AvatarUpload
+          photoUrl={profile.avatarUrl}
+          label={fullName}
+          onUpload={uploadAvatar}
+          details={
+            <>
+              <h2 className="truncate text-lg font-bold text-ink-900">{fullName}</h2>
+              <p className="mt-0.5 text-sm text-ink-500">
+                Small Business Owner · {businessCount} business {businessCount === 1 ? "profile" : "profiles"}
+              </p>
+            </>
+          }
+        />
         {/*
           The guided tour, the dashboard greeting and the theme used to be
           reachable from this page. Someone who learned them here will come
           back here looking, so the page says where they went rather than
           leaving them to find the sidebar entry.
         */}
-        <ButtonLink to="/account-settings" variant="secondary">
+        <ButtonLink to="/account-settings" variant="secondary" className="w-full sm:w-auto">
           Account settings
         </ButtonLink>
       </Card>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.08fr)_minmax(24rem,0.92fr)]">
         <Card className="p-6 sm:p-7">
-          <h2 className="mb-4 text-base font-semibold text-ink-900">Personal Details</h2>
+          <div className="mb-5 border-b border-paper-200 pb-4">
+            <h2 className="text-base font-semibold text-ink-900">Personal Details</h2>
+            <p className="mt-1 text-xs leading-relaxed text-ink-500">Keep your contact information accurate and up to date.</p>
+          </div>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="First name" htmlFor="firstName" required>
@@ -147,12 +156,19 @@ export function Profile() {
           </form>
         </Card>
 
-        <div className="space-y-6">
-          <SecurityPanel />
+        <SecurityPanel />
+      </div>
+
+      <section className="mt-8" aria-labelledby="account-access-heading">
+        <div className="mb-4">
+          <h2 id="account-access-heading" className="text-lg font-semibold text-ink-900">Account access</h2>
+          <p className="mt-1 text-sm text-ink-500">Manage signed-in devices or permanently close your account.</p>
+        </div>
+        <div className="grid items-start gap-6 lg:grid-cols-2">
           <SessionsPanel onLogOutEverywhere={logoutEverywhere} />
           <DeleteAccountPanel onDeleted={logout} />
         </div>
-      </div>
+      </section>
     </div>
   );
 }
@@ -186,7 +202,7 @@ function SessionsPanel({ onLogOutEverywhere }: { onLogOutEverywhere: () => Promi
   return (
     <Card className="p-6 sm:p-7">
       <h2 className="mb-1 text-base font-semibold text-ink-900">Devices</h2>
-      <p className="mb-6 text-xs text-ink-500">
+      <p className="mb-6 max-w-[65ch] text-xs leading-relaxed text-ink-500">
         Logging out normally only signs out this browser. If you've lost a phone, or used a computer you don't trust,
         sign out everywhere instead.
       </p>
@@ -239,9 +255,9 @@ function DeleteAccountPanel({ onDeleted }: { onDeleted: () => Promise<void> }) {
   }
 
   return (
-    <Card className="border border-edge-danger p-6 sm:p-7">
+    <Card className="border-edge-danger p-6 sm:p-7">
       <h2 className="mb-1 text-base font-semibold text-tone-danger">Delete account</h2>
-      <p className="mb-4 text-xs text-ink-500">Permanently removes every business, record, receipt image, import, and sign-in credential.</p>
+      <p className="mb-4 max-w-[65ch] text-xs leading-relaxed text-ink-500">Permanently removes every business, record, receipt image, import, and sign-in credential.</p>
       {/*
         No client-side rule beyond "type something": the only thing that can
         judge this password is the server, and the button is already disabled
@@ -320,10 +336,12 @@ function SecurityPanel() {
 
   return (
     <Card className="p-6 sm:p-7">
-      <h2 className="mb-1 text-base font-semibold text-ink-900">Security</h2>
-      <p className="mb-6 text-xs text-ink-500">
-        Change your password. You'll need your current password to confirm it's you.
-      </p>
+      <div className="mb-5 border-b border-paper-200 pb-4">
+        <h2 className="text-base font-semibold text-ink-900">Security</h2>
+        <p className="mt-1 text-xs leading-relaxed text-ink-500">
+          Choose a new password. You'll need your current password to confirm it's you.
+        </p>
+      </div>
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <Field label="Current password" htmlFor="currentPassword" required error={fieldErrors.currentPassword}>

@@ -6,7 +6,7 @@ import { useAuth, errorMessage } from "../context/AuthContext";
 import { useThemeControl } from "../context/ThemeContext";
 import { useTourOptional } from "../context/TourContext";
 import { space } from "../theme/tokens";
-import type { ThemeMode } from "../theme/palette";
+import type { ThemePreference } from "../theme/palette";
 
 /**
  * How this app behaves for this owner.
@@ -35,7 +35,7 @@ import type { ThemeMode } from "../theme/palette";
 
 export function SettingsScreen({ navigation }: any) {
   const { preferences, updatePreferences } = useAuth();
-  const { mode, setMode } = useThemeControl();
+  const { mode, preference, setPreference } = useThemeControl();
   const tour = useTourOptional();
   const [error, setError] = useState<string | null>(null);
 
@@ -95,6 +95,23 @@ export function SettingsScreen({ navigation }: any) {
           </Section>
         ) : null}
 
+        {/*
+          Recovery Target Improvement Plan §7.5/§10.8/§11 Phase 6. A
+          destination row, not a switch here, because the screen behind it is
+          a whole record with its own cross-field rules (a threshold percent,
+          quiet hours, a cooldown) — the same reason Operating schedule below
+          is a destination and not a row of switches on this screen.
+        */}
+        <Section title="Recovery target">
+          <Row
+            first
+            icon="notifications-outline"
+            label="Notification settings"
+            detail="Choose when FinSight alerts you about changes to your Sales Coverage Target — target increases, falling behind pace, and reaching your goal."
+            onPress={() => navigation.navigate("RecoveryNotificationPreferences")}
+          />
+        </Section>
+
         <Section title="Daily mascot message">
           <Row
             first
@@ -113,36 +130,55 @@ export function SettingsScreen({ navigation }: any) {
         </Section>
 
         {/*
-          APPEARANCE, as a segmented control rather than two more rows.
+          APPEARANCE, as a segmented control rather than three more rows.
 
-          Light and Dark are one choice with two answers, and a pair of
-          switches would let an owner set both or neither. The segmented
-          control is the app's existing "one of these" control — the same one
-          the insight screens and the period switchers use — so this introduces
-          no new shape, no new colour and no new motion.
+          Light, Dark and "the phone decides" are one choice with three
+          answers, and a set of switches would let an owner set all of them or
+          none. The segmented control is the app's existing "one of these"
+          control — the same one the insight screens and the period switchers
+          use — so this introduces no new shape, no new colour and no new
+          motion.
 
-          TWO OPTIONS ONLY, deliberately: no system/auto. "What did I pick" has
-          exactly one answer here, and following the OS would make the app
-          change appearance on its own at sunset with nothing in Settings to
-          explain it. See lib/themeStore.ts.
+          "AUTO" RATHER THAN "SYSTEM" ON THE CHIP because three chips share one
+          row on a 360dp phone at a scaled-up font, and "Use device setting"
+          does not fit in a third of it. The full sentence is in the caption
+          above and in the accessible label below, where there is room for it —
+          the chip is the short name, not the explanation.
+
+          BOUND TO `preference`, NOT `mode`. With Auto selected, `mode` is
+          whichever palette the phone is currently doing; a control bound to it
+          would show Light or Dark as the selected chip and quietly lose the
+          owner's actual answer the first time they opened this screen.
         */}
         <Section title="Appearance">
           <View style={{ paddingVertical: space.sm, gap: space.md }}>
             <T variant="caption">
-              Applies to this phone only, so a dark screen at the stall in the evening does not follow you onto
-              another device.
+              Auto follows your phone&apos;s light or dark setting. Applies to this phone only, so a dark screen at
+              the stall in the evening does not follow you onto another device.
             </T>
-            <SegmentedControl<ThemeMode>
+            <SegmentedControl<ThemePreference>
               accessibilityLabel="Appearance"
               options={
                 [
                   { label: "Light", value: "light", icon: "sunny-outline" },
                   { label: "Dark", value: "dark", icon: "moon-outline" },
+                  { label: "Auto", value: "system", icon: "phone-portrait-outline" },
                 ] as const
               }
-              value={mode}
-              onChange={setMode}
+              value={preference}
+              onChange={setPreference}
             />
+            {/*
+              What Auto currently RESOLVES TO, said in words. "Auto" alone
+              leaves an owner unable to tell a broken setting from a phone
+              that is simply in Light mode right now, and it is the one line
+              that makes the chip's effect checkable without leaving Settings.
+            */}
+            {preference === "system" ? (
+              <T variant="caption">
+                Your phone is set to {mode === "dark" ? "Dark" : "Light"} right now.
+              </T>
+            ) : null}
           </View>
         </Section>
       </ScrollView>

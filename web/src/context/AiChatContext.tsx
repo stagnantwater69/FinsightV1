@@ -10,6 +10,7 @@ import type {
   Conversation,
   ConversationDetail,
   InteractionModule,
+  ReductionOpportunity,
 } from "../lib/types";
 
 /**
@@ -46,18 +47,31 @@ import type {
  * ---------------------------------------------------------------------
  * Context is still rebuilt server-side
  * ---------------------------------------------------------------------
- * Sends carry {businessProfileId, question} and nothing else. The server
- * rebuilds the module context from fresh data on every message and threads the
- * conversation's own recent turns into it. Posting a context snapshot captured
- * when the drawer opened is exactly the staleness bug this avoids — the same
- * reasoning the first drawer carried, unchanged.
+ * Sends carry {businessProfileId, question} and, for the one message that
+ * consumes it, an optional `reductionOpportunity` block (see
+ * `pendingReductionOpportunityRef` below, and `askSchema.reductionOpportunity`
+ * on the backend). It is the SAME structured object the reduction-opportunity
+ * card already showed the owner — never free-form prose — and it only steers
+ * wording; the server still rebuilds the module context from current data on
+ * every message and threads the conversation's own recent turns into it.
+ * Posting a full context snapshot captured when the drawer opened, and
+ * trusting it as authoritative, is exactly the staleness bug this still
+ * avoids — the same reasoning the first drawer carried, unchanged.
  */
 
 interface AiChatValue {
   // --- the drawer, as a view ---
   open: boolean;
-  /** Open it from a module, optionally priming the box with a ready question. */
-  openChat: (originModule: InteractionModule, initialQuestion?: string) => void;
+  /**
+   * Open it from a module, optionally priming the box with a ready question
+   * and/or the selected reduction opportunity for the first message that
+   * sends it (see `pendingReductionOpportunityRef`).
+   */
+  openChat: (
+    originModule: InteractionModule,
+    initialQuestion?: string,
+    reductionOpportunity?: ReductionOpportunity,
+  ) => void;
   closeChat: () => void;
 
   /** Where the next NEW conversation will say it started. */
@@ -127,6 +141,15 @@ export function AiChatProvider({ children }: { children: ReactNode }) {
   /** The conversation a fetch was started for, so a slow one cannot land late over a newer choice. */
   const wantedRef = useRef<number | null>(null);
 
+  /**
+   * The selected reduction opportunity, set by `openChat`, consumed by the
+   * very NEXT `send()` and cleared immediately after — so it can never
+   * attach itself to a second message an owner sends later in the same
+   * conversation. A ref rather than state: nothing renders differently while
+   * it is armed, it is just a hand-off between two calls.
+   */
+  const pendingReductionOpportunityRef = useRef<ReductionOpportunity | null>(null);
+
   // --- the composer ---
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -151,6 +174,7 @@ export function AiChatProvider({ children }: { children: ReactNode }) {
     setMessages([]);
     wantedRef.current = null;
     cacheRef.current.clear();
+    pendingReductionOpportunityRef.current = null;
   }, [businessProfileId]);
 
   /*
@@ -201,13 +225,19 @@ export function AiChatProvider({ children }: { children: ReactNode }) {
    * Opening seeds the origin for the next new conversation and may prime the
    * box, and that is the whole of it.
    */
-  const openChat = useCallback((originModule: InteractionModule, initialQuestion?: string) => {
-    setSeedModule(originModule);
-    // Only ever pre-fills the box — the same thing clicking a starter chip
-    // does. It never sends on the owner's behalf.
-    if (initialQuestion) setInput(initialQuestion);
-    setOpen(true);
-  }, []);
+  const openChat = useCallback(
+    (originModule: InteractionModule, initialQuestion?: string, reductionOpportunity?: ReductionOpportunity) => {
+      setSeedModule(originModule);
+      // Only ever pre-fills the box — the same thing clicking a starter chip
+      // does. It never sends on the owner's behalf.
+      if (initialQuestion) setInput(initialQuestion);
+      // Armed for whichever message goes out next, from whichever
+      // conversation (new or already open) is current when that happens.
+      pendingReductionOpportunityRef.current = reductionOpportunity ?? null;
+      setOpen(true);
+    },
+    [],
+  );
 
   const closeChat = useCallback(() => setOpen(false), []);
 
@@ -217,6 +247,7 @@ export function AiChatProvider({ children }: { children: ReactNode }) {
     setMessages([]);
     setMessagesLoading(false);
     setInput("");
+    pendingReductionOpportunityRef.current = null;
     clearExchangeState();
   }, [clearExchangeState]);
 
@@ -262,6 +293,12 @@ export function AiChatProvider({ children }: { children: ReactNode }) {
       const creating = activeId === null;
       const previous = creating ? [] : messages;
 
+      // Consumed here, once, whatever the outcome — so a retry after a
+      // failed send does not silently reattach a card an owner may have
+      // already navigated away from.
+      const reductionOpportunity = pendingReductionOpportunityRef.current;
+      pendingReductionOpportunityRef.current = null;
+
       setInput("");
       setSending(true);
       clearExchangeState();
@@ -272,10 +309,12 @@ export function AiChatProvider({ children }: { children: ReactNode }) {
               businessProfileId,
               originModule: seedModule,
               question,
+              ...(reductionOpportunity ? { reductionOpportunity } : {}),
             })
           : await api.post<ChatSendResponse>(`/ai/conversations/${activeId}/messages`, {
               businessProfileId,
               question,
+              ...(reductionOpportunity ? { reductionOpportunity } : {}),
             });
 
         const next = [...previous, data.userMessage, data.assistantMessage];

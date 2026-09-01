@@ -2,12 +2,38 @@ import type { ReceiptWarning } from "../../lib/receiptWarnings";
 import type { ReconciliationMode } from "../../lib/allocation";
 import type { ParsedLineItem, ParsedReceiptFields } from "../ocr.service";
 import type { VisionRejectReason } from "../visionOcr.service";
+import type { VeryfiRejectReason } from "../veryfiOcr.service";
 
 /** One photographed page of a receipt, as it arrives from the upload. */
 export interface UploadPage {
   buffer: Buffer;
   mimetype: string;
   originalname: string;
+  /** Optional derived scanner/crop output. `buffer` always remains evidence. */
+  processed?: {
+    buffer: Buffer;
+    mimetype: string;
+    originalname: string;
+  };
+  metadata?: ReceiptCaptureMetadata;
+}
+
+export interface ReceiptCaptureMetadata {
+  source?: "manual-camera" | "native-document-scanner" | "gallery";
+  processingMode?: "original" | "manual-crop" | "native-selected" | "clear-colour" | "grayscale" | "black-white";
+  originalWidth?: number;
+  originalHeight?: number;
+  processedWidth?: number;
+  processedHeight?: number;
+  corners?: {
+    topLeft: { x: number; y: number };
+    topRight: { x: number; y: number };
+    bottomRight: { x: number; y: number };
+    bottomLeft: { x: number; y: number };
+  };
+  transformVersion?: string;
+  documentConfidence?: number;
+  ownerOverrodeLikelihood?: boolean;
 }
 
 /**
@@ -103,12 +129,16 @@ export interface RescuedFields extends ParsedReceiptFields {
   visionTrigger: string | null;
   /** Wall-clock ms of the vision call. Null when no call was made. */
   visionLatencyMs: number | null;
-  /** "gemini" when the provider actually answered (accepted OR rejected); null when it was never usefully reached. */
-  visionProvider: "gemini" | null;
+  /**
+   * Which rescue provider actually answered (accepted OR rejected); null when
+   * none was usefully reached. "veryfi" only appears here when Veryfi was
+   * tried and reached — see rescueWithVeryfi and worker.ts's fallback order.
+   */
+  visionProvider: "gemini" | "veryfi" | null;
   /** The model that answered, parsed from the endpoint actually called. Null when visionProvider is null. */
   visionModel: string | null;
   /** Why an answered rescue was thrown away at the validation boundary, or null. */
-  visionRejectReason: VisionRejectReason | null;
+  visionRejectReason: VisionRejectReason | VeryfiRejectReason | null;
   /** Verifier outcome on a high-risk result: "accepted" | "rejected:<fields>" | null when it never ran. */
   verifier: string | null;
   /** Warnings raised by the model or the verifier, already in the shared vocabulary. */

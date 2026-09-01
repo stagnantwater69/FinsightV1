@@ -163,7 +163,7 @@ export function KpiCard({
   label: string;
   value: ReactNode;
   meta?: ReactNode;
-  glyph: string;
+  glyph: ReactNode;
   tone?: keyof typeof KPI_TONES;
   valueClassName?: string;
 }) {

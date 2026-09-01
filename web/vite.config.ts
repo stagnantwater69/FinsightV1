@@ -7,6 +7,25 @@ import react from '@vitejs/plugin-react'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  server: {
+    /*
+     * The frontend calls a relative `/api/v1` base (see web/.env) rather
+     * than an absolute `http://localhost:4000`, and this proxy is what makes
+     * that resolve — forwarded server-side to the backend on this same
+     * machine. An absolute localhost URL only works when the browser IS
+     * that machine; it breaks the moment the page is opened through a
+     * devtunnel/ngrok-style forwarded URL, because "localhost" then means
+     * the browser's own machine, which has nothing listening on :4000.
+     * Proxying keeps API calls same-origin as the page, so they ride
+     * whatever origin actually loaded it.
+     */
+    proxy: {
+      "/api": {
+        target: "http://localhost:4000",
+        changeOrigin: true,
+      },
+    },
+  },
   test: {
     /*
      * `node` stays the DEFAULT, with jsdom opted into per file via a

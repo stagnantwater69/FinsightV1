@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { createChatStore, type ChatStore, type ChatTransport } from "../src/lib/chatStore";
-import type { ChatMessage, ChatSendResponse, Conversation, ConversationDetail } from "../src/lib/types";
+import type {
+  ChatMessage,
+  ChatSendResponse,
+  Conversation,
+  ConversationDetail,
+  ReductionOpportunity,
+} from "../src/lib/types";
 
 /**
  * The rules Ask FinSight's conversations have to obey.
@@ -31,6 +37,33 @@ const message = (id: number, role: "user" | "assistant", content: string): ChatM
   role,
   content,
   createdAt: "2026-08-01T00:00:00.000Z",
+});
+
+/** A minimal but shape-valid opportunity, matching `reductionOpportunitySchema` in ai.controller.ts. */
+const opportunity = (over: Partial<ReductionOpportunity> = {}): ReductionOpportunity => ({
+  id: "opp-1",
+  type: "CATEGORY_PRESSURE",
+  categoryId: 10,
+  categoryName: "Stock",
+  priority: "high",
+  confidence: "strong",
+  observation: "Stock rose sharply against the period before.",
+  rationale: "Stock is 42% of expenses this period, up from 28%.",
+  evidence: {
+    currentAmount: 8400,
+    previousAmount: 5200,
+    changeAmount: 3200,
+    changePercent: 61.5,
+    expenseSharePercent: 42,
+    recordCount: 9,
+    unusualRecordCount: 1,
+    possibleDuplicateCount: 0,
+  },
+  costBehavior: "unclassified",
+  suggestedChecks: ["Compare supplier prices"],
+  relatedRecordIds: [101, 102],
+  limitations: [],
+  ...over,
 });
 
 const sendResponse = (conv: Conversation, question: string, answer: string): ChatSendResponse => ({
@@ -309,6 +342,76 @@ describe("renaming and deleting", () => {
     await store.remove(3);
     expect(store.getState().conversations).toHaveLength(1);
     expect(store.getState().error).toBe("Request failed (500)");
+  });
+});
+
+describe("a queued reduction opportunity", () => {
+  /**
+   * The Reduction Opportunities deep link (lib/reductionOpportunityAsk.ts)
+   * primes both the composer and this in one call, so the two can never be
+   * set out of order or one forgotten. The object sent over the wire is the
+   * verbatim `ReductionOpportunity`, matching
+   * `createConversationSchema.reductionOpportunity`/
+   * `appendMessageSchema.reductionOpportunity` in
+   * backend/src/controllers/ai.controller.ts — never a client-serialized
+   * string.
+   */
+  it("sends the queued opportunity on the very next send, then forgets it", async () => {
+    const transport = fakeTransport();
+    const store = ready(transport);
+    const target = opportunity();
+
+    store.prepareQuestion("Why was this selected?", target);
+    expect(store.getState().input).toBe("Why was this selected?");
+
+    await store.send(store.getState().input);
+    expect(transport.createConversation).toHaveBeenCalledWith({
+      businessProfileId: 1,
+      originModule: "Dashboard",
+      question: "Why was this selected?",
+      reductionOpportunity: target,
+    });
+    expect(store.getState().pendingReductionOpportunity).toBeNull();
+
+    // The next send is an ordinary follow-up — no stale opportunity is replayed.
+    await store.send("And what about last month?");
+    expect(transport.sendMessage).toHaveBeenCalledWith(7, "And what about last month?");
+  });
+
+  it("carries the queued opportunity onto an already-open conversation as a 3-argument call", async () => {
+    const transport = fakeTransport();
+    const store = ready(transport);
+    await store.send("first question"); // opens conversation 7
+
+    const target = opportunity({ id: "opp-2" });
+    store.prepareQuestion("Why was this selected?", target);
+    await store.send(store.getState().input);
+
+    expect(transport.sendMessage).toHaveBeenLastCalledWith(7, "Why was this selected?", target);
+  });
+
+  it("restores the queued opportunity alongside the question if the send fails", async () => {
+    const transport = fakeTransport({
+      createConversation: vi.fn(async () => {
+        throw new Error("Couldn't reach FinSight.");
+      }),
+    });
+    const store = ready(transport);
+    const target = opportunity();
+
+    store.prepareQuestion("Why was this selected?", target);
+    await store.send(store.getState().input);
+
+    expect(store.getState().input).toBe("Why was this selected?");
+    expect(store.getState().pendingReductionOpportunity).toEqual(target);
+  });
+
+  it("is dropped by starting a new chat, so it cannot bleed into a later question", async () => {
+    const store = ready(fakeTransport());
+    store.prepareQuestion("Why was this selected?", opportunity());
+
+    store.newChat();
+    expect(store.getState().pendingReductionOpportunity).toBeNull();
   });
 });
 

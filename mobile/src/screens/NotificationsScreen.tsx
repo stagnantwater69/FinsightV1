@@ -3,7 +3,14 @@ import { ActivityIndicator, Pressable, RefreshControl, ScrollView, View } from "
 import { useFocusEffect } from "@react-navigation/native";
 import { Alert, Button, EmptyState, ErrorNote, Screen, T } from "../components/ui";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
-import { api, errorMessage } from "../lib/api";
+import { api } from "../lib/api";
+import { ConnectionNotice, LastUpdated } from "../components/ConnectionNotice";
+import {
+  describeActionFailure,
+  describeLoadFailure,
+  toLoadFailure,
+  type LoadFailure,
+} from "../lib/connectionState";
 import { alertKindFromType } from "../lib/money";
 import { radius, space } from "../theme/tokens";
 import { useTheme } from "../context/ThemeContext";
@@ -29,7 +36,12 @@ export function NotificationsScreen() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  /** A failed "mark read" — a different reassurance from a failed load. */
   const [error, setError] = useState<string | null>(null);
+  /** A failed fetch, kept as a descriptor. See lib/connectionState.ts. */
+  const [loadFailure, setLoadFailure] = useState<LoadFailure | null>(null);
+  const [loadedAt, setLoadedAt] = useState<number | null>(null);
+  const [clock, setClock] = useState(() => Date.now());
 
   const load = useCallback(
     async (isRefresh = false) => {
@@ -40,12 +52,15 @@ export function NotificationsScreen() {
         setLoading(true);
       }
       setError(null);
+      setClock(Date.now());
       try {
         setNotifications(
           await api.get<Notification[]>("/notifications", { businessProfileId: selected.id }),
         );
+        setLoadedAt(Date.now());
+        setLoadFailure(null);
       } catch (err) {
-        setError(errorMessage(err));
+        setLoadFailure(toLoadFailure(err));
       } finally {
         setLoading(false);
         setRefreshing(false);
@@ -69,7 +84,7 @@ export function NotificationsScreen() {
       // Put it back. Leaving it looking read when the server still has it
       // unread would be lying about the state of their alerts.
       setNotifications(previous);
-      setError(errorMessage(err));
+      setError(describeActionFailure(toLoadFailure(err), "The alert is still unread."));
     }
   }
 
@@ -81,7 +96,7 @@ export function NotificationsScreen() {
       await api.patch("/notifications/read-all", undefined, { businessProfileId: selected.id });
     } catch (err) {
       setNotifications(previous);
-      setError(errorMessage(err));
+      setError(describeActionFailure(toLoadFailure(err), "Your alerts are still unread."));
     }
   }
 
@@ -122,8 +137,32 @@ export function NotificationsScreen() {
 
         {error ? <ErrorNote>{error}</ErrorNote> : null}
 
+        <ConnectionNotice
+          notice={describeLoadFailure(loadFailure, {
+            hasData: notifications.length > 0,
+            lastUpdatedAt: loadedAt,
+            now: clock,
+            subject: "your alerts",
+          })}
+          onRetry={() => load(true)}
+          busy={refreshing}
+          style={{ marginBottom: space.md }}
+        />
+
+        {notifications.length > 0 ? (
+          <LastUpdated at={loadedAt} now={clock} style={{ marginBottom: space.sm }} />
+        ) : null}
+
         {loading ? (
           <ActivityIndicator color={brand[600]} style={{ marginTop: space.xxl }} />
+        ) : notifications.length === 0 && loadFailure ? (
+          /*
+            "Nothing needs your attention" is the WORST possible sentence to
+            show over a failed fetch: it is an all-clear on the screen whose
+            entire job is to raise duplicates and unusually large expenses.
+            The notice above says what actually happened instead.
+          */
+          null
         ) : notifications.length === 0 ? (
           <EmptyState
             title="Nothing needs your attention"

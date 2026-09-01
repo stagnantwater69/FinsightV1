@@ -17,6 +17,7 @@ vi.mock("../../src/services/storage.service", () => ({
   uploadReceiptImage: vi.fn(async () => "1/mock-receipt.jpg"),
   uploadCsvFile: vi.fn(async () => "1/mock.csv"),
   signedReceiptImageUrl: vi.fn(async () => "https://example.test/signed.jpg"),
+  deleteReceiptImage: vi.fn(async () => true),
 }));
 
 const { ocrGate } = vi.hoisted(() => ({
@@ -119,6 +120,54 @@ describe("POST /api/v1/records/receipts", () => {
       .set(...AUTH)
       .field("businessProfileId", String(ctx.profile.id));
 
+    expect(res.status).toBe(400);
+  });
+
+  it("accepts paired original and processed pages with validated provenance", async () => {
+    const metadata = [{
+      source: "manual-camera",
+      processingMode: "manual-crop",
+      originalWidth: 1200,
+      originalHeight: 2000,
+      processedWidth: 900,
+      processedHeight: 1700,
+      corners: {
+        topLeft: { x: 100, y: 100 }, topRight: { x: 1000, y: 100 },
+        bottomRight: { x: 1000, y: 1800 }, bottomLeft: { x: 100, y: 1800 },
+      },
+      transformVersion: "manual-axis-crop-v1",
+    }];
+    const res = await request(app)
+      .post("/api/v1/records/receipts")
+      .set(...AUTH)
+      .field("businessProfileId", String(ctx.profile.id))
+      .field("captureMetadata", JSON.stringify(metadata))
+      .attach("files", PNG, { filename: "processed.jpg", contentType: "image/jpeg" })
+      .attach("originalFiles", PNG, { filename: "original.jpg", contentType: "image/jpeg" });
+
+    expect(res.status).toBe(202);
+    await waitForScanProcessing(res.body.id);
+    const page = await prisma.receiptScanPage.findFirstOrThrow({ where: { receiptScanId: res.body.id } });
+    expect(page.processedImageFile).not.toBeNull();
+    expect(page.captureMetadata).toMatchObject({ processingMode: "manual-crop" });
+    expect(page.originalRawText).toContain("TOTAL 1220.00");
+    expect(page.processedRawText).toContain("TOTAL 1220.00");
+  });
+
+  it("rejects crop metadata whose corners leave the original image", async () => {
+    const res = await request(app)
+      .post("/api/v1/records/receipts")
+      .set(...AUTH)
+      .field("businessProfileId", String(ctx.profile.id))
+      .field("captureMetadata", JSON.stringify([{
+        originalWidth: 100,
+        originalHeight: 100,
+        corners: {
+          topLeft: { x: 0, y: 0 }, topRight: { x: 101, y: 0 },
+          bottomRight: { x: 101, y: 100 }, bottomLeft: { x: 0, y: 100 },
+        },
+      }]))
+      .attach("files", PNG, { filename: "receipt.jpg", contentType: "image/jpeg" });
     expect(res.status).toBe(400);
   });
 

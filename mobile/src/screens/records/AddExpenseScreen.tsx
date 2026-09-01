@@ -2,7 +2,8 @@ import { useRef, useState } from "react";
 import { KeyboardAvoidingView, Platform, ScrollView, TextInput } from "react-native";
 import { Button, Card, ErrorNote, Field, Screen, T } from "../../components/ui";
 import { useBusinessProfiles } from "../../context/BusinessProfileContext";
-import { api, errorMessage } from "../../lib/api";
+import { api } from "../../lib/api";
+import { saveFailureMessage } from "../../lib/connectionState";
 import { setFlash } from "../../lib/flash";
 import { DateField } from "../../components/DateField";
 import * as haptics from "../../lib/haptics";
@@ -50,7 +51,11 @@ export function AddExpenseScreen({ navigation }: any) {
       setFlash("Expense saved.");
       navigation.goBack();
     } catch (err) {
-      setError(errorMessage(err));
+      // The form keeps every field — nothing here is cleared on a failure and
+      // the screen only navigates away on success — so the message is allowed
+      // to say so. It stops short of promising a background retry, because
+      // there is no queue behind it. See lib/connectionState.ts.
+      setError(saveFailureMessage(err, "Save expense"));
     } finally {
       setBusy(false);
     }

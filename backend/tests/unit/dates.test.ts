@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  resolveBusinessToday,
   utcAddDays,
   utcDateKey,
   utcDayOfMonth,
@@ -149,5 +150,43 @@ describe("utcToday", () => {
 
   it("matches the current UTC calendar day", () => {
     expect(utcDateKey(utcToday())).toBe(new Date().toISOString().slice(0, 10));
+  });
+});
+
+describe("resolveBusinessToday", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("is already the next local day in Asia/Manila (UTC+8) while UTC is still on the previous day", () => {
+    // 20:00 UTC on the 25th is 04:00 the next morning in Manila.
+    vi.setSystemTime(new Date("2026-07-25T20:00:00.000Z"));
+    expect(utcDateKey(utcToday())).toBe("2026-07-25");
+    expect(utcDateKey(resolveBusinessToday("Asia/Manila"))).toBe("2026-07-26");
+  });
+
+  it("is still on the previous local day in America/Los_Angeles while UTC has already rolled over — not a hardcoded +8", () => {
+    // 02:00 UTC on the 26th is 19:00 the previous evening in Los Angeles (PDT, UTC-7).
+    vi.setSystemTime(new Date("2026-07-26T02:00:00.000Z"));
+    expect(utcDateKey(utcToday())).toBe("2026-07-26");
+    expect(utcDateKey(resolveBusinessToday("America/Los_Angeles"))).toBe("2026-07-25");
+  });
+
+  it("returns a UTC-midnight-encoded Date, matching the date-only construction convention used elsewhere", () => {
+    vi.setSystemTime(new Date("2026-07-25T20:00:00.000Z"));
+    const result = resolveBusinessToday("Asia/Manila");
+    expect(result.getUTCHours()).toBe(0);
+    expect(result.getUTCMinutes()).toBe(0);
+    expect(result.getUTCSeconds()).toBe(0);
+    expect(result.getUTCMilliseconds()).toBe(0);
+  });
+
+  it("agrees with utcToday() when the local zone and UTC are on the same calendar day", () => {
+    vi.setSystemTime(new Date("2026-07-25T05:00:00.000Z"));
+    expect(utcDateKey(resolveBusinessToday("Asia/Manila"))).toBe(utcDateKey(utcToday()));
   });
 });

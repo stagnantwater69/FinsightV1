@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Link } from "react-router-dom";
 
 /**
  * Empty states as invitations, not dead ends.
@@ -128,7 +129,13 @@ export function SetupProgress({
             >
               {s.done ? "✓" : ""}
             </span>
-            <span className={s.done ? "text-ink-400 line-through" : "text-ink-700"}>{s.label}</span>
+            {s.href && !s.done ? (
+              <Link className="tap-inline font-medium text-brand-700 hover:text-brand-800" to={s.href}>
+                {s.label}
+              </Link>
+            ) : (
+              <span className={s.done ? "text-ink-400 line-through" : "text-ink-700"}>{s.label}</span>
+            )}
           </li>
         ))}
       </ol>

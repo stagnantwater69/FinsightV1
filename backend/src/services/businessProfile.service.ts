@@ -10,6 +10,7 @@ interface CreateInput {
   expectedMonthlyExpenses: number;
   operatingDays: number;
   largeExpenseThresholdPercent?: number;
+  timezone?: string;
 }
 
 interface UpdateInput {
@@ -19,6 +20,7 @@ interface UpdateInput {
   expectedMonthlyExpenses?: number;
   operatingDays?: number;
   largeExpenseThresholdPercent?: number;
+  timezone?: string;
 }
 
 // Every read/write path below includes this so the card grid in the web UI
@@ -40,6 +42,7 @@ function toDTO(profile: ProfileWithCount) {
     expectedMonthlyExpenses: Number(profile.expectedMonthlyExpenses),
     operatingDays: profile.operatingDays,
     largeExpenseThresholdPercent: Number(profile.largeExpenseThresholdPercent),
+    timezone: profile.timezone,
     logoUrl: profile.logoUrl,
     createdAt: profile.createdAt,
     archivedAt: profile.archivedAt,

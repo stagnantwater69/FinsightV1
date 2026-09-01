@@ -37,12 +37,7 @@ export function NotFound() {
       className="relative flex min-h-screen flex-col items-center justify-center bg-paper-50 px-4 py-6 text-center sm:px-6"
     >
       <span className="flex items-center gap-2.5">
-        <span
-          aria-hidden
-          className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-700 font-display text-sm font-extrabold text-white"
-        >
-          F
-        </span>
+        <img src="/finsight-logo.png" alt="" aria-hidden className="h-10 w-10 rounded-lg object-contain" />
         <span className="font-display text-lg font-extrabold tracking-[-0.02em] text-ink-900">
           Fin<span className="text-brand-700">Sight</span>
         </span>

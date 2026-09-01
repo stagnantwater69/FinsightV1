@@ -2,45 +2,96 @@ import { useCallback, useRef, useState } from "react";
 import { Dimensions, Modal, Pressable, RefreshControl, ScrollView, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
-import { Button, Callout, Card, EmptyState, ErrorNote, Money, Screen, SetupProgress, StatTile, T } from "../components/ui";
+import { Button, Callout, Card, EmptyState, ErrorNote, Money, Screen, SetupProgress, T } from "../components/ui";
 import { HomeHeader } from "../components/HomeHeader";
-import { QuickActions, type QuickAction } from "../components/QuickActions";
 import { CashflowChart } from "../components/charts";
 import { GreetingHero } from "../components/GreetingHero";
 import { AskFinSightFab, FAB_CLEARANCE } from "../components/AskFinSightFab";
 import { AskFinSight } from "../components/AskFinSight";
 import { SpendingBreakdownCard } from "../components/SpendingBreakdownCard";
+import { TopReductionOpportunityCard } from "../components/TopReductionOpportunityCard";
 import { SkeletonBox, SkeletonDashboard } from "../components/Skeleton";
+import { mascotSource } from "../components/MascotState";
 import { useAuth } from "../context/AuthContext";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useTourHomeStage } from "../context/TourContext";
 import { useTourScrollView, useTourTarget } from "../components/tour/targets";
-import { api, errorMessage } from "../lib/api";
-import { TAP, radius, space, typeScale } from "../theme/tokens";
+import { api } from "../lib/api";
+import { ConnectionNotice, LastUpdated } from "../components/ConnectionNotice";
+import { describeLoadFailure, toLoadFailure, type LoadFailure } from "../lib/connectionState";
+import { selectTopOpportunity } from "../lib/topReductionOpportunity";
+import { formatMoney } from "../lib/money";
+import { font, radius, space, typeScale } from "../theme/tokens";
+import { TAP_FLOOR } from "../components/touchTarget";
 import { useTheme } from "../context/ThemeContext";
-import type { CashflowGranularity, DashboardCashflow, DashboardSummary } from "../lib/types";
+import type {
+  CashflowGranularity,
+  DashboardCashflow,
+  DashboardSummary,
+  ReductionOpportunity,
+  ReductionOpportunityResponse,
+} from "../lib/types";
 
-/** The dashboard summary (available funds, sales, expenses) is always this month — the period selector was removed. */
 const SUMMARY_PERIOD_DAYS = 30;
-
-/**
- * "All time", matching ALL_TIME_PERIOD on the server: no lower date bound.
- *
- * NOT a period selector coming back. The one above was removed deliberately and
- * this does not reinstate it — there is no control on screen offering these as
- * a choice. It is an escape hatch, reachable only from the notice that appears
- * when the fixed month is empty AND the business has records outside it.
- *
- * Without it a phone had no way at all to see imported history: the window is
- * hard-coded, so an owner whose records end more than 30 days ago could be told
- * their data exists and still never see a figure derived from it.
- */
 const ALL_TIME_PERIOD_DAYS = 0;
+const PERIOD_OPTIONS = [
+  { label: "Today", days: 1 },
+  { label: "Week", days: 7 },
+  { label: "Month", days: 30 },
+  { label: "All time", days: 0 },
+] as const;
 
 const GRANULARITY_OPTIONS: { label: string; value: CashflowGranularity }[] = [
   { label: "Daily", value: "daily" },
   { label: "Monthly", value: "monthly" },
 ];
+
+function PeriodSelector({ value, onChange }: { value: number; onChange: (days: number) => void }) {
+  const t = useTheme();
+  return (
+    <View
+      style={{
+        flexDirection: "row",
+        padding: 4,
+        borderRadius: radius.md,
+        backgroundColor: t.surfaceMuted,
+        borderWidth: 1,
+        borderColor: t.border,
+      }}
+    >
+      {PERIOD_OPTIONS.map((option) => {
+        const selected = value === option.days;
+        return (
+          <Pressable
+            key={option.days}
+            accessibilityRole="radio"
+            accessibilityLabel={option.label}
+            accessibilityState={{ checked: selected }}
+            onPress={() => onChange(option.days)}
+            style={({ pressed }) => ({
+              flex: 1,
+              minHeight: TAP_FLOOR,
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: radius.sm,
+              backgroundColor: selected ? t.surface : pressed ? t.surfaceStrong : "transparent",
+            })}
+          >
+            <T
+              variant="caption"
+              style={{
+                color: selected ? t.brandHeading : t.textMuted,
+                fontFamily: selected ? font.sansSemibold : font.sans,
+              }}
+            >
+              {option.label}
+            </T>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
 
 /**
  * A money-in or money-out figure, sitting in the reference layout's twin-card
@@ -61,18 +112,22 @@ function FlowCard({
   direction: "in" | "out";
 }) {
   const t = useTheme();
-  const { brand, statusText } = t;
+  const { brand, statusText, statusSurface, statusBorder } = t;
   const isIn = direction === "in";
   return (
     <Card
       style={{
         flex: 1,
         minWidth: 150,
-        // Outflow washes statusText.critical rather than a standalone red —
-        // same alpha-suffix technique ErrorNote and Button's danger variant
-        // use, so there is one critical scale in the app, not two.
-        backgroundColor: isIn ? brand[50] : statusText.critical + "12",
-        borderColor: isIn ? brand[200] : statusText.critical + "40",
+        // Outflow uses the themed critical wash/hairline pair — the same
+        // opaque `statusSurface`/`statusBorder` tokens ConnectionNotice and
+        // ExpenseAlertsSection use for a status panel, rather than an
+        // alpha-suffixed hex on top of `statusText`. An alpha-transparent
+        // backgroundColor combined with this card's `elevation` renders a
+        // stray opaque box under the shadow on Android — statusSurface is
+        // already opaque, so the card paints as one surface.
+        backgroundColor: isIn ? brand[50] : statusSurface.critical,
+        borderColor: isIn ? brand[200] : statusBorder.critical,
       }}
     >
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
@@ -93,6 +148,61 @@ function FlowCard({
         {sublabel}
       </T>
     </Card>
+  );
+}
+
+function DashboardLinkRow({
+  icon,
+  title,
+  detail,
+  onPress,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  detail: string;
+  onPress?: () => void;
+}) {
+  const t = useTheme();
+  const content = (
+    <>
+      <View
+        style={{
+          width: 38,
+          height: 38,
+          borderRadius: radius.md,
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: t.brandSurface,
+        }}
+      >
+        <Ionicons name={icon} size={19} color={t.brandText} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <T style={{ fontFamily: font.sansSemibold, color: t.textPrimary }}>{title}</T>
+        <T variant="caption" style={{ marginTop: 2 }}>{detail}</T>
+      </View>
+      {onPress ? <Ionicons name="chevron-forward" size={18} color={t.textMuted} /> : null}
+    </>
+  );
+
+  if (!onPress) {
+    return <View style={{ flexDirection: "row", alignItems: "center", gap: space.md }}>{content}</View>;
+  }
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${title}. ${detail}`}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        minHeight: TAP_FLOOR,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: space.md,
+        opacity: pressed ? 0.7 : 1,
+      })}
+    >
+      {content}
+    </Pressable>
   );
 }
 
@@ -192,7 +302,11 @@ function GranularityDropdown({
                     justifyContent: "space-between",
                     gap: space.md,
                     paddingHorizontal: space.md,
-                    minHeight: TAP - 4,
+                    // Full height, not a hitSlop: these rows stack vertically
+                    // in a popup that is sized by its contents, so slop on one
+                    // row would reach into the row above it and the two-option
+                    // menu simply grows eight points instead.
+                    minHeight: TAP_FLOOR,
                     backgroundColor: pressed ? paper[100] : "transparent",
                   })}
                 >
@@ -219,11 +333,41 @@ export function DashboardScreen({ navigation }: any) {
   const [summaryPeriodDays, setSummaryPeriodDays] = useState(SUMMARY_PERIOD_DAYS);
   const [cashflow, setCashflow] = useState<DashboardCashflow | null>(null);
   const [cashflowGranularity, setCashflowGranularity] = useState<CashflowGranularity>("daily");
+  /**
+   * The single top-ranked reduction opportunity, for the Dashboard's one
+   * compact link-out card — plan §13.1/§15 Phase 5. Reuses the same endpoint
+   * Expense Insight's full section calls; this screen only ever looks at
+   * `opportunities[0]`, never the whole list (plan §13.1: "do not fetch or
+   * render the complete opportunity list on the Dashboard").
+   */
+  const [topOpportunity, setTopOpportunity] = useState<ReductionOpportunity | null>(null);
   const [loading, setLoading] = useState(true);
   const [cashflowLoading, setCashflowLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  /*
+   * The last failed attempt, kept as a descriptor rather than a sentence.
+   *
+   * A string could not answer the two questions the banner asks — did the
+   * request reach FinSight at all, and is there anything on screen to fall
+   * back on — so the words are composed at render time from this plus
+   * `summary`. See lib/connectionState.ts.
+   */
+  const [failure, setFailure] = useState<LoadFailure | null>(null);
+  /**
+   * When the figures on screen arrived, and the clock the caption is measured
+   * against.
+   *
+   * TWO VALUES, NOT ONE. `loadedAt` only moves on a SUCCESSFUL load, which is
+   * what makes it the age of the data rather than the age of the last attempt.
+   * `clock` moves on every attempt, so a refresh that fails still advances
+   * "Updated 2 minutes ago" to "Updated 12 minutes ago" — the caption has to
+   * get older when the refresh does not work, or it is reassuring about the
+   * exact case it exists to expose.
+   */
+  const [loadedAt, setLoadedAt] = useState<number | null>(null);
+  const [clock, setClock] = useState(() => Date.now());
   const [askOpen, setAskOpen] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
 
   /*
    * The product tour's start gate.
@@ -249,16 +393,20 @@ export function DashboardScreen({ navigation }: any) {
    */
   const loadSummary = useCallback(async () => {
     if (!selected) return;
-    setError(null);
+    setClock(Date.now());
     try {
-      setSummary(
-        await api.get<DashboardSummary>("/dashboard/summary", {
-          businessProfileId: selected.id,
-          periodDays: summaryPeriodDays,
-        })
-      );
+      const next = await api.get<DashboardSummary>("/dashboard/summary", {
+        businessProfileId: selected.id,
+        periodDays: summaryPeriodDays,
+      });
+      setSummary(next);
+      setLoadedAt(Date.now());
+      // Cleared only on success. Clearing it up front, as this did, blanked
+      // the explanation for the whole duration of the retry — so a failing
+      // refresh flashed the banner off and back on every pull.
+      setFailure(null);
     } catch (err) {
-      setError(errorMessage(err));
+      setFailure(toLoadFailure(err));
     } finally {
       setLoading(false);
     }
@@ -283,18 +431,42 @@ export function DashboardScreen({ navigation }: any) {
     }
   }, [selected, cashflowGranularity]);
 
+  /**
+   * Plan §13.1's confidence/emptiness gate lives here rather than inside the
+   * card component: `topOpportunity` is null whenever nothing should be
+   * shown, so the render below stays a plain truthiness check exactly like
+   * every other optional Dashboard panel.
+   */
+  const loadTopOpportunity = useCallback(async () => {
+    if (!selected) return;
+    try {
+      const response = await api.get<ReductionOpportunityResponse>("/insights/reduction-opportunities", {
+        businessProfileId: selected.id,
+        periodDays: SUMMARY_PERIOD_DAYS,
+      });
+      setTopOpportunity(selectTopOpportunity(response));
+    } catch {
+      // Same reasoning as loadCashflow: this is an optional Dashboard panel,
+      // not the page's own data, so a failed fetch just means the card is
+      // absent rather than a page-level error banner.
+      setTopOpportunity(null);
+    }
+  }, [selected]);
+
   // Refetch on focus so a record added on another tab is reflected when the
-  // user comes back, rather than showing a stale figure. Two separate
-  // effects so a granularity change (which only recreates `loadCashflow`)
-  // reloads just the chart, not the whole screen.
+  // user comes back, rather than showing a stale figure. Separate effects so
+  // a granularity change (which only recreates `loadCashflow`) reloads just
+  // the chart, not the whole screen — same reasoning extends to the
+  // opportunity card, which has nothing to do with either of the other two.
   useFocusEffect(useCallback(() => { loadSummary(); }, [loadSummary]));
   useFocusEffect(useCallback(() => { loadCashflow(); }, [loadCashflow]));
+  useFocusEffect(useCallback(() => { loadTopOpportunity(); }, [loadTopOpportunity]));
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([loadSummary(), loadCashflow()]);
+    await Promise.all([loadSummary(), loadCashflow(), loadTopOpportunity()]);
     setRefreshing(false);
-  }, [loadSummary, loadCashflow]);
+  }, [loadSummary, loadCashflow, loadTopOpportunity]);
 
   if (!selected) {
     return (
@@ -320,7 +492,7 @@ export function DashboardScreen({ navigation }: any) {
           ) : (
             <EmptyState
               title="Finish setting up your business"
-              image={require("../../assets/mascot/01-onboarding/emptydashboard.png")}
+              image={mascotSource("emptyDashboard")}
               body="FinSight needs your business name and a few figures before it can work out your sales target, track your recovery or flag large expenses. Anything you already typed was kept."
               action={
                 <Button
@@ -355,74 +527,74 @@ export function DashboardScreen({ navigation }: any) {
     summary.overview.totalExpenses === 0 &&
     summary.overview.totalSalesReference === 0;
   const unreadCount = summary ? summary.alerts.filter((a) => !a.readStatus).length : 0;
+  const periodLabel =
+    summaryPeriodDays === 0
+      ? "Across all records"
+      : summaryPeriodDays === 1
+        ? "Today"
+        : summaryPeriodDays === 7
+          ? "This week"
+          : "This month";
+  const topCategory = summary?.expenseCategoryBreakdown?.length
+    ? [...summary.expenseCategoryBreakdown].sort((a, b) => b.total - a.total)[0]
+    : null;
+  const recoveryStatus = summary?.recoveryStatus;
+  const recoveryLabel = !recoveryStatus
+    ? "Not available"
+    : recoveryStatus.status === "needs_setup" || recoveryStatus.expectedMonthlyExpenses <= 0
+      ? "Not set up"
+      : recoveryStatus.status === "covered"
+        ? "Target reached"
+        : recoveryStatus.status === "ahead"
+          ? "Ahead of pace"
+          : recoveryStatus.status === "on_pace" || recoveryStatus.onTrack
+            ? "On track"
+            : recoveryStatus.status === "no_current_month_data"
+              ? "No sales yet"
+              : recoveryStatus.status === "data_incomplete"
+                ? "Data incomplete"
+                : "Behind pace";
+  const recoveryIsPositive = ["Target reached", "Ahead of pace", "On track"].includes(recoveryLabel);
+  const recoveryIsCritical = recoveryLabel === "Behind pace";
+  const recoveryCoverage = Math.max(0, Math.min(100, recoveryStatus?.monthCoveragePercent ?? 0));
+  const openRecoveryAction = () => {
+    if (!summary) return;
+    if (summary.recoveryStatus.expectedMonthlyExpenses <= 0 || summary.recoveryStatus.status === "needs_setup") {
+      navigation.navigate("More", {
+        screen: "BusinessProfileForm",
+        params: { profile: selected },
+      });
+    } else if (summary.recoveryStatus.status === "data_incomplete" || summary.recordsNeedingReview > 0) {
+      navigation.navigate("Records", { screen: "FlaggedRecords" });
+    } else if (summary.recoveryStatus.status === "no_current_month_data") {
+      navigation.navigate("Records", { screen: "AddSales" });
+    } else {
+      navigation.navigate("Insights", { screen: "RecoveryTarget" });
+    }
+  };
+  const recoveryActionLabel =
+    !summary || summary.recoveryStatus.expectedMonthlyExpenses <= 0 || summary.recoveryStatus.status === "needs_setup"
+      ? "Set monthly expenses"
+      : summary.recoveryStatus.status === "data_incomplete" || summary.recordsNeedingReview > 0
+        ? "Review flagged records"
+        : summary.recoveryStatus.status === "no_current_month_data"
+          ? "Add a sales record"
+          : "View recovery plan";
 
   /*
-   * The nested-params form is the only one that works across tabs.
+   * "Couldn't refresh" and "nothing here" are different sentences.
    *
-   * Switching to the tab and then dispatching a bare push reads better and
-   * silently does nothing — `useOnAction` forwards an action into a CHILD
-   * navigator only when it carries a `target`, so a targetless push bubbles
-   * up past the tab navigator and is dropped.
-   *
-   * The residue is that `{ screen }` sticks to the Records tab route, which
-   * bottom-tabs replays on every later press of that tab. That is handled
-   * once, in `recordsTabPressAction`, rather than at each of these call
-   * sites.
+   * `hasData` is the whole distinction: with figures on screen this is a
+   * warning that they are older than they look, and without them it is an
+   * explanation for a blank page — which is what Home used to answer with a
+   * skeleton that spun for ever.
    */
-  const openInRecords = (screen: string) => navigation.navigate("Records", { screen });
-
-  const quickActions: QuickAction[] = [
-    {
-      key: "scan",
-      label: "Scan receipt",
-      icon: "scan-outline",
-      // `autoLaunch` is gone — ScanReceipt opens its camera on arrival now,
-      // so the param only described behaviour that had moved.
-      onPress: () => openInRecords("ScanReceipt"),
-    },
-    {
-      key: "addExpense",
-      label: "Add expense",
-      icon: "wallet-outline",
-      onPress: () => openInRecords("AddExpense"),
-    },
-    {
-      key: "addSale",
-      label: "Add sale",
-      icon: "cash-outline",
-      onPress: () => openInRecords("AddSales"),
-    },
-    {
-      key: "categories",
-      label: "Categories",
-      icon: "pricetags-outline",
-      onPress: () => openInRecords("Categories"),
-    },
-    {
-      key: "importCsv",
-      label: "Import CSV",
-      icon: "cloud-upload-outline",
-      onPress: () => openInRecords("ImportCsv"),
-    },
-    {
-      key: "insights",
-      label: "Insights",
-      icon: "bar-chart-outline",
-      onPress: () => navigation.navigate("Insights"),
-    },
-    {
-      key: "alerts",
-      label: "Alerts",
-      icon: "notifications-outline",
-      onPress: () => navigation.navigate("Notifications"),
-    },
-    {
-      key: "businesses",
-      label: "Businesses",
-      icon: "storefront-outline",
-      onPress: () => navigation.navigate("More", { screen: "BusinessProfiles" }),
-    },
-  ];
+  const loadNotice = describeLoadFailure(failure, {
+    hasData: !!summary,
+    lastUpdatedAt: loadedAt,
+    now: clock,
+    subject: "your figures",
+  });
 
   return (
     <Screen safeTop>
@@ -433,7 +605,7 @@ export function DashboardScreen({ navigation }: any) {
         {...tourScroll}
         // The FAB floats over this list, so the scroll has to end far enough
         // up that it can never cover the last card.
-        contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl + FAB_CLEARANCE, gap: space.lg }}
+        contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl + FAB_CLEARANCE, gap: space.xl }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={brand[600]} />}
       >
         <HomeHeader
@@ -479,6 +651,8 @@ export function DashboardScreen({ navigation }: any) {
           />
         ) : null}
 
+        <PeriodSelector value={summaryPeriodDays} onChange={setSummaryPeriodDays} />
+
         {/*
           One line above the panels rather than a "no data" note inside each of
           them: three empty cards describe the symptom three times, while this
@@ -489,7 +663,7 @@ export function DashboardScreen({ navigation }: any) {
         {!loading && periodIsEmpty ? (
           <View style={{ marginBottom: space.lg }}>
             <Callout tone="info">
-              No records in this period, but this business has{" "}
+              No records in {periodLabel.toLowerCase()}, but this business has{" "}
               {summary!.lifetime!.recordCount.toLocaleString()} in total
               {summary!.lifetime!.latestRecordDate
                 ? `, the most recent dated ${new Date(
@@ -503,7 +677,7 @@ export function DashboardScreen({ navigation }: any) {
                     timeZone: "UTC",
                   })}`
                 : ""}
-              . Your history is safe — this screen is only looking at the last 30 days.
+              . Your history is safe — this screen is only looking at the selected period.
             </Callout>
             {/*
               The fix, not a signpost. Telling the owner their data is in
@@ -519,55 +693,241 @@ export function DashboardScreen({ navigation }: any) {
           </View>
         ) : null}
 
-        {error ? <ErrorNote>{error}</ErrorNote> : null}
+        <ConnectionNotice notice={loadNotice} onRetry={onRefresh} busy={refreshing} />
 
-        {loading || !summary ? (
+        {/*
+          The age of the figures, stated even when nothing is wrong.
+
+          It sits under the banner rather than inside it so that it is still
+          there on a good day: a figure with no timestamp is read as current,
+          and this screen refetches on focus, which is exactly the pattern that
+          makes an owner stop wondering.
+        */}
+        {summary ? <LastUpdated at={loadedAt} now={clock} /> : null}
+
+        {loading || (!summary && !failure) ? (
           // Shaped like the dashboard rather than a centred spinner, so the
           // layout does not jump when the figures land.
           <SkeletonDashboard />
+        ) : !summary ? (
+          /*
+            Nothing to draw and a banner above already saying why. The skeleton
+            used to stay here for ever in this state, which reads as "still
+            loading" — a promise the screen had already given up on.
+          */
+          null
         ) : (
           <>
-            {/*
-              Serial Position Effect — Fin's note in the greeting above already
-              answered "is anything wrong" before a single figure is read;
-              available funds takes the primacy slot here, the figure owners
-              check most.
-            */}
-            {/*
-              Funds, sales and expenses are one group for the tour: the
-              "Dashboard overview" step is about the figures as a set, and
-              spotlighting only the first tile would describe three things
-              while pointing at one. Grouping them costs a wrapper View with
-              the gap the ScrollView was already applying between them.
-            */}
             <View {...summaryTourTarget} style={{ gap: space.lg }}>
-              <StatTile label="Available business funds" value={summary.overview.availableFunds} emphasis />
+              <Card style={{ backgroundColor: t.brandSurface, borderColor: t.brandBorder }}>
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm }}>
+                  <T variant="heading" accessibilityRole="header" style={{ color: t.brandHeading }}>
+                    Your recovery position
+                  </T>
+                  <View
+                    style={{
+                      borderRadius: radius.full,
+                      paddingHorizontal: space.sm,
+                      paddingVertical: 5,
+                      backgroundColor: recoveryIsPositive
+                        ? t.statusSurface.good
+                        : recoveryIsCritical
+                          ? t.statusSurface.critical
+                          : t.statusSurface.warning,
+                    }}
+                  >
+                    <T
+                      variant="caption"
+                      style={{
+                        color: recoveryIsPositive
+                          ? t.statusText.good
+                          : recoveryIsCritical
+                            ? t.statusText.critical
+                            : t.statusText.warning,
+                        fontFamily: font.sansSemibold,
+                      }}
+                    >
+                      {recoveryLabel}
+                    </T>
+                  </View>
+                </View>
+
+                <T variant="caption" style={{ marginTop: space.md }}>
+                  Available business funds
+                </T>
+                <Money
+                  value={summary.overview.availableFunds}
+                  size={28}
+                  weight="semibold"
+                  style={{ marginTop: 2 }}
+                />
+
+                {summary.recoveryStatus.expectedMonthlyExpenses > 0 ? (
+                  <View style={{ marginTop: space.xl }}>
+                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "baseline" }}>
+                      <T variant="caption">Monthly expense coverage</T>
+                      <T style={{ fontFamily: font.sansSemibold, color: t.textPrimary }}>
+                        {recoveryCoverage.toFixed(0)}%
+                      </T>
+                    </View>
+                    <View
+                      accessible
+                      accessibilityRole="progressbar"
+                      accessibilityLabel="Monthly expense coverage"
+                      accessibilityValue={{ min: 0, max: 100, now: Math.round(recoveryCoverage) }}
+                      style={{
+                        height: 10,
+                        marginTop: space.sm,
+                        borderRadius: radius.full,
+                        overflow: "hidden",
+                        backgroundColor: t.surfaceStrong,
+                      }}
+                    >
+                      <View
+                        style={{
+                          width: `${recoveryCoverage}%`,
+                          height: "100%",
+                          borderRadius: radius.full,
+                          backgroundColor: recoveryIsCritical ? t.status.critical : t.status.good,
+                        }}
+                      />
+                    </View>
+                    <View style={{ flexDirection: "row", justifyContent: "space-between", marginTop: space.md }}>
+                      <View>
+                        <T variant="caption">Recorded sales</T>
+                        <Money value={summary.recoveryStatus.salesThisMonth} size={typeScale.bodySm} style={{ marginTop: 2 }} />
+                      </View>
+                      <View style={{ alignItems: "flex-end" }}>
+                        <T variant="caption">Still needed</T>
+                        <Money value={summary.recoveryStatus.remainingTarget} size={typeScale.bodySm} style={{ marginTop: 2 }} />
+                      </View>
+                    </View>
+                  </View>
+                ) : (
+                  <T variant="caption" style={{ marginTop: space.lg }}>
+                    Add expected monthly expenses to calculate a daily sales target and recovery pace.
+                  </T>
+                )}
+                <Button
+                  title={recoveryActionLabel}
+                  variant="primary"
+                  onPress={openRecoveryAction}
+                  style={{ marginTop: space.lg }}
+                />
+              </Card>
 
               <View style={{ flexDirection: "row", gap: space.md }}>
-                <FlowCard label="Sales" value={summary.overview.totalSalesReference} sublabel="This month" direction="in" />
-                <FlowCard label="Expenses" value={summary.overview.totalExpenses} sublabel="This month" direction="out" />
+                <FlowCard label="Sales" value={summary.overview.totalSalesReference} sublabel={periodLabel} direction="in" />
+                <FlowCard label="Expenses" value={summary.overview.totalExpenses} sublabel={periodLabel} direction="out" />
               </View>
             </View>
 
-            <QuickActions actions={quickActions} />
-
             <Card>
-              {cashflowLoading && !cashflow ? (
-                // Only on the very first load — a granularity toggle refetches
-                // in the background and swaps the chart in when it lands,
-                // rather than blanking a chart that is already on screen.
-                <SkeletonBox height={200} />
-              ) : (
-                <CashflowChart
-                  data={cashflow?.points ?? []}
-                  granularity={cashflowGranularity}
-                  subtitle={cashflowGranularity === "monthly" ? "Last 6 months" : "Last 7 days"}
-                  action={<GranularityDropdown value={cashflowGranularity} onChange={setCashflowGranularity} />}
+              <T variant="heading" accessibilityRole="header" style={{ marginBottom: space.lg }}>
+                {periodLabel}
+              </T>
+              <DashboardLinkRow
+                icon="pie-chart-outline"
+                title="Largest expense"
+                detail={
+                  topCategory
+                    ? `${topCategory.categoryName} · ${formatMoney(topCategory.total)}`
+                    : "No expenses recorded in this period"
+                }
+                onPress={topCategory ? () => setAskOpen(true) : undefined}
+              />
+              <View style={{ height: 1, backgroundColor: t.border, marginVertical: space.lg }} />
+              <DashboardLinkRow
+                icon={summary.recordsNeedingReview > 0 ? "alert-circle-outline" : "checkmark-circle-outline"}
+                title="Things to review"
+                detail={
+                  summary.recordsNeedingReview > 0
+                    ? `${summary.recordsNeedingReview} flagged item${summary.recordsNeedingReview === 1 ? "" : "s"}`
+                    : "Everything is clear"
+                }
+                onPress={
+                  summary.recordsNeedingReview > 0
+                    ? () => navigation.navigate("Records", { screen: "FlaggedRecords" })
+                    : undefined
+                }
+              />
+              {topCategory ? (
+                <Button
+                  title="Ask FinSight about this period"
+                  variant="ghost"
+                  onPress={() => setAskOpen(true)}
+                  style={{ marginTop: space.md }}
                 />
-              )}
+              ) : null}
             </Card>
 
-            <SpendingBreakdownCard data={summary.expenseCategoryBreakdown} />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={showDetails ? "Hide detailed charts" : "View detailed charts"}
+              accessibilityState={{ expanded: showDetails }}
+              onPress={() => setShowDetails((value) => !value)}
+              style={({ pressed }) => ({
+                minHeight: TAP_FLOOR,
+                borderRadius: radius.md,
+                borderWidth: 1,
+                borderColor: t.borderStrong,
+                backgroundColor: pressed ? t.surfaceMuted : t.surface,
+                paddingHorizontal: space.md,
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+              })}
+            >
+              <T style={{ fontFamily: font.sansSemibold, color: t.textSecondary }}>
+                {showDetails ? "Hide detailed charts" : "View detailed charts"}
+              </T>
+              <Ionicons
+                name={showDetails ? "chevron-up" : "chevron-down"}
+                size={18}
+                color={t.textMuted}
+              />
+            </Pressable>
+
+            {showDetails ? (
+              <>
+                <Card>
+                  {cashflowLoading && !cashflow ? (
+                    <SkeletonBox height={200} />
+                  ) : (
+                    <CashflowChart
+                      data={cashflow?.points ?? []}
+                      granularity={cashflowGranularity}
+                      subtitle={cashflowGranularity === "monthly" ? "Last 6 months" : "Last 7 days"}
+                      action={<GranularityDropdown value={cashflowGranularity} onChange={setCashflowGranularity} />}
+                    />
+                  )}
+                </Card>
+
+                <SpendingBreakdownCard data={summary.expenseCategoryBreakdown} />
+              </>
+            ) : null}
+
+            {topOpportunity ? (
+              <TopReductionOpportunityCard
+                opportunity={topOpportunity}
+                onPress={() => navigation.navigate("Insights", { screen: "ExpenseBehavior" })}
+              />
+            ) : null}
+
+            {!hasRecords ? (
+              <EmptyState
+                title="Nothing recorded yet"
+                image={mascotSource("emptyDashboard")}
+                body="Your dashboard fills in as soon as you record something. Even one day of expenses gives FinSight enough to start."
+                action={
+                  <Button
+                    title="Add your first expense"
+                    variant="primary"
+                    onPress={() => navigation.navigate("Records", { screen: "AddExpense" })}
+                  />
+                }
+              />
+            ) : null}
           </>
         )}
       </ScrollView>
