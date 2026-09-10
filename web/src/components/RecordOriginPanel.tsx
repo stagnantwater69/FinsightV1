@@ -321,7 +321,7 @@ function ReceiptOrigin({
                   className="min-w-0 truncate text-brand-700 underline-offset-2 hover:underline"
                 >
                   {sibling.categoryName}
-                  <span className="ml-1.5 text-xs text-ink-400">{sibling.description}</span>
+                  <span className="ml-1.5 text-xs text-ink-600">{sibling.description}</span>
                 </a>
                 <span className="shrink-0 text-ink-800">
                   <Money value={sibling.amount} decimals />

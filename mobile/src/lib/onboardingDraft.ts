@@ -75,3 +75,37 @@ export async function clearOnboarding(userId: number) {
     // Intentionally ignored — see above.
   }
 }
+
+/**
+ * Whether the first-run setup wizard should be on screen.
+ *
+ * WHY THIS IS A FUNCTION AND NOT AN INLINE CONDITION. The gate used to be
+ * `profiles.length === 0 && !dismissed && !left`, read live off
+ * BusinessProfileContext — and the wizard CREATES A PROFILE at the end of step
+ * 2. So the successful POST appended to `profiles`, `profiles.length` became 1,
+ * the gate flipped false, and the whole wizard unmounted in the same commit
+ * that step 3 was being set up in. Step 3 — the readiness summary and the four
+ * "what do you want to do first" actions — was unreachable in the first-run
+ * flow: the owner was dropped straight onto the tabs.
+ *
+ * `entered` is the latch that fixes it. Once the wizard is on screen it stays
+ * on screen, and only the owner leaves it: `finished` is set from `onDone`
+ * (every button on step 3, including "Not now"), `dismissed` from the skip
+ * confirmation. Live profile state can no longer evict a wizard mid-flow.
+ *
+ * Kept here rather than in App.tsx because App.tsx cannot be reached by the
+ * source suite, and this is the condition the bug lived in.
+ */
+export function shouldShowOnboarding(state: {
+  /** The account has at least one business profile. */
+  hasProfiles: boolean;
+  /** The owner chose "Skip for now", now or on an earlier launch. */
+  dismissed: boolean;
+  /** The owner has left the wizard this session — see `onDone`. */
+  finished: boolean;
+  /** The wizard has already been shown at least once this session. */
+  entered: boolean;
+}): boolean {
+  if (state.finished || state.dismissed) return false;
+  return state.entered || !state.hasProfiles;
+}

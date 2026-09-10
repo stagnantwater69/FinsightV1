@@ -78,6 +78,8 @@ describe.skipIf(!available)("ml worker contract (if-contract-v1)", () => {
     expect(status).toBe(200);
     expect(json.contractVersion).toBe("if-contract-v1");
     expect(json.trainedRows).toBe(60);
+    expect(typeof json.durationMs).toBe("number");
+    expect(json.durationMs).toBeGreaterThanOrEqual(0);
     expect(json.scores).toHaveLength(60);
     expect(json.scores.map((entry: { id: number }) => entry.id)).toEqual(
       Array.from({ length: 60 }, (_, index) => index + 1),

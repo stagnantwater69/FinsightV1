@@ -60,6 +60,8 @@ export function Row({
    * exactly what every other row in these screens uses.
    */
   toggle,
+  expandedDetail = false,
+  disabled = false,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
@@ -68,6 +70,9 @@ export function Row({
   first?: boolean;
   destructive?: boolean;
   toggle?: { value: boolean };
+  /** Give settings explanations their own full-width, wrapping line. */
+  expandedDetail?: boolean;
+  disabled?: boolean;
 }) {
   const { brand, ink, paper, statusText, statusSurface, brandSurface } = useTheme();
   const tint = destructive ? statusText.critical : brand[700];
@@ -85,18 +90,22 @@ export function Row({
   return (
     <Pressable
       onPress={onPress}
+      disabled={disabled}
       accessibilityRole={toggle ? "switch" : "button"}
-      accessibilityState={toggle ? { checked: toggle.value } : undefined}
+      accessibilityState={toggle ? { checked: toggle.value, disabled } : { disabled }}
       accessibilityLabel={detail ? `${label}. ${detail}` : label}
       style={({ pressed }) => ({
         flexDirection: "row",
+        flexWrap: expandedDetail ? "wrap" : "nowrap",
         alignItems: "center",
         gap: space.md,
+        rowGap: expandedDetail ? space.sm : space.md,
         minHeight: TAP + 8,
-        paddingVertical: space.sm,
+        paddingVertical: expandedDetail ? space.md : space.sm,
         borderTopWidth: first ? 0 : 1,
         borderTopColor: paper[200],
         backgroundColor: pressed ? paper[100] : "transparent",
+        opacity: disabled ? 0.6 : 1,
       })}
     >
       {/*
@@ -121,7 +130,7 @@ export function Row({
           style={{
             fontSize: typeScale.body,
             color: destructive ? statusText.critical : ink[900],
-            fontFamily: destructive ? font.sansSemibold : font.sans,
+            fontFamily: destructive || expandedDetail ? font.sansSemibold : font.sans,
           }}
         >
           {label}
@@ -131,16 +140,18 @@ export function Row({
           first-time owner what sits behind a word like "Privacy", and
           truncating them at one line cut most of them mid-sentence.
         */}
-        {detail ? (
+        {detail && !expandedDetail ? (
           <T variant="caption" numberOfLines={2} style={{ marginTop: 1, lineHeight: 16 }}>
             {detail}
           </T>
         ) : null}
       </View>
       {toggle ? (
-        <View pointerEvents="none">
+        <View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
           <Switch
+            accessible={false}
             value={toggle.value}
+            disabled={disabled}
             // Purely a state display — the row handles the press. See above.
             onValueChange={onPress}
             trackColor={{ false: ink[200], true: brand[600] }}
@@ -151,6 +162,11 @@ export function Row({
       ) : (
         <Ionicons name="chevron-forward" size={18} color={ink[300]} />
       )}
+      {detail && expandedDetail ? (
+        <T style={{ width: "100%", fontSize: typeScale.bodySm, lineHeight: 21 }}>
+          {detail}
+        </T>
+      ) : null}
     </Pressable>
   );
 }

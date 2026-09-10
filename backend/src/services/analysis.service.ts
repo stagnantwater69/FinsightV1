@@ -1219,6 +1219,196 @@ export function detectionMethod(
 }
 
 // ============================================================
+// Leave-one-out scan (amortised)
+// ============================================================
+//
+// WHAT THIS REPLACES AND WHY. The unusual-expense scan on the expense-behaviour
+// insight used to rebuild each candidate's baseline from scratch:
+//
+//     const baseline = records.filter(r => r.id !== candidate.id).map(...)
+//     computeCategoryStats(baseline); computeQuartiles(baseline);
+//
+// which is an array copy, a full mean/variance pass and a full SORT per
+// candidate — O(n^2 log n) for a category, on a synchronous code path an
+// authenticated GET holds the event loop for. Measured on this machine against
+// one category of uniform-random amounts: 198ms at 1,000 records, 851ms at
+// 2,000, 4,830ms at 5,000. The Dashboard calls that endpoint on every mount.
+//
+// THE RULE THIS OBEYS: the numbers must not move. Nothing below changes a
+// threshold, a test, or a formula — only how many times each formula is
+// evaluated. The quartile half is bit-for-bit identical (same order statistics,
+// same interpolation arithmetic, just indexed rather than re-sorted). The
+// mean/standard-deviation half is identical to within double-precision
+// associativity, EXCEPT on the one family of inputs where an O(1) update is
+// genuinely ill-conditioned — and those are detected and computed the old way.
+//
+// WHY THE FALLBACK IS NECESSARY, since "just use sum and sum-of-squares" is the
+// obvious shortcut and it is wrong here. Removing the candidate removes the
+// term that dominates the sum of squares precisely when the candidate is an
+// extreme outlier — which is the case this detector exists to find. The
+// remainder is then the difference of two nearly equal large numbers and can
+// lose every significant digit: a category of identical PHP 1,234.56 rents plus
+// one large record has a true leave-one-out standard deviation near zero, and
+// the cancelling form can report ~1e-5 instead. The reported z-score would then
+// be off by orders of magnitude and the ordering of the flagged list with it.
+// So a candidate whose own term dominates is recomputed exactly. At most about
+// nine candidates per category can satisfy that test (their squared deviations
+// must each exceed an eighth of a total that contains all of them), so the
+// fallback cannot reintroduce the quadratic it replaces.
+//
+// A second, budgeted fallback recomputes any candidate that the amortised pass
+// says is unusual, so every number actually REPORTED to an owner comes from the
+// original code path bit-for-bit. That one is capped, because a pathological
+// category could flag everything; past the cap the amortised values are used,
+// which by construction are the well-conditioned ones.
+
+/** Squared-deviation share above which an O(1) leave-one-out update is not trusted. */
+const ILL_CONDITIONED_SHARE = 0.125;
+/** Cap on the "recompute exactly so the reported figure is bit-identical" fallback, per category. */
+const EXACT_RECOMPUTE_BUDGET = 32;
+
+export interface LeaveOneOutRecord {
+  id: number;
+  amount: number;
+}
+
+export interface UnusualExpenseHit {
+  id: number;
+  categoryId: number;
+  amount: number;
+  zScore: number;
+  categoryMean: number;
+  categoryStdDev: number;
+  detectedBy: "z-score" | "iqr" | "both";
+}
+
+export interface UnusualExpenseScan {
+  unusual: UnusualExpenseHit[];
+  insufficientHistory: { categoryId: number; historyCount: number }[];
+}
+
+/** Index of one occurrence of `value` in an ascending array. */
+function firstIndexOf(sorted: number[], value: number): number {
+  let low = 0;
+  let high = sorted.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (sorted[mid]! < value) low = mid + 1;
+    else high = mid;
+  }
+  return low;
+}
+
+/**
+ * `percentile` over `sorted` with the element at `removeIdx` left out.
+ *
+ * Deliberately the same expression as `percentile`, index-shifted rather than
+ * rewritten, so the arithmetic — and therefore the result — is identical to
+ * sorting the filtered array and calling `percentile` on it.
+ */
+function percentileWithout(sorted: number[], removeIdx: number, p: number): number {
+  const length = sorted.length - 1;
+  const at = (i: number) => sorted[i < removeIdx ? i : i + 1]!;
+  if (length === 0) return 0;
+  if (length === 1) return at(0);
+  const index = p * (length - 1);
+  const lower = Math.floor(index);
+  const upper = Math.ceil(index);
+  if (lower === upper) return at(lower);
+  return at(lower) + (index - lower) * (at(upper) - at(lower));
+}
+
+/**
+ * Leave-one-out unusual-expense detection over pre-grouped category records.
+ *
+ * `isCandidate` decides which records may be REPORTED; every record in the
+ * category still contributes to the baselines, exactly as before. Categories
+ * are visited in the map's own order and records in array order, so the output
+ * order matches the loop this replaces.
+ */
+export function scanUnusualExpenses(
+  byCategory: Map<number, LeaveOneOutRecord[]>,
+  isCandidate: (id: number) => boolean,
+  thresholds: { zScoreThreshold?: number; iqrFenceMultiplier?: number; minimumDeviationFraction?: number } = {},
+): UnusualExpenseScan {
+  const unusual: UnusualExpenseHit[] = [];
+  const insufficientHistory: { categoryId: number; historyCount: number }[] = [];
+
+  for (const [categoryId, records] of byCategory) {
+    if (records.length < MIN_HISTORY_FOR_DETECTION) {
+      insufficientHistory.push({ categoryId, historyCount: records.length });
+      continue;
+    }
+
+    const count = records.length;
+    const amounts = records.map((r) => r.amount);
+    const sorted = [...amounts].sort((a, b) => a - b);
+    const total = amounts.reduce((sum, a) => sum + a, 0);
+    const fullMean = total / count;
+    // Both accumulated about the full mean, which keeps every term the size of
+    // the actual spread rather than the size of the amounts themselves.
+    let deviationSum = 0;
+    let squaredDeviationSum = 0;
+    for (const a of amounts) {
+      deviationSum += a - fullMean;
+      squaredDeviationSum += (a - fullMean) ** 2;
+    }
+
+    let exactBudget = EXACT_RECOMPUTE_BUDGET;
+    const exactStatsFor = (id: number) =>
+      computeCategoryStats(records.filter((r) => r.id !== id).map((r) => r.amount));
+
+    for (const candidate of records) {
+      if (!isCandidate(candidate.id)) continue;
+
+      const baselineCount = count - 1;
+      const mean = (total - candidate.amount) / baselineCount;
+      // Shift the accumulated sums from `fullMean` to this candidate's baseline
+      // mean: sum((x-m)^2) = sum((x-M)^2) + n(M-m)^2 + 2(M-m)sum(x-M).
+      const shift = fullMean - mean;
+      const shiftedSquares = squaredDeviationSum + count * shift * shift + 2 * shift * deviationSum;
+      const ownShare = (candidate.amount - mean) ** 2;
+      const variance = baselineCount > 1 ? Math.max(0, shiftedSquares - ownShare) / (baselineCount - 1) : 0;
+
+      let stats: CategoryStats = { mean, stdDev: Math.sqrt(variance), count: baselineCount };
+      let exact = false;
+      // Unbounded in principle, bounded in fact — see the note above.
+      if (!(shiftedSquares > 0) || ownShare > ILL_CONDITIONED_SHARE * shiftedSquares) {
+        stats = exactStatsFor(candidate.id);
+        exact = true;
+      }
+
+      const removeIdx = firstIndexOf(sorted, candidate.amount);
+      const q1 = percentileWithout(sorted, removeIdx, 0.25);
+      const q3 = percentileWithout(sorted, removeIdx, 0.75);
+      const quartiles: CategoryQuartiles = { q1, q3, iqr: q3 - q1 };
+
+      if (!isUnusualExpense(candidate.amount, stats, quartiles, thresholds)) continue;
+
+      // Reported figures come from the original expression wherever the budget
+      // allows, so an owner-visible number is never a re-derivation.
+      if (!exact && exactBudget > 0) {
+        exactBudget -= 1;
+        stats = exactStatsFor(candidate.id);
+        if (!isUnusualExpense(candidate.amount, stats, quartiles, thresholds)) continue;
+      }
+
+      unusual.push({
+        id: candidate.id,
+        categoryId,
+        amount: candidate.amount,
+        zScore: zScore(candidate.amount, stats),
+        categoryMean: stats.mean,
+        categoryStdDev: stats.stdDev,
+        detectedBy: detectionMethod(candidate.amount, stats, quartiles, thresholds),
+      });
+    }
+  }
+
+  return { unusual, insufficientHistory };
+}
+
+// ============================================================
 // Recovery Target — month-end review (plan §10.9/§11 Phase 7)
 // ============================================================
 //

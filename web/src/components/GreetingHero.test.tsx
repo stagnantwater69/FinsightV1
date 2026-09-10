@@ -36,14 +36,16 @@ describe("GreetingHero", () => {
     expect(screen.getByRole("heading").textContent).toContain("Ken");
   });
 
-  it("points the mascot at the asset the build actually emits", () => {
-    // The path is a string literal in the component and a file in public/;
-    // nothing but a test connects the two, and a typo here renders a broken
-    // image in production while typecheck and lint both stay green.
+  it("points the mascot at a frame the build actually emits", () => {
+    // The path is generated from a string literal in greetingFrames.ts and a
+    // set of files in public/; nothing but a test connects the two, and an
+    // off-by-one here renders a broken image in production while typecheck
+    // and lint both stay green. The frame on screen at rest is the rest pose,
+    // frame index 43 of a sequence numbered from 017.
     render(<GreetingHero summary={summary()} />);
     expect(screen.getByAltText("Fin, FinSight's mascot")).toHaveAttribute(
       "src",
-      "/mascot/greeting.webp",
+      "/mascot/greeting-frames/greeting_060.webp",
     );
   });
 

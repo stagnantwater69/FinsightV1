@@ -9,10 +9,7 @@ import { Money } from "./Money";
 import { api } from "../lib/api";
 import { getErrorMessage } from "../lib/errors";
 import type { RecordDetail } from "../lib/types";
-
-function today() {
-  return new Date().toISOString().slice(0, 10);
-}
+import { todayIso as today } from "../lib/dates";
 
 interface FieldErrors {
   category?: string;

@@ -84,9 +84,9 @@ export function DailySpendChart({ daily }: { daily: DailyExpenseTotal[] }) {
         ) : null}
       </p>
 
-      {/* `text-ink-400` is inherited by the axes and grid, which are drawn with
+      {/* `text-ink-500` is inherited by the axes and grid, which are drawn with
           currentColor so they follow the theme — see CategoryBreakdownChart. */}
-      <div className="min-w-0 text-ink-400">
+      <div className="min-w-0 text-ink-500">
         <ResponsiveContainer width="100%" height={200}>
           <AreaChart data={daily} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <defs>
@@ -193,7 +193,7 @@ export function DailySpendChart({ daily }: { daily: DailyExpenseTotal[] }) {
                   </th>
                   <td
                     className={`figure py-1.5 pr-3 text-right ${
-                      d.total > 0 ? "font-medium text-ink-900" : "text-ink-400"
+                      d.total > 0 ? "font-medium text-ink-900" : "text-ink-500"
                     }`}
                   >
                     {formatMoney(d.total)}

@@ -11,6 +11,7 @@ import {
   TextInput,
   TextProps,
   TextStyle,
+  useWindowDimensions,
   View,
   ViewStyle,
 } from "react-native";
@@ -88,11 +89,17 @@ export function T({
 }
 
 /**
- * A peso amount. Monospaced with tabular figures, exactly as on web — so a
- * column of amounts lines up and the app reads like a ledger.
+ * A peso amount. Monospaced with tabular figures — so a column of amounts
+ * lines up and the app reads like a ledger.
  *
- * `fontVariant: ["tabular-nums"]` is honoured on iOS; on Android the mono face
- * is already fixed-advance, so alignment holds either way.
+ * THE FACE IS WHAT DOES THE ALIGNING, not `fontVariant`. In React Native
+ * 0.86 `fontVariant` is declared on `TextStyleIOS` only
+ * (Libraries/StyleSheet/StyleSheetTypes.d.ts) — it is a no-op on Android. A
+ * proportional face here therefore aligns on iOS and silently stops aligning
+ * on Android, which is where the Records list, the dashboard tiles and the
+ * daily-coverage rows are read. IBM Plex Mono is fixed-advance on both, so
+ * the columns hold either way; `fontVariant` stays as the belt to that
+ * braces on iOS. Do not swap these for `font.sans*`.
  */
 export function Money({
   value,
@@ -692,6 +699,7 @@ export function SegmentedControl<Value extends string | number>({
   value,
   onChange,
   accessibilityLabel,
+  stacked = false,
 }: {
   // readonly so a call-site can declare its options `as const` and have the
   // literal value types flow through to `onChange` — without that, `value`
@@ -700,11 +708,13 @@ export function SegmentedControl<Value extends string | number>({
   value: Value;
   onChange: (v: Value) => void;
   accessibilityLabel?: string;
+  /** Keep choices readable in compact layouts or with larger accessibility text. */
+  stacked?: boolean;
 }) {
   const t = useTheme();
   const styles = useStyles();
   return (
-    <View style={styles.segmentTrack} accessibilityLabel={accessibilityLabel}>
+    <View style={[styles.segmentTrack, stacked && { flexDirection: "column" }]} accessibilityLabel={accessibilityLabel}>
       {options.map((option) => {
         const selected = option.value === value;
         return (
@@ -718,6 +728,7 @@ export function SegmentedControl<Value extends string | number>({
             }}
             style={({ pressed }) => [
               styles.segment,
+              stacked && { flex: 0, paddingVertical: space.sm },
               {
                 backgroundColor: selected ? t.brandFill : "transparent",
                 opacity: pressed ? 0.85 : 1,
@@ -1516,8 +1527,20 @@ export function ScreenHeader({
   action?: ReactNode;
 }) {
   const t = useTheme();
+  const { width, fontScale } = useWindowDimensions();
+  // Keep the title and its action readable on compact phones and at larger
+  // accessibility text sizes. A squeezed two-column header is especially
+  // costly here because the action is usually the screen's only shortcut.
+  const stacks = !!action && (width < 360 || fontScale >= 1.3);
   return (
-    <View style={{ flexDirection: "row", alignItems: "flex-start", gap: space.md, marginBottom: space.lg }}>
+    <View
+      style={{
+        flexDirection: stacks ? "column" : "row",
+        alignItems: stacks ? "stretch" : "flex-start",
+        gap: space.md,
+        marginBottom: space.lg,
+      }}
+    >
       <View style={{ flex: 1 }}>
         {eyebrow ? (
           <T variant="label" style={{ textTransform: "uppercase", letterSpacing: 0.6, color: t.textFaint }}>
@@ -1533,7 +1556,7 @@ export function ScreenHeader({
           </T>
         ) : null}
       </View>
-      {action}
+      {action ? <View style={stacks ? { alignSelf: "stretch" } : undefined}>{action}</View> : null}
     </View>
   );
 }

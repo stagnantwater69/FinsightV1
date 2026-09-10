@@ -7,6 +7,7 @@ import { useInsight } from "../lib/useInsight";
 import { formatMoney } from "../lib/money";
 import { formatMonthLabel, lastMonthKey, shiftMonthKey } from "../lib/monthEndReview";
 import { font, radius, space, typeScale } from "../theme/tokens";
+import { TAP_FLOOR } from "../components/touchTarget";
 import { useTheme } from "../context/ThemeContext";
 import type { RecoveryMonthEndReview } from "../lib/types";
 
@@ -89,7 +90,7 @@ function MonthPicker({ month, onChange }: { month: string; onChange: (month: str
         onPress={() => onChange(shiftMonthKey(month, -1))}
         accessibilityRole="button"
         accessibilityLabel="Previous month"
-        style={{ padding: space.sm }}
+        style={{ padding: space.sm, minWidth: TAP_FLOOR, minHeight: TAP_FLOOR, alignItems: "center", justifyContent: "center" }}
       >
         <Ionicons name="chevron-back" size={20} color={t.textPrimary} />
       </Pressable>
@@ -98,7 +99,7 @@ function MonthPicker({ month, onChange }: { month: string; onChange: (month: str
         onPress={() => onChange(shiftMonthKey(month, 1))}
         accessibilityRole="button"
         accessibilityLabel="Next month"
-        style={{ padding: space.sm }}
+        style={{ padding: space.sm, minWidth: TAP_FLOOR, minHeight: TAP_FLOOR, alignItems: "center", justifyContent: "center" }}
       >
         <Ionicons name="chevron-forward" size={20} color={t.textPrimary} />
       </Pressable>

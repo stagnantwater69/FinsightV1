@@ -192,8 +192,8 @@ export function BentoGridFeatures() {
       aria-labelledby="features-title"
       className="landing-section-gradient-base relative scroll-mt-20 overflow-hidden bg-landing-cream"
     >
-      {/* the workflow's pale mint arcs down into the cream */}
-      <CurveDivider from="mint-pale" className="relative z-10" />
+      {/* Continue the workflow section's exact edge color into this band. */}
+      <CurveDivider from="mint" className="relative z-10" />
       <div className={`${MEASURE} relative py-16 sm:py-24`}>
         <SectionHead
           eyebrow="Everything your shop needs"

@@ -17,7 +17,7 @@ export function EvidenceNote({ evidence }: { evidence?: FieldEvidence | null }) 
     evidence.pageNumber === null ? "Read from the receipt" : `Read from page ${evidence.pageNumber}`;
   const how = evidence.source === "vision" ? " by AI, from the photo" : "";
   return (
-    <span className="block text-ink-400">
+    <span className="block text-ink-500">
       {where}
       {how}
       {evidence.sourceText ? (

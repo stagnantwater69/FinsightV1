@@ -37,8 +37,8 @@ export function ThemeSwitcher({ compact = false }: { compact?: boolean }) {
         aria-expanded={open}
         aria-haspopup="menu"
         aria-label={`Theme — ${THEME_LABELS[theme].label}`}
-        className={`tap min-h-0 min-w-0 rounded-xl text-ink-600 transition hover:bg-paper-100 hover:text-ink-900 ${
-          compact ? "h-10 w-10" : "h-10 gap-2 px-2.5"
+        className={`tap rounded-xl text-ink-600 transition hover:bg-paper-100 hover:text-ink-900 ${
+          compact ? "h-11 w-11" : "h-11 gap-2 px-2.5"
         }`}
       >
         <Current className="h-[18px] w-[18px]" />
@@ -54,7 +54,7 @@ export function ThemeSwitcher({ compact = false }: { compact?: boolean }) {
           onKeyDown={onMenuKeys}
           className="absolute right-0 top-full z-50 mt-2 w-60 animate-pop-down rounded-2xl border border-paper-200 bg-paper p-1.5 shadow-lg"
         >
-          <div className="px-2.5 pb-1.5 pt-2 text-[10.5px] font-bold uppercase tracking-[0.12em] text-ink-400">
+          <div className="px-2.5 pb-1.5 pt-2 text-[10.5px] font-bold uppercase tracking-[0.12em] text-ink-500">
             Appearance
           </div>
           {THEMES.map((option) => {

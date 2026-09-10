@@ -1,14 +1,17 @@
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { suggestEmail } from "../lib/emailSuggestion";
 import { AuthLayout } from "../components/AuthLayout";
 import { Button } from "../components/Button";
 import { Field, FormError, TextInput, PasswordInput } from "../components/Field";
 import { api } from "../lib/api";
 import { getErrorMessage, getFieldErrors } from "../lib/errors";
 import { isValid, validateRegister, MIN_PASSWORD_LENGTH, type FieldErrors, type RegisterField } from "../lib/authValidation";
+import { focusFirstInvalidField } from "../lib/formFocus";
 
 export function Register() {
+  const formRef = useRef<HTMLFormElement>(null);
   const { register } = useAuth();
   const navigate = useNavigate();
   const [form, setForm] = useState({
@@ -41,6 +44,8 @@ export function Register() {
    */
   const [fieldErrors, setFieldErrors] = useState<FieldErrors<RegisterField>>({});
   const [submitting, setSubmitting] = useState(false);
+  /** A likely domain typo, offered under the field. Never blocks submission. */
+  const [emailSuggestion, setEmailSuggestion] = useState<string | null>(null);
 
   function update<K extends keyof typeof form>(key: K, value: string) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -56,6 +61,7 @@ export function Register() {
     const invalid = validateRegister(form);
     if (!isValid(invalid)) {
       setFieldErrors(invalid);
+      focusFirstInvalidField(formRef.current);
       return;
     }
     setFieldErrors({});
@@ -77,6 +83,7 @@ export function Register() {
       // sit under and stays a form-level message.
       const fromServer = getFieldErrors(err);
       setFieldErrors(fromServer);
+      if (!isValid(fromServer)) focusFirstInvalidField(formRef.current);
       if (!isValid(fromServer)) setError(null);
       else setError(getErrorMessage(err));
     } finally {
@@ -147,7 +154,7 @@ export function Register() {
       footnote="Your records stay organised per business profile."
       showBack
     >
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <form ref={formRef} onSubmit={handleSubmit} className="space-y-4" noValidate>
         {/* Stacks below `sm`: at 320px two side-by-side name fields leave
             about 130px each, which is not enough for a long surname to be
             readable while typing. */}
@@ -179,8 +186,41 @@ export function Register() {
             type="email"
             autoComplete="email"
             value={form.email}
-            onChange={(e) => update("email", e.target.value)}
+            onChange={(e) => {
+              update("email", e.target.value);
+              // Editing invalidates the previous guess; blur re-evaluates.
+              setEmailSuggestion(null);
+            }}
+            /*
+             * On blur, not on change — the same reasoning as `fieldErrors`
+             * above: second-guessing an address halfway through typing is a
+             * form arguing with someone who is doing nothing wrong.
+             */
+            onBlur={(e) => setEmailSuggestion(suggestEmail(e.target.value))}
           />
+          {emailSuggestion ? (
+            /*
+             * A suggestion, never a rejection. `owner@gmail.co` is a valid
+             * address (.co is Colombia) and no validator will refuse it — but
+             * it is almost always a slip for .com, and the cost is silent:
+             * registration succeeds, the confirmation email goes somewhere
+             * unread, and nothing on screen explains the wait.
+             */
+            <p className="mt-1.5 text-xs text-ink-600">
+              Did you mean{" "}
+              <button
+                type="button"
+                className="font-semibold text-tone-brand underline underline-offset-2 hover:no-underline"
+                onClick={() => {
+                  update("email", emailSuggestion);
+                  setEmailSuggestion(null);
+                }}
+              >
+                {emailSuggestion}
+              </button>
+              ?
+            </p>
+          ) : null}
         </Field>
         <Field label="Phone number" htmlFor="phoneNumber" optional error={fieldErrors.phoneNumber}>
           <TextInput

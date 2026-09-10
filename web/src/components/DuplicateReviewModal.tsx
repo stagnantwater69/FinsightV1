@@ -210,7 +210,7 @@ function RecordCard({
         tone === "subject" ? "bg-paper-50 ring-paper-200" : "bg-paper-100 ring-paper-200"
       }`}
     >
-      <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-400">{label}</p>
+      <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-600">{label}</p>
       <p className="mt-1 font-medium text-ink-900">{record.description}</p>
       <p className="text-xs text-ink-500">
         {record.date.slice(0, 10)} · <span className="capitalize">{record.type}</span> ·{" "}

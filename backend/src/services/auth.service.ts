@@ -7,6 +7,7 @@ import { securityEvent } from "../lib/securityLog";
 import { isDisposableEmail } from "../lib/emailPolicy";
 import { isUsable, statusRefusal, transition } from "./accountLifecycle.service";
 import { uploadUserAvatar } from "./storage.service";
+import { HANDOFF_TTL_SECONDS, hashHandoffCode, newHandoffCode, open as openSealed, seal } from "../lib/authHandoff";
 
 interface RegisterInput {
   email: string;
@@ -99,7 +100,72 @@ function toProfile(user: User) {
  * URL for anything not on that list, which presents as "the reset link goes to
  * the wrong page" rather than as an error.
  */
+/**
+ * Was this a failure to SEND, rather than a refusal of the request?
+ *
+ * The two need telling apart because they mean opposite things operationally:
+ * a refusal is the system working (a taken address, a weak password), while a
+ * send failure is the system silently not working, and the caller cannot be
+ * told about it without turning registration into an enumeration oracle.
+ *
+ * Three signals, because no one of them is sufficient:
+ *
+ * - 429 is the built-in mailer's hourly cap (`over_email_send_rate_limit`).
+ * - 5xx is an upstream send failure. Every way GoTrue refuses the REQUEST
+ *   itself — address taken, weak password, malformed body — is a 4xx, so a 5xx
+ *   out of a send path is the mail provider, not the caller.
+ * - An SMTP reply code (`535 5.7.8 …`) passed through verbatim.
+ *
+ * The reply-code branch exists because of a real failure this originally
+ * missed. A misconfigured Gmail App Password produces
+ * `535 "5.7.8 Username and Password not accepted"`, which contains none of the
+ * words a keyword match would look for — no "smtp", no "sending", no "mail".
+ * Matching prose alone silently filed a total mail outage as an ordinary
+ * registration rejection, which is exactly the failure this function exists to
+ * prevent. Structure beats vocabulary here.
+ *
+ * Anything unrecognised still falls through to the ordinary rejection path.
+ */
+function isDeliveryFailure(error: { status?: number; code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  if (error.status === 429) return true;
+  if (typeof error.status === "number" && error.status >= 500) return true;
+  if (error.code && /rate_limit|email_send|smtp|mail/i.test(error.code)) return true;
+
+  const message = error.message ?? "";
+  // An SMTP reply: 3-digit code, optionally followed by an enhanced status
+  // code, at the start of the message. Covers 535 auth, 550 rejected, 421
+  // unavailable, 454 TLS — none of which say "smtp" in words.
+  if (/^\s*"?[45]\d{2}[\s-]/.test(message)) return true;
+
+  return /rate limit|sending|smtp|mailer|confirmation email/i.test(message);
+}
+
 function redirectFor(platform: ClientPlatform, path: "auth/confirm" | "auth/reset-password"): string {
+  /*
+   * CONFIRMATION IGNORES THE PLATFORM. Everything else does not.
+   *
+   * A confirmation link is read wherever the owner reads their mail, which is
+   * very often not the device they registered on: someone who signed up in the
+   * app opens Gmail on the same phone, and someone who signed up on a laptop
+   * opens it on their phone anyway. Sending a `finsight://` URL to whoever
+   * registered on mobile made the link WORK ONLY THERE — on a desktop it is an
+   * unhandled scheme, which the browser reports as a broken link.
+   *
+   * An https URL is handled everywhere and is also the only form that can be
+   * claimed by the app: Android App Links and iOS Universal Links are https by
+   * definition, so the same address opens the installed app on a phone and the
+   * web app when there is no app to open. That is what makes "confirm on
+   * whichever device you happen to be holding" true rather than aspirational.
+   * The app claim is a deployment-side association (see
+   * docs/AUTH-CONFIGURATION.md); when it is missing, the browser handles the
+   * link and nothing is lost.
+   *
+   * Password reset is deliberately NOT changed. It has no cross-device story to
+   * fix — the person asking for it is sitting in front of the client they asked
+   * from — and its redirect targets are separately allow-listed in Supabase.
+   */
+  if (path === "auth/confirm") return `${env.WEB_APP_URL.replace(/\/+$/, "")}/auth/confirm`;
   const base = platform === "mobile" ? env.MOBILE_APP_URL : `${env.WEB_APP_URL.replace(/\/+$/, "")}/`;
   return `${base}${path}`;
 }
@@ -201,6 +267,32 @@ export async function registerUser(input: RegisterInput, platform: ClientPlatfor
      * never works. "User already registered" describes someone else's account
      * and is exactly what must not come back.
      */
+    /*
+     * A failure to DELIVER is not a rejection of the address, and must not be
+     * filed as one.
+     *
+     * `register.rejected` is the routine, high-volume event — "that address
+     * already has a profile" fires on every duplicate signup — so a mail
+     * outage buried in it is unalertable in practice. It is also the failure
+     * with the worst presentation: the caller still gets the neutral
+     * acknowledgement (it must, or registration becomes an enumeration
+     * oracle), so the owner is told to check an inbox nothing was ever sent
+     * to. The recovery paths already separate this as
+     * `recovery.delivery_failed`, which docs/AUTH-CONFIGURATION.md says to
+     * alert on; registration was the one send that had no equivalent.
+     *
+     * The common trigger is not an outage but Supabase's built-in mailer,
+     * which is capped at a few messages an hour and answers 429 past that.
+     */
+    if (isDeliveryFailure(error)) {
+      securityEvent("recovery.delivery_failed", {
+        email: input.email,
+        kind: "registration",
+        reason: error?.message ?? "unknown mailer failure",
+      });
+      return REGISTRATION_ACKNOWLEDGEMENT;
+    }
+
     securityEvent("register.rejected", { email: input.email, reason: error?.message ?? "no user returned" });
     if (error?.code === "weak_password" || /password/i.test(error?.message ?? "")) {
       throw new ApiError(400, error?.message ?? "Choose a stronger password.");
@@ -333,7 +425,7 @@ export async function confirmEmail(accessToken: string) {
     throw new ApiError(400, "That link did not confirm your email address. Request a new one below.");
   }
 
-  const user = await prisma.user.findUnique({ where: { authId: data.user.id } });
+  let user = await prisma.user.findUnique({ where: { authId: data.user.id } });
   if (!user) {
     throw new ApiError(404, "There is no FinSight profile for this account.");
   }
@@ -341,11 +433,153 @@ export async function confirmEmail(accessToken: string) {
   if (user.status === AccountStatus.PENDING_VERIFICATION) {
     await transition(user, AccountStatus.ACTIVE, { reason: "email confirmed" });
     securityEvent("register.verified", { userId: user.id, email: user.email });
+    user = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
   }
+
+  /*
+   * A confirmed address is not automatically a usable account.
+   *
+   * Everything else this function does assumes the only reason a row sits at
+   * PENDING_VERIFICATION is an unconfirmed address — but SUSPENDED and the
+   * deletion states are reachable too, and now that the caller turns a
+   * successful response straight into a signed-in session, saying "you are
+   * confirmed" to one of those would be handing out a session the login path
+   * refuses. Same gate, same wording, one place further forward.
+   */
+  if (!isUsable(user.status)) {
+    securityEvent("login.refused_status", { userId: user.id, email: user.email, status: user.status });
+    throw new ApiError(403, statusRefusal(user.status));
+  }
+
+  /*
+   * WHY THE PROFILE COMES BACK. The caller is about to decide where to put
+   * someone who has just proved their address, and the two destinations —
+   * finish setting up your business, or your dashboard — are the same
+   * distinction the signed-in route guards already make from the business
+   * profile list. Answering it here saves the client a round trip at the one
+   * moment it has nothing on screen yet, and it is the same fact either way:
+   * `needsOnboarding` is "this account has no business profile", not a new flag.
+   */
+  const businessProfiles = await prisma.businessProfile.count({ where: { userId: user.id } });
 
   // Idempotent on purpose: mail clients pre-fetch links, and a second click
   // should say "you're all set", not "that link is invalid".
-  return { message: "Your email address is confirmed. You can log in now." };
+  return {
+    message: "Your email address is confirmed.",
+    profile: toProfile(user),
+    needsOnboarding: businessProfiles === 0,
+  };
+}
+
+/**
+ * Mints the one-time code that carries a session from the web app into the
+ * installed mobile app.
+ *
+ * Authenticated by the access token the caller already holds — the same token
+ * the confirmation link delivered, or an ordinary session's — so this can only
+ * ever hand out a session the caller was already holding. It is not a way to
+ * obtain one.
+ *
+ * See lib/authHandoff.ts for why the code is stored as a hash and the refresh
+ * token as ciphertext, and why neither ever appears in the URL.
+ */
+export async function createSessionHandoff(accessToken: string, refreshToken: string) {
+  const { data, error } = await supabaseAdmin.auth.getUser(accessToken);
+  if (error || !data.user) {
+    throw new ApiError(401, "That session is no longer valid. Log in again to continue.");
+  }
+
+  const user = await prisma.user.findUnique({ where: { authId: data.user.id } });
+  if (!user) {
+    throw new ApiError(404, "There is no FinSight profile for this account.");
+  }
+  if (!isUsable(user.status)) {
+    securityEvent("login.refused_status", { userId: user.id, email: user.email, status: user.status });
+    throw new ApiError(403, statusRefusal(user.status));
+  }
+
+  const { code, codeHash } = newHandoffCode();
+  const expiresAt = new Date(Date.now() + HANDOFF_TTL_SECONDS * 1000);
+
+  /*
+   * Any code this account has outstanding dies here. Handoff is a "continue
+   * over there, now" gesture, so a second press means the first link is stale;
+   * leaving it live would be an extra, invisible way into the account for as
+   * long as its two minutes ran.
+   */
+  await prisma.authHandoff.deleteMany({ where: { userId: user.id } });
+  await prisma.authHandoff.create({
+    data: { codeHash, userId: user.id, refreshTokenCipher: seal(refreshToken), expiresAt },
+  });
+
+  securityEvent("handoff.issued", { userId: user.id, email: user.email });
+  // Opportunistic, unawaited: there is no volume here worth a scheduled job,
+  // and the caller is mid-handoff — it must not wait on a housekeeping delete.
+  void purgeExpiredHandoffs();
+  return { code, expiresInSeconds: HANDOFF_TTL_SECONDS };
+}
+
+/**
+ * Redeems a handoff code for a real session, once.
+ *
+ * SINGLE USE IS ENFORCED BY THE UPDATE, not by a read followed by a write. Two
+ * exchanges of the same code arriving together — a retried request, a link
+ * opened twice — would both pass a read-then-check and both mint a session; the
+ * conditional update means exactly one of them changes a row, and the other
+ * sees a dead code.
+ *
+ * The refresh token is then SPENT rather than returned: refreshing rotates it,
+ * so the copy sealed in the row is invalid the moment this succeeds, and the
+ * caller gets a session nothing else has a handle on.
+ */
+export async function exchangeSessionHandoff(code: string) {
+  const dead = new ApiError(400, "That link has expired or has already been used. Log in to continue.");
+
+  const codeHash = hashHandoffCode(code);
+  const claimed = await prisma.authHandoff.updateMany({
+    where: { codeHash, consumedAt: null, expiresAt: { gt: new Date() } },
+    data: { consumedAt: new Date() },
+  });
+  if (claimed.count !== 1) throw dead;
+
+  const row = await prisma.authHandoff.findUnique({ where: { codeHash } });
+  // Deleted rather than left to expire: it has done its one job, and the
+  // ciphertext it holds is dead weight from here on.
+  if (row) await prisma.authHandoff.delete({ where: { id: row.id } }).catch(() => undefined);
+  if (!row) throw dead;
+
+  const refreshToken = openSealed(row.refreshTokenCipher);
+  if (!refreshToken) throw dead;
+
+  const client = createAnonAuthClient();
+  const { data, error } = await client.auth.refreshSession({ refresh_token: refreshToken });
+  if (error || !data.session || !data.user) {
+    securityEvent("handoff.failed", { userId: row.userId, reason: error?.message ?? "no session" });
+    throw dead;
+  }
+
+  const user = await prisma.user.findUnique({ where: { id: row.userId } });
+  if (!user || user.authId !== data.user.id) throw dead;
+  if (!isUsable(user.status)) {
+    securityEvent("login.refused_status", { userId: user.id, email: user.email, status: user.status });
+    throw new ApiError(403, statusRefusal(user.status));
+  }
+
+  const businessProfiles = await prisma.businessProfile.count({ where: { userId: user.id } });
+  securityEvent("handoff.redeemed", { userId: user.id, email: user.email });
+  return { profile: toProfile(user), session: data.session, needsOnboarding: businessProfiles === 0 };
+}
+
+/**
+ * Clears handoff rows nobody came back for.
+ *
+ * They are harmless — expired and sealed — but they are session material, and
+ * session material that is kept is session material that can be stolen. Called
+ * opportunistically rather than on a timer; there is no volume here worth a
+ * scheduled job.
+ */
+export async function purgeExpiredHandoffs() {
+  await prisma.authHandoff.deleteMany({ where: { expiresAt: { lt: new Date() } } }).catch(() => undefined);
 }
 
 export async function loginUser(input: LoginInput) {
@@ -435,12 +669,45 @@ export async function requestPasswordRecovery(email: string, platform: ClientPla
    * anywhere that anything was wrong. Anonymity is owed to the visitor, not to
    * our own operations.
    */
-  const { error } = await supabaseAdmin.auth.resetPasswordForEmail(email, {
-    redirectTo: redirectFor(platform, "auth/reset-password"),
-  });
-  if (error) {
-    securityEvent("recovery.delivery_failed", { email, kind: "password-reset", reason: error.message });
-  }
+  /*
+   * STARTED HERE, NOT AWAITED HERE — and that is a property of what this
+   * endpoint is, not a shortcut.
+   *
+   * The caller is told the same sentence whatever happens: delivered, failed
+   * to send, address not registered. That is deliberate (an answer that varied
+   * would be an account-enumeration oracle), and it means the response does not
+   * depend on the send in any way — so waiting for the send only makes the
+   * owner watch a spinner for the length of an SMTP conversation.
+   *
+   * That wait was not theoretical. A reset request on this route already pays
+   * for two sequential DB-backed rate-limit writes before reaching this line,
+   * and against a hosted Postgres those alone run to seconds; adding a mail
+   * round trip on top pushed the whole request past the point where browsers
+   * and proxies start abandoning it. The observed failure was a request the
+   * client dropped at ~6s, which surfaced to the owner as "Network Error" on a
+   * request the server was still perfectly happy to answer.
+   *
+   * The call is MADE synchronously — only its result is handled later — so
+   * ordering against anything that observes the call is unchanged.
+   *
+   * `.catch` is not optional. `resetPasswordForEmail` reports mail failures in
+   * `error` rather than by throwing, but the transport underneath it can still
+   * reject, and an unhandled rejection here would take the process down.
+   */
+  void supabaseAdmin.auth
+    .resetPasswordForEmail(email, { redirectTo: redirectFor(platform, "auth/reset-password") })
+    .then(({ error }) => {
+      if (error) {
+        securityEvent("recovery.delivery_failed", { email, kind: "password-reset", reason: error.message });
+      }
+    })
+    .catch((err: unknown) => {
+      securityEvent("recovery.delivery_failed", {
+        email,
+        kind: "password-reset",
+        reason: err instanceof Error ? err.message : "send threw",
+      });
+    });
 }
 
 /**

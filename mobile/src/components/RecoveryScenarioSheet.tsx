@@ -190,7 +190,7 @@ export function RecoveryScenarioSheet({
                 }}
               />
               <T variant="caption" style={{ marginTop: 4 }}>
-                Your currently configured figure is {formatPHP(currentExpectedMonthlyExpenses)}.
+                Your currently configured figure is {formatMoney(currentExpectedMonthlyExpenses)}.
               </T>
               {valueError ? (
                 <View
@@ -229,11 +229,6 @@ export function RecoveryScenarioSheet({
       </Pressable>
     </Modal>
   );
-}
-
-/** A plain PHP formatter local to this file — kept minimal since Money already exists for the panel below. */
-function formatPHP(value: number): string {
-  return `₱${Math.round(value).toLocaleString("en-PH")}`;
 }
 
 /**

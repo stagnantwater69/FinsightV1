@@ -154,7 +154,7 @@ export function Field({
         <div className="flex items-center justify-between gap-3">
           <label htmlFor={id} className="block text-sm font-medium text-ink-700">
             {label}
-            {optional ? <span className="ml-1 font-normal text-ink-400">(optional)</span> : null}
+            {optional ? <span className="ml-1 font-normal text-ink-500">(optional)</span> : null}
             {required ? (
               <span className="ml-1 text-tone-danger" title="Required">
                 <span aria-hidden>*</span>
@@ -519,7 +519,7 @@ export function FileInput({
           ⇪
         </span>
         <span className="font-medium">{file ? "Choose a different file" : "Choose a file"}</span>
-        <span className="text-ink-400">or drag it here</span>
+        <span className="text-ink-500">or drag it here</span>
       </label>
 
       <input
@@ -541,7 +541,7 @@ export function FileInput({
         <p className="mt-2 flex items-center gap-2 rounded-lg bg-tint-brand px-3 py-2 text-xs text-tone-brand ring-1 ring-edge-brand">
           <span aria-hidden>✓</span>
           <span className="min-w-0 flex-1 truncate font-medium">{file.name}</span>
-          <span className="figure shrink-0 text-ink-500">{formatBytes(file.size)}</span>
+          <span className="figure shrink-0 text-ink-600">{formatBytes(file.size)}</span>
         </p>
       ) : null}
 

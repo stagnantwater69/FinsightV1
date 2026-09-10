@@ -22,5 +22,12 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  /*
+   * `*.node.test.ts` files read the repo's own source through `node:fs` — a
+   * source sweep is the only way to assert a rule across every call site at
+   * once. They are compiled by tsconfig.node.json (which has node types)
+   * instead of here, where `types` is deliberately just `vite/client`.
+   */
+  "exclude": ["src/**/*.node.test.ts"]
 }

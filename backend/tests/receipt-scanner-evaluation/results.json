@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-30T21:42:17.673Z",
+  "generatedAt": "2026-09-07T12:14:15.488Z",
   "metrics": {
     "releaseGateEligibleSamples": 0,
     "documentPrecision": null,
@@ -7,7 +7,39 @@
     "obviousNonReceiptFalseTriggerRate": null,
     "multiReceiptCountAccuracy": null,
     "handwrittenHardRejectRate": null,
-    "analysisLatencyP95Ms": 46.28311500000001
+    "analysisLatencyP95Ms": 206.42892700000004
+  },
+  "captureComparison": {
+    "diagnosticAllSamples": [
+      {
+        "group": "unknown/unknown",
+        "samples": 3,
+        "pairedSamples": 0,
+        "date": {
+          "pairedScoredFields": 0,
+          "improved": 0,
+          "regressed": 0,
+          "unchanged": 0,
+          "accuracyDelta": null
+        },
+        "vendor": {
+          "pairedScoredFields": 0,
+          "improved": 0,
+          "regressed": 0,
+          "unchanged": 0,
+          "accuracyDelta": null
+        },
+        "amount": {
+          "pairedScoredFields": 0,
+          "improved": 0,
+          "regressed": 0,
+          "unchanged": 0,
+          "accuracyDelta": null
+        },
+        "selectedWorseReading": 0
+      }
+    ],
+    "releaseGateEligibleOnly": []
   },
   "results": [
     {
@@ -16,7 +48,9 @@
       "writing": "printed",
       "releaseGateEligible": false,
       "sourceStatus": "existing project fixture; consent status not recorded in this manifest",
-      "detectionLatencyMs": 46.28311500000001,
+      "captureSource": "unknown",
+      "captureMode": "unknown",
+      "detectionLatencyMs": 206.42892700000004,
       "expectedDocumentCount": 1,
       "actualDocumentCount": 2,
       "likelihood": {
@@ -39,7 +73,14 @@
         "date": "correct",
         "vendor": "n/a",
         "amount": "correct"
-      }
+      },
+      "originalFields": {
+        "date": "correct",
+        "vendor": "n/a",
+        "amount": "correct"
+      },
+      "processedFields": null,
+      "processedMinusOriginal": null
     },
     {
       "id": "real-02-clean-digital",
@@ -47,7 +88,9 @@
       "writing": "printed",
       "releaseGateEligible": false,
       "sourceStatus": "existing project fixture; consent status not recorded in this manifest",
-      "detectionLatencyMs": 36.975586000000476,
+      "captureSource": "unknown",
+      "captureMode": "unknown",
+      "detectionLatencyMs": 92.41751599999952,
       "expectedDocumentCount": 1,
       "actualDocumentCount": 1,
       "likelihood": {
@@ -70,7 +113,14 @@
         "date": "correct",
         "vendor": "correct",
         "amount": "correct"
-      }
+      },
+      "originalFields": {
+        "date": "correct",
+        "vendor": "correct",
+        "amount": "correct"
+      },
+      "processedFields": null,
+      "processedMinusOriginal": null
     },
     {
       "id": "real-03-ph-sales-invoice",
@@ -78,7 +128,9 @@
       "writing": "printed",
       "releaseGateEligible": false,
       "sourceStatus": "existing project fixture; consent status not recorded in this manifest",
-      "detectionLatencyMs": 29.832800000000134,
+      "captureSource": "unknown",
+      "captureMode": "unknown",
+      "detectionLatencyMs": 51.35089899999912,
       "expectedDocumentCount": 1,
       "actualDocumentCount": 1,
       "likelihood": {
@@ -101,7 +153,14 @@
         "date": "correct",
         "vendor": "n/a",
         "amount": "wrong"
-      }
+      },
+      "originalFields": {
+        "date": "correct",
+        "vendor": "n/a",
+        "amount": "wrong"
+      },
+      "processedFields": null,
+      "processedMinusOriginal": null
     }
   ]
 }

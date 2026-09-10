@@ -19,6 +19,7 @@ import { useExpenseCategories } from "../context/ExpenseCategoryContext";
 import { api } from "../lib/api";
 import { getErrorMessage } from "../lib/errors";
 import { InsightsTabs } from "../components/AppShell";
+import { ButtonLink } from "../components/Button";
 import { AskFinSightButton, useAskFinSight } from "../components/AskFinSightButton";
 import type {
   CategorySuggestion,
@@ -219,7 +220,7 @@ function PriceContextPanel({
             paragraphs above this panel were written by a model; these numbers
             were not, and the difference is the whole reason the panel exists.
           */}
-          <p className="mt-0.5 text-xs text-ink-500">
+          <p className="mt-0.5 text-xs text-ink-600">
             Counted from your own records — not written by AI
           </p>
         </div>
@@ -236,7 +237,7 @@ function PriceContextPanel({
         <>
           {price.similar.length > 0 ? (
             <div className="mt-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-ink-500">
+              <p className="text-xs font-semibold uppercase tracking-wide text-ink-600">
                 Last time you bought something like this
               </p>
               <ul className="mt-1.5 space-y-1.5">
@@ -247,7 +248,7 @@ function PriceContextPanel({
                   >
                     <span className="min-w-0 truncate">
                       {record.description}
-                      <span className="ml-1.5 text-xs text-ink-500">
+                      <span className="ml-1.5 text-xs text-ink-600">
                         {new Date(record.date).toLocaleDateString(undefined, {
                           month: "short",
                           year: "numeric",
@@ -346,13 +347,13 @@ function PurchaseReviewCard({
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         <div className="rounded-xl bg-paper-100 p-4">
-          <p className="text-xs font-semibold uppercase tracking-wide text-ink-500">
+          <p className="text-xs font-semibold uppercase tracking-wide text-ink-600">
             What it is usually for
           </p>
           <p className="mt-1.5 text-sm leading-relaxed text-ink-700">{review.businessUse}</p>
         </div>
         <div className="rounded-xl bg-paper-100 p-4">
-          <p className="text-xs font-semibold uppercase tracking-wide text-ink-500">
+          <p className="text-xs font-semibold uppercase tracking-wide text-ink-600">
             What it costs to keep
           </p>
           <p className="mt-1.5 text-sm leading-relaxed text-ink-700">
@@ -586,9 +587,21 @@ export function SpendingImpact() {
     return () => clearTimeout(timeout);
   }, [selected, description, categoryTouched]);
 
-  if (!selected) return null;
+  /*
+   * No `if (!selected) return <NoBusinessProfile />` any more. Nothing on this
+   * page is ever saved — it is a what-if calculator — so with no business it
+   * keeps its form and sits in its own "enter an amount" state, with the two
+   * things that genuinely need a profile (the funds line and the AI item
+   * review) standing down. Both effects above already no-op without one, so
+   * no request is fired.
+   */
 
-  const sliderMaximum = Math.max(50000, Math.ceil((selected.availableFunds * 1.25) / 1000) * 1000);
+  // Falls back to the floor when there are no owner-entered funds to scale
+  // from, which is exactly what a business with none would get anyway.
+  const sliderMaximum = Math.max(
+    50000,
+    Math.ceil(((selected?.availableFunds ?? 0) * 1.25) / 1000) * 1000,
+  );
 
   // Names the exact scenario the card above just described — the planned
   // amount and its impact band — rather than a generic "tell me more".
@@ -657,16 +670,18 @@ export function SpendingImpact() {
               <button
                 type="button"
                 onClick={fetchReview}
-                disabled={description.trim().length < 3 || reviewing}
+                disabled={!selected || description.trim().length < 3 || reviewing}
                 className="inline-flex min-h-tap items-center gap-2 rounded-xl bg-brand-800 px-4 text-sm font-semibold text-brand-50 shadow-sm transition-colors hover:bg-brand-900 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Sparkles aria-hidden size={16} />
                 {reviewing ? "Looking at it…" : review ? "Look at this item again" : "What am I buying?"}
               </button>
               <p className="text-xs leading-relaxed text-ink-500">
-                {description.trim().length < 3
-                  ? "Name the item above and FinSight will describe it."
-                  : "FinSight describes the item and what to ask — it won't tell you whether to buy it."}
+                {!selected
+                  ? "FinSight compares an item against your own records, so this needs your business set up first."
+                  : description.trim().length < 3
+                    ? "Name the item above and FinSight will describe it."
+                    : "FinSight describes the item and what to ask — it won't tell you whether to buy it."}
               </p>
             </div>
 
@@ -695,7 +710,7 @@ export function SpendingImpact() {
                     type="button"
                     onClick={() => setPlannedAmount(amount)}
                     aria-pressed={plannedAmount === amount}
-                    className="min-h-tap rounded-xl bg-paper-100 px-3 text-xs font-semibold text-ink-700 ring-1 ring-paper-200 transition-colors hover:bg-tint-brand hover:text-tone-brand aria-pressed:bg-brand-700 aria-pressed:text-white"
+                    className="figure min-h-tap rounded-xl bg-paper-100 px-3 text-xs font-semibold text-ink-700 ring-1 ring-paper-200 transition-colors hover:bg-tint-brand hover:text-tone-brand aria-pressed:bg-brand-700 aria-pressed:text-white"
                   >
                     {formatMoney(amount)}
                   </button>
@@ -751,10 +766,25 @@ export function SpendingImpact() {
             </details>
 
             <div className="mt-5 flex flex-wrap items-center justify-between gap-2 text-xs text-ink-500">
-              <span>Using {selected.name}'s available funds: <b className="figure text-ink-700">{formatMoney(selected.availableFunds)}</b></span>
-              <Link to={`/business-profiles/${selected.id}/edit`} className="font-semibold text-brand-700 hover:text-brand-800">
-                Update funds
-              </Link>
+              {selected ? (
+                <>
+                  <span>Using {selected.name}'s available funds: <b className="figure text-ink-700">{formatMoney(selected.availableFunds)}</b></span>
+                  <Link to={`/business-profiles/${selected.id}/edit`} className="font-semibold text-brand-700 hover:text-brand-800">
+                    Update funds
+                  </Link>
+                </>
+              ) : (
+                <>
+                  {/* No funds figure to work against, so the scenario cannot
+                      be calculated — the link goes where that gets fixed
+                      rather than to a business-profile edit page that does
+                      not exist yet. */}
+                  <span>No available-funds figure yet — this needs your business.</span>
+                  <Link to="/onboarding" className="font-semibold text-brand-700 hover:text-brand-800">
+                    Finish setup
+                  </Link>
+                </>
+              )}
             </div>
           </div>
 
@@ -768,19 +798,26 @@ export function SpendingImpact() {
                   <CircleDollarSign aria-hidden size={30} />
                 </span>
                 <h2 className="mt-5 font-display text-xl font-bold text-ink-900">See the money move before you spend it</h2>
-                <p className="mt-2 max-w-sm text-sm leading-relaxed text-ink-500">
-                  Enter an amount or choose a quick scenario. FinSight will show what changes without recording an expense.
+                <p className="mt-2 max-w-sm text-sm leading-relaxed text-ink-600">
+                  {selected
+                    ? "Enter an amount or choose a quick scenario. FinSight will show what changes without recording an expense."
+                    : "This works out a planned spend against your available funds and your own spending history — so it needs your business set up before it can show you anything."}
                 </p>
+                {!selected ? (
+                  <ButtonLink to="/onboarding" variant="primary" className="mt-5">
+                    Finish setting up your business
+                  </ButtonLink>
+                ) : null}
               </div>
             ) : (
               <div className={`transition-opacity duration-200 ${isCalculating ? "opacity-60" : "opacity-100"}`}>
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <p className="text-sm font-medium text-ink-500">After this {description ? "purchase" : "spending"}, you may have</p>
+                    <p className="text-sm font-medium text-ink-600">After this {description ? "purchase" : "spending"}, you may have</p>
                     <p className={`figure mt-1 break-words text-4xl font-semibold tracking-[-0.03em] sm:text-5xl ${data.funds.after < 0 ? "text-tone-danger" : "text-ink-900"}`}>
                       {formatMoney(data.funds.after)}
                     </p>
-                    <p className="mt-2 flex items-center gap-1.5 text-sm text-ink-500">
+                    <p className="mt-2 flex items-center gap-1.5 text-sm text-ink-600">
                       <TrendingDown aria-hidden size={16} /> {formatMoney(data.plannedAmount)} less than your current funds
                     </p>
                   </div>
@@ -811,7 +848,7 @@ export function SpendingImpact() {
                 <div className="mt-5 grid gap-3 sm:grid-cols-2">
                   <div className="flex gap-3 rounded-xl bg-paper p-3.5 ring-1 ring-paper-200">
                     <WalletCards aria-hidden className="mt-0.5 shrink-0 text-tone-brand" size={18} />
-                    <div><p className="text-xs text-ink-500">Expenses this period</p><p className="figure mt-1 text-sm font-semibold text-ink-900">{formatMoney(data.periodExpenses.before)} <span className="mx-1 text-ink-400">→</span> {formatMoney(data.periodExpenses.after)}</p></div>
+                    <div><p className="text-xs text-ink-500">Expenses this period</p><p className="figure mt-1 text-sm font-semibold text-ink-900">{formatMoney(data.periodExpenses.before)} <span className="mx-1 text-ink-500">→</span> {formatMoney(data.periodExpenses.after)}</p></div>
                   </div>
                   <button
                     type="button"

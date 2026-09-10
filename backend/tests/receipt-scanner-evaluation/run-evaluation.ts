@@ -10,6 +10,9 @@ interface Entry {
   id: string;
   file: string;
   processedFile?: string;
+  /** Explicit provenance; historical fixtures with no record stay unknown. */
+  captureSource?: "manual-camera" | "native-document-scanner" | "gallery";
+  captureMode?: "standard" | "long";
   kind: "receipt" | "non-receipt";
   writing: "printed" | "handwritten" | "mixed" | "none";
   expectedDocumentCount: number;
@@ -42,25 +45,44 @@ async function run(entry: Entry) {
     ? await extractReceipt(readFileSync(resolve(HERE, entry.processedFile)))
     : null;
   const selected = selectOcrCandidate(original, processed);
-  const parsed = parseReceiptFields(selected.result.text);
   const likelihood = assessReceiptLikelihood({ rawText: selected.result.text, candidates: detection.candidates });
   const expected = entry.expected;
+  const scoreFields = (text: string) => {
+    if (!expected) return null;
+    const parsed = parseReceiptFields(text);
+    return {
+      date: scoreDate(expected.date, parsed.date),
+      vendor: scoreVendor(expected.vendor, parsed.vendor),
+      amount: scoreAmount(expected.amount, parsed.amount),
+    };
+  };
+  const originalFields = scoreFields(original.text);
+  const processedFields = processed ? scoreFields(processed.text) : null;
+  const fields = scoreFields(selected.result.text);
+  const comparison = originalFields && processedFields ? {
+    // +1 gains a correct field; -1 loses it; 0 keeps its correctness status.
+    // Absent ground truth remains unmeasurable rather than a false success.
+    date: originalFields.date === "n/a" ? null : Number(processedFields.date === "correct") - Number(originalFields.date === "correct"),
+    vendor: originalFields.vendor === "n/a" ? null : Number(processedFields.vendor === "correct") - Number(originalFields.vendor === "correct"),
+    amount: originalFields.amount === "n/a" ? null : Number(processedFields.amount === "correct") - Number(originalFields.amount === "correct"),
+  } : null;
   return {
     id: entry.id,
     kind: entry.kind,
     writing: entry.writing,
     releaseGateEligible: entry.releaseGateEligible,
     sourceStatus: entry.sourceStatus,
+    captureSource: entry.captureSource ?? "unknown",
+    captureMode: entry.captureMode ?? "unknown",
     detectionLatencyMs,
     expectedDocumentCount: entry.expectedDocumentCount,
     actualDocumentCount: detection.candidates?.length ?? (detection.corners ? 1 : 0),
     likelihood,
     selectedSource: selected.source,
-    fields: expected ? {
-      date: scoreDate(expected.date, parsed.date),
-      vendor: scoreVendor(expected.vendor, parsed.vendor),
-      amount: scoreAmount(expected.amount, parsed.amount),
-    } : null,
+    fields,
+    originalFields,
+    processedFields,
+    processedMinusOriginal: comparison,
   };
 }
 
@@ -90,7 +112,43 @@ async function run(entry: Entry) {
     ),
     analysisLatencyP95Ms: percentile(results.map((result) => result.detectionLatencyMs), 0.95),
   };
-  writeFileSync(join(HERE, "results.json"), JSON.stringify({ generatedAt: new Date().toISOString(), metrics, results }, null, 2) + "\n");
+  const summarize = (group: typeof results) => {
+    const fieldDeltas = (field: "date" | "vendor" | "amount") => {
+      const values = group.flatMap(result => {
+        const value = result.processedMinusOriginal?.[field];
+        return value == null ? [] : [value];
+      });
+      return {
+        pairedScoredFields: values.length,
+        improved: values.filter(value => value > 0).length,
+        regressed: values.filter(value => value < 0).length,
+        unchanged: values.filter(value => value === 0).length,
+        accuracyDelta: values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null,
+      };
+    };
+    return {
+      samples: group.length,
+      pairedSamples: group.filter(result => result.processedFields !== null).length,
+      date: fieldDeltas("date"), vendor: fieldDeltas("vendor"), amount: fieldDeltas("amount"),
+      /*
+       * Where the candidate selector took the processed reading and that
+       * reading lost a field the original had — the one failure mode the
+       * selector exists to prevent, counted rather than argued about.
+       */
+      selectedWorseReading: group.filter(result =>
+        result.selectedSource === "processed" &&
+        Object.values(result.processedMinusOriginal ?? {}).some(value => value != null && value < 0)).length,
+    };
+  };
+  const groupComparisons = (entries: typeof results) => Array.from(new Set(entries.map(result => `${result.captureSource}/${result.captureMode}`))).sort().map(key => ({
+    group: key,
+    ...summarize(entries.filter(result => `${result.captureSource}/${result.captureMode}` === key)),
+  }));
+  const captureComparison = {
+    diagnosticAllSamples: groupComparisons(results),
+    releaseGateEligibleOnly: groupComparisons(eligible),
+  };
+  writeFileSync(join(HERE, "results.json"), JSON.stringify({ generatedAt: new Date().toISOString(), metrics, captureComparison, results }, null, 2) + "\n");
 
   const format = (value: number | null) => value === null ? "Not measurable" : `${(value * 100).toFixed(1)}%`;
   const lines = [
@@ -112,6 +170,19 @@ async function run(entry: Entry) {
     `| Multi-receipt count accuracy | ${format(metrics.multiReceiptCountAccuracy)} |`,
     `| Handwritten hard-reject rate | ${format(metrics.handwrittenHardRejectRate)} |`,
     `| Detector latency p95 | ${metrics.analysisLatencyP95Ms?.toFixed(1) ?? "Not measurable"} ms |`,
+    "",
+    "## Original versus processed capture diagnostics",
+    "",
+    "These groups include all fixtures for debugging and are not release-gate evidence. Unknown provenance is never inferred from filenames. Deltas compare the same image pair against the same ground truth; positive values gain correct fields and negative values lose them. Missing pairs or ground truth are not measurable.",
+    "",
+    "| Capture source / mode | Samples | Paired samples | Date delta | Vendor delta | Amount delta |",
+    "|---|---:|---:|---:|---:|---:|",
+    ...captureComparison.diagnosticAllSamples.map(group => {
+      const delta = (value: number | null) => value === null ? "Not measurable" : `${value > 0 ? "+" : ""}${(value * 100).toFixed(1)} pp`;
+      return `| ${group.group} | ${group.samples} | ${group.pairedSamples} | ${delta(group.date.accuracyDelta)} | ${delta(group.vendor.accuracyDelta)} | ${delta(group.amount.accuracyDelta)} |`;
+    }),
+    "",
+    "Set optional `captureSource` and `captureMode` only from recorded capture provenance, and `processedFile` to the corresponding corrected image. JSON includes per-field gains/regressions and a separate eligible-only breakdown. No receipt text or images are included in the report.",
     "",
     "Add consented samples to `manifest.json`, verify ground truth independently, then set `releaseGateEligible` to true.",
   ];

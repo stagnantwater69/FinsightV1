@@ -52,7 +52,8 @@ vi.mock("../context/ExpenseCategoryContext", () => ({
   useExpenseCategories: () => ({ categories: [{ id: 1, name: "Inventory" }] }),
 }));
 
-vi.mock("../context/AiChatContext", () => ({ useAiChat: () => ({ openChat: vi.fn() }) }));
+const openChat = vi.fn();
+vi.mock("../context/AiChatContext", () => ({ useAiChat: () => ({ openChat }) }));
 
 vi.mock("../lib/api", () => ({
   api: {
@@ -95,6 +96,23 @@ describe("Dashboard decision-first improvements", () => {
     await user.click(await screen.findByRole("button", { name: "All time" }));
     await waitFor(() => expect(screen.getAllByText("Across all records").length).toBeGreaterThan(0));
     expect(screen.queryByText(/Last 0 days/i)).not.toBeInTheDocument();
+  });
+
+  /*
+   * The period label is lower-cased into the question that seeds Ask FinSight,
+   * so "Last 0 days" would not just look wrong on a tile — it would be sent to
+   * the AI as the owner's own words (QA register FUN-008).
+   */
+  it("seeds Ask FinSight with a question that reads naturally on All time", async () => {
+    const user = userEvent.setup();
+    openChat.mockClear();
+    renderDashboard();
+    await user.click(await screen.findByRole("button", { name: "All time" }));
+    await user.click(await screen.findByRole("button", { name: /Ask FinSight for more context/ }));
+
+    const question = openChat.mock.calls[0][1] as string;
+    expect(question).toBe("Why is Inventory my largest expense category across all records?");
+    expect(question).not.toMatch(/\b0 days?\b/);
   });
 
   it("distinguishes a comparison request failure from insufficient history", async () => {

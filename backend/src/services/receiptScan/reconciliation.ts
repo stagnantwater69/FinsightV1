@@ -1,6 +1,6 @@
 import { prisma } from "../../config/prisma";
 import { ApiError } from "../../middleware/error.middleware";
-import { createExpenseRecord } from "../expenseRecord.service";
+import { createExpenseRecordWithin } from "../expenseRecord.service";
 import { allocateProportionally, type ReconciliationMode } from "../../lib/allocation";
 import { recordConfirmationFeedback, recordDeletedLine, snapshotItemCategories } from "../extractionFeedback.service";
 import { toDTO } from "./dto";
@@ -182,40 +182,103 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
     );
   }
 
-  // One record per category, all pointing back at this scan. Sequential
-  // rather than batched on purpose: a receipt splits into a handful of
-  // categories at most, and going through createExpenseRecord keeps the
-  // duplicate check, the large-expense rule and their notifications
-  // identical to a hand-typed expense.
-  const records = [];
-  for (const split of splits) {
-    const record = await createExpenseRecord(userId, {
-      businessProfileId: scan.businessProfileId,
-      categoryId: split.categoryId,
-      date: input.date,
-      description: split.description ?? input.description,
-      vendor: input.vendor,
-      amount: split.amount,
-      allocatedCharges: split.allocatedCharges,
-      source: "RECEIPT_SCAN",
-      receiptScanId: scan.id,
-    });
-    records.push(record);
+  const businessProfileId = scan.businessProfileId;
 
-    // Point the items that composed this record at it, so "what made up this
-    // PHP 1,850 Ingredients entry" stays answerable after the fact.
-    if (split.itemIds && split.itemIds.length > 0) {
-      await prisma.receiptScanItem.updateMany({
-        where: { id: { in: split.itemIds } },
-        data: { expenseRecordId: record.id, categoryId: split.categoryId },
+  /*
+   * EVERYTHING THE CONFIRMATION WRITES, IN ONE TRANSACTION.
+   *
+   * Two separate ways this used to corrupt the books, both fixed by the same
+   * unit of work:
+   *
+   * 1. TWO CONFIRMS AT ONCE. The read guard near the top of this function and
+   *    the flip to Confirmed used to sit ~140 awaited lines apart, so a double
+   *    tap on a slow connection put both requests past the guard and both
+   *    wrote a complete set of expense records — a receipt booked twice, with
+   *    neither copy flagged, because the duplicate detector raced too. The
+   *    conditional updateMany below is the claim: it is the FIRST statement in
+   *    the transaction, so the loser blocks on that row until the winner
+   *    commits and then matches zero rows, because the status is no longer
+   *    Pending. Same discipline as claimImportBatch in csvImport.service.ts.
+   *
+   * 2. A FAILURE MID-LOOP. The record writes used to commit one at a time with
+   *    the status flip last, so an error on the third split left two expense
+   *    records booked against a scan that was still Pending — the owner saw a
+   *    failure, retried, and booked the first two a second time. Inside the
+   *    transaction there is no such half state: either the whole receipt is
+   *    booked and the scan is Confirmed, or nothing happened at all.
+   *
+   * The side effects each record create would normally fire — the duplicate
+   * and large-expense notifications, the queued analysis job — come back as
+   * thunks and run after the COMMIT. A notification that fails to send must
+   * never roll back the books, and the analysis job carries a foreign key to a
+   * record that does not exist outside the transaction yet.
+   */
+  const { records, deferredEffects } = await prisma.$transaction(
+    async (tx) => {
+      const claimed = await tx.receiptScan.updateMany({
+        where: { id: scan.id, confirmationStatus: "Pending" },
+        data: { confirmationStatus: "Confirmed" },
       });
-    }
-  }
+      if (claimed.count === 0) {
+        // 409 rather than the 400 the read guard gives: the guard answers
+        // "you already did this", this answers "someone is doing it right
+        // now". The books are intact either way, and the client's retry will
+        // find the scan confirmed.
+        throw new ApiError(409, "This receipt scan is already being confirmed");
+      }
 
-  await prisma.receiptScan.update({
-    where: { id: scan.id },
-    data: { confirmationStatus: "Confirmed" },
-  });
+      // One record per category, all pointing back at this scan. Sequential
+      // rather than batched on purpose: a receipt splits into a handful of
+      // categories at most, and going through the shared create keeps the
+      // duplicate check, the large-expense rule and their notifications
+      // identical to a hand-typed expense.
+      const created = [];
+      const effects: (() => Promise<void>)[] = [];
+      for (const split of splits) {
+        const { record, runSideEffects } = await createExpenseRecordWithin(
+          userId,
+          {
+            businessProfileId,
+            categoryId: split.categoryId,
+            date: input.date,
+            description: split.description ?? input.description,
+            vendor: input.vendor,
+            amount: split.amount,
+            allocatedCharges: split.allocatedCharges,
+            source: "RECEIPT_SCAN",
+            receiptScanId: scan.id,
+          },
+          tx,
+        );
+        created.push(record);
+        effects.push(runSideEffects);
+
+        // Point the items that composed this record at it, so "what made up
+        // this PHP 1,850 Ingredients entry" stays answerable after the fact.
+        // Scoped to THIS scan like its siblings above: an item id is the one
+        // value in this request that names a row directly, and an id belonging
+        // to another owner's receipt must not be writable by guessing it.
+        if (split.itemIds && split.itemIds.length > 0) {
+          await tx.receiptScanItem.updateMany({
+            where: { id: { in: split.itemIds }, receiptScanId: scan.id },
+            data: { expenseRecordId: record.id, categoryId: split.categoryId },
+          });
+        }
+      }
+
+      return { records: created, deferredEffects: effects };
+    },
+    // Generous relative to the handful of statements above, because a second
+    // confirm of the same scan waits here on the claim's row lock rather than
+    // failing fast, and the default 5s would turn an ordinary slow commit into
+    // a spurious error on a receipt that is perfectly fine.
+    { timeout: 20_000, maxWait: 10_000 },
+  );
+
+  // After COMMIT, in the order the records were written.
+  for (const runSideEffects of deferredEffects) {
+    await runSideEffects();
+  }
 
   /*
    * Last, and only once the confirmation has actually succeeded.

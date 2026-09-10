@@ -13,7 +13,15 @@ import type { ExpenseCategory, RecordItem } from "../../lib/types";
  * three slightly different versions of the same control.
  */
 
-export const todayISO = () => new Date().toISOString().slice(0, 10);
+/*
+ * Re-exported, not reimplemented. This used to be
+ * `new Date().toISOString().slice(0, 10)`, which is the UTC day: an owner in
+ * Manila adding an expense at 02:30 got yesterday's date, permanently, on
+ * every record they filed before 08:00. `lib/localDate` is the local-calendar
+ * version DateField has always used. The re-export keeps Add/Scan importing
+ * `todayISO` from here exactly as before.
+ */
+export { todayISO } from "../../lib/localDate";
 
 /** A past CSV import, used only to name a group of duplicates. */
 export interface ImportBatchSummary {

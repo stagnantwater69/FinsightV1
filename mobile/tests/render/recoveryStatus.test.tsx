@@ -217,7 +217,7 @@ describe('RecoveryTargetScreen — operating schedule (Phase 2)', () => {
     });
     expect(await queries.findByText('Closed')).toBeTruthy();
     // The open day beside it still renders its ordinary gap wording.
-    expect(await queries.findByText('300 below')).toBeTruthy();
+    expect(await queries.findByText('PHP 300 below target')).toBeTruthy();
   });
 
   it('offers "Edit operating schedule" while remaining days are approximated and no schedule is configured', async () => {

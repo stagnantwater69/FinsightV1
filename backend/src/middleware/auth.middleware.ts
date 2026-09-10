@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { supabaseAdmin } from "../config/supabase";
 import { prisma } from "../config/prisma";
+import { asyncHandler } from "../lib/asyncHandler";
 import { isUsable, statusRefusal } from "../services/accountLifecycle.service";
 import { securityEvent } from "../lib/securityLog";
 
@@ -19,7 +20,14 @@ declare global {
 
 // Every authenticated route uses this. There is only one role in this
 // system (Small Business Owner) — do not add a role check here.
-export async function requireAuth(req: Request, res: Response, next: NextFunction) {
+//
+// It MUST stay wrapped in `asyncHandler` (see the export below). Express 4
+// does not forward a rejected promise from middleware, and Node then treats it
+// as an unhandled rejection and exits — so before the wrapper, one unreachable
+// database or Supabase call here did not fail a request, it killed the whole
+// server for every user. This runs ahead of every authenticated route, which
+// made it the single most damaging place in the app to leave unwrapped.
+async function authenticate(req: Request, res: Response, next: NextFunction) {
   const header = req.headers.authorization;
   const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
 
@@ -62,3 +70,5 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   req.user = { id: user.id, authId: user.authId, email: user.email };
   next();
 }
+
+export const requireAuth = asyncHandler(authenticate);

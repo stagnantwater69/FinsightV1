@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
 import { getErrorMessage } from "../lib/errors";
-import { Button } from "../components/Button";
+import { Button, ButtonLink } from "../components/Button";
 import { DataTable, type Column } from "../components/DataTable";
 import { EmptyState } from "../components/EmptyState";
 import { Card, PageHead } from "../components/ui";
@@ -132,7 +132,13 @@ export function Categories() {
     }
   }
 
-  if (!selected) return null;
+  /*
+   * No `if (!selected) return <NoBusinessProfile />` here any more: the list
+   * itself only READS, so with no business this renders the same table in its
+   * own "no categories yet" state. What does stand down is CREATING one —
+   * a category belongs to a business, so both the header button and the empty
+   * state's action point at setup instead (see below).
+   */
 
   const columns: Column<ExpenseCategory>[] = [
     {
@@ -151,7 +157,7 @@ export function Categories() {
         c.description ? (
           <span className="text-ink-600">{c.description}</span>
         ) : (
-          <span className="text-ink-400">—</span>
+          <span className="text-ink-500">—</span>
         ),
     },
     {
@@ -217,7 +223,13 @@ export function Categories() {
         title="Expense categories"
         subtitle="How your spending is grouped. Every insight in FinSight is built on these."
         actions={
-          !adding ? (
+          /* createCategory throws without a business profile, so the button
+             that calls it is not offered without one. */
+          !selected ? (
+            <ButtonLink to="/onboarding" variant="brand" size="sm">
+              Finish setup
+            </ButtonLink>
+          ) : !adding ? (
             <Button variant="brand" size="sm" onClick={() => setAdding(true)}>
               + New category
             </Button>
@@ -297,7 +309,7 @@ export function Categories() {
         columns={columns}
         getRowKey={(c) => String(c.id)}
         loading={loading}
-        caption={`Expense categories for ${selected.name}`}
+        caption={selected ? `Expense categories for ${selected.name}` : "Expense categories"}
         itemNoun="categories"
         storageKey="categories"
         initialSort={{ key: "name", direction: "asc" }}
@@ -312,13 +324,20 @@ export function Categories() {
               compact
               title="No categories yet"
               action={
-                <Button variant="primary" onClick={() => setAdding(true)}>
-                  Create your first category
-                </Button>
+                selected ? (
+                  <Button variant="primary" onClick={() => setAdding(true)}>
+                    Create your first category
+                  </Button>
+                ) : (
+                  <ButtonLink to="/onboarding" variant="primary">
+                    Finish setting up your business
+                  </ButtonLink>
+                )
               }
             >
-              Categories are how FinSight groups your spending — without them every expense looks the
-              same. Start with the three or four you spend on most.
+              {selected
+                ? "Categories are how FinSight groups your spending — without them every expense looks the same. Start with the three or four you spend on most."
+                : "Categories belong to a business, so there are none to show yet. Add yours and you can start grouping your spending here."}
             </EmptyState>
           )
         }
@@ -329,7 +348,7 @@ export function Categories() {
               {c.description ? (
                 <p className="mt-0.5 text-sm text-ink-500">{c.description}</p>
               ) : null}
-              <p className="mt-1 text-xs text-ink-400">Created {c.createdAt.slice(0, 10)}</p>
+              <p className="mt-1 text-xs text-ink-500">Created {c.createdAt.slice(0, 10)}</p>
               <div className="mt-2 max-w-[10rem]">
                 <CostBehaviorSelect category={c} />
               </div>

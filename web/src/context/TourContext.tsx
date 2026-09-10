@@ -41,6 +41,16 @@ export interface TourContextValue {
   /** id of the active step, or null — the shell reads this. */
   activeStepId: string | null;
   active: boolean;
+  /**
+   * Whether there is anything worth touring yet.
+   *
+   * False for an owner who chose "Skip for now" and has no business. The
+   * auto-start below has always honoured that; `restart` did not, and the two
+   * entry points disagreeing is what made "Restart product tour" produce a
+   * four-step stub of a ten-step tour. The controls that offer the tour read
+   * this so they can say WHY it is unavailable rather than doing nothing.
+   */
+  available: boolean;
   stepIndex: number;
   setStepIndex: (i: number) => void;
   /** Ends the tour and records why. */
@@ -105,6 +115,27 @@ export function TourProvider({ children }: { children: ReactNode }) {
     [userId, updatePreferences],
   );
 
+  /*
+   * "This session has already had its answer" — the latch that makes a
+   * dismissal stick.
+   *
+   * `alwaysShow` is the deliberate override that lets the tour be re-offered
+   * past a terminal completed/skipped status. Without a latch that override
+   * also defeated the dismissal itself: `stop()` set `active` to false, the
+   * auto-start effect re-ran (it depends on `active`), found `alwaysShow`
+   * true, and started the tour again — an owner with the preference on could
+   * not get off the dashboard tour at all.
+   *
+   * So dismissal is remembered for the life of this mount. It is deliberately
+   * NOT persisted: `alwaysShow` still means "offer it again on a later visit",
+   * which is exactly what a fresh mount is. Only an explicit `restart()`
+   * clears it sooner.
+   *
+   * Route changes do not touch it — leaving the dashboard pauses the tour and
+   * coming back resumes it, as before.
+   */
+  const dismissedThisSession = useRef(false);
+
   // Whose state has been reconciled. Keyed by user id rather than a bare
   // boolean so switching accounts on a shared machine reconciles again
   // instead of trusting the previous owner's answer.
@@ -116,6 +147,8 @@ export function TourProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     reconciledFor.current = null;
     setReconciled(false);
+    // A different owner on the same machine has not dismissed anything.
+    dismissedThisSession.current = false;
     setAlwaysShowState(userId == null ? false : readTour(userId).alwaysShow === true);
   }, [userId]);
 
@@ -188,6 +221,9 @@ export function TourProvider({ children }: { children: ReactNode }) {
   // anything.
   useEffect(() => {
     if (active || !onDashboard || userId == null || loading || !selected || !reconciled) return;
+    // Dismissed already on this visit — including when `alwaysShow` is on,
+    // which is the whole point of the latch.
+    if (dismissedThisSession.current) return;
     const stored = readTour(userId);
     // `alwaysShow` is the deliberate override: it exists so the tour can be
     // demonstrated and re-checked without registering a new account, which is
@@ -213,11 +249,32 @@ export function TourProvider({ children }: { children: ReactNode }) {
 
   function stop(status: "completed" | "skipped") {
     if (userId != null) persist({ status, step: stepIndex, alwaysShow });
+    // Before the state change, so the auto-start effect sees the latch on the
+    // very re-render `setActive(false)` triggers.
+    dismissedThisSession.current = true;
     setActive(false);
   }
 
   function restart() {
+    /*
+     * THE SAME GATE THE AUTO-START MAKES, and it has to be here too.
+     *
+     * Six of the ten steps point at chrome that does not exist without a
+     * business — the switcher, the dashboard summary, Quick add (which owns
+     * both the receipt and CSV steps), and Ask FinSight. The overlay skips a
+     * step whose target is missing rather than stranding the tour, which is
+     * right on its own terms, and the two together turned the tour into four
+     * disconnected cards that teach nothing.
+     *
+     * This was latent until the read-only pages became enterable: before that
+     * the dashboard rendered the setup card instead of its `dashboard-loaded`
+     * marker, so `restart` fell through to the else below and quietly did
+     * nothing. Now the marker is there, so the guard has to be explicit.
+     */
+    if (!selected) return;
     if (userId != null) persist({ status: "in_progress", step: 0, alwaysShow });
+    // Asking for the tour back is the one thing that clears the latch.
+    dismissedThisSession.current = false;
     setStepIndex(0);
     // On the dashboard the auto-start effect would race the loaded marker;
     // activate directly when it is already there. Elsewhere the caller
@@ -232,6 +289,7 @@ export function TourProvider({ children }: { children: ReactNode }) {
   const value: TourContextValue = {
     activeStepId: active ? (TOUR_STEPS[stepIndex]?.id ?? null) : null,
     active,
+    available: !!selected,
     stepIndex,
     setStepIndex,
     stop,

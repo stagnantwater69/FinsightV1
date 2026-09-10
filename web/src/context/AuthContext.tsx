@@ -10,6 +10,17 @@ interface AuthContextValue {
   sessionExpired: boolean;
   login: (input: LoginInput) => Promise<void>;
   /**
+   * Installs a session this app did NOT get from the login form.
+   *
+   * The email-confirmation link already carries a proved-identity token pair,
+   * and the backend hands back the profile alongside it — so asking that
+   * person to type their password again would be asking them to re-prove
+   * something they just proved. This is the only other door in: it takes
+   * credentials the caller has already verified against the backend and
+   * finishes the sign-in exactly as `login` does.
+   */
+  adoptSession: (input: { accessToken: string; refreshToken: string; profile: Profile }) => Promise<void>;
+  /**
    * Returns what to tell the visitor; it does NOT sign them in.
    *
    * Registration is now only a request: the account is pending until its
@@ -148,17 +159,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  async function login(input: LoginInput) {
-    const { data } = await api.post<{ profile: Profile; session: { access_token: string; refresh_token: string } }>(
-      "/auth/login",
-      input
-    );
+  /*
+   * The shared tail of every sign-in, whatever proved the identity.
+   *
+   * Shared rather than copied because the ORDER matters and is easy to get
+   * subtly wrong on a second write: the Supabase session has to be in place
+   * before `profile` is set, or a route guard can wave the owner through a
+   * render earlier than api.ts has a bearer token to send.
+   */
+  async function installSession(
+    tokens: { accessToken: string; refreshToken: string },
+    nextProfile: Profile
+  ) {
     await supabase.auth.setSession({
-      access_token: data.session.access_token,
-      refresh_token: data.session.refresh_token,
+      access_token: tokens.accessToken,
+      refresh_token: tokens.refreshToken,
     });
     setSessionExpired(false);
-    setProfile(data.profile);
+    setProfile(nextProfile);
     /*
      * POST /auth/login answers with the identity block only — preferences ride
      * on GET /auth/me. Fetched here rather than widening the login response,
@@ -173,6 +191,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .get<Profile>("/auth/me")
       .then(({ data: me }) => setPreferences(me.preferences ?? DEFAULT_PREFERENCES))
       .catch(() => setPreferences(DEFAULT_PREFERENCES));
+  }
+
+  async function login(input: LoginInput) {
+    const { data } = await api.post<{ profile: Profile; session: { access_token: string; refresh_token: string } }>(
+      "/auth/login",
+      input
+    );
+    await installSession(
+      { accessToken: data.session.access_token, refreshToken: data.session.refresh_token },
+      data.profile
+    );
+  }
+
+  async function adoptSession(input: { accessToken: string; refreshToken: string; profile: Profile }) {
+    await installSession({ accessToken: input.accessToken, refreshToken: input.refreshToken }, input.profile);
   }
 
   async function register(input: RegisterInput) {
@@ -254,6 +287,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         loading,
         sessionExpired,
         login,
+        adoptSession,
         register,
         logout,
         logoutEverywhere,

@@ -9,6 +9,16 @@ export default defineConfig({
   plugins: [react()],
   server: {
     /*
+     * Listen on every interface, not just loopback.
+     *
+     * Auth emails are read on a phone as often as on the dev machine, and a
+     * confirmation link pointing at `localhost` resolves to the PHONE when it
+     * is opened there — "localhost refused to connect", with nothing wrong on
+     * this end. Binding to 0.0.0.0 lets WEB_APP_URL be this machine's LAN
+     * address (see backend/.env), so the same link works from both.
+     */
+    host: true,
+    /*
      * The frontend calls a relative `/api/v1` base (see web/.env) rather
      * than an absolute `http://localhost:4000`, and this proxy is what makes
      * that resolve — forwarded server-side to the backend on this same

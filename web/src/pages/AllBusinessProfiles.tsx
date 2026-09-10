@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { ArrowLeft } from "lucide-react";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { getErrorMessage } from "../lib/errors";
 import { formatMoney } from "../components/Money";
@@ -6,6 +7,7 @@ import { Button, ButtonLink } from "../components/Button";
 import { Avatar } from "../components/Avatar";
 import { BusinessProfileFormModal } from "../components/BusinessProfileFormModal";
 import { EmptyState } from "../components/EmptyState";
+import { NoBusinessProfile } from "../components/NoBusinessProfile";
 import { Callout, Card, PageHead, Pill } from "../components/ui";
 import { TextInput } from "../components/Field";
 import { useConfirm } from "../components/ConfirmDialog";
@@ -40,8 +42,18 @@ const ARCHIVE_PROMISE =
   "Nothing is deleted — all its records, insights and conversations are kept.";
 
 export function AllBusinessProfiles() {
-  const { profiles, selected, selectProfile, loading, archiveProfile, restoreProfile, listArchived } =
-    useBusinessProfiles();
+  const {
+    profiles,
+    selected,
+    selectProfile,
+    loading,
+    // Renamed: `error` below is this page's own action errors (archive,
+    // restore); this one is the profile list failing to arrive.
+    error: loadError,
+    archiveProfile,
+    restoreProfile,
+    listArchived,
+  } = useBusinessProfiles();
   const confirm = useConfirm();
   const toast = useToast();
 
@@ -55,7 +67,10 @@ export function AllBusinessProfiles() {
   const filtered = useMemo(() => {
     const q = keyword.trim().toLowerCase();
     if (!q) return profiles;
-    return profiles.filter((p) => p.name.toLowerCase().includes(q) || p.type.toLowerCase().includes(q));
+    return profiles.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) || p.type.toLowerCase().includes(q),
+    );
   }, [profiles, keyword]);
 
   async function loadArchived() {
@@ -75,8 +90,8 @@ export function AllBusinessProfiles() {
       title: `Archive "${profile.name}"?`,
       body: (
         <>
-          It will be hidden from your list of businesses. {ARCHIVE_PROMISE} You can restore it at any
-          time.
+          It will be hidden from your list of businesses. {ARCHIVE_PROMISE} You
+          can restore it at any time.
         </>
       ),
       confirmLabel: "Archive business",
@@ -125,26 +140,37 @@ export function AllBusinessProfiles() {
       ) : (
         <div className="animate-slide-up rounded-2xl border border-paper-200 bg-paper p-5 shadow-sm">
           <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-ink-800">Archived businesses</h2>
+            <h2 className="text-sm font-semibold text-ink-800">
+              Archived businesses
+            </h2>
             <button
               type="button"
               onClick={() => setArchived(null)}
-              className="tap rounded-lg px-2 text-xs font-medium text-ink-400 transition hover:bg-paper-100 hover:text-ink-700"
+              className="tap rounded-lg px-2 text-xs font-medium text-ink-500 transition hover:bg-paper-100 hover:text-ink-700"
             >
               Hide
             </button>
           </div>
           {archived.length === 0 ? (
-            <p className="text-sm text-ink-400">You have no archived businesses.</p>
+            <p className="text-sm text-ink-500">
+              You have no archived businesses.
+            </p>
           ) : (
             <ul className="divide-y divide-paper-200">
               {archived.map((p) => (
-                <li key={p.id} className="flex items-center justify-between gap-3 py-3">
+                <li
+                  key={p.id}
+                  className="flex items-center justify-between gap-3 py-3"
+                >
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-ink-800">{p.name}</p>
-                    <p className="text-xs text-ink-400">
+                    <p className="truncate text-sm font-medium text-ink-800">
+                      {p.name}
+                    </p>
+                    <p className="text-xs text-ink-500">
                       {p.type}
-                      {p.archivedAt ? ` · archived ${p.archivedAt.slice(0, 10)}` : ""}
+                      {p.archivedAt
+                        ? ` · archived ${p.archivedAt.slice(0, 10)}`
+                        : ""}
                     </p>
                   </div>
                   <Button
@@ -159,7 +185,7 @@ export function AllBusinessProfiles() {
               ))}
             </ul>
           )}
-          <p className="mt-3 text-xs text-ink-400">
+          <p className="mt-3 text-xs text-ink-500">
             {ARCHIVE_PROMISE} Restoring one brings it back exactly as it was.
           </p>
         </div>
@@ -175,13 +201,21 @@ export function AllBusinessProfiles() {
     />
   );
   const editModal = editing ? (
-    <BusinessProfileFormModal open onClose={() => setEditing(null)} profile={editing} onSaved={() => {}} />
+    <BusinessProfileFormModal
+      open
+      onClose={() => setEditing(null)}
+      profile={editing}
+      onSaved={() => {}}
+    />
   ) : null;
 
   if (loading) {
     return (
       <div>
-        <PageHead eyebrow="Business Profile Management" title="Business Profiles" />
+        <PageHead
+          eyebrow="Business Profile Management"
+          title="Business Profiles"
+        />
         <div className="skeleton h-64 rounded-2xl" aria-hidden />
         <span className="sr-only" aria-live="polite">
           Loading your businesses…
@@ -190,10 +224,18 @@ export function AllBusinessProfiles() {
     );
   }
 
+  // An empty list after a FAILED load is not a first-time owner. Telling
+  // someone with three businesses to "set up your first business" is the same
+  // defect the onboarding redirect had; the retry lives in NoBusinessProfile.
+  if (profiles.length === 0 && loadError) return <NoBusinessProfile />;
+
   if (profiles.length === 0) {
     return (
       <div>
-        <PageHead eyebrow="Business Profile Management" title="Business Profiles" />
+        <PageHead
+          eyebrow="Business Profile Management"
+          title="Business Profiles"
+        />
         <EmptyState
           title="Let's set up your first business"
           action={
@@ -202,14 +244,22 @@ export function AllBusinessProfiles() {
             </Button>
           }
         >
-          Add a business profile to start tracking its funds, expenses, and sales in FinSight.
+          Add a business profile to start tracking its funds, expenses, and
+          sales in FinSight.
         </EmptyState>
-        {error ? <p className="mt-4 text-sm text-tone-danger">{error}</p> : null}
+        {error ? (
+          <p className="mt-4 text-sm text-tone-danger">{error}</p>
+        ) : null}
         {archivedPanel}
         {addModal}
       </div>
     );
   }
+
+  const totalRecords = profiles.reduce(
+    (sum, profile) => sum + profile.recordCount,
+    0,
+  );
 
   return (
     <div>
@@ -220,7 +270,8 @@ export function AllBusinessProfiles() {
         actions={
           <>
             <ButtonLink to="/business-profiles" variant="secondary" size="sm">
-              ← Back to current business
+              <ArrowLeft size={16} strokeWidth={2} aria-hidden />
+              Back to current business
             </ButtonLink>
             <Button variant="brand" size="sm" onClick={() => setAddOpen(true)}>
               + Add Business Profile
@@ -228,6 +279,21 @@ export function AllBusinessProfiles() {
           </>
         }
       />
+
+      <Card className="mb-6 grid divide-y divide-paper-200 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+        <PortfolioStat
+          label="Active businesses"
+          value={String(profiles.length)}
+        />
+        <PortfolioStat
+          label="Business in focus"
+          value={selected?.name ?? "None selected"}
+        />
+        <PortfolioStat
+          label="Records across businesses"
+          value={String(totalRecords)}
+        />
+      </Card>
 
       {error ? (
         <p className="mb-4 rounded-xl bg-tint-danger px-3.5 py-3 text-sm text-tone-danger ring-1 ring-edge-danger">
@@ -263,19 +329,26 @@ export function AllBusinessProfiles() {
           {filtered.map((p) => {
             const isActive = p.id === selected?.id;
             return (
-              <Card key={p.id} className={`p-5 ${isActive ? "ring-2 ring-edge-brand" : ""}`}>
+              <Card
+                key={p.id}
+                className={`flex h-full flex-col p-5 ${isActive ? "bg-tint-brand ring-2 ring-edge-brand" : ""}`}
+              >
                 <div className="mb-3 flex items-start justify-between gap-2">
                   <Avatar photoUrl={p.logoUrl} label={p.name} />
                   {isActive ? <Pill tone="ok">Active</Pill> : null}
                 </div>
 
-                <h3 className="truncate text-base font-bold text-ink-900">{p.name}</h3>
+                <h3 className="truncate text-base font-bold text-ink-900">
+                  {p.name}
+                </h3>
                 <p className="text-sm text-ink-500">{p.type}</p>
 
                 <dl className="mt-3 space-y-1.5 border-t border-paper-200 pt-3 text-sm">
                   <div className="flex justify-between gap-3">
                     <dt className="text-ink-500">Available Business Funds</dt>
-                    <dd className="figure font-medium text-ink-900">{formatMoney(p.availableFunds)}</dd>
+                    <dd className="figure font-medium text-ink-900">
+                      {formatMoney(p.availableFunds)}
+                    </dd>
                   </div>
                   <div className="flex justify-between gap-3">
                     <dt className="text-ink-500">Expected Monthly Expenses</dt>
@@ -285,25 +358,44 @@ export function AllBusinessProfiles() {
                   </div>
                   <div className="flex justify-between gap-3">
                     <dt className="text-ink-500">Operating Days / Month</dt>
-                    <dd className="figure font-medium text-ink-900">{p.operatingDays}</dd>
+                    <dd className="figure font-medium text-ink-900">
+                      {p.operatingDays}
+                    </dd>
                   </div>
                   <div className="flex justify-between gap-3">
                     <dt className="text-ink-500">Records</dt>
-                    <dd className="figure font-medium text-ink-900">{p.recordCount}</dd>
+                    <dd className="figure font-medium text-ink-900">
+                      {p.recordCount}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-ink-500">Large-expense threshold</dt>
+                    <dd className="figure font-medium text-ink-900">
+                      {p.largeExpenseThresholdPercent}%
+                    </dd>
                   </div>
                 </dl>
 
-                <div className="mt-4 flex gap-2">
+                <div className="mt-auto flex gap-2 pt-5">
                   {isActive ? (
                     <Button variant="secondary" size="sm" fullWidth disabled>
                       Currently Active
                     </Button>
                   ) : (
-                    <Button variant="brand" size="sm" fullWidth onClick={() => selectProfile(p.id)}>
+                    <Button
+                      variant="brand"
+                      size="sm"
+                      fullWidth
+                      onClick={() => selectProfile(p.id)}
+                    >
                       Switch
                     </Button>
                   )}
-                  <Button variant="secondary" size="sm" onClick={() => setEditing(p)}>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setEditing(p)}
+                  >
                     Edit
                   </Button>
                 </div>
@@ -313,7 +405,7 @@ export function AllBusinessProfiles() {
                     type="button"
                     onClick={() => handleArchive(p)}
                     disabled={busyId === p.id}
-                    className="tap mt-2 w-full rounded-lg text-xs font-medium text-ink-400 transition hover:bg-paper-100 hover:text-tone-danger disabled:opacity-60"
+                    className="tap mt-2 w-full rounded-lg text-xs font-medium text-ink-500 transition hover:bg-paper-100 hover:text-tone-danger disabled:opacity-60"
                   >
                     {busyId === p.id ? "Archiving…" : "Archive"}
                   </button>
@@ -326,14 +418,26 @@ export function AllBusinessProfiles() {
 
       <div className="mt-6">
         <Callout>
-          Switching the active profile updates the Dashboard, Records, Insights, Available Business Funds,
-          and the context FinSight uses when suggesting categories or explaining results.
+          Switching the active profile updates the Dashboard, Records, Insights,
+          Available Business Funds, and the context FinSight uses when
+          suggesting categories or explaining results.
         </Callout>
       </div>
 
       {archivedPanel}
       {addModal}
       {editModal}
+    </div>
+  );
+}
+
+function PortfolioStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 px-5 py-4">
+      <p className="text-xs font-semibold text-ink-500">{label}</p>
+      <p className="mt-1 truncate text-base font-semibold text-ink-900">
+        {value}
+      </p>
     </div>
   );
 }

@@ -13,7 +13,10 @@ import { normalizeComparisonText, textSimilarity } from "./nearDuplicate.service
  * Everything here is pure and clock-free so it unit-tests like
  * `behavioralSignals` does. Ratio features are capped so a single wild value
  * cannot dominate the tree splits, and "no history" sentinels sit at the cap
- * rather than at zero (a first-ever vendor IS unusual, not average).
+ * rather than at zero (a first-ever vendor IS unusual, not average). The
+ * vendor/category count features are capped too, for the same reason: every
+ * other feature lives in [-1,1] or [0, RATIO_CAP], and an unbounded count
+ * from a high-volume business would otherwise dominate splits on scale alone.
  */
 
 export const IF_FEATURE_VERSION = "if-features-v1";
@@ -75,6 +78,7 @@ export const IF_FEATURE_LABELS: Record<IfFeatureName, string> = {
 
 const RATIO_CAP = 10;
 const DAYS_SINCE_CAP = 90;
+const COUNT_CAP = 20;
 const DAY_MS = 86_400_000;
 
 function median(sorted: number[]): number {
@@ -130,9 +134,13 @@ export function featuresFor(candidate: IsolationForestRecord, prior: IsolationFo
 
   const inWindow = (record: IsolationForestRecord, days: number) =>
     time - record.date.getTime() <= days * DAY_MS && record.date.getTime() <= time;
-  const vendorCount = (days: number) => vendorRecords.filter((record) => inWindow(record, days)).length;
+  const vendorCount = (days: number) =>
+    Math.min(vendorRecords.filter((record) => inWindow(record, days)).length, COUNT_CAP);
   const categoryCount = (days: number) =>
-    prior.filter((record) => record.categoryId === candidate.categoryId && inWindow(record, days)).length;
+    Math.min(
+      prior.filter((record) => record.categoryId === candidate.categoryId && inWindow(record, days)).length,
+      COUNT_CAP,
+    );
 
   const categoryShare = prior.length ? categoryAmounts.length / prior.length : 0;
   const descriptionNovelty = prior.length

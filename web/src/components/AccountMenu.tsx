@@ -64,7 +64,7 @@ export function AccountMenu() {
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-haspopup="menu"
-        className="tap min-h-0 gap-2 rounded-xl px-1.5 py-1 text-left transition hover:bg-paper-100"
+        className="tap gap-2 rounded-xl px-1.5 py-1 text-left transition hover:bg-paper-100"
       >
         <span
           aria-hidden
@@ -137,7 +137,7 @@ export function AccountMenu() {
 
           {/* ---- theme, inline ---- */}
           <div className="mt-1.5 border-t border-paper-200 pt-2">
-            <div className="px-2.5 pb-1.5 text-[10.5px] font-bold uppercase tracking-[0.12em] text-ink-400">
+            <div className="px-2.5 pb-1.5 text-[10.5px] font-bold uppercase tracking-[0.12em] text-ink-500">
               Theme
             </div>
             <div
@@ -165,10 +165,19 @@ export function AccountMenu() {
           </div>
 
           <div className="mt-1 border-t border-paper-200 pt-1.5">
+            {/*
+              DISABLED, NOT HIDDEN, before there is a business to tour.
+              Removing the item would read as the feature having disappeared;
+              this says what is missing and what to do about it. See
+              TourContext's `available` for why the tour cannot usefully run
+              with no business — most of what it points at is not on screen.
+            */}
             {tour ? (
               <button
                 type="button"
                 role="menuitem"
+                disabled={!tour.available}
+                title={tour.available ? undefined : "Add a business first — the tour walks through your dashboard."}
                 onClick={() => {
                   setOpen(false);
                   // Rewind the stored state, then land on the dashboard —
@@ -176,7 +185,7 @@ export function AccountMenu() {
                   tour.restart();
                   navigate("/dashboard");
                 }}
-                className={item}
+                className={`${item} disabled:cursor-not-allowed disabled:opacity-45`}
               >
                 <IconSparkle aria-hidden className="h-4 w-4 shrink-0 text-ink-400" />
                 Restart product tour

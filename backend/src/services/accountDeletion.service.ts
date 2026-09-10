@@ -90,6 +90,58 @@ async function clearStorage(userId: number): Promise<void> {
   }
 }
 
+/**
+ * THE LAST STAGE: the relational graph, INCLUDING THE ROWS THAT DO NOT CASCADE.
+ *
+ * `prisma.user.delete` cascades through BusinessProfile to records, categories,
+ * notifications, import batches and the rest. It does NOT reach receipt scans.
+ * ReceiptScan's relation to BusinessProfile is `onDelete: SetNull` — that
+ * nullable link exists so a scan survives a profile being reorganised — with
+ * the consequence that deleting the owner merely detached the scan instead of
+ * removing it. The row stayed behind holding the receipt's raw OCR text, the
+ * extracted vendor, amount and date, and the storage paths of the photographs;
+ * its pages, items and field corrections cascade FROM THE SCAN, so they stayed
+ * too. Nothing referenced them any more, which made them unreachable rather
+ * than deleted: the worst of both — undeletable by the owner, still present in
+ * the database, and contradicting this file's own promise that a deleted
+ * account leaves nothing behind.
+ *
+ * So the scans go first, explicitly, and only then the user. Both in ONE
+ * transaction, so a failure between them cannot delete a person's receipts
+ * while leaving the account that could still see them, or vice versa; a
+ * rollback simply means this stage runs again, which it is built to survive.
+ *
+ * SCOPING IS THE SECURITY-CRITICAL PART. Every delete here is filtered through
+ * `businessProfile: { userId }` — this user's own profiles and nothing else.
+ * Scans already detached by an earlier deletion (businessProfileId null) are
+ * deliberately NOT swept up: they cannot be attributed to anyone, and a
+ * blanket "delete orphans" would be a cross-tenant delete in disguise. Those
+ * are a pre-existing-data question for a one-off backfill, not for this path.
+ *
+ * The children are deleted explicitly rather than left to ReceiptScan's own
+ * cascades. The cascades would do it today; naming them means a future change
+ * to one of those relations shows up as a failing deletion test rather than as
+ * more silently surviving receipt data.
+ */
+async function deleteRelationalData(userId: number): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    const scans = await tx.receiptScan.findMany({
+      where: { businessProfile: { userId } },
+      select: { id: true },
+    });
+    const scanIds = scans.map((scan) => scan.id);
+
+    if (scanIds.length > 0) {
+      await tx.receiptFieldCorrection.deleteMany({ where: { receiptScanId: { in: scanIds } } });
+      await tx.receiptScanItem.deleteMany({ where: { receiptScanId: { in: scanIds } } });
+      await tx.receiptScanPage.deleteMany({ where: { receiptScanId: { in: scanIds } } });
+      await tx.receiptScan.deleteMany({ where: { id: { in: scanIds }, businessProfile: { userId } } });
+    }
+
+    await tx.user.delete({ where: { id: userId } });
+  });
+}
+
 /** Runs one stage of one pending deletion. Returns false when there is nothing to do. */
 export async function runAccountDeletionWorkerOnce(): Promise<boolean> {
   const user = await prisma.user.findFirst({
@@ -126,7 +178,7 @@ export async function runAccountDeletionWorkerOnce(): Promise<boolean> {
       return true;
     }
 
-    await prisma.user.delete({ where: { id: user.id } });
+    await deleteRelationalData(user.id);
     securityEvent("account.deletion_completed", { userId: user.id });
     return true;
   } catch (error) {
@@ -177,7 +229,10 @@ export async function purgeUnverifiedRegistrations(): Promise<number> {
       logger.warn({ userId: user.id, err: error }, "could not remove unverified auth user");
       continue;
     }
-    await prisma.user.delete({ where: { id: user.id } }).catch(() => undefined);
+    // Same non-cascading receipt rows as the main deletion path — an
+    // unverified registration is not expected to own any, but "not expected
+    // to" is what left them behind there too.
+    await deleteRelationalData(user.id).catch(() => undefined);
     securityEvent("account.deletion_completed", { userId: user.id, email: user.email, reason: "unverified expiry" });
     purged++;
   }

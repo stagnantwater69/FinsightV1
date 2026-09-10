@@ -27,6 +27,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy as np
@@ -40,6 +42,15 @@ MAX_BODY_BYTES = 1_000_000
 MAX_ROWS = 5_000
 MIN_ROWS = 20  # a forest fitted on fewer rows is noise, not a model
 MAX_FEATURES = 32
+
+# BOUNDED CONCURRENCY. Each fit can be up to MAX_ROWS x MAX_FEATURES with
+# n_jobs=1; several PROFILE_REFRESH jobs landing at once would otherwise pin
+# every core. A request that can't get a slot within BUSY_WAIT_SECONDS gets a
+# 503 — the caller (mlWorkerClient.ts) treats that as "no ML opinion this
+# pass" and fails open, same as any other sidecar hiccup.
+MAX_CONCURRENT_FITS = 2
+BUSY_WAIT_SECONDS = 1.0
+_fit_slots = threading.Semaphore(MAX_CONCURRENT_FITS)
 
 
 class ContractError(ValueError):
@@ -95,8 +106,16 @@ def validate_request(payload: object) -> tuple[list[int], np.ndarray, int]:
 
 def score(ids: list[int], matrix: np.ndarray, seed: int) -> dict:
     """Fit-and-score in one pass. Deterministic for a given (matrix, seed)."""
+    started = time.perf_counter()
     forest = IsolationForest(
         n_estimators=200,
+        # contamination shifts decision_function's offset_, not the rank order
+        # normalizedScore is built from below — so it does NOT change which
+        # row this function calls "most anomalous". It DOES change which rows
+        # land on the negative (anomalous) side of decisionValue, and the
+        # caller (isolationForest.service.ts) gates on `decisionValue < 0`
+        # before it ever looks at normalizedScore. Keep this in sync with the
+        # same "auto" choice in ml/experiment/run_experiment.py.
         contamination="auto",
         random_state=seed,
         n_jobs=1,  # bounded CPU: the caller is a background job, not a UI
@@ -113,12 +132,14 @@ def score(ids: list[int], matrix: np.ndarray, seed: int) -> dict:
     ranks[order] = np.arange(len(decisions), dtype=np.float64)
     denominator = max(len(decisions) - 1, 1)
     normalized = 1.0 - ranks / denominator
+    elapsed_ms = (time.perf_counter() - started) * 1000
     return {
         "contractVersion": CONTRACT_VERSION,
         "modelVersion": MODEL_VERSION,
         "sklearnVersion": sklearn.__version__,
         "trainedRows": int(matrix.shape[0]),
         "featureCount": int(matrix.shape[1]),
+        "durationMs": round(elapsed_ms, 1),
         "scores": [
             {
                 "id": row_id,
@@ -132,6 +153,9 @@ def score(ids: list[int], matrix: np.ndarray, seed: int) -> dict:
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "finsight-ml/1"
+    # StreamRequestHandler.setup() applies this to the connection socket, so a
+    # stalled client (slow body, dead connection) can't hold a thread forever.
+    timeout = 5.0
 
     def _respond(self, status: int, body: dict) -> None:
         encoded = json.dumps(body).encode("utf-8")
@@ -176,14 +200,35 @@ class Handler(BaseHTTPRequestHandler):
         except ContractError as error:
             self._respond(422, {"error": str(error)})
             return
+        if not _fit_slots.acquire(timeout=BUSY_WAIT_SECONDS):
+            self._respond(503, {"error": f"worker busy (max {MAX_CONCURRENT_FITS} concurrent fits)"})
+            return
         try:
             self._respond(200, score(ids, matrix, seed))
         except Exception as error:  # noqa: BLE001 — a scoring crash must be a 500, not a dead worker
             self._respond(500, {"error": f"scoring failed: {type(error).__name__}"})
+        finally:
+            _fit_slots.release()
 
     def log_message(self, format: str, *args) -> None:  # noqa: A002
         # One structured-ish line per request; quiet enough for a sidecar.
         sys.stderr.write(f"finsight-ml {self.address_string()} {format % args}\n")
+
+
+def _self_check() -> None:
+    """Fit-and-score a tiny synthetic batch once at boot.
+
+    /health only reports versions (a per-request fit there would make every
+    liveness probe pay for a forest fit). This runs once, before the server
+    starts accepting traffic, so a broken sklearn/numpy install or ABI
+    mismatch fails the process at startup instead of surfacing as a silent
+    string of shadow-pass failures behind the circuit breaker.
+    """
+    rng = np.random.default_rng(0)
+    ids = list(range(1, MIN_ROWS + 1))
+    matrix = rng.normal(size=(MIN_ROWS, 2))
+    result = score(ids, matrix, seed=0)
+    assert len(result["scores"]) == MIN_ROWS
 
 
 def main() -> None:
@@ -191,6 +236,13 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8321)
     parser.add_argument("--host", default="127.0.0.1")
     args = parser.parse_args()
+
+    try:
+        _self_check()
+    except Exception as error:  # noqa: BLE001 — any failure here means "don't start"
+        sys.stderr.write(f"finsight-ml self-check failed: {type(error).__name__}: {error}\n")
+        sys.exit(1)
+
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     sys.stderr.write(
         f"finsight-ml listening on {args.host}:{args.port} "

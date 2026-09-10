@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { IconChevronLeft } from "./icons";
+import { Wordmark } from "./Wordmark";
 
 /**
  * The signed-in screens: one centred card, form on the left, context panel on
@@ -86,17 +87,11 @@ function PanelArt() {
   );
 }
 
-function Wordmark({ tone = "ink" }: { tone?: "ink" | "brand" }) {
+function Brand() {
   return (
     <span className="flex items-center gap-2.5">
       <img src="/finsight-logo.png" alt="" aria-hidden className="h-10 w-10 rounded-lg object-contain" />
-      <span
-        className={`font-display text-lg font-extrabold tracking-[-0.02em] ${
-          tone === "brand" ? "text-brand-900" : "text-ink-900"
-        }`}
-      >
-        Fin<span className="text-brand-700">Sight</span>
-      </span>
+      <Wordmark className="text-lg text-tone-brand" />
     </span>
   );
 }
@@ -154,7 +149,7 @@ export function AuthLayout({
           type="button"
           onClick={() => navigate("/")}
           aria-label="Back to home"
-          className="tap-inline fixed left-4 top-4 z-10 flex h-10 w-10 items-center justify-center rounded-full border border-paper-200 bg-paper text-ink-500 shadow-sm transition duration-250 ease-shell hover:scale-105 hover:border-paper-300 hover:bg-paper-100 hover:text-ink-800 hover:shadow-md active:scale-95"
+          className="fixed left-4 top-4 z-10 flex h-11 w-11 items-center justify-center rounded-full border border-paper-200 bg-paper text-ink-500 shadow-sm transition duration-250 ease-shell hover:scale-105 hover:border-paper-300 hover:bg-paper-100 hover:text-ink-800 hover:shadow-md active:scale-95"
         >
           <IconChevronLeft className="h-4 w-4" />
         </button>
@@ -166,7 +161,7 @@ export function AuthLayout({
         <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           {/* ------------------------------ form ------------------------------ */}
           <div className="px-5 py-8 sm:px-9 sm:py-10">
-            <Wordmark />
+            <Brand />
 
             {/* Staggered rise, same rhythm as the landing page's SectionHead
                 (eyebrow, then heading, then body) — each element already sits
@@ -216,7 +211,7 @@ export function AuthLayout({
               ) : null}
             </div>
 
-            <p className="border-t border-paper-200 pt-4 text-xs leading-relaxed text-ink-400">{footnote}</p>
+            <p className="border-t border-paper-200 pt-4 text-xs leading-relaxed text-ink-600">{footnote}</p>
           </aside>
         </div>
       </div>

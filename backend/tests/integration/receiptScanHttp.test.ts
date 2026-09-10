@@ -75,6 +75,7 @@ vi.mock("../../src/config/supabase", async (importOriginal) => {
 });
 
 import request from "supertest";
+import sharp from "sharp";
 import { app } from "../../src/app";
 import { prisma } from "../../src/config/prisma";
 import { disconnectDb, makeOwnerWithProfile, resetDb, waitForScanProcessing } from "../setup/testDb";
@@ -92,6 +93,36 @@ beforeEach(async () => {
 afterAll(disconnectDb);
 
 const PNG = Buffer.from("fake-image-bytes");
+
+describe("POST /api/v1/records/receipts/transform", () => {
+  const corners = JSON.stringify({ topLeft: { x: 0, y: 0 }, topRight: { x: 80, y: 0 }, bottomRight: { x: 80, y: 120 }, bottomLeft: { x: 0, y: 120 } });
+
+  it("requires authentication before accepting correction work", async () => {
+    const response = await request(app).post("/api/v1/records/receipts/transform").field("corners", corners).attach("file", PNG, "receipt.jpg");
+    expect(response.status).toBe(401);
+  });
+
+  it("returns a usable corrected JPEG without creating a scan or financial record", async () => {
+    const image = await sharp({ create: { width: 80, height: 120, channels: 3, background: "white" } }).png().toBuffer();
+    const response = await request(app).post("/api/v1/records/receipts/transform").set(...AUTH)
+      .field("corners", corners).attach("file", image, { filename: "receipt.png", contentType: "image/png" });
+    expect(response.status).toBe(200);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.body).toMatchObject({ width: 80, height: 120, mimeType: "image/jpeg", transformVersion: "perspective-v2" });
+    expect((await sharp(Buffer.from(response.body.base64, "base64")).metadata()).format).toBe("jpeg");
+    expect(await prisma.receiptScan.count()).toBe(0);
+    expect(await prisma.expenseRecord.count()).toBe(0);
+  });
+
+  it("rejects missing files and malformed corner data", async () => {
+    const missing = await request(app).post("/api/v1/records/receipts/transform").set(...AUTH).field("corners", corners);
+    expect(missing.status).toBe(400);
+    const invalid = await request(app).post("/api/v1/records/receipts/transform").set(...AUTH)
+      .field("corners", "{broken").attach("file", PNG, { filename: "receipt.jpg", contentType: "image/jpeg" });
+    expect(invalid.status).toBe(400);
+    expect(await prisma.receiptScan.count()).toBe(0);
+  });
+});
 
 describe("POST /api/v1/records/receipts", () => {
   it("answers 202 with a pollable scan rather than 201 with a finished one", async () => {
@@ -126,6 +157,7 @@ describe("POST /api/v1/records/receipts", () => {
   it("accepts paired original and processed pages with validated provenance", async () => {
     const metadata = [{
       source: "manual-camera",
+      captureMode: "long",
       processingMode: "manual-crop",
       originalWidth: 1200,
       originalHeight: 2000,
@@ -149,7 +181,7 @@ describe("POST /api/v1/records/receipts", () => {
     await waitForScanProcessing(res.body.id);
     const page = await prisma.receiptScanPage.findFirstOrThrow({ where: { receiptScanId: res.body.id } });
     expect(page.processedImageFile).not.toBeNull();
-    expect(page.captureMetadata).toMatchObject({ processingMode: "manual-crop" });
+    expect(page.captureMetadata).toMatchObject({ processingMode: "manual-crop", captureMode: "long" });
     expect(page.originalRawText).toContain("TOTAL 1220.00");
     expect(page.processedRawText).toContain("TOTAL 1220.00");
   });

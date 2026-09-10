@@ -133,7 +133,7 @@ export function ConversationItem({ conversation, active, onSelect, onRename, onD
              * clusters — but `focus-visible` keeps it reachable by Tab, which
              * `hidden until hover` alone would not.
              */
-            className={`tap h-8 w-8 min-h-0 min-w-0 rounded-lg text-ink-400 transition hover:bg-paper-200 hover:text-ink-700 focus-visible:opacity-100 group-hover:opacity-100 ${
+            className={`tap h-8 w-8 min-h-0 min-w-0 rounded-lg text-ink-500 transition hover:bg-paper-200 hover:text-ink-700 focus-visible:opacity-100 group-hover:opacity-100 ${
               menuOpen ? "opacity-100" : "opacity-0"
             }`}
           >

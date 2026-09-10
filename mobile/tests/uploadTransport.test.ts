@@ -82,6 +82,25 @@ describe("the upload transport", () => {
   it("does not set Content-Type by hand on an upload", () => {
     expect(uploadRequestBody()).not.toMatch(/setRequestHeader\(\s*["']Content-Type["']/i);
   });
+
+  /**
+   * EVERY abort must fail in one shape.
+   *
+   * A signal already aborted when the upload is reached used to `throw new
+   * Error("The upload was cancelled")` — a bare Error with no `status`, unlike
+   * `xhr.onabort`, which wraps the same sentence in `networkError`. Which one a
+   * caller got depended only on how quickly the signal fired, so anything
+   * branching on `ApiError` treated the two identical cancellations
+   * differently. The camera aborts its in-flight operation on close and on
+   * unmount, which is exactly the race that produces the fast one.
+   */
+  it("wraps a pre-aborted upload the same way the abort handler does", () => {
+    const body = uploadRequestBody();
+    expect(body).toMatch(/if \(signal\?\.aborted\) throw networkError\(new Error\("The upload was cancelled"\)\)/);
+    expect(body).not.toMatch(/throw new Error\("The upload was cancelled"\)/);
+    // The sibling path it now matches.
+    expect(body).toContain('xhr.onabort = () => { detach(); reject(networkError(new Error("The upload was cancelled"))); }');
+  });
 });
 
 /**
@@ -108,8 +127,31 @@ describe("401 handling", () => {
 
   /** Both transports answer the same way; only one of them used to. */
   it("applies the same rule on the upload path", () => {
-    const matches = apiSource.match(/status === 401 && !isCredentialCheck\(path\)/g) ?? [];
+    // Matched on the rewrite itself rather than on the condition alone: the
+    // condition now also appears inside `reportSessionEnd`, which is a third
+    // occurrence that is not a third message.
+    const matches =
+      apiSource.match(
+        /status === 401 && !isCredentialCheck\(path\)\) \{\s*message = "Your session has expired/g,
+      ) ?? [];
     expect(matches.length).toBe(2);
+  });
+
+  /**
+   * A 401 must END THE SESSION, not merely be worded well.
+   *
+   * The message above is what the screen mid-request shows; on its own it left
+   * the owner sitting in the authenticated shell holding a token the server had
+   * already refused, with every screen after it failing the same way. Both
+   * transports now hand the fact to AuthProvider through `reportSessionEnd`,
+   * which is also where the 403/ACCOUNT_NOT_ACTIVE case is read.
+   */
+  it("hands a dead session to the app from BOTH transports", () => {
+    expect(apiSource).toContain("reportSessionEnd(res.status, path, code)");
+    expect(apiSource).toContain("reportSessionEnd(status, path, code)");
+    // Matched on the code, never the bare status: an ordinary "not yours" 403
+    // must not sign anyone out.
+    expect(apiSource).toMatch(/status === 403 && code === "ACCOUNT_NOT_ACTIVE"/);
   });
 });
 

@@ -247,7 +247,8 @@ beforeEach(() => {
   postHandlers = {};
   handlers = {
     "/insights/expense-behavior": ok(behavior),
-    "/records/flagged": ok([]),
+    "/records/flagged": ok({ items: [], nextCursor: null }),
+    "/records/flagged/count": ok({ expenses: 0, sales: 0, total: 0 }),
     "/insights/findings": ok({ items: [], nextCursor: null }),
     "/insights/recurring-patterns": ok([candidate]),
     "/insights/recurring-schedules": ok([schedule]),
@@ -318,6 +319,7 @@ describe("ExpenseInsight resilience", () => {
     // the page does not care which supplement failed or why.
     handlers["/insights/findings"] = failing();
     handlers["/records/flagged"] = failing();
+    handlers["/records/flagged/count"] = failing();
     renderPage();
 
     expect(await screen.findByText("Total expenses")).toBeInTheDocument();
@@ -371,38 +373,34 @@ describe("ExpenseInsight resilience", () => {
  */
 describe("ExpenseInsight reduction opportunities", () => {
   it("shows a loading skeleton, then up to three ranked cards even when four are returned", async () => {
-    // Delayed on purpose: the core expense-behavior read resolves on the next
-    // microtask, so the page leaves ITS OWN initial full-page skeleton before
-    // this panel's fetch (still pending) has a chance to render its own.
+    // Controlled rather than timer-delayed: a transient loading node can be
+    // returned by `findByText` and then detached before the following
+    // assertion on a busy full-suite run. Holding the request pending proves
+    // the state deterministically and makes the test independent of CPU load.
+    let resolveOpportunities!: (value: unknown) => void;
     handlers["/insights/reduction-opportunities"] = () =>
       new Promise((resolve) => {
-        setTimeout(
-          () =>
-            resolve({
-              data: reductionResponse({
-                opportunities: [
-                  makeOpportunity({
-                    id: "opp-1",
-                    categoryName: "Office Supplies",
-                  }),
-                  makeOpportunity({ id: "opp-2", categoryName: "Utilities" }),
-                  makeOpportunity({ id: "opp-3", categoryName: "Transport" }),
-                  makeOpportunity({ id: "opp-4", categoryName: "Marketing" }),
-                ],
-              }),
-            }),
-          // Comfortably longer than the core expense-behavior fetch (a
-          // same-tick microtask) can possibly take to resolve, even under a
-          // busy CPU running the full suite in parallel — otherwise this can
-          // race and skip the loading state entirely under load.
-          150,
-        );
+        resolveOpportunities = resolve;
       });
     renderPage();
 
     expect(
       await screen.findByText("Loading reduction opportunities…"),
     ).toBeInTheDocument();
+
+    resolveOpportunities({
+      data: reductionResponse({
+        opportunities: [
+          makeOpportunity({
+            id: "opp-1",
+            categoryName: "Office Supplies",
+          }),
+          makeOpportunity({ id: "opp-2", categoryName: "Utilities" }),
+          makeOpportunity({ id: "opp-3", categoryName: "Transport" }),
+          makeOpportunity({ id: "opp-4", categoryName: "Marketing" }),
+        ],
+      }),
+    });
 
     expect(await screen.findByText("Office Supplies")).toBeInTheDocument();
     expect(screen.getByText("Utilities")).toBeInTheDocument();

@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
-import { Alert, Button, EmptyState, ErrorNote, Screen, T } from "../components/ui";
+import { Alert, Button, EmptyState, ErrorNote, Screen, ScreenHeader, T } from "../components/ui";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { api } from "../lib/api";
 import { ConnectionNotice, LastUpdated } from "../components/ConnectionNotice";
@@ -120,20 +120,12 @@ export function NotificationsScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={brand[600]} />
         }
       >
-        <View
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: space.md,
-            marginBottom: space.md,
-          }}
-        >
-          <T variant="title" style={{ flex: 1 }}>
-            Alerts{unread > 0 ? ` (${unread} unread)` : ""}
-          </T>
-          {unread > 0 ? <Button title="Mark all read" variant="secondary" onPress={markAllRead} /> : null}
-        </View>
+        <ScreenHeader
+          eyebrow={unread > 0 ? `${unread} unread` : "All caught up"}
+          title="Alerts"
+          subtitle="Duplicates, large expenses, and changes that may need your attention."
+          action={unread > 0 ? <Button title="Mark all read" variant="secondary" onPress={markAllRead} /> : undefined}
+        />
 
         {error ? <ErrorNote>{error}</ErrorNote> : null}
 

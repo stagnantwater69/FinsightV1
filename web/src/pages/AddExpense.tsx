@@ -13,10 +13,8 @@ import { getErrorMessage } from "../lib/errors";
 import type { RecordItem } from "../lib/types";
 import { FormPage } from "../components/ui";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
-
-function today() {
-  return new Date().toISOString().slice(0, 10);
-}
+import { NoBusinessProfile } from "../components/NoBusinessProfile";
+import { todayIso as today } from "../lib/dates";
 
 interface DuplicateExpenseState {
   description: string;
@@ -45,7 +43,7 @@ export function AddExpense() {
   // rather than a silent redirect back to an empty list.
   const [firstRecord, setFirstRecord] = useState<RecordItem | null>(null);
 
-  if (!selected) return null;
+  if (!selected) return <NoBusinessProfile />;
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();

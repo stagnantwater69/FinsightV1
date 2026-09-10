@@ -67,6 +67,8 @@ export async function pollUntilRead(initial: ReceiptScanResult, mayRetry = true)
  */
 export function pagesFromSections(sections: ReceiptSection[]): CapturedPage[] {
   return sections.map((section, index) => ({
+    captureMode: section.captureMode,
+    sourceAssetUri: section.sourceAssetUri,
     key: section.localId,
     uri: section.processedUri,
     fileName: `receipt-section-${index + 1}-${Date.now()}.jpg`,
@@ -103,6 +105,8 @@ export function pagesFromSections(sections: ReceiptSection[]): CapturedPage[] {
  */
 export function sectionsFromPages(pages: CapturedPage[]): ReceiptSection[] {
   return pages.map((page) => ({
+    captureMode: page.captureMode,
+    sourceAssetUri: page.sourceAssetUri,
     localId: page.key,
     originalUri: page.originalUri ?? page.uri,
     originalWidth: page.originalWidth ?? page.width,

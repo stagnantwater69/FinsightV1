@@ -34,7 +34,7 @@ export function ScanProgress({ stage }: { stage: ScanStage }) {
               >
                 {done ? "✓" : i + 1}
               </span>
-              <span className={done ? "text-ink-500" : active ? "font-medium text-ink-800" : "text-ink-400"}>
+              <span className={done ? "text-ink-600" : active ? "font-medium text-ink-800" : "text-ink-600"}>
                 {STAGE_LABELS[s]}
               </span>
               <span className="sr-only">

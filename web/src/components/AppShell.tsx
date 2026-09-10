@@ -9,6 +9,7 @@ import { AddSalesModal } from "./AddSalesModal";
 import { BusinessSwitcher } from "./BusinessSwitcher";
 import { GlobalSearch } from "./GlobalSearch";
 import { NotificationBell } from "./NotificationBell";
+import { SetupPrompt } from "./SetupPrompt";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { AccountMenu, initials } from "./AccountMenu";
 import {
@@ -445,7 +446,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               onClick={() => setCollapsed(true)}
               aria-label="Collapse sidebar"
               aria-expanded
-              className="tap h-9 w-9 min-h-0 min-w-0 rounded-lg text-sidebar-muted transition hover:bg-sidebar-fg/10 hover:text-sidebar-ink"
+              className="tap h-11 w-11 min-h-0 min-w-0 rounded-lg text-sidebar-muted transition hover:bg-sidebar-fg/10 hover:text-sidebar-ink"
             >
               <IconSidebar className="h-[18px] w-[18px]" />
             </button>
@@ -454,121 +455,124 @@ export function AppShell({ children }: { children: ReactNode }) {
 
         <BusinessSwitcher collapsed={railCollapsed} />
 
-        {/* ---- grouped navigation ---- */}
-        {selected ? (
-          <nav
-            aria-label="Main"
-            // Collapsed, this must NOT be a scroll container. `overflow-y:auto`
-            // computes `overflow-x` to `auto` as well, which clips the rail
-            // tooltips — the only labels a collapsed sidebar has — at the 72px
-            // edge. The collapsed rail is a fixed, short list (seven icons and
-            // three rules, well under 400px), so there is nothing to scroll
-            // anyway. Expanded, the labels are inline and scrolling is free.
-            className={`min-h-0 flex-1 ${railCollapsed ? "overflow-visible" : "scroll-slim overflow-y-auto"}`}
-          >
-            {NAV_GROUPS.map((group, groupIndex) => (
-              <div key={group.heading} className="mb-1.5">
-                {/* Collapsed, the headings become a hairline: the grouping is
-                    still legible as rhythm, without four words of vertical
-                    space that no longer have room to be read. The first group
-                    gets no rule — there is nothing above it to separate from,
-                    and one there just reads as a stray line under the business
-                    switcher. */}
-                {railCollapsed ? (
-                  groupIndex > 0 ? <hr className="mx-2 my-2 border-sidebar-fg/10" aria-hidden /> : null
-                ) : (
-                  <div className="px-3 pb-1 pt-2.5 text-[10.5px] font-bold uppercase tracking-[0.13em] text-sidebar-accent">
-                    {group.heading}
-                  </div>
-                )}
+        {/* ---- grouped navigation ----
 
-                <ul>
-                  {group.items.map((item) =>
-                    item.children ? (
-                      <li key={item.to} className="group relative">
-                        {railCollapsed ? (
-                          <>
-                            <Link
-                              to={item.to}
-                              data-tour={item.tour}
-                              aria-current={isActive(item.to, item.match) ? "page" : undefined}
-                              className={`mb-0.5 flex min-h-tap items-center justify-center rounded-xl transition ${
-                                isActive(item.to, item.match)
-                                  ? "bg-sidebar-fg/15 text-sidebar-ink"
-                                  : "text-sidebar-muted hover:bg-sidebar-fg/10 hover:text-sidebar-ink"
+            Rendered whether or not a business is selected. It used to be
+            hidden without one, which left an owner who chose "Skip for now" in
+            a shell with no doors at all — every read-only page is open to them
+            now, and a navigation they cannot see is the same dead end reached
+            by a different route. Safe because every destination here only
+            READS; the write paths (Quick add, Scan, Import) stay gated below. */}
+        <nav
+          aria-label="Main"
+          // Collapsed, this must NOT be a scroll container. `overflow-y:auto`
+          // computes `overflow-x` to `auto` as well, which clips the rail
+          // tooltips — the only labels a collapsed sidebar has — at the 72px
+          // edge. The collapsed rail is a fixed, short list (seven icons and
+          // three rules, well under 400px), so there is nothing to scroll
+          // anyway. Expanded, the labels are inline and scrolling is free.
+          className={`min-h-0 flex-1 ${railCollapsed ? "overflow-visible" : "scroll-slim overflow-y-auto"}`}
+        >
+          {NAV_GROUPS.map((group, groupIndex) => (
+            <div key={group.heading} className="mb-1.5">
+              {/* Collapsed, the headings become a hairline: the grouping is
+                  still legible as rhythm, without four words of vertical
+                  space that no longer have room to be read. The first group
+                  gets no rule — there is nothing above it to separate from,
+                  and one there just reads as a stray line under the business
+                  switcher. */}
+              {railCollapsed ? (
+                groupIndex > 0 ? <hr className="mx-2 my-2 border-sidebar-fg/10" aria-hidden /> : null
+              ) : (
+                <div className="px-3 pb-1 pt-2.5 text-[10.5px] font-bold uppercase tracking-[0.13em] text-sidebar-accent">
+                  {group.heading}
+                </div>
+              )}
+
+              <ul>
+                {group.items.map((item) =>
+                  item.children ? (
+                    <li key={item.to} className="group relative">
+                      {railCollapsed ? (
+                        <>
+                          <Link
+                            to={item.to}
+                            data-tour={item.tour}
+                            aria-current={isActive(item.to, item.match) ? "page" : undefined}
+                            className={`mb-0.5 flex min-h-tap items-center justify-center rounded-xl transition ${
+                              isActive(item.to, item.match)
+                                ? "bg-sidebar-fg/15 text-sidebar-ink"
+                                : "text-sidebar-muted hover:bg-sidebar-fg/10 hover:text-sidebar-ink"
+                            }`}
+                          >
+                            <item.Icon className="h-[18px] w-[18px] shrink-0 opacity-90" />
+                            <span className="sr-only">{item.label}</span>
+                          </Link>
+                          <RailTip>{item.label}</RailTip>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            data-tour={item.tour}
+                            onClick={() => setInsightsOpen((v) => !v)}
+                            aria-expanded={insightsOpen}
+                            aria-controls="sidebar-insights"
+                            className={`mb-0.5 flex min-h-tap w-full items-center gap-3 rounded-xl px-3 text-sm font-medium transition ${
+                              isActive(item.to, item.match)
+                                ? "bg-sidebar-fg/15 font-semibold text-sidebar-ink"
+                                : "text-sidebar-muted hover:bg-sidebar-fg/10 hover:text-sidebar-ink"
+                            }`}
+                          >
+                            <item.Icon className="h-[18px] w-[18px] shrink-0 opacity-90" />
+                            {item.label}
+                            <IconChevronDown
+                              className={`ml-auto h-4 w-4 shrink-0 transition-transform duration-200 ${
+                                insightsOpen ? "rotate-180" : ""
                               }`}
+                            />
+                          </button>
+                          {showInsightsChildren ? (
+                            <ul
+                              id="sidebar-insights"
+                              className="mb-1.5 ml-4 animate-slide-up border-l border-sidebar-fg/15 pl-3"
                             >
-                              <item.Icon className="h-[18px] w-[18px] shrink-0 opacity-90" />
-                              <span className="sr-only">{item.label}</span>
-                            </Link>
-                            <RailTip>{item.label}</RailTip>
-                          </>
-                        ) : (
-                          <>
-                            <button
-                              type="button"
-                              data-tour={item.tour}
-                              onClick={() => setInsightsOpen((v) => !v)}
-                              aria-expanded={insightsOpen}
-                              aria-controls="sidebar-insights"
-                              className={`mb-0.5 flex min-h-tap w-full items-center gap-3 rounded-xl px-3 text-sm font-medium transition ${
-                                isActive(item.to, item.match)
-                                  ? "bg-sidebar-fg/15 font-semibold text-sidebar-ink"
-                                  : "text-sidebar-muted hover:bg-sidebar-fg/10 hover:text-sidebar-ink"
-                              }`}
-                            >
-                              <item.Icon className="h-[18px] w-[18px] shrink-0 opacity-90" />
-                              {item.label}
-                              <IconChevronDown
-                                className={`ml-auto h-4 w-4 shrink-0 transition-transform duration-200 ${
-                                  insightsOpen ? "rotate-180" : ""
-                                }`}
-                              />
-                            </button>
-                            {showInsightsChildren ? (
-                              <ul
-                                id="sidebar-insights"
-                                className="mb-1.5 ml-4 animate-slide-up border-l border-sidebar-fg/15 pl-3"
-                              >
-                                {item.children.map((child) => {
-                                  const active = location.pathname === child.to;
-                                  return (
-                                    <li key={child.to}>
-                                      <Link
-                                        to={child.to}
-                                        aria-current={active ? "page" : undefined}
-                                        className={`flex min-h-tap items-center rounded-lg px-3 text-[13.5px] transition ${
-                                          active
-                                            ? "bg-sidebar-fg/15 font-semibold text-sidebar-ink"
-                                            : "text-sidebar-muted hover:bg-sidebar-fg/10 hover:text-sidebar-ink"
-                                        }`}
-                                      >
-                                        {child.label}
-                                      </Link>
-                                    </li>
-                                  );
-                                })}
-                              </ul>
-                            ) : null}
-                          </>
-                        )}
-                      </li>
-                    ) : (
-                      <SidebarLink
-                        key={item.to}
-                        item={item}
-                        collapsed={railCollapsed}
-                        active={isActive(item.to, item.match)}
-                      />
-                    ),
-                  )}
-                </ul>
-              </div>
-            ))}
-          </nav>
-        ) : (
-          <div className="flex-1" />
-        )}
+                              {item.children.map((child) => {
+                                const active = location.pathname === child.to;
+                                return (
+                                  <li key={child.to}>
+                                    <Link
+                                      to={child.to}
+                                      aria-current={active ? "page" : undefined}
+                                      className={`flex min-h-tap items-center rounded-lg px-3 text-[13.5px] transition ${
+                                        active
+                                          ? "bg-sidebar-fg/15 font-semibold text-sidebar-ink"
+                                          : "text-sidebar-muted hover:bg-sidebar-fg/10 hover:text-sidebar-ink"
+                                      }`}
+                                    >
+                                      {child.label}
+                                    </Link>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          ) : null}
+                        </>
+                      )}
+                    </li>
+                  ) : (
+                    <SidebarLink
+                      key={item.to}
+                      item={item}
+                      collapsed={railCollapsed}
+                      active={isActive(item.to, item.match)}
+                    />
+                  ),
+                )}
+              </ul>
+            </div>
+          ))}
+        </nav>
 
         {/* ---- account footer ---- */}
         <div className="mt-auto border-t border-sidebar-fg/10 pt-3">
@@ -576,7 +580,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <div className="group relative">
               <Link
                 to="/profile"
-                className="tap h-10 w-full min-h-0 min-w-0 rounded-xl transition hover:bg-sidebar-fg/10"
+                className="tap h-11 w-full min-h-0 min-w-0 rounded-xl transition hover:bg-sidebar-fg/10"
                 aria-label="My profile"
               >
                 <span
@@ -644,7 +648,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                   onClick={() => setMobileSearch((v) => !v)}
                   aria-expanded={mobileSearch}
                   aria-label="Search"
-                  className="tap h-10 w-10 min-h-0 min-w-0 rounded-xl text-ink-600 transition hover:bg-paper-100 hover:text-ink-900 md:hidden"
+                  className="tap h-11 w-11 min-h-0 min-w-0 rounded-xl text-ink-600 transition hover:bg-paper-100 hover:text-ink-900 md:hidden"
                 >
                   <IconSearch className="h-[18px] w-[18px]" />
                 </button>
@@ -679,7 +683,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                       onKeyDown={onMenuKeys}
                       className="absolute right-0 top-full z-50 mt-2 w-[17rem] max-w-[calc(100vw-1.5rem)] animate-pop-down rounded-2xl border border-paper-200 bg-paper p-2 shadow-lg"
                     >
-                      <div className="px-2.5 pb-1.5 pt-2 text-[10.5px] font-bold uppercase tracking-[0.12em] text-ink-400">
+                      <div className="px-2.5 pb-1.5 pt-2 text-[10.5px] font-bold uppercase tracking-[0.12em] text-ink-500">
                         Add a record
                       </div>
                       {QUICK_ADD.map((entry) => {
@@ -754,38 +758,42 @@ export function AppShell({ children }: { children: ReactNode }) {
           tabIndex={-1}
           className="shell flex-1 animate-fade-up pb-24 pt-6 outline-none lg:pb-12"
         >
+          {/* Above the routed page on every route, not once per page — see
+              SetupPrompt for why it lives in the shell. */}
+          <SetupPrompt />
           {children}
         </main>
       </div>
 
-      {/* =========================== BOTTOM NAV =========================== */}
-      {selected ? (
-        <nav
-          aria-label="Main"
-          className="fixed inset-x-0 bottom-0 z-30 border-t border-paper-200 bg-paper/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden"
-        >
-          <ul className="mx-auto flex max-w-md">
-            {BOTTOM_NAV.map((item) => {
-              const active = isActive(item.to, item.match);
-              return (
-                <li key={item.to} className="flex-1">
-                  <Link
-                    to={item.to}
-                    data-tour={item.tour}
-                    aria-current={active ? "page" : undefined}
-                    className={`flex min-h-tap flex-col items-center justify-center gap-0.5 py-1.5 text-[11px] font-medium transition-colors ${
-                      active ? "text-brand-700" : "text-ink-500"
-                    }`}
-                  >
-                    <item.Icon className="h-[18px] w-[18px]" />
-                    {item.label}
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        </nav>
-      ) : null}
+      {/* =========================== BOTTOM NAV ===========================
+          Ungated for the same reason as the sidebar: its four destinations all
+          only read, and hiding them stranded an owner who skipped setup on
+          whichever page they happened to land on, with no way off it. */}
+      <nav
+        aria-label="Main"
+        className="fixed inset-x-0 bottom-0 z-30 border-t border-paper-200 bg-paper/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden"
+      >
+        <ul className="mx-auto flex max-w-md">
+          {BOTTOM_NAV.map((item) => {
+            const active = isActive(item.to, item.match);
+            return (
+              <li key={item.to} className="flex-1">
+                <Link
+                  to={item.to}
+                  data-tour={item.tour}
+                  aria-current={active ? "page" : undefined}
+                  className={`flex min-h-tap flex-col items-center justify-center gap-0.5 py-1.5 text-[11px] font-medium transition-colors ${
+                    active ? "text-brand-700" : "text-ink-500"
+                  }`}
+                >
+                  <item.Icon className="h-[18px] w-[18px]" />
+                  {item.label}
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      </nav>
 
       {/* Quick Add's own instances of Records' popups — see QUICK_ADD above. */}
       {selected ? (
@@ -811,16 +819,15 @@ export function AppShell({ children }: { children: ReactNode }) {
 /**
  * Sub-navigation across the three Insights screens.
  *
- * Redundant with the sidebar submenu on desktop, deliberately — the mockup
- * shows both, and the in-page row is the only path on mobile, where the
- * bottom nav has a single Insights destination. It scrolls horizontally
- * inside its own container rather than wrapping, keeping the page free of
- * horizontal overflow at 320px.
+ * The sidebar submenu owns this navigation on wider screens. This in-page row
+ * is the equivalent path on mobile, where the bottom nav has a single Insights
+ * destination. It scrolls horizontally inside its own container rather than
+ * wrapping, keeping the page free of horizontal overflow at 320px.
  */
 export function InsightsTabs() {
   const location = useLocation();
   return (
-    <div className="scroll-slim -mx-4 mb-5 overflow-x-auto px-4 sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0">
+    <div className="scroll-slim -mx-4 mb-5 overflow-x-auto px-4 sm:-mx-6 sm:px-6 md:hidden">
       <div className="flex w-max gap-1 rounded-xl border border-paper-200 bg-paper-100 p-1">
         {INSIGHTS_LINKS.map((link) => {
           const active = location.pathname === link.to;

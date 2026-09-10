@@ -108,7 +108,7 @@ export function MultiFileInput({
           ⇪
         </span>
         <span className="font-medium">{files.length > 0 ? "Add more photos" : "Choose photos"}</span>
-        <span className="text-ink-400">or drag them here</span>
+        <span className="text-ink-500">or drag them here</span>
       </label>
 
       <input

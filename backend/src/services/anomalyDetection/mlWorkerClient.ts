@@ -30,6 +30,19 @@ const scoreResponseSchema = z.object({
   sklearnVersion: z.string().min(1).max(50),
   trainedRows: z.number().int().positive(),
   featureCount: z.number().int().positive(),
+  /*
+   * OPTIONAL ON PURPOSE, and it must stay that way.
+   *
+   * This is an observational timing metric — it is logged and nothing reads it
+   * to make a decision. Required, it would have quietly become a deploy-order
+   * constraint: a worker still running the previous ml/worker/server.py omits
+   * the field, every score response then fails schema validation, and because
+   * this client FAILS OPEN the only symptom is that the isolation-forest
+   * shadow pass silently stops producing findings. A metric must never be able
+   * to do that. Absent means "this worker does not report it", which is a
+   * perfectly ordinary thing for an older worker to say.
+   */
+  durationMs: z.number().nonnegative().optional(),
   scores: z
     .array(
       z.object({

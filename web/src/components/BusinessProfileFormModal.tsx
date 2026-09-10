@@ -19,17 +19,29 @@ interface Props {
  * stay for the entry points that aren't already looking at this list (the
  * detail page's own Edit button, empty states).
  */
-export function BusinessProfileFormModal({ open, onClose, profile, onSaved }: Props) {
+export function BusinessProfileFormModal({
+  open,
+  onClose,
+  profile,
+  onSaved,
+}: Props) {
   const { createProfile, updateProfile, uploadLogo } = useBusinessProfiles();
 
   async function handleSubmit(input: BusinessProfileInput) {
-    const saved = profile ? await updateProfile(profile.id, input) : await createProfile(input);
+    const saved = profile
+      ? await updateProfile(profile.id, input)
+      : await createProfile(input);
     onSaved(saved);
     onClose();
   }
 
   return (
-    <Modal open={open} onClose={onClose} title={profile ? `Edit ${profile.name}` : "Add Business Profile"}>
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={profile ? `Edit ${profile.name}` : "Add Business Profile"}
+      size="wide"
+    >
       {profile ? (
         <div className="mb-5">
           <AvatarUpload
@@ -41,6 +53,7 @@ export function BusinessProfileFormModal({ open, onClose, profile, onSaved }: Pr
         </div>
       ) : null}
       <BusinessProfileForm
+        compact
         submitLabel={profile ? "Save changes" : "Create business"}
         initialValues={
           profile
@@ -50,7 +63,8 @@ export function BusinessProfileFormModal({ open, onClose, profile, onSaved }: Pr
                 availableFunds: profile.availableFunds,
                 expectedMonthlyExpenses: profile.expectedMonthlyExpenses,
                 operatingDays: profile.operatingDays,
-                largeExpenseThresholdPercent: profile.largeExpenseThresholdPercent,
+                largeExpenseThresholdPercent:
+                  profile.largeExpenseThresholdPercent,
               }
             : undefined
         }

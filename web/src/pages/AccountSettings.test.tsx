@@ -76,6 +76,9 @@ vi.mock("../lib/supabaseClient", () => ({
  * against the real provider.
  */
 const tour = {
+  // The ordinary case: this account has a business, so the tour has something
+  // to walk through. The no-business case is its own test below.
+  available: true,
   alwaysShow: false,
   setAlwaysShow: vi.fn(async (_value: boolean) => {}),
   restart: vi.fn(),
@@ -113,6 +116,7 @@ beforeEach(() => {
   patched.length = 0;
   patchFails = false;
   tour.alwaysShow = false;
+  tour.available = true;
   tour.setAlwaysShow.mockClear();
   tour.restart.mockClear();
   serverPreferences = {
@@ -201,11 +205,45 @@ describe("Account settings", () => {
       await waitFor(() => expect(screen.getByTestId("path")).toHaveTextContent("/dashboard"));
     });
 
+    /**
+     * SIX OF THE TEN STEPS point at chrome that only exists once a business
+     * does — the switcher, the dashboard summary, Quick add (which owns both
+     * the receipt and CSV steps), Ask FinSight. The overlay skips a step whose
+     * target is missing rather than stranding the tour, so offering the tour
+     * here to an owner who chose "Skip for now" delivered four disconnected
+     * cards out of ten and taught nothing.
+     *
+     * The auto-start in TourContext has always refused to run without a
+     * business. This is the same refusal at the other entry point, said out
+     * loud instead of leaving a button that under-delivers.
+     */
+    it("will not start the tour for an owner who has no business yet", async () => {
+      tour.available = false;
+      renderPage();
+
+      const start = screen.getByRole("button", { name: "Start Guided Tour" });
+      expect(start).toBeDisabled();
+      expect(screen.getByText(/Add a business first/i)).toBeInTheDocument();
+
+      await userEvent.click(start);
+      expect(tour.restart).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The panel used to carry a second pose on the daily-message setting. The
+     * redesign consolidated to one header illustration, so the count is not
+     * what this guards — the source of the art is. Every mascot image on the
+     * page must come from the existing library under /mascot/ (mapped in
+     * components/tour/steps.tsx); commissioning new art for a settings page is
+     * the thing to catch.
+     */
     it("uses mascot art that already exists rather than new illustration", () => {
       const { container } = renderPage();
       const poses = [...container.querySelectorAll("img")].map((img) => img.getAttribute("src"));
       expect(poses).toContain("/mascot/01-onboarding/tutorial.webp");
-      expect(poses).toContain("/mascot/greeting.webp");
+      for (const pose of poses) {
+        expect(pose, `${pose} is not from the existing mascot library`).toMatch(/^\/mascot\//);
+      }
     });
   });
 });

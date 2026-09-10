@@ -61,21 +61,39 @@ const outlier: AnomalyFinding = {
   metadata: { categoryMean: 600, historyCount: 12 },
 };
 
-let getHandlers: Record<string, () => unknown>;
+type Params = Record<string, unknown> | undefined;
+
+let getHandlers: Record<string, (params: Params) => unknown>;
 const patched: { url: string; body: unknown }[] = [];
+/** Every GET the page made, so a test can assert on what it asked for. */
+const gets: { url: string; params: Params }[] = [];
+const posted: { url: string; body: unknown }[] = [];
 
 function ok<T>(data: T) {
   return () => ({ data });
 }
 
+/** One page of the flagged list, in the envelope the endpoint answers with. */
+function flaggedPage(items: RecordItem[], nextCursor: string | null = null) {
+  return { items, nextCursor };
+}
+
 vi.mock("../lib/api", () => ({
   api: {
-    get: async (url: string) => {
+    get: async (url: string, config?: { params?: Record<string, unknown> }) => {
+      gets.push({ url, params: config?.params });
       const handler = getHandlers[url];
       if (!handler) throw new Error(`unmocked GET ${url}`);
-      return handler();
+      return handler(config?.params);
     },
-    post: async () => ({ data: { resolved: 0 } }),
+    post: async (url: string, body: unknown) => {
+      posted.push({ url, body });
+      const { expenseIds = [], salesIds = [] } = body as {
+        expenseIds?: number[];
+        salesIds?: number[];
+      };
+      return { data: { resolved: expenseIds.length + salesIds.length } };
+    },
     patch: async (url: string, body: unknown) => {
       patched.push({ url, body });
       return { data: {} };
@@ -115,8 +133,10 @@ function renderPage() {
 beforeEach(() => {
   openChat.mockClear();
   patched.length = 0;
+  gets.length = 0;
+  posted.length = 0;
   getHandlers = {
-    "/records/flagged": ok<RecordItem[]>([]),
+    "/records/flagged": ok(flaggedPage([])),
     "/insights/findings": ok({ items: [], nextCursor: null }),
     "/records/csv-imports/batches": ok([]),
   };
@@ -124,7 +144,7 @@ beforeEach(() => {
 
 describe("the unified review queue", () => {
   it("shows one card, not two, when a finding and a legacy flag describe the same record", async () => {
-    getHandlers["/records/flagged"] = ok([record({ id: 1, largeExpenseFlag: true })]);
+    getHandlers["/records/flagged"] = ok(flaggedPage([record({ id: 1, largeExpenseFlag: true })]));
     getHandlers["/insights/findings"] = ok({ items: [outlier], nextCursor: null });
     renderPage();
 
@@ -137,7 +157,7 @@ describe("the unified review queue", () => {
   });
 
   it("preserves the threshold explanation, naming the number and linking to the setting", async () => {
-    getHandlers["/records/flagged"] = ok([record({ id: 1, largeExpenseFlag: true })]);
+    getHandlers["/records/flagged"] = ok(flaggedPage([record({ id: 1, largeExpenseFlag: true })]));
     renderPage();
 
     expect(await screen.findByText(/large-expense threshold of/)).toBeInTheDocument();
@@ -175,10 +195,12 @@ describe("the unified review queue", () => {
   });
 
   it("filters the queue by category, and each chip says how much it holds", async () => {
-    getHandlers["/records/flagged"] = ok([
-      record({ id: 2, duplicateStatus: "Flagged", duplicateOfRecordId: 9, description: "Ice delivery" }),
-      record({ id: 3, source: "RECEIPT_SCAN", description: "Hardware run" }),
-    ]);
+    getHandlers["/records/flagged"] = ok(
+      flaggedPage([
+        record({ id: 2, duplicateStatus: "Flagged", duplicateOfRecordId: 9, description: "Ice delivery" }),
+        record({ id: 3, source: "RECEIPT_SCAN", description: "Hardware run" }),
+      ]),
+    );
     getHandlers["/insights/findings"] = ok({ items: [outlier], nextCursor: null });
     renderPage();
 
@@ -235,10 +257,12 @@ describe("the unified review queue", () => {
   });
 
   it("keeps one bulk decision for a whole imported duplicate group", async () => {
-    getHandlers["/records/flagged"] = ok([
-      record({ id: 4, importBatchId: 7, duplicateStatus: "Flagged" }),
-      record({ id: 5, importBatchId: 7, duplicateStatus: "Flagged", description: "Sugar" }),
-    ]);
+    getHandlers["/records/flagged"] = ok(
+      flaggedPage([
+        record({ id: 4, importBatchId: 7, duplicateStatus: "Flagged" }),
+        record({ id: 5, importBatchId: 7, duplicateStatus: "Flagged", description: "Sugar" }),
+      ]),
+    );
     getHandlers["/records/csv-imports/batches"] = ok([
       { id: 7, title: "March expenses.csv", uploadDate: "2026-03-01T00:00:00.000Z", status: "Reviewed" },
     ]);
@@ -257,7 +281,7 @@ describe("the unified review queue", () => {
   });
 
   it("still renders the legacy flags when the findings request fails", async () => {
-    getHandlers["/records/flagged"] = ok([record({ id: 1, largeExpenseFlag: true })]);
+    getHandlers["/records/flagged"] = ok(flaggedPage([record({ id: 1, largeExpenseFlag: true })]));
     getHandlers["/insights/findings"] = () => {
       throw new Error("Request failed with status code 500");
     };
@@ -265,5 +289,119 @@ describe("the unified review queue", () => {
 
     expect(await screen.findByText(/is large for your business/)).toBeInTheDocument();
     expect(screen.queryByText(/status code 500/)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * THE PAGINATION REGRESSION.
+ *
+ * `GET /records/flagged` used to answer with every flagged record a business
+ * had. It is now capped: a request that sends neither `limit` nor `cursor`
+ * gets at most 200 rows and a header, which means the old unbounded call would
+ * quietly stop at the 200th flagged record — a real owner losing the rest of
+ * their own review queue from view with nothing on screen saying so. These
+ * tests are what stops the page reverting to that call.
+ */
+describe("the flagged list is paged, not truncated", () => {
+  it("asks for a bounded page rather than the whole flagged history", async () => {
+    renderPage();
+    await screen.findByText("Nothing needs review right now");
+
+    const call = gets.find((g) => g.url === "/records/flagged");
+    expect(call).toBeDefined();
+    // A `limit` is what makes the server answer the paginated envelope. Without
+    // one it falls back to the capped bare array and the cursor is lost.
+    expect(call?.params).toMatchObject({ businessProfileId: 1 });
+    expect(typeof call?.params?.limit).toBe("number");
+    expect(call?.params?.limit).toBeLessThanOrEqual(100);
+  });
+
+  it("reaches past the cap by following the cursor the server handed back", async () => {
+    getHandlers["/records/flagged"] = (params) =>
+      params?.cursor === "cursor-200"
+        ? {
+            data: flaggedPage([
+              record({ id: 201, largeExpenseFlag: true, description: "Record two hundred and one" }),
+            ]),
+          }
+        : {
+            data: flaggedPage(
+              [record({ id: 1, largeExpenseFlag: true, description: "First page record" })],
+              "cursor-200",
+            ),
+          };
+    renderPage();
+
+    expect(await screen.findByText(/First page record/)).toBeInTheDocument();
+    expect(screen.queryByText(/Record two hundred and one/)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Show more flagged records" }));
+
+    // Appended, not swapped — the owner keeps what they were already reading.
+    expect(await screen.findByText(/Record two hundred and one/)).toBeInTheDocument();
+    expect(screen.getByText(/First page record/)).toBeInTheDocument();
+    expect(gets.filter((g) => g.url === "/records/flagged").at(-1)?.params).toMatchObject({
+      cursor: "cursor-200",
+    });
+    // The server said that was the last page, so nothing claims otherwise.
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /^Show more/ })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("advances both sources from one button when both have another page", async () => {
+    getHandlers["/records/flagged"] = ok(
+      flaggedPage([record({ id: 1, largeExpenseFlag: true })], "cursor-200"),
+    );
+    getHandlers["/insights/findings"] = ok({ items: [outlier], nextCursor: 10 });
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Show more" }));
+    await waitFor(() =>
+      expect(gets.filter((g) => g.url === "/records/flagged")).toHaveLength(2),
+    );
+    expect(gets.filter((g) => g.url === "/insights/findings").at(-1)?.params).toMatchObject({
+      cursorId: 10,
+    });
+  });
+
+  it("shows the empty state when there is genuinely nothing flagged", async () => {
+    renderPage();
+    expect(await screen.findByText("Nothing needs review right now")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Show more/ })).not.toBeInTheDocument();
+  });
+
+  it("surfaces an error when the flagged list itself fails", async () => {
+    getHandlers["/records/flagged"] = () => {
+      throw new Error("Request failed with status code 500");
+    };
+    renderPage();
+
+    expect(await screen.findByText(/status code 500/)).toBeInTheDocument();
+  });
+
+  it("chunks a bulk decision instead of sending one unbounded list of ids", async () => {
+    // 600 copies from one re-imported file — one group, one decision, and far
+    // more ids than belong in a single request.
+    const many = Array.from({ length: 600 }, (_, i) =>
+      record({ id: i + 1, importBatchId: 7, duplicateStatus: "Flagged" }),
+    );
+    getHandlers["/records/flagged"] = ok(flaggedPage(many));
+    getHandlers["/records/csv-imports/batches"] = ok([
+      { id: 7, title: "March expenses.csv", uploadDate: "2026-03-01T00:00:00.000Z", status: "Reviewed" },
+    ]);
+    renderPage();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Discard all 600" }));
+
+    await waitFor(() => expect(posted.length).toBeGreaterThan(1));
+    expect(posted.every((p) => p.url === "/records/duplicates/resolve")).toBe(true);
+    const sent = posted.flatMap((p) => (p.body as { expenseIds: number[] }).expenseIds);
+    // Every id still gets sent — chunking must not drop anyone's records.
+    expect(sent).toHaveLength(600);
+    expect(new Set(sent).size).toBe(600);
+    for (const call of posted) {
+      expect((call.body as { expenseIds: number[] }).expenseIds.length).toBeLessThanOrEqual(500);
+    }
   });
 });

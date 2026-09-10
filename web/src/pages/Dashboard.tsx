@@ -18,23 +18,13 @@ import { DonutChart } from "../components/DonutChart";
 import { Callout, KpiCard, Panel, PageHead, Pill } from "../components/ui";
 import { IconArrowRight, IconCheck, IconExpense, IconInsights, IconSales } from "../components/icons";
 import type { DashboardSummary, ExpenseBehavior, ReductionOpportunity, ReductionOpportunityResponse } from "../lib/types";
-
-/**
- * `days: 0` is "All time" — the server drops the date filter entirely rather
- * than widening it (see ALL_TIME_PERIOD in dashboard.service.ts).
- *
- * It exists because the other three are all lookback windows of a month or
- * less, and CSV import now invites owners to bring in YEARS of history. Without
- * it, a business whose records end more than 30 days ago has no setting on this
- * page that can see a single one of them — which is exactly what happened to a
- * 21,097-row import of 2023-2025 data.
- */
-const PERIOD_OPTIONS = [
-  { label: "Today", days: 1 },
-  { label: "This week", days: 7 },
-  { label: "This month", days: 30 },
-  { label: "All time", days: 0 },
-];
+import {
+  ALL_TIME_PERIOD_DAYS,
+  DEFAULT_SUMMARY_PERIOD_DAYS,
+  PERIOD_OPTIONS,
+  periodLabel,
+  periodPhrase,
+} from "../lib/dashboardPeriod";
 
 export function Dashboard() {
   const { selected } = useBusinessProfiles();
@@ -44,7 +34,7 @@ export function Dashboard() {
   // and stays put.
   const { preferences } = useAuth();
   const { categories } = useExpenseCategories();
-  const [periodDays, setPeriodDays] = useState(30);
+  const [periodDays, setPeriodDays] = useState<number>(DEFAULT_SUMMARY_PERIOD_DAYS);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -68,7 +58,18 @@ export function Dashboard() {
   const askFinSight = useAskFinSight("Dashboard");
 
   async function load() {
-    if (!selected) return;
+    /*
+     * No business — an owner who chose "Skip for now". This must SETTLE, not
+     * just return: `loading` starts true, so bailing out silently left the
+     * page under its skeleton forever. "Loaded, and empty" is the honest
+     * state, and it is the one the empty state below renders.
+     */
+    if (!selected) {
+      setSummary(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     setSummary(null);
@@ -90,7 +91,7 @@ export function Dashboard() {
   }, [selected?.id, periodDays]);
 
   // This vs last month, independent of the KPI row's own period toggle above
-  // — "Today" or "This week" would make a month-over-month comparison
+  // — "Today" or "7 days" would make a month-over-month comparison
   // meaningless, so this always asks for the fixed 30-day window regardless
   // of what periodDays is currently set to.
   function loadComparison() {
@@ -151,29 +152,20 @@ export function Dashboard() {
   }, [selected?.id]);
 
   /*
-   * No business yet — which now only happens to someone who chose "Skip for
-   * now" during setup, since everyone else is redirected into the wizard by
-   * RequireBusinessProfile.
+   * NO BUSINESS DOES NOT MEAN NO PAGE.
    *
-   * This used to `return null`, so the first screen a new owner ever saw was a
-   * blank page with no explanation and no way forward. Resuming setup is the
-   * only useful thing to offer here, so that is the only thing offered.
+   * This used to `return null` (a blank screen, the original bug) and then
+   * `return <NoBusinessProfile />` — a card that replaced the whole dashboard.
+   * That card was the entire app for someone who chose "Skip for now": every
+   * door showed it, so the skip skipped to nothing.
+   *
+   * So the dashboard renders its own chrome instead — heading, period picker,
+   * setup checklist — sitting in its own empty state, with no figures because
+   * there genuinely are none. Nothing below may assume `selected`: the fetches
+   * above already no-op, and the reads of `selected.id`/`.name` are guarded
+   * individually rather than by one early return. The persistent invitation to
+   * finish setup is in the shell (see components/SetupPrompt).
    */
-  if (!selected) {
-    return (
-      <div>
-        <PageHead title="Welcome to FinSight" subtitle="One short step and your dashboard comes to life." />
-        <EmptyState
-          image="/mascot/01-onboarding/businessprofilesetup.webp"
-          title="Finish setting up your business"
-          action={<ButtonLink to="/onboarding" variant="primary">Continue setup</ButtonLink>}
-        >
-          FinSight needs your business name and a few figures before it can work out your sales
-          target, track your recovery or flag large expenses. Anything you already typed was kept.
-        </EmptyState>
-      </div>
-    );
-  }
 
   /*
    * "Has this business ever recorded anything" — NOT "did it record anything
@@ -210,13 +202,10 @@ export function Dashboard() {
   // All derived from `summary`, which the server computed. Nothing here
   // recalculates a financial figure; it only picks and phrases.
 
-  const periodLabel = periodDays === 0
-    ? "Across all records"
-    : periodDays === 1
-      ? "Today"
-      : periodDays === 7
-        ? "This week"
-        : "This month";
+  // Named by its LENGTH, not by a calendar name: the server's window is a
+  // rolling lookback ending today, so "This month" on the 20th captioned
+  // 22 Jul-20 Aug as August. Same wording as mobile — see lib/dashboardPeriod.
+  const periodCaption = periodLabel(periodDays);
 
   const topCategory = summary?.expenseCategoryBreakdown?.length
     ? [...summary.expenseCategoryBreakdown].sort((a, b) => b.total - a.total)[0]
@@ -296,6 +285,22 @@ export function Dashboard() {
               tone: "danger",
             };
 
+  /**
+   * The window as it reads inside the question handed to Ask FinSight.
+   *
+   * A third form, because this one is typed into the box as the owner's own
+   * words and has to survive being read back: "across all records" rather than
+   * the caption's title case, and "over the last 7 days" rather than the bare
+   * phrase, which would produce "...my largest expense category the last 7
+   * days?" (QA register FUN-008 is what pins the all-time wording here).
+   */
+  const questionPeriod =
+    periodDays === ALL_TIME_PERIOD_DAYS
+      ? "across all records"
+      : periodDays === 1
+        ? "today"
+        : `over ${periodPhrase(periodDays)}`;
+
   // Names whichever specific thing the card above actually flagged — the
   // records needing review if there are any (the most actionable item),
   // otherwise the top category — rather than a generic "summarise this".
@@ -303,12 +308,14 @@ export function Dashboard() {
     ? summary.recordsNeedingReview > 0
       ? `What should I do about the ${summary.recordsNeedingReview} record${summary.recordsNeedingReview === 1 ? "" : "s"} that need${summary.recordsNeedingReview === 1 ? "s" : ""} review?`
       : topCategory
-        ? `Why is ${topCategory.categoryName} my largest expense category ${periodLabel.toLowerCase()}?`
+        ? `Why is ${topCategory.categoryName} my largest expense category ${questionPeriod}?`
         : undefined
     : undefined;
 
   const recoveryAction = !summary || summary.recoveryStatus.expectedMonthlyExpenses <= 0
-    ? { to: `/business-profiles/${selected.id}/edit`, label: "Set monthly expenses" }
+    ? selected
+      ? { to: `/business-profiles/${selected.id}/edit`, label: "Set monthly expenses" }
+      : { to: "/onboarding", label: "Finish setup" }
     : summary.recoveryStatus.status === "data_incomplete" || summary.recordsNeedingReview > 0
       ? { to: "/records/flagged", label: "Review flagged records" }
       : summary.recoveryStatus.status === "no_current_month_data"
@@ -320,9 +327,15 @@ export function Dashboard() {
       <PageHead
         title="Dashboard"
         subtitle={
-          <>
-            Overview for <b className="font-semibold text-ink-700">{selected.name}</b>
-          </>
+          selected ? (
+            <>
+              Overview for <b className="font-semibold text-ink-700">{selected.name}</b>
+            </>
+          ) : (
+            // No business to name yet. The subtitle still has to say what this
+            // page is for, rather than reading "Overview for" and stopping.
+            "Your figures appear here once your business is set up."
+          )
         }
         actions={
           <>
@@ -336,7 +349,7 @@ export function Dashboard() {
                   className={`tap rounded-lg px-3 text-[13.5px] font-semibold transition ${
                     periodDays === opt.days
                       ? "bg-paper text-brand-800 shadow-sm"
-                      : "text-ink-500 hover:text-brand-800"
+                      : "text-ink-600 hover:text-brand-800"
                   }`}
                 >
                   {opt.label}
@@ -362,7 +375,12 @@ export function Dashboard() {
           something rather than having it silently skipped (TourOverlay
           resolves the first VISIBLE match, which is this one when it is
           here). */}
-      {preferences.showDashboardMascotMessage ? (
+      {/* `selected &&` because GreetingHero holds its shape with skeleton
+          lines while `summary` is null — correct while a fetch is in flight,
+          but with no business there is no fetch, so those lines would never
+          resolve. A permanent skeleton is the eternal-loading state this page
+          must not settle into. */}
+      {selected && preferences.showDashboardMascotMessage ? (
         <div data-tour="dashboard-summary">
           <GreetingHero summary={loading ? null : summary} />
         </div>
@@ -375,12 +393,18 @@ export function Dashboard() {
 
       {/* Goal-Gradient: a brand-new business sees how close it is to a first
           insight, rather than three unrelated empty panels. */}
-      {!loading && summary ? (
+      {!loading && (summary || !selected) ? (
         <SetupProgress
           steps={[
-            { label: "Set up your business profile", done: true },
-            { label: "Add an expense category", done: categories.length > 0, href: "/categories" },
-            { label: "Record your first expense or sale", done: hasAnyRecords, href: "/records/expenses/new" },
+            // Unticked, with a route, for the owner who skipped the wizard —
+            // the checklist is the one thing on this page that still means
+            // something when there is nothing recorded.
+            { label: "Set up your business profile", done: !!selected, href: "/onboarding" },
+            // Both of these need a business to belong to, so with none they
+            // are shown as plain steps rather than links — sending someone to
+            // a form that cannot save is the dead end this change removes.
+            { label: "Add an expense category", done: categories.length > 0, href: selected ? "/categories" : undefined },
+            { label: "Record your first expense or sale", done: hasAnyRecords, href: selected ? "/records/expenses/new" : undefined },
           ]}
         />
       ) : null}
@@ -399,8 +423,8 @@ export function Dashboard() {
         <div className="mb-6">
           <Callout tone="info">
             <b className="font-semibold">
-              No records in {PERIOD_OPTIONS.find((o) => o.days === periodDays)?.label.toLowerCase() ?? "this period"}
-              , but this business has {summary!.lifetime!.recordCount.toLocaleString()} in total.
+              No records for {periodPhrase(periodDays)}, but this business has{" "}
+              {summary!.lifetime!.recordCount.toLocaleString()} in total.
             </b>{" "}
             {latestRecordDate ? (
               <>
@@ -453,6 +477,25 @@ export function Dashboard() {
           the request is in flight. */}
       {loading ? (
         <SkeletonDashboard />
+      ) : !selected ? (
+        /*
+         * The genuinely-empty dashboard. Same illustration and shape as the
+         * "nothing recorded yet" state at the foot of a real dashboard,
+         * because it is the same situation one step earlier — the difference
+         * is only which action closes it.
+         */
+        <EmptyState
+          image="/mascot/01-onboarding/emptydashboard.webp"
+          title="Nothing to show yet"
+          action={
+            <ButtonLink to="/onboarding" variant="primary">
+              Finish setting up your business
+            </ButtonLink>
+          }
+        >
+          FinSight needs your business name and a few figures before it can work out your sales
+          target, track your recovery or flag large expenses. Anything you already typed was kept.
+        </EmptyState>
       ) : !summary ? null
       : (
         // 8px scale throughout: 24px between the major bands, 20px inside a
@@ -504,14 +547,14 @@ export function Dashboard() {
             <KpiCard
               label="Total expenses"
               value={<span className="figure">{formatMoney(summary.overview.totalExpenses)}</span>}
-              meta={periodLabel}
+              meta={periodCaption}
               glyph={<IconExpense className="h-5 w-5" />}
               tone="accent"
             />
             <KpiCard
               label="Total sales reference"
               value={<span className="figure">{formatMoney(summary.overview.totalSalesReference)}</span>}
-              meta={periodLabel}
+              meta={periodCaption}
               glyph={<IconSales className="h-5 w-5" />}
               tone="info"
             />
@@ -532,7 +575,7 @@ export function Dashboard() {
             answer is grounded and the disclaimer travels with it.
           */}
           <div className="grid gap-5 lg:grid-cols-[1.6fr_1fr] xl:grid-cols-[2fr_1fr]">
-            <Panel title={`${periodLabel} at a glance`}>
+            <Panel title={`${periodCaption} at a glance`}>
               <p className="text-sm leading-relaxed text-ink-600">
                 {topCategory ? (
                   <>Your largest expense category is <b className="font-semibold text-ink-800">{topCategory.categoryName}</b> at <span className="figure font-semibold text-ink-800">{formatMoney(topCategory.total)}</span>.</>

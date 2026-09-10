@@ -6,8 +6,10 @@ import {
   Boxes,
   ChartPie,
   Flag,
+  Lightbulb,
   ListFilter,
   MessageCircleQuestion,
+  Repeat,
   SlidersHorizontal,
   ThumbsDown,
   ThumbsUp,
@@ -32,6 +34,7 @@ import {
   SkeletonStatTile,
 } from "../components/Skeleton";
 import { EmptyState } from "../components/EmptyState";
+import { SectionNav, type SectionNavItem } from "../components/SectionNav";
 import { Button, ButtonLink } from "../components/Button";
 import { formatMoney } from "../components/Money";
 import { STATUS_INK } from "../lib/chartPalette";
@@ -44,6 +47,8 @@ import type {
   AnomalyFindingPage,
   AnomalyFindingStatus,
   ExpenseBehavior as ExpenseInsightData,
+  FlaggedRecordCounts,
+  FlaggedRecordPage,
   RecordItem,
   RecurringPattern,
   RecurringSchedule,
@@ -152,7 +157,7 @@ function ChangeFigure({
   percent: number | null;
 }) {
   if (change === 0) {
-    return <span className="figure text-ink-400">{formatMoney(0)}</span>;
+    return <span className="figure text-ink-500">{formatMoney(0)}</span>;
   }
   const up = change > 0;
   return (
@@ -186,37 +191,21 @@ function ChangeFigure({
  * state), so it works with keyboard, browser history, and reduced motion.
  */
 function ExpenseSectionNav({ showRecurring }: { showRecurring: boolean }) {
-  const items = [
-    { href: "#expense-overview", label: "Overview" },
-    { href: "#expense-categories", label: "Categories" },
-    { href: "#expense-opportunities", label: "Opportunities" },
-    { href: "#expense-review", label: "Review" },
+  const items: SectionNavItem[] = [
+    { href: "#expense-overview", label: "Overview", icon: ChartPie },
+    { href: "#expense-categories", label: "Categories", icon: Boxes },
+    {
+      href: "#expense-opportunities",
+      label: "Opportunities",
+      icon: Lightbulb,
+    },
+    { href: "#expense-review", label: "Review", icon: Flag },
     ...(showRecurring
-      ? [{ href: "#expense-recurring", label: "Recurring" }]
+      ? [{ href: "#expense-recurring", label: "Recurring", icon: Repeat }]
       : []),
   ];
 
-  return (
-    <nav
-      aria-label="Expense insight sections"
-      className="scroll-slim -mx-1 overflow-x-auto px-1 pb-1"
-    >
-      <div className="flex min-w-max items-center gap-1 rounded-xl border border-paper-200 bg-paper-100 p-1">
-        <span className="px-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-500">
-          Jump to
-        </span>
-        {items.map((item) => (
-          <a
-            key={item.href}
-            href={item.href}
-            className="tap-inline rounded-lg px-3 text-[13px] font-semibold text-ink-600 transition hover:bg-paper hover:text-brand-800 focus-visible:bg-paper"
-          >
-            {item.label}
-          </a>
-        ))}
-      </div>
-    </nav>
-  );
+  return <SectionNav ariaLabel="Expense insight sections" items={items} />;
 }
 
 // The panel is a summary, not the full review queue — FlaggedRecords already
@@ -224,6 +213,17 @@ function ExpenseSectionNav({ showRecurring }: { showRecurring: boolean }) {
 // server-side (aiContext.service.ts: `take: 5`), so the two surfaces never
 // disagree about what "a short list" means.
 const MAX_FLAGGED_SHOWN = 5;
+
+/**
+ * How many flagged records this panel's short list asks the server for.
+ *
+ * It only ever shows five expenses, but the flagged list is expenses and sales
+ * interleaved by date, so it asks for one page and filters. What it must NOT
+ * do is what it did before — send no bound and take the whole flagged history
+ * of the business (megabytes, on a re-imported spreadsheet) to render five
+ * rows and a count. The count comes from /records/flagged/count now.
+ */
+const FLAGGED_PANEL_PAGE_SIZE = 100;
 
 // The backend already caps `opportunities` at three (plan §4.6, §8.3), but the
 // UI does not trust that as its only guarantee — a future server bug here
@@ -316,7 +316,7 @@ function evidenceFigures(
         }
       : {
           label: "Previous period",
-          value: <span className="text-ink-400">No prior baseline</span>,
+          value: <span className="text-ink-500">No prior baseline</span>,
         };
   const records = {
     label: "Records this period",
@@ -433,7 +433,7 @@ function OpportunityCard({
         <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-y border-paper-200 py-3 sm:grid-cols-3">
           {evidenceFigures(opportunity).map((fig) => (
             <div key={fig.label} className="min-w-0">
-              <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400">
+              <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-500">
                 {fig.label}
               </dt>
               <dd className="mt-0.5 text-sm font-semibold text-ink-900">
@@ -505,7 +505,7 @@ function OpportunityCard({
                 <Pill tone="info">{costBehaviorLabel}</Pill>
               ) : null}
             </div>
-            <p className="mt-3 text-xs text-ink-500">
+            <p className="mt-3 text-xs text-ink-600">
               <span className="font-semibold text-ink-700">
                 Why this appeared:{" "}
               </span>
@@ -521,7 +521,7 @@ function OpportunityCard({
                 <p className="text-xs font-semibold text-ink-700">
                   Suggested checks
                 </p>
-                <ul className="mt-1 list-disc space-y-1 pl-5 text-xs text-ink-500">
+                <ul className="mt-1 list-disc space-y-1 pl-5 text-xs text-ink-600">
                   {opportunity.suggestedChecks.map((check) => (
                     <li key={check}>{check}</li>
                   ))}
@@ -533,7 +533,7 @@ function OpportunityCard({
                 <p className="text-xs font-semibold text-ink-700">
                   Limitations
                 </p>
-                <ul className="mt-1 list-disc space-y-1 pl-5 text-xs text-ink-500">
+                <ul className="mt-1 list-disc space-y-1 pl-5 text-xs text-ink-600">
                   {opportunity.limitations.map((limitation) => (
                     <li key={limitation}>{limitation}</li>
                   ))}
@@ -588,7 +588,7 @@ function OpportunityCard({
             <span className="sr-only"> — {opportunity.categoryName}</span>
           </button>
           {feedbackRating ? (
-            <span className="text-xs text-ink-400" role="status">
+            <span className="text-xs text-ink-500" role="status">
               Thanks for the feedback.
             </span>
           ) : feedbackError ? (
@@ -669,6 +669,13 @@ export function ExpenseInsight() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [flaggedExpenses, setFlaggedExpenses] = useState<RecordItem[]>([]);
+  /**
+   * How many flagged expenses exist, as opposed to how many are on screen.
+   * `null` means the count request didn't answer, in which case the panel
+   * falls back to counting what it managed to load rather than claiming a
+   * number it doesn't have.
+   */
+  const [flaggedExpenseCount, setFlaggedExpenseCount] = useState<number | null>(null);
   const [findings, setFindings] = useState<AnomalyFinding[]>([]);
   const [recurringPatterns, setRecurringPatterns] = useState<
     RecurringPattern[]
@@ -735,7 +742,20 @@ export function ExpenseInsight() {
   }
 
   async function load() {
-    if (!selected) return;
+    /*
+     * No business — an owner who chose "Skip for now". Settles instead of
+     * bailing: `loading` starts true and `isInitialLoad` is `loading && !data`,
+     * so a silent return left this page under its skeleton for good.
+     */
+    if (!selected) {
+      setData(null);
+      setError(null);
+      setLoading(false);
+      setReductionOpportunities(null);
+      setReductionError(null);
+      setReductionLoading(false);
+      return;
+    }
     const businessProfileId = selected.id;
     setLoading(true);
     setError(null);
@@ -750,16 +770,23 @@ export function ExpenseInsight() {
     const supplements = Promise.all([
       loadReductionOpportunities(),
       loadPanel(
-        api.get<RecordItem[]>("/records/flagged", {
-          params: { businessProfileId },
+        api.get<FlaggedRecordPage>("/records/flagged", {
+          params: { businessProfileId, limit: FLAGGED_PANEL_PAGE_SIZE },
         }),
-        (rows) =>
+        (page) =>
           setFlaggedExpenses(
-            rows
+            page.items
               .filter((r) => r.type === "expense")
               .sort((a, b) => (a.date < b.date ? 1 : -1)),
           ),
         () => setFlaggedExpenses([]),
+      ),
+      loadPanel(
+        api.get<FlaggedRecordCounts>("/records/flagged/count", {
+          params: { businessProfileId },
+        }),
+        (counts) => setFlaggedExpenseCount(counts.expenses),
+        () => setFlaggedExpenseCount(null),
       ),
       loadPanel(
         api.get<AnomalyFindingPage>("/insights/findings", {
@@ -936,6 +963,16 @@ export function ExpenseInsight() {
   // With no agenda and no candidates the whole block is an empty container.
   const showRecurringBlock = recurringSchedules !== null || hasCandidates;
 
+  /*
+   * The flags panel counts with the server's number and lists with its own
+   * page. `flaggedExpenses.length` used to be both, which was only ever right
+   * because the request was unbounded — now the list is one page of at most a
+   * hundred and the count is a count, so "3 more — review all" stays honest
+   * for a business with three thousand.
+   */
+  const flaggedTotal = flaggedExpenseCount ?? flaggedExpenses.length;
+  const shownFlagged = Math.min(flaggedExpenses.length, MAX_FLAGGED_SHOWN);
+
   // ---- headline figures, all from one denominator ----
   const summary = useMemo(() => {
     if (!data) return null;
@@ -974,7 +1011,13 @@ export function ExpenseInsight() {
     };
   }, [data, selected]);
 
-  if (!selected) return null;
+  /*
+   * No `if (!selected) return <NoBusinessProfile />` any more. This page only
+   * READS, so with no business it renders its own chrome — heading, period
+   * picker, insights tabs — around its own empty state, rather than a gate
+   * card. The `!selected` branch in the body below both supplies that state
+   * and narrows `selected` for everything after it.
+   */
 
   function categoryName(categoryId?: number) {
     return categories.find((c) => c.id === categoryId)?.name ?? "—";
@@ -1035,7 +1078,7 @@ export function ExpenseInsight() {
           className={`tap rounded-lg px-3 text-[13.5px] font-semibold transition ${
             periodDays === opt.days && endDate === null
               ? "bg-paper text-brand-800 shadow-sm"
-              : "text-ink-500 hover:text-brand-800"
+              : "text-ink-600 hover:text-brand-800"
           }`}
         >
           {opt.label}
@@ -1058,7 +1101,7 @@ export function ExpenseInsight() {
           className={`tap rounded-lg px-3 text-[13.5px] font-semibold transition ${
             endDate === anchorMonth.endDate
               ? "bg-paper text-brand-800 shadow-sm"
-              : "text-ink-500 hover:text-brand-800"
+              : "text-ink-600 hover:text-brand-800"
           }`}
         >
           {anchorMonth.label}
@@ -1124,6 +1167,25 @@ export function ExpenseInsight() {
           </div>
           <SkeletonPanel lines={5} />
         </div>
+      ) : !selected ? (
+        /*
+         * Nothing to analyse, because there is nothing at all yet. Same shape
+         * as the "no expenses recorded" state below — this is that state one
+         * step earlier, and only the action that closes it differs.
+         */
+        <EmptyState
+          title="No expenses to look at yet"
+          icon="◔"
+          action={
+            <ButtonLink to="/onboarding" variant="primary">
+              Finish setting up your business
+            </ButtonLink>
+          }
+        >
+          Expenses belong to a business, so there is nothing here to group,
+          compare or flag yet. Once yours is set up and you record a few, this
+          page shows where your money goes and what changed.
+        </EmptyState>
       ) : !data || !summary ? null : summary.total === 0 ? (
         /*
           TWO DIFFERENT EMPTINESSES, and they were getting the same screen.
@@ -1371,7 +1433,7 @@ export function ExpenseInsight() {
             eyebrow="The numbers"
             title="Category summary"
             action={
-              <span className="text-xs text-ink-400">
+              <span className="text-xs text-ink-500">
                 {data.periodStart.slice(0, 10)} → {data.periodEnd.slice(0, 10)}
               </span>
             }
@@ -1445,37 +1507,37 @@ export function ExpenseInsight() {
                   <tr className="border-y border-paper-200 bg-paper-100/60">
                     <th
                       scope="col"
-                      className="px-5 py-2.5 text-xs font-semibold uppercase tracking-[0.06em] text-ink-500"
+                      className="px-5 py-2.5 text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
                     >
                       Category
                     </th>
                     <th
                       scope="col"
-                      className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-500"
+                      className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
                     >
                       This period
                     </th>
                     <th
                       scope="col"
-                      className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-500"
+                      className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
                     >
                       Share
                     </th>
                     <th
                       scope="col"
-                      className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-500"
+                      className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
                     >
                       {previousLabel}
                     </th>
                     <th
                       scope="col"
-                      className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-500"
+                      className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
                     >
                       Change
                     </th>
                     <th
                       scope="col"
-                      className="px-5 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-500"
+                      className="px-5 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
                     >
                       Count
                     </th>
@@ -1528,10 +1590,10 @@ export function ExpenseInsight() {
                     <td className="figure px-4 py-3 text-right font-bold text-ink-900">
                       {formatMoney(summary.total)}
                     </td>
-                    <td className="figure px-4 py-3 text-right text-ink-500">
+                    <td className="figure px-4 py-3 text-right text-ink-600">
                       100.0%
                     </td>
-                    <td className="figure px-4 py-3 text-right text-ink-500">
+                    <td className="figure px-4 py-3 text-right text-ink-600">
                       {formatMoney(data.totals.previous)}
                     </td>
                     <td className="px-4 py-3 text-right">
@@ -1563,7 +1625,7 @@ export function ExpenseInsight() {
               title="Needs attention"
               action={
                 reductionOpportunities ? (
-                  <span className="text-xs text-ink-400">
+                  <span className="text-xs text-ink-500">
                     {reductionOpportunities.period.start.slice(0, 10)} →{" "}
                     {reductionOpportunities.period.end.slice(0, 10)}
                   </span>
@@ -1656,7 +1718,7 @@ export function ExpenseInsight() {
                 not the picker's label, so this never disagrees with the dates
                 shown in the panel header above. */}
               {isAnchored && reductionOpportunities ? (
-                <p className="mt-3 text-xs text-ink-400">
+                <p className="mt-3 text-xs text-ink-500">
                   Showing a past period ending{" "}
                   {new Date(
                     reductionOpportunities.period.end,
@@ -1680,14 +1742,14 @@ export function ExpenseInsight() {
             <Panel
               title="Large expense flags"
               action={
-                flaggedExpenses.length > 0 ? (
-                  <Pill tone="danger">{flaggedExpenses.length} flagged</Pill>
+                flaggedTotal > 0 ? (
+                  <Pill tone="danger">{flaggedTotal} flagged</Pill>
                 ) : (
                   <Pill tone="ok">All clear</Pill>
                 )
               }
             >
-              {flaggedExpenses.length === 0 ? (
+              {flaggedTotal === 0 ? (
                 <EmptyState compact title="Nothing flagged right now" icon="✓">
                   Expenses land here once they cross your large-expense
                   threshold or look like a possible duplicate.
@@ -1722,16 +1784,16 @@ export function ExpenseInsight() {
                       </li>
                     ))}
                   </ul>
-                  {flaggedExpenses.length > MAX_FLAGGED_SHOWN ? (
+                  {flaggedTotal > shownFlagged ? (
                     <Link
                       to="/records/flagged"
                       className="tap-inline mt-3 block text-sm font-semibold text-brand-700 hover:text-brand-800"
                     >
-                      {flaggedExpenses.length - MAX_FLAGGED_SHOWN} more — review
-                      all flagged records →
+                      {flaggedTotal - shownFlagged} more — review all flagged
+                      records →
                     </Link>
                   ) : null}
-                  <p className="mt-3 text-xs text-ink-400">
+                  <p className="mt-3 text-xs text-ink-500">
                     A large-expense flag marks records worth a second look. It
                     does not mean the expense is wrong.
                   </p>
@@ -1761,7 +1823,7 @@ export function ExpenseInsight() {
             eyebrow="Day by day"
             title="Spending over time"
             action={
-              <span className="text-xs text-ink-400">
+              <span className="text-xs text-ink-500">
                 Last {data.periodDays} days
               </span>
             }
@@ -1775,7 +1837,7 @@ export function ExpenseInsight() {
             title="Unusual expenses"
             action={
               data.unusualExpenses.length > 0 ? (
-                <span className="text-xs text-ink-400">
+                <span className="text-xs text-ink-500">
                   {data.unusualExpenses.length} flagged
                 </span>
               ) : null
@@ -1836,7 +1898,7 @@ export function ExpenseInsight() {
             )}
 
             {data.insufficientHistoryCategories.length > 0 ? (
-              <p className="mt-3 text-xs text-ink-400">
+              <p className="mt-3 text-xs text-ink-500">
                 Not enough history yet to check:{" "}
                 {data.insufficientHistoryCategories
                   .map((c) => c.categoryName)
@@ -1852,7 +1914,7 @@ export function ExpenseInsight() {
             title="FinSight findings"
             action={
               findings.length > 0 ? (
-                <span className="text-xs text-ink-400">
+                <span className="text-xs text-ink-500">
                   {findings.length} open
                 </span>
               ) : null
@@ -1972,7 +2034,7 @@ export function ExpenseInsight() {
               eyebrow="Suggested by FinSight"
               title="Does this repeat?"
               action={
-                <span className="text-xs text-ink-400">
+                <span className="text-xs text-ink-500">
                   {canWatchPatterns
                     ? "Not watched until you confirm"
                     : "Detected from your records"}

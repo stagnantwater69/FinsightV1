@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useAiChat } from "../context/AiChatContext";
+import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import type { InteractionModule, ReductionOpportunity } from "../lib/types";
 
 /**
@@ -84,6 +85,19 @@ export function useAskFinSight(originModule: InteractionModule) {
  */
 export function AskFinSightButton({ originModule, initialQuestion, reductionOpportunity }: AskFinSightNavState) {
   const ask = useAskFinSight(originModule);
+  const { selected } = useBusinessProfiles();
+
+  /*
+   * NOT OFFERED WITHOUT A BUSINESS. A conversation is scoped to one — send()
+   * in AiChatContext returns early when `businessProfileId` is null — so the
+   * drawer would open, take a typed question and do nothing with it. The
+   * insight pages that carry this trigger are enterable now (an owner who
+   * chose "Skip for now" reaches them empty), which is the only way that state
+   * can be reached, and a trigger that silently swallows a question is worse
+   * than no trigger. The spacer goes with it: with no FAB there is nothing to
+   * clear.
+   */
+  if (!selected) return null;
 
   return (
     <>
@@ -112,7 +126,7 @@ export function AskFinSightButton({ originModule, initialQuestion, reductionOppo
            * an overlay opened over the page covers the trigger rather than
            * leaving it floating on top of the panel.
            */
-          className="fixed bottom-20 right-4 z-30 transition-transform duration-150 ease-shell hover:scale-105 active:scale-95 lg:bottom-6 lg:right-6"
+          className="fixed bottom-20 right-1 z-30 transition-transform duration-150 ease-shell hover:scale-105 active:scale-95 lg:bottom-6 lg:right-6"
         >
           <img
             src="/mascot/ask-fin.webp"
@@ -126,7 +140,13 @@ export function AskFinSightButton({ originModule, initialQuestion, reductionOppo
             //
             // No CSS shadow: the soft one under the owl and the bubble is
             // painted into the art already, and a second would double it.
-            className="h-[60px] w-[76px] animate-bob select-none"
+            //
+            // Smaller below `lg`, and tucked to `right-1` above: at 375px a
+            // 76px box starting at right-4 reaches left to x=268, which is
+            // inside the content column — it landed on top of the centred
+            // action buttons of a short page's empty state. The narrow phone
+            // viewport is the only place the two compete for the same space.
+            className="h-[47px] w-[60px] animate-bob select-none lg:h-[60px] lg:w-[76px]"
             draggable={false}
           />
         </button>,

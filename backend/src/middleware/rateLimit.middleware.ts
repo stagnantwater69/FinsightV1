@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import { prisma } from "../config/prisma";
 import { requestContext, securityEvent } from "../lib/securityLog";
@@ -80,10 +81,28 @@ export interface RateLimitOptions {
   identify?: (req: Request) => string | undefined;
 }
 
-/** Keys a limiter on the request's email field, so one account cannot be sprayed. */
+/**
+ * Keys a limiter on the request's email field, so one account cannot be sprayed.
+ *
+ * HASHED, NOT RAW, for two reasons. The identity becomes the primary key of a
+ * varchar(255) row in ApiRateLimit, and this limiter runs BEFORE Zod — so an
+ * attacker could post a kilobyte-long "address" and turn a rate-limit check
+ * into a database error, which is a 500 on the login route from an unvalidated
+ * body. A digest is fixed-length, so no input can overflow the column. It also
+ * keeps the address itself out of that table: the limiter only ever needs to
+ * know that two requests name the SAME account, never which one.
+ *
+ * Normalisation (trim + lowercase) happens before hashing, so "Owner@Shop.PH"
+ * and "owner@shop.ph" still land in one bucket — otherwise the limit is
+ * bypassed by holding down shift. The `e` prefix is kept so an email-keyed
+ * identity can never collide with the `u`/`ip` ones.
+ */
 export function byEmail(req: Request): string | undefined {
   const email = (req.body as { email?: unknown } | undefined)?.email;
-  return typeof email === "string" && email.trim() ? `e${email.trim().toLowerCase()}` : undefined;
+  if (typeof email !== "string" || !email.trim()) return undefined;
+  // 128 bits of a SHA-256 is far past any collision concern for a bucket key,
+  // and keeps the stored key short enough to read in a query result.
+  return `e${createHash("sha256").update(email.trim().toLowerCase()).digest("hex").slice(0, 32)}`;
 }
 
 /** Exported for tests, so a suite can start from a known state. */
@@ -108,6 +127,32 @@ export async function cleanUpExpiredRateLimits(): Promise<number> {
 function identityFor(req: Request, identify?: RateLimitOptions["identify"]): string | undefined {
   if (identify) return identify(req);
   return req.user?.id !== undefined ? `u${req.user.id}` : `ip${req.ip ?? "unknown"}`;
+}
+
+/**
+ * How long to wait, in words a shop owner reads rather than a number they have
+ * to divide.
+ *
+ * The 429 body used to interpolate raw seconds, which on the hour-long auth
+ * buckets produced "Please wait about 2275 seconds and try again." Nobody
+ * converts that in their head; it reads as a system fault rather than as a
+ * wait, and the honest answer — "about 38 minutes" — is the same fact stated
+ * usefully. Rounded UP, so the message never expires later than it promises.
+ *
+ * `Retry-After` keeps carrying the exact seconds: that header is for machines,
+ * and this string is for people.
+ */
+export function humanRetryAfter(seconds: number): string {
+  if (seconds < 60) return `${seconds} second${seconds === 1 ? "" : "s"}`;
+
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+
+  const hours = Math.round(minutes / 60);
+  // 90+ minutes reads better as "about an hour and a half" than "2 hours", but
+  // the buckets here top out at an hour, so a plain hour count is enough and
+  // an extra branch would be dead code.
+  return `${hours} hour${hours === 1 ? "" : "s"}`;
 }
 
 export function rateLimit({ name, limit, windowMs, identify }: RateLimitOptions) {
@@ -148,7 +193,9 @@ export function rateLimit({ name, limit, windowMs, identify }: RateLimitOptions)
           res.setHeader("Retry-After", String(resetSeconds));
           securityEvent("ratelimit.exhausted", { ...requestContext(req), limiter: name });
           return res.status(429).json({
-            error: `Too many requests in a short time. Please wait about ${resetSeconds} second${resetSeconds === 1 ? "" : "s"} and try again.`,
+            error: `Too many requests in a short time. Please wait about ${humanRetryAfter(
+              resetSeconds,
+            )} and try again.`,
           });
         }
         return next();
@@ -187,9 +234,9 @@ export function rateLimit({ name, limit, windowMs, identify }: RateLimitOptions)
        * message is "wait a moment and it will work".
        */
       return res.status(429).json({
-        error: `Too many requests in a short time. Please wait about ${resetSeconds} second${
-          resetSeconds === 1 ? "" : "s"
-        } and try again.`,
+        error: `Too many requests in a short time. Please wait about ${humanRetryAfter(
+          resetSeconds,
+        )} and try again.`,
       });
     }
 
@@ -231,6 +278,17 @@ export const LIMITS = {
   // the edge detection nobody depends on. Same size, same reasoning — one
   // pass over an image already in memory, no OCR, no write.
   EDGE_DETECT_BURST: { name: "edge-detect-burst", limit: 40, windowMs: 60_000 },
+  /*
+   * Perspective correction. Its own bucket for the reason given just above —
+   * it fires in the SAME capture session as edge detection, so sharing that
+   * bucket would spend one allowance twice and the first thing to break would
+   * be the crop the owner just confirmed. Smaller than either neighbour
+   * because it is the only one of the three that resamples every pixel of the
+   * image on a worker thread rather than one downscaled pass: a session
+   * corrects a page once (plus a retake or two), it does not fire per shutter
+   * press.
+   */
+  TRANSFORM_BURST: { name: "receipt-transform-burst", limit: 20, windowMs: 60_000 },
   /*
    * CSV import. Both endpoints parse an up-to-5MB file in memory, and confirm
    * additionally writes to Storage and can enqueue tens of thousands of rows —
@@ -277,8 +335,33 @@ export const LIMITS = {
   AUTH_LOGIN_EMAIL: { name: "auth-login-email", limit: 6, windowMs: 15 * 60_000, identify: byEmail },
   AUTH_REGISTER: { name: "auth-register", limit: 5, windowMs: 60 * 60_000 },
   AUTH_REGISTER_EMAIL: { name: "auth-register-email", limit: 3, windowMs: 60 * 60_000, identify: byEmail },
-  AUTH_RECOVERY: { name: "auth-recovery", limit: 5, windowMs: 60 * 60_000 },
-  AUTH_RECOVERY_EMAIL: { name: "auth-recovery-email", limit: 3, windowMs: 60 * 60_000, identify: byEmail },
+  /*
+   * PASSWORD RECOVERY — and the shape here matters more than the numbers.
+   *
+   * WHY THE IP HALF IS NOT TIGHT. It was 5 an hour, which reads prudent and is
+   * wrong for this market. Carrier-grade NAT puts thousands of mobile
+   * subscribers behind one address, and a mall or co-working connection does
+   * the same for everyone in the building — so a per-IP recovery budget of 5 is
+   * not "five attempts by one person", it is five attempts by an entire
+   * carrier's customers, after which the sixth real owner who forgot their
+   * password is refused for reasons that have nothing to do with them. The
+   * precise control against a single account is the EMAIL half below; this one
+   * exists to stop a spray across many addresses, and 20 an hour still does
+   * that while leaving a shared address usable.
+   *
+   * WHY THE EMAIL HALF KEEPS ITS COUNT BUT LOSES ITS WINDOW. Three per HOUR
+   * meant one bad run cost the rest of the hour — and the person paying that
+   * price is almost never an attacker. It is someone whose first email went to
+   * spam or was slow, who pressed "send again" twice, and who is now locked out
+   * of account recovery for fifty-five minutes at the exact moment they are
+   * already stuck. Three per fifteen minutes is the same burst protection: an
+   * attacker still cannot hammer one address, and a mistake costs a quarter of
+   * an hour instead of an afternoon. It also puts this in step with
+   * AUTH_LOGIN_EMAIL, which was four times more forgiving than recovery —
+   * backwards, given recovery is where people arrive when already locked out.
+   */
+  AUTH_RECOVERY: { name: "auth-recovery", limit: 20, windowMs: 60 * 60_000 },
+  AUTH_RECOVERY_EMAIL: { name: "auth-recovery-email", limit: 3, windowMs: 15 * 60_000, identify: byEmail },
   /*
    * Re-authentication: changing a password, deleting an account, and resending
    * a verification email.
@@ -290,5 +373,27 @@ export const LIMITS = {
    * minutes is far more than someone changing their own password needs.
    */
   AUTH_REAUTH: { name: "auth-reauth", limit: 5, windowMs: 15 * 60_000 },
-  AUTH_RESEND_VERIFICATION: { name: "auth-resend-verification", limit: 3, windowMs: 60 * 60_000, identify: byEmail },
+  /*
+   * The same reasoning as AUTH_RECOVERY_EMAIL, for the same reason: this is the
+   * button someone presses when the confirmation email has not arrived, so the
+   * person hitting the limit is by definition someone the system has already
+   * failed once. An hour-long penalty for that is the wrong trade.
+   */
+  AUTH_RESEND_VERIFICATION: { name: "auth-resend-verification", limit: 3, windowMs: 15 * 60_000, identify: byEmail },
+  /*
+   * The web → mobile session handoff.
+   *
+   * Issuing is already behind a valid access token, so this bounds a
+   * compromised token rather than an anonymous caller; a handful per quarter
+   * hour covers "I pressed it, nothing happened, I pressed it again" and
+   * nothing beyond that.
+   *
+   * EXCHANGING IS THE ONE THAT MATTERS. It is unauthenticated by construction —
+   * the code IS the credential — so it is the only endpoint in this file where
+   * an attacker can pick their own input and try again. The code is 256 bits,
+   * which makes guessing hopeless on arithmetic alone; the limit is here so
+   * that a bug which ever shortens it does not silently become brute-forceable.
+   */
+  AUTH_HANDOFF_ISSUE: { name: "auth-handoff-issue", limit: 10, windowMs: 15 * 60_000 },
+  AUTH_HANDOFF_EXCHANGE: { name: "auth-handoff-exchange", limit: 10, windowMs: 15 * 60_000 },
 } as const;

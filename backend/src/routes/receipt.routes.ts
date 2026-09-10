@@ -54,6 +54,16 @@ receiptRouter.post(
   asyncHandler(receiptScanController.detectEdges),
 );
 /*
+ * Applies the corners the owner settled on. Its own limiter rather than
+ * edge-detect's — see LIMITS.TRANSFORM_BURST.
+ */
+receiptRouter.post(
+  "/transform",
+  rateLimit(LIMITS.TRANSFORM_BURST),
+  uploadReceiptImage.single("file"),
+  asyncHandler(receiptScanController.transform),
+);
+/*
  * Polled by both clients after an upload until the read finishes.
  *
  * Deliberately NOT rate-limited alongside the expensive endpoints above: this

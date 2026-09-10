@@ -98,8 +98,8 @@ vi.mock("../../src/config/supabase", async (importOriginal) => {
     }),
     createAnonAuthClient: () => ({
       auth: {
-        async signUp({ email }: { email: string }) {
-          supabaseCalls.push({ method: "signUp", args: [email] });
+        async signUp({ email, options }: { email: string; options?: unknown }) {
+          supabaseCalls.push({ method: "signUp", args: [email, options] });
           if (supabaseFailures.has("signUp")) {
             return { data: { user: null }, error: { message: "signup failed", code: "unexpected_failure" } };
           }
@@ -116,6 +116,26 @@ vi.mock("../../src/config/supabase", async (importOriginal) => {
         },
         async resend(opts: unknown) {
           return record("resend", opts) ?? { data: {}, error: null };
+        },
+        /*
+         * The handoff exchange spends the sealed refresh token here. It is the
+         * anon client rather than the admin one on purpose — refreshing is an
+         * ordinary GoTrue operation and must not run on a privileged key — and
+         * it ROTATES, which is what makes a stolen handoff row worthless after
+         * the fact.
+         */
+        async refreshSession({ refresh_token }: { refresh_token: string }) {
+          supabaseCalls.push({ method: "refreshSession", args: [refresh_token] });
+          if (supabaseFailures.has("refreshSession") || refresh_token !== "valid-refresh-token") {
+            return { data: { session: null, user: null }, error: { message: "invalid refresh token" } };
+          }
+          return {
+            data: {
+              user: { id: authUserId.value },
+              session: { access_token: "rotated-access-token", refresh_token: "rotated-refresh-token" },
+            },
+            error: null,
+          };
         },
       },
     }),
@@ -692,6 +712,70 @@ describe("email confirmation", () => {
   });
 
   /**
+   * Confirmation now ANSWERS WITH THE ACCOUNT, not just a sentence.
+   *
+   * The clients turn this response straight into a signed-in session and a
+   * destination, so the two things they need have to arrive with it: who this
+   * is, and whether there is a business to show them yet. Fetching either
+   * afterwards would put a round trip in the one moment the screen is empty.
+   */
+  it("answers with the profile and where to send them", async () => {
+    await prisma.user.update({
+      where: { id: ctx.user.id },
+      data: { status: AccountStatus.PENDING_VERIFICATION },
+    });
+
+    const res = await request(app).post("/api/v1/auth/confirm-email").set(...AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body.profile).toMatchObject({ id: ctx.user.id, email: ctx.user.email });
+    // This owner was made with a business profile, so setup is behind them.
+    expect(res.body.needsOnboarding).toBe(false);
+    // Nothing about the account's credentials may ride along in the response.
+    expect(JSON.stringify(res.body)).not.toMatch(/valid-token|password/i);
+  });
+
+  it("sends someone with no business into setup rather than an empty dashboard", async () => {
+    await prisma.businessProfile.deleteMany({ where: { userId: ctx.user.id } });
+    const res = await request(app).post("/api/v1/auth/confirm-email").set(...AUTH);
+    expect(res.body.needsOnboarding).toBe(true);
+  });
+
+  /**
+   * A confirmed address is not the same as a usable account, and now that a
+   * successful answer here becomes a SESSION, the difference matters: without
+   * this gate, confirming would let a suspended account back in through a door
+   * the login path keeps shut.
+   */
+  it("refuses to confirm a suspended account into a session", async () => {
+    await transition(ctx.user, AccountStatus.SUSPENDED, { reason: "test" });
+    const res = await request(app).post("/api/v1/auth/confirm-email").set(...AUTH);
+    expect(res.status).toBe(403);
+  });
+
+  /**
+   * WHY THE CONFIRMATION LINK IGNORES THE PLATFORM. People read email on
+   * whichever device is nearest, which is very often not the one they
+   * registered on. A `finsight://` link is an unhandled scheme on a desktop —
+   * so a mobile registration confirmed on a laptop was a broken link, and vice
+   * versa. https is handled everywhere and is the only form an App Link /
+   * Universal Link can claim, so the same address opens the app when it is
+   * installed and the web app when it is not.
+   */
+  it("points the confirmation link at the web origin whichever client registered", async () => {
+    for (const platform of ["web", "mobile"] as const) {
+      await request(app)
+        .post("/api/v1/auth/register")
+        .send(registration({ email: `confirm-${platform}@shop.ph`, platform }));
+      const options = supabaseCalls.filter((c) => c.method === "signUp").at(-1)?.args[1] as {
+        emailRedirectTo: string;
+      };
+      expect(options.emailRedirectTo).toMatch(/^https?:\/\/.+\/auth\/confirm$/);
+      expect(options.emailRedirectTo).not.toMatch(/^finsight:/);
+    }
+  });
+
+  /**
    * THE DEAD END THIS CLOSES, which was reached in practice and not in theory.
    *
    * `status` mirrors a fact that lives in GoTrue, and only `confirmEmail`
@@ -744,5 +828,114 @@ describe("email confirmation", () => {
     expect(await prisma.user.findUniqueOrThrow({ where: { id: ctx.user.id } })).toMatchObject({
       status: AccountStatus.PENDING_VERIFICATION,
     });
+  });
+});
+
+/**
+ * Carrying a session from the browser into the installed app.
+ *
+ * THE CONSTRAINT THAT SHAPES ALL OF THIS: the only channel between a web page
+ * and a native app is a URL, and a URL is the one place a refresh token must
+ * never be — it survives in browser history, in the Android log, and in
+ * anything that can read an intent. So the URL carries an opaque code with no
+ * value of its own, and the session it stands for is exchanged over HTTPS.
+ */
+describe("web → mobile session handoff", () => {
+  const REFRESH = "valid-refresh-token";
+
+  async function issue() {
+    return request(app).post("/api/v1/auth/handoff").set(...AUTH).send({ refreshToken: REFRESH });
+  }
+
+  it("issues a code that carries nothing but randomness", async () => {
+    const res = await issue();
+
+    expect(res.status).toBe(201);
+    expect(typeof res.body.code).toBe("string");
+    expect(res.body.code.length).toBeGreaterThan(32);
+    // The credential it stands for must not be recoverable from what was handed out.
+    expect(res.body.code).not.toContain(REFRESH);
+    expect(JSON.stringify(res.body)).not.toContain(REFRESH);
+
+    // Nor from the row, which is why the column holds a hash and a sealed blob.
+    const row = await prisma.authHandoff.findFirstOrThrow({ where: { userId: ctx.user.id } });
+    expect(row.codeHash).not.toContain(res.body.code);
+    expect(row.refreshTokenCipher).not.toContain(REFRESH);
+  });
+
+  it("refuses to issue one without a valid session", async () => {
+    const res = await request(app)
+      .post("/api/v1/auth/handoff")
+      .set("Authorization", "Bearer nonsense")
+      .send({ refreshToken: REFRESH });
+    expect(res.status).toBe(401);
+  });
+
+  it("exchanges the code for a rotated session and the account", async () => {
+    const { body } = await issue();
+    const res = await request(app).post("/api/v1/auth/handoff/exchange").send({ code: body.code });
+
+    expect(res.status).toBe(200);
+    expect(res.body.session.access_token).toBe("rotated-access-token");
+    expect(res.body.profile).toMatchObject({ id: ctx.user.id });
+    expect(res.body).toHaveProperty("needsOnboarding");
+    // The token that was sealed in the row was SPENT, not handed back — GoTrue
+    // rotates on refresh, so the stored copy is dead the moment this succeeds.
+    expect(res.body.session.refresh_token).not.toBe(REFRESH);
+  });
+
+  /**
+   * SINGLE USE IS ENFORCED BY THE UPDATE, not by a read followed by a write —
+   * two exchanges arriving together would both pass a read-then-check and both
+   * mint a session.
+   */
+  it("spends a code exactly once", async () => {
+    const { body } = await issue();
+
+    const [first, second] = await Promise.all([
+      request(app).post("/api/v1/auth/handoff/exchange").send({ code: body.code }),
+      request(app).post("/api/v1/auth/handoff/exchange").send({ code: body.code }),
+    ]);
+
+    expect([first.status, second.status].sort()).toEqual([200, 400]);
+    expect(await prisma.authHandoff.count({ where: { userId: ctx.user.id } })).toBe(0);
+  });
+
+  it("refuses an expired code", async () => {
+    const { body } = await issue();
+    await prisma.authHandoff.updateMany({
+      where: { userId: ctx.user.id },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+
+    const res = await request(app).post("/api/v1/auth/handoff/exchange").send({ code: body.code });
+    expect(res.status).toBe(400);
+  });
+
+  it("refuses a code nobody issued, without saying which kind of wrong it is", async () => {
+    const res = await request(app).post("/api/v1/auth/handoff/exchange").send({ code: "made-up" });
+    expect(res.status).toBe(400);
+    expect(res.body.message ?? res.body.error).toMatch(/expired or has already been used/i);
+  });
+
+  /**
+   * Pressing "open the app" again means the first link is stale. Leaving it
+   * live would be an extra, invisible way into the account for as long as its
+   * two minutes ran.
+   */
+  it("kills the previous code when a new one is issued", async () => {
+    const first = await issue();
+    await issue();
+
+    const res = await request(app).post("/api/v1/auth/handoff/exchange").send({ code: first.body.code });
+    expect(res.status).toBe(400);
+  });
+
+  it("will not hand a session to a suspended account", async () => {
+    const { body } = await issue();
+    await transition(ctx.user, AccountStatus.SUSPENDED, { reason: "test" });
+
+    const res = await request(app).post("/api/v1/auth/handoff/exchange").send({ code: body.code });
+    expect(res.status).toBe(403);
   });
 });

@@ -14,7 +14,14 @@ import { logger } from "../config/logger";
  * corresponding code, so accuracy reports can split before/after.
  */
 export const PARSER_VERSION = "ocr-parser-v2";
-export const PREPROCESS_VERSION = "ocr-preprocess-v1";
+/**
+ * v2: the downscale cap follows the SHORT edge on an elongated LANDSCAPE image
+ * (a long receipt lying along the frame's long axis) instead of always the
+ * width, and the orientation that decision is made on is the EXIF-APPLIED one
+ * (see `orientedDimensions`), not the raw stored one. Portrait and ordinary
+ * photographs are preprocessed exactly as v1 did.
+ */
+export const PREPROCESS_VERSION = "ocr-preprocess-v2";
 
 /**
  * The width a receipt photo is reduced to before OCR.
@@ -68,10 +75,83 @@ const MAX_WIDTH = 2000;
  * no image transform that puts back detail the capture did not record, and
  * this function does not pretend otherwise.
  */
-async function preprocessReceiptImage(buffer: Buffer): Promise<Buffer> {
+/**
+ * Above this width-to-height ratio a photograph is a receipt lying along the
+ * frame's LONG axis, not an ordinary picture — see `preprocessReceiptImage`.
+ */
+const ELONGATED_RATIO = 3;
+
+/**
+ * Which edge the OCR downscale caps, given the image's own (EXIF-oriented)
+ * dimensions. Exported so the choice can be tested without running tesseract.
+ */
+/**
+ * The image's dimensions AS IT WILL BE READ — after the EXIF orientation flag
+ * has been applied, which is what `.rotate()` does to the pixels a moment later.
+ *
+ * THE TRAP THIS EXISTS TO AVOID. `sharp(buffer).rotate().metadata()` reports
+ * the RAW STORED width and height, not the oriented ones: `.rotate()` is a
+ * pipeline operation and `metadata()` reads the header, so chaining them does
+ * nothing at all. Verified against the installed sharp — a 900x3000 JPEG tagged
+ * `orientation: 6` reports 900x3000 either way, and the oriented size appears
+ * only under `metadata.autoOrient`. Feeding the stored dimensions to
+ * `ocrResizeOptions` picks the cap for an image that is about to be rotated out
+ * from under it, which gets BOTH orientations wrong: a long receipt stored
+ * portrait but displayed landscape takes the width cap and is squeezed to
+ * 2000x300 (the exact failure the elongation branch was added for), and one
+ * stored landscape but displayed portrait takes the height cap and is squeezed
+ * to 300x2000, which is worse — it was never resized at all before.
+ *
+ * Orientations 5-8 are the transposed ones, so those swap the axes. Same test
+ * and same reasoning as `boundedPerspectiveDimensions`'s caller in
+ * lib/receiptPerspective.ts; the two must agree about what "the image's width"
+ * means or a corrected receipt and the OCR of it disagree about their own shape.
+ */
+export function orientedDimensions(metadata: { width?: number; height?: number; orientation?: number }) {
+  const swapped = (metadata.orientation ?? 1) >= 5;
+  return swapped
+    ? { width: metadata.height, height: metadata.width }
+    : { width: metadata.width, height: metadata.height };
+}
+
+export function ocrResizeOptions(width: number | undefined, height: number | undefined) {
+  const landscapePanorama = !!width && !!height && width / height >= ELONGATED_RATIO;
+  return landscapePanorama
+    ? { height: MAX_WIDTH, withoutEnlargement: true as const }
+    : { width: MAX_WIDTH, withoutEnlargement: true as const };
+}
+
+/** Exported so the orientation/downscale wiring can be tested without running tesseract. */
+export async function preprocessReceiptImage(buffer: Buffer): Promise<Buffer> {
+  /*
+   * The cap is applied to whichever edge carries CHARACTER WIDTH, which is
+   * the short one — not unconditionally to the width.
+   *
+   * A receipt is nearly always taller than it is wide, so capping width is the
+   * same thing as capping the short edge and this behaves exactly as it always
+   * has. It stops being the same thing for a long receipt that arrives lying
+   * along the frame's long axis — a perspective-corrected panorama whose
+   * corners were labelled sideways, or a long receipt photographed rotated. A
+   * 12000x1800 image capped to 2000 wide comes out 2000x300: forty lines of
+   * print squeezed into three hundred pixels, which is not a hard read but an
+   * impossible one. Capping the SHORT edge instead keeps the same pixels per
+   * character in either orientation.
+   *
+   * Only elongated landscape images take the other branch, so nothing in the
+   * accuracy corpus changes (its landscape images are all under the cap and
+   * were never resized at all). Still a behaviour change, hence the
+   * PREPROCESS_VERSION bump above.
+   */
+  let dimensions: { width?: number; height?: number } = {};
+  try {
+    dimensions = orientedDimensions(await sharp(buffer).metadata());
+  } catch {
+    // Metadata is advisory here; the width cap is the safe default without it.
+  }
+
   return sharp(buffer)
     .rotate()
-    .resize({ width: MAX_WIDTH, withoutEnlargement: true })
+    .resize(ocrResizeOptions(dimensions.width, dimensions.height))
     .grayscale()
     .toBuffer();
 }

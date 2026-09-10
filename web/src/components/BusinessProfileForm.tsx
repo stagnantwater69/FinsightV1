@@ -28,6 +28,8 @@ interface Props {
   logo?: ReactNode;
   /** Where "Cancel" goes. Omitted on screens with nowhere to go back to. */
   onCancel?: () => void;
+  /** Condensed presentation for the wide modal; full pages retain guidance. */
+  compact?: boolean;
 }
 
 /**
@@ -43,11 +45,25 @@ interface Props {
  * and under the same names. An owner who set the business up and comes back to
  * edit it a month later meets the shape they already learned.
  */
-function Section({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
+function Section({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description?: string;
+  children: ReactNode;
+}) {
   return (
     <section className="border-t border-paper-200 pt-5 first:border-t-0 first:pt-0">
-      <h2 className="font-display text-sm font-semibold text-ink-900">{title}</h2>
-      {description ? <p className="mt-0.5 mb-4 text-sm text-ink-500">{description}</p> : <div className="mb-4" />}
+      <h2 className="font-display text-sm font-semibold text-ink-900">
+        {title}
+      </h2>
+      {description ? (
+        <p className="mt-0.5 mb-4 text-sm text-ink-500">{description}</p>
+      ) : (
+        <div className="mb-4" />
+      )}
       <div className="space-y-4">{children}</div>
     </section>
   );
@@ -61,7 +77,14 @@ function Section({ title, description, children }: { title: string; description?
  * groups from BusinessFields.tsx, so the questions and their explanations
  * cannot drift apart.
  */
-export function BusinessProfileForm({ initialValues, submitLabel, onSubmit, logo, onCancel }: Props) {
+export function BusinessProfileForm({
+  initialValues,
+  submitLabel,
+  onSubmit,
+  logo,
+  onCancel,
+  compact = false,
+}: Props) {
   const [draft, setDraft] = useState<BusinessProfileDraft>(() =>
     initialValues ? draftFromProfile(initialValues) : EMPTY_DRAFT,
   );
@@ -91,27 +114,56 @@ export function BusinessProfileForm({ initialValues, submitLabel, onSubmit, logo
     try {
       await onSubmit(toBusinessProfileInput(draft));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Something went wrong. Please try again.",
+      );
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6" noValidate>
-      <Section title="About your business" description="How FinSight refers to it, and what kind it is.">
+    <form
+      onSubmit={handleSubmit}
+      className={compact ? "space-y-4" : "space-y-6"}
+      noValidate
+    >
+      <Section
+        title="About your business"
+        description={
+          compact
+            ? undefined
+            : "How FinSight refers to it, and what kind it is."
+        }
+      >
         {/* The logo belongs with the name and the type: all three are the
             business's identity, and it was previously stranded above the form
             with no heading to say what it was part of. */}
         {logo}
-        <BusinessBasicsFields draft={draft} errors={fieldErrors} update={update} />
+        <BusinessBasicsFields
+          draft={draft}
+          errors={fieldErrors}
+          update={update}
+          compact={compact}
+        />
       </Section>
 
       <Section
         title="Your numbers"
-        description="These drive your sales target, your recovery tracking and which expenses get flagged. Rough figures are fine — you can change them anytime."
+        description={
+          compact
+            ? undefined
+            : "These drive your sales target, your recovery tracking and which expenses get flagged. Rough figures are fine — you can change them anytime."
+        }
       >
-        <BusinessNumbersFields draft={draft} errors={fieldErrors} update={update} />
+        <BusinessNumbersFields
+          draft={draft}
+          errors={fieldErrors}
+          update={update}
+          compact={compact}
+        />
       </Section>
 
       {error ? <FormError>{error}</FormError> : null}
@@ -129,7 +181,12 @@ export function BusinessProfileForm({ initialValues, submitLabel, onSubmit, logo
           {submitting ? "Saving…" : submitLabel}
         </Button>
         {onCancel ? (
-          <Button type="button" variant="ghost" onClick={onCancel} disabled={submitting}>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={onCancel}
+            disabled={submitting}
+          >
             Cancel
           </Button>
         ) : null}

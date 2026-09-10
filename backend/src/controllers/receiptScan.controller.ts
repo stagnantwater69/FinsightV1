@@ -5,6 +5,8 @@ import { assessImageQuality } from "../lib/imageQuality";
 import { detectReceiptCorners } from "../lib/edgeDetection";
 import { assessReceiptLikelihood } from "../lib/receiptLikelihood";
 import { ApiError } from "../middleware/error.middleware";
+import { transformReceiptPerspective } from "../lib/receiptPerspective";
+import { moneyAmountSchema } from "../lib/money";
 
 const uploadSchema = z.object({
   businessProfileId: z.coerce.number().int().positive(),
@@ -15,6 +17,7 @@ const pointSchema = z.object({ x: z.number().min(0).max(50_000), y: z.number().m
 const captureMetadataSchema = z.array(
   z.object({
     source: z.enum(["manual-camera", "native-document-scanner", "gallery"]).optional(),
+    captureMode: z.enum(["standard", "long"]).optional(),
     processingMode: z.enum(["original", "manual-crop", "native-selected", "clear-colour", "grayscale", "black-white"]).optional(),
     originalWidth: z.number().int().positive().max(50_000).optional(),
     originalHeight: z.number().int().positive().max(50_000).optional(),
@@ -68,7 +71,7 @@ export const confirmSchema = z.object({
   date: z.string().date(),
   description: z.string().min(1).max(255),
   vendor: z.string().max(150).optional(),
-  amount: z.number().positive(),
+  amount: moneyAmountSchema,
   // Either shape is accepted, and the service requires that one of them
   // resolves to at least one category. `splits` is the manual path (a
   // single-category receipt is just a split of one); `itemAssignments` is
@@ -77,7 +80,7 @@ export const confirmSchema = z.object({
     .array(
       z.object({
         categoryId: z.number().int().positive(),
-        amount: z.number().positive(),
+        amount: moneyAmountSchema,
         description: z.string().min(1).max(255).optional(),
       }),
     )
@@ -96,7 +99,7 @@ export const confirmSchema = z.object({
     .array(
       z.object({
         name: z.string().min(1).max(255),
-        amount: z.number().positive(),
+        amount: moneyAmountSchema,
         categoryId: z.number().int().positive(),
       }),
     )
@@ -216,6 +219,16 @@ export async function checkQuality(req: Request, res: Response) {
   }
   const quality = await assessImageQuality(req.file.buffer);
   res.status(200).json(quality);
+}
+
+export async function transform(req: Request, res: Response) {
+  if (!req.file) throw new ApiError(400, "A photo is required");
+  const raw = z.string().max(2_000).parse(req.body.corners);
+  let decoded: unknown;
+  try { decoded = JSON.parse(raw); } catch { throw new ApiError(400, "Crop corners must be valid JSON"); }
+  const corners = z.object({ topLeft: pointSchema, topRight: pointSchema, bottomRight: pointSchema, bottomLeft: pointSchema }).strict().parse(decoded);
+  res.setHeader("Cache-Control", "no-store");
+  res.json(await transformReceiptPerspective(req.file.buffer, corners));
 }
 
 /**

@@ -124,8 +124,16 @@ test("editing an expense loads the existing record and submits changes", async (
       body: JSON.stringify({ items: [existing], nextCursor: null }),
     });
   });
+  // Two endpoints behind one glob: the badge asks for the count, and the
+  // review queue asks for a page of the list. Neither is what this spec is
+  // about, but both have to answer in their own shape.
   await page.route("**/records/flagged**", async (route) => {
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
+    const isCount = new URL(route.request().url()).pathname.endsWith("/records/flagged/count");
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(isCount ? { expenses: 0, sales: 0, total: 0 } : { items: [], nextCursor: null }),
+    });
   });
 
   await page.goto("/records/expenses/777/edit");

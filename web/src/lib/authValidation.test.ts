@@ -4,10 +4,14 @@ import {
   isValid,
   MAX_NAME_LENGTH,
   MAX_PHONE_LENGTH,
+  MAX_RECOVERY_CODE_LENGTH,
   MIN_PASSWORD_LENGTH,
+  MIN_RECOVERY_CODE_LENGTH,
+  normaliseRecoveryCode,
   validateChangePassword,
   validateLogin,
   validateRecoverPassword,
+  validateRecoveryCode,
   validateRegister,
   validateResetPassword,
 } from "./authValidation";
@@ -247,5 +251,52 @@ describe("validateResetPassword", () => {
       "confirmPassword",
       "newPassword",
     ]);
+  });
+});
+
+
+describe("validateRecoveryCode", () => {
+  const email = "owner@example.com";
+
+  /**
+   * The range is GoTrue's `MAILER_OTP_LENGTH`, which is a dashboard setting
+   * between 6 and 10 — not a constant. This project's is 8 today; a client that
+   * assumed 8 would reject a perfectly good code the moment that setting moved,
+   * and the failure would present as "the code from my own email is wrong".
+   */
+  it("accepts every length the server can be configured to send", () => {
+    expect(MIN_RECOVERY_CODE_LENGTH).toBe(6);
+    expect(MAX_RECOVERY_CODE_LENGTH).toBe(10);
+    for (let length = MIN_RECOVERY_CODE_LENGTH; length <= MAX_RECOVERY_CODE_LENGTH; length += 1) {
+      expect(isValid(validateRecoveryCode({ email, code: "7".repeat(length) }))).toBe(true);
+    }
+  });
+
+  it("rejects codes shorter or longer than that range", () => {
+    expect(validateRecoveryCode({ email, code: "7".repeat(MIN_RECOVERY_CODE_LENGTH - 1) }).code).toBeTruthy();
+    expect(validateRecoveryCode({ email, code: "7".repeat(MAX_RECOVERY_CODE_LENGTH + 1) }).code).toBeTruthy();
+  });
+
+  it("rejects anything that is not digits", () => {
+    expect(validateRecoveryCode({ email, code: "75324abc" }).code).toBeTruthy();
+    expect(validateRecoveryCode({ email, code: "" }).code).toBeTruthy();
+  });
+
+  /**
+   * The email renders the code in a way that invites grouping, so "7532 4744"
+   * and "7532-4744" are what actually gets pasted back. Supabase compares the
+   * token as a string, so an unstripped separator is simply a wrong code.
+   */
+  it("forgives the spaces and dashes people paste", () => {
+    expect(normaliseRecoveryCode(" 7532 4744 ")).toBe("75324744");
+    expect(normaliseRecoveryCode("7532-4744")).toBe("75324744");
+    expect(isValid(validateRecoveryCode({ email, code: "7532 4744" }))).toBe(true);
+    expect(isValid(validateRecoveryCode({ email, code: "7532-4744" }))).toBe(true);
+  });
+
+  /** The same address check every other auth form uses — no second opinion. */
+  it("applies the shared email check", () => {
+    expect(validateRecoveryCode({ email: "not-an-address", code: "75324744" }).email).toBeTruthy();
+    expect(validateRecoveryCode({ email: "", code: "75324744" }).email).toBeTruthy();
   });
 });

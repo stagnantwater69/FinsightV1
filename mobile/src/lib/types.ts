@@ -226,6 +226,30 @@ export interface RecordDetail extends RecordItem {
   origin: RecordOrigin | null;
 }
 
+/**
+ * GET /records/flagged?limit=…&cursor=… — the paginated envelope.
+ *
+ * Asking with NO `limit`/`cursor` still answers with a bare `RecordItem[]`,
+ * but the server caps that legacy shape at 200 and only signals the rest
+ * through an `X-Next-Cursor` HEADER, which `api.get` does not surface. So this
+ * client always sends `limit` and always reads the envelope: a business with
+ * more than 200 flagged records must be able to reach all of them.
+ */
+export interface FlaggedRecordsPage {
+  items: RecordItem[];
+  nextCursor: string | null;
+}
+
+/**
+ * GET /records/flagged/count — how many records need review, without sending
+ * them. Rendering a number must not download the list it counts.
+ */
+export interface FlaggedRecordCount {
+  expenses: number;
+  sales: number;
+  total: number;
+}
+
 /** A past CSV import, for the "which import" picker on the Records filters. */
 export interface ImportBatchSummary {
   id: number;

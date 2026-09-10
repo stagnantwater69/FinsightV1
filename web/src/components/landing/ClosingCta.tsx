@@ -14,15 +14,15 @@ export function ClosingCta() {
   return (
     <section aria-labelledby="cta-title" className={`${MEASURE} pb-16 pt-4 sm:pb-24`}>
       <Rise>
-        <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-landing-emerald via-landing-emerald to-landing-emerald-2 px-6 py-10 sm:px-10 sm:py-14">
+        <div className="relative overflow-hidden rounded-3xl border border-landing-mint-light bg-landing-mint-pale px-6 py-10 shadow-sm sm:px-10 sm:py-14">
           {/* faint rising chart across the banner's foot */}
           <svg
             aria-hidden
             viewBox="0 0 400 80"
             preserveAspectRatio="none"
-            className="pointer-events-none absolute inset-x-0 bottom-0 h-20 w-full opacity-[0.08]"
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-20 w-full text-landing-green opacity-[0.14]"
           >
-            <path d="M0 70 L60 62 L120 66 L180 48 L240 54 L300 30 L360 36 L400 14" fill="none" stroke="#A9DEC9" strokeWidth="2" />
+            <path d="M0 70 L60 62 L120 66 L180 48 L240 54 L300 30 L360 36 L400 14" fill="none" stroke="currentColor" strokeWidth="2" />
             <circle cx="300" cy="30" r="4" fill="#F5AD19" />
             <circle cx="400" cy="14" r="4" fill="#F5AD19" />
           </svg>
@@ -44,11 +44,11 @@ export function ClosingCta() {
             <div className="md:col-span-5">
               <h2
                 id="cta-title"
-                className="max-w-[20ch] font-landing-display text-[clamp(1.6rem,3.4vw,2.3rem)] font-extrabold leading-[1.12] tracking-[-0.02em] text-white"
+                className="max-w-[20ch] font-landing-display text-[clamp(1.6rem,3.4vw,2.3rem)] font-extrabold leading-[1.12] tracking-[-0.02em] text-landing-charcoal"
               >
                 Start with just one week of sales &amp; receipt records.
               </h2>
-              <p className="mt-4 max-w-[46ch] text-[14.5px] leading-relaxed text-landing-mint/85">
+              <p className="mt-4 max-w-[46ch] text-[14.5px] leading-relaxed text-landing-muted">
                 That's usually enough for the recovery meter and AI assistant to start telling you something you
                 didn't already know about your shop's profitability.
               </p>
@@ -61,7 +61,7 @@ export function ClosingCta() {
               </Link>
               <ul className="mt-6 space-y-2.5">
                 {REASSURANCES.map((r) => (
-                  <li key={r} className="flex items-center gap-2.5 text-[13.5px] font-medium text-landing-mint">
+                  <li key={r} className="flex items-center gap-2.5 text-[13.5px] font-medium text-landing-muted">
                     <Check className="h-4 w-4 shrink-0 text-landing-gold" aria-hidden />
                     {r}
                   </li>

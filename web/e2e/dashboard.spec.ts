@@ -93,8 +93,9 @@ test("switching the dashboard period recalculates the displayed totals", async (
   await page.goto("/dashboard");
   await expect(page.getByRole("heading", { name: "Dashboard", exact: true })).toBeVisible();
 
-  // Defaults to "This month" (30 days). Money renders as whole pesos with a
-  // "PHP " prefix — see formatMoney in components/Money.tsx.
+  // Defaults to "30 days" — a rolling lookback ending today, which is what
+  // the button now says (it used to say "This month"). Money renders as whole
+  // pesos with a "PHP " prefix — see formatMoney in components/Money.tsx.
   await expect(page.getByText("PHP 18,000").first()).toBeVisible();
   await expect(page.getByText("PHP 42,000").first()).toBeVisible();
 

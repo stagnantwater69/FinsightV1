@@ -1,8 +1,39 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useDismiss, useMenuKeys } from "../lib/hooks";
 import { IconBusiness, IconChevronDown, IconPlus, IconSettings } from "./icons";
+
+function BusinessLogo({
+  logoUrl,
+  variant = "sidebar",
+  children,
+}: {
+  logoUrl: string | null | undefined;
+  variant?: "sidebar" | "menu";
+  children?: ReactNode;
+}) {
+  return (
+    <span
+      className={`relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
+        variant === "menu"
+          ? "bg-tint-brand text-tone-brand"
+          : "bg-brand-600 text-white"
+      }`}
+    >
+      {logoUrl ? (
+        <img
+          src={logoUrl}
+          alt=""
+          className="h-full w-full rounded-lg object-cover"
+        />
+      ) : (
+        <IconBusiness className="h-4 w-4" />
+      )}
+      {children}
+    </span>
+  );
+}
 
 /**
  * The business switcher, in the sidebar beneath the logo.
@@ -24,7 +55,11 @@ import { IconBusiness, IconChevronDown, IconPlus, IconSettings } from "./icons";
  * separate, ordinary `bg-paper` surface once open, so it needs none of this
  * — only the always-visible trigger row sits on the rail's own surface.
  */
-export function BusinessSwitcher({ collapsed = false }: { collapsed?: boolean }) {
+export function BusinessSwitcher({
+  collapsed = false,
+}: {
+  collapsed?: boolean;
+}) {
   const { profiles, selected, selectProfile, loading } = useBusinessProfiles();
   const [open, setOpen] = useState(false);
   const { ref, triggerRef } = useDismiss(open, () => setOpen(false));
@@ -33,7 +68,10 @@ export function BusinessSwitcher({ collapsed = false }: { collapsed?: boolean })
   if (loading) {
     return (
       <div className={`mb-3 ${collapsed ? "px-1" : "px-1"}`}>
-        <div className="skeleton h-12 rounded-xl bg-sidebar-fg/10" aria-hidden />
+        <div
+          className="skeleton h-12 rounded-xl bg-sidebar-fg/10"
+          aria-hidden
+        />
         <span className="sr-only">Loading your businesses…</span>
       </div>
     );
@@ -47,7 +85,7 @@ export function BusinessSwitcher({ collapsed = false }: { collapsed?: boolean })
         <Link
           to="/business-profiles/new"
           title="Add a business profile"
-          className="tap mx-auto mb-3 h-10 w-10 min-h-0 min-w-0 rounded-xl bg-sidebar-fg/10 text-sidebar-ink transition hover:bg-sidebar-fg/20"
+          className="tap mx-auto mb-3 h-11 w-11 rounded-xl bg-sidebar-fg/10 text-sidebar-ink transition hover:bg-sidebar-fg/20"
           aria-label="Add a business profile"
         >
           <IconPlus className="h-4 w-4" />
@@ -63,8 +101,12 @@ export function BusinessSwitcher({ collapsed = false }: { collapsed?: boolean })
           <IconPlus className="h-4 w-4" />
         </span>
         <span className="min-w-0">
-          <span className="block text-[13px] font-semibold text-sidebar-ink">Add a business</span>
-          <span className="block text-[11px] text-sidebar-accent">Nothing set up yet</span>
+          <span className="block text-[13px] font-semibold text-sidebar-ink">
+            Add a business
+          </span>
+          <span className="block text-[11px] text-sidebar-accent">
+            Nothing set up yet
+          </span>
         </span>
       </Link>
     );
@@ -84,8 +126,7 @@ export function BusinessSwitcher({ collapsed = false }: { collapsed?: boolean })
           collapsed ? "justify-center px-0" : "gap-2.5 px-2.5"
         }`}
       >
-        <span className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-600 text-white">
-          <IconBusiness className="h-4 w-4" />
+        <BusinessLogo logoUrl={selected.logoUrl}>
           {/* Collapsed, the "active" word is gone, so the state moves onto the
               avatar as a dot — the sidebar rail still says which business is
               live without needing to be expanded. */}
@@ -95,14 +136,21 @@ export function BusinessSwitcher({ collapsed = false }: { collapsed?: boolean })
               className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-brand-300 ring-2 ring-brand-900"
             />
           ) : null}
-        </span>
+        </BusinessLogo>
         {!collapsed ? (
           <>
             <span className="min-w-0 flex-1 leading-tight">
-              <b className="block truncate text-[13.5px] font-semibold text-sidebar-ink">{selected.name}</b>
+              <b className="block truncate text-[13.5px] font-semibold text-sidebar-ink">
+                {selected.name}
+              </b>
               <span className="flex items-center gap-1.5">
-                <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand-300" />
-                <small className="truncate text-[11px] text-sidebar-muted">Active business</small>
+                <span
+                  aria-hidden
+                  className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand-300"
+                />
+                <small className="truncate text-[11px] text-sidebar-muted">
+                  Active business
+                </small>
               </span>
             </span>
             <IconChevronDown
@@ -111,7 +159,8 @@ export function BusinessSwitcher({ collapsed = false }: { collapsed?: boolean })
           </>
         ) : null}
         <span className="sr-only">
-          {selected.name} — active business profile. Switch or manage businesses.
+          {selected.name} — active business profile. Switch or manage
+          businesses.
         </span>
       </button>
 
@@ -126,7 +175,7 @@ export function BusinessSwitcher({ collapsed = false }: { collapsed?: boolean })
             collapsed ? "left-full top-0 ml-2" : "left-0 top-full"
           }`}
         >
-          <div className="px-2.5 pb-1.5 pt-2 text-[10.5px] font-bold uppercase tracking-[0.12em] text-ink-400">
+          <div className="px-2.5 pb-1.5 pt-2 text-[10.5px] font-bold uppercase tracking-[0.12em] text-ink-500">
             Switch business profile
           </div>
 
@@ -145,12 +194,14 @@ export function BusinessSwitcher({ collapsed = false }: { collapsed?: boolean })
                   p.id === selected.id ? "bg-tint-brand" : "hover:bg-paper-100"
                 }`}
               >
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-tint-brand text-tone-brand">
-                  <IconBusiness className="h-4 w-4" />
-                </span>
+                <BusinessLogo logoUrl={p.logoUrl} variant="menu" />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[13.5px] font-semibold text-ink-900">{p.name}</span>
-                  <span className="block truncate text-[11.5px] text-ink-500">{p.type}</span>
+                  <span className="block truncate text-[13.5px] font-semibold text-ink-900">
+                    {p.name}
+                  </span>
+                  <span className="block truncate text-[11.5px] text-ink-500">
+                    {p.type}
+                  </span>
                 </span>
                 {p.id === selected.id ? (
                   <span className="shrink-0 text-brand-600" aria-hidden>
@@ -173,8 +224,12 @@ export function BusinessSwitcher({ collapsed = false }: { collapsed?: boolean })
               <IconPlus className="h-4 w-4" />
             </span>
             <span className="min-w-0">
-              <span className="block text-[13.5px] font-semibold text-ink-900">Add business profile</span>
-              <span className="block text-[11.5px] text-ink-500">Store, branch, or income source</span>
+              <span className="block text-[13.5px] font-semibold text-ink-900">
+                Add business profile
+              </span>
+              <span className="block text-[11.5px] text-ink-500">
+                Store, branch, or income source
+              </span>
             </span>
           </Link>
 
@@ -188,8 +243,12 @@ export function BusinessSwitcher({ collapsed = false }: { collapsed?: boolean })
               <IconSettings className="h-4 w-4" />
             </span>
             <span className="min-w-0">
-              <span className="block text-[13.5px] font-semibold text-ink-900">Manage businesses</span>
-              <span className="block text-[11.5px] text-ink-500">Edit, archive, or restore</span>
+              <span className="block text-[13.5px] font-semibold text-ink-900">
+                Manage businesses
+              </span>
+              <span className="block text-[11.5px] text-ink-500">
+                Edit, archive, or restore
+              </span>
             </span>
           </Link>
         </div>

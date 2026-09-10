@@ -132,8 +132,8 @@ export type RegisterField =
  *
  * It exists because registration is now the one moment a mistyped password
  * cannot be recovered from cheaply: the account it creates cannot be logged
- * into, and the reset link goes to an inbox the person may have mistyped in the
- * same sitting. Change-password has had this field all along; registration, the
+ * into, and the recovery code goes to an inbox the person may have mistyped in
+ * the same sitting. Change-password has had this field all along; registration, the
  * higher-stakes of the two, did not.
  */
 export function validateRegister(input: {
@@ -182,7 +182,7 @@ export function validateRegister(input: {
 }
 
 // ============================================================
-// Set a new password, from a reset link
+// Set a new password, after an emailed recovery code
 // ============================================================
 
 export type ResetPasswordField = "newPassword" | "confirmPassword";
@@ -191,9 +191,10 @@ export type ResetPasswordField = "newPassword" | "confirmPassword";
  * The reset screen, which has no current password to check against.
  *
  * That absence is the whole difference from `validateChangePassword`: someone
- * arriving from a reset link is there precisely because they do not know the
- * old password, so there is nothing to compare with and no "that's the one you
- * already use" to warn about.
+ * arriving here has just proved their address with the emailed recovery code,
+ * and is there precisely because they do not know the old password — so there
+ * is nothing to compare with and no "that's the one you already use" to warn
+ * about.
  */
 export function validateResetPassword(input: {
   newPassword: string;
@@ -260,4 +261,62 @@ export function validateChangePassword(input: {
 /** True when nothing is wrong — the form may be submitted. */
 export function isValid(errors: Record<string, string | undefined>): boolean {
   return Object.keys(errors).length === 0;
+}
+
+// ============================================================
+// Set a new password, from the code in the email
+// ============================================================
+
+/**
+ * The recovery OTP's length is GoTrue's `MAILER_OTP_LENGTH`, not a constant.
+ *
+ * It is configurable from 6 to 10 and can be changed in the Supabase dashboard
+ * without a deploy on our side. This project's is 8 today; hard-coding that
+ * would turn a one-line server setting into a client bug that presents as
+ * "the code from my email is rejected before it is even tried". So the client
+ * accepts the whole configurable range and lets Supabase be the judge of the
+ * actual value — the only thing knowable here is that a recovery code is
+ * digits, and roughly this long.
+ */
+export const MIN_RECOVERY_CODE_LENGTH = 6;
+export const MAX_RECOVERY_CODE_LENGTH = 10;
+
+/**
+ * What is actually sent to Supabase, from what was actually typed.
+ *
+ * The email renders the code in a way that invites grouping, and people paste
+ * "7532 4744" or type "7532-4744" back. Supabase compares the token as a
+ * string, so either of those is a wrong code — a failure with no visible cause,
+ * on a screen someone has already had a bad time reaching. Spaces and dashes
+ * are the only separators worth forgiving: anything else is a character the
+ * owner meant to type, and silently deleting it would hide a real typo.
+ */
+export function normaliseRecoveryCode(value: string): string {
+  return value.replace(/[\s-]/g, "");
+}
+
+export type RecoveryCodeField = "email" | "code";
+
+/**
+ * The code form's checks, which are shape-only and deliberately so.
+ *
+ * Nothing here may depend on whether the ADDRESS exists — `/auth/recover-password`
+ * answers identically for a registered and an unregistered address so it cannot
+ * be used to discover who has an account, and this form would undo that the
+ * moment it said anything more specific than "that didn't work".
+ */
+export function validateRecoveryCode(input: { email: string; code: string }): FieldErrors<RecoveryCodeField> {
+  const errors: FieldErrors<RecoveryCodeField> = {};
+
+  const email = emailError(input.email);
+  if (email) errors.email = email;
+
+  const code = normaliseRecoveryCode(input.code);
+  if (!code) errors.code = "Enter the code from the email.";
+  else if (!/^\d+$/.test(code)) errors.code = "The code is digits only.";
+  else if (code.length < MIN_RECOVERY_CODE_LENGTH || code.length > MAX_RECOVERY_CODE_LENGTH) {
+    errors.code = `That code should be ${MIN_RECOVERY_CODE_LENGTH}–${MAX_RECOVERY_CODE_LENGTH} digits.`;
+  }
+
+  return errors;
 }

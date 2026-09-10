@@ -54,6 +54,56 @@ export const MAX_SECTIONS = 8;
 export const CAPTURE_QUALITY = 0.9;
 
 /**
+ * The widest an image is sent at when the server is only going to LOOK at it.
+ *
+ * Two endpoints inspect a capture and return a verdict rather than an image:
+ * /records/receipts/quality-check and /records/receipts/detect-edges. Both
+ * downscale on arrival before they do any work — quality to width 400, edge
+ * detection to width 320 (see backend/src/lib/imageQuality.ts and
+ * edgeDetection.ts, owned by ai-ocr-analytics). Everything above those widths
+ * is uploaded, decoded, and thrown away, and on a shop owner's mobile data a
+ * full-resolution phone photograph is several megabytes of it — per page, and
+ * a long receipt is up to eight.
+ *
+ * 1000 rather than 400: this is a ceiling with a wide margin, not a match. The
+ * server owns those figures and may raise them, and a client that had shaved
+ * to exactly today's number would silently start starving them. At 1000 the
+ * analysis input is still 2.5x the widest thing either endpoint asks for.
+ *
+ * THIS NEVER TOUCHES WHAT THE OWNER KEEPS. The scan upload, the crop
+ * (/records/receipts/transform, which returns the image that replaces the
+ * page) and the stored original all stay at full capture resolution.
+ */
+export const ANALYSIS_MAX_WIDTH = 1000;
+
+/**
+ * JPEG quality for those same analysis-only copies.
+ *
+ * Lower than CAPTURE_QUALITY because nothing here is read by a person or by
+ * OCR: blur, glare, exposure and a receipt's outline all survive 0.8 at 1000px
+ * intact. The kept image is unaffected — see ANALYSIS_MAX_WIDTH.
+ */
+export const ANALYSIS_QUALITY = 0.8;
+
+/**
+ * The target size for an analysis copy, or null when the capture is already
+ * small enough to send as it is.
+ *
+ * Null matters: re-encoding a 900px photo to 900px would spend a decode, an
+ * encode and a cache file to produce the same bytes.
+ */
+export function analysisResize(width: number, height: number): { width: number; height: number } | null {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+  if (width <= ANALYSIS_MAX_WIDTH) return null;
+  return {
+    width: ANALYSIS_MAX_WIDTH,
+    // Rounded, and floored at 1: the manipulator takes integers, and a very
+    // wide, very short crop would otherwise round to a zero-pixel height.
+    height: Math.max(1, Math.round((height * ANALYSIS_MAX_WIDTH) / width)),
+  };
+}
+
+/**
  * How much of the previous section the owner is asked to re-photograph.
  *
  * The overlap exists so the server can tell that page 3 begins where page 2
@@ -97,6 +147,9 @@ export interface ReceiptLikelihoodAssessment {
 
 /** One photograph in a capture session, before the receipt is scanned. */
 export interface ReceiptSection {
+  captureMode?: "standard" | "long";
+  /** Local gallery identity for duplicate detection across separate picker visits. */
+  sourceAssetUri?: string;
   /** Local only, for list keys — the server assigns nothing until upload. */
   localId: string;
   /** The photograph as captured, kept so a crop can always be undone. */

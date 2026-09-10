@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { Alert as RNAlert, KeyboardAvoidingView, Platform, Pressable, ScrollView, TextInput, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
-import { Button, Callout, Card, EmptyState, ErrorNote, Field, Money, Screen, T } from "../components/ui";
+import { Button, Callout, Card, EmptyState, ErrorNote, Field, Money, Screen, ScreenHeader, T } from "../components/ui";
 import { PhotoUpload } from "../components/PhotoUpload";
 import { SignOutSheet } from "../components/SignOutSheet";
 import { useAuth } from "../context/AuthContext";
@@ -178,7 +178,11 @@ export function BusinessProfilesScreen({ navigation }: any) {
   return (
     <Screen>
       <ScrollView contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}>
-        <T variant="title" style={{ marginBottom: space.md }}>Your businesses</T>
+        <ScreenHeader
+          eyebrow={`${profiles.length} ${profiles.length === 1 ? "profile" : "profiles"}`}
+          title="Your businesses"
+          subtitle="Switch the active business or keep each profile's operating details up to date."
+        />
         {error ? <ErrorNote>{error}</ErrorNote> : null}
 
         {loading ? null : profiles.length === 0 ? (
@@ -199,7 +203,7 @@ export function BusinessProfilesScreen({ navigation }: any) {
                       <T variant="caption">{p.type}</T>
                     </View>
                     {isActive ? (
-                      <View style={{ backgroundColor: brand[100], borderRadius: radius.full, paddingHorizontal: space.sm, height: 22, justifyContent: "center" }}>
+                      <View style={{ backgroundColor: brand[100], borderRadius: radius.full, paddingHorizontal: space.sm, minHeight: 22, paddingVertical: 2, justifyContent: "center" }}>
                         <T style={{ fontSize: typeScale.micro, color: brand[700] }}>Active</T>
                       </View>
                     ) : null}

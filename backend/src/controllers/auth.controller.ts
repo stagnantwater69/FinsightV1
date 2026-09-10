@@ -129,6 +129,17 @@ export const changePasswordSchema = z.object({
 
 const deleteAccountSchema = z.object({ currentPassword: z.string().min(1) }).strict();
 
+/*
+ * The two halves of the web → mobile session handoff.
+ *
+ * `refreshToken` is accepted in the BODY and never in a query string, and the
+ * `code` goes back in a body too — this endpoint pair exists precisely so that
+ * neither value has to travel in a URL. Both are `.strict()` so a caller cannot
+ * smuggle an extra field past the shape.
+ */
+const handoffIssueSchema = z.object({ refreshToken: z.string().min(1) }).strict();
+const handoffExchangeSchema = z.object({ code: z.string().min(1).max(200) }).strict();
+
 const updateProfileSchema = z.object({
   firstName: z.string().min(1).max(100).optional(),
   middleName: z.string().max(100).nullable().optional(),
@@ -228,6 +239,25 @@ export async function resendVerification(req: Request, res: Response) {
 
 export async function confirmEmail(req: Request, res: Response) {
   const result = await authService.confirmEmail(bearerToken(req));
+  res.status(200).json(result);
+}
+
+/**
+ * Hands the browser a one-time code for continuing in the installed app.
+ *
+ * Authenticated by the bearer token the caller already has, so it can only ever
+ * re-issue a session that caller was already holding.
+ */
+export async function issueSessionHandoff(req: Request, res: Response) {
+  const { refreshToken } = handoffIssueSchema.parse(req.body);
+  const result = await authService.createSessionHandoff(bearerToken(req), refreshToken);
+  res.status(201).json(result);
+}
+
+/** Spends a handoff code. Unauthenticated by construction — the code is the credential. */
+export async function exchangeSessionHandoff(req: Request, res: Response) {
+  const { code } = handoffExchangeSchema.parse(req.body);
+  const result = await authService.exchangeSessionHandoff(code);
   res.status(200).json(result);
 }
 

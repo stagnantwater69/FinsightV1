@@ -135,7 +135,7 @@ export function Alert({
             {label ?? spec.label}
           </p>
           <p className="mt-0.5 break-words text-sm text-ink-700">{children}</p>
-          {meta ? <p className="mt-1 text-xs text-ink-400">{meta}</p> : null}
+          {meta ? <p className="mt-1 text-xs text-ink-500">{meta}</p> : null}
         </div>
         {action ? <div className="shrink-0">{action}</div> : null}
       </div>

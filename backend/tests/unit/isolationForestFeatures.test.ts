@@ -52,6 +52,17 @@ describe("isolation forest feature contract (if-features-v1)", () => {
     expect(at("categoryMadZ")).toBe(10);
   });
 
+  it("caps count features so a high-volume burst cannot dominate on scale alone", () => {
+    // 30 same-vendor, same-category records, all within the last 7 days.
+    const burst = Array.from({ length: 30 }, (_, index) =>
+      record({ id: 200 + index, date: new Date(Date.UTC(2026, 5, 4, index)) }),
+    );
+    const features = featuresFor(record({ date: new Date(Date.UTC(2026, 5, 10)) }), burst);
+    const at = (name: (typeof IF_FEATURE_NAMES)[number]) => features[IF_FEATURE_NAMES.indexOf(name)]!;
+    expect(at("vendorCount7d")).toBe(20);
+    expect(at("categoryCount7d")).toBe(20);
+  });
+
   it("marks a never-seen vendor as new and a known vendor as not", () => {
     const history = steadyHistory(30);
     const at = (features: number[], name: (typeof IF_FEATURE_NAMES)[number]) =>

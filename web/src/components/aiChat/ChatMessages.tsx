@@ -158,7 +158,7 @@ export function ChatMessages({
           </div>
         ) : null}
 
-        {loading ? <p className="text-center text-xs text-ink-400">Loading this conversation…</p> : null}
+        {loading ? <p className="text-center text-xs text-ink-500">Loading this conversation…</p> : null}
 
         {messages.map((m) => (
           <Bubble key={m.id} from={m.role === "user" ? "user" : "ai"}>

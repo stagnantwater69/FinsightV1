@@ -4,7 +4,7 @@ import { List } from "lucide-react";
 import { useAiChat } from "../context/AiChatContext";
 import { useFocusTrap } from "../lib/hooks";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
-import { IconPlus } from "./icons";
+import { IconArrowRight, IconPlus } from "./icons";
 import { ChatHistoryOverlay } from "./aiChat/ChatHistoryOverlay";
 import { ChatMessages, MODULE_COPY } from "./aiChat/ChatMessages";
 
@@ -142,7 +142,7 @@ export function AskFinSightDrawer() {
         role="dialog"
         aria-modal="true"
         aria-label="Ask FinSight"
-        className={`fixed inset-0 z-50 flex flex-col bg-paper shadow-2xl transition-transform duration-300 ease-shell sm:inset-y-0 sm:left-auto sm:right-0 sm:w-full sm:max-w-md ${
+        className={`fixed inset-0 z-50 flex flex-col bg-paper shadow-lg transition-transform duration-300 ease-shell sm:inset-y-0 sm:left-auto sm:right-0 sm:w-full sm:max-w-md ${
           open ? "translate-x-0" : "translate-x-full"
         }`}
       >
@@ -153,7 +153,7 @@ export function AskFinSightDrawer() {
               onClick={() => setHistoryOpen((v) => !v)}
               aria-label="Chat history"
               aria-expanded={historyOpen}
-              className="tap h-9 w-9 min-h-0 min-w-0 shrink-0 rounded-lg bg-white/10 text-white transition hover:bg-white/25"
+              className="tap h-11 w-11 shrink-0 rounded-lg bg-white/10 text-white transition hover:bg-white/25"
             >
               <List aria-hidden size={18} className="mx-auto" />
             </button>
@@ -166,7 +166,7 @@ export function AskFinSightDrawer() {
               type="button"
               onClick={startNewChat}
               aria-label="New chat"
-              className="tap h-9 w-9 min-h-0 min-w-0 shrink-0 rounded-lg bg-white/10 text-white transition hover:bg-white/25"
+              className="tap h-11 w-11 shrink-0 rounded-lg bg-white/10 text-white transition hover:bg-white/25"
             >
               <IconPlus className="mx-auto h-[18px] w-[18px]" />
             </button>
@@ -174,7 +174,7 @@ export function AskFinSightDrawer() {
               type="button"
               onClick={closeChat}
               aria-label="Close Ask FinSight"
-              className="tap h-9 w-9 min-h-0 min-w-0 shrink-0 rounded-lg bg-white/15 text-lg leading-none transition hover:bg-white/25"
+              className="tap h-11 w-11 shrink-0 rounded-lg bg-white/15 text-lg leading-none transition hover:bg-white/25"
             >
               ×
             </button>
@@ -239,10 +239,10 @@ export function AskFinSightDrawer() {
           <button
             type="submit"
             disabled={sending || !input.trim()}
-            className="tap shrink-0 rounded-full bg-brand-600 text-white transition hover:bg-brand-700 disabled:opacity-50"
+            className="tap shrink-0 rounded-full bg-brand-600 text-white transition-colors hover:bg-brand-700 active:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-60"
             aria-label="Send"
           >
-            →
+            <IconArrowRight className="h-5 w-5" />
           </button>
         </form>
       </aside>

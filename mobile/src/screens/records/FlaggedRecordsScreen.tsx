@@ -15,8 +15,23 @@ import { setFlash } from "../../lib/flash";
 import * as haptics from "../../lib/haptics";
 import { font, space } from "../../theme/tokens";
 import { useTheme } from "../../context/ThemeContext";
-import type { RecordItem } from "../../lib/types";
+import type { FlaggedRecordCount, FlaggedRecordsPage, RecordItem } from "../../lib/types";
 import { badges, type ImportBatchSummary } from "./shared";
+
+/**
+ * How many flagged records one request asks for.
+ *
+ * The server's ceiling on the paginated form is 100. It is NOT the same number
+ * as the 200-item cap it applies to a request that sends no `limit` at all —
+ * that cap is a safety net for un-updated clients, and silently hides
+ * everything past it. This screen always sends a `limit`, so it always gets
+ * `{ items, nextCursor }` and can walk to the end of a re-imported
+ * spreadsheet's worth of duplicates instead of stopping at 200.
+ */
+const PAGE_SIZE = 100;
+
+/** Identity for de-duping appended pages — ids are unique per table, not across. */
+const recordKey = (r: RecordItem) => `${r.type}-${r.id}`;
 
 interface DuplicateGroup {
   key: string;
@@ -84,14 +99,28 @@ function groupDuplicates(
 }
 export function FlaggedRecordsScreen() {
   const t = useTheme();
-  const { brand } = t;
+  const { brand, ink } = t;
   const { selected, categories } = useBusinessProfiles();
   const [records, setRecords] = useState<RecordItem[]>([]);
+  /** The cursor for the page after what is on screen; null once there is none. */
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  /**
+   * The total from `/records/flagged/count`, or null when that call failed.
+   *
+   * Its own endpoint on purpose: this number used to be `records.length`,
+   * which meant rendering a count downloaded every flagged record to measure
+   * it. Null rather than 0 on failure — "0 records to review" is an all-clear
+   * this screen has no grounds to give when it does not know.
+   */
+  const [flaggedTotal, setFlaggedTotal] = useState<number | null>(null);
   const [batches, setBatches] = useState<ImportBatchSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   /** A failed resolve — reassures about the record, not about the list's age. */
   const [error, setError] = useState<string | null>(null);
+  /** A failed "Load more" — sits with the button, not over the whole screen. */
+  const [moreError, setMoreError] = useState<string | null>(null);
   /** A failed fetch of the review queue. See lib/connectionState.ts. */
   const [loadFailure, setLoadFailure] = useState<LoadFailure | null>(null);
   const [loadedAt, setLoadedAt] = useState<number | null>(null);
@@ -105,15 +134,26 @@ export function FlaggedRecordsScreen() {
       // Together rather than in sequence: the batch list only supplies names
       // for the groups below, so waiting for one before asking for the other
       // would delay the screen for no reason.
-      const [flagged, importBatches] = await Promise.all([
-        api.get<RecordItem[]>("/records/flagged", { businessProfileId: selected.id }),
+      const [page, importBatches, count] = await Promise.all([
+        api.get<FlaggedRecordsPage>("/records/flagged", {
+          businessProfileId: selected.id,
+          limit: PAGE_SIZE,
+        }),
         api
           .get<ImportBatchSummary[]>("/records/csv-imports/batches", { businessProfileId: selected.id })
           // A group that cannot name its import still works — it just says
           // "an import" instead of the file's title.
           .catch(() => [] as ImportBatchSummary[]),
+        // Swallowed like the batches: the queue itself is usable without the
+        // headline number, and an error banner over a list that loaded fine
+        // would be the bigger problem.
+        api
+          .get<FlaggedRecordCount>("/records/flagged/count", { businessProfileId: selected.id })
+          .catch(() => null),
       ]);
-      setRecords(flagged);
+      setRecords(page.items);
+      setNextCursor(page.nextCursor);
+      setFlaggedTotal(count ? count.total : null);
       setBatches(importBatches);
       setLoadedAt(Date.now());
       setLoadFailure(null);
@@ -123,6 +163,38 @@ export function FlaggedRecordsScreen() {
       setLoading(false);
     }
   }, [selected]);
+
+  /**
+   * The next page, appended rather than replacing what is on screen.
+   *
+   * Appending is what makes the grouping below stay correct across pages: a
+   * re-imported file's duplicates are grouped by import batch, and paging
+   * "Previous / Next" the way RecordsScreen does would split one such group
+   * across pages and offer a bulk action over part of it. A failure here is
+   * reported as an ACTION failure, not a load failure — the records already
+   * listed are untouched and still resolvable.
+   */
+  const loadMore = useCallback(async () => {
+    if (!selected || !nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    setMoreError(null);
+    try {
+      const page = await api.get<FlaggedRecordsPage>("/records/flagged", {
+        businessProfileId: selected.id,
+        limit: PAGE_SIZE,
+        cursor: nextCursor,
+      });
+      setRecords((current) => {
+        const seen = new Set(current.map(recordKey));
+        return [...current, ...page.items.filter((r) => !seen.has(recordKey(r)))];
+      });
+      setNextCursor(page.nextCursor);
+    } catch (err) {
+      setMoreError(describeActionFailure(toLoadFailure(err), "The records already listed are still here."));
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [selected, nextCursor, loadingMore]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
@@ -253,7 +325,19 @@ export function FlaggedRecordsScreen() {
   return (
     <Screen>
       <ScrollView contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}>
-        <T variant="title" style={{ marginBottom: space.md }}>Records to review</T>
+        <T variant="title" style={{ marginBottom: flaggedTotal === null ? space.md : space.xs }}>Records to review</T>
+        {/*
+          The headline count comes from /records/flagged/count, not from
+          records.length — one page is not the whole queue, and saying "3"
+          while 400 wait behind a cursor would be a wrong number about the
+          owner's own books.
+        */}
+        {flaggedTotal !== null && flaggedTotal > 0 ? (
+          <T variant="caption" accessibilityLiveRegion="polite" style={{ marginBottom: space.md, color: ink[500] }}>
+            {flaggedTotal} record{flaggedTotal === 1 ? "" : "s"} flagged
+            {records.length < flaggedTotal ? ` · showing ${records.length}` : ""}
+          </T>
+        ) : null}
         {error ? <ErrorNote>{error}</ErrorNote> : null}
 
         <ConnectionNotice
@@ -320,6 +404,31 @@ export function FlaggedRecordsScreen() {
                 ))}
               </>
             ) : null}
+
+            {nextCursor ? (
+              <Card style={{ marginTop: space.xs }}>
+                {moreError ? <ErrorNote>{moreError}</ErrorNote> : null}
+                <T
+                  variant="caption"
+                  accessibilityLiveRegion="polite"
+                  style={{ textAlign: "center", color: ink[500], marginBottom: space.sm }}
+                >
+                  Showing {records.length}
+                  {flaggedTotal !== null ? ` of ${flaggedTotal}` : ""}
+                </T>
+                <Button
+                  title={loadingMore ? "Loading…" : "Load more"}
+                  variant="secondary"
+                  loading={loadingMore}
+                  disabled={loadingMore}
+                  onPress={() => void loadMore()}
+                />
+              </Card>
+            ) : (
+              <T variant="caption" style={{ textAlign: "center", color: ink[500], marginTop: space.md }}>
+                That's everything waiting for review.
+              </T>
+            )}
           </>
         )}
       </ScrollView>

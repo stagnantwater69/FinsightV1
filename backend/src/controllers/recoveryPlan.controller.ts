@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import * as recoveryPlanService from "../services/recoveryPlan.service";
 import { ApiError } from "../middleware/error.middleware";
+import { moneyAmountSchema } from "../lib/money";
 
 // EXPORTED for the contract tests — same rationale as
 // businessOperatingSchedule.controller.ts / expenseCategory.controller.ts.
@@ -9,7 +10,7 @@ export const putRecoveryPlanSchema = z
   .object({
     bufferPercent: z.number().min(0).max(100).nullable().optional(),
     deadline: z.string().date().nullable().optional(),
-    ownerTargetAmount: z.number().positive().nullable().optional(),
+    ownerTargetAmount: moneyAmountSchema.nullable().optional(),
   })
   .strict();
 

@@ -205,6 +205,33 @@ export interface RecordDetail extends RecordItem {
   origin: RecordOrigin | null;
 }
 
+/**
+ * One page of `GET /records/flagged`.
+ *
+ * The endpoint answers a bare array only for a caller that sends neither
+ * `limit` nor `cursor`, and that array is capped at 200 — a business with more
+ * flagged records than that would silently never see the rest. Every caller in
+ * this app therefore sends `limit` and reads this envelope instead. Same
+ * opaque keyset cursor as `/records/search`: pass `nextCursor` straight back as
+ * `cursor`, and `null` means the end of the list.
+ */
+export interface FlaggedRecordPage {
+  items: RecordItem[];
+  nextCursor: string | null;
+}
+
+/**
+ * `GET /records/flagged/count` — the badge number without the list behind it.
+ *
+ * Split out of the list endpoint precisely because rendering "12" used to cost
+ * a download of all twelve thousand records.
+ */
+export interface FlaggedRecordCounts {
+  expenses: number;
+  sales: number;
+  total: number;
+}
+
 /** A past CSV import, for the "which import" picker on the Records filters. */
 export interface ImportBatchSummary {
   id: number;
@@ -282,6 +309,22 @@ export const RECORD_SOURCE_LABELS: Record<RecordSource, string> = {
   CSV_UPLOAD: "CSV Upload",
   RECEIPT_SCAN: "Receipt Scan",
 };
+
+/**
+ * The orderings `GET /records/search` accepts (`sort=`), and the only ones it
+ * accepts — anything else is a 400 (`backend/src/lib/recordSort.ts`).
+ *
+ * Omitting the parameter is byte-identical to `date_desc`, which is the order
+ * this endpoint has always returned.
+ *
+ * A cursor is minted FOR a sort and is rejected under any other one, because
+ * the keyset it carries is that sort's key columns. So changing the sort means
+ * dropping the cursor and starting again from page 1 — never carrying one
+ * across.
+ */
+export const RECORD_SORTS = ["date_desc", "date_asc", "amount_desc", "amount_asc"] as const;
+
+export type RecordSort = (typeof RECORD_SORTS)[number];
 
 export interface RecordFilters {
   businessProfileId: number;

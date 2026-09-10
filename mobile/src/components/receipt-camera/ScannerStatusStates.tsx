@@ -9,12 +9,13 @@ import { useTheme } from "../../context/ThemeContext";
  * The full-screen states ML Kit's launch can be in, before it hands control
  * back to FinSight with pages.
  *
- * ML Kit IS THE ONLY CAPTURE PATH THESE STATES SERVE. None of the three
- * offers a way into a camera FinSight draws itself — there is no such camera
- * left in this journey. `onGoBack`/`onCancel` are the only exits besides a
- * successful scan, and they all resolve to the same thing: close this screen
- * and leave the owner exactly where they were, the same contract
- * `ReceiptCamera`'s `onCancel` has always had.
+ * THESE STATES SERVE THE OPTIONAL ML KIT ROLLOUT ONLY. They are reachable
+ * exclusively via `NativeReceiptCamera`, i.e. when `USE_NATIVE_RECEIPT_CAMERA`
+ * is set; the default path is FinSight's own `CustomReceiptCamera`. None of the
+ * three offers a way into a different camera from inside this flow.
+ * `onGoBack`/`onCancel` are the only exits besides a successful scan, and they
+ * all resolve to the same thing: close this screen and leave the owner exactly
+ * where they were, the same contract `ReceiptCamera`'s `onCancel` has always had.
  */
 
 /** Shown the instant the screen mounts, while the platform scanner opens. */

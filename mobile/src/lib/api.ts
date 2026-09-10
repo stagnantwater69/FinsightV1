@@ -85,6 +85,70 @@ function isCredentialCheck(path: string): boolean {
   return CREDENTIAL_ENDPOINTS.some((endpoint) => path.startsWith(endpoint));
 }
 
+/**
+ * Why a session ended, when the server ended it for us.
+ *
+ * - `expired` — a 401 on a request that HAD a session. The token is dead or
+ *   the FinSight profile behind it is gone; signing in again fixes it.
+ * - `account-not-active` — `requireAuth` answered 403 with
+ *   `code: "ACCOUNT_NOT_ACTIVE"` (suspended or still pending confirmation).
+ *   Signing in again does NOT fix it, and telling the owner it will is what
+ *   produces a loop between the login form and a refusal.
+ */
+export type SessionEndReason = "expired" | "account-not-active";
+
+type SessionEndedHandler = (reason: SessionEndReason) => void;
+
+let sessionEndedHandler: SessionEndedHandler | null = null;
+
+/**
+ * Registered once by AuthProvider.
+ *
+ * THE BUG THIS FIXES. A dead session used to produce a sentence and nothing
+ * else: `toError` rewrote the message to "Your session has expired. Please log
+ * in again." and the app stayed exactly where it was — on the authenticated
+ * shell, with a token the server has already refused, every subsequent screen
+ * failing the same way. Nothing anywhere read the 403/ACCOUNT_NOT_ACTIVE code
+ * either, so a suspended account behaved identically to a network blip.
+ *
+ * The transport cannot navigate — it has no access to React state or the
+ * navigator — so it hands the fact up to AuthProvider, which clears the
+ * session; App.tsx renders AuthStack the moment there is no profile. Same
+ * arrangement web uses (`setSessionExpiredHandler` in web/src/lib/api.ts).
+ */
+export function setSessionEndedHandler(handler: SessionEndedHandler | null) {
+  sessionEndedHandler = handler;
+}
+
+/**
+ * Reports a server-ended session, if this failure is one.
+ *
+ * Shared by both transports so `fetch` and XHR cannot disagree about what ends
+ * a session. Returns nothing; the error is still thrown to the caller, which
+ * still gets to show its own message.
+ */
+function reportSessionEnd(status: number, path: string, code: string | undefined) {
+  // Only a request that HAD a session to lose. Login, register, change-password
+  // and recover-password all answer 401 for "those credentials are wrong",
+  // which must not sign anyone out — see CREDENTIAL_ENDPOINTS.
+  if (status === 401 && !isCredentialCheck(path)) {
+    sessionEndedHandler?.("expired");
+    return;
+  }
+  /*
+   * Matched on the CODE, never the status alone. Plenty of legitimate 403s mean
+   * "that record is not yours", and ending the session on those would sign
+   * people out for opening the wrong thing.
+   */
+  if (status === 403 && code === "ACCOUNT_NOT_ACTIVE") sessionEndedHandler?.("account-not-active");
+}
+
+/** The `code` field on a rejected response body, when it has one. */
+function codeFrom(body: unknown): string | undefined {
+  const code = (body as { code?: unknown } | undefined)?.code;
+  return typeof code === "string" ? code : undefined;
+}
+
 async function authHeader(): Promise<Record<string, string>> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
@@ -110,9 +174,11 @@ function buildUrl(path: string, query?: Record<string, string | number | boolean
 async function toError(res: Response, path: string): Promise<ApiError> {
   let message = `Request failed (${res.status})`;
   let fieldErrors: Record<string, string> = {};
+  let code: string | undefined;
   try {
     const body = await res.json();
     fieldErrors = fieldErrorsFrom(body);
+    code = codeFrom(body);
     if (typeof body?.error === "string") message = body.error;
     if (Object.keys(fieldErrors).length > 0) {
       // The fields carry their own messages now, so the form-level line no
@@ -126,7 +192,16 @@ async function toError(res: Response, path: string): Promise<ApiError> {
   if (res.status === 401 && !isCredentialCheck(path)) {
     message = "Your session has expired. Please log in again.";
   }
-  if (res.status >= 500) message = "FinSight's server had a problem with that. Please try again in a moment.";
+  // The message above is what THIS caller shows; this is what ends the session
+  // app-wide. Both are needed — a screen mid-request still has an error to
+  // render while the shell swaps itself for the login form.
+  reportSessionEnd(res.status, path, code);
+  // 503 is the server saying a dependency is briefly away and naming which —
+  // more useful than the generic 5xx line, which would flatten it into
+  // "the server had a problem with that" and imply the request was at fault.
+  if (res.status >= 500 && res.status !== 503) {
+    message = "FinSight's server had a problem with that. Please try again in a moment.";
+  }
   return new ApiError(res.status, message, fieldErrors);
 }
 
@@ -199,18 +274,31 @@ async function request<T>(method: string, path: string, opts: {
  * Only uploads move. Every JSON call above stays on `fetch`, where none of
  * this applies.
  */
-function uploadRequest<T>(path: string, formData: FormData): Promise<T> {
+function uploadRequest<T>(path: string, formData: FormData, signal?: AbortSignal): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     void (async () => {
       const headers = await authHeader();
       const xhr = new XMLHttpRequest();
+      // Already cancelled before the request could start — the same failure
+      // `xhr.onabort` reports, so it must arrive in the same shape. A bare
+      // Error here reached callers as something with no `status`, and code
+      // that branches on ApiError treated one abort differently from the other
+      // depending only on how quickly the signal fired.
+      if (signal?.aborted) throw networkError(new Error("The upload was cancelled"));
+      const abort = () => xhr.abort();
+      signal?.addEventListener("abort", abort, { once: true });
+      const detach = () => signal?.removeEventListener("abort", abort);
       xhr.open("POST", buildUrl(path));
+      // A stalled upload must release the camera's action lock and leave the
+      // locally captured pages available for retry.
+      xhr.timeout = 120_000;
       for (const [key, value] of Object.entries(headers)) xhr.setRequestHeader(key, value);
       // Content-Type is deliberately unset: XHR derives it from the FormData
       // along with the multipart boundary, and setting it by hand produces a
       // body the server cannot split.
 
       xhr.onload = () => {
+        detach();
         const status = xhr.status;
         const text = xhr.responseText;
 
@@ -232,9 +320,11 @@ function uploadRequest<T>(path: string, formData: FormData): Promise<T> {
          */
         let message = `Request failed (${status})`;
         let fieldErrors: Record<string, string> = {};
+        let code: string | undefined;
         try {
           const body = JSON.parse(text);
           fieldErrors = fieldErrorsFrom(body);
+          code = codeFrom(body);
           if (typeof body?.error === "string") message = body.error;
           if (Object.keys(fieldErrors).length > 0) message = "Some details need fixing.";
         } catch {
@@ -243,16 +333,20 @@ function uploadRequest<T>(path: string, formData: FormData): Promise<T> {
         if (status === 401 && !isCredentialCheck(path)) {
           message = "Your session has expired. Please log in again.";
         }
-        if (status >= 500) message = "FinSight's server had a problem with that. Please try again in a moment.";
+        reportSessionEnd(status, path, code);
+        // See toError: a 503 carries a more specific reason than this line.
+        if (status >= 500 && status !== 503) {
+          message = "FinSight's server had a problem with that. Please try again in a moment.";
+        }
         reject(new ApiError(status, message, fieldErrors));
       };
 
       // XHR reports every transport failure as a bare event with no reason
       // attached, so this is the one place the detail in networkError cannot
       // come from an exception.
-      xhr.onerror = () => reject(networkError(new Error("Network request failed")));
-      xhr.ontimeout = () => reject(networkError(new Error("The upload timed out")));
-      xhr.onabort = () => reject(networkError(new Error("The upload was cancelled")));
+      xhr.onerror = () => { detach(); reject(networkError(new Error("Network request failed"))); };
+      xhr.ontimeout = () => { detach(); reject(networkError(new Error("The upload timed out"))); };
+      xhr.onabort = () => { detach(); reject(networkError(new Error("The upload was cancelled"))); };
 
       xhr.send(formData);
     })().catch(reject);
@@ -277,7 +371,7 @@ export const api = {
     query?: Record<string, string | number | boolean | undefined>,
   ) => request<T>("PATCH", path, { body, query }),
   delete: <T>(path: string, body?: unknown) => request<T>("DELETE", path, { body }),
-  upload: <T>(path: string, formData: FormData) => uploadRequest<T>(path, formData),
+  upload: <T>(path: string, formData: FormData, signal?: AbortSignal) => uploadRequest<T>(path, formData, signal),
 };
 
 export function errorMessage(err: unknown): string {

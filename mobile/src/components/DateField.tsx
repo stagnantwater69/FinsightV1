@@ -4,6 +4,7 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { Ionicons } from "@expo/vector-icons";
 import { SelectChip, T } from "./ui";
 import * as haptics from "../lib/haptics";
+import { toLocalISODate as toISO } from "../lib/localDate";
 import { radius, space, typeScale } from "../theme/tokens";
 import { TAP_FLOOR } from "./touchTarget";
 import { useTheme } from "../context/ThemeContext";
@@ -35,10 +36,13 @@ function parseISO(iso: string): Date {
   return new Date(y, m - 1, d);
 }
 
-function toISO(date: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
+/*
+ * The matching local-time formatter now lives in `lib/localDate.ts`, imported
+ * above as `toISO`. It was defined here first and was the only correct copy in
+ * the app: every other "today" default went through `toISOString()`, which is
+ * UTC and files a record a day early for anyone east of it before their local
+ * offset has elapsed. Same helper, one home.
+ */
 
 /** How the date reads to a person, once it is chosen. */
 function humanise(iso: string): string {

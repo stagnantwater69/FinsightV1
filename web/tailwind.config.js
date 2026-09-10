@@ -299,19 +299,6 @@ export default {
           "70%": { transform: "scale(1.15)", opacity: "1" },
           "100%": { transform: "scale(1)", opacity: "1" },
         },
-        // Fin's idle breath on the dashboard greeting.
-        //
-        // Mobile plays a 103-frame flipbook of the full wave. On web those
-        // frames would be a download on every dashboard load, for decoration,
-        // so the web mascot holds the sequence's own rest pose and breathes
-        // instead. The movement is deliberately under a pixel of drift and
-        // ~1.5% of scale: at 88px that is felt rather than watched, which is
-        // the point — a mascot that visibly bobs next to a page of figures
-        // pulls the eye away from them every four seconds.
-        breathe: {
-          "0%, 100%": { transform: "translateY(0) scale(1)" },
-          "50%": { transform: "translateY(-1.5px) scale(1.015)" },
-        },
         // ============================================================
         // The landing page's one authored motion idea
         // ============================================================
@@ -371,7 +358,6 @@ export default {
         "toast-in": "toast-in 250ms ease both",
         "slide-in-right": "slide-in-right 180ms ease both",
         "badge-in": "badge-in 260ms cubic-bezier(.2,.9,.3,1) both",
-        breathe: "breathe 4s ease-in-out infinite",
         bob: "bob 2.8s ease-in-out infinite",
         "rule-draw": "rule-draw 700ms cubic-bezier(.16,1,.3,1) both",
         rise: "rise 620ms cubic-bezier(.16,1,.3,1) both",

@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 import * as expenseRecordService from "../services/expenseRecord.service";
+import { moneyAmountSchema } from "../lib/money";
 import { ApiError } from "../middleware/error.middleware";
 
 /*
@@ -15,7 +16,7 @@ export const createSchema = z.object({
   date: z.string().date(),
   description: z.string().min(1).max(255),
   vendor: z.string().max(150).optional(),
-  amount: z.number().positive(),
+  amount: moneyAmountSchema,
 });
 
 const updateSchema = z.object({
@@ -23,7 +24,7 @@ const updateSchema = z.object({
   date: z.string().date().optional(),
   description: z.string().min(1).max(255).optional(),
   vendor: z.string().max(150).nullable().optional(),
-  amount: z.number().positive().optional(),
+  amount: moneyAmountSchema.optional(),
   reviewStatus: z.enum(["Reviewed", "Needs Review"]).optional(),
   duplicateStatus: z.enum(["Not a Duplicate", "Flagged"]).optional(),
 });

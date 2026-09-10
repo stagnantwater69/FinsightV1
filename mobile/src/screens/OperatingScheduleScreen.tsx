@@ -18,6 +18,7 @@ import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { api, errorMessage } from "../lib/api";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
 import { space, typeScale, font } from "../theme/tokens";
+import { TAP_FLOOR } from "../components/touchTarget";
 import { useTheme } from "../context/ThemeContext";
 
 /**
@@ -312,7 +313,7 @@ export function OperatingScheduleScreen() {
                     disabled={busyOverrideId === o.id}
                     accessibilityRole="button"
                     accessibilityLabel={`Remove the ${o.type === "CLOSED" ? "closure" : "opening"} on ${o.date}`}
-                    style={{ padding: space.sm }}
+                    style={{ padding: space.sm, minWidth: TAP_FLOOR, minHeight: TAP_FLOOR, alignItems: "center", justifyContent: "center" }}
                   >
                     <Ionicons name="trash-outline" size={18} color={t.statusText.critical} />
                   </Pressable>

@@ -3,7 +3,7 @@ import { Modal } from "./Modal";
 import { Button } from "./Button";
 import { Callout } from "./ui";
 import { Field, FormError, TextInput } from "./Field";
-import { Money } from "./Money";
+import { formatMoney, Money } from "./Money";
 import { api } from "../lib/api";
 import { getErrorMessage } from "../lib/errors";
 import type { ReductionSimulation, ReductionSimulationInput } from "../lib/types";
@@ -53,7 +53,7 @@ function validate(kind: Kind, rawValue: string, baseline: number): FieldErrors {
 
   if (value <= 0) return { value: "Enter an amount greater than 0." };
   if (baseline > 0 && value > baseline) {
-    return { value: `Enter an amount up to the category's period total of ${baseline.toFixed(2)}.` };
+    return { value: `Enter an amount up to the category's period total of ${formatMoney(baseline, { decimals: true })}.` };
   }
   return {};
 }
@@ -146,7 +146,7 @@ export function ReductionSimulationModal({
 
           <dl className="grid grid-cols-2 gap-3">
             <div>
-              <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400">
+              <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-500">
                 {result.categoryName} — before
               </dt>
               <dd className="mt-0.5 text-sm font-semibold text-ink-900">
@@ -154,7 +154,7 @@ export function ReductionSimulationModal({
               </dd>
             </div>
             <div>
-              <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400">
+              <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-500">
                 {result.categoryName} — hypothetical after
               </dt>
               <dd className="mt-0.5 text-sm font-semibold text-ink-900">
@@ -162,7 +162,7 @@ export function ReductionSimulationModal({
               </dd>
             </div>
             <div>
-              <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400">
+              <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-500">
                 Total expenses — before
               </dt>
               <dd className="mt-0.5 text-sm font-semibold text-ink-900">
@@ -170,7 +170,7 @@ export function ReductionSimulationModal({
               </dd>
             </div>
             <div>
-              <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400">
+              <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-500">
                 Total expenses — hypothetical after
               </dt>
               <dd className="mt-0.5 text-sm font-semibold text-ink-900">
@@ -257,7 +257,7 @@ export function ReductionSimulationModal({
               kind === "percent"
                 ? "Greater than 0, up to 100."
                 : baseline > 0
-                  ? `Greater than 0, up to this period's ${categoryName} total of ${baseline.toFixed(2)}.`
+                  ? `Greater than 0, up to this period's ${categoryName} total of ${formatMoney(baseline, { decimals: true })}.`
                   : "Greater than 0."
             }
             error={shownError}

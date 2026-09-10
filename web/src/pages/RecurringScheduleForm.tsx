@@ -11,7 +11,9 @@ import { formatDueDate } from "../components/RecurringAgenda";
 import { api } from "../lib/api";
 import { getErrorMessage } from "../lib/errors";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
+import { todayIso as today } from "../lib/dates";
 import type { RecurringSchedule } from "../lib/types";
+import { NoBusinessProfile } from "../components/NoBusinessProfile";
 
 /**
  * Declaring and editing a recurring payment.
@@ -27,11 +29,6 @@ import type { RecurringSchedule } from "../lib/types";
  * for a monthly bill. An owner who already knows the rent is due on the 5th
  * should not have to prove it to FinSight first.
  */
-
-/** Today as `YYYY-MM-DD` — what `<input type="date">` binds to. */
-function today() {
-  return new Date().toISOString().slice(0, 10);
-}
 
 interface FormValues {
   label: string;
@@ -174,7 +171,7 @@ export function AddRecurringSchedule() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  if (!selected) return null;
+  if (!selected) return <NoBusinessProfile />;
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();

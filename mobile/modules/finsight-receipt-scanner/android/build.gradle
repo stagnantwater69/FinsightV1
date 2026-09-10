@@ -1,0 +1,33 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+group = 'expo.modules.finsightreceiptscanner'
+version = '1.0.0'
+android {
+  namespace 'expo.modules.finsightreceiptscanner'
+  // The standalone instrumentation APK includes React Native and OpenCV,
+  // both of which ship the shared C++ runtime. Keep one packaged copy.
+  packaging { jniLibs { pickFirsts += ['**/libc++_shared.so'] } }
+  defaultConfig {
+    versionCode 1
+    versionName '1.0.0'
+    testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+  }
+}
+configurations.configureEach {
+  // AndroidX instrumentation brings full Guava, which already supplies this
+  // interface. Production CameraX needs the standalone artifact instead.
+  if (!name.toLowerCase().contains('androidtest')) {
+    resolutionStrategy.force 'com.google.guava:listenablefuture:1.0'
+  }
+}
+dependencies {
+  implementation 'androidx.camera:camera-core:1.6.0'
+  implementation 'androidx.camera:camera-camera2:1.6.0'
+  implementation 'androidx.camera:camera-lifecycle:1.6.0'
+  implementation 'androidx.camera:camera-view:1.6.0'
+  implementation 'org.opencv:opencv:4.12.0'
+  androidTestImplementation 'androidx.test:runner:1.6.2'
+  androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+}

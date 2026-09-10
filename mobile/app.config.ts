@@ -9,15 +9,61 @@ import type { ExpoConfig, ConfigContext } from "expo/config";
  * process.env lookups through the app.
  *
  * NOTE ON "PUBLIC": EXPO_PUBLIC_* values are embedded in the app bundle and are
- * readable by anyone with the APK. That is correct for all three of these — the
- * API base URL, the Supabase project URL, and the Supabase *publishable*
- * (anon) key are all designed to be client-visible. The service-role key is
- * never in this app; it stays server-side.
+ * readable by anyone with the APK. That is correct for every one of them — the
+ * API base URL, the Supabase project URL, the Supabase *publishable* (anon)
+ * key and the web app's own origin are all designed to be client-visible. The
+ * service-role key is never in this app; it stays server-side.
  */
+
+/**
+ * The web host the confirmation email now points at, or null.
+ *
+ * WHY THE APP CARES ABOUT A WEBSITE'S HOSTNAME. Confirmation emails redirect to
+ * `${WEB_APP_URL}/auth/confirm` for every owner, web- and mobile-registered
+ * alike, because a `finsight://` link in an inbox is a dead end on any device
+ * that does not have the app. The OS hands an https link to the app instead of
+ * the browser only when the app CLAIMS that host — an Android App Link with
+ * `autoVerify`, an iOS Universal Link with an associated domain — which is what
+ * the two blocks below declare.
+ *
+ * NULL WHEN UNSET OR NOT https, and then nothing is emitted at all. A claim on
+ * a placeholder host is worse than no claim: Android's verifier fails it and
+ * the link stops opening the app for good on that install, and local dev (where
+ * this is a LAN address, not a domain anybody can serve a file from) would
+ * otherwise ship a broken association into every debug build. Existing builds
+ * are likewise unaffected.
+ *
+ * VERIFICATION IS A DEPLOYMENT STEP, NOT A CODE ONE. This half is the app's
+ * claim; the other half is the host serving `/.well-known/assetlinks.json` with
+ * this package's signing-certificate fingerprint and
+ * `/.well-known/apple-app-site-association` with the app ID. Until both are
+ * live the link opens the website, which is exactly why the site can hand the
+ * session back over `finsight://auth/handoff` (see AuthScreens.tsx).
+ */
+const webAppHost = (() => {
+  const raw = process.env.EXPO_PUBLIC_WEB_APP_URL;
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" && url.hostname ? url.hostname : null;
+  } catch {
+    // A malformed value is a typo in an env file, not a reason to fail the
+    // build — it just means no association, same as unset.
+    return null;
+  }
+})();
+
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
   name: "FinSight",
   slug: "finsight",
+  /*
+   * KEPT, even though confirmation emails no longer use it. Password reset
+   * still arrives on `finsight://`, and so does the website's hand-back of a
+   * session (`finsight://auth/handoff?code=…`) — a custom scheme is the only
+   * way a browser can open this app on a device where the App Link claim
+   * below has not verified.
+   */
   scheme: "finsight",
   version: "0.1.0",
   orientation: "portrait",
@@ -63,9 +109,30 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // by expo-image-picker (the gallery fallback); declaring it here keeps the
     // manifest honest about what the app can do.
     permissions: ["CAMERA", "READ_EXTERNAL_STORAGE"],
+    /*
+     * The App Link claim, present only when there is a real host to claim.
+     * Scoped to `/auth` rather than the whole site: the app has nothing to do
+     * with the marketing pages, and a filter that swallowed every link to the
+     * website would take the blog with it.
+     */
+    ...(webAppHost
+      ? {
+          intentFilters: [
+            {
+              action: "VIEW",
+              autoVerify: true,
+              category: ["BROWSABLE", "DEFAULT"],
+              data: [{ scheme: "https", host: webAppHost, pathPrefix: "/auth" }],
+            },
+          ],
+        }
+      : {}),
   },
   ios: {
     bundleIdentifier: "app.finsight.mobile",
+    // The iOS half of the same claim. Path scoping lives in the
+    // apple-app-site-association file on the host, not here.
+    ...(webAppHost ? { associatedDomains: [`applinks:${webAppHost}`] } : {}),
     /*
      * PHONE-FIRST, and said out loud rather than implied.
      *
@@ -88,6 +155,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   web: { favicon: "./assets/favicon.png" },
 
   plugins: [
+    // Preserve gallery launchers across accessibility font-size changes.
+    "./plugins/withScannerFontScale",
     // Splash moved out of the top-level `splash` key in SDK 54+; it is plugin
     // config now.
     [
@@ -95,7 +164,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       {
         image: "./assets/splash-icon.png",
         resizeMode: "contain",
-        imageWidth: 220,
+        imageWidth: 160,
         /*
          * ONE FIXED BRAND SURFACE IN BOTH THEMES, deliberately, rather than a
          * light plate and a dark plate.
@@ -159,5 +228,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     supabaseUrl: process.env.EXPO_PUBLIC_SUPABASE_URL,
     supabaseAnonKey: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY,
     receiptScannerEnabled: process.env.EXPO_PUBLIC_RECEIPT_SCANNER_ENABLED !== "false",
+    receiptCameraMode: process.env.EXPO_PUBLIC_RECEIPT_CAMERA_MODE === "native" ? "native" : "custom",
   },
 });

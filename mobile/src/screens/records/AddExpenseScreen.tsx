@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { KeyboardAvoidingView, Platform, ScrollView, TextInput } from "react-native";
-import { Button, Card, ErrorNote, Field, Screen, T } from "../../components/ui";
+import { Button, Card, ErrorNote, Field, Screen, ScreenHeader } from "../../components/ui";
 import { useBusinessProfiles } from "../../context/BusinessProfileContext";
 import { api } from "../../lib/api";
 import { saveFailureMessage } from "../../lib/connectionState";
@@ -71,8 +71,12 @@ export function AddExpenseScreen({ navigation }: any) {
       */}
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}>
+          <ScreenHeader
+            eyebrow="Money out"
+            title="Add expense"
+            subtitle="Record what the business paid and where it belongs."
+          />
           <Card>
-            <T variant="title" style={{ marginBottom: space.md }}>Add expense</T>
             <CategoryPicker
               categories={categories}
               value={categoryId}

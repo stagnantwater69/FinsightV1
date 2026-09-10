@@ -79,7 +79,7 @@ export function FaqAccordion() {
     <section
       id="faq"
       aria-labelledby="faq-title"
-      className="landing-section-gradient-base scroll-mt-20 bg-landing-cream"
+      className="landing-section-gradient-base landing-section-gradient-faq scroll-mt-20 bg-landing-cream"
     >
       <div className={`${MEASURE} py-16 sm:py-24`}>
         <div className="flex flex-wrap items-end justify-between gap-6">

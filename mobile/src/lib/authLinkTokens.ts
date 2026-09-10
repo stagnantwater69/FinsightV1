@@ -1,5 +1,20 @@
 /**
- * Reads the credentials Supabase puts in a `finsight://` auth deep link.
+ * Reads the credentials an auth link hands the app.
+ *
+ * THE SCHEME IS NO LONGER ALWAYS OURS. Confirmation emails now point at the
+ * https web origin for everyone, web- and mobile-registered alike, so the OS
+ * gives this URL to the app only when the App Link/Universal Link association
+ * verifies (app.config.ts) and to the browser otherwise. Matching on the PATH
+ * rather than on the scheme is what makes both shapes read identically here.
+ *
+ * PASSWORD RESET IS NOT HERE ANY MORE, and its absence is the point. The reset
+ * email's button — `finsight://auth/reset-password`, with a token pair in the
+ * fragment — has been taken out of the Supabase template, which now sends
+ * GoTrue's recovery code and nothing else. That link can no longer be minted,
+ * so a branch for it would be dead code claiming to handle a URL that will
+ * never arrive; the code is typed into ResetPasswordScreen instead, and never
+ * travels in a URL at all. Confirmation still has its link, and still lands
+ * here.
  *
  * WHY BY HAND, AND WHY NO NEW DEPENDENCY. React Native's own `Linking` gives us
  * the URL; everything after that is string work. `expo-linking` would parse it
@@ -17,14 +32,26 @@
 export interface AuthLinkTokens {
   accessToken: string;
   refreshToken: string;
-  /** `recovery` for a reset link, `signup` for a confirmation link. */
+  /** `signup` for a confirmation link. */
   type: string | null;
 }
 
-export type AuthLinkKind = "reset-password" | "confirm-email";
+export type AuthLinkKind = "confirm-email" | "session-handoff";
 
 export type AuthLinkResult =
-  | { kind: AuthLinkKind; tokens: AuthLinkTokens }
+  | { kind: "confirm-email"; tokens: AuthLinkTokens }
+  /**
+   * A one-time code the web app minted for this phone, NOT a session.
+   *
+   * The confirmation email now always lands on the https web origin, so an
+   * owner whose phone did not claim the App Link finishes on the website — and
+   * the website hands the session over by opening `finsight://auth/handoff`
+   * with a short-lived opaque code that the backend exchanges. The code is
+   * carried instead of tokens deliberately: a URL is written to the system log,
+   * the recents list and the browser's history, and none of those are places an
+   * access or refresh token may end up.
+   */
+  | { kind: "session-handoff"; code: string }
   | { kind: AuthLinkKind; error: string }
   | null;
 
@@ -54,10 +81,10 @@ function describe(code: string | null, description: string | null): string {
  * than an error state on screen.
  */
 export function parseAuthDeepLink(url: string): AuthLinkResult {
-  const kind: AuthLinkKind | null = url.includes("auth/reset-password")
-    ? "reset-password"
-    : url.includes("auth/confirm")
-      ? "confirm-email"
+  const kind: AuthLinkKind | null = url.includes("auth/confirm")
+    ? "confirm-email"
+    : url.includes("auth/handoff")
+      ? "session-handoff"
       : null;
   if (!kind) return null;
 
@@ -69,6 +96,23 @@ export function parseAuthDeepLink(url: string): AuthLinkResult {
   const params = new URLSearchParams(`${afterQuery.split("#")[0]}&${afterHash}`);
 
   const errorCode = params.get("error_code") ?? params.get("error");
+
+  /*
+   * MATCHING THE PATH IS NOT ENOUGH FOR A HANDOFF — the code has to be there.
+   *
+   * Handled before the error/token branches below because a handoff link is
+   * not a Supabase link at all: it is minted by our own web app and carries
+   * neither `error_code` nor tokens, so the reasoning those branches encode
+   * does not apply to it. A `finsight://auth/handoff` with nothing usable on
+   * it is treated as none of this module's business rather than as a failed
+   * sign-in, because the one thing it cannot be is a session — and putting
+   * "that didn't work" over the screen of someone whose app was opened by a
+   * stray URL is the failure mode this module exists to avoid.
+   */
+  if (kind === "session-handoff") {
+    const code = params.get("code");
+    return code ? { kind, code } : null;
+  }
   if (errorCode) {
     return { kind, error: describe(errorCode, params.get("error_description")) };
   }

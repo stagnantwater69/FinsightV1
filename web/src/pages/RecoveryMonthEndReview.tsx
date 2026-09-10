@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import { ArrowRight } from "lucide-react";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { api } from "../lib/api";
 import { getErrorMessage } from "../lib/errors";
 import { InsightsTabs } from "../components/AppShell";
-import { Button } from "../components/Button";
+import { Button, ButtonLink } from "../components/Button";
+import { EmptyState } from "../components/EmptyState";
 import { Field, TextInput } from "../components/Field";
 import { Callout, Card, PageHead, Panel } from "../components/ui";
 import { formatMoney } from "../components/Money";
@@ -59,7 +61,17 @@ export function RecoveryMonthEndReviewPage() {
   const requestId = useRef(0);
 
   async function load() {
-    if (!selected) return;
+    /*
+     * No business — an owner who chose "Skip for now". Settles rather than
+     * bails: `loading` starts true, so returning silently left two skeleton
+     * panels on screen with nothing ever coming to replace them.
+     */
+    if (!selected) {
+      setData(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
     const thisRequestId = ++requestId.current;
     setLoading(true);
     setError(null);
@@ -82,7 +94,12 @@ export function RecoveryMonthEndReviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id, month]);
 
-  if (!selected) return null;
+  /*
+   * No `if (!selected) return <NoBusinessProfile />` any more — this page only
+   * READS a month that has already ended. With no business it keeps its month
+   * picker and shows the empty state below, which also narrows `selected` for
+   * the profile-scoped link further down.
+   */
 
   return (
     <div>
@@ -137,6 +154,20 @@ export function RecoveryMonthEndReviewPage() {
           <SkeletonPanel lines={3} />
           <SkeletonPanel lines={3} />
         </div>
+      ) : !selected ? (
+        <EmptyState
+          title="No month to review yet"
+          icon="◔"
+          action={
+            <ButtonLink to="/onboarding" variant="primary">
+              Finish setting up your business
+            </ButtonLink>
+          }
+        >
+          A month-end review looks back over the sales and expenses recorded
+          for a business. Add yours, and the first review is ready once a month
+          has ended.
+        </EmptyState>
       ) : data?.status === "not_yet_reviewable" ? (
         <Callout tone="info">
           <b className="font-semibold">{formatMonthLabel(data.month)} hasn't ended yet.</b> Once this month
@@ -238,9 +269,10 @@ export function RecoveryMonthEndReviewPage() {
               make a change yourself?{" "}
               <Link
                 to={`/business-profiles/${selected.id}/edit`}
-                className="tap-inline font-semibold text-brand-700 underline underline-offset-2"
+                className="tap-inline inline-flex items-center gap-1.5 font-semibold text-brand-700 underline underline-offset-2"
               >
-                Edit business profile →
+                Edit business profile
+                <ArrowRight aria-hidden className="size-3.5" strokeWidth={1.9} />
               </Link>
             </p>
           </Panel>

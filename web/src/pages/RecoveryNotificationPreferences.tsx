@@ -180,7 +180,7 @@ export function RecoveryNotificationPreferences() {
                         }
                         className="pr-8"
                       />
-                      <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-ink-400">
+                      <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-ink-500">
                         %
                       </span>
                     </div>

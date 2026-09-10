@@ -47,27 +47,41 @@ export function BusinessProfiles() {
             </ButtonLink>
           }
         >
-          Add a business profile to start tracking its funds, expenses, and sales in FinSight.
+          Add a business profile to start tracking its funds, expenses, and
+          sales in FinSight.
         </EmptyState>
       </div>
     );
   }
 
-  const threshold = Number(selected.expectedMonthlyExpenses) * (selected.largeExpenseThresholdPercent / 100);
+  const threshold =
+    Number(selected.expectedMonthlyExpenses) *
+    (selected.largeExpenseThresholdPercent / 100);
+  const dailyTarget =
+    selected.operatingDays > 0
+      ? Number(selected.expectedMonthlyExpenses) / selected.operatingDays
+      : 0;
 
   return (
     <div>
       <PageHead
-        eyebrow="Management"
         title="Business profile"
         subtitle="What FinSight knows about the business you're currently looking at."
         actions={
           <>
-            <ButtonLink to="/business-profiles/all" variant="secondary" size="sm">
+            <ButtonLink
+              to="/business-profiles/all"
+              variant="secondary"
+              size="sm"
+            >
               View all businesses
             </ButtonLink>
-            <ButtonLink to={`/business-profiles/${selected.id}/edit`} variant="brand" size="sm">
-              Edit
+            <ButtonLink
+              to={`/business-profiles/${selected.id}/edit`}
+              variant="brand"
+              size="sm"
+            >
+              Edit business
             </ButtonLink>
           </>
         }
@@ -83,7 +97,7 @@ export function BusinessProfiles() {
         eyebrow={selected.type}
         action={<Pill tone="ok">Active business</Pill>}
       >
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
           <StatTile
             label="Available business funds"
             value={formatMoney(selected.availableFunds)}
@@ -101,21 +115,42 @@ export function BusinessProfiles() {
             sublabel="Owner-entered reference"
           />
           <StatTile
+            label="Daily sales target"
+            value={formatMoney(dailyTarget)}
+            sublabel="Expected expenses ÷ operating days"
+          />
+          <StatTile
             label="Large-expense threshold"
             value={`${selected.largeExpenseThresholdPercent}%`}
             sublabel={
               <>
-                = <span className="figure">{formatMoney(threshold)}</span> of expected monthly expenses
+                = <span className="figure">{formatMoney(threshold)}</span> of
+                expected monthly expenses
               </>
             }
           />
         </div>
 
-        <p className="mt-4 border-t border-paper-200 pt-3 text-xs text-ink-400">
-          Created {selected.createdAt.slice(0, 10)}. These figures drive every insight in FinSight — the
-          recovery target, the daily sales target, and which expenses get flagged as unusually large.
-          Click Edit above to change any of them.
-        </p>
+        <div className="mt-5 grid gap-4 border-t border-paper-200 pt-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+          <div>
+            <p className="text-sm font-semibold text-ink-800">
+              How FinSight uses this profile
+            </p>
+            <p className="mt-1 max-w-4xl text-sm leading-relaxed text-ink-500">
+              These owner-entered figures shape recovery calculations, daily
+              targets, spending context, and which expenses are flagged for
+              review. Profile created {selected.createdAt.slice(0, 10)}.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <ButtonLink to="/insights/recovery" variant="secondary" size="sm">
+              View recovery target
+            </ButtonLink>
+            <ButtonLink to="/records" variant="secondary" size="sm">
+              Review records
+            </ButtonLink>
+          </div>
+        </div>
       </Panel>
     </div>
   );

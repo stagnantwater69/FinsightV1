@@ -13,11 +13,12 @@
  * behaviour only reachable by pressing a button on a screen this project has
  * no render harness deep enough to drive.
  *
- * ML Kit IS THE ONLY CAPTURE PATH ON ANDROID NOW. There is no fallback
- * branch here to "open the old camera" — that camera no longer exists in this
- * journey. A failure is a `failure` outcome the screen displays with retry and
- * go-back actions; it is never silently swapped for a different capture
- * implementation.
+ * THIS IS THE OPTIONAL ML KIT ROLLOUT PATH, NOT THE DEFAULT. FinSight's own
+ * `ReceiptCamera` is the default capture path; this file only runs when
+ * `USE_NATIVE_RECEIPT_CAMERA` (`extra.receiptCameraMode === "native"`) is set.
+ * There is still no fallback branch here that silently opens a different
+ * camera: a failure is a `failure` outcome the screen displays with retry and
+ * go-back actions.
  */
 
 import {

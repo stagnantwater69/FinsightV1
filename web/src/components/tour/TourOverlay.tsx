@@ -315,7 +315,7 @@ export function TourOverlay() {
                   type="button"
                   onClick={() => setConfirmOpen(true)}
                   aria-label="Close tour"
-                  className="tap -mr-1 -mt-1 h-8 w-8 min-h-0 min-w-0 shrink-0 rounded-lg text-ink-400 transition hover:bg-paper-100 hover:text-ink-800"
+                  className="tap -mr-1 -mt-1 h-8 w-8 min-h-0 min-w-0 shrink-0 rounded-lg text-ink-500 transition hover:bg-paper-100 hover:text-ink-800"
                 >
                   <span aria-hidden className="text-base leading-none">✕</span>
                 </button>
@@ -365,13 +365,13 @@ export function TourOverlay() {
             </div>
           ) : (
             <div className="mt-4 flex items-center gap-2">
-              <span className="figure text-[12px] tabular-nums text-ink-400">
+              <span className="figure text-[12px] tabular-nums text-ink-500">
                 {position} of {total}
               </span>
               <button
                 type="button"
                 onClick={() => tour.stop("skipped")}
-                className="tap-inline ml-1 rounded text-[12px] font-medium text-ink-400 underline-offset-2 transition hover:text-ink-700 hover:underline"
+                className="tap-inline ml-1 rounded text-[12px] font-medium text-ink-500 underline-offset-2 transition hover:text-ink-700 hover:underline"
               >
                 Skip Tour
               </button>

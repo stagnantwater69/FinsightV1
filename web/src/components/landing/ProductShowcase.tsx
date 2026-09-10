@@ -159,8 +159,8 @@ export function ProductShowcase() {
       aria-labelledby="showcase-title"
       className="landing-section-gradient-mint relative overflow-hidden bg-landing-mint-pale"
     >
-      {/* the trust strip's white arcs down into this mint band */}
-      <CurveDivider from="surface" className="relative z-10" />
+      {/* Continue the trust strip's exact edge color into this mint band. */}
+      <CurveDivider from="raised" className="relative z-10" />
       <MintGlow className="inset-x-8 inset-y-0 opacity-40" />
 
       <div className={`${MEASURE} relative py-16 sm:py-24`}>

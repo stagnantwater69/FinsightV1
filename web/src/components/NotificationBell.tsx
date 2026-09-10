@@ -76,7 +76,7 @@ export function NotificationRow({
       <div className="min-w-0 flex-1">
         <p className="text-[12.5px] font-semibold text-ink-900">{notification.type}</p>
         <p className="mt-0.5 text-[12.5px] leading-snug text-ink-600">{notification.message}</p>
-        <p className="mt-1 text-[11px] text-ink-400">{relativeTime(notification.dateCreated)}</p>
+        <p className="mt-1 text-[11px] text-ink-500">{relativeTime(notification.dateCreated)}</p>
       </div>
     </>
   );
@@ -138,7 +138,7 @@ export function NotificationBell() {
         aria-label={
           unreadCount > 0 ? `Notifications — ${unreadCount} unread` : "Notifications — none unread"
         }
-        className="tap relative h-10 w-10 min-h-0 min-w-0 rounded-xl text-ink-600 transition hover:bg-paper-100 hover:text-ink-900"
+        className="tap relative h-11 w-11 rounded-xl text-ink-600 transition hover:bg-paper-100 hover:text-ink-900"
       >
         <IconBell className="h-[18px] w-[18px]" />
         {unreadCount > 0 ? (

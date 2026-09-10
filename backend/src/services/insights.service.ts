@@ -6,9 +6,6 @@ import {
   AMOUNT_EPSILON,
   applyMonthDataStatus,
   approximateElapsedOperatingDaysAsOf,
-  computeCategoryStats,
-  computeQuartiles,
-  detectionMethod,
   computeRecoveryTarget,
   computeChangeSincePreviousDay,
   deriveBaselineAppearsOffFromPattern,
@@ -18,11 +15,9 @@ import {
   dayStatus,
   type DayStatus,
   impactBand,
-  isUnusualExpense,
   type MonthEndOpenDaySales,
+  scanUnusualExpenses,
   selectStrongestAndWeakestOpenDay,
-  zScore,
-  MIN_HISTORY_FOR_DETECTION,
   PROJECTION_STALENESS_CALENDAR_DAYS,
   type RecoveryChangeSincePreviousDay,
   type RecoveryCheckpoint,
@@ -701,7 +696,13 @@ export async function getExpenseBehavior(
 
   const [currentRecords, previousRecords, categories] = await Promise.all([
     prisma.expenseRecord.findMany({
+      // Explicit projection, not the whole row. A 366-day window on a busy
+      // account is thousands of records, and every column this does not name
+      // is bytes over the wire and a Decimal/Date object built for nothing.
+      // These five are exactly what the aggregation, the daily series and the
+      // unusual-expense output below read.
       where: { businessProfileId, date: { gte: periodStart, lte: utcEndOfDay(today) } },
+      select: { id: true, categoryId: true, amount: true, date: true, description: true },
     }),
     prisma.expenseRecord.findMany({
       where: { businessProfileId, date: { gte: previousPeriodStart, lte: previousPeriodEnd } },
@@ -829,61 +830,46 @@ export async function getExpenseBehavior(
   );
   const currentRecordById = new Map(currentRecords.map((r) => [r.id, r]));
 
-  const unusualExpenses: {
-    id: number;
-    description: string;
-    amount: number;
-    date: Date;
-    categoryId: number;
-    categoryName: string;
-    zScore: number;
-    categoryMean: number;
-    categoryStdDev: number;
-    detectedBy: "z-score" | "iqr" | "both";
-  }[] = [];
-  const insufficientHistoryCategories: { categoryId: number; categoryName: string; historyCount: number }[] = [];
+  /*
+   * Unusual by z-score OR by IQR, AND materially different in peso terms — see
+   * isUnusualExpense. The two statistical tests are blind in different places,
+   * and the peso floor is what stops either of them reporting a difference too
+   * small for an owner to care about.
+   *
+   * The leave-one-out arithmetic itself now lives in `scanUnusualExpenses`,
+   * which amortises it across the category instead of rebuilding (and
+   * re-sorting) every candidate's baseline from scratch. Same tests, same
+   * thresholds, same numbers — see the note above that function for why the
+   * one input family an O(1) update cannot handle is still computed the old
+   * way. Only candidates inside the selected period are reportable, which is
+   * what `currentRecordById.has` expresses; the whole bounded history still
+   * forms the baseline.
+   */
+  const scan = scanUnusualExpenses(byCategory, (id) => currentRecordById.has(id));
 
-  for (const [categoryId, records] of byCategory) {
-    if (records.length < MIN_HISTORY_FOR_DETECTION) {
-      insufficientHistoryCategories.push({
-        categoryId,
-        categoryName: categoryName.get(categoryId) ?? "Unknown",
-        historyCount: records.length,
-      });
-      continue;
-    }
+  const unusualExpenses = scan.unusual.map((hit) => {
+    const currentRecord = currentRecordById.get(hit.id)!;
+    return {
+      id: hit.id,
+      description: currentRecord.description,
+      amount: hit.amount,
+      date: currentRecord.date,
+      categoryId: hit.categoryId,
+      categoryName: categoryName.get(hit.categoryId) ?? "Unknown",
+      zScore: hit.zScore,
+      categoryMean: hit.categoryMean,
+      categoryStdDev: hit.categoryStdDev,
+      // Which test caught it. A flag an owner can be shown the reason for
+      // is worth more than one they have to take on trust.
+      detectedBy: hit.detectedBy,
+    };
+  });
+  const insufficientHistoryCategories = scan.insufficientHistory.map((entry) => ({
+    categoryId: entry.categoryId,
+    categoryName: categoryName.get(entry.categoryId) ?? "Unknown",
+    historyCount: entry.historyCount,
+  }));
 
-    for (const candidate of records) {
-      const currentRecord = currentRecordById.get(candidate.id);
-      if (!currentRecord) continue; // only flag within the selected period
-
-      const baseline = records.filter((r) => r.id !== candidate.id).map((r) => r.amount);
-      const stats = computeCategoryStats(baseline);
-      const quartiles = computeQuartiles(baseline);
-      const z = zScore(candidate.amount, stats);
-
-      // Unusual by z-score OR by IQR, AND materially different in peso terms —
-      // see isUnusualExpense. The two statistical tests are blind in different
-      // places, and the peso floor is what stops either of them reporting a
-      // difference too small for an owner to care about.
-      if (isUnusualExpense(candidate.amount, stats, quartiles)) {
-        unusualExpenses.push({
-          id: candidate.id,
-          description: currentRecord.description,
-          amount: candidate.amount,
-          date: currentRecord.date,
-          categoryId,
-          categoryName: categoryName.get(categoryId) ?? "Unknown",
-          zScore: z,
-          categoryMean: stats.mean,
-          categoryStdDev: stats.stdDev,
-          // Which test caught it. A flag an owner can be shown the reason for
-          // is worth more than one they have to take on trust.
-          detectedBy: detectionMethod(candidate.amount, stats, quartiles),
-        });
-      }
-    }
-  }
   unusualExpenses.sort((a, b) => Math.abs(b.zScore) - Math.abs(a.zScore));
 
   return {

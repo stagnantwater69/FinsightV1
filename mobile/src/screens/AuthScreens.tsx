@@ -1,29 +1,34 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, TextInput, View } from "react-native";
+import { Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, TextInput, View, useWindowDimensions } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { StatusBar } from "expo-status-bar";
-import Svg, { Defs, LinearGradient as SvgLinearGradient, Rect, Stop } from "react-native-svg";
-import { Button, Card, Checkbox, ErrorNote, Field, Screen, T } from "../components/ui";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Button, Callout, Checkbox, ErrorNote, Field, Screen, T } from "../components/ui";
 import { Mascot, mascotSource, type MascotState } from "../components/MascotState";
 import { useAuth } from "../context/AuthContext";
 import * as haptics from "../lib/haptics";
 import { api, errorMessage, getFieldErrors } from "../lib/api";
 import {
   isValid,
+  normaliseRecoveryCode,
   validateLogin,
   validateRecoverPassword,
+  validateRecoveryCode,
   validateRegister,
   validateResetPassword,
+  MAX_RECOVERY_CODE_LENGTH,
   MIN_PASSWORD_LENGTH,
   type FieldErrors,
   type LoginField,
+  type RecoveryCodeField,
   type RegisterField,
   type ResetPasswordField,
 } from "../lib/authValidation";
 import { createRecoveryClient } from "../lib/supabase";
 import type { AuthLinkTokens } from "../lib/authLinkTokens";
+import type { Profile } from "../lib/types";
 import { isSavingAccount, savedEmail, setSavedAccount } from "../lib/savedAccountStore";
-import { font, radius, space, typeScale } from "../theme/tokens";
+import { font, radius, space } from "../theme/tokens";
 import { useTheme } from "../context/ThemeContext";
 
 /**
@@ -79,132 +84,24 @@ function useResendCooldown(seconds = RESEND_COOLDOWN_SECONDS) {
   return { remaining, start: useCallback(() => setRemaining(seconds), [seconds]) };
 }
 
-/**
- * The brand moment: one calm logo, the product name, and one line about why
- * the app is worth the form below it.
- *
- * DELIBERATELY SMALL. The plan's rule is that the form stays visually
- * dominant, so this is a small mark and two lines of type — not a hero. The
- * logo is decorative; everything it could say is said by the product name
- * beside it. Auth states with approved scenario art can still opt into it.
- *
- * ONE FOCAL POINT. `AuthShell` renders exactly one illustration, whichever
- * state the screen names, so a screen can never end up with a pose above the
- * card and a second one inside it.
- */
-function BrandMoment({ mascot, benefit }: { mascot: MascotState; benefit?: string }) {
+/** One compact brand anchor and a consistent form layout for every auth state. */
+function BrandMoment({ mascot, showMascot = true }: { mascot: MascotState; showMascot?: boolean }) {
   return (
-    <View style={{ alignItems: "center", marginBottom: space.md }}>
-      {mascot === "brandMark" ? (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: space.md }}>
+      {!showMascot ? null : mascot === "brandMark" ? (
         <Image
           source={mascotSource("brandMark")}
-          style={{ width: 72, height: 72 }}
+          style={{ width: 48, height: 48 }}
           resizeMode="contain"
           accessible={false}
           accessibilityElementsHidden
           importantForAccessibility="no-hide-descendants"
         />
       ) : (
-        <Mascot state={mascot} size={64} plate />
+        <Mascot state={mascot} size={48} plate />
       )}
-      <T variant="titleLg" style={{ textAlign: "center", marginTop: space.sm }}>
-        FinSight
-      </T>
-      {benefit ? (
-        <T variant="caption" style={{ textAlign: "center", marginTop: 2 }}>
-          {benefit}
-        </T>
-      ) : null}
+      <T variant="title" style={{ flex: 1 }}>FinSight</T>
     </View>
-  );
-}
-
-function AuthHero({ title, benefit }: { title: string; benefit?: string }) {
-  const t = useTheme();
-  const foreground = t.mode === "light" ? t.brandHeading : t.onBrandSolid;
-  const secondary = t.mode === "light" ? t.textSecondary : t.onBrandSolidMuted;
-  return (
-    <View style={{ paddingHorizontal: space.lg, paddingTop: space.lg, paddingBottom: space.xxl }}>
-      <View
-        pointerEvents="none"
-        accessible={false}
-        accessibilityElementsHidden
-        importantForAccessibility="no-hide-descendants"
-        style={{ position: "absolute", inset: 0, overflow: "hidden" }}
-      >
-        <View
-          style={{
-            position: "absolute",
-            width: 190,
-            height: 190,
-            borderRadius: 95,
-            borderWidth: 1,
-            borderColor: t.mode === "light" ? t.brand[300] : t.onBrandSolidMuted,
-            opacity: t.mode === "light" ? 0.38 : 0.18,
-            top: -80,
-            right: -36,
-          }}
-        />
-        <View
-          style={{
-            position: "absolute",
-            width: 84,
-            height: 84,
-            borderRadius: 42,
-            backgroundColor: t.ACCENT.fill,
-            opacity: 0.12,
-            right: 52,
-            bottom: 18,
-          }}
-        />
-      </View>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
-        <Image
-          source={mascotSource("brandMark")}
-          style={{ width: 52, height: 52 }}
-          resizeMode="contain"
-          accessible={false}
-          accessibilityElementsHidden
-          importantForAccessibility="no-hide-descendants"
-        />
-        <T variant="title" style={{ color: foreground }}>
-          FinSight
-        </T>
-      </View>
-      <T
-        variant="titleLg"
-        style={{ color: foreground, maxWidth: 310, marginTop: space.lg, lineHeight: 34 }}
-      >
-        {title}
-      </T>
-      {benefit ? (
-        <T style={{ color: secondary, maxWidth: 320, marginTop: space.sm }}>
-          {benefit}
-        </T>
-      ) : null}
-    </View>
-  );
-}
-
-function AuthGradientBackground({ colors }: { colors: readonly [string, string, string] }) {
-  return (
-    <Svg
-      width="100%"
-      height="100%"
-      style={{ position: "absolute", inset: 0 }}
-      pointerEvents="none"
-      accessibilityElementsHidden
-      importantForAccessibility="no-hide-descendants"
-    >
-      <Defs>
-        <SvgLinearGradient id="authBackground" x1="0" y1="0" x2="0" y2="1">
-          <Stop offset="0" stopColor={colors[0]} />
-          <Stop offset="0.44" stopColor={colors[1]} />
-          <Stop offset="1" stopColor={colors[2]} />
-        </SvgLinearGradient>
-      </Defs>
-      <Rect width="100%" height="100%" fill="url(#authBackground)" />
-    </Svg>
   );
 }
 
@@ -215,17 +112,14 @@ function AuthTextLink({ title, onPress }: { title: string; onPress: () => void }
       accessibilityRole="button"
       accessibilityLabel={title}
       onPress={onPress}
-      hitSlop={4}
       style={({ pressed }) => ({
-        minHeight: 44,
+        minHeight: 48,
         justifyContent: "center",
         paddingHorizontal: space.xs,
         opacity: pressed ? 0.65 : 1,
       })}
     >
-      <T variant="caption" style={{ color: t.brandText, fontFamily: font.sansSemibold }}>
-        {title}
-      </T>
+      <T style={{ color: t.brandText, fontFamily: font.sansSemibold }}>{title}</T>
     </Pressable>
   );
 }
@@ -234,107 +128,85 @@ function AuthShell({
   title,
   subtitle,
   mascot = "brandMark",
-  benefit,
-  decorated = false,
-  heroTitle,
+  showMascot = true,
   switchPrompt,
   switchAction,
   onSwitch,
+  onBack,
   children,
 }: {
   title: string;
   subtitle?: string;
   mascot?: MascotState;
-  benefit?: string;
-  decorated?: boolean;
-  heroTitle?: string;
+  showMascot?: boolean;
   switchPrompt?: string;
   switchAction?: string;
   onSwitch?: () => void;
+  onBack?: () => void;
   children: React.ReactNode;
 }) {
   const t = useTheme();
-  const { ink } = t;
-  const gradientColors =
-    t.mode === "light"
-      ? (["#cdeee0", "#e8f7f0", "#fbfaf4"] as const)
-      : ([t.brandSolid, t.brand[900], t.brand[950]] as const);
-  const formContent = (
-    <>
-      <T accessibilityRole="header" variant="title" style={{ textAlign: "center" }}>
-        {title}
-      </T>
-      {subtitle ? (
-        <T
-          style={{
-            textAlign: "center",
-            color: ink[500],
-            marginTop: 4,
-            marginBottom: space.md,
-            fontSize: typeScale.bodySm,
-          }}
-        >
-          {subtitle}
-        </T>
-      ) : (
-        <View style={{ height: space.md }} />
-      )}
-      {switchPrompt && switchAction && onSwitch ? (
-        <View
-          style={{
-            flexDirection: "row",
-            justifyContent: "center",
-            alignItems: "center",
-            marginTop: -space.sm,
-            marginBottom: space.sm,
-          }}
-        >
-          <T variant="caption">{switchPrompt}</T>
-          <AuthTextLink title={switchAction} onPress={onSwitch} />
-        </View>
-      ) : null}
-      {children}
-    </>
-  );
+  const insets = useSafeAreaInsets();
 
   return (
-    <Screen
-      safeTop
-      style={decorated ? { backgroundColor: gradientColors[0] } : undefined}
-    >
-      {decorated ? <StatusBar style={t.mode === "light" ? "dark" : "light"} /> : null}
-      {decorated ? <AuthGradientBackground colors={gradientColors} /> : null}
+    <Screen safeTop style={{ backgroundColor: t.brandSurface }}>
+      <StatusBar style={t.mode === "light" ? "dark" : "light"} />
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
         <ScrollView
-          contentContainerStyle={
-            decorated
-              ? { flexGrow: 1 }
-              : { padding: space.lg, paddingTop: space.xl, flexGrow: 1 }
-          }
+          contentContainerStyle={{
+            flexGrow: 1,
+            padding: space.lg,
+            paddingBottom: Math.max(insets.bottom, space.xxl) + space.lg,
+          }}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
         >
-          {decorated ? (
-            <>
-              <AuthHero title={heroTitle ?? title} benefit={benefit} />
+          <View style={{ width: "100%", maxWidth: 480, alignSelf: "center" }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, paddingVertical: space.md, marginBottom: space.lg }}>
+              {onBack ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Back to log in"
+                  onPress={onBack}
+                  style={({ pressed }) => ({
+                    minWidth: 48,
+                    minHeight: 48,
+                    borderRadius: radius.md,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    backgroundColor: pressed ? t.surface : "transparent",
+                  })}
+                >
+                  <Ionicons name="arrow-back" size={24} color={t.brandText} accessibilityElementsHidden importantForAccessibility="no" />
+                </Pressable>
+              ) : null}
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <BrandMoment mascot={mascot} showMascot={showMascot} />
+              </View>
+            </View>
+            <View style={{ backgroundColor: t.surface, borderRadius: radius.lg, padding: space.xl }}>
+              <View style={{ gap: space.sm, marginBottom: space.xxl }}>
+                <T accessibilityRole="header" variant="titleLg">{title}</T>
+                {subtitle ? <T style={{ color: t.textSecondary }}>{subtitle}</T> : null}
+              </View>
+              {children}
+            </View>
+            {switchPrompt && switchAction && onSwitch ? (
               <View
                 style={{
-                  flexGrow: 1,
-                  backgroundColor: t.surface,
-                  borderTopLeftRadius: 28,
-                  borderTopRightRadius: 28,
-                  padding: space.lg,
-                  paddingTop: space.xl,
+                  flexDirection: "row",
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: space.xs,
+                  marginTop: space.md,
                 }}
               >
-                {formContent}
+                <T>{switchPrompt}</T>
+                <AuthTextLink title={switchAction} onPress={onSwitch} />
               </View>
-            </>
-          ) : (
-            <>
-              <BrandMoment mascot={mascot} benefit={benefit} />
-              <Card>{formContent}</Card>
-            </>
-          )}
+            ) : null}
+          </View>
         </ScrollView>
       </KeyboardAvoidingView>
     </Screen>
@@ -385,17 +257,18 @@ function SuccessPanel({
         borderRadius: radius.md,
         borderWidth: 1,
         borderColor: tone === "good" ? t.statusBorder.good : t.brandBorder,
-        padding: space.md,
-        alignItems: "center",
+        padding: space.lg,
+        alignItems: "flex-start",
         gap: space.sm,
       }}
     >
       {/* Decorative: `body` below states the outcome in words. */}
       <Ionicons name={icon} size={28} color={tint} accessibilityElementsHidden importantForAccessibility="no" />
-      <T style={{ color: t.textPrimary, textAlign: "center", fontSize: typeScale.bodySm }}>{body}</T>
+      <T style={{ color: t.textPrimary }}>{body}</T>
       {email ? (
         <T
-          style={{ color: t.textPrimary, textAlign: "center", fontFamily: font.sansSemibold, fontSize: typeScale.bodySm }}
+          selectable
+          style={{ color: t.textPrimary, fontFamily: font.sansSemibold }}
         >
           {email}
         </T>
@@ -420,7 +293,7 @@ function resendLabel(remaining: number, sending: boolean, sent: boolean): string
 }
 
 export function LoginScreen({ navigation }: any) {
-  const { login } = useAuth();
+  const { login, sessionEnded } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [saveAccount, setSaveAccount] = useState(true);
@@ -504,11 +377,9 @@ export function LoginScreen({ navigation }: any) {
   return (
     <AuthShell
       title="Log in"
-      heroTitle="Know where your business stands."
-      benefit="Sales, expenses and receipts—clear and together."
-      decorated
+      subtitle="Welcome back. Log in to see how your business is doing."
       switchPrompt="New to FinSight?"
-      switchAction="Sign up"
+      switchAction="Create account"
       onSwitch={() => navigation.navigate("Register")}
     >
       {/*
@@ -518,6 +389,35 @@ export function LoginScreen({ navigation }: any) {
         open again on every hop — it replaces `blurOnSubmit`, which React Native
         0.86 marks deprecated in favour of it.
       */}
+      {/*
+        WHY THE APP IS SHOWING THIS FORM, when the owner did not ask for it.
+        Landing on a login screen you did not tap for reads as the app having
+        lost your work; saying which of the two things happened is the whole
+        difference between that and an instruction.
+
+        The two reasons get different sentences on purpose. "Log in again" is
+        the fix for an expired token and is NOT the fix for a suspended
+        account — see the ACCOUNT_NOT_ACTIVE note in the backend's requireAuth,
+        which is why that case is a 403 rather than a 401 in the first place.
+      */}
+      {sessionEnded ? (
+        <View
+          style={{ marginBottom: space.md }}
+          // `accessible` for the reason ErrorNote gives: React Native maps it
+          // onto isAccessibilityElement, and `alert` on a View without it is an
+          // announcement nothing makes. Safe here — the callout is text only,
+          // so there is no control for the grouping to swallow.
+          accessible
+          accessibilityLiveRegion="assertive"
+          accessibilityRole="alert"
+        >
+          <Callout tone="warn">
+            {sessionEnded === "account-not-active"
+              ? "This account isn't active right now, so FinSight has signed it out. Confirm your email address if you haven't yet, or contact support if you think this is a mistake."
+              : "Your session expired — please log in again."}
+          </Callout>
+        </View>
+      ) : null}
       <Field
         ref={emailRef}
         icon="mail-outline"
@@ -554,28 +454,30 @@ export function LoginScreen({ navigation }: any) {
           if (!busy) submit();
         }}
       />
-      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-        <View style={{ flex: 1 }}>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: space.sm }}>
+        <View style={{ flexGrow: 1, flexBasis: 160 }}>
           <Checkbox
             label="Remember me"
             checked={saveAccount}
             onChange={setSaveAccount}
-            style={{ marginBottom: 0 }}
+            style={{ marginBottom: 0, minHeight: 48 }}
           />
         </View>
         <AuthTextLink title="Forgot password?" onPress={() => navigation.navigate("RecoverPassword")} />
       </View>
       {error ? <ErrorNote>{error}</ErrorNote> : null}
-      <Button title="Log in" onPress={submit} loading={busy} style={{ marginTop: space.md }} />
+      <Button title="Log in" variant="primary" onPress={submit} loading={busy} style={{ marginTop: space.md }} />
     </AuthShell>
   );
 }
 
 export function RegisterScreen({ navigation }: any) {
   const t = useTheme();
-  const { ink } = t;
+  const { width, fontScale } = useWindowDimensions();
+  const formWidth = Math.min(width - space.lg * 2, 480) - space.xl * 2;
+  const namesSideBySide = formWidth >= 360 && fontScale <= 1.2;
   const { register } = useAuth();
-  const [form, setForm] = useState({ firstName: "", lastName: "", email: "", password: "", confirmPassword: "" });
+  const [form, setForm] = useState({ firstName: "", lastName: "", middleName: "", email: "", phoneNumber: "", password: "", confirmPassword: "" });
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors<RegisterField>>({});
   const [busy, setBusy] = useState(false);
@@ -599,15 +501,25 @@ export function RegisterScreen({ navigation }: any) {
   };
   const firstNameRef = useRef<TextInput>(null);
   const lastNameRef = useRef<TextInput>(null);
+  const middleNameRef = useRef<TextInput>(null);
   const emailRef = useRef<TextInput>(null);
+  const phoneNumberRef = useRef<TextInput>(null);
+  const focusEmailOnReturn = useRef(false);
   const passwordRef = useRef<TextInput>(null);
   const confirmPasswordRef = useRef<TextInput>(null);
-  // Only the fields this form actually renders — RegisterField also names
-  // middleName and phoneNumber, which mobile registration does not ask for.
+  useEffect(() => {
+    if (acknowledgement === null && focusEmailOnReturn.current) {
+      focusEmailOnReturn.current = false;
+      emailRef.current?.focus();
+    }
+  }, [acknowledgement]);
+  // Match the visible field order when focusing the first validation error.
   const fieldOrder = [
     ["firstName", firstNameRef],
     ["lastName", lastNameRef],
+    ["middleName", middleNameRef],
     ["email", emailRef],
+    ["phoneNumber", phoneNumberRef],
     ["password", passwordRef],
     ["confirmPassword", confirmPasswordRef],
   ] as const satisfies readonly (readonly [RegisterField, React.RefObject<TextInput | null>])[];
@@ -629,7 +541,9 @@ export function RegisterScreen({ navigation }: any) {
       const { message } = await register({
         firstName: form.firstName.trim(),
         lastName: form.lastName.trim(),
+        middleName: form.middleName.trim() || undefined,
         email: form.email.trim(),
+        phoneNumber: form.phoneNumber.trim() || undefined,
         password: form.password,
       });
       setAcknowledgement(message);
@@ -682,7 +596,7 @@ export function RegisterScreen({ navigation }: any) {
        */
       <AuthShell title="Check your email" subtitle="One more step.">
         <SuccessPanel icon="mail-unread-outline" tone="brand" body={acknowledgement} email={form.email.trim()} />
-        <T style={{ color: ink[500], fontSize: typeScale.bodySm, marginTop: space.md }}>
+        <T style={{ color: t.textSecondary, marginTop: space.md }}>
           Open the link on this phone and it will bring you straight back here. Nothing is active until you do.
         </T>
         {/*
@@ -719,11 +633,10 @@ export function RegisterScreen({ navigation }: any) {
           title="Use a different email"
           variant="ghost"
           onPress={() => {
+            // Focus after the email field has mounted again.
+            focusEmailOnReturn.current = true;
             setAcknowledgement(null);
             setResent(false);
-            // The next registration mails a fresh link; the old cooldown was
-            // about the old address.
-            emailRef.current?.focus();
           }}
         />
       </AuthShell>
@@ -733,34 +646,51 @@ export function RegisterScreen({ navigation }: any) {
   return (
     <AuthShell
       title="Create your account"
-      subtitle="Start tracking your business in a few minutes."
-      heroTitle="Build a clearer view of your business."
-      benefit="Set up FinSight in a few minutes. Your records stay yours."
-      decorated
+      subtitle="Track your business finances with FinSight."
+      onBack={() => navigation.navigate("Login")}
       switchPrompt="Already have an account?"
       switchAction="Log in"
       onSwitch={() => navigation.navigate("Login")}
     >
+      <T style={{ color: t.textSecondary, marginBottom: space.lg }}>Fields without (optional) are required.</T>
+      <View style={{ flexDirection: namesSideBySide ? "row" : "column", gap: namesSideBySide ? space.md : 0 }}>
+        <View style={namesSideBySide ? { flex: 1, minWidth: 0 } : undefined}>
+          <Field
+            ref={firstNameRef}
+            icon="person-outline"
+            label="First name"
+            value={form.firstName}
+            onChangeText={set("firstName")}
+            error={fieldErrors.firstName}
+            autoComplete="given-name"
+            returnKeyType="next"
+            submitBehavior="submit"
+            onSubmitEditing={() => lastNameRef.current?.focus()}
+          />
+        </View>
+        <View style={namesSideBySide ? { flex: 1, minWidth: 0 } : undefined}>
+          <Field
+            ref={lastNameRef}
+            icon="person-outline"
+            label="Last name"
+            value={form.lastName}
+            onChangeText={set("lastName")}
+            error={fieldErrors.lastName}
+            autoComplete="family-name"
+            returnKeyType="next"
+            submitBehavior="submit"
+            onSubmitEditing={() => middleNameRef.current?.focus()}
+          />
+        </View>
+      </View>
       <Field
-        ref={firstNameRef}
+        ref={middleNameRef}
         icon="person-outline"
-        label="First name"
-        value={form.firstName}
-        onChangeText={set("firstName")}
-        error={fieldErrors.firstName}
-        autoComplete="given-name"
-        returnKeyType="next"
-        submitBehavior="submit"
-        onSubmitEditing={() => lastNameRef.current?.focus()}
-      />
-      <Field
-        ref={lastNameRef}
-        icon="person-outline"
-        label="Last name"
-        value={form.lastName}
-        onChangeText={set("lastName")}
-        error={fieldErrors.lastName}
-        autoComplete="family-name"
+        label="Middle name (optional)"
+        value={form.middleName}
+        onChangeText={set("middleName")}
+        error={fieldErrors.middleName}
+        autoComplete="additional-name"
         returnKeyType="next"
         submitBehavior="submit"
         onSubmitEditing={() => emailRef.current?.focus()}
@@ -775,6 +705,19 @@ export function RegisterScreen({ navigation }: any) {
         autoCapitalize="none"
         keyboardType="email-address"
         autoComplete="email"
+        returnKeyType="next"
+        submitBehavior="submit"
+        onSubmitEditing={() => phoneNumberRef.current?.focus()}
+      />
+      <Field
+        ref={phoneNumberRef}
+        icon="call-outline"
+        label="Phone number (optional)"
+        value={form.phoneNumber}
+        onChangeText={set("phoneNumber")}
+        error={fieldErrors.phoneNumber}
+        keyboardType="phone-pad"
+        autoComplete="tel"
         returnKeyType="next"
         submitBehavior="submit"
         onSubmitEditing={() => passwordRef.current?.focus()}
@@ -792,12 +735,15 @@ export function RegisterScreen({ navigation }: any) {
         onChangeText={set("password")}
         error={fieldErrors.password}
         secureTextEntry
-        placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
+        accessibilityHint={`At least ${MIN_PASSWORD_LENGTH} characters. A short phrase works well.`}
         autoComplete="new-password"
         returnKeyType="next"
         submitBehavior="submit"
         onSubmitEditing={() => confirmPasswordRef.current?.focus()}
       />
+      <T style={{ color: t.textSecondary, marginBottom: space.lg }}>
+        At least {MIN_PASSWORD_LENGTH} characters. A short phrase works well.
+      </T>
       {/*
         A mistyped password here is not a small mistake: the account it creates
         cannot be logged into, and the way out is a reset link sent to an inbox
@@ -834,6 +780,13 @@ export function RecoverPasswordScreen({ navigation }: any) {
   const [busy, setBusy] = useState(false);
   const emailRef = useRef<TextInput>(null);
   const cooldown = useResendCooldown();
+  const focusEmailOnReturn = useRef(false);
+  useEffect(() => {
+    if (!sent && focusEmailOnReturn.current) {
+      focusEmailOnReturn.current = false;
+      emailRef.current?.focus();
+    }
+  }, [sent]);
 
   async function submit() {
     setError(null);
@@ -867,6 +820,17 @@ export function RecoverPasswordScreen({ navigation }: any) {
       setSentTo(email.trim());
       setSent(true);
       cooldown.start();
+      /*
+       * Straight into the code form, with the address already filled in.
+       *
+       * The email carries a CODE and nothing else now — the button that used to
+       * open `finsight://auth/reset-password` has been taken out of the
+       * template, so there is no link left to come back on and "check your
+       * inbox" would be the end of the road rather than the middle of it. The
+       * `sent` state below is still rendered underneath, so backing out of the
+       * code form lands on the resend rather than on an empty form.
+       */
+      navigation.navigate("ResetPassword", { email: email.trim() });
     } catch (err) {
       const fromServer = getFieldErrors(err);
       setEmailError(fromServer.email ?? null);
@@ -880,19 +844,18 @@ export function RecoverPasswordScreen({ navigation }: any) {
   return (
     <AuthShell
       title={sent ? "Check your email" : "Reset your password"}
-      subtitle={sent ? "The link is on its way." : "We'll email you a link to set a new one."}
-      // The approved recovery pose — helpful, not playful, and paired with the
-      // direct instructions below rather than standing in for them.
-      mascot="forgotPassword"
+      subtitle={sent ? "The code is on its way." : "We'll email you a code to set a new one."}
+      onBack={() => navigation.navigate("Login")}
+      showMascot={false}
     >
       {sent ? (
         <>
           {/*
-            "Open the link" rather than the old "come back and log in".
-            That instruction was wrong: it told owners to return and sign in
-            with a password that had not been changed and could not be, because
-            the link went nowhere. The link is now the step that matters — it
-            opens the app on the screen where the new password is set.
+            A CODE, not a link. The reset email no longer carries a button —
+            the template is the code alone — so nothing will ever open the app
+            from that inbox, and an instruction to "open the link" would be a
+            step the owner cannot take. The code is typed on the next screen,
+            which this one goes straight to.
 
             The ADDRESS is shown because this endpoint answers identically for
             a registered address and an unregistered one — deliberately, so it
@@ -903,13 +866,19 @@ export function RecoverPasswordScreen({ navigation }: any) {
           <SuccessPanel
             icon="mail-unread-outline"
             tone="brand"
-            body="If that email is registered, a reset link is on its way to:"
+            body="If that email is registered, a recovery code is on its way to:"
             email={sentTo}
           />
-          <T style={{ color: t.textMuted, fontSize: typeScale.bodySm, marginTop: space.md }}>
-            Open it on this phone and we'll bring you straight to the screen where you set a new password. The link
-            expires, and each one works only once.
+          <T style={{ color: t.textSecondary, marginTop: space.md }}>
+            Type that code on the next screen and you can set a new password here, without leaving the app. Codes
+            expire, and each one works only once.
           </T>
+          <Button
+            title="Enter the code"
+            variant="primary"
+            onPress={() => navigation.navigate("ResetPassword", { email: sentTo })}
+            style={{ marginTop: space.md }}
+          />
           <Button
             title={resendLabel(cooldown.remaining, busy, true)}
             variant="secondary"
@@ -921,8 +890,8 @@ export function RecoverPasswordScreen({ navigation }: any) {
             title="Use a different email"
             variant="ghost"
             onPress={() => {
+              focusEmailOnReturn.current = true;
               setSent(false);
-              emailRef.current?.focus();
             }}
           />
         </>
@@ -930,6 +899,7 @@ export function RecoverPasswordScreen({ navigation }: any) {
         <>
           <Field
             ref={emailRef}
+            icon="mail-outline"
             label="Email"
             value={email}
             onChangeText={(v) => {
@@ -946,47 +916,84 @@ export function RecoverPasswordScreen({ navigation }: any) {
             }}
           />
           {error ? <ErrorNote>{error}</ErrorNote> : null}
-          <Button title="Send reset link" onPress={submit} loading={busy} style={{ marginTop: space.sm }} />
+          {/* "Send code", because a code is what arrives. A button promising a
+              link would be describing an email this app no longer sends. */}
+          <Button title="Send code" variant="primary" onPress={submit} loading={busy} style={{ marginTop: space.sm }} />
         </>
       )}
-      <Button title="Back to log in" variant="ghost" onPress={() => navigation.navigate("Login")} />
     </AuthShell>
   );
 }
 
 /**
- * The screen the password-reset deep link opens.
+ * Where a password reset is finished: the emailed code in, a new password out.
  *
- * Before this existed, "Reset your password" ended at "check your inbox" and
- * the link in that inbox had nowhere on the phone to go — the reset could be
- * started and never finished, while the screen cheerfully told the owner to
- * come back and log in with a password that had not changed.
+ * IT USED TO BE A DEEP LINK, and it is not one any more. The reset email's
+ * button — `finsight://auth/reset-password`, carrying a token pair in the
+ * fragment — has been taken out of the Supabase template, which now sends
+ * GoTrue's recovery code and nothing else. So there is no link left to arrive
+ * on, and a screen that could only be reached by one would have left every
+ * mobile owner holding a code with nowhere to type it. This is that somewhere.
+ * (Email CONFIRMATION is unaffected: it still has its link and its
+ * `auth/confirm` deep link — see ConfirmEmailScreen.)
  *
- * THE TOKEN NEVER REACHES OUR SERVER as a password-bearing request. The new
- * password is set directly against Supabase using a client that persists
+ * THE CODE IS A LIVE CREDENTIAL, on exactly the footing the link's token was:
+ * it is enough to change the password on the account. So it is never logged,
+ * never put in a URL, and never sent to our backend. `verifyOtp` exchanges it
+ * with Supabase for the same token pair the link used to deliver, and from
+ * there this is the flow it always was.
+ *
+ * THE TOKENS NEVER REACH OUR SERVER as a password-bearing request either. The
+ * new password is set directly against Supabase using a client that persists
  * nothing (see `createRecoveryClient`), so it never touches the keystore. The
  * backend is told only afterwards, and only so it can end every other session —
  * which the phone cannot do for itself and is often the entire reason someone
  * is resetting.
- *
- * Rendered by App.tsx over whatever else is on screen, rather than pushed onto
- * the auth stack: the link can arrive while somebody is already signed in, and
- * "set a new password" has to win over whatever they were doing.
  */
 export function ResetPasswordScreen({
-  tokens,
-  linkError,
+  email: sentTo = "",
   onDone,
+  onNewCode,
 }: {
-  tokens: AuthLinkTokens | null;
-  linkError: string | null;
+  /** The address the code was sent to, when we know it. May be empty. */
+  email?: string;
   onDone: () => void;
+  /** Back to the "email me a code" form. Absent when there is nowhere to go. */
+  onNewCode?: () => void;
 }) {
+  const t = useTheme();
+  /*
+   * Only so a completed reset can end the local session — see `finish` below.
+   * There is normally no session here at all (this screen lives on the auth
+   * stack), which is why `profile` is checked rather than assumed.
+   */
+  const { profile, logout } = useAuth();
+
+  /*
+   * Step one. Held apart from the password form's state because the two are
+   * never on screen together, and sharing one `error` would let a failed
+   * verification's message survive onto the password step.
+   */
+  const [codeForm, setCodeForm] = useState({ email: sentTo, code: "" });
+  const [codeFieldErrors, setCodeFieldErrors] = useState<FieldErrors<RecoveryCodeField>>({});
+  const [codeError, setCodeError] = useState<string | null>(null);
+  const [verifying, setVerifying] = useState(false);
+  /** What the verified code bought: the pair the link used to carry. */
+  const [tokens, setTokens] = useState<{ accessToken: string; refreshToken: string } | null>(null);
+
   const [form, setForm] = useState({ newPassword: "", confirmPassword: "" });
   const [fieldErrors, setFieldErrors] = useState<FieldErrors<ResetPasswordField>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
+
+  const codeEmailRef = useRef<TextInput>(null);
+  const codeRef = useRef<TextInput>(null);
+  const codeFieldOrder = [
+    ["email", codeEmailRef],
+    ["code", codeRef],
+  ] as const satisfies readonly (readonly [RecoveryCodeField, React.RefObject<TextInput | null>])[];
+
   const newPasswordRef = useRef<TextInput>(null);
   const confirmRef = useRef<TextInput>(null);
   const fieldOrder = [
@@ -998,6 +1005,81 @@ export function ResetPasswordScreen({
     setForm((f) => ({ ...f, [k]: v }));
     setFieldErrors((prev) => (prev[k as ResetPasswordField] ? { ...prev, [k]: undefined } : prev));
   };
+
+  const setCode = (k: keyof typeof codeForm) => (v: string) => {
+    setCodeForm((f) => ({ ...f, [k]: v }));
+    setCodeFieldErrors((prev) => (prev[k as RecoveryCodeField] ? { ...prev, [k]: undefined } : prev));
+  };
+
+  /**
+   * Exchanges the emailed code for the token pair a link used to hand over.
+   *
+   * On success this sets `tokens` and nothing else: the password form below is
+   * then reached with exactly the credentials the old deep link produced, so
+   * there is one implementation of "change the password and end every other
+   * session" rather than two.
+   */
+  async function verify() {
+    setCodeError(null);
+
+    const invalid = validateRecoveryCode(codeForm);
+    if (!isValid(invalid)) {
+      setCodeFieldErrors(invalid);
+      focusFirstInvalid(invalid, codeFieldOrder);
+      haptics.failed();
+      return;
+    }
+    setCodeFieldErrors({});
+
+    setVerifying(true);
+    const recovery = createRecoveryClient();
+    try {
+      const { data, error: verifyError } = await recovery.auth.verifyOtp({
+        email: codeForm.email.trim(),
+        token: normaliseRecoveryCode(codeForm.code),
+        type: "recovery",
+      });
+
+      /*
+       * ONE MESSAGE FOR BOTH FAILURES, and it must stay that way.
+       *
+       * Supabase distinguishes an unknown address from a wrong token, and
+       * repeating that distinction here would turn this form into the account
+       * oracle that `/auth/recover-password` refuses to be — that endpoint
+       * answers identically for a registered and an unregistered address
+       * precisely so nobody can enumerate customers, and it is worth nothing if
+       * the next screen along will confirm the address for free. So a wrong
+       * code, a wrong address, and an expired code all read the same.
+       *
+       * The owner stays on this form either way: a mistyped digit is the most
+       * likely cause and retyping it is the fix, which sending them back to the
+       * start would not be.
+       */
+      if (verifyError || !data.session) {
+        setCodeError(
+          "That didn't work. Check the email address and the code — codes expire, so ask for a new one if this keeps failing.",
+        );
+        haptics.failed();
+        return;
+      }
+
+      setTokens({
+        accessToken: data.session.access_token,
+        refreshToken: data.session.refresh_token,
+      });
+      // Nothing keeps the typed code around: it is spent, and the pair in
+      // state is what the next step uses.
+      setCodeForm((f) => ({ ...f, code: "" }));
+    } catch {
+      // Deliberately not `errorMessage(err)`: a transport failure here must not
+      // become a channel for the distinction the branch above refuses to draw.
+      setCodeError("We couldn't check that code just now. Try again in a moment.");
+    } finally {
+      // The verification client has done its one job, whichever way it went.
+      await recovery.auth.signOut({ scope: "local" }).catch(() => undefined);
+      setVerifying(false);
+    }
+  }
 
   async function submit() {
     if (!tokens) return;
@@ -1020,7 +1102,14 @@ export function ResetPasswordScreen({
         refresh_token: tokens.refreshToken,
       });
       if (sessionError) {
-        setError("That link has expired. Ask for a new one from the log-in screen.");
+        /*
+         * Clearing the pair is what puts the code form back on screen: the
+         * render below treats "no tokens" as step one, so leaving a dead pair
+         * in state would strand the owner on a password form that can no
+         * longer save anything.
+         */
+        setTokens(null);
+        setCodeError("That has expired. Enter the code from your email again, or ask for a new one.");
         return;
       }
 
@@ -1041,6 +1130,21 @@ export function ResetPasswordScreen({
        */
       await api.postWithToken("/auth/reset-password/complete", tokens.accessToken).catch(() => undefined);
 
+      /*
+       * AND THE LOCAL SESSION GOES TOO, if there was one.
+       *
+       * The call above revokes every session globally, so anything this phone
+       * still holds is a corpse: keeping it would leave the owner inside the
+       * app on credentials the server has already thrown away, and the next
+       * request would fail as an expired session rather than as the reset it
+       * actually was. This used to live in App.tsx's `finishReset`, which the
+       * deep link no longer reaches.
+       */
+      if (profile) void logout();
+
+      // Spent, and never wanted again.
+      setTokens(null);
+      setForm({ newPassword: "", confirmPassword: "" });
       haptics.succeeded();
       setDone(true);
     } catch (err) {
@@ -1052,21 +1156,9 @@ export function ResetPasswordScreen({
     }
   }
 
-  if (linkError) {
-    return (
-      <AuthShell title="That link didn't work" subtitle="Reset links expire, and each works only once.">
-        <ErrorNote>{linkError}</ErrorNote>
-        <Button title="Back to log in" variant="primary" onPress={onDone} style={{ marginTop: space.md }} />
-      </AuthShell>
-    );
-  }
-
   if (done) {
     return (
-      // The one genuinely security-POSITIVE moment in this file, and the only
-      // place the approved reset-success pose belongs: the change has actually
-      // been made, not merely requested.
-      <AuthShell title="Password changed" subtitle="You're all set." mascot="passwordResetSuccess">
+      <AuthShell title="Password changed" subtitle="You're all set." showMascot={false}>
         <SuccessPanel
           icon="shield-checkmark-outline"
           body="Your password has been changed, and every device that was signed in has been signed out. Log in with your new password to continue."
@@ -1076,8 +1168,88 @@ export function ResetPasswordScreen({
     );
   }
 
+  /*
+   * Step one: the code. No tokens means there is nothing to set a password
+   * with, whether the owner has just arrived or a verified pair has since
+   * expired under them.
+   */
+  if (!tokens) {
+    return (
+      <AuthShell
+        title="Enter your recovery code"
+        subtitle="Use the code from your password-reset email."
+        showMascot={false}
+      >
+        <T style={{ color: t.textSecondary, marginBottom: space.lg }}>
+          {sentTo
+            ? `Your password-reset email — the one on its way to ${sentTo} — has a numbered code in it. Type it here and you can set a new password without leaving the app.`
+            : "Your password-reset email has a numbered code in it. Type it here and you can set a new password without leaving the app."}
+        </T>
+        <Field
+          ref={codeEmailRef}
+          icon="mail-outline"
+          label="Email"
+          value={codeForm.email}
+          onChangeText={setCode("email")}
+          error={codeFieldErrors.email}
+          autoCapitalize="none"
+          keyboardType="email-address"
+          autoComplete="email"
+          returnKeyType="next"
+          submitBehavior="submit"
+          onSubmitEditing={() => codeRef.current?.focus()}
+        />
+        {/*
+          A NUMBER PAD, and the OS's own one-time-code offer.
+
+          `keyboardType="number-pad"` with `inputMode="numeric"` gets the digit
+          keypad on both platforms without making this a numeric FIELD — a code
+          is a string of digits, not a quantity, and a leading zero is part of
+          it. `textContentType="oneTimeCode"` is what lets iOS put the code it
+          just saw arrive above the keyboard; `autoComplete="sms-otp"` is
+          Android's equivalent and is not a value iOS understands, hence the
+          platform split rather than one string for both.
+
+          `maxLength` is the top of GoTrue's configurable range plus room for
+          the separators people paste — it is there to stop a runaway paste,
+          not to enforce a length. `validateRecoveryCode` does that, after the
+          separators are stripped, because the real length is a server setting
+          (`MAILER_OTP_LENGTH`) this app does not get to see.
+        */}
+        <Field
+          ref={codeRef}
+          icon="keypad-outline"
+          label="Recovery code"
+          value={codeForm.code}
+          onChangeText={setCode("code")}
+          error={codeFieldErrors.code}
+          accessibilityHint="The numbered code in your password-reset email."
+          inputMode="numeric"
+          keyboardType="number-pad"
+          textContentType="oneTimeCode"
+          autoComplete={Platform.OS === "android" ? "sms-otp" : "one-time-code"}
+          maxLength={MAX_RECOVERY_CODE_LENGTH + 4}
+          returnKeyType="done"
+          onSubmitEditing={() => {
+            if (!verifying) verify();
+          }}
+        />
+        {codeError ? <ErrorNote>{codeError}</ErrorNote> : null}
+        <Button
+          title="Continue"
+          variant="primary"
+          onPress={verify}
+          loading={verifying}
+          style={{ marginTop: space.md }}
+        />
+        {onNewCode ? <Button title="Send a new code" variant="ghost" onPress={onNewCode} /> : null}
+        <Button title="Back to log in" variant="ghost" onPress={onDone} />
+      </AuthShell>
+    );
+  }
+
   return (
-    <AuthShell title="Set a new password" subtitle={`At least ${MIN_PASSWORD_LENGTH} characters.`}>
+    <AuthShell title="Set a new password" subtitle={`At least ${MIN_PASSWORD_LENGTH} characters.`} showMascot={false}>
       <Field
         ref={newPasswordRef}
         label="New password"
@@ -1109,7 +1281,6 @@ export function ResetPasswordScreen({
         variant="primary"
         onPress={submit}
         loading={busy}
-        disabled={!tokens}
         style={{ marginTop: space.md }}
       />
       <Button title="Cancel" variant="ghost" onPress={onDone} />
@@ -1118,13 +1289,20 @@ export function ResetPasswordScreen({
 }
 
 /**
- * The screen the registration confirmation deep link opens.
+ * The screen the registration confirmation link opens.
  *
  * Registration no longer hands out a session, so this is the step that turns a
- * pending registration into a usable account. Nothing here establishes a
- * session either: the token goes straight to the backend, which verifies it
- * against Supabase before flipping the account to ACTIVE. A confirmation link
- * forwarded to the wrong person still cannot sign anyone in.
+ * pending registration into a usable account: the token goes to the backend,
+ * which verifies it against Supabase before flipping the account to ACTIVE.
+ *
+ * AND THEN IT SIGNS THEM IN, which it did not used to. The owner tapped
+ * "Confirm and open FinSight" in their inbox and was shown a log-in form —
+ * asked, on the same tap, to prove again what the email had just proved, and
+ * usually to invent the password they had typed ninety seconds earlier on a
+ * different screen. The link's own tokens ARE a session the backend has just
+ * validated; there is nothing left to check, so the phone adopts it and the
+ * app opens on the inside. What the tokens never do is travel any further than
+ * `adoptSession` — not into a log line, not into a message on screen.
  */
 export function ConfirmEmailScreen({
   tokens,
@@ -1136,7 +1314,7 @@ export function ConfirmEmailScreen({
   onDone: () => void;
 }) {
   const t = useTheme();
-  const { ink } = t;
+  const { adoptSession } = useAuth();
   const [state, setState] = useState<"checking" | "confirmed" | "failed">(linkError ? "failed" : "checking");
   const [message, setMessage] = useState<string>(linkError ?? "");
 
@@ -1144,8 +1322,19 @@ export function ConfirmEmailScreen({
     if (!tokens) return;
     let active = true;
     api
-      .postWithToken<{ message: string }>("/auth/confirm-email", tokens.accessToken)
-      .then((data) => {
+      .postWithToken<{ profile: Profile; message: string }>("/auth/confirm-email", tokens.accessToken)
+      .then(async (data) => {
+        /*
+         * Adopted even if this screen has been torn down in the meantime — a
+         * session belongs to the app, not to a mounted component, and dropping
+         * it because the owner backgrounded the phone for a moment would put
+         * them right back at the log-in form this exists to avoid. Only the
+         * on-screen state is guarded by `active`.
+         */
+        await adoptSession(
+          { access_token: tokens.accessToken, refresh_token: tokens.refreshToken },
+          data.profile,
+        );
         if (!active) return;
         setState("confirmed");
         setMessage(data.message);
@@ -1158,12 +1347,16 @@ export function ConfirmEmailScreen({
     return () => {
       active = false;
     };
+    // The link's tokens are the whole input. `adoptSession` is rebuilt on every
+    // render of AuthProvider, and listing it would re-POST a one-time token the
+    // second any unrelated state there changed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tokens]);
 
   if (state === "checking") {
     return (
       <AuthShell title="Confirming your email">
-        <T style={{ textAlign: "center", color: ink[500], fontSize: typeScale.bodySm }}>Just a moment…</T>
+        <T accessibilityLiveRegion="polite" accessibilityState={{ busy: true }} style={{ color: t.textSecondary }}>Just a moment…</T>
       </AuthShell>
     );
   }
@@ -1171,14 +1364,119 @@ export function ConfirmEmailScreen({
   return (
     <AuthShell
       title={state === "confirmed" ? "Email confirmed" : "That link didn't work"}
-      subtitle={state === "confirmed" ? "Your account is ready." : "Confirmation links expire, and each works once."}
+      subtitle={
+        state === "confirmed"
+          ? "Your account is ready — taking you in."
+          : "Confirmation links expire, and each works once."
+      }
     >
       {state === "confirmed" ? (
         <SuccessPanel icon="checkmark-circle-outline" body={message} />
       ) : (
         <ErrorNote>{message}</ErrorNote>
       )}
-      <Button title="Log in" variant="primary" onPress={onDone} style={{ marginTop: space.md }} />
+      {/*
+        "Continue", not "Log in": there is a session on this phone by now, and
+        a button that says log in describes work the owner no longer has to do.
+        A failed confirmation lands back on the log-in screen instead, which is
+        the only place a new link can be asked for.
+      */}
+      <Button
+        title={state === "confirmed" ? "Continue" : "Back to log in"}
+        variant="primary"
+        onPress={onDone}
+        style={{ marginTop: space.md }}
+      />
+    </AuthShell>
+  );
+}
+
+/**
+ * The screen the website's hand-back opens: `finsight://auth/handoff?code=…`.
+ *
+ * WHY THERE IS A SECOND WAY IN AT ALL. Confirmation emails point at the https
+ * web origin for every owner now, and whether the OS gives that URL to this app
+ * or to a browser is not something the app gets to decide — it depends on an
+ * App Link/Universal Link association that a fresh install, a sideload or a
+ * missing `assetlinks.json` can all leave unverified. When the browser wins,
+ * the owner confirms on the website and the website offers to open the app; it
+ * mints a short-lived one-time code, and this exchanges that code for the
+ * session rather than putting tokens in a URL the OS will happily write to the
+ * recents list, the system log and the browser's history.
+ *
+ * A code that has expired or already been spent is not recoverable from here,
+ * so the failure state does the one useful thing left: back to log in.
+ */
+export function SessionHandoffScreen({
+  code,
+  linkError,
+  onDone,
+}: {
+  code: string | null;
+  linkError: string | null;
+  onDone: () => void;
+}) {
+  const t = useTheme();
+  const { adoptSession } = useAuth();
+  const [state, setState] = useState<"exchanging" | "done" | "failed">(linkError ? "failed" : "exchanging");
+  const [message, setMessage] = useState<string>(linkError ?? "");
+
+  useEffect(() => {
+    if (!code) return;
+    let active = true;
+    api
+      .post<{ profile: Profile; session: { access_token: string; refresh_token: string } }>(
+        "/auth/handoff/exchange",
+        { code },
+      )
+      .then(async (data) => {
+        // Same reasoning as the confirmation screen: the session is adopted
+        // regardless of whether this component is still on screen.
+        await adoptSession(data.session, data.profile);
+        if (!active) return;
+        setState("done");
+      })
+      .catch((err) => {
+        if (!active) return;
+        setState("failed");
+        // The backend's message already says which of expired/used/invalid it
+        // was, in words an owner can act on.
+        setMessage(errorMessage(err));
+      });
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [code]);
+
+  if (state === "exchanging") {
+    return (
+      <AuthShell title="Signing you in">
+        <T accessibilityLiveRegion="polite" accessibilityState={{ busy: true }} style={{ color: t.textSecondary }}>Just a moment…</T>
+      </AuthShell>
+    );
+  }
+
+  return (
+    <AuthShell
+      title={state === "done" ? "You're signed in" : "That link didn't work"}
+      subtitle={
+        state === "done"
+          ? "Taking you in."
+          : "These links are good for one use, and only for a few minutes."
+      }
+    >
+      {state === "done" ? (
+        <SuccessPanel icon="checkmark-circle-outline" body="Your account is ready on this phone." />
+      ) : (
+        <ErrorNote>{message || "That link is no longer valid. Log in to continue."}</ErrorNote>
+      )}
+      <Button
+        title={state === "done" ? "Continue" : "Back to log in"}
+        variant="primary"
+        onPress={onDone}
+        style={{ marginTop: space.md }}
+      />
     </AuthShell>
   );
 }

@@ -20,11 +20,13 @@ export function Modal({
   open,
   onClose,
   title,
+  size = "default",
   children,
 }: {
   open: boolean;
   onClose: () => void;
   title: string;
+  size?: "default" | "wide";
   children: ReactNode;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -53,22 +55,37 @@ export function Modal({
       onClick={(e) => {
         if (e.target === dialogRef.current) onClose();
       }}
-      className="modal-dialog w-[min(32rem,calc(100vw-2rem))] rounded-2xl border border-paper-200 bg-paper p-0 text-ink-900 shadow-lg"
+      className={`modal-dialog rounded-2xl border border-paper-200 bg-paper p-0 text-ink-900 shadow-lg ${
+        size === "wide"
+          ? "w-[min(48rem,calc(100vw-2rem))]"
+          : "w-[min(32rem,calc(100vw-2rem))]"
+      }`}
     >
       <div className="flex items-center justify-between gap-3 border-b border-paper-200 px-5 py-4">
-        <h2 id="modal-title" className="font-display text-base font-semibold text-ink-900">
+        <h2
+          id="modal-title"
+          className="font-display text-base font-semibold text-ink-900"
+        >
           {title}
         </h2>
         <button
           type="button"
           onClick={onClose}
           aria-label="Close"
-          className="tap -m-2 flex h-9 w-9 min-h-0 min-w-0 items-center justify-center rounded-lg text-lg leading-none text-ink-400 transition hover:bg-paper-100 hover:text-ink-800"
+          className="tap -m-2 flex h-9 w-9 min-h-0 min-w-0 items-center justify-center rounded-lg text-lg leading-none text-ink-500 transition hover:bg-paper-100 hover:text-ink-800"
         >
           ×
         </button>
       </div>
-      <div className="scroll-slim max-h-[75vh] overflow-y-auto p-5">{children}</div>
+      <div
+        className={
+          size === "wide"
+            ? "p-5"
+            : "scroll-slim max-h-[75vh] overflow-y-auto p-5"
+        }
+      >
+        {children}
+      </div>
     </dialog>
   );
 }

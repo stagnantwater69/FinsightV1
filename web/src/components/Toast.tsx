@@ -82,7 +82,23 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         {toasts.map((t) => (
           <div
             key={t.id}
-            className="pointer-events-auto flex max-w-full animate-toast-in items-center gap-2.5 rounded-full bg-ink-900 py-2.5 pl-4 pr-2.5 text-sm font-medium text-white shadow-lg"
+            /*
+             * `bg-brand-950`, NOT `bg-ink-900`.
+             *
+             * The pill is deliberately inverted chrome — a dark chip floating
+             * over the page in every theme, like the sidebar's fixed deep
+             * teal. `ink-900` cannot express that, because the ink scale
+             * flips with the theme: in Dark it resolves to the near-white
+             * headings step, so this pill was white text on a white pill at
+             * about 1.09:1 — every confirmation the app gave was invisible.
+             *
+             * A brand-scale colour is fixed across themes (see the note on
+             * `brand`/`accent` in tailwind.config.js), so the surface stays
+             * dark and the three foregrounds below stay legible in Classic,
+             * Light and Dark alike — measured on #052624: white ~19:1,
+             * brand-300 ~9.5:1, accent-200 ~12:1.
+             */
+            className="pointer-events-auto flex max-w-full animate-toast-in items-center gap-2.5 rounded-full bg-brand-950 py-2.5 pl-4 pr-2.5 text-sm font-medium text-white shadow-lg"
           >
             <span aria-hidden className="text-brand-300">
               ✓

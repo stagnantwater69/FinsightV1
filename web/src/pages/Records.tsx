@@ -7,9 +7,16 @@ import { getErrorMessage } from "../lib/errors";
 import { Money } from "../components/Money";
 import { Button, ButtonLink } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
-import { DataTable, type Column } from "../components/DataTable";
+import { DataTable, type Column, type SortState } from "../components/DataTable";
 import { IconDuplicate, IconEdit, IconSearch, IconTrash } from "../components/icons";
-import { RECORD_SOURCE_LABELS, type ImportBatchSummary, type RecordItem, type RecordSource } from "../lib/types";
+import {
+  RECORD_SOURCE_LABELS,
+  type FlaggedRecordCounts,
+  type ImportBatchSummary,
+  type RecordItem,
+  type RecordSort,
+  type RecordSource,
+} from "../lib/types";
 import { PageHead, Pill, Tag, type PillTone } from "../components/ui";
 import { SelectInput, TextInput } from "../components/Field";
 import { useConfirm } from "../components/ConfirmDialog";
@@ -18,32 +25,28 @@ import { useToast } from "../components/Toast";
 import { AddExpenseModal, type DuplicateExpenseSeed } from "../components/AddExpenseModal";
 import { AddSalesModal, type DuplicateSalesSeed } from "../components/AddSalesModal";
 import { DuplicateReviewModal } from "../components/DuplicateReviewModal";
+import {
+  activeAdvancedCount,
+  emptyFilters,
+  filtersAreActive,
+  type Filters,
+} from "./records/filters";
 
-interface Filters {
-  type: "all" | "expense" | "sales";
-  categoryId: string;
-  dateFrom: string;
-  dateTo: string;
-  keyword: string;
-  source: "" | RecordSource;
-  /** Only meaningful alongside source === "CSV_UPLOAD" — see the Source select. */
-  importBatchId: string;
+
+/**
+ * The table's sort state, as the API spells it.
+ *
+ * Only Date and Amount are here because only Date and Amount are orderings the
+ * server has — every other column would have to be sorted over the page that
+ * happens to be loaded, which is the thing this replaced.
+ */
+function toRecordSort(sort: SortState): RecordSort {
+  if (sort.key === "amount") return sort.direction === "asc" ? "amount_asc" : "amount_desc";
+  return sort.direction === "asc" ? "date_asc" : "date_desc";
 }
 
-const emptyFilters: Filters = {
-  type: "all",
-  categoryId: "",
-  dateFrom: "",
-  dateTo: "",
-  keyword: "",
-  source: "",
-  importBatchId: "",
-};
-
-/** Which filters count as "advanced" for Hick's Law progressive disclosure. */
-function activeAdvancedCount(f: Filters) {
-  return [f.categoryId, f.dateFrom, f.dateTo, f.source, f.importBatchId].filter(Boolean).length;
-}
+/** What the table starts on, and what the server returns when `sort` is omitted. */
+const DEFAULT_SORT: SortState = { key: "date", direction: "desc" };
 
 /**
  * One status per row, not a stack of badges.
@@ -180,6 +183,17 @@ export function Records() {
   }, [queryKey]);
 
   const [records, setRecords] = useState<RecordItem[]>([]);
+  /**
+   * Which ordering the SERVER is applying — not a re-ordering of the rows on
+   * screen.
+   *
+   * The table used to sort whatever page it had in hand while drawing an
+   * ordinary sort arrow, so "Amount, highest first" answered "what was my
+   * biggest spend?" with the biggest of the most recent 100 records, and
+   * quietly changed its answer as more pages loaded. The sort is a property of
+   * the query now (`sort=amount_desc`), so the answer is the whole ledger's.
+   */
+  const [sort, setSort] = useState<SortState>(DEFAULT_SORT);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -225,7 +239,20 @@ export function Records() {
   );
 
   async function loadRecords(signal?: AbortSignal, cursor?: string) {
-    if (!selected) return;
+    /*
+     * No business — an owner who chose "Skip for now". This has to SETTLE
+     * rather than bail: `loading` starts true, and returning silently left the
+     * table under its skeleton forever. Loaded-and-empty is the true state,
+     * and `isPristine` below turns it into the page's own empty state.
+     */
+    if (!selected) {
+      setRecords([]);
+      setNextCursor(null);
+      setError(null);
+      setLoading(false);
+      setLoadingMore(false);
+      return;
+    }
     if (cursor) setLoadingMore(true);
     else setLoading(true);
     setError(null);
@@ -242,6 +269,7 @@ export function Records() {
           source: appliedFilters.source || undefined,
           importBatchId: appliedFilters.importBatchId || undefined,
           limit: 100,
+          sort: toRecordSort(sort),
           cursor,
         },
       });
@@ -260,14 +288,22 @@ export function Records() {
     }
   }
 
+  /**
+   * The badge number, and nothing else.
+   *
+   * This used to GET /records/flagged and read `data.length` — the entire
+   * flagged list, megabytes of it on a business that re-imported a
+   * spreadsheet, downloaded and thrown away on every filter change purely to
+   * render one integer. `/records/flagged/count` is two COUNTs.
+   */
   async function loadFlaggedCount(signal?: AbortSignal) {
     if (!selected) return;
     try {
-      const { data } = await api.get<RecordItem[]>("/records/flagged", {
+      const { data } = await api.get<FlaggedRecordCounts>("/records/flagged/count", {
         signal,
         params: { businessProfileId: selected.id },
       });
-      setFlaggedCount(data.length);
+      setFlaggedCount(data.total);
     } catch {
       // The badge is decoration; a failure here must not take out the page.
     }
@@ -291,7 +327,24 @@ export function Records() {
     appliedFilters.keyword,
     appliedFilters.source,
     appliedFilters.importBatchId,
+    // A sort change is a new query, not a re-render of the same one.
+    sort.key,
+    sort.direction,
   ]);
+
+  /**
+   * Changing the sort restarts the list from page 1.
+   *
+   * Not an optimisation — a requirement. A cursor is minted for the sort it
+   * was issued under and the API rejects it under any other, so carrying the
+   * one in hand across a column click would turn the next "Load more" into an
+   * invalid-cursor error. Dropping it here also stops the button from being
+   * offered against results that are already being replaced.
+   */
+  function handleSortChange(next: SortState) {
+    setSort(next);
+    setNextCursor(null);
+  }
 
   // Fetched only while the Source filter is actually set to CSV Upload —
   // there is nowhere in the UI to pick a specific import otherwise, so
@@ -412,9 +465,33 @@ export function Records() {
     return categories.find((c) => c.id === categoryId)?.name ?? "—";
   }
 
-  if (!selected) return null;
+  /*
+   * There is deliberately no `if (!selected) return <NoBusinessProfile />`
+   * here any more. Records only READS, so with no business it renders its
+   * normal chrome around an empty table — the same page, genuinely empty —
+   * rather than a card that made "Skip for now" skip to nothing. The reads of
+   * `selected` below are guarded one at a time instead, and the write paths
+   * (the add modals, Scan, Import) stand down with it.
+   */
 
-  const hasFilters = JSON.stringify(filters) !== JSON.stringify(emptyFilters);
+  const hasFilters = filtersAreActive(filters);
+
+  /**
+   * "This business has nothing yet" — as opposed to "nothing matched".
+   *
+   * The two are different pages, not two captions. When a filter hid the rows
+   * the owner needs the toolbar (that is how they get their rows back); when
+   * there is genuinely nothing to filter, a search box, a Type select and a
+   * "More filters" toggle are three controls over an empty set, and they push
+   * the one thing worth doing down the page. They also make the empty state
+   * ambiguous: an owner cannot tell whether a filter is hiding their records.
+   *
+   * So this collapses the whole page down to a single invitation, and the
+   * secondary add-strip and the header's own add button stand down while it is
+   * showing — otherwise "add an expense" appears three times in two different
+   * colours on a screen whose only job is to get the first record in.
+   */
+  const isPristine = !loading && !error && records.length === 0 && !hasFilters;
   const advancedCount = activeAdvancedCount(filters);
 
   async function handleEdit(r: RecordItem) {
@@ -461,21 +538,21 @@ export function Records() {
       key: "date",
       header: "Date",
       width: "content",
-      sortValue: (r) => r.date,
+      // Date and Amount are the two the API can order by; every other column
+      // below deliberately offers no sort affordance at all.
+      sortable: true,
       cell: (r) => <span className="figure text-ink-600">{r.date.slice(0, 10)}</span>,
     },
     {
       key: "type",
       header: "Type",
       width: "content",
-      sortValue: (r) => r.type,
       cell: (r) => <Tag kind={r.type === "expense" ? "expense" : "sales"} />,
     },
     {
       key: "description",
       header: "Description",
       width: "grow",
-      sortValue: (r) => r.description,
       cell: (r) => (
         <span className="line-clamp-2 min-w-0 font-medium text-ink-900" title={r.description}>
           {r.description}
@@ -486,7 +563,6 @@ export function Records() {
       key: "category",
       header: "Category",
       width: "content",
-      sortValue: (r) => (r.type === "expense" ? categoryName(r.categoryId) : null),
       cell: (r) => (
         <span className="text-ink-600">{r.type === "expense" ? categoryName(r.categoryId) : "—"}</span>
       ),
@@ -495,7 +571,6 @@ export function Records() {
       key: "vendor",
       header: "Vendor",
       width: "content",
-      sortValue: (r) => r.vendor ?? null,
       cell: (r) => <span className="text-ink-500">{r.vendor || "—"}</span>,
     },
     {
@@ -503,10 +578,14 @@ export function Records() {
       header: "Amount",
       width: "content",
       align: "right",
-      sortValue: (r) => r.amount,
+      sortable: true,
       cell: (r) => (
         <span className={`font-medium ${r.type === "expense" ? "text-ink-900" : "text-brand-700"}`}>
-          <Money value={r.amount} />
+          {/* Centavos, because this column is the record itself rather than a
+              summary of it: a scanned 8.70 shown as "9" misstates what was
+              saved, and the tooltip that carries the exact figure is not
+              reachable by touch. Uniform 2dp also keeps the column aligned. */}
+          <Money value={r.amount} decimals />
         </span>
       ),
     },
@@ -514,7 +593,6 @@ export function Records() {
       key: "source",
       header: "Source",
       width: "content",
-      sortValue: (r) => r.source,
       cell: (r) => (
         <span className="text-xs text-ink-500">
           {RECORD_SOURCE_LABELS[r.source as RecordSource] ?? r.source}
@@ -525,7 +603,6 @@ export function Records() {
       key: "status",
       header: "Status",
       width: "content",
-      sortValue: (r) => recordStatus(r).label,
       cell: (r) => {
         const status = recordStatus(r);
         return <Pill tone={status.tone}>{status.label}</Pill>;
@@ -579,7 +656,7 @@ export function Records() {
             onClick={() => handleDelete(r)}
             title="Delete"
             aria-label={`Delete ${r.description}`}
-            className="tap flex h-9 w-9 min-h-0 min-w-0 items-center justify-center rounded-lg text-ink-400 transition hover:bg-tint-danger hover:text-tone-danger"
+            className="tap flex h-9 w-9 min-h-0 min-w-0 items-center justify-center rounded-lg text-ink-500 transition hover:bg-tint-danger hover:text-tone-danger"
           >
             <IconTrash className="h-4 w-4" />
           </button>
@@ -598,7 +675,11 @@ export function Records() {
   const toolbar = (
     <div>
       <div className="flex flex-wrap items-end gap-3">
-        <div className="relative min-w-0 flex-1 basis-full sm:basis-64">
+        {/* Capped rather than free-growing: `flex-1` alone stretched this to
+            most of a wide desktop viewport, which reads as the page's main
+            input and dwarfs the Type select sitting next to it. A description
+            search does not need 1,000px of runway. */}
+        <div className="relative min-w-0 flex-1 basis-full sm:max-w-md sm:basis-64">
           <label htmlFor="rec-search" className="mb-1 block text-xs font-medium text-ink-500">
             Search
           </label>
@@ -766,28 +847,40 @@ export function Records() {
                 <Pill tone="warn">{flaggedCount}</Pill>
               </Link>
             ) : null}
-            <Button variant="brand" size="sm" onClick={() => setAddExpenseOpen(true)}>
-              + Add expense
-            </Button>
+            {/* Stands down while the empty state is showing: it offers this
+                same action, larger and with the context to explain it. Two
+                buttons for one action is not twice the invitation. */}
+            {isPristine ? null : (
+              <Button variant="brand" size="sm" onClick={() => setAddExpenseOpen(true)}>
+                + Add expense
+              </Button>
+            )}
           </>
         }
       />
 
       {/* The less-used create paths. Scrolls horizontally on phones rather
-          than wrapping into rows that push the table off-screen. */}
-      <div className="scroll-slim -mx-4 mb-4 overflow-x-auto px-4 sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0">
-        <div className="flex w-max gap-2">
-          <Button variant="secondary" size="sm" onClick={() => setAddSalesOpen(true)}>
-            + Add sales
-          </Button>
-          <ButtonLink to="/records/receipts/new" variant="secondary" size="sm">
-            Scan receipt
-          </ButtonLink>
-          <ButtonLink to="/records/csv-imports/new" variant="secondary" size="sm">
-            Import CSV
-          </ButtonLink>
+          than wrapping into rows that push the table off-screen.
+
+          Hidden while the page is empty: the empty state below already offers
+          every one of these routes in context, and a detached strip of
+          equal-weight buttons directly under the title reads as the page's
+          content rather than as its overflow. */}
+      {isPristine ? null : (
+        <div className="scroll-slim -mx-4 mb-4 overflow-x-auto px-4 sm:-mx-6 sm:px-6 lg:mx-0 lg:px-0">
+          <div className="flex w-max gap-2">
+            <Button variant="secondary" size="sm" onClick={() => setAddSalesOpen(true)}>
+              + Add sales
+            </Button>
+            <ButtonLink to="/records/receipts/new" variant="secondary" size="sm">
+              Scan receipt
+            </ButtonLink>
+            <ButtonLink to="/records/csv-imports/new" variant="secondary" size="sm">
+              Import CSV
+            </ButtonLink>
+          </div>
         </div>
-      </div>
+      )}
 
       {error ? (
         <p className="mb-4 rounded-xl bg-tint-danger px-3.5 py-3 text-sm text-tone-danger ring-1 ring-edge-danger">
@@ -795,119 +888,188 @@ export function Records() {
         </p>
       ) : null}
 
-      <DataTable
-        rows={records}
-        columns={columns}
-        getRowKey={(r) => `${r.type}-${r.id}`}
-        loading={loading}
-        caption={`Expense and sales reference records for ${selected.name}`}
-        itemNoun="records"
-        storageKey="records"
-        initialSort={{ key: "date", direction: "desc" }}
-        toolbar={toolbar}
-        rowClassName={(r) =>
-          highlightRecordId && r.type === "expense" && r.id === highlightRecordId ? "bg-tint-accent" : ""
-        }
-        empty={
-          hasFilters ? (
-            <EmptyState compact title="No records match these filters" icon="⌕">
-              Try widening the date range or clearing the search box.
-            </EmptyState>
-          ) : (
-            <EmptyState
-              compact
-              title="You haven't added any records yet"
-              action={
-                <>
-                  <Button variant="primary" onClick={() => setAddExpenseOpen(true)}>
-                    Add your first expense
-                  </Button>
-                  <ButtonLink to="/records/receipts/new" variant="secondary">
-                    Or scan a receipt
-                  </ButtonLink>
-                </>
-              }
-            >
-              Start with what you spent today — even one entry is enough for FinSight to begin showing
-              you something.
-            </EmptyState>
-          )
-        }
-        mobileRow={(r) => {
-          const status = recordStatus(r);
-          return (
-            <div>
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="truncate font-medium text-ink-900">{r.description}</p>
-                  <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-ink-500">
-                    <span className="figure">{r.date.slice(0, 10)}</span>
-                    <span aria-hidden>·</span>
-                    <Tag kind={r.type === "expense" ? "expense" : "sales"} />
-                    {r.type === "expense" ? <span>· {categoryName(r.categoryId)}</span> : null}
-                    {r.vendor ? <span>· {r.vendor}</span> : null}
+      {isPristine ? (
+        /*
+         * The full EmptyState, not the `compact` one, and rendered INSTEAD of
+         * the table rather than inside it.
+         *
+         * `compact` is documented as "a line of text inside an existing panel
+         * and has no room for art" — which is exactly what this was, so a
+         * brand-new owner got small grey text floating in a mostly-empty card
+         * with a filter bar over it. This is not a row of a table that happens
+         * to be missing; it is the whole page, and it is the first thing a new
+         * owner sees here. Rendering it outside the table also avoids nesting
+         * the EmptyState's own card inside DataTable's.
+         *
+         * Pose: `emptydashboard` is the brand-new-account illustration
+         * ("signals: start adding data, this fills in"), which is the state
+         * this is. The scenario library maps "No expense records" to a
+         * dedicated empty-folder pose, but that asset has not been produced —
+         * see docs/mascot-scenario-library.md.
+         */
+        <EmptyState
+          image="/mascot/01-onboarding/emptydashboard.webp"
+          title={selected ? "You haven't added any records yet" : "Nothing to record against yet"}
+          action={
+            /*
+             * With no business, every one of these leads somewhere a record
+             * cannot be saved — the same dead end one click further away. The
+             * one action that actually unblocks them replaces all three.
+             */
+            selected ? (
+              <>
+                <Button variant="primary" onClick={() => setAddExpenseOpen(true)}>
+                  Add your first expense
+                </Button>
+                <ButtonLink to="/records/receipts/new" variant="secondary">
+                  Scan a receipt
+                </ButtonLink>
+                <ButtonLink to="/records/csv-imports/new" variant="secondary">
+                  Import CSV
+                </ButtonLink>
+              </>
+            ) : (
+              <ButtonLink to="/onboarding" variant="primary">
+                Finish setting up your business
+              </ButtonLink>
+            )
+          }
+        >
+          {selected
+            ? "Start with what you spent today — even one entry is enough for FinSight to begin showing you something."
+            : "A record has to belong to a business. Add yours and this page starts filling in with everything you spend and take."}
+        </EmptyState>
+      ) : (
+        <DataTable
+          rows={records}
+          columns={columns}
+          getRowKey={(r) => `${r.type}-${r.id}`}
+          loading={loading}
+          caption={
+            selected
+              ? `Expense and sales reference records for ${selected.name}`
+              : "Expense and sales reference records"
+          }
+          itemNoun="records"
+          storageKey="records"
+          sort={sort}
+          onSortChange={handleSortChange}
+          toolbar={toolbar}
+          rowClassName={(r) =>
+            highlightRecordId && r.type === "expense" && r.id === highlightRecordId ? "bg-tint-accent" : ""
+          }
+          empty={
+            hasFilters ? (
+              <EmptyState compact title="No records match these filters" icon="⌕">
+                Try widening the date range or clearing the search box.
+              </EmptyState>
+            ) : (
+              <EmptyState
+                compact
+                title="You haven't added any records yet"
+                action={
+                  selected ? (
+                    <>
+                      <Button variant="primary" onClick={() => setAddExpenseOpen(true)}>
+                        Add your first expense
+                      </Button>
+                      <ButtonLink to="/records/receipts/new" variant="secondary">
+                        Or scan a receipt
+                      </ButtonLink>
+                    </>
+                  ) : (
+                    <ButtonLink to="/onboarding" variant="primary">
+                      Finish setting up your business
+                    </ButtonLink>
+                  )
+                }
+              >
+                Start with what you spent today — even one entry is enough for FinSight to begin showing
+                you something.
+              </EmptyState>
+            )
+          }
+          mobileRow={(r) => {
+            const status = recordStatus(r);
+            return (
+              <div>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium text-ink-900">{r.description}</p>
+                    <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-ink-500">
+                      <span className="figure">{r.date.slice(0, 10)}</span>
+                      <span aria-hidden>·</span>
+                      <Tag kind={r.type === "expense" ? "expense" : "sales"} />
+                      {r.type === "expense" ? <span>· {categoryName(r.categoryId)}</span> : null}
+                      {r.vendor ? <span>· {r.vendor}</span> : null}
+                    </p>
+                  </div>
+                  <p
+                    className={`shrink-0 text-right font-medium ${
+                      r.type === "expense" ? "text-ink-900" : "text-brand-700"
+                    }`}
+                  >
+                    {/* Same reasoning as the table column, and more so here:
+                        this is the phone layout, where there is no hover to
+                        recover the exact figure from. */}
+                    <Money value={r.amount} decimals />
                   </p>
                 </div>
-                <p
-                  className={`shrink-0 text-right font-medium ${
-                    r.type === "expense" ? "text-ink-900" : "text-brand-700"
-                  }`}
-                >
-                  <Money value={r.amount} />
-                </p>
-              </div>
 
-              <div className="mt-2">
-                <Pill tone={status.tone}>{status.label}</Pill>
-              </div>
+                <div className="mt-2">
+                  <Pill tone={status.tone}>{status.label}</Pill>
+                </div>
 
-              <div className="mt-3 flex items-center justify-between border-t border-paper-200 pt-2">
-                <span className="text-xs text-ink-400">
-                  {RECORD_SOURCE_LABELS[r.source as RecordSource] ?? r.source}
-                </span>
-                <div className="flex gap-1">
-                  {r.duplicateStatus === "Flagged" ? (
+                <div className="mt-3 flex items-center justify-between border-t border-paper-200 pt-2">
+                  <span className="text-xs text-ink-500">
+                    {RECORD_SOURCE_LABELS[r.source as RecordSource] ?? r.source}
+                  </span>
+                  <div className="flex gap-1">
+                    {r.duplicateStatus === "Flagged" ? (
+                      <button
+                        type="button"
+                        onClick={() => setReviewDuplicate({ id: r.id, type: r.type })}
+                        className="tap rounded-lg px-3 text-sm font-medium text-tone-info transition hover:bg-tint-info"
+                      >
+                        Compare
+                        <span className="sr-only"> possible duplicate — {r.description}</span>
+                      </button>
+                    ) : null}
                     <button
                       type="button"
-                      onClick={() => setReviewDuplicate({ id: r.id, type: r.type })}
-                      className="tap rounded-lg px-3 text-sm font-medium text-tone-info transition hover:bg-tint-info"
+                      onClick={() => handleEdit(r)}
+                      className="tap rounded-lg px-3 text-sm font-medium text-tone-brand transition hover:bg-tint-brand"
                     >
-                      Compare
-                      <span className="sr-only"> possible duplicate — {r.description}</span>
+                      Edit
+                      <span className="sr-only"> {r.description}</span>
                     </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={() => handleEdit(r)}
-                    className="tap rounded-lg px-3 text-sm font-medium text-tone-brand transition hover:bg-tint-brand"
-                  >
-                    Edit
-                    <span className="sr-only"> {r.description}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDuplicate(r)}
-                    className="tap rounded-lg px-3 text-sm font-medium text-ink-500 transition hover:bg-paper-100 hover:text-ink-800"
-                  >
-                    Duplicate
-                    <span className="sr-only"> {r.description}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDelete(r)}
-                    className="tap rounded-lg px-3 text-sm font-medium text-ink-400 transition hover:bg-tint-danger hover:text-tone-danger"
-                  >
-                    Delete
-                    <span className="sr-only"> {r.description}</span>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDuplicate(r)}
+                      className="tap rounded-lg px-3 text-sm font-medium text-ink-500 transition hover:bg-paper-100 hover:text-ink-800"
+                    >
+                      Duplicate
+                      <span className="sr-only"> {r.description}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDelete(r)}
+                      className="tap rounded-lg px-3 text-sm font-medium text-ink-500 transition hover:bg-tint-danger hover:text-tone-danger"
+                    >
+                      Delete
+                      <span className="sr-only"> {r.description}</span>
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
-          );
-        }}
-      />
+            );
+          }}
+        />
+      )}
 
-      {nextCursor ? (
+      {/* Hidden while a fresh query is in flight: the cursor on screen belongs
+          to results that are being replaced. */}
+      {nextCursor && !loading ? (
         <div className="mt-4 flex justify-center">
           <Button variant="secondary" onClick={() => loadRecords(undefined, nextCursor)} disabled={loadingMore}>
             {loadingMore ? "Loading…" : "Load more records"}
@@ -915,36 +1077,43 @@ export function Records() {
         </div>
       ) : null}
 
-      <AddExpenseModal
-        businessProfileId={selected.id}
-        open={addExpenseOpen || editingExpenseId !== null || duplicateExpenseSeed !== null}
-        recordId={editingExpenseId ?? undefined}
-        duplicateFrom={duplicateExpenseSeed ?? undefined}
-        onClose={() => {
-          setAddExpenseOpen(false);
-          setEditingExpenseId(null);
-          setDuplicateExpenseSeed(null);
-        }}
-        onSaved={() => {
-          loadRecords();
-          loadFlaggedCount();
-        }}
-      />
-      <AddSalesModal
-        businessProfileId={selected.id}
-        open={addSalesOpen || editingSalesId !== null || duplicateSalesSeed !== null}
-        recordId={editingSalesId ?? undefined}
-        duplicateFrom={duplicateSalesSeed ?? undefined}
-        onClose={() => {
-          setAddSalesOpen(false);
-          setEditingSalesId(null);
-          setDuplicateSalesSeed(null);
-        }}
-        onSaved={() => {
-          loadRecords();
-          loadFlaggedCount();
-        }}
-      />
+      {/* Both add modals need a business for the record to belong to, so with
+          none they simply do not exist — nothing on this page can open them
+          either (see the empty state above). */}
+      {selected ? (
+        <>
+          <AddExpenseModal
+            businessProfileId={selected.id}
+            open={addExpenseOpen || editingExpenseId !== null || duplicateExpenseSeed !== null}
+            recordId={editingExpenseId ?? undefined}
+            duplicateFrom={duplicateExpenseSeed ?? undefined}
+            onClose={() => {
+              setAddExpenseOpen(false);
+              setEditingExpenseId(null);
+              setDuplicateExpenseSeed(null);
+            }}
+            onSaved={() => {
+              loadRecords();
+              loadFlaggedCount();
+            }}
+          />
+          <AddSalesModal
+            businessProfileId={selected.id}
+            open={addSalesOpen || editingSalesId !== null || duplicateSalesSeed !== null}
+            recordId={editingSalesId ?? undefined}
+            duplicateFrom={duplicateSalesSeed ?? undefined}
+            onClose={() => {
+              setAddSalesOpen(false);
+              setEditingSalesId(null);
+              setDuplicateSalesSeed(null);
+            }}
+            onSaved={() => {
+              loadRecords();
+              loadFlaggedCount();
+            }}
+          />
+        </>
+      ) : null}
       <DuplicateReviewModal
         recordId={reviewDuplicate?.id ?? null}
         recordType={reviewDuplicate?.type ?? "expense"}

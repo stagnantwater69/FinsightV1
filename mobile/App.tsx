@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Linking, Pressable, View } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { Ionicons } from "@expo/vector-icons";
@@ -24,6 +24,7 @@ import {
 } from "@expo-google-fonts/ibm-plex-mono";
 
 import { AuthProvider, useAuth } from "./src/context/AuthContext";
+import { LaunchScreen } from "./src/components/LaunchScreen";
 import { BusinessProfileProvider, useBusinessProfiles } from "./src/context/BusinessProfileContext";
 import { TourProvider, useTourOptional } from "./src/context/TourContext";
 import { AiChatProvider } from "./src/context/AiChatContext";
@@ -35,13 +36,14 @@ import {
   OnboardingScreen,
   type OnboardingNext,
 } from "./src/screens/OnboardingScreens";
-import { readOnboarding } from "./src/lib/onboardingDraft";
+import { readOnboarding, shouldShowOnboarding } from "./src/lib/onboardingDraft";
 import {
   LoginScreen,
   RegisterScreen,
   RecoverPasswordScreen,
   ResetPasswordScreen,
   ConfirmEmailScreen,
+  SessionHandoffScreen,
 } from "./src/screens/AuthScreens";
 import { parseAuthDeepLink, type AuthLinkResult } from "./src/lib/authLinkTokens";
 import { DashboardScreen } from "./src/screens/DashboardScreen";
@@ -79,7 +81,7 @@ import {
 import { OperatingScheduleScreen } from "./src/screens/OperatingScheduleScreen";
 import { RecoveryNotificationPreferencesScreen } from "./src/screens/RecoveryNotificationPreferencesScreen";
 import { MonthEndReviewScreen } from "./src/screens/MonthEndReviewScreen";
-import { font } from "./src/theme/tokens";
+import { font, typeScale } from "./src/theme/tokens";
 import type { Palette } from "./src/theme/palette";
 import { ThemeProvider, useTheme, useThemeControl } from "./src/context/ThemeContext";
 import { recordsTabPressAction, RECORDS_LIST_SCREEN } from "./src/lib/tabSelection";
@@ -262,7 +264,30 @@ function MoreStack() {
       <Stack.Screen
         name="RecoveryNotificationPreferences"
         component={RecoveryNotificationPreferencesScreen}
-        options={{ title: "Notification settings" }}
+        options={({ navigation }) => ({
+          title: "Notification settings",
+          headerTitleStyle: { ...screenOptions.headerTitleStyle, fontSize: typeScale.title },
+          headerBackVisible: false,
+          headerLeft: ({ tintColor }) => (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Back"
+              onPress={() => {
+                if (navigation.canGoBack()) navigation.goBack();
+                else navigation.navigate("MoreHome");
+              }}
+              style={({ pressed }) => ({
+                width: 48,
+                height: 48,
+                alignItems: "center",
+                justifyContent: "center",
+                opacity: pressed ? 0.6 : 1,
+              })}
+            >
+              <Ionicons name="arrow-back" size={24} color={tintColor} />
+            </Pressable>
+          ),
+        })}
       />
       <Stack.Screen
         name="MonthEndReview"
@@ -745,6 +770,31 @@ function AuthStack() {
       <Stack.Screen name="Login" component={LoginScreen} />
       <Stack.Screen name="Register" component={RegisterScreen} />
       <Stack.Screen name="RecoverPassword" component={RecoverPasswordScreen} />
+      {/*
+        A STACK SCREEN NOW, not a deep-link destination.
+
+        The reset email used to carry a button pointing at
+        `finsight://auth/reset-password`, and this screen was rendered above the
+        navigator when that link fired. The template no longer has the button —
+        it carries GoTrue's recovery code alone — so the link will never fire
+        again, and the code has to be typed somewhere. That somewhere is here,
+        reached from RecoverPassword with the address it was sent to, so the
+        whole reset happens without leaving the app.
+
+        Email CONFIRMATION is untouched: it still arrives as a link, and
+        ConfirmEmailScreen is still rendered above the navigator for it.
+      */}
+      <Stack.Screen name="ResetPassword">
+        {({ route, navigation }) => (
+          <ResetPasswordScreen
+            // Empty when someone reaches this screen directly — the form asks
+            // for the address in that case rather than refusing to open.
+            email={(route.params as { email?: string } | undefined)?.email ?? ""}
+            onDone={() => navigation.navigate("Login")}
+            onNewCode={() => navigation.navigate("RecoverPassword")}
+          />
+        )}
+      </Stack.Screen>
     </Stack.Navigator>
   );
 }
@@ -766,6 +816,7 @@ function AuthStack() {
  */
 function useAuthDeepLink() {
   const [link, setLink] = useState<AuthLinkResult>(null);
+  const [initialLinkReady, setInitialLinkReady] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -777,7 +828,10 @@ function useAuthDeepLink() {
           if (parsed) setLink(parsed);
         }
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => {
+        if (active) setInitialLinkReady(true);
+      });
 
     const sub = Linking.addEventListener("url", ({ url }) => {
       const parsed = parseAuthDeepLink(url);
@@ -790,59 +844,60 @@ function useAuthDeepLink() {
     };
   }, []);
 
-  return { link, dismiss: useCallback(() => setLink(null), []) };
+  return { link, initialLinkReady, dismiss: useCallback(() => setLink(null), []) };
 }
 
 function Root({ fontsReady }: { fontsReady: boolean }) {
-  const t = useTheme();
-  const { profile, loading, logout } = useAuth();
-  const { link, dismiss } = useAuthDeepLink();
+  const { profile, loading } = useAuth();
+  const { link, initialLinkReady, dismiss } = useAuthDeepLink();
 
   // Restoring the session from the device keystore is async, so the app waits
-  // here rather than flashing Login at an already-signed-in user. Fonts are
-  // waited on in the same place because the two finish independently and
-  // there is nothing worth showing until both have.
-  const ready = fontsReady && !loading;
+  // here rather than flashing Login at an already-signed-in user. A cold
+  // email link must also resolve before choosing the destination screen.
+  const ready = fontsReady && !loading && initialLinkReady;
 
   useEffect(() => {
-    // Uncovering the app is the last thing that happens, after the tree that
-    // replaces the splash has been committed. hideAsync's rejection is
-    // ignored for the same reason preventAutoHideAsync's is.
-    if (ready) SplashScreen.hideAsync().catch(() => undefined);
-  }, [ready]);
+    // Once typography and theme are ready, reveal the committed branded
+    // loading view while session/link restoration finishes. No artificial delay.
+    if (fontsReady) SplashScreen.hideAsync().catch(() => undefined);
+  }, [fontsReady]);
 
   if (!ready) {
-    // Normally invisible — the native splash is still up. This is what the
-    // owner sees if the splash could not be held, so it stays a real view
-    // rather than null.
-    return (
-      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: t.surfaceSunken }}>
-        <ActivityIndicator color={t.brand[600]} />
-      </View>
-    );
+    return <LaunchScreen fontsReady={fontsReady} />;
   }
 
   /*
    * An auth link beats whatever else is on screen.
    *
-   * Including a signed-in session: someone resetting their password is often
-   * doing it BECAUSE another person has their account, and dropping them into
-   * the dashboard instead would be the one outcome that helps nobody. Finishing
-   * a reset ends every session anyway (the backend revokes globally), so
-   * `logout` clears the now-dead local one on the way out.
+   * Two kinds reach here now: a confirmation link and the website's session
+   * hand-back. Password RESET is no longer one of them — its email carries a
+   * code rather than a button, so nothing opens the app from it and the reset
+   * is finished on the ResetPassword screen in the auth stack instead.
    */
   if (link) {
     const tokens = "tokens" in link ? link.tokens : null;
     const linkError = "error" in link ? link.error : null;
-    const finish = () => {
-      dismiss();
-      if (profile) void logout();
-    };
-    return link.kind === "reset-password" ? (
-      <ResetPasswordScreen tokens={tokens} linkError={linkError} onDone={finish} />
-    ) : (
-      <ConfirmEmailScreen tokens={tokens} linkError={linkError} onDone={finish} />
-    );
+
+    /*
+     * Leaving one of these screens is just "stop showing it": clearing `link`
+     * hands the screen back to the branch below, which shows the tabs to a
+     * signed-in owner and the log-in form to everyone else. Confirmation and
+     * handoff have both just ESTABLISHED a session, so that is the whole job —
+     * this used to also `logout()`, which signed the owner straight back out of
+     * the account they had just finished setting up.
+     */
+    if (link.kind === "confirm-email") {
+      return <ConfirmEmailScreen tokens={tokens} linkError={linkError} onDone={dismiss} />;
+    }
+    if (link.kind === "session-handoff") {
+      return (
+        <SessionHandoffScreen
+          code={"code" in link ? link.code : null}
+          linkError={linkError}
+          onDone={dismiss}
+        />
+      );
+    }
   }
 
   return profile ? (
@@ -857,11 +912,15 @@ function Root({ fontsReady }: { fontsReady: boolean }) {
 /**
  * Sends an owner who has no business yet into the setup wizard.
  *
- * WHY `profiles.length === 0` IS THE WHOLE TEST. It is the fact the app already
+ * WHY `profiles.length === 0` IS THE ENTRY TEST. It is the fact the app already
  * depends on everywhere else — no business means no records, no targets, and
  * nothing to show — so it needs no flag of its own, and it can never catch an
  * established owner: having a profile is exactly what completing setup means.
  * See src/lib/onboardingDraft.ts.
+ *
+ * IT IS THE ENTRY TEST ONLY, NOT THE STAY TEST. The wizard creates the profile
+ * at the end of step 2, so re-asking that question on every render evicted the
+ * wizard one step before its last one. `shouldShowOnboarding` latches it.
  *
  * DISMISSAL IS RESPECTED. Someone who chose "Skip for now" is not sent back
  * here on the next launch; they get on with whatever they opened the app for
@@ -918,7 +977,23 @@ function MainOrOnboarding() {
     }
   }, [pendingStart]);
 
-  if (loading || dismissed === null) {
+  /*
+   * THE LATCH. Set the first time the wizard renders and never cleared while
+   * this component is mounted — see shouldShowOnboarding in lib/onboardingDraft.ts
+   * for the bug it exists to close (step 2 creates the profile, which used to
+   * evict the wizard before step 3 could render).
+   *
+   * A ref rather than state because nothing needs to re-render when it flips:
+   * it is read in the same pass that sets it, and the render that sets it is
+   * already the render that shows the wizard.
+   */
+  const enteredWizard = useRef(false);
+
+  // The loading gate is skipped once the wizard is up: `refresh()` flipping
+  // `loading` back to true mid-setup would swap the owner's half-filled form
+  // for a spinner and lose the step they were on, which is the same defect in
+  // a different disguise.
+  if (!enteredWizard.current && (loading || dismissed === null)) {
     return (
       <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: t.surfaceSunken }}>
         <ActivityIndicator color={t.brand[600]} />
@@ -926,7 +1001,15 @@ function MainOrOnboarding() {
     );
   }
 
-  if (profiles.length === 0 && !dismissed && !left) {
+  if (
+    shouldShowOnboarding({
+      hasProfiles: profiles.length > 0,
+      dismissed: dismissed === true,
+      finished: left,
+      entered: enteredWizard.current,
+    })
+  ) {
+    enteredWizard.current = true;
     return (
       <OnboardingScreen
         onDone={(next) => {
@@ -1027,17 +1110,13 @@ function Themed({ fontsReady }: { fontsReady: boolean }) {
 
   return (
     <>
+      {/* Screen-specific bars (including the dark launch plate) override this default. */}
+      <StatusBar style={t.statusBarStyle} />
       <NavigationContainer ref={navigationRef} theme={navThemeFor(t)}>
         <AuthProvider>
           <Root fontsReady={fontsReady && themeReady} />
         </AuthProvider>
       </NavigationContainer>
-      {/*
-        The status bar follows the theme: dark glyphs on a light app, light
-        glyphs on a dark one. Hardcoded "dark" here was invisible against a
-        dark page — the clock and the battery simply disappeared.
-      */}
-      <StatusBar style={t.statusBarStyle} />
     </>
   );
 }

@@ -1,5 +1,5 @@
 import { Suspense, lazy } from "react";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { ThemeProvider } from "./context/ThemeContext";
 import { AuthenticatedLayout, OnboardingLayout } from "./components/AuthenticatedLayout";
@@ -7,6 +7,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ToastProvider } from "./components/Toast";
 import { ConfirmProvider } from "./components/ConfirmDialog";
 import { Landing } from "./pages/Landing";
+import { landingRouteTarget } from "./lib/landingRoute";
 /*
  * Eager, unlike every other page below. This one is the fallback for "routing
  * has already gone wrong", so making it depend on a second network round trip
@@ -67,14 +68,25 @@ const Onboarding = lazy(() => import("./pages/Onboarding").then((m) => ({ defaul
  * dashboard for anyone already signed in — so returning users never have to
  * click past a marketing page to reach their own numbers.
  *
+ * EXCEPT when the URL names a section of the landing page (QA register
+ * FUN-014). The public header's "Features" link points at `/#features`, and a
+ * signed-in visitor who clicked it was redirected to the dashboard — the one
+ * place the features section is not. A bare `/` is "take me to my numbers";
+ * `/#features` is an explicit request for a specific piece of the marketing
+ * page, and the redirect was answering a question nobody asked. Sending them
+ * on to the dashboard would also silently discard the hash, so there is no
+ * "redirect and then scroll" version of this that works.
+ *
  * Rendered while auth is still resolving as `null` rather than a spinner: the
  * check is a local token read and resolves in a frame or two, and flashing a
  * loader there would be more jarring than a brief blank.
  */
 function LandingOrDashboard() {
   const { profile, loading } = useAuth();
+  const { hash } = useLocation();
   if (loading) return null;
-  return profile ? <Navigate to="/dashboard" replace /> : <Landing />;
+  const target = landingRouteTarget({ hash, signedIn: !!profile });
+  return target === "dashboard" ? <Navigate to="/dashboard" replace /> : <Landing />;
 }
 
 /**

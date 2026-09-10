@@ -368,10 +368,52 @@ model User {
   aiInteractions               AIInteraction[]
   conversations                Conversation[]
   reductionOpportunityFeedback ReductionOpportunityFeedback[]
+  authHandoffs                 AuthHandoff[]
 
   // The deletion worker claims the oldest unfinished request on every pass.
   @@index([status, deletionRequestedAt], map: "User_DeletionQueue_idx")
   @@map("User")
+}
+
+/// [ADDED] One-time codes that carry a live session from the web app into the
+/// installed mobile app, and nowhere else.
+///
+/// WHY THIS TABLE EXISTS. Confirmation emails now land on an HTTPS URL that
+/// the phone's OS hands to the FinSight app when it is installed, and to the
+/// browser when it is not. The browser branch confirms the address and signs
+/// the owner in *on the web*; offering them "open the app" from there means
+/// moving that session across process boundaries, and the only channel between
+/// a web page and a native app is a URL.
+///
+/// A URL is exactly where a refresh token must never be: it survives in browser
+/// history, in the Android log, and in whatever intent-inspecting app happens
+/// to be installed. So the URL carries an opaque code with no value of its own,
+/// and the session it stands for is exchanged over an authenticated HTTPS POST.
+///
+/// Nothing here is readable at rest. `codeHash` is a SHA-256 of the code, so a
+/// database read cannot replay one; the refresh token is AES-256-GCM sealed
+/// with a key derived from the service-role secret. The row is single-use
+/// (`consumedAt`) and short-lived (`expiresAt`, two minutes), and the exchange
+/// rotates the refresh token anyway — so a stolen row is worthless twice over.
+model AuthHandoff {
+  id                 Int       @id @default(autoincrement()) @map("AuthHandoff_ID")
+  /// SHA-256 of the code, hex. The code itself is never stored.
+  codeHash           String    @unique @map("AuthHandoff_CodeHash") @db.VarChar(64)
+  userId             Int       @map("AuthHandoff_User_ID")
+  /// AES-256-GCM sealed refresh token — see lib/authHandoff.ts.
+  refreshTokenCipher String    @map("AuthHandoff_RefreshTokenCipher") @db.VarChar(4000)
+  expiresAt          DateTime  @map("AuthHandoff_ExpiresAt")
+  /// Set by the exchange. Single use is enforced by a conditional update on
+  /// this column, not by a read-then-write, so two simultaneous exchanges of
+  /// the same code cannot both win.
+  consumedAt         DateTime? @map("AuthHandoff_ConsumedAt")
+  createdAt          DateTime  @default(now()) @map("AuthHandoff_CreatedAt")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // The sweep that clears expired rows orders by this.
+  @@index([expiresAt], map: "AuthHandoff_Expiry_idx")
+  @@map("AuthHandoff")
 }
 
 model BusinessProfile {

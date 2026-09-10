@@ -36,7 +36,7 @@ export function StatTile({
       >
         {value}
       </p>
-      {sublabel ? <p className="mt-1 text-xs text-ink-400">{sublabel}</p> : null}
+      {sublabel ? <p className="mt-1 text-xs text-ink-500">{sublabel}</p> : null}
     </div>
   );
 }

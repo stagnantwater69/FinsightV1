@@ -11,6 +11,7 @@ import { Callout, Card, FormPage, Panel } from "../components/ui";
 import { EmptyState } from "../components/EmptyState";
 import { SkeletonPanel } from "../components/Skeleton";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
+import { todayIso, toLocalIsoDate } from "../lib/dates";
 import type {
   OperatingDayOverride,
   OperatingDayOverrideInput,
@@ -44,12 +45,7 @@ function defaultOverrideRange(): { from: string; to: string } {
   const now = new Date();
   const from = new Date(now.getFullYear(), now.getMonth(), 1);
   const to = new Date(now.getFullYear(), now.getMonth() + 2, 0);
-  const iso = (d: Date) => d.toISOString().slice(0, 10);
-  return { from: iso(from), to: iso(to) };
-}
-
-function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+  return { from: toLocalIsoDate(from), to: toLocalIsoDate(to) };
 }
 
 /**
@@ -240,7 +236,7 @@ export function OperatingSchedule() {
                       className={`tap min-w-[4.5rem] rounded-xl border px-3 py-2.5 text-sm font-semibold transition ${
                         isOpen
                           ? "border-edge-brand bg-tint-brand text-tone-brand"
-                          : "border-ink-200 bg-paper-100 text-ink-400"
+                          : "border-ink-200 bg-paper-100 text-ink-600"
                       }`}
                     >
                       <span className="block">{w.short}</span>
@@ -335,7 +331,7 @@ export function OperatingSchedule() {
                       type="button"
                       aria-label={`Remove override for ${o.date}`}
                       onClick={() => handleDeleteOverride(o)}
-                      className="tap-inline shrink-0 rounded-lg px-2 py-1 text-ink-400 transition hover:bg-tint-danger hover:text-tone-danger"
+                      className="tap-inline shrink-0 rounded-lg px-2 py-1 text-ink-500 transition hover:bg-tint-danger hover:text-tone-danger"
                     >
                       ×
                     </button>

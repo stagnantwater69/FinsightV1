@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { AuthLayout } from "../components/AuthLayout";
@@ -8,8 +8,10 @@ import { Callout } from "../components/ui";
 import { getErrorMessage, getFieldErrors } from "../lib/errors";
 import { isSavingAccount, savedEmail, setSavedAccount } from "../lib/savedAccount";
 import { isValid, validateLogin, type FieldErrors, type LoginField } from "../lib/authValidation";
+import { focusFirstInvalidField } from "../lib/formFocus";
 
 export function Login() {
+  const formRef = useRef<HTMLFormElement>(null);
   const { login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -44,6 +46,7 @@ export function Login() {
       // Nothing is sent. The round trip would only bring back the same
       // answer, and on a phone tether it is a round trip the owner pays for.
       setFieldErrors(invalid);
+      focusFirstInvalidField(formRef.current);
       return;
     }
     setFieldErrors({});
@@ -65,6 +68,7 @@ export function Login() {
        */
       const fromServer = getFieldErrors(err);
       setFieldErrors(fromServer);
+      if (!isValid(fromServer)) focusFirstInvalidField(formRef.current);
       if (!isValid(fromServer)) setError(null);
       else setError(getErrorMessage(err));
     } finally {
@@ -95,7 +99,7 @@ export function Login() {
           <Callout tone="warn">Your session expired — please log in again.</Callout>
         </div>
       ) : null}
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <form ref={formRef} onSubmit={handleSubmit} className="space-y-4" noValidate>
         <Field label="Email" htmlFor="email" required error={fieldErrors.email}>
           <TextInput
             type="email"
@@ -139,7 +143,7 @@ export function Login() {
       <p className="mt-6 text-center text-sm text-ink-500">
         Don't have an account?{" "}
         <Link to="/register" className="tap-inline font-medium text-brand-700 hover:text-brand-800">
-          Register
+          Create account
         </Link>
       </p>
     </AuthLayout>

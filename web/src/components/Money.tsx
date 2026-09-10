@@ -4,15 +4,20 @@
  * Two reasons it's a component rather than a helper that returns a string:
  *
  *  1. Tabular figures need a class on an element. Routing every amount through
- *     here guarantees the mono/tabular treatment is never forgotten, so columns
- *     of figures always align.
+ *     here guarantees aligned numerals without making conversational financial
+ *     summaries feel like technical or accounting-system output.
  *  2. Formatting stays in one place. Amounts were previously rendered with a
  *     mix of `toLocaleString()` calls with different options, so the same value
  *     could appear as "5,000", "5000" or "5,000.00" on different screens.
  */
 interface Props {
   value: number;
-  /** Show centavos. Off by default — whole pesos read faster in summaries. */
+  /**
+   * Show centavos. Off by default — whole pesos read faster in summaries, and
+   * a derived figure (a daily target, an average) is spurious precision at two
+   * decimal places. Turn it ON for a stored transaction amount the owner typed
+   * or confirmed: rounding 8.70 to "9" in a ledger misstates the record.
+   */
   decimals?: boolean;
   /** Drop the "PHP" prefix, for tables where the column header carries it. */
   bare?: boolean;

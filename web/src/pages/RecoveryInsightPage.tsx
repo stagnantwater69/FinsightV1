@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type MouseEvent } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowDown,
@@ -12,7 +12,6 @@ import {
   Minus,
   SlidersHorizontal,
   Target,
-  type LucideIcon,
 } from "lucide-react";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { api } from "../lib/api";
@@ -50,6 +49,8 @@ import {
   type PillTone,
 } from "../components/ui";
 import { Money, formatMoney } from "../components/Money";
+import { EmptyState } from "../components/EmptyState";
+import { SectionNav, type SectionNavItem } from "../components/SectionNav";
 import {
   SkeletonPanel,
   SkeletonRows,
@@ -176,7 +177,7 @@ function CheckpointCard({
   return (
     <div className="rounded-xl border border-paper-200 bg-paper-100 p-4">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-400">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-600">
           {label}
         </p>
         <Pill tone={CHECKPOINT_STATUS_TONE[checkpoint.status]}>
@@ -188,23 +189,23 @@ function CheckpointCard({
       </p>
       <dl className="mt-3 grid grid-cols-2 gap-3 text-sm">
         <div>
-          <dt className="text-xs text-ink-500">Cumulative target</dt>
+          <dt className="text-xs text-ink-600">Cumulative target</dt>
           <dd className="figure font-semibold text-ink-900">
             {formatMoney(checkpoint.cumulativeTarget)}
           </dd>
         </div>
         <div>
-          <dt className="text-xs text-ink-500">Recorded amount</dt>
+          <dt className="text-xs text-ink-600">Recorded amount</dt>
           <dd className="figure font-semibold text-ink-900">
             {isPending || checkpoint.recordedAmount === null ? (
-              <span className="text-ink-400">Not yet reached</span>
+              <span className="text-ink-600">Not yet reached</span>
             ) : (
               formatMoney(checkpoint.recordedAmount)
             )}
           </dd>
         </div>
         <div className="col-span-2">
-          <dt className="text-xs text-ink-500">Variance</dt>
+          <dt className="text-xs text-ink-600">Variance</dt>
           <dd
             className="figure font-semibold"
             style={{
@@ -212,7 +213,7 @@ function CheckpointCard({
             }}
           >
             {isPending || checkpoint.variance === null ? (
-              <span className="text-ink-400">—</span>
+              <span className="text-ink-600">—</span>
             ) : (
               formatMoney(checkpoint.variance, { signed: true })
             )}
@@ -258,7 +259,7 @@ const CHECKPOINT_COLUMNS: Column<RecoveryCheckpoint>[] = [
     sortValue: (c) => c.recordedAmount ?? -1,
     cell: (c) =>
       c.recordedAmount === null ? (
-        <span className="text-ink-400">Not yet reached</span>
+        <span className="text-ink-500">Not yet reached</span>
       ) : (
         <span className="text-ink-600">
           <Money value={c.recordedAmount} />
@@ -273,7 +274,7 @@ const CHECKPOINT_COLUMNS: Column<RecoveryCheckpoint>[] = [
     sortValue: (c) => c.variance ?? 0,
     cell: (c) =>
       c.variance === null ? (
-        <span className="text-ink-400">—</span>
+        <span className="text-ink-500">—</span>
       ) : (
         <span
           className="font-medium"
@@ -316,6 +317,11 @@ function findCurrentAndNextCheckpoints(
     }
   }
   if (!current) current = checkpoints[0] ?? null;
+  // The rare early-month case where the very first checkpoint hasn't
+  // happened yet: it is both the "current" fallback and the "next"
+  // checkpoint, so it is shown once rather than twice — mirrors mobile's
+  // RecoveryCheckpointsCard, which carries the same guard.
+  if (next && current && next.endDate === current.endDate) next = null;
   return { current, next };
 }
 
@@ -365,7 +371,7 @@ function RecoveryCheckpoints({
         )
       }
     >
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className={`grid gap-4 ${current && next ? "sm:grid-cols-2" : ""}`}>
         {current ? (
           <CheckpointCard label="Current checkpoint" checkpoint={current} />
         ) : null}
@@ -442,7 +448,7 @@ const DAILY_COVERAGE_COLUMNS: Column<DailyCoverageRow>[] = [
     sortValue: (d) => d.neededTarget ?? -1,
     cell: (d) =>
       d.neededTarget === null ? (
-        <span className="text-ink-400">—</span>
+        <span className="text-ink-500">—</span>
       ) : (
         <span className="text-ink-600">
           <Money value={d.neededTarget} />
@@ -469,7 +475,7 @@ const DAILY_COVERAGE_COLUMNS: Column<DailyCoverageRow>[] = [
     sortValue: (d) => d.gap ?? 0,
     cell: (d) =>
       d.gap === null || d.status === "closed" ? (
-        <span className="text-ink-400">—</span>
+        <span className="text-ink-500">—</span>
       ) : (
         <span className="font-medium" style={{ color: statusColor(d.status) }}>
           {d.status === "at" ? (
@@ -527,14 +533,23 @@ function focusSection(id: string) {
   el.focus({ preventScroll: true });
 }
 
+/**
+ * "Saved plan" in `RecoverySectionNav` needs to open the (collapsed-by-
+ * default) "Try a scenario" panel when there's no plan yet to jump to — a
+ * DOM event rather than lifted state, since `RecoveryScenarioPanel` owns its
+ * own `expanded` flag and nothing else on the page otherwise needs to know
+ * about it.
+ */
+const EXPAND_SCENARIO_EVENT = "finsight:recovery-expand-scenario";
+
 function RecoverySectionNav({
   showCheckpoints,
-  showSavedPlan,
+  hasSavedPlan,
 }: {
   showCheckpoints: boolean;
-  showSavedPlan: boolean;
+  hasSavedPlan: boolean;
 }) {
-  const items: { href: string; label: string; icon: LucideIcon }[] = [
+  const items: SectionNavItem[] = [
     { href: "#recovery-overview", label: "Overview", icon: CircleGauge },
     { href: "#remaining-recovery-target", label: "Daily plan", icon: Target },
     ...(showCheckpoints
@@ -546,44 +561,31 @@ function RecoverySectionNav({
           },
         ]
       : []),
-    ...(showSavedPlan
-      ? [
-          {
-            href: "#recovery-saved-plan",
-            label: "Saved plan",
-            icon: BookmarkCheck,
+    // Always present — plan §10.x treats a saved plan as a first-class
+    // feature, so it shouldn't only become discoverable after one already
+    // exists. With no plan yet, this jumps to (and opens) the scenario
+    // panel instead of a section that doesn't exist yet.
+    hasSavedPlan
+      ? {
+          href: "#recovery-saved-plan",
+          label: "Saved plan",
+          icon: BookmarkCheck,
+        }
+      : {
+          href: "#recovery-scenario",
+          label: "Save a plan",
+          icon: BookmarkCheck,
+          onClick: (e: MouseEvent) => {
+            e.preventDefault();
+            window.dispatchEvent(new Event(EXPAND_SCENARIO_EVENT));
+            focusSection("recovery-scenario");
           },
-        ]
-      : []),
+        },
     { href: "#recovery-scenario", label: "Scenario", icon: SlidersHorizontal },
     { href: "#daily-coverage", label: "Daily history", icon: History },
   ];
 
-  return (
-    <nav
-      aria-label="Recovery target sections"
-      className="scroll-slim -mx-1 overflow-x-auto px-1 pb-1"
-    >
-      <div className="flex min-w-max items-center gap-1 rounded-xl border border-paper-200 bg-paper-100 p-1">
-        <span className="px-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-500">
-          Jump to
-        </span>
-        {items.map((item) => {
-          const Icon = item.icon;
-          return (
-            <a
-              key={item.href}
-              href={item.href}
-              className="tap-inline inline-flex items-center gap-1.5 rounded-lg px-3 text-[13px] font-semibold text-ink-600 transition hover:bg-paper hover:text-brand-800 focus-visible:bg-paper"
-            >
-              <Icon aria-hidden className="size-3.5" strokeWidth={1.9} />
-              {item.label}
-            </a>
-          );
-        })}
-      </div>
-    </nav>
-  );
+  return <SectionNav ariaLabel="Recovery target sections" items={items} />;
 }
 
 function RecoveryPrimaryAction({
@@ -738,7 +740,7 @@ function RecoveryChangeSincePreviousDay({
           in sales since yesterday.
         </p>
       ) : null}
-      <p className="mt-2 text-xs text-ink-400">
+      <p className="mt-2 text-xs text-ink-500">
         Composed from your records, not AI-written.
       </p>
     </Panel>
@@ -879,7 +881,7 @@ function RecoveryPlanFields({
             onChange={(e) => onBufferPercentChange(e.target.value)}
             className="pr-8"
           />
-          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-ink-400">
+          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-ink-500">
             %
           </span>
         </div>
@@ -992,7 +994,7 @@ function SavedRecoveryPlanPanel({
         ) : null
       }
     >
-      <p className="mb-3 text-xs text-ink-400">
+      <p className="mb-3 text-xs text-ink-500">
         A note you saved for yourself. It has never changed, and does not
         change, your actual Recovery Target, business profile, or recorded
         sales.
@@ -1029,7 +1031,7 @@ function SavedRecoveryPlanPanel({
             <dt className="text-xs text-ink-500">Target amount</dt>
             <dd className="figure font-semibold text-ink-900">
               {plan.ownerTargetAmount === null ? (
-                <span className="text-ink-400">—</span>
+                <span className="text-ink-500">—</span>
               ) : (
                 formatMoney(plan.ownerTargetAmount)
               )}
@@ -1046,7 +1048,7 @@ function SavedRecoveryPlanPanel({
                   timeZone: "UTC",
                 })
               ) : (
-                <span className="text-ink-400">—</span>
+                <span className="text-ink-500">—</span>
               )}
             </dd>
           </div>
@@ -1054,7 +1056,7 @@ function SavedRecoveryPlanPanel({
             <dt className="text-xs text-ink-500">Buffer</dt>
             <dd className="figure font-semibold text-ink-900">
               {plan.bufferPercent === null ? (
-                <span className="text-ink-400">—</span>
+                <span className="text-ink-500">—</span>
               ) : (
                 `${plan.bufferPercent}%`
               )}
@@ -1083,6 +1085,24 @@ function RecoveryScenarioPanel({
   const [rawValue, setRawValue] = useState(
     String(currentExpectedMonthlyExpenses),
   );
+  // Once the owner types into the field, a background refresh that changes
+  // the real expected-monthly-expenses must not silently overwrite what
+  // they're mid-way through entering.
+  const touchedRef = useRef(false);
+  useEffect(() => {
+    if (touchedRef.current) return;
+    setRawValue(String(currentExpectedMonthlyExpenses));
+  }, [currentExpectedMonthlyExpenses]);
+  // Lets `RecoverySectionNav`'s "Save a plan" jump-link open this
+  // collapsed-by-default panel from outside, without lifting `expanded`
+  // state up through the page just for that one cross-component nudge.
+  useEffect(() => {
+    function onExpand() {
+      setExpanded(true);
+    }
+    window.addEventListener(EXPAND_SCENARIO_EVENT, onExpand);
+    return () => window.removeEventListener(EXPAND_SCENARIO_EVENT, onExpand);
+  }, []);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [scenario, setScenario] = useState<RecoveryScenario | null>(null);
@@ -1202,7 +1222,10 @@ function RecoveryScenarioPanel({
                 id="recovery-scenario-value"
                 value={rawValue}
                 min={0}
-                onChange={(e) => setRawValue(e.target.value)}
+                onChange={(e) => {
+                  touchedRef.current = true;
+                  setRawValue(e.target.value);
+                }}
               />
             </Field>
             <Button type="submit" variant="primary" disabled={submitting}>
@@ -1360,7 +1383,7 @@ function RecoveryScenarioPanel({
                             }
                             className="pr-8"
                           />
-                          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-ink-400">
+                          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-ink-600">
                             %
                           </span>
                         </div>
@@ -1446,7 +1469,17 @@ export function RecoveryInsightPage() {
   }
 
   async function load() {
-    if (!selected) return;
+    /*
+     * No business — an owner who chose "Skip for now". Settles rather than
+     * bails: `loading` starts true and `isInitialLoad` is `loading && !data`,
+     * so returning silently pinned this page to its skeleton for good.
+     */
+    if (!selected) {
+      setData(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
     const thisRequestId = ++requestId.current;
     setLoading(true);
     setError(null);
@@ -1475,7 +1508,13 @@ export function RecoveryInsightPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id]);
 
-  if (!selected) return null;
+  /*
+   * No `if (!selected) return <NoBusinessProfile />` any more. Recovery only
+   * READS, so with no business this renders its own chrome and its own empty
+   * state instead of a gate card. The `!selected` branch in the body both
+   * supplies that state and narrows `selected` for everything after it; the
+   * header's profile-scoped links are guarded separately above it.
+   */
 
   const isInitialLoad = loading && !data;
   const isRefreshing = loading && data !== null;
@@ -1498,13 +1537,26 @@ export function RecoveryInsightPage() {
           </>
         }
         actions={
-          <Link
-            to="/insights/recovery/month-end-review"
-            className="tap-inline inline-flex items-center gap-1.5 text-sm font-semibold text-brand-700 underline underline-offset-2"
-          >
-            View last month's summary
-            <ArrowRight aria-hidden className="size-4" strokeWidth={1.9} />
-          </Link>
+          /* Both are settings for a specific business — with none, there is
+             nothing for them to point at. */
+          selected ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <ButtonLink
+                to="/insights/recovery/month-end-review"
+                variant="secondary"
+                size="sm"
+              >
+                View last month's summary
+              </ButtonLink>
+              <ButtonLink
+                to={`/business-profiles/${selected.id}/recovery-notifications`}
+                variant="secondary"
+                size="sm"
+              >
+                Manage notifications
+              </ButtonLink>
+            </div>
+          ) : null
         }
       />
 
@@ -1570,15 +1622,24 @@ export function RecoveryInsightPage() {
         numbers below are arithmetically correct and completely misleading on
         their own; this is the sentence that makes them honest.
       */}
+      {/*
+        An illustrated invitation, not a warning — mirrors mobile's own
+        RecoveryTargetScreen, which deliberately moved off a warn-toned
+        callout for this exact state: a business that hasn't traded yet this
+        month isn't behind, so the state shouldn't read like an alert. No
+        action button here — RecoveryPrimaryAction below already renders the
+        one CTA for this status ("Record or import sales") right beside the
+        meter it changes; a second one here would only duplicate it.
+      */}
       {!loading && data?.monthHasNoRecords ? (
         <div className="mb-5">
-          <Callout tone="warn">
-            <b className="font-semibold">
-              No sales are recorded for this month yet
-            </b>
-            , so every figure below compares your target against zero. It isn't
-            a shortfall you've made — there's simply nothing in this month to
-            measure.
+          <EmptyState
+            image="/mascot/04-empty-states/nosalesrecords.webp"
+            title="Nothing to measure yet this month"
+          >
+            No sales are recorded for this month yet, so every figure below
+            compares your target against zero. It isn't a shortfall — there's
+            simply nothing in this month to measure yet.
             {data.latestSaleDate ? (
               <>
                 {" "}
@@ -1593,15 +1654,8 @@ export function RecoveryInsightPage() {
                 </span>
                 .
               </>
-            ) : null}{" "}
-            <Link
-              to="/records"
-              className="tap-inline inline-flex items-center gap-1.5 font-semibold text-brand-700 underline underline-offset-2"
-            >
-              See your records
-              <ArrowRight aria-hidden className="size-4" strokeWidth={1.9} />
-            </Link>
-          </Callout>
+            ) : null}
+          </EmptyState>
         </div>
       ) : null}
 
@@ -1632,6 +1686,24 @@ export function RecoveryInsightPage() {
           </Card>
           <SkeletonPanel lines={3} />
         </div>
+      ) : !selected ? (
+        /*
+         * Nothing to measure against: a recovery target is computed from a
+         * business's expected monthly expenses, and there is no business.
+         */
+        <EmptyState
+          image="/mascot/04-empty-states/nosalesrecords.webp"
+          title="No recovery target yet"
+          action={
+            <ButtonLink to="/onboarding" variant="primary">
+              Finish setting up your business
+            </ButtonLink>
+          }
+        >
+          Your sales-coverage target is worked out from your expected monthly
+          expenses and the sales you record against them. Add your business and
+          this page starts tracking that pace.
+        </EmptyState>
       ) : data ? (
         <div
           className={`space-y-6 transition-opacity duration-200 ${isRefreshing ? "opacity-60" : ""}`}
@@ -1643,7 +1715,7 @@ export function RecoveryInsightPage() {
 
           <RecoverySectionNav
             showCheckpoints={Boolean(data.weeklyCheckpoints?.length)}
-            showSavedPlan={plan !== null}
+            hasSavedPlan={plan !== null}
           />
 
           <div id="recovery-overview" className="scroll-mt-6">
@@ -1664,7 +1736,7 @@ export function RecoveryInsightPage() {
           <Panel
             title="Inputs"
             action={
-              <span className="text-xs text-ink-400">
+              <span className="text-xs text-ink-500">
                 {data.asOfDate
                   ? `As of ${new Date(data.asOfDate).toLocaleDateString(
                       undefined,
@@ -1697,7 +1769,7 @@ export function RecoveryInsightPage() {
                 emphasis
               />
             </div>
-            <p className="mt-3 text-xs text-ink-400">
+            <p className="mt-3 text-xs text-ink-500">
               Daily needed target = expected monthly expenses ÷ operating days.
               This is a target-based recovery guide using your sales reference
               records — it does not calculate formal financial results.
@@ -1775,14 +1847,14 @@ export function RecoveryInsightPage() {
                   emphasis
                 />
               </div>
-              <p className="mt-3 text-xs text-ink-400">
+              <p className="mt-3 text-xs text-ink-500">
                 Remaining target = expected monthly expenses − sales reference
                 recorded so far. Adjusted daily target updates as you record
                 more sales references — it's a planning guide, not a guarantee
                 of any result.
               </p>
               {data.remainingOperatingDaysIsApproximated ? (
-                <p className="mt-1 text-xs text-ink-400">
+                <p className="mt-1 text-xs text-ink-500">
                   Remaining operating days is an estimate: your profile records
                   how many days a month you operate, not which days of the week,
                   so this scales your monthly count by how much of the month is
@@ -1800,7 +1872,7 @@ export function RecoveryInsightPage() {
                   </Link>
                 </p>
               ) : data.operatingScheduleConfigured ? (
-                <p className="mt-1 text-xs text-ink-400">
+                <p className="mt-1 text-xs text-ink-500">
                   Based on your configured operating days
                   {typeof data.operatingDaysThisMonth === "number"
                     ? ` — ${data.operatingDaysThisMonth} open this month`
@@ -1813,7 +1885,7 @@ export function RecoveryInsightPage() {
               {data.dataWarnings &&
               data.dataWarnings.length > 0 &&
               typeof data.provisionalSalesThisMonth === "number" ? (
-                <p className="mt-1 text-xs text-ink-400">
+                <p className="mt-1 text-xs text-ink-500">
                   Includes {formatMoney(data.provisionalSalesThisMonth)} pending
                   review or flagged as a possible duplicate.
                 </p>
@@ -1869,7 +1941,7 @@ export function RecoveryInsightPage() {
               >
                 Daily coverage
               </h2>
-              <span className="text-xs text-ink-400">Month to date</span>
+              <span className="text-xs text-ink-500">Month to date</span>
             </div>
             <DataTable
               rows={data.dailyCoverage}

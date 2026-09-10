@@ -6,6 +6,7 @@ import { getErrorMessage } from "../lib/errors";
 import type {
   AnomalyFindingPage,
   BusinessProfile,
+  FlaggedRecordPage,
   ImportBatchSummary,
   RecordItem,
 } from "../lib/types";
@@ -34,6 +35,36 @@ import { useToast } from "../components/Toast";
 
 /** How many findings one page of the queue asks for. */
 const FINDINGS_PAGE_SIZE = 25;
+
+/**
+ * How many flagged records one page asks for — the server's ceiling.
+ *
+ * This request used to send no bound at all and take whatever came back. A
+ * business that re-imported one spreadsheet flags every row it re-adds, so
+ * "whatever came back" was tens of thousands of records and megabytes of JSON.
+ * The server now caps an unbounded request at 200 and says so in an
+ * X-Next-Cursor header, which means the old code silently stopped showing the
+ * 201st flagged record onwards. Asking by page is how the rest become
+ * reachable at all.
+ */
+const FLAGGED_PAGE_SIZE = 100;
+
+/**
+ * How many record ids one bulk-resolve request may carry.
+ *
+ * A duplicate group IS the unbounded case — the whole point of the group card
+ * is settling hundreds of re-imported rows in one decision — and the server
+ * rejects more than 1000 ids per side outright. Chunking below that keeps a
+ * 3,000-row group a sequence of accepted requests instead of one 400.
+ */
+const BULK_RESOLVE_CHUNK = 500;
+
+/** `list` split into chunks of at most `size`; `[]` stays `[]`. */
+function chunk<T>(list: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
+  return out;
+}
 
 /**
  * Why a record was flagged, stated in the owner's own numbers.
@@ -135,7 +166,7 @@ function AuditSection({ item }: { item: ReviewItem }) {
             </div>
           ))}
         </dl>
-        <p className="mt-2 text-[11px] leading-relaxed text-ink-400">
+        <p className="mt-2 text-[11px] leading-relaxed text-ink-500">
           These are FinSight's own working figures, kept so a flag can be explained after the fact. A
           flag is never a claim that something is wrong — it is a comparison against this business's own
           history.
@@ -151,7 +182,8 @@ export function FlaggedRecords() {
   const toast = useToast();
   const [records, setRecords] = useState<RecordItem[]>([]);
   const [findings, setFindings] = useState<AnomalyFindingPage["items"]>([]);
-  const [nextCursor, setNextCursor] = useState<number | null>(null);
+  const [findingsCursor, setFindingsCursor] = useState<number | null>(null);
+  const [flaggedCursor, setFlaggedCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [batches, setBatches] = useState<ImportBatchSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -168,7 +200,21 @@ export function FlaggedRecords() {
   const queueId = useId();
 
   async function load() {
-    if (!selected) return;
+    /*
+     * No business — an owner who chose "Skip for now". Settles rather than
+     * bails: `loading` starts true, so returning silently held the queue under
+     * its skeleton forever. An empty queue is the honest answer.
+     */
+    if (!selected) {
+      setRecords([]);
+      setFindings([]);
+      setBatches([]);
+      setFlaggedCursor(null);
+      setFindingsCursor(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -180,7 +226,9 @@ export function FlaggedRecords() {
        * from is still the screen the owner opened.
        */
       const [flagged, findingPage, importBatches] = await Promise.all([
-        api.get<RecordItem[]>("/records/flagged", { params: { businessProfileId: selected.id } }),
+        api.get<FlaggedRecordPage>("/records/flagged", {
+          params: { businessProfileId: selected.id, limit: FLAGGED_PAGE_SIZE },
+        }),
         api
           .get<AnomalyFindingPage>("/insights/findings", {
             params: { businessProfileId: selected.id, status: "OPEN", take: FINDINGS_PAGE_SIZE },
@@ -192,9 +240,10 @@ export function FlaggedRecords() {
           })
           .catch(() => ({ data: [] as ImportBatchSummary[] })),
       ]);
-      setRecords(flagged.data);
+      setRecords(flagged.data.items);
+      setFlaggedCursor(flagged.data.nextCursor);
       setFindings(findingPage.data.items);
-      setNextCursor(findingPage.data.nextCursor);
+      setFindingsCursor(findingPage.data.nextCursor);
       setBatches(importBatches.data);
     } catch (err) {
       setError(getErrorMessage(err));
@@ -208,21 +257,51 @@ export function FlaggedRecords() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id]);
 
-  /** The next page of findings, appended rather than replacing what's on screen. */
-  async function loadMoreFindings() {
-    if (!selected || nextCursor === null) return;
+  /**
+   * The next page of the queue, appended rather than replacing what's on
+   * screen.
+   *
+   * One button for two paginated sources, because the queue the owner sees is
+   * one list: flagged records and detector findings are merged and grouped
+   * before anything is rendered, so "there is more" is true when EITHER has
+   * another page, and pressing it should advance whichever still can. The two
+   * requests go together so a second page costs one round trip, and each
+   * cursor only moves if its own request came back.
+   */
+  async function loadMore() {
+    if (!selected) return;
+    if (findingsCursor === null && flaggedCursor === null) return;
     setLoadingMore(true);
     try {
-      const { data } = await api.get<AnomalyFindingPage>("/insights/findings", {
-        params: {
-          businessProfileId: selected.id,
-          status: "OPEN",
-          take: FINDINGS_PAGE_SIZE,
-          cursorId: nextCursor,
-        },
-      });
-      setFindings((prev) => [...prev, ...data.items]);
-      setNextCursor(data.nextCursor);
+      const [findingPage, flaggedPage] = await Promise.all([
+        findingsCursor === null
+          ? null
+          : api.get<AnomalyFindingPage>("/insights/findings", {
+              params: {
+                businessProfileId: selected.id,
+                status: "OPEN",
+                take: FINDINGS_PAGE_SIZE,
+                cursorId: findingsCursor,
+              },
+            }),
+        flaggedCursor === null
+          ? null
+          : api.get<FlaggedRecordPage>("/records/flagged", {
+              params: {
+                businessProfileId: selected.id,
+                limit: FLAGGED_PAGE_SIZE,
+                cursor: flaggedCursor,
+              },
+            }),
+      ]);
+      if (findingPage) {
+        setFindings((prev) => [...prev, ...findingPage.data.items]);
+        setFindingsCursor(findingPage.data.nextCursor);
+      }
+      if (flaggedPage) {
+        setRecords((prev) => [...prev, ...flaggedPage.data.items]);
+        setFlaggedCursor(flaggedPage.data.nextCursor);
+      }
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -337,20 +416,41 @@ export function FlaggedRecords() {
 
     setBusyKey(group.key);
     try {
-      const { data } = await api.post<{ resolved: number }>("/records/duplicates/resolve", {
-        businessProfileId: selected.id,
-        action,
-        expenseIds: group.records.filter((r) => r.type === "expense").map((r) => r.id),
-        salesIds: group.records.filter((r) => r.type === "sales").map((r) => r.id),
-      });
+      /*
+       * Sent in chunks, and sequentially. A group is exactly where an
+       * unbounded id list comes from, and the server refuses more than 1000
+       * per side — so a genuinely large re-import would fail outright as one
+       * request. Sequential rather than parallel for the same reason the
+       * server resolves its two halves in order: these requests delete
+       * records that can share an import batch, and the batch cleanup counts
+       * what is left.
+       */
+      const expenseChunks = chunk(
+        group.records.filter((r) => r.type === "expense").map((r) => r.id),
+        BULK_RESOLVE_CHUNK,
+      );
+      const salesChunks = chunk(
+        group.records.filter((r) => r.type === "sales").map((r) => r.id),
+        BULK_RESOLVE_CHUNK,
+      );
+      let resolved = 0;
+      for (let i = 0; i < Math.max(expenseChunks.length, salesChunks.length); i += 1) {
+        const res = await api.post<{ resolved: number }>("/records/duplicates/resolve", {
+          businessProfileId: selected.id,
+          action,
+          expenseIds: expenseChunks[i] ?? [],
+          salesIds: salesChunks[i] ?? [],
+        });
+        resolved += res.data.resolved;
+      }
       await load();
       // The server's count, not the group's — it excludes anything already
       // resolved in another tab, and saying "40" when 38 were left would be a
       // small lie about the owner's own books.
       toast(
         action === "keep"
-          ? `Kept ${data.resolved} record${data.resolved === 1 ? "" : "s"}`
-          : `Discarded ${data.resolved} record${data.resolved === 1 ? "" : "s"}`,
+          ? `Kept ${resolved} record${resolved === 1 ? "" : "s"}`
+          : `Discarded ${resolved} record${resolved === 1 ? "" : "s"}`,
       );
     } catch (err) {
       setError(getErrorMessage(err));
@@ -363,7 +463,12 @@ export function FlaggedRecords() {
     askFinSight(question);
   }
 
-  if (!selected) return null;
+  /*
+   * Read-only queue, so no business means an empty queue rather than a gate
+   * card — "nothing needs review" is exactly true of an app with no records.
+   * `selected` is narrowed by the `!selected ||` test below, which is why the
+   * cards that need the profile can still be handed it.
+   */
 
   const queue = buildReviewQueue({ findings, records, batches });
   const visible = filterQueue(queue, filter);
@@ -374,7 +479,11 @@ export function FlaggedRecords() {
       <PageHead
         eyebrow="Records management"
         title="Needs review"
-        subtitle={`Everything FinSight wants a second look at, for ${selected.name} — duplicates, unusual spending and scan problems in one queue.`}
+        subtitle={
+          selected
+            ? `Everything FinSight wants a second look at, for ${selected.name} — duplicates, unusual spending and scan problems in one queue.`
+            : "Everything FinSight wants a second look at — duplicates, unusual spending and scan problems in one queue."
+        }
       />
 
       {error ? (
@@ -390,7 +499,7 @@ export function FlaggedRecords() {
         so choosing a filter is an informed choice rather than a gamble about
         what it hides.
       */}
-      {loading || nothingAtAll ? null : (
+      {loading || !selected || nothingAtAll ? null : (
         <div role="group" aria-label="Filter the review queue" className="mb-4 flex flex-wrap gap-2">
           {(["all", ...REVIEW_CATEGORIES] as ReviewFilter[]).map((chip) => {
             const active = filter === chip;
@@ -408,7 +517,7 @@ export function FlaggedRecords() {
                 }`}
               >
                 {CATEGORY_LABELS[chip]}
-                <span className={`figure ml-1.5 text-xs ${active ? "opacity-80" : "text-ink-400"}`}>
+                <span className={`figure ml-1.5 text-xs ${active ? "opacity-80" : "text-ink-500"}`}>
                   {queue.counts[chip]}
                 </span>
               </button>
@@ -421,7 +530,7 @@ export function FlaggedRecords() {
         <Card>
           <SkeletonRows rows={4} />
         </Card>
-      ) : nothingAtAll ? (
+      ) : !selected || nothingAtAll ? (
         <EmptyState title="Nothing needs review right now" icon="✓">
           FinSight flags a record when it looks like a duplicate, when it's unusual against your own
           history, or when a scan came out hard to read. When one turns up, it will be waiting here.
@@ -459,10 +568,21 @@ export function FlaggedRecords() {
             </EmptyState>
           ) : null}
 
-          {nextCursor !== null ? (
+          {/*
+            One "show more" for the merged queue. The label names whichever
+            source still has a page left, so pressing it is never a surprise
+            about what appears.
+          */}
+          {findingsCursor !== null || flaggedCursor !== null ? (
             <div className="pt-1">
-              <Button type="button" variant="secondary" disabled={loadingMore} onClick={loadMoreFindings}>
-                {loadingMore ? "Loading…" : "Show more findings"}
+              <Button type="button" variant="secondary" disabled={loadingMore} onClick={loadMore}>
+                {loadingMore
+                  ? "Loading…"
+                  : findingsCursor !== null && flaggedCursor === null
+                    ? "Show more findings"
+                    : findingsCursor === null && flaggedCursor !== null
+                      ? "Show more flagged records"
+                      : "Show more"}
               </Button>
             </div>
           ) : null}
@@ -513,7 +633,7 @@ function ReviewCard({
               <Money value={record.amount} />
             </p>
           ) : null}
-          <p className="mt-0.5 text-xs text-ink-400">
+          <p className="mt-0.5 text-xs text-ink-500">
             {item.source}
             {item.detectedAt ? ` · noticed ${new Date(item.detectedAt).toLocaleDateString()}` : null}
           </p>
@@ -723,7 +843,7 @@ function GroupCard({
                 className="min-w-0 truncate text-brand-700 underline-offset-2 hover:underline"
               >
                 {r.description}
-                <span className="ml-1.5 text-xs text-ink-400">{r.date.slice(0, 10)}</span>
+                <span className="ml-1.5 text-xs text-ink-500">{r.date.slice(0, 10)}</span>
               </Link>
               <span className="shrink-0 text-ink-800">
                 <Money value={r.amount} decimals />

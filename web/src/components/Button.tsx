@@ -9,6 +9,15 @@ import { Link } from "react-router-dom";
  *              construction: landing CTAs and Save/Confirm actions only.
  *              Dark ink rather than white because white on amber measures
  *              2.04:1 and fails — see ACCENT in lib/chartPalette.ts.
+ *
+ *              The foreground is `accent-950`, a FIXED step, not `ink-900`.
+ *              The `ink` scale inverts per theme — ink-900 is the near-white
+ *              headings step in Dark — so pairing it with a fill that does NOT
+ *              invert produced exactly the failure this comment warns about:
+ *              measured 8.08:1 Classic and 8.75:1 Light, but 1.87:1 in Dark,
+ *              on every amber CTA in the app. accent-950 is 7.57:1 in all
+ *              three. Rule: a fixed-colour fill takes a fixed-colour
+ *              foreground. (Same defect shape as the Toast bg-ink-900 one.)
  *   brand    — teal fill + white ink. The everyday affirmative action.
  *   secondary— outlined. Neutral alternatives.
  *   ghost    — text only. Tertiary / dismissive.
@@ -19,7 +28,8 @@ type Variant = "primary" | "brand" | "secondary" | "ghost" | "danger";
 type Size = "sm" | "md" | "lg";
 
 const VARIANTS: Record<Variant, string> = {
-  primary: "bg-accent-400 text-ink-900 font-semibold hover:bg-accent-500 active:bg-accent-500 shadow-sm",
+  primary:
+    "bg-accent-400 text-accent-950 font-semibold hover:bg-accent-500 active:bg-accent-500 shadow-sm",
   brand: "bg-brand-600 text-white font-medium hover:bg-brand-700 active:bg-brand-800",
   secondary: "border border-ink-200 bg-paper text-ink-700 font-medium hover:bg-paper-100 active:bg-paper-200",
   ghost: "text-ink-500 font-medium hover:text-ink-800 hover:bg-paper-100",

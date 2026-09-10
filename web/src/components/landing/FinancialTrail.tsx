@@ -210,7 +210,13 @@ export function MintGlow({ className = "" }: { className?: string }) {
  * keeps matching its neighbour when the landing dark theme swaps that
  * variable's value (see index.css `[data-landing-theme="dark"]`).
  */
-const CURVE_FILL: Record<"cream" | "surface" | "mint-pale", string> = {
+const CURVE_FILL: Record<"hero" | "raised" | "mint" | "cream" | "surface" | "mint-pale", string> = {
+  // Use the hero's actual terminal color for its divider. In light mode this
+  // matches cream; in dark mode it avoids introducing a distracting third
+  // green band between the near-black hero and the raised content surface.
+  hero: "var(--landing-hero-bottom)",
+  raised: "var(--landing-divider-raised)",
+  mint: "var(--landing-divider-mint)",
   cream: "var(--landing-cream)",
   surface: "var(--landing-surface)",
   "mint-pale": "var(--landing-mint-pale)",
@@ -220,7 +226,7 @@ export function CurveDivider({
   from,
   className = "",
 }: {
-  from: "cream" | "surface" | "mint-pale";
+  from: "hero" | "raised" | "mint" | "cream" | "surface" | "mint-pale";
   className?: string;
 }) {
   return (

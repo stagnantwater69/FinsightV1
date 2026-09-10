@@ -42,6 +42,15 @@ export type SecurityEvent =
   | "recovery.delivery_failed"
   | "password.changed"
   | "sessions.revoked"
+  /**
+   * The web → mobile session handoff. `issued` is a browser asking for a code,
+   * `redeemed` is the app spending one, `failed` is a code that could not be
+   * turned back into a session — which is either an expired refresh token or
+   * somebody guessing, and the two are told apart by volume.
+   */
+  | "handoff.issued"
+  | "handoff.redeemed"
+  | "handoff.failed"
   | "account.status_changed"
   | "account.deletion_requested"
   | "account.deletion_stage"

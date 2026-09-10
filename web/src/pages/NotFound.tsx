@@ -1,6 +1,7 @@
 import { Link, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { ButtonLink } from "../components/Button";
+import { Wordmark } from "../components/Wordmark";
 
 /**
  * The catch-all for a path no route matches.
@@ -38,9 +39,7 @@ export function NotFound() {
     >
       <span className="flex items-center gap-2.5">
         <img src="/finsight-logo.png" alt="" aria-hidden className="h-10 w-10 rounded-lg object-contain" />
-        <span className="font-display text-lg font-extrabold tracking-[-0.02em] text-ink-900">
-          Fin<span className="text-brand-700">Sight</span>
-        </span>
+        <Wordmark className="text-lg text-tone-brand" />
       </span>
 
       <h1 className="mt-8 font-display text-2xl font-bold tracking-tight text-ink-900">

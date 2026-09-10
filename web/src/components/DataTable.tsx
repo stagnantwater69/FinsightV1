@@ -36,11 +36,23 @@ export interface Column<T> {
   header: string;
   cell: (row: T) => ReactNode;
   /**
-   * Makes the column sortable. Return the value to compare; `null` sorts to
-   * the end regardless of direction, so blanks never displace real data at
-   * the top of the list.
+   * Makes the column sortable **client-side**. Return the value to compare;
+   * `null` sorts to the end regardless of direction, so blanks never displace
+   * real data at the top of the list.
+   *
+   * Only meaningful for a table holding every row it claims to sort. In
+   * server-sorted mode (see `onSortChange`) it is ignored entirely — use
+   * `sortable` there.
    */
   sortValue?: (row: T) => string | number | null;
+  /**
+   * Makes the column sortable **server-side**, for a table in the controlled
+   * mode below. Set it only on columns the API can actually order by: a
+   * column left out of this offers no arrow and no `aria-sort`, which is the
+   * honest answer for a paged list where a local sort would only reorder the
+   * rows that happen to be loaded.
+   */
+  sortable?: boolean;
   align?: "left" | "right";
   /**
    * "content" shrinks the column to fit its contents (dates, amounts, status
@@ -99,6 +111,8 @@ export function DataTable<T>({
   empty,
   caption,
   initialSort,
+  sort: controlledSort,
+  onSortChange,
   paginate = true,
   itemNoun = "records",
   storageKey,
@@ -117,6 +131,25 @@ export function DataTable<T>({
   /** Screen-reader description of what the table contains. */
   caption: string;
   initialSort?: SortState;
+  /**
+   * Server-sorted mode. Passing `onSortChange` hands the ordering to the
+   * caller: the table renders `rows` in exactly the order it was given them,
+   * reports the current `sort` in the header, and reports clicks back here.
+   *
+   * This exists because a paged list cannot be sorted honestly on the client.
+   * Records fetches a page at a time; sorting the loaded page by Amount and
+   * drawing a normal sort arrow answers "what was my biggest spend?" with the
+   * biggest spend *of the rows already downloaded* — a confidently wrong
+   * number that silently changes as more pages arrive. So the sort travels to
+   * the API (`GET /records/search?sort=`), and only the columns the API can
+   * order by are marked `sortable`.
+   *
+   * Direction cycles desc -> asc -> desc. There is no "unsorted" state here:
+   * the server always returns *some* order, and offering a third click that
+   * quietly means "back to date_desc" would misdescribe it.
+   */
+  sort?: SortState;
+  onSortChange?: (sort: SortState) => void;
   paginate?: boolean;
   itemNoun?: string;
   /** Remembers the chosen page size per table. */
@@ -131,7 +164,9 @@ export function DataTable<T>({
    */
   rowClassName?: (row: T) => string;
 }) {
-  const [sort, setSort] = useState<SortState | null>(initialSort ?? null);
+  const serverSorted = onSortChange !== undefined;
+  const [localSort, setLocalSort] = useState<SortState | null>(initialSort ?? null);
+  const sort = serverSorted ? (controlledSort ?? null) : localSort;
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = usePersistentState<PageSize>(
     storageKey ? `finsight.pageSize.${storageKey}` : "finsight.pageSize.default",
@@ -140,13 +175,16 @@ export function DataTable<T>({
   );
 
   const sorted = useMemo(() => {
+    // Server-sorted: the rows arrived in the requested order. Re-sorting them
+    // here is exactly the bug this mode exists to remove.
+    if (serverSorted) return rows;
     if (!sort) return rows;
     const column = columns.find((c) => c.key === sort.key);
     if (!column?.sortValue) return rows;
     // Copied before sorting — mutating the caller's array in place would
     // reorder their state behind their back.
     return [...rows].sort((a, b) => compare(column.sortValue!(a), column.sortValue!(b), sort.direction));
-  }, [rows, sort, columns]);
+  }, [rows, sort, columns, serverSorted]);
 
   const totalItems = sorted.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
@@ -162,13 +200,24 @@ export function DataTable<T>({
   }, [sorted, paginate, currentPage, pageSize]);
 
   function toggleSort(key: string) {
-    setSort((prev) => {
-      if (prev?.key !== key) return { key, direction: "asc" };
-      // asc -> desc -> unsorted, so there is always a way back to the
-      // server's original order without reloading.
-      if (prev.direction === "asc") return { key, direction: "desc" };
-      return null;
-    });
+    if (serverSorted) {
+      // A fresh column starts at "desc": on the two columns a ledger is
+      // sorted by, newest-first and largest-first are what the question
+      // actually is.
+      const next: SortState =
+        sort?.key === key
+          ? { key, direction: sort.direction === "desc" ? "asc" : "desc" }
+          : { key, direction: "desc" };
+      onSortChange(next);
+    } else {
+      setLocalSort((prev) => {
+        if (prev?.key !== key) return { key, direction: "asc" };
+        // asc -> desc -> unsorted, so there is always a way back to the
+        // server's original order without reloading.
+        if (prev.direction === "asc") return { key, direction: "desc" };
+        return null;
+      });
+    }
     setPage(1);
   }
 
@@ -229,6 +278,10 @@ export function DataTable<T>({
           <thead>
             <tr>
               {columns.map((column) => {
+                // The one place sortability is decided, so the arrow, the
+                // `aria-sort` and the click target can never disagree about
+                // which columns can actually be ordered.
+                const canSort = serverSorted ? column.sortable === true : column.sortValue !== undefined;
                 const active = sort?.key === column.key ? sort.direction : null;
                 const alignRight = column.align === "right";
                 return (
@@ -238,7 +291,7 @@ export function DataTable<T>({
                     // aria-sort is what a screen reader announces; the glyph
                     // is only for people who can see it.
                     aria-sort={
-                      column.sortValue
+                      canSort
                         ? active === "asc"
                           ? "ascending"
                           : active === "desc"
@@ -246,13 +299,13 @@ export function DataTable<T>({
                             : "none"
                         : undefined
                     }
-                    className={`sticky top-[var(--topbar-h)] z-10 border-b border-paper-200 bg-paper-100/95 px-4 py-2.5 text-xs font-semibold uppercase tracking-[0.06em] text-ink-500 backdrop-blur ${
+                    className={`sticky top-[var(--topbar-h)] z-10 border-b border-paper-200 bg-paper-100/95 px-4 py-2.5 text-xs font-semibold uppercase tracking-[0.06em] text-ink-600 backdrop-blur ${
                       column.width === "content" ? "w-px whitespace-nowrap" : ""
                     } ${alignRight ? "text-right" : ""}`}
                   >
                     {column.headerSrOnly ? (
                       <span className="sr-only">{column.header}</span>
-                    ) : column.sortValue ? (
+                    ) : canSort ? (
                       <button
                         type="button"
                         onClick={() => toggleSort(column.key)}

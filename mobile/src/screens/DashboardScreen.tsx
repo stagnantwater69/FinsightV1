@@ -11,6 +11,7 @@ import { AskFinSight } from "../components/AskFinSight";
 import { SpendingBreakdownCard } from "../components/SpendingBreakdownCard";
 import { TopReductionOpportunityCard } from "../components/TopReductionOpportunityCard";
 import { SkeletonBox, SkeletonDashboard } from "../components/Skeleton";
+import { PeriodSelector } from "../components/PeriodSelector";
 import { mascotSource } from "../components/MascotState";
 import { useAuth } from "../context/AuthContext";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
@@ -20,6 +21,12 @@ import { api } from "../lib/api";
 import { ConnectionNotice, LastUpdated } from "../components/ConnectionNotice";
 import { describeLoadFailure, toLoadFailure, type LoadFailure } from "../lib/connectionState";
 import { selectTopOpportunity } from "../lib/topReductionOpportunity";
+import {
+  ALL_TIME_PERIOD_DAYS,
+  DEFAULT_SUMMARY_PERIOD_DAYS,
+  periodLabel as describePeriod,
+  periodPhrase,
+} from "../lib/dashboardPeriod";
 import { formatMoney } from "../lib/money";
 import { font, radius, space, typeScale } from "../theme/tokens";
 import { TAP_FLOOR } from "../components/touchTarget";
@@ -32,66 +39,10 @@ import type {
   ReductionOpportunityResponse,
 } from "../lib/types";
 
-const SUMMARY_PERIOD_DAYS = 30;
-const ALL_TIME_PERIOD_DAYS = 0;
-const PERIOD_OPTIONS = [
-  { label: "Today", days: 1 },
-  { label: "Week", days: 7 },
-  { label: "Month", days: 30 },
-  { label: "All time", days: 0 },
-] as const;
-
 const GRANULARITY_OPTIONS: { label: string; value: CashflowGranularity }[] = [
   { label: "Daily", value: "daily" },
   { label: "Monthly", value: "monthly" },
 ];
-
-function PeriodSelector({ value, onChange }: { value: number; onChange: (days: number) => void }) {
-  const t = useTheme();
-  return (
-    <View
-      style={{
-        flexDirection: "row",
-        padding: 4,
-        borderRadius: radius.md,
-        backgroundColor: t.surfaceMuted,
-        borderWidth: 1,
-        borderColor: t.border,
-      }}
-    >
-      {PERIOD_OPTIONS.map((option) => {
-        const selected = value === option.days;
-        return (
-          <Pressable
-            key={option.days}
-            accessibilityRole="radio"
-            accessibilityLabel={option.label}
-            accessibilityState={{ checked: selected }}
-            onPress={() => onChange(option.days)}
-            style={({ pressed }) => ({
-              flex: 1,
-              minHeight: TAP_FLOOR,
-              alignItems: "center",
-              justifyContent: "center",
-              borderRadius: radius.sm,
-              backgroundColor: selected ? t.surface : pressed ? t.surfaceStrong : "transparent",
-            })}
-          >
-            <T
-              variant="caption"
-              style={{
-                color: selected ? t.brandHeading : t.textMuted,
-                fontFamily: selected ? font.sansSemibold : font.sans,
-              }}
-            >
-              {option.label}
-            </T>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
 
 /**
  * A money-in or money-out figure, sitting in the reference layout's twin-card
@@ -329,8 +280,12 @@ export function DashboardScreen({ navigation }: any) {
   const { selected, profiles, categories, error: profilesError, refresh: refreshProfiles, selectProfile } =
     useBusinessProfiles();
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
-  /** Stays at the fixed month unless the empty-period notice widens it. */
-  const [summaryPeriodDays, setSummaryPeriodDays] = useState(SUMMARY_PERIOD_DAYS);
+  /**
+   * Which lookback the figures cover. Owned here because the summary refetch
+   * reads it; the segmented control below is the only thing that sets it, and
+   * it is always on screen, so every window is reachable from every other.
+   */
+  const [summaryPeriodDays, setSummaryPeriodDays] = useState(DEFAULT_SUMMARY_PERIOD_DAYS);
   const [cashflow, setCashflow] = useState<DashboardCashflow | null>(null);
   const [cashflowGranularity, setCashflowGranularity] = useState<CashflowGranularity>("daily");
   /**
@@ -442,7 +397,7 @@ export function DashboardScreen({ navigation }: any) {
     try {
       const response = await api.get<ReductionOpportunityResponse>("/insights/reduction-opportunities", {
         businessProfileId: selected.id,
-        periodDays: SUMMARY_PERIOD_DAYS,
+        periodDays: DEFAULT_SUMMARY_PERIOD_DAYS,
       });
       setTopOpportunity(selectTopOpportunity(response));
     } catch {
@@ -527,14 +482,13 @@ export function DashboardScreen({ navigation }: any) {
     summary.overview.totalExpenses === 0 &&
     summary.overview.totalSalesReference === 0;
   const unreadCount = summary ? summary.alerts.filter((a) => !a.readStatus).length : 0;
-  const periodLabel =
-    summaryPeriodDays === 0
-      ? "Across all records"
-      : summaryPeriodDays === 1
-        ? "Today"
-        : summaryPeriodDays === 7
-          ? "This week"
-          : "This month";
+  /*
+   * Named from the window the SERVER actually returns — a rolling lookback
+   * ending today — not from a calendar month it does not compute. "This month"
+   * over a 22 Jul-20 Aug window is a figure an owner cannot reconcile against
+   * their own August books, and nothing on the card says why.
+   */
+  const periodLabel = describePeriod(summaryPeriodDays);
   const topCategory = summary?.expenseCategoryBreakdown?.length
     ? [...summary.expenseCategoryBreakdown].sort((a, b) => b.total - a.total)[0]
     : null;
@@ -663,7 +617,7 @@ export function DashboardScreen({ navigation }: any) {
         {!loading && periodIsEmpty ? (
           <View style={{ marginBottom: space.lg }}>
             <Callout tone="info">
-              No records in {periodLabel.toLowerCase()}, but this business has{" "}
+              No records for {periodPhrase(summaryPeriodDays)}, but this business has{" "}
               {summary!.lifetime!.recordCount.toLocaleString()} in total
               {summary!.lifetime!.latestRecordDate
                 ? `, the most recent dated ${new Date(

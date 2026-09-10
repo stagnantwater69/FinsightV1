@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { api, errorMessage } from "../lib/api";
+import { api, errorMessage, setSessionEndedHandler, type SessionEndReason } from "../lib/api";
 import { supabase } from "../lib/supabase";
 import { commitPreferences, DEFAULT_PREFERENCES } from "../lib/preferences";
 import type {
@@ -22,6 +22,21 @@ interface AuthValue {
   profile: Profile | null;
   loading: boolean;
   login: (input: LoginInput) => Promise<void>;
+  /**
+   * Signs the owner in from a session somebody else already established.
+   *
+   * WHY THIS IS NOT `login` WITH DIFFERENT ARGUMENTS: there is nothing left to
+   * authenticate. Confirming an email and exchanging a handoff code both end
+   * with the backend handing back a real session and the profile it belongs
+   * to, and asking for a password at that point would be asking someone to
+   * prove again what they just proved through their inbox. It is the SAME tail
+   * `login` runs — keystore, profile, preferences — so the two can never drift
+   * into signing people in differently.
+   */
+  adoptSession: (
+    session: { access_token: string; refresh_token: string },
+    profile: Profile,
+  ) => Promise<void>;
   /**
    * Returns what to tell the owner; it does NOT sign them in.
    *
@@ -79,6 +94,14 @@ interface AuthValue {
    * for why it is partial and why it rolls back.
    */
   updatePreferences: (patch: Partial<UserPreferences>) => Promise<void>;
+  /**
+   * Why the app signed the owner out without being asked, or null.
+   *
+   * Read by the login screen, which is the only place it can be shown: by the
+   * time it is set the authenticated shell has already been replaced. Cleared
+   * by the next successful sign-in.
+   */
+  sessionEnded: SessionEndReason | null;
 }
 
 const AuthContext = createContext<AuthValue | undefined>(undefined);
@@ -98,7 +121,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // defaults — the tour has to be able to tell the two apart before it decides
   // whether to take over someone's screen.
   const [preferences, setPreferences] = useState<UserPreferences | null>(null);
+  const [sessionEnded, setSessionEnded] = useState<SessionEndReason | null>(null);
   const bootstrapProfiles = useRef<Promise<BusinessProfile[]> | null>(null);
+
+  /*
+   * Whether there was a session to lose, read at the moment the transport
+   * reports one ending. A ref rather than the state itself because the handler
+   * below is registered once and would otherwise close over `profile` as it
+   * stood on mount — which is always null.
+   */
+  const signedInRef = useRef(false);
+  signedInRef.current = profile !== null;
+
+  /**
+   * What the app does about a session the server has already ended.
+   *
+   * CLEARING `profile` IS THE NAVIGATION. App.tsx renders AuthStack the moment
+   * there is no profile, so the redirect is one line here instead of a check at
+   * every call site, and no navigator has to be reachable from the transport.
+   *
+   * THE ANNOUNCEMENT IS CONDITIONAL, the sign-out is not. A 401 during the
+   * cold-start /auth/me is just "this stored token is no longer any good" — the
+   * owner was never signed in this session and telling them their session
+   * expired would be a lie — but the dead token must still leave the keystore.
+   *
+   * NO LOOP ON THE AUTH SCREENS. Every request the signed-out shell can make is
+   * a credential check (`CREDENTIAL_ENDPOINTS`), so their 401s never reach this
+   * at all; and when it does run with nothing signed in it sets no state, so
+   * there is no re-render to trigger it again.
+   */
+  useEffect(() => {
+    setSessionEndedHandler((reason) => {
+      if (signedInRef.current) setSessionEnded(reason);
+      bootstrapProfiles.current = null;
+      setProfile(null);
+      setPreferences(null);
+      void supabase.auth.signOut();
+    });
+    return () => setSessionEndedHandler(null);
+  }, []);
 
   const takeBootstrapProfiles = useCallback(() => {
     const pending = bootstrapProfiles.current;
@@ -159,7 +220,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  async function applySession(session: { access_token: string; refresh_token: string }, p: Profile) {
+  async function adoptSession(session: { access_token: string; refresh_token: string }, p: Profile) {
     // The backend returns the session; hand it to supabase-js so it persists it
     // to the keystore and takes over refreshing.
     await supabase.auth.setSession({
@@ -167,14 +228,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       refresh_token: session.refresh_token,
     });
     setProfile(p);
-  }
-
-  async function login(input: LoginInput) {
-    const data = await api.post<{ profile: Profile; session: { access_token: string; refresh_token: string } }>(
-      "/auth/login",
-      input
-    );
-    await applySession(data.session, data.profile);
+    // The banner on the login screen has done its job the moment a sign-in
+    // succeeds; leaving it set would show it again on the next sign-out.
+    setSessionEnded(null);
     /*
      * POST /auth/login answers with the identity block only — preferences ride
      * on GET /auth/me, and web does the same rather than widening the login
@@ -189,6 +245,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .get<Profile>("/auth/me")
       .then((me) => setPreferences(me.preferences ?? DEFAULT_PREFERENCES))
       .catch(() => setPreferences(DEFAULT_PREFERENCES));
+  }
+
+  async function login(input: LoginInput) {
+    const data = await api.post<{ profile: Profile; session: { access_token: string; refresh_token: string } }>(
+      "/auth/login",
+      input
+    );
+    await adoptSession(data.session, data.profile);
   }
 
   async function register(input: RegisterInput) {
@@ -228,6 +292,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     bootstrapProfiles.current = null;
     setProfile(null);
     setPreferences(null);
+    // Cleared LAST, and deliberately. Logging out with an already-dead token
+    // makes POST /auth/logout answer 401, which sets this on the way past — and
+    // an owner who tapped "Log out" must not then be told their session expired
+    // as though something had gone wrong.
+    setSessionEnded(null);
   }
 
   async function updateProfile(input: UpdateProfileInput) {
@@ -281,6 +350,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         profile,
         loading,
         login,
+        adoptSession,
         register,
         logout,
         logoutEverywhere,
@@ -291,6 +361,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         preferences: preferences ?? DEFAULT_PREFERENCES,
         preferencesLoaded: preferences !== null,
         updatePreferences,
+        sessionEnded,
       }}
     >
       {children}

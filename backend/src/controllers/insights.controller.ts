@@ -5,6 +5,7 @@ import { AnomalyFindingFeedback, AnomalyFindingSeverity, AnomalyFindingStatus, A
 import * as findingService from "../services/anomalyDetection/finding.service";
 import * as recurringService from "../services/anomalyDetection/recurring.service";
 import * as recurringScheduleService from "../services/recurringSchedule.service";
+import { moneyAmountSchema } from "../lib/money";
 import { anomalyEvaluation } from "../services/anomalyDetection/evaluation.service";
 import {
   getReductionOpportunities,
@@ -247,7 +248,7 @@ export const createRecurringScheduleSchema = z.object({
   // cycle, and a schedule longer than annual would raise its first finding
   // after the business's own planning horizon.
   intervalDays: z.number().int().positive().max(366),
-  expectedAmount: z.number().positive(),
+  expectedAmount: moneyAmountSchema,
   // 0..1 mirrors the column's CHECK — a tolerance is a fraction of the amount.
   amountTolerance: z.number().min(0).max(1).optional(),
   nextDueDate: z.string().date(),
@@ -259,7 +260,7 @@ const updateRecurringScheduleSchema = z.object({
   label: z.string().min(1).max(255).optional(),
   vendor: z.string().max(150).nullable().optional(),
   intervalDays: z.number().int().positive().max(366).optional(),
-  expectedAmount: z.number().positive().optional(),
+  expectedAmount: moneyAmountSchema.optional(),
   amountTolerance: z.number().min(0).max(1).optional(),
   nextDueDate: z.string().date().optional(),
   isActive: z.boolean().optional(),

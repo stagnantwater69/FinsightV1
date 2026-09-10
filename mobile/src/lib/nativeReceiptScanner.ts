@@ -7,8 +7,8 @@ import {
 } from "./receiptCapture";
 
 /**
- * Launches Google ML Kit Document Scanner — the only Android receipt-camera
- * capture path (see `components/receipt-camera/ReceiptCamera.tsx`).
+ * Launches the optional Google ML Kit Document Scanner rollout alternative.
+ * The default capture path is FinSight's custom ReceiptCamera.
  *
  * The import stays inside the function rather than at module scope so Expo
  * Go and any other unsupported runtime can still load FinSight without ever

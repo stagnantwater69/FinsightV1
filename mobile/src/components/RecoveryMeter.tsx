@@ -3,6 +3,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { Money, T } from "./ui";
 import { font, radius, space, typeScale } from "../theme/tokens";
 import { useTheme } from "../context/ThemeContext";
+import { dayStatusTone } from "../lib/recoveryTone";
 import type { RecoveryTargets } from "../lib/types";
 
 /**
@@ -57,7 +58,19 @@ function resolveMonthStatus(
   return { tone: "critical", glyph: "!", copy: "Behind pace for the month" };
 }
 
-export function RecoveryMeter({ data }: { data: RecoveryTargets }) {
+export function RecoveryMeter({
+  data,
+  hideStatusPill = false,
+}: {
+  data: RecoveryTargets;
+  /**
+   * RecoveryTargetScreen already shows a dedicated EmptyState illustration
+   * for `monthHasNoRecords` right above this meter — without this, its own
+   * "No sales recorded yet this month" pill repeats the same message a
+   * second time in the same scroll view.
+   */
+  hideStatusPill?: boolean;
+}) {
   const t = useTheme();
   const { ACCENT, ink, paper, statusText, status } = t;
   const monthRatio = Math.min(data.monthCoveragePercent / 100, 1);
@@ -68,14 +81,12 @@ export function RecoveryMeter({ data }: { data: RecoveryTargets }) {
   // expenses" hint), which only applies to `needs_setup`.
   const needsSetupNow = data.status ? data.status === "needs_setup" : !!data.needsSetup;
 
-  const todayFill =
-    data.todaysStatus === "below" ? status.critical : data.todaysStatus === "at" ? status.warning : status.good;
-  const todayInk =
-    data.todaysStatus === "below"
-      ? statusText.critical
-      : data.todaysStatus === "at"
-        ? statusText.warning
-        : statusText.good;
+  // `todaysStatus` is never "closed" — `dayStatusTone` never returns "muted"
+  // for it, so `status`/`statusText`/`statusSurface` (which have no "muted"
+  // entry) are always safe to index here.
+  const todayTone = dayStatusTone(data.todaysStatus) as "good" | "warning" | "critical";
+  const todayFill = status[todayTone];
+  const todayInk = statusText[todayTone];
   const todayRatio =
     data.todaysTarget > 0 ? Math.min(data.todaysSales / data.todaysTarget, 1) : data.todaysSales > 0 ? 1 : 0;
   /*
@@ -84,30 +95,27 @@ export function RecoveryMeter({ data }: { data: RecoveryTargets }) {
     TEXT steps but no tinted backgrounds, and it is a hand-kept mirror of
     web's config — adding a scale on mobile alone would put the two out of step.
   */
-  const todaySurface =
-    data.todaysStatus === "below"
-      ? t.statusSurface.critical
-      : data.todaysStatus === "at"
-        ? t.statusSurface.warning
-        : t.statusSurface.good;
+  const todaySurface = t.statusSurface[todayTone];
 
   return (
     <View>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, marginBottom: space.sm }}>
-        <View
-          style={{
-            width: 20,
-            height: 20,
-            borderRadius: 10,
-            backgroundColor: monthInk,
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <T style={{ color: t.textOnFill, fontSize: typeScale.micro }}>{monthStatus.glyph}</T>
+      {hideStatusPill ? null : (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, marginBottom: space.sm }}>
+          <View
+            style={{
+              width: 20,
+              height: 20,
+              borderRadius: 10,
+              backgroundColor: monthInk,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <T style={{ color: t.textOnFill, fontSize: typeScale.micro }}>{monthStatus.glyph}</T>
+          </View>
+          <T style={{ color: monthInk, fontSize: typeScale.bodySm }}>{monthStatus.copy}</T>
         </View>
-        <T style={{ color: monthInk, fontSize: typeScale.bodySm }}>{monthStatus.copy}</T>
-      </View>
+      )}
       {needsSetupNow ? (
         <T variant="caption" style={{ marginBottom: space.sm }}>
           Add your expected monthly expenses to calculate your target.

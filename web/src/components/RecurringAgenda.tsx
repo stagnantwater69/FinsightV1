@@ -186,7 +186,7 @@ export function RecurringAgenda({ schedules }: { schedules: RecurringSchedule[] 
         <div className="space-y-5">
           {groups.map((group) => (
             <section key={group.key} aria-label={group.label}>
-              <h3 className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.13em] text-ink-400">
+              <h3 className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.13em] text-ink-500">
                 {group.label}
                 <span className="figure font-semibold normal-case tracking-normal">
                   {group.items.length}
@@ -196,7 +196,7 @@ export function RecurringAgenda({ schedules }: { schedules: RecurringSchedule[] 
                   mobile's agenda carries. "Paused" in particular has to say
                   that FinSight is not watching these, or a row sitting quietly
                   at the bottom of the list reads as an oversight. */}
-              <p className="mb-2 mt-0.5 text-xs text-ink-400">{group.caption}</p>
+              <p className="mb-2 mt-0.5 text-xs text-ink-500">{group.caption}</p>
               <ul className="space-y-2">
                 {group.items.map((schedule) => (
                   <ScheduleRow key={schedule.id} schedule={schedule} />

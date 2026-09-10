@@ -2,6 +2,14 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { androidBuildSpaceError } from "./android-build-space.mjs";
+
+const spaceError = androidBuildSpaceError(fileURLToPath(new URL("..", import.meta.url)));
+if (spaceError) {
+  console.error(spaceError);
+  process.exit(1);
+}
 
 function firstDirectory(candidates) {
   return candidates.find((candidate) => candidate && existsSync(candidate));

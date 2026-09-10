@@ -26,9 +26,15 @@ interface GroupProps {
   draft: BusinessProfileDraft;
   errors: BusinessFieldErrors;
   update: (key: BusinessTextField, value: string) => void;
+  compact?: boolean;
 }
 
-export function BusinessBasicsFields({ draft, errors, update }: GroupProps) {
+export function BusinessBasicsFields({
+  draft,
+  errors,
+  update,
+  compact = false,
+}: GroupProps) {
   /*
    * A type that is not on the list can only have come from "Other" — either
    * typed just now, or loaded from a profile created before the picker existed.
@@ -41,7 +47,9 @@ export function BusinessBasicsFields({ draft, errors, update }: GroupProps) {
    * for. See matchBusinessType.
    */
   const listed = matchBusinessType(draft.type);
-  const [showCustomType, setShowCustomType] = useState(() => draft.type !== "" && listed === null);
+  const [showCustomType, setShowCustomType] = useState(
+    () => draft.type !== "" && listed === null,
+  );
 
   return (
     <>
@@ -60,7 +68,11 @@ export function BusinessBasicsFields({ draft, errors, update }: GroupProps) {
         htmlFor="type"
         required
         error={errors.type}
-        hint="Helps FinSight compare you against the right kind of business."
+        hint={
+          compact
+            ? undefined
+            : "Helps FinSight compare you against the right kind of business."
+        }
       >
         <SelectInput
           /* The canonical option, not the raw value — a stored "Food Business"
@@ -123,39 +135,71 @@ export function BusinessBasicsFields({ draft, errors, update }: GroupProps) {
  * expenses over operating days — so this cannot quote a target the dashboard
  * will then contradict.
  */
-function DailyTargetNote({ draft }: { draft: BusinessProfileDraft }) {
+function DailyTargetNote({
+  draft,
+  compact = false,
+}: {
+  draft: BusinessProfileDraft;
+  compact?: boolean;
+}) {
   const expenses = Number(draft.expectedMonthlyExpenses);
   const days = Number(draft.operatingDays);
-  const ready = Number.isFinite(expenses) && expenses > 0 && Number.isInteger(days) && days > 0;
+  const ready =
+    Number.isFinite(expenses) &&
+    expenses > 0 &&
+    Number.isInteger(days) &&
+    days > 0;
 
   if (!ready) {
+    if (compact) {
+      return (
+        <InfoNote>
+          Monthly expenses ÷ operating days becomes your daily sales target.
+        </InfoNote>
+      );
+    }
     // Falls back to the shared example, which uses the same figures as the
     // Landing page's live RecoveryMeter demo (DEMO_BASE in pages/Landing.tsx),
     // so what a visitor was shown before signing up and what they are told here
     // agree.
     return (
       <InfoNote>
-        <b className="font-semibold text-ink-700">How these fit together.</b> If a normal month costs
-        you <span className="figure">PHP 125,000</span> and you're open{" "}
-        <span className="figure">25</span> days, FinSight works out a daily target of{" "}
-        <span className="figure">PHP 5,000</span> — the number that tells you what today needs to
-        look like.
+        <b className="font-semibold text-ink-700">How these fit together.</b> If
+        a normal month costs you <span className="figure">PHP 125,000</span> and
+        you're open <span className="figure">25</span> days, FinSight works out
+        a daily target of <span className="figure">PHP 5,000</span> — the number
+        that tells you what today needs to look like.
       </InfoNote>
     );
   }
 
   return (
     <InfoNote>
-      <b className="font-semibold text-ink-700">Your daily sales target.</b> A normal month costs you{" "}
-      <span className="figure">{formatMoney(expenses)}</span> across{" "}
-      <span className="figure">{days}</span> open {days === 1 ? "day" : "days"}, so FinSight will aim
-      for <span className="figure font-semibold text-ink-900">{formatMoney(expenses / days)} a day</span> —
-      the number that tells you what today needs to look like.
+      <b className="font-semibold text-ink-700">Daily sales target:</b>{" "}
+      <span className="figure font-semibold text-ink-900">
+        {formatMoney(expenses / days)}
+      </span>
+      {compact ? (
+        " per operating day."
+      ) : (
+        <>
+          {" "}
+          from <span className="figure">
+            {formatMoney(expenses)}
+          </span> across <span className="figure">{days}</span> open{" "}
+          {days === 1 ? "day" : "days"}.
+        </>
+      )}
     </InfoNote>
   );
 }
 
-export function BusinessNumbersFields({ draft, errors, update }: GroupProps) {
+export function BusinessNumbersFields({
+  draft,
+  errors,
+  update,
+  compact = false,
+}: GroupProps) {
   return (
     <>
       {/*
@@ -173,7 +217,11 @@ export function BusinessNumbersFields({ draft, errors, update }: GroupProps) {
           htmlFor="availableFunds"
           required
           error={errors.availableFunds}
-          hint="Roughly how much cash the business has to work with right now. You'll update this as things change — FinSight doesn't read your bank."
+          hint={
+            compact
+              ? undefined
+              : "Roughly how much cash the business has to work with right now. You'll update this as things change — FinSight doesn't read your bank."
+          }
         >
           <MoneyInput
             min={0}
@@ -189,7 +237,11 @@ export function BusinessNumbersFields({ draft, errors, update }: GroupProps) {
           htmlFor="expectedMonthlyExpenses"
           required
           error={errors.expectedMonthlyExpenses}
-          hint="What a normal month costs you — rent, stock, wages, utilities. FinSight uses this to work out how much you need to sell."
+          hint={
+            compact
+              ? undefined
+              : "What a normal month costs you — rent, stock, wages, utilities. FinSight uses this to work out how much you need to sell."
+          }
         >
           <MoneyInput
             min={0}
@@ -208,7 +260,11 @@ export function BusinessNumbersFields({ draft, errors, update }: GroupProps) {
           htmlFor="operatingDays"
           required
           error={errors.operatingDays}
-          hint="How many days a month the business is actually open. Used to spread your target across the days you can actually sell."
+          hint={
+            compact
+              ? undefined
+              : "How many days a month the business is actually open. Used to spread your target across the days you can actually sell."
+          }
         >
           <TextInput
             type="number"
@@ -238,13 +294,19 @@ export function BusinessNumbersFields({ draft, errors, update }: GroupProps) {
           htmlFor="largeExpenseThresholdPesos"
           optional
           error={errors.largeExpenseThresholdPesos}
-          hint="Expenses this big get set aside for you to review, so a large or mistaken one doesn't slip past. Suggested from your monthly expenses — change it anytime."
+          hint={
+            compact
+              ? undefined
+              : "Expenses this big get set aside for you to review, so a large or mistaken one doesn't slip past. Suggested from your monthly expenses — change it anytime."
+          }
         >
           <MoneyInput
             min={0}
             inputMode="decimal"
             value={thresholdDisplayValue(draft)}
-            onChange={(e) => update("largeExpenseThresholdPesos", e.target.value)}
+            onChange={(e) =>
+              update("largeExpenseThresholdPesos", e.target.value)
+            }
             placeholder="0"
           />
         </Field>
@@ -252,7 +314,7 @@ export function BusinessNumbersFields({ draft, errors, update }: GroupProps) {
 
       {/* Lives with the fields it is computed from, so both screens that ask
           these questions show the same answer. */}
-      <DailyTargetNote draft={draft} />
+      <DailyTargetNote draft={draft} compact={compact} />
     </>
   );
 }

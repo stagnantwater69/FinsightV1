@@ -1,9 +1,32 @@
 import { isAxiosError } from "axios";
 
+/**
+ * What went wrong, in words the person reading it can act on.
+ *
+ * THE NO-RESPONSE BRANCH IS THE ONE THAT MATTERS. When a request never gets an
+ * answer — the connection dropped, a proxy gave up, the request outran the
+ * client timeout — axios raises an Error whose `message` is "Network Error" or
+ * "timeout of 90000ms exceeded", and falling through to `err.message` put those
+ * words in front of a shop owner as the app's own explanation.
+ *
+ * They are also actively misleading. A recovery request that was still being
+ * rate-limit-checked against a slow database, and which the browser abandoned
+ * at six seconds, reported "Network Error" on a perfectly healthy connection to
+ * a server that was about to answer. The honest reading of an unanswered
+ * request is "we could not reach FinSight", and the useful next step is to try
+ * again — so that is what it says, for every cause, because the client cannot
+ * tell them apart and the remedy is the same either way.
+ *
+ * A response that DID arrive still wins: the backend's own `error` string is
+ * written for this audience and is more specific than anything guessable here.
+ */
 export function getErrorMessage(err: unknown): string {
   if (isAxiosError(err)) {
     const data = err.response?.data as { error?: string } | undefined;
     if (data?.error) return data.error;
+    if (!err.response) {
+      return "We couldn't reach FinSight. Check your connection and try again.";
+    }
   }
   if (err instanceof Error) return err.message;
   return "Something went wrong. Please try again.";

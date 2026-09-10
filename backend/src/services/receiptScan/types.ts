@@ -19,6 +19,7 @@ export interface UploadPage {
 }
 
 export interface ReceiptCaptureMetadata {
+  captureMode?: "standard" | "long";
   source?: "manual-camera" | "native-document-scanner" | "gallery";
   processingMode?: "original" | "manual-crop" | "native-selected" | "clear-colour" | "grayscale" | "black-white";
   originalWidth?: number;

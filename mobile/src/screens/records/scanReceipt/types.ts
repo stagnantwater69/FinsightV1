@@ -123,6 +123,8 @@ export interface ReceiptScanResult {
 
 /** One photograph in a capture session, before it has been scanned. */
 export interface CapturedPage {
+  captureMode?: "standard" | "long";
+  sourceAssetUri?: string;
   /** Local only, for list keys and edits — the server assigns nothing yet. */
   key: string;
   uri: string;

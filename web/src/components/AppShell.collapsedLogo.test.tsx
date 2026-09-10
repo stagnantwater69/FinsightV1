@@ -30,7 +30,10 @@ vi.mock("../context/AuthContext", () => ({
 // `selected: null` keeps the nav, the search field and the bell out of the
 // render — none of them are what this file is about.
 vi.mock("../context/BusinessProfileContext", () => ({
-  useBusinessProfiles: () => ({ selected: null }),
+  // `profiles`/`loading`/`error` are here for the shell's SetupPrompt, which
+  // reads the list rather than the selection — it is not what is under test,
+  // but it renders inside <main> on every route and needs a real shape.
+  useBusinessProfiles: () => ({ selected: null, profiles: [], loading: false, error: null }),
 }));
 vi.mock("../context/TourContext", () => ({ useTourOptional: () => null }));
 vi.mock("./BusinessSwitcher", () => ({ BusinessSwitcher: () => null }));

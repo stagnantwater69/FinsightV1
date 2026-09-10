@@ -8,10 +8,8 @@ import { Button } from "../components/Button";
 import { useToast } from "../components/Toast";
 import { Field, FormError, MoneyInput, TextInput } from "../components/Field";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
-
-function today() {
-  return new Date().toISOString().slice(0, 10);
-}
+import { NoBusinessProfile } from "../components/NoBusinessProfile";
+import { todayIso as today } from "../lib/dates";
 
 interface DuplicateSalesState {
   description: string;
@@ -30,7 +28,7 @@ export function AddSalesRecord() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  if (!selected) return null;
+  if (!selected) return <NoBusinessProfile />;
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();

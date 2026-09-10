@@ -60,14 +60,24 @@ export function Notifications() {
     return out;
   }, [visible]);
 
-  if (!selected) return null;
+  /*
+   * Read-only, so no business means an empty archive rather than a gate card:
+   * NotificationProvider already settles to `[]` without one, and the "nothing
+   * needs your attention" state below is a truthful description of that. It
+   * offers no action because there is nothing to do here — finishing setup is
+   * offered once, in the shell (see components/SetupPrompt).
+   */
 
   return (
     <div>
       <PageHead
         eyebrow="Account"
         title="Notifications"
-        subtitle={`Everything FinSight has flagged for ${selected.name}.`}
+        subtitle={
+          selected
+            ? `Everything FinSight has flagged for ${selected.name}.`
+            : "Everything FinSight has flagged."
+        }
         actions={
           unreadCount > 0 ? (
             <Button variant="secondary" size="sm" onClick={markAllRead}>
@@ -132,7 +142,7 @@ export function Notifications() {
         <div className="space-y-6">
           {groups.map((group) => (
             <section key={group.label} aria-label={group.label}>
-              <h2 className="mb-2 text-[11px] font-bold uppercase tracking-[0.13em] text-ink-400">
+              <h2 className="mb-2 text-[11px] font-bold uppercase tracking-[0.13em] text-ink-500">
                 {group.label}
               </h2>
               <ul className="space-y-2">

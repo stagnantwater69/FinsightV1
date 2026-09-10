@@ -134,7 +134,16 @@ export async function refreshIsolationForestFindings(
   }
 
   logger.info(
-    { businessProfileId, scored: records.length, shadowFindings: saved, modelVersion: response.modelVersion },
+    {
+      businessProfileId,
+      scored: records.length,
+      shadowFindings: saved,
+      modelVersion: response.modelVersion,
+      // Absent on a worker older than the build that started reporting it —
+      // see the field's note in mlWorkerClient. Undefined drops the key from
+      // the log line rather than asserting a duration of zero.
+      durationMs: response.durationMs,
+    },
     "isolation forest shadow pass complete",
   );
   return saved;

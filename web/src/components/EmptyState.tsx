@@ -134,7 +134,7 @@ export function SetupProgress({
                 {s.label}
               </Link>
             ) : (
-              <span className={s.done ? "text-ink-400 line-through" : "text-ink-700"}>{s.label}</span>
+              <span className={s.done ? "text-ink-600 line-through" : "text-ink-700"}>{s.label}</span>
             )}
           </li>
         ))}

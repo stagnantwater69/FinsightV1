@@ -34,6 +34,21 @@ authRouter.post(
 // pass one. The service verifies the token against Supabase before trusting it.
 authRouter.post("/confirm-email", rateLimit(LIMITS.AUTH_LOGIN), asyncHandler(authController.confirmEmail));
 
+/*
+ * The web → mobile session handoff.
+ *
+ * Issuing carries a bearer token; exchanging cannot, because the whole point is
+ * that the app has no session yet — the code IS the credential there, which is
+ * why it is 256 random bits, single use, and dead after two minutes. Neither
+ * value is ever accepted from or returned in a URL. See lib/authHandoff.ts.
+ */
+authRouter.post("/handoff", rateLimit(LIMITS.AUTH_HANDOFF_ISSUE), asyncHandler(authController.issueSessionHandoff));
+authRouter.post(
+  "/handoff/exchange",
+  rateLimit(LIMITS.AUTH_HANDOFF_EXCHANGE),
+  asyncHandler(authController.exchangeSessionHandoff),
+);
+
 authRouter.post(
   "/login",
   rateLimit(LIMITS.AUTH_LOGIN),

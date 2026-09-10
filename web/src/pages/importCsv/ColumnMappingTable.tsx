@@ -66,7 +66,7 @@ export function MappedHeader({
       <label htmlFor={id} className="block text-xs font-semibold uppercase tracking-[0.06em] text-ink-500">
         {column.field}
         {column.optional ? (
-          <span className="ml-1 font-normal normal-case tracking-normal text-ink-400">(optional)</span>
+          <span className="ml-1 font-normal normal-case tracking-normal text-ink-500">(optional)</span>
         ) : (
           <span className="ml-1 text-tone-danger" title="Required">
             <span aria-hidden>*</span>
@@ -105,7 +105,7 @@ export function MappedHeader({
         // times across the widest element on the page, which reads as noise
         // and pushes the data further down. The title carries the long form.
         <p
-          className="mt-1.5 text-[11px] font-normal normal-case tracking-normal text-ink-400"
+          className="mt-1.5 text-[11px] font-normal normal-case tracking-normal text-ink-500"
           title="FinSight matched this column automatically — change it if that's wrong."
         >
           ✦ Auto-matched
@@ -139,7 +139,7 @@ export function CellValue({
   isProblem?: boolean;
 }) {
   if (column.value === "") {
-    return <span className="text-ink-400">—</span>;
+    return <span className="text-ink-500">—</span>;
   }
 
   if (column.field === "Amount") {
@@ -154,5 +154,5 @@ export function CellValue({
   if (isProblem) {
     return <span className="text-tone-danger">{value || "—"}</span>;
   }
-  return <>{value || <span className="text-ink-400">—</span>}</>;
+  return <>{value || <span className="text-ink-500">—</span>}</>;
 }

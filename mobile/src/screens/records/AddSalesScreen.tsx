@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { KeyboardAvoidingView, Platform, ScrollView, TextInput } from "react-native";
-import { Button, Card, ErrorNote, Field, Screen, T } from "../../components/ui";
+import { Button, Card, ErrorNote, Field, Screen, ScreenHeader, T } from "../../components/ui";
 import { useBusinessProfiles } from "../../context/BusinessProfileContext";
 import { api } from "../../lib/api";
 import { saveFailureMessage } from "../../lib/connectionState";
@@ -51,8 +51,12 @@ export function AddSalesScreen({ navigation }: any) {
     <Screen>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={{ padding: space.lg }}>
+          <ScreenHeader
+            eyebrow="Money in"
+            title="Add sales reference"
+            subtitle="Log a sales total so FinSight can measure recovery progress."
+          />
           <Card>
-            <T variant="title" style={{ marginBottom: 4 }}>Add sales reference</T>
             <T variant="caption" style={{ marginBottom: space.md }}>
               A sales figure you record for monitoring — not a receipt for a customer.
             </T>

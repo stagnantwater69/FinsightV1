@@ -16,16 +16,16 @@ export function Privacy() {
   return (
     <PublicLayout>
       <PublicPageHead
-        eyebrow="Others"
+        eyebrow="Legal"
         title="Privacy"
         lede="What FinSight stores, where it goes, and who can reach it — in plain language."
       />
 
-      <div className="mx-auto max-w-3xl px-4 py-12 lg:px-6 lg:py-16">
-        <div className="space-y-8 text-sm leading-relaxed text-ink-600">
+      <div className="mx-auto max-w-[1240px] px-4 py-14 lg:px-6 lg:py-20">
+        <article className="max-w-[72ch] space-y-10 text-base leading-7 text-landing-muted">
           {PRIVACY_SECTIONS.map((section) => (
             <section key={section.heading}>
-              <h2 className="font-display text-lg font-bold text-ink-900">{section.heading}</h2>
+              <h2 className="font-landing-display text-xl font-bold text-landing-charcoal">{section.heading}</h2>
               {section.body.map((paragraph) => (
                 <p key={paragraph} className="mt-2">
                   {paragraph}
@@ -34,12 +34,12 @@ export function Privacy() {
             </section>
           ))}
 
-          <div className="rounded-2xl border border-edge-brand bg-tint-brand/40 p-5">
-            <p className="text-ink-700">
+          <div className="border-y border-landing-mint-light bg-landing-mint-pale/40 px-5 py-6">
+            <p className="text-landing-charcoal">
               <strong className="font-semibold">{LEGAL_DISCLAIMER_HEADING}</strong> {PRIVACY_DISCLAIMER}
             </p>
           </div>
-        </div>
+        </article>
       </div>
     </PublicLayout>
   );

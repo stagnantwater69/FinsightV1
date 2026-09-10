@@ -49,7 +49,7 @@ export function FileSelectStage({
         {previewing ? (
           <div aria-busy="true" aria-live="polite" className="space-y-3 rounded-xl bg-paper-100 p-4">
             <span className="sr-only">Reading your file…</span>
-            <p className="text-xs font-medium text-ink-500">Reading your file…</p>
+            <p className="text-xs font-medium text-ink-600">Reading your file…</p>
             <SkeletonLine className="w-1/3" />
             <SkeletonLine className="w-full" />
             <SkeletonLine className="w-2/3" />

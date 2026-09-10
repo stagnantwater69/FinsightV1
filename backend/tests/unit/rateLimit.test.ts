@@ -105,9 +105,17 @@ describe("rateLimit", () => {
     call(mw, req);
     const blocked = call(mw, req);
 
-    expect(blocked.res.headers["Retry-After"]).toBeDefined();
-    // Worded for the owner: they did nothing wrong and there is nothing to fix.
-    expect(String((blocked.res.body as { error: string }).error)).toMatch(/wait about \d+ seconds? and try again/);
+    // Retry-After is for machines, so it stays exact seconds.
+    expect(blocked.res.headers["Retry-After"]).toBe("60");
+    /*
+     * The body is for the owner: they did nothing wrong and there is nothing
+     * to fix. It carries a unit a person reads rather than raw seconds — a
+     * 60s window is "1 minute", and the hour-long auth buckets say
+     * "38 minutes" instead of "2275 seconds". See humanRetryAfter.
+     */
+    const message = String((blocked.res.body as { error: string }).error);
+    expect(message).toMatch(/wait about \d+ (second|minute|hour)s? and try again/);
+    expect(message).toContain("wait about 1 minute and");
   });
 
   it("falls back to the IP when there is no authenticated user", () => {
@@ -211,6 +219,41 @@ describe("rateLimit", () => {
   it("bounds the re-authentication oracles tightly", () => {
     expect(LIMITS.AUTH_REAUTH.limit).toBeLessThanOrEqual(5);
     expect(LIMITS.AUTH_REAUTH.windowMs).toBeGreaterThanOrEqual(15 * 60_000);
+  });
+
+  /**
+   * THE FLOWS PEOPLE REACH WHEN THEY ARE ALREADY STUCK.
+   *
+   * Password recovery and "resend my confirmation email" are both reached by
+   * someone the system has already failed once — their email went to spam, or
+   * was slow, or never came. They press the button again, twice, and an
+   * hour-long window then locks them out of getting back into their own account
+   * for the rest of that hour. The count is doing the anti-abuse work; the
+   * WINDOW only decides how long a mistake costs, and an attacker does not care
+   * about that while a locked-out owner cares about nothing else.
+   *
+   * Pinned so a future tightening has to argue with this rather than quietly
+   * restore an hour.
+   */
+  it("keeps the penalty short on the flows people hit when they are locked out", () => {
+    for (const limit of [LIMITS.AUTH_RECOVERY_EMAIL, LIMITS.AUTH_RESEND_VERIFICATION]) {
+      expect(limit.windowMs, limit.name).toBeLessThanOrEqual(15 * 60_000);
+    }
+  });
+
+  /**
+   * CARRIER-GRADE NAT IS THE NORMAL CASE HERE, not an edge one: thousands of
+   * mobile subscribers share one address, and so does everyone on a mall or
+   * co-working connection. A per-IP recovery budget in single figures is
+   * therefore not "a few tries by one person" — it is a few tries by an entire
+   * carrier's customers, after which real owners are refused for something
+   * somebody else did.
+   *
+   * The precision belongs to the email-keyed half. This one only has to make a
+   * spray across many addresses expensive.
+   */
+  it("does not let one shared address lock out everyone behind it", () => {
+    expect(LIMITS.AUTH_RECOVERY.limit).toBeGreaterThanOrEqual(20);
   });
 
   /** Every unauthenticated auth route has both halves of its pair. */

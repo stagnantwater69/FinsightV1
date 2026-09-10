@@ -205,34 +205,36 @@ export function AiCard({
   children: ReactNode;
 }) {
   return (
-    <div className="surface-ai relative overflow-hidden rounded-2xl p-5 text-brand-50 shadow-md">
+    <aside className="surface-ai relative overflow-hidden rounded-2xl border-l-4 border-l-brand-600 p-5 sm:p-6">
       <span
         aria-hidden
-        className="surface-ai-glow pointer-events-none absolute -right-10 -top-12 h-44 w-44 rounded-full"
+        className="surface-ai-glow pointer-events-none absolute -right-6 -top-8 h-32 w-32 rounded-full"
       />
       <div className="relative">
-        <div className="mb-3 flex items-center gap-2.5">
+        <div className="mb-4 flex items-center gap-3">
           <span
             aria-hidden
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white/15 text-sm"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-tint-brand text-base text-tone-brand ring-1 ring-edge-brand"
           >
             ✦
           </span>
           <div className="min-w-0">
-            <b className="block font-display text-[15px] font-bold text-white">{title}</b>
-            {subtitle ? <small className="block text-[11px] text-brand-200">{subtitle}</small> : null}
+            <b className="block font-display text-base font-bold tracking-[-0.01em] text-white">{title}</b>
+            {subtitle ? <small className="mt-0.5 block text-xs leading-snug text-brand-200">{subtitle}</small> : null}
           </div>
         </div>
-        <div className="text-sm leading-relaxed text-brand-50">{children}</div>
-        {footer ? <div className="mt-3.5 text-[11.5px] text-brand-200">{footer}</div> : null}
+        <div className="text-[14.5px] leading-6 text-brand-50">{children}</div>
+        {footer ? (
+          <div className="mt-4 border-t border-white/10 pt-4 text-xs font-medium text-brand-200">{footer}</div>
+        ) : null}
       </div>
-    </div>
+    </aside>
   );
 }
 
 /** Highlights a figure inside AiCard prose. Warm, so it reads off the dark ground. */
 export function Kw({ children }: { children: ReactNode }) {
-  return <span className="font-semibold text-accent-200">{children}</span>;
+  return <span className="font-bold text-accent-200">{children}</span>;
 }
 
 // ============================================================
@@ -241,7 +243,7 @@ export function Kw({ children }: { children: ReactNode }) {
 
 export function InfoNote({ children }: { children: ReactNode }) {
   return (
-    <div className="flex items-start gap-2.5 rounded-xl border border-paper-200 bg-paper-100 px-3.5 py-2.5 text-xs leading-relaxed text-ink-500">
+    <div className="flex items-start gap-2.5 rounded-xl border border-paper-200 bg-paper-100 px-3.5 py-2.5 text-xs leading-relaxed text-ink-600">
       <span aria-hidden className="mt-px shrink-0">
         ⓘ
       </span>

@@ -32,7 +32,9 @@ import {
   warningTone,
 } from "../../lib/receiptWarnings";
 import { ReceiptCamera } from "../../components/receipt-camera";
+import type { ReceiptCameraHandle } from "../../components/receipt-camera/ReceiptCamera";
 import { canAddSection, CAPTURE_QUALITY } from "../../lib/receiptCapture";
+import { analysisImageUri } from "../../lib/analysisImage";
 import { setFlash } from "../../lib/flash";
 import { SkeletonBox } from "../../components/Skeleton";
 import { DateField } from "../../components/DateField";
@@ -55,38 +57,16 @@ import { groupReceiptMembers } from "../../lib/receiptGrouping";
 import type { CapturedPage, ReceiptScanResult, ReviewNotice } from "./scanReceipt/types";
 
 /**
- * Capture (Google ML Kit Document Scanner on Android; gallery elsewhere) →
+ * Capture (custom camera or gallery; optional native scanner rollout flag) →
  * approve/reorder sections → upload to the existing backend receipt endpoint
  * → editable review → confirm.
  *
- * WHAT CHANGED, AND WHAT DID NOT. `components/receipt-camera` used to be
- * FinSight's own camera on `expo-camera`. On Android it is now a thin
- * launcher for the platform scanner (see `ReceiptCamera.tsx`'s own
- * documentation for why there is no camera fallback any more): ML Kit does
- * its own live document detection, automatic shutter, background removal,
- * perspective correction and multi-page capture, then hands back approved
- * page images. None of that reaches the server. `scanPages` below still
- * sends the same `files` array in the same order to the same endpoint it
- * always has — see pagesFromSections for the seam. "Choose from gallery" on
- * the card below is unchanged and is a genuinely separate, explicitly chosen
- * workflow — never a fallback opened automatically when the scanner fails.
- *
- * SECTION 0 DECISION: OCR runs SERVER-SIDE (Tesseract, already built and
- * accuracy-measured at 100% date / 95% vendor / 100% amount on a 20-image
- * corpus). ML Kit Document Scanner produces a clean document image; it does
- * not run text recognition, and adopting on-device OCR remains a distinct,
- * undecided change. On-device OCR stays documented as a future improvement.
- *
- * EDGE DETECTION for a gallery-picked image still runs server-side, on the
- * same still the readability check already looks at — that endpoint and its
- * reasoning are unchanged by the scanner replacement. It has no bearing on
- * Android's scanner path, where ML Kit performs its own live detection.
- *
- * The one real difference from a browser upload: a phone camera returns a
- * large, possibly rotated JPEG, and ML Kit hands back its own approved
- * document image rather than a raw sensor frame — see nativeReceiptScanner.ts.
- * That is exactly why the review step below is editable and nothing is saved
- * until the owner confirms.
+ * ReceiptCamera owns capture, gallery, ordered sections and image review.
+ * Explicit quality/crop actions use the server's non-persistent helpers.
+ * This screen sends approved files and paired originals in reading order.
+ * OCR remains server-side; none of the camera's visual guidance invents
+ * receipt fields or creates an expense. Financial values stay editable until
+ * owner confirmation. See docs/custom-receipt-camera-implementation.md.
  *
  * Its own supporting types, poll helper and capture-session conversions live
  * in ./scanReceipt/ — this file is the screen itself.
@@ -129,6 +109,7 @@ export function ScanReceiptScreen({ navigation }: any) {
    * this screen.
    */
   const [cameraOpen, setCameraOpen] = useState(false);
+  const receiptCameraRef = useRef<ReceiptCameraHandle>(null);
 
   const [categoryId, setCategoryId] = useState<number | null>(null);
   const [date, setDate] = useState(todayISO());
@@ -225,10 +206,27 @@ export function ScanReceiptScreen({ navigation }: any) {
     setError(null);
 
     try {
+      /*
+       * SENT SMALL, KEPT LARGE. /quality-check resizes to width 400 before it
+       * measures anything, so the full-resolution page this used to upload was
+       * megabytes of mobile data the server decoded and threw away — once per
+       * shutter press, up to eight times a receipt. `uri` above is untouched:
+       * the page held in state, and the one `scanSingleReceipt` uploads for
+       * OCR, is still the original capture.
+       */
+      const checkUri = await analysisImageUri(uri, asset.width, asset.height);
+      // The manipulator always writes JPEG, so a downscaled copy must be
+      // declared as one — a HEIC or PNG capture would otherwise arrive under a
+      // content type the server would be right to reject.
+      const downscaled = checkUri !== uri;
       const form = new FormData();
       // React Native's FormData takes this {uri,name,type} shape rather than
       // a Blob — the browser's File API isn't available here.
-      form.append("file", { uri, name: fileName, type: mimeType } as any);
+      form.append("file", {
+        uri: checkUri,
+        name: downscaled ? `quality-${Date.now()}.jpg` : fileName,
+        type: downscaled ? "image/jpeg" : mimeType,
+      } as any);
       const quality = await api.upload<CapturedPage["quality"]>("/records/receipts/quality-check", form);
       setPages((prev) => prev.map((p) => (p.key === key ? { ...p, quality, checkingQuality: false } : p)));
     } catch {
@@ -281,6 +279,7 @@ export function ScanReceiptScreen({ navigation }: any) {
         }
       }
       form.append("captureMetadata", JSON.stringify(list.map((page) => ({
+        captureMode: page.captureMode,
         source: page.captureSource,
         processingMode: page.processingMode ?? "original",
         originalWidth: page.originalWidth ?? page.width,
@@ -774,24 +773,26 @@ export function ScanReceiptScreen({ navigation }: any) {
       visible={cameraOpen}
       animationType="fade"
       statusBarTranslucent
-      onRequestClose={() => setCameraOpen(false)}
+      onRequestClose={() => receiptCameraRef.current ? receiptCameraRef.current.requestClose() : setCameraOpen(false)}
     >
       {/*
-        Mounted only while visible. ML Kit runs as its own native activity
-        rather than an `expo-camera` preview this component owns, but there is
-        still no reason to hold `ReceiptCamera` mounted, or its launch effect
-        armed, behind the review form once the owner is back on it.
+        Mounted only while visible. The default `ReceiptCamera` owns a live
+        preview and, on a native Android build, the local scanner engine; the
+        optional ML Kit rollout launches its own activity instead. Neither is
+        held mounted behind the review form once the owner is back on it, so the
+        camera and any torch it enabled are released with this modal.
       */}
       {cameraOpen ? (
         <ReceiptCamera
+          ref={receiptCameraRef}
           initialSections={sectionsFromPages(pages)}
           /*
            * Closing the camera — for any reason, including zero pages —
            * reveals the capture card behind it rather than leaving this
            * screen. That card is where "Choose from gallery" lives (see the
-           * card below), which matters most exactly when the scanner
-           * couldn't run at all: ML Kit's own unsupported/failure states
-           * deliberately offer no camera fallback themselves (see
+           * card below), which matters most exactly when the camera
+           * couldn't run at all: the in-camera states deliberately offer no
+           * alternative capture implementation themselves (see
            * ReceiptCamera.tsx and ScannerStatusStates.tsx), so this is the
            * only place that alternative is reachable from.
            */

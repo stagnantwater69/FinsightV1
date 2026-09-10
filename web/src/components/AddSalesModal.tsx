@@ -6,10 +6,7 @@ import { Field, FormError, MoneyInput, TextInput } from "./Field";
 import { api } from "../lib/api";
 import { getErrorMessage } from "../lib/errors";
 import type { RecordItem } from "../lib/types";
-
-function today() {
-  return new Date().toISOString().slice(0, 10);
-}
+import { todayIso as today } from "../lib/dates";
 
 export interface DuplicateSalesSeed {
   description: string;

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { Menu, Moon, Sun, X, ChevronDown } from "lucide-react";
+import { Wordmark } from "./Wordmark";
 
 const LANDING_THEME_KEY = "finsight.landingTheme";
 
@@ -43,7 +44,7 @@ function Brand({ size = "md" }: { size?: "sm" | "md" }) {
   return (
     <span className="flex items-center gap-2.5">
       <img src="/finsight-logo.png" alt="" aria-hidden className={`rounded-xl object-contain shadow-sm ${box}`} />
-      <span className={`font-landing-display font-bold tracking-tight text-landing-charcoal ${text}`}>FinSight</span>
+      <Wordmark className={`text-landing-charcoal ${text}`} />
     </span>
   );
 }
@@ -516,11 +517,19 @@ export function PublicLayout({ children }: { children: ReactNode }) {
 
 export function PublicPageHead({ eyebrow, title, lede }: { eyebrow: string; title: string; lede?: string }) {
   return (
-    <section className="border-b border-landing-mint-light/70 bg-landing-surface py-12 text-center lg:py-16">
-      <div className="mx-auto max-w-4xl px-4 lg:px-6">
-        <p className="text-xs font-bold uppercase tracking-wider text-landing-green">{eyebrow}</p>
-        <h1 className="mt-3 font-landing-display text-3xl font-bold text-landing-charcoal sm:text-4xl">{title}</h1>
-        {lede ? <p className="mx-auto mt-4 max-w-2xl text-base text-landing-muted">{lede}</p> : null}
+    <section className="landing-section-gradient-raised border-b border-landing-mint-light/70 bg-landing-surface py-12 lg:py-16">
+      <div className="mx-auto max-w-[1240px] px-4 lg:px-6">
+        <nav aria-label="Breadcrumb" className="font-landing-sans text-sm text-landing-muted">
+          <ol className="flex items-center gap-2">
+            <li><Link to="/" className="rounded-sm underline-offset-4 hover:text-landing-green hover:underline">Home</Link></li>
+            <li aria-hidden className="text-landing-green/60">/</li>
+            <li aria-current="page" className="font-semibold text-landing-green">{eyebrow}</li>
+          </ol>
+        </nav>
+        <div className="mt-7 max-w-3xl">
+          <h1 className="text-balance font-landing-display text-3xl font-bold tracking-[-0.025em] text-landing-charcoal sm:text-4xl lg:text-5xl">{title}</h1>
+          {lede ? <p className="mt-4 max-w-2xl text-base leading-relaxed text-landing-muted sm:text-lg">{lede}</p> : null}
+        </div>
       </div>
     </section>
   );

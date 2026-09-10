@@ -677,7 +677,7 @@ describe("Recovery Target — operating calendar (plan §7.2-§7.4/§8.3/§11 Ph
     // Two dashes for the closed row: one in "Needed target", one in "Gap" —
     // rendered as their own plain span, distinct from the pill's glyph dash.
     const dashSpans = screen.getAllByText("—", {
-      selector: "span.text-ink-400",
+      selector: "span.text-ink-500",
     });
     expect(dashSpans.length).toBeGreaterThanOrEqual(2);
   });
@@ -903,6 +903,38 @@ describe("Recovery Target — weekly checkpoints (plan §10.4, Phase 4)", () => 
       screen.getByRole("button", { name: "Hide full list" }),
     );
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+
+  it("shows the month's first checkpoint once, not duplicated as both current and next, before it has arrived", async () => {
+    // Before day 7 of the month, no checkpoint has an endDate at-or-before
+    // today, so "current" falls back to the first checkpoint — which is also
+    // the only pending one available for "next". Showing the same card
+    // twice under two different labels would read as a bug, not as two
+    // distinct checkpoints.
+    currentRecovery = {
+      ...recovery,
+      asOfDate: "2026-01-05",
+      weeklyCheckpoints: [
+        checkpoint({
+          endDate: "2026-01-07",
+          recordedAmount: null,
+          variance: null,
+          status: "pending",
+        }),
+        checkpoint({
+          endDate: "2026-01-14",
+          recordedAmount: null,
+          variance: null,
+          status: "pending",
+        }),
+      ],
+    };
+    renderPage();
+
+    expect(await screen.findByText("Current checkpoint")).toBeInTheDocument();
+    expect(screen.queryByText("Next checkpoint")).not.toBeInTheDocument();
+    // Only one checkpoint card rendered — not the same Jan 7 date twice.
+    expect(screen.getAllByText("Jan 7, 2026")).toHaveLength(1);
   });
 
   it("renders nothing when weeklyCheckpoints is absent (older server)", async () => {

@@ -17,6 +17,7 @@ import { useInsight } from "../lib/useInsight";
 import { api, errorMessage } from "../lib/api";
 import { formatMoney } from "../lib/money";
 import { bufferPercentError, currentMonthKey, ownerTargetAmountError, parsePlanNumber } from "../lib/recoveryPlanForm";
+import { dayStatusTone } from "../lib/recoveryTone";
 import { font, space, typeScale } from "../theme/tokens";
 import { useTheme } from "../context/ThemeContext";
 import type {
@@ -77,6 +78,28 @@ export function RecoveryTargetScreen({ navigation }: any) {
         contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl + FAB_CLEARANCE }}
       >
         <InsightHeader navigation={navigation} active="RecoveryTarget" title="Recovery target" />
+
+        {/*
+          §7.5/§10.8/§11 Phase 6 — the smaller of the two entry points into
+          notification preferences (the other is Settings' own row), for an
+          owner who just noticed an alert on this screen and wants to tune it
+          without leaving the insight they were reading. Same text-link
+          affordance as "Learn more" below, right-aligned so it reads as a
+          shortcut rather than another paragraph of copy.
+        */}
+        <View style={{ alignItems: "flex-end", marginBottom: space.sm }}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Manage recovery target notification settings"
+            onPress={() => navigation.navigate("More", { screen: "RecoveryNotificationPreferences", initial: false })}
+            hitSlop={8}
+            style={{ paddingVertical: space.xs }}
+          >
+            <T variant="label" style={{ color: brand[700] }}>
+              Manage notifications
+            </T>
+          </Pressable>
+        </View>
 
         {/*
           Improvement Plan §6.1/§6.2 — "Sales Coverage Target" is the
@@ -185,7 +208,7 @@ export function RecoveryTargetScreen({ navigation }: any) {
             ) : null}
 
             <Card>
-              <RecoveryMeter data={data} />
+              <RecoveryMeter data={data} hideStatusPill={data.monthHasNoRecords} />
               {/*
                 §10.1/§10.2 primary action — one prominent, state-driven
                 control right beside the status/meter, so an owner doesn't
@@ -261,7 +284,7 @@ export function RecoveryTargetScreen({ navigation }: any) {
                 icon="flag-outline"
                 label="Remaining target"
                 value={data.remainingTarget}
-                tint={statusText.critical}
+                tint={data.status === "covered" || data.remainingTarget <= 0 ? statusText.good : statusText.critical}
               />
               <View
                 style={{
@@ -275,7 +298,10 @@ export function RecoveryTargetScreen({ navigation }: any) {
               >
                 <Medallion icon="calendar-outline" tint={brand[700]} surface={brand[50]} size={28} />
                 <T style={{ flex: 1, fontSize: typeScale.bodySm }}>Remaining operating days</T>
-                <T style={{ fontSize: typeScale.bodySm, fontFamily: font.monoMedium }}>≈ {data.remainingOperatingDays}</T>
+                <T style={{ fontSize: typeScale.bodySm, fontFamily: font.monoMedium }}>
+                  {data.operatingScheduleConfigured ? "" : "≈ "}
+                  {data.remainingOperatingDays}
+                </T>
               </View>
 
               {/*
@@ -382,13 +408,8 @@ function DailyCoverageRows({ days }: { days: RecoveryInsight["dailyCoverage"] })
     <View>
       {days.map((day, index) => {
         const closed = day.status === "closed";
-        const tone = closed
-          ? t.textMuted
-          : day.status === "below"
-            ? statusText.critical
-            : day.status === "at"
-              ? statusText.warning
-              : statusText.good;
+        const toneKey = dayStatusTone(day.status);
+        const tone = toneKey === "muted" ? t.textMuted : statusText[toneKey];
         return (
           <View
             key={day.date}
@@ -409,8 +430,8 @@ function DailyCoverageRows({ days }: { days: RecoveryInsight["dailyCoverage"] })
               {closed
                 ? "Closed"
                 : day.status === "at"
-                  ? "Reached"
-                  : `${Math.round(Math.abs(day.gap ?? 0)).toLocaleString("en-PH")} ${day.status}`}
+                  ? "Target reached"
+                  : `${formatMoney(Math.abs(day.gap ?? 0))} ${day.status} target`}
             </T>
           </View>
         );

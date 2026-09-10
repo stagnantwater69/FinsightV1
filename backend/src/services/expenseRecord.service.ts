@@ -4,6 +4,8 @@ import { prisma } from "../config/prisma";
 import { ApiError } from "../middleware/error.middleware";
 import { cleanUpImportBatchIfOrphaned, cleanUpReceiptScanIfOrphaned } from "../lib/sourceCleanup";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
+import { DEFAULT_RECORD_SORT, recordCursorWhere, recordOrderBy, type RecordCursor, type RecordSort } from "../lib/recordSort";
+import { lockDuplicateKey } from "../lib/recordLock";
 import { createNotification, NOTIFICATION_TYPES } from "./notification.service";
 import { signedReceiptImageUrl, signedCsvFileUrl } from "./storage.service";
 import { logger } from "../config/logger";
@@ -45,7 +47,9 @@ export interface SearchFilters {
   source?: ExpenseRecordSource;
   importBatchId?: number;
   take?: number;
-  cursor?: { date: Date; id: number; mode: "same-type" | "include-date" | "exclude-date" };
+  /** Defaults to DEFAULT_RECORD_SORT, i.e. today's [date desc, id desc]. */
+  sort?: RecordSort;
+  cursor?: RecordCursor;
 }
 
 function toDTO(record: ExpenseRecord) {
@@ -76,8 +80,19 @@ async function queueAnalysis(businessProfileId: number, expenseRecordId: number)
   });
 }
 
-async function findDuplicate(businessProfileId: number, date: Date, amount: Prisma.Decimal, description: string, excludeId?: number) {
-  return prisma.expenseRecord.findFirst({
+async function findDuplicate(
+  businessProfileId: number,
+  date: Date,
+  amount: Prisma.Decimal,
+  description: string,
+  excludeId?: number,
+  // Defaults to the shared client, so every existing caller is unchanged. A
+  // caller inside an interactive transaction must pass its own client, or the
+  // records it has already written in that transaction would be invisible here
+  // and a real duplicate would be recorded as "Not a Duplicate".
+  db: BulkDbClient = prisma,
+) {
+  return db.expenseRecord.findFirst({
     where: {
       businessProfileId,
       date,
@@ -121,24 +136,87 @@ export function duplicateKeyOf(date: Date, amount: Prisma.Decimal | number, desc
   ].join("|");
 }
 
-async function verifyCategoryBelongsToProfile(categoryId: number, businessProfileId: number) {
-  const category = await prisma.expenseCategory.findFirst({ where: { id: categoryId, businessProfileId } });
+async function verifyCategoryBelongsToProfile(categoryId: number, businessProfileId: number, db: BulkDbClient = prisma) {
+  const category = await db.expenseCategory.findFirst({ where: { id: categoryId, businessProfileId } });
   if (!category) {
     throw new ApiError(400, "Category does not belong to this business profile");
   }
 }
 
+/**
+ * The typed-in single expense create.
+ *
+ * THE DUPLICATE CHECK AND THE INSERT ARE ONE UNIT NOW. They used to be two
+ * bare awaits on the shared client with nothing between them, so a double-tap
+ * on Add Expense — one owner, one finger, two requests — had both requests
+ * read "no duplicate" before either had written. Two identical records went
+ * into the books and the duplicate detector flagged neither, which is the one
+ * outcome it exists to prevent. See lib/recordLock.ts for why a transaction on
+ * its own is not enough and what the advisory lock adds.
+ *
+ * The notifications and the queued analysis stay OUTSIDE the transaction, via
+ * `runSideEffects` — a notification that fails to send must never roll back a
+ * record the owner has already been told was saved, and the analysis job
+ * carries a foreign key to a row that is not committed yet.
+ */
 export async function createExpenseRecord(userId: number, input: CreateInput) {
+  const { record, runSideEffects } = await prisma.$transaction((tx) =>
+    createExpenseRecordWithin(userId, input, tx, { serializeDuplicateCheck: true }),
+  );
+  await runSideEffects();
+  return record;
+}
+
+/**
+ * The single-record create, with its non-transactional tail handed back to the
+ * caller instead of run inline.
+ *
+ * WHY THIS SHAPE. Receipt confirmation writes a whole set of records and then
+ * flips the scan to Confirmed; those writes have to commit or roll back as one
+ * unit, or a failure mid-loop leaves records booked against a scan still
+ * Pending and the owner books them a second time on the retry. That needs a
+ * transaction client threaded down to the insert — the same threading
+ * `bulkCreateExpenseRecords` already accepts for the CSV import.
+ *
+ * But two of the things createExpenseRecord does must NOT be inside that
+ * transaction: the notifications are the owner's record of an event that has
+ * happened (rolling one back is fine, but failing to send one must never undo
+ * the books), and the queued analysis job carries a foreign key to a record
+ * that is not committed yet, which would fail every time. So they are returned
+ * as `runSideEffects` for the caller to run AFTER its commit.
+ *
+ * `createExpenseRecord` above runs them immediately, which is exactly the
+ * previous behaviour for every other caller.
+ *
+ * `serializeDuplicateCheck` is opt-in rather than always-on: it is what the
+ * single-record create needs to survive a double-tap, but receipt confirmation
+ * calls this once per category split inside ONE transaction, and taking a
+ * lock per split would hold several at a time for no benefit — those splits
+ * are already serialised with each other by being in the same transaction.
+ */
+export async function createExpenseRecordWithin(
+  userId: number,
+  input: CreateInput,
+  db: BulkDbClient,
+  options: { serializeDuplicateCheck?: boolean } = {},
+) {
+  // Read through the shared client on purpose: the profile is not written by
+  // any caller's transaction, and requireOwnedBusinessProfile is the one
+  // ownership gate every records service shares.
   const profile = await requireOwnedBusinessProfile(userId, input.businessProfileId);
-  await verifyCategoryBelongsToProfile(input.categoryId, input.businessProfileId);
+  await verifyCategoryBelongsToProfile(input.categoryId, input.businessProfileId, db);
 
   const date = new Date(input.date);
   const amount = new Prisma.Decimal(input.amount);
 
-  const duplicate = await findDuplicate(input.businessProfileId, date, amount, input.description);
+  if (options.serializeDuplicateCheck) {
+    await lockDuplicateKey(db, input.businessProfileId, `expense:${duplicateKeyOf(date, amount, input.description)}`);
+  }
+
+  const duplicate = await findDuplicate(input.businessProfileId, date, amount, input.description, undefined, db);
   const largeExpenseFlag = input.amount >= largeExpenseThresholdFor(profile);
 
-  const record = await prisma.expenseRecord.create({
+  const record = await db.expenseRecord.create({
     data: {
       businessProfileId: input.businessProfileId,
       categoryId: input.categoryId,
@@ -158,28 +236,30 @@ export async function createExpenseRecord(userId: number, input: CreateInput) {
     },
   });
 
-  if (duplicate) {
-    await createNotification(
-      userId,
-      input.businessProfileId,
-      NOTIFICATION_TYPES.POSSIBLE_DUPLICATE,
-      `Possible duplicate: "${input.description}" (PHP ${input.amount}) on ${input.date}`,
-      record.id
-    );
-  }
-  if (largeExpenseFlag) {
-    await createNotification(
-      userId,
-      input.businessProfileId,
-      NOTIFICATION_TYPES.LARGE_EXPENSE_FLAG,
-      `Large expense flagged: "${input.description}" (PHP ${input.amount}) on ${input.date}`,
-      record.id
-    );
-  }
+  const runSideEffects = async () => {
+    if (duplicate) {
+      await createNotification(
+        userId,
+        input.businessProfileId,
+        NOTIFICATION_TYPES.POSSIBLE_DUPLICATE,
+        `Possible duplicate: "${input.description}" (PHP ${input.amount}) on ${input.date}`,
+        record.id
+      );
+    }
+    if (largeExpenseFlag) {
+      await createNotification(
+        userId,
+        input.businessProfileId,
+        NOTIFICATION_TYPES.LARGE_EXPENSE_FLAG,
+        `Large expense flagged: "${input.description}" (PHP ${input.amount}) on ${input.date}`,
+        record.id
+      );
+    }
 
-  await queueAnalysis(record.businessProfileId, record.id);
+    await queueAnalysis(record.businessProfileId, record.id);
+  };
 
-  return toDTO(record);
+  return { record: toDTO(record), runSideEffects };
 }
 
 export interface BulkExpenseRow {
@@ -687,13 +767,8 @@ export async function bulkResolveExpenseDuplicates(
 export async function searchExpenseRecords(userId: number, filters: SearchFilters) {
   await requireOwnedBusinessProfile(userId, filters.businessProfileId);
 
-  const cursorWhere = !filters.cursor
-    ? undefined
-    : filters.cursor.mode === "include-date"
-      ? { date: { lte: filters.cursor.date } }
-      : filters.cursor.mode === "exclude-date"
-        ? { date: { lt: filters.cursor.date } }
-        : { OR: [{ date: { lt: filters.cursor.date } }, { date: filters.cursor.date, id: { lt: filters.cursor.id } }] };
+  const sort = filters.sort ?? DEFAULT_RECORD_SORT;
+  const cursorWhere = recordCursorWhere(filters.cursor, sort);
 
   const records = await prisma.expenseRecord.findMany({
     where: {
@@ -712,21 +787,63 @@ export async function searchExpenseRecords(userId: number, filters: SearchFilter
       ],
       description: filters.keyword ? { contains: filters.keyword, mode: "insensitive" } : undefined,
     },
-    orderBy: [{ date: "desc" }, { id: "desc" }],
+    orderBy: recordOrderBy(sort),
     take: filters.take,
   });
 
   return records.map(toDTO);
 }
 
-export async function listFlaggedExpenseRecords(userId: number, businessProfileId: number) {
+/** The one definition of "flagged", shared by the list and the count. */
+const FLAGGED_EXPENSE_WHERE = {
+  OR: [{ reviewStatus: "Needs Review" }, { duplicateStatus: "Flagged" }],
+};
+
+export interface FlaggedListOptions {
+  take?: number;
+  cursor?: SearchFilters["cursor"];
+}
+
+/**
+ * BOUNDED, where it used to return everything.
+ *
+ * This query had no `take` and no cursor, so a business that re-imported a
+ * large spreadsheet — every row flagged as a duplicate — answered with tens of
+ * thousands of records, megabytes of JSON, on every filter change. Same
+ * keyset-pagination shape as searchExpenseRecords, so the two agree on order
+ * and on what a cursor means; the tiebreaker on `id` is what makes the cursor
+ * stable across records sharing a date.
+ */
+export async function listFlaggedExpenseRecords(
+  userId: number,
+  businessProfileId: number,
+  options: FlaggedListOptions = {},
+) {
   await requireOwnedBusinessProfile(userId, businessProfileId);
+
+  // The flagged list has no sort parameter; it stays on the default order.
+  const cursorWhere = recordCursorWhere(options.cursor);
+
   const records = await prisma.expenseRecord.findMany({
     where: {
       businessProfileId,
-      OR: [{ reviewStatus: "Needs Review" }, { duplicateStatus: "Flagged" }],
+      AND: [FLAGGED_EXPENSE_WHERE, ...(cursorWhere ? [cursorWhere] : [])],
     },
-    orderBy: { date: "desc" },
+    orderBy: [{ date: "desc" }, { id: "desc" }],
+    take: options.take,
   });
   return records.map(toDTO);
+}
+
+/**
+ * How many expense records need the owner's attention, without sending them.
+ *
+ * Both clients were downloading the entire flagged list purely to render the
+ * number on a badge. This is that number.
+ */
+export async function countFlaggedExpenseRecords(userId: number, businessProfileId: number): Promise<number> {
+  await requireOwnedBusinessProfile(userId, businessProfileId);
+  return prisma.expenseRecord.count({
+    where: { businessProfileId, ...FLAGGED_EXPENSE_WHERE },
+  });
 }

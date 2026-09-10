@@ -56,13 +56,13 @@ export function ChatHistoryOverlay({
     */
     <div className="absolute inset-0 z-10 flex animate-slide-in-right flex-col bg-paper-50">
       <div className="flex items-center gap-1 border-b border-paper-200 px-3 py-2">
-        <h3 className="flex-1 text-[11px] font-bold uppercase tracking-[0.13em] text-ink-400">Chat history</h3>
+        <h3 className="flex-1 text-[11px] font-bold uppercase tracking-[0.13em] text-ink-500">Chat history</h3>
         <button
           type="button"
           onClick={onClose}
           aria-label="Close chat history"
           aria-expanded
-          className="tap h-9 w-9 min-h-0 min-w-0 rounded-lg text-ink-400 transition hover:bg-paper-100 hover:text-ink-700"
+          className="tap h-9 w-9 min-h-0 min-w-0 rounded-lg text-ink-500 transition hover:bg-paper-100 hover:text-ink-700"
         >
           {/* Back to the conversation, so the arrow points the way the panel
               is about to move rather than being a generic dismiss ×. */}
@@ -86,13 +86,13 @@ export function ChatHistoryOverlay({
           // No mascot here. The welcome state this is sitting on top of already
           // carries Fin at full size, and a second illustration one keypress
           // apart would put the same character on screen twice in one panel.
-          <p className="px-3 pt-4 text-xs leading-relaxed text-ink-400">
+          <p className="px-3 pt-4 text-xs leading-relaxed text-ink-500">
             Your conversations will appear here once you ask something.
           </p>
         ) : (
           groups.map((group) => (
             <div key={group.label} className="pb-1">
-              <div className="px-3 pb-1 pt-3 text-[10.5px] font-bold uppercase tracking-[0.13em] text-ink-400">
+              <div className="px-3 pb-1 pt-3 text-[10.5px] font-bold uppercase tracking-[0.13em] text-ink-500">
                 {group.label}
               </div>
               <ul>

@@ -4,8 +4,10 @@ import { prisma } from "../config/prisma";
 import { ApiError } from "../middleware/error.middleware";
 import { cleanUpImportBatchIfOrphaned } from "../lib/sourceCleanup";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
+import { DEFAULT_RECORD_SORT, recordCursorWhere, recordOrderBy, type RecordCursor, type RecordSort } from "../lib/recordSort";
+import { lockDuplicateKey } from "../lib/recordLock";
 import { createNotification, NOTIFICATION_TYPES } from "./notification.service";
-import { duplicateKeyOf, type BulkDbClient } from "./expenseRecord.service";
+import { duplicateKeyOf, type BulkDbClient, type FlaggedListOptions } from "./expenseRecord.service";
 
 interface CreateInput {
   businessProfileId: number;
@@ -32,7 +34,9 @@ export interface SearchFilters {
   source?: SalesRecordSource;
   importBatchId?: number;
   take?: number;
-  cursor?: { date: Date; id: number; mode: "same-type" | "include-date" | "exclude-date" };
+  /** Defaults to DEFAULT_RECORD_SORT, i.e. today's [date desc, id desc]. */
+  sort?: RecordSort;
+  cursor?: RecordCursor;
 }
 
 function toDTO(record: SalesReferenceRecord) {
@@ -52,8 +56,18 @@ function toDTO(record: SalesReferenceRecord) {
   };
 }
 
-async function findDuplicate(businessProfileId: number, date: Date, amount: Prisma.Decimal, description: string, excludeId?: number) {
-  return prisma.salesReferenceRecord.findFirst({
+async function findDuplicate(
+  businessProfileId: number,
+  date: Date,
+  amount: Prisma.Decimal,
+  description: string,
+  excludeId?: number,
+  // Same reason as the expense side's findDuplicate: a caller inside an
+  // interactive transaction must pass its own client, or a row that
+  // transaction has already written would be invisible here.
+  db: BulkDbClient = prisma,
+) {
+  return db.salesReferenceRecord.findFirst({
     where: {
       businessProfileId,
       date,
@@ -65,26 +79,44 @@ async function findDuplicate(businessProfileId: number, date: Date, amount: Pris
   });
 }
 
+/**
+ * The typed-in single sales-reference create — the same shape, and the same
+ * fix, as createExpenseRecord.
+ *
+ * The duplicate check and the insert now happen inside one transaction, behind
+ * the same per-duplicate-key advisory lock (see lib/recordLock.ts), because a
+ * double-tap on Add Sales had exactly the expense side's problem: both
+ * requests read "no duplicate" before either wrote, and the owner was told
+ * about neither. The duplicate NOTIFICATION is sent after the commit, so a
+ * notification failure can never undo a sale the owner has already been shown
+ * as saved.
+ */
 export async function createSalesRecord(userId: number, input: CreateInput) {
   await requireOwnedBusinessProfile(userId, input.businessProfileId);
 
   const date = new Date(input.date);
   const amount = new Prisma.Decimal(input.amount);
 
-  const duplicate = await findDuplicate(input.businessProfileId, date, amount, input.description);
+  const { record, duplicate } = await prisma.$transaction(async (tx) => {
+    await lockDuplicateKey(tx, input.businessProfileId, `sales:${duplicateKeyOf(date, amount, input.description)}`);
 
-  const record = await prisma.salesReferenceRecord.create({
-    data: {
-      businessProfileId: input.businessProfileId,
-      date,
-      description: input.description,
-      amount,
-      source: input.source ?? "MANUAL_ENTRY",
-      importBatchId: input.importBatchId,
-      reviewStatus: "Reviewed",
-      duplicateStatus: duplicate ? "Flagged" : "Not a Duplicate",
-      duplicateOfRecordId: duplicate?.id,
-    },
+    const existing = await findDuplicate(input.businessProfileId, date, amount, input.description, undefined, tx);
+
+    const created = await tx.salesReferenceRecord.create({
+      data: {
+        businessProfileId: input.businessProfileId,
+        date,
+        description: input.description,
+        amount,
+        source: input.source ?? "MANUAL_ENTRY",
+        importBatchId: input.importBatchId,
+        reviewStatus: "Reviewed",
+        duplicateStatus: existing ? "Flagged" : "Not a Duplicate",
+        duplicateOfRecordId: existing?.id,
+      },
+    });
+
+    return { record: created, duplicate: existing };
   });
 
   if (duplicate) {
@@ -321,13 +353,8 @@ export async function bulkResolveSalesDuplicates(
 export async function searchSalesRecords(userId: number, filters: SearchFilters) {
   await requireOwnedBusinessProfile(userId, filters.businessProfileId);
 
-  const cursorWhere = !filters.cursor
-    ? undefined
-    : filters.cursor.mode === "include-date"
-      ? { date: { lte: filters.cursor.date } }
-      : filters.cursor.mode === "exclude-date"
-        ? { date: { lt: filters.cursor.date } }
-        : { OR: [{ date: { lt: filters.cursor.date } }, { date: filters.cursor.date, id: { lt: filters.cursor.id } }] };
+  const sort = filters.sort ?? DEFAULT_RECORD_SORT;
+  const cursorWhere = recordCursorWhere(filters.cursor, sort);
 
   const records = await prisma.salesReferenceRecord.findMany({
     where: {
@@ -345,21 +372,44 @@ export async function searchSalesRecords(userId: number, filters: SearchFilters)
       ],
       description: filters.keyword ? { contains: filters.keyword, mode: "insensitive" } : undefined,
     },
-    orderBy: [{ date: "desc" }, { id: "desc" }],
+    orderBy: recordOrderBy(sort),
     take: filters.take,
   });
 
   return records.map(toDTO);
 }
 
-export async function listFlaggedSalesRecords(userId: number, businessProfileId: number) {
+/** The one definition of "flagged" on this side, shared by the list and the count. */
+const FLAGGED_SALES_WHERE = {
+  OR: [{ reviewStatus: "Needs Review" }, { duplicateStatus: "Flagged" }],
+};
+
+/** The sales half of the bounded flagged list — see listFlaggedExpenseRecords. */
+export async function listFlaggedSalesRecords(
+  userId: number,
+  businessProfileId: number,
+  options: FlaggedListOptions = {},
+) {
   await requireOwnedBusinessProfile(userId, businessProfileId);
+
+  // The flagged list has no sort parameter; it stays on the default order.
+  const cursorWhere = recordCursorWhere(options.cursor);
+
   const records = await prisma.salesReferenceRecord.findMany({
     where: {
       businessProfileId,
-      OR: [{ reviewStatus: "Needs Review" }, { duplicateStatus: "Flagged" }],
+      AND: [FLAGGED_SALES_WHERE, ...(cursorWhere ? [cursorWhere] : [])],
     },
-    orderBy: { date: "desc" },
+    orderBy: [{ date: "desc" }, { id: "desc" }],
+    take: options.take,
   });
   return records.map(toDTO);
+}
+
+/** The sales half of the badge count — see countFlaggedExpenseRecords. */
+export async function countFlaggedSalesRecords(userId: number, businessProfileId: number): Promise<number> {
+  await requireOwnedBusinessProfile(userId, businessProfileId);
+  return prisma.salesReferenceRecord.count({
+    where: { businessProfileId, ...FLAGGED_SALES_WHERE },
+  });
 }

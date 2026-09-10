@@ -64,6 +64,7 @@ const DESTINATIONS: Destination[] = [
   { label: "Spending impact", to: "/insights/spending-impact", section: "Insights", keywords: "simulate what if afford purchase plan impact" },
   { label: "Recovery target", to: "/insights/recovery", section: "Insights", keywords: "daily target sales goal month coverage break even" },
   { label: "Month-end review", to: "/insights/recovery/month-end-review", section: "Insights", keywords: "recovery month summary recap last month coverage surplus shortfall suggested questions" },
+  { label: "Recovery target notifications", to: "/business-profiles/:id/recovery-notifications", section: "Insights", keywords: "recovery alerts notify quiet hours frequency reminders coverage" },
   { label: "Add expense", to: "/records/expenses/new", section: "Actions", keywords: "new create spend cost" },
   { label: "Add sales reference", to: "/records/sales/new", section: "Actions", keywords: "new create revenue income takings" },
   { label: "Scan receipt", to: "/records/receipts/new", section: "Actions", keywords: "ocr photo camera capture" },
@@ -145,12 +146,17 @@ export function GlobalSearch({ className = "" }: { className?: string }) {
     const out: Result[] = [];
 
     for (const d of DESTINATIONS) {
+      // A few destinations are scoped to the active business profile (its id
+      // is part of the path) — skip them entirely when nothing is selected
+      // yet, rather than navigating to a broken ":id" literal.
+      if (d.to.includes(":id") && !selected) continue;
       if (matches(d.label, q) || matches(d.keywords, q)) {
+        const to = selected ? d.to.replace(":id", String(selected.id)) : d.to;
         out.push({
           id: `nav:${d.to}`,
           label: d.label,
           section: d.section,
-          to: d.to,
+          to,
           meta: d.to === ASK_FINSIGHT ? "Open the assistant" : "Go to page",
         });
       }
@@ -194,7 +200,7 @@ export function GlobalSearch({ className = "" }: { className?: string }) {
     }
 
     return out.slice(0, 24);
-  }, [trimmed, categories, profiles, records, selected?.id]);
+  }, [trimmed, categories, profiles, records, selected]);
 
   // Reset the highlight whenever the result set changes, so Enter can never
   // fire whatever happened to be at the old index.
@@ -313,7 +319,7 @@ export function GlobalSearch({ className = "" }: { className?: string }) {
         />
         {/* The shortcut hint. Hidden on touch, where there is no keyboard to
             press it with and it would just be a mystery label. */}
-        <kbd className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 rounded-md border border-paper-200 bg-paper px-1.5 py-0.5 font-sans text-[10.5px] font-semibold text-ink-400 lg:block">
+        <kbd className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2 rounded-md border border-paper-200 bg-paper px-1.5 py-0.5 font-sans text-[10.5px] font-semibold text-ink-500 lg:block">
           ⌘K
         </kbd>
       </div>
@@ -340,7 +346,7 @@ export function GlobalSearch({ className = "" }: { className?: string }) {
                     {showSection ? (
                       <div
                         role="presentation"
-                        className="px-2.5 pb-1 pt-2.5 text-[10.5px] font-bold uppercase tracking-[0.12em] text-ink-400"
+                        className="px-2.5 pb-1 pt-2.5 text-[10.5px] font-bold uppercase tracking-[0.12em] text-ink-500"
                       >
                         {result.section}
                       </div>
@@ -382,15 +388,15 @@ export function GlobalSearch({ className = "" }: { className?: string }) {
             </ul>
           )}
 
-          <div className="flex items-center gap-3 border-t border-paper-200 bg-paper-100 px-3 py-2 text-[11px] text-ink-400">
+          <div className="flex items-center gap-3 border-t border-paper-200 bg-paper-100 px-3 py-2 text-[11px] text-ink-600">
             <span>
-              <b className="font-semibold text-ink-500">↑↓</b> to move
+              <b className="font-semibold text-ink-600">↑↓</b> to move
             </span>
             <span>
-              <b className="font-semibold text-ink-500">↵</b> to open
+              <b className="font-semibold text-ink-600">↵</b> to open
             </span>
             <span>
-              <b className="font-semibold text-ink-500">esc</b> to close
+              <b className="font-semibold text-ink-600">esc</b> to close
             </span>
             {searching ? <span className="ml-auto">Searching records…</span> : null}
           </div>

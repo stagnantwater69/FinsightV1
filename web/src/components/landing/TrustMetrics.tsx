@@ -40,8 +40,8 @@ const ITEMS: { icon: LucideIcon; figure: string; mono?: boolean; caption: string
 export function TrustMetrics() {
   return (
     <section aria-label="Why owners trust FinSight" className="landing-section-gradient-raised bg-landing-surface">
-      {/* the hero's cream arcs down into this white band */}
-      <CurveDivider from="cream" />
+      {/* Continue the hero's exact edge color into this raised band. */}
+      <CurveDivider from="hero" />
       <div className={`${MEASURE} grid grid-cols-1 gap-x-0 gap-y-7 py-8 sm:grid-cols-2 lg:grid-cols-4 lg:py-10`}>
         {ITEMS.map((item, i) => {
           const Icon = item.icon;

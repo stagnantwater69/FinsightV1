@@ -14,6 +14,7 @@
     "lint": "oxlint",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
+    "ratelimit:clear": "tsx scripts/clear-rate-limits.ts",
     "migrate:author": "tsx scripts/migrate-workflow/author.ts",
     "migrate:validate": "tsx scripts/migrate-workflow/validate.ts",
     "migrate:deploy-hosted": "tsx scripts/migrate-workflow/deploy-hosted.ts",

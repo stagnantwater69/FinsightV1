@@ -41,6 +41,7 @@ import type {
   ScanStage,
   Split,
 } from "./scanReceipt/types";
+import { NoBusinessProfile } from "../components/NoBusinessProfile";
 
 export function ScanReceipt() {
   const { selected } = useBusinessProfiles();
@@ -233,7 +234,7 @@ export function ScanReceipt() {
     if (el instanceof HTMLElement) el.focus({ preventScroll: false });
   }, [scan]);
 
-  if (!selected) return null;
+  if (!selected) return <NoBusinessProfile />;
 
   function ensureScanned(file: File): Promise<ScanResult> {
     const existing = scanPromises.current.get(file);
@@ -762,6 +763,18 @@ export function ScanReceipt() {
   const receiptBand = scanConfidenceBand(scan ?? {});
   const attentionFields = attentionFieldsFor(scan);
 
+  /*
+   * Warnings split by tone so the amber ones can share a single callout. One
+   * card per code stacked six full-width amber boxes above the fields on a
+   * poor photo, which reads as a wall rather than as six things to check.
+   * The informational ones stay separate: OVERLAPPING_PAGES is a note about
+   * the capture the guide asked for, not a problem, and folding it into a
+   * list of problems would make it read as one.
+   */
+  const allWarnings = scan?.warnings ?? [];
+  const warningProblems = allWarnings.filter((w) => warningTone(w.code) !== "info");
+  const warningNotices = allWarnings.filter((w) => warningTone(w.code) === "info");
+
   /**
    * Items grouped by the category the owner currently has them in, with a
    * subtotal each. Recomputed on every render, so moving one row between
@@ -917,7 +930,7 @@ export function ScanReceipt() {
           className="mx-auto max-h-[70vh] w-full object-contain"
         />
       </button>
-      <p className="mt-2 text-center text-xs text-ink-400">Tap the photo to enlarge it.</p>
+      <p className="mt-2 text-center text-xs text-ink-500">Tap the photo to enlarge it.</p>
 
       <dialog
         ref={zoomRef}
@@ -1054,7 +1067,7 @@ export function ScanReceipt() {
               <span
                 key={n}
                 role="listitem"
-                className="inline-flex items-center gap-1.5 rounded-full bg-paper-100 px-3 py-1.5 text-xs text-ink-400"
+                className="inline-flex items-center gap-1.5 rounded-full bg-paper-100 px-3 py-1.5 text-xs text-ink-600"
               >
                 Receipt {n} · Not yet
               </span>
@@ -1126,7 +1139,38 @@ export function ScanReceipt() {
               renders `warning.guidance` verbatim. Writing a sentence here
               instead — however small — puts the drift straight back.
             */}
-            {(scan.warnings ?? []).map((warning, i) => (
+            {warningProblems.length === 1 ? (
+              <Callout tone="warn">
+                <b className="font-semibold">
+                  {warningHeadline(warningProblems[0].code)}
+                  {warningPageSuffix(warningProblems[0])}.
+                </b>{" "}
+                {warningProblems[0].guidance}
+                {warningProblems[0].detail ? (
+                  <span className="mt-1 block text-[11px] opacity-80">{warningProblems[0].detail}</span>
+                ) : null}
+              </Callout>
+            ) : warningProblems.length > 1 ? (
+              <Callout tone="warn">
+                <b className="font-semibold">{warningProblems.length} things to check on this photo.</b>
+                <ul className="mt-1.5 list-disc space-y-1.5 pl-4">
+                  {warningProblems.map((warning, i) => (
+                    <li key={`${warning.code}-${warning.pageNumber ?? "x"}-${i}`}>
+                      <b className="font-semibold">
+                        {warningHeadline(warning.code)}
+                        {warningPageSuffix(warning)}.
+                      </b>{" "}
+                      {warning.guidance}
+                      {warning.detail ? (
+                        <span className="mt-0.5 block text-[11px] opacity-80">{warning.detail}</span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </Callout>
+            ) : null}
+
+            {warningNotices.map((warning, i) => (
               <Callout key={`${warning.code}-${warning.pageNumber ?? "x"}-${i}`} tone={warningTone(warning.code)}>
                 <b className="font-semibold">
                   {warningHeadline(warning.code)}
@@ -1271,16 +1315,16 @@ export function ScanReceipt() {
                     </caption>
                     <thead>
                       <tr className="border-b border-paper-200 bg-paper-100">
-                        <th scope="col" className="px-3 py-2 text-xs font-semibold uppercase tracking-[0.06em] text-ink-500">
+                        <th scope="col" className="px-3 py-2 text-xs font-semibold uppercase tracking-[0.06em] text-ink-600">
                           Item
                         </th>
-                        <th scope="col" className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-500">
+                        <th scope="col" className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600">
                           Qty
                         </th>
-                        <th scope="col" className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-500">
+                        <th scope="col" className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600">
                           Price
                         </th>
-                        <th scope="col" className="w-48 px-3 py-2 text-xs font-semibold uppercase tracking-[0.06em] text-ink-500">
+                        <th scope="col" className="w-48 px-3 py-2 text-xs font-semibold uppercase tracking-[0.06em] text-ink-600">
                           Category
                         </th>
                       </tr>
@@ -1322,7 +1366,7 @@ export function ScanReceipt() {
                               paper for a number.
                             */}
                             {item.evidence ? (
-                              <span className="mt-0.5 block text-[10px] leading-relaxed text-ink-400">
+                              <span className="mt-0.5 block text-[10px] leading-relaxed text-ink-500">
                                 <EvidenceNote evidence={item.evidence} />
                               </span>
                             ) : null}
@@ -1460,7 +1504,7 @@ export function ScanReceipt() {
                               onChange={(e) => updateAddedItem(added.key, { name: e.target.value })}
                             />
                           </td>
-                          <td className="px-3 py-2 text-right text-ink-400">—</td>
+                          <td className="px-3 py-2 text-right text-ink-500">—</td>
                           <td className="px-3 py-2">
                             <label htmlFor={`added-amount-${added.key}`} className="sr-only">
                               Amount for added item {i + 1}
@@ -1524,7 +1568,7 @@ export function ScanReceipt() {
                           ) : (
                             categoryName(group.categoryId)
                           )}
-                          <span className="ml-1.5 text-xs text-ink-400">
+                          <span className="ml-1.5 text-xs text-ink-600">
                             ({group.count} item{group.count === 1 ? "" : "s"})
                           </span>
                         </span>
@@ -1574,7 +1618,7 @@ export function ScanReceipt() {
                   </p>
 
                   {gapPlan === "proportional" && gapNeedsAPlan ? (
-                    <p className="mt-1 text-xs text-ink-500">
+                    <p className="mt-1 text-xs text-ink-600">
                       Each category above will carry its share of the{" "}
                       <Money value={Math.abs(itemGapCentavos) / 100} decimals bare /> when saved.
                     </p>
@@ -1748,7 +1792,7 @@ export function ScanReceipt() {
                         type="button"
                         onClick={() => removeSplit(i)}
                         aria-label={`Remove part ${i + 1}`}
-                        className="tap mt-0.5 h-11 w-9 min-h-0 min-w-0 shrink-0 rounded-lg text-ink-400 transition hover:bg-paper-100 hover:text-tone-danger"
+                        className="tap mt-0.5 h-11 w-9 min-h-0 min-w-0 shrink-0 rounded-lg text-ink-500 transition hover:bg-paper-100 hover:text-tone-danger"
                       >
                         <span aria-hidden>×</span>
                       </button>
@@ -1827,7 +1871,7 @@ export function ScanReceipt() {
 
         <Card className="p-4 lg:sticky lg:top-24 lg:self-start">
           {receiptPreview ?? (
-            <p className="py-8 text-center text-sm text-ink-400">
+            <p className="py-8 text-center text-sm text-ink-500">
               The photo isn't available to show here, but the values below are the ones FinSight read from
               it.
             </p>

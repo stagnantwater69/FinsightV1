@@ -9,6 +9,7 @@ import { classifyTypeValue, parseSignedAmount, type RowRecordType } from "../lib
 import { Button } from "../components/Button";
 import { Field, FormError, SelectInput, TextInput } from "../components/Field";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
+import { randomId } from "../lib/uuid";
 import type { CsvConfirmDateFormat, CsvImportStatus } from "../lib/types";
 import {
   guessColumn,
@@ -28,6 +29,7 @@ import type {
   MixedStrategy,
   PreviewResult,
 } from "./importCsv/types";
+import { NoBusinessProfile } from "../components/NoBusinessProfile";
 
 export function ImportCsv() {
   const { selected } = useBusinessProfiles();
@@ -126,7 +128,7 @@ export function ImportCsv() {
     };
   }, [previewRowTypes]);
 
-  if (!selected) return null;
+  if (!selected) return <NoBusinessProfile />;
 
   /**
    * One CSV column mapped to two FinSight fields is always a mistake — it would
@@ -272,7 +274,7 @@ export function ImportCsv() {
    */
   function handleSelectFile(next: File | null) {
     setFile(next);
-    setIdempotencyKey(next ? crypto.randomUUID() : null);
+    setIdempotencyKey(next ? randomId() : null);
     setDateFormat("");
     setProgress(null);
     setConfirmError(null);
@@ -834,7 +836,7 @@ export function ImportCsv() {
                   scope="col"
                   className="sticky top-0 z-10 w-12 border-b border-paper-200 bg-paper-100/95 px-3 py-2.5 align-top text-right backdrop-blur"
                 >
-                  <span className="text-xs font-semibold uppercase tracking-[0.06em] text-ink-400">#</span>
+                  <span className="text-xs font-semibold uppercase tracking-[0.06em] text-ink-600">#</span>
                 </th>
                 {/* Only for a mixed file: the column that says what each row
                     becomes, which is the whole thing being checked here. */}
@@ -843,7 +845,7 @@ export function ImportCsv() {
                     scope="col"
                     className="sticky top-0 z-10 w-28 border-b border-paper-200 bg-paper-100/95 px-3 py-2.5 align-top backdrop-blur"
                   >
-                    <span className="text-xs font-semibold uppercase tracking-[0.06em] text-ink-400">
+                    <span className="text-xs font-semibold uppercase tracking-[0.06em] text-ink-600">
                       Imports as
                     </span>
                   </th>
@@ -869,7 +871,7 @@ export function ImportCsv() {
                     problem ? "bg-tint-danger/40" : "even:bg-paper-100/40"
                   }`}
                 >
-                  <td className="figure px-3 py-2 text-right text-xs text-ink-400">{rowNumber}</td>
+                  <td className="figure px-3 py-2 text-right text-xs text-ink-500">{rowNumber}</td>
                   {isMixed ? (
                     <td className="whitespace-nowrap px-3 py-2 align-top">
                       <RowTypeBadge type={previewRowTypes?.[rowIndex] ?? null} />
@@ -966,7 +968,7 @@ export function ImportCsv() {
                       const id = `fix-${rowNumber}-${c.field}`;
                       return (
                         <div key={c.field} className={`min-w-0 ${isProblem ? "sm:col-span-2" : ""}`}>
-                          <label htmlFor={id} className="block text-[11px] font-medium text-ink-500">
+                          <label htmlFor={id} className="block text-[11px] font-medium text-ink-600">
                             {c.field}
                           </label>
                           {isProblem ? (
