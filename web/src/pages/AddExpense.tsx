@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { CategorySelect } from "../components/CategorySelect";
@@ -10,11 +10,12 @@ import { Field, FormError, MoneyInput, TextInput } from "../components/Field";
 import { Money } from "../components/Money";
 import { api } from "../lib/api";
 import { getErrorMessage } from "../lib/errors";
-import type { RecordItem } from "../lib/types";
+import type { CategorySuggestion, RecordItem } from "../lib/types";
 import { FormPage } from "../components/ui";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
 import { NoBusinessProfile } from "../components/NoBusinessProfile";
 import { todayIso as today } from "../lib/dates";
+import { ResultDetails } from "../components/ResultDetails";
 
 interface DuplicateExpenseState {
   description: string;
@@ -24,6 +25,11 @@ interface DuplicateExpenseState {
 }
 
 export function AddExpense() {
+  const { selected } = useBusinessProfiles();
+  return <AddExpenseForm key={selected?.id ?? "no-profile"} />;
+}
+
+function AddExpenseForm() {
   const { selected } = useBusinessProfiles();
   const navigate = useNavigate();
   const toast = useToast();
@@ -42,12 +48,49 @@ export function AddExpense() {
   // product becomes true for this owner. It earns a real confirmation screen
   // rather than a silent redirect back to an empty list.
   const [firstRecord, setFirstRecord] = useState<RecordItem | null>(null);
+  const [suggestion, setSuggestion] = useState<CategorySuggestion | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestionError, setSuggestionError] = useState<string | null>(null);
+  const suggestionRequest = useRef<AbortController | null>(null);
+  const savePending = useRef(false);
+
+  useEffect(() => {
+    setSuggestion(null);
+    setSuggestionError(null);
+    setSuggesting(false);
+    suggestionRequest.current?.abort();
+    return () => suggestionRequest.current?.abort();
+  }, [description, vendor, categoryId]);
+
+  async function suggestCategory() {
+    if (!selected || suggesting || !description.trim()) return;
+    const controller = new AbortController();
+    suggestionRequest.current?.abort();
+    suggestionRequest.current = controller;
+    setSuggesting(true);
+    setSuggestionError(null);
+    try {
+      const { data } = await api.post<{ suggestion: CategorySuggestion | null }>("/ai/suggest-category", {
+        businessProfileId: selected.id,
+        description: description.trim(),
+        ...(vendor.trim() ? { vendor: vendor.trim() } : {}),
+      }, { signal: controller.signal });
+      if (controller.signal.aborted) return;
+      setSuggestion(data.suggestion);
+      if (!data.suggestion) setSuggestionError("No clear match. Choose a category above.");
+    } catch {
+      if (!controller.signal.aborted) setSuggestionError("Suggestions are unavailable. Choose a category above.");
+    } finally {
+      if (!controller.signal.aborted) setSuggesting(false);
+    }
+  }
 
   if (!selected) return <NoBusinessProfile />;
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!categoryId || amount === "") return;
+    if (!categoryId || amount === "" || savePending.current) return;
+    savePending.current = true;
     setError(null);
     setSubmitting(true);
     try {
@@ -84,6 +127,7 @@ export function AddExpense() {
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
+      savePending.current = false;
       setSubmitting(false);
     }
   }
@@ -144,6 +188,25 @@ export function AddExpense() {
             maxLength={FIELD_LIMITS.vendor}
           />
         </Field>
+        {description.trim() ? (
+          <div className="space-y-1 text-sm text-ink-700">
+            <Button type="button" variant="secondary" onClick={suggestCategory} disabled={suggesting || submitting}>
+              {suggesting ? "Finding a category…" : "Suggest a category"}
+            </Button>
+            {suggestion ? (
+              <div className="mt-2">
+                <p>Suggested: <strong>{suggestion.categoryName}</strong></p>
+                <Button type="button" variant="secondary" onClick={() => setCategoryId(suggestion.categoryId)} disabled={submitting}>
+                  Apply suggestion
+                </Button>
+                <ResultDetails label="Category suggestion details">
+                  <p>{suggestion.source === "history" ? "Based on your previously saved choices." : "Based on your description and vendor."} Check that the category fits before saving.</p>
+                </ResultDetails>
+              </div>
+            ) : null}
+            {suggestionError ? <p role="status" className="text-xs text-ink-500">{suggestionError}</p> : null}
+          </div>
+        ) : null}
         <Field label="Amount" htmlFor="amount" required>
           <MoneyInput
             min={0.01}

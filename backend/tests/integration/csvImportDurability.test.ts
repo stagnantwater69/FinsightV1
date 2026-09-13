@@ -75,6 +75,30 @@ async function drainWorker(maxPasses = 60) {
 }
 
 describe("idempotent confirmation", () => {
+  it.each([601, SYNC_ROW_LIMIT + 1])("preserves the total skip count on replay when %s invalid rows exceed the stored detail limit", async (invalidRows) => {
+    const buffer = Buffer.from([
+      "Date,Description,Amount,Category",
+      `${utcDayString(0)},Valid row,100,Inventory`,
+      ...Array.from({ length: invalidRows }, (_, index) => `${utcDayString(0)},Invalid row ${index},bad,Inventory`),
+    ].join("\n"));
+    uploadedBuffer = buffer;
+    const args = confirmArgs(buffer, { idempotencyKey: "skip-count-replay" });
+    const first = await confirmImport(ctx.user.id, args);
+    if (invalidRows > SYNC_ROW_LIMIT) {
+      expect(first).toMatchObject({ processingStatus: "PENDING", skippedCount: 0, skippedTruncated: false });
+      await drainWorker();
+    } else {
+      expect(first).toMatchObject({ processingStatus: "COMPLETE", skippedCount: invalidRows, skippedTruncated: false });
+      expect(first.skipped).toHaveLength(invalidRows);
+    }
+    const replay = await confirmImport(ctx.user.id, args);
+    expect(replay).toMatchObject({ batchId: first.batchId, processingStatus: "COMPLETE", imported: 1,
+      skippedCount: invalidRows, skippedTruncated: true });
+    expect(replay.skipped).toHaveLength(500);
+    expect(await prisma.expenseRecord.count()).toBe(1);
+    expect(await prisma.cSVImportBatch.count()).toBe(1);
+  });
+
   it("returns the same import for a replayed key instead of importing twice", async () => {
     const buffer = csvOf(5);
     const first = await confirmImport(ctx.user.id, confirmArgs(buffer, { idempotencyKey: "key-replay-1" }));
@@ -234,6 +258,32 @@ describe("storage failure", () => {
 });
 
 describe("asynchronous import", () => {
+  it("reports committed rows after a terminal chunk failure and replays FAILED without restarting the import", async () => {
+    const buffer = csvOf(SYNC_ROW_LIMIT + 1);
+    const args = confirmArgs(buffer, { idempotencyKey: "terminal-partial-import" });
+    const accepted = await confirmImport(ctx.user.id, args);
+    await prisma.cSVImportBatch.update({ where: { id: accepted.batchId }, data: { attemptCount: 4 } });
+    const real = expenseService.bulkCreateExpenseRecords;
+    const spy = vi.spyOn(expenseService, "bulkCreateExpenseRecords");
+    let chunks = 0;
+    spy.mockImplementation(async (...parameters: Parameters<typeof real>) => {
+      chunks += 1;
+      if (chunks === 2) throw new Error("database unavailable after the first committed chunk");
+      return real(...parameters);
+    });
+    try { await runCsvImportWorkerOnce(); } finally { spy.mockRestore(); }
+    const status = await getImportBatchStatus(ctx.user.id, accepted.batchId);
+    expect(status).toMatchObject({ processingStatus: "FAILED", processedRows: 1000, importedRows: 1000, skippedRows: 0 });
+    expect(await prisma.expenseRecord.count()).toBe(1000);
+    expect(deleteCsvFile).toHaveBeenCalledTimes(1);
+    expect((await prisma.cSVImportBatch.findUniqueOrThrow({ where: { id: accepted.batchId } })).fileReference).toBeNull();
+    const replay = await confirmImport(ctx.user.id, args);
+    expect(replay).toMatchObject({ batchId: accepted.batchId, processingStatus: "FAILED", imported: 1000, skippedCount: 0 });
+    expect(await runCsvImportWorkerOnce()).toBe(false);
+    expect(uploadCsvFile).toHaveBeenCalledTimes(1);
+    expect(await prisma.expenseRecord.count()).toBe(1000);
+  });
+
   it("accepts a large file, then completes it through the worker with correct counts", async () => {
     const rows = SYNC_ROW_LIMIT + 10;
     const buffer = csvOf(rows);

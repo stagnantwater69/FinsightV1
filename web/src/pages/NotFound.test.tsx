@@ -42,6 +42,14 @@ describe("NotFound", () => {
     expect(screen.getByRole("heading", { name: /this page doesn't exist/i })).toBeInTheDocument();
   });
 
+  it("is a main landmark, since no AppShell is around it to supply one", () => {
+    // WEB-F02: landmark navigation had nothing to jump to on this route.
+    renderAt("/nope");
+    const mains = screen.getAllByRole("main");
+    expect(mains).toHaveLength(1);
+    expect(mains[0]).toContainElement(screen.getByRole("heading", { name: /this page doesn't exist/i }));
+  });
+
   it("names the unmatched path, so a broken link is reportable", () => {
     renderAt("/ai-chat-typo/deep/path");
     expect(screen.getByText("/ai-chat-typo/deep/path")).toBeInTheDocument();

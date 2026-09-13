@@ -28,13 +28,22 @@
  * discarded fraction. The result is both exact and the fairest rounding
  * available.
  *
- * Signed: `totalCentavos` may be negative (a discount). Math.floor rounds
- * toward negative infinity for both signs, so the sum of the floors is always
- * <= the target and the leftover to distribute is always >= 0. That keeps one
- * code path for tax and discounts rather than two that could disagree.
+ * Signed: `totalCentavos` may be negative (a discount). The floor division
+ * rounds toward negative infinity for both signs, so the sum of the floors is
+ * always <= the target and the leftover to distribute is always >= 0. That
+ * keeps one code path for tax and discounts rather than two that could
+ * disagree.
+ *
+ * Exact arithmetic, in BigInt. The shares used to be computed in floating
+ * point and the discarded fractions compared as doubles, which broke the
+ * documented tie rule below: two buckets whose exact remainders were equal
+ * (say 10/22 of a centavo each, at different magnitudes) came out an ulp
+ * apart, so the numeric comparison decided and the index tiebreak never ran —
+ * a one-centavo difference from the contract on roughly 1% of splits
+ * (QA-FIN-02). Integer remainders are equal when they are equal.
  *
  * @param totalCentavos the signed amount to distribute
- * @param weights       one non-negative weight per bucket, in bucket order
+ * @param weights       one non-negative integer weight per bucket, in bucket order
  * @returns             one integer centavo amount per bucket, summing to `totalCentavos`
  */
 export function allocateProportionally(totalCentavos: number, weights: number[]): number[] {
@@ -44,6 +53,9 @@ export function allocateProportionally(totalCentavos: number, weights: number[])
   if (weights.length === 0) return [];
   if (weights.some((w) => w < 0)) {
     throw new Error("allocateProportionally expects non-negative weights");
+  }
+  if (weights.some((w) => !Number.isInteger(w))) {
+    throw new Error("allocateProportionally expects integer weights");
   }
 
   const totalWeight = weights.reduce((sum, w) => sum + w, 0);
@@ -55,31 +67,46 @@ export function allocateProportionally(totalCentavos: number, weights: number[])
    * alternative — and an equal split of nothing across nothing is the least
    * surprising reading of "proportional" when all proportions are equal.
    */
-  const effective = totalWeight === 0 ? weights.map(() => 1) : weights;
-  const effectiveTotal = totalWeight === 0 ? weights.length : totalWeight;
+  const effective = (totalWeight === 0 ? weights.map(() => 1) : weights).map((w) => BigInt(w));
+  const effectiveTotal = BigInt(totalWeight === 0 ? weights.length : totalWeight);
+  const total = BigInt(totalCentavos);
 
-  const exact = effective.map((w) => (totalCentavos * w) / effectiveTotal);
-  const floors = exact.map((v) => Math.floor(v));
-  const distributed = floors.reduce((sum, v) => sum + v, 0);
+  // Floor division: BigInt `/` truncates toward zero, which is wrong for a
+  // negative numerator with a positive remainder. Each remainder ends up in
+  // [0, effectiveTotal), so the largest-remainder ordering below is exact.
+  const floors: bigint[] = [];
+  const remainders: bigint[] = [];
+  for (const w of effective) {
+    const numerator = total * w;
+    let q = numerator / effectiveTotal;
+    let r = numerator - q * effectiveTotal;
+    if (r < 0n) {
+      q -= 1n;
+      r += effectiveTotal;
+    }
+    floors.push(q);
+    remainders.push(r);
+  }
+  const distributed = floors.reduce((sum, v) => sum + v, 0n);
 
   // Always >= 0, because flooring can only ever move a value down.
-  let leftover = totalCentavos - distributed;
+  let leftover = total - distributed;
 
   // Hand the leftover centavos to the largest discarded fractions first.
   // Ties break on the earlier bucket, so the result is deterministic — the
   // same receipt confirmed twice must produce the same split.
-  const order = exact
-    .map((value, index) => ({ index, fraction: value - Math.floor(value) }))
-    .sort((a, b) => b.fraction - a.fraction || a.index - b.index);
+  const order = remainders
+    .map((remainder, index) => ({ index, remainder }))
+    .sort((a, b) => (a.remainder === b.remainder ? a.index - b.index : b.remainder > a.remainder ? 1 : -1));
 
   const result = [...floors];
   for (const { index } of order) {
-    if (leftover <= 0) break;
-    result[index] = result[index]! + 1;
-    leftover -= 1;
+    if (leftover <= 0n) break;
+    result[index] = result[index]! + 1n;
+    leftover -= 1n;
   }
 
-  return result;
+  return result.map((v) => Number(v));
 }
 
 /** How a receipt's unaccounted-for difference should be dealt with. */

@@ -7,7 +7,7 @@ import { logger } from "../config/logger";
 import { ApiError } from "../middleware/error.middleware";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
 import { uploadCsvFile, downloadCsvFile, deleteCsvFile } from "./storage.service";
-import { bulkCreateExpenseRecords } from "./expenseRecord.service";
+import { bulkCreateExpenseRecords, duplicateKeyOf } from "./expenseRecord.service";
 import { bulkCreateSalesRecords } from "./salesRecord.service";
 import { createNotification, NOTIFICATION_TYPES } from "./notification.service";
 import { enqueueExpenseAnalyses, enqueueProfileRefresh } from "./anomalyDetection/job.service";
@@ -27,6 +27,7 @@ import {
   parseSignedAmount,
   type RowRecordType,
 } from "../lib/recordTypeDetection";
+import { categoryFromHistory, loadConfirmedCategoryHistory } from "../lib/categoryHistory";
 
 export interface ColumnMapping {
   date: string;
@@ -89,6 +90,27 @@ export interface PreviewResult {
    */
   detectedDateFormat: CsvDateFormat;
   dateFormatAmbiguous: boolean;
+  suggestedMapping: Partial<ColumnMapping>;
+  categorySuggestions?: { row: number; categoryId: number; categoryName: string; source: "history" }[];
+  categorySuggestionsTruncated?: boolean;
+  /** Full-file validation; the error list is bounded to keep previews small. */
+  validation?: {
+    validRows: number;
+    invalidRows: number;
+    skipped: SkippedRow[];
+    skippedTruncated: boolean;
+    possibleDuplicateRows: number;
+    duplicateRows: number[];
+    duplicateRowsTruncated: boolean;
+  };
+}
+
+export interface PreviewOptions {
+  recordType: ImportRecordType;
+  columnMapping: ColumnMapping;
+  mixedStrategy?: MixedStrategy;
+  corrections?: RowCorrections;
+  dateFormat?: ConfirmDateFormat;
 }
 
 /** Replacement cell values, keyed by spreadsheet row number as a string. */
@@ -133,6 +155,9 @@ export interface ConfirmResult {
   totalRows: number;
   imported: number;
   skipped: SkippedRow[];
+  /** Total skips, including rows omitted from the bounded details list. */
+  skippedCount: number;
+  skippedTruncated: boolean;
   flagged: number;
   largeExpenseFlagged: number;
   // Reported separately so a mixed import can say what it did with each half,
@@ -280,7 +305,7 @@ function detectDelimiter(buffer: Buffer): string {
   return best;
 }
 
-function parseCsv(buffer: Buffer): { records: Record<string, string>[]; delimiter: string } {
+function parseCsv(buffer: Buffer): { records: Record<string, string>[]; delimiter: string; headers: string[] } {
   /*
    * A NUL byte never appears in a text CSV but appears constantly in the
    * things owners upload by mistake — .xlsx files renamed to .csv, PDFs,
@@ -297,13 +322,30 @@ function parseCsv(buffer: Buffer): { records: Record<string, string>[]; delimite
   }
 
   const delimiter = detectDelimiter(buffer);
-  const records = parse(buffer, {
-    columns: true,
-    skip_empty_lines: true,
-    trim: true,
-    bom: true,
-    delimiter,
-  }) as Record<string, string>[];
+  let headers: string[] = [];
+  let records: Record<string, string>[];
+  try {
+    records = parse(buffer, {
+      columns: (columns: string[]) => {
+        if (columns.some((header) => !header.trim())) {
+          throw new ApiError(400, "Every CSV column needs a header. Name the empty columns and try again.");
+        }
+        if (new Set(columns.map((header) => header.toLowerCase())).size !== columns.length) {
+          throw new ApiError(400, "CSV column headers must be unique. Rename repeated columns and try again.");
+        }
+        headers = columns;
+        return columns;
+      },
+      skip_empty_lines: true,
+      trim: true,
+      bom: true,
+      delimiter,
+    }) as Record<string, string>[];
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    // Parser errors can contain raw financial cells. Neither log nor return them.
+    throw new ApiError(400, "This CSV could not be read. Check its quotes and column counts, then try again.");
+  }
 
   /*
    * Checked HERE rather than at each call site, so preview and confirm cannot
@@ -319,7 +361,7 @@ function parseCsv(buffer: Buffer): { records: Record<string, string>[]; delimite
     );
   }
 
-  return { records, delimiter };
+  return { records, delimiter, headers };
 }
 
 // The preview is a full-height table on the mapping screen now, not the
@@ -351,23 +393,154 @@ function detectDateFormatFromRecords(records: Record<string, string>[]) {
   return { format: "iso" as CsvDateFormat, ambiguous: false };
 }
 
-export function previewCsv(buffer: Buffer): PreviewResult {
-  const { records } = parseCsv(buffer);
-  const headers = records.length > 0 ? Object.keys(records[0]!) : [];
+const HEADER_SYNONYMS: Record<Exclude<keyof ColumnMapping, "recordType">, string[]> = {
+  date: ["date", "txn date", "transaction date", "trans date", "posted", "day", "petsa"],
+  description: ["description", "item", "particulars", "details", "detail", "memo", "notes", "note"],
+  amount: ["amount", "total", "price", "cost", "value", "debit", "halaga", "cash out"],
+  category: ["category", "type", "class", "account", "group", "uri"],
+  vendor: ["vendor", "supplier", "store", "shop", "merchant", "payee", "seller", "from", "tindahan"],
+};
+
+function suggestMapping(headers: string[], typeColumn: string | null): Partial<ColumnMapping> {
+  const suggested: Partial<ColumnMapping> = {};
+  const normalise = (header: string) => header.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+  for (const field of Object.keys(HEADER_SYNONYMS) as (keyof typeof HEADER_SYNONYMS)[]) {
+    const candidates = field === "category" ? headers.filter((header) => header !== typeColumn) : headers;
+    const synonyms = HEADER_SYNONYMS[field];
+    const match = candidates.find((header) => synonyms.includes(normalise(header)))
+      ?? candidates.find((header) => synonyms.some((synonym) => normalise(header).includes(synonym)));
+    if (match) suggested[field] = match;
+  }
+  if (typeColumn) suggested.recordType = typeColumn;
+  return suggested;
+}
+
+function validateMapping(headers: string[], options: PreviewOptions): void {
+  for (const header of Object.values(options.columnMapping)) {
+    if (header && !headers.includes(header)) {
+      throw new ApiError(400, "A mapped column is missing from this CSV. Check the column mapping and try again.");
+    }
+  }
+  if (options.recordType === "mixed" && !options.mixedStrategy) {
+    throw new ApiError(400, "Choose how this file identifies sales and expenses.");
+  }
+  if (options.recordType === "mixed" && options.mixedStrategy === "column" && !options.columnMapping.recordType) {
+    throw new ApiError(400, "Choose the column that identifies sales and expenses.");
+  }
+}
+
+function summarisePreviewDuplicates(outcomes: RowOutcome[], existingKeys: Set<string> = new Set()) {
+  const seen = new Set(existingKeys);
+  const duplicateRows: number[] = [];
+  let possibleDuplicateRows = 0;
+  for (const outcome of outcomes) {
+    if (outcome.kind === "skip") continue;
+    const key = `${outcome.kind}:${duplicateKeyOf(new Date(outcome.data.date), outcome.data.amount, outcome.data.description)}`;
+    if (seen.has(key)) {
+      possibleDuplicateRows += 1;
+      if (duplicateRows.length < 100) duplicateRows.push(outcome.row);
+    }
+    seen.add(key);
+  }
+  return { possibleDuplicateRows, duplicateRows, duplicateRowsTruncated: possibleDuplicateRows > duplicateRows.length };
+}
+
+function prepareCsvPreview(buffer: Buffer, options?: PreviewOptions): { result: PreviewResult; outcomes: RowOutcome[]; records: Record<string, string>[] } {
+  const { records, headers } = parseCsv(buffer);
+  if (options && records.length > 0) validateMapping(headers, options);
   // Detection reads further than the preview shows: 50 rows is what fits on a
   // screen, but a type column can easily be uniform for the first 50 rows of a
   // file that is sorted by kind.
   const sample = records.slice(0, DETECTION_SAMPLE_ROWS);
-  const dateDetection = detectDateFormatFromRecords(records);
-  return {
+  const dateDetection = options
+    ? detectDateFormat(records.map((record, index) => options.corrections?.[String(index + 2)]?.date ?? record[options.columnMapping.date] ?? "").filter(Boolean))
+    : detectDateFormatFromRecords(records);
+  const typeColumn = detectTypeColumn(sample);
+  const dateFormat = options?.dateFormat ?? dateDetection.format;
+  let validation: PreviewResult["validation"];
+  let outcomes: RowOutcome[] = [];
+  if (options && (options.dateFormat || !dateDetection.ambiguous)) {
+    outcomes = validateRows(records, options.columnMapping, options.recordType, options.corrections, options.mixedStrategy, dateFormat);
+    const skipped = outcomes.filter((row): row is Extract<RowOutcome, { kind: "skip" }> => row.kind === "skip");
+    validation = {
+      validRows: outcomes.length - skipped.length,
+      invalidRows: skipped.length,
+      skipped: skipped.slice(0, 100).map(({ row, reason }) => ({ row, reason })),
+      skippedTruncated: skipped.length > 100,
+      ...summarisePreviewDuplicates(outcomes),
+    };
+  }
+  const result: PreviewResult = {
     headers,
     previewRows: records.slice(0, PREVIEW_ROW_LIMIT),
     totalRows: records.length,
-    detectedTypeColumn: detectTypeColumn(sample),
+    detectedTypeColumn: typeColumn,
     columnsWithNegatives: columnsWithSignedAmounts(sample),
-    detectedDateFormat: dateDetection.format,
-    dateFormatAmbiguous: dateDetection.ambiguous,
+    detectedDateFormat: dateFormat,
+    dateFormatAmbiguous: options?.dateFormat ? false : dateDetection.ambiguous,
+    suggestedMapping: suggestMapping(headers, typeColumn),
+    ...(validation ? { validation } : {}),
   };
+  return { result, outcomes, records };
+}
+
+export function previewCsv(buffer: Buffer, options?: PreviewOptions): PreviewResult {
+  return prepareCsvPreview(buffer, options).result;
+}
+
+/** Optional ownership-scoped preflight against records already saved. */
+export async function previewCsvForProfile(userId: number, businessProfileId: number, buffer: Buffer, options?: PreviewOptions): Promise<PreviewResult> {
+  await requireOwnedBusinessProfile(userId, businessProfileId);
+  const { result, outcomes, records } = prepareCsvPreview(buffer, options);
+  if (options && options.recordType !== "sales") {
+    const history = await loadConfirmedCategoryHistory(businessProfileId);
+    const categorySuggestions: NonNullable<PreviewResult["categorySuggestions"]> = [];
+    let suggestionCount = 0;
+    for (let index = 0; index < records.length; index += 1) {
+      const row = records[index]!;
+      const correction = options.corrections?.[String(index + 2)];
+      const category = correction?.category ?? (options.columnMapping.category ? row[options.columnMapping.category] : "");
+      if (category?.trim()) continue;
+      if (options.recordType === "mixed") {
+        const amount = parseSignedAmount(correction?.amount ?? row[options.columnMapping.amount]);
+        const kind = options.mixedStrategy === "sign"
+          ? (amount !== null && amount < 0 ? "expense" : "sales")
+          : classifyTypeValue(options.columnMapping.recordType ? row[options.columnMapping.recordType] : undefined);
+        if (kind !== "expense") continue;
+      }
+      const match = categoryFromHistory(history,
+        correction?.description ?? row[options.columnMapping.description] ?? "",
+        options.columnMapping.vendor ? row[options.columnMapping.vendor] : undefined);
+      if (match) {
+        suggestionCount += 1;
+        if (categorySuggestions.length < 100) categorySuggestions.push({ row: index + 2, ...match });
+      }
+    }
+    result.categorySuggestions = categorySuggestions;
+    result.categorySuggestionsTruncated = suggestionCount > categorySuggestions.length;
+  }
+  if (!result.validation || outcomes.length === 0) return result;
+
+  const existingKeys = new Set<string>();
+  for (const kind of ["expense", "sales"] as const) {
+    const dates = [...new Set(outcomes.flatMap((outcome) => outcome.kind === kind ? [outcome.data.date] : []))]
+      .map((date) => new Date(date));
+    // Bound query parameters even for files spanning many calendar days.
+    for (let offset = 0; offset < dates.length; offset += 500) {
+      const query = {
+        where: { businessProfileId, date: { in: dates.slice(offset, offset + 500) } },
+        select: { date: true, amount: true, description: true },
+      };
+      const candidates = kind === "expense"
+        ? await prisma.expenseRecord.findMany(query)
+        : await prisma.salesReferenceRecord.findMany(query);
+      for (const candidate of candidates) {
+        existingKeys.add(`${kind}:${duplicateKeyOf(candidate.date, candidate.amount, candidate.description)}`);
+      }
+    }
+  }
+  Object.assign(result.validation, summarisePreviewDuplicates(outcomes, existingKeys));
+  return result;
 }
 
 export interface ImportBatchSummary {
@@ -992,6 +1165,7 @@ function replayResponse(
     processingStatus: CsvImportProcessingStatus;
     totalRows: number | null;
     importedRows: number;
+    skippedRows: number;
     flaggedRows: number;
     resultSummary: Prisma.JsonValue | null;
   },
@@ -1006,6 +1180,8 @@ function replayResponse(
     totalRows: batch.totalRows ?? 0,
     imported: batch.importedRows,
     skipped: progress.skipped,
+    skippedCount: batch.skippedRows,
+    skippedTruncated: batch.skippedRows > progress.skipped.length,
     flagged: batch.flaggedRows,
     largeExpenseFlagged: progress.largeExpenseFlagged,
     importedExpenses: progress.importedExpenses,
@@ -1044,7 +1220,7 @@ export async function confirmImport(userId: number, input: ConfirmInput): Promis
   }
 
   const fileHash = createHash("sha256").update(input.buffer).digest("hex");
-  const { records, delimiter } = parseCsv(input.buffer);
+  const { records, delimiter, headers } = parseCsv(input.buffer);
 
   if (records.length === 0) {
     throw new ApiError(
@@ -1052,6 +1228,7 @@ export async function confirmImport(userId: number, input: ConfirmInput): Promis
       "This file has no data rows to import — only a header (or nothing at all). Check that the export included the rows.",
     );
   }
+  validateMapping(headers, input);
 
   /*
    * The date convention is settled BEFORE any row is judged. If the owner
@@ -1059,7 +1236,7 @@ export async function confirmImport(userId: number, input: ConfirmInput): Promis
    * because importing "05/01/2026" on a guess files the record four months
    * away and reports success.
    */
-  const rawDateSamples = records.map((r) => (r[input.columnMapping.date] ?? "").trim()).filter(Boolean);
+  const rawDateSamples = records.map((r, index) => (input.corrections?.[String(index + 2)]?.date ?? r[input.columnMapping.date] ?? "").trim()).filter(Boolean);
   let dateFormat: CsvDateFormat;
   if (input.dateFormat) {
     dateFormat = input.dateFormat;
@@ -1174,6 +1351,8 @@ export async function confirmImport(userId: number, input: ConfirmInput): Promis
       totalRows: records.length,
       imported: 0,
       skipped: [],
+      skippedCount: 0,
+      skippedTruncated: false,
       flagged: 0,
       largeExpenseFlagged: 0,
       importedExpenses: 0,
@@ -1227,6 +1406,8 @@ export async function confirmImport(userId: number, input: ConfirmInput): Promis
     // has every outcome in memory and small files are what it serves.
     skipped: outcomes.filter((o): o is Extract<RowOutcome, { kind: "skip" }> => o.kind === "skip")
       .map((o) => ({ row: o.row, reason: o.reason })),
+    skippedCount: completed.skippedRows,
+    skippedTruncated: false,
     flagged: completed.flaggedRows,
     largeExpenseFlagged: progress.largeExpenseFlagged,
     importedExpenses: progress.importedExpenses,

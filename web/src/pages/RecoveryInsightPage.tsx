@@ -29,7 +29,7 @@ import { Field, FormError, MoneyInput } from "../components/Field";
 import { STATUS_TEXT_COLORS } from "../lib/chartPalette";
 import type {
   DailyCoverageRow,
-  DailyRowStatus,
+  DailyCoverageStatus,
   DayStatus,
   RecoveryCheckpoint,
   RecoveryCheckpointStatus,
@@ -87,7 +87,7 @@ function statusLabel(status: DayStatus): string {
  * plan §8.3. Kept separate from `statusLabel` above because every OTHER call
  * site (today's status, the scenario summaries) only ever has a `DayStatus`
  * and can never be handed `"closed"`. */
-function dailyRowStatusLabel(status: DailyRowStatus): string {
+function dailyRowStatusLabel(status: DailyCoverageStatus): string {
   return status === "closed" ? "Closed" : statusLabel(status);
 }
 
@@ -97,14 +97,14 @@ function dailyRowStatusLabel(status: DailyRowStatus): string {
 // exactly is a good outcome, not a caution. "closed" is neutral — a
 // configured non-operating day is neither good nor bad news, so it must not
 // borrow the danger/info/ok tones the other three statuses use.
-const STATUS_TONE: Record<DailyRowStatus, PillTone> = {
+const STATUS_TONE: Record<DailyCoverageStatus, PillTone> = {
   below: "danger",
   at: "info",
   above: "ok",
   closed: "neutral",
 };
 
-function DailyStatusIcon({ status }: { status: DailyRowStatus }) {
+function DailyStatusIcon({ status }: { status: DailyCoverageStatus }) {
   const Icon =
     status === "below"
       ? ArrowDown

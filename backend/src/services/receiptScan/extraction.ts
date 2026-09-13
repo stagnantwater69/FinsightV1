@@ -1,4 +1,5 @@
 import { prisma } from "../../config/prisma";
+import { logger } from "../../config/logger";
 import {
   findPageSeams,
   locateValue,
@@ -75,10 +76,7 @@ export async function snapVendorToHistory(
    */
   if (parsedVendor === match.value) return parsedVendor;
 
-  console.info(
-    `[vendor-history] business=${businessProfileId} read=${JSON.stringify(parsedVendor)} ` +
-      `corrected=${JSON.stringify(match.value)} score=${match.score.toFixed(3)}`,
-  );
+  logger.info({ businessProfileId, score: match.score }, "Receipt vendor matched confirmed history");
   return match.value;
 }
 

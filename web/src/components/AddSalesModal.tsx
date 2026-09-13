@@ -112,13 +112,13 @@ export function AddSalesModal({
     <Modal open={open} onClose={handleClose} title={editing ? "Edit sales reference" : "Add sales reference"}>
       <form onSubmit={handleSubmit} className="space-y-4">
         {loading ? <p className="text-sm text-ink-500">Loading…</p> : null}
-        <Field label="Date" htmlFor="modal-sales-date" required>
+        <Field label="Date" required>
           <TextInput type="date" required value={date} onChange={(e) => setDate(e.target.value)} />
         </Field>
-        <Field label="Description" htmlFor="modal-sales-description" required>
+        <Field label="Description" required>
           <TextInput required value={description} onChange={(e) => setDescription(e.target.value)} />
         </Field>
-        <Field label="Amount" htmlFor="modal-sales-amount" required>
+        <Field label="Amount" required>
           <MoneyInput
             min={0.01}
             required

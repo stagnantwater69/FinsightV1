@@ -1,6 +1,7 @@
 import { T } from "../../../components/ui";
 import { evidenceSummary, type FieldEvidence } from "../../../lib/receiptWarnings";
 import { space } from "../../../theme/tokens";
+import { ResultDetails } from "../../../components/ResultDetails";
 
 /**
  * Where one extracted value came from, in the owner's own terms.
@@ -14,8 +15,8 @@ export function EvidenceNote({ evidence }: { evidence: FieldEvidence | null | un
   const summary = evidenceSummary(evidence);
   if (!summary) return null;
   return (
-    <T variant="caption" style={{ marginTop: -space.sm, marginBottom: space.md }}>
-      {summary}
-    </T>
+    <ResultDetails label="source on receipt">
+      <T variant="caption" style={{ marginBottom: space.md }}>{summary}</T>
+    </ResultDetails>
   );
 }

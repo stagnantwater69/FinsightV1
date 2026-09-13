@@ -9,6 +9,10 @@ import { MAX_PAGES } from "../services/receiptScan.service";
 export const receiptRouter = Router();
 
 receiptRouter.use(requireAuth);
+receiptRouter.use((_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  next();
+});
 
 /*
  * The most expensive request in the product: OCR per page, then possibly a

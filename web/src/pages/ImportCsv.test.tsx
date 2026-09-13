@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { ImportCsv } from "./ImportCsv";
@@ -43,6 +43,8 @@ let posts: PostCall[];
 /** Queued responses for POST /confirm, consumed in order. */
 let confirmResponses: (() => { status: number; data: unknown })[];
 let statusResponses: unknown[];
+let previewExtra: Record<string, unknown>;
+let deferredPreview: Promise<unknown> | null;
 
 function fieldsOf(body: FormData): Record<string, string> {
   const out: Record<string, string> = {};
@@ -63,7 +65,7 @@ vi.mock("../lib/api", () => ({
     },
     post: async (url: string, body: FormData) => {
       posts.push({ url, fields: fieldsOf(body) });
-      if (url.endsWith("/preview")) return { status: 200, data: previewBody };
+      if (url.endsWith("/preview")) return { status: 200, data: deferredPreview ? await deferredPreview : { ...previewBody, ...previewExtra } };
       const next = confirmResponses.shift();
       if (!next) throw new Error("no queued confirm response");
       const result = next();
@@ -100,12 +102,114 @@ beforeEach(() => {
   posts = [];
   confirmResponses = [];
   statusResponses = [];
+  previewExtra = {};
+  deferredPreview = null;
   vi.stubGlobal("crypto", { ...globalThis.crypto, randomUUID: () => "11111111-2222-3333-4444-555555555555" });
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+
+describe("CSV full-file review", () => {
+  it("locks mapping and row corrections while the server checks the reviewed values", async () => {
+    const user = userEvent.setup();
+    previewExtra.previewRows = [{ date: "03/04/2026", description: "Rice sack", amount: "invalid", category: "Inventory" }];
+    renderPage();
+    await reachMappingScreen(user);
+    let finish!: (value: unknown) => void;
+    deferredPreview = new Promise((resolve) => { finish = resolve; });
+    const mapping = screen.getByRole("combobox", { name: "Which CSV column holds the amount?" });
+    const correction = document.getElementById("fix-2-Amount") as HTMLInputElement;
+    const title = screen.getByRole("textbox", { name: /Batch title/ });
+    await user.click(screen.getByRole("button", { name: "Check all rows" }));
+    expect(mapping).toBeDisabled();
+    expect(correction).toBeDisabled();
+    expect(title).toBeDisabled();
+    await user.selectOptions(mapping, "description");
+    await user.type(correction, "500");
+    expect(mapping).toHaveValue("amount");
+    expect(correction).toHaveValue("invalid");
+    await act(async () => { finish({ ...previewBody, validation: { validRows: 0, invalidRows: 1, skipped: [{ row: 2, reason: "Invalid amount" }], skippedTruncated: false } }); });
+    expect(mapping).toBeEnabled();
+    expect(correction).toBeEnabled();
+    expect(posts.filter((post) => post.url.endsWith("/confirm"))).toHaveLength(0);
+  });
+
+  it("can check all rows without creating an import", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await reachMappingScreen(user);
+    previewExtra.validation = { validRows: 1, invalidRows: 0, skipped: [], skippedTruncated: false };
+    await user.click(screen.getByRole("button", { name: "Check all rows" }));
+    await screen.findByText(/File checked/);
+    expect(posts.filter((post) => post.url.endsWith("/confirm"))).toHaveLength(0);
+  });
+  it("requires acknowledgement of skipped rows before writing and collapses details", async () => {
+    const user = userEvent.setup();
+    previewExtra = { totalRows: 3 };
+    renderPage();
+    await reachMappingScreen(user);
+    previewExtra.validation = { validRows: 2, invalidRows: 1, skipped: [{ row: 4, reason: "Invalid amount" }], skippedTruncated: false };
+    await user.click(screen.getByRole("button", { name: "Import 3 rows" }));
+    await screen.findByText(/File check: 2 valid, 1 skipped/);
+    expect(posts.filter((post) => post.url.endsWith("/confirm"))).toHaveLength(0);
+    expect(screen.getByText("Row 4: Invalid amount")).not.toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Show more" }));
+    expect(screen.getByText("Row 4: Invalid amount")).toBeVisible();
+    confirmResponses = [() => ({ status: 201, data: { batchId: 3, title: "march", status: "Reviewed", totalRows: 3, imported: 2, skipped: [{ row: 4, reason: "Invalid amount" }], flagged: 0, largeExpenseFlagged: 0 } })];
+    await user.click(screen.getByRole("button", { name: "Import 2 of 3 rows" }));
+    await screen.findByText("Import complete");
+    expect(posts.filter((post) => post.url.endsWith("/confirm"))).toHaveLength(1);
+    expect(screen.getByText("Row 4: Invalid amount")).not.toBeVisible();
+  });
+
+  it("shows suspected duplicates before confirming instead of silently importing", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await reachMappingScreen(user);
+    previewExtra.validation = { validRows: 1, invalidRows: 0, skipped: [], skippedTruncated: false, possibleDuplicateRows: 1, duplicateRows: [2] };
+    await user.click(screen.getByRole("button", { name: "Import 1 row" }));
+    await screen.findByText(/possible duplicate will be included and flagged/);
+    expect(posts.filter((post) => post.url.endsWith("/confirm"))).toHaveLength(0);
+    expect(screen.getByText(/Possible duplicate rows: 2/)).not.toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Show more" }));
+    expect(screen.getByText(/Possible duplicate rows: 2/)).toBeVisible();
+  });
+
+  it("does not confirm a file with no valid rows, including repeated attempts", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await reachMappingScreen(user);
+    previewExtra.validation = { validRows: 0, invalidRows: 1, skipped: [{ row: 2, reason: "Invalid date" }], skippedTruncated: false };
+    await user.click(screen.getByRole("button", { name: "Import 1 row" }));
+    await screen.findByText(/No rows are ready/);
+    await user.click(screen.getByRole("button", { name: "Import 0 of 1 rows" }));
+    expect(posts.filter((post) => post.url.endsWith("/confirm"))).toHaveLength(0);
+  });
+
+  it("applies historical category suggestions only after an explicit action and rechecks", async () => {
+    const user = userEvent.setup();
+    previewExtra = { headers: ["date", "description", "amount"], previewRows: [{ date: "03/04/2026", description: "Rice sack", amount: "2400" }] };
+    renderPage();
+    await reachMappingScreen(user);
+    previewExtra.validation = { validRows: 0, invalidRows: 1, skipped: [{ row: 2, reason: "Missing category" }], skippedTruncated: false };
+    previewExtra.categorySuggestions = [{ row: 2, categoryId: 1, categoryName: "Inventory", source: "history" }];
+    await user.click(screen.getByRole("button", { name: "Import 0 of 1 rows" }));
+    await screen.findByRole("button", { name: "Apply category suggestions" });
+    const preflight = posts.filter((post) => post.url.endsWith("/preview")).at(-1)!;
+    expect(preflight.fields.corrections).toBeUndefined();
+    await user.click(screen.getByRole("button", { name: "Apply category suggestions" }));
+    previewExtra.validation = { validRows: 1, invalidRows: 0, skipped: [], skippedTruncated: false };
+    previewExtra.categorySuggestions = [];
+    confirmResponses = [() => ({ status: 201, data: { batchId: 3, title: "march", status: "Reviewed", totalRows: 1, imported: 1, skipped: [], flagged: 0, largeExpenseFlagged: 0 } })];
+    await user.click(screen.getByRole("button", { name: "Import 1 row" }));
+    await screen.findByText("Import complete");
+    const confirm = posts.find((post) => post.url.endsWith("/confirm"))!;
+    expect(JSON.parse(confirm.fields.corrections!)).toEqual({ "2": { category: "Inventory" } });
+    expect(posts.filter((post) => post.url.endsWith("/preview"))).toHaveLength(3);
+  });
 });
 
 describe("CSV import — idempotent confirm", () => {
@@ -275,6 +379,7 @@ describe("CSV import — a large file that finishes on the worker", () => {
     const bar = await screen.findByRole("progressbar");
     expect(bar).toHaveAttribute("aria-valuenow", "400");
     expect(bar).toHaveAttribute("aria-valuemax", "1000");
+    expect(bar).toHaveAttribute("aria-valuetext", "400 of 1000 rows processed");
     expect(screen.getByText("400 of 1,000 rows")).toBeInTheDocument();
 
     // …then the ordinary summary, built from the final status.
@@ -284,6 +389,59 @@ describe("CSV import — a large file that finishes on the worker", () => {
     expect(screen.getByText("30")).toBeInTheDocument();
     expect(screen.getByText("Showing 1 of 30 skipped rows.")).toBeInTheDocument();
   }, 10000);
+
+  it("reports committed rows after terminal worker failure without offering a same-file retry", async () => {
+    const user = userEvent.setup();
+    const accepted = { batchId: 9, title: "march", status: "Pending Review", processingStatus: "PENDING", totalRows: 1000, imported: 0, skipped: [], flagged: 0 };
+    confirmResponses = [() => ({ status: 202, data: accepted })];
+    statusResponses = [
+      { batchId: 9, status: "Pending Review", processingStatus: "FAILED", totalRows: 1000, processedRows: 400, importedRows: 380, skippedRows: 20, flaggedRows: 0, failureStage: "insert", resultSummary: null },
+    ];
+    renderPage();
+    await reachMappingScreen(user);
+    await user.click(screen.getByRole("button", { name: "Import 1 row" }));
+    await screen.findByText("Import stopped");
+    expect(screen.getByText("380")).toBeVisible();
+    expect(screen.getByText("20")).toBeVisible();
+    expect(screen.getByText("Review the saved records, then import only the remaining rows.")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Review saved records" })).toHaveAttribute("href", "/records?source=CSV_UPLOAD&importBatchId=9");
+    expect(screen.queryByRole("button", { name: /^Import/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("Import complete")).not.toBeInTheDocument();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    const confirms = posts.filter((post) => post.url.endsWith("/confirm"));
+    expect(confirms).toHaveLength(1);
+  });
+
+  it("does not celebrate a terminal FAILED replay returned directly by confirm", async () => {
+    const user = userEvent.setup();
+    confirmResponses = [() => ({ status: 200, data: {
+      batchId: 9, title: "march", status: "Pending Review", processingStatus: "FAILED", totalRows: 1000,
+      imported: 380, skippedCount: 20, skipped: [], flagged: 0,
+    } })];
+    renderPage();
+    await reachMappingScreen(user);
+    await user.click(screen.getByRole("button", { name: "Import 1 row" }));
+    await screen.findByText("Import stopped");
+    expect(screen.getByText("380")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Review saved records" })).toBeVisible();
+    expect(screen.queryByText("Import complete")).not.toBeInTheDocument();
+  });
+
+  it("uses the aggregate skipped count when a completed replay has a capped error list", async () => {
+    const user = userEvent.setup();
+    confirmResponses = [() => ({ status: 200, data: {
+      batchId: 9, title: "march", status: "Reviewed", processingStatus: "COMPLETE", totalRows: 1000,
+      imported: 970, skippedCount: 30, skippedTruncated: true, skipped: [{ row: 4, reason: "Invalid amount" }], flagged: 0,
+    } })];
+    renderPage();
+    await reachMappingScreen(user);
+    await user.click(screen.getByRole("button", { name: "Import 1 row" }));
+    await screen.findByText("Import complete");
+    expect(screen.getByText("30")).toBeVisible();
+    expect(screen.getByText("Row 4: Invalid amount")).not.toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Show more" }));
+    expect(screen.getByText("Showing 1 of 30 skipped rows.")).toBeVisible();
+  });
 
   it("warns when the same file was imported before", async () => {
     const user = userEvent.setup();

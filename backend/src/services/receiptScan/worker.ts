@@ -3,7 +3,7 @@ import { env } from "../../config/env";
 import { ApiError } from "../../middleware/error.middleware";
 import { requireOwnedBusinessProfile } from "../../lib/ownership";
 import { hostname } from "node:os";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { deleteReceiptImage, downloadReceiptImage, uploadReceiptImage } from "../storage.service";
 import {
   confidenceForValue,
@@ -20,7 +20,7 @@ import {
 } from "../ocr.service";
 import { PROMPT_VERSION, SCHEMA_VERSION } from "../visionOcr.service";
 import { assessImageQuality } from "../../lib/imageQuality";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { logger } from "../../config/logger";
 import { toDTO } from "./dto";
 import { persistCategorisedItems } from "./categorisation";
@@ -77,6 +77,35 @@ export async function uploadAndScan(userId: number, input: UploadInput) {
     throw new ApiError(400, `A receipt can have at most ${MAX_PAGES} pages`);
   }
 
+  const uploadKey = input.idempotencyKey
+    ? createHash("sha256").update(`${input.businessProfileId}:${input.idempotencyKey}`).digest("hex")
+    : null;
+  const fingerprint = createHash("sha256");
+  for (const page of input.pages) {
+    fingerprint.update(JSON.stringify({
+      mimetype: page.mimetype,
+      size: page.buffer.length,
+      processedType: page.processed?.mimetype ?? null,
+      processedSize: page.processed?.buffer.length ?? 0,
+      metadata: page.metadata ?? null,
+    }));
+    fingerprint.update(page.buffer);
+    if (page.processed) fingerprint.update(page.processed.buffer);
+  }
+  const uploadHash = fingerprint.digest("hex");
+  if (uploadKey) {
+    const existing = await prisma.receiptScan.findUnique({
+      where: { uploadKey },
+      include: { items: true, pages: true },
+    });
+    if (existing) {
+      if (existing.businessProfileId !== input.businessProfileId || existing.uploadHash !== uploadHash) {
+        throw new ApiError(409, "This upload key belongs to a different receipt. Start a new upload.");
+      }
+      return toDTO(existing, existing.items, existing.pages);
+    }
+  }
+
   // Uploaded in the order the pages arrived — every step after this one (the
   // concatenated text, the vision call, the stored page numbers) depends on
   // that order to mean anything, and nothing downstream re-derives it. The
@@ -107,6 +136,8 @@ export async function uploadAndScan(userId: number, input: UploadInput) {
     scan = await prisma.receiptScan.create({
       data: {
         businessProfileId: input.businessProfileId,
+        uploadKey,
+        uploadHash: uploadKey ? uploadHash : null,
         imageFile: imagePaths[0]!, // the page-1 cover — see schema header note 14
         confirmationStatus: "Pending",
         processingStatus: "Processing",
@@ -123,6 +154,16 @@ export async function uploadAndScan(userId: number, input: UploadInput) {
     });
   } catch (error) {
     await Promise.all([...imagePaths, ...processedPaths.filter((path): path is string => Boolean(path))].map(deleteReceiptImage));
+    if (uploadKey && error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const winner = await prisma.receiptScan.findUnique({
+        where: { uploadKey },
+        include: { items: true, pages: true },
+      });
+      if (winner && winner.businessProfileId === input.businessProfileId && winner.uploadHash === uploadHash) {
+        return toDTO(winner, winner.items, winner.pages);
+      }
+      throw new ApiError(409, "This upload key belongs to a different receipt. Start a new upload.");
+    }
     throw error;
   }
 

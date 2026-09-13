@@ -3,6 +3,7 @@ import { Card, T } from "../../../components/ui";
 import { BAND_COPY, type scanConfidenceBand } from "../../../lib/confidenceBands";
 import { font, space, typeScale } from "../../../theme/tokens";
 import { useTheme } from "../../../context/ThemeContext";
+import { ResultDetails } from "../../../components/ResultDetails";
 
 /**
  * How much of this reading the owner should distrust, said in words.
@@ -36,12 +37,14 @@ export function ScanBand({ band, fields }: { band: ReturnType<typeof scanConfide
           {copy.label}
         </T>
       </View>
-      <T style={{ fontSize: typeScale.label, lineHeight: 19, color: t.textSecondary, marginTop: 4 }}>{copy.detail}</T>
       {fields.length > 0 ? (
         <T variant="caption" style={{ marginTop: space.sm, color: tint }}>
           Worth checking first: {fields.join(", ")}.
         </T>
       ) : null}
+      <ResultDetails label="reading confidence">
+        <T variant="caption">{copy.detail}</T>
+      </ResultDetails>
     </Card>
   );
 }

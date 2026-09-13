@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { ExpenseInsight } from "./ExpenseInsight";
@@ -770,6 +770,19 @@ function simulationResult(
 /**
  * Simulate reduction — plan §12, Phase 4.
  */
+/**
+ * The page mounts one ReductionSimulationModal per opportunity row, and a
+ * native <dialog> stays in the DOM while closed. Field queries therefore have
+ * to be scoped to the one dialog that is open: a document-wide label query
+ * finds a copy per row. (A fixed element id used to hide that by making every
+ * label resolve to the first control — WEB-F01.)
+ */
+function openSimulationDialog(): HTMLElement {
+  const open = document.querySelectorAll<HTMLElement>("dialog[open]");
+  expect(open).toHaveLength(1);
+  return open[0]!;
+}
+
 describe("ExpenseInsight simulate reduction", () => {
   beforeEach(() => {
     handlers["/insights/reduction-opportunities"] = ok(
@@ -826,7 +839,7 @@ describe("ExpenseInsight simulate reduction", () => {
       name: "Simulate reduction — Office Supplies",
     });
 
-    await userEvent.type(screen.getByLabelText(/Reduction percentage/), "15");
+    await userEvent.type(within(openSimulationDialog()).getByLabelText(/Reduction percentage/), "15");
     await userEvent.click(screen.getByRole("button", { name: "Simulate" }));
 
     expect(
@@ -875,7 +888,7 @@ describe("ExpenseInsight simulate reduction", () => {
     });
 
     await userEvent.click(screen.getByRole("radio", { name: "Peso amount" }));
-    await userEvent.type(screen.getByLabelText(/Reduction amount/), "500");
+    await userEvent.type(within(openSimulationDialog()).getByLabelText(/Reduction amount/), "500");
     await userEvent.click(screen.getByRole("button", { name: "Simulate" }));
 
     expect(
@@ -899,7 +912,7 @@ describe("ExpenseInsight simulate reduction", () => {
       name: "Simulate reduction — Office Supplies",
     });
 
-    await userEvent.type(screen.getByLabelText(/Reduction percentage/), "150");
+    await userEvent.type(within(openSimulationDialog()).getByLabelText(/Reduction percentage/), "150");
     await userEvent.click(screen.getByRole("button", { name: "Simulate" }));
 
     expect(
@@ -924,7 +937,7 @@ describe("ExpenseInsight simulate reduction", () => {
     });
 
     await userEvent.click(screen.getByRole("radio", { name: "Peso amount" }));
-    await userEvent.type(screen.getByLabelText(/Reduction amount/), "999999");
+    await userEvent.type(within(openSimulationDialog()).getByLabelText(/Reduction amount/), "999999");
     await userEvent.click(screen.getByRole("button", { name: "Simulate" }));
 
     expect(
@@ -953,7 +966,7 @@ describe("ExpenseInsight simulate reduction", () => {
       name: "Simulate reduction — Office Supplies",
     });
 
-    await userEvent.type(screen.getByLabelText(/Reduction percentage/), "10");
+    await userEvent.type(within(openSimulationDialog()).getByLabelText(/Reduction percentage/), "10");
     await userEvent.click(screen.getByRole("button", { name: "Simulate" }));
 
     expect(
@@ -977,7 +990,7 @@ describe("ExpenseInsight simulate reduction", () => {
       name: "Simulate reduction — Office Supplies",
     });
 
-    await userEvent.type(screen.getByLabelText(/Reduction percentage/), "15");
+    await userEvent.type(within(openSimulationDialog()).getByLabelText(/Reduction percentage/), "15");
     await userEvent.click(screen.getByRole("button", { name: "Simulate" }));
     await screen.findByText(/Hypothetical reduction/);
 

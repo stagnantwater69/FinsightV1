@@ -528,6 +528,8 @@ export function Checkbox({
  * a system control that takes no styling on Android, so it would be the one
  * input in the app that ignores the design system entirely.
  */
+const recentCategoryChoices = new Map<string, number[]>();
+
 export function CategorySelect<Option extends { id: number; name: string }>({
   options,
   value,
@@ -548,6 +550,8 @@ export function CategorySelect<Option extends { id: number; name: string }>({
 }) {
   const t = useTheme();
   const [open, setOpen] = useState(false);
+  // Store IDs only, separated by the business's available category set.
+  const recentScope = options.map((option) => option.id).sort((a, b) => a - b).join(",");
 
   const selected = options.find((o) => o.id === value) ?? null;
 
@@ -606,9 +610,17 @@ export function CategorySelect<Option extends { id: number; name: string }>({
         title={sheetTitle}
         options={options}
         value={value}
-        onChoose={(id) => onChange(id)}
+        onChoose={(id) => {
+          const recent = recentCategoryChoices.get(recentScope) ?? [];
+          recentCategoryChoices.set(recentScope, [id, ...recent.filter((entry) => entry !== id)].slice(0, 4));
+          // Session-only convenience, bounded even when owners switch businesses.
+          if (recentCategoryChoices.size > 20) recentCategoryChoices.delete(recentCategoryChoices.keys().next().value!);
+          onChange(id);
+        }}
         onClose={() => setOpen(false)}
         emptyText="No categories yet. Close this and add one first."
+        searchPlaceholder="Search categories"
+        recentIds={recentCategoryChoices.get(recentScope)}
       />
     </>
   );
@@ -779,6 +791,8 @@ export function OptionSheet<Option extends { id: number | string; name: string }
   onChoose,
   onClose,
   emptyText,
+  searchPlaceholder,
+  recentIds = [],
 }: {
   visible: boolean;
   title: string;
@@ -787,14 +801,25 @@ export function OptionSheet<Option extends { id: number | string; name: string }
   onChoose: (id: Option["id"]) => void;
   onClose: () => void;
   emptyText: string;
+  searchPlaceholder?: string;
+  recentIds?: readonly Option["id"][];
 }) {
   const t = useTheme();
   const insets = useSafeAreaInsets();
+  const [search, setSearch] = useState("");
+  const query = search.trim().toLocaleLowerCase();
+  const matches = options.filter((option) => !query || option.name.toLocaleLowerCase().includes(query));
+  const recent = query ? [] : recentIds.flatMap((id) => {
+    const option = options.find((entry) => entry.id === id);
+    return option ? [option] : [];
+  });
+  const shown = [...recent, ...matches.filter((option) => !recent.some((entry) => entry.id === option.id))];
+  const close = () => { setSearch(""); onClose(); };
 
   return (
-    <Modal visible={visible} transparent animationType="slide" statusBarTranslucent onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="slide" statusBarTranslucent onRequestClose={close}>
       <Pressable
-        onPress={onClose}
+        onPress={close}
         accessibilityRole="button"
         accessibilityLabel="Close without choosing"
         style={{ flex: 1, backgroundColor: t.scrim, justifyContent: "flex-end" }}
@@ -832,7 +857,7 @@ export function OptionSheet<Option extends { id: number | string; name: string }
               {title}
             </T>
             <Pressable
-              onPress={onClose}
+              onPress={close}
               accessibilityRole="button"
               accessibilityLabel="Close"
               hitSlop={10}
@@ -842,16 +867,29 @@ export function OptionSheet<Option extends { id: number | string; name: string }
             </Pressable>
           </View>
 
-          <ScrollView>
-            {options.map((option) => {
+          {searchPlaceholder ? (
+            <TextInput
+              value={search}
+              onChangeText={setSearch}
+              placeholder={searchPlaceholder}
+              accessibilityLabel={searchPlaceholder}
+              placeholderTextColor={t.textMuted}
+              autoCorrect={false}
+              style={{ minHeight: TAP_FLOOR, marginHorizontal: space.lg, marginBottom: space.sm, paddingHorizontal: space.md, borderWidth: 1, borderColor: t.borderStrong, borderRadius: radius.md, color: t.textPrimary, fontFamily: font.sans, fontSize: typeScale.body }}
+            />
+          ) : null}
+          <ScrollView keyboardShouldPersistTaps="handled">
+            {recent.length ? <T variant="label" style={{ paddingHorizontal: space.lg, paddingVertical: space.sm }}>Recently chosen</T> : null}
+            {shown.map((option, index) => {
               const isSelected = option.id === value;
               return (
-                <Pressable
-                  key={String(option.id)}
+                <View key={String(option.id)}>
+                  {recent.length > 0 && index === recent.length ? <T variant="label" style={{ paddingHorizontal: space.lg, paddingVertical: space.sm }}>All categories</T> : null}
+                  <Pressable
                   onPress={() => {
                     haptics.tapped();
                     onChoose(option.id);
-                    onClose();
+                    close();
                   }}
                   accessibilityRole="button"
                   accessibilityState={{ selected: isSelected }}
@@ -871,12 +909,13 @@ export function OptionSheet<Option extends { id: number | string; name: string }
                   </T>
                   {/* A tick as well as the tint — never colour alone. */}
                   {isSelected ? <Ionicons name="checkmark" size={18} color={t.brand[600]} /> : null}
-                </Pressable>
+                  </Pressable>
+                </View>
               );
             })}
-            {options.length === 0 ? (
+            {shown.length === 0 ? (
               <T variant="caption" style={{ paddingHorizontal: space.lg, paddingVertical: space.md }}>
-                {emptyText}
+                {query ? "No categories match. Try another name." : emptyText}
               </T>
             ) : null}
           </ScrollView>

@@ -472,6 +472,7 @@ export function FileInput({
   }
 
   function take(f: File | null) {
+    if (disabled) return;
     setRejected(null);
     if (!f) {
       onSelect(null);
@@ -479,6 +480,11 @@ export function FileInput({
     }
     if (!accepts(f)) {
       setRejected(`${f.name} isn't a file type this accepts. Expected ${accept}.`);
+      onSelect(null);
+      return;
+    }
+    if (f.size === 0) {
+      setRejected(`${f.name} is empty. Choose another file.`);
       onSelect(null);
       return;
     }
@@ -496,15 +502,19 @@ export function FileInput({
       <label
         htmlFor={id}
         onDragOver={(e) => {
-          if (disabled) return;
           e.preventDefault();
+          if (disabled) return;
           setDragging(true);
         }}
         onDragLeave={() => setDragging(false)}
         onDrop={(e) => {
-          if (disabled) return;
           e.preventDefault();
+          if (disabled) return;
           setDragging(false);
+          if (e.dataTransfer.files.length > 1) {
+            setRejected("Choose one file at a time.");
+            return;
+          }
           take(e.dataTransfer.files?.[0] ?? null);
         }}
         className={`flex min-h-tap cursor-pointer flex-wrap items-center justify-center gap-2 rounded-xl border border-dashed px-4 py-5 text-center text-sm transition-colors ${
@@ -519,7 +529,7 @@ export function FileInput({
           ⇪
         </span>
         <span className="font-medium">{file ? "Choose a different file" : "Choose a file"}</span>
-        <span className="text-ink-500">or drag it here</span>
+        <span className="text-ink-600">or drag it here</span>
       </label>
 
       <input
@@ -528,7 +538,11 @@ export function FileInput({
         accept={accept}
         disabled={disabled}
         className="sr-only"
-        onChange={(e) => take(e.target.files?.[0] ?? null)}
+        onChange={(e) => {
+          const next = e.target.files?.[0];
+          if (next) take(next);
+          e.target.value = "";
+        }}
       />
 
       {hintText ? <p className="mt-1.5 text-xs text-ink-500">{hintText}</p> : null}

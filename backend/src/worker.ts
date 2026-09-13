@@ -8,6 +8,7 @@
  */
 import { prisma } from "./config/prisma";
 import { logger } from "./config/logger";
+import { assertMigrationsApplied } from "./config/migrationGuard";
 import { runReceiptWorkerOnce } from "./services/receiptScan.service";
 import { runCsvImportWorkerOnce, sweepStalledCsvImports } from "./services/csvImport.service";
 import { cleanUpExpiredRateLimits } from "./middleware/rateLimit.middleware";
@@ -47,56 +48,71 @@ async function work(): Promise<void> {
   }
 }
 
-const workerTimer = setInterval(() => void work(), 5_000);
-void work();
-
-const rateLimitCleanupTimer = setInterval(() => {
-  if (shuttingDown) return;
-  void cleanUpExpiredRateLimits().catch((error) => logger.error({ err: error }, "rate-limit cleanup failed"));
-}, 60 * 60_000);
-void cleanUpExpiredRateLimits().catch((error) => logger.error({ err: error }, "initial rate-limit cleanup failed"));
-
 /*
- * Imports that were claimed and then abandoned — the process died mid-chunk,
- * or a lease expired with attempts exhausted. Hourly rather than per-pass
- * because it is a scan for wreckage, not part of the normal path: the worker's
- * own lease reclaim handles the ordinary crash, and this only catches what has
- * stayed stuck long enough to be certainly dead.
+ * Cleared by shutdown(). Assigned in start(), which does not run until the
+ * database has been confirmed to be at the schema this build expects —
+ * `undefined` here is the state where a signal arrived during that check,
+ * and clearInterval ignores it.
  */
-const csvSweepTimer = setInterval(() => {
-  if (shuttingDown) return;
-  void sweepStalledCsvImports()
-    .then((swept) => {
-      if (swept > 0) logger.warn({ swept }, "swept stalled CSV imports");
-    })
-    .catch((error) => logger.error({ err: error }, "CSV import sweep failed"));
-}, 60 * 60_000);
+let workerTimer: NodeJS.Timeout | undefined;
+let rateLimitCleanupTimer: NodeJS.Timeout | undefined;
+let csvSweepTimer: NodeJS.Timeout | undefined;
+let dailyAnalysisTimer: NodeJS.Timeout | undefined;
+let unverifiedPurgeTimer: NodeJS.Timeout | undefined;
 
-const dailyAnalysisTimer = setInterval(() => {
-  if (shuttingDown) return;
-  void enqueueDailyProfileAnalyses().catch((error) => logger.error({ err: error }, "daily analysis enqueue failed"));
-}, 60 * 60_000);
-void enqueueDailyProfileAnalyses().catch((error) => logger.error({ err: error }, "initial daily analysis enqueue failed"));
+/** Every recurring job the worker owns. See start()'s caller for the boot gate. */
+function start(): void {
+  workerTimer = setInterval(() => void work(), 5_000);
+  void work();
 
-/*
- * Unconfirmed registrations expire.
- *
- * Hourly is far more often than a 72-hour TTL needs, and that is the point: the
- * cost of a pass is one indexed query returning nothing, and running it often
- * means an address is released promptly after its window rather than whenever
- * the process last happened to restart.
- */
-const unverifiedPurgeTimer = setInterval(() => {
-  if (shuttingDown) return;
-  void purgeUnverifiedRegistrations()
-    .then((purged) => {
-      if (purged > 0) logger.info({ purged }, "purged unverified registrations");
-    })
-    .catch((error) => logger.error({ err: error }, "unverified registration purge failed"));
-}, 60 * 60_000);
-void purgeUnverifiedRegistrations().catch((error) =>
-  logger.error({ err: error }, "initial unverified registration purge failed"),
-);
+  rateLimitCleanupTimer = setInterval(() => {
+    if (shuttingDown) return;
+    void cleanUpExpiredRateLimits().catch((error) => logger.error({ err: error }, "rate-limit cleanup failed"));
+  }, 60 * 60_000);
+  void cleanUpExpiredRateLimits().catch((error) => logger.error({ err: error }, "initial rate-limit cleanup failed"));
+
+  /*
+   * Imports that were claimed and then abandoned — the process died mid-chunk,
+   * or a lease expired with attempts exhausted. Hourly rather than per-pass
+   * because it is a scan for wreckage, not part of the normal path: the worker's
+   * own lease reclaim handles the ordinary crash, and this only catches what has
+   * stayed stuck long enough to be certainly dead.
+   */
+  csvSweepTimer = setInterval(() => {
+    if (shuttingDown) return;
+    void sweepStalledCsvImports()
+      .then((swept) => {
+        if (swept > 0) logger.warn({ swept }, "swept stalled CSV imports");
+      })
+      .catch((error) => logger.error({ err: error }, "CSV import sweep failed"));
+  }, 60 * 60_000);
+
+  dailyAnalysisTimer = setInterval(() => {
+    if (shuttingDown) return;
+    void enqueueDailyProfileAnalyses().catch((error) => logger.error({ err: error }, "daily analysis enqueue failed"));
+  }, 60 * 60_000);
+  void enqueueDailyProfileAnalyses().catch((error) => logger.error({ err: error }, "initial daily analysis enqueue failed"));
+
+  /*
+   * Unconfirmed registrations expire.
+   *
+   * Hourly is far more often than a 72-hour TTL needs, and that is the point: the
+   * cost of a pass is one indexed query returning nothing, and running it often
+   * means an address is released promptly after its window rather than whenever
+   * the process last happened to restart.
+   */
+  unverifiedPurgeTimer = setInterval(() => {
+    if (shuttingDown) return;
+    void purgeUnverifiedRegistrations()
+      .then((purged) => {
+        if (purged > 0) logger.info({ purged }, "purged unverified registrations");
+      })
+      .catch((error) => logger.error({ err: error }, "unverified registration purge failed"));
+  }, 60 * 60_000);
+  void purgeUnverifiedRegistrations().catch((error) =>
+    logger.error({ err: error }, "initial unverified registration purge failed"),
+  );
+}
 
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
@@ -133,3 +149,19 @@ async function shutdown(signal: string): Promise<void> {
 
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 process.on("SIGINT", () => void shutdown("SIGINT"));
+
+/*
+ * NO JOB RUNS UNTIL THE SCHEMA IS VERIFIED — see config/migrationGuard.
+ *
+ * The worker has the same exposure as the API to a database that is behind
+ * the build, and less of an audience: a receipt scan that fails here fails
+ * inside a queue consumer, where the owner sees a scan that never finishes
+ * rather than an error. Worse, a pass that dies on a missing column still
+ * burns the job's attempt budget, so a schema problem quietly exhausts
+ * retries on work that was never going to succeed until it is fixed.
+ */
+void (async () => {
+  await assertMigrationsApplied("worker");
+  if (shuttingDown) return;
+  start();
+})();

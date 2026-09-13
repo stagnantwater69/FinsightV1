@@ -15,6 +15,17 @@ export interface ReceiptScanResult {
   extractedVendor: string | null;
   extractedDescription: string | null;
   extractedAmount: number | null;
+  requiresManualCurrencyConversion?: boolean;
+  receiptDetails?: {
+    currency: string | null;
+    transactionTime: string | null;
+    subtotal: number | null;
+    tax: number | null;
+    tip: number | null;
+    discount: number | null;
+    paymentMethod: string | null;
+    receiptNumber: string | null;
+  } | null;
   /**
    * True when the server could not read the receipt's TEXT and had a vision
    * model interpret the photograph instead. These values are a machine's
@@ -160,4 +171,5 @@ export interface CapturedPage {
 export interface ReviewNotice {
   tone: "warn" | "info";
   text: string;
+  detail?: string;
 }

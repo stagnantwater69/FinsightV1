@@ -217,6 +217,7 @@ function networkError(err: unknown): ApiError {
 async function request<T>(method: string, path: string, opts: {
   body?: unknown;
   query?: Record<string, string | number | boolean | undefined>;
+  signal?: AbortSignal;
   /**
    * A specific token to authenticate with, instead of the stored session.
    *
@@ -232,6 +233,7 @@ async function request<T>(method: string, path: string, opts: {
   try {
     res = await fetch(buildUrl(path, opts.query), {
       method,
+      signal: opts.signal,
       headers: {
         ...(opts.authToken ? { Authorization: `Bearer ${opts.authToken}` } : await authHeader()),
         "Content-Type": "application/json",
@@ -354,8 +356,11 @@ function uploadRequest<T>(path: string, formData: FormData, signal?: AbortSignal
 }
 
 export const api = {
-  get: <T>(path: string, query?: Record<string, string | number | boolean | undefined>) =>
-    request<T>("GET", path, { query }),
+  get: <T>(
+    path: string,
+    query?: Record<string, string | number | boolean | undefined>,
+    signal?: AbortSignal,
+  ) => request<T>("GET", path, { query, signal }),
   post: <T>(path: string, body?: unknown) => request<T>("POST", path, { body }),
   /** Whole-resource replacement — used by the operating-schedule endpoint, which takes exactly seven entries at once rather than one field at a time (that's what `patch` is for). */
   put: <T>(path: string, body?: unknown) => request<T>("PUT", path, { body }),

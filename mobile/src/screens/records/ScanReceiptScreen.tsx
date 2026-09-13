@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -12,6 +12,11 @@ import {
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import * as ImagePicker from "expo-image-picker";
+import * as DocumentPicker from "expo-document-picker";
+import { ResultDetails } from "../../components/ResultDetails";
+import { RECEIPT_MIME_TYPES, receiptFileError, receiptMimeType } from "../../lib/importFiles";
+import { useImportOperation } from "../../lib/useImportOperation";
+import { newIdempotencyKey } from "../../lib/csvImport";
 import { Button, Card, ErrorNote, Field, Money, Screen, T } from "../../components/ui";
 import { useBusinessProfiles } from "../../context/BusinessProfileContext";
 import { api } from "../../lib/api";
@@ -78,6 +83,10 @@ export function ScanReceiptScreen({ navigation }: any) {
   const [scan, setScan] = useState<ReceiptScanResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [phase, setPhase] = useState("Uploading receipt…");
+  const [picking, setPicking] = useState(false);
+  const operation = useImportOperation(selected?.id);
+  const uploadAttempt = useRef<{ signature: string; key: string; accepted: ReceiptScanResult | null } | null>(null);
 
   /**
    * Photos captured so far in this session, before the receipt is scanned.
@@ -167,7 +176,29 @@ export function ScanReceiptScreen({ navigation }: any) {
    * component left to close it, which shows up as an app that has quietly
    * become unresponsive.
    */
-  useFocusEffect(useCallback(() => () => setCameraOpen(false), []));
+  useFocusEffect(useCallback(() => () => {
+    setCameraOpen(false);
+    operation.cancel();
+    setBusy(false);
+    setPicking(false);
+  }, [operation]));
+
+  useEffect(() => {
+    uploadAttempt.current = null;
+    setScan(null);
+    setPages([]);
+    setQueuedReceiptGroups([]);
+    setBusy(false);
+    setPicking(false);
+    setCategoryId(null);
+    setDate("");
+    setDescription("");
+    setVendor("");
+    setAmount("");
+    setItemCategories({});
+    setAddedItems([]);
+    setError(null);
+  }, [selected?.id]);
 
   if (!selected) return null;
 
@@ -185,11 +216,14 @@ export function ScanReceiptScreen({ navigation }: any) {
    * run is a missed nicety, not a reason to stop the owner from adding the
    * page they just photographed.
    */
-  async function addPage(asset: ImagePicker.ImagePickerAsset) {
+  async function addPage(asset: ImagePicker.ImagePickerAsset, task: NonNullable<ReturnType<typeof operation.begin>>) {
+    if (!operation.current(task) || !canAddSection(pages.length)) return;
     const key = `${Date.now()}-${Math.random()}`;
     const uri = asset.uri;
     const fileName = asset.fileName ?? `receipt-${Date.now()}.jpg`;
     const mimeType = asset.mimeType ?? "image/jpeg";
+    const validation = receiptFileError({ name: fileName, mimeType, size: asset.fileSize });
+    if (validation) { setError(validation); return; }
     setPages((prev) => [
       ...prev,
       {
@@ -227,9 +261,11 @@ export function ScanReceiptScreen({ navigation }: any) {
         name: downscaled ? `quality-${Date.now()}.jpg` : fileName,
         type: downscaled ? "image/jpeg" : mimeType,
       } as any);
-      const quality = await api.upload<CapturedPage["quality"]>("/records/receipts/quality-check", form);
+      const quality = await api.upload<CapturedPage["quality"]>("/records/receipts/quality-check", form, task.controller.signal);
+      if (!operation.current(task)) return;
       setPages((prev) => prev.map((p) => (p.key === key ? { ...p, quality, checkingQuality: false } : p)));
     } catch {
+      if (!operation.current(task)) return;
       setPages((prev) => prev.map((p) => (p.key === key ? { ...p, checkingQuality: false } : p)));
     }
   }
@@ -257,11 +293,20 @@ export function ScanReceiptScreen({ navigation }: any) {
    */
   async function scanSingleReceipt(list: CapturedPage[]) {
     if (list.length === 0) return;
+    const task = operation.begin();
+    if (!task) return;
     setBusy(true);
+    setPhase("Uploading receipt…");
     setError(null);
     try {
+      const signature = `${selected!.id}:${list.map((page) => `${page.key}:${page.uri}:${page.originalUri ?? ""}`).join("|")}`;
+      if (uploadAttempt.current?.signature !== signature) {
+        uploadAttempt.current = { signature, key: newIdempotencyKey(), accepted: null };
+      }
+      const attempt = uploadAttempt.current;
       const form = new FormData();
       form.append("businessProfileId", String(selected!.id));
+      form.append("idempotencyKey", attempt.key);
       // "files" — plural — repeated once per page: the server has one
       // upload route for both a single photo and a long receipt's pages,
       // and it reads this field name for either.
@@ -292,22 +337,27 @@ export function ScanReceiptScreen({ navigation }: any) {
         ownerOverrodeLikelihood: page.ownerOverrodeLikelihood,
       }))));
 
-      const accepted = await api.upload<ReceiptScanResult>("/records/receipts", form);
+      const accepted = attempt.accepted ?? await api.upload<ReceiptScanResult>("/records/receipts", form, task.controller.signal);
+      if (!operation.current(task)) return;
+      attempt.accepted = accepted;
+      setPhase("Reading receipt…");
       // The upload returns as soon as the photos are stored; the read itself
       // finishes behind it. See pollUntilRead.
-      const result = await pollUntilRead(accepted);
+      const result = await pollUntilRead(accepted, true, task.controller.signal);
+      if (!operation.current(task)) return;
       setScan(result);
       // Pre-fill from OCR — as a draft the owner checks, never as truth.
-      if (result.extractedDate) setDate(String(result.extractedDate).slice(0, 10));
-      if (result.extractedVendor) setVendor(result.extractedVendor);
-      if (result.extractedDescription) setDescription(result.extractedDescription);
+      setDate(result.extractedDate ? String(result.extractedDate).slice(0, 10) : "");
+      setVendor(result.extractedVendor ?? "");
+      setDescription(result.extractedDescription ?? "");
+      setCategoryId(result.items?.length === 1 ? result.items[0]!.categoryId : null);
       /*
         Two decimal places, always. `String(1475.5)` is "1475.5", which reads
         as an amount somebody typed carelessly rather than one read off a
         receipt — and it is the field the owner is asked to check against
         printed centavos.
       */
-      if (result.extractedAmount != null) setAmount(result.extractedAmount.toFixed(2));
+      setAmount(result.extractedAmount != null ? result.extractedAmount.toFixed(2) : "");
       // Seed the per-item categories from what FinSight assigned. A starting
       // point, not a decision — every row stays editable below.
       setItemCategories(
@@ -324,6 +374,7 @@ export function ScanReceiptScreen({ navigation }: any) {
         haptics.succeeded();
       }
     } catch (err) {
+      if (!operation.current(task)) return;
       haptics.failed();
       // The captured pages are untouched by a failed read, so this offers the
       // retry that costs nothing rather than sending the owner back to the
@@ -332,7 +383,8 @@ export function ScanReceiptScreen({ navigation }: any) {
         describeActionFailure(toLoadFailure(err), "Your photos are still here — try scanning them again."),
       );
     } finally {
-      setBusy(false);
+      if (operation.current(task)) setBusy(false);
+      operation.finish(task);
     }
   }
 
@@ -353,6 +405,7 @@ export function ScanReceiptScreen({ navigation }: any) {
    * stopped asking — none of which a one-line error on this card could do.
    */
   function capturePage() {
+    if (busy || picking) return;
     haptics.committed();
     setError(null);
     setCameraOpen(true);
@@ -372,11 +425,38 @@ export function ScanReceiptScreen({ navigation }: any) {
    * arrive more compressed than a captured one.
    */
   async function pickPage() {
-    const res = await ImagePicker.launchImageLibraryAsync({
-      quality: CAPTURE_QUALITY,
-      mediaTypes: ["images"],
-    });
-    if (!res.canceled && res.assets[0]) await addPage(res.assets[0]);
+    const task = operation.begin();
+    if (!task) return;
+    setPicking(true);
+    try {
+      const res = await ImagePicker.launchImageLibraryAsync({ quality: CAPTURE_QUALITY, mediaTypes: ["images"] });
+      if (!res.canceled && res.assets[0]) await addPage(res.assets[0], task);
+    } catch (err) {
+      if (operation.current(task)) setError(describeActionFailure(toLoadFailure(err), "Choose another photo or use the camera."));
+    } finally {
+      if (operation.current(task)) setPicking(false);
+      operation.finish(task);
+    }
+  }
+
+  async function pickFile() {
+    const task = operation.begin();
+    if (!task) return;
+    setPicking(true);
+    try {
+      const result = await DocumentPicker.getDocumentAsync({ type: RECEIPT_MIME_TYPES, copyToCacheDirectory: true });
+      if (!operation.current(task) || result.canceled || !result.assets[0]) return;
+      const file = result.assets[0];
+      const validation = receiptFileError(file);
+      if (validation) { setError(validation); return; }
+      const dimensions = await Image.getSize(file.uri);
+      await addPage({ uri: file.uri, width: dimensions.width, height: dimensions.height, fileName: file.name, mimeType: file.mimeType === "application/octet-stream" ? receiptMimeType(file.name) : file.mimeType ?? receiptMimeType(file.name), fileSize: file.size }, task);
+    } catch (err) {
+      if (operation.current(task)) setError(describeActionFailure(toLoadFailure(err), "Choose another receipt image."));
+    } finally {
+      if (operation.current(task)) setPicking(false);
+      operation.finish(task);
+    }
   }
 
   /*
@@ -390,6 +470,8 @@ export function ScanReceiptScreen({ navigation }: any) {
    * a decision the category picker already makes.
    */
   const items = scan?.items ?? [];
+  const foreignCurrency = scan?.receiptDetails?.currency && scan.receiptDetails.currency !== "PHP" ? scan.receiptDetails.currency : null;
+  const requiresManualCurrencyConversion = Boolean(scan?.requiresManualCurrencyConversion || foreignCurrency);
   const isItemised = items.length > 1;
   /** An added line only counts once it is actually usable. */
   const usableAddedItems = addedItems.filter(
@@ -416,6 +498,7 @@ export function ScanReceiptScreen({ navigation }: any) {
     (plan === "category" && canFileGapOnItsOwn && gapCategoryId != null);
 
   async function confirm() {
+    if (requiresManualCurrencyConversion) return setError("Enter this receipt manually in PHP.");
     const value = Number(amount);
     if (!Number.isFinite(value) || value <= 0) return setError("Enter an amount greater than zero.");
     if (isItemised) {
@@ -424,6 +507,9 @@ export function ScanReceiptScreen({ navigation }: any) {
     } else if (!categoryId) {
       return setError("Choose a category first.");
     }
+    if (!date) return setError("Enter the date printed on the receipt.");
+    const task = operation.begin();
+    if (!task) return;
 
     setBusy(true);
     setError(null);
@@ -450,6 +536,7 @@ export function ScanReceiptScreen({ navigation }: any) {
         : buildReceiptConfirmPayload({ date, description, vendor, amount: value, categoryId: categoryId! });
 
       await api.post(`/records/receipts/${scan!.id}/confirm`, payload);
+      if (!operation.current(task)) return;
       haptics.succeeded();
       if (queuedReceiptGroups.length > 0) {
         const [next, ...remaining] = queuedReceiptGroups;
@@ -457,7 +544,7 @@ export function ScanReceiptScreen({ navigation }: any) {
         setPages(next!);
         setScan(null);
         setCategoryId(null);
-        setDate(todayISO());
+        setDate("");
         setDescription("");
         setVendor("");
         setAmount("");
@@ -466,12 +553,14 @@ export function ScanReceiptScreen({ navigation }: any) {
         setPlan(null);
         setGapCategoryId(null);
         setFlash(`Receipt saved. ${remaining.length + 1} more receipt${remaining.length === 0 ? "" : "s"} to review.`);
+        operation.finish(task);
         await scanSingleReceipt(next!);
       } else {
         setFlash("Receipt saved to your records.");
         navigation.goBack();
       }
     } catch (err) {
+      if (!operation.current(task)) return;
       // Every corrected field, every per-item category and the photographs
       // themselves are still here — the screen only leaves on success — and
       // the wording says so rather than leaving the owner to guess whether
@@ -479,7 +568,8 @@ export function ScanReceiptScreen({ navigation }: any) {
       // this app would. See lib/connectionState.ts.
       setError(saveFailureMessage(err, "Save this expense"));
     } finally {
-      setBusy(false);
+      if (operation.current(task)) setBusy(false);
+      operation.finish(task);
     }
   }
 
@@ -512,6 +602,8 @@ export function ScanReceiptScreen({ navigation }: any) {
    * placed themselves are left alone, and everything stays editable.
    */
   async function acceptSuggestedCategory(name: string) {
+    const task = operation.begin();
+    if (!task) return;
     setCreatingCategoryFor(name);
     setError(null);
     try {
@@ -519,6 +611,7 @@ export function ScanReceiptScreen({ navigation }: any) {
       // refreshCategories() that used to follow this is gone — it was a second
       // round trip to learn what the response already said.
       const created = await createCategory({ name });
+      if (!operation.current(task)) return;
       setItemCategories((prev) => {
         const next = { ...prev };
         for (const id of rowsToApplySuggestionTo(items, name, prev, uncategorisedId)) {
@@ -527,9 +620,11 @@ export function ScanReceiptScreen({ navigation }: any) {
         return next;
       });
     } catch (err) {
+      if (!operation.current(task)) return;
       setError(describeActionFailure(toLoadFailure(err), "The category wasn't created; your rows are unchanged."));
     } finally {
-      setCreatingCategoryFor(null);
+      if (operation.current(task)) setCreatingCategoryFor(null);
+      operation.finish(task);
     }
   }
 
@@ -547,10 +642,13 @@ export function ScanReceiptScreen({ navigation }: any) {
    */
   async function removeScannedItem(itemId: number) {
     if (!scan) return;
+    const task = operation.begin();
+    if (!task) return;
     setRemovingItemId(itemId);
     setError(null);
     try {
       const updated = await api.delete<ReceiptScanResult>(`/records/receipts/${scan.id}/items/${itemId}`);
+      if (!operation.current(task)) return;
       setScan(updated);
       setItemCategories((prev) => {
         const next = { ...prev };
@@ -558,9 +656,11 @@ export function ScanReceiptScreen({ navigation }: any) {
         return next;
       });
     } catch (err) {
+      if (!operation.current(task)) return;
       setError(describeActionFailure(toLoadFailure(err), "The item is still on the receipt."));
     } finally {
-      setRemovingItemId(null);
+      if (operation.current(task)) setRemovingItemId(null);
+      operation.finish(task);
     }
   }
 
@@ -617,12 +717,12 @@ export function ScanReceiptScreen({ navigation }: any) {
     if (scan.receiptLikelihood?.outcome === "obvious-non-receipt") {
       notices.push({
         tone: "warn",
-        text: "FinSight found very little receipt evidence in this image. Keep it only if it is an unusual or handwritten receipt, and enter every field from the paper.",
+        text: "This may not be a receipt. Check every field before saving.",
       });
     } else if (scan.receiptLikelihood?.outcome === "uncertain") {
       notices.push({
         tone: "info",
-        text: "This image has limited receipt evidence. Check every extracted field; handwritten or faded fields may need manual entry.",
+        text: "This receipt was hard to identify. Check every field.",
       });
     }
 
@@ -630,14 +730,12 @@ export function ScanReceiptScreen({ navigation }: any) {
       notices.push(...warnings.map((w) => ({
         tone: warningTone(w.code),
         text: [
-          `${warningHeadline(w.code)}${warningPageSuffix(w)}.`,
-          // Verbatim, or nothing — a code this build has no guidance for is
-          // shown with its evidence rather than with an invented instruction.
-          w.guidance ?? "",
-          w.detail ? `(${w.detail})` : "",
+          w.guidance ?? `${warningHeadline(w.code)}.`,
+          warningPageSuffix(w),
         ]
           .filter(Boolean)
           .join(" "),
+        detail: w.detail,
       })));
       return notices;
     }
@@ -645,10 +743,7 @@ export function ScanReceiptScreen({ navigation }: any) {
     if (scan.captureQuality?.tooBlurredToTrust) {
       notices.push({
         tone: "warn",
-        text:
-          "This photo came out blurry. FinSight read it anyway, but blurred print is where it makes the " +
-          "most mistakes — if you still have the receipt, taking another picture is usually quicker than " +
-          "correcting the figures below.",
+        text: "Blurry receipt. Retake the photo or check the figures carefully.",
       });
     }
 
@@ -670,9 +765,7 @@ export function ScanReceiptScreen({ navigation }: any) {
       notices.push({
         tone: "warn",
         text:
-          `Page${duplicates.length === 1 ? "" : "s"} ${duplicates.map((p) => `${p - 1} and ${p}`).join(", ")} ` +
-          "look the same. If one is a repeat photo of the other, the figures below may be double-counted — " +
-          "check the items against the photos, or rescan without the repeat.",
+          `Pages ${duplicates.map((p) => `${p - 1} and ${p}`).join(", ")} look the same. Check for double-counted items.`,
       });
     }
 
@@ -686,19 +779,14 @@ export function ScanReceiptScreen({ navigation }: any) {
       notices.push({
         tone: "info",
         text:
-          `Section${overlaps.length === 1 ? "" : "s"} ${overlaps.map((p) => `${p - 1} and ${p}`).join(", ")} ` +
-          "share a few lines, which is the overlap the camera asked for. FinSight counted them once. If you " +
-          "see a line twice below, delete the repeat.",
+          `Sections ${overlaps.map((p) => `${p - 1} and ${p}`).join(", ")} overlap. Remove any repeated items.`,
       });
     }
 
     if (scan.looksLikeMultipleReceipts) {
       notices.push({
         tone: "warn",
-        text:
-          "This photo may hold two receipts. If it does, saving now would put both purchases into one " +
-          "record and the items won't add up to the total. Photograph each receipt on its own and they'll " +
-          "be recorded separately — if it really is one receipt, carry on.",
+        text: "There may be two receipts here. Scan each separately if so.",
       });
     }
 
@@ -712,18 +800,12 @@ export function ScanReceiptScreen({ navigation }: any) {
     if (scan.items?.some((i) => i.extractedByVision)) {
       notices.push({
         tone: "warn",
-        text:
-          "FinSight couldn't read this receipt's text. These values were interpreted from the photo by AI, " +
-          "so treat them as a first guess rather than something read off the paper — check every one, " +
-          "including the total, against the photo.",
+        text: "AI interpreted these values. Check every field and the total against the receipt.",
       });
     } else if (scan.visionAssisted) {
       notices.push({
         tone: "warn",
-        text:
-          "Some item names were filled in by AI. The amounts were read from the receipt and match its " +
-          "total, but the printing was faint enough that FinSight wasn't sure of the wording — check the " +
-          "item names against the photo.",
+        text: "AI helped read item names. Check them against the receipt.",
       });
     }
 
@@ -835,8 +917,8 @@ export function ScanReceiptScreen({ navigation }: any) {
               <T variant="title" style={{ marginBottom: 4 }}>Scan a receipt</T>
               <T variant="caption" style={{ marginBottom: space.lg }}>
                 {pages.length === 0
-                  ? "Photograph a receipt and FinSight will read the date, store and amount. You check them before anything is saved."
-                  : "Add another section only if this receipt didn't fit in one — otherwise scan what you have."}
+                  ? "Capture or upload a receipt. Review the details before saving."
+                  : "Your receipt is ready to read."}
               </T>
 
               {busy ? (
@@ -846,12 +928,17 @@ export function ScanReceiptScreen({ navigation }: any) {
                 // thumbnail shows the actual photo being read; the bars
                 // underneath still say which fields are about to fill in.
                 <View style={{ gap: space.sm, paddingVertical: space.md }}>
-                  <T variant="caption" style={{ marginBottom: space.xs }}>Reading the receipt…</T>
+                  <T variant="caption" accessibilityLiveRegion="polite" style={{ marginBottom: space.xs }}>{phase}</T>
                   {pages[0] ? <ScanningThumbnail uri={pages[0].uri} /> : null}
                   <SkeletonBox width="40%" height={14} />
                   <SkeletonBox height={14} />
                   <SkeletonBox width="70%" height={14} />
                   <SkeletonBox width="55%" height={14} />
+                  <Button title={phase === "Uploading receipt…" ? "Cancel upload" : "Stop waiting"} variant="ghost" onPress={() => {
+                    operation.cancel();
+                    setBusy(false);
+                    setError("Your photos are kept. Scan again to resume.");
+                  }} />
                 </View>
               ) : (
                 <>
@@ -969,12 +1056,14 @@ export function ScanReceiptScreen({ navigation }: any) {
                        */
                       <View style={{ flexDirection: "row", gap: space.sm, alignItems: "stretch" }}>
                         <View style={{ flex: 1 }}>
-                          <Button title="Scan receipt" variant="primary" onPress={capturePage} />
+                          <Button title="Scan receipt" variant="primary" onPress={capturePage} disabled={picking} />
                         </View>
                         <Pressable
                           onPress={pickPage}
                           accessibilityRole="button"
                           accessibilityLabel="Choose a photo from your gallery"
+                          disabled={picking}
+                          accessibilityState={{ disabled: picking }}
                           style={{
                             width: TAP_FLOOR,
                             height: TAP_FLOOR,
@@ -988,6 +1077,16 @@ export function ScanReceiptScreen({ navigation }: any) {
                         >
                           <Ionicons name="image-outline" size={22} color={t.brandText} />
                         </Pressable>
+                        <Pressable
+                          onPress={pickFile}
+                          accessibilityRole="button"
+                          accessibilityLabel="Choose a receipt from Files"
+                          disabled={picking}
+                          accessibilityState={{ disabled: picking }}
+                          style={{ width: TAP_FLOOR, height: TAP_FLOOR, borderRadius: radius.md, backgroundColor: t.surface, borderWidth: 1, borderColor: t.border, alignItems: "center", justifyContent: "center" }}
+                        >
+                          <Ionicons name="document-outline" size={22} color={t.brandText} />
+                        </Pressable>
                       </View>
                     ) : (
                       <>
@@ -997,6 +1096,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                           }
                           variant="primary"
                           onPress={() => void scanPages()}
+                          disabled={picking || pages.some((page) => page.checkingQuality)}
                         />
                         {/*
                           Reopens the camera on the session already captured,
@@ -1005,15 +1105,17 @@ export function ScanReceiptScreen({ navigation }: any) {
                           server refuses a ninth page, and a button that can
                           only produce a 400 is worse than no button.
                         */}
-                        {canAddSection(pages.length) ? (
-                          <Button title="Add another section" variant="secondary" onPress={capturePage} />
-                        ) : null}
+                        <Button title="Review photos" variant="secondary" onPress={capturePage} disabled={picking} />
+                        {canAddSection(pages.length) ? <Button title="Add from Files" variant="ghost" onPress={pickFile} disabled={picking} /> : null}
                       </>
                     )}
                   </View>
+                  <T variant="caption" style={{ marginTop: space.sm }}>JPG, PNG, or WebP · 10 MB each · up to 8 sections. PDFs aren’t supported.</T>
+                  {picking ? <T variant="caption" accessibilityLiveRegion="polite">Preparing photo…</T> : null}
                 </>
               )}
               {error ? <View style={{ marginTop: space.md }}><ErrorNote>{error}</ErrorNote></View> : null}
+              {error && !busy ? <Button title="Enter expense manually" variant="ghost" onPress={() => navigation.navigate("AddExpense")} /> : null}
             </Card>
           ) : (
             <>
@@ -1031,9 +1133,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                 <Card>
                   <T variant="title" style={{ marginBottom: 2 }}>Check the details</T>
                   <T variant="caption" style={{ marginBottom: space.md }}>
-                    {pages.length === 1
-                      ? "Compare what FinSight read against the photo. Nothing is saved until you confirm."
-                      : `Compare what FinSight read against the ${pages.length} sections. Nothing is saved until you confirm.`}
+                    Receipt scanned. Review the details before saving.
                   </T>
                   <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                     <View style={{ flexDirection: "row", gap: space.sm }}>
@@ -1087,8 +1187,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                 <Card>
                   <T variant="title" style={{ marginBottom: 2 }}>Check the details</T>
                   <T variant="caption">
-                    FinSight filled these in from the photo. Correct anything that's wrong — nothing is
-                    saved until you confirm.
+                    Receipt scanned. Review the details before saving.
                   </T>
                 </Card>
               )}
@@ -1102,6 +1201,34 @@ export function ScanReceiptScreen({ navigation }: any) {
               <ScanBand band={scanBand} fields={attentionFields} />
 
               <ReviewNotices notices={reviewNotices} />
+
+              {scan.receiptDetails && Object.values(scan.receiptDetails).some((value) => value !== null) ? (
+                <View>
+                <T variant="heading">As printed on the receipt</T>
+                <ResultDetails label="as printed on the receipt">
+                  {([
+                    ["Currency", scan.receiptDetails.currency],
+                    ["Time", scan.receiptDetails.transactionTime],
+                    ["Subtotal", scan.receiptDetails.subtotal],
+                    ["Tax", scan.receiptDetails.tax],
+                    ["Tip", scan.receiptDetails.tip],
+                    ["Discount", scan.receiptDetails.discount],
+                    ["Payment", scan.receiptDetails.paymentMethod],
+                    ["Receipt number", scan.receiptDetails.receiptNumber],
+                  ] as const).filter(([, value]) => value !== null).map(([label, value]) => (
+                    <T key={label} variant="caption">{label}: {typeof value === "number" ? value.toFixed(2) : value}</T>
+                  ))}
+                </ResultDetails>
+                </View>
+              ) : null}
+
+              {requiresManualCurrencyConversion ? (
+                <View style={{ gap: space.sm }}>
+                  <ErrorNote>{foreignCurrency ? `This receipt is in ${foreignCurrency}. Enter the converted PHP amount manually before saving.` : "Enter this receipt manually with the amount paid in PHP."}</ErrorNote>
+                  <Button title="Enter expense manually" variant="primary" onPress={() => navigation.navigate("AddExpense")} />
+                  <Button title="Choose another receipt" variant="ghost" onPress={() => { setScan(null); setPages([]); }} />
+                </View>
+              ) : <>
 
               <ReviewSection
                 title={isItemised ? "Receipt totals" : "This expense"}
@@ -1276,9 +1403,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                       ) : null}
                       {/* Which printed line this came from, where the server
                           could locate it. Never invented. */}
-                      {evidenceSummary(item.evidence) ? (
-                        <T variant="caption" style={{ marginTop: 2 }}>{evidenceSummary(item.evidence)}</T>
-                      ) : null}
+                      {evidenceSummary(item.evidence) ? <ResultDetails label={`source for ${item.name}`}><T variant="caption">{evidenceSummary(item.evidence)}</T></ResultDetails> : null}
 
                       <View style={{ marginTop: space.sm }}>
                         <CategoryChips
@@ -1603,10 +1728,12 @@ export function ScanReceiptScreen({ navigation }: any) {
                   variant="primary"
                   onPress={confirm}
                   loading={busy}
+                  disabled={removingItemId !== null || creatingCategoryFor !== null}
                 />
                 <Button
                   title="Retake photo"
                   variant="ghost"
+                  disabled={busy || removingItemId !== null || creatingCategoryFor !== null}
                   onPress={() => {
                     setScan(null);
                     // Rescan is a deliberate "start over" — the captured pages
@@ -1617,6 +1744,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                   }}
                 />
               </View>
+              </>}
             </>
           )}
         </ScrollView>

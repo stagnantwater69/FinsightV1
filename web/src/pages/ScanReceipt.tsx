@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { CategorySelect } from "../components/CategorySelect";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
@@ -20,7 +20,6 @@ import { everyLineIsReady, groupByCategory, sumCentavos, toReviewLines } from ".
  * cutoffs this screen used to carry (80/60 for the page, 75 per item).
  */
 import { BAND_COPY, confidenceBand, scanConfidenceBand } from "../lib/confidenceBands";
-import { warningHeadline, warningPageSuffix, warningTone } from "../lib/receiptWarnings";
 import { Callout, Card, PageHead, FormPage, Pill } from "../components/ui";
 import { Button } from "../components/Button";
 import { Field, FormError, MoneyInput, TextInput } from "../components/Field";
@@ -42,8 +41,17 @@ import type {
   Split,
 } from "./scanReceipt/types";
 import { NoBusinessProfile } from "../components/NoBusinessProfile";
+import { ResultDetails } from "../components/ResultDetails";
+import { ReceiptResultNotes } from "./scanReceipt/ReceiptResultNotes";
+import { randomId } from "../lib/uuid";
+import { PrintedReceiptDetails } from "./scanReceipt/PrintedReceiptDetails";
 
 export function ScanReceipt() {
+  const { selected } = useBusinessProfiles();
+  return <ScanReceiptForm key={selected?.id ?? "no-profile"} />;
+}
+
+function ScanReceiptForm() {
   const { selected } = useBusinessProfiles();
   const { categories, refresh: refreshCategories, createCategory } = useExpenseCategories();
   const navigate = useNavigate();
@@ -139,9 +147,9 @@ export function ScanReceipt() {
   /** The proposed category currently being created, so its row can show progress. */
   const [creatingCategoryFor, setCreatingCategoryFor] = useState<string | null>(null);
   /**
-   * The category the AI proposed for a receipt with no itemised lines.
+   * The category proposed for a receipt with no itemised lines.
    *
-   * Held as the id rather than a boolean so the "AI-suggested" chip can be
+   * Held as the id rather than a boolean so the "Suggested" chip can be
    * derived by comparing it against the field's current value — the same way
    * `originOf` distinguishes a read value from an edited one everywhere else
    * on this screen. Change the category and the chip goes away on its own,
@@ -195,6 +203,28 @@ export function ScanReceipt() {
    * waits a little longer); one already asked for is never asked again.
    */
   const scanPromises = useRef<Map<File, Promise<ScanResult>>>(new Map());
+  const acceptedScans = useRef<Map<File, ScanResult>>(new Map());
+  const uploadKeys = useRef<Map<File, string>>(new Map());
+  const combinedUpload = useRef<{ files: File[]; key: string; scan?: ScanResult } | null>(null);
+  const currentFiles = useRef<File[]>([]);
+  const requests = useRef(new AbortController());
+  const startPending = useRef(false);
+  const savePending = useRef(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    requests.current = controller;
+    const pending = scanPromises.current;
+    const accepted = acceptedScans.current;
+    const keys = uploadKeys.current;
+    return () => {
+      controller.abort();
+      latestScanId.current = null;
+      pending.clear();
+      accepted.clear();
+      keys.clear();
+    };
+  }, []);
 
   /**
    * The receipt preview.
@@ -241,18 +271,29 @@ export function ScanReceipt() {
     if (existing) return existing;
 
     const promise = (async () => {
+      const signal = requests.current.signal;
+      const accepted = acceptedScans.current.get(file);
+      if (accepted) return pollUntilRead(accepted, true, signal);
       const formData = new FormData();
       formData.append("files", file);
       formData.append("businessProfileId", String(selected!.id));
+      if (!uploadKeys.current.has(file)) uploadKeys.current.set(file, randomId());
+      formData.append("idempotencyKey", uploadKeys.current.get(file)!);
       const { data } = await api.post<ScanResult>("/records/receipts", formData, {
         headers: { "Content-Type": "multipart/form-data" },
+        signal,
       });
+      signal.throwIfAborted();
+      acceptedScans.current.set(file, data);
       // The photos are on the server. Whether OCR has started is the server's
       // business; what the client knows is that the upload is over.
       setScanStage("reading");
-      return pollUntilRead(data);
+      return pollUntilRead(data, true, signal);
     })();
     scanPromises.current.set(file, promise);
+    void promise.catch(() => {
+      if (scanPromises.current.get(file) === promise) scanPromises.current.delete(file);
+    });
     return promise;
   }
 
@@ -273,12 +314,13 @@ export function ScanReceipt() {
    * the caller's existing error path then shows the reason and leaves the
    * owner on the picker, which is the same outcome any other failed scan has.
    */
-  async function pollUntilRead(initial: ScanResult, mayRetry = true): Promise<ScanResult> {
+  async function pollUntilRead(initial: ScanResult, mayRetry = true, signal = requests.current.signal): Promise<ScanResult> {
+    signal.throwIfAborted();
     if (initial.processingStatus && initial.processingStatus !== "Processing") {
       if (initial.processingStatus === "Failed") {
         if (mayRetry) {
-          const { data: retried } = await api.post<ScanResult>(`/records/receipts/${initial.id}/retry`);
-          return pollUntilRead(retried, false);
+          const { data: retried } = await api.post<ScanResult>(`/records/receipts/${initial.id}/retry`, undefined, { signal });
+          return pollUntilRead(retried, false, signal);
         }
         throw new Error(initial.processingError ?? "This receipt could not be read. Try scanning it again.");
       }
@@ -288,11 +330,12 @@ export function ScanReceipt() {
     const deadline = Date.now() + SCAN_POLL_TIMEOUT_MS;
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, SCAN_POLL_INTERVAL_MS));
-      const { data } = await api.get<ScanResult>(`/records/receipts/${initial.id}`);
+      signal.throwIfAborted();
+      const { data } = await api.get<ScanResult>(`/records/receipts/${initial.id}`, { signal });
       if (data.processingStatus === "Failed") {
         if (mayRetry) {
-          const { data: retried } = await api.post<ScanResult>(`/records/receipts/${initial.id}/retry`);
-          return pollUntilRead(retried, false);
+          const { data: retried } = await api.post<ScanResult>(`/records/receipts/${initial.id}/retry`, undefined, { signal });
+          return pollUntilRead(retried, false, signal);
         }
         throw new Error(data.processingError ?? "This receipt could not be read. Try scanning it again.");
       }
@@ -325,6 +368,8 @@ export function ScanReceipt() {
    * no change at all.
    */
   async function scanFiles(filesToSend: File[], representativeFile: File) {
+    const signal = requests.current.signal;
+    currentFiles.current = filesToSend;
     setFile(representativeFile);
     setScanning(true);
     setScanStage("uploading");
@@ -340,23 +385,34 @@ export function ScanReceipt() {
         filesToSend.length === 1
           ? await ensureScanned(filesToSend[0]!)
           : await (async () => {
+              if (!combinedUpload.current || combinedUpload.current.files.length !== filesToSend.length ||
+                  combinedUpload.current.files.some((file, index) => file !== filesToSend[index])) {
+                combinedUpload.current = { files: filesToSend, key: randomId() };
+              }
+              const upload = combinedUpload.current;
+              if (upload.scan) return pollUntilRead(upload.scan, true, signal);
               const formData = new FormData();
               // "files" — plural — even for one photo: the server has one
               // upload route for both shapes, and it reads this field name
               // for either.
               filesToSend.forEach((f) => formData.append("files", f));
               formData.append("businessProfileId", String(selected!.id));
+              formData.append("idempotencyKey", upload.key);
               const res = await api.post<ScanResult>("/records/receipts", formData, {
                 headers: { "Content-Type": "multipart/form-data" },
+                signal,
               });
+              signal.throwIfAborted();
+              upload.scan = res.data;
               setScanStage("reading");
               // Polled here too, not only in ensureScanned: this branch is a
               // multi-page receipt, which is the SLOWEST read there is (up to
               // MAX_RECEIPT_FILES pages of OCR). It has no single File to key
               // the promise cache on, which is the only reason it bypasses
               // that path — the waiting is identical.
-              return pollUntilRead(res.data);
+              return pollUntilRead(res.data, true, signal);
             })();
+      signal.throwIfAborted();
       /*
        * Reload the category list BEFORE showing the review table.
        *
@@ -382,6 +438,7 @@ export function ScanReceipt() {
        */
       setScanStage("checking");
       await refreshCategories();
+      signal.throwIfAborted();
       setScanStage("categorising");
 
       latestScanId.current = data.id;
@@ -410,10 +467,13 @@ export function ScanReceipt() {
         void suggestCategoryForReceipt(data);
       }
     } catch (err) {
-      setScanError(getErrorMessage(err));
+      if (!signal.aborted) {
+        setPickedFiles(filesToSend);
+        setScanError(getErrorMessage(err));
+      }
       throw err;
     } finally {
-      setScanning(false);
+      if (!signal.aborted) setScanning(false);
     }
   }
 
@@ -428,7 +488,9 @@ export function ScanReceipt() {
    */
   async function handleStartScanning(e: FormEvent) {
     e.preventDefault();
-    if (pickedFiles.length === 0) return;
+    if (pickedFiles.length === 0 || startPending.current) return;
+    startPending.current = true;
+    try {
 
     if (pickedFiles.length === 1 || combineChoice === "one") {
       const toScan = pickedFiles;
@@ -463,6 +525,9 @@ export function ScanReceipt() {
     });
 
     await scanFiles([first!], first!).catch(() => {});
+    } finally {
+      startPending.current = false;
+    }
   }
 
   /**
@@ -488,7 +553,7 @@ export function ScanReceipt() {
     try {
       const { data: result } = await api.post<{ suggestion: CategorySuggestion | null }>(
         "/ai/suggest-category",
-        { businessProfileId: selected!.id, description },
+        { businessProfileId: selected!.id, description, ...(data.extractedVendor ? { vendor: data.extractedVendor } : {}) },
       );
       // A late answer for a receipt the owner has already moved on from is
       // dropped rather than applied to whatever is on screen now.
@@ -545,7 +610,9 @@ export function ScanReceipt() {
 
   async function handleConfirm(e: FormEvent) {
     e.preventDefault();
-    if (!scan || amount === "" || !readyToConfirm) return;
+    if (!scan || amount === "" || !readyToConfirm || savePending.current || foreignCurrency) return;
+    savePending.current = true;
+    const signal = requests.current.signal;
     setConfirming(true);
     setConfirmError(null);
     try {
@@ -574,7 +641,9 @@ export function ScanReceipt() {
             amount: Number(isSplit ? s.amount : amount),
           })),
         }),
+        { signal },
       );
+      signal.throwIfAborted();
       const saved = records.data as { id: number }[];
       toast(saved.length === 1 ? "Expense saved from receipt" : `${saved.length} expenses saved from receipt`);
 
@@ -629,9 +698,10 @@ export function ScanReceipt() {
       }
       navigate("/records");
     } catch (err) {
-      setConfirmError(getErrorMessage(err));
+      if (!signal.aborted) setConfirmError(getErrorMessage(err));
     } finally {
-      setConfirming(false);
+      savePending.current = false;
+      if (!signal.aborted) setConfirming(false);
     }
   }
 
@@ -684,6 +754,7 @@ export function ScanReceipt() {
    */
   function handleRescan() {
     resetReviewFields();
+    setPickedFiles(currentFiles.current);
     setFileQueue([]);
     setQueuePosition(0);
     setQueueTotal(0);
@@ -772,8 +843,8 @@ export function ScanReceipt() {
    * list of problems would make it read as one.
    */
   const allWarnings = scan?.warnings ?? [];
-  const warningProblems = allWarnings.filter((w) => warningTone(w.code) !== "info");
-  const warningNotices = allWarnings.filter((w) => warningTone(w.code) === "info");
+  const foreignCurrency = scan?.receiptDetails?.currency && scan.receiptDetails.currency !== "PHP"
+    ? scan.receiptDetails.currency : scan?.requiresManualCurrencyConversion ? "another currency" : null;
 
   /**
    * Items grouped by the category the owner currently has them in, with a
@@ -953,7 +1024,8 @@ export function ScanReceipt() {
               id="receipt-files"
               files={pickedFiles}
               onChange={setPickedFiles}
-              hintText="JPEG, PNG or WEBP, up to 8MB each. A flat, well-lit photo reads best. Add more than one only if this receipt did not fit in a single photo, or you're scanning several receipts at once."
+              disabled={scanning}
+              hintText="JPEG, PNG or WEBP. Up to 8 photos, 10MB each. Use a flat, well-lit photo."
             />
           </Field>
 
@@ -1004,6 +1076,27 @@ export function ScanReceipt() {
                 : "Scan receipt"}
           </Button>
         </form>
+      </FormPage>
+    );
+  }
+
+  if (foreignCurrency) {
+    return (
+      <FormPage title="Review receipt">
+        <div className="space-y-4">
+          <Callout tone="warn">
+            <p className="font-semibold">This receipt uses {foreignCurrency}. FinSight records expenses in PHP.</p>
+            <Link to="/records/expenses/new" className="tap-inline font-semibold underline underline-offset-2">
+              Enter the PHP amount manually
+            </Link>
+          </Callout>
+          {scan.extractedAmount !== null && scan.receiptDetails?.currency ? (
+            <p className="text-sm text-ink-700">Printed total: <strong className="figure">{foreignCurrency} {new Intl.NumberFormat("en-PH", { minimumFractionDigits: 2 }).format(scan.extractedAmount)}</strong></p>
+          ) : null}
+          <PrintedReceiptDetails details={scan.receiptDetails} />
+          {receiptPreview}
+          <Button type="button" variant="secondary" onClick={handleRescan}>Choose another receipt</Button>
+        </div>
       </FormPage>
     );
   }
@@ -1098,9 +1191,7 @@ export function ScanReceipt() {
               <Pill tone={BAND_COPY[receiptBand].tone === "ok" ? "ok" : BAND_COPY[receiptBand].tone === "warn" ? "warn" : "danger"}>
                 {BAND_COPY[receiptBand].label}
               </Pill>
-              <p className="min-w-0 flex-1 text-xs leading-relaxed text-ink-500">
-                {BAND_COPY[receiptBand].detail}
-              </p>
+              <p className="min-w-0 flex-1 text-xs text-ink-500">Receipt scanned. Review before saving.</p>
             </div>
 
             {/*
@@ -1117,10 +1208,7 @@ export function ScanReceipt() {
                 <b className="font-semibold">
                   Check {attentionFields.map((f) => FIELD_LABELS[f]).join(", ").toLowerCase()} before
                   saving.
-                </b>{" "}
-                {attentionFields.length === 1
-                  ? "FinSight was least sure about this one."
-                  : "These are the values FinSight was least sure about."}
+                </b>
               </Callout>
             ) : null}
 
@@ -1139,61 +1227,8 @@ export function ScanReceipt() {
               renders `warning.guidance` verbatim. Writing a sentence here
               instead — however small — puts the drift straight back.
             */}
-            {warningProblems.length === 1 ? (
-              <Callout tone="warn">
-                <b className="font-semibold">
-                  {warningHeadline(warningProblems[0].code)}
-                  {warningPageSuffix(warningProblems[0])}.
-                </b>{" "}
-                {warningProblems[0].guidance}
-                {warningProblems[0].detail ? (
-                  <span className="mt-1 block text-[11px] opacity-80">{warningProblems[0].detail}</span>
-                ) : null}
-              </Callout>
-            ) : warningProblems.length > 1 ? (
-              <Callout tone="warn">
-                <b className="font-semibold">{warningProblems.length} things to check on this photo.</b>
-                <ul className="mt-1.5 list-disc space-y-1.5 pl-4">
-                  {warningProblems.map((warning, i) => (
-                    <li key={`${warning.code}-${warning.pageNumber ?? "x"}-${i}`}>
-                      <b className="font-semibold">
-                        {warningHeadline(warning.code)}
-                        {warningPageSuffix(warning)}.
-                      </b>{" "}
-                      {warning.guidance}
-                      {warning.detail ? (
-                        <span className="mt-0.5 block text-[11px] opacity-80">{warning.detail}</span>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-              </Callout>
-            ) : null}
-
-            {warningNotices.map((warning, i) => (
-              <Callout key={`${warning.code}-${warning.pageNumber ?? "x"}-${i}`} tone={warningTone(warning.code)}>
-                <b className="font-semibold">
-                  {warningHeadline(warning.code)}
-                  {warningPageSuffix(warning)}.
-                </b>{" "}
-                {warning.guidance}
-                {warning.detail ? (
-                  <span className="mt-1 block text-[11px] opacity-80">{warning.detail}</span>
-                ) : null}
-              </Callout>
-            ))}
-
-            {/*
-              The standing reminder, which is not a warning about THIS receipt
-              and so is not part of the list above. It stays because the design
-              assumes owners know they can correct these values, and item 29
-              exists because they did not.
-            */}
-            <Callout tone="warn">
-              <b className="font-semibold">Check these against your receipt before saving.</b>{" "}
-              FinSight often misreads creased, faded or thermal-printed receipts. Anything you change here
-              is what gets saved.
-            </Callout>
+            <ReceiptResultNotes key={scan.id} warnings={allWarnings} />
+            <PrintedReceiptDetails key={`printed-${scan.id}`} details={scan.receiptDetails} />
 
             <ScannedField
               label="Date"
@@ -1468,7 +1503,7 @@ export function ScanReceipt() {
                                   type="button"
                                   onClick={() => acceptSuggestedCategory(item.suggestedCategoryName!)}
                                   disabled={creatingCategoryFor !== null}
-                                  className="tap-inline font-medium text-brand-700 underline transition hover:text-brand-800 disabled:opacity-50"
+                                  className="tap-inline font-medium text-tone-brand underline transition hover:decoration-2 disabled:opacity-50"
                                 >
                                   {creatingCategoryFor === item.suggestedCategoryName
                                     ? "Creating…"
@@ -1712,7 +1747,7 @@ export function ScanReceipt() {
                     <button
                       type="button"
                       onClick={addAddedItem}
-                      className="tap-inline mt-2.5 border-t border-tone-accent/20 pt-2 text-xs font-medium text-brand-700 transition hover:text-brand-800"
+                      className="tap-inline mt-2.5 border-t border-tone-accent/20 pt-2 text-xs font-medium text-tone-brand transition hover:underline"
                     >
                       + An item is missing — add it to the list
                     </button>
@@ -1725,17 +1760,17 @@ export function ScanReceipt() {
                 htmlFor="category"
                 required
                 /*
-                  Says plainly that this one was written by the AI.
+                  Marks a suggestion from either history or AI.
                   Derived by comparing the field against what was suggested
                   rather than held as a flag, so it disappears by itself the
                   moment the owner picks something else — at which point the
-                  value is theirs and calling it AI-suggested would be wrong.
+                  value is theirs and calling it suggested would be wrong.
                 */
                 labelAction={
                   suggestedCategoryId !== null && splits[0]!.categoryId === suggestedCategoryId ? (
                     <span className="inline-flex items-center gap-1 rounded-full bg-tint-info px-2 py-0.5 text-[11px] font-medium text-tone-info ring-1 ring-edge-info">
                       <span aria-hidden>✦</span>
-                      AI-suggested — check it
+                      Suggested — check it
                     </span>
                   ) : null
                 }
@@ -1827,7 +1862,7 @@ export function ScanReceipt() {
               <button
                 type="button"
                 onClick={addSplit}
-                className="tap-inline text-sm font-medium text-brand-700 transition hover:text-brand-800"
+                className="tap-inline text-sm font-medium text-tone-brand transition hover:underline"
               >
                 + Add another category
               </button>
@@ -1835,9 +1870,10 @@ export function ScanReceipt() {
 
             {isItemised && itemsWereAutoCategorised ? (
               <Callout tone="info">
-                <b className="font-semibold">FinSight chose these categories</b> by reading the item names.
-                It gets item lines wrong more often than it gets a total wrong, so check each row against
-                the photo before saving. Anything you change here is what gets saved.
+                <b className="font-semibold">Categories suggested. Check each item before saving.</b>
+                <ResultDetails label="Category suggestion details">
+                  <p>Suggestions use the item names. Change any category that does not fit; your choices are saved when you confirm.</p>
+                </ResultDetails>
               </Callout>
             ) : null}
 
@@ -1847,7 +1883,7 @@ export function ScanReceipt() {
               <Button
                 type="submit"
                 variant="primary"
-                disabled={confirming || !readyToConfirm}
+                disabled={confirming || !readyToConfirm || Boolean(foreignCurrency)}
                 className="flex-1"
               >
                 {confirming
@@ -1862,7 +1898,7 @@ export function ScanReceipt() {
                       return n === 1 ? "Confirm & save expense" : `Confirm & save ${n} expenses`;
                     })()}
               </Button>
-              <Button type="button" variant="secondary" onClick={handleRescan}>
+              <Button type="button" variant="secondary" onClick={handleRescan} disabled={confirming}>
                 Rescan
               </Button>
             </div>

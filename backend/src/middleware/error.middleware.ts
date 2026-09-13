@@ -7,9 +7,10 @@ import { logger } from "../config/logger";
 /*
  * Codes for "the database was not reachable", as opposed to "the query was
  * wrong". P1001/P1002 are the connection itself; P1008 is a timeout waiting
- * for one; P1017 is the server closing it mid-flight.
+ * for an operation; P1017 is the server closing it mid-flight, and P2024 is
+ * the application pool timing out before a connection becomes available.
  */
-const UNREACHABLE_DB_CODES = new Set(["P1001", "P1002", "P1008", "P1017"]);
+const UNREACHABLE_DB_CODES = new Set(["P1001", "P1002", "P1008", "P1017", "P2024"]);
 
 function isDatabaseUnreachable(err: unknown): boolean {
   if (err instanceof Prisma.PrismaClientInitializationError) {
@@ -106,12 +107,10 @@ export function errorHandler(err: unknown, req: Request, res: Response, next: Ne
    * A LOST DATABASE CONNECTION IS NOT A BUG IN THE REQUEST, and saying "the
    * server had a problem with that" told the owner the opposite — that
    * something was wrong with what they did, and that retrying was pointless.
-   * The usual cause is a momentary network drop between this process and the
-   * database, where a retry a second later simply works.
-   *
-   * 503 with `Retry-After` is what actually describes that, and it is what
-   * lets a client offer a retry rather than an apology. The reassurance about
-   * unchanged data is the honest part: the request never reached storage.
+   * A 503 with `Retry-After` identifies an unavailable dependency without
+   * promising how quickly it will recover. A closed connection or timeout can
+   * happen after a write committed, so neither automatic write retries nor a
+   * promise that nothing changed would be safe here.
    */
   if (isDatabaseUnreachable(err)) {
     logger.error(
@@ -120,8 +119,39 @@ export function errorHandler(err: unknown, req: Request, res: Response, next: Ne
     );
     res.setHeader("Retry-After", "5");
     return res.status(503).json({
-      error: "FinSight can't reach its database right now. This is usually a brief connection problem — please try again in a moment. Nothing on your account has changed.",
+      error:
+        "FinSight's database connection is unavailable right now. Please try again shortly. " +
+        "If you were saving changes, check whether they were saved before submitting them again.",
       code: "DATABASE_UNREACHABLE",
+    });
+  }
+
+  /*
+   * THE DATABASE IS REACHABLE BUT IS NOT THE SCHEMA THIS BUILD EXPECTS.
+   *
+   * P2022 is a missing column, P2021 a missing table. Both mean exactly one
+   * thing in this codebase: a migration in the repository has not been applied
+   * to the database this process is talking to. Nothing the caller did can
+   * cause either code, and no retry can clear one.
+   *
+   * This is the branch that should never be reached — server.ts and worker.ts
+   * refuse to start on that condition (see config/migrationGuard). It exists
+   * for the window that check cannot cover: a schema that changes underneath a
+   * process that is already running. Answering 500 "the server had a problem
+   * with that" is how this last went unnoticed — a real receipt scan failed on
+   * a phone with a message that blamed the photo — so the answer names the
+   * operational fault instead, and the log carries the code an operator needs.
+   */
+  if (err instanceof Prisma.PrismaClientKnownRequestError && (err.code === "P2021" || err.code === "P2022")) {
+    logger.fatal(
+      { err, requestId: requestIdOf(req), method: req.method, path: req.path, code: err.code },
+      "database schema is behind this build — a migration has not been applied",
+    );
+    return res.status(503).json({
+      error:
+        "FinSight is briefly out of step with its database and can't complete that right now. " +
+        "Nothing on your account has changed. This needs an update on our side rather than another try.",
+      code: "SCHEMA_OUT_OF_DATE",
     });
   }
 

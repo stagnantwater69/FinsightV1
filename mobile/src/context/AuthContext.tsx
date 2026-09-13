@@ -106,11 +106,21 @@ interface AuthValue {
 
 const AuthContext = createContext<AuthValue | undefined>(undefined);
 
+// A stale LAN address must not make a stored session hold the launch screen
+// until Android's TCP stack eventually gives up. This only bounds the cold-
+// start identity check; ordinary requests keep their endpoint-appropriate
+// lifetimes, and uploads retain their separate two-minute timeout.
+const BOOTSTRAP_PROFILE_TIMEOUT_MS = 10_000;
+
 async function fetchProfile(): Promise<Profile | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), BOOTSTRAP_PROFILE_TIMEOUT_MS);
   try {
-    return await api.get<Profile>("/auth/me");
+    return await api.get<Profile>("/auth/me", undefined, controller.signal);
   } catch {
     return null;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 

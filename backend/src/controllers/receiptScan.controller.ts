@@ -7,10 +7,12 @@ import { assessReceiptLikelihood } from "../lib/receiptLikelihood";
 import { ApiError } from "../middleware/error.middleware";
 import { transformReceiptPerspective } from "../lib/receiptPerspective";
 import { moneyAmountSchema } from "../lib/money";
+import { validateReceiptUpload } from "../lib/receiptUploadValidation";
 
 const uploadSchema = z.object({
   businessProfileId: z.coerce.number().int().positive(),
   captureMetadata: z.string().max(50_000).optional(),
+  idempotencyKey: z.string().min(8).max(100).optional(),
 });
 
 const pointSchema = z.object({ x: z.number().min(0).max(50_000), y: z.number().min(0).max(50_000) });
@@ -157,14 +159,16 @@ export async function upload(req: Request, res: Response) {
   if (files.length === 0) {
     throw new ApiError(400, "At least one receipt photo is required");
   }
-  const { businessProfileId, captureMetadata } = uploadSchema.parse(req.body);
+  const { businessProfileId, captureMetadata, idempotencyKey } = uploadSchema.parse(req.body);
   if (originals.length > 0 && originals.length !== files.length) {
     throw new ApiError(400, "Original and processed receipt page counts must match");
   }
   const metadata = parseCaptureMetadata(captureMetadata, files.length);
+  for (const file of [...files, ...originals]) await validateReceiptUpload(file);
 
   const scan = await receiptScanService.uploadAndScan(req.user!.id, {
     businessProfileId,
+    idempotencyKey,
     pages: files.map((file, index) => {
       const original = originals[index];
       return {
@@ -217,6 +221,7 @@ export async function checkQuality(req: Request, res: Response) {
   if (!req.file) {
     throw new ApiError(400, "A photo is required");
   }
+  await validateReceiptUpload(req.file);
   const quality = await assessImageQuality(req.file.buffer);
   res.status(200).json(quality);
 }
@@ -227,6 +232,7 @@ export async function transform(req: Request, res: Response) {
   let decoded: unknown;
   try { decoded = JSON.parse(raw); } catch { throw new ApiError(400, "Crop corners must be valid JSON"); }
   const corners = z.object({ topLeft: pointSchema, topRight: pointSchema, bottomRight: pointSchema, bottomLeft: pointSchema }).strict().parse(decoded);
+  await validateReceiptUpload(req.file);
   res.setHeader("Cache-Control", "no-store");
   res.json(await transformReceiptPerspective(req.file.buffer, corners));
 }
@@ -255,6 +261,7 @@ export async function detectEdges(req: Request, res: Response) {
   if (!req.file) {
     throw new ApiError(400, "A photo is required");
   }
+  await validateReceiptUpload(req.file);
   const result = await detectReceiptCorners(req.file.buffer);
   res.status(200).json({
     ...result,

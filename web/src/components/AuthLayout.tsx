@@ -125,6 +125,8 @@ export function AuthLayout({
   children: ReactNode;
 }) {
   const navigate = useNavigate();
+  const backButtonClass =
+    "h-11 w-11 items-center justify-center rounded-full border border-paper-200 bg-paper text-ink-500 shadow-sm transition duration-250 ease-shell hover:scale-105 hover:border-paper-300 hover:bg-paper-100 hover:text-ink-800 hover:shadow-md active:scale-95";
   return (
     // Pinned to Classic for the same reason the landing page is: these are
     // signed-out pages, and the app theme is a preference about the PRODUCT,
@@ -144,23 +146,44 @@ export function AuthLayout({
         className="pointer-events-none absolute left-1/2 top-1/2 h-[36rem] w-[36rem] -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand-100/60 blur-3xl"
       />
 
+      {/* Pinned to the page corner only when the viewport is wide enough
+          for it to sit clear of the card (the card is max-w-5xl, so below
+          `xl` it fills the width and a fixed button would land on top of
+          its corner). Narrower than that, the in-card copy below is shown
+          instead. */}
       {showBack ? (
         <button
           type="button"
           onClick={() => navigate("/")}
           aria-label="Back to home"
-          className="fixed left-4 top-4 z-10 flex h-11 w-11 items-center justify-center rounded-full border border-paper-200 bg-paper text-ink-500 shadow-sm transition duration-250 ease-shell hover:scale-105 hover:border-paper-300 hover:bg-paper-100 hover:text-ink-800 hover:shadow-md active:scale-95"
+          className={`${backButtonClass} fixed left-4 top-4 z-10 hidden xl:flex`}
         >
           <IconChevronLeft className="h-4 w-4" />
         </button>
       ) : null}
-      <div className="relative w-full max-w-5xl animate-rise overflow-hidden rounded-2xl border border-paper-200 bg-paper shadow-lg">
+      {/* The card is the page's principal content, so it is the <main>
+          landmark — the same `main-content` id AppShell and PublicLayout use,
+          so assistive navigation can jump to it here too (WEB-F02). */}
+      <main
+        id="main-content"
+        className="relative w-full max-w-5xl animate-rise overflow-hidden rounded-2xl border border-paper-200 bg-paper shadow-lg"
+      >
         {/* `lg:grid-cols-2` with min-w-0 tracks: without the minmax(0,...) a
             long unbroken string in a field could force a column wider than its
             share and push the card into a horizontal scroll. */}
         <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           {/* ------------------------------ form ------------------------------ */}
           <div className="px-5 py-8 sm:px-9 sm:py-10">
+            {showBack ? (
+              <button
+                type="button"
+                onClick={() => navigate("/")}
+                aria-label="Back to home"
+                className={`${backButtonClass} mb-5 flex xl:hidden`}
+              >
+                <IconChevronLeft className="h-4 w-4" />
+              </button>
+            ) : null}
             <Brand />
 
             {/* Staggered rise, same rhythm as the landing page's SectionHead
@@ -214,7 +237,7 @@ export function AuthLayout({
             <p className="border-t border-paper-200 pt-4 text-xs leading-relaxed text-ink-600">{footnote}</p>
           </aside>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

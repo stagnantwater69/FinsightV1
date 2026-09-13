@@ -232,6 +232,147 @@ describe("a confirm that fails part-way through", () => {
   });
 });
 
+describe("owner-added lines on a rejected or failed confirm", () => {
+  /*
+   * QA-FIN-01. The rows for lines the owner typed in were written BEFORE the
+   * confirmation transaction, so every rejection after that point — a total
+   * that did not reconcile, an unassigned item, a failed record write — left
+   * them on the scan. The retry then wrote a second copy and was refused on
+   * the first, which had no assignment: the owner could not get out without
+   * refreshing and deleting lines they never saw arrive. Real PostgreSQL,
+   * because the defect is about what survives a rolled-back request.
+   */
+  const softdrinks = () => ({ name: "Softdrinks", amount: 50, categoryId: ctx.categories.Inventory! });
+
+  function confirm(scanId: number, body: Record<string, unknown>) {
+    return request(app).post(`/api/v1/records/receipts/${scanId}/confirm`).set(...AUTH).send({
+      date: "2026-07-20",
+      description: "Purchase from ABC Store",
+      ...body,
+    });
+  }
+
+  it("leaves the original items untouched when the total does not reconcile, and the retry succeeds exactly once", async () => {
+    const scan = await makeReadScan([{ name: "Rice 25kg", amount: 1000 }]);
+    const rice = scan.items[0]!;
+    const assignments = [{ itemId: rice.id, categoryId: ctx.categories.Inventory }];
+
+    // Items come to 1050; the owner typed 1200 and chose no way to close the gap.
+    const rejected = await confirm(scan.id, { amount: 1200, itemAssignments: assignments, additionalItems: [softdrinks()] });
+    expect(rejected.status).toBe(400);
+    expect(rejected.body.error).toMatch(/choose how to account for the difference/i);
+
+    // Pre-fix this was 2 rows: the Softdrinks line survived the refusal.
+    expect(await prisma.receiptScanItem.count({ where: { receiptScanId: scan.id } })).toBe(1);
+    expect(await prisma.receiptScanItem.count({ where: { receiptScanId: scan.id, addedByOwner: true } })).toBe(0);
+    expect(await prisma.expenseRecord.count()).toBe(0);
+    expect(await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).toMatchObject({
+      confirmationStatus: "Pending",
+    });
+
+    // Same payload, corrected total. Pre-fix this was refused with "Every item
+    // on the receipt needs a category" because of the orphan, and wrote a
+    // third row while doing so.
+    const retry = await confirm(scan.id, { amount: 1050, itemAssignments: assignments, additionalItems: [softdrinks()] });
+    expect(retry.status).toBe(201);
+
+    const items = await prisma.receiptScanItem.findMany({ where: { receiptScanId: scan.id }, orderBy: { lineNumber: "asc" } });
+    expect(items).toHaveLength(2);
+    expect(items.filter((i) => i.addedByOwner)).toMatchObject([{ name: "Softdrinks", lineNumber: 2 }]);
+    const records = await prisma.expenseRecord.findMany({ where: { receiptScanId: scan.id } });
+    expect(records).toHaveLength(1);
+    expect(Number(records[0]!.amount)).toBe(1050);
+    for (const item of items) expect(item.expenseRecordId).toBe(records[0]!.id);
+
+    // The hand-added line still reaches the extraction-feedback ledger once,
+    // now that it rides out of the transaction rather than being known before it.
+    const misses = await prisma.receiptFieldCorrection.findMany({ where: { field: "itemPresence" } });
+    expect(misses).toHaveLength(1);
+    expect(misses[0]).toMatchObject({ finalValue: "Softdrinks" });
+
+    // And a plain repeat is the ordinary "already confirmed" refusal, writing nothing.
+    const again = await confirm(scan.id, { amount: 1050, itemAssignments: assignments, additionalItems: [softdrinks()] });
+    expect(again.status).toBe(400);
+    expect(again.body.error).toMatch(/already been confirmed/i);
+    expect(await prisma.receiptScanItem.count({ where: { receiptScanId: scan.id } })).toBe(2);
+  });
+
+  it("rolls the owner-added line back with everything else when a record write fails", async () => {
+    const scan = await makeReadScan([
+      { name: "Rice 25kg", amount: 1000 },
+      { name: "Electricity", amount: 220 },
+    ]);
+    const [rice, electricity] = scan.items;
+    const body = {
+      amount: 1270,
+      itemAssignments: [
+        { itemId: rice!.id, categoryId: ctx.categories.Inventory },
+        { itemId: electricity!.id, categoryId: ctx.categories.Utilities },
+      ],
+      additionalItems: [softdrinks()],
+    };
+
+    createHook.before = async (call) => {
+      if (call === 2) throw new Error("simulated failure writing the second split");
+    };
+    const failed = await confirm(scan.id, body);
+    expect(failed.status).toBe(500);
+    expect(createHook.calls).toBe(2);
+
+    expect(await prisma.expenseRecord.count()).toBe(0);
+    expect(await prisma.receiptScanItem.count({ where: { receiptScanId: scan.id, addedByOwner: true } })).toBe(0);
+    const items = await prisma.receiptScanItem.findMany({ where: { receiptScanId: scan.id } });
+    expect(items.map((item) => item.expenseRecordId)).toEqual([null, null]);
+    expect(await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).toMatchObject({
+      confirmationStatus: "Pending",
+    });
+
+    createHook.before = null;
+    const retry = await confirm(scan.id, body);
+    expect(retry.status).toBe(201);
+    expect(await prisma.receiptScanItem.count({ where: { receiptScanId: scan.id, addedByOwner: true } })).toBe(1);
+    const records = await prisma.expenseRecord.findMany({ where: { receiptScanId: scan.id } });
+    expect(records.reduce((sum, record) => sum + Number(record.amount), 0)).toBe(1270);
+  });
+
+  it("writes the owner-added line once when two confirms race", async () => {
+    const scan = await makeReadScan([{ name: "Rice 25kg", amount: 1000 }]);
+    const rice = scan.items[0]!;
+    const body = {
+      amount: 1050,
+      itemAssignments: [{ itemId: rice.id, categoryId: ctx.categories.Inventory }],
+      additionalItems: [softdrinks()],
+    };
+
+    let releaseWinner: (() => void) | null = null;
+    const winnerHeld = new Promise<void>((resolve) => {
+      releaseWinner = resolve;
+    });
+    createHook.before = async (call) => {
+      if (call === 1) await winnerHeld;
+    };
+
+    const winner = confirm(scan.id, body).then((r) => r);
+    await sleep(200);
+    const loser = confirm(scan.id, body).then((r) => r);
+    await sleep(200);
+    releaseWinner!();
+    const [first, second] = await Promise.all([winner, loser]);
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(409);
+
+    expect(await prisma.expenseRecord.findMany({ where: { receiptScanId: scan.id } })).toHaveLength(1);
+    const items = await prisma.receiptScanItem.findMany({ where: { receiptScanId: scan.id } });
+    expect(items).toHaveLength(2);
+    expect(items.filter((i) => i.addedByOwner)).toHaveLength(1);
+    expect(items.every((i) => i.expenseRecordId !== null)).toBe(true);
+    expect(await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).toMatchObject({
+      confirmationStatus: "Confirmed",
+    });
+  });
+});
+
 describe("the item -> record link written on confirm", () => {
   /*
    * SEC-007. The link update was the one receipt-item write in the file not

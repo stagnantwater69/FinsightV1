@@ -10,7 +10,7 @@ export const STAGE_LABELS: Record<ScanStage, string> = {
 };
 
 export const ACCEPTED_TYPES = "image/jpeg,image/png,image/webp";
-export const MAX_FILE_BYTES = 8 * 1024 * 1024;
+export const MAX_FILE_BYTES = 10 * 1024 * 1024;
 /** Matches the server's own MAX_PAGES (receiptScan.service.ts) — kept in the
  * comment rather than imported, since the client has no access to backend
  * source; the server is still the one place that actually enforces it. */

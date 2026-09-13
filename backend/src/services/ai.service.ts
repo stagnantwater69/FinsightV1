@@ -7,6 +7,7 @@ import type { ExtractedScenario } from "../lib/scenario";
 import type { AIInteraction } from "@prisma/client";
 import { logger } from "../config/logger";
 import type { ReductionOpportunity } from "./reductionOpportunity.service";
+import { categoryFromHistory, loadConfirmedCategoryHistory } from "../lib/categoryHistory";
 
 // Keep the model names as named constants — Google and OpenRouter rename
 // or deprecate models often. If a call starts failing with a 404/"model
@@ -391,6 +392,7 @@ async function classifyWithOpenRouter(description: string, categoryNames: string
 export interface CategorySuggestion {
   categoryId: number;
   categoryName: string;
+  source?: "history" | "ai";
 }
 
 /**
@@ -672,7 +674,8 @@ export async function categoriseReceiptItems(
 export async function suggestCategoryForDescription(
   userId: number,
   businessProfileId: number,
-  description: string
+  description: string,
+  vendor?: string,
 ): Promise<CategorySuggestion | null> {
   await requireOwnedBusinessProfile(userId, businessProfileId);
 
@@ -682,23 +685,28 @@ export async function suggestCategoryForDescription(
   });
   if (categories.length === 0) return null;
 
+  const historyMatch = categoryFromHistory(await loadConfirmedCategoryHistory(businessProfileId), description, vendor);
+  if (historyMatch && categories.some((category) => category.id === historyMatch.categoryId)) return historyMatch;
+
   const suggestions: CategorySuggestion[] = categories.map((c) => ({ categoryId: c.id, categoryName: c.name }));
   const names = suggestions.map((c) => c.categoryName);
+  const classificationDescription = vendor?.trim() ? `${description}\nVendor: ${vendor.trim()}` : description;
 
   let raw: string;
   try {
-    raw = await classifyWithGemini(description, names);
+    raw = await classifyWithGemini(classificationDescription, names);
   } catch (geminiError) {
     logger.error({ err: geminiError }, "Gemini category classification failed, falling back to OpenRouter");
     try {
-      raw = await classifyWithOpenRouter(description, names);
+      raw = await classifyWithOpenRouter(classificationDescription, names);
     } catch (openRouterError) {
       logger.error({ err: openRouterError }, "OpenRouter category classification also failed");
       return null;
     }
   }
 
-  return matchCategory(raw, suggestions);
+  const match = matchCategory(raw, suggestions);
+  return match ? { ...match, source: "ai" as const } : null;
 }
 
 // ============================================================

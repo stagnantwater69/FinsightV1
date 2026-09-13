@@ -11,7 +11,7 @@ test("login form exposes the complete recovery and registration journey", async 
   await expect(page.getByRole("heading", { name: /reset/i })).toBeVisible();
 
   await page.goto("/login");
-  await page.getByRole("link", { name: "Register" }).click();
+  await page.getByRole("link", { name: "Create account", exact: true }).click();
   await expect(page).toHaveURL(/\/register$/);
   await expect(page.getByRole("heading", { name: /create|register/i })).toBeVisible();
 });

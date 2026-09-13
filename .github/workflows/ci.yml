@@ -59,6 +59,24 @@ jobs:
         env:
           DATABASE_URL: postgresql://testuser:testpass@localhost:55432/finsight_test
           DIRECT_URL: postgresql://testuser:testpass@localhost:55432/finsight_test
+      # A migrated fresh database must match schema.prisma exactly. Nine index
+      # names drifted for months (DATA-DRIFT-01: Postgres truncated the
+      # migration-authored names to 63 bytes, Prisma later computed different
+      # short names) because nothing diffed the two. --exit-code makes any
+      # difference — a dropped index, a stray column — a red step.
+      - run: >-
+          npx prisma migrate diff
+          --from-url "$DATABASE_URL"
+          --to-schema-datamodel prisma/schema.prisma
+          --exit-code
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://testuser:testpass@localhost:55432/finsight_test
+      # Web and mobile each carry a copy of the shared API types. The script
+      # only compares exported NAMES (the contract tests below cover shapes),
+      # but it was never wired into CI and drifted to 16 mismatches
+      # (CONTRACT-01). Exemptions live in the script with a reason each.
+      - run: node scripts/check-type-parity.mjs
       - run: npm run typecheck --prefix backend
       - run: npm run lint --prefix backend
       # Compiles the actual production artifact (dist/) that Dockerfile's
@@ -187,7 +205,19 @@ jobs:
           DATABASE_URL: postgresql://testuser:testpass@localhost:55432/finsight_test
           DIRECT_URL: postgresql://testuser:testpass@localhost:55432/finsight_test
 
-      - run: docker build -t finsight-backend:ci ./backend
+      # Both targets, named explicitly, then a CMD check on each: an untargeted
+      # build once resolved to the worker stage (OPS-DEPLOY-01), which would
+      # have made the smoke below poll an image that never listens.
+      - run: docker build --target api -t finsight-backend:ci ./backend
+      - run: docker build --target worker -t finsight-worker:ci ./backend
+      - run: |
+          api_cmd="$(docker inspect --format '{{json .Config.Cmd}}' finsight-backend:ci)"
+          worker_cmd="$(docker inspect --format '{{json .Config.Cmd}}' finsight-worker:ci)"
+          default_cmd="$(docker build -q ./backend | xargs docker inspect --format '{{json .Config.Cmd}}')"
+          echo "api: $api_cmd  worker: $worker_cmd  default: $default_cmd"
+          [ "$api_cmd" = '["node","dist/server.js"]' ]
+          [ "$worker_cmd" = '["node","dist/worker.js"]' ]
+          [ "$default_cmd" = '["node","dist/server.js"]' ]
 
       # --network host: the container needs to reach the postgres *service
       # container*, which GitHub Actions publishes on the runner's own

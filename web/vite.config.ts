@@ -18,6 +18,10 @@ export default defineConfig({
      * address (see backend/.env), so the same link works from both.
      */
     host: true,
+    // Approve this shared preview explicitly; a wildcard would trust other
+    // users' tunnels too. Vite also accepts extra exact hostnames through the
+    // __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS shell environment variable.
+    allowedHosts: ['l5v15rgq-5173.asse.devtunnels.ms'],
     /*
      * The frontend calls a relative `/api/v1` base (see web/.env) rather
      * than an absolute `http://localhost:4000`, and this proxy is what makes

@@ -115,14 +115,12 @@ export function guessMapping(
  * Which fields must be mapped before the import can run, for this choice of
  * record type and strategy.
  *
- * Category is required for a PURE expense import and optional for a mixed
- * one — a combined export often has no category column at all, and those rows
- * land in "Uncategorised" rather than being rejected. Vendor is never
- * required: ExpenseRecord.vendor is nullable.
+ * Category can come from a mapped column or an explicit row correction.
+ * Expense rows still require a category at validation; leaving the column
+ * unmapped allows the owner to apply history suggestions before confirming.
  */
 export function requiredFields(recordType: ImportRecordType, mixedStrategy: MixedStrategy): MappedField[] {
   const fields: MappedField[] = ["date", "description", "amount"];
-  if (recordType === "expense") fields.push("category");
   if (recordType === "mixed" && mixedStrategy === "column") fields.push("recordType");
   return fields;
 }

@@ -1,10 +1,11 @@
 import { prisma } from "../../config/prisma";
 import { ApiError } from "../../middleware/error.middleware";
-import { createExpenseRecordWithin } from "../expenseRecord.service";
+import { createExpenseRecordWithin, type BulkDbClient } from "../expenseRecord.service";
 import { allocateProportionally, type ReconciliationMode } from "../../lib/allocation";
 import { recordConfirmationFeedback, recordDeletedLine, snapshotItemCategories } from "../extractionFeedback.service";
 import { toDTO } from "./dto";
 import { CHARGES_DESCRIPTION, type ConfirmInput, type ReceiptSplit } from "./types";
+import { requiresManualCurrencyConversion } from "../../lib/receiptDetails";
 
 /**
  * Removes a line the owner says was never a purchase.
@@ -93,6 +94,9 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
   if (!scan.businessProfileId) {
     throw new ApiError(400, "Receipt scan is not linked to a business profile");
   }
+  if (requiresManualCurrencyConversion(scan.rawText)) {
+    throw new ApiError(400, "This receipt uses a foreign currency. Enter an expense manually with the amount paid in PHP.");
+  }
 
   /*
    * The splits must account for the whole receipt, exactly.
@@ -111,10 +115,8 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
 
   /*
    * Every category named anywhere in this request is checked against THIS
-   * business before anything is written. Doing it up front rather than at
-   * each use matters because owner-added items are persisted below: a
-   * validation failure halfway through would leave orphan item rows on the
-   * scan that reappear the next time the owner opens it.
+   * business before the transaction opens, so an obviously bad payload is
+   * refused with a 400 without ever taking the claim on the scan row.
    */
   const validCategories = new Set(
     (
@@ -133,19 +135,6 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
     throw new ApiError(400, "Category does not belong to this business profile");
   }
 
-  // The itemised path derives its own splits from the stored items, so the
-  // amounts written and the item -> record links written come from the same
-  // grouping and cannot drift apart.
-  let splits: ReceiptSplit[];
-  let ownerAdded: { itemId: number; categoryId: number; name: string; lineNumber: number }[] = [];
-  if (input.itemAssignments) {
-    ownerAdded = await persistOwnerAddedItems(scan.id, input.additionalItems);
-    splits = await groupItemsIntoSplits(scan.id, validCategories, [...input.itemAssignments, ...ownerAdded]);
-    splits = reconcileSplits(splits, totalCentavos, input.reconciliation ?? { mode: "none" });
-  } else {
-    splits = input.splits ?? [];
-  }
-
   /*
    * The categoriser's picks, read before the write below destroys them.
    *
@@ -154,41 +143,18 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
    * the database entirely. Comparing afterwards would compare the owner's
    * choice with itself and conclude the categoriser is never wrong. This is
    * the one signal in the whole feedback loop that cannot be recovered later,
-   * which is why it is taken here rather than at the end.
+   * which is why it is taken here rather than at the end. Owner-added lines
+   * are excluded by that query, so it does not need to wait for them.
    */
   const priorItems = await snapshotItemCategories(scan.id);
-
-  if (splits.length === 0) {
-    throw new ApiError(400, "Assign the receipt to at least one category");
-  }
-
-  /*
-   * The splits must account for the whole receipt, exactly.
-   *
-   * On the itemised path reconcileSplits has already closed any legitimate
-   * gap, so this is now a POST-CONDITION on that arithmetic rather than the
-   * owner's problem to solve — if it ever fires there, the allocation is
-   * wrong and must not be written. On the manual-split path it is still the
-   * original check on what the owner typed.
-   */
-  const splitCentavos = splits.reduce((sum, s) => sum + Math.round(s.amount * 100), 0);
-  if (splitCentavos !== totalCentavos) {
-    const difference = (splitCentavos - totalCentavos) / 100;
-    throw new ApiError(
-      400,
-      difference > 0
-        ? `The categories add up to PHP ${Math.abs(difference).toFixed(2)} more than the receipt total.`
-        : `PHP ${Math.abs(difference).toFixed(2)} of the receipt total is not assigned to a category yet.`,
-    );
-  }
 
   const businessProfileId = scan.businessProfileId;
 
   /*
    * EVERYTHING THE CONFIRMATION WRITES, IN ONE TRANSACTION.
    *
-   * Two separate ways this used to corrupt the books, both fixed by the same
-   * unit of work:
+   * Three separate ways this used to corrupt the books or the review, all
+   * fixed by the same unit of work:
    *
    * 1. TWO CONFIRMS AT ONCE. The read guard near the top of this function and
    *    the flip to Confirmed used to sit ~140 awaited lines apart, so a double
@@ -207,13 +173,23 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
    *    transaction there is no such half state: either the whole receipt is
    *    booked and the scan is Confirmed, or nothing happened at all.
    *
+   * 3. OWNER-ADDED LINES. The rows for lines the owner typed in used to be
+   *    written before the transaction, so any rejection after that point — a
+   *    total that did not reconcile, an unassigned item, the post-condition
+   *    below — left them on the scan. The retry then wrote a second copy and
+   *    failed on the first, which carried no assignment. They are written
+   *    after the claim now, and the validation that can refuse them runs in
+   *    here too, so a refused or failed confirmation leaves none behind.
+   *    One consequence: a concurrent loser answers 409 regardless of whether
+   *    its own payload would have reconciled, because the claim comes first.
+   *
    * The side effects each record create would normally fire — the duplicate
    * and large-expense notifications, the queued analysis job — come back as
    * thunks and run after the COMMIT. A notification that fails to send must
    * never roll back the books, and the analysis job carries a foreign key to a
    * record that does not exist outside the transaction yet.
    */
-  const { records, deferredEffects } = await prisma.$transaction(
+  const { records, deferredEffects, splits, ownerAdded } = await prisma.$transaction(
     async (tx) => {
       const claimed = await tx.receiptScan.updateMany({
         where: { id: scan.id, confirmationStatus: "Pending" },
@@ -225,6 +201,44 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
         // now". The books are intact either way, and the client's retry will
         // find the scan confirmed.
         throw new ApiError(409, "This receipt scan is already being confirmed");
+      }
+
+      // The itemised path derives its own splits from the stored items, so the
+      // amounts written and the item -> record links written come from the same
+      // grouping and cannot drift apart.
+      let splits: ReceiptSplit[];
+      let ownerAdded: { itemId: number; categoryId: number; name: string; lineNumber: number }[] = [];
+      if (input.itemAssignments) {
+        ownerAdded = await persistOwnerAddedItems(tx, scan.id, input.additionalItems);
+        splits = await groupItemsIntoSplits(tx, scan.id, validCategories, [...input.itemAssignments, ...ownerAdded]);
+        splits = reconcileSplits(splits, totalCentavos, input.reconciliation ?? { mode: "none" });
+      } else {
+        splits = input.splits ?? [];
+      }
+
+      if (splits.length === 0) {
+        throw new ApiError(400, "Assign the receipt to at least one category");
+      }
+
+      /*
+       * The splits must account for the whole receipt, exactly.
+       *
+       * On the itemised path reconcileSplits has already closed any legitimate
+       * gap, so this is now a POST-CONDITION on that arithmetic rather than the
+       * owner's problem to solve — if it ever fires there, the allocation is
+       * wrong and must not be written. On the manual-split path it is still the
+       * original check on what the owner typed. Throwing here rolls back the
+       * claim and any owner-added rows along with it.
+       */
+      const splitCentavos = splits.reduce((sum, s) => sum + Math.round(s.amount * 100), 0);
+      if (splitCentavos !== totalCentavos) {
+        const difference = (splitCentavos - totalCentavos) / 100;
+        throw new ApiError(
+          400,
+          difference > 0
+            ? `The categories add up to PHP ${Math.abs(difference).toFixed(2)} more than the receipt total.`
+            : `PHP ${Math.abs(difference).toFixed(2)} of the receipt total is not assigned to a category yet.`,
+        );
       }
 
       // One record per category, all pointing back at this scan. Sequential
@@ -266,7 +280,7 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
         }
       }
 
-      return { records: created, deferredEffects: effects };
+      return { records: created, deferredEffects: effects, splits, ownerAdded };
     },
     // Generous relative to the handful of statements above, because a second
     // confirm of the same scan waits here on the claim's row lock rather than
@@ -321,14 +335,22 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
  * Line numbers continue after the extracted ones, so a hand-added line sorts
  * to the bottom rather than claiming a position on the printed receipt it
  * never occupied.
+ *
+ * Written through `db` — the confirmation's transaction client — so a
+ * confirmation that is refused or fails after this point leaves none of these
+ * rows behind. They used to be written up front with the global client, and
+ * every later rejection (a total that did not reconcile, an unassigned line,
+ * a failed record write) left them on the scan as orphans; the retry then
+ * created a second copy and failed on the first one, which had no assignment.
  */
 async function persistOwnerAddedItems(
+  db: BulkDbClient,
   receiptScanId: number,
   additionalItems: { name: string; amount: number; categoryId: number }[] | undefined,
 ): Promise<{ itemId: number; categoryId: number; name: string; lineNumber: number }[]> {
   if (!additionalItems || additionalItems.length === 0) return [];
 
-  const existing = await prisma.receiptScanItem.findMany({
+  const existing = await db.receiptScanItem.findMany({
     where: { receiptScanId },
     select: { lineNumber: true },
   });
@@ -341,7 +363,7 @@ async function persistOwnerAddedItems(
   const created: { itemId: number; categoryId: number; name: string; lineNumber: number }[] = [];
   for (const item of additionalItems) {
     lineNumber += 1;
-    const row = await prisma.receiptScanItem.create({
+    const row = await db.receiptScanItem.create({
       data: {
         receiptScanId,
         lineNumber,
@@ -456,11 +478,16 @@ function reconcileSplits(
  * per finalised transaction.
  */
 async function groupItemsIntoSplits(
+  db: BulkDbClient,
   receiptScanId: number,
   validCategories: ReadonlySet<number>,
   assignments: { itemId: number; categoryId: number }[],
 ): Promise<ReceiptSplit[]> {
-  const items = await prisma.receiptScanItem.findMany({ where: { receiptScanId }, orderBy: { lineNumber: "asc" } });
+  // Read through the same client that just wrote the owner-added rows: inside
+  // the confirmation transaction those rows are not yet visible to the global
+  // client, and reading past them here would reject every hand-added line as
+  // "not on this receipt".
+  const items = await db.receiptScanItem.findMany({ where: { receiptScanId }, orderBy: { lineNumber: "asc" } });
   const chosen = new Map(assignments.map((a) => [a.itemId, a.categoryId]));
 
   // Every assignment must name an item of THIS scan and a category of THIS

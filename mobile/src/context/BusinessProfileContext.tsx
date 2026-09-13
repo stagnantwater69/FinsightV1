@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, errorMessage } from "../lib/api";
 import { useAuth } from "./AuthContext";
 import type { BusinessProfile, BusinessProfileInput, ExpenseCategory, ExpenseCostBehavior } from "../lib/types";
@@ -60,7 +60,11 @@ export function BusinessProfileProvider({ children }: { children: ReactNode }) {
   const { profile: user, takeBootstrapProfiles } = useAuth();
   const [profiles, setProfiles] = useState<BusinessProfile[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [categories, setCategories] = useState<ExpenseCategory[]>([]);
+  const [categoryState, setCategoryState] = useState<{ scope: string; rows: ExpenseCategory[] } | null>(null);
+  const categoryScope = `${user?.id ?? ""}:${selectedId ?? ""}`;
+  const latestCategoryScope = useRef(categoryScope);
+  latestCategoryScope.current = categoryScope;
+  const categories = categoryState?.scope === categoryScope ? categoryState.rows : [];
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -99,7 +103,7 @@ export function BusinessProfileProvider({ children }: { children: ReactNode }) {
     if (!user) {
       setProfiles([]);
       setSelectedId(null);
-      setCategories([]);
+      setCategoryState(null);
       setError(null);
       setLoading(false);
       return;
@@ -112,11 +116,12 @@ export function BusinessProfileProvider({ children }: { children: ReactNode }) {
 
   const refreshCategories = useCallback(async () => {
     if (!selectedId) {
-      setCategories([]);
+      setCategoryState(null);
       return;
     }
-    setCategories(await api.get<ExpenseCategory[]>("/records/categories", { businessProfileId: selectedId }));
-  }, [selectedId]);
+    const rows = await api.get<ExpenseCategory[]>("/records/categories", { businessProfileId: selectedId });
+    if (latestCategoryScope.current === categoryScope) setCategoryState({ scope: categoryScope, rows });
+  }, [selectedId, categoryScope]);
 
   useEffect(() => {
     // Categories failing is not worth blocking the screen over — the pickers
@@ -152,7 +157,13 @@ export function BusinessProfileProvider({ children }: { children: ReactNode }) {
             ...(input.description ? { description: input.description } : {}),
             ...(input.costBehavior ? { costBehavior: input.costBehavior } : {}),
           });
-          setCategories((prev) => [...prev, created]);
+          if (latestCategoryScope.current !== categoryScope) {
+            throw new Error("Business changed. Choose a category for the current business.");
+          }
+          setCategoryState((previous) => ({
+            scope: categoryScope,
+            rows: [...(previous?.scope === categoryScope ? previous.rows : []), created],
+          }));
           return created;
         },
         createProfile: async (input) => {

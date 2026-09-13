@@ -235,7 +235,7 @@ export interface RecordDetail extends RecordItem {
  * client always sends `limit` and always reads the envelope: a business with
  * more than 200 flagged records must be able to reach all of them.
  */
-export interface FlaggedRecordsPage {
+export interface FlaggedRecordPage {
   items: RecordItem[];
   nextCursor: string | null;
 }
@@ -244,11 +244,21 @@ export interface FlaggedRecordsPage {
  * GET /records/flagged/count — how many records need review, without sending
  * them. Rendering a number must not download the list it counts.
  */
-export interface FlaggedRecordCount {
+export interface FlaggedRecordCounts {
   expenses: number;
   sales: number;
   total: number;
 }
+
+/**
+ * The sort orders `GET /records` accepts (`?sort=`). Shared with web so the
+ * value set the server validates is spelled once per client, not inlined.
+ * A cursor is minted FOR a sort and is rejected under any other one — change
+ * the sort, drop the cursor.
+ */
+export const RECORD_SORTS = ["date_desc", "date_asc", "amount_desc", "amount_asc"] as const;
+
+export type RecordSort = (typeof RECORD_SORTS)[number];
 
 /** A past CSV import, for the "which import" picker on the Records filters. */
 export interface ImportBatchSummary {
@@ -489,6 +499,39 @@ export interface RecoveryChangeSincePreviousDay {
     | "no_material_change";
 }
 
+/**
+ * One weekday's open/closed setting — `GET`/`PUT
+ * /business-profiles/:id/operating-schedule`. 1=Monday .. 7=Sunday, matching
+ * the backend's `BusinessOperatingDay.weekday` convention exactly so no
+ * client-side remapping is needed.
+ */
+export interface OperatingScheduleEntry {
+  weekday: number;
+  isOpen: boolean;
+}
+
+export type OperatingDayOverrideType = "OPEN" | "CLOSED";
+
+/**
+ * A single date exception — a holiday closure or a special opening —
+ * `GET`/`POST`/`DELETE /business-profiles/:id/operating-overrides`. Takes
+ * precedence over the weekly schedule for that one date.
+ */
+export interface OperatingDayOverride {
+  id: number;
+  businessProfileId: number;
+  date: string;
+  type: OperatingDayOverrideType;
+  reason: string | null;
+}
+
+export interface OperatingDayOverrideInput {
+  date: string;
+  type: OperatingDayOverrideType;
+  /** Owner-entered context only — never treated as financial evidence. Max 120 chars. */
+  reason?: string;
+}
+
 export type RecoveryStatus =
   | "needs_setup"
   | "no_current_month_data"
@@ -619,6 +662,12 @@ export interface ReductionOpportunity {
  * so the client never fetches prior feedback before showing the buttons.
  */
 export type ReductionOpportunityFeedbackRating = "helpful" | "not_relevant";
+
+export interface ReductionOpportunityFeedbackInput {
+  businessProfileId: number;
+  opportunityId: string;
+  rating: ReductionOpportunityFeedbackRating;
+}
 
 export interface ReductionOpportunityFeedbackResult {
   opportunityId: string;
@@ -918,6 +967,18 @@ export interface RecoveryPlan {
 }
 
 /**
+ * `strongestOpenDay`/`weakestOpenDay` — plan §10.9, Phase 7. See
+ * `computeMonthEndReview` in insights.service.ts: in an all-zero-sales month
+ * this is still a real day (the earliest one), not `null` — `null` only
+ * happens when the month had zero open days at all.
+ */
+export interface MonthEndOpenDaySales {
+  /** YYYY-MM-DD, UTC-midnight-encoded like every other date in this app. */
+  date: string;
+  sales: number;
+}
+
+/**
  * Recovery Target month-end review — plan §10.9/§11 Phase 7.
  * `GET /insights/recovery/month-end-review?businessProfileId=<id>&month=YYYY-MM`.
  *
@@ -942,8 +1003,8 @@ export type RecoveryMonthEndReview =
       /** Positive = surplus, negative = shortfall. */
       surplusOrShortfall: number;
       /** Null only when there were truly zero open days this month. */
-      strongestOpenDay: { date: string; sales: number } | null;
-      weakestOpenDay: { date: string; sales: number } | null;
+      strongestOpenDay: MonthEndOpenDaySales | null;
+      weakestOpenDay: MonthEndOpenDaySales | null;
       /** Combined missing + provisional day count, out of `openDayCount`. */
       missingOrProvisionalDayCount: number;
       openDayCount: number;

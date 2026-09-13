@@ -87,6 +87,14 @@ The API listens on `http://localhost:4000`. Use `GET /api/v1/health/live` for
 process liveness and `GET /api/v1/health/ready` (or the compatibility path
 `GET /api/v1/health`) for database-aware readiness and receipt-queue depth.
 
+`npm run dev` and `npm run worker:dev` automatically handle the observed
+Supabase pooler handshake stall in development through a local encrypted
+connection relay. They preserve your `.env` and use the same database project.
+Run `npm run db:check` to verify the development connection, or
+`npm run db:check:direct` to diagnose the original network path. See the
+[connection recovery instructions](docs/deployment-runbook.md#local-development-connection-recovery)
+for the supported settings and direct startup commands.
+
 For a fresh target database, set both `DATABASE_URL` and `DIRECT_URL` before
 deploying migrations. See [the deployment runbook](docs/deployment-runbook.md)
 and [internal acceptance checklist](docs/internal-acceptance-checklist.md) before pointing at a
@@ -104,6 +112,28 @@ npm run dev
 The Vite development server normally listens on `http://localhost:5173`.
 Supabase client settings and `VITE_API_BASE_URL` are build-time values.
 
+### Sharing the web preview
+
+Use `VITE_API_BASE_URL="/api/v1"` in `web/.env`, as shown in the example,
+then restart Vite after changing it. This keeps API requests on the preview's
+origin; Vite forwards `/api` to the backend on this machine's port 4000.
+
+Keep both servers running in separate terminals, from the repository root:
+
+```bash
+npm run dev --prefix backend
+npm run dev --prefix web
+```
+
+Forward port **5173** through VS Code's Ports panel and share its forwarded
+URL. On a first visit, Microsoft may show a tunnel notice; select **Continue**
+to reach FinSight. The web preview uses that same forwarded port for API
+requests, so it does not require a separate public forward for port 4000.
+
+If the tunnel URL changes, update the exact hostname in
+`server.allowedHosts` in `web/vite.config.ts` and restart Vite. Keep the API,
+Vite and the tunnel running while others use the preview.
+
 ## Mobile
 
 ```bash
@@ -115,6 +145,9 @@ npm start
 
 When testing on a physical phone, configure the API base URL with an address
 the phone can reach; `localhost` refers to the phone itself.
+
+For the standalone team APK that connects through Tailscale, follow the
+[Android APK and Tailscale setup guide](docs/mobile-apk-tailscale-setup.md).
 
 ## Verification
 

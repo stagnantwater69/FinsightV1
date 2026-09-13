@@ -32,9 +32,11 @@ export function NotFound() {
   const location = useLocation();
 
   return (
-    <div
+    <main
+      id="main-content"
       // No AppShell: this route sits outside the authenticated layout, so it
-      // paints its own page background rather than inheriting one.
+      // paints its own page background rather than inheriting one — and
+      // supplies its own <main> landmark, which AppShell would otherwise do.
       className="relative flex min-h-screen flex-col items-center justify-center bg-paper-50 px-4 py-6 text-center sm:px-6"
     >
       <span className="flex items-center gap-2.5">
@@ -81,6 +83,6 @@ export function NotFound() {
           </Link>
         )}
       </div>
-    </div>
+    </main>
   );
 }

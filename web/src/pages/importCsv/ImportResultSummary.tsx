@@ -3,6 +3,7 @@ import { Callout, FormPage } from "../../components/ui";
 import { ButtonLink } from "../../components/Button";
 import { Celebration } from "../../components/Confirmation";
 import type { ImportResult } from "./types";
+import { ResultDetails } from "../../components/ResultDetails";
 
 /**
  * The finished-import screen — stage 3 of the flow.
@@ -22,10 +23,18 @@ export function ImportResultSummary({
   // of skipped rows it persists, so `skipped.length` under-reports a large
   // file and "0 skipped" over a file that skipped 400 rows would be a lie.
   const skippedTotal = result.skippedCount ?? result.skipped.length;
-  const clean = skippedTotal === 0 && flaggedTotal === 0 && result.duplicateOfBatchId === undefined;
+  const failed = result.processingStatus === "FAILED";
+  const clean = !failed && skippedTotal === 0 && flaggedTotal === 0 && result.duplicateOfBatchId === undefined;
 
   return (
-    <FormPage eyebrow="Records" title="Import complete">
+    <FormPage eyebrow="Records" title={failed ? "Import stopped" : "Import complete"}>
+      {failed ? (
+        <div className="mb-4">
+          <Callout tone="warn">
+            Review the saved records, then import only the remaining rows.
+          </Callout>
+        </div>
+      ) : null}
       {/*
         Confirmation.tsx names CSV import as one of the three moments that
         earns a designed ending — a lot of work landing at once — and it was
@@ -35,8 +44,7 @@ export function ImportResultSummary({
       */}
       {clean ? (
         <Celebration title={`${result.imported} record${result.imported === 1 ? "" : "s"} imported`}>
-          Every row in <strong className="text-ink-800">{result.title}</strong> went in cleanly — nothing
-          was skipped and nothing needs review.
+          All rows in <strong className="text-ink-800">{result.title}</strong> were imported.
         </Celebration>
       ) : null}
 
@@ -99,9 +107,7 @@ export function ImportResultSummary({
       {result.duplicateOfBatchId !== undefined ? (
         <div className="mt-4">
           <Callout tone="warn">
-            <b className="font-semibold">This file was imported before.</b> An earlier import of this
-            business had byte-for-byte the same contents, so these records are probably a second copy
-            of ones you already have.{" "}
+            <b className="font-semibold">This file was imported before.</b> Check for duplicate records.{" "}
             <Link
               to="/records/flagged"
               className="tap-inline font-semibold text-tone-accent underline underline-offset-2"
@@ -121,10 +127,8 @@ export function ImportResultSummary({
         <div className="mt-4">
           <Callout tone="warn">
             <b className="font-semibold">
-              {flaggedTotal} record{flaggedTotal === 1 ? "" : "s"} need a second look.
+              {flaggedTotal} record{flaggedTotal === 1 ? " needs" : "s need"} a second look.
             </b>{" "}
-            FinSight flags a record when it matches one you already have, or when it's large for your
-            business.{" "}
             <Link
               to="/records/flagged"
               className="tap-inline font-semibold text-tone-accent underline underline-offset-2"
@@ -145,14 +149,11 @@ export function ImportResultSummary({
         <div className="mt-4">
           <Callout tone="info">
             <b className="font-semibold">
-              {result.uncategorised} expense{result.uncategorised === 1 ? "" : "s"} had no category
-              and went into "Uncategorised".
+              {result.uncategorised} expense{result.uncategorised === 1 ? "" : "s"} saved as "Uncategorised".
             </b>{" "}
-            They're imported and counted — sorting them into real categories is what makes them
-            show up in your spending breakdown.{" "}
             <Link
               to="/records"
-              className="tap-inline font-semibold text-brand-700 underline underline-offset-2"
+              className="tap-inline font-semibold text-tone-brand underline underline-offset-2"
             >
               Sort them now →
             </Link>
@@ -162,10 +163,10 @@ export function ImportResultSummary({
 
       {skippedTotal > 0 ? (
         <div className="mt-4 rounded-lg bg-tint-danger p-3 text-xs text-tone-danger ring-1 ring-edge-danger">
-          <p className="mb-1 font-medium">
-            These rows couldn't be read and were not imported. Fix them in your spreadsheet and import
-            again:
+          <p className="font-medium">
+            {skippedTotal} row{skippedTotal === 1 ? " was" : "s were"} skipped. Correct and import only those rows.
           </p>
+          <ResultDetails label="Skipped CSV rows">
           <ul className="list-inside list-disc space-y-0.5">
             {result.skipped.map((s) => (
               <li key={s.row}>
@@ -181,11 +182,12 @@ export function ImportResultSummary({
               Showing {result.skipped.length} of {skippedTotal} skipped rows.
             </p>
           ) : null}
+          </ResultDetails>
         </div>
       ) : null}
 
       <div className="mt-6 flex flex-wrap gap-3">
-        {fromOnboarding ? (
+        {fromOnboarding && !failed ? (
           <ButtonLink to="/dashboard" variant={clean ? "primary" : "brand"}>
             Go to my dashboard
           </ButtonLink>
@@ -204,7 +206,7 @@ export function ImportResultSummary({
             to={`/records?source=CSV_UPLOAD&importBatchId=${result.batchId}`}
             variant={clean ? "primary" : "brand"}
           >
-            See these {result.imported} records
+            {failed ? "Review saved records" : `See these ${result.imported} records`}
           </ButtonLink>
         )}
         <ButtonLink

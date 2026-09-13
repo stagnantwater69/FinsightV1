@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useId, useState, type FormEvent } from "react";
 import { Modal } from "./Modal";
 import { Button } from "./Button";
 import { Callout } from "./ui";
@@ -135,6 +135,10 @@ export function ReductionSimulationModal({
     }
   }
 
+  // Per-instance rather than a fixed string, like every other Modal form:
+  // a document-wide id is only unique while exactly one copy is mounted.
+  const valueFieldId = useId();
+
   return (
     <Modal open={open} onClose={handleClose} title={`Simulate reduction — ${categoryName}`}>
       {result ? (
@@ -251,7 +255,7 @@ export function ReductionSimulationModal({
 
           <Field
             label={kind === "percent" ? "Reduction percentage" : "Reduction amount"}
-            htmlFor="reduction-simulation-value"
+            htmlFor={valueFieldId}
             required
             hint={
               kind === "percent"
@@ -263,7 +267,7 @@ export function ReductionSimulationModal({
             error={shownError}
           >
             <TextInput
-              id="reduction-simulation-value"
+              id={valueFieldId}
               type="number"
               inputMode="decimal"
               step="0.01"

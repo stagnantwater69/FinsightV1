@@ -23,12 +23,17 @@ const SCAN_POLL_TIMEOUT_MS = 3 * 60 * 1000;
  * leaves the owner on the capture screen with their photos intact, which is
  * the same outcome any other failed scan has always had.
  */
-export async function pollUntilRead(initial: ReceiptScanResult, mayRetry = true): Promise<ReceiptScanResult> {
+export async function pollUntilRead(initial: ReceiptScanResult, mayRetry = true, signal?: AbortSignal): Promise<ReceiptScanResult> {
+  const checkActive = () => {
+    if (signal?.aborted) throw new Error("Receipt processing paused.");
+  };
+  checkActive();
   if (initial.processingStatus && initial.processingStatus !== "Processing") {
     if (initial.processingStatus === "Failed") {
       if (mayRetry) {
         const retried = await api.post<ReceiptScanResult>(`/records/receipts/${initial.id}/retry`);
-        return pollUntilRead(retried, false);
+        checkActive();
+        return pollUntilRead(retried, false, signal);
       }
       throw new Error(initial.processingError ?? "This receipt could not be read. Try scanning it again.");
     }
@@ -38,11 +43,14 @@ export async function pollUntilRead(initial: ReceiptScanResult, mayRetry = true)
   const deadline = Date.now() + SCAN_POLL_TIMEOUT_MS;
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, SCAN_POLL_INTERVAL_MS));
+    checkActive();
     const next = await api.get<ReceiptScanResult>(`/records/receipts/${initial.id}`);
+    checkActive();
     if (next.processingStatus === "Failed") {
       if (mayRetry) {
         const retried = await api.post<ReceiptScanResult>(`/records/receipts/${initial.id}/retry`);
-        return pollUntilRead(retried, false);
+        checkActive();
+        return pollUntilRead(retried, false, signal);
       }
       throw new Error(next.processingError ?? "This receipt could not be read. Try scanning it again.");
     }

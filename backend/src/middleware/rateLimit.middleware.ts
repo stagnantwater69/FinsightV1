@@ -26,10 +26,13 @@ import { requestContext, securityEvent } from "../lib/securityLog";
  * — an IP-keyed limiter would have them throttling each other. The IP fallback
  * only matters if this is ever mounted before auth.
  *
- * IN-MEMORY, single process. That is honest for how FinSight is deployed today
- * (one backend container). Behind more than one instance each would keep its
- * own counts and the effective limit would multiply by the instance count; at
- * that point this needs to move to Redis or the database.
+ * DURABLE, in Postgres, for every deployed process: the `ApiRateLimit` table
+ * (one upsert per request, see the `durableRateLimitMiddleware` branch below)
+ * so a limit survives restarts and applies once across every replica — the
+ * repo's "never in-memory" non-negotiable. The in-memory `buckets` Map further
+ * down is the NODE_ENV=test stub only, kept so the ordinary unit suites need
+ * no database; tests/integration/rateLimitDurability.test.ts pins the deployed
+ * branch explicitly.
  */
 
 interface Bucket {

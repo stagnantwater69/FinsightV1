@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 
 /**
  * A general-purpose popup, for content too involved for ConfirmDialog's
@@ -38,10 +38,17 @@ export function Modal({
     if (!open && dialog.open) dialog.close();
   }, [open]);
 
+  // Per-instance, not a fixed string: several Modals are mounted at once
+  // (Records' own add/edit popups plus Quick Add's copies in AppShell), and
+  // a shared "modal-title" id resolved every dialog's accessible name to the
+  // FIRST heading in the document — the sales popup announced itself as
+  // "Add expense" (QA finding WEB-F01).
+  const titleId = useId();
+
   return (
     <dialog
       ref={dialogRef}
-      aria-labelledby="modal-title"
+      aria-labelledby={titleId}
       // `cancel` fires for Escape. Routing it through onClose rather than
       // letting the browser close the dialog on its own keeps the caller's
       // `open` state in sync with what's actually on screen.
@@ -63,7 +70,7 @@ export function Modal({
     >
       <div className="flex items-center justify-between gap-3 border-b border-paper-200 px-5 py-4">
         <h2
-          id="modal-title"
+          id={titleId}
           className="font-display text-base font-semibold text-ink-900"
         >
           {title}

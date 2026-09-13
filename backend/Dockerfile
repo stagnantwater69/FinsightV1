@@ -74,8 +74,8 @@ EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:4000/api/v1/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
-# Default is the API process. The `worker` target below is the same image with
-# no HEALTHCHECK (it has no HTTP endpoint to probe) and a different CMD — the
+# The API process. The `worker` target below is the same image with no
+# HEALTHCHECK (it has no HTTP endpoint to probe) and a different CMD — the
 # background queue consumers, deployed and scaled as their own service. See
 # src/worker.ts.
 CMD ["node", "dist/server.js"]
@@ -83,3 +83,13 @@ CMD ["node", "dist/server.js"]
 FROM runtime AS worker
 HEALTHCHECK NONE
 CMD ["node", "dist/worker.js"]
+
+# Docker resolves an untargeted build to the LAST stage in the file, and
+# `worker` has to come after `runtime` because it derives from it. This final
+# stage exists so a plain `docker build ./backend` (no --target) is the API
+# again rather than a worker that never listens — that was QA finding
+# OPS-DEPLOY-01. Compose and CI still name their targets explicitly.
+FROM runtime AS api
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:4000/api/v1/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+CMD ["node", "dist/server.js"]

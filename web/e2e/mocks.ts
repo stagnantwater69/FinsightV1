@@ -13,7 +13,7 @@
  * not an integration test against a live backend or Supabase instance.
  */
 import type { Page } from "@playwright/test";
-import type { BusinessProfile, ExpenseCategory, Profile } from "../src/lib/types";
+import type { BusinessProfile, ExpenseCategory, Profile, UserPreferences } from "../src/lib/types";
 
 /** Base64url-encode a UTF-8 string, without Node's Buffer (kept browser-agnostic). */
 function base64url(input: string): string {
@@ -114,6 +114,9 @@ export async function mockBackendSession(
   opts: { profile?: Profile; businessProfiles?: BusinessProfile[]; categories?: ExpenseCategory[] } = {},
 ) {
   const profile = opts.profile ?? TEST_PROFILE;
+  let preferences: UserPreferences = profile.preferences ?? {
+    showDashboardMascotMessage: true, tourStatus: null, tourStep: null, tourAlwaysShow: false,
+  };
   const businessProfiles = opts.businessProfiles ?? [TEST_BUSINESS_PROFILE];
   const categories = opts.categories ?? TEST_CATEGORIES;
 
@@ -137,7 +140,11 @@ export async function mockBackendSession(
 
   await page.route("**/auth/me", async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(profile) });
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...profile, preferences }) });
+  });
+  await page.route("**/auth/me/preferences", async (route) => {
+    if (route.request().method() === "PATCH") preferences = { ...preferences, ...route.request().postDataJSON() };
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(preferences) });
   });
 
   await page.route("**/business-profiles", async (route) => {
@@ -154,6 +161,16 @@ export async function mockBackendSession(
     if (route.request().method() !== "GET") return route.fallback();
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
   });
+
+  // Dashboard companion data is outside these journeys, but must stay mocked
+  // too so the browser suite never needs a running backend.
+  await page.route("**/insights/reduction-opportunities**", async (route) => {
+    await route.fulfill({ json: {
+      period: { days: 30, start: "2026-08-01", end: "2026-08-31" },
+      dataQuality: { status: "insufficient", currentRecordCount: 0, previousRecordCount: 0, message: null },
+      opportunities: [], detectorVersion: "e2e-fixture",
+    } });
+  });
 }
 
 /**
@@ -168,6 +185,23 @@ export async function loginViaUi(page: Page, email = TEST_PROFILE.email, passwor
   await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Log in" }).click();
   await page.waitForURL("**/business-profiles");
+}
+
+/**
+ * Use the visible picker, as an owner would. setInputFiles on an sr-only
+ * input skips actionability checks and can select a file while the
+ * authenticated route is still mounting and the visible picker is unstable.
+ */
+export async function chooseUpload(
+  page: Page,
+  label: "Choose a file" | "Choose photos",
+  file: { name: string; mimeType: string; buffer: Buffer },
+) {
+  const [chooser] = await Promise.all([
+    page.waitForEvent("filechooser"),
+    page.getByText(label, { exact: true }).click(),
+  ]);
+  await chooser.setFiles(file);
 }
 
 /**

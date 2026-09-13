@@ -1,7 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { TextInput, View } from "react-native";
-import { AlertBadge, Button, CategorySelect, T } from "../../components/ui";
+import { AlertBadge, Button, CategorySelect, ErrorNote, T } from "../../components/ui";
+import { saveFailureMessage } from "../../lib/connectionState";
+import { FIELD_LIMITS } from "../../lib/fieldLimits";
 import { useBusinessProfiles } from "../../context/BusinessProfileContext";
+import { useImportOperation } from "../../lib/useImportOperation";
 import { TAP, radius, space, typeScale } from "../../theme/tokens";
 import { useTheme } from "../../context/ThemeContext";
 import type { ExpenseCategory, RecordItem } from "../../lib/types";
@@ -58,23 +61,33 @@ export function CategoryPicker({
   // The business is read from context rather than passed in: the write itself
   // moved to createCategory, which is already scoped to the selected business,
   // so a prop naming it here would be a second source for the same fact.
-  const { createCategory } = useBusinessProfiles();
+  const { createCategory, selected } = useBusinessProfiles();
   const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(false);
+  const operation = useImportOperation(selected?.id);
+  const [error, setError] = useState<string | null>(null);
   /** Raw TextInput, so the focus border `Field` gives every other input is
    *  wired here by hand rather than inherited. */
   const [nameFocused, setNameFocused] = useState(false);
+  useEffect(() => { setNewName(""); setBusy(false); setError(null); }, [selected?.id]);
 
   async function create() {
     if (!newName.trim()) return;
+    const task = operation.begin();
+    if (!task) return;
     setBusy(true);
+    setError(null);
     try {
       const c = await createCategory({ name: newName.trim() });
+      if (!operation.current(task)) return;
       setNewName("");
       onCreated();
       onChange(c.id);
+    } catch (err) {
+      if (operation.current(task)) setError(saveFailureMessage(err, "Create category"));
     } finally {
-      setBusy(false);
+      if (operation.current(task)) setBusy(false);
+      operation.finish(task);
     }
   }
 
@@ -100,6 +113,8 @@ export function CategoryPicker({
       <View style={{ flexDirection: "row", gap: space.sm }}>
         <TextInput
           value={newName}
+          accessibilityLabel="New category name"
+          maxLength={FIELD_LIMITS.categoryName}
           onChangeText={setNewName}
           placeholder="New category name"
           placeholderTextColor={ink[400]}
@@ -128,6 +143,7 @@ export function CategoryPicker({
         />
         <Button title="Add" variant="secondary" onPress={create} loading={busy} disabled={!newName.trim()} />
       </View>
+      {error ? <ErrorNote>{error}</ErrorNote> : null}
     </View>
   );
 }

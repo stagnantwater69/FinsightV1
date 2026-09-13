@@ -1,6 +1,11 @@
 services:
   backend:
-    build: ./backend
+    # `api` target named explicitly: the Dockerfile's stage order once made an
+    # untargeted build resolve to the worker image, whose CMD never listens on
+    # :4000, so this healthcheck failed forever and nginx never started.
+    build:
+      context: ./backend
+      target: api
     env_file: ./backend/.env
     # `expose`, NOT `ports`, and the difference is a security control.
     #

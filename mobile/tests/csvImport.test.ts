@@ -90,9 +90,9 @@ describe("column guessing", () => {
 });
 
 describe("mapping validity", () => {
-  it("requires a category for a pure expense import but not for a mixed one", () => {
+  it("allows category corrections or suggestions after mapping, without requiring a category column", () => {
     const mapping: ColumnMapping = { ...EMPTY_MAPPING, date: "D", description: "N", amount: "A" };
-    expect(checkMapping(mapping, "expense", "column").missing).toEqual(["category"]);
+    expect(checkMapping(mapping, "expense", "column").missing).toEqual([]);
     expect(checkMapping(mapping, "mixed", "sign").missing).toEqual([]);
     expect(checkMapping(mapping, "sales", "column").missing).toEqual([]);
   });

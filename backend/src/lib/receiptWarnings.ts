@@ -62,13 +62,13 @@ export function isReceiptWarningCode(value: unknown): value is ReceiptWarningCod
  */
 export const WARNING_GUIDANCE: Record<ReceiptWarningCode, string> = {
   BLURRY_PAGE: "Hold the phone steady and retake this page.",
-  TOO_SMALL: "Move closer so the receipt text fills the frame, then retake.",
-  DUPLICATE_PAGE: "This looks like the same page photographed twice. Remove the extra photo if it is.",
-  OVERLAPPING_PAGES: "These pages overlap slightly — that is expected on a long receipt. Check that no item was counted twice.",
-  MULTI_RECEIPT: "This photo may show more than one receipt. Scan each receipt separately.",
-  UNEXPLAINED_GAP: "The items don't add up to the printed total. Check each amount against the receipt.",
-  LOW_CONFIDENCE: "This receipt was hard to read. Check the amounts carefully before saving.",
-  VISION_INTERPRETED: "These values were interpreted from the photo, not read from clear text. Check them against the receipt.",
-  AMBIGUOUS_DATE: "The printed date could be read two ways. Confirm the day and month are right.",
-  UNREADABLE_FIELD: "Part of this receipt could not be read. Fill in the missing value from the paper receipt.",
+  TOO_SMALL: "Move closer and retake this page.",
+  DUPLICATE_PAGE: "This page may be repeated. Remove it if it is a duplicate.",
+  OVERLAPPING_PAGES: "Pages overlap. Check that each item appears once.",
+  MULTI_RECEIPT: "Scan each receipt separately.",
+  UNEXPLAINED_GAP: "The items and total differ. Check the amounts.",
+  LOW_CONFIDENCE: "Check the amounts before saving.",
+  VISION_INTERPRETED: "AI helped read this receipt. Review the details.",
+  AMBIGUOUS_DATE: "Check the day and month.",
+  UNREADABLE_FIELD: "Fill in the missing value from the receipt.",
 };

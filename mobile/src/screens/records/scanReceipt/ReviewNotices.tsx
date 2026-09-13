@@ -1,6 +1,8 @@
 import { View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { Card, T } from "../../../components/ui";
-import { font, space, typeScale } from "../../../theme/tokens";
+import { ResultDetails } from "../../../components/ResultDetails";
+import { space, typeScale } from "../../../theme/tokens";
 import { useTheme } from "../../../context/ThemeContext";
 import type { ReviewNotice } from "./types";
 
@@ -15,14 +17,15 @@ import type { ReviewNotice } from "./types";
  * visible — and a wall of warnings is read as one undifferentiated blob or
  * skipped entirely, which is the failure mode a warning can least afford.
  *
- * The wording of each is unchanged: they were written to say what to DO, and
- * shortening them to fit a tidier layout would trade the useful half for the
- * decorative one. What changes is that they share one panel, are counted, and
- * sit under a heading that says what they are.
+ * Required warnings stay visible. Optional evidence and informational notes
+ * are available on demand without obscuring the receipt fields.
  */
 export function ReviewNotices({ notices }: { notices: ReviewNotice[] }) {
   const t = useTheme();
   const { brand, ink, paper, statusText, status } = t;
+  const unique = notices.filter((notice, index) => notices.findIndex((other) => other.text === notice.text) === index);
+  const warnings = unique.filter((notice) => notice.tone === "warn");
+  const details = unique.filter((notice) => notice.tone === "info" || notice.detail);
   if (notices.length === 0) return null;
 
   const worst = notices.some((n) => n.tone === "warn") ? "warn" : "info";
@@ -31,10 +34,10 @@ export function ReviewNotices({ notices }: { notices: ReviewNotice[] }) {
   return (
     <Card style={{ borderColor: worst === "warn" ? status.warning : brand[200] }}>
       <T variant="heading" accessibilityRole="header" style={{ color: tint, marginBottom: space.sm }}>
-        {notices.length === 1 ? "Worth checking" : `Worth checking (${notices.length})`}
+        {warnings.length ? "Check before saving" : "Scan notes"}
       </T>
       <View style={{ gap: space.sm }}>
-        {notices.map((notice, i) => (
+        {warnings.map((notice, i) => (
           <View
             key={i}
             style={{
@@ -47,18 +50,20 @@ export function ReviewNotices({ notices }: { notices: ReviewNotice[] }) {
               borderTopColor: paper[200],
             }}
           >
-            <T
-              style={{
-                fontSize: typeScale.label,
-                fontFamily: font.sansSemibold,
-                color: notice.tone === "warn" ? statusText.warning : brand[700],
-              }}
-            >
-              {notice.tone === "warn" ? "⚠" : "ⓘ"}
-            </T>
+            <Ionicons name="alert-circle-outline" size={18} color={statusText.warning} />
             <T style={{ flex: 1, fontSize: typeScale.label, lineHeight: 19, color: ink[700] }}>{notice.text}</T>
           </View>
         ))}
+        {details.length ? (
+          <ResultDetails label="scan notes">
+            {details.map((notice) => (
+              <T key={notice.text} variant="caption">
+                {notice.tone === "info" ? notice.text : ""}
+                {notice.detail ? `${notice.tone === "info" ? " " : ""}${notice.detail}` : ""}
+              </T>
+            ))}
+          </ResultDetails>
+        ) : null}
       </View>
     </Card>
   );

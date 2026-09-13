@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useLocation } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
@@ -30,8 +30,15 @@ import type {
   PreviewResult,
 } from "./importCsv/types";
 import { NoBusinessProfile } from "../components/NoBusinessProfile";
+import { ResultDetails } from "../components/ResultDetails";
 
 export function ImportCsv() {
+  const { selected } = useBusinessProfiles();
+  const location = useLocation();
+  return <ImportCsvForm key={`${selected?.id ?? "no-profile"}-${location.key}`} />;
+}
+
+function ImportCsvForm() {
   const { selected } = useBusinessProfiles();
   const { categories } = useExpenseCategories();
   /*
@@ -58,6 +65,7 @@ export function ImportCsv() {
   const [vendorCol, setVendorCol] = useState("");
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [checking, setChecking] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
   /**
    * THE THING THAT MAKES A RETRY SAFE.
@@ -87,6 +95,21 @@ export function ImportCsv() {
   const [progress, setProgress] = useState<CsvImportStatus | null>(null);
   /** Invalidates an in-flight poll loop when the owner starts over. */
   const pollToken = useRef(0);
+  const requests = useRef(new AbortController());
+  const previewPending = useRef(false);
+  const confirmPending = useRef(false);
+  const [validation, setValidation] = useState<PreviewResult["validation"]>();
+  const [categorySuggestions, setCategorySuggestions] = useState<NonNullable<PreviewResult["categorySuggestions"]>>([]);
+  const [categorySuggestionsTruncated, setCategorySuggestionsTruncated] = useState(false);
+  const validatedInput = useRef<string | null>(null);
+
+  useEffect(() => {
+    requests.current = new AbortController();
+    return () => {
+      requests.current.abort();
+      pollToken.current += 1;
+    };
+  }, []);
   /** Which fields were guessed rather than chosen, so each can say so. */
   const [autoMapped, setAutoMapped] = useState<Set<string>>(new Set());
   /**
@@ -143,10 +166,6 @@ export function ImportCsv() {
     ["date", dateCol],
     ["description", descriptionCol],
     ["amount", amountCol],
-    // Required for a pure expense import, OPTIONAL for a mixed one: a combined
-    // export often has no category column at all, and those expense rows land
-    // in "Uncategorised" rather than being rejected.
-    ...(recordType === "expense" ? ([["category", categoryCol]] as [string, string][]) : []),
     ...(isMixed && mixedStrategy === "column" ? ([["recordType", typeCol]] as [string, string][]) : []),
   ];
 
@@ -157,7 +176,7 @@ export function ImportCsv() {
   const allMapping: [string, string][] = [
     ...requiredMapping,
     ...(usesCategory ? ([["vendor", vendorCol]] as [string, string][]) : []),
-    ...(isMixed ? ([["category", categoryCol]] as [string, string][]) : []),
+    ...(usesCategory ? ([["category", categoryCol]] as [string, string][]) : []),
   ];
 
   const duplicateColumns = new Set(
@@ -177,6 +196,9 @@ export function ImportCsv() {
    */
   const dateChoiceNeeded = preview?.dateFormatAmbiguous === true && dateFormat === "";
   const readyToImport = mappingIsValid && !dateChoiceNeeded;
+  const inputKey = JSON.stringify([recordType, mixedStrategy, dateCol, descriptionCol, amountCol, categoryCol, vendorCol, typeCol, corrections, dateFormat]);
+  const currentValidation = validatedInput.current === inputKey ? validation : undefined;
+  const currentSuggestions = validatedInput.current === inputKey ? categorySuggestions : [];
 
 
   function duplicateError(col: string): string | null {
@@ -198,7 +220,9 @@ export function ImportCsv() {
 
   async function handlePreview(e: FormEvent) {
     e.preventDefault();
-    if (!file) return;
+    if (!file || previewPending.current) return;
+    previewPending.current = true;
+    const signal = requests.current.signal;
     setPreviewing(true);
     setPreviewError(null);
     try {
@@ -206,7 +230,9 @@ export function ImportCsv() {
       formData.append("file", file);
       const { data } = await api.post<PreviewResult>("/records/csv-imports/preview", formData, {
         headers: { "Content-Type": "multipart/form-data" },
+        signal,
       });
+      signal.throwIfAborted();
       setPreview(data);
       setTitle(file.name.replace(/\.csv$/i, ""));
 
@@ -214,11 +240,11 @@ export function ImportCsv() {
       // empty and the owner picks it, which is the behaviour that existed for
       // all four columns before.
       const guessed = {
-        date: guessColumn(data.headers, "date"),
-        description: guessColumn(data.headers, "description"),
-        amount: guessColumn(data.headers, "amount"),
-        category: guessColumn(data.headers, "category"),
-        vendor: guessColumn(data.headers, "vendor"),
+        date: data.suggestedMapping?.date ?? guessColumn(data.headers, "date"),
+        description: data.suggestedMapping?.description ?? guessColumn(data.headers, "description"),
+        amount: data.suggestedMapping?.amount ?? guessColumn(data.headers, "amount"),
+        category: data.suggestedMapping?.category ?? guessColumn(data.headers, "category"),
+        vendor: data.suggestedMapping?.vendor ?? guessColumn(data.headers, "vendor"),
       };
       setDateCol(guessed.date);
       setDescriptionCol(guessed.description);
@@ -259,9 +285,10 @@ export function ImportCsv() {
         ]),
       );
     } catch (err) {
-      setPreviewError(getErrorMessage(err));
+      if (!signal.aborted) setPreviewError(getErrorMessage(err));
     } finally {
-      setPreviewing(false);
+      previewPending.current = false;
+      if (!signal.aborted) setPreviewing(false);
     }
   }
 
@@ -273,11 +300,15 @@ export function ImportCsv() {
    * attempt for this file, retries included, the same logical import.
    */
   function handleSelectFile(next: File | null) {
+    if (previewPending.current || confirmPending.current) return;
     setFile(next);
     setIdempotencyKey(next ? randomId() : null);
     setDateFormat("");
     setProgress(null);
     setConfirmError(null);
+    setPreviewError(null);
+    setValidation(undefined);
+    validatedInput.current = null;
   }
 
   /**
@@ -288,6 +319,7 @@ export function ImportCsv() {
    * value that looked like a choice the owner had made.
    */
   function handleChooseDifferentFile() {
+    if (confirmPending.current) return;
     // A different file is a different import, so the replay token goes with
     // it — reusing one across files would make the server answer with the
     // FIRST file's import.
@@ -309,11 +341,15 @@ export function ImportCsv() {
     setAutoMapped(new Set());
     setCorrections({});
     setConfirmError(null);
+    setValidation(undefined);
+    validatedInput.current = null;
   }
 
-  async function handleConfirm(e: FormEvent) {
+  async function handleConfirm(e: FormEvent, previewOnly = false) {
     e.preventDefault();
-    if (!file || !mappingIsValid || dateChoiceNeeded) return;
+    if (!file || !mappingIsValid || dateChoiceNeeded || confirmPending.current) return;
+    confirmPending.current = true;
+    const signal = requests.current.signal;
     setConfirming(true);
     setConfirmError(null);
     try {
@@ -358,9 +394,46 @@ export function ImportCsv() {
       // guess wearing a decision's clothes.
       if (dateFormat) formData.append("dateFormat", dateFormat);
 
+      // Validate the entire file using the server's import rules. A changed
+      // mapping or correction needs fresh validation; a second confirm accepts
+      // the displayed skipped-row count without importing the file twice.
+      if (validatedInput.current !== inputKey) {
+        setChecking(true);
+        const { data: checked } = await api.post<PreviewResult>("/records/csv-imports/preview", formData, {
+          headers: { "Content-Type": "multipart/form-data" }, signal,
+        });
+        signal.throwIfAborted();
+        setChecking(false);
+        if (checked.dateFormatAmbiguous && !dateFormat) {
+          setPreview(checked);
+          setConfirmError("Choose the date format before importing.");
+          return;
+        }
+        setValidation(checked.validation);
+        setCategorySuggestions(checked.categorySuggestions ?? []);
+        setCategorySuggestionsTruncated(checked.categorySuggestionsTruncated ?? false);
+        validatedInput.current = inputKey;
+        if (checked.validation && (checked.validation.invalidRows > 0 || (checked.validation.possibleDuplicateRows ?? 0) > 0 || (checked.categorySuggestions?.length ?? 0) > 0)) {
+          setConfirmError(checked.validation.validRows > 0
+            ? checked.validation.invalidRows > 0
+              ? `${checked.validation.invalidRows} rows will be skipped. Review the details, then press Import again to save the valid rows.`
+              : (checked.validation.possibleDuplicateRows ?? 0) > 0
+                ? `${checked.validation.possibleDuplicateRows} possible duplicates. Review the details, then press Import again if you want to include them.`
+                : "Category suggestions are ready. Apply them or press Import again to keep the current categories."
+            : "No rows are ready to import. Correct the file or column mapping first.");
+          return;
+        }
+      } else if (validation?.validRows === 0) {
+        setConfirmError("No rows are ready to import. Correct the file or column mapping first.");
+        return;
+      }
+      if (previewOnly) return;
+
       const response = await api.post<ImportResult>("/records/csv-imports/confirm", formData, {
         headers: { "Content-Type": "multipart/form-data" },
+        signal,
       });
+      signal.throwIfAborted();
 
       /*
        * 202 — TOO BIG TO IMPORT INSIDE THE REQUEST.
@@ -388,9 +461,10 @@ export function ImportCsv() {
 
       setResult(response.data);
     } catch (err) {
-      setConfirmError(getErrorMessage(err));
+      if (!signal.aborted) setConfirmError(getErrorMessage(err));
     } finally {
-      setConfirming(false);
+      confirmPending.current = false;
+      if (!signal.aborted) { setConfirming(false); setChecking(false); }
     }
   }
 
@@ -416,9 +490,11 @@ export function ImportCsv() {
       try {
         const { data } = await api.get<CsvImportStatus>(
           `/records/csv-imports/batches/${batchId}/status`,
+          { signal: requests.current.signal },
         );
         status = data;
-      } catch (err) {
+      } catch {
+        if (pollToken.current !== token || requests.current.signal.aborted) return;
         /*
          * A dropped poll is not a failed import. The worker owns the batch and
          * carries on; what is lost is this screen's view of it. Saying so, and
@@ -427,7 +503,7 @@ export function ImportCsv() {
          */
         setProgress(null);
         setConfirmError(
-          `${getErrorMessage(err)} — your import is still running on the server. Reopen your records in a moment to see it.`,
+          "Couldn't check the import status. It may still be running. Press Import again to check safely.",
         );
         return;
       }
@@ -441,9 +517,9 @@ export function ImportCsv() {
       }
       if (status.processingStatus === "FAILED") {
         setProgress(null);
-        setConfirmError(
-          `This import stopped during the ${status.failureStage ?? "import"} step after ${status.processedRows} of ${status.totalRows} rows. Press Import again — FinSight will pick up the same import rather than starting a second one.`,
-        );
+        // A terminal failure can leave committed chunks. Its replay key is
+        // not resumable; show the saved rows before a new partial-file import.
+        setResult(resultFromStatus(status, initial.title || title));
         return;
       }
 
@@ -504,6 +580,7 @@ export function ImportCsv() {
               clearAuto("category");
             },
             auto: autoMapped.has("category"),
+            optional: true,
           },
           {
             field: "Vendor" as const,
@@ -606,13 +683,14 @@ export function ImportCsv() {
         title="Map your columns"
         subtitle="Each heading below picks which column of your file feeds it. The rows underneath are your real data, read through those choices — what you see is what gets imported."
         actions={
-          <Button type="button" variant="secondary" size="sm" onClick={handleChooseDifferentFile}>
+          <Button type="button" variant="secondary" size="sm" onClick={handleChooseDifferentFile} disabled={confirming}>
             Choose a different file
           </Button>
         }
       />
 
-      <form onSubmit={handleConfirm} className="space-y-4">
+      <form onSubmit={handleConfirm}>
+        <fieldset disabled={confirming} className="min-w-0 space-y-4">
         <Card className="p-5">
           <div className="grid gap-4 sm:grid-cols-2">
             <Field
@@ -908,16 +986,13 @@ export function ImportCsv() {
         {newCategoryNames.length > 0 ? (
           <Callout tone="info">
             <b className="font-semibold">
-              This import will create {newCategoryNames.length} new categor
-              {newCategoryNames.length === 1 ? "y" : "ies"}:
+              Preview includes {newCategoryNames.length} new categor
+              {newCategoryNames.length === 1 ? "y" : "ies"}.
             </b>{" "}
-            {newCategoryNames.join(", ")}.{" "}
-            {preview.previewRows.length < preview.totalRows
-              ? `That is from the ${preview.previewRows.length} rows shown — later rows may add more. `
-              : ""}
-            If one of those is a misspelling of a category you already have, fix it in the
-            highlighted rows or change the Category column above, or you'll end up with two
-            categories for the same thing.
+            <ResultDetails label="New CSV categories">
+              <p>{newCategoryNames.join(", ")}</p>
+              <p>Check spelling before importing. Rows outside this preview may add more categories.</p>
+            </ResultDetails>
           </Callout>
         ) : null}
 
@@ -999,6 +1074,47 @@ export function ImportCsv() {
           </Callout>
         ) : null}
 
+        {currentSuggestions.length > 0 ? (
+          <Callout tone="info">
+            <p className="font-semibold">{currentSuggestions.length} missing categories have suggestions from your saved records.</p>
+            <Button type="button" variant="secondary" disabled={confirming} onClick={() => {
+              setCorrections((previous) => {
+                const next = { ...previous };
+                for (const suggestion of currentSuggestions) {
+                  if (!next[suggestion.row]?.Category?.trim()) {
+                    next[suggestion.row] = { ...next[suggestion.row], Category: suggestion.categoryName };
+                  }
+                }
+                return next;
+              });
+              setConfirmError(null);
+            }}>Apply category suggestions</Button>
+            <ResultDetails label="CSV category suggestions">
+              <ul className="space-y-1">{currentSuggestions.map((suggestion) => (
+                <li key={suggestion.row}>Row {suggestion.row}: {suggestion.categoryName}</li>
+              ))}</ul>
+              {categorySuggestionsTruncated ? <p>More suggestions may be available after these are applied.</p> : null}
+              <p>Only empty categories are filled. Check the results before importing.</p>
+            </ResultDetails>
+          </Callout>
+        ) : null}
+        {currentValidation && currentValidation.invalidRows === 0 && !currentValidation.possibleDuplicateRows && currentSuggestions.length === 0 ? (
+          <Callout tone="brand">File checked. {currentValidation.validRows} rows are ready to import.</Callout>
+        ) : null}
+        {currentValidation && (currentValidation.invalidRows > 0 || (currentValidation.possibleDuplicateRows ?? 0) > 0) ? (
+          <Callout tone="warn">
+            <p className="font-semibold">File check: {currentValidation.validRows} valid, {currentValidation.invalidRows} skipped.</p>
+            {currentValidation.possibleDuplicateRows ? <p>{currentValidation.possibleDuplicateRows} possible duplicate{currentValidation.possibleDuplicateRows === 1 ? "" : "s"} will be included and flagged for review.</p> : null}
+            <ResultDetails label="CSV validation details">
+              <ul className="space-y-1">
+                {currentValidation.skipped.map((row) => <li key={row.row}>Row {row.row}: {row.reason}</li>)}
+              </ul>
+              {currentValidation.skippedTruncated ? <p>Showing {currentValidation.skipped.length} of {currentValidation.invalidRows} row errors.</p> : null}
+              {currentValidation.duplicateRows?.length ? <p>Possible duplicate rows: {currentValidation.duplicateRows.join(", ")}.{currentValidation.duplicateRowsTruncated ? " More rows may be affected." : ""}</p> : null}
+              <p>Correct these rows or import only the valid rows. Your original file is unchanged.</p>
+            </ResultDetails>
+          </Callout>
+        ) : null}
         {confirmError ? <FormError>{confirmError}</FormError> : null}
 
         {/*
@@ -1014,7 +1130,9 @@ export function ImportCsv() {
           the same block says what is happening in words instead of drawing an
           empty bar and calling it 0%.
         */}
-        {confirming ? (
+        {checking ? (
+          <p role="status" aria-busy="true" className="text-sm text-ink-600">Checking every row before import…</p>
+        ) : confirming ? (
           <ImportProgress progress={progress} totalRows={preview.totalRows} />
         ) : null}
 
@@ -1035,6 +1153,9 @@ export function ImportCsv() {
         */}
         <div className="sticky bottom-0 -mx-1 flex flex-wrap items-center justify-between gap-3 border-t border-paper-200 bg-paper/95 px-1 py-3 backdrop-blur">
           <div className="flex flex-wrap gap-3">
+            <Button type="button" variant="secondary" disabled={confirming || !readyToImport} onClick={(event) => { void handleConfirm(event, true); }}>
+              Check all rows
+            </Button>
             {/*
               The count promises what will actually land. Saying "Import 35 rows"
               over a file where three of them are going to be skipped is a small
@@ -1044,12 +1165,14 @@ export function ImportCsv() {
             */}
             <Button type="submit" variant="primary" disabled={confirming || !readyToImport}>
               {confirming
-                ? "Importing…"
-                : brokenRows.length > 0 && preview.previewRows.length === preview.totalRows
+                ? checking ? "Checking rows…" : "Importing…"
+                : currentValidation && currentValidation.invalidRows > 0
+                  ? `Import ${currentValidation.validRows} of ${preview.totalRows} rows`
+                  : brokenRows.length > 0 && preview.previewRows.length === preview.totalRows
                   ? `Import ${preview.totalRows - brokenRows.length} of ${preview.totalRows} rows`
                   : `Import ${preview.totalRows} row${preview.totalRows === 1 ? "" : "s"}`}
             </Button>
-            <Button type="button" variant="secondary" onClick={handleChooseDifferentFile}>
+            <Button type="button" variant="secondary" onClick={handleChooseDifferentFile} disabled={confirming}>
               Choose a different file
             </Button>
           </div>
@@ -1057,10 +1180,11 @@ export function ImportCsv() {
             Showing {preview.previewRows.length} of {preview.totalRows} row
             {preview.totalRows === 1 ? "" : "s"}.{" "}
             {brokenRows.length === 0
-              ? `All ${preview.totalRows} will be imported.`
+              ? "The full file is checked before importing."
               : `${brokenRows.length} won't import as ${brokenRows.length === 1 ? "it is" : "they are"}.`}
           </p>
         </div>
+        </fieldset>
       </form>
     </div>
   );

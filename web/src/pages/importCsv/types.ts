@@ -19,6 +19,18 @@ export interface PreviewResult {
    * to ask before it will let them import — see the date-convention card.
    */
   dateFormatAmbiguous?: boolean;
+  suggestedMapping?: Partial<Record<"date" | "description" | "amount" | "category" | "vendor" | "recordType", string>>;
+  categorySuggestions?: { row: number; categoryId: number; categoryName: string; source: "history" }[];
+  categorySuggestionsTruncated?: boolean;
+  validation?: {
+    validRows: number;
+    invalidRows: number;
+    skipped: { row: number; reason: string }[];
+    skippedTruncated: boolean;
+    possibleDuplicateRows?: number;
+    duplicateRows?: number[];
+    duplicateRowsTruncated?: boolean;
+  };
 }
 
 export interface ImportResult {

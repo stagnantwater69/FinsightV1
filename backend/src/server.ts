@@ -1,7 +1,9 @@
+import type { Server } from "node:http";
 import { app } from "./app";
 import { env } from "./config/env";
 import { prisma } from "./config/prisma";
 import { logger } from "./config/logger";
+import { assertMigrationsApplied } from "./config/migrationGuard";
 
 /*
  * API process only. The background queue consumers (receipt scans, CSV
@@ -11,9 +13,9 @@ import { logger } from "./config/logger";
  * throughput, and an API restart/deploy no longer interrupts in-flight
  * background jobs (and vice versa).
  */
-const server = app.listen(env.PORT, () => {
-  logger.info({ port: env.PORT }, "FinSight backend listening");
-});
+
+/** Undefined until the startup checks below pass and the port actually opens. */
+let server: Server | undefined;
 
 let shuttingDown = false;
 async function shutdown(signal: string): Promise<void> {
@@ -25,6 +27,13 @@ async function shutdown(signal: string): Promise<void> {
     process.exit(1);
   }, 10_000);
   forceTimer.unref();
+  // A signal during startup — before the migration check finished and the
+  // port opened — has no server to close and no connections to drain.
+  if (!server) {
+    await prisma.$disconnect();
+    logger.info("graceful shutdown complete");
+    return process.exit(0);
+  }
   server.close(async (error) => {
     await prisma.$disconnect();
     if (error) logger.error({ err: error }, "HTTP server close failed");
@@ -35,3 +44,20 @@ async function shutdown(signal: string): Promise<void> {
 
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 process.on("SIGINT", () => void shutdown("SIGINT"));
+
+/*
+ * THE PORT OPENS ONLY AFTER THE SCHEMA IS VERIFIED — see config/migrationGuard.
+ *
+ * A process whose build expects columns the database does not have answers
+ * every request touching them with an opaque 500 while passing its health
+ * check, which is how an unapplied migration reached a real phone as
+ * "FinSight's server had a problem with that". Refusing to listen means the
+ * load balancer never sends it traffic and the deploy fails visibly instead.
+ */
+void (async () => {
+  await assertMigrationsApplied("api");
+  if (shuttingDown) return;
+  server = app.listen(env.PORT, () => {
+    logger.info({ port: env.PORT }, "FinSight backend listening");
+  });
+})();

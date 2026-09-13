@@ -1,11 +1,12 @@
 import multer from "multer";
 import { ApiError } from "./error.middleware";
+import { RECEIPT_MAX_BYTES } from "../lib/receiptUploadValidation";
 
 const storage = multer.memoryStorage();
 
 export const uploadReceiptImage = multer({
   storage,
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: RECEIPT_MAX_BYTES },
   fileFilter: (_req, file, cb) => {
     const allowed = ["image/jpeg", "image/png", "image/webp"];
     if (!allowed.includes(file.mimetype)) {

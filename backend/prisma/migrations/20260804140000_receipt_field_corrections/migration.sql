@@ -42,12 +42,6 @@ CREATE INDEX "ReceiptFieldCorrection_ReceiptScan_ID_idx" ON "ReceiptFieldCorrect
 CREATE INDEX "ReceiptFieldCorrection_ReceiptFieldCorrection_Field_idx" ON "ReceiptFieldCorrection"("ReceiptFieldCorrection_Field");
 CREATE INDEX "ReceiptFieldCorrection_ReceiptFieldCorrection_CreatedAt_idx" ON "ReceiptFieldCorrection"("ReceiptFieldCorrection_CreatedAt");
 
--- This table contains owner-confirmed transaction details and lives in the
--- public schema. It is consumed only by the server through Prisma, not by the
--- Supabase Data API, so expose no rows to API roles even if project-level Data
--- API settings grant access to newly created public tables.
-ALTER TABLE "ReceiptFieldCorrection" ENABLE ROW LEVEL SECURITY;
-
 -- Cascade, so deleting a receipt also deletes what we recorded about it.
 -- Keeping these as orphaned rows would preserve the accuracy figures at the
 -- cost of an owner's deletion not actually deleting — not a trade this app

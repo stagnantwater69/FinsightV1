@@ -78,6 +78,74 @@ function confirmRequest(buffer: Buffer, fields: Record<string, string> = {}) {
 }
 
 describe("CSV import over HTTP", () => {
+  it("deduplicates identical retries from legacy clients without an explicit key", async () => {
+    const buffer = csvOf(2);
+    const first = await confirmRequest(buffer);
+    const second = await confirmRequest(buffer);
+    expect(first.status).toBe(201);
+    expect(second.body.batchId).toBe(first.body.batchId);
+    expect(await prisma.expenseRecord.count()).toBe(2);
+  });
+
+  it("returns a mapped preflight before saving and rejects malformed files as client errors", async () => {
+    const response = await request(app).post(`${BASE}/preview`).set(...AUTH)
+      .field("businessProfileId", String(ctx.profile.id)).field("recordType", "expense")
+      .field("columnMapping", MAPPING).attach("file", csvOf(2), "books.csv");
+    expect(response.status).toBe(200);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.body.validation).toMatchObject({ validRows: 2, invalidRows: 0, possibleDuplicateRows: 0 });
+    expect(await prisma.expenseRecord.count()).toBe(0);
+    const malformed = await request(app).post(`${BASE}/preview`).set(...AUTH)
+      .attach("file", Buffer.from('Date,Description\n2026-09-01,"broken'), "books.csv");
+    expect(malformed.status).toBe(400);
+    expect(malformed.body.error).not.toContain("broken");
+  });
+
+  it("keeps mapped preview suggestions owner-scoped and requires an explicit category correction", async () => {
+    await prisma.expenseRecord.create({ data: {
+      businessProfileId: ctx.profile.id, categoryId: ctx.categories.Inventory!,
+      date: new Date("2026-09-01"), description: "Rice", vendor: "Store A", amount: 100, source: "MANUAL_ENTRY",
+    } });
+    const buffer = Buffer.from("Date,Description,Amount,Vendor\n2026-09-01,Rice,100,Store A");
+    const mapping = JSON.stringify({ date: "Date", description: "Description", amount: "Amount", vendor: "Vendor" });
+    const preview = (businessProfileId: number, corrections?: string) => {
+      const req = request(app).post(`${BASE}/preview`).set(...AUTH)
+        .field("businessProfileId", String(businessProfileId)).field("recordType", "expense").field("columnMapping", mapping);
+      if (corrections) req.field("corrections", corrections);
+      return req.attach("file", buffer, "books.csv");
+    };
+    const first = await preview(ctx.profile.id);
+    expect(first.status).toBe(200);
+    expect(first.body.validation).toMatchObject({ validRows: 0, invalidRows: 1 });
+    expect(first.body.categorySuggestions).toEqual([{ row: 2, categoryId: ctx.categories.Inventory, categoryName: "Inventory", source: "history" }]);
+    const corrected = await preview(ctx.profile.id, JSON.stringify({ "2": { category: "Inventory" } }));
+    expect(corrected.body.validation).toMatchObject({ validRows: 1, invalidRows: 0, possibleDuplicateRows: 1, duplicateRows: [2] });
+    expect(corrected.body.categorySuggestions).toEqual([]);
+    expect(await prisma.expenseRecord.count()).toBe(1);
+    const other = await makeOwnerWithProfile();
+    authUserId.value = other.user.authId;
+    expect((await preview(ctx.profile.id)).status).toBe(404);
+    const otherPreview = await preview(other.profile.id);
+    expect(otherPreview.status).toBe(200);
+    expect(otherPreview.body.categorySuggestions).toEqual([]);
+  });
+
+  it("validates preview request mappings and corrections at the HTTP boundary", async () => {
+    for (const fields of [
+      { recordType: "expense" },
+      { recordType: "expense", columnMapping: "{broken" },
+      { recordType: "expense", columnMapping: MAPPING, corrections: "{broken" },
+      { recordType: "expense", columnMapping: MAPPING, corrections: JSON.stringify({ invalid: { amount: "100" } }) },
+      { recordType: "expense", columnMapping: MAPPING, dateFormat: "guess" },
+    ]) {
+      const req = request(app).post(`${BASE}/preview`).set(...AUTH);
+      for (const [key, value] of Object.entries(fields)) req.field(key, value);
+      const response = await req.attach("file", csvOf(1), "books.csv");
+      expect(response.status).toBe(400);
+    }
+    expect(await prisma.cSVImportBatch.count()).toBe(0);
+  });
+
   it("imports a small file synchronously and reports 201 with final counts", async () => {
     const response = await confirmRequest(csvOf(3), { idempotencyKey: "http-sync-1" });
 

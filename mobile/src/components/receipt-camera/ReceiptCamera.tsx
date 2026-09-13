@@ -56,6 +56,7 @@ function CustomReceiptCamera({ initialSections = [], onCancel, onDone, handleRef
   const [cropping, setCropping] = useState(false);
   const [ready, setReady] = useState(false);
   const [active, setActive] = useState(AppState.currentState === 'active');
+  const [textLayoutRevision, setTextLayoutRevision] = useState(0);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [torch, setTorch] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -84,7 +85,12 @@ function CustomReceiptCamera({ initialSections = [], onCancel, onDone, handleRef
     const sub = AppState.addEventListener('change', state => {
       const foreground = state === 'active'; setActive(foreground);
       if (!foreground) { nativeEpoch.current++; longStarted.current = false; nativeVisible.current = false; setTorch(false); setReady(false); setScanning(false); setNativeProcessing(false); setCommand(c => ({ id: c.id + 1, type: 'reset' })); setScannerMessage('Camera paused. Position the receipt and start again.'); }
-      else void getPermission().catch(() => undefined);
+      else {
+        // Android can update native font scaling before Dimensions reflects
+        // it. Recreate only text/control hosts on return from Settings.
+        setTextLayoutRevision((revision) => revision + 1);
+        void getPermission().catch(() => undefined);
+      }
     });
     const back = BackHandler.addEventListener('hardwareBackPress', () => { closeRef.current(); return true; });
     // This is an operation counter, not a host view ref; invalidate late captures.
@@ -268,10 +274,10 @@ function CustomReceiptCamera({ initialSections = [], onCancel, onDone, handleRef
   const hint = qualityHint(selected?.quality ?? null);
   const ink = { color: t.onCamera };
   return <View style={[styles.root, { backgroundColor: t.cameraSurface, paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 12) }]}>
-    <View key={`header-${fontScale}`} style={styles.header}>
-      <CameraAction label={cropping || selected ? 'Back' : 'Close'} icon={cropping || selected ? 'arrow-back' : 'close-outline'} onPress={close} />
+    <View key={`header-${fontScale}-${textLayoutRevision}`} style={styles.header}>
+      <CameraAction iconOnly label={cropping || selected ? 'Back' : 'Close'} icon={cropping || selected ? 'arrow-back' : 'close-outline'} onPress={close} />
       <Text accessibilityRole="header" numberOfLines={1} style={[styles.heading, ink]}>{cropping ? 'Crop receipt' : selected ? continuous && sections.length === 1 ? 'Review receipt' : `Section ${sections.indexOf(selected) + 1}` : readyToReview ? 'Receipt ready' : 'Scan receipt'}</Text>
-      {!selected && !readyToReview ? <CameraAction label={torch ? 'Flash on' : 'Flash off'} icon={torch ? 'flash' : 'flash-off-outline'} onPress={() => setTorch(!torch)} disabled={!showCamera || busy} /> : <View style={{ width: 48 }} />}
+      {!selected && !readyToReview ? <CameraAction iconOnly label={torch ? 'Flash on' : 'Flash off'} icon={torch ? 'flash' : 'flash-off-outline'} onPress={() => setTorch(!torch)} disabled={!showCamera || busy} /> : <View style={{ width: 48 }} />}
     </View>
     {error ? <Text accessibilityRole="alert" style={[styles.notice, ink]}>{error}</Text> : null}
     {cropping && selected ? <CropEditor key={selected.localId} uri={selected.originalUri} width={selected.originalWidth ?? selected.width} height={selected.originalHeight ?? selected.height} initial={selected.cropCorners} busy={busy} onApply={corners => void applyCrop(corners)} onCancel={() => setCropping(false)} onDetect={detect} /> : <>
@@ -320,10 +326,10 @@ function CustomReceiptCamera({ initialSections = [], onCancel, onDone, handleRef
       </View>
       {/* Refresh native text measurements after accessibility-size changes without
           remounting the camera or discarding the retained receipt. */}
-      <ScrollView key={`controls-${fontScale}`} style={{ flexGrow: 0, maxHeight: '48%' }} contentContainerStyle={styles.bottom}>
+      <ScrollView key={`controls-${fontScale}-${textLayoutRevision}`} style={{ flexGrow: 0, maxHeight: '48%' }} contentContainerStyle={styles.bottom}>
         {continuous && scanning && !selected ? <Text accessibilityLiveRegion="polite" style={[styles.body, ink]}>{nativeProcessing ? 'Preparing scan' : hasAcceptedReceipt ? 'Receipt captured so far' : 'Waiting for the top edge'}</Text> : null}
         <Text accessibilityLiveRegion="polite" style={[styles.body, ink]}>{selected ? hint ?? (selected.quality ? 'Quality checked. Make sure every line is readable.' : 'Check the photo before continuing. Nothing is saved as an expense yet.') : readyToReview ? 'Your receipt is kept here. Review it to approve, retake, or remove it.' : continuous ? nativeProcessing ? 'Finishing your receipt. Keep this screen open.' : scannerMessage : replaceId ? `Retake section ${sections.findIndex(s => s.localId === replaceId) + 1}` : mode === 'long' ? `Section ${Math.min(sections.length + 1, MAX_SECTIONS)} of up to ${MAX_SECTIONS} · ${previous ? 'Match the last few lines, then move down.' : 'Start at the top of one long receipt.'}` : 'Keep the whole receipt in frame, including the total.'}</Text>
-        {!selected && !readyToReview ? <Text style={[styles.small, ink]}>{continuous ? mode === 'long' ? 'Start at the top and move slowly down. Hold at the bottom to finish automatically, or tap Finish scan.' : 'Automatic edge detection and capture. Hold steady with all four corners visible.' : 'Manual camera · Automatic capture and continuous scanning require the new Android build.'}</Text> : null}
+        {!selected && !readyToReview && showCamera ? <Text style={[styles.small, ink]}>{continuous ? mode === 'long' ? 'Move slowly from top to bottom. Hold steady to finish.' : 'Auto capture is on.' : 'Manual camera · Tap Capture to take a photo.'}</Text> : null}
         {sections.length ? <ScrollView horizontal contentContainerStyle={styles.filmstrip} showsHorizontalScrollIndicator={false}>
           {sections.map((section, i) => <Pressable key={section.localId} accessibilityRole="button" accessibilityLabel={`Review section ${i + 1}${qualityHint(section.quality) ? ', quality warning' : ''}`} accessibilityState={{ selected: selectedId === section.localId, disabled: busy }} disabled={busy} onPress={() => { setSelectedId(section.localId); setReplaceId(null); setError(null); setReady(false); }} style={[styles.thumb, { borderColor: selectedId === section.localId ? t.onCamera : 'transparent' }]}>
             <Image source={{ uri: section.processedUri }} style={{ flex: 1, borderRadius: 6 }} resizeMode="cover" />
@@ -382,8 +388,8 @@ function CustomReceiptCamera({ initialSections = [], onCancel, onDone, handleRef
 const styles = StyleSheet.create({
   root: { flex: 1 }, header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 8, gap: 8 },
   heading: { fontFamily: font.display, fontSize: typeScale.title, textAlign: 'center', flex: 1 },
-  body: { fontFamily: font.sansMedium, fontSize: typeScale.bodySm, textAlign: 'center', lineHeight: 21 },
-  small: { fontFamily: font.sans, fontSize: typeScale.caption, textAlign: 'center', lineHeight: 18 },
+  body: { fontFamily: font.sansMedium, fontSize: typeScale.bodySm, textAlign: 'center' },
+  small: { fontFamily: font.sans, fontSize: typeScale.caption, textAlign: 'center' },
   notice: { fontFamily: font.sans, fontSize: typeScale.bodySm, paddingHorizontal: 16, paddingVertical: 8 },
   viewfinder: { flex: 1, minHeight: 120, overflow: 'hidden', justifyContent: 'center' },
   empty: { alignItems: 'center', padding: 24, gap: 16 }, bottom: { padding: 12, gap: 8 },

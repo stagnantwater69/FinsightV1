@@ -1,4 +1,5 @@
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useFocusEffect } from "@react-navigation/native";
 import { KeyboardAvoidingView, Platform, ScrollView, TextInput } from "react-native";
 import { Button, Card, ErrorNote, Field, Screen, ScreenHeader } from "../../components/ui";
 import { useBusinessProfiles } from "../../context/BusinessProfileContext";
@@ -6,6 +7,8 @@ import { api } from "../../lib/api";
 import { saveFailureMessage } from "../../lib/connectionState";
 import { setFlash } from "../../lib/flash";
 import { DateField } from "../../components/DateField";
+import { CategorySuggestionAction } from "../../components/CategorySuggestionAction";
+import { useImportOperation } from "../../lib/useImportOperation";
 import * as haptics from "../../lib/haptics";
 import { space } from "../../theme/tokens";
 import { FIELD_LIMITS } from "../../lib/fieldLimits";
@@ -20,6 +23,17 @@ export function AddExpenseScreen({ navigation }: any) {
   const [amount, setAmount] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const operation = useImportOperation(selected?.id);
+  useEffect(() => {
+    setCategoryId(null);
+    setDate(todayISO());
+    setDescription("");
+    setVendor("");
+    setAmount("");
+    setError(null);
+    setBusy(false);
+  }, [selected?.id]);
+  useFocusEffect(useCallback(() => () => { operation.cancel(); setBusy(false); }, [operation]));
   /*
    * The category picker and the date field are pressables, not text inputs —
    * they cannot carry a return key at all. So the keyboard chain starts at the
@@ -34,6 +48,8 @@ export function AddExpenseScreen({ navigation }: any) {
     if (!categoryId) return setError("Choose a category first.");
     const value = Number(amount);
     if (!Number.isFinite(value) || value <= 0) return setError("Enter an amount greater than zero.");
+    const task = operation.begin();
+    if (!task) return;
     setError(null);
     setBusy(true);
     try {
@@ -45,6 +61,7 @@ export function AddExpenseScreen({ navigation }: any) {
         vendor: vendor.trim() || undefined,
         amount: value,
       });
+      if (!operation.current(task)) return;
       haptics.succeeded();
       // The haptic is silent for anyone who has haptics off; the flash is what
       // the owner actually sees once the list comes back.
@@ -55,9 +72,10 @@ export function AddExpenseScreen({ navigation }: any) {
       // the screen only navigates away on success — so the message is allowed
       // to say so. It stops short of promising a background retry, because
       // there is no queue behind it. See lib/connectionState.ts.
-      setError(saveFailureMessage(err, "Save expense"));
+      if (operation.current(task)) setError(saveFailureMessage(err, "Save expense"));
     } finally {
-      setBusy(false);
+      if (operation.current(task)) setBusy(false);
+      operation.finish(task);
     }
   }
 
@@ -83,6 +101,7 @@ export function AddExpenseScreen({ navigation }: any) {
               onChange={setCategoryId}
               onCreated={refreshCategories}
             />
+            <CategorySuggestionAction businessId={selected.id} description={description} vendor={vendor} categories={categories} value={categoryId} onApply={setCategoryId} />
             <DateField label="Date" value={date} onChange={setDate} />
             {/*
               `submitBehavior="submit"` keeps the keyboard up between fields so

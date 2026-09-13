@@ -15,7 +15,7 @@ import { setFlash } from "../../lib/flash";
 import * as haptics from "../../lib/haptics";
 import { font, space } from "../../theme/tokens";
 import { useTheme } from "../../context/ThemeContext";
-import type { FlaggedRecordCount, FlaggedRecordsPage, RecordItem } from "../../lib/types";
+import type { FlaggedRecordCounts, FlaggedRecordPage, RecordItem } from "../../lib/types";
 import { badges, type ImportBatchSummary } from "./shared";
 
 /**
@@ -135,7 +135,7 @@ export function FlaggedRecordsScreen() {
       // for the groups below, so waiting for one before asking for the other
       // would delay the screen for no reason.
       const [page, importBatches, count] = await Promise.all([
-        api.get<FlaggedRecordsPage>("/records/flagged", {
+        api.get<FlaggedRecordPage>("/records/flagged", {
           businessProfileId: selected.id,
           limit: PAGE_SIZE,
         }),
@@ -148,7 +148,7 @@ export function FlaggedRecordsScreen() {
         // headline number, and an error banner over a list that loaded fine
         // would be the bigger problem.
         api
-          .get<FlaggedRecordCount>("/records/flagged/count", { businessProfileId: selected.id })
+          .get<FlaggedRecordCounts>("/records/flagged/count", { businessProfileId: selected.id })
           .catch(() => null),
       ]);
       setRecords(page.items);
@@ -179,7 +179,7 @@ export function FlaggedRecordsScreen() {
     setLoadingMore(true);
     setMoreError(null);
     try {
-      const page = await api.get<FlaggedRecordsPage>("/records/flagged", {
+      const page = await api.get<FlaggedRecordPage>("/records/flagged", {
         businessProfileId: selected.id,
         limit: PAGE_SIZE,
         cursor: nextCursor,

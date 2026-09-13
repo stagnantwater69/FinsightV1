@@ -30,6 +30,7 @@ export function FileSelectStage({
             accept=".csv,text/csv"
             maxBytes={5 * 1024 * 1024}
             file={file}
+            disabled={previewing}
             onSelect={onSelectFile}
             hintText="A .csv export from your spreadsheet, up to 5MB. The first row should be your column headings."
           />

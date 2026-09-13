@@ -9,7 +9,7 @@
  * mocks.ts for the shared session/context setup.
  */
 import { expect, test } from "@playwright/test";
-import { loginViaUi, mockBackendSession, mockSupabaseAuth } from "./mocks";
+import { chooseUpload, loginViaUi, mockBackendSession, mockSupabaseAuth } from "./mocks";
 
 test.beforeEach(async ({ page }) => {
   await mockSupabaseAuth(page);
@@ -65,7 +65,7 @@ test("validate, preview and confirm a CSV import", async ({ page }) => {
   await page.goto("/records/csv-imports/new");
   await expect(page.getByRole("heading", { name: "Import CSV records" })).toBeVisible();
 
-  await page.setInputFiles('input[type="file"]', {
+  await chooseUpload(page, "Choose a file", {
     name: "expenses.csv",
     mimeType: "text/csv",
     buffer: Buffer.from("Date,Description,Category,Amount\n2026-08-01,Rice sacks,Inventory,850.50\n"),
@@ -94,4 +94,77 @@ test("validate, preview and confirm a CSV import", async ({ page }) => {
    * component test.
    */
   expect(confirmedFields.raw).toContain('name="idempotencyKey"');
+});
+
+test("reviews skipped and duplicate rows before importing and keeps result details optional", async ({ page }, testInfo) => {
+  const preview = {
+    headers: ["Date", "Description", "Category", "Amount"],
+    previewRows: [{ Date: "2026-09-01", Description: "Paper supplies", Category: "Inventory", Amount: "500" }],
+    totalRows: 3, dateFormatAmbiguous: false, detectedDateFormat: "iso",
+    validation: { validRows: 2, invalidRows: 1, skipped: [{ row: 4, reason: "Invalid amount" }], skippedTruncated: false, possibleDuplicateRows: 1, duplicateRows: [3] },
+  };
+  await page.route("**/records/csv-imports/preview", async (route) => { await route.fulfill({ json: preview }); });
+  let confirms = 0;
+  await page.route("**/records/csv-imports/confirm", async (route) => {
+    confirms += 1;
+    await route.fulfill({ json: { batchId: 800, title: "September expenses", status: "COMPLETE", totalRows: 3, imported: 2, skipped: [{ row: 4, reason: "Invalid amount" }], flagged: 1, largeExpenseFlagged: 0 } });
+  });
+  await page.goto("/records/csv-imports/new");
+  await chooseUpload(page, "Choose a file", { name: "expenses.csv", mimeType: "text/csv", buffer: Buffer.from("Date,Description,Category,Amount\n2026-09-01,Paper supplies,Inventory,500\n") });
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await page.getByRole("button", { name: "Check all rows", exact: true }).click();
+  await expect(page.getByText("File check: 2 valid, 1 skipped.")).toBeVisible();
+  await expect(page.getByText("1 possible duplicate will be included and flagged for review.")).toBeVisible();
+  expect(confirms).toBe(0);
+  await expect(page.getByText("Row 4: Invalid amount")).toBeHidden();
+  await page.getByRole("button", { name: "Show more", exact: true }).click();
+  await expect(page.getByText("Row 4: Invalid amount")).toBeVisible();
+  await page.getByRole("button", { name: "Import 2 of 3 rows", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Import complete" })).toBeVisible();
+  expect(confirms).toBe(1);
+  await expect(page.getByText("Row 4: Invalid amount")).toBeHidden();
+  await expect(page.getByRole("link", { name: "Review them now →" })).toBeVisible();
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath(`csv-result-${theme}-${width}.png`), fullPage: true });
+    }
+  }
+  await page.getByRole("button", { name: "Show more", exact: true }).click();
+  await expect(page.getByText("Row 4: Invalid amount")).toBeVisible();
+  await page.getByRole("button", { name: "Show less", exact: true }).click();
+  await expect(page.getByText("Row 4: Invalid amount")).toBeHidden();
+});
+
+test("a terminal import failure reports saved rows and directs recovery to the batch", async ({ page }, testInfo) => {
+  await page.route("**/records/csv-imports/preview", async (route) => {
+    await route.fulfill({ json: {
+      headers: ["Date", "Description", "Category", "Amount"],
+      previewRows: [{ Date: "2026-09-01", Description: "Paper", Category: "Inventory", Amount: "500" }],
+      totalRows: 1000, dateFormatAmbiguous: false,
+      validation: { validRows: 1000, invalidRows: 0, skipped: [], skippedTruncated: false },
+    } });
+  });
+  let confirms = 0;
+  await page.route("**/records/csv-imports/confirm", async (route) => {
+    confirms += 1;
+    await route.fulfill({ status: 202, json: { batchId: 801, title: "September expenses", status: "Pending Review", processingStatus: "PENDING", totalRows: 1000, imported: 0, skipped: [], flagged: 0 } });
+  });
+  await page.route("**/records/csv-imports/batches/801/status", async (route) => {
+    await route.fulfill({ json: { batchId: 801, status: "Pending Review", processingStatus: "FAILED", totalRows: 1000, processedRows: 400, importedRows: 380, skippedRows: 20, flaggedRows: 0, failureStage: "insert", resultSummary: { skipped: [{ row: 4, reason: "Invalid amount" }], skippedTruncated: true } } });
+  });
+  await page.goto("/records/csv-imports/new");
+  await chooseUpload(page, "Choose a file", { name: "expenses.csv", mimeType: "text/csv", buffer: Buffer.from("Date,Description,Category,Amount\n2026-09-01,Paper,Inventory,500\n") });
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await page.getByRole("button", { name: "Import 1000 rows", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Import stopped" })).toBeVisible();
+  await expect(page.getByText("380", { exact: true })).toBeVisible();
+  await expect(page.getByText("20", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Review saved records" })).toHaveAttribute("href", "/records?source=CSV_UPLOAD&importBatchId=801");
+  await expect(page.getByRole("button", { name: /^Import/ })).toHaveCount(0);
+  expect(confirms).toBe(1);
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.screenshot({ path: testInfo.outputPath("csv-stopped-390.png"), fullPage: true });
 });

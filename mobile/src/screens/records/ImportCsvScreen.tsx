@@ -1,10 +1,11 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useFocusEffect } from "@react-navigation/native";
 import { FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, View } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
 import { Alert as AlertBanner, Button, Callout, Card, ConfirmSheet, ErrorNote, Field, OptionSheet, Screen, SelectChip, T } from "../../components/ui";
 import { useBusinessProfiles } from "../../context/BusinessProfileContext";
 import { api } from "../../lib/api";
-import { describeActionFailure, saveFailureMessage, toLoadFailure } from "../../lib/connectionState";
+import { describeActionFailure, toLoadFailure } from "../../lib/connectionState";
 import {
   EMPTY_MAPPING,
   analyseRows,
@@ -36,7 +37,21 @@ import { useTheme } from "../../context/ThemeContext";
 import { FIELD_LIMITS } from "../../lib/fieldLimits";
 import { ImportSteps } from "./importCsv/ImportSteps";
 import { ReviewRowCard } from "./importCsv/ReviewRowCard";
-import { FIELD_LABELS, IMPORT_POLL_INTERVAL_MS, IMPORT_POLL_TIMEOUT_MS, IMPORT_STAGE_WORDS } from "./importCsv/constants";
+import { FIELD_LABELS, IMPORT_POLL_INTERVAL_MS, IMPORT_POLL_TIMEOUT_MS } from "./importCsv/constants";
+import { ResultDetails } from "../../components/ResultDetails";
+import { csvFileError } from "../../lib/importFiles";
+import { useImportOperation } from "../../lib/useImportOperation";
+
+interface ImportValidation {
+  validRows: number;
+  invalidRows: number;
+  skipped: { row: number; reason: string }[];
+  skippedTruncated: boolean;
+  possibleDuplicateRows?: number;
+  duplicateRows?: number[];
+  duplicateRowsTruncated?: boolean;
+}
+interface ImportCategorySuggestion { row: number; categoryId: number; categoryName: string; source: "history" }
 
 /**
  * Importing a spreadsheet, in the three steps the website has always had:
@@ -64,7 +79,7 @@ import { FIELD_LABELS, IMPORT_POLL_INTERVAL_MS, IMPORT_POLL_TIMEOUT_MS, IMPORT_S
  */
 export function ImportCsvScreen({ navigation }: any) {
   const t = useTheme();
-  const { brand, ink, paper, statusText, status } = t;
+  const { brand, ink, paper, statusText } = t;
   const { selected, categories } = useBusinessProfiles();
   const [file, setFile] = useState<DocumentPicker.DocumentPickerAsset | null>(null);
   /**
@@ -101,6 +116,15 @@ export function ImportCsvScreen({ navigation }: any) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [validation, setValidation] = useState<ImportValidation | null>(null);
+  const [categorySuggestions, setCategorySuggestions] = useState<ImportCategorySuggestion[]>([]);
+  const [categorySuggestionsTruncated, setCategorySuggestionsTruncated] = useState(false);
+  const operation = useImportOperation(selected?.id);
+  const reviewSignature = JSON.stringify({ file: file?.uri, mapping, recordType, mixedStrategy, dateFormat, detectedFormat, dateAmbiguous, corrections, title });
+  const latestReviewSignature = useRef(reviewSignature);
+  latestReviewSignature.current = reviewSignature;
+  useEffect(() => { reset(); setBusy(false); }, [selected?.id]);
+  useFocusEffect(useCallback(() => () => { operation.cancel(); setBusy(false); }, [operation]));
 
   const dateRules: RowRules = useMemo(
     () => ({
@@ -176,19 +200,30 @@ export function ImportCsvScreen({ navigation }: any) {
     setResult(null);
     setBatchStatus(null);
     setError(null);
+    setValidation(null);
+    setCategorySuggestions([]);
+    setCategorySuggestionsTruncated(false);
+    setConfirmOpen(false);
   }
 
-  async function pick() {
-    const res = await DocumentPicker.getDocumentAsync({ type: ["text/csv", "text/comma-separated-values", "*/*"] });
-    if (res.canceled || !res.assets?.[0]) return;
-    const f = res.assets[0];
-    reset();
-    setFile(f);
-    // Minted with the file, not with the request — see the state declaration.
-    setIdempotencyKey(newIdempotencyKey());
-    setTitle(defaultImportTitle(f.name));
+  async function pick(retry = false) {
+    const task = operation.begin();
+    if (!task) return;
     setBusy(true);
     try {
+      const res = retry ? null : await DocumentPicker.getDocumentAsync({ type: ["text/csv", "text/comma-separated-values", "*/*"], copyToCacheDirectory: true });
+      if (!operation.current(task)) return;
+      const f = retry ? file : res && !res.canceled ? res.assets?.[0] : null;
+      if (!f) return;
+      const invalid = csvFileError(f);
+      if (invalid) { setError(invalid); return; }
+      if (!retry) {
+        reset();
+        setFile(f);
+        setIdempotencyKey(newIdempotencyKey());
+        setTitle(defaultImportTitle(f.name));
+      }
+      setError(null);
       const preview = await api.upload<{
         headers: string[];
         previewRows: Record<string, string>[];
@@ -197,7 +232,9 @@ export function ImportCsvScreen({ navigation }: any) {
         columnsWithNegatives?: string[];
         detectedDateFormat?: CsvDateFormat;
         dateFormatAmbiguous?: boolean;
-      }>("/records/csv-imports/preview", formFor(f));
+        suggestedMapping?: Partial<ColumnMapping>;
+      }>("/records/csv-imports/preview", formFor(f), task.controller.signal);
+      if (!operation.current(task)) return;
 
       setHeaders(preview.headers);
       setPreviewRows(preview.previewRows ?? []);
@@ -211,17 +248,19 @@ export function ImportCsvScreen({ navigation }: any) {
       });
       // Offered, not applied silently: the owner still sees every choice, and
       // the review step labels each row before anything is written.
-      setMapping(guess.mapping);
+      setMapping(preview.suggestedMapping ? { ...EMPTY_MAPPING, ...preview.suggestedMapping } : guess.mapping);
       setAutoMapped(guess.autoMapped);
       setRecordType(guess.recordType);
       setMixedStrategy(guess.mixedStrategy);
     } catch (err) {
+      if (!operation.current(task)) return;
       // The file is still chosen and the idempotency key still minted, so
       // "Try again" re-previews the same spreadsheet rather than sending the
       // owner back to the file picker.
       setError(describeActionFailure(toLoadFailure(err), "The file you chose is still selected."));
     } finally {
-      setBusy(false);
+      if (operation.current(task)) setBusy(false);
+      operation.finish(task);
     }
   }
 
@@ -232,11 +271,13 @@ export function ImportCsvScreen({ navigation }: any) {
    * moves because rows were committed, not because time passed. ADR-4's rule:
    * never fake determinate progress.
    */
-  async function pollBatch(batchId: number) {
+  async function pollBatch(batchId: number, task: NonNullable<ReturnType<typeof operation.begin>>) {
     const deadline = Date.now() + IMPORT_POLL_TIMEOUT_MS;
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, IMPORT_POLL_INTERVAL_MS));
+      if (!operation.current(task)) return;
       const status = await api.get<any>(`/records/csv-imports/batches/${batchId}/status`);
+      if (!operation.current(task)) return;
       setBatchStatus(status);
       if (status.processingStatus === "COMPLETE") {
         const summary = status.resultSummary ?? {};
@@ -247,6 +288,7 @@ export function ImportCsvScreen({ navigation }: any) {
           imported: status.importedRows,
           skipped: summary.skipped ?? [],
           skippedCount: status.skippedRows,
+          skippedTruncated: status.skippedRows > (summary.skipped?.length ?? 0),
           flagged: status.flaggedRows,
           largeExpenseFlagged: summary.largeExpenseFlagged ?? 0,
           importedExpenses: summary.importedExpenses ?? 0,
@@ -256,11 +298,8 @@ export function ImportCsvScreen({ navigation }: any) {
         return;
       }
       if (status.processingStatus === "FAILED") {
-        throw new Error(
-          status.failureStage
-            ? `The import stopped while it was ${IMPORT_STAGE_WORDS[status.failureStage] ?? status.failureStage}. Nothing was half-saved — try importing the same file again.`
-            : "The import could not be finished. Try importing the same file again.",
-        );
+        setError("Review saved records before importing the remaining rows.");
+        return;
       }
     }
     throw new Error(
@@ -270,6 +309,8 @@ export function ImportCsvScreen({ navigation }: any) {
 
   async function confirm() {
     if (!file || !idempotencyKey) return;
+    const task = operation.begin();
+    if (!task) return;
     setConfirmOpen(false);
     setBusy(true);
     setError(null);
@@ -289,16 +330,21 @@ export function ImportCsvScreen({ navigation }: any) {
       // refuses the file, which is the server asking this exact question.
       if (dateAmbiguous && dateFormat) form.append("dateFormat", dateFormat);
 
-      const confirmed = await api.upload<any>("/records/csv-imports/confirm", form);
+      const confirmed = await api.upload<any>("/records/csv-imports/confirm", form, task.controller.signal);
+      if (!operation.current(task)) return;
       if (confirmed.processingStatus === "PENDING" || confirmed.processingStatus === "PROCESSING") {
         // 202: the batch exists and the worker has it, but no records are
         // written yet. Nothing here is final until the poll says so.
         setBatchStatus({ ...confirmed, processedRows: 0 });
-        await pollBatch(confirmed.batchId);
+        await pollBatch(confirmed.batchId, task);
+      } else if (confirmed.processingStatus === "FAILED") {
+        setBatchStatus({ ...confirmed, importedRows: confirmed.imported, skippedRows: confirmed.skippedCount ?? confirmed.skipped?.length ?? 0 });
+        setError("Review saved records before importing the remaining rows.");
       } else {
-        setResult({ ...confirmed, skippedCount: confirmed.skipped?.length ?? 0 });
+        setResult({ ...confirmed, skippedCount: confirmed.skippedCount ?? confirmed.skipped?.length ?? 0 });
       }
     } catch (err) {
+      if (!operation.current(task)) return;
       /*
         THE MAPPING AND THE CORRECTIONS SURVIVE, and the message says so.
 
@@ -310,13 +356,60 @@ export function ImportCsvScreen({ navigation }: any) {
         actually landed before the connection dropped comes back as the SAME
         import rather than a second copy of the records.
       */
-      setError(saveFailureMessage(err, "Import these rows"));
+      const failure = toLoadFailure(err);
+      setError(failure.reach === "unreachable"
+        ? "Connection lost. Your import may still be running. Retry here to check the same import."
+        : `${failure.message} Your mapping and changes are kept.`);
     } finally {
-      setBusy(false);
+      if (operation.current(task)) setBusy(false);
+      operation.finish(task);
+    }
+  }
+
+  async function checkAllRows(openConfirmation = false) {
+    if (!file || !mappingCheck.ready || needsDateAnswer) return;
+    const task = operation.begin();
+    if (!task) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const form = formFor(file);
+      form.append("recordType", recordType);
+      form.append("businessProfileId", String(selected!.id));
+      form.append("columnMapping", JSON.stringify(columnMappingPayload(mapping, recordType, mixedStrategy)));
+      form.append("corrections", JSON.stringify(correctionsPayload(corrections)));
+      if (recordType === "mixed") form.append("mixedStrategy", mixedStrategy);
+      if (dateFormat) form.append("dateFormat", dateFormat);
+      const preview = await api.upload<{ validation?: ImportValidation; dateFormatAmbiguous?: boolean; categorySuggestions?: ImportCategorySuggestion[]; categorySuggestionsTruncated?: boolean }>("/records/csv-imports/preview", form, task.controller.signal);
+      if (!operation.current(task)) return;
+      if (latestReviewSignature.current !== reviewSignature) {
+        setValidation(null);
+        setCategorySuggestions([]);
+        setError("Details changed. Check the rows again.");
+        return;
+      }
+      if (!preview.validation) {
+        if (preview.dateFormatAmbiguous) { setDateAmbiguous(true); setDateFormat(null); setStep("map"); }
+        setError("Check the column mapping and date format, then try again.");
+        return;
+      }
+      setValidation(preview.validation);
+      setCategorySuggestions(preview.categorySuggestions ?? []);
+      setCategorySuggestionsTruncated(preview.categorySuggestionsTruncated === true);
+      setReviewOrder(problemsFirst(analysed).map((row) => row.rowNumber));
+      setStep("review");
+      if (openConfirmation && preview.validation.validRows > 0) setConfirmOpen(true);
+    } catch (err) {
+      if (operation.current(task)) setError(describeActionFailure(toLoadFailure(err), "Your mapping and row changes are still here."));
+    } finally {
+      if (operation.current(task)) setBusy(false);
+      operation.finish(task);
     }
   }
 
   function correct(rowNumber: number, field: CorrectableField, value: string) {
+    setValidation(null);
+    setCategorySuggestions((previous) => previous.filter((suggestion) => suggestion.row !== rowNumber));
     setCorrections((prev) => ({ ...prev, [rowNumber]: { ...prev[rowNumber], [field]: value } }));
   }
 
@@ -337,21 +430,25 @@ export function ImportCsvScreen({ navigation }: any) {
             <View style={{ gap: space.sm }}>
               {result.duplicateOfBatchId ? (
                 <AlertBanner kind="duplicate" label="You have imported this file before">
-                  Every row in it matches an import you already have. Nothing was blocked — but if this was
-                  an accident, the new rows are the ones to delete.
+                  These rows match an earlier import. Review duplicates before keeping both.
                 </AlertBanner>
               ) : null}
               {result.uncategorised > 0 ? (
                 <Callout tone="info">
-                  {result.uncategorised} expense(s) had no category and went into "Uncategorised". They're
-                  imported and counted — sorting them is what makes them show up in your spending breakdown.
+                  {result.uncategorised} expense(s) need a category.
                 </Callout>
               ) : null}
               {result.skippedCount > 0 ? (
                 <AlertBanner kind="needs-review" label={`${result.skippedCount} row(s) were skipped`}>
-                  {(result.skipped ?? []).slice(0, 20).map((s: any) => `Row ${s.row}: ${s.reason}`).join("\n") ||
-                    "Open the import in your records to see which rows they were."}
+                  These rows were not saved.
                 </AlertBanner>
+              ) : null}
+              {(result.skipped?.length ?? 0) > 0 || result.importedExpenses > 0 || result.importedSales > 0 ? (
+                <ResultDetails label="import results">
+                  {result.importedExpenses > 0 || result.importedSales > 0 ? <T variant="caption">{result.importedExpenses ?? 0} expenses · {result.importedSales ?? 0} sales</T> : null}
+                  {(result.skipped ?? []).slice(0, 100).map((row: { row: number; reason: string }) => <T key={row.row} variant="caption">Row {row.row}: {row.reason}</T>)}
+                  {result.skippedTruncated || result.skippedCount > Math.min(100, result.skipped?.length ?? 0) ? <T variant="caption">Some row details are unavailable here. Check the original file.</T> : null}
+                </ResultDetails>
               ) : null}
               {result.flagged > 0 ? (
                 <AlertBanner kind="duplicate">{result.flagged} row(s) look like possible duplicates.</AlertBanner>
@@ -382,16 +479,16 @@ export function ImportCsvScreen({ navigation }: any) {
    */
   if (batchStatus && !result) {
     const progress = importProgress(batchStatus);
+    const failed = batchStatus.processingStatus === "FAILED";
     return (
       <Screen>
         <ScrollView contentContainerStyle={{ padding: space.lg }}>
           <Card>
-            <T variant="title" style={{ marginBottom: 4 }}>Importing your records</T>
+            <T variant="title" style={{ marginBottom: 4 }}>{failed ? "Import stopped" : "Importing your records"}</T>
             <T variant="caption" style={{ marginBottom: space.md }}>
-              This file is large enough that FinSight is importing it in the background. You can leave this
-              screen — the import carries on without you.
+              {failed ? `${batchStatus.importedRows ?? 0} rows saved · ${batchStatus.skippedRows ?? 0} skipped` : "Importing in the background. You can leave this screen."}
             </T>
-            {progress ? (
+            {failed ? null : progress ? (
               <>
                 <View
                   // Without `accessible`, RN leaves `isAccessibilityElement`
@@ -409,7 +506,7 @@ export function ImportCsvScreen({ navigation }: any) {
                     // The caption underneath says this in words; a reader
                     // parked on the bar itself would otherwise get a bare
                     // ratio with no unit.
-                    text: `${progress.done} of ${progress.total} rows checked and saved`,
+                    text: `${progress.done} of ${progress.total} rows processed`,
                   }}
                   style={{ height: 8, borderRadius: radius.sm, backgroundColor: paper[200], overflow: "hidden" }}
                 >
@@ -422,21 +519,20 @@ export function ImportCsvScreen({ navigation }: any) {
                   />
                 </View>
                 <T variant="caption" style={{ marginTop: space.sm }}>
-                  {progress.done} of {progress.total} rows checked and saved.
+                  {progress.done} of {progress.total} rows processed.
                 </T>
               </>
             ) : (
               <T variant="caption">FinSight is reading the file. It will start counting rows in a moment.</T>
             )}
             {error ? <View style={{ marginTop: space.md }}><ErrorNote>{error}</ErrorNote></View> : null}
-            {error ? (
+            {failed ? (
+              <Button title="Review saved records" variant="primary" onPress={() => navigation.navigate("RecordsList")} style={{ marginTop: space.md }} />
+            ) : error ? (
               <Button
-                title="Try again"
+                title="Check progress"
                 variant="secondary"
-                onPress={() => {
-                  setBatchStatus(null);
-                  setError(null);
-                }}
+                onPress={() => void confirm()}
                 style={{ marginTop: space.md }}
               />
             ) : null}
@@ -453,12 +549,16 @@ export function ImportCsvScreen({ navigation }: any) {
           <Card>
             <T variant="title" style={{ marginBottom: 4 }}>Import a spreadsheet</T>
             <T variant="caption" style={{ marginBottom: space.lg }}>
-              Bring in sales and expenses from a CSV you already keep — one file can hold both. You'll map
-              the columns and check the rows before anything is saved.
+              Upload a CSV, match the columns, then review before importing. Up to 5 MB.
             </T>
             <ImportSteps current={0} />
             {error ? <View style={{ marginBottom: space.md }}><ErrorNote>{error}</ErrorNote></View> : null}
-            <Button title="Choose a CSV file" variant="primary" onPress={pick} />
+            <Button title="Choose a CSV file" variant="primary" onPress={() => void pick()} loading={busy} />
+            <ResultDetails label="CSV format">
+              <T variant="caption">Use a header row, then one transaction per row. Date, description, and amount are required. Vendor and category are optional. Amounts are in PHP.</T>
+              <T variant="caption" selectable>{"date,description,amount,category,vendor\n2026-09-01,Coffee beans,450,Inventory,Local supplier"}</T>
+              <T variant="caption">Use YYYY-MM-DD dates where possible. For mixed files, add a type column with sale or expense. Other columns, including tax and currency, are not imported.</T>
+            </ResultDetails>
           </Card>
         </ScrollView>
       </Screen>
@@ -473,8 +573,22 @@ export function ImportCsvScreen({ navigation }: any) {
             <ImportSteps current={0} />
             <T variant="caption" style={{ marginBottom: space.md }}>Reading {file.name}…</T>
             <SkeletonList count={4} />
+            <Button title="Cancel upload" variant="ghost" onPress={() => { operation.cancel(); setBusy(false); setError("Your file is kept. Try again when ready."); }} />
           </Card>
         </ScrollView>
+      </Screen>
+    );
+  }
+
+  if (headers.length === 0) {
+    return (
+      <Screen>
+        <View style={{ padding: space.lg, gap: space.md }}>
+          <T variant="title">Couldn’t read this file</T>
+          {error ? <ErrorNote>{error}</ErrorNote> : null}
+          <Button title="Try again" variant="primary" onPress={() => void pick(true)} loading={busy} />
+          <Button title="Choose a different file" variant="ghost" onPress={reset} disabled={busy} />
+        </View>
       </Screen>
     );
   }
@@ -493,19 +607,29 @@ export function ImportCsvScreen({ navigation }: any) {
           keyExtractor={(row) => String(row.rowNumber)}
           contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2, gap: space.sm }}
           keyboardShouldPersistTaps="handled"
+          pointerEvents={busy ? "none" : "auto"}
           ListHeaderComponent={
             <View style={{ gap: space.sm, marginBottom: space.sm }}>
               <Card>
                 <ImportSteps current={2} />
                 <T variant="title" style={{ marginBottom: 4 }}>Check your rows</T>
                 <T variant="caption">
-                  {counts.problems === 0
-                    ? `All ${counts.total} rows read cleanly.`
-                    : `${counts.problems} of ${counts.total} rows can't be imported as they are. They're first in the list — fix them here and FinSight will import them.`}
+                  {validation ? `${validation.validRows} rows ready · ${validation.invalidRows} will be skipped.` : "Your changes will be checked before importing."}
                   {previewRows.length < totalRows
                     ? ` This is the first ${previewRows.length} of ${totalRows} rows; the rest are checked when you import.`
                     : ""}
                 </T>
+                {validation?.invalidRows ? (
+                  <ResultDetails label="row errors">
+                    {validation.skipped.map((row) => <T key={row.row} variant="caption">Row {row.row}: {row.reason}</T>)}
+                    {validation.skippedTruncated ? <T variant="caption">Showing the first 100 errors. Correct later rows in the CSV and upload it again.</T> : null}
+                  </ResultDetails>
+                ) : null}
+                {(validation?.possibleDuplicateRows ?? 0) > 0 ? (
+                  <T variant="caption" style={{ color: statusText.warning, marginTop: space.sm }}>
+                    {validation!.possibleDuplicateRows} possible duplicate row(s). They will be flagged if imported.
+                  </T>
+                ) : null}
                 {counts.corrected > 0 ? (
                   <T variant="caption" style={{ marginTop: space.sm, color: brand[700] }}>
                     {counts.corrected} row{counts.corrected === 1 ? "" : "s"} corrected. Your fixes are sent
@@ -524,15 +648,35 @@ export function ImportCsvScreen({ navigation }: any) {
               ) : null}
 
               {newCategories.length > 0 ? (
-                <Callout tone="info">
-                  This import will create {newCategories.length} new categor
-                  {newCategories.length === 1 ? "y" : "ies"}: {newCategories.join(", ")}.
-                  {previewRows.length < totalRows
-                    ? ` That is from the ${previewRows.length} rows checked — later rows may add more.`
-                    : ""}{" "}
-                  If one is a misspelling of a category you already have, fix it here or change the Category
-                  column, or you'll end up with two categories for the same thing.
-                </Callout>
+                <View>
+                  <T variant="caption">
+                  {newCategories.length} new categor{newCategories.length === 1 ? "y" : "ies"} in this preview. Check spellings before importing.
+                  </T>
+                  <ResultDetails label="new categories">
+                    <T variant="caption">{newCategories.join(", ")}</T>
+                    {previewRows.length < totalRows ? <T variant="caption">Later rows may create more categories.</T> : null}
+                  </ResultDetails>
+                </View>
+              ) : null}
+              {categorySuggestions.length > 0 ? (
+                <View style={{ gap: space.sm }}>
+                  <T variant="label">{categorySuggestions.length} category suggestion(s) from your past choices.</T>
+                  <Button title="Apply category suggestions" variant="secondary" disabled={busy} onPress={() => {
+                    setCorrections((previous) => {
+                      const next = { ...previous };
+                      for (const suggestion of categorySuggestions) {
+                        if (!next[suggestion.row]?.category?.trim()) next[suggestion.row] = { ...next[suggestion.row], category: suggestion.categoryName };
+                      }
+                      return next;
+                    });
+                    setValidation(null);
+                    setCategorySuggestions([]);
+                  }} />
+                  <ResultDetails label="suggested categories">
+                    {categorySuggestions.map((suggestion) => <T key={suggestion.row} variant="caption">Row {suggestion.row}: {suggestion.categoryName}</T>)}
+                    {categorySuggestionsTruncated ? <T variant="caption">More rows may need categories. Apply these suggestions, then review the import again.</T> : null}
+                  </ResultDetails>
+                </View>
               ) : null}
             </View>
           }
@@ -547,12 +691,12 @@ export function ImportCsvScreen({ navigation }: any) {
             <View style={{ marginTop: space.md, gap: space.sm }}>
               {error ? <ErrorNote>{error}</ErrorNote> : null}
               <Button
-                title={counts.problems > 0 ? `Import the other ${counts.total - counts.problems} rows` : "Import these rows"}
+                title="Review import"
                 variant="primary"
-                onPress={() => setConfirmOpen(true)}
+                onPress={() => void checkAllRows(true)}
                 loading={busy}
               />
-              <Button title="Back to the columns" variant="ghost" onPress={() => setStep("map")} />
+              <Button title="Back to the columns" variant="ghost" onPress={() => { setValidation(null); setStep("map"); }} disabled={busy} />
             </View>
           }
         />
@@ -561,8 +705,8 @@ export function ImportCsvScreen({ navigation }: any) {
           title="Import this file?"
           body={
             `${totalRows} row${totalRows === 1 ? "" : "s"} will be checked and added to your records as "${title.trim()}".` +
-            (counts.problems > 0
-              ? ` The ${counts.problems} row${counts.problems === 1 ? "" : "s"} still marked below will be skipped and listed afterwards.`
+            ((validation?.invalidRows ?? counts.problems) > 0
+              ? ` ${validation?.invalidRows ?? counts.problems} invalid row(s) will be skipped and listed afterwards.`
               : "") +
             (newCategories.length > 0 ? ` ${newCategories.length} new categor${newCategories.length === 1 ? "y" : "ies"} will be created.` : "")
           }
@@ -585,6 +729,7 @@ export function ImportCsvScreen({ navigation }: any) {
         <ScrollView
           contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}
           keyboardShouldPersistTaps="handled"
+          pointerEvents={busy ? "none" : "auto"}
         >
           <Card>
             <ImportSteps current={1} />
@@ -735,10 +880,8 @@ export function ImportCsvScreen({ navigation }: any) {
             <Button
               title="Check the rows"
               variant="primary"
-              onPress={() => {
-                setReviewOrder(problemsFirst(analysed).map((r) => r.rowNumber));
-                setStep("review");
-              }}
+              onPress={() => void checkAllRows()}
+              loading={busy}
               disabled={!mappingCheck.ready || needsDateAnswer || title.trim().length === 0 || totalRows === 0}
               style={{ marginTop: space.sm }}
             />
@@ -751,7 +894,7 @@ export function ImportCsvScreen({ navigation }: any) {
                     : `Still to map: ${mappingCheck.missing.map((f) => FIELD_LABELS[f]).join(", ")}.`}
               </T>
             ) : null}
-            <Button title="Choose a different file" variant="ghost" onPress={reset} />
+            <Button title="Choose a different file" variant="ghost" onPress={reset} disabled={busy} />
           </Card>
         </ScrollView>
       </KeyboardAvoidingView>

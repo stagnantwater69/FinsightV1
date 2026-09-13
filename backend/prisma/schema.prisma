@@ -440,25 +440,25 @@ model BusinessProfile {
   // whose whole value is the history it holds.
   archivedAt                   DateTime? @map("BusinessProfile_ArchivedAt")
 
-  user                         User                           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  categories                   ExpenseCategory[]
-  expenseRecords               ExpenseRecord[]
-  salesReferenceRecords        SalesReferenceRecord[]
-  receiptScans                 ReceiptScan[]
-  csvImportBatches             CSVImportBatch[]
-  aiInteractions               AIInteraction[]
-  conversations                Conversation[]
-  notifications                Notification[]
-  anomalyFindings              AnomalyFinding[]
-  categoryStatistics           CategoryStatistics[]
-  recurringPatterns            RecurringPattern[]
-  recurringSchedules           RecurringSchedule[]
-  analysisJobs                 AnalysisJob[]
-  reductionOpportunityFeedback ReductionOpportunityFeedback[]
-  operatingDaySchedule         BusinessOperatingDay[]
-  operatingDayOverrides        BusinessOperatingDayOverride[]
-  recoveryPlans                RecoveryPlan[]
-  recoveryNotificationPreference RecoveryNotificationPreference?
+  user                              User                               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  categories                        ExpenseCategory[]
+  expenseRecords                    ExpenseRecord[]
+  salesReferenceRecords             SalesReferenceRecord[]
+  receiptScans                      ReceiptScan[]
+  csvImportBatches                  CSVImportBatch[]
+  aiInteractions                    AIInteraction[]
+  conversations                     Conversation[]
+  notifications                     Notification[]
+  anomalyFindings                   AnomalyFinding[]
+  categoryStatistics                CategoryStatistics[]
+  recurringPatterns                 RecurringPattern[]
+  recurringSchedules                RecurringSchedule[]
+  analysisJobs                      AnalysisJob[]
+  reductionOpportunityFeedback      ReductionOpportunityFeedback[]
+  operatingDaySchedule              BusinessOperatingDay[]
+  operatingDayOverrides             BusinessOperatingDayOverride[]
+  recoveryPlans                     RecoveryPlan[]
+  recoveryNotificationPreference    RecoveryNotificationPreference?
   recoveryNotificationTriggerStates RecoveryNotificationTriggerState[]
 
   @@index([userId])
@@ -533,7 +533,15 @@ model ExpenseRecord {
   @@index([importBatchId])
   @@index([receiptScanId])
   @@index([duplicateOfRecordId])
-  @@index([businessProfileId, date, id])
+  // Explicit `map:` on the long composite indexes below pins them to the names
+  // that actually exist in every migrated database. The migrations authored
+  // names longer than Postgres's 63-byte identifier limit, Postgres truncated
+  // them on CREATE, and Prisma's own shortening later produced different names
+  // — so `migrate diff` reported nine RenameIndex statements on every fresh
+  // database (QA finding DATA-DRIFT-01, docs/P1B-MIGRATION-HISTORY-
+  // INVESTIGATION.md #4). Naming them here closes the drift without a rename
+  // migration against deployed databases.
+  @@index([businessProfileId, date, id], map: "ExpenseRecord_BusinessProfile_ID_ExpenseRecord_Date_ExpenseR_id")
   @@map("ExpenseRecord")
 }
 
@@ -559,9 +567,10 @@ model AnomalyFinding {
   businessProfile BusinessProfile @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
   expenseRecord   ExpenseRecord?  @relation(fields: [expenseRecordId], references: [id], onDelete: Cascade)
 
-  @@unique([businessProfileId, fingerprint])
-  @@index([businessProfileId, status, detectedAt])
-  @@index([businessProfileId, type, detectedAt])
+  // See the ExpenseRecord note on why these carry explicit `map:` names.
+  @@unique([businessProfileId, fingerprint], map: "AnomalyFinding_BusinessProfile_ID_AnomalyFinding_Fingerprint_ke")
+  @@index([businessProfileId, status, detectedAt], map: "AnomalyFinding_BusinessProfile_ID_AnomalyFinding_Status_An_idx")
+  @@index([businessProfileId, type, detectedAt], map: "AnomalyFinding_BusinessProfile_ID_AnomalyFinding_Type_Anom_idx")
   @@index([expenseRecordId])
   @@map("AnomalyFinding")
 }
@@ -588,8 +597,9 @@ model CategoryStatistics {
   businessProfile BusinessProfile @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
   category        ExpenseCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
 
-  @@unique([categoryId, windowDays])
-  @@index([businessProfileId, windowDays])
+  // See the ExpenseRecord note on why these carry explicit `map:` names.
+  @@unique([categoryId, windowDays], map: "CategoryStatistics_Category_ID_CategoryStatistics_WindowDays_ke")
+  @@index([businessProfileId, windowDays], map: "CategoryStatistics_BusinessProfile_ID_CategoryStatistics_W_idx")
   @@map("CategoryStatistics")
 }
 
@@ -615,8 +625,9 @@ model RecurringPattern {
   category        ExpenseCategory    @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   derivedSchedule RecurringSchedule?
 
-  @@unique([businessProfileId, normalizedKey])
-  @@index([businessProfileId, status, nextExpectedDate])
+  // See the ExpenseRecord note on why these carry explicit `map:` names.
+  @@unique([businessProfileId, normalizedKey], map: "RecurringPattern_BusinessProfile_ID_RecurringPattern_Normalized")
+  @@index([businessProfileId, status, nextExpectedDate], map: "RecurringPattern_BusinessProfile_ID_RecurringPattern_Status_Rec")
   @@index([categoryId])
   @@map("RecurringPattern")
 }
@@ -726,6 +737,12 @@ model ReceiptScan {
   id                      Int       @id @default(autoincrement()) @map("ReceiptScan_ID")
   businessProfileId       Int?      @map("BusinessProfile_ID") // [ADDED] see schema header note
   imageFile               String    @map("ReceiptScan_ImageFile") @db.VarChar(255)
+  /// Profile-scoped replay token hash. Nullable for scans created before
+  /// upload idempotency; uniqueness arbitrates concurrent upload retries.
+  uploadKey               String?   @unique @map("ReceiptScan_UploadKey") @db.VarChar(100)
+  /// SHA-256 of the submitted pages and capture metadata. A replay token
+  /// must never be reused for different receipt contents.
+  uploadHash              String?   @map("ReceiptScan_UploadHash") @db.VarChar(64)
   extractedDate           DateTime? @map("ReceiptScan_ExtractedDate") @db.Date
   extractedVendor         String?   @map("ReceiptScan_ExtractedVendor") @db.VarChar(150)
   extractedDescription    String?   @map("ReceiptScan_ExtractedDescription") @db.VarChar(255)
@@ -790,7 +807,8 @@ model ReceiptScan {
   corrections     ReceiptFieldCorrection[]
 
   @@index([businessProfileId])
-  @@index([processingStatus, nextProcessingAttemptAt, processingHeartbeatAt])
+  // See the ExpenseRecord note on why this carries an explicit `map:` name.
+  @@index([processingStatus, nextProcessingAttemptAt, processingHeartbeatAt], map: "ReceiptScan_ReceiptScan_ProcessingStatus_ReceiptScan_NextProces")
   @@map("ReceiptScan")
 }
 
@@ -798,31 +816,31 @@ model ReceiptScan {
 /// owner photographed them — including the first, so a single-photo receipt
 /// (still the common case) and a five-page one are read the same way.
 model ReceiptScanPage {
-  id                Int      @id @default(autoincrement()) @map("ReceiptScanPage_ID")
-  receiptScanId     Int      @map("ReceiptScan_ID")
-  pageNumber        Int      @map("ReceiptScanPage_Number")
-  imageFile         String   @map("ReceiptScanPage_ImageFile") @db.VarChar(255)
+  id                     Int      @id @default(autoincrement()) @map("ReceiptScanPage_ID")
+  receiptScanId          Int      @map("ReceiptScan_ID")
+  pageNumber             Int      @map("ReceiptScanPage_Number")
+  imageFile              String   @map("ReceiptScanPage_ImageFile") @db.VarChar(255)
   /// Optional derived scanner/crop output. `imageFile` always remains the
   /// original evidence object and is never overwritten by this path.
-  processedImageFile String? @map("ReceiptScanPage_ProcessedImageFile") @db.VarChar(255)
+  processedImageFile     String?  @map("ReceiptScanPage_ProcessedImageFile") @db.VarChar(255)
   /// Versioned, validated capture provenance supplied by the client.
-  captureMetadata   Json?    @map("ReceiptScanPage_CaptureMetadata")
+  captureMetadata        Json?    @map("ReceiptScanPage_CaptureMetadata")
   /// Which OCR candidate objectively won for this page.
-  ocrSource         String   @default("original") @map("ReceiptScanPage_OcrSource") @db.VarChar(20)
+  ocrSource              String   @default("original") @map("ReceiptScanPage_OcrSource") @db.VarChar(20)
   /// This page's own OCR text. ReceiptScan.rawText holds all pages
   /// concatenated in order — the shape every parser already reads — so this
   /// is kept only for per-page re-processing (a retaken page 2 must not force
   /// re-reading pages 1 and 3), not as the primary text store.
-  rawText           String?  @map("ReceiptScanPage_RawText") @db.Text
+  rawText                String?  @map("ReceiptScanPage_RawText") @db.Text
   /// Audit copy of OCR run against the unmodified evidence image.
-  originalRawText   String?  @map("ReceiptScanPage_OriginalRawText") @db.Text
+  originalRawText        String?  @map("ReceiptScanPage_OriginalRawText") @db.Text
   /// Audit copy of OCR run against the derived image, whether or not it won.
-  processedRawText  String?  @map("ReceiptScanPage_ProcessedRawText") @db.Text
+  processedRawText       String?  @map("ReceiptScanPage_ProcessedRawText") @db.Text
   /// This page's own OCR confidence, for a per-page "this one looks rough"
   /// signal. ReceiptScan.ocrConfidence remains the whole-scan figure.
-  ocrConfidence     Int?     @map("ReceiptScanPage_OcrConfidence")
-  originalOcrConfidence Int? @map("ReceiptScanPage_OriginalOcrConfidence")
-  processedOcrConfidence Int? @map("ReceiptScanPage_ProcessedOcrConfidence")
+  ocrConfidence          Int?     @map("ReceiptScanPage_OcrConfidence")
+  originalOcrConfidence  Int?     @map("ReceiptScanPage_OriginalOcrConfidence")
+  processedOcrConfidence Int?     @map("ReceiptScanPage_ProcessedOcrConfidence")
   /// How readable the photograph itself was — see lib/imageQuality.
   ///
   /// STORED, where it deliberately was not before. The old reasoning was that
@@ -833,9 +851,9 @@ model ReceiptScanPage {
   /// so anything not written down is simply lost before it can be shown. The
   /// lifespan argument was about how long it stays USEFUL, not about whether
   /// it can be stored, and the two came apart when the pipeline went async.
-  sharpness         Float?   @map("ReceiptScanPage_Sharpness")
-  brightness        Float?   @map("ReceiptScanPage_Brightness")
-  tooBlurredToTrust Boolean? @map("ReceiptScanPage_TooBlurredToTrust")
+  sharpness              Float?   @map("ReceiptScanPage_Sharpness")
+  brightness             Float?   @map("ReceiptScanPage_Brightness")
+  tooBlurredToTrust      Boolean? @map("ReceiptScanPage_TooBlurredToTrust")
 
   receiptScan ReceiptScan @relation(fields: [receiptScanId], references: [id], onDelete: Cascade)
 
@@ -1233,15 +1251,15 @@ enum RecoveryNotificationTrigger {
 /// (§7.1), per the task's explicit instruction not to add a second
 /// timezone. A null pair means quiet hours are off.
 model RecoveryNotificationPreference {
-  id                Int  @id @default(autoincrement()) @map("RecoveryNotificationPreference_ID")
-  businessProfileId Int  @unique @map("BusinessProfile_ID")
+  id                Int @id @default(autoincrement()) @map("RecoveryNotificationPreference_ID")
+  businessProfileId Int @unique @map("BusinessProfile_ID")
 
-  targetIncreaseAlertEnabled     Boolean @default(true) @map("RecoveryNotificationPreference_TargetIncreaseAlertEnabled")
-  targetIncreaseThresholdPercent Decimal @default(15) @map("RecoveryNotificationPreference_TargetIncreaseThresholdPercent") @db.Decimal(5, 2)
-  behindThreeDaysAlertEnabled    Boolean @default(true) @map("RecoveryNotificationPreference_BehindThreeDaysAlertEnabled")
-  openDayNoSalesAlertEnabled     Boolean @default(true) @map("RecoveryNotificationPreference_OpenDayNoSalesAlertEnabled")
+  targetIncreaseAlertEnabled      Boolean @default(true) @map("RecoveryNotificationPreference_TargetIncreaseAlertEnabled")
+  targetIncreaseThresholdPercent  Decimal @default(15) @map("RecoveryNotificationPreference_TargetIncreaseThresholdPercent") @db.Decimal(5, 2)
+  behindThreeDaysAlertEnabled     Boolean @default(true) @map("RecoveryNotificationPreference_BehindThreeDaysAlertEnabled")
+  openDayNoSalesAlertEnabled      Boolean @default(true) @map("RecoveryNotificationPreference_OpenDayNoSalesAlertEnabled")
   projectionShortfallAlertEnabled Boolean @default(true) @map("RecoveryNotificationPreference_ProjectionShortfallAlertEnabled")
-  coverageReachedAlertEnabled    Boolean @default(true) @map("RecoveryNotificationPreference_CoverageReachedAlertEnabled")
+  coverageReachedAlertEnabled     Boolean @default(true) @map("RecoveryNotificationPreference_CoverageReachedAlertEnabled")
 
   // Local time-of-day (business timezone), null pair = disabled.
   quietHoursStart DateTime? @map("RecoveryNotificationPreference_QuietHoursStart") @db.Time(0)

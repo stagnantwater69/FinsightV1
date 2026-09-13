@@ -91,6 +91,7 @@ export async function ask(req: Request, res: Response) {
 const suggestCategorySchema = z.object({
   businessProfileId: z.number().int().positive(),
   description: z.string().min(1).max(255),
+  vendor: z.string().max(150).optional(),
 });
 
 export async function suggestCategory(req: Request, res: Response) {
@@ -98,7 +99,8 @@ export async function suggestCategory(req: Request, res: Response) {
   const suggestion = await aiService.suggestCategoryForDescription(
     req.user!.id,
     input.businessProfileId,
-    input.description
+    input.description,
+    input.vendor,
   );
   res.status(200).json({ suggestion });
 }

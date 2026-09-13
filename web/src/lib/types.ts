@@ -392,7 +392,7 @@ export type DayStatus = "above" | "at" | "below";
  * would force each of those to handle a `"closed"` case that can never
  * actually reach them.
  */
-export type DailyRowStatus = DayStatus | "closed";
+export type DailyCoverageStatus = DayStatus | "closed";
 
 // Month-to-date recovery tracker. Shared verbatim by the Dashboard summary
 // and the Insights Recovery Target screen — both read the same computed
@@ -463,18 +463,23 @@ export interface RecoveryTargets {
   /** Deterministic explanation of what moved the adjusted daily target since
    * the previous local day. `null` on the 1st of the month, when setup is
    * incomplete, or (per its own `primaryReason`) when nothing material moved. */
-  changeSincePreviousDay?: {
-    adjustedDailyTargetDelta: number;
-    salesAdded: number;
-    remainingOpenDaysDelta: number;
-    primaryReason:
-      | "sales_added"
-      | "open_day_elapsed"
-      | "baseline_changed"
-      | "schedule_changed"
-      | "data_changed"
-      | "no_material_change";
-  } | null;
+  changeSincePreviousDay?: RecoveryChangeSincePreviousDay | null;
+}
+
+/** §8.2/§10.3 "Why your target changed" delta shape. */
+export interface RecoveryChangeSincePreviousDay {
+  /** Peso change in `adjustedDailyTarget` since yesterday; negative means the target got easier. */
+  adjustedDailyTargetDelta: number;
+  /** Peso change in `salesThisMonth` since yesterday. */
+  salesAdded: number;
+  remainingOpenDaysDelta: number;
+  primaryReason:
+    | "sales_added"
+    | "open_day_elapsed"
+    | "baseline_changed"
+    | "schedule_changed"
+    | "data_changed"
+    | "no_material_change";
 }
 
 /**
@@ -699,7 +704,7 @@ export interface ReductionOpportunityEvidence {
  * `ExpenseCostBehavior` above for why this response's casing differs from
  * `/records/categories`'.
  */
-export type ReductionOpportunityCostBehavior = "fixed" | "variable" | "mixed" | "unclassified";
+export type ExpenseCostBehaviorApi = "fixed" | "variable" | "mixed" | "unclassified";
 
 export interface ReductionOpportunity {
   id: string;
@@ -711,7 +716,7 @@ export interface ReductionOpportunity {
   observation: string;
   rationale: string;
   evidence: ReductionOpportunityEvidence;
-  costBehavior: ReductionOpportunityCostBehavior;
+  costBehavior: ExpenseCostBehaviorApi;
   suggestedChecks: string[];
   relatedRecordIds: number[];
   limitations: string[];
@@ -907,7 +912,7 @@ export interface DailyCoverageRow {
   sales: number;
   /** Null on a closed day, alongside `neededTarget`. */
   gap: number | null;
-  status: DailyRowStatus;
+  status: DailyCoverageStatus;
   /** Defaults to true when no schedule is configured (the old approximation
    * mode never had closed days). Optional for older servers. */
   isOperatingDay?: boolean;
@@ -1161,4 +1166,5 @@ export interface ChatSendResponse {
 export interface CategorySuggestion {
   categoryId: number;
   categoryName: string;
+  source?: "history" | "ai";
 }

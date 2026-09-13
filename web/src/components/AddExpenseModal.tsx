@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useId, useState, type FormEvent } from "react";
 import { Modal } from "./Modal";
 import { Button } from "./Button";
 import { useToast } from "./Toast";
@@ -206,20 +206,26 @@ export function AddExpenseModal({
   const amountDrifted =
     scanned !== null && amount !== "" && Math.round(Number(amount) * 100) !== Math.round(originAmount * 100);
 
+  // CategorySelect needs the id handed to it explicitly (it renders its own
+  // <select>), and it must be unique per mounted instance — Quick Add mounts
+  // a second copy of this form alongside Records' own, and a fixed id made
+  // every label point at whichever control came first in the document.
+  const categoryFieldId = useId();
+
   return (
     <Modal open={open} onClose={handleClose} title={editing ? "Edit expense" : "Add expense"}>
       {/* noValidate hands validation to the code above; see handleSubmit. */}
       <form onSubmit={handleSubmit} className="space-y-4" noValidate>
         {loading ? <p className="text-sm text-ink-500">Loading…</p> : null}
-        <Field label="Category" htmlFor="modal-expense-category" required error={shownErrors.category}>
+        <Field label="Category" htmlFor={categoryFieldId} required error={shownErrors.category}>
           <CategorySelect
-            id="modal-expense-category"
+            id={categoryFieldId}
             value={categoryId}
             onChange={setCategoryId}
             onBlur={() => markTouched("category")}
           />
         </Field>
-        <Field label="Date" htmlFor="modal-expense-date" required error={shownErrors.date}>
+        <Field label="Date" required error={shownErrors.date}>
           <TextInput
             type="date"
             value={date}
@@ -227,7 +233,7 @@ export function AddExpenseModal({
             onBlur={() => markTouched("date")}
           />
         </Field>
-        <Field label="Description" htmlFor="modal-expense-description" required error={shownErrors.description}>
+        <Field label="Description" required error={shownErrors.description}>
           <TextInput
             value={description}
             onChange={(e) => setDescription(e.target.value)}
@@ -235,10 +241,10 @@ export function AddExpenseModal({
             placeholder="e.g. Rice sacks"
           />
         </Field>
-        <Field label="Vendor" htmlFor="modal-expense-vendor" optional>
+        <Field label="Vendor" optional>
           <TextInput value={vendor} onChange={(e) => setVendor(e.target.value)} />
         </Field>
-        <Field label="Amount" htmlFor="modal-expense-amount" required error={shownErrors.amount}>
+        <Field label="Amount" required error={shownErrors.amount}>
           <MoneyInput
             min={0.01}
             value={amount}

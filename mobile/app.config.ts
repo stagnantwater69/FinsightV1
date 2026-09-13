@@ -53,6 +53,16 @@ const webAppHost = (() => {
   }
 })();
 
+const apiBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL;
+const apiUsesCleartext = (() => {
+  if (!apiBaseUrl) return false;
+  try {
+    return new URL(apiBaseUrl).protocol === "http:";
+  } catch {
+    return false;
+  }
+})();
+
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
   name: "FinSight",
@@ -157,6 +167,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   plugins: [
     // Preserve gallery launchers across accessibility font-size changes.
     "./plugins/withScannerFontScale",
+    // Android blocks HTTP in release builds by default. Permit it only while
+    // the configured development API is itself HTTP; HTTPS keeps the secure
+    // platform default. `android:apk` prebuilds so this reaches the manifest.
+    ["./plugins/withApiCleartext", { enabled: apiUsesCleartext }],
     // Splash moved out of the top-level `splash` key in SDK 54+; it is plugin
     // config now.
     [
@@ -224,7 +238,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   ],
 
   extra: {
-    apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL,
+    apiBaseUrl,
     supabaseUrl: process.env.EXPO_PUBLIC_SUPABASE_URL,
     supabaseAnonKey: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY,
     receiptScannerEnabled: process.env.EXPO_PUBLIC_RECEIPT_SCANNER_ENABLED !== "false",

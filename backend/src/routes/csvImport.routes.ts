@@ -8,6 +8,10 @@ import { asyncHandler } from "../lib/asyncHandler";
 export const csvImportRouter = Router();
 
 csvImportRouter.use(requireAuth);
+csvImportRouter.use((_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  next();
+});
 
 /*
  * Limited BEFORE multer, the same ordering the receipt routes use: a rejected

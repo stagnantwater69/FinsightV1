@@ -60,11 +60,11 @@ test("adding an expense posts the form and celebrates the business's first recor
   await page.goto("/records/expenses/new");
   await expect(page.getByRole("heading", { name: "Add expense" })).toBeVisible();
 
-  await page.getByLabel("Category").selectOption({ label: TEST_CATEGORIES[0].name });
-  await page.getByLabel("Date").fill("2026-08-15");
-  await page.getByLabel("Description").fill("Rice sacks");
-  await page.getByLabel("Vendor").fill("Metro Market");
-  await page.getByLabel("Amount").fill("850.50");
+  await page.locator("#category").selectOption({ label: TEST_CATEGORIES[0].name });
+  await page.locator("#date").fill("2026-08-15");
+  await page.locator("#description").fill("Rice sacks");
+  await page.locator("#vendor").fill("Metro Market");
+  await page.locator("#amount").fill("850.50");
   await page.getByRole("button", { name: "Save expense" }).click();
 
   await expect(page.getByText("That's your first expense recorded")).toBeVisible();
@@ -138,10 +138,10 @@ test("editing an expense loads the existing record and submits changes", async (
 
   await page.goto("/records/expenses/777/edit");
   await expect(page.getByRole("heading", { name: "Edit expense" })).toBeVisible();
-  await expect(page.getByLabel("Description")).toHaveValue("Electric bill");
-  await expect(page.getByLabel("Amount")).toHaveValue("3200");
+  await expect(page.locator("#description")).toHaveValue("Electric bill");
+  await expect(page.locator("#amount")).toHaveValue("3200");
 
-  await page.getByLabel("Amount").fill("3450");
+  await page.locator("#amount").fill("3450");
   await page.getByRole("button", { name: "Save changes" }).click();
 
   await expect(page).toHaveURL(/\/records$/);

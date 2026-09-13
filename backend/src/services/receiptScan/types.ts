@@ -45,6 +45,8 @@ export interface ReceiptCaptureMetadata {
 export interface UploadInput {
   businessProfileId: number;
   pages: UploadPage[];
+  /** Reuse for retries of one selected receipt; use a new token after edits. */
+  idempotencyKey?: string;
 }
 
 export interface ReceiptSplit {
@@ -88,10 +90,12 @@ export interface ConfirmInput {
   itemAssignments?: { itemId: number; categoryId: number }[];
   /**
    * Lines the owner typed in on the confirm screen because OCR missed them.
-   * Stored as real ReceiptScanItem rows (flagged `addedByOwner`) before the
-   * grouping runs, so a hand-added line is grouped, linked to its record and
-   * shown on the record afterwards exactly like an extracted one — while
-   * still being distinguishable from something FinSight claims to have read.
+   * Stored as real ReceiptScanItem rows (flagged `addedByOwner`) inside the
+   * confirmation transaction, before the grouping runs, so a hand-added line
+   * is grouped, linked to its record and shown on the record afterwards
+   * exactly like an extracted one — while still being distinguishable from
+   * something FinSight claims to have read, and never left behind by a
+   * confirmation that was refused.
    */
   additionalItems?: { name: string; amount: number; categoryId: number }[];
   /**

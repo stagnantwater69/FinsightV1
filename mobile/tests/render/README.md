@@ -52,8 +52,17 @@ It is a renderer, not a device. There is no view geometry, no gesture
 recognizer, no screen reader, no camera and no OS. It **pins iOS**, matching
 the jest preset's default platform.
 
-**Nothing here gives any coverage of camera, permission or app-lifecycle
-behaviour.** A render test of camera UI would not be a test of camera
-lifecycle, and `receipt-camera/*` has no tests in this directory at all. Those
-remain physical-device-only — see `docs/MOBILE-UI-UX-IMPROVEMENT-PLAN.md`
-§7 Phase 4.
+**Nothing here is evidence of camera, permission or app-lifecycle behaviour
+on a device.** `receipt-camera/*` *does* have tests in this directory —
+`receiptCamera.test.tsx` (the custom camera's interaction contract with
+`expo-camera`/`expo-image-picker` mocked), `continuousReceiptCamera.test.tsx`
+(the continuous native engine's UI contract with the native view and its
+events mocked, including the `AppState` background reset) and
+`receiptImportFlow.test.tsx` (the review/upload workflow after capture) — and
+they pass. What they establish is that the components react correctly to the
+events a camera, picker, engine or OS *would* send. No sensor frame, real
+permission dialog, activity lifecycle, gallery intent, rotation, low-memory
+or screen-reader path runs here. Those remain physical-device-only:
+`docs/mobile-camera-verification-checklist.md` lists them, per mode, and the
+repo rule is to say "needs physical-device verification" rather than to cite
+these tests as coverage.

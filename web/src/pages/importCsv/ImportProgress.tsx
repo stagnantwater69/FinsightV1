@@ -27,7 +27,7 @@ export function ImportProgress({
           Importing your records…
         </p>
         <p className="text-xs text-ink-500">
-          FinSight is validating every row before it writes any of them.
+          Waiting for the latest import status.
         </p>
         <SkeletonLine className="w-full" />
         <SkeletonLine className="w-2/3" />
@@ -55,7 +55,7 @@ export function ImportProgress({
         aria-valuemin={0}
         aria-valuemax={total}
         aria-valuenow={processed}
-        aria-valuetext={`${processed} of ${total} rows imported`}
+        aria-valuetext={`${processed} of ${total} rows processed`}
         className="h-2 w-full overflow-hidden rounded-full bg-paper-200"
       >
         <div

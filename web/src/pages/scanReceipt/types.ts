@@ -69,6 +69,17 @@ export interface ScanResult {
    * invented.
    */
   fieldEvidence?: Record<string, FieldEvidence> | null;
+  receiptDetails?: {
+    currency: string | null;
+    transactionTime: string | null;
+    subtotal: number | null;
+    tax: number | null;
+    tip: number | null;
+    discount: number | null;
+    paymentMethod: string | null;
+    receiptNumber: string | null;
+  };
+  requiresManualCurrencyConversion?: boolean;
 }
 
 export interface ScannedItem {

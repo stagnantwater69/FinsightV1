@@ -21,11 +21,13 @@ export function MultiFileInput({
   files,
   onChange,
   hintText,
+  disabled = false,
 }: {
   id: string;
   files: File[];
   onChange: (files: File[]) => void;
   hintText?: string;
+  disabled?: boolean;
 }) {
   const [rejected, setRejected] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -45,9 +47,22 @@ export function MultiFileInput({
    * picking again should only ever add to the set it already has.
    */
   function take(list: FileList | File[] | null) {
+    if (disabled) return;
     setRejected(null);
     if (!list || list.length === 0) return;
     const incoming = Array.from(list);
+    const empty = incoming.find((file) => file.size === 0);
+    if (empty) {
+      setRejected(`${empty.name} is empty. Choose another photo.`);
+      return;
+    }
+    const alreadyPicked = incoming.some((file, index) => [...files, ...incoming.slice(0, index)].some((other) =>
+      file.name === other.name && file.size === other.size && file.lastModified === other.lastModified,
+    ));
+    if (alreadyPicked) {
+      setRejected("That photo is already selected. Choose a different photo.");
+      return;
+    }
     const combined = [...files, ...incoming];
 
     if (combined.length > MAX_RECEIPT_FILES) {
@@ -72,10 +87,12 @@ export function MultiFileInput({
   }
 
   function removeAt(index: number) {
+    if (disabled) return;
     onChange(files.filter((_, i) => i !== index));
   }
 
   function move(index: number, delta: number) {
+    if (disabled) return;
     const target = index + delta;
     if (target < 0 || target >= files.length) return;
     const next = [...files];
@@ -85,11 +102,12 @@ export function MultiFileInput({
   }
 
   return (
-    <div>
+    <fieldset disabled={disabled} className="min-w-0 rounded-xl has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-brand-600">
       <label
         htmlFor={id}
         onDragOver={(e) => {
           e.preventDefault();
+          if (disabled) return;
           setDragging(true);
         }}
         onDragLeave={() => setDragging(false)}
@@ -98,7 +116,7 @@ export function MultiFileInput({
           setDragging(false);
           take(e.dataTransfer.files);
         }}
-        className={`flex min-h-tap cursor-pointer flex-wrap items-center justify-center gap-2 rounded-xl border border-dashed px-4 py-5 text-center text-sm transition-colors ${
+        className={`flex min-h-tap cursor-pointer flex-wrap items-center justify-center gap-2 rounded-xl border border-dashed px-4 py-5 text-center text-sm transition-colors ${disabled ? "opacity-60" : ""} ${
           dragging
             ? "border-edge-brand bg-tint-brand text-tone-brand"
             : "border-ink-200 bg-paper-100 text-ink-600 hover:border-edge-brand hover:bg-tint-brand"
@@ -108,7 +126,7 @@ export function MultiFileInput({
           ⇪
         </span>
         <span className="font-medium">{files.length > 0 ? "Add more photos" : "Choose photos"}</span>
-        <span className="text-ink-500">or drag them here</span>
+        <span className="text-ink-600">or drag them here</span>
       </label>
 
       <input
@@ -116,8 +134,12 @@ export function MultiFileInput({
         type="file"
         accept={ACCEPTED_TYPES}
         multiple
+        disabled={disabled}
         className="sr-only"
-        onChange={(e) => take(e.target.files)}
+        onChange={(e) => {
+          take(e.target.files);
+          e.target.value = "";
+        }}
       />
 
       {hintText ? <p className="mt-1.5 text-xs text-ink-500">{hintText}</p> : null}
@@ -146,6 +168,6 @@ export function MultiFileInput({
           ))}
         </ul>
       ) : null}
-    </div>
+    </fieldset>
   );
 }

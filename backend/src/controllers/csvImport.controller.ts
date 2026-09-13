@@ -1,9 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import type { Request, Response } from "express";
 import { z } from "zod";
 import * as csvImportService from "../services/csvImport.service";
 import { ApiError } from "../middleware/error.middleware";
-import { logger } from "../config/logger";
 
 const columnMappingSchema = z.object({
   date: z.string().min(1).max(255),
@@ -82,11 +81,32 @@ export const confirmSchema = z.object({
   dateFormat: z.enum(["iso", "dmy", "mdy"]).optional(),
 });
 
+const previewSchema = confirmSchema.pick({
+  businessProfileId: true,
+  recordType: true,
+  mixedStrategy: true,
+  columnMapping: true,
+  corrections: true,
+  dateFormat: true,
+}).partial().refine((input) => Boolean(input.recordType) === Boolean(input.columnMapping), {
+  message: "Provide both recordType and columnMapping to validate the CSV.",
+});
+
 export async function preview(req: Request, res: Response) {
   if (!req.file) {
     throw new ApiError(400, "CSV file is required");
   }
-  const result = csvImportService.previewCsv(req.file.buffer);
+  const input = previewSchema.parse(req.body);
+  const options = input.recordType && input.columnMapping ? {
+    recordType: input.recordType,
+    columnMapping: input.columnMapping,
+    corrections: input.corrections,
+    mixedStrategy: input.mixedStrategy,
+    dateFormat: input.dateFormat,
+  } : undefined;
+  const result = input.businessProfileId
+    ? await csvImportService.previewCsvForProfile(req.user!.id, input.businessProfileId, req.file.buffer, options)
+    : csvImportService.previewCsv(req.file.buffer, options);
   res.status(200).json(result);
 }
 
@@ -121,9 +141,6 @@ export async function confirm(req: Request, res: Response) {
     throw new ApiError(400, "CSV file is required");
   }
   const input = confirmSchema.parse(req.body);
-  if (input.recordType === "expense" && !input.columnMapping.category) {
-    throw new ApiError(400, "columnMapping.category is required for expense imports");
-  }
 
   /*
    * A mixed file has to say HOW it is mixed, and the two strategies need
@@ -140,28 +157,12 @@ export async function confirm(req: Request, res: Response) {
     }
   }
 
-  /*
-   * IDEMPOTENCY KEY — required in spirit, shimmed in practice.
-   *
-   * A confirm that is retried without a key (a refresh, a proxy retry, an
-   * impatient second click) imports the file twice, and doubling a month of
-   * books is the worst outcome this endpoint has. So the key is what makes a
-   * retry safe, and every client should send one.
-   *
-   * It is not yet REJECTED when missing, because the web client does not send
-   * one until the Phase 4 UI work lands, and a 400 here would break importing
-   * altogether in between. A generated key still produces a well-formed batch;
-   * it simply cannot recognise a replay, which is exactly the old behaviour.
-   *
-   * PHASE 4 FOLLOW-UP: once both clients send a key, drop the `??` below and
-   * make the schema field required.
-   */
-  if (!input.idempotencyKey) {
-    logger.warn(
-      { businessProfileId: input.businessProfileId },
-      "csv confirm without an idempotency key — retries of this import cannot be deduplicated",
-    );
-  }
+  // Older clients also need replay protection after a lost network response.
+  // A fresh explicit token still allows an intentional new import of the file.
+  const fallbackKey = `http-${createHash("sha256")
+    .update(JSON.stringify(input))
+    .update(req.file.buffer)
+    .digest("hex")}`;
 
   const result = await csvImportService.confirmImport(req.user!.id, {
     businessProfileId: input.businessProfileId,
@@ -172,7 +173,7 @@ export async function confirm(req: Request, res: Response) {
     originalname: req.file.originalname,
     columnMapping: input.columnMapping,
     corrections: input.corrections,
-    idempotencyKey: input.idempotencyKey ?? `http-${randomUUID()}`,
+    idempotencyKey: input.idempotencyKey ?? fallbackKey,
     dateFormat: input.dateFormat,
   });
 
