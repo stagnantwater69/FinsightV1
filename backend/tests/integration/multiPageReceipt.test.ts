@@ -11,17 +11,22 @@ const { uploadCallCount, uploadFailureAt, deletedReceiptPaths } = vi.hoisted(() 
   uploadFailureAt: { value: null as number | null },
   deletedReceiptPaths: [] as string[],
 }));
-vi.mock("../../src/services/storage.service", () => ({
-  uploadReceiptImage: vi.fn(async () => {
-    const call = ++uploadCallCount.value;
-    if (uploadFailureAt.value === call) throw new Error("storage upload failed");
-    return `1/mock-page-${call}.jpg`;
-  }),
-  downloadReceiptImage: vi.fn(async () => Buffer.from("stored-page")),
-  uploadCsvFile: vi.fn(async () => "1/mock.csv"),
-  signedReceiptImageUrl: vi.fn(async () => "https://example.test/signed.jpg"),
-  deleteReceiptImage: vi.fn(async (path: string) => (deletedReceiptPaths.push(path), true)),
-}));
+vi.mock("../../src/services/storage.service", async () => {
+  const { tinyReceiptJpeg } = await import("../helpers/receiptImageFixtures");
+  const storedBytes = tinyReceiptJpeg();
+  return {
+    uploadReceiptImage: vi.fn(async () => {
+      const call = ++uploadCallCount.value;
+      if (uploadFailureAt.value === call) throw new Error("storage upload failed");
+      return `1/mock-page-${call}.jpg`;
+    }),
+    inspectReceiptImage: vi.fn(async () => ({ sizeBytes: storedBytes.length, mimetype: "image/jpeg" })),
+    downloadReceiptImageBounded: vi.fn(async () => storedBytes),
+    uploadCsvFile: vi.fn(async () => "1/mock.csv"),
+    signedReceiptImageUrl: vi.fn(async () => "https://example.test/signed.jpg"),
+    deleteReceiptImage: vi.fn(async (path: string) => (deletedReceiptPaths.push(path), true)),
+  };
+});
 
 /*
  * extractReceipt is driven by a QUEUE of {text, confidence} results consumed
@@ -58,8 +63,23 @@ vi.mock("../../src/services/visionOcr.service", async (importOriginal) => {
 
 import { prisma } from "../../src/config/prisma";
 import * as ocrService from "../../src/services/ocr.service";
-import { confirmReceipt, getScan, uploadAndScan, MAX_PAGES, runReceiptWorkerOnce } from "../../src/services/receiptScan.service";
-import { disconnectDb, makeOwnerWithProfile, resetDb, utcDayString, waitForScanProcessing } from "../setup/testDb";
+import { downloadReceiptImageBounded } from "../../src/services/storage.service";
+import {
+  confirmReceipt,
+  getScan,
+  uploadAndScan,
+  MAX_PAGES,
+  RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES,
+  RECEIPT_UPLOAD_MAX_OBJECT_BYTES,
+  runReceiptWorkerOnce,
+} from "../../src/services/receiptScan.service";
+import {
+  disconnectDb,
+  makeOwnerWithProfile,
+  resetDb,
+  runReceiptWorkerAndWait,
+  utcDayString,
+} from "../setup/testDb";
 
 let ctx: Awaited<ReturnType<typeof makeOwnerWithProfile>>;
 
@@ -76,6 +96,7 @@ beforeEach(async () => {
   categoriseMock.mockResolvedValue([]);
   visionMock.mockReset();
   visionMock.mockResolvedValue(null);
+  vi.mocked(downloadReceiptImageBounded).mockClear();
 });
 
 afterAll(disconnectDb);
@@ -86,7 +107,7 @@ function page(text: string) {
 
 /**
  * Uploads pages and returns the scan once its background read has finished —
- * see waitForScanProcessing. Polling mirrors what both clients do, so these
+ * see runReceiptWorkerAndWait. Polling mirrors what both clients do, so these
  * assertions exercise the real upload-then-poll contract.
  */
 async function uploadPages(texts: { text: string; confidence?: number }[]) {
@@ -95,7 +116,7 @@ async function uploadPages(texts: { text: string; confidence?: number }[]) {
     businessProfileId: ctx.profile.id,
     pages: texts.map((t) => page(t.text)),
   });
-  await waitForScanProcessing(created.id);
+  await runReceiptWorkerAndWait(created.id);
   return getScan(ctx.user.id, created.id);
 }
 
@@ -160,6 +181,64 @@ describe("multi-page receipt upload", () => {
     expect(deletedReceiptPaths).toEqual(["1/mock-page-1.jpg"]);
     expect(await prisma.receiptScan.count()).toBe(0);
   });
+
+  it("accepts the exact 10 MiB object and 80 MiB aggregate boundaries", async () => {
+    const exactObject = Buffer.alloc(RECEIPT_UPLOAD_MAX_OBJECT_BYTES);
+    await expect(uploadAndScan(ctx.user.id, {
+      businessProfileId: ctx.profile.id,
+      pages: [{ buffer: exactObject, mimetype: "image/jpeg", originalname: "exact-object.jpg" }],
+    })).resolves.toMatchObject({ processingStatus: "Processing" });
+
+    await resetDb();
+    ctx = await makeOwnerWithProfile({}, ["Inventory"]);
+    uploadCallCount.value = 0;
+    const fiveMiB = Buffer.alloc(5 * 1024 * 1024);
+    const pages = Array.from({ length: MAX_PAGES }, (_, index) => ({
+      buffer: fiveMiB,
+      mimetype: "image/jpeg",
+      originalname: `original-${index + 1}.jpg`,
+      processed: {
+        buffer: fiveMiB,
+        mimetype: "image/jpeg",
+        originalname: `processed-${index + 1}.jpg`,
+      },
+    }));
+    expect(pages.length * 2 * fiveMiB.length).toBe(RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES);
+    await expect(uploadAndScan(ctx.user.id, { businessProfileId: ctx.profile.id, pages }))
+      .resolves.toMatchObject({ processingStatus: "Processing" });
+    expect(uploadCallCount.value).toBe(MAX_PAGES * 2);
+  });
+
+  it("rejects one byte above either byte boundary before storing anything", async () => {
+    await expect(uploadAndScan(ctx.user.id, {
+      businessProfileId: ctx.profile.id,
+      pages: [{
+        buffer: Buffer.alloc(RECEIPT_UPLOAD_MAX_OBJECT_BYTES + 1),
+        mimetype: "image/jpeg",
+        originalname: "too-large.jpg",
+      }],
+    })).rejects.toMatchObject({ status: 400 });
+    expect(uploadCallCount.value).toBe(0);
+
+    const fiveMiB = Buffer.alloc(5 * 1024 * 1024);
+    const fiveMiBAndOne = Buffer.alloc(5 * 1024 * 1024 + 1);
+    const pages = Array.from({ length: MAX_PAGES }, (_, index) => ({
+      buffer: fiveMiB,
+      mimetype: "image/jpeg",
+      originalname: `original-${index + 1}.jpg`,
+      processed: {
+        buffer: index === MAX_PAGES - 1 ? fiveMiBAndOne : fiveMiB,
+        mimetype: "image/jpeg",
+        originalname: `processed-${index + 1}.jpg`,
+      },
+    }));
+    expect(pages.reduce((sum, item) => sum + item.buffer.length + item.processed.buffer.length, 0))
+      .toBe(RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES + 1);
+    await expect(uploadAndScan(ctx.user.id, { businessProfileId: ctx.profile.id, pages }))
+      .rejects.toMatchObject({ status: 413 });
+    expect(uploadCallCount.value).toBe(0);
+    expect(await prisma.receiptScan.count()).toBe(0);
+  });
 });
 
 /**
@@ -184,7 +263,7 @@ describe("background processing", () => {
     // it waits.
     expect(await prisma.receiptScanPage.count({ where: { receiptScanId: created.id } })).toBe(1);
 
-    await waitForScanProcessing(created.id);
+    await runReceiptWorkerAndWait(created.id);
   });
 
   it("reaches Complete, and only then carries the extracted fields", async () => {
@@ -194,12 +273,29 @@ describe("background processing", () => {
       pages: [page("x")],
     });
 
-    expect(await waitForScanProcessing(created.id)).toBe("Complete");
+    expect(await runReceiptWorkerAndWait(created.id)).toBe("Complete");
 
     const done = await getScan(ctx.user.id, created.id);
     expect(done.processingStatus).toBe("Complete");
     expect(done.processingError).toBeNull();
     expect(done.extractedAmount).toBe(1220);
+  });
+
+  it("allows concurrent workers to claim the queued scan only once", async () => {
+    pageQueue.push({ text: "ABC STORE\nItem A 10.00\nTOTAL 10.00", confidence: 95 });
+    const extractSpy = vi.spyOn(ocrService, "extractReceipt");
+    const created = await uploadAndScan(ctx.user.id, {
+      businessProfileId: ctx.profile.id,
+      pages: [page("one-claim")],
+    });
+
+    const claims = await Promise.all([runReceiptWorkerOnce(), runReceiptWorkerOnce()]);
+
+    expect(claims.filter(Boolean)).toHaveLength(1);
+    expect(claims.filter((claimed) => !claimed)).toHaveLength(1);
+    expect(extractSpy).toHaveBeenCalledTimes(1);
+    expect((await getScan(ctx.user.id, created.id)).processingStatus).toBe("Complete");
+    extractSpy.mockRestore();
   });
 
   it("records a failed attempt and durably retries it from Storage", async () => {
@@ -211,13 +307,17 @@ describe("background processing", () => {
       pages: [page("x")],
     });
 
+    expect(await runReceiptWorkerOnce()).toBe(true);
+
     let queued = await getScan(ctx.user.id, created.id);
     for (let i = 0; i < 50 && !queued.processingError; i++) {
       await new Promise((resolve) => setTimeout(resolve, 10));
       queued = await getScan(ctx.user.id, created.id);
     }
     expect(queued.processingStatus).toBe("Processing");
-    expect(queued.processingError).toContain("tesseract exploded");
+    expect(queued.processingError).toBe("The receipt could not be read. Try again or enter the values manually.");
+    expect(queued.processingErrorCode).toBe("RECEIPT_PROCESSING_FAILED");
+    expect(JSON.stringify(queued)).not.toContain("tesseract exploded");
 
     // Make the backoff due now. The next worker has no request buffer, so its
     // success proves the page was reconstructed from durable Storage.
@@ -225,6 +325,7 @@ describe("background processing", () => {
     await prisma.receiptScan.update({ where: { id: created.id }, data: { nextProcessingAttemptAt: new Date(0) } });
     expect(await runReceiptWorkerOnce()).toBe(true);
     expect((await getScan(ctx.user.id, created.id)).processingStatus).toBe("Complete");
+    expect(downloadReceiptImageBounded).toHaveBeenCalledTimes(2);
     spy.mockRestore();
   });
 
@@ -280,57 +381,52 @@ describe("background processing", () => {
       businessProfileId: ctx.profile.id,
       pages: [page("x")],
     });
-    await waitForScanProcessing(created.id);
+    await runReceiptWorkerAndWait(created.id);
 
     // 404 rather than 403, matching the non-disclosure rule used everywhere
     // else — a poller must not be able to confirm a scan id even exists.
     await expect(getScan(other.user.id, created.id)).rejects.toMatchObject({ status: 404 });
   });
 
-  /**
-   * The AI model is the primary source and is asked on every scan regardless
-   * of confidence — see receiptScan.test.ts's "is called even when the
-   * deterministic parser already read the receipt cleanly". What the WORST
-   * page (not an average) still decides is `visionTrigger`, the diagnostic
-   * persisted on `extractorVersions` for billing/calibration. Chosen so the
-   * two readings actually disagree — average(95, 60) is 77.5, ABOVE
-   * LOW_CONFIDENCE (75), so an average-based trigger would stay silent here;
-   * min(95, 60) is 60, below it. If this test passes under both an average
-   * and a minimum implementation, it is not testing the claim at all.
+  /*
+   * The worst page drives this local diagnostic: average(95, 60) is above
+   * the threshold, while min(95, 60) is below it. External rescue is tested
+   * separately through the consent-and-budget gate.
    */
-  it("attributes the trigger to the worst page even when the average would look fine", async () => {
+  it("attributes the local-review trigger to the worst page without calling the legacy vision path", async () => {
     const scan = await uploadPages([
       { text: "Date: 2026-07-20\nItem A   10.00\nTOTAL 30.00", confidence: 95 },
       { text: "Item B   20.00", confidence: 60 }, // reconciles, so only confidence can trigger this
     ]);
 
-    expect(visionMock).toHaveBeenCalledTimes(1);
+    expect(visionMock).not.toHaveBeenCalled();
     const stored = await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } });
     expect((stored.extractorVersions as { visionTrigger: string | null }).visionTrigger).toBe("low-confidence");
   });
 
-  it("asks the model anyway, but leaves no trigger, when every page reads well and reconciles", async () => {
+  it("leaves no trigger and makes no provider call when every page reads well and reconciles", async () => {
     const scan = await uploadPages([
       { text: "Date: 2026-07-20\nItem A   10.00", confidence: 92 },
       { text: "Item B   20.00\nTOTAL 30.00", confidence: 90 },
     ]);
 
-    expect(visionMock).toHaveBeenCalledTimes(1);
+    expect(visionMock).not.toHaveBeenCalled();
     const stored = await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } });
     expect((stored.extractorVersions as { visionTrigger: string | null }).visionTrigger).toBeNull();
   });
 
-  it("sends every page to the vision model in a single call, not one call per page", async () => {
-    // does-not-add-up trigger: forces the rescue so the call shape can be
-    // inspected.
-    await uploadPages([
+  it("does not bypass the provider gate through the legacy multi-page vision function", async () => {
+    const scan = await uploadPages([
       { text: "Date: 2026-07-20\nItem A   10.00" },
       { text: "Item B   20.00\nTOTAL 999.00" },
     ]);
 
-    expect(visionMock).toHaveBeenCalledTimes(1);
-    const [pagesArg] = visionMock.mock.calls[0]!;
-    expect(pagesArg).toHaveLength(2);
+    expect(visionMock).not.toHaveBeenCalled();
+    const stored = await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } });
+    expect(stored.extractorVersions).toMatchObject({
+      provider: null,
+      providerGateCode: "PROVIDER_NOT_REQUESTED",
+    });
   });
 
   it("flags adjacent pages that look like the same page shot twice", async () => {

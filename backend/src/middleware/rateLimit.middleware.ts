@@ -267,6 +267,7 @@ export function rateLimit({ name, limit, windowMs, identify }: RateLimitOptions)
  * because someone entering a month of receipts in one sitting still fits.
  */
 export const LIMITS = {
+  PROVIDER_CONSENT_WRITE: { name: "provider-consent-write", limit: 20, windowMs: 60_000 },
   SCAN_RECEIPT_BURST: { name: "scan-receipt-burst", limit: 15, windowMs: 60_000 },
   SCAN_RECEIPT_HOURLY: { name: "scan-receipt-hourly", limit: 200, windowMs: 60 * 60_000 },
   // Generous relative to SCAN_RECEIPT_BURST: this fires once per SHUTTER

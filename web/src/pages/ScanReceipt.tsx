@@ -5,7 +5,6 @@ import { CategorySelect } from "../components/CategorySelect";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
 import { api } from "../lib/api";
 import { getErrorMessage } from "../lib/errors";
-import type { CategorySuggestion } from "../lib/types";
 /*
  * The payload builder and the plan type both come from lib/receiptConfirm, so
  * this screen and the request it sends cannot disagree about either. "shrink"
@@ -31,7 +30,12 @@ import { MultiFileInput } from "./scanReceipt/MultiFileInput";
 import { ScannedField } from "./scanReceipt/ScannedField";
 import { ScanProgress } from "./scanReceipt/ScanProgress";
 import { attentionFieldsFor, originOf, provisionalClass } from "./scanReceipt/helpers";
-import { FIELD_LABELS, SCAN_POLL_INTERVAL_MS, SCAN_POLL_TIMEOUT_MS } from "./scanReceipt/constants";
+import {
+  FIELD_LABELS,
+  SCAN_POLL_INTERVAL_MS,
+  SCAN_POLL_TIMEOUT_MS,
+  receiptUploadSelectionError,
+} from "./scanReceipt/constants";
 import type {
   AddedItem,
   Origin,
@@ -45,6 +49,7 @@ import { ResultDetails } from "../components/ResultDetails";
 import { ReceiptResultNotes } from "./scanReceipt/ReceiptResultNotes";
 import { randomId } from "../lib/uuid";
 import { PrintedReceiptDetails } from "./scanReceipt/PrintedReceiptDetails";
+import { ReceiptProviderConsent } from "./scanReceipt/ReceiptProviderConsent";
 
 export function ScanReceipt() {
   const { selected } = useBusinessProfiles();
@@ -83,6 +88,7 @@ function ScanReceiptForm() {
    * and is never touched again until the owner returns to pick more.
    */
   const [pickedFiles, setPickedFiles] = useState<File[]>([]);
+  const pickedFilesError = receiptUploadSelectionError([], pickedFiles);
   /**
    * How to treat more than one picked photo. Meaningless with one photo.
    *
@@ -142,20 +148,8 @@ function ScanReceiptForm() {
    * owner — every row is editable and nothing is written until Confirm.
    */
   const [itemCategories, setItemCategories] = useState<Record<number, number | "">>({});
-  /** True while any row still differs from nothing — used only for labelling. */
-  const [itemsWereAutoCategorised, setItemsWereAutoCategorised] = useState(false);
   /** The proposed category currently being created, so its row can show progress. */
   const [creatingCategoryFor, setCreatingCategoryFor] = useState<string | null>(null);
-  /**
-   * The category proposed for a receipt with no itemised lines.
-   *
-   * Held as the id rather than a boolean so the "Suggested" chip can be
-   * derived by comparing it against the field's current value — the same way
-   * `originOf` distinguishes a read value from an edited one everywhere else
-   * on this screen. Change the category and the chip goes away on its own,
-   * because it is no longer true.
-   */
-  const [suggestedCategoryId, setSuggestedCategoryId] = useState<number | null>(null);
 
   /** Lines the owner added because OCR missed them. */
   const [addedItems, setAddedItems] = useState<AddedItem[]>([]);
@@ -168,16 +162,6 @@ function ScanReceiptForm() {
 
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const zoomRef = useRef<HTMLDialogElement>(null);
-
-  /**
-   * The scan this screen is currently showing.
-   *
-   * The category suggestion below is fired off after the review screen has
-   * already rendered, so its answer can arrive after the owner has hit Rescan
-   * and moved on to a different receipt. This is what stops a stale answer
-   * landing on the new one.
-   */
-  const latestScanId = useRef<number | null>(null);
 
   /**
    * Scans a SINGLE photo, keyed so the same request is never made twice for
@@ -219,7 +203,6 @@ function ScanReceiptForm() {
     const keys = uploadKeys.current;
     return () => {
       controller.abort();
-      latestScanId.current = null;
       pending.clear();
       accepted.clear();
       keys.clear();
@@ -263,6 +246,19 @@ function ScanReceiptForm() {
     const el = document.getElementById(first);
     if (el instanceof HTMLElement) el.focus({ preventScroll: false });
   }, [scan]);
+
+  useEffect(() => {
+    const item = scan?.items.length === 1 ? scan.items[0] : null;
+    if (item?.categoryId === null || item?.categoryId === undefined) return;
+    const categoryId = item.categoryId;
+    const category = categories.find((candidate) => candidate.id === categoryId);
+    if (!category || category.name.toLowerCase() === "uncategorized") return;
+    setSplits((current) =>
+      current.length === 1 && current[0]!.categoryId === ""
+        ? [{ categoryId, amount: "" }]
+        : current,
+    );
+  }, [categories, scan]);
 
   if (!selected) return <NoBusinessProfile />;
 
@@ -441,7 +437,6 @@ function ScanReceiptForm() {
       signal.throwIfAborted();
       setScanStage("categorising");
 
-      latestScanId.current = data.id;
       setScan(data);
       setDate(data.extractedDate ? data.extractedDate.slice(0, 10) : "");
       setDescription(data.extractedDescription ?? "");
@@ -450,22 +445,7 @@ function ScanReceiptForm() {
       // Seed the per-item categories from what FinSight assigned. Every one
       // stays editable — this is a starting point, not a decision.
       setItemCategories(Object.fromEntries(data.items.map((i) => [i.id, i.categoryId ?? ""])));
-      setItemsWereAutoCategorised(data.items.some((i) => i.categoryId !== null));
-
-      /*
-       * A receipt FinSight could not itemise still deserves a starting point.
-       *
-       * The per-item categoriser has nothing to work with here — there are no
-       * item lines — but the same classifier the Spending Impact screen uses
-       * can read "Purchase from Cebu Hardware" and propose a category from
-       * the business's own list. Deliberately NOT awaited: the review screen
-       * is already on screen and usable, so a slow or unreachable model costs
-       * the owner nothing. The field fills in a moment later, or never, and
-       * they pick one themselves exactly as before.
-       */
-      if (data.items.length <= 1) {
-        void suggestCategoryForReceipt(data);
-      }
+      setSplits([{ categoryId: "", amount: "" }]);
     } catch (err) {
       if (!signal.aborted) {
         setPickedFiles(filesToSend);
@@ -489,6 +469,11 @@ function ScanReceiptForm() {
   async function handleStartScanning(e: FormEvent) {
     e.preventDefault();
     if (pickedFiles.length === 0 || startPending.current) return;
+    const selectionError = receiptUploadSelectionError([], pickedFiles);
+    if (selectionError) {
+      setScanError(selectionError);
+      return;
+    }
     startPending.current = true;
     try {
 
@@ -527,51 +512,6 @@ function ScanReceiptForm() {
     await scanFiles([first!], first!).catch(() => {});
     } finally {
       startPending.current = false;
-    }
-  }
-
-  /**
-   * Fills the single Category field with the classifier's best guess.
-   *
-   * Silent on every failure path. A missing suggestion is indistinguishable
-   * from never having asked, and the owner choosing a category themselves is
-   * the ordinary flow this only tries to shortcut — an error about something
-   * they never requested would be noise.
-   */
-  async function suggestCategoryForReceipt(data: ScanResult) {
-    /*
-     * "Receipt purchase" is the backend's literal fallback for a receipt
-     * whose vendor it could not read, so it describes nothing and would only
-     * invite the classifier to guess from the word "purchase".
-     */
-    const description =
-      data.extractedDescription && data.extractedDescription !== "Receipt purchase"
-        ? data.extractedDescription
-        : data.extractedVendor;
-    if (!description) return;
-
-    try {
-      const { data: result } = await api.post<{ suggestion: CategorySuggestion | null }>(
-        "/ai/suggest-category",
-        { businessProfileId: selected!.id, description, ...(data.extractedVendor ? { vendor: data.extractedVendor } : {}) },
-      );
-      // A late answer for a receipt the owner has already moved on from is
-      // dropped rather than applied to whatever is on screen now.
-      if (!result.suggestion || latestScanId.current !== data.id) return;
-
-      const suggestion = result.suggestion;
-      // Only ever fills a field the owner has left alone. They may have
-      // chosen a category while this was in flight, and a guess must never
-      // overwrite a decision.
-      setSplits((prev) =>
-        prev.length === 1 && prev[0]!.categoryId === ""
-          ? [{ ...prev[0]!, categoryId: suggestion.categoryId }]
-          : prev,
-      );
-      setSuggestedCategoryId(suggestion.categoryId);
-    } catch {
-      // Nothing to say and nothing to do: the field stays empty and the owner
-      // fills it in, which is what would have happened anyway.
     }
   }
 
@@ -718,14 +658,9 @@ function ScanReceiptForm() {
    * that makes sense, and the position would come out wrong by one.
    */
   function resetReviewFields() {
-    // Any category suggestion still in flight is for the receipt being left
-    // behind, so it must not land on the next one.
-    latestScanId.current = null;
     setScan(null);
     setSplits([{ categoryId: "", amount: "" }]);
     setItemCategories({});
-    setItemsWereAutoCategorised(false);
-    setSuggestedCategoryId(null);
     setCreatingCategoryFor(null);
     setAddedItems([]);
     setGapPlan(null);
@@ -825,6 +760,11 @@ function ScanReceiptForm() {
   const isItemised = items.length > 1;
   /** True when the item lines came from AI reading the photo, not from OCR text. */
   const itemsAreFromPhoto = items.some((i) => i.extractedByVision);
+  const hasHistoryCategoryMatches = items.some((item) => {
+    if (item.categoryId === null) return false;
+    const category = categories.find((candidate) => candidate.id === item.categoryId);
+    return Boolean(category && category.name.toLowerCase() !== "uncategorized");
+  });
 
   /**
    * The one confidence cue this screen shows, resolved from the page reading,
@@ -1023,11 +963,16 @@ function ScanReceiptForm() {
             <MultiFileInput
               id="receipt-files"
               files={pickedFiles}
-              onChange={setPickedFiles}
+              onChange={(next) => {
+                setPickedFiles(next);
+                setScanError(null);
+              }}
               disabled={scanning}
-              hintText="JPEG, PNG or WEBP. Up to 8 photos, 10MB each. Use a flat, well-lit photo."
+              hintText="JPEG, PNG or WEBP. Up to 8 photos, 10 MiB each and 80 MiB total. Use a flat, well-lit photo."
             />
           </Field>
+
+          <ReceiptProviderConsent businessProfileId={selected.id} disabled={scanning} />
 
           {/*
             The disambiguation only appears once there is something to
@@ -1035,7 +980,7 @@ function ScanReceiptForm() {
             would put a question in front of every owner for the sake of the
             minority with a long receipt.
           */}
-          {pickedFiles.length > 1 ? (
+          {pickedFiles.length > 1 && pickedFilesError === null ? (
             <div className="space-y-2 rounded-xl border border-paper-200 bg-paper-50 p-3">
               <p className="text-xs font-medium text-ink-700">
                 You added {pickedFiles.length} photos. What are they?
@@ -1068,10 +1013,17 @@ function ScanReceiptForm() {
           */}
           {scanning ? <ScanProgress stage={scanStage} /> : null}
 
-          <Button type="submit" variant="primary" fullWidth disabled={scanning || pickedFiles.length === 0}>
+          <Button
+            type="submit"
+            variant="primary"
+            fullWidth
+            disabled={scanning || pickedFiles.length === 0 || pickedFilesError !== null}
+          >
             {scanning
               ? "Reading receipt…"
-              : pickedFiles.length > 1 && combineChoice === "separate"
+              : pickedFilesError
+                ? "Fix selected photos to continue"
+                : pickedFiles.length > 1 && combineChoice === "separate"
                 ? `Scan ${pickedFiles.length} receipts`
                 : "Scan receipt"}
           </Button>
@@ -1330,15 +1282,15 @@ function ScanReceiptForm() {
                     photograph, so it is not used for one. Same sentence,
                     honest verb.
                   */}
-                  {itemsWereAutoCategorised ? (
+                  {hasHistoryCategoryMatches ? (
                     <>
-                      FinSight {itemsAreFromPhoto ? "found" : "read"} {items.length} items and put each
-                      one in a category. Check them against the photo — change any that are wrong.
+                      FinSight {itemsAreFromPhoto ? "found" : "read"} {items.length} items and reused
+                      categories from matching receipt records you confirmed before. Check each category.
                     </>
                   ) : (
                     <>
-                      FinSight {itemsAreFromPhoto ? "found" : "read"} {items.length} items but couldn't
-                      categorise them. Put each one in a category below.
+                      FinSight {itemsAreFromPhoto ? "found" : "read"} {items.length} items but could not
+                      match them to categories you confirmed before. Choose each category below.
                     </>
                   )}
                 </p>
@@ -1759,21 +1711,6 @@ function ScanReceiptForm() {
                 label="Category"
                 htmlFor="category"
                 required
-                /*
-                  Marks a suggestion from either history or AI.
-                  Derived by comparing the field against what was suggested
-                  rather than held as a flag, so it disappears by itself the
-                  moment the owner picks something else — at which point the
-                  value is theirs and calling it suggested would be wrong.
-                */
-                labelAction={
-                  suggestedCategoryId !== null && splits[0]!.categoryId === suggestedCategoryId ? (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-tint-info px-2 py-0.5 text-[11px] font-medium text-tone-info ring-1 ring-edge-info">
-                      <span aria-hidden>✦</span>
-                      Suggested — check it
-                    </span>
-                  ) : null
-                }
                 hint="One receipt often covers more than one kind of spending — split it if this one does."
               >
                 <CategorySelect
@@ -1868,11 +1805,14 @@ function ScanReceiptForm() {
               </button>
             ) : null}
 
-            {isItemised && itemsWereAutoCategorised ? (
+            {isItemised && hasHistoryCategoryMatches ? (
               <Callout tone="info">
-                <b className="font-semibold">Categories suggested. Check each item before saving.</b>
+                <b className="font-semibold">Categories matched from your receipt history.</b>
                 <ResultDetails label="Category suggestion details">
-                  <p>Suggestions use the item names. Change any category that does not fit; your choices are saved when you confirm.</p>
+                  <p>
+                    Matches use item names and vendors from receipt records you already confirmed. Change any
+                    category that does not fit; your choices are saved when you confirm.
+                  </p>
                 </ResultDetails>
               </Callout>
             ) : null}

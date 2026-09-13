@@ -44,6 +44,7 @@ Phase 1 implementation may start from runtime checkpoint `20d011ec8c51fb026abb1d
 
 - **Priority:** P1
 - **Owner:** database
+- **Status:** IMPLEMENTED AND LOCALLY VERIFIED on 13 September 2026
 - **Depends on:** P0-CLOSE-01
 - **Likely surfaces:** `backend/prisma/schema.prisma`, one additive migration
 - **Work:** add business-scoped provider-consent state, atomic monthly provider-unit reservations, safe dispatch audit metadata, and resumable purge state. Store no receipt text, image URL, item payload, or payment data in the audit record. Revoke default public-function execution from `anon` and `authenticated` before any public function is introduced.
@@ -54,6 +55,7 @@ Phase 1 implementation may start from runtime checkpoint `20d011ec8c51fb026abb1d
 
 - **Priority:** P1
 - **Owner:** backend-api
+- **Status:** IMPLEMENTED AND LOCALLY VERIFIED on 13 September 2026
 - **Depends on:** P0-CLOSE-01
 - **Likely surfaces:** receipt controller, receipt orchestration service, API startup, worker startup
 - **Work:** upload and retry must persist or requeue work only. Remove eager `claimAndProcessScan()` execution from the API process. Preserve idempotent status reads and stale-job recovery.
@@ -64,6 +66,7 @@ Phase 1 implementation may start from runtime checkpoint `20d011ec8c51fb026abb1d
 
 - **Priority:** P1
 - **Owner:** backend-api
+- **Status:** IMPLEMENTED AND LOCALLY VERIFIED on 13 September 2026
 - **Depends on:** P0-CLOSE-01
 - **Likely surfaces:** upload middleware, receipt route/controller, backend storage orchestration
 - **Work:** replace the current all-in-memory paired multipart path with bounded temporary-file or streaming ingestion and sequential private upload. Enforce 10 MiB per object, eight logical pages, and 80 MiB total before decode. Clean request-owned temporary data after success, failure, abort, and timeout.
@@ -74,6 +77,7 @@ Phase 1 implementation may start from runtime checkpoint `20d011ec8c51fb026abb1d
 
 - **Priority:** P1
 - **Owner:** database
+- **Status:** OPERATOR TOOLING COMPLETE; HOSTED BUCKET ALIGNMENT REMAINS A RELEASE GATE
 - **Depends on:** P1-BE-02
 - **Likely surfaces:** Supabase Storage bucket configuration and its verification evidence
 - **Work:** set per-object size and MIME restrictions for the private `receipts` and `csv-imports` buckets to match the approved backend contract. Keep both buckets private and do not add direct client object policies.
@@ -84,6 +88,7 @@ Phase 1 implementation may start from runtime checkpoint `20d011ec8c51fb026abb1d
 
 - **Priority:** P1
 - **Owner:** devops-release
+- **Status:** IMPLEMENTED AND LOCALLY VERIFIED; PRODUCTION-IMAGE CI RUN REMAINS OPEN
 - **Depends on:** P0-CLOSE-01
 - **Likely surfaces:** backend Dockerfile, OCR environment contract, CI smoke test, deployment runbook
 - **Work:** copy every configured traineddata file into the production image, pin a checksum, configure a read-only local language-data path, and fail readiness when a configured language is missing.
@@ -94,6 +99,7 @@ Phase 1 implementation may start from runtime checkpoint `20d011ec8c51fb026abb1d
 
 - **Priority:** P1
 - **Owner:** ai-ocr-analytics
+- **Status:** IMPLEMENTED AND LOCALLY VERIFIED on 13 September 2026
 - **Depends on:** P1-BE-01 and P1-OPS-01
 - **Likely surfaces:** OCR/extraction services, provider-neutral types, `extractionMetrics`
 - **Work:** run Tesseract and deterministic parsing first, then return a versioned `RescueDecision` from missing or conflicting critical fields, handwriting/damage flags, and calibration state. The backend-owned receipt worker consumes that decision. Do not use a raw provider confidence score as a decision.
@@ -104,6 +110,7 @@ Phase 1 implementation may start from runtime checkpoint `20d011ec8c51fb026abb1d
 
 - **Priority:** P1 guardrail
 - **Owner:** ai-ocr-analytics
+- **Status:** IMPLEMENTED AND LOCALLY VERIFIED on 13 September 2026
 - **Depends on:** P1-DB-01 and P1-AI-01
 - **Likely surfaces:** provider-neutral interface, normalized extraction schema, reservation/outcome types
 - **Work:** define the adapter boundary and validated normalized result without adding an Azure network client. The seam must require consent, a reserved unit, provider/version/region metadata, timeout outcome, and safe evidence before any implementation can dispatch.
@@ -114,6 +121,7 @@ Phase 1 implementation may start from runtime checkpoint `20d011ec8c51fb026abb1d
 
 - **Priority:** P1
 - **Owner:** backend-api
+- **Status:** IMPLEMENTED AND LOCALLY VERIFIED on 13 September 2026
 - **Depends on:** P1-DB-01
 - **Likely surfaces:** provider dispatch boundary, error middleware, receipt DTOs, account deletion
 - **Work:** expose current consent/revocation state for the active business, require it at the future dispatch boundary, map provider failures to stable public codes, redact provider bodies from stored errors and logs, and extend backend account deletion to remove consent and dispatch metadata.
@@ -124,6 +132,7 @@ Phase 1 implementation may start from runtime checkpoint `20d011ec8c51fb026abb1d
 
 - **Priority:** P1
 - **Owner:** backend-api
+- **Status:** IMPLEMENTED AND LOCALLY VERIFIED on 13 September 2026
 - **Depends on:** P1-DB-01, P1-AI-01, P1-AI-02, and P1-BE-03
 - **Likely surfaces:** backend-owned receipt worker orchestration and environment validation
 - **Work:** put current Gemini/Veryfi receipt calls and every future adapter behind one server-side gate. An absent enable flag, absent finite limit, missing consent, failed reservation, uncalibrated route, or active kill switch must mean zero dispatches. A configured API key alone must never enable receipt upload to a provider.
@@ -134,6 +143,7 @@ Phase 1 implementation may start from runtime checkpoint `20d011ec8c51fb026abb1d
 
 - **Priority:** P1
 - **Owner:** web-frontend
+- **Status:** IMPLEMENTED AND LOCALLY VERIFIED on 13 September 2026
 - **Depends on:** P1-BE-02, P1-BE-03, and P1-BE-04
 - **Likely surfaces:** web receipt selection/upload and cloud-consent presentation
 - **Work:** enforce the published page/object/aggregate limits before upload. Present provider consent only when the backend advertises an available future provider; otherwise keep cloud controls absent and local review unchanged.
@@ -143,6 +153,7 @@ Phase 1 implementation may start from runtime checkpoint `20d011ec8c51fb026abb1d
 
 - **Priority:** P1
 - **Owner:** mobile
+- **Status:** IMPLEMENTED AND AUTOMATED TESTS PASS; PHYSICAL ANDROID EVIDENCE REMAINS OPEN
 - **Depends on:** P1-BE-02, P1-BE-03, and P1-BE-04
 - **Likely surfaces:** mobile receipt selection/upload and cloud-consent presentation
 - **Work:** enforce the published page/object/aggregate limits across original and processed evidence before upload. Present the same conditional consent contract as web without changing physical-camera behavior.
@@ -152,6 +163,7 @@ Phase 1 implementation may start from runtime checkpoint `20d011ec8c51fb026abb1d
 
 - **Priority:** P1
 - **Owner:** devops-release
+- **Status:** IMPLEMENTED AND LOCALLY VERIFIED; AUTHENTICATED DEPLOYMENT DRILLS REMAIN OPEN
 - **Depends on:** P1-BE-02
 - **Likely surfaces:** nginx, API temporary volume/permissions, cleanup scheduling, CI deployment tests
 - **Work:** size nginx for the exact 80 MiB file aggregate plus measured multipart overhead, provide bounded non-public temporary storage, and operate the hourly orphan sweep. Do not fix the mismatch by allowing a 160 MiB in-memory request.
@@ -161,6 +173,7 @@ Phase 1 implementation may start from runtime checkpoint `20d011ec8c51fb026abb1d
 
 - **Priority:** P1
 - **Owner:** devops-release
+- **Status:** IMPLEMENTED AND LOCALLY VERIFIED; HOSTED/DEPLOYED DRILLS REMAIN OPEN
 - **Depends on:** P1-DB-01, P1-DB-02, P1-BE-01, P1-BE-02, P1-BE-04, P1-OPS-01, P1-OPS-02, P1-AI-01, P1-AI-02, and P1-BE-03
 - **Likely surfaces:** environment examples, worker health, deployment runbook, monitoring configuration
 - **Work:** document and test provider-disable, budget exhaustion, orphan cleanup, queue recovery, secret rotation, and safe rollback drills. Keep provider paid overage disabled. For a Pro target, add an operator check for organization Spend Cap state, excluded usage/add-ons, approved compute class, and upcoming invoice.
@@ -170,11 +183,14 @@ Phase 1 implementation may start from runtime checkpoint `20d011ec8c51fb026abb1d
 
 - **Priority:** P0 for isolation, P1 for the remaining Phase 1 gates
 - **Owner:** qa-security
+- **Status:** LOCAL AUTOMATED GATE COMPLETE on 13 September 2026; RELEASE-ONLY EVIDENCE REMAINS OPEN
 - **Depends on:** P1-DB-01, P1-DB-02, P1-BE-01, P1-BE-02, P1-BE-03, P1-BE-04, P1-OPS-01, P1-OPS-02, P1-OPS-03, P1-AI-01, P1-AI-02, P1-WEB-01, and P1-MOB-01
 - **Work:** add unit, contract, integration, adversarial multipart, process-boundary, provider-timeout, budget-race, consent, deletion, and tenant-tampering tests.
 - **Acceptance:** no cross-profile scan, image, signed URL, consent, budget reservation, or audit event is observable; API-only test processes cannot perform OCR; budget concurrency cannot overspend; the full backend, web, and mobile gates pass; mocked provider and camera tests are labeled as such.
 
 ## Phase 1 completion gate
+
+**Local implementation result, 13 September 2026:** PASS. All implementation tickets are present and the local automated gate is green. This is not a production-release declaration: hosted private-bucket alignment, the production-image CI run, deployed recovery drills, real-receipt evidence, account posture, and physical Android evidence remain open as described below and in `../phase-1/IMPLEMENTATION-EVIDENCE.md`.
 
 Phase 1 is complete only when all of the following are evidenced:
 

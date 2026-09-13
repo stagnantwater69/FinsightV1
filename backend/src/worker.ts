@@ -9,7 +9,7 @@
 import { prisma } from "./config/prisma";
 import { logger } from "./config/logger";
 import { assertMigrationsApplied } from "./config/migrationGuard";
-import { runReceiptWorkerOnce } from "./services/receiptScan.service";
+import { runReceiptWorkerOnce } from "./services/receiptScan/worker";
 import { runCsvImportWorkerOnce, sweepStalledCsvImports } from "./services/csvImport.service";
 import { cleanUpExpiredRateLimits } from "./middleware/rateLimit.middleware";
 import { enqueueDailyProfileAnalyses, runAnalysisWorkerOnce } from "./services/anomalyDetection/job.service";

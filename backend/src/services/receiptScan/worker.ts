@@ -1,10 +1,11 @@
 import { prisma } from "../../config/prisma";
-import { env } from "../../config/env";
-import { ApiError } from "../../middleware/error.middleware";
-import { requireOwnedBusinessProfile } from "../../lib/ownership";
 import { hostname } from "node:os";
 import { createHash, randomUUID } from "node:crypto";
-import { deleteReceiptImage, downloadReceiptImage, uploadReceiptImage } from "../storage.service";
+import {
+  downloadReceiptImageBounded,
+  inspectReceiptImage,
+  type ReceiptImageObjectInfo,
+} from "../storage.service";
 import {
   confidenceForValue,
   extractReceipt,
@@ -22,170 +23,257 @@ import { PROMPT_VERSION, SCHEMA_VERSION } from "../visionOcr.service";
 import { assessImageQuality } from "../../lib/imageQuality";
 import { Prisma } from "@prisma/client";
 import { logger } from "../../config/logger";
-import { toDTO } from "./dto";
 import { persistCategorisedItems } from "./categorisation";
 import {
   buildFieldEvidence,
   buildScanWarnings,
-  rescueWithVeryfi,
-  rescueWithVision,
+  determineRescueTrigger,
   snapVendorToHistory,
 } from "./extraction";
-import { MAX_PAGES, type UploadInput } from "./types";
+import type { ReceiptCaptureMetadata, RescuedFields } from "./types";
 import { selectOcrCandidate } from "./ocrCandidateSelection";
 import { assessReceiptLikelihood } from "../../lib/receiptLikelihood";
-import { recordVeryfiUsage, veryfiQuotaAvailable } from "./veryfiQuota";
+import { parseReceiptDetails } from "../../lib/receiptDetails";
+import { validateReceiptUpload } from "../../lib/receiptUploadValidation";
+import {
+  RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES,
+  RECEIPT_UPLOAD_MAX_LOGICAL_PAGES,
+  RECEIPT_UPLOAD_MAX_OBJECT_BYTES,
+} from "../../lib/receiptUploadContract";
+import { decideReceiptRescue, RESCUE_DECISION_VERSION } from "../receiptRescueDecision";
+import {
+  RECEIPT_PROVIDER_CONTRACT_VERSION,
+  type NormalizedEvidence,
+  type NormalizedReceiptExtraction,
+} from "../receiptProviderContract";
+import { dispatchReceiptProviderRescue } from "../receiptProviderDispatch.service";
+import { getReceiptProviderConfiguration } from "../../config/receiptProvider";
+import { createGeminiReceiptAdapter, createVeryfiReceiptAdapter } from "./providerAdapters";
 
 const RECEIPT_WORKER_ID = `${hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`;
 const RECEIPT_LEASE_MS = 2 * 60 * 1000;
 const MAX_PROCESSING_ATTEMPTS = 3;
 const RETRY_DELAYS_MS = [15_000, 60_000, 5 * 60_000] as const;
 
-class ReceiptLeaseLostError extends Error {}
+export class ReceiptLeaseLostError extends Error {}
 
-/**
- * Accepts the photographs and returns immediately, leaving the reading to
- * `processScan` in the background.
- *
- * WHY THIS RETURNS BEFORE THE WORK IS DONE. Reading a receipt is Tesseract
- * per page, sometimes a vision model, then the categoriser — seconds of work,
- * multiplied by up to MAX_PAGES. Doing that inline meant the owner's upload
- * held an HTTP connection open for the whole pipeline (a timeout risk on a
- * long receipt over a phone connection) and, worse, occupied the single Node
- * process the whole time, so a second owner scanning concurrently simply
- * waited. The request now ends once the bytes are safely in Storage and a row
- * exists to poll.
- *
- * WHAT STAYS SYNCHRONOUS, and why exactly these. Ownership and the page-count
- * limit, because a rejected upload must fail as a 4xx the client can act on
- * rather than as a row that quietly turns into "Failed". And the Storage
- * upload itself, because if the bytes cannot be stored there is nothing to
- * process later and the honest answer is an immediate error — it is also I/O
- * -bound rather than CPU-bound, so it does not block the event loop the way
- * OCR does.
- */
-export async function uploadAndScan(userId: number, input: UploadInput) {
-  await requireOwnedBusinessProfile(userId, input.businessProfileId);
+type ReceiptProcessingErrorCode =
+  | "RECEIPT_EVIDENCE_UNAVAILABLE"
+  | "RECEIPT_EVIDENCE_INVALID"
+  | "RECEIPT_PROCESSING_FAILED";
 
-  if (input.pages.length === 0) {
-    throw new ApiError(400, "At least one receipt photo is required");
+class ReceiptProcessingFailure extends Error {
+  constructor(readonly code: ReceiptProcessingErrorCode, readonly publicMessage: string) {
+    super(code);
   }
-  if (input.pages.length > MAX_PAGES) {
-    // A receipt needing nine photographs is a scanning problem, not a
-    // receipt — caught here too, not only at the HTTP boundary, since this
-    // function is the one place both the route and the tests actually call.
-    throw new ApiError(400, `A receipt can have at most ${MAX_PAGES} pages`);
-  }
+}
 
-  const uploadKey = input.idempotencyKey
-    ? createHash("sha256").update(`${input.businessProfileId}:${input.idempotencyKey}`).digest("hex")
-    : null;
-  const fingerprint = createHash("sha256");
-  for (const page of input.pages) {
-    fingerprint.update(JSON.stringify({
-      mimetype: page.mimetype,
-      size: page.buffer.length,
-      processedType: page.processed?.mimetype ?? null,
-      processedSize: page.processed?.buffer.length ?? 0,
-      metadata: page.metadata ?? null,
-    }));
-    fingerprint.update(page.buffer);
-    if (page.processed) fingerprint.update(page.processed.buffer);
-  }
-  const uploadHash = fingerprint.digest("hex");
-  if (uploadKey) {
-    const existing = await prisma.receiptScan.findUnique({
-      where: { uploadKey },
-      include: { items: true, pages: true },
-    });
-    if (existing) {
-      if (existing.businessProfileId !== input.businessProfileId || existing.uploadHash !== uploadHash) {
-        throw new ApiError(409, "This upload key belongs to a different receipt. Start a new upload.");
-      }
-      return toDTO(existing, existing.items, existing.pages);
-    }
-  }
+function safeProcessingFailure(error: unknown): ReceiptProcessingFailure {
+  if (error instanceof ReceiptProcessingFailure) return error;
+  return new ReceiptProcessingFailure(
+    "RECEIPT_PROCESSING_FAILED",
+    "The receipt could not be read. Try again or enter the values manually.",
+  );
+}
 
-  // Uploaded in the order the pages arrived — every step after this one (the
-  // concatenated text, the vision call, the stored page numbers) depends on
-  // that order to mean anything, and nothing downstream re-derives it. The
-  // order is the client's assertion, not something inferred here.
-  const imagePaths: string[] = [];
-  const processedPaths: (string | null)[] = [];
-  try {
-    for (const page of input.pages) {
-      imagePaths.push(await uploadReceiptImage(input.businessProfileId, page.buffer, page.mimetype, page.originalname));
-      processedPaths.push(
-        page.processed
-          ? await uploadReceiptImage(
-              input.businessProfileId,
-              page.processed.buffer,
-              page.processed.mimetype,
-              page.processed.originalname,
-            )
-          : null,
-      );
-    }
-  } catch (error) {
-    await Promise.all([...imagePaths, ...processedPaths.filter((path): path is string => Boolean(path))].map(deleteReceiptImage));
-    throw error;
-  }
+type StoredEvidence = { path: string; info: ReceiptImageObjectInfo };
+type StoredPage = {
+  pageNumber: number;
+  original: StoredEvidence;
+  processed: StoredEvidence | null;
+  metadata?: ReceiptCaptureMetadata;
+};
+type StoredInput = { businessProfileId: number; pages: StoredPage[] };
 
-  let scan;
-  try {
-    scan = await prisma.receiptScan.create({
-      data: {
-        businessProfileId: input.businessProfileId,
-        uploadKey,
-        uploadHash: uploadKey ? uploadHash : null,
-        imageFile: imagePaths[0]!, // the page-1 cover — see schema header note 14
-        confirmationStatus: "Pending",
+export interface ReceiptProcessingLease {
+  workerId: string;
+  attempt: number;
+}
+
+export interface ReceiptPageProcessingOutput {
+  pageNumber: number;
+  data: Prisma.ReceiptScanPageUpdateManyMutationInput;
+}
+
+export interface ReceiptItemProcessingOutput {
+  parsedItems: { name: string; quantity: number | null; unitPrice: number | null; amount: number }[];
+  vendor: string | null;
+  extractedByVision: boolean;
+  amountConfidences: (number | null)[];
+  itemEvidence: ({ pageNumber: number | null; sourceText: string | null } | null)[];
+}
+
+export interface ReceiptProcessingOutput {
+  scan: Prisma.ReceiptScanUpdateManyMutationInput;
+  pages: ReceiptPageProcessingOutput[];
+  items: ReceiptItemProcessingOutput;
+}
+
+function sha256(buffer: Buffer): string {
+  return createHash("sha256").update(buffer).digest("hex");
+}
+
+async function readStoredCandidate(evidence: StoredEvidence, withQuality: boolean) {
+  const buffer = await downloadReceiptImageBounded(evidence.path, RECEIPT_UPLOAD_MAX_OBJECT_BYTES, evidence.info);
+  await validateReceiptUpload({ buffer, mimetype: evidence.info.mimetype });
+  const digest = sha256(buffer);
+  const quality = withQuality ? await assessImageQuality(buffer) : null;
+  const ocr = await extractReceipt(buffer);
+  return { ocr, digest, quality };
+}
+
+function localEvidence(validated: boolean, arithmetic = false): NormalizedEvidence {
+  return {
+    source: "local-tesseract",
+    sourceVersion: PARSER_VERSION,
+    pageNumber: null,
+    regionStatus: "UNAVAILABLE",
+    region: null,
+    confidenceBand: validated ? "MEDIUM" : "LOW",
+    calibrationState: "UNCALIBRATED",
+    validationState: validated ? "VALIDATED" : "UNVALIDATED",
+    validationCodes: [
+      arithmetic ? "ARITHMETIC_VALID" : "FORMAT_VALID",
+      "REGION_UNAVAILABLE",
+      ...(validated ? [] : (["OWNER_REVIEW_REQUIRED"] as const)),
+    ],
+  };
+}
+
+function localNormalizedExtraction(
+  parsed: ReturnType<typeof parseReceiptFields>,
+  items: ReturnType<typeof parseLineItems>,
+  currency: string | null,
+  reconciled: boolean,
+): NormalizedReceiptExtraction {
+  const itemEvidence = localEvidence(reconciled, reconciled);
+  return {
+    schemaVersion: RECEIPT_PROVIDER_CONTRACT_VERSION,
+    source: "local-tesseract",
+    sourceVersion: PARSER_VERSION,
+    date: { value: parsed.date, evidence: parsed.date ? localEvidence(true) : null },
+    vendor: { value: parsed.vendor, evidence: parsed.vendor ? localEvidence(true) : null },
+    currency: { value: currency, evidence: currency ? localEvidence(true) : null },
+    total: { value: parsed.amount, evidence: parsed.amount ? localEvidence(true, reconciled) : null },
+    items: items.map((item) => ({
+      name: item.name,
+      quantity: item.quantity,
+      amount: item.amount,
+      evidence: itemEvidence,
+    })),
+    itemsEvidence: items.length > 0 ? itemEvidence : null,
+  };
+}
+
+function mergeIntoRescuedFields(
+  parsed: ReturnType<typeof parseReceiptFields>,
+  localItems: ReturnType<typeof parseLineItems>,
+  gate: Awaited<ReturnType<typeof dispatchReceiptProviderRescue>>,
+  trigger: string | null,
+  providerVersion: string | null,
+): RescuedFields {
+  const applied = new Set(gate.merge.appliedFields);
+  const receipt = gate.merge.receipt;
+  const items = receipt.items.map((item) => ({
+    name: item.name,
+    quantity: item.quantity,
+    unitPrice: null,
+    amount: item.amount,
+  }));
+  const providerItems = applied.has("items");
+  return {
+    date: receipt.date.value,
+    vendor: receipt.vendor.value,
+    description: receipt.vendor.value ? `Purchase from ${receipt.vendor.value}` : "Receipt purchase",
+    amount: receipt.total.value,
+    items: providerItems ? items : localItems,
+    dateAmbiguous: applied.has("date") ? false : parsed.dateAmbiguous,
+    dateSourceText: applied.has("date") ? null : parsed.dateSourceText,
+    visionAssisted: applied.size > 0,
+    itemsFromVision: providerItems,
+    visionTrigger: trigger,
+    visionLatencyMs: gate.latencyMs,
+    visionProvider: gate.dispatched ? gate.provider : null,
+    visionModel: gate.dispatched ? providerVersion : null,
+    visionRejectReason: null,
+    verifier: gate.provider === "gemini" && gate.code === "PROVIDER_OK" ? "accepted" : null,
+    visionWarnings: [],
+    itemEvidence: providerItems
+      ? receipt.items.map((item) => ({ pageNumber: item.evidence.pageNumber, sourceText: null }))
+      : null,
+  };
+}
+
+/** Commit every derived receipt value only while this attempt still owns the lease. */
+export async function persistReceiptProcessingOutput(
+  scanId: number,
+  businessProfileId: number,
+  lease: ReceiptProcessingLease,
+  output: ReceiptProcessingOutput,
+): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    // This conditional UPDATE both proves ownership and locks the scan row
+    // until every dependent write below commits or rolls back with it.
+    const scanUpdated = await tx.receiptScan.updateMany({
+      where: {
+        id: scanId,
+        businessProfileId,
         processingStatus: "Processing",
-        pages: {
-          create: imagePaths.map((imageFile, i) => ({
-            pageNumber: i + 1,
-            imageFile,
-            processedImageFile: processedPaths[i],
-            captureMetadata: input.pages[i]?.metadata as Prisma.InputJsonValue | undefined,
-          })),
-        },
+        processingWorkerId: lease.workerId,
+        processingAttemptCount: lease.attempt,
       },
-      include: { pages: true },
+      data: {
+        ...output.scan,
+        processingStatus: "Processing",
+        processingWorkerId: lease.workerId,
+        processingAttemptCount: lease.attempt,
+        processingHeartbeatAt: new Date(),
+      },
     });
-  } catch (error) {
-    await Promise.all([...imagePaths, ...processedPaths.filter((path): path is string => Boolean(path))].map(deleteReceiptImage));
-    if (uploadKey && error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      const winner = await prisma.receiptScan.findUnique({
-        where: { uploadKey },
-        include: { items: true, pages: true },
+    if (scanUpdated.count !== 1) throw new ReceiptLeaseLostError(`Receipt scan ${scanId} lease was reclaimed`);
+
+    for (const page of output.pages) {
+      const pageUpdated = await tx.receiptScanPage.updateMany({
+        where: { receiptScanId: scanId, pageNumber: page.pageNumber },
+        data: page.data,
       });
-      if (winner && winner.businessProfileId === input.businessProfileId && winner.uploadHash === uploadHash) {
-        return toDTO(winner, winner.items, winner.pages);
-      }
-      throw new ApiError(409, "This upload key belongs to a different receipt. Start a new upload.");
+      if (pageUpdated.count !== 1) throw new Error("Receipt scan page missing during processing commit");
     }
-    throw error;
-  }
 
-  /*
-   * Deliberately NOT awaited — this is the whole point of the change.
-   *
-   * `processScan` never rejects (it records failure on the row instead), so
-   * there is no unhandled rejection to guard against; the `.catch` is belt
-   * and braces for a genuinely unexpected throw before its own try block.
-   */
-  void claimAndProcessScan(scan.id, input).catch((err) => {
-    logger.error({ err }, `[receipt-scan] background processing threw for scan=${scan.id}`);
-  });
+    await persistCategorisedItems(
+      businessProfileId,
+      scanId,
+      output.items.parsedItems,
+      output.items.vendor,
+      output.items.extractedByVision,
+      output.items.amountConfidences,
+      output.items.itemEvidence,
+      tx,
+    );
 
-  return toDTO(scan, [], scan.pages);
+    const completed = await tx.receiptScan.updateMany({
+      where: {
+        id: scanId,
+        businessProfileId,
+        processingStatus: "Processing",
+        processingWorkerId: lease.workerId,
+        processingAttemptCount: lease.attempt,
+      },
+      data: {
+        processingStatus: "Complete",
+        processingError: null,
+        processingWorkerId: null,
+        processingHeartbeatAt: null,
+      },
+    });
+    if (completed.count !== 1) throw new ReceiptLeaseLostError(`Receipt scan ${scanId} lease was reclaimed`);
+  }, { timeout: 15_000 });
 }
 
 /**
- * The actual read: OCR every page, parse deterministically as a fallback
- * read, then ask the AI vision model (the primary source — see
- * rescueWithVision/rescueWithVeryfi) to read the same pages, categorise, and
- * write the settled result back onto the scan row.
+ * Validate and OCR one stored candidate at a time, preserve that local draft,
+ * then offer only a doubtful result to the selected provider through the
+ * consent and budget gate.
  *
  * Runs after the HTTP response has already gone out, so it CANNOT report a
  * failure by throwing — nobody is listening. Every failure path instead lands
@@ -194,37 +282,57 @@ export async function uploadAndScan(userId: number, input: UploadInput) {
  * steps propagate.
  *
  * The row itself is the queue. A conditional update claims a short lease, so
- * multiple backend instances cannot process the same scan and a restart can
- * reclaim work after the heartbeat expires. The first attempt may reuse the
- * request's buffers; every recovery attempt reconstructs them from Storage.
+ * multiple worker instances cannot process the same scan and a restart can
+ * reclaim work after the heartbeat expires. Every attempt restores the
+ * receipt from private Storage after the worker owns the lease.
  */
-async function processScan(scanId: number, input: UploadInput, attempt: number): Promise<void> {
+async function processScan(scanId: number, input: StoredInput, attempt: number): Promise<void> {
   // OCR on one difficult photo can outlast the normal scheduler interval.
   // Refresh independently of page boundaries so another replica never
   // mistakes a healthy long-running read for an abandoned lease.
+  let leaseLost = false;
   const heartbeatTimer = setInterval(() => {
-    void heartbeatScan(scanId, attempt).catch((error) =>
-      logger.error({ err: error }, `[receipt-scan] heartbeat failed for scan=${scanId}`),
-    );
+    void heartbeatScan(scanId, attempt).catch((error) => {
+      if (error instanceof ReceiptLeaseLostError) {
+        leaseLost = true;
+        return;
+      }
+      logger.error({ scanId, code: "RECEIPT_HEARTBEAT_FAILED" }, "receipt scan heartbeat failed");
+    });
   }, 30_000);
   heartbeatTimer.unref();
   try {
-    // extractReceipt rather than extractText: the same read, but keeping the
-    // per-word confidences tesseract reports so the confirm screen can say
-    // which figure it doubts instead of asking the owner to check everything
-    // equally.
     const ocrResults: OcrResult[] = [];
     const originalOcrResults: OcrResult[] = [];
     const processedOcrResults: (OcrResult | null)[] = [];
     const ocrSources: ("original" | "processed")[] = [];
+    const pageQualities: Awaited<ReturnType<typeof assessImageQuality>>[] = [];
+    const selectedEvidence: {
+      pageNumber: number;
+      dataClass: "RECEIPT_IMAGE" | "DERIVED_RECEIPT_IMAGE";
+      mediaType: "image/jpeg" | "image/png" | "image/webp";
+      inputSha256: string;
+      loadBytes: () => Promise<Buffer>;
+    }[] = [];
     for (const page of input.pages) {
-      const original = await extractReceipt(page.buffer);
-      const processed = page.processed ? await extractReceipt(page.processed.buffer) : null;
-      const selected = selectOcrCandidate(original, processed);
-      originalOcrResults.push(original);
-      processedOcrResults.push(processed);
+      const original = await readStoredCandidate(page.original, true);
+      await heartbeatScan(scanId, attempt);
+      const processed = page.processed ? await readStoredCandidate(page.processed, false) : null;
+      const selected = selectOcrCandidate(original.ocr, processed?.ocr ?? null);
+      const chosenEvidence = selected.source === "processed" && page.processed ? page.processed : page.original;
+      const chosenDigest = selected.source === "processed" && processed ? processed.digest : original.digest;
+      originalOcrResults.push(original.ocr);
+      processedOcrResults.push(processed?.ocr ?? null);
       ocrResults.push(selected.result);
       ocrSources.push(selected.source);
+      pageQualities.push(original.quality!);
+      selectedEvidence.push({
+        pageNumber: page.pageNumber,
+        dataClass: selected.source === "processed" ? "DERIVED_RECEIPT_IMAGE" : "RECEIPT_IMAGE",
+        mediaType: chosenEvidence.info.mimetype,
+        inputSha256: chosenDigest,
+        loadBytes: () => downloadReceiptImageBounded(chosenEvidence.path, RECEIPT_UPLOAD_MAX_OBJECT_BYTES, chosenEvidence.info),
+      });
       await heartbeatScan(scanId, attempt);
     }
 
@@ -256,10 +364,9 @@ async function processScan(scanId: number, input: UploadInput, attempt: number):
      * The obvious fix — find the repeat, drop it — is a heuristic deciding
      * which money lines survive, so it is settled the same way this codebase
      * settles any choice between two OCR readings of the same pages: an
-     * OBJECTIVE test, never a preference. (This is purely a choice between
-     * two DETERMINISTIC readings, both fallback-tier now that the AI vision
-     * model is the primary source — it happens before either rescue function
-     * is even called.) The objective test here is the receipt's own printed
+     * OBJECTIVE test, never a preference. This is a choice between two local
+     * deterministic readings and happens before the provider gate. The
+     * objective test here is the receipt's own printed
      * total. If the plain reading fails to account for it and the
      * de-overlapped reading does, that is arithmetic agreeing with the paper,
      * not a judgement that one reading looks tidier.
@@ -286,50 +393,48 @@ async function processScan(scanId: number, input: UploadInput, attempt: number):
       }
     }
 
-    // The worst page, not the average — see rescueWithVision's own note.
     const worstPageConfidence = Math.min(...ocrResults.map((r) => overallConfidence(r)));
-
-    const selectedInput: UploadInput = {
-      businessProfileId: input.businessProfileId,
-      pages: input.pages.map((page, index) =>
-        ocrSources[index] === "processed" && page.processed
-          ? { ...page.processed, metadata: page.metadata }
-          : { buffer: page.buffer, mimetype: page.mimetype, originalname: page.originalname, metadata: page.metadata },
-      ),
-    };
-    /*
-     * The AI model is the PRIMARY source now, so it is asked on every scan —
-     * not just when OCR looks doubtful. Veryfi tries first among the two
-     * providers — see
-     * docs/superpowers/specs/2026-09-01-veryfi-production-ocr-integration-design.md
-     * — gated only by `VERYFI_ENABLED` and the monthly quota, and falls
-     * through to Gemini's `rescueWithVision` whenever Veryfi is disabled,
-     * out of quota, or was never reached.
-     */
-    let rescued;
-    if (env.VERYFI_ENABLED && (await veryfiQuotaAvailable())) {
-      const veryfiRescued = await rescueWithVeryfi(selectedInput, parsed, deterministicItems, combinedText, worstPageConfidence);
-      if (veryfiRescued.visionProvider === "veryfi") {
-        // Counted here, not inside rescueWithVeryfi itself — this is the one
-        // place "Veryfi was actually called" and "record the call against
-        // this month's quota" are the same fact, rather than two places that
-        // could disagree about what counts as an attempt.
-        await recordVeryfiUsage();
-        rescued = veryfiRescued;
-      } else {
-        // Veryfi was never reached (network failure, no credentials) —
-        // falls through to the existing Gemini rescue exactly as if Veryfi
-        // did not exist. Not counted against the quota: nothing was billed.
-        rescued = await rescueWithVision(selectedInput, parsed, deterministicItems, combinedText, worstPageConfidence);
-      }
-    } else {
-      rescued = await rescueWithVision(selectedInput, parsed, deterministicItems, combinedText, worstPageConfidence);
-    }
+    const reconciliation = reconcileItems(combinedText, deterministicItems, parsed.amount);
+    const currency = parseReceiptDetails(combinedText).currency;
+    const providerConfig = getReceiptProviderConfiguration();
+    const rescueDecision = decideReceiptRescue({
+      validation: parsed.amount !== null && (deterministicItems.length === 0 || reconciliation.reconciled) ? "VALIDATED" : "FAILED",
+      missingCriticalFields: [
+        ...(parsed.date === null ? (["date"] as const) : []),
+        ...(parsed.vendor === null ? (["vendor"] as const) : []),
+        ...(currency === null ? (["currency"] as const) : []),
+        ...(parsed.amount === null ? (["total"] as const) : []),
+      ],
+      conflictingCriticalFields: [
+        ...(parsed.dateAmbiguous ? (["date"] as const) : []),
+        ...(!reconciliation.reconciled && deterministicItems.length > 0 && parsed.amount !== null
+          ? (["total"] as const)
+          : []),
+      ],
+      handwriting: "UNKNOWN",
+      damage: "UNKNOWN",
+      calibration:
+        providerConfig.routingCalibrated && providerConfig.calibrationVersion
+          ? { state: "CALIBRATED", version: providerConfig.calibrationVersion }
+          : { state: "UNCALIBRATED", version: null },
+    });
+    const localExtraction = localNormalizedExtraction(parsed, deterministicItems, currency, reconciliation.reconciled);
+    const adapter = providerConfig.provider === "veryfi" ? createVeryfiReceiptAdapter() : createGeminiReceiptAdapter();
+    const gate = await dispatchReceiptProviderRescue(
+      {
+        businessProfileId: input.businessProfileId,
+        receiptScanId: scanId,
+        rescueDecision,
+        localExtraction,
+        pages: selectedEvidence,
+        preprocessingVersion: PREPROCESS_VERSION,
+        normalizedSchemaVersion: RECEIPT_PROVIDER_CONTRACT_VERSION,
+      },
+      { adapter, loadConfiguration: getReceiptProviderConfiguration },
+    );
+    const trigger = determineRescueTrigger(deterministicItems, parsed, combinedText, worstPageConfidence);
+    const rescued = mergeIntoRescuedFields(parsed, deterministicItems, gate, trigger, providerConfig.providerVersion);
     const vendor = await snapVendorToHistory(input.businessProfileId, combinedText, rescued.vendor);
-
-    // Assessed per page, not once for the whole scan — the client can then say
-    // WHICH page came out blurry rather than "something about this did".
-    const pageQualities = await Promise.all(input.pages.map((p) => assessImageQuality(p.buffer)));
 
     const pageTexts = ocrResults.map((r) => r.text);
     const fieldEvidence = buildFieldEvidence(pageTexts, parsed, rescued, vendor);
@@ -343,13 +448,7 @@ async function processScan(scanId: number, input: UploadInput, attempt: number):
       worstPageConfidence,
     });
 
-    /*
-     * Which code read this receipt — persisted per scan, not just logged.
-     * The console line above (see rescueWithVision) survives for live
-     * grepping, but a log rotates away; a model, prompt or parser change must
-     * stay attributable for as long as the scan's corrections are used as
-     * accuracy evidence, which is the row's own lifetime.
-     */
+    // Persist versions and safe gate outcomes with the scan for calibration.
     const extractorVersions = {
       provider: rescued.visionProvider,
       model: rescued.visionModel,
@@ -361,6 +460,11 @@ async function processScan(scanId: number, input: UploadInput, attempt: number):
       visionLatencyMs: rescued.visionLatencyMs,
       visionRejectReason: rescued.visionRejectReason,
       verifier: rescued.verifier,
+      providerGateCode: gate.code,
+      providerDispatchStatus: gate.dispatchStatus,
+      rescueDecisionVersion: RESCUE_DECISION_VERSION,
+      rescueReasonCodes: rescueDecision.reasons,
+      providerContractVersion: RECEIPT_PROVIDER_CONTRACT_VERSION,
       ocrCandidateSources: ocrSources,
     };
     const receiptLikelihood = assessReceiptLikelihood({
@@ -368,103 +472,91 @@ async function processScan(scanId: number, input: UploadInput, attempt: number):
       documentConfidence: Math.max(...input.pages.map((page) => page.metadata?.documentConfidence ?? 0)),
     });
 
+    if (leaseLost) throw new ReceiptLeaseLostError(`Receipt scan ${scanId} lease was reclaimed`);
     await heartbeatScan(scanId, attempt);
-    await prisma.receiptScan.update({
-      where: { id: scanId },
-      data: {
-        extractedDate: rescued.date ? new Date(rescued.date) : undefined,
-        extractedVendor: vendor ?? undefined,
-        // Rebuilt from the settled vendor, so a name corrected from history is
-        // the one the owner sees rather than the raw OCR reading.
-        extractedDescription: vendor ? `Purchase from ${vendor}` : rescued.description ?? undefined,
-        extractedAmount: rescued.amount ?? undefined,
-        rawText: combinedText,
-        visionAssisted: rescued.visionAssisted,
-        // Null on a vision-assisted read: the figure would describe text
-        // tesseract could not make sense of, which is not what it looks like.
-        ocrConfidence: rescued.visionAssisted ? null : worstPageConfidence,
-        // Per field, for calibration. The whole-scan figure above cannot say
-        // whether confidence predicts a wrong answer for the VENDOR
-        // specifically, because one number per scan says nothing about which
-        // field on it was doubtful. Same null rule, and for the same reason.
-        vendorConfidence: rescued.visionAssisted ? null : confidenceForValue(combinedLines, vendor),
-        amountConfidence: rescued.visionAssisted
-          ? null
-          : confidenceForValue(combinedLines, rescued.amount?.toFixed(2) ?? null),
-        extractorVersions: extractorVersions as Prisma.InputJsonValue,
-        // An empty evidence object is left as NULL, not {} — "nothing could
-        // be located" and "never assessed" read the same to a client, and
-        // null is the established spelling for the second.
-        fieldEvidence: Object.keys(fieldEvidence).length > 0 ? (fieldEvidence as Prisma.InputJsonValue) : undefined,
-        // Always an array, even when empty: [] means "assessed, nothing to
-        // warn about", which is a different statement from a legacy null.
-        warnings: warnings as unknown as Prisma.InputJsonValue,
-        receiptLikelihood: receiptLikelihood as unknown as Prisma.InputJsonValue,
-      },
-    });
-
-    // Per page, because the pages were created before any of this was known.
-    // Scoped by receiptScanId as well as pageNumber so a page number can only
-    // ever be updated within its own scan.
-    for (let i = 0; i < ocrResults.length; i++) {
-      await prisma.receiptScanPage.updateMany({
-        where: { receiptScanId: scanId, pageNumber: i + 1 },
-        data: {
-          rawText: ocrResults[i]!.text,
-          ocrConfidence: overallConfidence(ocrResults[i]!),
-          originalRawText: originalOcrResults[i]!.text,
-          originalOcrConfidence: overallConfidence(originalOcrResults[i]!),
-          ocrSource: ocrSources[i]!,
-          processedRawText: processedOcrResults[i]?.text ?? null,
-          processedOcrConfidence: processedOcrResults[i] ? overallConfidence(processedOcrResults[i]!) : null,
-          sharpness: pageQualities[i]?.sharpness ?? null,
-          brightness: pageQualities[i]?.brightness ?? null,
-          tooBlurredToTrust: pageQualities[i]?.tooBlurredToTrust ?? null,
-        },
-      });
-    }
-
-    await heartbeatScan(scanId, attempt);
-    await persistCategorisedItems(
-      input.businessProfileId,
+    const itemEvidence = rescued.itemsFromVision
+      ? rescued.itemEvidence ?? []
+      : locateItemLines(pageTexts, rescued.items.map((item) => item.amount));
+    await persistReceiptProcessingOutput(
       scanId,
-      rescued.items,
-      vendor,
-      rescued.itemsFromVision,
-      rescued.itemsFromVision ? [] : rescued.items.map((i) => confidenceForValue(combinedLines, i.amount.toFixed(2))),
-      // Vision items carry the model's own reported page/source text; OCR
-      // items are located in the page text they were parsed from. Either way
-      // an item nothing can vouch for stays evidence-less rather than being
-      // given a plausible-looking line.
-      rescued.itemsFromVision
-        ? rescued.itemEvidence ?? []
-        : locateItemLines(pageTexts, rescued.items.map((i) => i.amount)),
-    );
-
-    // Last, so a client that sees "Complete" is guaranteed to find the fields
-    // and items already written rather than racing them.
-    const completed = await prisma.receiptScan.updateMany({
-      where: { id: scanId, processingWorkerId: RECEIPT_WORKER_ID, processingAttemptCount: attempt },
-      data: {
-        processingStatus: "Complete",
-        processingError: null,
-        processingWorkerId: null,
-        processingHeartbeatAt: null,
+      input.businessProfileId,
+      { workerId: RECEIPT_WORKER_ID, attempt },
+      {
+        scan: {
+          extractedDate: rescued.date ? new Date(rescued.date) : undefined,
+          extractedVendor: vendor ?? undefined,
+          // Rebuilt from the settled vendor, so a name corrected from history is
+          // the one the owner sees rather than the raw OCR reading.
+          extractedDescription: vendor ? `Purchase from ${vendor}` : rescued.description ?? undefined,
+          extractedAmount: rescued.amount ?? undefined,
+          rawText: combinedText,
+          visionAssisted: rescued.visionAssisted,
+          // Null on a vision-assisted read: the figure would describe text
+          // tesseract could not make sense of, which is not what it looks like.
+          ocrConfidence: rescued.visionAssisted ? null : worstPageConfidence,
+          // Per field, for calibration. The whole-scan figure above cannot say
+          // whether confidence predicts a wrong answer for the VENDOR
+          // specifically, because one number per scan says nothing about which
+          // field on it was doubtful. Same null rule, and for the same reason.
+          vendorConfidence: rescued.visionAssisted ? null : confidenceForValue(combinedLines, vendor),
+          amountConfidence: rescued.visionAssisted
+            ? null
+            : confidenceForValue(combinedLines, rescued.amount?.toFixed(2) ?? null),
+          extractorVersions: extractorVersions as Prisma.InputJsonValue,
+          // An empty evidence object is left as NULL, not {} — "nothing could
+          // be located" and "never assessed" read the same to a client, and
+          // null is the established spelling for the second.
+          fieldEvidence: Object.keys(fieldEvidence).length > 0 ? (fieldEvidence as Prisma.InputJsonValue) : undefined,
+          // Always an array, even when empty: [] means "assessed, nothing to
+          // warn about", which is a different statement from a legacy null.
+          warnings: warnings as unknown as Prisma.InputJsonValue,
+          receiptLikelihood: receiptLikelihood as unknown as Prisma.InputJsonValue,
+          processingErrorCode:
+            gate.code === "PROVIDER_OK" || gate.code === "PROVIDER_NOT_REQUESTED" ? null : gate.code,
+        },
+        pages: ocrResults.map((result, index) => ({
+          pageNumber: input.pages[index]!.pageNumber,
+          data: {
+            rawText: result.text,
+            ocrConfidence: overallConfidence(result),
+            originalRawText: originalOcrResults[index]!.text,
+            originalOcrConfidence: overallConfidence(originalOcrResults[index]!),
+            ocrSource: ocrSources[index]!,
+            processedRawText: processedOcrResults[index]?.text ?? null,
+            processedOcrConfidence: processedOcrResults[index]
+              ? overallConfidence(processedOcrResults[index]!)
+              : null,
+            sharpness: pageQualities[index]?.sharpness ?? null,
+            brightness: pageQualities[index]?.brightness ?? null,
+            tooBlurredToTrust: pageQualities[index]?.tooBlurredToTrust ?? null,
+          },
+        })),
+        items: {
+          parsedItems: rescued.items,
+          vendor,
+          extractedByVision: rescued.itemsFromVision,
+          amountConfidences: rescued.itemsFromVision
+            ? []
+            : rescued.items.map((item) => confidenceForValue(combinedLines, item.amount.toFixed(2))),
+          // Vision items carry the provider's page evidence; OCR items are
+          // located in the page text. Unverifiable items remain evidence-less.
+          itemEvidence,
+        },
       },
-    });
-    if (completed.count !== 1) throw new ReceiptLeaseLostError(`Receipt scan ${scanId} lease was reclaimed`);
+    );
   } catch (err) {
     // A newer worker owns the row now. The stale worker must not overwrite its
     // state with either a success or failure from an expired lease.
     if (err instanceof ReceiptLeaseLostError) return;
-    logger.error({ err }, `[receipt-scan] processing failed for scan=${scanId}`);
-    await recordProcessingFailure(scanId, attempt, err);
+    const failure = safeProcessingFailure(err);
+    logger.error({ scanId, code: failure.code }, "receipt scan processing failed");
+    await recordProcessingFailure(scanId, attempt, failure);
   } finally {
     clearInterval(heartbeatTimer);
   }
 }
 
-async function recordProcessingFailure(scanId: number, attempt: number, err: unknown): Promise<void> {
+async function recordProcessingFailure(scanId: number, attempt: number, failure: ReceiptProcessingFailure): Promise<void> {
   const retryable = attempt < MAX_PROCESSING_ATTEMPTS;
   await prisma.receiptScan.updateMany({
     where: { id: scanId, processingWorkerId: RECEIPT_WORKER_ID, processingAttemptCount: attempt },
@@ -475,7 +567,8 @@ async function recordProcessingFailure(scanId: number, attempt: number, err: unk
       nextProcessingAttemptAt: new Date(
         Date.now() + RETRY_DELAYS_MS[Math.min(attempt - 1, RETRY_DELAYS_MS.length - 1)]!,
       ),
-      processingError: (err instanceof Error ? err.message : "The receipt could not be read").slice(0, 500),
+      processingError: failure.publicMessage,
+      processingErrorCode: failure.code,
     },
   });
 }
@@ -493,33 +586,62 @@ async function heartbeatScan(scanId: number, attempt: number): Promise<void> {
   if (updated.count !== 1) throw new ReceiptLeaseLostError(`Receipt scan ${scanId} lease was reclaimed`);
 }
 
-async function storedInput(scanId: number, attempt: number): Promise<UploadInput> {
+function storedReceiptMimeType(path: string): "image/jpeg" | "image/png" | "image/webp" | null {
+  const extension = path.split(".").pop()?.toLowerCase();
+  if (extension === "png") return "image/png";
+  if (extension === "webp") return "image/webp";
+  if (extension === "jpg" || extension === "jpeg") return "image/jpeg";
+  return null;
+}
+
+async function inspectStoredEvidence(path: string): Promise<StoredEvidence> {
+  const expectedMime = storedReceiptMimeType(path);
+  if (!expectedMime) {
+    throw new ReceiptProcessingFailure("RECEIPT_EVIDENCE_INVALID", "Stored receipt evidence could not be validated.");
+  }
+  let info: ReceiptImageObjectInfo;
+  try {
+    info = await inspectReceiptImage(path);
+  } catch {
+    throw new ReceiptProcessingFailure(
+      "RECEIPT_EVIDENCE_UNAVAILABLE",
+      "Stored receipt evidence is temporarily unavailable.",
+    );
+  }
+  if (info.mimetype !== expectedMime || info.sizeBytes > RECEIPT_UPLOAD_MAX_OBJECT_BYTES) {
+    throw new ReceiptProcessingFailure("RECEIPT_EVIDENCE_INVALID", "Stored receipt evidence could not be validated.");
+  }
+  return { path, info };
+}
+
+async function storedInput(scanId: number, attempt: number): Promise<StoredInput> {
   const scan = await prisma.receiptScan.findUnique({
     where: { id: scanId },
     include: { pages: { orderBy: { pageNumber: "asc" } } },
   });
-  if (!scan?.businessProfileId || scan.pages.length === 0) {
-    throw new Error("The stored receipt pages are unavailable");
+  if (
+    !scan?.businessProfileId ||
+    scan.pages.length === 0 ||
+    scan.pages.length > RECEIPT_UPLOAD_MAX_LOGICAL_PAGES ||
+    scan.pages.some((page, index) => page.pageNumber !== index + 1)
+  ) {
+    throw new ReceiptProcessingFailure("RECEIPT_EVIDENCE_INVALID", "Stored receipt evidence could not be validated.");
   }
-  const pages: UploadInput["pages"] = [];
+  const pages: StoredPage[] = [];
+  let aggregateBytes = 0;
   for (const page of scan.pages) {
-    const ext = page.imageFile.split(".").pop()?.toLowerCase();
-    const mimetype = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+    const original = await inspectStoredEvidence(page.imageFile);
+    const processed = page.processedImageFile ? await inspectStoredEvidence(page.processedImageFile) : null;
+    aggregateBytes += original.info.sizeBytes + (processed?.info.sizeBytes ?? 0);
+    if (aggregateBytes > RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES) {
+      throw new ReceiptProcessingFailure("RECEIPT_EVIDENCE_INVALID", "Stored receipt evidence could not be validated.");
+    }
     pages.push({
-      buffer: await downloadReceiptImage(page.imageFile),
-      mimetype,
-      originalname: `page-${page.pageNumber}.${ext ?? "jpg"}`,
-      ...(page.processedImageFile
-        ? {
-            processed: {
-              buffer: await downloadReceiptImage(page.processedImageFile),
-              mimetype: page.processedImageFile.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg",
-              originalname: `page-${page.pageNumber}-processed.${page.processedImageFile.split(".").pop() ?? "jpg"}`,
-            },
-          }
-        : {}),
-      ...((page.captureMetadata as UploadInput["pages"][number]["metadata"] | null)
-        ? { metadata: page.captureMetadata as UploadInput["pages"][number]["metadata"] }
+      pageNumber: page.pageNumber,
+      original,
+      processed,
+      ...((page.captureMetadata as ReceiptCaptureMetadata | null)
+        ? { metadata: page.captureMetadata as ReceiptCaptureMetadata }
         : {}),
     });
     await heartbeatScan(scanId, attempt);
@@ -528,7 +650,7 @@ async function storedInput(scanId: number, attempt: number): Promise<UploadInput
 }
 
 /** Atomically lease one eligible scan. The conditional update is the race guard. */
-async function claimScan(scanId?: number): Promise<{ id: number; attempt: number } | null> {
+async function claimScan(): Promise<{ id: number; attempt: number } | null> {
   const now = new Date();
   const staleBefore = new Date(now.getTime() - RECEIPT_LEASE_MS);
   const eligible: Prisma.ReceiptScanWhereInput = {
@@ -537,7 +659,7 @@ async function claimScan(scanId?: number): Promise<{ id: number; attempt: number
     OR: [{ processingWorkerId: null }, { processingHeartbeatAt: null }, { processingHeartbeatAt: { lt: staleBefore } }],
   };
   const candidate = await prisma.receiptScan.findFirst({
-    where: { ...(scanId ? { id: scanId } : {}), ...eligible },
+    where: eligible,
     orderBy: [{ nextProcessingAttemptAt: "asc" }, { id: "asc" }],
     select: { id: true, processingAttemptCount: true },
   });
@@ -554,64 +676,24 @@ async function claimScan(scanId?: number): Promise<{ id: number; attempt: number
   return claimed.count === 1 ? { id: candidate.id, attempt: candidate.processingAttemptCount + 1 } : null;
 }
 
-async function claimAndProcessScan(scanId?: number, initialInput?: UploadInput): Promise<boolean> {
-  const claimed = await claimScan(scanId);
+async function claimAndProcessScan(): Promise<boolean> {
+  const claimed = await claimScan();
   if (!claimed) return false;
-  let input: UploadInput;
+  let input: StoredInput;
   try {
-    input = initialInput ?? (await storedInput(claimed.id, claimed.attempt));
+    input = await storedInput(claimed.id, claimed.attempt);
   } catch (err) {
     if (err instanceof ReceiptLeaseLostError) return true;
-    logger.error({ err }, `[receipt-scan] could not restore scan=${claimed.id} from Storage`);
-    await recordProcessingFailure(claimed.id, claimed.attempt, err);
+    const failure = safeProcessingFailure(err);
+    logger.error({ scanId: claimed.id, code: failure.code }, "receipt scan evidence restore failed");
+    await recordProcessingFailure(claimed.id, claimed.attempt, failure);
     return true;
   }
   await processScan(claimed.id, input, claimed.attempt);
   return true;
 }
 
-/** Runs at most one durable job; the server scheduler calls this repeatedly. */
+/** Runs at most one durable job; the dedicated worker calls this repeatedly. */
 export async function runReceiptWorkerOnce(): Promise<boolean> {
   return claimAndProcessScan();
-}
-
-/** Owner-triggered recovery after automatic attempts have been exhausted. */
-export async function retryScan(userId: number, scanId: number) {
-  const scan = await prisma.receiptScan.findFirst({
-    where: { id: scanId, businessProfile: { userId } },
-    select: { id: true, processingStatus: true },
-  });
-  if (!scan) throw new ApiError(404, "Receipt scan not found");
-  if (scan.processingStatus !== "Failed") throw new ApiError(409, "Only a failed receipt scan can be retried");
-  await prisma.receiptScan.update({
-    where: { id: scanId },
-    data: {
-      processingStatus: "Processing",
-      processingError: null,
-      processingAttemptCount: 0,
-      processingWorkerId: null,
-      processingHeartbeatAt: null,
-      nextProcessingAttemptAt: new Date(),
-    },
-  });
-  void claimAndProcessScan(scanId).catch((err) => logger.error({ err }, `[receipt-scan] manual retry failed scan=${scanId}`));
-  return getScan(userId, scanId);
-}
-
-/**
- * One scan as it currently stands, for the client polling after upload.
- *
- * Ownership is enforced through the scan's own business profile, and a scan
- * belonging to someone else is reported as 404 rather than 403 — the same
- * non-disclosure rule requireOwnedBusinessProfile follows everywhere else.
- */
-export async function getScan(userId: number, scanId: number) {
-  const scan = await prisma.receiptScan.findFirst({
-    where: { id: scanId, businessProfile: { userId } },
-    include: { items: { orderBy: { lineNumber: "asc" } }, pages: true },
-  });
-  if (!scan) {
-    throw new ApiError(404, "Receipt scan not found");
-  }
-  return toDTO(scan, scan.items, scan.pages);
 }

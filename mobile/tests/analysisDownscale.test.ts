@@ -7,6 +7,7 @@ const src = (...parts: string[]) => readFileSync(join(__dirname, "..", "src", ..
 const CAMERA = src("components", "receipt-camera", "ReceiptCamera.tsx");
 const SCAN = src("screens", "records", "ScanReceiptScreen.tsx");
 const HELPER = src("lib", "analysisImage.ts");
+const UPLOAD_CONTRACT = src("lib", "receiptUploadContract.ts");
 
 /**
  * PERF-003. Full-resolution photographs were being uploaded to endpoints that
@@ -66,13 +67,14 @@ describe("the kept image stays at full resolution", () => {
   it("crops from the untouched original", () => {
     // applyCrop builds its form from `selected.originalUri`, never from an
     // analysis copy.
-    expect(CAMERA).toMatch(/const form = formFor\(selected\.originalUri\); form\.append\('corners'/);
+    expect(CAMERA).toMatch(/const form = formFor\(selected\.originalUri, selected\.originalMimeType \?\? 'image\/jpeg'\); form\.append\('corners'/);
     expect(CAMERA).not.toMatch(/analysisImageUri[\s\S]{0,400}?'\/records\/receipts\/transform'/);
   });
 
   it("uploads the captured page for scanning, not the quality-check copy", () => {
-    expect(SCAN).toMatch(/form\.append\("files", \{ uri: p\.uri,/);
-    expect(SCAN).toMatch(/uri: page\.originalUri!,/);
+    expect(SCAN).toMatch(/for \(const object of inspection\.objects\)[\s\S]{0,400}uri: object\.uri/);
+    expect(UPLOAD_CONTRACT).toMatch(/variant: "processed",\s*uri: page\.uri/);
+    expect(UPLOAD_CONTRACT).toMatch(/variant: "original",\s*uri: page\.originalUri \?\? page\.uri/);
   });
 
   it("downscales only the two inspect-only endpoints", () => {

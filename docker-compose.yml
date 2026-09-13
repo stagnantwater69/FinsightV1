@@ -22,7 +22,17 @@ services:
     #     - "127.0.0.1:4000:4000"
     expose:
       - "4000"
+    environment:
+      RECEIPT_UPLOAD_TEMP_ROOT: /run/finsight/receipt-uploads
+    # One owner can have one full upload and one retry in flight. 192 MiB
+    # holds those two 80 MiB aggregates plus filesystem overhead, then fails
+    # closed instead of consuming the host disk. This is container-private
+    # tmpfs, not a bind or named host volume, and disappears on restart.
+    tmpfs:
+      - /run/finsight/receipt-uploads:rw,noexec,nosuid,nodev,size=201326592,mode=0700,uid=1000,gid=1000
     restart: unless-stopped
+    # Node allows 10 seconds to drain HTTP; leave the wrapper time to reap it.
+    stop_grace_period: 15s
     healthcheck:
       # `restart: unless-stopped` only catches a process that has EXITED. The
       # failure that actually happens is a process still running and no longer
@@ -58,6 +68,10 @@ services:
       context: ./backend
       target: worker
     env_file: ./backend/.env
+    environment:
+      RECEIPT_WORKER_HEALTH_DIR: /run/finsight/worker-health
+    tmpfs:
+      - /run/finsight/worker-health:rw,noexec,nosuid,nodev,size=1048576,mode=0700,uid=1000,gid=1000
     restart: unless-stopped
     stop_grace_period: 35s
 

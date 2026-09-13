@@ -22,7 +22,6 @@ test("upload, review optional details, correct and save a receipt across web lay
     await route.fulfill({ json: { ...receipt, processingStatus: "Processing" } });
   });
   await page.route("**/records/receipts/700", async (route) => { await route.fulfill({ json: receipt }); });
-  await page.route("**/ai/suggest-category", async (route) => { await route.fulfill({ json: { suggestion: { categoryId: 100, categoryName: "Inventory", source: "history" } } }); });
   await page.route("**/records/receipts/700/confirm", async (route) => {
     saved = route.request().postDataJSON();
     await route.fulfill({ json: [{ id: 701 }] });
@@ -42,8 +41,7 @@ test("upload, review optional details, correct and save a receipt across web lay
   await chooseUpload(page, "Choose photos", { name: "synthetic-receipt.png", mimeType: "image/png", buffer: Buffer.from(dataUrl.split(",")[1]!, "base64") });
   await page.getByRole("button", { name: "Scan receipt", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Check what FinSight read" })).toBeVisible();
-  await expect(page.getByText(/Suggested — check it$/)).toBeVisible();
-  await expect(page.getByText(/AI-suggested — check it/)).toHaveCount(0);
+  await expect(page.locator("#category")).toHaveValue("");
   await expect(page.getByText("Check the date before saving.")).toBeVisible();
   await expect(page.getByText("Faded print near the receipt edge.")).toBeHidden();
   const detailsButton = page.getByRole("button", { name: "Show more", exact: true }).first();

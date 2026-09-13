@@ -9,12 +9,69 @@ export const STAGE_LABELS: Record<ScanStage, string> = {
   categorising: "Categorising",
 };
 
-export const ACCEPTED_TYPES = "image/jpeg,image/png,image/webp";
-export const MAX_FILE_BYTES = 10 * 1024 * 1024;
-/** Matches the server's own MAX_PAGES (receiptScan.service.ts) — kept in the
- * comment rather than imported, since the client has no access to backend
- * source; the server is still the one place that actually enforces it. */
-export const MAX_RECEIPT_FILES = 8;
+export const RECEIPT_UPLOAD_MAX_OBJECT_BYTES = 10 * 1024 * 1024;
+export const RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES = 80 * 1024 * 1024;
+export const RECEIPT_UPLOAD_MAX_LOGICAL_PAGES = 8;
+export const RECEIPT_UPLOAD_ALLOWED_MIME_TYPES = ["image/jpeg", "image/png", "image/webp"] as const;
+
+export const ACCEPTED_TYPES = RECEIPT_UPLOAD_ALLOWED_MIME_TYPES.join(",");
+export const MAX_FILE_BYTES = RECEIPT_UPLOAD_MAX_OBJECT_BYTES;
+export const MAX_RECEIPT_FILES = RECEIPT_UPLOAD_MAX_LOGICAL_PAGES;
+
+export type ReceiptUploadFile = Pick<File, "name" | "size" | "type" | "lastModified">;
+export type ReceiptUploadFileIssue = "EMPTY" | "UNSUPPORTED_TYPE" | "TOO_LARGE";
+
+export function receiptUploadFileIssue(file: ReceiptUploadFile): ReceiptUploadFileIssue | null {
+  if (file.size === 0) return "EMPTY";
+  if (!RECEIPT_UPLOAD_ALLOWED_MIME_TYPES.some((allowed) => allowed === file.type.toLowerCase())) {
+    return "UNSUPPORTED_TYPE";
+  }
+  if (file.size > RECEIPT_UPLOAD_MAX_OBJECT_BYTES) return "TOO_LARGE";
+  return null;
+}
+
+export function receiptUploadBytes(files: readonly Pick<ReceiptUploadFile, "size">[]): number {
+  return files.reduce((total, file) => total + file.size, 0);
+}
+
+export function exceedsReceiptUploadAggregateLimit(
+  files: readonly Pick<ReceiptUploadFile, "size">[],
+): boolean {
+  return receiptUploadBytes(files) > RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES;
+}
+
+export function receiptUploadSelectionError(
+  selected: readonly ReceiptUploadFile[],
+  incoming: readonly ReceiptUploadFile[],
+): string | null {
+  const empty = incoming.find((file) => receiptUploadFileIssue(file) === "EMPTY");
+  if (empty) return `${empty.name} is empty. Choose another photo.`;
+
+  const seen = new Set(selected.map((file) => `${file.name}\u0000${file.size}\u0000${file.lastModified}`));
+  for (const file of incoming) {
+    const key = `${file.name}\u0000${file.size}\u0000${file.lastModified}`;
+    if (seen.has(key)) return "That photo is already selected. Choose a different photo.";
+    seen.add(key);
+  }
+
+  const combined = [...selected, ...incoming];
+  if (combined.length > RECEIPT_UPLOAD_MAX_LOGICAL_PAGES) {
+    const extra = combined.length - RECEIPT_UPLOAD_MAX_LOGICAL_PAGES;
+    return `A receipt can have at most ${RECEIPT_UPLOAD_MAX_LOGICAL_PAGES} photos. Remove ${extra} ${extra === 1 ? "photo" : "photos"}.`;
+  }
+
+  const badType = incoming.find((file) => receiptUploadFileIssue(file) === "UNSUPPORTED_TYPE");
+  if (badType) return `${badType.name} is not an accepted photo. Choose a JPEG, PNG or WEBP image.`;
+
+  const tooBig = incoming.find((file) => receiptUploadFileIssue(file) === "TOO_LARGE");
+  if (tooBig) return `${tooBig.name} is larger than 10 MiB. Choose a smaller photo.`;
+
+  if (exceedsReceiptUploadAggregateLimit(combined)) {
+    return "The selected photos total more than 80 MiB. Remove a photo or choose smaller files.";
+  }
+
+  return null;
+}
 
 /**
  * How often, and for how long, to ask whether a scan has finished reading.

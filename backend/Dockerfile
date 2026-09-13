@@ -51,7 +51,32 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends openssl \
     && rm -rf /var/lib/apt/lists/*
 
-ENV NODE_ENV=production
+ENV NODE_ENV=production \
+    TESSERACT_LANG=eng \
+    TESSERACT_LANG_PATH=/app/tessdata
+
+# Keep traineddata inside the image and outside the process-writable tree. The
+# checksum is a build gate, not metadata: changing the bytes without updating
+# the reviewed pin fails the production build. The OCR service reads only the
+# explicit TESSERACT_LANG_PATH with runtime caching and downloads disabled.
+RUN install -d -o root -g root -m 0555 /app/tessdata
+COPY eng.traineddata /app/tessdata/eng.traineddata
+COPY docker/tesseract-entrypoint.sh /usr/local/bin/finsight-tesseract-preflight
+COPY docker/receipt-upload-orphan-sweep.sh /usr/local/bin/finsight-receipt-upload-sweeper
+COPY docker/api-entrypoint.sh /usr/local/bin/finsight-api-entrypoint
+COPY docker/worker-entrypoint.sh /usr/local/bin/finsight-worker-entrypoint
+COPY docker/worker-readiness.sh /usr/local/bin/finsight-worker-readiness
+RUN printf '%s  %s\n' \
+      '5dc5d8d640a212c9d6184921ba103b186f50e0fed9ee716c53e6b312b400d747' \
+      'eng.traineddata' > /app/tessdata/SHA256SUMS \
+    && (cd /app/tessdata && sha256sum -c SHA256SUMS) \
+    && chmod 0444 /app/tessdata/eng.traineddata /app/tessdata/SHA256SUMS \
+    && chmod 0555 /app/tessdata \
+      /usr/local/bin/finsight-tesseract-preflight \
+      /usr/local/bin/finsight-receipt-upload-sweeper \
+      /usr/local/bin/finsight-api-entrypoint \
+      /usr/local/bin/finsight-worker-entrypoint \
+      /usr/local/bin/finsight-worker-readiness
 
 # Owned by `node`, the unprivileged user the base image already ships. Set on
 # COPY rather than with a later `chown -R`, which would duplicate every file
@@ -74,14 +99,15 @@ EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:4000/api/v1/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
-# The API process. The `worker` target below is the same image with no
-# HEALTHCHECK (it has no HTTP endpoint to probe) and a different CMD — the
-# background queue consumers, deployed and scaled as their own service. See
-# src/worker.ts.
+# The API and worker targets share this filesystem. The worker replaces this
+# HTTP healthcheck with its own process, heartbeat, and language-data probe.
+ENTRYPOINT ["/usr/local/bin/finsight-api-entrypoint"]
 CMD ["node", "dist/server.js"]
 
 FROM runtime AS worker
-HEALTHCHECK NONE
+ENTRYPOINT ["/usr/local/bin/finsight-worker-entrypoint"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD ["/usr/local/bin/finsight-worker-readiness"]
 CMD ["node", "dist/worker.js"]
 
 # Docker resolves an untargeted build to the LAST stage in the file, and

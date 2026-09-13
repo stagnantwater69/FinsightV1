@@ -1,10 +1,15 @@
 import { Router } from "express";
 import * as receiptScanController from "../controllers/receiptScan.controller";
 import { requireAuth } from "../middleware/auth.middleware";
-import { uploadReceiptImage } from "../middleware/upload.middleware";
+import {
+  prepareReceiptUploadTemporaryFiles,
+  uploadReceiptEvidence,
+  uploadReceiptImage,
+} from "../middleware/upload.middleware";
 import { LIMITS, rateLimit } from "../middleware/rateLimit.middleware";
 import { asyncHandler } from "../lib/asyncHandler";
-import { MAX_PAGES } from "../services/receiptScan.service";
+import { RECEIPT_UPLOAD_MAX_LOGICAL_PAGES } from "../lib/receiptUploadContract";
+import * as receiptProviderConsentController from "../controllers/receiptProviderConsent.controller";
 
 export const receiptRouter = Router();
 
@@ -14,22 +19,37 @@ receiptRouter.use((_req, res, next) => {
   next();
 });
 
+receiptRouter.get(
+  "/provider-consent/:businessProfileId",
+  asyncHandler(receiptProviderConsentController.show),
+);
+receiptRouter.put(
+  "/provider-consent/:businessProfileId",
+  rateLimit(LIMITS.PROVIDER_CONSENT_WRITE),
+  asyncHandler(receiptProviderConsentController.grant),
+);
+receiptRouter.delete(
+  "/provider-consent/:businessProfileId",
+  rateLimit(LIMITS.PROVIDER_CONSENT_WRITE),
+  asyncHandler(receiptProviderConsentController.revoke),
+);
+
 /*
  * The most expensive request in the product: OCR per page, then possibly a
  * vision model re-read, then the categoriser. Limited BEFORE multer so a
  * rejected burst does not even pay to parse the uploaded images off the wire.
  *
- * `.array("files", MAX_PAGES)` accepts one photo the same way it always has —
- * a single-element array — or up to MAX_PAGES for a long receipt. There is no
- * separate single-file route to keep in sync with this one.
+ * The full upload uses request-owned temporary files. Capture-only helpers
+ * below keep their existing single-image memory path.
  */
 receiptRouter.post(
   "/",
   rateLimit(LIMITS.SCAN_RECEIPT_BURST),
   rateLimit(LIMITS.SCAN_RECEIPT_HOURLY),
-  uploadReceiptImage.fields([
-    { name: "files", maxCount: MAX_PAGES },
-    { name: "originalFiles", maxCount: MAX_PAGES },
+  prepareReceiptUploadTemporaryFiles,
+  uploadReceiptEvidence.fields([
+    { name: "files", maxCount: RECEIPT_UPLOAD_MAX_LOGICAL_PAGES },
+    { name: "originalFiles", maxCount: RECEIPT_UPLOAD_MAX_LOGICAL_PAGES },
   ]),
   asyncHandler(receiptScanController.upload),
 );

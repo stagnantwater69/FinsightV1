@@ -132,7 +132,12 @@ function CustomReceiptCamera({ initialSections = [], onCancel, onDone, handleRef
   }
   function put(next: ReceiptSection[]) { dirty.current = true; setSections(next); }
   function updateSection(next: ReceiptSection) { put(sections.map(s => s.localId === next.localId ? next : s)); }
-  const formFor = (uri: string) => { const form = new FormData(); form.append('file', { uri, name: 'receipt.jpg', type: 'image/jpeg' } as any); return form; };
+  const formFor = (uri: string, mimeType: string) => {
+    const extension = mimeType === 'image/png' ? 'png' : mimeType === 'image/webp' ? 'webp' : 'jpg';
+    const form = new FormData();
+    form.append('file', { uri, name: `receipt.${extension}`, type: mimeType } as any);
+    return form;
+  };
 
   async function capture() {
     if (!camera.current || !ready || !active || full) return;
@@ -181,7 +186,7 @@ function CustomReceiptCamera({ initialSections = [], onCancel, onDone, handleRef
     await run(async (isCurrent, signal) => {
       const uri = await analysisImageUri(selected.processedUri, selected.width, selected.height);
       if (!isCurrent()) return;
-      const quality = await api.upload<SectionQuality>('/records/receipts/quality-check', formFor(uri), signal);
+      const quality = await api.upload<SectionQuality>('/records/receipts/quality-check', formFor(uri, uri === selected.processedUri ? selected.processedMimeType ?? 'image/jpeg' : 'image/jpeg'), signal);
       if (isCurrent()) updateSection({ ...selected, quality });
     });
   }
@@ -190,7 +195,7 @@ function CustomReceiptCamera({ initialSections = [], onCancel, onDone, handleRef
     await run(async (isCurrent) => {
       const result = await Manipulator.manipulateAsync(selected.processedUri, [{ rotate: 90 }], { compress: CAPTURE_QUALITY, format: Manipulator.SaveFormat.JPEG });
       if (isCurrent()) updateSection({ ...selected, processedUri: result.uri, width: result.width, height: result.height,
-        processingMode: 'manual-crop', transformVersion: `${selected.transformVersion ?? 'original'}-r90`.slice(-80), quality: null });
+        processedMimeType: 'image/jpeg', processingMode: 'manual-crop', transformVersion: `${selected.transformVersion ?? 'original'}-r90`.slice(-80), quality: null });
     });
   }
   async function detect(): Promise<Corners | null> {
@@ -206,7 +211,7 @@ function CustomReceiptCamera({ initialSections = [], onCancel, onDone, handleRef
       const height = selected.originalHeight ?? selected.height;
       const uri = await analysisImageUri(selected.originalUri, width, height);
       if (!isCurrent()) return;
-      const result = await api.upload<{ corners: Corners | null; confidence: number }>('/records/receipts/detect-edges', formFor(uri), signal);
+      const result = await api.upload<{ corners: Corners | null; confidence: number }>('/records/receipts/detect-edges', formFor(uri, uri === selected.originalUri ? selected.originalMimeType ?? 'image/jpeg' : 'image/jpeg'), signal);
       if (!isCurrent()) return;
       corners = cornersFromFractions(result.corners, width, height);
       if (!corners) setError('No clear receipt boundary found. Place the corners manually.');
@@ -215,7 +220,7 @@ function CustomReceiptCamera({ initialSections = [], onCancel, onDone, handleRef
   async function applyCrop(corners: Corners) {
     if (!selected) return;
     await run(async (isCurrent, signal) => {
-      const form = formFor(selected.originalUri); form.append('corners', JSON.stringify(corners));
+      const form = formFor(selected.originalUri, selected.originalMimeType ?? 'image/jpeg'); form.append('corners', JSON.stringify(corners));
       // CropEditor already refuses to send a quad the server would reject (see
       // lib/cropQuad.ts), so a 400 here is drift or an unusable photo — either
       // way the owner needs an instruction, not the endpoint's own wording.
@@ -226,7 +231,7 @@ function CustomReceiptCamera({ initialSections = [], onCancel, onDone, handleRef
       const image = await Manipulator.manipulateAsync(`data:image/jpeg;base64,${result.base64}`, [], { format: Manipulator.SaveFormat.JPEG, compress: CAPTURE_QUALITY });
       if (!isCurrent()) return;
       updateSection({ ...selected, processedUri: image.uri, width: image.width, height: image.height,
-        cropCorners: corners, processingMode: 'manual-crop', transformVersion: result.transformVersion, quality: null });
+        processedMimeType: 'image/jpeg', cropCorners: corners, processingMode: 'manual-crop', transformVersion: result.transformVersion, quality: null });
       setCropping(false);
     });
   }
@@ -346,7 +351,7 @@ function CustomReceiptCamera({ initialSections = [], onCancel, onDone, handleRef
           <View style={styles.row}>
             <CameraAction label="Retake" icon="camera-outline" onPress={() => { nativeAccepted.current = false; setMode(selected.captureMode ?? 'standard'); setCommand(c => ({ id: c.id + 1, type: 'reset' })); setReplaceId(selected.localId); setSelectedId(null); setReady(false); }} disabled={busy} />
             <CameraAction label="Remove" icon="trash-outline" onPress={() => { nativeAccepted.current = false; setCommand(c => ({ id: c.id + 1, type: 'reset' })); put(removeSessionSection(sections, selected.localId)); setSelectedId(null); setReady(false); }} disabled={busy} />
-            {selected.processedUri !== selected.originalUri ? <CameraAction label={selectedCustomScan ? 'Use unenhanced scan' : 'Use original'} onPress={() => updateSection({ ...selected, processedUri: selected.originalUri, width: selected.originalWidth ?? selected.width, height: selected.originalHeight ?? selected.height, quality: null, cropCorners: undefined, processingMode: 'original', transformVersion: selectedCustomScan ? selected.captureMode === 'long' ? 'custom-panorama-v1' : 'custom-frame-v1' : undefined })} disabled={busy} /> : null}
+            {selected.processedUri !== selected.originalUri ? <CameraAction label={selectedCustomScan ? 'Use unenhanced scan' : 'Use original'} onPress={() => updateSection({ ...selected, processedUri: selected.originalUri, processedMimeType: selected.originalMimeType ?? 'image/jpeg', width: selected.originalWidth ?? selected.width, height: selected.originalHeight ?? selected.height, quality: null, cropCorners: undefined, processingMode: 'original', transformVersion: selectedCustomScan ? selected.captureMode === 'long' ? 'custom-panorama-v1' : 'custom-frame-v1' : undefined })} disabled={busy} /> : null}
           </View>
           {sections.length > 1 ? <View style={styles.row}>
             <CameraAction label="Move earlier" icon="arrow-back" onPress={() => put(moveSessionSection(sections, selected.localId, -1))} disabled={busy || sections[0]?.localId === selected.localId} />

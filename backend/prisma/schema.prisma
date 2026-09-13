@@ -281,6 +281,71 @@ enum AccountDeletionStage {
   @@map("AccountDeletionStage")
 }
 
+enum ExternalProcessingDataClass {
+  RECEIPT_IMAGE
+  DERIVED_RECEIPT_IMAGE
+
+  @@map("ExternalProcessingDataClass")
+}
+
+enum ExternalProcessingPurpose {
+  RECEIPT_EXTRACTION
+
+  @@map("ExternalProcessingPurpose")
+}
+
+enum ExternalProviderBudgetScope {
+  RESOURCE
+  BUSINESS
+
+  @@map("ExternalProviderBudgetScope")
+}
+
+enum ExternalProviderUnitType {
+  PAGE
+  DOCUMENT
+  IMAGE_FEATURE
+
+  @@map("ExternalProviderUnitType")
+}
+
+enum ExternalProviderDispatchStatus {
+  RESERVED
+  SUBMITTED
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  AMBIGUOUS
+
+  @@map("ExternalProviderDispatchStatus")
+}
+
+enum ReceiptPurgeReason {
+  OWNER_REQUEST
+  ABANDONED_SCAN
+  ACCOUNT_DELETION
+
+  @@map("ReceiptPurgeReason")
+}
+
+enum ReceiptPurgeStatus {
+  PENDING
+  PROCESSING
+  RETRY
+  COMPLETE
+  FAILED
+
+  @@map("ReceiptPurgeStatus")
+}
+
+enum ReceiptPurgeStage {
+  STORAGE
+  DATABASE
+  COMPLETE
+
+  @@map("ReceiptPurgeStage")
+}
+
 // [ADDED] Owner-controlled cost-behavior classification for
 // docs/EXPENSE-REDUCTION-OPPORTUNITIES-PLAN.md §5.2 (deferred in v1, added
 // once validated as useful post-UAT). UNCLASSIFIED is the default for every
@@ -460,7 +525,12 @@ model BusinessProfile {
   recoveryPlans                     RecoveryPlan[]
   recoveryNotificationPreference    RecoveryNotificationPreference?
   recoveryNotificationTriggerStates RecoveryNotificationTriggerState[]
+  externalProcessingConsents        ExternalProcessingConsent[]
+  externalProviderBudgets           ExternalProviderBudget[]
+  externalProviderDispatches        ExternalProviderDispatch[]
+  receiptPurgeJobs                  ReceiptPurgeJob[]
 
+  @@unique([id, userId], map: "BusinessProfile_ID_User_ID_key")
   @@index([userId])
   @@map("BusinessProfile")
 }
@@ -757,6 +827,8 @@ model ReceiptScan {
   /// Why the read failed, for the owner. Null unless processingStatus is
   /// "Failed".
   processingError         String?   @map("ReceiptScan_ProcessingError") @db.VarChar(500)
+  /// Stable owner-safe code; processingError remains the matching safe message.
+  processingErrorCode     String?   @map("ReceiptScan_ProcessingErrorCode") @db.VarChar(64)
   /// Durable worker metadata. A worker owns a scan only while its heartbeat
   /// is fresh; after a crash another worker can safely reclaim the same row.
   processingAttemptCount  Int       @default(0) @map("ReceiptScan_ProcessingAttemptCount")
@@ -800,12 +872,15 @@ model ReceiptScan {
   receiptLikelihood       Json?     @map("ReceiptScan_ReceiptLikelihood")
   createdAt               DateTime  @default(now()) @map("ReceiptScan_CreatedAt")
 
-  businessProfile BusinessProfile?         @relation(fields: [businessProfileId], references: [id], onDelete: SetNull)
-  expenseRecords  ExpenseRecord[]
-  items           ReceiptScanItem[]
-  pages           ReceiptScanPage[]
-  corrections     ReceiptFieldCorrection[]
+  businessProfile    BusinessProfile?           @relation(fields: [businessProfileId], references: [id], onDelete: SetNull)
+  expenseRecords     ExpenseRecord[]
+  items              ReceiptScanItem[]
+  pages              ReceiptScanPage[]
+  corrections        ReceiptFieldCorrection[]
+  providerDispatches ExternalProviderDispatch[]
+  purgeJobs          ReceiptPurgeJob[]
 
+  @@unique([id, businessProfileId], map: "ReceiptScan_ID_BusinessProfile_ID_key")
   @@index([businessProfileId])
   // See the ExpenseRecord note on why this carries an explicit `map:` name.
   @@index([processingStatus, nextProcessingAttemptAt, processingHeartbeatAt], map: "ReceiptScan_ReceiptScan_ProcessingStatus_ReceiptScan_NextProces")
@@ -1347,6 +1422,149 @@ model RecoveryPlan {
 
   @@unique([businessProfileId, month], map: "RecoveryPlan_profile_month_key")
   @@map("RecoveryPlan")
+}
+
+/// One grant episode for a provider and business. Revocation closes the row;
+/// a later grant creates a new row so the consent presented at dispatch stays auditable.
+model ExternalProcessingConsent {
+  id                      Int                           @id @default(autoincrement()) @map("ExternalProcessingConsent_ID")
+  businessProfileId       Int                           @map("BusinessProfile_ID")
+  actorUserId             Int                           @map("User_ID")
+  provider                String                        @map("ExternalProcessingConsent_Provider") @db.VarChar(64)
+  policyVersion           String                        @map("ExternalProcessingConsent_PolicyVersion") @db.VarChar(64)
+  purpose                 ExternalProcessingPurpose     @map("ExternalProcessingConsent_Purpose")
+  allowedDataClasses      ExternalProcessingDataClass[] @map("ExternalProcessingConsent_AllowedDataClasses")
+  processingRegion        String                        @map("ExternalProcessingConsent_ProcessingRegion") @db.VarChar(64)
+  providerRetentionHours  Int                           @map("ExternalProcessingConsent_ProviderRetentionHours")
+  providerTrainingAllowed Boolean                       @default(false) @map("ExternalProcessingConsent_ProviderTrainingAllowed")
+  grantedAt               DateTime                      @default(now()) @map("ExternalProcessingConsent_GrantedAt")
+  revokedAt               DateTime?                     @map("ExternalProcessingConsent_RevokedAt")
+  createdAt               DateTime                      @default(now()) @map("ExternalProcessingConsent_CreatedAt")
+  updatedAt               DateTime                      @updatedAt @map("ExternalProcessingConsent_UpdatedAt")
+
+  businessProfile BusinessProfile            @relation(fields: [businessProfileId, actorUserId], references: [id, userId], onDelete: Cascade)
+  dispatches      ExternalProviderDispatch[]
+
+  @@unique([id, businessProfileId, provider], map: "ExternalProcessingConsent_ID_profile_provider_key")
+  @@index([businessProfileId, provider, revokedAt], map: "ExternalProcessingConsent_profile_provider_revoked_idx")
+  @@map("ExternalProcessingConsent")
+}
+
+/// Monthly provider units. RESOURCE rows guard the shared provider account;
+/// BUSINESS rows add an optional active-business ceiling.
+model ExternalProviderBudget {
+  id                Int                         @id @default(autoincrement()) @map("ExternalProviderBudget_ID")
+  businessProfileId Int?                        @map("BusinessProfile_ID")
+  scope             ExternalProviderBudgetScope @map("ExternalProviderBudget_Scope")
+  provider          String                      @map("ExternalProviderBudget_Provider") @db.VarChar(64)
+  unitType          ExternalProviderUnitType    @map("ExternalProviderBudget_UnitType")
+  cycleStart        DateTime                    @map("ExternalProviderBudget_CycleStart") @db.Date
+  cycleEnd          DateTime                    @map("ExternalProviderBudget_CycleEnd") @db.Date
+  limitUnits        Int                         @default(0) @map("ExternalProviderBudget_LimitUnits")
+  reservedUnits     Int                         @default(0) @map("ExternalProviderBudget_ReservedUnits")
+  usedUnits         Int                         @default(0) @map("ExternalProviderBudget_UsedUnits")
+  createdAt         DateTime                    @default(now()) @map("ExternalProviderBudget_CreatedAt")
+  updatedAt         DateTime                    @updatedAt @map("ExternalProviderBudget_UpdatedAt")
+
+  businessProfile    BusinessProfile?           @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+  resourceDispatches ExternalProviderDispatch[] @relation("ExternalProviderResourceBudget")
+  businessDispatches ExternalProviderDispatch[] @relation("ExternalProviderBusinessBudget")
+
+  @@unique([id, scope, provider, cycleStart, unitType], map: "ExternalProviderBudget_resource_relation_key")
+  @@unique([id, scope, businessProfileId, provider, cycleStart, unitType], map: "ExternalProviderBudget_business_relation_key")
+  @@index([provider, cycleStart, unitType], map: "ExternalProviderBudget_resource_cycle_idx")
+  @@index([businessProfileId, provider, cycleStart, unitType], map: "ExternalProviderBudget_business_cycle_idx")
+  @@map("ExternalProviderBudget")
+}
+
+/// Provider dispatch evidence contains identifiers, counts, versions, and
+/// outcomes only. Receipt content and object locations never belong here.
+model ExternalProviderDispatch {
+  id                           Int                            @id @default(autoincrement()) @map("ExternalProviderDispatch_ID")
+  businessProfileId            Int                            @map("BusinessProfile_ID")
+  receiptScanId                Int?                           @map("ReceiptScan_ID")
+  receiptScanBusinessProfileId Int?                           @map("ReceiptScan_BusinessProfile_ID")
+  consentId                    Int                            @map("ExternalProcessingConsent_ID")
+  resourceBudgetId             Int                            @map("ExternalProviderDispatch_ResourceBudget_ID")
+  resourceBudgetScope          ExternalProviderBudgetScope    @default(RESOURCE) @map("ExternalProviderDispatch_ResourceBudgetScope")
+  businessBudgetId             Int?                           @map("ExternalProviderDispatch_BusinessBudget_ID")
+  businessBudgetScope          ExternalProviderBudgetScope?   @map("ExternalProviderDispatch_BusinessBudgetScope")
+  businessBudgetProfileId      Int?                           @map("ExternalProviderDispatch_BusinessBudgetProfile_ID")
+  provider                     String                         @map("ExternalProviderDispatch_Provider") @db.VarChar(64)
+  providerVersion              String                         @map("ExternalProviderDispatch_ProviderVersion") @db.VarChar(96)
+  providerRegion               String                         @map("ExternalProviderDispatch_ProviderRegion") @db.VarChar(64)
+  unitType                     ExternalProviderUnitType       @map("ExternalProviderDispatch_UnitType")
+  cycleStart                   DateTime                       @map("ExternalProviderDispatch_CycleStart") @db.Date
+  reservationKeyHash           String                         @unique(map: "ExternalProviderDispatch_reservation_key") @map("ExternalProviderDispatch_ReservationKeyHash") @db.Char(64)
+  inputHash                    String                         @map("ExternalProviderDispatch_InputHash") @db.Char(64)
+  providerRequestIdHash        String?                        @map("ExternalProviderDispatch_ProviderRequestIDHash") @db.Char(64)
+  preprocessingVersion         String                         @map("ExternalProviderDispatch_PreprocessingVersion") @db.VarChar(64)
+  schemaVersion                String                         @map("ExternalProviderDispatch_SchemaVersion") @db.VarChar(64)
+  rescueReasonCode             String                         @map("ExternalProviderDispatch_RescueReasonCode") @db.VarChar(64)
+  reservedUnits                Int                            @map("ExternalProviderDispatch_ReservedUnits")
+  finalBillableUnits           Int?                           @map("ExternalProviderDispatch_FinalBillableUnits")
+  pageCount                    Int                            @map("ExternalProviderDispatch_PageCount")
+  documentCount                Int                            @default(1) @map("ExternalProviderDispatch_DocumentCount")
+  estimatedCostMicros          BigInt?                        @map("ExternalProviderDispatch_EstimatedCostMicros") @db.BigInt
+  latencyMs                    Int?                           @map("ExternalProviderDispatch_LatencyMs")
+  status                       ExternalProviderDispatchStatus @default(RESERVED) @map("ExternalProviderDispatch_Status")
+  outcomeCode                  String?                        @map("ExternalProviderDispatch_OutcomeCode") @db.VarChar(64)
+  submittedAt                  DateTime?                      @map("ExternalProviderDispatch_SubmittedAt")
+  completedAt                  DateTime?                      @map("ExternalProviderDispatch_CompletedAt")
+  createdAt                    DateTime                       @default(now()) @map("ExternalProviderDispatch_CreatedAt")
+  updatedAt                    DateTime                       @updatedAt @map("ExternalProviderDispatch_UpdatedAt")
+
+  businessProfile BusinessProfile           @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+  receiptScan     ReceiptScan?              @relation(fields: [receiptScanId, receiptScanBusinessProfileId], references: [id, businessProfileId], onDelete: SetNull)
+  consent         ExternalProcessingConsent @relation(fields: [consentId, businessProfileId, provider], references: [id, businessProfileId, provider], onDelete: NoAction)
+  resourceBudget  ExternalProviderBudget    @relation("ExternalProviderResourceBudget", fields: [resourceBudgetId, resourceBudgetScope, provider, cycleStart, unitType], references: [id, scope, provider, cycleStart, unitType], onDelete: Restrict)
+  businessBudget  ExternalProviderBudget?   @relation("ExternalProviderBusinessBudget", fields: [businessBudgetId, businessBudgetScope, businessBudgetProfileId, provider, cycleStart, unitType], references: [id, scope, businessProfileId, provider, cycleStart, unitType], onDelete: NoAction)
+
+  @@index([businessProfileId, createdAt, id], map: "ExternalProviderDispatch_profile_created_idx")
+  @@index([businessProfileId, provider, inputHash], map: "ExternalProviderDispatch_profile_provider_input_idx")
+  @@index([receiptScanId, receiptScanBusinessProfileId], map: "ExternalProviderDispatch_receipt_idx")
+  @@index([consentId, businessProfileId, provider], map: "ExternalProviderDispatch_consent_idx")
+  @@index([status, createdAt], map: "ExternalProviderDispatch_status_created_idx")
+  @@index([resourceBudgetId, status], map: "ExternalProviderDispatch_resource_status_idx")
+  @@index([businessBudgetId, status], map: "ExternalProviderDispatch_business_status_idx")
+  @@map("ExternalProviderDispatch")
+}
+
+/// A completed purge keeps only hashes, bounded counts, and lifecycle state;
+/// deleting its receipt clears the nullable target relation without deleting the job.
+model ReceiptPurgeJob {
+  id                           Int                @id @default(autoincrement()) @map("ReceiptPurgeJob_ID")
+  businessProfileId            Int                @map("BusinessProfile_ID")
+  receiptScanId                Int?               @map("ReceiptScan_ID")
+  receiptScanBusinessProfileId Int?               @map("ReceiptScan_BusinessProfile_ID")
+  requestKeyHash               String             @unique(map: "ReceiptPurgeJob_request_key") @map("ReceiptPurgeJob_RequestKeyHash") @db.Char(64)
+  targetReferenceHash          String             @map("ReceiptPurgeJob_TargetReferenceHash") @db.Char(64)
+  reason                       ReceiptPurgeReason @map("ReceiptPurgeJob_Reason")
+  status                       ReceiptPurgeStatus @default(PENDING) @map("ReceiptPurgeJob_Status")
+  stage                        ReceiptPurgeStage  @default(STORAGE) @map("ReceiptPurgeJob_Stage")
+  checkpointPageNumber         Int                @default(0) @map("ReceiptPurgeJob_CheckpointPageNumber")
+  storageObjectsExpected       Int                @default(0) @map("ReceiptPurgeJob_StorageObjectsExpected")
+  storageObjectsDeleted        Int                @default(0) @map("ReceiptPurgeJob_StorageObjectsDeleted")
+  attemptCount                 Int                @default(0) @map("ReceiptPurgeJob_AttemptCount")
+  nextAttemptAt                DateTime           @default(now()) @map("ReceiptPurgeJob_NextAttemptAt")
+  leaseStartedAt               DateTime?          @map("ReceiptPurgeJob_LeaseStartedAt")
+  heartbeatAt                  DateTime?          @map("ReceiptPurgeJob_HeartbeatAt")
+  workerId                     String?            @map("ReceiptPurgeJob_WorkerID") @db.VarChar(100)
+  lastErrorCode                String?            @map("ReceiptPurgeJob_LastErrorCode") @db.VarChar(64)
+  requestedAt                  DateTime           @default(now()) @map("ReceiptPurgeJob_RequestedAt")
+  completedAt                  DateTime?          @map("ReceiptPurgeJob_CompletedAt")
+  expiresAt                    DateTime           @map("ReceiptPurgeJob_ExpiresAt")
+  updatedAt                    DateTime           @updatedAt @map("ReceiptPurgeJob_UpdatedAt")
+
+  businessProfile BusinessProfile @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+  receiptScan     ReceiptScan?    @relation(fields: [receiptScanId, receiptScanBusinessProfileId], references: [id, businessProfileId], onDelete: SetNull)
+
+  @@unique([businessProfileId, receiptScanId], map: "ReceiptPurgeJob_profile_receipt_key")
+  @@index([receiptScanId, receiptScanBusinessProfileId], map: "ReceiptPurgeJob_receipt_idx")
+  @@index([status, nextAttemptAt, heartbeatAt], map: "ReceiptPurgeJob_claim_idx")
+  @@index([businessProfileId, status, requestedAt], map: "ReceiptPurgeJob_profile_status_requested_idx")
+  @@index([expiresAt], map: "ReceiptPurgeJob_expiry_idx")
+  @@map("ReceiptPurgeJob")
 }
 
 /// [ADDED] docs/superpowers/specs/2026-09-01-veryfi-production-ocr-integration-design.md

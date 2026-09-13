@@ -11,7 +11,7 @@ vi.mock("../../src/config/logger", () => ({ logger: { error: logError, warn: log
 const { errorHandler } = await import("../../src/middleware/error.middleware");
 
 function fakeReq(): Request {
-  return { method: "POST", path: "/api/v1/auth/change-password" } as unknown as Request;
+  return { method: "POST", path: "/api/v1/auth/change-password", headers: {} } as unknown as Request;
 }
 
 function fakeRes() {

@@ -52,6 +52,8 @@ export interface ScanResult {
   processingStatus?: "Processing" | "Complete" | "Failed";
   /** Why the read failed. Present only when processingStatus is "Failed". */
   processingError?: string | null;
+  /** Stable failure code used to choose recovery copy without parsing prose. */
+  processingErrorCode?: string | null;
   /**
    * Machine-readable warnings the pipeline recorded, each carrying the
    * server's own actionable guidance sentence.

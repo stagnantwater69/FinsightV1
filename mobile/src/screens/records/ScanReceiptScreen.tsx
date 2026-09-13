@@ -59,7 +59,18 @@ import { CategoryChips } from "./scanReceipt/CategoryChips";
 import { GapOption } from "./scanReceipt/GapOption";
 import { pollUntilRead, pagesFromSections, sectionsFromPages } from "./scanReceipt/helpers";
 import { groupReceiptMembers } from "../../lib/receiptGrouping";
+import {
+  inspectReceiptUpload,
+  RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES,
+  RECEIPT_UPLOAD_MAX_LOGICAL_PAGES,
+  RECEIPT_UPLOAD_MAX_OBJECT_BYTES,
+  type ReceiptUploadIssue,
+} from "../../lib/receiptUploadContract";
+import { localFileByteSize } from "../../lib/localFileSize";
+import { ReceiptProviderConsent } from "./scanReceipt/ReceiptProviderConsent";
 import type { CapturedPage, ReceiptScanResult, ReviewNotice } from "./scanReceipt/types";
+
+const MIB = 1024 * 1024;
 
 /**
  * Capture (custom camera or gallery; optional native scanner rollout flag) →
@@ -99,6 +110,7 @@ export function ScanReceiptScreen({ navigation }: any) {
    */
   const [pages, setPages] = useState<CapturedPage[]>([]);
   const [queuedReceiptGroups, setQueuedReceiptGroups] = useState<CapturedPage[][]>([]);
+  const [uploadIssuePageKeys, setUploadIssuePageKeys] = useState<Record<string, true>>({});
 
   /**
    * Whether FinSight's own camera is up.
@@ -188,6 +200,7 @@ export function ScanReceiptScreen({ navigation }: any) {
     setScan(null);
     setPages([]);
     setQueuedReceiptGroups([]);
+    setUploadIssuePageKeys({});
     setBusy(false);
     setPicking(false);
     setCategoryId(null);
@@ -201,6 +214,15 @@ export function ScanReceiptScreen({ navigation }: any) {
   }, [selected?.id]);
 
   if (!selected) return null;
+
+  function showUploadIssues(issues: ReceiptUploadIssue[]) {
+    const pageKeys: Record<string, true> = {};
+    for (const issue of issues) {
+      if (issue.pageKey) pageKeys[issue.pageKey] = true;
+    }
+    setUploadIssuePageKeys(pageKeys);
+    setError(issues[0]?.message ?? "Check the receipt photos and try again.");
+  }
 
   /**
    * Adds one photograph to the session and checks its own readability
@@ -222,24 +244,35 @@ export function ScanReceiptScreen({ navigation }: any) {
     const uri = asset.uri;
     const fileName = asset.fileName ?? `receipt-${Date.now()}.jpg`;
     const mimeType = asset.mimeType ?? "image/jpeg";
-    const validation = receiptFileError({ name: fileName, mimeType, size: asset.fileSize });
+    const validation = receiptFileError({ name: fileName, mimeType });
     if (validation) { setError(validation); return; }
-    setPages((prev) => [
-      ...prev,
-      {
-        key,
-        uri,
-        fileName,
-        mimeType,
-        quality: null,
-        checkingQuality: true,
-        width: asset.width,
-        height: asset.height,
-      },
-    ]);
+    const page: CapturedPage = {
+      key,
+      uri,
+      fileName,
+      mimeType,
+      originalMimeType: mimeType,
+      quality: null,
+      checkingQuality: true,
+      width: asset.width,
+      height: asset.height,
+    };
+    const nextPages = [...pages, page];
+    setPages(nextPages);
+    setUploadIssuePageKeys({});
     setError(null);
 
     try {
+      const inspection = await inspectReceiptUpload(nextPages, localFileByteSize);
+      if (!operation.current(task)) return;
+      if (!inspection.ok) {
+        showUploadIssues(inspection.issues);
+        setPages((prev) => prev.map((candidate) => (
+          candidate.key === key ? { ...candidate, checkingQuality: false } : candidate
+        )));
+        return;
+      }
+
       /*
        * SENT SMALL, KEPT LARGE. /quality-check resizes to width 400 before it
        * measures anything, so the full-resolution page this used to upload was
@@ -272,6 +305,8 @@ export function ScanReceiptScreen({ navigation }: any) {
 
   function removePage(key: string) {
     setPages((prev) => prev.filter((p) => p.key !== key));
+    setUploadIssuePageKeys({});
+    setError(null);
   }
 
   /** Moves a page earlier (delta -1) or later (delta +1) in the sequence. */
@@ -285,6 +320,8 @@ export function ScanReceiptScreen({ navigation }: any) {
       next.splice(target, 0, moved!);
       return next;
     });
+    setUploadIssuePageKeys({});
+    setError(null);
   }
 
   /**
@@ -296,7 +333,7 @@ export function ScanReceiptScreen({ navigation }: any) {
     const task = operation.begin();
     if (!task) return;
     setBusy(true);
-    setPhase("Uploading receipt…");
+    setPhase("Checking receipt size…");
     setError(null);
     try {
       const signature = `${selected!.id}:${list.map((page) => `${page.key}:${page.uri}:${page.originalUri ?? ""}`).join("|")}`;
@@ -304,42 +341,48 @@ export function ScanReceiptScreen({ navigation }: any) {
         uploadAttempt.current = { signature, key: newIdempotencyKey(), accepted: null };
       }
       const attempt = uploadAttempt.current;
-      const form = new FormData();
-      form.append("businessProfileId", String(selected!.id));
-      form.append("idempotencyKey", attempt.key);
-      // "files" — plural — repeated once per page: the server has one
-      // upload route for both a single photo and a long receipt's pages,
-      // and it reads this field name for either.
-      for (const p of list) {
-        form.append("files", { uri: p.uri, name: p.fileName, type: p.mimeType } as any);
-      }
-      const carriesOriginals = list.every((page) => Boolean(page.originalUri));
-      if (carriesOriginals && list.some((page) => page.originalUri !== page.uri)) {
-        for (const [index, page] of list.entries()) {
-          form.append("originalFiles", {
-            uri: page.originalUri!,
-            name: `receipt-section-${index + 1}-original.jpg`,
-            type: page.mimeType,
+      let accepted = attempt.accepted;
+      if (!accepted) {
+        const inspection = await inspectReceiptUpload(list, localFileByteSize);
+        if (!operation.current(task)) return;
+        if (!inspection.ok) {
+          haptics.warned();
+          showUploadIssues(inspection.issues);
+          return;
+        }
+        setUploadIssuePageKeys({});
+        setPhase("Uploading receipt…");
+        const form = new FormData();
+        form.append("businessProfileId", String(selected!.id));
+        form.append("idempotencyKey", attempt.key);
+        for (const object of inspection.objects) {
+          const page = list[object.pageNumber - 1]!;
+          const originalExtension = object.mediaType === "image/png" ? "png" : object.mediaType === "image/webp" ? "webp" : "jpg";
+          form.append(object.variant === "processed" ? "files" : "originalFiles", {
+            uri: object.uri,
+            name: object.variant === "processed"
+              ? page.fileName
+              : `receipt-section-${object.pageNumber}-original.${originalExtension}`,
+            type: object.mediaType,
           } as any);
         }
+        form.append("captureMetadata", JSON.stringify(list.map((page) => ({
+          captureMode: page.captureMode,
+          source: page.captureSource,
+          processingMode: page.processingMode ?? "original",
+          originalWidth: page.originalWidth ?? page.width,
+          originalHeight: page.originalHeight ?? page.height,
+          processedWidth: page.width,
+          processedHeight: page.height,
+          corners: page.cropCorners,
+          transformVersion: page.transformVersion,
+          documentConfidence: page.documentConfidence,
+          ownerOverrodeLikelihood: page.ownerOverrodeLikelihood,
+        }))));
+        accepted = await api.upload<ReceiptScanResult>("/records/receipts", form, task.controller.signal);
+        if (!operation.current(task)) return;
+        attempt.accepted = accepted;
       }
-      form.append("captureMetadata", JSON.stringify(list.map((page) => ({
-        captureMode: page.captureMode,
-        source: page.captureSource,
-        processingMode: page.processingMode ?? "original",
-        originalWidth: page.originalWidth ?? page.width,
-        originalHeight: page.originalHeight ?? page.height,
-        processedWidth: page.width,
-        processedHeight: page.height,
-        corners: page.cropCorners,
-        transformVersion: page.transformVersion,
-        documentConfidence: page.documentConfidence,
-        ownerOverrodeLikelihood: page.ownerOverrodeLikelihood,
-      }))));
-
-      const accepted = attempt.accepted ?? await api.upload<ReceiptScanResult>("/records/receipts", form, task.controller.signal);
-      if (!operation.current(task)) return;
-      attempt.accepted = accepted;
       setPhase("Reading receipt…");
       // The upload returns as soon as the photos are stored; the read itself
       // finishes behind it. See pollUntilRead.
@@ -393,6 +436,7 @@ export function ScanReceiptScreen({ navigation }: any) {
     if (groups.length === 0) return;
     setQueuedReceiptGroups(groups.slice(1));
     setPages(groups[0]!);
+    setUploadIssuePageKeys({});
     await scanSingleReceipt(groups[0]!);
   }
 
@@ -447,7 +491,7 @@ export function ScanReceiptScreen({ navigation }: any) {
       const result = await DocumentPicker.getDocumentAsync({ type: RECEIPT_MIME_TYPES, copyToCacheDirectory: true });
       if (!operation.current(task) || result.canceled || !result.assets[0]) return;
       const file = result.assets[0];
-      const validation = receiptFileError(file);
+      const validation = receiptFileError({ name: file.name, mimeType: file.mimeType });
       if (validation) { setError(validation); return; }
       const dimensions = await Image.getSize(file.uri);
       await addPage({ uri: file.uri, width: dimensions.width, height: dimensions.height, fileName: file.name, mimeType: file.mimeType === "application/octet-stream" ? receiptMimeType(file.name) : file.mimeType ?? receiptMimeType(file.name), fileSize: file.size }, task);
@@ -542,6 +586,7 @@ export function ScanReceiptScreen({ navigation }: any) {
         const [next, ...remaining] = queuedReceiptGroups;
         setQueuedReceiptGroups(remaining);
         setPages(next!);
+        setUploadIssuePageKeys({});
         setScan(null);
         setCategoryId(null);
         setDate("");
@@ -881,6 +926,8 @@ export function ScanReceiptScreen({ navigation }: any) {
           onCancel={() => setCameraOpen(false)}
           onDone={(sections) => {
             setPages(pagesFromSections(sections));
+            setUploadIssuePageKeys({});
+            setError(null);
             setCameraOpen(false);
           }}
         />
@@ -934,7 +981,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                   <SkeletonBox height={14} />
                   <SkeletonBox width="70%" height={14} />
                   <SkeletonBox width="55%" height={14} />
-                  <Button title={phase === "Uploading receipt…" ? "Cancel upload" : "Stop waiting"} variant="ghost" onPress={() => {
+                  <Button title={phase === "Reading receipt…" ? "Stop waiting" : "Cancel upload"} variant="ghost" onPress={() => {
                     operation.cancel();
                     setBusy(false);
                     setError("Your photos are kept. Scan again to resume.");
@@ -1015,6 +1062,11 @@ export function ScanReceiptScreen({ navigation }: any) {
                             {p.quality?.tooBlurredToTrust ? (
                               <T style={{ fontSize: typeScale.axis, color: statusText.warning, marginTop: 2, textAlign: "center" }}>
                                 ⚠ blurry
+                              </T>
+                            ) : null}
+                            {uploadIssuePageKeys[p.key] ? (
+                              <T style={{ fontSize: typeScale.axis, color: statusText.critical, marginTop: 2, textAlign: "center" }}>
+                                ⚠ Can't upload yet
                               </T>
                             ) : null}
                             <View style={{ flexDirection: "row", justifyContent: "center", gap: 2, marginTop: 2 }}>
@@ -1110,12 +1162,15 @@ export function ScanReceiptScreen({ navigation }: any) {
                       </>
                     )}
                   </View>
-                  <T variant="caption" style={{ marginTop: space.sm }}>JPG, PNG, or WebP · 10 MB each · up to 8 sections. PDFs aren’t supported.</T>
+                  <T variant="caption" style={{ marginTop: space.sm }}>
+                    JPG, PNG, or WebP · {RECEIPT_UPLOAD_MAX_OBJECT_BYTES / MIB} MiB each · up to {RECEIPT_UPLOAD_MAX_LOGICAL_PAGES} sections · {RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES / MIB} MiB total. PDFs aren’t supported.
+                  </T>
                   {picking ? <T variant="caption" accessibilityLiveRegion="polite">Preparing photo…</T> : null}
                 </>
               )}
               {error ? <View style={{ marginTop: space.md }}><ErrorNote>{error}</ErrorNote></View> : null}
               {error && !busy ? <Button title="Enter expense manually" variant="ghost" onPress={() => navigation.navigate("AddExpense")} /> : null}
+              {!busy ? <ReceiptProviderConsent businessProfileId={selected.id} /> : null}
             </Card>
           ) : (
             <>
@@ -1226,7 +1281,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                 <View style={{ gap: space.sm }}>
                   <ErrorNote>{foreignCurrency ? `This receipt is in ${foreignCurrency}. Enter the converted PHP amount manually before saving.` : "Enter this receipt manually with the amount paid in PHP."}</ErrorNote>
                   <Button title="Enter expense manually" variant="primary" onPress={() => navigation.navigate("AddExpense")} />
-                  <Button title="Choose another receipt" variant="ghost" onPress={() => { setScan(null); setPages([]); }} />
+                  <Button title="Choose another receipt" variant="ghost" onPress={() => { setScan(null); setPages([]); setUploadIssuePageKeys({}); }} />
                 </View>
               ) : <>
 
@@ -1741,6 +1796,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                     // into a new session would mean the next scan quietly
                     // starts with photos of the WRONG receipt already loaded.
                     setPages([]);
+                    setUploadIssuePageKeys({});
                   }}
                 />
               </View>

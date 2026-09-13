@@ -1,7 +1,10 @@
 import { prisma } from "../../config/prisma";
 import { logger } from "../../config/logger";
 import type { Prisma, ReceiptScanItem } from "@prisma/client";
-import { categoriseReceiptItems, UNCATEGORISED } from "../ai.service";
+import { categoryFromHistory, type ConfirmedCategoryChoice } from "../../lib/categoryHistory";
+
+const UNCATEGORISED = "Uncategorized";
+export type ReceiptCategorisationDb = Prisma.TransactionClient | typeof prisma;
 
 /**
  * The standing home for an item nothing else fits.
@@ -11,12 +14,15 @@ import { categoriseReceiptItems, UNCATEGORISED } from "../ai.service";
  * use. Matched case-insensitively first, so an owner who already has their
  * own "Uncategorized" keeps it instead of getting a near-duplicate.
  */
-export async function ensureUncategorised(businessProfileId: number): Promise<number> {
-  const existing = await prisma.expenseCategory.findFirst({
+export async function ensureUncategorised(
+  businessProfileId: number,
+  db: ReceiptCategorisationDb = prisma,
+): Promise<number> {
+  const existing = await db.expenseCategory.findFirst({
     where: { businessProfileId, name: { equals: UNCATEGORISED, mode: "insensitive" } },
   });
   if (existing) return existing.id;
-  const created = await prisma.expenseCategory.create({
+  const created = await db.expenseCategory.create({
     data: {
       businessProfileId,
       name: UNCATEGORISED,
@@ -27,57 +33,51 @@ export async function ensureUncategorised(businessProfileId: number): Promise<nu
 }
 
 /**
- * How many past items are read to build the classifier's few-shot examples.
- *
- * Deliberately larger than the number of examples the prompt ends up carrying
- * (ai.service caps that): these are deduplicated by item name there, and a
- * business that buys the same few things every week would otherwise yield
- * only a handful of distinct examples from a tighter query.
+ * How many recent confirmed item choices are considered for an exact local
+ * match. Rows are newest first, so a more recent owner correction wins.
  */
 const PRIOR_CHOICE_LOOKBACK = 100;
 
 /**
- * What this business has decided about items before, most recent first.
- *
- * ONLY from CONFIRMED scans, and that restriction is the whole point. A
- * pending scan's categories are the AI's own unreviewed guesses; feeding
- * those back would teach it its own mistakes and the loop would amplify an
- * error rather than correct it. A confirmed scan is the opposite — the owner
- * saw every row and either accepted it or changed it, so each one is a real
- * human decision.
- *
- * Items sitting in Uncategorized are left out too: "this belongs in
- * Uncategorized" is not a decision, it is the absence of one, and the model
- * already has UNCATEGORISED for declining.
+ * What this business has confirmed about receipt items before, newest first.
+ * Pending scans and Uncategorized rows are not owner category decisions.
  */
-async function recentCategoryChoices(businessProfileId: number) {
-  const rows = await prisma.receiptScanItem.findMany({
+async function recentCategoryChoices(
+  businessProfileId: number,
+  db: ReceiptCategorisationDb,
+): Promise<ConfirmedCategoryChoice[]> {
+  const rows = await db.receiptScanItem.findMany({
     where: {
       receiptScan: { businessProfileId, confirmationStatus: "Confirmed" },
       categoryId: { not: null },
+      category: { businessProfileId },
     },
-    select: { name: true, category: { select: { name: true } } },
+    select: {
+      name: true,
+      category: { select: { id: true, name: true } },
+      receiptScan: { select: { extractedVendor: true } },
+      expenseRecord: { select: { vendor: true } },
+    },
     orderBy: { id: "desc" },
     take: PRIOR_CHOICE_LOOKBACK,
   });
 
   return rows
     .filter((r) => r.category !== null && r.category.name.toLowerCase() !== UNCATEGORISED.toLowerCase())
-    .map((r) => ({ item: r.name, category: r.category!.name }));
+    .map((r) => ({
+      description: r.name,
+      vendor: r.expenseRecord?.vendor ?? r.receiptScan.extractedVendor,
+      categoryId: r.category!.id,
+      categoryName: r.category!.name,
+    }));
 }
 
 /**
  * Categorises the extracted lines and stores them against the scan.
  *
- * Categorisation is automatic and happens here, at scan time, rather than
- * behind a button the owner has to find — reading a receipt and knowing that
- * "buns" are ingredients is the thing the feature is for, and making it
- * opt-in meant it mostly didn't happen.
- *
- * Nothing here can fail the scan. If the model is unreachable the items are
- * still stored, just all uncategorised, and the owner assigns them on the
- * review screen. An upload must never be lost because a third-party API was
- * down.
+ * Categorisation at scan time is deliberately local: only an exact normalized
+ * match to the owner's confirmed history is assigned. Everything else stays
+ * Uncategorized for review, so receipt-derived text never leaves this worker.
  */
 export async function persistCategorisedItems(
   businessProfileId: number,
@@ -89,49 +89,43 @@ export async function persistCategorisedItems(
   amountConfidences: (number | null)[] = [],
   /** Per-item provenance (page + printed line), positionally aligned. Null entries stay unrecorded. */
   itemEvidence: ({ pageNumber: number | null; sourceText: string | null } | null)[] = [],
+  db: ReceiptCategorisationDb = prisma,
 ): Promise<ReceiptScanItem[]> {
   // A recovered attempt replaces any partial result left by the prior worker.
-  await prisma.receiptScanItem.deleteMany({ where: { receiptScanId } });
+  await db.receiptScanItem.deleteMany({ where: { receiptScanId } });
   if (parsedItems.length === 0) return [];
 
-  const categories = await prisma.expenseCategory.findMany({
+  const categories = await db.expenseCategory.findMany({
     where: { businessProfileId },
     select: { id: true, name: true },
   });
 
-  // The standing Uncategorized category is never offered to the model as a
-  // classification target — "put it in Uncategorized" is our decision when
-  // the model declines, not one of its options.
+  // A prior Uncategorized row records no category decision to reuse.
   const assignable = categories.filter((c) => c.name.toLowerCase() !== UNCATEGORISED.toLowerCase());
 
-  let suggestions: Awaited<ReturnType<typeof categoriseReceiptItems>> = [];
+  let history: ConfirmedCategoryChoice[] = [];
   try {
-    // The history read sits inside the try with the model call on purpose: it
-    // is part of the categorisation attempt, and this function's promise is
-    // that nothing in it can cost the owner their scan.
-    suggestions = await categoriseReceiptItems(
-      parsedItems.map((i) => i.name),
-      assignable.map((c) => c.name),
-      { vendorName: vendor, priorChoices: await recentCategoryChoices(businessProfileId) },
+    history = await recentCategoryChoices(businessProfileId, db);
+  } catch {
+    logger.error(
+      { operation: "receipt-item-categorisation", failureKind: "history-read-failed" },
+      "Confirmed category history could not be read; storing items uncategorised",
     );
-  } catch (err) {
-    logger.error({ err }, "Item categorisation failed; storing items uncategorised");
   }
 
-  const idByName = new Map(assignable.map((c) => [c.name.toLowerCase(), c.id]));
-  const matchByIndex = new Map(suggestions.map((s) => [s.index, s.match]));
-  // Kept separate from the match: a proposal is only ever a question for the
-  // owner, never an assignment. validateItemCategories guarantees the two are
-  // mutually exclusive — a suggestion only survives when nothing matched.
-  const suggestNewByIndex = new Map(suggestions.map((s) => [s.index, s.suggestNew]));
+  const assignableIds = new Set(assignable.map((category) => category.id));
+  const categoryByIndex = new Map<number, number>();
+  parsedItems.forEach((item, index) => {
+    const match = categoryFromHistory(history, item.name, vendor);
+    if (match && assignableIds.has(match.categoryId)) categoryByIndex.set(index, match.categoryId);
+  });
 
   // Only pay for the Uncategorized category if something actually needs it.
-  const needsFallback = parsedItems.some((_, i) => !matchByIndex.get(i));
-  const uncategorisedId = needsFallback ? await ensureUncategorised(businessProfileId) : null;
+  const needsFallback = parsedItems.some((_, index) => !categoryByIndex.has(index));
+  const uncategorisedId = needsFallback ? await ensureUncategorised(businessProfileId, db) : null;
 
-  await prisma.receiptScanItem.createMany({
+  await db.receiptScanItem.createMany({
     data: parsedItems.map((item, i) => {
-      const match = matchByIndex.get(i);
       const evidence = itemEvidence[i] ?? null;
       return {
         receiptScanId,
@@ -140,8 +134,8 @@ export async function persistCategorisedItems(
         quantity: item.quantity,
         unitPrice: item.unitPrice,
         amount: item.amount,
-        categoryId: (match ? idByName.get(match.toLowerCase()) : null) ?? uncategorisedId,
-        suggestedCategoryName: suggestNewByIndex.get(i) ?? null,
+        categoryId: categoryByIndex.get(i) ?? uncategorisedId,
+        suggestedCategoryName: null,
         extractedByVision,
         amountConfidence: amountConfidences[i] ?? null,
         // Only when something can actually be pointed at. An entry that would
@@ -159,5 +153,5 @@ export async function persistCategorisedItems(
     }),
   });
 
-  return prisma.receiptScanItem.findMany({ where: { receiptScanId }, orderBy: { lineNumber: "asc" } });
+  return db.receiptScanItem.findMany({ where: { receiptScanId }, orderBy: { lineNumber: "asc" } });
 }

@@ -39,10 +39,10 @@ shipping.
       reason.
 - [ ] **Auth is configured** in Supabase (email/password provider enabled,
       redirect URLs set to wherever the web app is served from).
-- [ ] **A decision about `GOOGLE_GEMINI_API_KEY`.** Without it the vision
-      rescue and the AI features degrade quietly rather than erroring — which
-      is the intended design, but means an unset key looks like "the AI is
-      just not very good" rather than "the AI is not configured."
+- [ ] **A receipt-provider posture.** Keep receipt-provider dispatch disabled
+      for the local-first release. A provider credential alone is inert. Any
+      later enablement needs the complete consent, data-terms, calibration,
+      region, retention, budget, and kill-switch gate described below.
 
 ---
 
@@ -70,9 +70,34 @@ misconfigured deploy dies immediately instead of erroring per-request later.
 | `CORS_ORIGIN` | `http://localhost:5173` | Must be the real web origin, or the browser blocks every request |
 | `PORT` | `4000` | |
 | `SUPABASE_STORAGE_BUCKET` | `receipts` | |
-| `GOOGLE_GEMINI_API_KEY` | `""` | Empty disables the vision rescue silently |
+| `GOOGLE_GEMINI_API_KEY` | `""` | Credential only; it cannot enable receipt dispatch by itself |
 | `OPENROUTER_API_KEY` | `""` | Fallback for the categoriser |
-| `TESSERACT_LANG` | `eng` | |
+| `TESSERACT_LANG` | `eng` | `+`-joined language codes; every configured language must be packaged and checksummed in the worker image |
+| `TESSERACT_LANG_PATH` | backend root locally; `/app/tessdata` in Docker | Optional for direct npm development; the source and compiled config both resolve the tracked backend bundle when it is unset. Docker sets its root-owned, read-only bundle explicitly. |
+| `RECEIPT_UPLOAD_TEMP_ROOT` | OS temp directory plus `finsight-receipt-uploads` locally; `/run/finsight/receipt-uploads` in Docker | Must resolve to an absolute, private directory. Compose supplies a bounded tmpfs rather than a host volume. |
+| `RECEIPT_UPLOAD_ORPHAN_TTL_SECONDS` | `3600` | Sweeper-only setting; values below 3600 are rejected because an upload request may run for 300 seconds. |
+| `RECEIPT_WORKER_HEALTH_DIR` | `/tmp/finsight-worker-health` outside Compose; `/run/finsight/worker-health` in Compose | Private worker PID and heartbeat markers only; arbitrary or symlink-resolved paths are rejected before cleanup |
+| `RECEIPT_WORKER_HEARTBEAT_MAX_AGE_SECONDS` | `45` | Worker healthcheck range is 15 through 300 seconds |
+| `RECEIPT_QUEUE_STALE_AFTER_SECONDS` | `300` | Operator-only warning threshold for the read-only queue readiness command |
+
+**Optional receipt-provider gate, safe defaults shown:**
+
+| Variable | Safe default | Rule |
+|---|---|---|
+| `RECEIPT_PROVIDER_DISPATCH_ENABLED` | `false` | Explicit request to allow dispatch evaluation, not enough by itself |
+| `RECEIPT_PROVIDER_KILL_SWITCH` | `true` | One switch that stops every receipt-provider submission |
+| `RECEIPT_PROVIDER_DATA_TERMS_APPROVED` | `false` | Must match reviewed provider data terms |
+| `RECEIPT_PROVIDER` and `RECEIPT_PROVIDER_VERSION` | unset | One supported provider/version only; no paid fallback cascade |
+| `RECEIPT_PROVIDER_REGION` | unset | Must match the consent record |
+| `RECEIPT_PROVIDER_RETENTION_HOURS` | unset | Must be reviewed and no more than 24 hours |
+| `RECEIPT_PROVIDER_ROUTING_CALIBRATED` | `false` | Must have a matching calibration version |
+| `RECEIPT_PROVIDER_CALIBRATION_VERSION` | unset | Versioned evidence, not a raw confidence threshold |
+| `RECEIPT_PROVIDER_MONTHLY_UNIT_LIMIT` | `0` | Unset, zero, invalid, or above 100 disables dispatch |
+| `RECEIPT_PROVIDER_BUSINESS_MONTHLY_UNIT_LIMIT` | unset | Optional second cap; if set, it must be from 1 through 100 |
+
+`VERYFI_*` values follow the same credential-only rule as the Gemini key.
+Never place a provider key in a command line, readiness artifact, screenshot,
+or Git file.
 
 **Anomaly-detector feature flags — all default to `false`, leave them alone:**
 
@@ -155,14 +180,19 @@ mechanism. Do not add a production `.env` to the repo — `.gitignore` covers
 ```bash
 docker build --target api    -t finsight-backend:$(git rev-parse --short HEAD) ./backend
 docker build --target worker -t finsight-worker:$(git rev-parse --short HEAD)  ./backend
-docker run -d --name finsight-backend -p 127.0.0.1:4000:4000 --env-file /path/to/prod.env \
+docker run -d --name finsight-backend -p 127.0.0.1:4000:4000 \
+  --env-file /path/to/prod.env \
+  -e RECEIPT_UPLOAD_TEMP_ROOT=/run/finsight/receipt-uploads \
+  --tmpfs /run/finsight/receipt-uploads:rw,noexec,nosuid,nodev,size=201326592,mode=0700,uid=1000,gid=1000 \
   finsight-backend:$(git rev-parse --short HEAD)
 curl -s http://localhost:4000/api/v1/health/live    # → {"status":"ok","uptimeSeconds":...}
 ```
 
 The Dockerfile has two deployable targets: `api` (HTTP server, `dist/server.js`,
-with a HEALTHCHECK) and `worker` (queue consumers, `dist/worker.js`, no
-HEALTHCHECK). An untargeted build resolves to `api`, but always name the target
+with a HEALTHCHECK) and `worker` (queue consumers, `dist/worker.js`, with no
+HTTP endpoint). The worker entrypoint and container healthcheck verify its
+configured Tesseract files before work starts. An untargeted build resolves to
+`api`, but always name the target
 — a stage-order slip once made the default image the worker, which never
 listens, so compose's healthcheck failed and nginx never started
 (QA finding OPS-DEPLOY-01). CI now asserts each image's CMD.
@@ -185,6 +215,378 @@ for a plain up/down check that needs no token.
 **Verified**: this image builds, boots, and answers `/api/v1/health/live` —
 checked against this repo. Tagging by commit rather than `latest` is what
 makes a rollback a matter of running the previous tag.
+
+### Offline Tesseract language data
+
+Both backend image targets contain `/app/tessdata/eng.traineddata` as a
+root-owned, read-only file. Its pinned SHA-256 is
+`5dc5d8d640a212c9d6184921ba103b186f50e0fed9ee716c53e6b312b400d747`.
+The image build verifies that checksum and fails on a mismatch. The worker
+entrypoint verifies the complete `/app/tessdata/SHA256SUMS` manifest, then
+checks that every `+`-joined code in `TESSERACT_LANG` has a readable,
+non-writable file before starting the queue consumer. Add a traineddata file
+and its reviewed checksum to the image in the same change that adds a language
+code; setting an unbundled code makes the worker fail readiness.
+
+CI runs `extractText()` from the production worker image with `--network none`
+and a read-only root filesystem. This is the cold English OCR gate: a missing
+local file would make Tesseract.js attempt its default CDN and the job would
+fail because the container has no outbound interface. The OCR service passes
+`TESSERACT_LANG_PATH` to `createWorker` with `gzip: false` and
+`cacheMethod: "none"`, so it does not depend on its working directory or a
+Tesseract.js cache lookup.
+
+If the worker reports `Tesseract readiness failed`, keep it stopped, leave the
+API and web app running for manual expense entry, and keep optional receipt
+providers disabled. Restore the pinned language file or roll back to the last
+passing worker image. Do not enable egress to work around a missing file.
+
+### Receipt upload envelope and temporary storage
+
+The receipt contract has separate application and transport limits. Treat
+`MiB` here as exactly 1,048,576 bytes.
+
+| Boundary | Limit | Enforced by |
+|---|---:|---|
+| One file object | 10 MiB | Multer/API |
+| Logical receipt pages | 8 | API |
+| Processed plus original file objects | 16 | Multer/API |
+| Aggregate bytes across all file objects | 80 MiB (83,886,080 bytes) | API |
+| Entire HTTP request body | 81 MiB (84,934,656 bytes) | nginx |
+
+nginx keeps `proxy_request_buffering off` and permits only the measured
+multipart overhead above the file contract. The current 16-file/eight-field
+probe sends exactly 80 MiB of file data in an 84,413,748-byte request:
+527,668 bytes of headers, boundaries, and bounded fields, leaving 520,908
+bytes below the proxy ceiling. It also proves that an 80 MiB + 1 byte file
+aggregate still reaches the instrumented upstream, where the real API is the
+authority that returns 413. A body of 81 MiB + 1 byte is rejected by nginx.
+
+Run the same live edge gate used in CI after changing nginx, curl, or any
+receipt upload field:
+
+```bash
+bash nginx/verify-upload-envelope.sh
+```
+
+The command uses task-named throwaway containers and a scratch directory under
+the OS temp directory. It reports byte counts only and removes its resources
+on exit. Its upstream is an instrumented request-body sink; the backend's own
+boundary tests remain the proof of the 80 MiB aggregate rejection.
+
+Compose mounts `/run/finsight/receipt-uploads` only in the API container as a
+192 MiB tmpfs owned by UID/GID 1000 with mode `0700` and
+`noexec,nosuid,nodev`. It is neither a bind mount nor a named volume, is not
+served by nginx, and is not mounted in the worker. The size admits two 80 MiB
+file aggregates for the single-owner retry case plus 32 MiB of filesystem
+headroom. It is deliberately bounded; do not replace it with a 160 MiB
+in-memory upload path.
+
+Each request uses a mode-`0700` directory whose basename is exactly
+`finsight-receipt-` plus six alphanumeric characters. A mode-`0600` `.active`
+marker is refreshed every 60 seconds while the request is alive. Request,
+response, abort, error, timeout, and controller-finally paths all invoke the
+same idempotent cleanup. The API entrypoint also runs an hourly backstop:
+
+```bash
+docker compose exec -T backend finsight-receipt-upload-sweeper --once
+```
+
+The sweeper accepts only an absolute, normalized, canonical root owned by its
+current user at mode `0700`. The path must end in
+`finsight-receipt-uploads` or `finsight/receipt-uploads`, matching the upload
+middleware contract. It rejects parent symlinks before deletion and never
+follows candidate or marker symlinks. It leaves directories younger than the
+3,600-second TTL alone, and also preserves an old directory while its active
+marker is fresh. A stale directory with a stale or missing marker is
+reclaimed. Output contains counts and the oldest observed age only, never
+paths, filenames, or receipt data.
+
+Container restart unmounts and reclaims the tmpfs. Direct `npm` development
+uses `<OS temp>/finsight-receipt-uploads`; it has no container entrypoint, so
+run the same script hourly under the same OS account as the API. For example:
+
+```cron
+0 * * * * cd /path/to/FinsightV1 && backend/docker/receipt-upload-orphan-sweep.sh --once
+```
+
+Set `RECEIPT_UPLOAD_TEMP_ROOT` on both the API and that job if the local
+default is unsuitable. Never point the job at `/tmp` itself, a shared upload
+directory, a symlink, or a public web root.
+
+Use synthetic data in a non-production deployment for these drills. The live
+proxy gate and isolated orphan drill were exercised while adding this
+contract. The authenticated abort and running-compose restart drills remain
+release checks because this workstation pass did not have a disposable logged-
+in deployment.
+
+Abort an upload after the directory count increases, then require the count to
+return to its baseline. The sparse fixture is deliberately not a valid image;
+if it finishes unexpectedly, byte-signature validation rejects it.
+
+```bash
+truncate -s 10M /tmp/finsight-upload-abort.bin
+docker compose exec -T backend sh -c \
+  'find "$RECEIPT_UPLOAD_TEMP_ROOT" -mindepth 1 -maxdepth 1 -type d | wc -l'
+curl --limit-rate 64k --fail-with-body \
+  -H "Authorization: Bearer <TEST_TOKEN>" \
+  -F "businessProfileId=<TEST_PROFILE_ID>" \
+  -F "files=@/tmp/finsight-upload-abort.bin;type=image/jpeg;filename=drill.jpg" \
+  http://127.0.0.1:8080/api/v1/records/receipts
+# Press Ctrl-C after the count increases, then run the count command again.
+rm /tmp/finsight-upload-abort.bin
+```
+
+Test restart reclamation only after active uploads have drained:
+
+```bash
+docker compose exec -T backend sh -c \
+  'mkdir -m 700 "$RECEIPT_UPLOAD_TEMP_ROOT/finsight-receipt-DRILL1"'
+docker compose restart backend
+docker compose exec -T backend sh -c \
+  'test ! -e "$RECEIPT_UPLOAD_TEMP_ROOT/finsight-receipt-DRILL1"'
+```
+
+Test the active-marker rule outside the running service:
+
+```bash
+drill_parent=$(mktemp -d /tmp/finsight-upload-sweep.XXXXXX)
+mkdir -m 700 "$drill_parent/finsight"
+drill_root="$drill_parent/finsight/receipt-uploads"
+mkdir -m 700 "$drill_root"
+mkdir -m 700 "$drill_root/finsight-receipt-ACT123" \
+  "$drill_root/finsight-receipt-OLD123"
+printf '%s\n' active > "$drill_root/finsight-receipt-ACT123/.active"
+printf '%s\n' active > "$drill_root/finsight-receipt-OLD123/.active"
+chmod 600 "$drill_root"/finsight-receipt-*/.active
+DRILL_ROOT="$drill_root" node <<'NODE'
+const fs = require("node:fs");
+const root = process.env.DRILL_ROOT;
+const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+fs.utimesSync(`${root}/finsight-receipt-ACT123`, old, old);
+fs.utimesSync(`${root}/finsight-receipt-OLD123`, old, old);
+fs.utimesSync(`${root}/finsight-receipt-OLD123/.active`, old, old);
+NODE
+RECEIPT_UPLOAD_TEMP_ROOT="$drill_root" \
+  backend/docker/receipt-upload-orphan-sweep.sh --once
+RECEIPT_UPLOAD_TEMP_ROOT="$drill_root" \
+  backend/docker/receipt-upload-orphan-sweep.sh --once
+rm -r -- "$drill_parent"
+```
+
+The first pass must report `active=1 removed=1 errors=0`; the second must
+report `removed=0`. The preserved `ACT123` directory has an old directory
+timestamp and a fresh marker. The reclaimed `OLD123` directory has both an old
+directory timestamp and an old marker.
+
+If a request fails with `ENOSPC`, stop retries first, keep manual expense entry
+available, record only the response/request correlation ID, and check
+`docker compose exec -T backend df -h /run/finsight/receipt-uploads`. Let
+active requests finish or abort them deliberately, run the one-shot sweep,
+and confirm the directory count returns to baseline. If no upload is active,
+restarting the API safely reclaims the tmpfs. Repeated exhaustion means the
+actual concurrency/retry policy must be corrected and the 192 MiB capacity
+reviewed; do not move the files to a public or unbounded host path, loosen
+permissions, expose filenames in logs, or raise Node's memory allowance to
+160 MiB.
+
+### Phase 1 receipt readiness and drills
+
+Receipt readiness is a set of independent signals. Do not collapse them into a
+single green process check.
+
+| Signal | Command | Passing state |
+|---|---|---|
+| API process | `curl --max-time 5 --fail-with-body http://127.0.0.1:8080/api/v1/health/live` | HTTP 200 and `status: ok` |
+| Database from the API | `curl --max-time 45 --fail-with-body http://127.0.0.1:8080/api/v1/health/ready` | HTTP 200 and `database: ok` |
+| Worker process and language bundle | `docker compose exec -T worker finsight-worker-readiness` | `status=ok process=ok language=ok` |
+| Migrations and queue freshness | from `backend/`, `npm run ops:receipt-queue:readiness` | `status: ok`, `databaseTransaction: read-only`, `migrations: ok`, `workerQueue` not `stale`, and `providerDispatchReview: ok` |
+| Private Storage contract | from `backend/`, `npm run storage:buckets:verify` | `status: ok` and `bucketMismatchCount: 0` |
+| Optional provider | from `backend/`, `npm run ops:receipt-provider:status` | `disabled` for local-only mode, or `operational` after every optional gate is approved |
+
+Inject the target deployment environment through its secret manager before
+running the three backend operator commands. The queue and Storage commands do
+not load `backend/.env` to fill missing credentials. A developer file must not
+silently turn a target readiness check into a check of another environment.
+
+The API liveness endpoint does not prove database access. The worker container
+healthcheck proves that its child process is alive, its heartbeat is fresh, and
+every configured Tesseract language file is readable, read-only, and matches
+the packaged checksum. It does not prove that work is draining. The queue
+readiness command fills that gap with read-only counts from the same database
+route as the application. Run it from the worker's network context when the
+host cannot reach `DATABASE_URL`.
+
+The queue command reports an otherwise eligible receipt as stale after 300
+seconds by default. Set `RECEIPT_QUEUE_STALE_AFTER_SECONDS` from 60 through
+3,600 only when a measured local OCR service-time envelope justifies it. It
+also reports failed scans, purge work, exhausted or unsafe provider budgets,
+stale reservations, stale submitted calls, and ambiguous submissions. A
+`SUBMITTED` dispatch older than the fixed 600-second reconciliation threshold
+needs review because the process may have stopped after sending the request but
+before recording its outcome. `submittedProviderDispatchCount` remains the
+total number of dispatch rows that reached submission. The command never
+prints a profile ID, scan ID, dispatch ID, object path, receipt text, or money
+value.
+
+Optional-provider state is not part of local OCR readiness. `disabled` is a
+passing and preferred Phase 1 state. `blocked` means someone requested dispatch
+but the complete configuration is not valid; local OCR and owner editing stay
+available, while provider calls remain off.
+
+#### Provider-disable drill
+
+Run this first during an incident and before any secret rotation:
+
+1. Set `RECEIPT_PROVIDER_DISPATCH_ENABLED=false`,
+   `RECEIPT_PROVIDER_KILL_SWITCH=true`, and
+   `RECEIPT_PROVIDER_MONTHLY_UNIT_LIMIT=0` in the deployment secret store.
+2. Restart both API and worker so the consent endpoint and worker use the same
+   configuration.
+3. Run `npm run ops:receipt-provider:status -- --require-disabled` from
+   `backend/`. Credentials may remain present; the result must still be
+   `disabled` with `providerNetworkCalls: 0`.
+4. Record `providerDispatchCount` and `submittedProviderDispatchCount` from
+   `receipt-queue-readiness.ts`, process one synthetic receipt through local
+   OCR, then confirm both provider counts are unchanged and the local draft is
+   still editable.
+
+The CI gate `npm run ops:receipt-provider:smoke` covers safe defaults, credentials
+alone, zero and over-100 resource caps, a zero business cap, a complete bounded
+configuration, and the kill switch without making a network call.
+
+The CI gate `npm run ops:receipt-queue:smoke` also proves that one stale
+`SUBMITTED` count changes readiness to `attention`. Its output contains only
+scenario status and counts.
+
+#### Budget-exhaustion drill
+
+Do not consume paid pages to prove exhaustion. The required automated backend
+gate uses a mock adapter and a disposable database to race reservations at the configured
+limit; its required result is one bounded set of accepted reservations, quota
+refusals for the rest, and zero calls beyond the reserved units. The
+configuration smoke separately proves that zero, unset, invalid, and values
+above the Phase 1 cap of 100 cannot become operational.
+
+In a deployed environment, `exhaustedProviderBudgetCount` is an expected
+fail-closed state, not a reason to raise the limit. Keep the limit unchanged,
+leave local OCR running, and wait for the next approved cycle. Any
+`unsafeProviderBudgetCount` above zero fails release readiness. A stale
+reservation, stale submitted call, or ambiguous submission also fails
+optional-provider readiness. Keep the kill switch active and reconcile the
+provider outcome and billing manually before a new dispatch is allowed. Do not
+retry a stale `SUBMITTED` call or release its reserved units until that review
+establishes the provider outcome.
+
+#### Orphan-cleanup drill
+
+Run the isolated, synthetic test used by CI:
+
+```bash
+bash backend/docker/verify-receipt-upload-orphan-sweep.sh
+```
+
+It creates one active directory, one stale directory, and one symlink-shaped
+invalid candidate under a task-named OS temporary directory. It also presents
+an arbitrary private root, a nonnormalized root, and a path reached through a
+parent symlink. A pass preserves the active directory, removes the stale
+directory, rejects all unsafe roots without deleting their sentinel files,
+refuses the candidate symlink, and prints counts only. The live one-shot
+command remains:
+
+```bash
+docker compose exec -T backend finsight-receipt-upload-sweeper --once
+```
+
+Investigate `errors` or `invalid` above zero. Do not log directory contents or
+change the root to a public or unbounded path.
+
+#### API graceful-stop drill
+
+Run the isolated signal test used by CI:
+
+```bash
+bash backend/docker/verify-api-entrypoint-signal.sh
+```
+
+The fixture sends `TERM` while a synthetic child takes one second to stop. A
+pass proves the entrypoint stays alive until that child finishes, propagates
+the child's exit status, and then stops the cleanup loop. This is local wrapper
+evidence only. The authenticated upload-abort and deployed restart drills in
+the temporary-upload section remain release checks.
+
+#### Queue-recovery drill
+
+Use a synthetic receipt and a disposable deployment with the provider kill
+switch active. Capture only the readiness counts.
+
+1. Confirm `workerQueue` is `idle`, then stop the worker and enqueue one scan.
+2. Confirm the API remains live and manual record entry works. Queue readiness
+   should show a claimable count while the worker is stopped.
+3. Start the worker and require the claimable count to return to zero.
+4. To exercise stale-lease recovery, start another synthetic scan, wait until
+   `activeReceiptLeaseCount` increases, force-stop only the disposable worker,
+   wait for the two-minute receipt lease to expire, and start the worker again.
+5. Require the queue to drain or the scan to reach its bounded terminal failure
+   after the configured three attempts. It must not remain claimable beyond the
+   readiness threshold.
+
+A normal deploy uses graceful stop and allows the current pass up to 30 seconds
+to finish. The force-stop step is only for the disposable recovery drill. Never
+run it while a real owner's receipt is being processed.
+
+#### Secret-rotation drill
+
+1. Activate the provider kill switch, restart API and worker, and complete the
+   provider-disable drill.
+2. Create the replacement secret in the provider or Supabase console. Put it in
+   the deployment secret store without printing it or saving it in shell
+   history.
+3. Restart the affected processes. Keep receipt-provider dispatch disabled and
+   run API, database, Storage, worker, language, and queue readiness separately.
+4. Revoke the old secret only after the replacement passes those checks.
+5. Re-enabling an optional receipt provider is a separate owner-approved change
+   that repeats terms, consent, calibration, and budget checks. Rotation alone
+   is never authorization to turn it on.
+
+If the Supabase server key changes, restart both API and worker and rerun the
+private-bucket verifier. Public web/mobile anon-key rotation is a separate
+client rebuild and release.
+
+#### Safe rollback drill
+
+Start by activating the provider kill switch. Roll back API and worker images
+independently to known commit tags, keep the additive Phase 1 migration in
+place, and do not loosen private bucket restrictions or add client Storage
+policies. If the worker rollback fails its language or process probe, stop the
+worker and keep the API available for manual records. If the API rollback
+cannot use the current additive schema, restore the pre-migration backup using
+the already-rehearsed §6 procedure; never improvise a migration-down command.
+
+The release drill must record image tags, start/end times, readiness states,
+and before/after counts only. Do not put receipt text, filenames, object paths,
+profile IDs, scan IDs, credentials, or financial values in the artifact.
+
+#### Supabase Pro cost-control checklist (manual, not executed here)
+
+This checklist applies only after the owner confirms a real-data Pro target.
+It is not required for a synthetic-only school-project target that remains on
+the eligible Free plan.
+
+- [ ] Record the target organization and project in private release evidence.
+- [ ] Confirm the organization Spend Cap is on in the current billing UI.
+- [ ] Inventory every usage category and add-on the current UI marks as
+      excluded from Spend Cap. Do not assume a historical list is current.
+- [ ] Confirm the selected compute class is the plan-included class. Any larger
+      class needs separate written owner approval.
+- [ ] Review the upcoming invoice and list each nonzero add-on or excluded item
+      by billing label and status, without copying financial records.
+- [ ] Confirm no paid add-on is enabled without explicit owner approval.
+- [ ] Record the owner's approval, date, and evidence location outside Git.
+
+Do not mark this checklist complete from code review, local tests, or a
+dashboard from another organization. A real-owner release remains blocked
+until an authorized operator verifies the target organization.
 
 ### If login reports that the database cannot be reached
 
@@ -538,6 +940,71 @@ Storage is a **separate system from Postgres** and a Postgres restore does
 | `csv-imports` | Uploaded source CSV files | Private (signed URLs) |
 | `avatars` | User profile pictures | Public |
 
+#### Private bucket contract and hosted evidence
+
+The private buckets must match the backend upload contract exactly:
+
+| Bucket | Public | Per-object limit | Allowed stored MIME types |
+|---|---:|---:|---|
+| `receipts` | no | 10,485,760 bytes | `image/jpeg`, `image/png`, `image/webp` |
+| `csv-imports` | no | 5,242,880 bytes | `text/csv` |
+
+The CSV endpoint accepts a small compatibility set at ingress, but the backend
+stores every accepted CSV as `text/csv`. Do not add a client policy for either
+bucket. `avatars` is outside these commands and remains unchanged.
+
+Run operator commands from `backend/` with `SUPABASE_URL`,
+`SUPABASE_STORAGE_BUCKET=receipts`, and either `SUPABASE_SECRET_KEY`
+(preferred) or the legacy `SUPABASE_SERVICE_ROLE_KEY` injected by the
+operator's secret manager. Do not put a key in a command argument or evidence
+file. Verification also requires `DIRECT_URL`; the script refuses a database
+target that does not match the canonical Supabase project URL. Neither command
+loads `.env` to satisfy missing operator credentials.
+
+First capture the read-only state:
+
+```bash
+npm run storage:buckets:verify
+```
+
+The verifier uses `getBucket` plus a read-only PostgreSQL catalog transaction.
+It emits bucket settings and aggregate counts only, never object paths. A
+passing result has `bucketMismatchCount: 0`, two RLS-enabled Storage tables,
+zero elevated/owner client roles, and zero policies applicable to `anon` or
+`authenticated`. `effectiveClientDmlGrantCount` can be nonzero because
+Supabase grants table operations before RLS; RLS with no applicable policy is
+the intended denial. `forceRlsTableCount` can be zero because the client roles
+neither own nor bypass the Supabase-managed tables.
+
+Configuration is a separate, deliberate mutation:
+
+```bash
+npm run storage:buckets:configure -- --apply
+npm run storage:buckets:verify
+```
+
+The configure command calls only `getBucket` and `updateBucket`. It never
+creates a bucket and refuses any receipt bucket name other than `receipts`. It
+preflights both buckets before the first update, verifies the returned settings
+afterward, and is safe to rerun when the contract already matches.
+
+If either command fails, keep the candidate release and its receipt/CSV upload
+routes out of service, keep receipt-provider dispatch disabled, and do not add
+direct-client Storage policies. A later API failure can leave one preflighted
+bucket updated and the other unchanged; rerun the idempotent configure command,
+then require the read-only verifier to exit zero. Do not loosen a private bucket
+as rollback. If a bucket is absent, stop and provision it as a separate reviewed
+operator action; this tool never creates one.
+
+For hosted evidence, enable shell `pipefail` and capture the verifier's JSON
+after configuration. The output contains settings and counts but no key or
+object name:
+
+```bash
+set -o pipefail
+npm run storage:buckets:verify 2>&1 | tee storage-bucket-verification.json
+```
+
 There is no scripted backup for these either — same finding as §6.0. Rehearse
 an export/restore using the Supabase JS admin client (the same
 `SUPABASE_SERVICE_ROLE_KEY` the backend already uses), against a **second,
@@ -623,15 +1090,13 @@ Named plainly, so nobody assumes otherwise:
   stdout is typically lost the moment the container is recreated. Choosing
   where logs live (a hosting platform's built-in log drain, a self-run
   collector, a SaaS log service) is a hosting/vendor decision — see §10.
-- **Single instance only.** The rate limiter is in-memory and per-process
-  (`rateLimit.middleware.ts` documents this itself). Behind two instances the
-  effective limit doubles. Scaling horizontally means moving it to Redis or
-  the database first.
-- **Background scan work does not survive a restart.** Receipt reads run
-  in-process (see schema header note 15); deploying mid-read strands those
-  scans on `processingStatus = "Processing"`. The clients time out politely
-  and offer a rescan, but those rows stay stuck. **Prefer deploying when
-  nobody is mid-scan**, and know this is the cost of not having a job queue.
+- **No automated scaling policy.** Rate limits and receipt leases are durable,
+  but compose still defines one API and one worker. Capacity thresholds and
+  replica counts remain an operator decision.
+- **Durable work still needs monitoring.** Receipt scans survive a worker
+  restart and stale leases can be reclaimed, but no external monitor watches
+  the queue-age signal or pages an operator. Three failed attempts produce a
+  reviewable terminal failure rather than an infinite retry loop.
 - **No production probes/alerting beyond the two health endpoints.**
   `/api/v1/health/live` and `/api/v1/health/ready` exist and are wired into
   the Docker healthcheck and nginx's `depends_on`, but nothing external polls
@@ -645,8 +1110,8 @@ Named plainly, so nobody assumes otherwise:
 - [ ] `curl https://<host>/api/v1/health` → `{"status":"ok"}`
 - [ ] Register a throwaway account and create a business profile
 - [ ] Record one expense by hand
-- [ ] Scan one receipt — this exercises Storage, OCR, and (if configured) the
-      vision model, which is the most infrastructure any single action touches
+- [ ] Scan one synthetic receipt. This exercises Storage and local OCR. An
+      optional provider must stay off unless its separate gate is approved.
 - [ ] Import a small CSV
 - [ ] Confirm `CORS_ORIGIN` is right by using the web app from its real URL,
       not from localhost
@@ -657,13 +1122,17 @@ Named plainly, so nobody assumes otherwise:
 
 ## 9. Rolling back
 
-1. Run the previous image tag (this is why §4 tags by commit).
-2. **Check whether the bad deploy included a migration.** If it did, the old
+1. Activate `RECEIPT_PROVIDER_KILL_SWITCH=true` and restart API and worker.
+2. Run the previous API and worker image tags independently (this is why §4
+   tags by commit).
+3. **Check whether the bad deploy included a migration.** If it did, the old
    image may not tolerate the new schema. The migrations here are additive, so
    an older backend generally runs against a newer schema — but that is a
    property of the migrations so far, not a guarantee. Check the migration
    before assuming it.
-3. If data is wrong rather than the code, restore from backup — and note that
+4. Keep both private Storage buckets restricted. Never add a client policy as
+   rollback.
+5. If data is wrong rather than the code, restore from backup, and note that
    §6 means you should have tested that path already.
 
 ---

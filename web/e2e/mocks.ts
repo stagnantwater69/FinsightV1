@@ -157,6 +157,15 @@ export async function mockBackendSession(
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(categories) });
   });
 
+  await page.route("**/records/receipts/provider-consent/**", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ available: false, provider: null, consent: null, activeConsents: [] }),
+    });
+  });
+
   await page.route("**/notifications**", async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });

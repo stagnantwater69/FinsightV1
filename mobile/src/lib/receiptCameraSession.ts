@@ -1,8 +1,9 @@
 import { MAX_SECTIONS, moveSection, newSectionId, type CaptureSource, type ReceiptSection, type SectionQuality } from './receiptCapture';
 
-export function createReceiptSection(asset: { uri: string; width: number; height: number }, source: CaptureSource): ReceiptSection {
+export function createReceiptSection(asset: { uri: string; width: number; height: number; mimeType?: string }, source: CaptureSource): ReceiptSection {
   if (!asset.uri.trim() || !Number.isFinite(asset.width) || !Number.isFinite(asset.height) || asset.width <= 0 || asset.height <= 0) throw new Error('This image could not be opened. Choose another photo.');
-  return { localId: newSectionId(), originalUri: asset.uri, processedUri: asset.uri, width: asset.width, height: asset.height, originalWidth: asset.width, originalHeight: asset.height, captureSource: source, processingMode: 'original', quality: null };
+  const mimeType = asset.mimeType ?? 'image/jpeg';
+  return { localId: newSectionId(), originalUri: asset.uri, originalMimeType: mimeType, processedUri: asset.uri, processedMimeType: mimeType, width: asset.width, height: asset.height, originalWidth: asset.width, originalHeight: asset.height, captureSource: source, processingMode: 'original', quality: null };
 }
 
 export function addSessionSections(current: ReceiptSection[], incoming: ReceiptSection[], replaceId?: string | null): ReceiptSection[] {

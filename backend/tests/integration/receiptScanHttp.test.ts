@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { readdir } from "node:fs/promises";
 
 /**
  * The only test in this suite that goes through real HTTP.
@@ -13,12 +14,18 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
  * Storage and the read pipeline are mocked for the same reason they are
  * everywhere else — what is under test here is the wiring, not OCR accuracy.
  */
-vi.mock("../../src/services/storage.service", () => ({
-  uploadReceiptImage: vi.fn(async () => "1/mock-receipt.jpg"),
-  uploadCsvFile: vi.fn(async () => "1/mock.csv"),
-  signedReceiptImageUrl: vi.fn(async () => "https://example.test/signed.jpg"),
-  deleteReceiptImage: vi.fn(async () => true),
-}));
+vi.mock("../../src/services/storage.service", async () => {
+  const { tinyReceiptJpeg } = await import("../helpers/receiptImageFixtures");
+  const storedBytes = tinyReceiptJpeg();
+  return {
+    uploadReceiptImage: vi.fn(async () => "1/mock-receipt.jpg"),
+    uploadCsvFile: vi.fn(async () => "1/mock.csv"),
+    signedReceiptImageUrl: vi.fn(async () => "https://example.test/signed.jpg"),
+    deleteReceiptImage: vi.fn(async () => true),
+    inspectReceiptImage: vi.fn(async () => ({ sizeBytes: storedBytes.length, mimetype: "image/jpeg" })),
+    downloadReceiptImageBounded: vi.fn(async () => storedBytes),
+  };
+});
 
 const { ocrGate } = vi.hoisted(() => ({
   // Held open so a test can observe "Processing" before letting the read
@@ -77,10 +84,19 @@ vi.mock("../../src/config/supabase", async (importOriginal) => {
 import request from "supertest";
 import sharp from "sharp";
 import { app } from "../../src/app";
+import { env } from "../../src/config/env";
 import { prisma } from "../../src/config/prisma";
+import { RECEIPT_UPLOAD_MAX_LOGICAL_PAGES, RECEIPT_UPLOAD_MAX_OBJECT_BYTES } from "../../src/lib/receiptUploadContract";
 import { resetRateLimits } from "../../src/middleware/rateLimit.middleware";
+import { runReceiptWorkerOnce } from "../../src/services/receiptScan/worker";
 import { deleteReceiptImage, uploadReceiptImage } from "../../src/services/storage.service";
-import { disconnectDb, makeOwnerWithProfile, resetDb, waitForScanProcessing } from "../setup/testDb";
+import {
+  disconnectDb,
+  makeOwnerWithProfile,
+  resetDb,
+  runReceiptWorkerAndWait,
+  waitForScanProcessing,
+} from "../setup/testDb";
 
 let ctx: Awaited<ReturnType<typeof makeOwnerWithProfile>>;
 const AUTH = ["Authorization", "Bearer valid-token"] as const;
@@ -101,6 +117,26 @@ afterAll(disconnectDb);
 
 // A real decoded image is required at the HTTP upload boundary; OCR is mocked.
 let PNG: Buffer;
+
+async function receiptUploadTempDirectories(): Promise<string[]> {
+  try {
+    return (await readdir(env.RECEIPT_UPLOAD_TEMP_ROOT))
+      .filter((name) => name.startsWith("finsight-receipt-"))
+      .sort();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+async function expectNoNewReceiptUploadTempDirectories(before: string[]): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const after = await receiptUploadTempDirectories();
+    if (after.every((name) => before.includes(name))) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  expect(await receiptUploadTempDirectories()).toEqual(before);
+}
 
 describe("POST /api/v1/records/receipts/transform", () => {
   const corners = JSON.stringify({ topLeft: { x: 0, y: 0 }, topRight: { x: 80, y: 0 }, bottomRight: { x: 80, y: 120 }, bottomLeft: { x: 0, y: 120 } });
@@ -133,12 +169,69 @@ describe("POST /api/v1/records/receipts/transform", () => {
 });
 
 describe("POST /api/v1/records/receipts", () => {
+  it("rejects unsupported MIME types before creating or storing a scan", async () => {
+    const response = await request(app).post("/api/v1/records/receipts").set(...AUTH)
+      .field("businessProfileId", String(ctx.profile.id))
+      .attach("files", PNG, { filename: "receipt.pdf", contentType: "application/pdf" });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: "Receipt image must be JPEG, PNG, or WEBP" });
+    expect(uploadReceiptImage).not.toHaveBeenCalled();
+    expect(await prisma.receiptScan.count()).toBe(0);
+  });
+
   it("rejects fake image bytes before storing a scan", async () => {
     const response = await request(app).post("/api/v1/records/receipts").set(...AUTH)
       .field("businessProfileId", String(ctx.profile.id))
       .attach("files", Buffer.from("not an image"), { filename: "receipt.jpg", contentType: "image/jpeg" });
     expect(response.status).toBe(400);
     expect(await prisma.receiptScan.count()).toBe(0);
+  });
+
+  it("rejects more than eight logical pages and cleans its request-owned temporary files", async () => {
+    const before = await receiptUploadTempDirectories();
+    let upload = request(app).post("/api/v1/records/receipts").set(...AUTH)
+      .field("businessProfileId", String(ctx.profile.id));
+    for (let index = 0; index < RECEIPT_UPLOAD_MAX_LOGICAL_PAGES + 1; index++) {
+      upload = upload.attach("files", PNG, { filename: `receipt-${index}.jpg`, contentType: "image/jpeg" });
+    }
+
+    const response = await upload;
+
+    expect(response.status).toBe(400);
+    expect(uploadReceiptImage).not.toHaveBeenCalled();
+    expect(await prisma.receiptScan.count()).toBe(0);
+    await expectNoNewReceiptUploadTempDirectories(before);
+  });
+
+  it("rejects an object one byte above 10 MiB and cleans its temporary file", async () => {
+    const before = await receiptUploadTempDirectories();
+    const response = await request(app).post("/api/v1/records/receipts").set(...AUTH)
+      .field("businessProfileId", String(ctx.profile.id))
+      .attach("files", Buffer.alloc(RECEIPT_UPLOAD_MAX_OBJECT_BYTES + 1), {
+        filename: "oversize.jpg",
+        contentType: "image/jpeg",
+      });
+
+    expect(response.status).toBe(400);
+    expect(uploadReceiptImage).not.toHaveBeenCalled();
+    expect(await prisma.receiptScan.count()).toBe(0);
+    await expectNoNewReceiptUploadTempDirectories(before);
+  });
+
+  it("returns a safe client error for malformed multipart and cleans temporary files", async () => {
+    const before = await receiptUploadTempDirectories();
+    const marker = "PRIVATE_RECEIPT_MULTIPART_CONTENT";
+    const response = await request(app).post("/api/v1/records/receipts").set(...AUTH)
+      .set("Content-Type", "multipart/form-data; boundary=finsight-broken")
+      .send(`--finsight-broken\r\nContent-Disposition: form-data; name="businessProfileId"\r\n\r\n${marker}`);
+
+    expect(response.status).toBe(400);
+    expect(response.body).toHaveProperty("error");
+    expect(JSON.stringify(response.body)).not.toContain(marker);
+    expect(uploadReceiptImage).not.toHaveBeenCalled();
+    expect(await prisma.receiptScan.count()).toBe(0);
+    await expectNoNewReceiptUploadTempDirectories(before);
   });
 
   it("replays simultaneous uploads with one key and rejects changing its contents", async () => {
@@ -150,7 +243,7 @@ describe("POST /api/v1/records/receipts", () => {
     expect(second.status).toBe(202);
     expect(first.body.id).toBe(second.body.id);
     expect(await prisma.receiptScan.count()).toBe(1);
-    await waitForScanProcessing(first.body.id);
+    await runReceiptWorkerAndWait(first.body.id);
     expect((await upload(PNG)).body.id).toBe(first.body.id);
     const different = await sharp({ create: { width: 80, height: 120, channels: 3, background: "black" } }).jpeg().toBuffer();
     expect((await upload(different)).status).toBe(409);
@@ -176,7 +269,7 @@ describe("POST /api/v1/records/receipts", () => {
     expect(responses.map((response) => response.status).sort()).toEqual(differentContents ? [202, 409] : [202, 202]);
     expect(await prisma.receiptScan.count()).toBe(1);
     const winner = await prisma.receiptScan.findFirstOrThrow();
-    await waitForScanProcessing(winner.id);
+    await runReceiptWorkerAndWait(winner.id);
     if (!differentContents) expect(responses[0]!.body.id).toBe(responses[1]!.body.id);
     expect(vi.mocked(deleteReceiptImage).mock.calls.map(([path]) => path)).toEqual([
       winner.imageFile === "1/race-first.jpg" ? "1/race-second.jpg" : "1/race-first.jpg",
@@ -189,7 +282,7 @@ describe("POST /api/v1/records/receipts", () => {
       .attach("files", PNG, { filename: "receipt.jpg", contentType: "image/jpeg" });
     const first = await upload(ctx.profile.id);
     expect(first.status).toBe(202);
-    await waitForScanProcessing(first.body.id);
+    await runReceiptWorkerAndWait(first.body.id);
     const other = await makeOwnerWithProfile();
     authUserId.value = other.user.authId;
     const storedBefore = vi.mocked(uploadReceiptImage).mock.calls.length;
@@ -199,7 +292,7 @@ describe("POST /api/v1/records/receipts", () => {
     expect(second.status).toBe(202);
     expect(second.body.id).not.toBe(first.body.id);
     expect(second.body.businessProfileId).toBe(other.profile.id);
-    await waitForScanProcessing(second.body.id);
+    await runReceiptWorkerAndWait(second.body.id);
     expect(await prisma.receiptScan.count()).toBe(2);
   });
 
@@ -212,7 +305,7 @@ describe("POST /api/v1/records/receipts", () => {
       .attach("originalFiles", PNG, { filename: "original.jpg", contentType: "image/jpeg" });
     const first = await upload(false);
     expect(first.status).toBe(202);
-    await waitForScanProcessing(first.body.id);
+    await runReceiptWorkerAndWait(first.body.id);
     const storedBefore = vi.mocked(uploadReceiptImage).mock.calls.length;
     expect((await upload(true)).status).toBe(409);
     expect(uploadReceiptImage).toHaveBeenCalledTimes(storedBefore);
@@ -236,7 +329,12 @@ describe("POST /api/v1/records/receipts", () => {
     expect(res.body).toHaveProperty("extractedAmount", null);
     expect(res.body).toHaveProperty("items");
 
-    await waitForScanProcessing(res.body.id);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(await prisma.receiptScan.findUnique({
+      where: { id: res.body.id },
+      select: { processingStatus: true, processingAttemptCount: true, processingWorkerId: true },
+    })).toEqual({ processingStatus: "Processing", processingAttemptCount: 0, processingWorkerId: null });
+    await runReceiptWorkerAndWait(res.body.id);
   });
 
   it("still refuses an upload with no file", async () => {
@@ -272,7 +370,7 @@ describe("POST /api/v1/records/receipts", () => {
       .attach("originalFiles", PNG, { filename: "original.jpg", contentType: "image/jpeg" });
 
     expect(res.status).toBe(202);
-    await waitForScanProcessing(res.body.id);
+    await runReceiptWorkerAndWait(res.body.id);
     const page = await prisma.receiptScanPage.findFirstOrThrow({ where: { receiptScanId: res.body.id } });
     expect(page.processedImageFile).not.toBeNull();
     expect(page.captureMetadata).toMatchObject({ processingMode: "manual-crop", captureMode: "long" });
@@ -339,7 +437,9 @@ describe("GET /api/v1/records/receipts/:id", () => {
       .attach("files", PNG, { filename: "receipt.jpg", contentType: "image/jpeg" });
     expect(created.status).toBe(202);
 
-    // Give the background task a moment to actually reach the gate.
+    const workerPass = runReceiptWorkerOnce();
+
+    // Give the dedicated worker a moment to actually reach the gate.
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     const midRead = await request(app)
@@ -352,6 +452,7 @@ describe("GET /api/v1/records/receipts/:id", () => {
     // Let the read finish.
     ocrGate.release?.();
     ocrGate.release = null;
+    expect(await workerPass).toBe(true);
     await waitForScanProcessing(created.body.id);
 
     const done = await request(app)
@@ -392,7 +493,7 @@ describe("GET /api/v1/records/receipts/:id", () => {
       .set(...AUTH)
       .field("businessProfileId", String(ctx.profile.id))
       .attach("files", PNG, { filename: "receipt.jpg", contentType: "image/jpeg" });
-    await waitForScanProcessing(created.body.id);
+    await runReceiptWorkerAndWait(created.body.id);
 
     const other = await makeOwnerWithProfile();
     authUserId.value = other.user.authId;

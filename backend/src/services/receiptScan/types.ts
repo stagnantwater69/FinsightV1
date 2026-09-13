@@ -3,6 +3,7 @@ import type { ReconciliationMode } from "../../lib/allocation";
 import type { ParsedLineItem, ParsedReceiptFields } from "../ocr.service";
 import type { VisionRejectReason } from "../visionOcr.service";
 import type { VeryfiRejectReason } from "../veryfiOcr.service";
+import { RECEIPT_UPLOAD_MAX_LOGICAL_PAGES } from "../../lib/receiptUploadContract";
 
 /** One photographed page of a receipt, as it arrives from the upload. */
 export interface UploadPage {
@@ -46,6 +47,34 @@ export interface UploadInput {
   businessProfileId: number;
   pages: UploadPage[];
   /** Reuse for retries of one selected receipt; use a new token after edits. */
+  idempotencyKey?: string;
+}
+
+export interface BufferedReceiptUploadFile {
+  source?: "buffer";
+  buffer: Buffer;
+  mimetype: string;
+  originalname: string;
+}
+
+export interface TemporaryReceiptUploadFile {
+  source: "temporary-file";
+  temporaryPath: string;
+  sizeBytes: number;
+  mimetype: string;
+  originalname: string;
+}
+
+export type ReceiptUploadFile = BufferedReceiptUploadFile | TemporaryReceiptUploadFile;
+
+export type ReceiptUploadPage = ReceiptUploadFile & {
+  processed?: ReceiptUploadFile;
+  metadata?: ReceiptCaptureMetadata;
+};
+
+export interface ReceiptUploadSubmission {
+  businessProfileId: number;
+  pages: ReceiptUploadPage[];
   idempotencyKey?: string;
 }
 
@@ -116,7 +145,7 @@ export const CHARGES_DESCRIPTION = "Tax and charges";
  * are the same number rather than two copies that could quietly disagree —
  * the same discipline duplicateKeyOf documents for its own shared constant.
  */
-export const MAX_PAGES = 8;
+export const MAX_PAGES = RECEIPT_UPLOAD_MAX_LOGICAL_PAGES;
 
 /**
  * What the scan ended up with, whether a model had a hand in it — and the
@@ -130,14 +159,13 @@ export interface RescuedFields extends ParsedReceiptFields {
   visionAssisted: boolean;
   /** True when the ITEMS specifically came from the model rather than OCR text. */
   itemsFromVision: boolean;
-  /** Which trigger sent the scan to the model, or null when the deterministic read stood on its own. */
+  /** Which local signal requested provider rescue, or null for a clean local draft. */
   visionTrigger: string | null;
   /** Wall-clock ms of the vision call. Null when no call was made. */
   visionLatencyMs: number | null;
   /**
-   * Which rescue provider actually answered (accepted OR rejected); null when
-   * none was usefully reached. "veryfi" only appears here when Veryfi was
-   * tried and reached — see rescueWithVeryfi and worker.ts's fallback order.
+   * The single provider submitted through the dispatch gate; null when local
+   * processing completed without a provider call.
    */
   visionProvider: "gemini" | "veryfi" | null;
   /** The model that answered, parsed from the endpoint actually called. Null when visionProvider is null. */

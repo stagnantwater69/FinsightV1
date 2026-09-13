@@ -16,6 +16,7 @@ export function PickedFileThumb({
   onRemove,
   onMoveUp,
   onMoveDown,
+  invalidReason = null,
 }: {
   file: File;
   index: number;
@@ -23,20 +24,33 @@ export function PickedFileThumb({
   onRemove: () => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
+  invalidReason?: string | null;
 }) {
   const [url, setUrl] = useState<string | null>(null);
 
   useEffect(() => {
+    if (invalidReason) {
+      setUrl(null);
+      return;
+    }
     const objectUrl = URL.createObjectURL(file);
     setUrl(objectUrl);
     return () => URL.revokeObjectURL(objectUrl);
-  }, [file]);
+  }, [file, invalidReason]);
 
   return (
     <li className="relative w-24 shrink-0">
       <div className="aspect-[3/4] overflow-hidden rounded-lg border border-paper-200 bg-paper-100">
         {url ? (
           <img src={url} alt={`Page ${index + 1}`} className="h-full w-full object-cover" />
+        ) : invalidReason ? (
+          <div className="flex h-full min-w-0 flex-col justify-center gap-1 p-2 text-center">
+            <span className="break-all text-[11px] font-medium leading-tight text-ink-700">{file.name}</span>
+            <span className="text-[10px] leading-tight text-tone-danger">{invalidReason}</span>
+            <span className="text-[10px] leading-tight text-ink-600">
+              {new Intl.NumberFormat("en-PH").format(file.size)} bytes
+            </span>
+          </div>
         ) : null}
       </div>
       <span className="absolute left-1 top-1 rounded-full bg-paper/90 px-1.5 py-0.5 text-[10px] font-semibold text-ink-700">

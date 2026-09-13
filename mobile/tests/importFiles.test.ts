@@ -4,7 +4,7 @@ import { CSV_MAX_BYTES, RECEIPT_MAX_BYTES, csvFileError, receiptFileError, recei
 describe("receipt and CSV file selection", () => {
   it.each(["receipt.jpg", "receipt.JPEG", "receipt.png", "receipt.webp"])("accepts supported image %s", (name) => {
     expect(receiptFileError({ name, size: RECEIPT_MAX_BYTES })).toBeNull();
-    expect(receiptFileError({ name, size: RECEIPT_MAX_BYTES + 1 })).toMatch(/10 MB/);
+    expect(receiptFileError({ name, size: RECEIPT_MAX_BYTES + 1 })).toMatch(/10 MiB/);
   });
   it("rejects PDFs and misleading MIME types", () => {
     expect(receiptFileError({ name: "receipt.pdf", mimeType: "application/pdf" })).toMatch(/PDF/);

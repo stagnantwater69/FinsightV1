@@ -1,3 +1,5 @@
+import { RECEIPT_UPLOAD_MAX_LOGICAL_PAGES } from "./receiptUploadContract";
+
 /**
  * The arithmetic behind the receipt camera, kept out of the components.
  *
@@ -18,19 +20,10 @@
 /**
  * How many photographs one receipt may be split into.
  *
- * MIRRORS `MAX_PAGES` in backend/src/services/receiptScan.service.ts, which
- * is the figure that actually decides — multer is configured with it and the
- * service rejects a ninth page with a 400. Duplicated rather than fetched
- * because a capture session has to know its own ceiling before it has spoken
- * to the server at all, and a camera that lets someone shoot nine sections
- * and only then says no has wasted the one thing this whole feature is about:
- * the owner standing there with the receipt in their hand.
- *
- * If the backend figure moves, this must move with it. The contract test in
- * tests/receiptCapture.test.ts pins the number so the two cannot drift
- * silently.
+ * Shared with the mobile upload preflight so the camera and FormData reject at
+ * the same boundary. The contract test pins it to the backend's eight pages.
  */
-export const MAX_SECTIONS = 8;
+export const MAX_SECTIONS = RECEIPT_UPLOAD_MAX_LOGICAL_PAGES;
 
 /**
  * JPEG compression for a captured section, 0-1.
@@ -154,8 +147,11 @@ export interface ReceiptSection {
   localId: string;
   /** The photograph as captured, kept so a crop can always be undone. */
   originalUri: string;
+  /** The original file's media type; it can differ after a crop writes JPEG. */
+  originalMimeType?: string;
   /** What will actually be uploaded: cropped and rotated, or the original. */
   processedUri: string;
+  processedMimeType?: string;
   /**
    * How this section entered the session.
    *

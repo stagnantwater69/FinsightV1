@@ -8,6 +8,10 @@ import { resolveBusinessToday } from "../../src/lib/dates";
 // on predictable ids and never leak state into the next file.
 const TABLES = [
   "ApiRateLimit",
+  "ReceiptPurgeJob",
+  "ExternalProviderDispatch",
+  "ExternalProviderBudget",
+  "ExternalProcessingConsent",
   "CategoryStatistics",
   "RecurringSchedule",
   "RecurringPattern",
@@ -71,6 +75,13 @@ export async function waitForScanProcessing(scanId: number, timeoutMs = 15_000):
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`Scan ${scanId} never left "Processing" within ${timeoutMs}ms`);
+}
+
+export async function runReceiptWorkerAndWait(scanId: number, timeoutMs = 15_000): Promise<string> {
+  const { runReceiptWorkerOnce } = await import("../../src/services/receiptScan/worker");
+  const claimed = await runReceiptWorkerOnce();
+  if (!claimed) throw new Error(`No receipt worker job was available for scan ${scanId}`);
+  return waitForScanProcessing(scanId, timeoutMs);
 }
 
 // ---------------------------------------------------------------

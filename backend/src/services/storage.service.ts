@@ -37,16 +37,28 @@ async function uploadWithRetry(bucket: string, path: string, buffer: Buffer, con
 
     const status = (error as { status?: number }).status;
     const statusCode = (error as { statusCode?: string }).statusCode;
-    logger.error(`Storage upload failed (attempt ${attempt}/2): ${error.message} [status=${status} statusCode=${statusCode}]`);
+    logger.error({ bucket, attempt, status, statusCode }, "Storage upload failed");
 
     if (attempt === 2) {
-      throw new ApiError(502, `Could not upload file to storage: ${error.message}`);
+      throw new ApiError(502, "Could not upload file to storage");
     }
   }
 }
 
-export async function uploadReceiptImage(businessProfileId: number, buffer: Buffer, mimetype: string, originalname: string) {
-  const ext = originalname.includes(".") ? originalname.split(".").pop() : mimetype.split("/")[1];
+const RECEIPT_IMAGE_EXTENSIONS: Readonly<Record<string, string>> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+};
+
+export async function uploadReceiptImage(
+  businessProfileId: number,
+  buffer: Buffer,
+  mimetype: string,
+  _originalname: string,
+) {
+  const ext = RECEIPT_IMAGE_EXTENSIONS[mimetype];
+  if (!ext) throw new ApiError(400, "Receipt image must be JPEG, PNG, or WEBP");
   const path = `${businessProfileId}/${randomUUID()}.${ext}`;
   await uploadWithRetry(env.SUPABASE_STORAGE_BUCKET, path, buffer, mimetype);
   return path;
@@ -75,7 +87,7 @@ export async function signedReceiptImageUrl(path: string): Promise<string | null
     .createSignedUrl(path, RECEIPT_URL_TTL_SECONDS);
 
   if (error || !data?.signedUrl) {
-    logger.error(`Could not sign receipt image URL for "${path}": ${error?.message ?? "no URL returned"}`);
+    logger.error({ bucket: env.SUPABASE_STORAGE_BUCKET }, "Could not sign receipt image URL");
     return null;
   }
   return data.signedUrl;
@@ -89,9 +101,44 @@ export async function signedReceiptImageUrl(path: string): Promise<string | null
 export async function downloadReceiptImage(path: string): Promise<Buffer> {
   const { data, error } = await supabaseAdmin.storage.from(env.SUPABASE_STORAGE_BUCKET).download(path);
   if (error || !data) {
-    throw new ApiError(502, `Could not download receipt image: ${error?.message ?? "no data returned"}`);
+    throw new ApiError(502, "Could not download receipt image");
   }
   return Buffer.from(await data.arrayBuffer());
+}
+
+export interface ReceiptImageObjectInfo {
+  sizeBytes: number;
+  mimetype: "image/jpeg" | "image/png" | "image/webp";
+}
+
+/** Reads Storage metadata before a receipt object is materialized. */
+export async function inspectReceiptImage(path: string): Promise<ReceiptImageObjectInfo> {
+  const { data, error } = await supabaseAdmin.storage.from(env.SUPABASE_STORAGE_BUCKET).info(path);
+  const mimetype = data?.contentType;
+  if (
+    error ||
+    !data ||
+    !Number.isSafeInteger(data.size) ||
+    (data.size ?? 0) <= 0 ||
+    (mimetype !== "image/jpeg" && mimetype !== "image/png" && mimetype !== "image/webp")
+  ) {
+    throw new ApiError(502, "Stored receipt evidence is unavailable");
+  }
+  return { sizeBytes: data.size!, mimetype };
+}
+
+/** Refuses an oversized object from metadata before asking Storage for its body. */
+export async function downloadReceiptImageBounded(
+  path: string,
+  maxBytes: number,
+  expected: ReceiptImageObjectInfo,
+): Promise<Buffer> {
+  if (expected.sizeBytes > maxBytes) throw new ApiError(413, "Stored receipt evidence exceeds its byte limit");
+  const buffer = await downloadReceiptImage(path);
+  if (buffer.byteLength !== expected.sizeBytes || buffer.byteLength > maxBytes) {
+    throw new ApiError(400, "Stored receipt evidence changed during processing");
+  }
+  return buffer;
 }
 
 /**
@@ -144,7 +191,7 @@ export async function signedCsvFileUrl(path: string): Promise<string | null> {
     .createSignedUrl(path, CSV_URL_TTL_SECONDS, { download: originalCsvName(path) });
 
   if (error || !data?.signedUrl) {
-    logger.error(`Could not sign CSV file URL for "${path}": ${error?.message ?? "no URL returned"}`);
+    logger.error({ bucket: CSV_IMPORT_BUCKET }, "Could not sign CSV file URL");
     return null;
   }
   return data.signedUrl;
@@ -166,7 +213,7 @@ export async function signedCsvFileUrl(path: string): Promise<string | null> {
 async function removeObject(bucket: string, path: string): Promise<boolean> {
   const { error } = await supabaseAdmin.storage.from(bucket).remove([path]);
   if (error) {
-    logger.error(`Could not delete "${path}" from ${bucket}: ${error.message}`);
+    logger.error({ bucket }, "Could not delete stored object");
     return false;
   }
   return true;
@@ -207,7 +254,7 @@ export async function deletePublicImageUrl(url: string): Promise<boolean> {
 export async function downloadCsvFile(path: string): Promise<Buffer | null> {
   const { data, error } = await supabaseAdmin.storage.from(CSV_IMPORT_BUCKET).download(path);
   if (error || !data) {
-    logger.error(`Could not download CSV file "${path}": ${error?.message ?? "no data returned"}`);
+    logger.error({ bucket: CSV_IMPORT_BUCKET }, "Could not download CSV file");
     return null;
   }
   return Buffer.from(await data.arrayBuffer());
@@ -271,7 +318,7 @@ async function uploadPublicImage(prefix: string, buffer: Buffer, mimetype: strin
     .from(AVATAR_BUCKET)
     .upload(path, buffer, { contentType: mimetype, upsert: true });
   if (error) {
-    throw new ApiError(502, `Could not upload image to storage: ${error.message}`);
+    throw new ApiError(502, "Could not upload image to storage");
   }
   const { data } = supabaseAdmin.storage.from(AVATAR_BUCKET).getPublicUrl(path);
   // Cache-bust: the path (and therefore the URL) is stable across re-uploads,

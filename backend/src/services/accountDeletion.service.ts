@@ -125,11 +125,23 @@ async function clearStorage(userId: number): Promise<void> {
  */
 async function deleteRelationalData(userId: number): Promise<void> {
   await prisma.$transaction(async (tx) => {
+    const profiles = await tx.businessProfile.findMany({ where: { userId }, select: { id: true } });
+    const profileIds = profiles.map((profile) => profile.id);
     const scans = await tx.receiptScan.findMany({
       where: { businessProfile: { userId } },
       select: { id: true },
     });
     const scanIds = scans.map((scan) => scan.id);
+
+    if (profileIds.length > 0) {
+      // Dispatch must go first because its consent and business-budget
+      // relations intentionally refuse independent audit-row deletion.
+      await tx.externalProviderDispatch.deleteMany({ where: { businessProfileId: { in: profileIds } } });
+      await tx.externalProcessingConsent.deleteMany({ where: { businessProfileId: { in: profileIds } } });
+      await tx.externalProviderBudget.deleteMany({
+        where: { scope: "BUSINESS", businessProfileId: { in: profileIds } },
+      });
+    }
 
     if (scanIds.length > 0) {
       await tx.receiptFieldCorrection.deleteMany({ where: { receiptScanId: { in: scanIds } } });

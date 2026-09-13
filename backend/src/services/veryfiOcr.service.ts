@@ -2,31 +2,19 @@ import { env } from "../config/env";
 import { logger } from "../config/logger";
 
 /**
- * Reading a receipt photograph with Veryfi's receipt-OCR API — a production
- * rescue, gated by `VERYFI_ENABLED` and a monthly quota (see
- * `receiptScan/veryfiQuota.ts`), for the receipts the deterministic parser
- * cannot read at all.
- *
- * WHY THIS EXISTS ALONGSIDE `visionOcr.service.ts`, NOT INSTEAD OF IT. Veryfi
- * is a receipt-specialised extraction API, not a general vision model —
- * measured directly against this app's own OCR corpus and, during this
- * session, against a real customer receipt tesseract could not read at any
- * confidence (see `tests/ocr-accuracy/VERYFI-SPIKE-REPORT.md` and
- * `docs/superpowers/specs/2026-09-01-veryfi-production-ocr-integration-design.md`).
- * It is tried FIRST among rescues, precisely because it reads harder receipts
- * than Gemini's vision rescue does on the evidence gathered so far — but it is
- * a paid, quota-limited third party, so `extractReceiptWithVision` (Gemini)
- * remains the fallback once Veryfi is disabled, exhausted, or unreachable.
- *
- * Same "never throws" contract as `extractReceiptWithVision`: returns `null`
- * when Veryfi was never usefully reached (no credentials, network failure,
- * timeout), so the caller can fall through to the Gemini rescue exactly as if
- * this function did not exist.
+ * Veryfi receipt extraction transport. Production calls originate only from
+ * the receipt provider adapter after the consent, configuration, idempotency,
+ * and budget gate has marked one dispatch submitted. A null result preserves
+ * the local draft and never triggers another provider.
  */
 
 const ENDPOINT = "https://api.veryfi.com/api/v8/partner/documents";
 const TIMEOUT_MS = 20_000;
 const MAX_ITEMS = 100;
+
+function safeFailureKind(error: unknown): "timeout" | "transport" {
+  return error instanceof Error && error.name === "TimeoutError" ? "timeout" : "transport";
+}
 
 export interface VeryfiPage {
   buffer: Buffer;
@@ -129,7 +117,10 @@ async function readOnePage(page: VeryfiPage): Promise<{ ok: true; doc: Record<st
   });
 
   if (!res.ok) {
-    logger.error(`Veryfi receipt read failed: ${res.status} ${(await res.text()).slice(0, 200)}`);
+    logger.error(
+      { provider: "veryfi", operation: "receipt-extraction", httpStatus: res.status },
+      "Veryfi receipt read failed",
+    );
     return { ok: false };
   }
   return { ok: true, doc: (await res.json()) as Record<string, unknown> };
@@ -162,7 +153,10 @@ export async function extractReceiptWithVeryfi(pages: VeryfiPage[]): Promise<Ver
     const results = await Promise.all(pages.map(readOnePage));
     docs = results.filter((r): r is { ok: true; doc: Record<string, unknown> } => r.ok).map((r) => r.doc);
   } catch (err) {
-    logger.error({ err }, "Veryfi receipt read failed");
+    logger.error(
+      { provider: "veryfi", operation: "receipt-extraction", failureKind: safeFailureKind(err) },
+      "Veryfi receipt read failed",
+    );
     return null;
   }
 

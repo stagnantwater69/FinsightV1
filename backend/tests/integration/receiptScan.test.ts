@@ -5,12 +5,18 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 // Real OCR accuracy is measured separately by the OCR accuracy assessment
 // against a sample of real and degraded images — that is a different question
 // from whether the flow wires up correctly.
-vi.mock("../../src/services/storage.service", () => ({
-  uploadReceiptImage: vi.fn(async () => "1/mock-receipt.jpg"),
-  uploadCsvFile: vi.fn(async () => "1/mock.csv"),
-  signedReceiptImageUrl: vi.fn(async () => "https://example.test/signed-receipt.jpg"),
-  deleteReceiptImage: vi.fn(async () => true),
-}));
+vi.mock("../../src/services/storage.service", async () => {
+  const { tinyReceiptJpeg } = await import("../helpers/receiptImageFixtures");
+  const storedBytes = tinyReceiptJpeg();
+  return {
+    uploadReceiptImage: vi.fn(async () => "1/mock-receipt.jpg"),
+    uploadCsvFile: vi.fn(async () => "1/mock.csv"),
+    signedReceiptImageUrl: vi.fn(async () => "https://example.test/signed-receipt.jpg"),
+    deleteReceiptImage: vi.fn(async () => true),
+    inspectReceiptImage: vi.fn(async () => ({ sizeBytes: storedBytes.length, mimetype: "image/jpeg" })),
+    downloadReceiptImageBounded: vi.fn(async () => storedBytes),
+  };
+});
 
 // vi.mock is hoisted above ordinary declarations, so the spy has to be created
 // inside vi.hoisted to exist by the time the factory runs. parseReceiptFields is
@@ -53,20 +59,16 @@ vi.mock("../../src/services/ocr.service", async (importOriginal) => {
   };
 });
 
-// The line-item model is mocked for the same reason OCR is: what this suite
-// asks is whether the GROUPING, reconciliation and failure handling around it
-// behave, not whether a particular model reads a particular receipt well.
+// Retained as a tripwire for the pre-Phase-1 categorisation path. Receipt
+// items must be categorised locally from confirmed owner history.
 const { categoriseMock } = vi.hoisted(() => ({ categoriseMock: vi.fn() }));
 vi.mock("../../src/services/ai.service", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/services/ai.service")>();
   return { ...actual, categoriseReceiptItems: categoriseMock };
 });
 
-// The vision rescue is mocked for the same reason, plus one more: it fires
-// whenever a fixture yields no items, so leaving it real would put a live
-// network call — billed, slow and flaky — inside the test suite. Default is
-// "the model found nothing", which is the pre-Phase-D behaviour; tests that
-// care about the rescue set it explicitly.
+// Retained as a tripwire for the pre-Phase-1 direct-vision path. Receipt
+// extraction may now reach a provider only through its consent/budget gate.
 const { visionMock } = vi.hoisted(() => ({ visionMock: vi.fn() }));
 vi.mock("../../src/services/visionOcr.service", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/services/visionOcr.service")>();
@@ -77,7 +79,7 @@ import { prisma } from "../../src/config/prisma";
 import type { VisionReceipt } from "../../src/services/visionOcr.service";
 import { confirmReceipt, deleteScanItem, getScan, uploadAndScan } from "../../src/services/receiptScan.service";
 import { getExpenseRecord } from "../../src/services/expenseRecord.service";
-import { disconnectDb, makeOwnerWithProfile, resetDb, utcDayString, waitForScanProcessing } from "../setup/testDb";
+import { disconnectDb, makeOwnerWithProfile, resetDb, runReceiptWorkerAndWait, utcDayString } from "../setup/testDb";
 
 let ctx: Awaited<ReturnType<typeof makeOwnerWithProfile>>;
 
@@ -149,8 +151,31 @@ async function upload() {
     businessProfileId: ctx.profile.id,
     pages: [{ buffer: Buffer.from("fake-image-bytes"), mimetype: "image/jpeg", originalname: "receipt.jpg" }],
   });
-  await waitForScanProcessing(created.id);
+  await runReceiptWorkerAndWait(created.id);
   return getScan(ctx.user.id, created.id);
+}
+
+async function establishCategoryChoices(
+  choices: { name: string; categoryId: number }[],
+  vendor = "ABC SARI-SARI STORE",
+) {
+  await prisma.receiptScan.create({
+    data: {
+      businessProfileId: ctx.profile.id,
+      imageFile: `${ctx.profile.id}/category-history.jpg`,
+      processingStatus: "Complete",
+      confirmationStatus: "Confirmed",
+      extractedVendor: vendor,
+      items: {
+        create: choices.map((choice, index) => ({
+          lineNumber: index + 1,
+          name: choice.name,
+          amount: 1,
+          categoryId: choice.categoryId,
+        })),
+      },
+    },
+  });
 }
 
 describe("upload and scan", () => {
@@ -203,22 +228,19 @@ describe("automatic itemisation at scan time", () => {
     expect(scan.items.map((i) => i.lineNumber)).toEqual([1, 2]);
   });
 
-  it("applies the AI's categories to the stored items", async () => {
-    categoriseMock.mockResolvedValue([
-      { index: 0, match: "Inventory", suggestNew: null },
-      { index: 1, match: "Utilities", suggestNew: null },
+  it("applies exact category choices from the owner's confirmed history", async () => {
+    await establishCategoryChoices([
+      { name: "Rice 25kg", categoryId: ctx.categories.Inventory! },
+      { name: "Cooking oil", categoryId: ctx.categories.Utilities! },
     ]);
     const scan = await upload();
     expect(scan.items[0]!.categoryId).toBe(ctx.categories.Inventory);
     expect(scan.items[1]!.categoryId).toBe(ctx.categories.Utilities);
   });
 
-  it("sends every item to the categoriser in ONE call, with the business's own categories", async () => {
+  it("does not send item or category text to the legacy AI categoriser", async () => {
     await upload();
-    expect(categoriseMock).toHaveBeenCalledTimes(1);
-    const [names, categories] = categoriseMock.mock.calls[0]!;
-    expect(names).toEqual(["Rice 25kg", "Cooking oil"]);
-    expect(categories).toEqual(expect.arrayContaining(["Inventory", "Utilities"]));
+    expect(categoriseMock).not.toHaveBeenCalled();
   });
 
   /**
@@ -227,7 +249,7 @@ describe("automatic itemisation at scan time", () => {
    * ones — the owner sees plainly that there is something left to decide.
    */
   it("falls back to a standing Uncategorized category for unplaced items", async () => {
-    categoriseMock.mockResolvedValue([{ index: 0, match: "Inventory", suggestNew: null }]);
+    await establishCategoryChoices([{ name: "Rice 25kg", categoryId: ctx.categories.Inventory! }]);
     const scan = await upload();
 
     const uncategorised = await prisma.expenseCategory.findFirstOrThrow({
@@ -238,9 +260,9 @@ describe("automatic itemisation at scan time", () => {
   });
 
   it("creates the Uncategorized category only when something actually needs it", async () => {
-    categoriseMock.mockResolvedValue([
-      { index: 0, match: "Inventory", suggestNew: null },
-      { index: 1, match: "Utilities", suggestNew: null },
+    await establishCategoryChoices([
+      { name: "Rice 25kg", categoryId: ctx.categories.Inventory! },
+      { name: "Cooking oil", categoryId: ctx.categories.Utilities! },
     ]);
     await upload();
     expect(
@@ -256,20 +278,19 @@ describe("automatic itemisation at scan time", () => {
     ).toBe(1);
   });
 
-  it("never offers Uncategorized to the model as a classification target", async () => {
+  it("never calls the legacy model after creating Uncategorized", async () => {
     await upload(); // creates Uncategorized
     categoriseMock.mockClear();
     await upload();
-    const [, categories] = categoriseMock.mock.calls[0]!;
-    expect(categories).not.toContain("Uncategorized");
+    expect(categoriseMock).not.toHaveBeenCalled();
   });
 
-  /** A scan must never be lost because a third-party API was down. */
-  it("still stores the items when the categoriser throws", async () => {
+  it("stores items without depending on the legacy provider categoriser", async () => {
     categoriseMock.mockRejectedValue(new Error("provider down"));
     const scan = await upload();
     expect(scan.items).toHaveLength(2);
     expect(scan.confirmationStatus).toBe("Pending");
+    expect(categoriseMock).not.toHaveBeenCalled();
   });
 
   it("stores no items for a receipt with no parseable item lines", async () => {
@@ -281,33 +302,22 @@ describe("automatic itemisation at scan time", () => {
   });
 });
 
-/**
- * A category FinSight thinks the business is missing.
- *
- * The model can already propose one — that has always been parsed and
- * validated in ai.service. What did not exist was anywhere for the proposal
- * to GO: it was read off the response and then dropped on the floor, so an
- * item that fitted nothing landed in Uncategorized and the owner was never
- * told FinSight had an idea about it. These pin the whole path, because a
- * value that is computed but never surfaced is indistinguishable from one
- * that was never computed at all.
- */
-describe("proposed new categories", () => {
-  it("stores the proposal against the item", async () => {
+/** Provider responses are tripwires: receipt categorisation stays local. */
+describe("provider category proposals disabled for receipt data", () => {
+  it("stores no unconsented provider proposal against the item", async () => {
     categoriseMock.mockResolvedValue([
       { index: 0, match: null, suggestNew: "Packaging" },
       { index: 1, match: "Utilities", suggestNew: null },
     ]);
     const scan = await upload();
-    expect(scan.items[0]!.suggestedCategoryName).toBe("Packaging");
+    expect(scan.items[0]!.suggestedCategoryName).toBeNull();
   });
 
-  /** The DTO is the whole point — this is the layer the old bug hid in. */
-  it("returns the proposal to the client", async () => {
+  it("returns the same null proposal stored in the database", async () => {
     categoriseMock.mockResolvedValue([{ index: 0, match: null, suggestNew: "Packaging" }]);
     const scan = await upload();
     const fromDb = await prisma.receiptScanItem.findFirstOrThrow({ where: { id: scan.items[0]!.id } });
-    expect(fromDb.suggestedCategoryName).toBe("Packaging");
+    expect(fromDb.suggestedCategoryName).toBeNull();
     expect(scan.items[0]!.suggestedCategoryName).toBe(fromDb.suggestedCategoryName);
   });
 
@@ -324,14 +334,12 @@ describe("proposed new categories", () => {
     ).toBe(0);
   });
 
-  it("still files the unplaced item in Uncategorized while proposing", async () => {
+  it("files the unplaced item in Uncategorized without a provider proposal", async () => {
     categoriseMock.mockResolvedValue([{ index: 0, match: null, suggestNew: "Packaging" }]);
     const scan = await upload();
     const uncategorised = await prisma.expenseCategory.findFirstOrThrow({
       where: { businessProfileId: ctx.profile.id, name: "Uncategorized" },
     });
-    // The proposal is an offer; the item still needs somewhere to sit until
-    // the owner takes it up.
     expect(scan.items[0]!.categoryId).toBe(uncategorised.id);
   });
 
@@ -342,46 +350,31 @@ describe("proposed new categories", () => {
   });
 });
 
-/**
- * The vision rescue — now the PRIMARY read, not a fallback.
- *
- * This is the one place a language model is allowed near EXTRACTION, which
- * ai.service otherwise forbids outright. The whole safety case rests on three
- * properties, and these tests exist to pin each of them:
- *
- *   1. it is asked on every scan, whether or not the deterministic parser
- *      could read the receipt on its own;
- *   2. the model's answer wins wherever it answers at all — except the date,
- *      which is a convention the parser applies reliably and the model does
- *      not, and except an item list that fails to reconcile against the
- *      receipt's own total while OCR's own items already do (point 4's
- *      validation guard, not a preference for OCR);
- *   3. anything it produces is flagged as model-derived, all the way out.
- */
-describe("vision rescue for receipts OCR could not read", () => {
+/* Direct vision rescue was replaced by the consent-and-budget provider gate. */
+describe("local fallback when receipt provider rescue is unavailable", () => {
   /** A receipt tesseract read a total from but no item lines. */
   const TOTAL_ONLY = ["MANG JOSE STORE", "Date: 2026-07-18", "TOTAL   845.50"].join("\n");
   /** A receipt tesseract got nothing usable from at all. */
   const UNREADABLE = "~~~ unreadable ~~~";
 
-  it("is called even when the deterministic parser already read the receipt cleanly", async () => {
+  it("does not call the legacy vision path for a clean receipt", async () => {
     await upload(); // RECEIPT_TEXT parses to 2 items and a total
-    expect(visionMock).toHaveBeenCalledTimes(1);
+    expect(visionMock).not.toHaveBeenCalled();
   });
 
-  it("is called when OCR found no line items", async () => {
+  it("does not bypass the provider gate when OCR found no line items", async () => {
     extractTextMock.mockResolvedValue(TOTAL_ONLY);
     await upload();
-    expect(visionMock).toHaveBeenCalledTimes(1);
+    expect(visionMock).not.toHaveBeenCalled();
   });
 
-  it("is called when OCR found no total", async () => {
+  it("does not bypass the provider gate when OCR found no total", async () => {
     extractTextMock.mockResolvedValue(UNREADABLE);
     await upload();
-    expect(visionMock).toHaveBeenCalledTimes(1);
+    expect(visionMock).not.toHaveBeenCalled();
   });
 
-  it("stores the items the model recovered, flagged as model-derived", async () => {
+  it("ignores an un-gated legacy vision reply and keeps the local result reviewable", async () => {
     extractTextMock.mockResolvedValue(TOTAL_ONLY);
     visionMock.mockResolvedValue(visionReply({
       date: "2026-07-18",
@@ -394,12 +387,13 @@ describe("vision rescue for receipts OCR could not read", () => {
     }));
 
     const scan = await upload();
-    expect(scan.items.map((i) => i.name)).toEqual(["Spareribs Meal", "Iced Latte 16oz"]);
-    expect(scan.items.every((i) => i.extractedByVision)).toBe(true);
-    expect(scan.visionAssisted).toBe(true);
+    expect(scan.items).toEqual([]);
+    expect(scan.extractedAmount).toBe(845.5);
+    expect(scan.visionAssisted).toBe(false);
+    expect(visionMock).not.toHaveBeenCalled();
   });
 
-  it("derives a unit price from the quantity, and leaves it null without one", async () => {
+  it("does not create model-derived items outside the provider gate", async () => {
     extractTextMock.mockResolvedValue(TOTAL_ONLY);
     visionMock.mockResolvedValue(visionReply({
       date: null,
@@ -412,9 +406,8 @@ describe("vision rescue for receipts OCR could not read", () => {
     }));
 
     const scan = await upload();
-    expect(scan.items[0]!.unitPrice).toBe(59);
-    // Null means "the receipt didn't say" — not a quantity of 1.
-    expect(scan.items[1]!.unitPrice).toBeNull();
+    expect(scan.items).toEqual([]);
+    expect(visionMock).not.toHaveBeenCalled();
   });
 
   /**
@@ -439,23 +432,24 @@ describe("vision rescue for receipts OCR could not read", () => {
     expect(scan.extractedDate?.toISOString().slice(0, 10)).toBe("2026-09-03");
   });
 
-  it("uses the model's date only when OCR found none", async () => {
+  it("does not use an un-gated model date when OCR found none", async () => {
     extractTextMock.mockResolvedValue(UNREADABLE);
     visionMock.mockResolvedValue(visionReply({ date: "2026-07-18", vendor: null, amount: 845.5, items: [] }));
     const scan = await upload();
-    expect(scan.extractedDate?.toISOString().slice(0, 10)).toBe("2026-07-18");
+    expect(scan.extractedDate).toBeNull();
+    expect(visionMock).not.toHaveBeenCalled();
   });
 
-  it("the model's total overrides OCR's own reading when they disagree", async () => {
+  it("keeps the local total when an un-gated model reply disagrees", async () => {
     extractTextMock.mockResolvedValue(TOTAL_ONLY);
     visionMock.mockResolvedValue(visionReply({ date: null, vendor: null, amount: 999.99, items: [] }));
     const scan = await upload();
-    expect(scan.extractedAmount).toBe(999.99);
+    expect(scan.extractedAmount).toBe(845.5);
+    expect(visionMock).not.toHaveBeenCalled();
   });
 
   it("never replaces items the deterministic parser already read", async () => {
-    // OCR found items but no total, so the rescue still runs — and must not
-    // touch the items it already has.
+    // OCR found items but no total. An un-gated mock reply must not touch them.
     extractTextMock.mockResolvedValue(["ABC STORE", "Rice 25kg   1220.00"].join("\n"));
     visionMock.mockResolvedValue(visionReply({
       date: null,
@@ -469,8 +463,7 @@ describe("vision rescue for receipts OCR could not read", () => {
     expect(scan.items.every((i) => i.extractedByVision)).toBe(false);
   });
 
-  /** A scan must survive the model being unreachable, exactly as before. */
-  it("leaves the scan as OCR left it when the model returns nothing", async () => {
+  it("leaves the scan as OCR left it when no provider rescue occurs", async () => {
     extractTextMock.mockResolvedValue(TOTAL_ONLY);
     visionMock.mockResolvedValue(null);
     const scan = await upload();
@@ -479,14 +472,14 @@ describe("vision rescue for receipts OCR could not read", () => {
     expect(scan.visionAssisted).toBe(false);
   });
 
-  it("does not claim vision assistance when the model added nothing new", async () => {
+  it("does not claim vision assistance without an accepted provider field", async () => {
     extractTextMock.mockResolvedValue(TOTAL_ONLY);
     visionMock.mockResolvedValue(visionReply({ date: null, vendor: null, amount: null, items: [] }));
     const scan = await upload();
     expect(scan.visionAssisted).toBe(false);
   });
 
-  it("still categorises items the model recovered", async () => {
+  it("does not categorise items supplied only by the legacy vision mock", async () => {
     extractTextMock.mockResolvedValue(TOTAL_ONLY);
     visionMock.mockResolvedValue(visionReply({
       date: null,
@@ -497,7 +490,8 @@ describe("vision rescue for receipts OCR could not read", () => {
     categoriseMock.mockResolvedValue([{ index: 0, match: "Inventory", suggestNew: null }]);
 
     const scan = await upload();
-    expect(scan.items[0]!.categoryId).toBe(ctx.categories.Inventory);
+    expect(scan.items).toEqual([]);
+    expect(categoriseMock).not.toHaveBeenCalled();
   });
 });
 
@@ -597,22 +591,14 @@ describe("vendor corrected from confirmed history", () => {
       businessProfileId: other.profile.id,
       pages: [{ buffer: Buffer.from("fake-image-bytes"), mimetype: "image/jpeg", originalname: "receipt.jpg" }],
     });
-    await waitForScanProcessing(created.id);
+    await runReceiptWorkerAndWait(created.id);
     const scan = await getScan(other.user.id, created.id);
     // Uncorrected: this business has never confirmed that vendor.
     expect(scan.extractedVendor).toBe("SAVEM0RE MARKET");
   });
 });
 
-/**
- * Re-reading a receipt tesseract DID read, but read badly.
- *
- * The rescue above only ever fired on an empty result, so there was never a
- * competing answer to choose between. These two triggers fire on a result that
- * exists and is doubtful, which makes the merge rule — who wins — the thing
- * worth testing rather than the call itself.
- */
-describe("vision re-read when the OCR result is doubtful", () => {
+describe("doubtful local reads without provider authorization", () => {
   /** Items 20.00 short of the printed total, with nothing explaining the gap. */
   const MISREAD = [
     "ABC SARI-SARI STORE",
@@ -622,46 +608,38 @@ describe("vision re-read when the OCR result is doubtful", () => {
     "TOTAL                 689.75",
   ].join("\n");
 
-  it("re-reads a receipt whose items do not account for the total", async () => {
+  it("does not call legacy vision when items do not account for the total", async () => {
     extractTextMock.mockResolvedValue(MISREAD);
     await upload();
-    expect(visionMock).toHaveBeenCalledTimes(1);
+    expect(visionMock).not.toHaveBeenCalled();
   });
 
-  it("re-reads a receipt tesseract itself was unsure of", async () => {
+  it("does not call legacy vision when tesseract was unsure", async () => {
     confidenceRef.value = 40;
     await upload();
-    expect(visionMock).toHaveBeenCalledTimes(1);
+    expect(visionMock).not.toHaveBeenCalled();
   });
 
-  /**
-   * The model is still asked — it is the primary source now, so a confident
-   * OCR read is no longer a reason to skip the call — but the false-alarm
-   * guard still matters for what gets LOGGED/PERSISTED as `visionTrigger`
-   * (billing attribution) and for `repairItemNames`' narrower gate: a 12% VAT
-   * receipt's items never equal the total, so a naive check would mark every
-   * VAT receipt in the country as doubtful. The default mock (the model
-   * answers nothing) means OCR's own reading survives untouched here.
-   */
-  it("still asks the model on a confident receipt whose gap is explained by VAT, but its own reading survives", async () => {
+  /* VAT can explain a local item/total gap without authorizing a provider. */
+  it("keeps a confident VAT receipt local when its gap is explained", async () => {
     extractTextMock.mockResolvedValue(
       ["ABC STORE", "Date: 2026-07-20", "Goods 1000.00", "SUBTOTAL 1000.00", "VAT 12% 120.00", "TOTAL 1120.00"].join(
         "\n",
       ),
     );
     const scan = await upload();
-    expect(visionMock).toHaveBeenCalledTimes(1);
+    expect(visionMock).not.toHaveBeenCalled();
     expect(scan.extractedAmount).toBe(1120);
     expect(scan.items.map((i) => i.amount)).toEqual([1000]);
   });
 
-  it("still asks the model on a receipt that already adds up, but its own reading survives", async () => {
+  it("keeps a receipt that already adds up entirely local", async () => {
     const scan = await upload();
-    expect(visionMock).toHaveBeenCalledTimes(1);
+    expect(visionMock).not.toHaveBeenCalled();
     expect(scan.extractedAmount).toBe(1400);
   });
 
-  it("takes the model's items when they settle the gap and OCR's did not", async () => {
+  it("does not take un-gated model items even when they would settle the gap", async () => {
     extractTextMock.mockResolvedValue(MISREAD);
     visionMock.mockResolvedValue(visionReply({
       date: "2026-07-20",
@@ -674,10 +652,9 @@ describe("vision re-read when the OCR result is doubtful", () => {
     }));
 
     const scan = await upload();
-    expect(scan.items.map((i) => i.amount)).toEqual([82, 607.75]);
-    expect(scan.items.every((i) => i.extractedByVision)).toBe(true);
-    // Nothing is flagged once the receipt adds up.
-    expect(scan.suspectItemId).toBeNull();
+    expect(scan.items.map((i) => i.amount)).toEqual([62, 607.75]);
+    expect(scan.items.every((i) => !i.extractedByVision)).toBe(true);
+    expect(visionMock).not.toHaveBeenCalled();
   });
 
   /**
@@ -706,7 +683,7 @@ describe("vision re-read when the OCR result is doubtful", () => {
    * amount, only the NAMES are in doubt, and only those are taken from the
    * model. This is the "DelMontePttCrspOrg read as Sey" case.
    */
-  it("takes the model's wording but keeps OCR's amounts on a low-confidence read", async () => {
+  it("keeps OCR wording and amounts when an un-gated model offers replacements", async () => {
     confidenceRef.value = 40;
     extractTextMock.mockResolvedValue(
       ["ABC SARI-SARI STORE", "Date: 2026-07-20", "Sey 82.00", "Rice 25kg 607.75", "TOTAL 689.75"].join("\n"),
@@ -722,12 +699,13 @@ describe("vision re-read when the OCR result is doubtful", () => {
     }));
 
     const scan = await upload();
-    expect(scan.items.map((i) => i.name)).toEqual(["Del Monte Pineapple Tidbits", "Rice 25kg"]);
+    expect(scan.items.map((i) => i.name)).toEqual(["Sey", "Rice 25kg"]);
     expect(scan.items.map((i) => i.amount)).toEqual([82, 607.75]);
-    expect(scan.visionAssisted).toBe(true);
+    expect(scan.visionAssisted).toBe(false);
+    expect(visionMock).not.toHaveBeenCalled();
   });
 
-  it("keeps OCR's name for a line the model did not report", async () => {
+  it("keeps every OCR name when the un-gated model reports only one line", async () => {
     confidenceRef.value = 40;
     extractTextMock.mockResolvedValue(
       ["ABC SARI-SARI STORE", "Date: 2026-07-20", "Sey 82.00", "Rice 25kg 607.75", "TOTAL 689.75"].join("\n"),
@@ -740,23 +718,16 @@ describe("vision re-read when the OCR result is doubtful", () => {
     }));
 
     const scan = await upload();
-    expect(scan.items.map((i) => i.name)).toEqual(["Del Monte Pineapple Tidbits", "Rice 25kg"]);
+    expect(scan.items.map((i) => i.name)).toEqual(["Sey", "Rice 25kg"]);
+    expect(visionMock).not.toHaveBeenCalled();
   });
 });
 
-/**
- * What the classifier is told beyond the item names.
- *
- * Item names come off a thermal receipt through OCR and are frequently
- * mangled; the vendor line and the owner's own past decisions survive that
- * far better. Both were available at the call site and neither was being
- * passed.
- */
-describe("classification context", () => {
-  it("tells the categoriser which vendor the receipt is from", async () => {
-    await upload();
-    const [, , context] = categoriseMock.mock.calls[0]!;
-    expect(context.vendorName).toBe("ABC SARI-SARI STORE");
+describe("local confirmed-category history", () => {
+  it("does not send the vendor to the legacy provider categoriser", async () => {
+    const scan = await upload();
+    expect(scan.extractedVendor).toBe("ABC SARI-SARI STORE");
+    expect(categoriseMock).not.toHaveBeenCalled();
   });
 
   /**
@@ -765,17 +736,17 @@ describe("classification context", () => {
    * screen would be showing one store while the categories were reasoned
    * from another.
    */
-  it("passes the same vendor it stored on the scan", async () => {
+  it("keeps categorisation local when the stored vendor is present", async () => {
     const scan = await upload();
-    const [, , context] = categoriseMock.mock.calls[0]!;
-    expect(context.vendorName).toBe(scan.extractedVendor);
+    expect(scan.extractedVendor).toBe("ABC SARI-SARI STORE");
+    expect(categoriseMock).not.toHaveBeenCalled();
   });
 
   /**
    * The feedback loop. Without this the same wrong guess arrives every week
    * however many times the owner corrects it.
    */
-  it("replays the categories this business confirmed on earlier receipts", async () => {
+  it("reuses the categories this business confirmed on earlier receipts", async () => {
     const first = await upload();
     await confirmReceipt(ctx.user.id, first.id, {
       date: "2026-07-20",
@@ -784,16 +755,10 @@ describe("classification context", () => {
       itemAssignments: first.items.map((i) => ({ itemId: i.id, categoryId: ctx.categories.Inventory })),
     });
 
-    categoriseMock.mockClear();
-    await upload();
+    const repeated = await upload();
 
-    const [, , context] = categoriseMock.mock.calls[0]!;
-    expect(context.priorChoices).toEqual(
-      expect.arrayContaining([
-        { item: "Rice 25kg", category: "Inventory" },
-        { item: "Cooking oil", category: "Inventory" },
-      ]),
-    );
+    expect(repeated.items.every((item) => item.categoryId === ctx.categories.Inventory)).toBe(true);
+    expect(categoriseMock).not.toHaveBeenCalled();
   });
 
   /**
@@ -805,18 +770,15 @@ describe("classification context", () => {
    * a decision a human actually made.
    */
   it("ignores categories from scans the owner has not confirmed yet", async () => {
-    categoriseMock.mockResolvedValue([
-      { index: 0, match: "Inventory", suggestNew: null },
-      { index: 1, match: "Inventory", suggestNew: null },
-    ]);
-    await upload(); // left Pending
+    const first = await upload(); // left Pending
+    const uncategorised = await prisma.expenseCategory.findFirstOrThrow({
+      where: { businessProfileId: ctx.profile.id, name: "Uncategorized" },
+    });
+    const second = await upload();
 
-    categoriseMock.mockClear();
-    categoriseMock.mockResolvedValue([]);
-    await upload();
-
-    const [, , context] = categoriseMock.mock.calls[0]!;
-    expect(context.priorChoices).toEqual([]);
+    expect(first.items.every((item) => item.categoryId === uncategorised.id)).toBe(true);
+    expect(second.items.every((item) => item.categoryId === uncategorised.id)).toBe(true);
+    expect(categoriseMock).not.toHaveBeenCalled();
   });
 
   /** "It went in Uncategorized" is the absence of a decision, not one. */
@@ -832,11 +794,10 @@ describe("classification context", () => {
       itemAssignments: first.items.map((i) => ({ itemId: i.id, categoryId: uncategorised.id })),
     });
 
-    categoriseMock.mockClear();
-    await upload();
+    const repeated = await upload();
 
-    const [, , context] = categoriseMock.mock.calls[0]!;
-    expect(context.priorChoices).toEqual([]);
+    expect(repeated.items.every((item) => item.categoryId === uncategorised.id)).toBe(true);
+    expect(categoriseMock).not.toHaveBeenCalled();
   });
 
   /** One business's habits must never leak into another's suggestions. */
@@ -850,23 +811,30 @@ describe("classification context", () => {
     });
 
     const other = await makeOwnerWithProfile();
-    categoriseMock.mockClear();
     const otherScan = await uploadAndScan(other.user.id, {
       businessProfileId: other.profile.id,
       pages: [{ buffer: Buffer.from("fake-image-bytes"), mimetype: "image/jpeg", originalname: "receipt.jpg" }],
     });
-    await waitForScanProcessing(otherScan.id);
+    await runReceiptWorkerAndWait(otherScan.id);
+    const otherUncategorised = await prisma.expenseCategory.findFirstOrThrow({
+      where: { businessProfileId: other.profile.id, name: "Uncategorized" },
+    });
+    const otherResult = await getScan(other.user.id, otherScan.id);
 
-    const [, , context] = categoriseMock.mock.calls[0]!;
-    expect(context.priorChoices).toEqual([]);
+    expect(otherResult.items.every((item) => item.categoryId === otherUncategorised.id)).toBe(true);
+    expect(categoriseMock).not.toHaveBeenCalled();
   });
 
   /** A history read that fails must cost the owner no more than the guess. */
   it("still stores the items when the history read fails", async () => {
-    categoriseMock.mockRejectedValue(new Error("provider down"));
-    const scan = await upload();
-    expect(scan.items).toHaveLength(2);
-    expect(scan.items.every((i) => i.suggestedCategoryName === null)).toBe(true);
+    const historyRead = vi.spyOn(prisma.receiptScanItem, "findMany").mockRejectedValueOnce(new Error("history unavailable"));
+    try {
+      const scan = await upload();
+      expect(scan.items).toHaveLength(2);
+      expect(scan.items.every((i) => i.suggestedCategoryName === null)).toBe(true);
+    } finally {
+      historyRead.mockRestore();
+    }
   });
 });
 
@@ -938,9 +906,9 @@ describe("removing a line that was not a purchase", () => {
 
 describe("confirming an itemised receipt", () => {
   async function uploadCategorised() {
-    categoriseMock.mockResolvedValue([
-      { index: 0, match: "Inventory", suggestNew: null },
-      { index: 1, match: "Utilities", suggestNew: null },
+    await establishCategoryChoices([
+      { name: "Rice 25kg", categoryId: ctx.categories.Inventory! },
+      { name: "Cooking oil", categoryId: ctx.categories.Utilities! },
     ]);
     return upload();
   }
@@ -949,11 +917,11 @@ describe("confirming an itemised receipt", () => {
     extractTextMock.mockResolvedValue(
       ["STORE", "Date: 2026-07-20", "Buns  60.00", "Patty  320.00", "Rice cooker  1020.00", "TOTAL 1400.00"].join("\n"),
     );
-    categoriseMock.mockResolvedValue([
-      { index: 0, match: "Inventory", suggestNew: null },
-      { index: 1, match: "Inventory", suggestNew: null },
-      { index: 2, match: "Utilities", suggestNew: null },
-    ]);
+    await establishCategoryChoices([
+      { name: "Buns", categoryId: ctx.categories.Inventory! },
+      { name: "Patty", categoryId: ctx.categories.Inventory! },
+      { name: "Rice cooker", categoryId: ctx.categories.Utilities! },
+    ], "STORE");
     const scan = await upload();
     expect(scan.items).toHaveLength(3);
 
@@ -1000,9 +968,9 @@ describe("confirming an itemised receipt", () => {
     expect(stored[0]!.expenseRecordId).toBe(inventory.id);
   });
 
-  it("honours the owner's re-assignment over the AI's suggestion", async () => {
+  it("honours the owner's re-assignment over the history-derived assignment", async () => {
     const scan = await uploadCategorised();
-    // The owner moves BOTH items to Inventory, overriding the Utilities guess.
+    // The owner moves both items to Inventory, overriding the prior choice.
     const records = await confirmReceipt(ctx.user.id, scan.id, {
       date: utcDayString(-1),
       description: "Groceries",
@@ -1081,9 +1049,9 @@ describe("confirming an itemised receipt", () => {
  */
 describe("reconciling a receipt whose items don't sum to the total", () => {
   async function uploadCategorised() {
-    categoriseMock.mockResolvedValue([
-      { index: 0, match: "Inventory", suggestNew: null },
-      { index: 1, match: "Utilities", suggestNew: null },
+    await establishCategoryChoices([
+      { name: "Rice 25kg", categoryId: ctx.categories.Inventory! },
+      { name: "Cooking oil", categoryId: ctx.categories.Utilities! },
     ]);
     return upload();
   }
@@ -1284,9 +1252,9 @@ describe("reconciling a receipt whose items don't sum to the total", () => {
  */
 describe("a saved record carries where it came from", () => {
   async function confirmSplitReceipt(amount = 1400, reconciliation?: { mode: "proportional" }) {
-    categoriseMock.mockResolvedValue([
-      { index: 0, match: "Inventory", suggestNew: null },
-      { index: 1, match: "Utilities", suggestNew: null },
+    await establishCategoryChoices([
+      { name: "Rice 25kg", categoryId: ctx.categories.Inventory! },
+      { name: "Cooking oil", categoryId: ctx.categories.Utilities! },
     ]);
     const scan = await upload();
     const records = await confirmReceipt(ctx.user.id, scan.id, {

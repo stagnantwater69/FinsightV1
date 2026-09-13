@@ -2,6 +2,16 @@ import { createWorker } from "tesseract.js";
 import sharp from "sharp";
 import { env } from "../config/env";
 import { logger } from "../config/logger";
+export {
+  findPageSeams,
+  joinPagesWithoutSeams,
+  looksLikeDuplicatePage,
+  looksLikeMultipleReceipts,
+  receiptItemsReconcile,
+  reconcileItems,
+  seamOverlapLength,
+} from "../lib/receiptTextSignals";
+export type { PageSeam, Reconciliation, ReconciliationReason } from "../lib/receiptTextSignals";
 
 /**
  * Version tags for the deterministic half of the extraction pipeline,
@@ -22,6 +32,12 @@ export const PARSER_VERSION = "ocr-parser-v2";
  * photographs are preprocessed exactly as v1 did.
  */
 export const PREPROCESS_VERSION = "ocr-preprocess-v2";
+
+const TESSERACT_WORKER_OPTIONS = {
+  langPath: env.TESSERACT_LANG_PATH,
+  gzip: false,
+  cacheMethod: "none",
+} as const;
 
 /**
  * The width a receipt photo is reduced to before OCR.
@@ -214,7 +230,7 @@ export async function extractReceipt(buffer: Buffer, options: OcrEngineOptions =
     logger.error({ err }, "Receipt image preprocessing failed; reading the original image instead");
   }
 
-  const worker = await createWorker(env.TESSERACT_LANG);
+  const worker = await createWorker(env.TESSERACT_LANG, undefined, TESSERACT_WORKER_OPTIONS);
   try {
     const params: Record<string, string> = {};
     if (options.pageSegMode) params.tessedit_pageseg_mode = options.pageSegMode;
@@ -270,7 +286,7 @@ export async function extractText(buffer: Buffer, options: OcrEngineOptions = {}
     logger.error({ err }, "Receipt image preprocessing failed; reading the original image instead");
   }
 
-  const worker = await createWorker(env.TESSERACT_LANG);
+  const worker = await createWorker(env.TESSERACT_LANG, undefined, TESSERACT_WORKER_OPTIONS);
   try {
     /*
      * DO NOT SET A PAGE SEGMENTATION MODE HERE. It has been measured, and
@@ -974,255 +990,6 @@ export function parseLineItems(text: string): ParsedLineItem[] {
   return items;
 }
 
-/**
- * Marks the start of a receipt, for counting how many are in one photograph.
- *
- * WHY THIS MARKER AND NOT A BETTER-SOUNDING ONE. The obvious candidates were
- * measured against the 31-image corpus (tests/ocr-accuracy/results.json), and
- * the obvious ones lose:
- *
- *   "SALES INVOICE" / "OFFICIAL RECEIPT"   1 of 31 receipts carry it
- *   a TIN / VAT-REG number                 3 of 31
- *   "Thank you"                            1 of 31
- *   a DATE: label                         28 of 31   <-- this one
- *
- * Counting the word TOTAL, which is the first thing anyone reaches for, is
- * actively wrong: a single real receipt in the corpus prints "Total gross
- * value", "Total QTY" AND "AMOUNT DUE", so it would report two receipts on
- * nearly every photograph. That is the cry-wolf failure reconcileItems is
- * written to avoid, and it is worse than not checking.
- *
- * Measured on the corpus: fires on 0 of 31 single receipts (no receipt carries
- * two date labels), and catches 81% of artificial two-receipt pairs. The
- * misses are all pairs built from the three receipts that print no date label
- * at all — a limit of the marker, not a tuning problem.
- */
-const RECEIPT_START_MARKER = /\bdate\s*[:.]/gi;
-
-/**
- * Whether one photograph appears to hold more than one receipt.
- *
- * Deliberately one-directional: false means "no evidence of a second
- * receipt", NOT "definitely one receipt". Two receipts photographed together
- * where neither prints a date label read past this undetected, and the items
- * failing to reconcile is what catches them instead.
- *
- * Nothing acts on this but a sentence on the confirm screen. Splitting the
- * photograph automatically would mean deciding which items belong to which
- * receipt, and a wrong split puts money against the wrong purchase — the
- * owner can see two receipts in their own hand far more reliably than this
- * can infer it.
- */
-export function looksLikeMultipleReceipts(text: string | null | undefined): boolean {
-  if (!text) return false;
-  return (text.match(RECEIPT_START_MARKER) ?? []).length >= 2;
-}
-
-/**
- * How much of the shorter page's lines must reappear in the other to call it
- * a duplicate.
- *
- * A majority rather than a supermajority, deliberately: on a short receipt —
- * common in this market — a four-line page with one line OCR reads
- * differently already falls to a 0.75 overlap, so 0.8 would miss the exact
- * case this exists to catch. 0.6 still requires most of the page to agree,
- * which two genuinely different pages sharing only a header or a footer line
- * will not reach.
- */
-const DUPLICATE_PAGE_OVERLAP = 0.6;
-
-/**
- * Whether two photographed pages of a multi-page scan look like the same
- * page, shot twice — the owner's shutter finger firing early, or a retake
- * that was kept alongside the original by mistake.
- *
- * UNMEASURED, unlike looksLikeMultipleReceipts. That check had a 31-receipt
- * corpus of real photographs to test candidate markers against; there is no
- * equivalent corpus of "the same page photographed twice" pairs, because
- * nobody has one — it is not a thing anyone photographs on purpose to build
- * a test set from. So this is a considered threshold, not a validated one,
- * and the honest thing is to say so rather than borrow the confidence the
- * measurement above earned.
- *
- * A ratio rather than exact equality, because two photographs of the
- * identical physical page will not produce byte-identical OCR text — a
- * slightly different angle or a fold moves a handful of characters — and a
- * check that only caught perfect matches would miss the real case it exists
- * for. Compared as whole trimmed lines rather than characters: OCR noise
- * scrambles individual characters far more than it drops or repeats whole
- * lines, so the line is the more stable unit to compare on.
- *
- * Deliberately not folded into the upload pipeline's automatic decisions —
- * it only ever produces a sentence the owner can dismiss with one tap. Two
- * genuinely identical pages of a short receipt (a two-line kiosk slip
- * photographed as pages 1 and 2 by mistake) would otherwise have its real
- * page silently dropped by anything more automatic than a question.
- */
-export function looksLikeDuplicatePage(pageA: string, pageB: string): boolean {
-  const significantLines = (text: string) =>
-    text
-      .split("\n")
-      .map((line) => line.trim().toLowerCase())
-      .filter((line) => line.length > 0);
-
-  const a = significantLines(pageA);
-  const b = significantLines(pageB);
-  if (a.length === 0 || b.length === 0) return false;
-
-  const bLines = new Set(b);
-  const shared = a.filter((line) => bLines.has(line)).length;
-  return shared / Math.min(a.length, b.length) >= DUPLICATE_PAGE_OVERLAP;
-}
-
-// ============================================================
-// Seams — where one photographed section runs into the next
-// ============================================================
-// The camera asks for 15-25% overlap between sections of a long receipt, so
-// the owner can see where to continue (mobile ReceiptGuide). That overlap is
-// what makes the sections obviously parts of ONE receipt — and it is also the
-// only way a few item lines can get read twice, because pages are OCR'd
-// separately and their text concatenated in order.
-//
-// WHAT THIS DELIBERATELY IS NOT. An earlier draft of the plan scored every
-// line of page n against every line of page n+1, normalised currency symbols
-// and punctuation, and dropped whatever passed a similarity threshold. That
-// is a preference-based heuristic deciding which money lines survive, and
-// this codebase already fixed the opposite rule for exactly this situation at
-// rescueWithVision: a competing reading replaces the deterministic one "only
-// on an OBJECTIVE test, never a preference". The objective test available
-// here is the receipt's own printed total — see receiptScan.service.
-
-/**
- * The most lines at a seam that will be considered overlap.
- *
- * The camera asks for a quarter of a frame; a quarter of a photographed
- * section is rarely more than a dozen printed lines. A cap matters because
- * without one the longest common run between two pages of a restock receipt —
- * where the same supplier's items repeat legitimately — could swallow a whole
- * page of genuine purchases.
- */
-const MAX_SEAM_LINES = 12;
-
-/** How much of a line must survive normalisation for it to be worth comparing. */
-const MIN_SEAM_LINE_LENGTH = 3;
-
-/**
- * Comparable form for seam matching.
- *
- * Whole lines, lower-cased, with runs of whitespace collapsed — and nothing
- * else. The temptation is to strip currency symbols and punctuation too, on
- * the grounds that OCR renders them inconsistently; the reason not to is that
- * those characters are most of what distinguishes one money line from
- * another, and a normaliser aggressive enough to match "P 45.00" with
- * "₱45,00" is also aggressive enough to match two genuinely different lines.
- * Being conservative here means missing some overlap, which costs a
- * reconciliation warning the owner can see. Being aggressive means deleting a
- * purchase, which costs money nobody notices.
- */
-function seamKey(line: string): string {
-  return line.trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-function seamLines(text: string): string[] {
-  return text
-    .split("\n")
-    .map(seamKey)
-    .filter((line) => line.length >= MIN_SEAM_LINE_LENGTH);
-}
-
-export interface PageSeam {
-  /** 1-indexed page whose TOP repeats the previous page's bottom. */
-  pageNumber: number;
-  /** How many lines repeat. */
-  lineCount: number;
-}
-
-/**
- * The longest run of lines that ends page A and begins page B.
- *
- * An ANCHORED match — the run must be A's tail and B's head — not a search
- * for shared lines anywhere in either page. That distinction is the whole
- * safety property: a restock receipt legitimately repeats "san miguel pale
- * pilsen 1 case" on pages 1 and 3, and an unanchored search would find it and
- * call it overlap. Only a tail-to-head repeat is evidence that the camera
- * photographed the same strip of paper twice, because that is the only shape
- * the overlap guide can produce.
- *
- * Longest-first so a genuine 6-line overlap is not reported as a 1-line one
- * because the shorter run also matched.
- */
-export function seamOverlapLength(pageA: string, pageB: string): number {
-  const a = seamLines(pageA);
-  const b = seamLines(pageB);
-  const limit = Math.min(MAX_SEAM_LINES, a.length, b.length);
-
-  for (let run = limit; run >= 1; run--) {
-    let matches = true;
-    for (let i = 0; i < run; i++) {
-      if (a[a.length - run + i] !== b[i]) {
-        matches = false;
-        break;
-      }
-    }
-    if (matches) return run;
-  }
-  return 0;
-}
-
-/** Every seam in a scan, adjacent pages only. */
-export function findPageSeams(pageTexts: string[]): PageSeam[] {
-  const seams: PageSeam[] = [];
-  for (let i = 1; i < pageTexts.length; i++) {
-    const lineCount = seamOverlapLength(pageTexts[i - 1] ?? "", pageTexts[i] ?? "");
-    if (lineCount > 0) seams.push({ pageNumber: i + 1, lineCount });
-  }
-  return seams;
-}
-
-/**
- * The pages' text joined with each seam's repeat removed from the later page.
- *
- * A CANDIDATE READING, not a decision. Nothing calls this and uses the result
- * unconditionally — receiptScan.service builds both this and the plain
- * concatenation, then keeps this one only when the arithmetic says it is
- * right. See `overlapSettlesTheGap` there.
- */
-export function joinPagesWithoutSeams(pageTexts: string[]): string {
-  if (pageTexts.length <= 1) return pageTexts.join("\n");
-
-  const parts: string[] = [pageTexts[0] ?? ""];
-  for (let i = 1; i < pageTexts.length; i++) {
-    const page = pageTexts[i] ?? "";
-    const overlap = seamOverlapLength(pageTexts[i - 1] ?? "", page);
-    if (overlap === 0) {
-      parts.push(page);
-      continue;
-    }
-
-    /*
-     * Dropped by counting SIGNIFICANT lines, then cutting the raw text at
-     * that point — rather than by filtering the raw lines directly. The two
-     * differ whenever OCR emits a blank or a one-character line inside the
-     * overlap, and cutting at the wrong index there would take a line of real
-     * purchases with it.
-     */
-    const rawLines = page.split("\n");
-    let significantSeen = 0;
-    let cutAt = 0;
-    for (let index = 0; index < rawLines.length; index++) {
-      if (seamKey(rawLines[index] ?? "").length >= MIN_SEAM_LINE_LENGTH) {
-        significantSeen++;
-        if (significantSeen === overlap) {
-          cutAt = index + 1;
-          break;
-        }
-      }
-    }
-    parts.push(rawLines.slice(cutAt).join("\n"));
-  }
-  return parts.join("\n");
-}
-
 export function parseReceiptFields(text: string): ParsedReceiptFields {
   const vendor = parseVendor(text);
   const date = parseDate(text);
@@ -1375,127 +1142,4 @@ export function locateItemLines(pageTexts: string[], amounts: number[]): (ValueE
     hit.used = true;
     return { pageNumber: hit.pageNumber, sourceText: hit.sourceText };
   });
-}
-
-// ============================================================
-// Reconciliation — do the items account for the total?
-// ============================================================
-
-/** Why a receipt did or didn't add up. */
-export type ReconciliationReason =
-  | "not-comparable"
-  | "exact"
-  | "matches-subtotal"
-  | "explained-by-adjustment"
-  | "unexplained";
-
-export interface Reconciliation {
-  /** Sum of the item amounts, or null when there are none. */
-  itemsTotal: number | null;
-  /** The receipt's printed total, as parsed. */
-  total: number | null;
-  /** total - itemsTotal. Positive means the items fall short. */
-  difference: number | null;
-  /**
-   * True when the items account for the total — either exactly, or with a
-   * gap the receipt itself explains. False ONLY for an unexplained gap.
-   */
-  reconciled: boolean;
-  reason: ReconciliationReason;
-}
-
-/**
- * Money that legitimately sits between the items and the total.
- *
- * Kept separate from NOT_AN_ITEM, which is a broader denylist covering payment
- * lines and register furniture too. This is specifically the subset that
- * ADJUSTS the bill, and using the wider list here would let a "CASH 500.00"
- * tender line excuse a real 500.00 misread.
- */
-const ADJUSTMENT_LINE = new RegExp(
-  [
-    String.raw`\b[vy]at\b`,
-    String.raw`\b(tax|service\s*charge|svc\s*chg|rounding|round\s*off)\b`,
-    String.raw`\b(discounts?|disc\.|less|senior|pwd|rebates?)\b`,
-  ].join("|"),
-  "i",
-);
-
-const SUBTOTAL_LINE = /\bsub\s*-?\s*total\b/i;
-const RECONCILE_MONEY = /(\d+(?:,\d{3})*\.\d{2})/;
-
-function moneyOnLine(line: string): number | null {
-  const m = line.match(RECONCILE_MONEY);
-  return m ? Number(m[1]!.replace(/,/g, "")) : null;
-}
-
-/** Centavos, so comparisons are integer-exact rather than float-approximate. */
-function centavos(n: number): number {
-  return Math.round(n * 100);
-}
-
-/**
- * Whether the item lines add up to the printed total.
- *
- * WHY THIS IS NOT JUST `sum === total`: measured against the corpus, a naive
- * equality check called 6 receipts broken and was RIGHT about 1. The other 5
- * were fine and simply carried tax or a discount — `1000.00` of goods against
- * a `1120.00` total is the Philippine 12% VAT, not a misread. A check that
- * cries wolf 5 times out of 6 trains owners to ignore it, which is worse than
- * not checking at all.
- *
- * So a gap is only reported when the receipt does not explain it:
- *
- *   - the items match a printed SUBTOTAL — whatever sits between that and the
- *     total is tax and charges, and the items themselves are sound; or
- *   - the gap equals an adjustment the receipt prints (a VAT line, a senior
- *     discount), individually or summed.
- *
- * What remains is a gap no line on the receipt accounts for, which is real
- * evidence that a figure was read wrong. That evidence is what earns the right
- * to spend an API call re-reading the image, and to point the owner at a line.
- */
-export function reconcileItems(
-  text: string,
-  items: { amount: number }[],
-  total: number | null,
-): Reconciliation {
-  if (total === null || items.length === 0) {
-    return { itemsTotal: null, total, difference: null, reconciled: true, reason: "not-comparable" };
-  }
-
-  const itemsTotal = items.reduce((sum, i) => sum + centavos(i.amount), 0);
-  const totalC = centavos(total);
-  const difference = (totalC - itemsTotal) / 100;
-  const base = { itemsTotal: itemsTotal / 100, total, difference };
-
-  if (itemsTotal === totalC) return { ...base, reconciled: true, reason: "exact" };
-
-  const lines = text.split("\n");
-
-  // A printed subtotal the items match settles it: the items are right, and
-  // the remainder is the receipt's own tax and charges.
-  for (const line of lines) {
-    if (!SUBTOTAL_LINE.test(line)) continue;
-    const sub = moneyOnLine(line);
-    if (sub !== null && centavos(sub) === itemsTotal) {
-      return { ...base, reconciled: true, reason: "matches-subtotal" };
-    }
-  }
-
-  // Otherwise the gap has to be accounted for by adjustment lines — each on
-  // its own (the common case: one VAT line, one discount) or all together.
-  const adjustments = lines
-    .filter((line) => ADJUSTMENT_LINE.test(line) && !SUBTOTAL_LINE.test(line))
-    .map(moneyOnLine)
-    .filter((n): n is number => n !== null)
-    .map(centavos);
-
-  const gap = Math.abs(totalC - itemsTotal);
-  const summed = adjustments.reduce((a, b) => a + b, 0);
-  if (adjustments.some((a) => a === gap) || (adjustments.length > 1 && summed === gap)) {
-    return { ...base, reconciled: true, reason: "explained-by-adjustment" };
-  }
-
-  return { ...base, reconciled: false, reason: "unexplained" };
 }

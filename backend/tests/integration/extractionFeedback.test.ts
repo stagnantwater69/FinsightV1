@@ -4,12 +4,18 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 // is external, and running real OCR over Buffer.from("fake-image-bytes") fails.
 // What this suite asks is whether the owner's review is RECORDED faithfully,
 // not whether tesseract reads well — that is the corpus harness's job.
-vi.mock("../../src/services/storage.service", () => ({
-  uploadReceiptImage: vi.fn(async () => "1/mock-receipt.jpg"),
-  uploadCsvFile: vi.fn(async () => "1/mock.csv"),
-  signedReceiptImageUrl: vi.fn(async () => "https://example.test/signed-receipt.jpg"),
-  deleteReceiptImage: vi.fn(async () => true),
-}));
+vi.mock("../../src/services/storage.service", async () => {
+  const { tinyReceiptJpeg } = await import("../helpers/receiptImageFixtures");
+  const storedBytes = tinyReceiptJpeg();
+  return {
+    uploadReceiptImage: vi.fn(async () => "1/mock-receipt.jpg"),
+    uploadCsvFile: vi.fn(async () => "1/mock.csv"),
+    signedReceiptImageUrl: vi.fn(async () => "https://example.test/signed-receipt.jpg"),
+    deleteReceiptImage: vi.fn(async () => true),
+    inspectReceiptImage: vi.fn(async () => ({ sizeBytes: storedBytes.length, mimetype: "image/jpeg" })),
+    downloadReceiptImageBounded: vi.fn(async () => storedBytes),
+  };
+});
 
 const { extractTextMock, confidenceRef, linesRef } = vi.hoisted(() => ({
   extractTextMock: vi.fn(),
@@ -32,12 +38,6 @@ vi.mock("../../src/services/ocr.service", async (importOriginal) => {
   };
 });
 
-const { categoriseMock } = vi.hoisted(() => ({ categoriseMock: vi.fn() }));
-vi.mock("../../src/services/ai.service", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../src/services/ai.service")>();
-  return { ...actual, categoriseReceiptItems: categoriseMock };
-});
-
 const { visionMock } = vi.hoisted(() => ({ visionMock: vi.fn() }));
 vi.mock("../../src/services/visionOcr.service", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/services/visionOcr.service")>();
@@ -46,7 +46,7 @@ vi.mock("../../src/services/visionOcr.service", async (importOriginal) => {
 
 import { prisma } from "../../src/config/prisma";
 import { confirmReceipt, deleteScanItem, getScan, uploadAndScan } from "../../src/services/receiptScan.service";
-import { disconnectDb, makeOwnerWithProfile, resetDb, waitForScanProcessing } from "../setup/testDb";
+import { disconnectDb, makeOwnerWithProfile, resetDb, runReceiptWorkerAndWait } from "../setup/testDb";
 
 let ctx: Awaited<ReturnType<typeof makeOwnerWithProfile>>;
 
@@ -62,8 +62,6 @@ beforeEach(async () => {
   await resetDb();
   ctx = await makeOwnerWithProfile();
   extractTextMock.mockReset();
-  categoriseMock.mockReset();
-  categoriseMock.mockResolvedValue([]);
   visionMock.mockReset();
   visionMock.mockResolvedValue(null);
   confidenceRef.value = 95;
@@ -78,7 +76,7 @@ async function upload() {
     businessProfileId: ctx.profile.id,
     pages: [{ buffer: Buffer.from("fake-image-bytes"), mimetype: "image/jpeg", originalname: "receipt.jpg" }],
   });
-  await waitForScanProcessing(created.id);
+  await runReceiptWorkerAndWait(created.id);
   return getScan(ctx.user.id, created.id);
 }
 
@@ -101,6 +99,26 @@ async function confirmAsRead(scanId: number, items: { id: number }[], overrides:
   });
 }
 
+async function establishCategoryHistory(categoryId: number, itemNames: string[]) {
+  await prisma.receiptScan.create({
+    data: {
+      businessProfileId: ctx.profile.id,
+      imageFile: `${ctx.profile.id}/confirmed-history.jpg`,
+      processingStatus: "Complete",
+      confirmationStatus: "Confirmed",
+      extractedVendor: "ABC SARI-SARI STORE",
+      items: {
+        create: itemNames.map((name, index) => ({
+          lineNumber: index + 1,
+          name,
+          amount: 1,
+          categoryId,
+        })),
+      },
+    },
+  });
+}
+
 describe("recording a confirmation", () => {
   /**
    * The rule the whole feature rests on. Logging only the edits would record a
@@ -108,13 +126,7 @@ describe("recording a confirmation", () => {
    * correct case entirely — nothing was edited to record it by.
    */
   it("records a row for every reviewed field, not only the corrected ones", async () => {
-    // The categoriser agrees with where the owner files these, so this receipt
-    // is confirmed with nothing changed at all — which is precisely the review
-    // that would leave no trace if only edits were logged.
-    categoriseMock.mockResolvedValue([
-      { index: 0, match: "Inventory", suggestNew: null },
-      { index: 1, match: "Inventory", suggestNew: null },
-    ]);
+    await establishCategoryHistory(ctx.categories.Inventory!, ["Rice 25kg", "Cooking oil"]);
     const scan = await upload();
     await confirmAsRead(scan.id, scan.items);
 
@@ -200,7 +212,7 @@ describe("recording a confirmation", () => {
   });
 });
 
-describe("the categoriser's original pick", () => {
+describe("the local history categoriser's original pick", () => {
   /**
    * THE REGRESSION THIS SUITE EXISTS FOR.
    *
@@ -211,17 +223,14 @@ describe("the categoriser's original pick", () => {
    * write, and this is the test that fails if it ever moves after it.
    */
   it("is recorded even though confirmation overwrites it on the item", async () => {
-    categoriseMock.mockResolvedValue([
-      { index: 0, match: "Utilities", suggestNew: null },
-      { index: 1, match: "Utilities", suggestNew: null },
-    ]);
+    await establishCategoryHistory(ctx.categories.Utilities!, ["Rice 25kg", "Cooking oil"]);
     const scan = await upload();
     expect(scan.items[0]!.categoryId).toBe(ctx.categories.Utilities);
 
     // The owner disagrees: both lines are Inventory.
     await confirmAsRead(scan.id, scan.items);
 
-    // The item row now says Inventory — the AI's answer is gone from it.
+    // The item row now says Inventory — the pre-confirmation choice is gone from it.
     const item = await prisma.receiptScanItem.findFirstOrThrow({ where: { id: scan.items[0]!.id } });
     expect(item.categoryId).toBe(ctx.categories.Inventory);
 
@@ -238,10 +247,7 @@ describe("the categoriser's original pick", () => {
   });
 
   it("records agreement when the owner keeps the suggested category", async () => {
-    categoriseMock.mockResolvedValue([
-      { index: 0, match: "Inventory", suggestNew: null },
-      { index: 1, match: "Inventory", suggestNew: null },
-    ]);
+    await establishCategoryHistory(ctx.categories.Inventory!, ["Rice 25kg", "Cooking oil"]);
     const scan = await upload();
     await confirmAsRead(scan.id, scan.items);
 
@@ -439,7 +445,7 @@ describe("per-field confidence", () => {
     expect(byField.get("amount")!.confidence).toBe(88);
   });
 
-  it("stays null on a vision-assisted read, where it would describe unread text", async () => {
+  it("ignores un-gated legacy vision evidence and keeps missing local confidence reviewable", async () => {
     extractTextMock.mockResolvedValue("~~~ unreadable ~~~");
     // The extraction envelope: an ACCEPTED reading, as opposed to null
     // ("provider never reached") or a rejectReason ("answered, refused").
@@ -455,10 +461,9 @@ describe("per-field confidence", () => {
     });
 
     const scan = await upload();
-    await confirmAsRead(scan.id, scan.items);
-
-    const rows = await corrections();
-    expect(rows.every((r) => r.source === "vision" || r.source === "ai-category")).toBe(true);
-    expect(rows.filter((r) => r.field === "vendor")[0]!.confidence).toBeNull();
+    expect(scan.visionAssisted).toBe(false);
+    expect(scan.extractedAmount).toBeNull();
+    expect(scan.items).toEqual([]);
+    expect(visionMock).not.toHaveBeenCalled();
   });
 });

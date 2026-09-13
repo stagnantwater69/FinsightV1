@@ -74,31 +74,33 @@ export async function pollUntilRead(initial: ReceiptScanResult, mayRetry = true,
  * approved in the camera is not sent for the same check twice.
  */
 export function pagesFromSections(sections: ReceiptSection[]): CapturedPage[] {
-  return sections.map((section, index) => ({
-    captureMode: section.captureMode,
-    sourceAssetUri: section.sourceAssetUri,
-    key: section.localId,
-    uri: section.processedUri,
-    fileName: `receipt-section-${index + 1}-${Date.now()}.jpg`,
-    // Always JPEG: the camera saves JPEG and every crop re-renders as JPEG.
-    // The server's upload filter accepts jpeg|png|webp, so this is inside
-    // what it allows rather than a new claim about what it takes.
-    mimeType: "image/jpeg",
-    quality: section.quality,
-    checkingQuality: false,
-    width: section.width,
-    height: section.height,
-    originalUri: section.originalUri,
-    originalWidth: section.originalWidth ?? section.width,
-    originalHeight: section.originalHeight ?? section.height,
-    captureSource: section.captureSource,
-    processingMode: section.processingMode,
-    transformVersion: section.transformVersion,
-    cropCorners: section.cropCorners,
-    documentConfidence: section.documentConfidence ?? section.edgeConfidence,
-    ownerOverrodeLikelihood: section.ownerOverrodeLikelihood,
-    receiptGroupId: section.receiptGroupId,
-  }));
+  return sections.map((section, index) => {
+    const processedMimeType = section.processedMimeType ?? "image/jpeg";
+    const extension = processedMimeType === "image/png" ? "png" : processedMimeType === "image/webp" ? "webp" : "jpg";
+    return {
+      captureMode: section.captureMode,
+      sourceAssetUri: section.sourceAssetUri,
+      key: section.localId,
+      uri: section.processedUri,
+      fileName: `receipt-section-${index + 1}-${Date.now()}.${extension}`,
+      mimeType: processedMimeType,
+      quality: section.quality,
+      checkingQuality: false,
+      width: section.width,
+      height: section.height,
+      originalUri: section.originalUri,
+      originalMimeType: section.originalMimeType ?? processedMimeType,
+      originalWidth: section.originalWidth ?? section.width,
+      originalHeight: section.originalHeight ?? section.height,
+      captureSource: section.captureSource,
+      processingMode: section.processingMode,
+      transformVersion: section.transformVersion,
+      cropCorners: section.cropCorners,
+      documentConfidence: section.documentConfidence ?? section.edgeConfidence,
+      ownerOverrodeLikelihood: section.ownerOverrodeLikelihood,
+      receiptGroupId: section.receiptGroupId,
+    };
+  });
 }
 
 /**
@@ -117,9 +119,11 @@ export function sectionsFromPages(pages: CapturedPage[]): ReceiptSection[] {
     sourceAssetUri: page.sourceAssetUri,
     localId: page.key,
     originalUri: page.originalUri ?? page.uri,
+    originalMimeType: page.originalMimeType ?? page.mimeType,
     originalWidth: page.originalWidth ?? page.width,
     originalHeight: page.originalHeight ?? page.height,
     processedUri: page.uri,
+    processedMimeType: page.mimeType,
     captureSource: page.captureSource,
     processingMode: page.processingMode,
     transformVersion: page.transformVersion,

@@ -2,9 +2,9 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 /*
  * Same mocking posture as receiptScan.test.ts: OCR text, the categoriser, the
- * vision rescue and the verifier are all stubbed so these tests exercise the
- * pipeline's own decisions — what it RECORDS about a read — without a network
- * call. Storage is stubbed for the same reason.
+ * legacy vision and verifier entry points are stubbed as tripwires so these
+ * tests prove the worker records local evidence without bypassing the new
+ * provider gate. Storage is stubbed for the same reason.
  */
 /*
  * extractReceipt is DERIVED from the text mock rather than being mocked
@@ -42,19 +42,40 @@ vi.mock("../../src/services/visionOcr.service", async (importOriginal) => {
   return { ...actual, extractReceiptWithVision: visionMock, verifyVisionReceipt: verifierMock };
 });
 
-vi.mock("../../src/services/storage.service", () => ({
-  uploadReceiptImage: vi.fn(async () => "test/mock-receipt.jpg"),
-  uploadCsvFile: vi.fn(async () => "test/mock-csv.csv"),
-  signedReceiptImageUrl: vi.fn(async () => "https://example.test/signed"),
-  removeObject: vi.fn(async () => true),
-  deleteReceiptImage: vi.fn(async () => true),
-}));
+vi.mock("../../src/lib/imageQuality", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/lib/imageQuality")>();
+  return {
+    ...actual,
+    assessImageQuality: vi.fn(async () => ({
+      sharpness: 1_000,
+      brightness: 180,
+      tooBlurredToTrust: false,
+      width: 1_200,
+      height: 2_000,
+      tooSmallToRead: false,
+    })),
+  };
+});
+
+vi.mock("../../src/services/storage.service", async () => {
+  const { tinyReceiptJpeg } = await import("../helpers/receiptImageFixtures");
+  const storedBytes = tinyReceiptJpeg();
+  return {
+    uploadReceiptImage: vi.fn(async () => "test/mock-receipt.jpg"),
+    uploadCsvFile: vi.fn(async () => "test/mock-csv.csv"),
+    signedReceiptImageUrl: vi.fn(async () => "https://example.test/signed"),
+    removeObject: vi.fn(async () => true),
+    deleteReceiptImage: vi.fn(async () => true),
+    inspectReceiptImage: vi.fn(async () => ({ sizeBytes: storedBytes.length, mimetype: "image/jpeg" })),
+    downloadReceiptImageBounded: vi.fn(async () => storedBytes),
+  };
+});
 
 import { prisma } from "../../src/config/prisma";
 import { getScan, uploadAndScan } from "../../src/services/receiptScan.service";
 import type { VisionReceipt } from "../../src/services/visionOcr.service";
 import { WARNING_GUIDANCE } from "../../src/lib/receiptWarnings";
-import { disconnectDb, makeOwnerWithProfile, resetDb, waitForScanProcessing } from "../setup/testDb";
+import { disconnectDb, makeOwnerWithProfile, resetDb, runReceiptWorkerAndWait } from "../setup/testDb";
 
 let ctx: Awaited<ReturnType<typeof makeOwnerWithProfile>>;
 
@@ -92,7 +113,7 @@ beforeEach(async () => {
   ctx = await makeOwnerWithProfile({}, ["Inventory"]);
   extractTextMock.mockReset();
   confidenceRef.value = 95;
-    extractTextMock.mockResolvedValue(CLEAN_RECEIPT);
+  extractTextMock.mockResolvedValue(CLEAN_RECEIPT);
   categoriseMock.mockReset();
   categoriseMock.mockResolvedValue([]);
   visionMock.mockReset();
@@ -108,7 +129,7 @@ async function upload() {
     businessProfileId: ctx.profile.id,
     pages: [{ buffer: Buffer.from("fake-image-bytes"), mimetype: "image/jpeg", originalname: "receipt.jpg" }],
   });
-  await waitForScanProcessing(scan.id);
+  await runReceiptWorkerAndWait(scan.id);
   return getScan(ctx.user.id, scan.id);
 }
 
@@ -126,7 +147,7 @@ describe("extractor versioning", () => {
     expect(versions.model ?? null).toBeNull();
   });
 
-  it("records provider, model, prompt/schema versions and the trigger on a rescued scan", async () => {
+  it("records the local trigger and closed provider gate without claiming a provider read", async () => {
     confidenceRef.value = 40;
     extractTextMock.mockResolvedValue("~~~ unreadable ~~~");
     visionMock.mockResolvedValue(
@@ -137,17 +158,17 @@ describe("extractor versioning", () => {
     const row = await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan!.id } });
     const versions = row.extractorVersions as Record<string, unknown>;
 
-    expect(versions.provider).toBe("gemini");
-    expect(versions.model).toBeTruthy();
+    expect(versions.provider).toBeNull();
+    expect(versions.model).toBeNull();
     expect(versions.promptVersion).toBeTruthy();
     expect(versions.schemaVersion).toBeTruthy();
-    // The trigger and cost of the call, which used to exist only in a console
-    // line and so could never be attributed per scan.
     expect(versions.visionTrigger).toBeTruthy();
-    expect(typeof versions.visionLatencyMs).toBe("number");
+    expect(versions.visionLatencyMs).toBeNull();
+    expect(versions.providerGateCode).toBe("PROVIDER_NOT_REQUESTED");
+    expect(visionMock).not.toHaveBeenCalled();
   });
 
-  it("records WHY a model answer was refused, rather than losing the distinction", async () => {
+  it("does not record an un-gated legacy provider answer or its body-derived reason", async () => {
     confidenceRef.value = 40;
     extractTextMock.mockResolvedValue("~~~ unreadable ~~~");
     visionMock.mockResolvedValue({ receipt: null, rejectReason: "schema" });
@@ -156,8 +177,10 @@ describe("extractor versioning", () => {
     const row = await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan!.id } });
     const versions = row.extractorVersions as Record<string, unknown>;
 
-    expect(versions.visionRejectReason).toBe("schema");
+    expect(versions.visionRejectReason).toBeNull();
+    expect(versions.providerGateCode).toBe("PROVIDER_NOT_REQUESTED");
     expect(scan!.visionAssisted).toBe(false);
+    expect(visionMock).not.toHaveBeenCalled();
   });
 });
 
@@ -178,7 +201,7 @@ describe("per-field evidence", () => {
     expect(evidence!.vendor?.sourceText?.toUpperCase()).toContain("ABC");
   });
 
-  it("attributes a vision-read field to the model", async () => {
+  it("does not manufacture field evidence from an un-gated vision reply", async () => {
     confidenceRef.value = 40;
     extractTextMock.mockResolvedValue("~~~ unreadable ~~~");
     visionMock.mockResolvedValue(
@@ -192,7 +215,8 @@ describe("per-field evidence", () => {
 
     const scan = await upload();
     const evidence = scan!.fieldEvidence as Record<string, { source: string | null }> | null;
-    expect(evidence!.amount?.source).toBe("vision");
+    expect(evidence?.amount).toBeUndefined();
+    expect(visionMock).not.toHaveBeenCalled();
   });
 });
 
@@ -242,7 +266,7 @@ describe("machine-readable warnings", () => {
   });
 });
 
-describe("the verifier gate", () => {
+describe("legacy verifier isolation", () => {
   /** OCR that reads no total, so a model-supplied one is unchecked → high risk. */
   function noTotalRead() {
     confidenceRef.value = 95;
@@ -250,32 +274,30 @@ describe("the verifier gate", () => {
     visionMock.mockResolvedValue(visionReply({ amount: 1400, items: [{ name: "Rice 25kg", amount: 1400 }] }));
   }
 
-  it("keeps an accepted reading and records the verdict", async () => {
+  it("does not invoke the legacy verifier or accept its reply outside the provider gate", async () => {
     noTotalRead();
     verifierMock.mockResolvedValue({ accept: true, rejectedFields: [] });
 
     const scan = await upload();
-    expect(verifierMock).toHaveBeenCalledTimes(1);
-    expect(scan!.extractedAmount).toBe(1400);
+    expect(verifierMock).not.toHaveBeenCalled();
+    expect(scan!.extractedAmount).toBeNull();
     const row = await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan!.id } });
-    expect((row.extractorVersions as Record<string, unknown>).verifier).toBe("accepted");
+    expect((row.extractorVersions as Record<string, unknown>).verifier).toBeNull();
   });
 
-  it("falls back to the deterministic result when the verifier rejects", async () => {
+  it("keeps the deterministic result when an un-gated verifier mock would reject", async () => {
     noTotalRead();
     verifierMock.mockResolvedValue({ accept: false, rejectedFields: ["amount"] });
 
     const scan = await upload();
-    // The model's unverifiable total is discarded rather than filed.
     expect(scan!.extractedAmount).toBeNull();
-    expect(scan!.warnings.some((w) => w.code === "UNREADABLE_FIELD" && w.field === "amount")).toBe(true);
+    expect(scan!.warnings.map((warning) => warning.code)).not.toContain("VISION_INTERPRETED");
     const row = await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan!.id } });
-    expect((row.extractorVersions as Record<string, unknown>).verifier).toBe("rejected:amount");
+    expect((row.extractorVersions as Record<string, unknown>).verifier).toBeNull();
+    expect(verifierMock).not.toHaveBeenCalled();
   });
 
-  it("leaves an ordinary rescue unverified — the gate is for high-risk reads only", async () => {
-    // OCR read a total; the model only supplied item wording, which the
-    // receipt's own arithmetic already corroborates.
+  it("does not verify an un-gated legacy reply when OCR already read the total", async () => {
     confidenceRef.value = 95;
     extractTextMock.mockResolvedValue(["ABC STORE", "Date: 2026-07-20", "TOTAL 1400.00"].join("\n"));
     visionMock.mockResolvedValue(visionReply({ amount: 1400, items: [{ name: "Rice 25kg", amount: 1400 }] }));
@@ -284,20 +306,19 @@ describe("the verifier gate", () => {
     expect(verifierMock).not.toHaveBeenCalled();
   });
 
-  it("keeps the rescue working when the verifier cannot run at all", async () => {
+  it("keeps a missing local total reviewable when no gated rescue runs", async () => {
     noTotalRead();
     verifierMock.mockResolvedValue(null); // no key / provider down
 
     const scan = await upload();
-    // Unverified, but not discarded — the gate must not regress the rescue
-    // into never working when the provider is unavailable.
-    expect(scan!.extractedAmount).toBe(1400);
+    expect(scan!.extractedAmount).toBeNull();
+    expect(verifierMock).not.toHaveBeenCalled();
   });
 
-  it("asks the verifier at most once per scan", async () => {
+  it("never asks the legacy verifier directly", async () => {
     noTotalRead();
     verifierMock.mockResolvedValue({ accept: true, rejectedFields: [] });
     await upload();
-    expect(verifierMock).toHaveBeenCalledTimes(1);
+    expect(verifierMock).not.toHaveBeenCalled();
   });
 });

@@ -1,13 +1,20 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
-import * as receiptScanService from "../services/receiptScan.service";
+import * as receiptScanQueue from "../services/receiptScan/queue";
+import { confirmReceipt, deleteScanItem } from "../services/receiptScan/reconciliation";
+import type { ReceiptUploadFile } from "../services/receiptScan/types";
 import { assessImageQuality } from "../lib/imageQuality";
 import { detectReceiptCorners } from "../lib/edgeDetection";
 import { assessReceiptLikelihood } from "../lib/receiptLikelihood";
 import { ApiError } from "../middleware/error.middleware";
 import { transformReceiptPerspective } from "../lib/receiptPerspective";
 import { moneyAmountSchema } from "../lib/money";
-import { validateReceiptUpload } from "../lib/receiptUploadValidation";
+import { receiptUploadByteLength, validateReceiptUpload } from "../lib/receiptUploadValidation";
+import {
+  RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES,
+  RECEIPT_UPLOAD_MAX_LOGICAL_PAGES,
+} from "../lib/receiptUploadContract";
+import { cleanupReceiptUploadTemporaryFiles } from "../middleware/upload.middleware";
 
 const uploadSchema = z.object({
   businessProfileId: z.coerce.number().int().positive(),
@@ -35,7 +42,7 @@ const captureMetadataSchema = z.array(
     documentConfidence: z.number().min(0).max(1).optional(),
     ownerOverrodeLikelihood: z.boolean().optional(),
   }).strict(),
-).max(receiptScanService.MAX_PAGES);
+).max(RECEIPT_UPLOAD_MAX_LOGICAL_PAGES);
 
 function parseCaptureMetadata(raw: string | undefined, pageCount: number) {
   if (!raw) return [];
@@ -150,36 +157,65 @@ function parseItemId(raw: string): number {
 }
 
 export async function upload(req: Request, res: Response) {
-  // multer's .array() always sets req.files to an array (possibly empty),
-  // never to req.file — checking both is what lets this controller serve
-  // both the field name older clients might still send and the current one.
-  const grouped = !Array.isArray(req.files) && req.files ? req.files as Record<string, Express.Multer.File[]> : null;
-  const files = Array.isArray(req.files) ? req.files : grouped?.files ?? (req.file ? [req.file] : []);
-  const originals = grouped?.originalFiles ?? [];
-  if (files.length === 0) {
-    throw new ApiError(400, "At least one receipt photo is required");
-  }
-  const { businessProfileId, captureMetadata, idempotencyKey } = uploadSchema.parse(req.body);
-  if (originals.length > 0 && originals.length !== files.length) {
-    throw new ApiError(400, "Original and processed receipt page counts must match");
-  }
-  const metadata = parseCaptureMetadata(captureMetadata, files.length);
-  for (const file of [...files, ...originals]) await validateReceiptUpload(file);
+  const scan = await (async () => {
+    const grouped = !Array.isArray(req.files) && req.files
+      ? req.files as Record<string, Express.Multer.File[]>
+      : null;
+    const files = Array.isArray(req.files) ? req.files : grouped?.files ?? (req.file ? [req.file] : []);
+    const originals = grouped?.originalFiles ?? [];
+    if (files.length === 0) throw new ApiError(400, "At least one receipt photo is required");
+    if (files.length > RECEIPT_UPLOAD_MAX_LOGICAL_PAGES) {
+      throw new ApiError(400, `A receipt can have at most ${RECEIPT_UPLOAD_MAX_LOGICAL_PAGES} pages`);
+    }
 
-  const scan = await receiptScanService.uploadAndScan(req.user!.id, {
-    businessProfileId,
-    idempotencyKey,
-    pages: files.map((file, index) => {
-      const original = originals[index];
-      return {
-        buffer: original?.buffer ?? file.buffer,
-        mimetype: original?.mimetype ?? file.mimetype,
-        originalname: original?.originalname ?? file.originalname,
-        ...(original ? { processed: { buffer: file.buffer, mimetype: file.mimetype, originalname: file.originalname } } : {}),
-        ...(metadata[index] ? { metadata: metadata[index] } : {}),
-      };
-    }),
-  });
+    const { businessProfileId, captureMetadata, idempotencyKey } = uploadSchema.parse(req.body);
+    if (originals.length > 0 && originals.length !== files.length) {
+      throw new ApiError(400, "Original and processed receipt page counts must match");
+    }
+
+    const metadata = parseCaptureMetadata(captureMetadata, files.length);
+    const uploadedFiles = [...files, ...originals];
+    const actualSizes = new Map<Express.Multer.File, number>();
+    let aggregateBytes = 0;
+    for (const file of uploadedFiles) {
+      const size = await receiptUploadByteLength(file);
+      actualSizes.set(file, size);
+      aggregateBytes += size;
+    }
+    if (aggregateBytes > RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES) {
+      throw new ApiError(413, "Receipt upload files must total 80 MiB or less");
+    }
+    for (const file of uploadedFiles) await validateReceiptUpload(file);
+
+    const queueFile = (file: Express.Multer.File): ReceiptUploadFile => file.path
+      ? {
+          source: "temporary-file",
+          temporaryPath: file.path,
+          sizeBytes: actualSizes.get(file)!,
+          mimetype: file.mimetype,
+          originalname: file.originalname,
+        }
+      : {
+          source: "buffer",
+          buffer: file.buffer,
+          mimetype: file.mimetype,
+          originalname: file.originalname,
+        };
+
+    return receiptScanQueue.uploadAndScan(req.user!.id, {
+      businessProfileId,
+      idempotencyKey,
+      pages: files.map((file, index) => {
+        const original = originals[index];
+        const uploadFile = original ?? file;
+        return {
+          ...queueFile(uploadFile),
+          ...(original ? { processed: queueFile(file) } : {}),
+          ...(metadata[index] ? { metadata: metadata[index] } : {}),
+        };
+      }),
+    });
+  })().finally(() => cleanupReceiptUploadTemporaryFiles(req));
 
   /*
    * 202, not 201: the photographs have been accepted and a scan exists, but
@@ -195,13 +231,13 @@ export async function upload(req: Request, res: Response) {
 /** One scan as it currently stands — what the client polls after uploading. */
 export async function show(req: Request, res: Response) {
   const id = parseId(req.params.id!);
-  const scan = await receiptScanService.getScan(req.user!.id, id);
+  const scan = await receiptScanQueue.getScan(req.user!.id, id);
   res.json(scan);
 }
 
 export async function retry(req: Request, res: Response) {
   const id = parseId(req.params.id!);
-  const scan = await receiptScanService.retryScan(req.user!.id, id);
+  const scan = await receiptScanQueue.retryScan(req.user!.id, id);
   res.status(202).json(scan);
 }
 
@@ -279,13 +315,13 @@ export async function detectEdges(req: Request, res: Response) {
 export async function deleteItem(req: Request, res: Response) {
   const id = parseId(req.params.id!);
   const itemId = parseItemId(req.params.itemId!);
-  const scan = await receiptScanService.deleteScanItem(req.user!.id, id, itemId);
+  const scan = await deleteScanItem(req.user!.id, id, itemId);
   res.json(scan);
 }
 
 export async function confirm(req: Request, res: Response) {
   const id = parseId(req.params.id!);
   const input = confirmSchema.parse(req.body);
-  const records = await receiptScanService.confirmReceipt(req.user!.id, id, input);
+  const records = await confirmReceipt(req.user!.id, id, input);
   res.status(201).json(records);
 }

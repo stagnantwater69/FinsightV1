@@ -1,5 +1,10 @@
 import { useState } from "react";
-import { ACCEPTED_TYPES, MAX_FILE_BYTES, MAX_RECEIPT_FILES } from "./constants";
+import {
+  ACCEPTED_TYPES,
+  receiptUploadFileIssue,
+  receiptUploadSelectionError,
+  type ReceiptUploadFileIssue,
+} from "./constants";
 import { PickedFileThumb } from "./PickedFileThumb";
 
 /**
@@ -29,12 +34,8 @@ export function MultiFileInput({
   hintText?: string;
   disabled?: boolean;
 }) {
-  const [rejected, setRejected] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
-
-  function accepts(f: File): boolean {
-    return ACCEPTED_TYPES.split(",").includes(f.type.toLowerCase());
-  }
+  const selectionError = receiptUploadSelectionError([], files);
 
   /**
    * ADDS the newly picked photos to what is already selected, rather than
@@ -48,42 +49,9 @@ export function MultiFileInput({
    */
   function take(list: FileList | File[] | null) {
     if (disabled) return;
-    setRejected(null);
     if (!list || list.length === 0) return;
     const incoming = Array.from(list);
-    const empty = incoming.find((file) => file.size === 0);
-    if (empty) {
-      setRejected(`${empty.name} is empty. Choose another photo.`);
-      return;
-    }
-    const alreadyPicked = incoming.some((file, index) => [...files, ...incoming.slice(0, index)].some((other) =>
-      file.name === other.name && file.size === other.size && file.lastModified === other.lastModified,
-    ));
-    if (alreadyPicked) {
-      setRejected("That photo is already selected. Choose a different photo.");
-      return;
-    }
-    const combined = [...files, ...incoming];
-
-    if (combined.length > MAX_RECEIPT_FILES) {
-      setRejected(
-        `A receipt can have at most ${MAX_RECEIPT_FILES} photos — you already have ${files.length} and picked ` +
-          `${incoming.length} more.`,
-      );
-      return;
-    }
-    const badType = incoming.find((f) => !accepts(f));
-    if (badType) {
-      setRejected(`${badType.name} isn't a photo this accepts. Expected JPEG, PNG or WEBP.`);
-      return;
-    }
-    const tooBig = incoming.find((f) => f.size > MAX_FILE_BYTES);
-    if (tooBig) {
-      const limit = Math.round(MAX_FILE_BYTES / (1024 * 1024));
-      setRejected(`${tooBig.name} is over ${limit}MB — try a smaller photo.`);
-      return;
-    }
-    onChange(combined);
+    onChange([...files, ...incoming]);
   }
 
   function removeAt(index: number) {
@@ -102,7 +70,12 @@ export function MultiFileInput({
   }
 
   return (
-    <fieldset disabled={disabled} className="min-w-0 rounded-xl has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-brand-600">
+    <fieldset
+      disabled={disabled}
+      aria-invalid={selectionError ? true : undefined}
+      aria-describedby={selectionError ? `${id}-selection-error` : undefined}
+      className="min-w-0 rounded-xl has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-brand-600"
+    >
       <label
         htmlFor={id}
         onDragOver={(e) => {
@@ -144,12 +117,12 @@ export function MultiFileInput({
 
       {hintText ? <p className="mt-1.5 text-xs text-ink-500">{hintText}</p> : null}
 
-      {rejected ? (
-        <p role="alert" className="mt-2 flex items-start gap-1.5 text-xs text-tone-danger">
+      {selectionError ? (
+        <p id={`${id}-selection-error`} role="alert" className="mt-2 flex items-start gap-1.5 text-xs text-tone-danger">
           <span aria-hidden className="mt-px shrink-0">
             ⚠
           </span>
-          <span className="min-w-0">{rejected}</span>
+          <span className="min-w-0">{selectionError}</span>
         </p>
       ) : null}
 
@@ -164,10 +137,18 @@ export function MultiFileInput({
               onRemove={() => removeAt(i)}
               onMoveUp={() => move(i, -1)}
               onMoveDown={() => move(i, 1)}
+              invalidReason={invalidFileReason(receiptUploadFileIssue(f))}
             />
           ))}
         </ul>
       ) : null}
     </fieldset>
   );
+}
+
+function invalidFileReason(issue: ReceiptUploadFileIssue | null): string | null {
+  if (issue === "EMPTY") return "Empty file";
+  if (issue === "UNSUPPORTED_TYPE") return "Unsupported file type";
+  if (issue === "TOO_LARGE") return "Larger than 10 MiB";
+  return null;
 }

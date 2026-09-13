@@ -6,7 +6,7 @@ import { errorHandler } from "../../src/middleware/error.middleware";
 vi.mock("../../src/config/logger", () => ({ logger: { error: vi.fn(), warn: vi.fn(), fatal: vi.fn() } }));
 
 function fakeReq(): Request {
-  return { method: "GET", path: "/api/v1/dashboard" } as unknown as Request;
+  return { method: "GET", path: "/api/v1/dashboard", headers: {} } as unknown as Request;
 }
 
 function fakeRes() {

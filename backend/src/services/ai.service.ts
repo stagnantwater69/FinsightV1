@@ -653,11 +653,28 @@ export async function categoriseReceiptItems(
   try {
     raw = await classifyItemsWithGemini(itemNames, categoryNames, context);
   } catch (geminiError) {
-    logger.error({ err: geminiError }, "Gemini item categorisation failed, falling back to OpenRouter");
+    logger.error(
+      {
+        provider: "gemini",
+        operation: "receipt-item-categorisation",
+        failureKind: geminiError instanceof DOMException && geminiError.name === "AbortError" ? "timeout" : "provider-failure",
+      },
+      "Receipt item categorisation provider failed; trying configured fallback",
+    );
     try {
       raw = await classifyItemsWithOpenRouter(itemNames, categoryNames, context);
     } catch (openRouterError) {
-      logger.error({ err: openRouterError }, "OpenRouter item categorisation also failed");
+      logger.error(
+        {
+          provider: "openrouter",
+          operation: "receipt-item-categorisation",
+          failureKind:
+            openRouterError instanceof DOMException && openRouterError.name === "AbortError"
+              ? "timeout"
+              : "provider-failure",
+        },
+        "Receipt item categorisation providers unavailable",
+      );
       return [];
     }
   }
@@ -696,11 +713,28 @@ export async function suggestCategoryForDescription(
   try {
     raw = await classifyWithGemini(classificationDescription, names);
   } catch (geminiError) {
-    logger.error({ err: geminiError }, "Gemini category classification failed, falling back to OpenRouter");
+    logger.error(
+      {
+        provider: "gemini",
+        operation: "expense-category-suggestion",
+        failureKind: geminiError instanceof DOMException && geminiError.name === "AbortError" ? "timeout" : "provider-failure",
+      },
+      "Expense category suggestion provider failed; trying configured fallback",
+    );
     try {
       raw = await classifyWithOpenRouter(classificationDescription, names);
     } catch (openRouterError) {
-      logger.error({ err: openRouterError }, "OpenRouter category classification also failed");
+      logger.error(
+        {
+          provider: "openrouter",
+          operation: "expense-category-suggestion",
+          failureKind:
+            openRouterError instanceof DOMException && openRouterError.name === "AbortError"
+              ? "timeout"
+              : "provider-failure",
+        },
+        "Expense category suggestion providers unavailable",
+      );
       return null;
     }
   }

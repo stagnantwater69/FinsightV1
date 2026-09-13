@@ -1,0 +1,219 @@
+import { createHash, type Hash } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
+import { Prisma } from "@prisma/client";
+import { prisma } from "../../config/prisma";
+import {
+  RECEIPT_UPLOAD_ALLOWED_MIME_TYPES,
+  RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES,
+  RECEIPT_UPLOAD_MAX_LOGICAL_PAGES,
+  RECEIPT_UPLOAD_MAX_OBJECT_BYTES,
+} from "../../lib/receiptUploadContract";
+import { requireOwnedBusinessProfile } from "../../lib/ownership";
+import { ApiError } from "../../middleware/error.middleware";
+import { deleteReceiptImage, uploadReceiptImage } from "../storage.service";
+import { toDTO } from "./dto";
+import type { ReceiptUploadFile, ReceiptUploadSubmission } from "./types";
+
+const receiptMimeTypes = new Set<string>(RECEIPT_UPLOAD_ALLOWED_MIME_TYPES);
+
+function isTemporaryFile(file: ReceiptUploadFile): file is Extract<ReceiptUploadFile, { source: "temporary-file" }> {
+  return file.source === "temporary-file";
+}
+
+async function byteLength(file: ReceiptUploadFile): Promise<number> {
+  if (!isTemporaryFile(file)) return file.buffer.length;
+  try {
+    const details = await stat(file.temporaryPath);
+    if (!details.isFile()) throw new Error("not a file");
+    if (details.size !== file.sizeBytes) throw new Error("size changed");
+    return details.size;
+  } catch {
+    throw new ApiError(400, "A receipt upload file is no longer available. Choose the receipt again.");
+  }
+}
+
+async function updateFingerprint(hash: Hash, file: ReceiptUploadFile): Promise<void> {
+  if (!isTemporaryFile(file)) {
+    hash.update(file.buffer);
+    return;
+  }
+  try {
+    let bytesRead = 0;
+    for await (const chunk of createReadStream(file.temporaryPath)) {
+      bytesRead += chunk.length;
+      hash.update(chunk);
+    }
+    if (bytesRead !== file.sizeBytes) throw new Error("size changed");
+  } catch {
+    throw new ApiError(400, "A receipt upload file is no longer available. Choose the receipt again.");
+  }
+}
+
+async function bufferForUpload(file: ReceiptUploadFile): Promise<Buffer> {
+  if (!isTemporaryFile(file)) return file.buffer;
+  try {
+    return await readFile(file.temporaryPath);
+  } catch {
+    throw new ApiError(400, "A receipt upload file is no longer available. Choose the receipt again.");
+  }
+}
+
+async function uploadOneReceiptFile(businessProfileId: number, file: ReceiptUploadFile): Promise<string> {
+  const buffer = await bufferForUpload(file);
+  if (isTemporaryFile(file) && buffer.length !== file.sizeBytes) {
+    throw new ApiError(400, "A receipt upload file changed while it was being processed. Choose the receipt again.");
+  }
+  if (buffer.length > RECEIPT_UPLOAD_MAX_OBJECT_BYTES) {
+    throw new ApiError(400, "Each receipt image must be 10 MiB or smaller.");
+  }
+  return uploadReceiptImage(businessProfileId, buffer, file.mimetype, file.originalname);
+}
+
+async function deleteUploadedObjects(imagePaths: string[], processedPaths: (string | null)[]): Promise<void> {
+  await Promise.all(
+    [...imagePaths, ...processedPaths.filter((path): path is string => Boolean(path))].map(deleteReceiptImage),
+  );
+}
+
+export async function uploadAndScan(userId: number, input: ReceiptUploadSubmission) {
+  await requireOwnedBusinessProfile(userId, input.businessProfileId);
+
+  if (input.pages.length === 0) throw new ApiError(400, "At least one receipt photo is required");
+  if (input.pages.length > RECEIPT_UPLOAD_MAX_LOGICAL_PAGES) {
+    throw new ApiError(400, `A receipt can have at most ${RECEIPT_UPLOAD_MAX_LOGICAL_PAGES} pages`);
+  }
+
+  const pageSizes: { original: number; processed: number }[] = [];
+  let aggregateBytes = 0;
+  for (const page of input.pages) {
+    const original = await byteLength(page);
+    const processed = page.processed ? await byteLength(page.processed) : 0;
+    for (const file of [page, page.processed].filter((item): item is ReceiptUploadFile => Boolean(item))) {
+      if (!receiptMimeTypes.has(file.mimetype)) throw new ApiError(400, "Use a JPEG, PNG, or WebP receipt image.");
+    }
+    if (original === 0 || (page.processed && processed === 0)) {
+      throw new ApiError(400, "This receipt file is empty. Choose another image.");
+    }
+    if (original > RECEIPT_UPLOAD_MAX_OBJECT_BYTES || processed > RECEIPT_UPLOAD_MAX_OBJECT_BYTES) {
+      throw new ApiError(400, "Each receipt image must be 10 MiB or smaller.");
+    }
+    aggregateBytes += original + processed;
+    pageSizes.push({ original, processed });
+  }
+  if (aggregateBytes > RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES) {
+    throw new ApiError(413, "Receipt upload files must total 80 MiB or less");
+  }
+
+  const uploadKey = input.idempotencyKey
+    ? createHash("sha256").update(`${input.businessProfileId}:${input.idempotencyKey}`).digest("hex")
+    : null;
+  const fingerprint = createHash("sha256");
+  for (const [index, page] of input.pages.entries()) {
+    const sizes = pageSizes[index]!;
+    fingerprint.update(JSON.stringify({
+      mimetype: page.mimetype,
+      size: sizes.original,
+      processedType: page.processed?.mimetype ?? null,
+      processedSize: sizes.processed,
+      metadata: page.metadata ?? null,
+    }));
+    await updateFingerprint(fingerprint, page);
+    if (page.processed) await updateFingerprint(fingerprint, page.processed);
+  }
+  const uploadHash = fingerprint.digest("hex");
+
+  if (uploadKey) {
+    const existing = await prisma.receiptScan.findUnique({
+      where: { uploadKey },
+      include: { items: true, pages: true },
+    });
+    if (existing) {
+      if (existing.businessProfileId !== input.businessProfileId || existing.uploadHash !== uploadHash) {
+        throw new ApiError(409, "This upload key belongs to a different receipt. Start a new upload.");
+      }
+      return toDTO(existing, existing.items, existing.pages);
+    }
+  }
+
+  const imagePaths: string[] = [];
+  const processedPaths: (string | null)[] = [];
+  try {
+    for (const page of input.pages) {
+      imagePaths.push(await uploadOneReceiptFile(input.businessProfileId, page));
+      processedPaths.push(page.processed ? await uploadOneReceiptFile(input.businessProfileId, page.processed) : null);
+    }
+  } catch (error) {
+    await deleteUploadedObjects(imagePaths, processedPaths);
+    throw error;
+  }
+
+  let scan;
+  try {
+    scan = await prisma.receiptScan.create({
+      data: {
+        businessProfileId: input.businessProfileId,
+        uploadKey,
+        uploadHash: uploadKey ? uploadHash : null,
+        imageFile: imagePaths[0]!,
+        confirmationStatus: "Pending",
+        processingStatus: "Processing",
+        pages: {
+          create: imagePaths.map((imageFile, index) => ({
+            pageNumber: index + 1,
+            imageFile,
+            processedImageFile: processedPaths[index],
+            captureMetadata: input.pages[index]?.metadata as Prisma.InputJsonValue | undefined,
+          })),
+        },
+      },
+      include: { pages: true },
+    });
+  } catch (error) {
+    await deleteUploadedObjects(imagePaths, processedPaths);
+    if (uploadKey && error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const winner = await prisma.receiptScan.findUnique({
+        where: { uploadKey },
+        include: { items: true, pages: true },
+      });
+      if (winner && winner.businessProfileId === input.businessProfileId && winner.uploadHash === uploadHash) {
+        return toDTO(winner, winner.items, winner.pages);
+      }
+      throw new ApiError(409, "This upload key belongs to a different receipt. Start a new upload.");
+    }
+    throw error;
+  }
+
+  return toDTO(scan, [], scan.pages);
+}
+
+export async function retryScan(userId: number, scanId: number) {
+  const scan = await prisma.receiptScan.findFirst({
+    where: { id: scanId, businessProfile: { userId } },
+    select: { id: true, processingStatus: true },
+  });
+  if (!scan) throw new ApiError(404, "Receipt scan not found");
+  if (scan.processingStatus !== "Failed") throw new ApiError(409, "Only a failed receipt scan can be retried");
+  await prisma.receiptScan.update({
+    where: { id: scanId },
+    data: {
+      processingStatus: "Processing",
+      processingError: null,
+      processingErrorCode: null,
+      processingAttemptCount: 0,
+      processingWorkerId: null,
+      processingHeartbeatAt: null,
+      nextProcessingAttemptAt: new Date(),
+    },
+  });
+  return getScan(userId, scanId);
+}
+
+export async function getScan(userId: number, scanId: number) {
+  const scan = await prisma.receiptScan.findFirst({
+    where: { id: scanId, businessProfile: { userId } },
+    include: { items: { orderBy: { lineNumber: "asc" } }, pages: true },
+  });
+  if (!scan) throw new ApiError(404, "Receipt scan not found");
+  return toDTO(scan, scan.items, scan.pages);
+}

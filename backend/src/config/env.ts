@@ -1,5 +1,10 @@
 import "dotenv/config";
+import { tmpdir } from "node:os";
+import { isAbsolute, normalize, resolve } from "node:path";
 import { z } from "zod";
+
+const DEFAULT_TESSERACT_LANG_PATH = resolve(__dirname, "../..");
+const DEFAULT_RECEIPT_UPLOAD_TEMP_ROOT = resolve(tmpdir(), "finsight-receipt-uploads");
 
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
@@ -46,31 +51,30 @@ const envSchema = z.object({
   MOBILE_APP_URL: z.string().default("finsight://"),
   GOOGLE_GEMINI_API_KEY: z.string().optional().default(""),
   OPENROUTER_API_KEY: z.string().optional().default(""),
-  /**
-   * Veryfi's receipt-OCR API. Used by the measurement spike at
-   * tests/ocr-accuracy/veryfi-spike.ts, and — only when VERYFI_ENABLED is
-   * true — as a real production rescue in receiptScan/worker.ts. See
-   * docs/superpowers/specs/2026-09-01-veryfi-production-ocr-integration-design.md.
-   */
+  /** Veryfi credentials are inert unless the unified receipt dispatch gate approves a call. */
   VERYFI_CLIENT_ID: z.string().optional().default(""),
   VERYFI_CLIENT_SECRET: z.string().optional().default(""),
   VERYFI_USERNAME: z.string().optional().default(""),
   VERYFI_API_KEY: z.string().optional().default(""),
-  /**
-   * Off by default on purpose. Turning this on sends real customer receipt
-   * photos to Veryfi's servers in production, not just the test corpus — a
-   * deliberate, separate decision from having credentials configured.
-   */
-  VERYFI_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
-  /**
-   * How many Veryfi calls receiptScan/veryfiQuota.ts allows per calendar
-   * month before falling back to the Gemini vision-rescue for the rest of it.
-   * Unset means "no configured limit" — treated as unlimited, not zero, so a
-   * forgotten variable doesn't silently disable a deliberately-enabled
-   * integration.
-   */
-  VERYFI_MONTHLY_LIMIT: z.coerce.number().int().positive().optional(),
-  TESSERACT_LANG: z.string().default("eng"),
+  TESSERACT_LANG: z
+    .string()
+    .regex(/^[A-Za-z0-9_]+(?:\+[A-Za-z0-9_]+)*$/, "use Tesseract language codes joined by +")
+    .default("eng"),
+  TESSERACT_LANG_PATH: z
+    .string()
+    .trim()
+    .min(1)
+    .default(DEFAULT_TESSERACT_LANG_PATH)
+    .transform((value) => resolve(value)),
+  RECEIPT_UPLOAD_TEMP_ROOT: z
+    .string()
+    .trim()
+    .min(1)
+    .default(DEFAULT_RECEIPT_UPLOAD_TEMP_ROOT)
+    .refine((value) => isAbsolute(value) && normalize(value) === value, {
+      message: "must be an absolute normalized path without parent traversal",
+    })
+    .transform((value) => resolve(value)),
   ANOMALY_NEAR_DUPLICATE_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
   ANOMALY_VELOCITY_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
   ANOMALY_TRENDS_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),

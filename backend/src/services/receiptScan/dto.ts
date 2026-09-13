@@ -1,7 +1,12 @@
 import type { ReceiptScan, ReceiptScanItem, ReceiptScanPage } from "@prisma/client";
-import { findPageSeams, looksLikeDuplicatePage, looksLikeMultipleReceipts, reconcileItems } from "../ocr.service";
 import { WARNING_GUIDANCE, type ReceiptWarning } from "../../lib/receiptWarnings";
 import { parseReceiptDetails, requiresManualCurrencyConversion } from "../../lib/receiptDetails";
+import {
+  findPageSeams,
+  looksLikeDuplicatePage,
+  looksLikeMultipleReceipts,
+  receiptItemsReconcile,
+} from "../../lib/receiptTextSignals";
 
 export function toDTO(scan: ReceiptScan, items: ReceiptScanItem[] = [], pages: ReceiptScanPage[] = []) {
   /*
@@ -77,8 +82,10 @@ export function toDTO(scan: ReceiptScan, items: ReceiptScanItem[] = [], pages: R
      * upload rather than holding a request open for the whole pipeline.
      */
     processingStatus: scan.processingStatus,
-    /** Why the read failed. Null unless processingStatus is "Failed". */
+    /** Owner-safe explanation. Null unless the local read itself failed. */
     processingError: scan.processingError,
+    /** Stable machine-readable failure or local-fallback reason. */
+    processingErrorCode: scan.processingErrorCode,
     processingAttemptCount: scan.processingAttemptCount,
     nextProcessingAttemptAt: scan.processingStatus === "Processing" ? scan.nextProcessingAttemptAt : null,
     createdAt: scan.createdAt,
@@ -226,12 +233,12 @@ export function toDTO(scan: ReceiptScan, items: ReceiptScanItem[] = [], pages: R
 function suspectItemId(scan: ReceiptScan, items: ReceiptScanItem[]): number | null {
   if (scan.extractedAmount === null || items.length === 0) return null;
 
-  const reconciliation = reconcileItems(
+  const reconciled = receiptItemsReconcile(
     scan.rawText ?? "",
     items.map((i) => ({ amount: Number(i.amount) })),
     Number(scan.extractedAmount),
   );
-  if (reconciliation.reconciled) return null;
+  if (reconciled) return null;
 
   const measured = items.filter((i) => i.amountConfidence !== null && !i.addedByOwner);
   if (measured.length === 0) return null;

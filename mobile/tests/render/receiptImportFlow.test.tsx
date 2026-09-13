@@ -3,19 +3,49 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, waitFor } from "@testing-library/react-native";
 import { Image } from "react-native";
 import * as fixtures from "./support/fixtures";
+import { RECEIPT_UPLOAD_MAX_OBJECT_BYTES } from "../../src/lib/receiptUploadContract";
 
 const upload = vi.fn();
 const post = vi.fn();
 const get = vi.fn();
+const put = vi.fn();
+const remove = vi.fn();
 const poll = vi.fn();
 const gallery = vi.fn();
 const document = vi.fn();
+const localFileByteSize = vi.fn();
 let selectedBusiness = fixtures.businessProfile;
-vi.mock("../../src/lib/api", () => ({ api: { upload, post, get, delete: vi.fn() } }));
+vi.mock("../../src/lib/api", () => ({ api: { upload, post, get, put, delete: remove } }));
 vi.mock("expo-image-picker", () => ({ launchImageLibraryAsync: gallery }));
 vi.mock("expo-document-picker", () => ({ getDocumentAsync: document }));
 vi.mock("../../src/lib/analysisImage", () => ({ analysisImageUri: async (uri: string) => uri }));
-vi.mock("../../src/components/receipt-camera", () => ({ ReceiptCamera: () => null }));
+vi.mock("../../src/lib/localFileSize", () => ({ localFileByteSize }));
+vi.mock("../../src/components/receipt-camera", async () => {
+  const ReactRuntime = await import("react");
+  const { Pressable, Text } = await import("react-native");
+  return {
+    ReceiptCamera: ({ onDone }: any) => ReactRuntime.createElement(
+      Pressable,
+      {
+        accessibilityRole: "button",
+        accessibilityLabel: "Finish mocked camera with unsupported evidence",
+        onPress: () => onDone([{
+          localId: "mocked-unsupported",
+          originalUri: "file:///converted.gif",
+          originalMimeType: "image/gif",
+          processedUri: "file:///converted.gif",
+          processedMimeType: "image/gif",
+          width: 600,
+          height: 1000,
+          quality: null,
+          captureSource: "gallery",
+          processingMode: "original",
+        }]),
+      },
+      ReactRuntime.createElement(Text, null, "Finish mocked camera with unsupported evidence"),
+    ),
+  };
+});
 vi.mock("@react-navigation/native", () => ({ useFocusEffect: (effect: () => (() => void)) => React.useEffect(effect, [effect]) }));
 vi.mock("../../src/context/BusinessProfileContext", () => ({
   useBusinessProfiles: () => ({ selected: selectedBusiness, categories: fixtures.categories, createCategory: vi.fn(), refreshCategories: vi.fn() }),
@@ -30,9 +60,40 @@ const { ScanReceiptScreen } = await import("../../src/screens/records/ScanReceip
 const { ImportCsvScreen } = await import("../../src/screens/records/ImportCsvScreen");
 const { AddExpenseScreen } = await import("../../src/screens/records/AddExpenseScreen");
 const navigation = { navigate: vi.fn(), goBack: vi.fn() };
-const wrap = (node: React.ReactNode) => <ThemeProvider initialMode="light">{node}</ThemeProvider>;
+const wrapInMode = (node: React.ReactNode, mode: "light" | "dark") => <ThemeProvider initialMode={mode}>{node}</ThemeProvider>;
+const wrap = (node: React.ReactNode) => wrapInMode(node, "light");
 const accepted = { id: 41, processingStatus: "Processing" };
 const complete = { id: 41, processingStatus: "Complete", extractedDate: "2026-09-01", extractedVendor: "Supplier", extractedDescription: "Coffee beans", extractedAmount: 250, items: [{ id: 5, name: "Coffee beans", amount: 250, categoryId: 10 }], warnings: [], ocrConfidence: 96 };
+const unavailableConsent = { available: false, provider: null, consent: null, activeConsents: [] };
+const providerTerms = {
+  key: "gemini",
+  label: "Google Gemini",
+  version: "gemini-3.5-flash-lite",
+  region: "global",
+  policyVersion: "receipt-provider-policy-v1",
+  purpose: "RECEIPT_EXTRACTION",
+  dataClasses: ["RECEIPT_IMAGE", "DERIVED_RECEIPT_IMAGE"],
+  retentionHours: 0,
+  trainingAllowed: false,
+  revocable: true,
+};
+const availableConsent = { available: true, provider: providerTerms, consent: null, activeConsents: [] };
+const grantedConsent = {
+  ...availableConsent,
+  consent: { reference: "consent:9", grantedAt: "2026-09-13T08:00:00.000Z", revokedAt: null },
+  activeConsents: [{
+    reference: "consent:9",
+    provider: "gemini",
+    policyVersion: providerTerms.policyVersion,
+    purpose: providerTerms.purpose,
+    dataClasses: providerTerms.dataClasses,
+    region: providerTerms.region,
+    retentionHours: providerTerms.retentionHours,
+    trainingAllowed: false,
+    grantedAt: "2026-09-13T08:00:00.000Z",
+    revocable: true,
+  }],
+};
 
 // Same handler lookup that RN Testing Library uses for composite Pressables,
 // invoked within a single act so React cannot render between the two taps.
@@ -46,10 +107,14 @@ function pressHandler(button: ReturnType<Awaited<ReturnType<typeof render>>["get
 }
 beforeEach(() => {
   selectedBusiness = fixtures.businessProfile;
-  upload.mockReset(); post.mockReset(); get.mockReset(); poll.mockReset(); gallery.mockReset(); document.mockReset(); navigation.navigate.mockReset(); navigation.goBack.mockReset();
+  upload.mockReset(); post.mockReset(); get.mockReset(); put.mockReset(); remove.mockReset(); poll.mockReset(); gallery.mockReset(); document.mockReset(); localFileByteSize.mockReset(); navigation.navigate.mockReset(); navigation.goBack.mockReset();
   gallery.mockResolvedValue({ canceled: false, assets: [{ uri: "file:///receipt.jpg", width: 600, height: 1000, fileName: "receipt.jpg", mimeType: "image/jpeg", fileSize: 2048 }] });
   document.mockResolvedValue({ canceled: false, assets: [{ uri: "file:///records.csv", name: "records.csv", size: 1024, mimeType: "text/csv" }] });
   upload.mockImplementation(async (path: string) => path.endsWith("quality-check") ? { sharpness: 50, brightness: 150, tooBlurredToTrust: false } : accepted);
+  get.mockResolvedValue(unavailableConsent);
+  put.mockResolvedValue(grantedConsent);
+  remove.mockResolvedValue(availableConsent);
+  localFileByteSize.mockResolvedValue(2048);
   poll.mockResolvedValue(complete);
   post.mockResolvedValue({});
 });
@@ -208,6 +273,143 @@ describe("receipt scan review workflow", () => {
     await fireEvent.press(q.getByRole("button", { name: "Choose a receipt from Files" }));
     await waitFor(() => expect(q.getByText(/PDF receipts are not supported/)).toBeTruthy());
     expect(upload).not.toHaveBeenCalled();
+  });
+
+  it("keeps mocked oversized gallery evidence available for review or removal and never uploads it", async () => {
+    localFileByteSize.mockResolvedValue(RECEIPT_UPLOAD_MAX_OBJECT_BYTES + 1);
+    const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
+    await fireEvent.press(q.getByRole("button", { name: "Choose a photo from your gallery" }));
+    await waitFor(() => expect(q.getByText(/larger than 10 MiB/)).toBeTruthy());
+    expect(q.getByRole("button", { name: "Remove page 1" })).toBeTruthy();
+    expect(q.getByRole("button", { name: "Review photos" })).toBeTruthy();
+    expect(q.getByText("⚠ Can't upload yet")).toBeTruthy();
+    expect(upload).not.toHaveBeenCalled();
+
+    await fireEvent.press(q.getByRole("button", { name: "Scan this receipt" }));
+    await waitFor(() => expect(q.getByRole("button", { name: "Remove page 1" })).toBeTruthy());
+    expect(upload).not.toHaveBeenCalled();
+    expect(localFileByteSize).toHaveBeenCalledWith("file:///receipt.jpg");
+
+    await fireEvent.press(q.getByRole("button", { name: "Remove page 1" }));
+    expect(q.getByRole("button", { name: "Choose a photo from your gallery" })).toBeEnabled();
+  });
+
+  it("keeps mocked converted evidence when its media type is unsupported", async () => {
+    const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
+    await fireEvent.press(q.getByRole("button", { name: "Scan receipt" }));
+    await fireEvent.press(q.getByRole("button", { name: "Finish mocked camera with unsupported evidence" }));
+    await fireEvent.press(q.getByRole("button", { name: "Scan this receipt" }));
+    await waitFor(() => expect(q.getByText(/not a JPG, PNG, or WebP/)).toBeTruthy());
+    expect(q.getByText("⚠ Can't upload yet")).toBeTruthy();
+    expect(q.getByRole("button", { name: "Review photos" })).toBeEnabled();
+    expect(q.getByRole("button", { name: "Remove page 1" })).toBeEnabled();
+    expect(upload.mock.calls.filter(([path]) => path === "/records/receipts")).toHaveLength(0);
+  });
+
+  it("uploads mocked local evidence at the exact 10 MiB object boundary", async () => {
+    localFileByteSize.mockResolvedValue(RECEIPT_UPLOAD_MAX_OBJECT_BYTES);
+    const q = await readyReceipt();
+    await fireEvent.press(q.getByRole("button", { name: "Scan this receipt" }));
+    await waitFor(() => expect(q.getByRole("button", { name: "Save this expense" })).toBeTruthy());
+    expect(upload.mock.calls.filter(([path]) => path === "/records/receipts")).toHaveLength(1);
+  });
+
+  describe("mocked optional provider consent UI, not physical camera evidence", () => {
+    it("announces while optional settings load without blocking receipt capture", async () => {
+      get.mockReturnValue(new Promise(() => {}));
+      const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
+      const loadingText = q.getByText("Checking optional cloud receipt settings…");
+      expect(loadingText.parent?.props.accessibilityLiveRegion).toBe("polite");
+      expect(q.getByRole("button", { name: "Scan receipt" })).toBeEnabled();
+    });
+
+    it("shows no grant control when the backend disables the optional provider", async () => {
+      const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
+      await waitFor(() => expect(q.queryByText("Checking optional cloud receipt settings…")).toBeNull());
+      expect(q.queryByRole("button", { name: "Allow optional cloud help" })).toBeNull();
+      expect(q.getByRole("button", { name: "Scan receipt" })).toBeEnabled();
+    });
+
+    it.each(["light", "dark"] as const)("renders the exact disclosure in %s mode", async (mode) => {
+      get.mockResolvedValue(availableConsent);
+      const q = await render(wrapInMode(<ScanReceiptScreen navigation={navigation} />, mode));
+      await waitFor(() => expect(q.getByText(/Processing region: global/)).toBeTruthy());
+      expect(q.getByText(/processed copy when one exists/)).toBeTruthy();
+      expect(q.getByRole("checkbox", { name: "I allow FinSight to send these receipt images to Google Gemini under the terms above" })).toBeTruthy();
+    });
+
+    it("requires an unchecked deliberate choice and echoes the advertised terms", async () => {
+      get.mockResolvedValue(availableConsent);
+      const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
+      const checkbox = await waitFor(() => q.getByRole("checkbox", { name: "I allow FinSight to send these receipt images to Google Gemini under the terms above" }));
+      const allow = q.getByRole("button", { name: "Allow optional cloud help" });
+      expect(checkbox.props.accessibilityState.checked).toBe(false);
+      expect(allow).toBeDisabled();
+      expect(q.getByText(/Processing region: global/)).toBeTruthy();
+      expect(q.getByText(/not allowed to use it for model training/)).toBeTruthy();
+
+      await fireEvent.press(checkbox);
+      expect(q.getByRole("button", { name: "Allow optional cloud help" })).toBeEnabled();
+      await fireEvent.press(q.getByRole("button", { name: "Allow optional cloud help" }));
+      await waitFor(() => expect(q.getByText("Optional cloud receipt help is allowed for these terms.")).toBeTruthy());
+      expect(put).toHaveBeenCalledWith(
+        "/records/receipts/provider-consent/1",
+        {
+          provider: "gemini",
+          policyVersion: "receipt-provider-policy-v1",
+          purpose: "RECEIPT_EXTRACTION",
+          dataClasses: ["RECEIPT_IMAGE", "DERIVED_RECEIPT_IMAGE"],
+          region: "global",
+          retentionHours: 0,
+          trainingAllowed: false,
+        },
+      );
+    });
+
+    it("keeps local scanning usable when the optional settings request fails, then retries", async () => {
+      get.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce(availableConsent);
+      const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
+      await waitFor(() => expect(q.getByText("Optional cloud receipt settings could not be checked. Receipt capture and the standard reader remain available.")).toBeTruthy());
+      expect(q.getByRole("button", { name: "Scan receipt" })).toBeEnabled();
+      await fireEvent.press(q.getByRole("button", { name: "Check optional settings again" }));
+      await waitFor(() => expect(q.getByRole("checkbox", { name: "I allow FinSight to send these receipt images to Google Gemini under the terms above" })).toBeTruthy());
+    });
+
+    it("ignores mocked consent terms returned after the active business changes", async () => {
+      let finishFirst!: (value: unknown) => void;
+      get.mockImplementation((path: string) => path.endsWith("/1")
+        ? new Promise((resolve) => { finishFirst = resolve; })
+        : Promise.resolve(unavailableConsent));
+      const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
+      await waitFor(() => expect(get).toHaveBeenCalledWith("/records/receipts/provider-consent/1"));
+      selectedBusiness = { ...fixtures.businessProfile, id: 2 };
+      await q.rerender(wrap(<ScanReceiptScreen navigation={navigation} />));
+      await waitFor(() => expect(get).toHaveBeenCalledWith("/records/receipts/provider-consent/2"));
+      await act(() => finishFirst(availableConsent));
+      expect(q.queryByRole("button", { name: "Allow optional cloud help" })).toBeNull();
+    });
+
+    it("keeps revoke available for an earlier consent after the provider is disabled", async () => {
+      get.mockResolvedValue({ ...unavailableConsent, activeConsents: grantedConsent.activeConsents });
+      remove.mockResolvedValue(unavailableConsent);
+      const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
+      const revoke = await waitFor(() => q.getByRole("button", { name: "Revoke future cloud sends" }));
+      expect(q.queryByRole("button", { name: "Allow optional cloud help" })).toBeNull();
+      await fireEvent.press(revoke);
+      await waitFor(() => expect(q.getByText(/Cloud receipt permission was revoked/)).toBeTruthy());
+      expect(remove).toHaveBeenCalledWith("/records/receipts/provider-consent/1");
+    });
+
+    it("keeps an accessible revoke retry after a failed revocation", async () => {
+      get.mockResolvedValue(grantedConsent);
+      remove.mockRejectedValue(new Error("Permission could not be changed."));
+      const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
+      const revoke = await waitFor(() => q.getByRole("button", { name: "Revoke future cloud sends" }));
+      await fireEvent.press(revoke);
+      await waitFor(() => expect(q.getByText(/Permission could not be changed/)).toBeTruthy());
+      expect(q.getByRole("button", { name: "Revoke future cloud sends" })).toBeEnabled();
+      expect(q.getByRole("button", { name: "Scan receipt" })).toBeEnabled();
+    });
   });
 
   it("blocks mixed printed currencies even when the extracted currency is unknown", async () => {

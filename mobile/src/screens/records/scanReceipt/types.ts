@@ -108,6 +108,8 @@ export interface ReceiptScanResult {
   processingStatus?: "Processing" | "Complete" | "Failed";
   /** Why the read failed. Present only when processingStatus is "Failed". */
   processingError?: string | null;
+  /** Stable failure code used for recovery choices without exposing provider details. */
+  processingErrorCode?: string | null;
   /**
    * The individual lines the server read, each with the category it assigned.
    * A receipt with more than one is reviewed line by line below; anything
@@ -156,6 +158,7 @@ export interface CapturedPage {
   height: number;
   /** The uncropped original, when one is still around. */
   originalUri?: string;
+  originalMimeType?: string;
   originalWidth?: number;
   originalHeight?: number;
   captureSource?: CaptureSource;

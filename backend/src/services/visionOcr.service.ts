@@ -77,6 +77,10 @@ const TIMEOUT_MS = 20_000;
 /** A receipt cannot plausibly have more lines than this; a longer list is a runaway answer. */
 const MAX_ITEMS = 100;
 
+function safeFailureKind(error: unknown): "timeout" | "transport" {
+  return error instanceof Error && error.name === "TimeoutError" ? "timeout" : "transport";
+}
+
 export interface VisionReceiptItem {
   name: string;
   quantity: number | null;
@@ -394,7 +398,10 @@ export async function extractReceiptWithVision(pages: VisionPage[]): Promise<Vis
     });
 
     if (!res.ok) {
-      logger.error(`Vision receipt read failed: ${res.status} ${(await res.text()).slice(0, 200)}`);
+      logger.error(
+        { provider: "gemini", operation: "receipt-extraction", httpStatus: res.status },
+        "Vision receipt read failed",
+      );
       return null;
     }
 
@@ -407,7 +414,10 @@ export async function extractReceiptWithVision(pages: VisionPage[]): Promise<Vis
     const validated = validateVisionReceipt(text);
     return validated.ok ? { receipt: validated.receipt, rejectReason: null } : { receipt: null, rejectReason: validated.reason };
   } catch (err) {
-    logger.error({ err }, "Vision receipt read failed");
+    logger.error(
+      { provider: "gemini", operation: "receipt-extraction", failureKind: safeFailureKind(err) },
+      "Vision receipt read failed",
+    );
     return null;
   }
 }
@@ -503,7 +513,10 @@ A null proposed value needs no support — do not reject a field for being null.
     });
 
     if (!res.ok) {
-      logger.error(`Vision verifier failed: ${res.status} ${(await res.text()).slice(0, 200)}`);
+      logger.error(
+        { provider: "gemini", operation: "receipt-verification", httpStatus: res.status },
+        "Vision verifier failed",
+      );
       return null;
     }
 
@@ -520,7 +533,10 @@ A null proposed value needs no support — do not reject a field for being null.
     const result = verifierSchema.safeParse(parsed);
     return result.success ? result.data : null;
   } catch (err) {
-    logger.error({ err }, "Vision verifier failed");
+    logger.error(
+      { provider: "gemini", operation: "receipt-verification", failureKind: safeFailureKind(err) },
+      "Vision verifier failed",
+    );
     return null;
   }
 }

@@ -83,6 +83,23 @@ jobs:
       # build stage and `npm start` both depend on. typecheck alone
       # (--noEmit) does not catch every failure mode tsc's emit path can hit.
       - run: npm run build --prefix backend
+      - run: npm run ops:receipt-provider:smoke
+        working-directory: backend
+      - run: npm run ops:receipt-queue:smoke
+        working-directory: backend
+      - run: npm run ops:receipt-provider:status -- --require-disabled
+        working-directory: backend
+        env:
+          RECEIPT_PROVIDER_DISPATCH_ENABLED: "false"
+          RECEIPT_PROVIDER_KILL_SWITCH: "true"
+          RECEIPT_PROVIDER_MONTHLY_UNIT_LIMIT: "0"
+          GOOGLE_GEMINI_API_KEY: "non-secret-ci-placeholder"
+      # The probe verifies PostgreSQL reports an explicit read-only transaction
+      # before it reads migration, queue, cleanup, or provider-budget counts.
+      - run: npm run ops:receipt-queue:readiness
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://testuser:testpass@localhost:55432/finsight_test
       - run: npm test --prefix backend
         env:
           DATABASE_URL: postgresql://testuser:testpass@localhost:55432/finsight_test
@@ -178,7 +195,7 @@ jobs:
       # the file must exist — so a placeholder copy of the example file is
       # enough. Nothing here starts a container.
       - run: cp backend/.env.example backend/.env
-      - run: docker compose config
+      - run: docker compose config --quiet
       # nginx.conf's upstream block names the backend service by its
       # docker-compose hostname. `nginx -t` resolves upstream hosts as part of
       # loading the config even though it never connects to them, so bare
@@ -189,6 +206,10 @@ jobs:
           docker run --rm --add-host backend:127.0.0.1 \
             -v "$(pwd)/nginx/nginx.conf:/etc/nginx/nginx.conf:ro" \
             nginx:1.27-alpine nginx -t
+      - run: bash nginx/verify-upload-envelope.sh
+      - run: bash backend/docker/verify-receipt-upload-orphan-sweep.sh
+      - run: bash backend/docker/verify-api-entrypoint-signal.sh
+      - run: bash backend/docker/verify-receipt-worker-readiness.sh
 
       - uses: actions/setup-node@v4
         with:
@@ -213,11 +234,70 @@ jobs:
       - run: |
           api_cmd="$(docker inspect --format '{{json .Config.Cmd}}' finsight-backend:ci)"
           worker_cmd="$(docker inspect --format '{{json .Config.Cmd}}' finsight-worker:ci)"
+          api_entrypoint="$(docker inspect --format '{{json .Config.Entrypoint}}' finsight-backend:ci)"
+          worker_entrypoint="$(docker inspect --format '{{json .Config.Entrypoint}}' finsight-worker:ci)"
           default_cmd="$(docker build -q ./backend | xargs docker inspect --format '{{json .Config.Cmd}}')"
-          echo "api: $api_cmd  worker: $worker_cmd  default: $default_cmd"
+          echo "api: $api_cmd  api entrypoint: $api_entrypoint  worker: $worker_cmd  worker entrypoint: $worker_entrypoint  default: $default_cmd"
           [ "$api_cmd" = '["node","dist/server.js"]' ]
           [ "$worker_cmd" = '["node","dist/worker.js"]' ]
+          [ "$api_entrypoint" = '["/usr/local/bin/finsight-api-entrypoint"]' ]
+          [ "$worker_entrypoint" = '["/usr/local/bin/finsight-worker-entrypoint"]' ]
           [ "$default_cmd" = '["node","dist/server.js"]' ]
+
+      - run: |
+          docker run -d --name finsight-worker-health-smoke --read-only \
+            --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
+            finsight-worker:ci node -e 'setInterval(() => {}, 1000)'
+          for i in $(seq 1 30); do
+            state="$(docker inspect --format '{{.State.Health.Status}}' finsight-worker-health-smoke)"
+            if [ "$state" = healthy ]; then break; fi
+            if [ "$state" = unhealthy ]; then exit 1; fi
+            sleep 1
+          done
+          [ "$(docker inspect --format '{{.State.Health.Status}}' finsight-worker-health-smoke)" = healthy ]
+      - if: always()
+        run: docker rm -f finsight-worker-health-smoke || true
+
+      # Exercise the application OCR path from the production worker image,
+      # with no network interface and no writable image filesystem. A cache
+      # miss would try Tesseract.js's CDN and make this cold-start gate fail.
+      - run: |
+          docker run --rm -i --network none --read-only \
+            --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
+            -e DATABASE_URL="postgresql://offline:offline@127.0.0.1/offline" \
+            -e DIRECT_URL="postgresql://offline:offline@127.0.0.1/offline" \
+            -e SUPABASE_URL="https://example.supabase.co" \
+            -e SUPABASE_ANON_KEY="ci-placeholder-anon-key" \
+            -e SUPABASE_SERVICE_ROLE_KEY="ci-placeholder-service-role-key" \
+            -e TRUST_PROXY_HOPS=0 \
+            finsight-worker:ci node - <<'NODE'
+          const { extractText } = require("./dist/services/ocr.service.js");
+          const receipt = Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAAAyAAAACgAQMAAADO5ppuAAAABlBMVEX///8NDQ2WBULdAAAACXBIWXMAAAsTAAALEwEAmpwYAAADsklEQVRoge2Yy5HkKBCGIYgYjpiAKRovxpsFD9YlPFgXiFgDhiMHLWwkL6GSUEF19GUi/wOtklB+/YtXAiEoFAqFQqFQKBQKhUKhUCgUCvUnKfq3VVh0hBA+UfMSHOQIi6Fce0KUI4SGvta2QwF1iEple+DSa/sURMSoxxCeokSow1L5CvFTEBmjGUMUQCC8SaXtnqw42eDVBvF3EJ7CA8RdIHNOFBQVEl8hsUKg8U4h44qTaJUfQ1SG2OgJS2UVLZC3HW4zUFlLqLilzw0hb5zsRO6EeShPkFM/fIRAjAKhF4j6FyCOiJ0wTXg4D51ZCAuEJYgByH+vkB0e8hqeHY/47xXInl/NTi6QnwD5UcPTDyF8z68mJ2wPryOe5Wag8SiTxD8rEF8g4IT5Zwg5IHIRkl7NToYQcoH8vQARFQJOuI+zkE2sQFznhDv1fRBdncxD/lqFKH040ZOQ8BEEnAi3zUL2FYjsnQj7DKENQv1HkOTEbuZxMIZ2O0OEnoPYzokcQ0L6cUBc6jETqUWDmOJEGvkI4W2q5wUS1yDmEcLSn7TyZIgtELPsZDPSjiH017HGiwqxy07GEA7rchdSmgJx6060GEBEhrTOJLVYWOPPTuDVe4gDyPEk1SQxrdeLTtQQIm1y0m6rhHVEhmUnSvMBZMsQc4ZoIsK6k7ZQvkJUSmyOZg4JAknLspM4hMTU5K2Z6V4g3ao/62QIoTmW2L8IAScB0sRbSEg/WnLHfIEUiwtOaEr07iCsn8FOEJhcl5yMIfyUGOXE9RNIdkLvIaK0eIUIuw4p6wnsQMItRJa+W0N2ELMCsU+QzV4hfgHSrfFjiDIvkLyBqvnaNKQ4ibeQqL8E6fMuPoLQ2uDbBTL1ufoMcghh9Vb9vz+FVCf6BsLrdKKuEL2ScNv66W4gok6M1zaZg3T7kyFE1im+C7kyGGHafetE2iFkaoJs27kyMDdzA9lq60LIYmsJUjem9gGiaqTURXIDrawnbYv95CQWSAp5cjK3/LJwnEhkN1cITZFgN59arzn50S1jjxAa86IK19nNFcJytm1yyMMJN5PZCo2mHeAUCIyB2p02yKnzTMA92cLJCdyZSu5IdGlUNSfuBFENoqHsBg1AZtPUfKiWnUAnEo8Qf3Yym3Dn48F8/R7iLk6mtg75oLNz4p8g9uJkahMEc129huHAHyH64uQdoxza5OwfnMAbYwgph8/diH97znk6e50Sv7SyeN8kKBQKhUKhUCgUCoVCoVAoFPlu/Q+wTzG/CPK8NAAAAABJRU5ErkJggg==",
+            "base64",
+          );
+
+          (async () => {
+            const text = await extractText(receipt);
+            if (!/TOTAL\s+123[.,]45/.test(text)) {
+              throw new Error(`Unexpected offline OCR output: ${JSON.stringify(text)}`);
+            }
+            console.log("Offline English OCR passed with packaged language data.");
+          })().catch((error) => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
+
+      # The worker must reject a configured language that the image does not
+      # contain. The API image is left independent so manual entry stays up.
+      - run: |
+          if docker run --rm --network none \
+            -e TESSERACT_LANG=missing \
+            finsight-worker:ci true; then
+            echo "Worker started without its configured language data" >&2
+            exit 1
+          fi
 
       # --network host: the container needs to reach the postgres *service
       # container*, which GitHub Actions publishes on the runner's own

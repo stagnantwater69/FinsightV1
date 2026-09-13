@@ -135,4 +135,103 @@ describe("account deletion leaves no receipt data behind", () => {
 
     expect(await prisma.receiptScan.count({ where: { id: orphan.id } })).toBe(1);
   });
+
+  it("removes provider consent, dispatch, business budget, and purge metadata", async () => {
+    const scan = await makeScanWithChildren(ctx.profile.id, ctx.categories.Inventory!, "provider");
+    const now = new Date();
+    const terminalAt = new Date(now.getTime() + 1_000);
+    const cycleStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const cycleEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+    const consent = await prisma.externalProcessingConsent.create({
+      data: {
+        businessProfileId: ctx.profile.id,
+        actorUserId: ctx.user.id,
+        provider: "gemini",
+        policyVersion: "receipt-provider-policy-v1",
+        purpose: "RECEIPT_EXTRACTION",
+        allowedDataClasses: ["RECEIPT_IMAGE", "DERIVED_RECEIPT_IMAGE"],
+        processingRegion: "global",
+        providerRetentionHours: 0,
+      },
+    });
+    const resourceBudget = await prisma.externalProviderBudget.create({
+      data: {
+        businessProfileId: null,
+        scope: "RESOURCE",
+        provider: "gemini",
+        unitType: "DOCUMENT",
+        cycleStart,
+        cycleEnd,
+        limitUnits: 10,
+        usedUnits: 2,
+      },
+    });
+    const businessBudget = await prisma.externalProviderBudget.create({
+      data: {
+        businessProfileId: ctx.profile.id,
+        scope: "BUSINESS",
+        provider: "gemini",
+        unitType: "DOCUMENT",
+        cycleStart,
+        cycleEnd,
+        limitUnits: 10,
+        usedUnits: 2,
+      },
+    });
+    await prisma.externalProviderDispatch.create({
+      data: {
+        businessProfileId: ctx.profile.id,
+        receiptScanId: scan.id,
+        receiptScanBusinessProfileId: ctx.profile.id,
+        consentId: consent.id,
+        resourceBudgetId: resourceBudget.id,
+        resourceBudgetScope: "RESOURCE",
+        businessBudgetId: businessBudget.id,
+        businessBudgetScope: "BUSINESS",
+        businessBudgetProfileId: ctx.profile.id,
+        provider: "gemini",
+        providerVersion: "gemini-3.5-flash-lite",
+        providerRegion: "global",
+        unitType: "DOCUMENT",
+        cycleStart,
+        reservationKeyHash: "a".repeat(64),
+        inputHash: "b".repeat(64),
+        preprocessingVersion: "preprocess-v1",
+        schemaVersion: "normalized-v1",
+        rescueReasonCode: "MISSING_CRITICAL_TOTAL",
+        reservedUnits: 2,
+        finalBillableUnits: 2,
+        pageCount: 1,
+        documentCount: 1,
+        status: "SUCCEEDED",
+        outcomeCode: "OK",
+        submittedAt: terminalAt,
+        completedAt: terminalAt,
+      },
+    });
+    await prisma.receiptPurgeJob.create({
+      data: {
+        businessProfileId: ctx.profile.id,
+        receiptScanId: scan.id,
+        receiptScanBusinessProfileId: ctx.profile.id,
+        requestKeyHash: "c".repeat(64),
+        targetReferenceHash: "d".repeat(64),
+        reason: "ACCOUNT_DELETION",
+        expiresAt: new Date(now.getTime() + 86_400_000),
+      },
+    });
+
+    await drainDeletion(ctx.user.id);
+
+    expect(await prisma.externalProviderDispatch.count()).toBe(0);
+    expect(await prisma.externalProcessingConsent.count()).toBe(0);
+    expect(await prisma.externalProviderBudget.count({ where: { scope: "BUSINESS" } })).toBe(0);
+    expect(await prisma.receiptPurgeJob.count()).toBe(0);
+    expect(await prisma.externalProviderBudget.findUnique({ where: { id: resourceBudget.id } })).toMatchObject({
+      businessProfileId: null,
+      scope: "RESOURCE",
+      usedUnits: 2,
+      reservedUnits: 0,
+    });
+  });
 });

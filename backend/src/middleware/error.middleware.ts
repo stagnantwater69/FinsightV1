@@ -27,6 +27,13 @@ function isDatabaseUnreachable(err: unknown): boolean {
 type BodyParserError = Error & { type?: unknown; status?: unknown; body?: unknown };
 
 const HANDLED_BODY_PARSER_TYPES = new Set(["entity.parse.failed", "entity.too.large"]);
+const HANDLED_MULTIPART_PARSER_MESSAGES = new Set([
+  "Malformed content type",
+  "Malformed part header",
+  "Multipart: Boundary not found",
+  "Unexpected end of file",
+  "Unexpected end of form",
+]);
 
 function bodyParserType(err: unknown): "entity.parse.failed" | "entity.too.large" | undefined {
   if (typeof err !== "object" || err === null) return undefined;
@@ -37,6 +44,16 @@ function bodyParserType(err: unknown): "entity.parse.failed" | "entity.too.large
   // Anything that re-throws the SyntaxError without body-parser's marker still
   // carries the raw body on it, which is the part that must not be logged.
   return err instanceof SyntaxError && "body" in err ? "entity.parse.failed" : undefined;
+}
+
+function isMalformedMultipart(err: unknown, req: Request): boolean {
+  const contentType = req.headers["content-type"];
+  return (
+    typeof contentType === "string" &&
+    /^multipart\/form-data(?:;|$)/i.test(contentType.trim()) &&
+    err instanceof Error &&
+    HANDLED_MULTIPART_PARSER_MESSAGES.has(err.message)
+  );
 }
 
 export class ApiError extends Error {
@@ -70,6 +87,19 @@ export function errorHandler(err: unknown, req: Request, res: Response, next: Ne
 
   if (err instanceof MulterError) {
     return res.status(400).json({ error: err.message });
+  }
+
+  if (isMalformedMultipart(err, req)) {
+    logger.warn(
+      {
+        requestId: requestIdOf(req),
+        method: req.method,
+        path: req.path,
+        type: "multipart.parse.failed",
+      },
+      "malformed multipart request",
+    );
+    return res.status(400).json({ error: "Malformed multipart request" });
   }
 
   /*
