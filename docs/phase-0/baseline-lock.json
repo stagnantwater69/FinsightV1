@@ -1,0 +1,219 @@
+{
+  "baselineId": "finsight-phase-0-2026-09-13-checkpointed-candidate",
+  "capturedOn": "2026-09-13",
+  "phase0Status": "PARTIALLY_COMPLETE",
+  "claim": "PHASE_1_IMPLEMENTATION_BASELINE_NOT_RELEASE_BASELINE",
+  "repository": {
+    "branch": "finsightv1-main",
+    "sourceBaseCommit": "50d7a1f53e69f493b30cb8e8b25ab66f830a3bc2",
+    "checkpointCommit": "20d011ec8c51fb026abb1d29b53c4f8a196227b7",
+    "workingTreeClean": false,
+    "trackedChangedEntriesImmediatelyAfterCheckpoint": 0,
+    "untrackedNormalEntriesImmediatelyAfterCheckpoint": 18,
+    "untrackedDisposition": "Local-only documentation, agent configuration, browser traces, review artifacts, planning files, UAT helpers, and skill observations remain excluded under the prior repository untracking policy. RECEIPTS is ignored. None is required to build or test the runtime checkpoint.",
+    "phase0DocumentationCheckpointed": true,
+    "testedCodeAndRuntimeConfigurationTree": {
+      "includedPaths": [
+        ".github/workflows",
+        "backend",
+        "docker-compose.yml",
+        "mobile",
+        "ml",
+        "nginx",
+        "scripts/check-type-parity.mjs",
+        "web"
+      ],
+      "checkpointGitTreeEntries": 1215,
+      "sha256": "15c4fc3b4616f0780a2b143c7f181b2053b868ced9f2fab210f353675d498a6d",
+      "hashMethod": "SHA-256 of the exact git ls-tree -r --full-tree output for checkpoint commit 20d011ec8c51fb026abb1d29b53c4f8a196227b7 and the included paths.",
+      "phase0ChangesInsideIncludedPathsAfterFullAutomatedGate": "The receipt-field-corrections migration was restored to the exact deployed bytes. The post-recovery migration validation replayed all migrations and reran the full backend suite.",
+      "excludedFromFingerprint": "Documentation, agent metadata, and other non-runtime planning files are outside this tested code/configuration fingerprint."
+    }
+  },
+  "inputs": {
+    "prismaSchema": {
+      "path": "backend/prisma/schema.prisma",
+      "sha256": "fa01efb2a0de699ecd75bbf6257ab2a96fb12b60c2918f4330bb395813aec816"
+    },
+    "presentMigrationChain": {
+      "migrationSqlFiles": 39,
+      "trackedMigrationSqlFiles": 39,
+      "untrackedMigrationSqlFiles": 0,
+      "sha256": "87c75ea2f583c37d81be14f69ecaadb90df2cdbe980bb72bb820ceceda56216d",
+      "hashMethod": "SHA-256 of the sorted per-file sha256sum output for backend/prisma/migrations/*/migration.sql"
+    },
+    "ocrGroundTruth": {
+      "path": "backend/tests/ocr-accuracy/ground-truth.json",
+      "sha256": "3fb38d68b6fa75a8156b0a087569332d0cb2832cfe48293c70307657e5887c92",
+      "samples": 73
+    },
+    "scannerManifest": {
+      "path": "backend/tests/receipt-scanner-evaluation/manifest.json",
+      "sha256": "de23b68b047803546d6d1a6efec9a06fe52f2d6e1536a341db4719a8c0628bbc",
+      "samples": 3,
+      "releaseGateEligibleSamples": 0
+    },
+    "scannerThresholds": {
+      "path": "backend/tests/receipt-scanner-evaluation/thresholds.json",
+      "sha256": "12666143a6cf1e0364110256d0d5e1be033de7e8f0551de3766d2fcdf60b082a"
+    },
+    "corpusDataDictionary": {
+      "path": "docs/phase-0/CORPUS-DATA-DICTIONARY.md",
+      "sha256": "76deebb08b5cb8cace49a67ef3232a3e7449a5f5f018f7cfefa30799056aeb4c"
+    },
+    "receiptCorpusIntakeHeader": {
+      "path": "docs/phase-0/receipt-corpus-intake.example.csv",
+      "sha256": "a720485a0e89105456c3d329c8e6f0dd961196a064e6e03ececeae836a744b86"
+    },
+    "receiptPairLabelHeader": {
+      "path": "docs/phase-0/receipt-pair-label.example.csv",
+      "sha256": "7fcc440898045454403df5a17424bd74225c230afe67f7fc458f56f674449988"
+    },
+    "tesseractEnglishLanguageData": {
+      "path": "backend/eng.traineddata",
+      "bytes": 5199098,
+      "sha256": "5dc5d8d640a212c9d6184921ba103b186f50e0fed9ee716c53e6b312b400d747"
+    },
+    "phase0BenchmarkPolicy": {
+      "path": "docs/phase-0/benchmark-policy-v1.json",
+      "sha256": "4368086c7ef0ae38be67d7c510c91b7b8cc37fb383a179e6ab543cfb2039650f",
+      "status": "FROZEN_EXCEPT_DEVICE_SPECIFIC_PSS"
+    }
+  },
+  "automatedGate": {
+    "testedTreeFingerprintSha256": "15c4fc3b4616f0780a2b143c7f181b2053b868ced9f2fab210f353675d498a6d",
+    "verificationSplit": "After restoring the exact deployed migration, migrate:validate replayed all 39 migrations and reran the backend suite. After commit 20d011e, the unchanged web, browser, mobile, shared-type, and ML gates were rerun against that exact checkpoint.",
+    "runtime": {
+      "node": "24.18.0",
+      "npm": "11.16.0",
+      "localPostgresql": "16",
+      "ciNode": "22",
+      "ciPostgresql": "16"
+    },
+    "commandGroups": {
+      "backend": [
+        "npm run typecheck",
+        "npm run lint",
+        "npm run build",
+        "npx prisma validate",
+        "npm test"
+      ],
+      "web": [
+        "npm run typecheck",
+        "npm run lint",
+        "npm run build",
+        "npm run check:bundle-budget",
+        "npm test",
+        "npm run test:e2e"
+      ],
+      "mobile": [
+        "npm run typecheck",
+        "npm run lint",
+        "npm test"
+      ],
+      "repository": [
+        "node scripts/check-type-parity.mjs",
+        "ml/.venv/bin/python -m unittest discover -s ml/worker -v",
+        "git diff --check"
+      ]
+    },
+    "allRecordedCommandExitCodes": 0,
+    "rawCommandLogsRetained": false,
+    "testDatabaseFinalState": "ABSENT",
+    "externalProviderCallsMade": false,
+    "passingTestCases": 3674,
+    "expectedSkippedTestCases": 1,
+    "backend": {
+      "files": 137,
+      "passed": 1983,
+      "expectedSkipped": 1,
+      "typecheck": "PASS",
+      "lint": "PASS_WITH_8_WARNINGS",
+      "build": "PASS",
+      "prismaValidate": "PASS"
+    },
+    "web": {
+      "files": 80,
+      "passed": 685,
+      "typecheck": "PASS",
+      "lint": "PASS_WITH_36_WARNINGS",
+      "build": "PASS",
+      "bundleBudget": "PASS_WITH_2_SOFT_WARNINGS"
+    },
+    "browser": {
+      "chromiumMockedJourneysPassed": 10,
+      "chromiumMockedJourneysTotal": 10
+    },
+    "mobile": {
+      "files": 92,
+      "passed": 983,
+      "typecheck": "PASS",
+      "lint": "PASS_WITH_12_WARNINGS"
+    },
+    "sharedClientTypesMatched": 91,
+    "mlWorkerPassed": 13,
+    "limits": [
+      "Backend integrations mock Supabase Auth, Storage, OCR, and AI providers.",
+      "Browser journeys mock Auth and backend requests.",
+      "Mobile tests mock camera, gallery, native scanner, API, and lifecycle behavior.",
+      "No physical-device or live-provider result is claimed."
+    ]
+  },
+  "hostedReadOnlyAudit": {
+    "postgresVersion": "17.6",
+    "schemaDiffAgainstCapturedWorktree": "NONE",
+    "prismaMigrationRows": 40,
+    "uniquePrismaMigrationNames": 39,
+    "successfulUniqueMigrationNames": 39,
+    "missingLocalMigrations": 0,
+    "unappliedLocalMigrations": 0,
+    "successfulMigrationChecksumMismatches": 0,
+    "publicTables": 29,
+    "publicTablesWithRls": 29,
+    "clientRoleEffectiveApplicationTableCrudPrivileges": 0,
+    "clientRolePublicSequenceUsagePrivileges": 0,
+    "publicPolicies": 0,
+    "publicViews": 0,
+    "publicSecurityDefinerFunctions": 0,
+    "storage": {
+      "objects": 381,
+      "bytes": 59001254,
+      "receiptObjects": 334,
+      "csvImportObjects": 35,
+      "avatarObjects": 12,
+      "receiptBucketPrivate": true,
+      "csvImportBucketPrivate": true,
+      "bucketMimeAndSizeRestrictionsPresent": false
+    },
+    "writesPerformedByPhase0Audit": false
+  },
+  "closedExitConditions": [
+    {
+      "id": "REPOSITORY_CHECKPOINT",
+      "state": "CLOSED",
+      "evidence": "Runtime commit 20d011ec8c51fb026abb1d29b53c4f8a196227b7; no tracked changes immediately after commit; private receipt data and local artifacts excluded."
+    },
+    {
+      "id": "MIGRATION_PROVENANCE",
+      "state": "CLOSED",
+      "evidence": "All 39 migrations are tracked; recovered receipt-field-corrections SHA-256 matches hosted; receipt-upload-idempotency SHA-256 matches hosted; fresh replay, hosted status, ledger comparison, and schema diff pass."
+    }
+  ],
+  "openExitConditions": [
+    {
+      "id": "CONSENTED_REAL_CORPUS",
+      "state": "BLOCKED",
+      "reason": "No scanner-manifest sample satisfies the frozen consented owner-receipt evidence policy."
+    },
+    {
+      "id": "PHYSICAL_ANDROID_MATRIX",
+      "state": "BLOCKED",
+      "reason": "No physical Android target or predeclared target-specific peak-PSS ceiling is available."
+    },
+    {
+      "id": "ACCOUNT_AND_DATA_CLASSIFICATION",
+      "state": "BLOCKED",
+      "reason": "The hosted account and objects have not been classified as synthetic-only or real-owner data; leaked-password, backup, signup, and Pro cost controls depend on that decision."
+    }
+  ]
+}

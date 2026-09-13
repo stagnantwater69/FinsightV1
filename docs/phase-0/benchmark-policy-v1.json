@@ -1,0 +1,319 @@
+{
+  "policyId": "finsight-core-evidence-gates-v1",
+  "frozenAt": "2026-09-13",
+  "status": "FROZEN_EXCEPT_DEVICE_SPECIFIC_PSS",
+  "scope": [
+    "receipt_capture",
+    "ocr_extraction",
+    "csv_import",
+    "automatic_categorization",
+    "duplicate_detection"
+  ],
+  "claimPolicy": {
+    "capstoneSetSupportsProductionAccuracyClaim": false,
+    "syntheticSamplesMaySatisfyRealReceiptMinimums": false,
+    "publicDatasetSamplesMaySatisfyConsentedOwnerReceiptMinimums": false,
+    "unrecordedConsentMayBeInferred": false,
+    "unscoredCohortsMustBeReported": true
+  },
+  "existingScannerHarnessGates": {
+    "source": "backend/tests/receipt-scanner-evaluation/thresholds.json",
+    "sourceVersion": "receipt-scanner-release-gates-v1",
+    "sourceSha256": "12666143a6cf1e0364110256d0d5e1be033de7e8f0551de3766d2fcdf60b082a",
+    "relationshipToThisPolicy": "RETAINED_AND_NOT_SUPERSEDED",
+    "changeRule": "BUMP_POLICY_VERSION_AND_UPDATE_SOURCE_HASH_BEFORE_NEW_RESULTS",
+    "documentPrecisionMin": 0.95,
+    "documentRecallMin": 0.9,
+    "obviousNonReceiptFalseTriggerMax": 0.05,
+    "medianNormalizedCornerErrorMax": 0.04,
+    "multiReceiptCountAccuracyMin": 0.9,
+    "processedCompositeGainMin": 0.02,
+    "financialFieldRegressionMax": 0.01,
+    "handwrittenHardRejectMax": 0,
+    "analysisLatencyP95MillisecondsMax": 1500
+  },
+  "capstoneCorpus": {
+    "uniqueConsentedRealReceiptsMin": 30,
+    "cohortReceiptMinimums": {
+      "clean_printed": 5,
+      "stressed_or_faded": 5,
+      "long": 5,
+      "handwritten_or_hand_annotated": 5,
+      "filipino_or_mixed_language": 5,
+      "damaged_or_low_light": 5
+    },
+    "cohortTagsMayOverlap": true,
+    "nonReceiptsMin": 10,
+    "knownDuplicatePairsMin": 10,
+    "knownNonDuplicatePairsMin": 20,
+    "vendorTemplateShareMax": 0.2,
+    "independentGroundTruthReviewersMin": 2,
+    "countingRules": {
+      "receiptCountingUnit": "DISTINCT_ELIGIBLE_RECEIPT_ID",
+      "primaryRowsRequiredPerReceiptId": 1,
+      "primaryRowBenchmarkCountRole": "PRIMARY_RECEIPT",
+      "sameReceiptPagesAndSegmentsCountAgain": false,
+      "derivedVariantsCountAgain": false,
+      "recapturesCountAgain": false,
+      "recapturesMayBeUsedOnlyForPredeclaredRobustnessAnalysis": true,
+      "vendorTemplateShareUsesDistinctReceiptIds": true,
+      "cohortCountsUseDistinctReceiptIds": true,
+      "cohortMembershipField": "cohort_tags",
+      "nonReceiptCountingUnit": "DISTINCT_ELIGIBLE_SAMPLE_ID_WITH_NON_RECEIPT_ROLE",
+      "multiReceiptSourceRequiresOneReceiptIdAndGroundTruthRecordPerPhysicalReceipt": true
+    },
+    "cohortTagMap": {
+      "CLEAN_PRINTED": "clean_printed",
+      "STRESSED_OR_FADED": "stressed_or_faded",
+      "LONG": "long",
+      "HANDWRITTEN_OR_HAND_ANNOTATED": "handwritten_or_hand_annotated",
+      "FILIPINO_OR_MIXED_LANGUAGE": "filipino_or_mixed_language",
+      "DAMAGED_OR_LOW_LIGHT": "damaged_or_low_light"
+    },
+    "normativeIntakeArtifacts": {
+      "dataDictionary": {
+        "path": "docs/phase-0/CORPUS-DATA-DICTIONARY.md",
+        "sha256": "76deebb08b5cb8cace49a67ef3232a3e7449a5f5f018f7cfefa30799056aeb4c"
+      },
+      "receiptIntakeHeader": {
+        "path": "docs/phase-0/receipt-corpus-intake.example.csv",
+        "sha256": "a720485a0e89105456c3d329c8e6f0dd961196a064e6e03ececeae836a744b86"
+      },
+      "pairLabelHeader": {
+        "path": "docs/phase-0/receipt-pair-label.example.csv",
+        "sha256": "7fcc440898045454403df5a17424bd74225c230afe67f7fc458f56f674449988"
+      },
+      "changeRule": "BUMP_POLICY_VERSION_AND_UPDATE_ALL_ARTIFACT_HASHES_BEFORE_NEW_RESULTS"
+    }
+  },
+  "providerOcrPromotionCorpus": {
+    "uniqueRealReceiptsMin": 100,
+    "affectedCohortReceiptMinimum": 30,
+    "eachAffectedCohortMustMeetApplicablePointGates": true,
+    "aggregateResultMayOverrideAffectedCohortFailure": false,
+    "confidenceLevel": 0.95
+  },
+  "postMvpCategoryPromotionCorpus": {
+    "confirmedCategoryDecisionsPerBusinessProfileMin": 300,
+    "decisionsFromAnotherBusinessProfileMayContribute": false,
+    "profileSpecificSupportMustBeReported": true,
+    "precisionIntervalComputedPerBusinessProfile": true,
+    "confidenceLevel": 0.95
+  },
+  "duplicatePromotionCorpus": {
+    "knownDuplicatePairsMin": 100,
+    "knownNonDuplicatePairsMin": 200,
+    "confidenceLevel": 0.95
+  },
+  "receiptGates": {
+    "cleanPrinted": {
+      "totalExactMatchMin": 0.95,
+      "normalizedVendorExactMatchMin": 0.9,
+      "dateExactMatchMin": 0.9,
+      "currencyCodeExactMatchMin": 0.95,
+      "incorrectCurrencyCodeGivenHighConfidenceMax": 0
+    },
+    "stressedPrinted": {
+      "totalExactMatchMin": 0.85,
+      "missingOrConflictingCriticalValuesRoutedToReviewMin": 1.0,
+      "currencyCorrectOrRoutedToFocusedReviewMin": 1.0,
+      "incorrectCurrencyCodeGivenHighConfidenceMax": 0
+    },
+    "handwriting": {
+      "highConfidenceFinancialFieldsMax": 0,
+      "financialFieldsOmittedFromFocusedReviewMax": 0,
+      "reportCharacterErrorRate": true,
+      "reportWordErrorRate": true,
+      "reportFieldExactMatch": true
+    },
+    "longReceipt": {
+      "lineRecallMin": 0.95,
+      "duplicatedLineRateMax": 0.01,
+      "lineOrderAccuracyMin": 0.95,
+      "knownTruncatedScansMarkedCompleteMax": 0
+    },
+    "confidenceBands": {
+      "errorRateMustBeMonotonicHighToLow": true,
+      "reviewedPredictionsPerFieldProviderCohortMin": 30,
+      "belowSupportLabel": "UNCALIBRATED"
+    }
+  },
+  "categorizationGates": {
+    "postMvpLearnedHistoryOrModelHighBandPrecisionMin": 0.95,
+    "confidenceLevel": 0.95,
+    "mvpHighBandSources": ["active_owner_authored_rule"],
+    "unpromotedExactHistoryBandMax": "MEDIUM",
+    "unpromotedModelBandMax": "LOW",
+    "learnedHighPromotionLifecycle": "POST_MVP_SEPARATE_DECISION",
+    "postMvpHighPrecisionConfidenceIntervalLowerBoundMin": 0.95,
+    "ownerAuthoredRulesTreatedAsInstructions": true,
+    "newCategoryRequiresOwnerApproval": true,
+    "silentLowOrUncalibratedAssignmentAllowed": false,
+    "ownerConfirmationStillRequiredForReceipts": true
+  },
+  "duplicateGates": {
+    "precisionMin": 0.98,
+    "recallMin": 0.9,
+    "ownerReviewRequired": true
+  },
+  "performanceGates": {
+    "liveCaptureGuidanceP95MillisecondsMax": 500,
+    "onePageLocalResultP95MillisecondsMax": 15000,
+    "workerHeartbeatIntervalSecondsMax": 30,
+    "staleScanTerminalOrReclaimedSecondsMax": 130,
+    "largeImport": {
+      "rowCount": 30000,
+      "coldAndWarmTrialsMin": 20,
+      "durableValidationP95SecondsMax": 600,
+      "workerPeakRssMiBMax": 512,
+      "hostMemoryHeadroomMin": 0.3
+    }
+  },
+  "physicalAndroidProtocol": {
+    "requiredTargets": [
+      "minimum_supported_api_and_ram_class",
+      "mainstream_target"
+    ],
+    "longSessionSecondsMax": 90,
+    "standardRepeatedSessionsPerTarget": 10,
+    "longRepeatedSessionsPerTarget": 5,
+    "backgroundResumeCyclesPerTarget": 5,
+    "peakPssCeilingMiBByDeclaredTarget": null,
+    "peakPssStatus": "BLOCKED_UNTIL_DEVICE_MODEL_RAM_AND_MEMORY_CLASS_ARE_RECORDED",
+    "eligibleDeviceRunAllowedWhilePeakPssIsNull": false,
+    "deviceSpecificPssAmendmentMustPrecedeFirstRun": true,
+    "noOomAnrOrThermalShutdown": true,
+    "physicalDeviceEvidenceRequired": true
+  },
+  "importFixtureMatrix": {
+    "rowCounts": [1, 2000, 2001, 30000, 30001],
+    "delimiters": ["comma", "semicolon", "tab"],
+    "csvCases": [
+      "utf8",
+      "utf8_bom",
+      "utf16_le_bom",
+      "utf16_be_bom",
+      "unicode_filipino_and_vendor_text",
+      "duplicate_headers",
+      "empty_headers",
+      "ambiguous_day_month_dates",
+      "exact_decimal_boundaries",
+      "formula_injection_text",
+      "antimalware_detection_test"
+    ],
+    "xlsxCasesRequiredBeforeEnablement": [
+      "1900_date_system",
+      "1904_date_system",
+      "multiple_sheets",
+      "formula_cells",
+      "macros",
+      "embedded_objects",
+      "external_links",
+      "encryption",
+      "excessive_compression",
+      "malformed_xml"
+    ],
+    "compressedUploadBytesMax": 5242880,
+    "compressedUploadLimitExcludesMultipartEnvelope": true,
+    "decompressedOoxmlBytesMax": 52428800,
+    "archiveEntriesMax": 200,
+    "rowsMax": 30000,
+    "worksheetsSelectedExactly": 1,
+    "malwareScanner": "CLAMAV",
+    "malwareScanRequiredBeforeParsingEveryCsvAndXlsx": true,
+    "malwareScannerUnavailableFailsClosed": true,
+    "knownAntimalwareTestSignatureMustBeRejected": true,
+    "xlsxEnabledBeforeAllCasesPass": false
+  },
+  "providerBenchmark": {
+    "order": [
+      "local_tesseract",
+      "azure_document_intelligence_f0",
+      "paddleocr_nonproduction_only_after_recorded_failure_hypothesis",
+      "google_vision_only_after_recorded_failure_hypothesis"
+    ],
+    "sameSourceBytesRequired": true,
+    "providerRequiredTransformMustBeRecorded": true,
+    "providerRegionAndVersionMustBePinned": true,
+    "failedTimedOutOrMissingProviderResultExcludedFromApplicableDenominator": false,
+    "failedTimedOutOrMissingProviderFieldScoredAsIncorrect": true,
+    "providerFailureAndTimeoutRatesReportedSeparately": true,
+    "paddleOcrProductionAdoptionLifecycle": "POST_MVP_ONLY_AFTER_INDEPENDENT_GAIN",
+    "rawOcrAndNormalizedFieldsScoredSeparately": true,
+    "cohortResultsAndMacroAverageRequired": true,
+    "selectionOrder": [
+      "critical_field_safety",
+      "privacy_and_legal_fit",
+      "monthly_cost",
+      "latency",
+      "implementation_effort"
+    ]
+  },
+  "costGuardrails": {
+    "mandatoryMeteredApiBudgetUsdPerMonth": 0,
+    "syntheticCapstoneHostingTier": "SUPABASE_FREE_WHILE_MEASURED_QUOTAS_FIT",
+    "realPasswordBasedOwnerHostingRecommendation": "SUPABASE_PRO_OR_APPROVED_EQUIVALENT_CONTROL",
+    "paidOverageAllowed": false,
+    "supabaseProOrganizationSpendCapRequired": true,
+    "supabaseSpendCapExcludedUsageAndAddonsInventoryRequired": true,
+    "supabasePaidAddonRequiresExplicitOwnerApproval": true,
+    "supabaseIncludedComputeClassMustBeRetainedWithoutOwnerApproval": true,
+    "supabaseTargetOrganizationCostControlVerificationRequiredAtRelease": true,
+    "productionCloudReceiptOcrEnabledByDefault": false,
+    "initialAzureBenchmarkPageUnitsPerCalendarMonthMax": 100,
+    "initialAzureBenchmarkRequiresVerifiedF0Resource": true,
+    "azureS0PaidBenchmarkApproved": false,
+    "azureResourceMustBeDedicatedOrExternalUsageReconciledBeforeDispatch": true,
+    "finSightDispatchCapControlsOtherResourceCallers": false,
+    "postPassAzureF0ApplicationCapCandidatePageUnitsPerMonth": 450,
+    "postPassAzureF0ApplicationCapApproved": false,
+    "veryfiDocumentTransactionUnitsApproved": 0,
+    "realReceiptsThroughGeminiDeveloperFreeTierAllowed": false,
+    "budgetExhaustionFallback": "LOCAL_OCR_AND_OWNER_REVIEW"
+  },
+  "reporting": {
+    "requiredForEachMetric": [
+      "numerator",
+      "denominator",
+      "point_estimate",
+      "confidence_interval_when_applicable"
+    ],
+    "requiredSplits": [
+      "cohort",
+      "provider",
+      "extractor_version",
+      "capture_mode",
+      "declared_hardware",
+      "cold_or_warm"
+    ],
+    "confidenceIntervals": {
+      "confidenceLevel": 0.95,
+      "binomialProportionMethod": "TWO_SIDED_WILSON_SCORE_WITHOUT_CONTINUITY_CORRECTION",
+      "clusteredContinuousOrPercentileMethod": "TWO_SIDED_PERCENTILE_BOOTSTRAP",
+      "bootstrapResamples": 10000,
+      "bootstrapSeed": 20260913,
+      "metricMethodMap": {
+        "document_detection_precision_recall_false_trigger_and_count_accuracy": "WILSON",
+        "field_and_total_exact_match_and_binary_review_routing": "WILSON",
+        "category_precision_top3_recall_coverage_and_correction_decisions": "WILSON",
+        "duplicate_pair_precision_and_recall": "WILSON",
+        "handwritten_hard_reject_and_other_binary_sample_outcomes": "WILSON",
+        "confidence_band_error_rates": "WILSON",
+        "character_and_word_error_rates": "BOOTSTRAP_BY_DISTINCT_RECEIPT_ID",
+        "line_and_item_precision_recall_reconstruction_and_manual_correction_rates": "BOOTSTRAP_BY_DISTINCT_RECEIPT_ID",
+        "corner_error_brier_score_expected_calibration_error_and_absolute_currency_error": "BOOTSTRAP_BY_DISTINCT_RECEIPT_ID",
+        "latency_and_memory_percentiles": "BOOTSTRAP_BY_DECLARED_INDEPENDENT_TRIAL",
+        "provider_or_transform_metric_differences": "PAIRED_BOOTSTRAP_BY_DISTINCT_RECEIPT_ID"
+      },
+      "metricMethodMapOverridesGenericStatisticalFamily": true,
+      "unlistedMetricRequiresVersionedMethodBeforeEligibleResult": true,
+      "pairedProviderComparisonMethod": "TWO_SIDED_PAIRED_PERCENTILE_BOOTSTRAP_OF_WITHIN_RECEIPT_METRIC_DIFFERENCES",
+      "pairedProviderComparisonResamplingUnit": "DISTINCT_RECEIPT_ID",
+      "postMvpLearnedCategoryHighDecision": "PER_BUSINESS_PROFILE_LOWER_ENDPOINT_OF_TWO_SIDED_WILSON_95_PERCENT_INTERVAL_MUST_MEET_CATEGORY_THRESHOLD",
+      "ocrProviderDecision": "FROZEN_POINT_GATES_PLUS_REPORTED_INTERVAL_AND_SAFETY_REVIEW_NO_PRODUCTION_ACCURACY_CLAIM",
+      "duplicateDecision": "FROZEN_POINT_GATES_PLUS_REPORTED_INTERVAL_AND_OWNER_REVIEW_NO_PRODUCTION_ACCURACY_CLAIM",
+      "productionAccuracyClaimRequiresSeparatePredeclaredProtocol": true
+    },
+    "labelsBelowEvidenceFloor": "UNCALIBRATED"
+  }
+}
