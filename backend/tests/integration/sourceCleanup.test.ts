@@ -24,6 +24,7 @@ vi.mock("../../src/services/storage.service", async (importOriginal) => {
 import { prisma } from "../../src/config/prisma";
 import * as expenses from "../../src/services/expenseRecord.service";
 import * as sales from "../../src/services/salesRecord.service";
+import { runReceiptPurgeWorkerOnce } from "../../src/services/receiptPurge.service";
 import { disconnectDb, makeOwnerWithProfile, resetDb, utcDayString } from "../setup/testDb";
 
 /**
@@ -45,6 +46,11 @@ beforeEach(async () => {
 afterAll(disconnectDb);
 
 const TODAY = () => utcDayString(0);
+
+async function drainReceiptPurge() {
+  expect(await runReceiptPurgeWorkerOnce()).toBe(true);
+  expect(await runReceiptPurgeWorkerOnce()).toBe(true);
+}
 
 /** A confirmed scan with `records` expense records hanging off it. */
 async function confirmedScanWithRecords(records: number) {
@@ -79,6 +85,12 @@ describe("receipt image cleanup", () => {
 
     await expenses.deleteExpenseRecord(ctx.user.id, records[0]!.id);
 
+    expect(deleteReceiptImageMock).not.toHaveBeenCalled();
+    expect(await prisma.receiptPurgeJob.findFirst({ where: { receiptScanId: scan.id } })).toMatchObject({
+      status: "PENDING",
+      stage: "STORAGE",
+    });
+    await drainReceiptPurge();
     expect(deleteReceiptImageMock).toHaveBeenCalledWith("1/receipt-abc.jpg");
     expect(await prisma.receiptScan.findUnique({ where: { id: scan.id } })).toBeNull();
   });
@@ -98,6 +110,8 @@ describe("receipt image cleanup", () => {
 
     // ...and goes once the second one follows.
     await expenses.deleteExpenseRecord(ctx.user.id, records[1]!.id);
+    expect(deleteReceiptImageMock).not.toHaveBeenCalled();
+    await drainReceiptPurge();
     expect(deleteReceiptImageMock).toHaveBeenCalledWith("1/receipt-abc.jpg");
   });
 
@@ -164,6 +178,8 @@ describe("receipt image cleanup", () => {
 
     await expenses.deleteExpenseRecord(ctx.user.id, record.id);
 
+    expect(deleteReceiptImageMock).not.toHaveBeenCalled();
+    await drainReceiptPurge();
     expect(deleteReceiptImageMock).toHaveBeenCalledWith("1/page-1.jpg");
     expect(deleteReceiptImageMock).toHaveBeenCalledWith("1/page-2.jpg");
     expect(deleteReceiptImageMock).toHaveBeenCalledWith("1/page-2-processed.jpg");

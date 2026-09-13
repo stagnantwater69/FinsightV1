@@ -232,19 +232,40 @@ const needsJestShim = (filename) => filename.startsWith(JEST_PRESET_DIR);
 // the mocks, which is what Jest does and what keeps `mocks/View.js` from
 // dragging in the real native-module bridge.
 let bypassSpecifier = null;
+let bypassFilename = null;
 
 function requireActual(moduleRequire, specifier) {
-  const previous = bypassSpecifier;
+  const previousSpecifier = bypassSpecifier;
+  const previousFilename = bypassFilename;
   bypassSpecifier = specifier;
   try {
-    return moduleRequire(specifier);
+    // Resolve while the public specifier is exempt, then keep the resulting
+    // absolute file exempt too. Node 22 runs synchronous ESM hooks for the
+    // nested require and presents that second pass as an absolute target;
+    // exempting only the public name redirects it back to the half-loaded mock.
+    const reactNativePath = specifier.startsWith('react-native/')
+      ? `${path.join(NM, specifier)}.js`
+      : null;
+    bypassFilename = reactNativePath && fs.existsSync(reactNativePath)
+      ? applyPlatformExtension(reactNativePath)
+      : moduleRequire.resolve(specifier);
+    return moduleRequire(bypassFilename);
   } finally {
-    bypassSpecifier = previous;
+    bypassSpecifier = previousSpecifier;
+    bypassFilename = previousFilename;
   }
 }
 
 function shouldBypass(request) {
-  return bypassSpecifier != null && request === bypassSpecifier;
+  if (bypassSpecifier != null && request === bypassSpecifier) return true;
+  if (bypassFilename == null || typeof request !== 'string') return false;
+  if (request === bypassFilename) return true;
+  if (!request.startsWith('file:')) return false;
+  try {
+    return fileURLToPath(request) === bypassFilename;
+  } catch {
+    return false;
+  }
 }
 
 /**

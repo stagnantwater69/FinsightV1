@@ -1,7 +1,11 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 import * as receiptScanQueue from "../services/receiptScan/queue";
-import { confirmReceipt, deleteScanItem } from "../services/receiptScan/reconciliation";
+import {
+  listReceiptScans,
+  RECEIPT_HISTORY_STATUSES,
+} from "../services/receiptScan/history";
+import { confirmReceipt, deleteScanItem, updateScanItem } from "../services/receiptScan/reconciliation";
 import type { ReceiptUploadFile } from "../services/receiptScan/types";
 import { assessImageQuality } from "../lib/imageQuality";
 import { detectReceiptCorners } from "../lib/edgeDetection";
@@ -9,43 +13,72 @@ import { assessReceiptLikelihood } from "../lib/receiptLikelihood";
 import { ApiError } from "../middleware/error.middleware";
 import { transformReceiptPerspective } from "../lib/receiptPerspective";
 import { moneyAmountSchema } from "../lib/money";
-import { receiptUploadByteLength, validateReceiptUpload } from "../lib/receiptUploadValidation";
+import {
+  inspectReceiptUpload,
+  receiptUploadByteLength,
+  type ReceiptUploadImageInfo,
+  validateReceiptUpload,
+} from "../lib/receiptUploadValidation";
 import {
   RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES,
   RECEIPT_UPLOAD_MAX_LOGICAL_PAGES,
 } from "../lib/receiptUploadContract";
 import { cleanupReceiptUploadTemporaryFiles } from "../middleware/upload.middleware";
+import {
+  requestConfirmedReceiptEvidenceDeletion,
+  requestReceiptScanDeletion,
+} from "../services/receiptPurge.service";
+import { listReceiptDuplicateCandidates } from "../services/receiptDuplicate.service";
 
-const uploadSchema = z.object({
-  businessProfileId: z.coerce.number().int().positive(),
-  captureMetadata: z.string().max(50_000).optional(),
-  idempotencyKey: z.string().min(8).max(100).optional(),
-});
+const uploadSchema = z
+  .object({
+    businessProfileId: z.coerce.number().int().positive(),
+    captureMetadata: z.string().max(50_000).optional(),
+    idempotencyKey: z.string().min(8).max(100).optional(),
+    receiptBatchId: z.coerce.number().int().positive().optional(),
+    receiptOrdinal: z.coerce.number().int().min(1).max(RECEIPT_UPLOAD_MAX_LOGICAL_PAGES).optional(),
+  })
+  .superRefine((input, context) => {
+    if ((input.receiptBatchId === undefined) !== (input.receiptOrdinal === undefined)) {
+      context.addIssue({
+        code: "custom",
+        message: "Receipt batch id and receipt position must be supplied together",
+      });
+    }
+  });
 
 const pointSchema = z.object({ x: z.number().min(0).max(50_000), y: z.number().min(0).max(50_000) });
-const captureMetadataSchema = z.array(
-  z.object({
-    source: z.enum(["manual-camera", "native-document-scanner", "gallery"]).optional(),
-    captureMode: z.enum(["standard", "long"]).optional(),
-    processingMode: z.enum(["original", "manual-crop", "native-selected", "clear-colour", "grayscale", "black-white"]).optional(),
-    originalWidth: z.number().int().positive().max(50_000).optional(),
-    originalHeight: z.number().int().positive().max(50_000).optional(),
-    processedWidth: z.number().int().positive().max(50_000).optional(),
-    processedHeight: z.number().int().positive().max(50_000).optional(),
-    corners: z.object({
-      topLeft: pointSchema,
-      topRight: pointSchema,
-      bottomRight: pointSchema,
-      bottomLeft: pointSchema,
-    }).optional(),
-    transformVersion: z.string().min(1).max(80).optional(),
-    documentConfidence: z.number().min(0).max(1).optional(),
-    ownerOverrodeLikelihood: z.boolean().optional(),
-  }).strict(),
-).max(RECEIPT_UPLOAD_MAX_LOGICAL_PAGES);
+const captureMetadataItemSchema = z.object({
+  source: z.enum(["manual-camera", "native-document-scanner", "gallery"]).optional(),
+  captureMode: z.enum(["standard", "long"]).optional(),
+  processingMode: z.enum(["original", "manual-crop", "native-selected", "clear-colour", "grayscale", "black-white"]).optional(),
+  originalWidth: z.number().int().positive().max(50_000).optional(),
+  originalHeight: z.number().int().positive().max(50_000).optional(),
+  processedWidth: z.number().int().positive().max(50_000).optional(),
+  processedHeight: z.number().int().positive().max(50_000).optional(),
+  corners: z.object({
+    topLeft: pointSchema,
+    topRight: pointSchema,
+    bottomRight: pointSchema,
+    bottomLeft: pointSchema,
+  }).optional(),
+  transformVersion: z.string().min(1).max(80).optional(),
+  documentConfidence: z.number().min(0).max(1).optional(),
+  ownerOverrodeLikelihood: z.boolean().optional(),
+}).strict().superRefine((metadata, context) => {
+  if ((metadata.originalWidth === undefined) !== (metadata.originalHeight === undefined)) {
+    context.addIssue({ code: "custom", message: "Original receipt dimensions require both width and height" });
+  }
+  if ((metadata.processedWidth === undefined) !== (metadata.processedHeight === undefined)) {
+    context.addIssue({ code: "custom", message: "Processed receipt dimensions require both width and height" });
+  }
+});
+
+const captureMetadataSchema = z.array(captureMetadataItemSchema).max(RECEIPT_UPLOAD_MAX_LOGICAL_PAGES);
+type ParsedCaptureMetadata = z.infer<typeof captureMetadataItemSchema>;
 
 function parseCaptureMetadata(raw: string | undefined, pageCount: number) {
-  if (!raw) return [];
+  if (!raw) return Array.from({ length: pageCount }, () => ({} as ParsedCaptureMetadata));
   let decoded: unknown;
   try {
     decoded = JSON.parse(raw);
@@ -56,14 +89,50 @@ function parseCaptureMetadata(raw: string | undefined, pageCount: number) {
   if (metadata.length !== pageCount) {
     throw new ApiError(400, "Receipt capture metadata must have one entry per page");
   }
-  for (const page of metadata) {
-    if (!page.corners || !page.originalWidth || !page.originalHeight) continue;
-    const points = Object.values(page.corners);
-    if (points.some((point) => point.x > page.originalWidth! || point.y > page.originalHeight!)) {
-      throw new ApiError(400, "Receipt crop corners must stay inside the original image");
+  return metadata;
+}
+
+function dimensionsMatch(
+  label: "Original" | "Processed",
+  declaredWidth: number | undefined,
+  declaredHeight: number | undefined,
+  actual: ReceiptUploadImageInfo,
+): void {
+  if (declaredWidth === undefined || declaredHeight === undefined) return;
+  if (declaredWidth !== actual.width || declaredHeight !== actual.height) {
+    throw new ApiError(400, `${label} receipt dimensions do not match the uploaded image`);
+  }
+}
+
+function verifiedCaptureMetadata(
+  metadata: ParsedCaptureMetadata,
+  source: ReceiptUploadImageInfo,
+  derived: ReceiptUploadImageInfo | null,
+): ParsedCaptureMetadata {
+  dimensionsMatch("Original", metadata.originalWidth, metadata.originalHeight, source);
+  dimensionsMatch(
+    "Processed",
+    metadata.processedWidth,
+    metadata.processedHeight,
+    derived ?? source,
+  );
+
+  if (!derived && metadata.processingMode && metadata.processingMode !== "original") {
+    throw new ApiError(400, "A processed receipt page must include its source image");
+  }
+  if (metadata.corners) {
+    const points = Object.values(metadata.corners);
+    if (points.some((point) => point.x > source.width || point.y > source.height)) {
+      throw new ApiError(400, "Receipt crop corners must stay inside the source image");
     }
   }
-  return metadata;
+
+  return {
+    ...metadata,
+    originalWidth: source.width,
+    originalHeight: source.height,
+    ...(derived ? { processedWidth: derived.width, processedHeight: derived.height } : {}),
+  };
 }
 
 /**
@@ -77,6 +146,7 @@ function parseCaptureMetadata(raw: string | undefined, pageCount: number) {
  * in a test would have drifted the same way the client did.
  */
 export const confirmSchema = z.object({
+  expectedScanRevision: z.number().int().nonnegative().optional(),
   date: z.string().date(),
   description: z.string().min(1).max(255),
   vendor: z.string().max(150).optional(),
@@ -123,6 +193,10 @@ export const confirmSchema = z.object({
       z.object({ mode: z.literal("none") }),
     ])
     .optional(),
+  duplicateDecision: z.object({
+    action: z.literal("SAVE_ANYWAY"),
+    candidateSetHash: z.string().regex(/^[0-9a-f]{64}$/),
+  }).strict().optional(),
 })
   /*
    * Unknown keys are REJECTED here, not quietly dropped.
@@ -140,6 +214,26 @@ export const confirmSchema = z.object({
    */
   .strict();
 
+export const itemUpdateSchema = z.object({
+  name: z.string().trim().min(1).max(255),
+  amount: moneyAmountSchema,
+  expectedScanRevision: z.number().int().nonnegative(),
+}).strict();
+
+const receiptHistorySchema = z.object({
+  businessProfileId: z.coerce.number().int().positive(),
+  status: z.enum(RECEIPT_HISTORY_STATUSES).default("active"),
+  cursor: z.string().min(1).max(500).optional(),
+  take: z.coerce.number().int().min(1).max(50).default(20),
+}).strict();
+
+const purgeIdempotencyKeySchema = z.string().trim().min(8).max(100);
+
+const duplicateCandidateQuerySchema = z.object({
+  cursor: z.string().min(1).max(500).optional(),
+  take: z.coerce.number().int().min(1).max(50).default(20),
+}).strict();
+
 function parseId(raw: string): number {
   const id = Number(raw);
   if (!Number.isInteger(id) || id <= 0) {
@@ -156,6 +250,14 @@ function parseItemId(raw: string): number {
   return id;
 }
 
+function parsePageNumber(raw: string): number {
+  const pageNumber = Number(raw);
+  if (!Number.isInteger(pageNumber) || pageNumber <= 0 || pageNumber > RECEIPT_UPLOAD_MAX_LOGICAL_PAGES) {
+    throw new ApiError(400, "Invalid receipt page number");
+  }
+  return pageNumber;
+}
+
 export async function upload(req: Request, res: Response) {
   const scan = await (async () => {
     const grouped = !Array.isArray(req.files) && req.files
@@ -168,7 +270,13 @@ export async function upload(req: Request, res: Response) {
       throw new ApiError(400, `A receipt can have at most ${RECEIPT_UPLOAD_MAX_LOGICAL_PAGES} pages`);
     }
 
-    const { businessProfileId, captureMetadata, idempotencyKey } = uploadSchema.parse(req.body);
+    const {
+      businessProfileId,
+      captureMetadata,
+      idempotencyKey,
+      receiptBatchId,
+      receiptOrdinal,
+    } = uploadSchema.parse(req.body);
     if (originals.length > 0 && originals.length !== files.length) {
       throw new ApiError(400, "Original and processed receipt page counts must match");
     }
@@ -185,7 +293,8 @@ export async function upload(req: Request, res: Response) {
     if (aggregateBytes > RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES) {
       throw new ApiError(413, "Receipt upload files must total 80 MiB or less");
     }
-    for (const file of uploadedFiles) await validateReceiptUpload(file);
+    const imageInfo = new Map<Express.Multer.File, ReceiptUploadImageInfo>();
+    for (const file of uploadedFiles) imageInfo.set(file, await inspectReceiptUpload(file));
 
     const queueFile = (file: Express.Multer.File): ReceiptUploadFile => file.path
       ? {
@@ -205,13 +314,20 @@ export async function upload(req: Request, res: Response) {
     return receiptScanQueue.uploadAndScan(req.user!.id, {
       businessProfileId,
       idempotencyKey,
+      receiptBatchId,
+      receiptOrdinal,
       pages: files.map((file, index) => {
         const original = originals[index];
         const uploadFile = original ?? file;
+        const verifiedMetadata = verifiedCaptureMetadata(
+          metadata[index]!,
+          imageInfo.get(uploadFile)!,
+          original ? imageInfo.get(file)! : null,
+        );
         return {
           ...queueFile(uploadFile),
           ...(original ? { processed: queueFile(file) } : {}),
-          ...(metadata[index] ? { metadata: metadata[index] } : {}),
+          metadata: verifiedMetadata,
         };
       }),
     });
@@ -228,6 +344,11 @@ export async function upload(req: Request, res: Response) {
   res.status(202).json(scan);
 }
 
+export async function index(req: Request, res: Response) {
+  const input = receiptHistorySchema.parse(req.query);
+  res.json(await listReceiptScans(req.user!.id, input));
+}
+
 /** One scan as it currently stands — what the client polls after uploading. */
 export async function show(req: Request, res: Response) {
   const id = parseId(req.params.id!);
@@ -235,10 +356,48 @@ export async function show(req: Request, res: Response) {
   res.json(scan);
 }
 
+export async function showPageImage(req: Request, res: Response) {
+  const id = parseId(req.params.id!);
+  const pageNumber = parsePageNumber(req.params.pageNumber!);
+  const variant = z.enum(["source", "derived"]).parse(req.params.variant);
+  const image = await receiptScanQueue.getScanPageImage(req.user!.id, id, pageNumber, variant);
+  res.json(image);
+}
+
+export async function duplicateCandidates(req: Request, res: Response) {
+  const input = duplicateCandidateQuerySchema.parse(req.query);
+  const result = await listReceiptDuplicateCandidates(req.user!.id, parseId(req.params.id!), input);
+  res.json(result);
+}
+
 export async function retry(req: Request, res: Response) {
   const id = parseId(req.params.id!);
   const scan = await receiptScanQueue.retryScan(req.user!.id, id);
   res.status(202).json(scan);
+}
+
+function purgeIdempotencyKey(req: Request): string {
+  const key = req.get("Idempotency-Key");
+  if (!key) throw new ApiError(400, "Idempotency-Key header is required");
+  return purgeIdempotencyKeySchema.parse(key);
+}
+
+export async function remove(req: Request, res: Response) {
+  const job = await requestReceiptScanDeletion(
+    req.user!.id,
+    parseId(req.params.id!),
+    purgeIdempotencyKey(req),
+  );
+  res.status(202).json(job);
+}
+
+export async function removeImages(req: Request, res: Response) {
+  const job = await requestConfirmedReceiptEvidenceDeletion(
+    req.user!.id,
+    parseId(req.params.id!),
+    purgeIdempotencyKey(req),
+  );
+  res.status(202).json(job);
 }
 
 /**
@@ -315,7 +474,17 @@ export async function detectEdges(req: Request, res: Response) {
 export async function deleteItem(req: Request, res: Response) {
   const id = parseId(req.params.id!);
   const itemId = parseItemId(req.params.itemId!);
-  const scan = await deleteScanItem(req.user!.id, id, itemId);
+  const expectedScanRevision = req.query.expectedScanRevision === undefined
+    ? undefined
+    : z.coerce.number().int().nonnegative().parse(req.query.expectedScanRevision);
+  const scan = await deleteScanItem(req.user!.id, id, itemId, expectedScanRevision);
+  res.json(scan);
+}
+
+export async function updateItem(req: Request, res: Response) {
+  const id = parseId(req.params.id!);
+  const itemId = parseItemId(req.params.itemId!);
+  const scan = await updateScanItem(req.user!.id, id, itemId, itemUpdateSchema.parse(req.body));
   res.json(scan);
 }
 

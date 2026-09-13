@@ -23,19 +23,17 @@ const SCAN_POLL_TIMEOUT_MS = 3 * 60 * 1000;
  * leaves the owner on the capture screen with their photos intact, which is
  * the same outcome any other failed scan has always had.
  */
-export async function pollUntilRead(initial: ReceiptScanResult, mayRetry = true, signal?: AbortSignal): Promise<ReceiptScanResult> {
+export async function pollUntilRead(initial: ReceiptScanResult, signal?: AbortSignal): Promise<ReceiptScanResult> {
   const checkActive = () => {
     if (signal?.aborted) throw new Error("Receipt processing paused.");
   };
   checkActive();
   if (initial.processingStatus && initial.processingStatus !== "Processing") {
     if (initial.processingStatus === "Failed") {
-      if (mayRetry) {
-        const retried = await api.post<ReceiptScanResult>(`/records/receipts/${initial.id}/retry`);
-        checkActive();
-        return pollUntilRead(retried, false, signal);
-      }
-      throw new Error(initial.processingError ?? "This receipt could not be read. Try scanning it again.");
+      throw new ReceiptReadFailure(
+        "failed",
+        initial.processingError ?? "This receipt could not be read from its stored images.",
+      );
     }
     return initial;
   }
@@ -44,19 +42,30 @@ export async function pollUntilRead(initial: ReceiptScanResult, mayRetry = true,
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, SCAN_POLL_INTERVAL_MS));
     checkActive();
-    const next = await api.get<ReceiptScanResult>(`/records/receipts/${initial.id}`);
+    const next = await api.get<ReceiptScanResult>(`/records/receipts/${initial.id}`, undefined, signal);
     checkActive();
     if (next.processingStatus === "Failed") {
-      if (mayRetry) {
-        const retried = await api.post<ReceiptScanResult>(`/records/receipts/${initial.id}/retry`);
-        checkActive();
-        return pollUntilRead(retried, false, signal);
-      }
-      throw new Error(next.processingError ?? "This receipt could not be read. Try scanning it again.");
+      throw new ReceiptReadFailure(
+        "failed",
+        next.processingError ?? "This receipt could not be read from its stored images.",
+      );
     }
     if (next.processingStatus === "Complete") return next;
   }
-  throw new Error("This receipt is taking longer than expected to read. Try scanning it again.");
+  throw new ReceiptReadFailure(
+    "timeout",
+    "This receipt is taking longer than expected. You can leave it processing and review the result later.",
+  );
+}
+
+export class ReceiptReadFailure extends Error {
+  constructor(
+    public readonly kind: "failed" | "timeout",
+    message: string,
+  ) {
+    super(message);
+    this.name = "ReceiptReadFailure";
+  }
 }
 
 /**

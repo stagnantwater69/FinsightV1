@@ -28,7 +28,8 @@ export {
   RECEIPT_UPLOAD_MAX_OBJECT_BYTES,
 } from "../lib/receiptUploadContract";
 
-export { deleteScanItem, confirmReceipt } from "./receiptScan/reconciliation";
+export { deleteScanItem, updateScanItem, confirmReceipt } from "./receiptScan/reconciliation";
 
-export { uploadAndScan, retryScan, getScan } from "./receiptScan/queue";
+export { uploadAndScan, retryScan, getScan, getScanPageImage } from "./receiptScan/queue";
+export { listReceiptScans, RECEIPT_HISTORY_STATUSES } from "./receiptScan/history";
 export { runReceiptWorkerOnce } from "./receiptScan/worker";

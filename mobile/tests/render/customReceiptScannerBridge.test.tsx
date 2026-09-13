@@ -6,7 +6,11 @@ const { receiptSectionFromNative, parseScannerStatus } = await import('../../src
 const payload = (mode = 'standard') => ({
   originalUri: 'file:///cache/original.jpg', processedUri: 'file:///cache/processed.jpg',
   originalWidth: 1200, originalHeight: 2400, width: 1000, height: 2000,
-  mode, transformVersion: mode === 'long' ? 'custom-panorama-v1' : 'custom-frame-v1',
+  mode, processingMode: 'clear-colour', transformVersion: mode === 'long' ? 'custom-panorama-v1' : 'custom-still-v2',
+  ...(mode === 'standard' ? { corners: {
+    topLeft: { x: 100, y: 100 }, topRight: { x: 1100, y: 100 },
+    bottomRight: { x: 1100, y: 2300 }, bottomLeft: { x: 100, y: 2300 },
+  } } : {}),
 });
 
 describe('custom scanner bridge boundary (native processing not simulated)', () => {
@@ -15,8 +19,19 @@ describe('custom scanner bridge boundary (native processing not simulated)', () 
     const section = receiptSectionFromNative(payload(mode));
     expect(section).toMatchObject({ originalUri: 'file:///cache/original.jpg', processedUri: 'file:///cache/processed.jpg',
       originalWidth: 1200, originalHeight: 2400, width: 1000, height: 2000,
-      captureMode: mode, processingMode: 'native-selected', captureSource: 'native-document-scanner' });
+      captureMode: mode, processingMode: 'clear-colour', captureSource: 'native-document-scanner' });
     expect(section.localId).toBeTruthy();
+  });
+  it('accepts an installed legacy standard scanner while distinguishing its transform', () => {
+    const section = receiptSectionFromNative({ ...payload(), transformVersion: 'custom-frame-v1', corners: undefined, processingMode: undefined });
+    expect(section).toMatchObject({ transformVersion: 'custom-frame-v1', processingMode: 'native-selected' });
+  });
+  it('requires mapped source corners from the full-resolution standard scanner', () => {
+    expect(() => receiptSectionFromNative({ ...payload(), corners: undefined })).toThrow(/scan the receipt again/i);
+  });
+  it('requires the truthful enhanced-color label from the full-resolution standard scanner', () => {
+    expect(() => receiptSectionFromNative({ ...payload(), processingMode: undefined })).toThrow(/scan the receipt again/i);
+    expect(() => receiptSectionFromNative({ ...payload(), processingMode: 'native-selected' })).toThrow(/scan the receipt again/i);
   });
   it.each([null, undefined, [], 'image', {}, { ...payload(), mode: 'pages' },
     { ...payload(), transformVersion: 'custom-panorama-v1' }])('rejects incomplete or inconsistent event %#', value => {

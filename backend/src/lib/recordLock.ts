@@ -56,3 +56,13 @@ function hashKey(key: string): number {
 export async function lockDuplicateKey(db: DbClient, businessProfileId: number, key: string): Promise<void> {
   await db.$executeRaw`SELECT pg_advisory_xact_lock(${businessProfileId}::int, ${hashKey(key)}::int)`;
 }
+
+const EXPENSE_DUPLICATE_WRITE_GATE = "expense-duplicate-write-gate:v1";
+
+/** Acquired before narrower locks so manual, CSV, and receipt duplicate checks cannot race. */
+export function lockExpenseDuplicateWriteGate(
+  db: DbClient,
+  businessProfileId: number,
+): Promise<void> {
+  return lockDuplicateKey(db, businessProfileId, EXPENSE_DUPLICATE_WRITE_GATE);
+}

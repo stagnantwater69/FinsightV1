@@ -1,4 +1,4 @@
-import type { ReceiptScan, ReceiptScanItem, ReceiptScanPage } from "@prisma/client";
+import type { ReceiptFieldCorrection, ReceiptScan, ReceiptScanItem, ReceiptScanPage } from "@prisma/client";
 import { WARNING_GUIDANCE, type ReceiptWarning } from "../../lib/receiptWarnings";
 import { parseReceiptDetails, requiresManualCurrencyConversion } from "../../lib/receiptDetails";
 import {
@@ -7,8 +7,15 @@ import {
   looksLikeMultipleReceipts,
   receiptItemsReconcile,
 } from "../../lib/receiptTextSignals";
+import { MIN_READABLE_EDGE } from "../../lib/imageQuality";
+import { receiptPageEvidence } from "./pageEvidence";
 
-export function toDTO(scan: ReceiptScan, items: ReceiptScanItem[] = [], pages: ReceiptScanPage[] = []) {
+export function toDTO(
+  scan: ReceiptScan,
+  items: ReceiptScanItem[] = [],
+  pages: ReceiptScanPage[] = [],
+  corrections: ReceiptFieldCorrection[] = [],
+) {
   /*
    * Adjacent pages only, not every pair — and recomputed here rather than
    * stored in a column of its own.
@@ -27,6 +34,7 @@ export function toDTO(scan: ReceiptScan, items: ReceiptScanItem[] = [], pages: R
    * produce, because such pages are usually not adjacent.
    */
   const ordered = [...pages].sort((a, b) => a.pageNumber - b.pageNumber);
+  const pageEvidence = ordered.map(receiptPageEvidence);
   const duplicatePages: number[] = [];
   for (let i = 1; i < ordered.length; i++) {
     if (looksLikeDuplicatePage(ordered[i - 1]!.rawText ?? "", ordered[i]!.rawText ?? "")) {
@@ -53,20 +61,45 @@ export function toDTO(scan: ReceiptScan, items: ReceiptScanItem[] = [], pages: R
    */
   const overlappingPages = findPageSeams(ordered.map((p) => p.rawText ?? "")).map((s) => s.pageNumber);
 
-  const pageQualities = ordered.map((p) =>
-    p.tooBlurredToTrust === null
+  const ownerEditedFieldsByLine = new Map<number, Set<"name" | "amount">>();
+  for (const correction of corrections) {
+    if (!correction.wasEdited || correction.lineNumber === null) continue;
+    const field = correction.field === "itemName"
+      ? "name"
+      : correction.field === "itemAmount"
+        ? "amount"
+        : null;
+    if (!field) continue;
+    const fields = ownerEditedFieldsByLine.get(correction.lineNumber) ?? new Set();
+    fields.add(field);
+    ownerEditedFieldsByLine.set(correction.lineNumber, fields);
+  }
+
+  const pageQualities = ordered.map((p, index) => {
+    const source = pageEvidence[index]!.source;
+    return p.tooBlurredToTrust === null
       ? null
       : {
           sharpness: p.sharpness ?? 0,
           brightness: p.brightness ?? 0,
           tooBlurredToTrust: p.tooBlurredToTrust,
-        },
-  );
+          width: source.width,
+          height: source.height,
+          tooSmallToRead:
+            source.width !== null && source.height !== null
+              ? Math.min(source.width, source.height) < MIN_READABLE_EDGE
+              : null,
+        };
+  });
 
   return {
     id: scan.id,
     businessProfileId: scan.businessProfileId,
-    imageFile: scan.imageFile,
+    receiptBatchId: scan.captureBatchId,
+    receiptOrdinal: scan.receiptOrdinal,
+    scanRevision: scan.scanRevision,
+    evidenceDeletionRequestedAt: scan.evidenceDeletionRequestedAt,
+    evidenceDeletedAt: scan.evidenceDeletedAt,
     extractedDate: scan.extractedDate,
     extractedVendor: scan.extractedVendor,
     extractedDescription: scan.extractedDescription,
@@ -156,7 +189,9 @@ export function toDTO(scan: ReceiptScan, items: ReceiptScanItem[] = [], pages: R
       guidance: WARNING_GUIDANCE[w.code] ?? null,
     }))),
     receiptLikelihood: scan.receiptLikelihood ?? null,
+    pageEvidence,
     pageProcessing: ordered.map((page) => ({
+      pageNumber: page.pageNumber,
       source: page.ocrSource,
       hasProcessedVariant: Boolean(page.processedImageFile),
       captureMetadata: page.captureMetadata ?? null,
@@ -184,6 +219,7 @@ export function toDTO(scan: ReceiptScan, items: ReceiptScanItem[] = [], pages: R
       quantity: i.quantity === null ? null : Number(i.quantity),
       unitPrice: i.unitPrice === null ? null : Number(i.unitPrice),
       amount: Number(i.amount),
+      ownerEditedFields: [...(ownerEditedFieldsByLine.get(i.lineNumber) ?? [])],
       categoryId: i.categoryId,
       addedByOwner: i.addedByOwner,
       /**

@@ -21,7 +21,7 @@ import {
 } from "../ocr.service";
 import { PROMPT_VERSION, SCHEMA_VERSION } from "../visionOcr.service";
 import { assessImageQuality } from "../../lib/imageQuality";
-import { Prisma } from "@prisma/client";
+import { Prisma, ReceiptPurgeMode } from "@prisma/client";
 import { logger } from "../../config/logger";
 import { persistCategorisedItems } from "./categorisation";
 import {
@@ -49,6 +49,11 @@ import {
 import { dispatchReceiptProviderRescue } from "../receiptProviderDispatch.service";
 import { getReceiptProviderConfiguration } from "../../config/receiptProvider";
 import { createGeminiReceiptAdapter, createVeryfiReceiptAdapter } from "./providerAdapters";
+import {
+  lockReceiptCaptureBatchForMutation,
+  refreshReceiptCaptureBatchStatus,
+} from "../receiptCaptureBatch.service";
+import { refreshReceiptDuplicateCandidatesForScan } from "../receiptDuplicate.service";
 
 const RECEIPT_WORKER_ID = `${hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`;
 const RECEIPT_LEASE_MS = 2 * 60 * 1000;
@@ -212,6 +217,27 @@ export async function persistReceiptProcessingOutput(
   output: ReceiptProcessingOutput,
 ): Promise<void> {
   await prisma.$transaction(async (tx) => {
+    const batchLink = await tx.receiptScan.findFirst({
+      where: {
+        id: scanId,
+        businessProfileId,
+        processingStatus: "Processing",
+        confirmationStatus: "Pending",
+        evidenceDeletionRequestedAt: null,
+        purgeJobs: { none: { mode: ReceiptPurgeMode.DELETE_SCAN } },
+        processingWorkerId: lease.workerId,
+        processingAttemptCount: lease.attempt,
+      },
+      select: { captureBatchId: true },
+    });
+    if (!batchLink) throw new ReceiptLeaseLostError(`Receipt scan ${scanId} lease was reclaimed`);
+    if (
+      batchLink.captureBatchId !== null
+      && !(await lockReceiptCaptureBatchForMutation(tx, batchLink.captureBatchId))
+    ) {
+      throw new ReceiptLeaseLostError(`Receipt scan ${scanId} no longer belongs to its receipt batch`);
+    }
+
     // This conditional UPDATE both proves ownership and locks the scan row
     // until every dependent write below commits or rolls back with it.
     const scanUpdated = await tx.receiptScan.updateMany({
@@ -219,6 +245,9 @@ export async function persistReceiptProcessingOutput(
         id: scanId,
         businessProfileId,
         processingStatus: "Processing",
+        confirmationStatus: "Pending",
+        evidenceDeletionRequestedAt: null,
+        purgeJobs: { none: { mode: ReceiptPurgeMode.DELETE_SCAN } },
         processingWorkerId: lease.workerId,
         processingAttemptCount: lease.attempt,
       },
@@ -256,6 +285,9 @@ export async function persistReceiptProcessingOutput(
         id: scanId,
         businessProfileId,
         processingStatus: "Processing",
+        confirmationStatus: "Pending",
+        evidenceDeletionRequestedAt: null,
+        purgeJobs: { none: { mode: ReceiptPurgeMode.DELETE_SCAN } },
         processingWorkerId: lease.workerId,
         processingAttemptCount: lease.attempt,
       },
@@ -267,6 +299,10 @@ export async function persistReceiptProcessingOutput(
       },
     });
     if (completed.count !== 1) throw new ReceiptLeaseLostError(`Receipt scan ${scanId} lease was reclaimed`);
+    await refreshReceiptDuplicateCandidatesForScan(tx, scanId, businessProfileId);
+    if (batchLink.captureBatchId !== null) {
+      await refreshReceiptCaptureBatchStatus(tx, batchLink.captureBatchId);
+    }
   }, { timeout: 15_000 });
 }
 
@@ -558,18 +594,41 @@ async function processScan(scanId: number, input: StoredInput, attempt: number):
 
 async function recordProcessingFailure(scanId: number, attempt: number, failure: ReceiptProcessingFailure): Promise<void> {
   const retryable = attempt < MAX_PROCESSING_ATTEMPTS;
-  await prisma.receiptScan.updateMany({
-    where: { id: scanId, processingWorkerId: RECEIPT_WORKER_ID, processingAttemptCount: attempt },
-    data: {
-      processingStatus: retryable ? "Processing" : "Failed",
-      processingWorkerId: null,
-      processingHeartbeatAt: null,
-      nextProcessingAttemptAt: new Date(
-        Date.now() + RETRY_DELAYS_MS[Math.min(attempt - 1, RETRY_DELAYS_MS.length - 1)]!,
-      ),
-      processingError: failure.publicMessage,
-      processingErrorCode: failure.code,
-    },
+  await prisma.$transaction(async (tx) => {
+    const batchLink = await tx.receiptScan.findUnique({
+      where: { id: scanId },
+      select: { captureBatchId: true },
+    });
+    if (
+      batchLink?.captureBatchId !== null
+      && batchLink?.captureBatchId !== undefined
+      && !(await lockReceiptCaptureBatchForMutation(tx, batchLink.captureBatchId))
+    ) {
+      return;
+    }
+    const updated = await tx.receiptScan.updateMany({
+      where: {
+        id: scanId,
+        confirmationStatus: "Pending",
+        evidenceDeletionRequestedAt: null,
+        purgeJobs: { none: { mode: ReceiptPurgeMode.DELETE_SCAN } },
+        processingWorkerId: RECEIPT_WORKER_ID,
+        processingAttemptCount: attempt,
+      },
+      data: {
+        processingStatus: retryable ? "Processing" : "Failed",
+        processingWorkerId: null,
+        processingHeartbeatAt: null,
+        nextProcessingAttemptAt: new Date(
+          Date.now() + RETRY_DELAYS_MS[Math.min(attempt - 1, RETRY_DELAYS_MS.length - 1)]!,
+        ),
+        processingError: failure.publicMessage,
+        processingErrorCode: failure.code,
+      },
+    });
+    if (updated.count === 1 && batchLink?.captureBatchId !== null && batchLink?.captureBatchId !== undefined) {
+      await refreshReceiptCaptureBatchStatus(tx, batchLink.captureBatchId);
+    }
   });
 }
 
@@ -578,6 +637,9 @@ async function heartbeatScan(scanId: number, attempt: number): Promise<void> {
     where: {
       id: scanId,
       processingStatus: "Processing",
+      confirmationStatus: "Pending",
+      evidenceDeletionRequestedAt: null,
+      purgeJobs: { none: { mode: ReceiptPurgeMode.DELETE_SCAN } },
       processingWorkerId: RECEIPT_WORKER_ID,
       processingAttemptCount: attempt,
     },
@@ -617,10 +679,16 @@ async function inspectStoredEvidence(path: string): Promise<StoredEvidence> {
 async function storedInput(scanId: number, attempt: number): Promise<StoredInput> {
   const scan = await prisma.receiptScan.findUnique({
     where: { id: scanId },
-    include: { pages: { orderBy: { pageNumber: "asc" } } },
+    include: {
+      pages: { orderBy: { pageNumber: "asc" } },
+      purgeJobs: { select: { mode: true } },
+    },
   });
   if (
     !scan?.businessProfileId ||
+    scan.confirmationStatus !== "Pending" ||
+    scan.evidenceDeletionRequestedAt !== null ||
+    scan.purgeJobs.some((job) => job.mode === ReceiptPurgeMode.DELETE_SCAN) ||
     scan.pages.length === 0 ||
     scan.pages.length > RECEIPT_UPLOAD_MAX_LOGICAL_PAGES ||
     scan.pages.some((page, index) => page.pageNumber !== index + 1)
@@ -655,6 +723,9 @@ async function claimScan(): Promise<{ id: number; attempt: number } | null> {
   const staleBefore = new Date(now.getTime() - RECEIPT_LEASE_MS);
   const eligible: Prisma.ReceiptScanWhereInput = {
     processingStatus: "Processing",
+    confirmationStatus: "Pending",
+    evidenceDeletionRequestedAt: null,
+    purgeJobs: { none: { mode: ReceiptPurgeMode.DELETE_SCAN } },
     nextProcessingAttemptAt: { lte: now },
     OR: [{ processingWorkerId: null }, { processingHeartbeatAt: null }, { processingHeartbeatAt: { lt: staleBefore } }],
   };

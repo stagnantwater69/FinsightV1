@@ -76,6 +76,8 @@ export interface ReceiptUploadSubmission {
   businessProfileId: number;
   pages: ReceiptUploadPage[];
   idempotencyKey?: string;
+  receiptBatchId?: number;
+  receiptOrdinal?: number;
 }
 
 export interface ReceiptSplit {
@@ -99,6 +101,11 @@ export interface ReceiptSplit {
 }
 
 export interface ConfirmInput {
+  expectedScanRevision?: number;
+  duplicateDecision?: {
+    action: "SAVE_ANYWAY";
+    candidateSetHash: string;
+  };
   date: string;
   description: string;
   vendor?: string;

@@ -338,12 +338,46 @@ enum ReceiptPurgeStatus {
   @@map("ReceiptPurgeStatus")
 }
 
+enum ReceiptPurgeMode {
+  DELETE_SCAN
+  DETACH_EVIDENCE
+
+  @@map("ReceiptPurgeMode")
+}
+
 enum ReceiptPurgeStage {
   STORAGE
   DATABASE
   COMPLETE
 
   @@map("ReceiptPurgeStage")
+}
+
+enum ReceiptCaptureBatchStatus {
+  COLLECTING
+  PROCESSING
+  READY_FOR_REVIEW
+  PARTIAL_FAILURE
+  FAILED
+  COMPLETE
+  CANCELLED
+
+  @@map("ReceiptCaptureBatchStatus")
+}
+
+enum ReceiptDuplicateScoreBand {
+  EXACT
+  LIKELY
+
+  @@map("ReceiptDuplicateScoreBand")
+}
+
+enum ReceiptDuplicateReviewStatus {
+  PENDING
+  SAVED_ANYWAY
+  SUPERSEDED
+
+  @@map("ReceiptDuplicateReviewStatus")
 }
 
 // [ADDED] Owner-controlled cost-behavior classification for
@@ -516,6 +550,9 @@ model BusinessProfile {
   notifications                     Notification[]
   anomalyFindings                   AnomalyFinding[]
   categoryStatistics                CategoryStatistics[]
+  receiptCaptureBatches             ReceiptCaptureBatch[]
+  receiptDuplicateCandidates        ReceiptDuplicateCandidate[]        @relation("ReceiptDuplicateCandidateProfile")
+  receiptDuplicateDecisions         ReceiptDuplicateCandidate[]        @relation("ReceiptDuplicateCandidateDecisionOwner")
   recurringPatterns                 RecurringPattern[]
   recurringSchedules                RecurringSchedule[]
   analysisJobs                      AnalysisJob[]
@@ -587,17 +624,19 @@ model ExpenseRecord {
   largeExpenseFlag    Boolean             @default(false) @map("ExpenseRecord_LargeExpenseFlag")
   createdAt           DateTime            @default(now()) @map("ExpenseRecord_CreatedAt")
 
-  businessProfile BusinessProfile   @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
-  category        ExpenseCategory   @relation(fields: [categoryId], references: [id])
-  receiptScan     ReceiptScan?      @relation(fields: [receiptScanId], references: [id])
-  importBatch     CSVImportBatch?   @relation(fields: [importBatchId], references: [id])
-  duplicateOf     ExpenseRecord?    @relation("ExpenseRecordDuplicates", fields: [duplicateOfRecordId], references: [id])
-  duplicates      ExpenseRecord[]   @relation("ExpenseRecordDuplicates")
-  notifications   Notification[]
-  receiptItems    ReceiptScanItem[]
-  anomalyFindings AnomalyFinding[]
-  analysisJobs    AnalysisJob[]
+  businessProfile            BusinessProfile             @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+  category                   ExpenseCategory             @relation(fields: [categoryId], references: [id])
+  receiptScan                ReceiptScan?                @relation(fields: [receiptScanId], references: [id])
+  importBatch                CSVImportBatch?             @relation(fields: [importBatchId], references: [id])
+  duplicateOf                ExpenseRecord?              @relation("ExpenseRecordDuplicates", fields: [duplicateOfRecordId], references: [id])
+  duplicates                 ExpenseRecord[]             @relation("ExpenseRecordDuplicates")
+  notifications              Notification[]
+  receiptItems               ReceiptScanItem[]
+  anomalyFindings            AnomalyFinding[]
+  analysisJobs               AnalysisJob[]
+  receiptDuplicateCandidates ReceiptDuplicateCandidate[]
 
+  @@unique([id, businessProfileId], map: "ExpenseRecord_ID_BusinessProfile_ID_key")
   @@index([businessProfileId])
   @@index([categoryId])
   @@index([importBatchId])
@@ -803,88 +842,149 @@ model SalesReferenceRecord {
   @@map("SalesReferenceRecord")
 }
 
+model ReceiptCaptureBatch {
+  id                   Int                       @id @default(autoincrement()) @map("ReceiptCaptureBatch_ID")
+  businessProfileId    Int                       @map("BusinessProfile_ID")
+  clientBatchKey       String                    @map("ReceiptCaptureBatch_ClientBatchKey") @db.VarChar(100)
+  expectedReceiptCount Int                       @map("ReceiptCaptureBatch_ExpectedReceiptCount")
+  status               ReceiptCaptureBatchStatus @default(COLLECTING) @map("ReceiptCaptureBatch_Status")
+  createdAt            DateTime                  @default(now()) @map("ReceiptCaptureBatch_CreatedAt")
+  finishedAt           DateTime?                 @map("ReceiptCaptureBatch_FinishedAt")
+
+  businessProfile BusinessProfile @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+  receiptScans    ReceiptScan[]
+
+  @@unique([businessProfileId, clientBatchKey], map: "ReceiptCaptureBatch_profile_client_key")
+  @@unique([id, businessProfileId], map: "ReceiptCaptureBatch_ID_BusinessProfile_ID_key")
+  @@index([businessProfileId, createdAt, id], map: "ReceiptCaptureBatch_profile_created_idx")
+  @@map("ReceiptCaptureBatch")
+}
+
 model ReceiptScan {
-  id                      Int       @id @default(autoincrement()) @map("ReceiptScan_ID")
-  businessProfileId       Int?      @map("BusinessProfile_ID") // [ADDED] see schema header note
-  imageFile               String    @map("ReceiptScan_ImageFile") @db.VarChar(255)
+  id                          Int       @id @default(autoincrement()) @map("ReceiptScan_ID")
+  businessProfileId           Int?      @map("BusinessProfile_ID") // [ADDED] see schema header note
+  captureBatchId              Int?      @map("ReceiptCaptureBatch_ID")
+  receiptOrdinal              Int?      @map("ReceiptScan_ReceiptOrdinal")
+  imageFile                   String?   @map("ReceiptScan_ImageFile") @db.VarChar(255)
+  evidenceDeletionRequestedAt DateTime? @map("ReceiptScan_EvidenceDeletionRequestedAt")
+  evidenceDeletedAt           DateTime? @map("ReceiptScan_EvidenceDeletedAt")
   /// Profile-scoped replay token hash. Nullable for scans created before
   /// upload idempotency; uniqueness arbitrates concurrent upload retries.
-  uploadKey               String?   @unique @map("ReceiptScan_UploadKey") @db.VarChar(100)
+  uploadKey                   String?   @unique @map("ReceiptScan_UploadKey") @db.VarChar(100)
   /// SHA-256 of the submitted pages and capture metadata. A replay token
   /// must never be reused for different receipt contents.
-  uploadHash              String?   @map("ReceiptScan_UploadHash") @db.VarChar(64)
-  extractedDate           DateTime? @map("ReceiptScan_ExtractedDate") @db.Date
-  extractedVendor         String?   @map("ReceiptScan_ExtractedVendor") @db.VarChar(150)
-  extractedDescription    String?   @map("ReceiptScan_ExtractedDescription") @db.VarChar(255)
-  extractedAmount         Decimal?  @map("ReceiptScan_ExtractedAmount") @db.Decimal(12, 2)
-  confirmationStatus      String    @default("Pending") @map("ReceiptScan_ConfirmationStatus") @db.VarChar(50)
+  uploadHash                  String?   @map("ReceiptScan_UploadHash") @db.VarChar(64)
+  sourceImageHash             String?   @map("ReceiptScan_SourceImageHash") @db.Char(64)
+  extractedDate               DateTime? @map("ReceiptScan_ExtractedDate") @db.Date
+  extractedVendor             String?   @map("ReceiptScan_ExtractedVendor") @db.VarChar(150)
+  extractedDescription        String?   @map("ReceiptScan_ExtractedDescription") @db.VarChar(255)
+  extractedAmount             Decimal?  @map("ReceiptScan_ExtractedAmount") @db.Decimal(12, 2)
+  confirmationStatus          String    @default("Pending") @map("ReceiptScan_ConfirmationStatus") @db.VarChar(50)
+  scanRevision                Int       @default(0) @map("ReceiptScan_ScanRevision")
   /// [ADDED] see schema header note 15. How far the READ has got:
   /// "Processing" | "Complete" | "Failed". Deliberately separate from
   /// confirmationStatus, which is about the OWNER's decision afterwards —
   /// conflating them would make "still being read" and "read, awaiting the
   /// owner" the same state, and they need different screens.
-  processingStatus        String    @default("Processing") @map("ReceiptScan_ProcessingStatus") @db.VarChar(50)
+  processingStatus            String    @default("Processing") @map("ReceiptScan_ProcessingStatus") @db.VarChar(50)
   /// Why the read failed, for the owner. Null unless processingStatus is
   /// "Failed".
-  processingError         String?   @map("ReceiptScan_ProcessingError") @db.VarChar(500)
+  processingError             String?   @map("ReceiptScan_ProcessingError") @db.VarChar(500)
   /// Stable owner-safe code; processingError remains the matching safe message.
-  processingErrorCode     String?   @map("ReceiptScan_ProcessingErrorCode") @db.VarChar(64)
+  processingErrorCode         String?   @map("ReceiptScan_ProcessingErrorCode") @db.VarChar(64)
   /// Durable worker metadata. A worker owns a scan only while its heartbeat
   /// is fresh; after a crash another worker can safely reclaim the same row.
-  processingAttemptCount  Int       @default(0) @map("ReceiptScan_ProcessingAttemptCount")
-  processingStartedAt     DateTime? @map("ReceiptScan_ProcessingStartedAt")
-  processingHeartbeatAt   DateTime? @map("ReceiptScan_ProcessingHeartbeatAt")
-  nextProcessingAttemptAt DateTime  @default(now()) @map("ReceiptScan_NextProcessingAttemptAt")
-  processingWorkerId      String?   @map("ReceiptScan_ProcessingWorkerID") @db.VarChar(100)
-  rawText                 String?   @map("ReceiptScan_RawText") @db.Text // [ADDED] see schema header note 10
+  processingAttemptCount      Int       @default(0) @map("ReceiptScan_ProcessingAttemptCount")
+  processingStartedAt         DateTime? @map("ReceiptScan_ProcessingStartedAt")
+  processingHeartbeatAt       DateTime? @map("ReceiptScan_ProcessingHeartbeatAt")
+  nextProcessingAttemptAt     DateTime  @default(now()) @map("ReceiptScan_NextProcessingAttemptAt")
+  processingWorkerId          String?   @map("ReceiptScan_ProcessingWorkerID") @db.VarChar(100)
+  rawText                     String?   @map("ReceiptScan_RawText") @db.Text // [ADDED] see schema header note 10
   /// True when the deterministic OCR parse came back empty and a vision model
   /// was asked to interpret the photo instead. The confirm screen says so
   /// plainly — these values were guessed from an image, not read off text,
   /// and the owner is told to check them harder than usual.
-  visionAssisted          Boolean   @default(false) @map("ReceiptScan_VisionAssisted")
+  visionAssisted              Boolean   @default(false) @map("ReceiptScan_VisionAssisted")
   /// How sure the OCR engine was about this page overall, 0-100. Null on
   /// scans read before this was recorded, and on vision-assisted reads, where
   /// the figure would describe text tesseract could not read anyway.
-  ocrConfidence           Int?      @map("ReceiptScan_OcrConfidence")
+  ocrConfidence               Int?      @map("ReceiptScan_OcrConfidence")
   /// [ADDED] see schema header note 17. How sure OCR was about the VENDOR and
   /// the TOTAL specifically, 0-100 — the per-field figures ocrConfidence
   /// cannot give, and the ones calibration needs to say whether a confidence
   /// score predicts a wrong answer for that particular field.
-  vendorConfidence        Int?      @map("ReceiptScan_VendorConfidence")
-  amountConfidence        Int?      @map("ReceiptScan_AmountConfidence")
+  vendorConfidence            Int?      @map("ReceiptScan_VendorConfidence")
+  amountConfidence            Int?      @map("ReceiptScan_AmountConfidence")
   /// [ADDED] Which code read this receipt: provider, model, prompt version,
   /// response-schema version, parser version, preprocessing version. Null on
   /// scans read before recording began. Without this, a model or prompt change
   /// silently changes extraction with no way to attribute a regression.
-  extractorVersions       Json?     @map("ReceiptScan_ExtractorVersions")
+  extractorVersions           Json?     @map("ReceiptScan_ExtractorVersions")
   /// [ADDED] Per-field evidence: for date/vendor/amount, the page number, the
   /// visible source text the value was read from, the extraction source
   /// (ocr | vision | owner), and the confidence band. What lets the review
   /// screen say "read from page 2: 'TOTAL 1,220.00'" instead of a bare number.
-  fieldEvidence           Json?     @map("ReceiptScan_FieldEvidence")
+  fieldEvidence               Json?     @map("ReceiptScan_FieldEvidence")
   /// [ADDED] Machine-readable warning codes (BLURRY_PAGE, AMBIGUOUS_DATE,
   /// UNEXPLAINED_GAP, VISION_INTERPRETED, ...) with optional field/page
   /// detail. The clients render prose FROM these; they had already drifted
   /// apart by hardcoding the prose twice.
-  warnings                Json?     @map("ReceiptScan_Warnings")
+  warnings                    Json?     @map("ReceiptScan_Warnings")
   /// Advisory receipt evidence produced after OCR. It never confirms an
   /// expense and never replaces the owner's review decision.
-  receiptLikelihood       Json?     @map("ReceiptScan_ReceiptLikelihood")
-  createdAt               DateTime  @default(now()) @map("ReceiptScan_CreatedAt")
+  receiptLikelihood           Json?     @map("ReceiptScan_ReceiptLikelihood")
+  semanticFingerprint         String?   @map("ReceiptScan_SemanticFingerprint") @db.Char(64)
+  createdAt                   DateTime  @default(now()) @map("ReceiptScan_CreatedAt")
 
-  businessProfile    BusinessProfile?           @relation(fields: [businessProfileId], references: [id], onDelete: SetNull)
-  expenseRecords     ExpenseRecord[]
-  items              ReceiptScanItem[]
-  pages              ReceiptScanPage[]
-  corrections        ReceiptFieldCorrection[]
-  providerDispatches ExternalProviderDispatch[]
-  purgeJobs          ReceiptPurgeJob[]
+  businessProfile             BusinessProfile?            @relation(fields: [businessProfileId], references: [id], onDelete: SetNull)
+  captureBatch                ReceiptCaptureBatch?        @relation(fields: [captureBatchId, businessProfileId], references: [id, businessProfileId], onDelete: NoAction)
+  expenseRecords              ExpenseRecord[]
+  items                       ReceiptScanItem[]
+  pages                       ReceiptScanPage[]
+  corrections                 ReceiptFieldCorrection[]
+  providerDispatches          ExternalProviderDispatch[]
+  purgeJobs                   ReceiptPurgeJob[]
+  duplicateCandidatesAsSource ReceiptDuplicateCandidate[] @relation("ReceiptDuplicateCandidateSource")
+  duplicateCandidatesAsTarget ReceiptDuplicateCandidate[] @relation("ReceiptDuplicateCandidateScanTarget")
 
   @@unique([id, businessProfileId], map: "ReceiptScan_ID_BusinessProfile_ID_key")
-  @@index([businessProfileId])
+  @@unique([captureBatchId, receiptOrdinal], map: "ReceiptScan_batch_ordinal_key")
+  @@index([businessProfileId, confirmationStatus, processingStatus, createdAt(sort: Desc), id(sort: Desc)], map: "ReceiptScan_history_status_created_idx")
+  @@index([businessProfileId, createdAt(sort: Desc), id(sort: Desc)], map: "ReceiptScan_history_created_idx")
+  @@index([businessProfileId, sourceImageHash], map: "ReceiptScan_profile_source_image_hash_idx")
+  @@index([businessProfileId, semanticFingerprint], map: "ReceiptScan_profile_semantic_fingerprint_idx")
   // See the ExpenseRecord note on why this carries an explicit `map:` name.
   @@index([processingStatus, nextProcessingAttemptAt, processingHeartbeatAt], map: "ReceiptScan_ReceiptScan_ProcessingStatus_ReceiptScan_NextProces")
   @@map("ReceiptScan")
+}
+
+model ReceiptDuplicateCandidate {
+  id                       Int                          @id @default(autoincrement()) @map("ReceiptDuplicateCandidate_ID")
+  businessProfileId        Int                          @map("BusinessProfile_ID")
+  sourceReceiptScanId      Int                          @map("ReceiptDuplicateCandidate_SourceReceiptScan_ID")
+  candidateReceiptScanId   Int?                         @map("ReceiptDuplicateCandidate_CandidateReceiptScan_ID")
+  candidateExpenseRecordId Int?                         @map("ReceiptDuplicateCandidate_CandidateExpenseRecord_ID")
+  detectorVersion          String                       @map("ReceiptDuplicateCandidate_DetectorVersion") @db.VarChar(64)
+  sourceFingerprint        String                       @map("ReceiptDuplicateCandidate_SourceFingerprint") @db.Char(64)
+  reasonCodes              Json                         @map("ReceiptDuplicateCandidate_ReasonCodes")
+  scoreBand                ReceiptDuplicateScoreBand    @map("ReceiptDuplicateCandidate_ScoreBand")
+  reviewStatus             ReceiptDuplicateReviewStatus @default(PENDING) @map("ReceiptDuplicateCandidate_ReviewStatus")
+  decisionSetHash          String?                      @map("ReceiptDuplicateCandidate_DecisionSetHash") @db.Char(64)
+  decidedByUserId          Int?                         @map("ReceiptDuplicateCandidate_DecidedByUser_ID")
+  createdAt                DateTime                     @default(now()) @map("ReceiptDuplicateCandidate_CreatedAt")
+  decidedAt                DateTime?                    @map("ReceiptDuplicateCandidate_DecidedAt")
+
+  businessProfile        BusinessProfile  @relation("ReceiptDuplicateCandidateProfile", fields: [businessProfileId], references: [id], onDelete: Cascade, map: "ReceiptDuplicateCandidate_profile_fkey")
+  decisionOwnerProfile   BusinessProfile? @relation("ReceiptDuplicateCandidateDecisionOwner", fields: [businessProfileId, decidedByUserId], references: [id, userId], onDelete: NoAction, map: "ReceiptDuplicateCandidate_decision_owner_fkey")
+  sourceReceiptScan      ReceiptScan      @relation("ReceiptDuplicateCandidateSource", fields: [sourceReceiptScanId, businessProfileId], references: [id, businessProfileId], onDelete: Cascade, map: "ReceiptDuplicateCandidate_source_scan_fkey")
+  candidateReceiptScan   ReceiptScan?     @relation("ReceiptDuplicateCandidateScanTarget", fields: [candidateReceiptScanId, businessProfileId], references: [id, businessProfileId], onDelete: Cascade, map: "ReceiptDuplicateCandidate_scan_target_fkey")
+  candidateExpenseRecord ExpenseRecord?   @relation(fields: [candidateExpenseRecordId, businessProfileId], references: [id, businessProfileId], onDelete: Cascade, map: "ReceiptDuplicateCandidate_expense_target_fkey")
+
+  @@index([businessProfileId, sourceReceiptScanId, reviewStatus, id], map: "ReceiptDuplicateCandidate_source_review_idx")
+  @@index([candidateReceiptScanId, businessProfileId], map: "ReceiptDuplicateCandidate_scan_target_idx")
+  @@index([candidateExpenseRecordId, businessProfileId], map: "ReceiptDuplicateCandidate_expense_target_idx")
+  @@index([businessProfileId, decidedByUserId], map: "ReceiptDuplicateCandidate_decision_owner_idx")
+  @@map("ReceiptDuplicateCandidate")
 }
 
 /// [ADDED] see schema header note 14. Every page of a scan, in the order the
@@ -1540,6 +1640,7 @@ model ReceiptPurgeJob {
   requestKeyHash               String             @unique(map: "ReceiptPurgeJob_request_key") @map("ReceiptPurgeJob_RequestKeyHash") @db.Char(64)
   targetReferenceHash          String             @map("ReceiptPurgeJob_TargetReferenceHash") @db.Char(64)
   reason                       ReceiptPurgeReason @map("ReceiptPurgeJob_Reason")
+  mode                         ReceiptPurgeMode   @map("ReceiptPurgeJob_Mode")
   status                       ReceiptPurgeStatus @default(PENDING) @map("ReceiptPurgeJob_Status")
   stage                        ReceiptPurgeStage  @default(STORAGE) @map("ReceiptPurgeJob_Stage")
   checkpointPageNumber         Int                @default(0) @map("ReceiptPurgeJob_CheckpointPageNumber")
@@ -1559,7 +1660,7 @@ model ReceiptPurgeJob {
   businessProfile BusinessProfile @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
   receiptScan     ReceiptScan?    @relation(fields: [receiptScanId, receiptScanBusinessProfileId], references: [id, businessProfileId], onDelete: SetNull)
 
-  @@unique([businessProfileId, receiptScanId], map: "ReceiptPurgeJob_profile_receipt_key")
+  @@index([businessProfileId, receiptScanId], map: "ReceiptPurgeJob_profile_receipt_idx")
   @@index([receiptScanId, receiptScanBusinessProfileId], map: "ReceiptPurgeJob_receipt_idx")
   @@index([status, nextAttemptAt, heartbeatAt], map: "ReceiptPurgeJob_claim_idx")
   @@index([businessProfileId, status, requestedAt], map: "ReceiptPurgeJob_profile_status_requested_idx")

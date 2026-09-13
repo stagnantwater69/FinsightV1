@@ -3,7 +3,13 @@ import { config as loadEnv } from "dotenv";
 
 // Loaded at config time so source modules never fall through to backend/.env
 // and accidentally connect an integration test to the hosted project.
-const testEnv = loadEnv({ path: ".env.test" }).parsed ?? {};
+const fileEnv = loadEnv({ path: ".env.test" }).parsed ?? {};
+// An explicitly supplied test environment wins over the checked-in local
+// defaults. This lets CI and isolated audit databases choose their own local
+// port while preserving the hard local/finsight_test guard in globalSetup.
+const testEnv = Object.fromEntries(
+  Object.entries(fileEnv).map(([key, fallback]) => [key, process.env[key] ?? fallback]),
+);
 
 export default defineConfig({
   test: {

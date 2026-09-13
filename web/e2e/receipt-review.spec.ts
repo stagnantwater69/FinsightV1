@@ -22,6 +22,11 @@ test("upload, review optional details, correct and save a receipt across web lay
     await route.fulfill({ json: { ...receipt, processingStatus: "Processing" } });
   });
   await page.route("**/records/receipts/700", async (route) => { await route.fulfill({ json: receipt }); });
+  await page.route("**/records/receipts/700/duplicate-candidates**", async (route) => {
+    await route.fulfill({
+      json: { sourceFingerprint: null, candidateSetHash: null, candidates: [], nextCursor: null },
+    });
+  });
   await page.route("**/records/receipts/700/confirm", async (route) => {
     saved = route.request().postDataJSON();
     await route.fulfill({ json: [{ id: 701 }] });

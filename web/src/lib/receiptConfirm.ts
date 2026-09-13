@@ -26,6 +26,8 @@ export type ReconciliationMode =
 export type GapPlan = "proportional" | "category" | "shrink" | null;
 
 export interface ReceiptConfirmPayload {
+  expectedScanRevision: number;
+  duplicateDecision?: { action: "SAVE_ANYWAY"; candidateSetHash: string };
   date: string;
   description: string;
   vendor?: string;
@@ -37,6 +39,8 @@ export interface ReceiptConfirmPayload {
 }
 
 export interface ReceiptConfirmInput {
+  expectedScanRevision: number;
+  duplicateDecision?: { action: "SAVE_ANYWAY"; candidateSetHash: string };
   date: string;
   description: string;
   vendor: string;
@@ -65,6 +69,8 @@ export function gapCentavos(amount: number, itemsTotal: number): number {
 export function buildReceiptConfirmPayload(input: ReceiptConfirmInput): ReceiptConfirmPayload {
   const vendor = input.vendor.trim();
   const base = {
+    expectedScanRevision: input.expectedScanRevision,
+    ...(input.duplicateDecision ? { duplicateDecision: input.duplicateDecision } : {}),
     date: input.date,
     description: input.description,
     // Omitted rather than sent empty: the field is optional server-side, and

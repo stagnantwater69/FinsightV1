@@ -12,6 +12,7 @@ import { buildReceiptConfirmPayload, gapCentavos, type ReceiptConfirmInput } fro
  */
 
 const base: ReceiptConfirmInput = {
+  expectedScanRevision: 4,
   date: "2026-07-31",
   description: "Grocery run",
   vendor: "Savemore",
@@ -147,5 +148,13 @@ describe("vendor handling", () => {
 
   it("trims a real vendor", () => {
     expect(buildReceiptConfirmPayload({ ...base, vendor: "  Savemore  " }).vendor).toBe("Savemore");
+  });
+});
+
+describe("duplicate review", () => {
+  it("sends Save anyway only after the caller supplies the reviewed candidate set", () => {
+    const duplicateDecision = { action: "SAVE_ANYWAY" as const, candidateSetHash: "a".repeat(64) };
+    expect(buildReceiptConfirmPayload({ ...base, duplicateDecision })).toMatchObject({ duplicateDecision });
+    expect(buildReceiptConfirmPayload(base)).not.toHaveProperty("duplicateDecision");
   });
 });

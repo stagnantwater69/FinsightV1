@@ -85,6 +85,50 @@ class ReceiptVisionInstrumentedTest {
     } finally { image.release() }
   }
 
+  @Test fun analysisCornersMapToTheCenteredFullResolutionStill() {
+    val corners = arrayOf(Point(96.0, 128.0), Point(864.0, 128.0), Point(864.0, 1152.0), Point(96.0, 1152.0))
+    val sameAspect = ReceiptVision.mapCornersBetweenFrames(corners, 960, 1280, 3024, 4032)
+    assertEquals(302.4, sameAspect[0].x, .01)
+    assertEquals(403.2, sameAspect[0].y, .01)
+    assertEquals(2721.6, sameAspect[2].x, .01)
+    assertEquals(3628.8, sameAspect[2].y, .01)
+
+    val widerStill = ReceiptVision.mapCornersBetweenFrames(
+      arrayOf(Point(0.0, 0.0), Point(1000.0, 0.0), Point(1000.0, 1000.0), Point(0.0, 1000.0)),
+      1000,
+      1000,
+      1200,
+      1000,
+    )
+    assertEquals("A wider still is center-cropped to the analysis field of view", 100.0, widerStill[0].x, .01)
+    assertEquals(1100.0, widerStill[1].x, .01)
+  }
+
+  @Test fun standardDerivativeWarpKeepsAspectInsidePixelBudget() {
+    val image = Mat(100, 100, CvType.CV_8UC3, Scalar.all(240.0))
+    val corners = arrayOf(
+      Point(0.0, 0.0),
+      Point(1600.0, 0.0),
+      Point(1600.0, 5000.0),
+      Point(0.0, 5000.0),
+    )
+    val result = ReceiptVision.warp(image, corners, 1800, maxPixels = 4_000_000L)
+    try {
+      assertTrue(result.cols().toLong() * result.rows() <= 4_000_000L)
+      assertEquals(5000.0 / 1600.0, result.rows().toDouble() / result.cols(), .01)
+    } finally { result.release(); image.release() }
+  }
+
+  @Test fun standardCaptureCallbackAndDeadlineCannotBothWin() {
+    val callbackWins = CaptureResultGate()
+    assertTrue(callbackWins.claim())
+    assertFalse("A late timeout cannot emit after a completed callback", callbackWins.claim())
+
+    val deadlineWins = CaptureResultGate()
+    assertTrue(deadlineWins.claim())
+    assertFalse("A late CameraX callback cannot emit after timeout", deadlineWins.claim())
+  }
+
   @Test fun stitchedSequencePreservesEveryRowAndRejectsGapWithoutMutation() {
     val image = paper(); val session = LongReceiptSession()
     try {

@@ -1,41 +1,62 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ScanReceipt } from "./ScanReceipt";
 import type { ScanResult } from "./scanReceipt/types";
 
-const mocks = vi.hoisted(() => ({ post: vi.fn(), get: vi.fn(), selected: { id: 1 } }));
-vi.mock("../lib/api", () => ({ api: { post: mocks.post, get: mocks.get } }));
+const mocks = vi.hoisted(() => ({
+  post: vi.fn(),
+  get: vi.fn(),
+  patch: vi.fn(),
+  delete: vi.fn(),
+  confirm: vi.fn(),
+  selected: { id: 1 },
+}));
+vi.mock("../lib/api", () => ({
+  api: { post: mocks.post, get: mocks.get, patch: mocks.patch, delete: mocks.delete },
+}));
 vi.mock("../context/BusinessProfileContext", () => ({ useBusinessProfiles: () => ({ selected: mocks.selected }) }));
 vi.mock("../context/ExpenseCategoryContext", () => ({ useExpenseCategories: () => ({
   categories: [{ id: 2, name: "Supplies" }, { id: 3, name: "Uncategorized" }],
   refresh: async () => {}, createCategory: vi.fn(), loading: false,
 }) }));
 vi.mock("../components/Toast", () => ({ useToast: () => vi.fn() }));
+vi.mock("../components/ConfirmDialog", () => ({ useConfirm: () => mocks.confirm }));
 
 const receipt: ScanResult = {
-  id: 10, processingStatus: "Complete", extractedDate: "2026-09-01", extractedDescription: "Paper supplies",
+  id: 10, scanRevision: 0, processingStatus: "Complete", extractedDate: "2026-09-01", extractedDescription: "Paper supplies",
   extractedVendor: "Paper shop", extractedAmount: 500, items: [], ocrConfidence: 98,
 };
 const photo = (name = "receipt.png", contents = "receipt image") => new File([contents], name, { type: "image/png" });
-function page() { return <MemoryRouter><ScanReceipt /></MemoryRouter>; }
+function CurrentPath() {
+  return <span data-testid="current-path">{useLocation().pathname}</span>;
+}
+function page() { return <MemoryRouter><ScanReceipt /><CurrentPath /></MemoryRouter>; }
 
 beforeEach(() => {
   mocks.selected = { id: 1 };
   mocks.post.mockReset();
   mocks.get.mockReset();
+  mocks.patch.mockReset();
+  mocks.delete.mockReset();
+  mocks.confirm.mockReset();
+  mocks.confirm.mockResolvedValue(true);
   mocks.get.mockImplementation(async (url: string) =>
-    url.startsWith("/records/receipts/provider-consent/")
+    url === "/records/receipts"
+      ? { data: { items: [], nextCursor: null } }
+      : url.startsWith("/records/receipts/provider-consent/")
       ? { data: { available: false, provider: null, consent: null, activeConsents: [] } }
       : { data: receipt },
   );
   vi.stubGlobal("URL", class extends URL {
-    static createObjectURL() { return "blob:receipt"; }
+    static createObjectURL(value: Blob) { return `blob:${(value as File).name}`; }
     static revokeObjectURL() {}
   });
   mocks.post.mockResolvedValue({ data: receipt });
+  mocks.patch.mockResolvedValue({ data: receipt });
+  mocks.delete.mockResolvedValue({ data: receipt });
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
@@ -146,11 +167,183 @@ describe("receipt upload and review", () => {
     expect(appended.reduce((total, file) => total + file.size, 0)).toBe(first.size + second.size);
   });
 
+  it("accepts every separate receipt in order before opening the first review", async () => {
+    const user = userEvent.setup();
+    mocks.post.mockImplementation(async (url: string, body: unknown) => {
+      if (url === "/records/receipt-batches") {
+        return { data: {
+          id: 77,
+          businessProfileId: 1,
+          expectedReceiptCount: 2,
+          status: "COLLECTING",
+          uploadedReceiptCount: 0,
+          createdAt: "2026-09-13T00:00:00.000Z",
+          finishedAt: null,
+          receipts: [],
+        } };
+      }
+      if (url === "/records/receipts") {
+        const ordinal = Number((body as FormData).get("receiptOrdinal"));
+        return { data: { ...receipt, id: 10 + ordinal, receiptBatchId: 77, receiptOrdinal: ordinal } };
+      }
+      if (url.endsWith("/confirm")) return { data: [{ id: url.includes("/11/") ? 901 : 902 }] };
+      return { data: receipt };
+    });
+
+    render(page());
+    const input = screen.getByLabelText(/Receipt photo/);
+    await user.upload(input, photo("first.png", "first"));
+    await user.upload(input, photo("second.png", "second"));
+    await user.click(screen.getByRole("button", { name: "Scan 2 receipts" }));
+
+    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    let uploads = mocks.post.mock.calls.filter(([url]) => url === "/records/receipts");
+    expect(uploads).toHaveLength(2);
+    expect((uploads[0]![1] as FormData).get("receiptBatchId")).toBe("77");
+    expect((uploads[0]![1] as FormData).get("receiptOrdinal")).toBe("1");
+    expect((uploads[1]![1] as FormData).get("receiptBatchId")).toBe("77");
+    expect((uploads[1]![1] as FormData).get("receiptOrdinal")).toBe("2");
+
+    await user.selectOptions(screen.getByLabelText(/^Category/), "2");
+    await user.click(screen.getByRole("button", { name: "Confirm & save expense" }));
+
+    await screen.findByText(/Receipt 2.*Reviewing now/);
+    uploads = mocks.post.mock.calls.filter(([url]) => url === "/records/receipts");
+    expect(uploads).toHaveLength(2);
+    expect(mocks.post.mock.calls.filter(([url]) => url === "/records/receipt-batches")).toHaveLength(1);
+  });
+
+  it("replaces a cancelled batch replay once and validates the replacement before upload", async () => {
+    const user = userEvent.setup();
+    const batchKeys: string[] = [];
+    mocks.post.mockImplementation(async (url: string, body: unknown) => {
+      if (url === "/records/receipt-batches") {
+        batchKeys.push((body as { clientBatchKey: string }).clientBatchKey);
+        if (batchKeys.length === 1) {
+          return { data: {
+            id: 77, businessProfileId: 1, expectedReceiptCount: 2, status: "CANCELLED",
+            uploadedReceiptCount: 0, createdAt: "2026-09-13T00:00:00.000Z", finishedAt: null, receipts: [],
+          } };
+        }
+        return { data: {
+          id: 78, businessProfileId: 1, expectedReceiptCount: 2, status: "COLLECTING",
+          uploadedReceiptCount: 0, createdAt: "2026-09-13T00:00:00.000Z", finishedAt: null, receipts: [],
+        } };
+      }
+      if (url === "/records/receipts") {
+        const ordinal = Number((body as FormData).get("receiptOrdinal"));
+        return { data: { ...receipt, id: 80 + ordinal, receiptBatchId: 78, receiptOrdinal: ordinal } };
+      }
+      return { data: receipt };
+    });
+
+    render(page());
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo("first.png"));
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo("second.png"));
+    await user.click(screen.getByRole("button", { name: "Scan 2 receipts" }));
+
+    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    expect(batchKeys).toHaveLength(2);
+    expect(batchKeys[1]).not.toBe(batchKeys[0]);
+    const uploads = mocks.post.mock.calls.filter(([url]) => url === "/records/receipts");
+    expect(uploads).toHaveLength(2);
+    expect(uploads.every(([, body]) => (body as FormData).get("receiptBatchId") === "78")).toBe(true);
+  });
+
+  it("does not upload when a new batch response is not an empty collecting batch", async () => {
+    const user = userEvent.setup();
+    mocks.post.mockResolvedValueOnce({ data: {
+      id: 77, businessProfileId: 2, expectedReceiptCount: 2, status: "COLLECTING",
+      uploadedReceiptCount: 0, createdAt: "2026-09-13T00:00:00.000Z", finishedAt: null, receipts: [],
+    } });
+
+    render(page());
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo("first.png"));
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo("second.png"));
+    await user.click(screen.getByRole("button", { name: "Scan 2 receipts" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("This receipt batch no longer matches the selected images.");
+    expect(mocks.post.mock.calls.filter(([url]) => url === "/records/receipts")).toHaveLength(0);
+  });
+
+  it("lets the owner inspect every long-receipt page and reports which evidence OCR used", async () => {
+    const user = userEvent.setup();
+    mocks.post.mockResolvedValueOnce({
+      data: {
+        ...receipt,
+        pageQualities: [
+          { sharpness: 90, brightness: 0.5, tooBlurredToTrust: false },
+          { sharpness: 20, brightness: 0.4, tooBlurredToTrust: true },
+        ],
+        pageProcessing: [
+          { source: "original", hasProcessedVariant: false, captureMetadata: null },
+          { source: "processed", hasProcessedVariant: true, captureMetadata: null },
+        ],
+        pageEvidence: [
+          {
+            pageNumber: 1, captureMode: "standard", processingMode: "original", ocrInput: "source",
+            source: { variant: "source", label: "Source", width: 1200, height: 1800 }, derived: null,
+          },
+          {
+            pageNumber: 2, captureMode: "standard", processingMode: "grayscale", ocrInput: "derived",
+            source: { variant: "source", label: "Source", width: 1200, height: 1800 },
+            derived: { variant: "derived", label: "Enhanced grayscale", width: 1100, height: 1700 },
+          },
+        ],
+      },
+    });
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === "/records/receipts") return { data: { items: [], nextCursor: null } };
+      if (url.startsWith("/records/receipts/provider-consent/")) {
+        return { data: { available: false, provider: null, consent: null, activeConsents: [] } };
+      }
+      if (url === "/records/receipts/10/pages/2/image/derived") {
+        return { data: {
+          pageNumber: 2, variant: "derived", label: "Enhanced grayscale", width: 1100, height: 1700,
+          url: "https://storage.example.test/signed-derived", expiresInSeconds: 600,
+        } };
+      }
+      return { data: receipt };
+    });
+    render(page());
+    const input = screen.getByLabelText(/Receipt photo/);
+    await user.upload(input, photo("page-1.png", "first page"));
+    await user.upload(input, photo("page-2.png", "second page"));
+    await user.click(screen.getByRole("radio", { name: /One long receipt/ }));
+    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+
+    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    expect(screen.getByRole("tablist", { name: "Receipt pages" })).toBeVisible();
+    expect(screen.getByRole("img", { name: "Source, receipt page 1 of 2" })).toHaveAttribute("src", "blob:page-1.png");
+    const firstPage = screen.getByRole("tab", { name: "View page 1 of 2" });
+    firstPage.focus();
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("tab", { name: "View page 2 of 2, quality warning" })).toHaveFocus();
+    expect(screen.getByRole("img", { name: "Source, receipt page 2 of 2" })).toHaveAttribute("src", "blob:page-2.png");
+    expect(screen.getByText("Quality warning: check this page closely.")).toBeVisible();
+    expect(screen.getByText("OCR used the enhanced grayscale copy. Your source image is retained.")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Enhanced grayscale" }));
+    const adjusted = await screen.findByRole("img", { name: "Enhanced grayscale, receipt page 2 of 2" });
+    expect(adjusted).toHaveAttribute(
+      "src",
+      "https://storage.example.test/signed-derived",
+    );
+    expect(mocks.get).toHaveBeenCalledWith("/records/receipts/10/pages/2/image/derived");
+    fireEvent.error(adjusted);
+    expect(screen.getByRole("img", { name: "Source, receipt page 2 of 2" })).toHaveAttribute("src", "blob:page-2.png");
+    expect(screen.getByRole("alert")).toHaveTextContent(/adjusted copy expired/i);
+    await user.click(screen.getByRole("button", { name: "Enhanced grayscale" }));
+    await waitFor(() => {
+      expect(mocks.get.mock.calls.filter(([url]) => url === "/records/receipts/10/pages/2/image/derived")).toHaveLength(2);
+    });
+  });
+
   it("resumes an accepted scan after a failed poll without uploading again", async () => {
     const user = userEvent.setup();
     mocks.post.mockResolvedValueOnce({ data: { ...receipt, processingStatus: "Processing" } });
     let pollCount = 0;
     mocks.get.mockImplementation(async (url: string) => {
+      if (url === "/records/receipts") return { data: { items: [], nextCursor: null } };
       if (url.startsWith("/records/receipts/provider-consent/")) {
         return { data: { available: false, provider: null, consent: null, activeConsents: [] } };
       }
@@ -165,6 +358,195 @@ describe("receipt upload and review", () => {
     await user.click(screen.getByRole("button", { name: "Scan receipt" }));
     await screen.findByRole("heading", { name: "Check what FinSight read" }, { timeout: 3000 });
     expect(mocks.post.mock.calls.filter(([url]) => url === "/records/receipts")).toHaveLength(1);
+  });
+
+  it("deletes an unfinished scan with a stable idempotency key across a transport retry", async () => {
+    const user = userEvent.setup();
+    mocks.post.mockResolvedValue({
+      data: {
+        ...receipt,
+        processingStatus: "Failed",
+        processingError: "The image could not be read.",
+      },
+    });
+    mocks.delete
+      .mockRejectedValueOnce(new Error("Connection lost"))
+      .mockResolvedValueOnce({ data: { id: 501, receiptScanId: receipt.id, status: "PENDING" } });
+
+    render(page());
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo());
+    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+    await screen.findByRole("heading", { name: "Receipt needs another try" });
+
+    await user.click(screen.getByRole("button", { name: "Delete scan" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Connection lost");
+    await user.click(screen.getByRole("button", { name: "Delete scan" }));
+
+    await screen.findByRole("heading", { name: "Scan a receipt" });
+    expect(mocks.confirm).toHaveBeenCalledTimes(2);
+    expect(mocks.delete).toHaveBeenCalledTimes(2);
+    expect(mocks.delete.mock.calls[0]![0]).toBe("/records/receipts/10");
+    expect(mocks.delete.mock.calls[0]![1].headers["Idempotency-Key"]).toBe(
+      mocks.delete.mock.calls[1]![1].headers["Idempotency-Key"],
+    );
+  });
+
+  it("abandons a deleted batch's local queue and resumes accepted children from history without reuploading", async () => {
+    const user = userEvent.setup();
+    let uploadNumber = 0;
+    let includeAcceptedChildren = false;
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === "/records/receipts") {
+        return { data: { items: includeAcceptedChildren ? [
+          {
+            id: 22, businessProfileId: 1, receiptBatchId: 77, receiptOrdinal: 2, scanRevision: 0,
+            processingStatus: "Complete", confirmationStatus: "Pending", processingError: null, processingErrorCode: null,
+            extractedDate: "2026-09-13T00:00:00.000Z", extractedVendor: "Accepted receipt 2", extractedDescription: null,
+            extractedAmount: 100, createdAt: "2026-09-13T00:00:00.000Z", pageCount: 1,
+            allowedActions: { retryProcessing: false, reviewResult: true },
+          },
+          {
+            id: 23, businessProfileId: 1, receiptBatchId: 77, receiptOrdinal: 3, scanRevision: 0,
+            processingStatus: "Complete", confirmationStatus: "Pending", processingError: null, processingErrorCode: null,
+            extractedDate: "2026-09-13T00:00:00.000Z", extractedVendor: "Accepted receipt 3", extractedDescription: null,
+            extractedAmount: 100, createdAt: "2026-09-13T00:00:00.000Z", pageCount: 1,
+            allowedActions: { retryProcessing: false, reviewResult: true },
+          },
+        ] : [], nextCursor: null } };
+      }
+      if (url.startsWith("/records/receipts/provider-consent/")) {
+        return { data: { available: false, provider: null, consent: null, activeConsents: [] } };
+      }
+      return { data: receipt };
+    });
+    mocks.post.mockImplementation(async (url: string, body: unknown) => {
+      if (url === "/records/receipt-batches") {
+        const request = body as { businessProfileId: number; clientBatchKey: string; expectedReceiptCount: number };
+        return { data: {
+          id: 77,
+          businessProfileId: request.businessProfileId,
+          expectedReceiptCount: request.expectedReceiptCount,
+          status: "COLLECTING",
+          uploadedReceiptCount: 0,
+          createdAt: "2026-09-13T00:00:00.000Z",
+          finishedAt: null,
+          receipts: [],
+        } };
+      }
+      if (url === "/records/receipts") {
+        uploadNumber += 1;
+        const form = body as FormData;
+        return { data: {
+          ...receipt,
+          id: 20 + uploadNumber,
+          receiptBatchId: Number(form.get("receiptBatchId")),
+          receiptOrdinal: Number(form.get("receiptOrdinal")),
+          extractedVendor: `Accepted receipt ${uploadNumber}`,
+          ...(uploadNumber === 1
+            ? { processingStatus: "Failed", processingError: "Unreadable photo" }
+            : { processingStatus: "Complete" }),
+        } };
+      }
+      return { data: receipt };
+    });
+    mocks.delete.mockImplementation(async () => {
+      includeAcceptedChildren = true;
+      return { data: { id: 601, receiptScanId: 21, status: "PENDING" } };
+    });
+
+    render(page());
+    const input = screen.getByLabelText(/Receipt photo/);
+    await user.upload(input, photo("first.png"));
+    await user.upload(input, photo("second.png"));
+    await user.upload(input, photo("third.png"));
+    await user.click(screen.getByRole("button", { name: "Scan 3 receipts" }));
+    await screen.findByRole("heading", { name: "Receipt needs another try" });
+
+    await user.click(screen.getByRole("button", { name: "Delete scan" }));
+    await screen.findByRole("heading", { name: "Scan a receipt" });
+    await screen.findByRole("heading", { name: "Continue an unfinished scan" });
+    expect(screen.getByText("Accepted receipt 2", { exact: true })).toBeVisible();
+    expect(screen.getByText("Accepted receipt 3", { exact: true })).toBeVisible();
+
+    expect(mocks.post.mock.calls.filter(([url]) => url === "/records/receipt-batches")).toHaveLength(1);
+    const uploads = mocks.post.mock.calls.filter(([url]) => url === "/records/receipts");
+    expect(uploads).toHaveLength(3);
+    expect(uploads.map(([, body]) => ({
+      batchId: (body as FormData).get("receiptBatchId"),
+      ordinal: (body as FormData).get("receiptOrdinal"),
+    }))).toEqual([
+      { batchId: "77", ordinal: "1" },
+      { batchId: "77", ordinal: "2" },
+      { batchId: "77", ordinal: "3" },
+    ]);
+  });
+
+  it("discovers an unfinished scan and reviews its stored source without local files", async () => {
+    const user = userEvent.setup();
+    const stored = {
+      ...receipt,
+      id: 91,
+      pageEvidence: [{
+        pageNumber: 1,
+        captureMode: "standard" as const,
+        processingMode: "grayscale",
+        ocrInput: "derived" as const,
+        source: { variant: "source" as const, label: "Source" as const, width: 2400, height: 3600 },
+        derived: {
+          variant: "derived" as const,
+          label: "Enhanced grayscale" as const,
+          width: 1200,
+          height: 1800,
+        },
+      }],
+    };
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === "/records/receipts") return { data: { items: [{
+        id: 91,
+        businessProfileId: 1,
+        receiptBatchId: null,
+        receiptOrdinal: null,
+        scanRevision: 0,
+        processingStatus: "Complete",
+        confirmationStatus: "Pending",
+        processingError: null,
+        processingErrorCode: null,
+        extractedDate: "2026-09-01",
+        extractedVendor: "Paper shop",
+        extractedDescription: "Paper supplies",
+        extractedAmount: 500,
+        createdAt: "2026-09-13T00:00:00.000Z",
+        pageCount: 1,
+        allowedActions: { retryProcessing: false, reviewResult: true },
+      }], nextCursor: null } };
+      if (url.startsWith("/records/receipts/provider-consent/")) {
+        return { data: { available: false, provider: null, consent: null, activeConsents: [] } };
+      }
+      if (url === "/records/receipts/91") return { data: stored };
+      if (url === "/records/receipts/91/pages/1/image/source") {
+        return { data: {
+          pageNumber: 1,
+          variant: "source",
+          label: "Source",
+          width: 2400,
+          height: 3600,
+          url: "https://storage.example.test/source",
+          expiresInSeconds: 600,
+        } };
+      }
+      return { data: receipt };
+    });
+
+    render(page());
+    await user.click(await screen.findByRole("button", { name: "Review result" }));
+    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    expect(await screen.findByRole("img", { name: "Source, receipt page 1 of 1" })).toHaveAttribute(
+      "src",
+      "https://storage.example.test/source",
+    );
+    expect(mocks.get).toHaveBeenCalledWith("/records/receipts", expect.objectContaining({
+      params: { businessProfileId: 1, status: "active", take: 20 },
+    }));
   });
 
   it("ignores a late upload after switching businesses", async () => {
@@ -205,6 +587,242 @@ describe("receipt upload and review", () => {
     const saves = mocks.post.mock.calls.filter(([url]) => url.endsWith("/confirm"));
     expect(saves).toHaveLength(1);
     expect(saves[0][1]).toMatchObject({ amount: 520 });
+  });
+
+  it("requires an explicit Save anyway decision for the current duplicate set", async () => {
+    const user = userEvent.setup();
+    const candidateSetHash = "a".repeat(64);
+    let confirmAttempts = 0;
+    mocks.post.mockImplementation(async (url: string) => {
+      if (url === "/records/receipts") return { data: receipt };
+      if (url === "/records/receipts/10/confirm") {
+        confirmAttempts += 1;
+        if (confirmAttempts === 1) {
+          throw Object.assign(new Error("Possible duplicate receipt"), {
+            isAxiosError: true,
+            response: {
+              status: 409,
+              data: {
+                error: "Review possible duplicate receipts before saving",
+                code: "DUPLICATE_REVIEW_REQUIRED",
+                sourceFingerprint: "b".repeat(64),
+                candidateSetHash,
+                candidateCount: 1,
+                candidatesTruncated: false,
+                nextCursor: null,
+                candidates: [{
+                  id: 81,
+                  target: { kind: "expense", id: 501 },
+                  vendor: "Paper shop",
+                  date: "2026-09-01T00:00:00.000Z",
+                  total: 500,
+                  scoreBand: "EXACT",
+                  reasons: ["SAME_VENDOR", "SAME_DATE", "SAME_TOTAL"],
+                }],
+              },
+            },
+          });
+        }
+        return { data: [{ id: 502 }] };
+      }
+      return { data: receipt };
+    });
+
+    render(page());
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo());
+    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await user.selectOptions(screen.getByLabelText(/^Category/), "2");
+    await user.click(screen.getByRole("button", { name: "Confirm & save expense" }));
+
+    expect(await screen.findByRole("heading", { name: "Possible duplicate receipt" })).toBeVisible();
+    expect(screen.getByText(/same merchant, same date, same total/i)).toBeVisible();
+    const saveAnyway = screen.getByRole("button", { name: "Save anyway" });
+    expect(saveAnyway).toBeDisabled();
+    await user.click(screen.getByRole("checkbox", { name: /I reviewed these matches/ }));
+    expect(saveAnyway).toBeEnabled();
+    await user.click(saveAnyway);
+
+    const saves = mocks.post.mock.calls.filter(([url]) => url === "/records/receipts/10/confirm");
+    expect(saves).toHaveLength(2);
+    expect(saves[0]![1]).not.toHaveProperty("duplicateDecision");
+    expect(saves[1]![1]).toMatchObject({
+      duplicateDecision: { action: "SAVE_ANYWAY", candidateSetHash },
+    });
+  });
+
+  it("cannot approve a truncated duplicate set until every page is loaded", async () => {
+    const user = userEvent.setup();
+    const candidateSetHash = "c".repeat(64);
+    const candidates = Array.from({ length: 21 }, (_, index) => ({
+      id: 100 + index,
+      target: { kind: "expense" as const, id: 500 + index },
+      vendor: `Paper shop ${index + 1}`,
+      date: "2026-09-01T00:00:00.000Z",
+      total: 500,
+      scoreBand: "EXACT" as const,
+      reasons: ["SAME_VENDOR" as const, "SAME_DATE" as const, "SAME_TOTAL" as const],
+    }));
+    mocks.get.mockImplementation(async (url: string, config?: { params?: { cursor?: string } }) => {
+      if (url === "/records/receipts") return { data: { items: [], nextCursor: null } };
+      if (url.startsWith("/records/receipts/provider-consent/")) {
+        return { data: { available: false, provider: null, consent: null, activeConsents: [] } };
+      }
+      if (url === "/records/receipts/10/duplicate-candidates") {
+        const finalPage = config?.params?.cursor === "next-duplicate-page";
+        return { data: {
+          sourceFingerprint: "d".repeat(64),
+          candidateSetHash,
+          candidateCount: 21,
+          candidatesTruncated: !finalPage,
+          candidates: finalPage ? candidates.slice(20) : candidates.slice(0, 20),
+          nextCursor: finalPage ? null : "next-duplicate-page",
+        } };
+      }
+      return { data: receipt };
+    });
+
+    render(page());
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo());
+    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await user.selectOptions(screen.getByLabelText(/^Category/), "2");
+
+    expect(await screen.findByText("Showing 20 of 21 matches. Load the rest before deciding.")).toBeVisible();
+    expect(screen.queryByRole("checkbox", { name: /I reviewed these matches/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save anyway" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Load remaining matches" }));
+    const acknowledgement = await screen.findByRole("checkbox", { name: /I reviewed these matches/ });
+    expect(screen.getByText("Paper shop 21")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Save anyway" })).toBeDisabled();
+    await user.click(acknowledgement);
+    expect(screen.getByRole("button", { name: "Save anyway" })).toBeEnabled();
+  });
+
+  it("resolves a lost confirmation response from the stored scan state without posting again", async () => {
+    const user = userEvent.setup();
+    mocks.post.mockImplementation(async (url: string) => {
+      if (url === "/records/receipts") return { data: receipt };
+      if (url === "/records/receipts/10/confirm") {
+        throw Object.assign(new Error("Network Error"), { isAxiosError: true, code: "ERR_NETWORK" });
+      }
+      return { data: receipt };
+    });
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === "/records/receipts") return { data: { items: [], nextCursor: null } };
+      if (url === "/records/receipts/10/duplicate-candidates") {
+        return { data: { sourceFingerprint: null, candidateSetHash: null, candidates: [], nextCursor: null } };
+      }
+      if (url === "/records/receipts/10") {
+        return { data: { ...receipt, confirmationStatus: "Confirmed" } };
+      }
+      return { data: receipt };
+    });
+
+    render(page());
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo());
+    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await user.selectOptions(screen.getByLabelText(/^Category/), "2");
+    await user.click(screen.getByRole("button", { name: "Confirm & save expense" }));
+
+    await waitFor(() => expect(screen.getByTestId("current-path")).toHaveTextContent("/records"));
+    expect(mocks.post.mock.calls.filter(([url]) => url === "/records/receipts/10/confirm")).toHaveLength(1);
+    expect(mocks.get.mock.calls.some(([url]) => url === "/records/receipts/10")).toBe(true);
+  });
+
+  it("edits an extracted item with a revision guard and confirms the new revision", async () => {
+    const user = userEvent.setup();
+    const itemised = {
+      ...receipt,
+      scanRevision: 3,
+      items: [
+        { id: 41, lineNumber: 1, name: "Printer paper", quantity: 1, unitPrice: 250, amount: 250, categoryId: 2 },
+        { id: 42, lineNumber: 2, name: "Pens", quantity: 5, unitPrice: 50, amount: 250, categoryId: 2 },
+      ],
+    };
+    const corrected = {
+      ...itemised,
+      scanRevision: 4,
+      items: [
+        { ...itemised.items[0], name: "A4 printer paper", amount: 260, ownerEditedFields: ["name", "amount"] },
+        itemised.items[1],
+      ],
+    } satisfies ScanResult;
+    mocks.post.mockImplementation(async (url: string) =>
+      url.endsWith("/confirm") ? { data: [{ id: 501 }] } : { data: itemised });
+    mocks.patch.mockResolvedValue({ data: corrected });
+
+    render(page());
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo());
+    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+    await screen.findByRole("heading", { name: "Check what FinSight read" });
+
+    await user.click(screen.getByRole("button", { name: "Edit Printer paper" }));
+    await user.clear(screen.getByLabelText("Item name"));
+    await user.type(screen.getByLabelText("Item name"), "A4 printer paper");
+    await user.clear(screen.getByLabelText("Item amount"));
+    await user.type(screen.getByLabelText("Item amount"), "260");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await screen.findByText("Corrected by you");
+    expect(mocks.patch).toHaveBeenCalledWith(
+      "/records/receipts/10/items/41",
+      { name: "A4 printer paper", amount: 260, expectedScanRevision: 3 },
+    );
+    await user.click(screen.getByRole("radio", { name: /A discount on the whole receipt/ }));
+    await user.click(screen.getByRole("button", { name: "Confirm & save expense" }));
+    const save = mocks.post.mock.calls.find(([url]) => url === "/records/receipts/10/confirm");
+    expect(save?.[1]).toMatchObject({ expectedScanRevision: 4 });
+  });
+
+  it("keeps an item draft and refreshes its revision after a stale edit", async () => {
+    const user = userEvent.setup();
+    const itemised = {
+      ...receipt,
+      scanRevision: 3,
+      items: [
+        { id: 41, lineNumber: 1, name: "Printer paper", quantity: 1, unitPrice: 250, amount: 250, categoryId: 2 },
+        { id: 42, lineNumber: 2, name: "Pens", quantity: 5, unitPrice: 50, amount: 250, categoryId: 2 },
+      ],
+    };
+    mocks.post.mockResolvedValue({ data: itemised });
+    mocks.patch.mockRejectedValueOnce(Object.assign(new Error("Conflict"), {
+      isAxiosError: true,
+      response: { status: 409, data: { error: "Receipt changed" } },
+    }));
+    mocks.get.mockImplementation(async (url: string) =>
+      url === "/records/receipts"
+        ? { data: { items: [], nextCursor: null } }
+        : url.startsWith("/records/receipts/provider-consent/")
+        ? { data: { available: false, provider: null, consent: null, activeConsents: [] } }
+        : { data: { ...itemised, scanRevision: 4 } });
+
+    render(page());
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo());
+    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await user.click(screen.getByRole("button", { name: "Edit Printer paper" }));
+    await user.clear(screen.getByLabelText("Item name"));
+    await user.type(screen.getByLabelText("Item name"), "A4 paper draft");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/changed in another request/i);
+    expect(screen.getByLabelText("Item name")).toHaveValue("A4 paper draft");
+
+    mocks.patch.mockResolvedValueOnce({
+      data: {
+        ...itemised,
+        scanRevision: 5,
+        items: [{ ...itemised.items[0], name: "A4 paper draft" }, itemised.items[1]],
+      },
+    });
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(mocks.patch.mock.calls[1]?.[1]).toMatchObject({
+      name: "A4 paper draft",
+      expectedScanRevision: 4,
+    });
   });
 
   it("keeps foreign receipt amounts out of the peso confirmation form", async () => {

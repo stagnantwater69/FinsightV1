@@ -270,6 +270,7 @@ export const LIMITS = {
   PROVIDER_CONSENT_WRITE: { name: "provider-consent-write", limit: 20, windowMs: 60_000 },
   SCAN_RECEIPT_BURST: { name: "scan-receipt-burst", limit: 15, windowMs: 60_000 },
   SCAN_RECEIPT_HOURLY: { name: "scan-receipt-hourly", limit: 200, windowMs: 60 * 60_000 },
+  RECEIPT_DELETE_WRITE: { name: "receipt-delete-write", limit: 10, windowMs: 60_000 },
   // Generous relative to SCAN_RECEIPT_BURST: this fires once per SHUTTER
   // PRESS during a multi-page capture session (up to MAX_PAGES photos, plus
   // retakes), not once per submitted receipt — a real session can call this

@@ -63,6 +63,40 @@ internal object ReceiptVision {
 
   fun distance(a: Point, b: Point) = hypot(a.x - b.x, a.y - b.y)
 
+  /** Maps a stable analysis-frame quadrilateral into the same CameraX viewport at still resolution. */
+  fun mapCornersBetweenFrames(
+    corners: Array<Point>,
+    analysisWidth: Int,
+    analysisHeight: Int,
+    stillWidth: Int,
+    stillHeight: Int,
+  ): Array<Point> {
+    require(analysisWidth > 0 && analysisHeight > 0 && stillWidth > 0 && stillHeight > 0)
+    val analysisAspect = analysisWidth.toDouble() / analysisHeight
+    val stillAspect = stillWidth.toDouble() / stillHeight
+    val visibleWidth: Double
+    val visibleHeight: Double
+    val offsetX: Double
+    val offsetY: Double
+    if (stillAspect > analysisAspect) {
+      visibleHeight = stillHeight.toDouble()
+      visibleWidth = visibleHeight * analysisAspect
+      offsetX = (stillWidth - visibleWidth) / 2.0
+      offsetY = 0.0
+    } else {
+      visibleWidth = stillWidth.toDouble()
+      visibleHeight = visibleWidth / analysisAspect
+      offsetX = 0.0
+      offsetY = (stillHeight - visibleHeight) / 2.0
+    }
+    return corners.map { point ->
+      Point(
+        (offsetX + point.x / analysisWidth * visibleWidth).coerceIn(0.0, stillWidth - 1.0),
+        (offsetY + point.y / analysisHeight * visibleHeight).coerceIn(0.0, stillHeight - 1.0),
+      )
+    }.toTypedArray()
+  }
+
   private fun hasTextTexture(gray: Mat): Boolean {
     val binary = Mat(); val hierarchy = Mat(); val contours = ArrayList<MatOfPoint>()
     try {
@@ -78,11 +112,26 @@ internal object ReceiptVision {
    * measured width instead makes the output a pixel narrower whenever the hand
    * drifts back, which the compositor then rejects as a distance change.
    */
-  fun warp(rgb: Mat, p: Array<Point>, requestedWidth: Int = 1200, exact: Boolean = false): Mat {
+  fun warp(
+    rgb: Mat,
+    p: Array<Point>,
+    requestedWidth: Int = 1200,
+    exact: Boolean = false,
+    maxPixels: Long? = null,
+  ): Mat {
     val natural = max(distance(p[0], p[1]), distance(p[3], p[2])).coerceAtLeast(1.0)
-    val width = (if (exact) requestedWidth else min(requestedWidth, natural.roundToInt())).coerceAtLeast(32)
+    var width = (if (exact) requestedWidth else min(requestedWidth, natural.roundToInt())).coerceAtLeast(32)
     val ratio = max(distance(p[0], p[3]), distance(p[1], p[2])) / natural
-    val height = (width * ratio).roundToInt().coerceIn(32, 6000)
+    var height = (width * ratio).roundToInt().coerceIn(32, 6000)
+    if (maxPixels != null && width.toLong() * height > maxPixels) {
+      require(maxPixels >= 32L * 32L)
+      val scale = sqrt(maxPixels.toDouble() / (width.toDouble() * height))
+      width = floor(width * scale).toInt().coerceAtLeast(32)
+      height = floor(height * scale).toInt().coerceAtLeast(32)
+      if (width.toLong() * height > maxPixels) {
+        height = (maxPixels / width).toInt().coerceAtLeast(32)
+      }
+    }
     val from = MatOfPoint2f(*p); val to = MatOfPoint2f(Point(0.0, 0.0), Point(width - 1.0, 0.0), Point(width - 1.0, height - 1.0), Point(0.0, height - 1.0))
     val transform = Imgproc.getPerspectiveTransform(from, to); val out = Mat()
     try { Imgproc.warpPerspective(rgb, out, transform, Size(width.toDouble(), height.toDouble()), Imgproc.INTER_LINEAR, Core.BORDER_REPLICATE); return out }

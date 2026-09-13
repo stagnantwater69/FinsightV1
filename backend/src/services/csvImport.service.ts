@@ -28,6 +28,7 @@ import {
   type RowRecordType,
 } from "../lib/recordTypeDetection";
 import { categoryFromHistory, loadConfirmedCategoryHistory } from "../lib/categoryHistory";
+import { expenseDuplicateKeysOf } from "../lib/expenseDuplicateIdentity";
 
 export interface ColumnMapping {
   date: string;
@@ -435,12 +436,19 @@ function summarisePreviewDuplicates(outcomes: RowOutcome[], existingKeys: Set<st
   let possibleDuplicateRows = 0;
   for (const outcome of outcomes) {
     if (outcome.kind === "skip") continue;
-    const key = `${outcome.kind}:${duplicateKeyOf(new Date(outcome.data.date), outcome.data.amount, outcome.data.description)}`;
-    if (seen.has(key)) {
+    const keys = outcome.kind === "expense"
+      ? expenseDuplicateKeysOf({
+          date: outcome.data.date,
+          amount: outcome.data.amount,
+          description: outcome.data.description,
+          vendor: outcome.data.vendor,
+        }).map((key) => `expense:${key}`)
+      : [`sales:${duplicateKeyOf(new Date(outcome.data.date), outcome.data.amount, outcome.data.description)}`];
+    if (keys.some((key) => seen.has(key))) {
       possibleDuplicateRows += 1;
       if (duplicateRows.length < 100) duplicateRows.push(outcome.row);
     }
-    seen.add(key);
+    for (const key of keys) seen.add(key);
   }
   return { possibleDuplicateRows, duplicateRows, duplicateRowsTruncated: possibleDuplicateRows > duplicateRows.length };
 }
@@ -527,15 +535,23 @@ export async function previewCsvForProfile(userId: number, businessProfileId: nu
       .map((date) => new Date(date));
     // Bound query parameters even for files spanning many calendar days.
     for (let offset = 0; offset < dates.length; offset += 500) {
-      const query = {
-        where: { businessProfileId, date: { in: dates.slice(offset, offset + 500) } },
-        select: { date: true, amount: true, description: true },
-      };
-      const candidates = kind === "expense"
-        ? await prisma.expenseRecord.findMany(query)
-        : await prisma.salesReferenceRecord.findMany(query);
-      for (const candidate of candidates) {
-        existingKeys.add(`${kind}:${duplicateKeyOf(candidate.date, candidate.amount, candidate.description)}`);
+      const where = { businessProfileId, date: { in: dates.slice(offset, offset + 500) } };
+      if (kind === "expense") {
+        const candidates = await prisma.expenseRecord.findMany({
+          where,
+          select: { date: true, amount: true, description: true, vendor: true },
+        });
+        for (const candidate of candidates) {
+          for (const key of expenseDuplicateKeysOf(candidate)) existingKeys.add(`expense:${key}`);
+        }
+      } else {
+        const candidates = await prisma.salesReferenceRecord.findMany({
+          where,
+          select: { date: true, amount: true, description: true },
+        });
+        for (const candidate of candidates) {
+          existingKeys.add(`sales:${duplicateKeyOf(candidate.date, candidate.amount, candidate.description)}`);
+        }
       }
     }
   }

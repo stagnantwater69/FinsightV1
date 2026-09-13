@@ -141,6 +141,7 @@ describe("Phase 1 database tenant and privilege isolation", () => {
         requestKeyHash: "a".repeat(64),
         targetReferenceHash: "b".repeat(64),
         reason: "OWNER_REQUEST",
+        mode: "DELETE_SCAN",
         expiresAt: new Date(Date.now() + 86_400_000),
       },
     })).rejects.toMatchObject({ code: "P2003" });

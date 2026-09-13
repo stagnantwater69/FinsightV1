@@ -11,6 +11,11 @@ import type { FieldEvidence, ReceiptWarning } from "../../../lib/receiptWarnings
  */
 export interface ReceiptScanResult {
   id: number;
+  businessProfileId: number;
+  receiptBatchId: number | null;
+  receiptOrdinal: number | null;
+  /** Optimistic guard for edits to OCR-derived values. */
+  scanRevision: number;
   extractedDate: string | null;
   extractedVendor: string | null;
   extractedDescription: string | null;
@@ -58,10 +63,13 @@ export interface ReceiptScanResult {
     outcome: "likely-receipt" | "uncertain" | "obvious-non-receipt";
   } | null;
   pageProcessing?: {
+    pageNumber?: number;
     source: "original" | "processed";
     hasProcessedVariant: boolean;
     captureMetadata: unknown;
   }[];
+  /** Stored evidence variants available for each page, in printed order. */
+  pageEvidence?: ReceiptPageEvidence[];
   /**
    * Every page's own quality reading, in the order they were photographed.
    * Present only on the upload response, for the same reason captureQuality
@@ -106,6 +114,7 @@ export interface ReceiptScanResult {
    * this is what pollUntilRead waits on.
    */
   processingStatus?: "Processing" | "Complete" | "Failed";
+  confirmationStatus: "Pending" | "Confirmed" | "Deletion Pending";
   /** Why the read failed. Present only when processingStatus is "Failed". */
   processingError?: string | null;
   /** Stable failure code used for recovery choices without exposing provider details. */
@@ -132,6 +141,65 @@ export interface ReceiptScanResult {
      *  where nothing could be located, including every older scan. */
     evidence?: FieldEvidence | null;
   }[];
+}
+
+export interface ReceiptPageEvidenceVariant {
+  variant: "source" | "derived";
+  label: string;
+  width: number | null;
+  height: number | null;
+}
+
+export interface ReceiptPageEvidence {
+  pageNumber: number;
+  captureMode: "standard" | "long" | null;
+  processingMode: ReceiptProcessingMode;
+  ocrInput: "source" | "derived";
+  source: ReceiptPageEvidenceVariant;
+  derived: ReceiptPageEvidenceVariant | null;
+}
+
+export interface ReceiptPageImage extends ReceiptPageEvidenceVariant {
+  pageNumber: number;
+  url: string;
+  expiresInSeconds: number;
+}
+
+export interface ReceiptHistoryItem {
+  id: number;
+  businessProfileId: number;
+  receiptBatchId: number | null;
+  receiptOrdinal: number | null;
+  scanRevision: number;
+  processingStatus: "Processing" | "Complete" | "Failed";
+  confirmationStatus: "Pending" | "Confirmed";
+  processingError: string | null;
+  processingErrorCode: string | null;
+  extractedDate: string | null;
+  extractedVendor: string | null;
+  extractedDescription: string | null;
+  extractedAmount: number | null;
+  createdAt: string;
+  pageCount: number;
+  allowedActions: { retryProcessing: boolean; reviewResult: boolean };
+}
+
+export interface ReceiptHistoryPage {
+  items: ReceiptHistoryItem[];
+  nextCursor: string | null;
+}
+
+export interface ReceiptPurgeJob {
+  id: number;
+  receiptScanId: number;
+  reason: string;
+  status: string;
+  stage: string;
+  storageObjectsExpected: number;
+  storageObjectsDeleted: number;
+  requestedAt: string;
+  completedAt: string | null;
+  lastErrorCode: string | null;
 }
 
 /** One photograph in a capture session, before it has been scanned. */

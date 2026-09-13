@@ -46,10 +46,17 @@ import { logger } from "../config/logger";
  * purchase. Both are extraction errors and neither shows up as a wrong value
  * anywhere else, because the field they got wrong is the existence of the row.
  */
-export type CorrectionField = "date" | "vendor" | "amount" | "itemCategory" | "itemPresence";
+export type CorrectionField =
+  | "date"
+  | "vendor"
+  | "amount"
+  | "itemCategory"
+  | "itemPresence"
+  | "itemName"
+  | "itemAmount";
 
 /** Who produced the original reading — see the schema note on why this matters. */
-export type CorrectionSource = "ocr" | "vision" | "ai-category";
+export type CorrectionSource = "ocr" | "vision" | "ai-category" | "owner";
 
 interface PendingCorrection {
   field: CorrectionField;

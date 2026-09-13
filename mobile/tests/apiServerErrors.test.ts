@@ -49,4 +49,22 @@ describe("5xx message handling", () => {
     const err = await api.get("/dashboard").then(() => null, (e: unknown) => e);
     expect(errorMessage(err)).toBe("FinSight's server had a problem with that. Please try again in a moment.");
   });
+
+  it("retains a guarded 409 body for duplicate review", async () => {
+    const body = {
+      error: "Review possible duplicates before saving.",
+      code: "DUPLICATE_REVIEW_REQUIRED",
+      sourceFingerprint: "a".repeat(64),
+      candidateSetHash: "b".repeat(64),
+      candidates: [],
+    };
+    vi.mocked(globalThis.fetch).mockResolvedValue(reply(409, body));
+
+    const err = await api.post("/records/receipts/41/confirm", {}).then(() => null, (e: unknown) => e);
+    expect(err).toMatchObject({
+      status: 409,
+      code: "DUPLICATE_REVIEW_REQUIRED",
+      responseBody: body,
+    });
+  });
 });

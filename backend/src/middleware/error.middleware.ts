@@ -58,10 +58,18 @@ function isMalformedMultipart(err: unknown, req: Request): boolean {
 
 export class ApiError extends Error {
   status: number;
+  code?: string;
+  responseDetails?: Record<string, unknown>;
 
-  constructor(status: number, message: string) {
+  constructor(
+    status: number,
+    message: string,
+    options: { code?: string; responseDetails?: Record<string, unknown> } = {},
+  ) {
     super(message);
     this.status = status;
+    this.code = options.code;
+    this.responseDetails = options.responseDetails;
   }
 }
 
@@ -82,7 +90,11 @@ export function errorHandler(err: unknown, req: Request, res: Response, next: Ne
   }
 
   if (err instanceof ApiError) {
-    return res.status(err.status).json({ error: err.message });
+    return res.status(err.status).json({
+      error: err.message,
+      ...(err.code ? { code: err.code } : {}),
+      ...(err.responseDetails ?? {}),
+    });
   }
 
   if (err instanceof MulterError) {

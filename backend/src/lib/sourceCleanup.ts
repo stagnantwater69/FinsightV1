@@ -1,5 +1,6 @@
 import { prisma } from "../config/prisma";
-import { deleteCsvFile, deleteReceiptImage } from "../services/storage.service";
+import { enqueueReceiptPurgeIfOrphaned } from "../services/receiptPurge.service";
+import { deleteCsvFile } from "../services/storage.service";
 
 /**
  * Removes the uploaded file a deleted record came from, once nothing is left
@@ -18,14 +19,14 @@ import { deleteCsvFile, deleteReceiptImage } from "../services/storage.service";
  * file the others still came from. So the rule is reference counting — the
  * file goes when the LAST record that came from it goes.
  *
- * Called after the record delete has already committed. Everything here is
- * best-effort by design: see removeObject in storage.service for why a failure
- * to delete a file must never turn a successful record deletion into an error.
+ * Called after the record delete has already committed. Receipt cleanup is
+ * queued before any private object path is removed; CSV cleanup still follows
+ * the older immediate path below.
  */
 
 /**
- * Deletes a receipt scan and its image if no expense record still comes from
- * it.
+ * Queues durable deletion of a receipt scan once no expense record comes from
+ * it. Storage is cleared before the relational row that names each path.
  *
  * A PENDING SCAN IS NEVER TOUCHED, and that exclusion is the important part.
  * A scan that has not been confirmed yet has no expense records by definition
@@ -34,42 +35,7 @@ import { deleteCsvFile, deleteReceiptImage } from "../services/storage.service";
  * middle of checking.
  */
 export async function cleanUpReceiptScanIfOrphaned(receiptScanId: number | null | undefined) {
-  if (!receiptScanId) return;
-
-  const scan = await prisma.receiptScan.findUnique({
-    where: { id: receiptScanId },
-    select: {
-      id: true,
-      imageFile: true,
-      confirmationStatus: true,
-      pages: { select: { imageFile: true, processedImageFile: true } },
-    },
-  });
-  if (!scan || scan.confirmationStatus !== "Confirmed") return;
-
-  const remaining = await prisma.expenseRecord.count({ where: { receiptScanId } });
-  if (remaining > 0) return;
-
-  /*
-   * EVERY page's image, not just the cover.
-   *
-   * Deleting the ReceiptScan row cascades ReceiptScanPage's DB ROWS (see
-   * schema header note 14) — but Storage is a separate system, and cascade
-   * only ever reaches the database. A scan with three pages that deleted only
-   * scan.imageFile would leave pages 2 and 3 in Storage forever, orphaned and
-   * silent: removeObject never throws, so nothing would ever surface the
-   * leak.
-   *
-   * A Set, because scan.imageFile and pages[0].imageFile are the same path
-   * (uploadAndScan writes the cover as page 1's own file) — deduplicated so
-   * deleteReceiptImage is not asked to delete the same object twice.
-   */
-  const files = new Set([
-    scan.imageFile,
-    ...scan.pages.flatMap((page) => [page.imageFile, page.processedImageFile]).filter((path): path is string => Boolean(path)),
-  ]);
-  await prisma.receiptScan.delete({ where: { id: receiptScanId } });
-  for (const file of files) await deleteReceiptImage(file);
+  await enqueueReceiptPurgeIfOrphaned(receiptScanId);
 }
 
 /**

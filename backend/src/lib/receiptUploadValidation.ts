@@ -22,6 +22,11 @@ interface ReceiptUploadValidationInput {
   mimetype: string;
 }
 
+export interface ReceiptUploadImageInfo {
+  width: number;
+  height: number;
+}
+
 export async function receiptUploadByteLength(file: ReceiptUploadValidationInput): Promise<number> {
   if (file.buffer) return file.buffer.length;
   if (!file.path) throw new ApiError(400, "This receipt file is unavailable. Choose it again.");
@@ -35,8 +40,8 @@ export async function receiptUploadByteLength(file: ReceiptUploadValidationInput
   }
 }
 
-/** Check actual image contents before accepting them into private storage. */
-export async function validateReceiptUpload(file: ReceiptUploadValidationInput): Promise<void> {
+/** Check actual image contents and return its display-oriented dimensions. */
+export async function inspectReceiptUpload(file: ReceiptUploadValidationInput): Promise<ReceiptUploadImageInfo> {
   const byteLength = await receiptUploadByteLength(file);
   if (byteLength === 0) throw new ApiError(400, "This receipt file is empty. Choose another image.");
   if (byteLength > RECEIPT_MAX_BYTES) throw new ApiError(400, "Each receipt image must be 10 MiB or smaller.");
@@ -56,8 +61,17 @@ export async function validateReceiptUpload(file: ReceiptUploadValidationInput):
     // Header inspection alone accepts truncated files. Decoding a tiny result
     // checks readability without retaining another full-resolution image.
     await image.resize({ width: 1, height: 1, fit: "inside" }).toBuffer();
+    return {
+      width: metadata.autoOrient.width,
+      height: metadata.autoOrient.height,
+    };
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(400, "This receipt image could not be read. Try another image, up to 50 megapixels.");
   }
+}
+
+/** Check actual image contents before accepting them into private storage. */
+export async function validateReceiptUpload(file: ReceiptUploadValidationInput): Promise<void> {
+  await inspectReceiptUpload(file);
 }

@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { isAxiosError } from "axios";
 import { Link, useNavigate } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { CategorySelect } from "../components/CategorySelect";
@@ -21,7 +22,7 @@ import { everyLineIsReady, groupByCategory, sumCentavos, toReviewLines } from ".
 import { BAND_COPY, confidenceBand, scanConfidenceBand } from "../lib/confidenceBands";
 import { Callout, Card, PageHead, FormPage, Pill } from "../components/ui";
 import { Button } from "../components/Button";
-import { Field, FormError, MoneyInput, TextInput } from "../components/Field";
+import { Checkbox, Field, FormError, MoneyInput, TextInput } from "../components/Field";
 import { Money } from "../components/Money";
 import { useToast } from "../components/Toast";
 import { EvidenceNote } from "./scanReceipt/EvidenceNote";
@@ -39,6 +40,13 @@ import {
 import type {
   AddedItem,
   Origin,
+  ReceiptCaptureBatch,
+  ReceiptDuplicateCandidate,
+  ReceiptDuplicateCandidatePage,
+  ReceiptDuplicateReason,
+  ReceiptPurgeJob,
+  ReceiptScanHistoryPage,
+  ReceiptScanSummary,
   ScannedItem,
   ScanResult,
   ScanStage,
@@ -50,6 +58,98 @@ import { ReceiptResultNotes } from "./scanReceipt/ReceiptResultNotes";
 import { randomId } from "../lib/uuid";
 import { PrintedReceiptDetails } from "./scanReceipt/PrintedReceiptDetails";
 import { ReceiptProviderConsent } from "./scanReceipt/ReceiptProviderConsent";
+import { ReceiptPagePreview } from "./scanReceipt/ReceiptPagePreview";
+import { useConfirm } from "../components/ConfirmDialog";
+
+interface BatchReceiptBinding {
+  batchId: number;
+  receiptOrdinal: number;
+}
+
+interface DuplicateReviewState {
+  candidateSetHash: string;
+  candidates: ReceiptDuplicateCandidate[];
+  candidateCount: number;
+  nextCursor: string | null;
+  changed: boolean;
+}
+
+const DUPLICATE_REASON_COPY: Record<ReceiptDuplicateReason, string> = {
+  EXACT_IMAGE: "same receipt image",
+  SAME_VENDOR: "same merchant",
+  SAME_DESCRIPTION: "same description",
+  SAME_DATE: "same date",
+  SAME_TOTAL: "same total",
+};
+const DUPLICATE_REASONS = new Set<ReceiptDuplicateReason>(Object.keys(DUPLICATE_REASON_COPY) as ReceiptDuplicateReason[]);
+
+/**
+ * A receipt batch response controls which private uploads are attached to a
+ * selection. Do not trust its TypeScript annotation at the HTTP boundary.
+ */
+function isCollectingReceiptBatch(
+  value: unknown,
+  businessProfileId: number,
+  expectedReceiptCount: number,
+): value is ReceiptCaptureBatch {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const batch = value as Record<string, unknown>;
+  return Number.isInteger(batch.id)
+    && Number(batch.id) > 0
+    && batch.businessProfileId === businessProfileId
+    && batch.expectedReceiptCount === expectedReceiptCount
+    && batch.status === "COLLECTING"
+    && batch.uploadedReceiptCount === 0
+    && Array.isArray(batch.receipts)
+    && batch.receipts.length === 0;
+}
+
+function isCancelledReceiptBatch(value: unknown): boolean {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value)
+    && (value as { status?: unknown }).status === "CANCELLED");
+}
+
+function duplicateReviewFrom(value: unknown, changed = false): DuplicateReviewState | null {
+  if (!value || typeof value !== "object") return null;
+  const candidateSetHash = (value as { candidateSetHash?: unknown }).candidateSetHash;
+  const candidates = (value as { candidates?: unknown }).candidates;
+  const candidateCountValue = (value as { candidateCount?: unknown }).candidateCount;
+  const candidatesTruncatedValue = (value as { candidatesTruncated?: unknown }).candidatesTruncated;
+  const nextCursorValue = (value as { nextCursor?: unknown }).nextCursor;
+  if (typeof candidateSetHash !== "string" || !/^[0-9a-f]{64}$/.test(candidateSetHash) || !Array.isArray(candidates)) {
+    return null;
+  }
+  const valid = candidates.filter((candidate): candidate is ReceiptDuplicateCandidate => {
+    if (!candidate || typeof candidate !== "object") return false;
+    const row = candidate as Partial<ReceiptDuplicateCandidate>;
+    return Number.isInteger(row.id)
+      && typeof row.date === "string"
+      && typeof row.total === "number"
+      && Number.isFinite(row.total)
+      && (row.vendor === null || typeof row.vendor === "string")
+      && (row.scoreBand === "EXACT" || row.scoreBand === "LIKELY")
+      && Array.isArray(row.reasons)
+      && row.reasons.every((reason) => DUPLICATE_REASONS.has(reason))
+      && Boolean(row.target && (row.target.kind === "receipt" || row.target.kind === "expense") && Number.isInteger(row.target.id));
+  });
+  if (valid.length !== candidates.length || valid.length === 0) return null;
+  const candidateCount = candidateCountValue === undefined
+    ? valid.length
+    : candidateCountValue;
+  if (!Number.isInteger(candidateCount) || Number(candidateCount) < valid.length) return null;
+  const nextCursor = nextCursorValue === undefined ? null : nextCursorValue;
+  if (nextCursor !== null && (typeof nextCursor !== "string" || nextCursor.length === 0)) return null;
+  if (candidatesTruncatedValue !== undefined
+    && (typeof candidatesTruncatedValue !== "boolean"
+      || candidatesTruncatedValue !== (nextCursor !== null))) return null;
+  return {
+    candidateSetHash,
+    candidates: valid,
+    candidateCount: Number(candidateCount),
+    nextCursor,
+    changed,
+  };
+}
 
 export function ScanReceipt() {
   const { selected } = useBusinessProfiles();
@@ -61,8 +161,9 @@ function ScanReceiptForm() {
   const { categories, refresh: refreshCategories, createCategory } = useExpenseCategories();
   const navigate = useNavigate();
   const toast = useToast();
+  const confirm = useConfirm();
 
-  const [file, setFile] = useState<File | null>(null);
+  const [reviewFiles, setReviewFiles] = useState<File[]>([]);
   const [scanning, setScanning] = useState(false);
   /**
    * Which stage of the read is actually happening right now.
@@ -78,12 +179,20 @@ function ScanReceiptForm() {
   const [scanStage, setScanStage] = useState<ScanStage>("uploading");
   const [scanError, setScanError] = useState<string | null>(null);
   const [scan, setScan] = useState<ScanResult | null>(null);
+  const [pausedScan, setPausedScan] = useState<ScanResult | null>(null);
+  const [resumeScans, setResumeScans] = useState<ReceiptScanSummary[]>([]);
+  const [resumeLoading, setResumeLoading] = useState(false);
+  const [resumeError, setResumeError] = useState<string | null>(null);
+  const [duplicateReview, setDuplicateReview] = useState<DuplicateReviewState | null>(null);
+  const [duplicateLoading, setDuplicateLoading] = useState(false);
+  const [duplicateAcknowledged, setDuplicateAcknowledged] = useState(false);
+  const [deletingScanId, setDeletingScanId] = useState<number | null>(null);
 
   /**
    * Photos picked at the file-choosing stage, before scanning starts.
    *
-   * Separate from `file` above, which is the photo of whichever receipt is
-   * CURRENTLY being scanned or reviewed. `pickedFiles` is spent the moment
+   * Separate from `reviewFiles` above, which are the ordered photos of
+   * whichever receipt is CURRENTLY being scanned or reviewed. `pickedFiles` is spent the moment
    * scanning starts — into the pages of one upload, or into the queue below —
    * and is never touched again until the owner returns to pick more.
    */
@@ -155,50 +264,38 @@ function ScanReceiptForm() {
   const [addedItems, setAddedItems] = useState<AddedItem[]>([]);
   /** The extracted line currently being deleted, so its row can show progress. */
   const [removingItemId, setRemovingItemId] = useState<number | null>(null);
+  const [editingItem, setEditingItem] = useState<{ id: number; name: string; amount: number | "" } | null>(null);
+  const [updatingItemId, setUpdatingItemId] = useState<number | null>(null);
   /** Their choice for whatever difference remains after any added lines. */
   const [gapPlan, setGapPlan] = useState<GapPlan>(null);
   /** The category for the "put it all in one category" plan. */
   const [gapCategoryId, setGapCategoryId] = useState<number | "">("");
 
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const zoomRef = useRef<HTMLDialogElement>(null);
-
-  /**
-   * Scans a SINGLE photo, keyed so the same request is never made twice for
-   * the same File.
-   *
-   * WHY THIS EXISTS — the bug it fixes, and the feature it enables, turned
-   * out to be the same root cause. "Separate receipts" used to scan receipt
-   * 1 immediately and leave receipt 2 sitting untouched in `fileQueue` —
-   * OCR and the categoriser only ran on it once receipt 1 was confirmed.
-   * That was slow (every receipt after the first waited for the one before
-   * it), and it was FRAGILE: the file was popped out of `fileQueue` before
-   * that later scan ran, so if it failed for any reason — a network blip, a
-   * cold backend — the photo was gone from every piece of state at once,
-   * and the only way forward was to pick it again from the device. That is
-   * the exact "I have to upload the second receipt again" report.
-   *
-   * The fix is to start scanning EVERY receipt in the batch the moment the
-   * owner submits, not one at a time as each is reached — seeded from
-   * handleStartScanning below. This cache is what makes that safe to do
-   * without ever asking twice: a caller reaching a receipt whose scan is
-   * already finished gets the answer instantly: one still running is
-   * awaited in place (the ordinary "Reading your receipt…" screen just
-   * waits a little longer); one already asked for is never asked again.
-   */
-  const scanPromises = useRef<Map<File, Promise<ScanResult>>>(new Map());
+  // Accepted scans and keys survive a stopped poll or transient request
+  // failure, so retry resumes the stored scan instead of uploading twice.
+  // An accepting promise is held separately from reading: a receipt batch must
+  // finish storing every child before the first one is presented for review.
+  const acceptingScans = useRef<Map<File, Promise<ScanResult>>>(new Map());
   const acceptedScans = useRef<Map<File, ScanResult>>(new Map());
   const uploadKeys = useRef<Map<File, string>>(new Map());
   const combinedUpload = useRef<{ files: File[]; key: string; scan?: ScanResult } | null>(null);
+  const batchUpload = useRef<{
+    clientBatchKey: string;
+    expectedReceiptCount: number;
+    id?: number;
+  } | null>(null);
   const currentFiles = useRef<File[]>([]);
   const requests = useRef(new AbortController());
+  const duplicateRequests = useRef<AbortController | null>(null);
   const startPending = useRef(false);
   const savePending = useRef(false);
+  const stopRequested = useRef(false);
+  const deleteKeys = useRef<Map<number, string>>(new Map());
 
   useEffect(() => {
     const controller = new AbortController();
     requests.current = controller;
-    const pending = scanPromises.current;
+    const pending = acceptingScans.current;
     const accepted = acceptedScans.current;
     const keys = uploadKeys.current;
     return () => {
@@ -209,24 +306,124 @@ function ScanReceiptForm() {
     };
   }, []);
 
-  /**
-   * The receipt preview.
-   *
-   * Built from the local File rather than the stored image, so it appears
-   * instantly and costs no request — the server does return the uploaded
-   * image's path, but fetching it back to show the user the picture they just
-   * picked would be absurd. The object URL is revoked when the file changes or
-   * the page unmounts; without that, every rescan leaks a blob.
-   */
+  const selectedBusinessProfileId = selected?.id;
+  const refreshActiveReceiptHistory = useCallback(async (signal?: AbortSignal, excludeScanId?: number) => {
+    if (selectedBusinessProfileId === undefined) return;
+    setResumeLoading(true);
+    setResumeError(null);
+    try {
+      const { data } = await api.get<ReceiptScanHistoryPage>("/records/receipts", {
+        params: { businessProfileId: selectedBusinessProfileId, status: "active", take: 20 },
+        signal,
+      });
+      signal?.throwIfAborted();
+      setResumeScans(data.items.filter((candidate) => candidate.id !== excludeScanId));
+    } catch (error) {
+      if (!signal?.aborted) setResumeError(getErrorMessage(error));
+    } finally {
+      if (!signal?.aborted) setResumeLoading(false);
+    }
+  }, [selectedBusinessProfileId]);
+
   useEffect(() => {
-    if (!file) {
-      setPreviewUrl(null);
+    if (selectedBusinessProfileId === undefined) return;
+    const controller = new AbortController();
+    void refreshActiveReceiptHistory(controller.signal);
+    return () => controller.abort();
+  }, [refreshActiveReceiptHistory, selectedBusinessProfileId]);
+
+  const duplicateScanId = scan?.id;
+  const duplicateScanStatus = scan?.processingStatus;
+  useEffect(() => {
+    if (duplicateScanId === undefined || duplicateScanStatus !== "Complete") {
+      duplicateRequests.current?.abort();
+      duplicateRequests.current = null;
+      setDuplicateReview(null);
+      setDuplicateAcknowledged(false);
+      setDuplicateLoading(false);
       return;
     }
-    const url = URL.createObjectURL(file);
-    setPreviewUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [file]);
+    duplicateRequests.current?.abort();
+    const controller = new AbortController();
+    duplicateRequests.current = controller;
+    setDuplicateReview(null);
+    setDuplicateAcknowledged(false);
+    setDuplicateLoading(true);
+    void api.get<ReceiptDuplicateCandidatePage>(`/records/receipts/${duplicateScanId}/duplicate-candidates`, {
+      params: { take: 50 },
+      signal: controller.signal,
+    }).then(({ data }) => {
+      if (!controller.signal.aborted) setDuplicateReview(duplicateReviewFrom(data));
+    }).catch(() => {
+      // Confirmation performs the authoritative locked recheck. A failed
+      // preview request must not discard the owner's review edits.
+    }).finally(() => {
+      if (!controller.signal.aborted) setDuplicateLoading(false);
+    });
+    return () => {
+      controller.abort();
+      if (duplicateRequests.current === controller) duplicateRequests.current = null;
+    };
+  }, [duplicateScanId, duplicateScanStatus]);
+
+  const duplicateListComplete = duplicateReview === null
+    || (duplicateReview.nextCursor === null
+      && duplicateReview.candidates.length === duplicateReview.candidateCount);
+
+  async function loadMoreDuplicateCandidates() {
+    if (!scan || !duplicateReview?.nextCursor || duplicateLoading) return;
+    const current = duplicateReview;
+    const signal = duplicateRequests.current?.signal;
+    if (!signal || signal.aborted) return;
+    setDuplicateLoading(true);
+    setConfirmError(null);
+    try {
+      const { data } = await api.get<ReceiptDuplicateCandidatePage>(
+        `/records/receipts/${scan.id}/duplicate-candidates`,
+        { params: { cursor: current.nextCursor, take: 50 }, signal },
+      );
+      signal.throwIfAborted();
+      const page = duplicateReviewFrom(data, current.changed);
+      if (!page) {
+        setDuplicateReview(null);
+        setDuplicateAcknowledged(false);
+        return;
+      }
+      if (page.candidateSetHash !== current.candidateSetHash) {
+        const fresh = await api.get<ReceiptDuplicateCandidatePage>(
+          `/records/receipts/${scan.id}/duplicate-candidates`,
+          { params: { take: 50 }, signal },
+        );
+        signal.throwIfAborted();
+        setDuplicateReview(duplicateReviewFrom(fresh.data, true));
+        setDuplicateAcknowledged(false);
+        setConfirmError("The possible matches changed. Review the current list before saving.");
+        return;
+      }
+
+      const candidates = [...new Map(
+        [...current.candidates, ...page.candidates].map((candidate) => [candidate.id, candidate]),
+      ).values()];
+      if (candidates.length > page.candidateCount
+        || (page.nextCursor === null && candidates.length !== page.candidateCount)) {
+        throw new Error("Duplicate candidate page did not match its full-set count");
+      }
+      setDuplicateReview({
+        candidateSetHash: current.candidateSetHash,
+        candidates,
+        candidateCount: page.candidateCount,
+        nextCursor: page.nextCursor,
+        changed: current.changed,
+      });
+      setDuplicateAcknowledged(false);
+    } catch {
+      if (!signal.aborted) {
+        setConfirmError("FinSight could not load every possible match. Try loading the list again before saving.");
+      }
+    } finally {
+      if (!signal.aborted) setDuplicateLoading(false);
+    }
+  }
 
   /**
    * Focus lands on the first field that needs a decision.
@@ -262,64 +459,118 @@ function ScanReceiptForm() {
 
   if (!selected) return <NoBusinessProfile />;
 
-  function ensureScanned(file: File): Promise<ScanResult> {
-    const existing = scanPromises.current.get(file);
+  async function ensureReceiptBatch(expectedReceiptCount: number): Promise<number> {
+    let pending = batchUpload.current;
+    if (!pending || pending.expectedReceiptCount !== expectedReceiptCount) {
+      pending = { clientBatchKey: randomId(), expectedReceiptCount };
+      batchUpload.current = pending;
+    }
+    if (pending.id !== undefined) return pending.id;
+
+    const create = async () => {
+      const { data } = await api.post<ReceiptCaptureBatch>("/records/receipt-batches", {
+        businessProfileId: selected!.id,
+        clientBatchKey: pending!.clientBatchKey,
+        expectedReceiptCount,
+      }, { signal: requests.current.signal });
+      return data;
+    };
+
+    let data = await create();
+    // A timed-out create can replay a batch that was cancelled before the
+    // browser received its first response. Replace that stale key once; a
+    // second CANCELLED response is rejected by the validation below.
+    if (isCancelledReceiptBatch(data)) {
+      pending = { clientBatchKey: randomId(), expectedReceiptCount };
+      batchUpload.current = pending;
+      data = await create();
+    }
+    if (!isCollectingReceiptBatch(data, selected!.id, expectedReceiptCount)) {
+      if (batchUpload.current === pending) batchUpload.current = null;
+      throw new Error("This receipt batch no longer matches the selected images.");
+    }
+    pending.id = data.id;
+    return data.id;
+  }
+
+  function ensureAccepted(file: File, batch?: BatchReceiptBinding): Promise<ScanResult> {
+    const accepted = acceptedScans.current.get(file);
+    if (accepted) return Promise.resolve(accepted);
+    const existing = acceptingScans.current.get(file);
     if (existing) return existing;
 
     const promise = (async () => {
       const signal = requests.current.signal;
-      const accepted = acceptedScans.current.get(file);
-      if (accepted) return pollUntilRead(accepted, true, signal);
       const formData = new FormData();
       formData.append("files", file);
       formData.append("businessProfileId", String(selected!.id));
       if (!uploadKeys.current.has(file)) uploadKeys.current.set(file, randomId());
       formData.append("idempotencyKey", uploadKeys.current.get(file)!);
+      if (batch) {
+        formData.append("receiptBatchId", String(batch.batchId));
+        formData.append("receiptOrdinal", String(batch.receiptOrdinal));
+      }
       const { data } = await api.post<ScanResult>("/records/receipts", formData, {
         headers: { "Content-Type": "multipart/form-data" },
         signal,
       });
       signal.throwIfAborted();
       acceptedScans.current.set(file, data);
-      // The photos are on the server. Whether OCR has started is the server's
-      // business; what the client knows is that the upload is over.
-      setScanStage("reading");
-      return pollUntilRead(data, true, signal);
+      return data;
     })();
-    scanPromises.current.set(file, promise);
-    void promise.catch(() => {
-      if (scanPromises.current.get(file) === promise) scanPromises.current.delete(file);
+    acceptingScans.current.set(file, promise);
+    void promise.then(() => {
+      if (acceptingScans.current.get(file) === promise) acceptingScans.current.delete(file);
+    }, () => {
+      if (acceptingScans.current.get(file) === promise) acceptingScans.current.delete(file);
     });
     return promise;
   }
 
+  async function ensureScanned(file: File, batch?: BatchReceiptBinding): Promise<ScanResult> {
+    const accepted = await ensureAccepted(file, batch);
+    // The photos are on the server. Whether OCR has started is the server's
+    // business; what the client knows is that the upload is over.
+    setScanStage("reading");
+    return pollUntilRead(accepted, requests.current.signal);
+  }
+
   /**
-   * Waits for a scan the server has accepted but not yet finished reading.
+   * Persists a separate-receipt batch one child at a time before review begins.
    *
-   * The upload now returns as soon as the photographs are stored (202), with
-   * OCR, the vision rescue and the categoriser running behind it — so the
-   * response carries an id and a status rather than the extracted figures.
-   * This polls until that read reaches a terminal state and resolves with the
-   * finished scan, so everything upstream keeps its old shape: `ensureScanned`
-   * still returns `Promise<ScanResult>`, and every caller of it — the promise
-   * cache, `scanFiles`, `handleConfirm`'s queue advance — is unchanged. The
-   * one function that knew how to fetch a scan is still the only one that
-   * does.
-   *
-   * Rejects on a failed read rather than resolving with a half-empty scan:
-   * the caller's existing error path then shows the reason and leaves the
-   * owner on the picker, which is the same outcome any other failed scan has.
+   * A browser cannot restore chosen File handles after reload, so queuing only
+   * local files made every child after the first disappear from an interrupted
+   * batch. The server already owns ordinal/idempotency semantics; accepting
+   * sequentially keeps memory and request pressure bounded while making every
+   * child visible to history-based resume as soon as the first review opens.
    */
-  async function pollUntilRead(initial: ScanResult, mayRetry = true, signal = requests.current.signal): Promise<ScanResult> {
+  async function acceptBatchFiles(files: File[], batchId: number): Promise<void> {
+    const signal = requests.current.signal;
+    currentFiles.current = files;
+    setScanning(true);
+    setScanStage("uploading");
+    setScanError(null);
+    try {
+      for (const [index, file] of files.entries()) {
+        signal.throwIfAborted();
+        await ensureAccepted(file, { batchId, receiptOrdinal: index + 1 });
+      }
+      signal.throwIfAborted();
+    } catch (error) {
+      if (!signal.aborted) setPickedFiles(files);
+      throw error;
+    } finally {
+      if (!signal.aborted) setScanning(false);
+    }
+  }
+
+  /** Polls an accepted scan until it is complete, failed, or times out locally. */
+  async function pollUntilRead(
+    initial: ScanResult,
+    signal = requests.current.signal,
+  ): Promise<ScanResult> {
     signal.throwIfAborted();
     if (initial.processingStatus && initial.processingStatus !== "Processing") {
-      if (initial.processingStatus === "Failed") {
-        if (mayRetry) {
-          const { data: retried } = await api.post<ScanResult>(`/records/receipts/${initial.id}/retry`, undefined, { signal });
-          return pollUntilRead(retried, false, signal);
-        }
-        throw new Error(initial.processingError ?? "This receipt could not be read. Try scanning it again.");
-      }
       return initial;
     }
 
@@ -328,13 +579,7 @@ function ScanReceiptForm() {
       await new Promise((resolve) => setTimeout(resolve, SCAN_POLL_INTERVAL_MS));
       signal.throwIfAborted();
       const { data } = await api.get<ScanResult>(`/records/receipts/${initial.id}`, { signal });
-      if (data.processingStatus === "Failed") {
-        if (mayRetry) {
-          const { data: retried } = await api.post<ScanResult>(`/records/receipts/${initial.id}/retry`, undefined, { signal });
-          return pollUntilRead(retried, false, signal);
-        }
-        throw new Error(data.processingError ?? "This receipt could not be read. Try scanning it again.");
-      }
+      if (data.processingStatus === "Failed") return data;
       if (data.processingStatus === "Complete") return data;
     }
     /*
@@ -346,47 +591,41 @@ function ScanReceiptForm() {
     throw new Error("This receipt is taking longer than expected to read. Try scanning it again.");
   }
 
-  /**
-   * Sends one or more photos to the server as a SINGLE scan and populates the
-   * review screen from the answer. A single photo is simply a one-element
-   * page list — there is no separate code path for the common case.
-   *
-   * `representativeFile` drives the preview and the zoom dialog: page 1 for a
-   * multi-page receipt, the only file otherwise. Showing every page here is
-   * Phase 4 work (docs/multi-page-receipts-plan.md) — for now the photo the
-   * owner sees during review is always the receipt's first.
-   *
-   * Rethrows on failure, unlike most of this screen's handlers — the queue
-   * advance in handleConfirm needs to know a scan failed so it can retry
-   * rather than silently treating a rejected background prefetch as success.
-   * scanError is still set before the throw, so every OTHER caller — which
-   * does not care why, only that the picker should show the message — needs
-   * no change at all.
-   */
-  async function scanFiles(filesToSend: File[], representativeFile: File) {
+  async function presentCompletedScan(data: ScanResult, signal: AbortSignal) {
+    setScanStage("checking");
+    await refreshCategories();
+    signal.throwIfAborted();
+    setScanStage("categorising");
+    setScan(data);
+    setDate(data.extractedDate ? data.extractedDate.slice(0, 10) : "");
+    setDescription(data.extractedDescription ?? "");
+    setVendor(data.extractedVendor ?? "");
+    setAmount(data.extractedAmount ?? "");
+    setItemCategories(Object.fromEntries(data.items.map((item) => [item.id, item.categoryId ?? ""])));
+    setSplits([{ categoryId: "", amount: "" }]);
+  }
+
+  /** Uploads one receipt, retaining its ordered local pages for review. */
+  async function scanFiles(filesToSend: File[], batch?: BatchReceiptBinding) {
     const signal = requests.current.signal;
     currentFiles.current = filesToSend;
-    setFile(representativeFile);
+    setReviewFiles(filesToSend);
     setScanning(true);
     setScanStage("uploading");
     setScanError(null);
     try {
-      // A single photo — the common case, and every "separate receipts"
-      // queue entry — is routed through the shared cache above, so a page
-      // already scanning in the background is awaited instead of re-asked
-      // for. A multi-page "one long receipt" upload has no single File to
-      // key a cache entry on and nothing else prefetches it, so it keeps its
-      // own direct request exactly as before.
+      // Single-photo retries use the accepted-scan cache. A multi-page receipt
+      // keeps one combined upload key and one accepted scan for the same reason.
       const data =
         filesToSend.length === 1
-          ? await ensureScanned(filesToSend[0]!)
+          ? await ensureScanned(filesToSend[0]!, batch)
           : await (async () => {
               if (!combinedUpload.current || combinedUpload.current.files.length !== filesToSend.length ||
                   combinedUpload.current.files.some((file, index) => file !== filesToSend[index])) {
                 combinedUpload.current = { files: filesToSend, key: randomId() };
               }
               const upload = combinedUpload.current;
-              if (upload.scan) return pollUntilRead(upload.scan, true, signal);
+              if (upload.scan) return pollUntilRead(upload.scan, signal);
               const formData = new FormData();
               // "files" — plural — even for one photo: the server has one
               // upload route for both shapes, and it reads this field name
@@ -406,46 +645,15 @@ function ScanReceiptForm() {
               // MAX_RECEIPT_FILES pages of OCR). It has no single File to key
               // the promise cache on, which is the only reason it bypasses
               // that path — the waiting is identical.
-              return pollUntilRead(res.data, true, signal);
+              return pollUntilRead(res.data, signal);
             })();
       signal.throwIfAborted();
-      /*
-       * Reload the category list BEFORE showing the review table.
-       *
-       * The scan can create a category server-side: an item nothing fits
-       * lands in a standing "Uncategorized" that is made on first need. The
-       * client's list was fetched before that existed, so the <select> for
-       * such an item had no matching <option> — and a <select> whose value
-       * matches no option falls back to the first selectable one. That made
-       * EVERY row display the same category (the business's first), which
-       * looked exactly like the AI having assigned one category to the whole
-       * receipt while the database in fact held the right per-item values.
-       */
-      /*
-       * The read came back. The reconciliation and the warnings are already
-       * IN that response, so "checking totals" is the client resolving them —
-       * and "categorising" is the category refresh below, which exists
-       * precisely because the read may have created a category.
-       *
-       * Both are genuinely fast on a small receipt, and neither is padded to
-       * be visible. A stage that took no time simply does not paint, which is
-       * the honest outcome; the alternative — a bar timed to look busy — is
-       * what ADR-4 rules out.
-       */
-      setScanStage("checking");
-      await refreshCategories();
-      signal.throwIfAborted();
-      setScanStage("categorising");
-
-      setScan(data);
-      setDate(data.extractedDate ? data.extractedDate.slice(0, 10) : "");
-      setDescription(data.extractedDescription ?? "");
-      setVendor(data.extractedVendor ?? "");
-      setAmount(data.extractedAmount ?? "");
-      // Seed the per-item categories from what FinSight assigned. Every one
-      // stays editable — this is a starting point, not a decision.
-      setItemCategories(Object.fromEntries(data.items.map((i) => [i.id, i.categoryId ?? ""])));
-      setSplits([{ categoryId: "", amount: "" }]);
+      setPausedScan(null);
+      if (data.processingStatus === "Failed") {
+        setScan(data);
+        return data;
+      }
+      await presentCompletedScan(data, signal);
     } catch (err) {
       if (!signal.aborted) {
         setPickedFiles(filesToSend);
@@ -461,10 +669,10 @@ function ScanReceiptForm() {
    * Turns the picked photos into a scanning plan and starts it.
    *
    * One photo, or "one long receipt" chosen for several: every photo becomes
-   * a page of ONE upload. "Separate receipts" instead: the first photo scans
-   * now, and the rest wait in `fileQueue` — handleConfirm advances through
-   * them one at a time, so a batch of receipts is reviewed in sequence
-   * without the owner returning to this screen between each one.
+   * a page of ONE upload. "Separate receipts" instead: every child is first
+   * accepted in ordinal order, then `fileQueue` advances the local review
+   * sequence one receipt at a time. That keeps the review focused without
+   * making a reload lose a child that had not yet reached the screen.
    */
   async function handleStartScanning(e: FormEvent) {
     e.preventDefault();
@@ -475,43 +683,172 @@ function ScanReceiptForm() {
       return;
     }
     startPending.current = true;
+    stopRequested.current = false;
     try {
+      const existingBatchId = batchUpload.current?.id;
+      if (queueTotal > 0 && existingBatchId !== undefined && pickedFiles.length === queueTotal) {
+        const [first, ...rest] = pickedFiles;
+        setPickedFiles([]);
+        setFileQueue(rest);
+        setQueuePosition(1);
+        await acceptBatchFiles(pickedFiles, existingBatchId);
+        await scanFiles([first!], { batchId: existingBatchId, receiptOrdinal: 1 });
+        return;
+      }
 
-    if (pickedFiles.length === 1 || combineChoice === "one") {
-      const toScan = pickedFiles;
+      if (queueTotal > 0 && existingBatchId !== undefined && pickedFiles.length === 1) {
+        const toScan = pickedFiles;
+        setPickedFiles([]);
+        await scanFiles(toScan, { batchId: existingBatchId, receiptOrdinal: queuePosition });
+        return;
+      }
+
+      if (pickedFiles.length === 1 || combineChoice === "one") {
+        const toScan = pickedFiles;
+        setPickedFiles([]);
+        await scanFiles(toScan);
+        return;
+      }
+
+      const selectedFiles = pickedFiles;
+      const [first, ...rest] = selectedFiles;
+      const batchId = await ensureReceiptBatch(selectedFiles.length);
       setPickedFiles([]);
-      // scanFiles already recorded the failure in scanError before
-      // rethrowing; the picker's existing error display reacts to that
-      // state directly, so this caller has nothing further to do with the
-      // rejection beyond not letting it go unhandled.
-      await scanFiles(toScan, toScan[0]!).catch(() => {});
-      return;
-    }
+      setFileQueue(rest);
+      setQueuePosition(1);
+      setQueueTotal(selectedFiles.length);
 
-    const [first, ...rest] = pickedFiles;
-    setPickedFiles([]);
-    setFileQueue(rest);
-    setQueuePosition(1);
-    setQueueTotal(pickedFiles.length);
-
-    /*
-     * Every OTHER receipt in the batch starts scanning now too, not once
-     * confirming receipt 1 reaches it — this is the actual fix: OCR and the
-     * categoriser run for every photo in the batch, concurrently, instead of
-     * only the first.
-     *
-     * Errors are swallowed here on purpose. A background prefetch failing is
-     * surfaced properly, with a retry, at the moment the owner actually
-     * reaches that receipt (handleConfirm's queue advance) — not as an alert
-     * about a receipt they have not been asked to look at yet.
-     */
-    rest.forEach((f) => {
-      ensureScanned(f).catch(() => {});
-    });
-
-    await scanFiles([first!], first!).catch(() => {});
+      // Accept every child in ordinal order before showing the first review.
+      // The work remains sequential, not an unbounded fan-out, and a reload
+      // can then rediscover every accepted child from receipt history.
+      await acceptBatchFiles(selectedFiles, batchId);
+      await scanFiles([first!], { batchId, receiptOrdinal: 1 });
+    } catch (err) {
+      if (!stopRequested.current) setScanError(getErrorMessage(err));
     } finally {
       startPending.current = false;
+    }
+  }
+
+  function handleStopWaiting() {
+    stopRequested.current = true;
+    requests.current.abort();
+    requests.current = new AbortController();
+    currentFiles.current.forEach((file) => acceptingScans.current.delete(file));
+
+    const accepted = currentFiles.current.length === 1
+      ? acceptedScans.current.get(currentFiles.current[0]!)
+      : combinedUpload.current?.scan
+        ?? currentFiles.current.map((file) => acceptedScans.current.get(file)).find(Boolean);
+    setPausedScan(accepted ?? null);
+    setPickedFiles(currentFiles.current);
+    setScanning(false);
+    setScanError(
+      accepted
+        ? "Stopped waiting. Your upload is safe and can be checked again."
+        : "Upload cancelled. Your selected image is still here.",
+    );
+  }
+
+  async function retryProcessing() {
+    if (!scan || scan.processingStatus !== "Failed") return;
+    const signal = requests.current.signal;
+    setScanning(true);
+    setScanStage("reading");
+    setScanError(null);
+    try {
+      const { data: queued } = await api.post<ScanResult>(
+        `/records/receipts/${scan.id}/retry`,
+        undefined,
+        { signal },
+      );
+      const result = await pollUntilRead(queued, signal);
+      signal.throwIfAborted();
+      if (result.processingStatus === "Failed") {
+        setScan(result);
+        return;
+      }
+      await presentCompletedScan(result, signal);
+    } catch (err) {
+      if (!signal.aborted) setScanError(getErrorMessage(err));
+    } finally {
+      if (!signal.aborted) setScanning(false);
+    }
+  }
+
+  async function openStoredScan(summary: ReceiptScanSummary) {
+    const signal = requests.current.signal;
+    setScanning(true);
+    setScanStage(summary.allowedActions.retryProcessing ? "reading" : "checking");
+    setScanError(null);
+    setReviewFiles([]);
+    currentFiles.current = [];
+    try {
+      const response = summary.allowedActions.retryProcessing
+        ? await api.post<ScanResult>(`/records/receipts/${summary.id}/retry`, undefined, { signal })
+        : await api.get<ScanResult>(`/records/receipts/${summary.id}`, { signal });
+      const result = response.data.processingStatus === "Processing"
+        ? await pollUntilRead(response.data, signal)
+        : response.data;
+      signal.throwIfAborted();
+      if (result.processingStatus === "Failed") {
+        setScan(result);
+        return;
+      }
+      await presentCompletedScan(result, signal);
+    } catch (err) {
+      if (!signal.aborted) setScanError(getErrorMessage(err));
+    } finally {
+      if (!signal.aborted) setScanning(false);
+    }
+  }
+
+  async function deleteUnconfirmedScan(target: Pick<ReceiptScanSummary, "id" | "extractedVendor" | "extractedDescription">) {
+    if (deletingScanId !== null) return;
+    const label = target.extractedVendor ?? target.extractedDescription ?? `scan ${target.id}`;
+    const approved = await confirm({
+      title: `Delete ${label}?`,
+      body: "This removes the unfinished scan from review and queues its private receipt files for deletion. It cannot be undone.",
+      confirmLabel: "Delete scan",
+      tone: "danger",
+    });
+    if (!approved) return;
+
+    let key = deleteKeys.current.get(target.id);
+    if (!key) {
+      key = randomId();
+      deleteKeys.current.set(target.id, key);
+    }
+
+    setDeletingScanId(target.id);
+    setScanError(null);
+    try {
+      const { data: job } = await api.delete<ReceiptPurgeJob>(`/records/receipts/${target.id}`, {
+        headers: { "Idempotency-Key": key },
+      });
+      if (job.receiptScanId !== target.id || !Number.isInteger(job.id)) {
+        throw new Error("FinSight returned a deletion result that did not match this receipt scan.");
+      }
+      deleteKeys.current.delete(target.id);
+      setResumeScans((current) => current.filter((candidate) => candidate.id !== target.id));
+
+      if (scan?.id === target.id) {
+        const wasBatchChild = scan.receiptBatchId !== null && scan.receiptBatchId !== undefined;
+        handleRescan();
+        // Every batch child was accepted before review. Re-queuing local Files
+        // here would upload those same stored scans again and strand their
+        // original pending reviews. History is the durable continuation path.
+        await refreshActiveReceiptHistory(undefined, target.id);
+        toast(wasBatchChild
+          ? "Scan removed. This batch is no longer continuing here; accepted receipts remain in unfinished scans."
+          : "Scan removed. Its private files will be deleted in the background.");
+        return;
+      }
+      toast("Scan removed. Its private files will be deleted in the background.");
+    } catch (error) {
+      setScanError(getErrorMessage(error));
+    } finally {
+      setDeletingScanId(null);
     }
   }
 
@@ -548,9 +885,46 @@ function ScanReceiptForm() {
     }
   }
 
+  async function finishConfirmedReceipt(saved: { id: number }[] | null) {
+    if (saved) {
+      toast(saved.length === 1 ? "Expense saved from receipt" : `${saved.length} expenses saved from receipt`);
+    } else {
+      toast("Receipt was saved before the connection ended.");
+    }
+
+    if (fileQueue.length > 0) {
+      setQueueHistory((prev) => [...prev, { position: queuePosition, recordIds: saved?.map((record) => record.id) ?? [] }]);
+      const [next, ...rest] = fileQueue;
+      resetReviewFields();
+      setFileQueue(rest);
+      setQueuePosition((position) => position + 1);
+      try {
+        await scanFiles([next!], {
+          batchId: batchUpload.current!.id!,
+          receiptOrdinal: queuePosition + 1,
+        });
+      } catch {
+        // The confirmed receipt remains saved; its next batch slot can be retried.
+      }
+      return;
+    }
+    if (queueTotal > 0) {
+      setQueuePosition(0);
+      setQueueTotal(0);
+      batchUpload.current = null;
+    }
+    navigate("/records");
+  }
+
   async function handleConfirm(e: FormEvent) {
     e.preventDefault();
     if (!scan || amount === "" || !readyToConfirm || savePending.current || foreignCurrency) return;
+    if (duplicateReview && (!duplicateListComplete || !duplicateAcknowledged)) {
+      setConfirmError(duplicateListComplete
+        ? "Review the possible matches and choose whether to save this receipt anyway."
+        : "Load and review every possible match before saving this receipt anyway.");
+      return;
+    }
     savePending.current = true;
     const signal = requests.current.signal;
     setConfirming(true);
@@ -562,6 +936,15 @@ function ScanReceiptForm() {
       const records = await api.post(
         `/records/receipts/${scan.id}/confirm`,
         buildReceiptConfirmPayload({
+          expectedScanRevision: scan.scanRevision,
+          ...(duplicateReview && duplicateListComplete && duplicateAcknowledged
+            ? {
+                duplicateDecision: {
+                  action: "SAVE_ANYWAY" as const,
+                  candidateSetHash: duplicateReview.candidateSetHash,
+                },
+              }
+            : {}),
           date,
           description,
           vendor,
@@ -585,59 +968,33 @@ function ScanReceiptForm() {
       );
       signal.throwIfAborted();
       const saved = records.data as { id: number }[];
-      toast(saved.length === 1 ? "Expense saved from receipt" : `${saved.length} expenses saved from receipt`);
-
-      /*
-       * Advancing a queued "separate receipts" batch, rather than always
-       * navigating away.
-       *
-       * handleRescan already clears every field this scan populated; reusing
-       * it here is what keeps that reset logic in one place instead of a
-       * second copy that could drift from it.
-       */
-      if (fileQueue.length > 0) {
-        // Recorded before the fields it describes are cleared — this is the
-        // only trace of receipt N that survives resetReviewFields, and it is
-        // what lets receipt N+1's screen show "Receipt 1 — view it".
-        setQueueHistory((prev) => [...prev, { position: queuePosition, recordIds: saved.map((r) => r.id) }]);
-        const [next, ...rest] = fileQueue;
-        resetReviewFields();
-        setFileQueue(rest);
-        setQueuePosition((p) => p + 1);
-        try {
-          // The common path: receipt N+1 has been scanning in the background
-          // since the batch started, so this is usually just picking up an
-          // already-finished (or already in-flight) result — not starting
-          // its OCR from zero.
-          await scanFiles([next!], next!);
-        } catch {
-          /*
-           * The background prefetch failed. One automatic retry against a
-           * FRESH request — not the same rejected promise — covers the
-           * ordinary transient cause (a network blip, a cold backend) without
-           * making the owner notice and act.
-           *
-           * Caught HERE rather than left to the outer try/catch below: that
-           * one sets confirmError, which describes "saving receipt N failed"
-           * — a claim that would be false. Receipt N saved; it is receipt
-           * N+1's read that stumbled, and scanFiles already recorded that
-           * under scanError, which the picker screen already shows.
-           *
-           * A failure that survives the retry leaves the owner on the picker
-           * with the reason visible — the same outcome any other failed scan
-           * has always had, not a new dead end.
-           */
-          scanPromises.current.delete(next!);
-          await scanFiles([next!], next!).catch(() => {});
-        }
-        return;
-      }
-      if (queueTotal > 0) {
-        setQueuePosition(0);
-        setQueueTotal(0);
-      }
-      navigate("/records");
+      await finishConfirmedReceipt(saved);
     } catch (err) {
+      if (!signal.aborted && isAxiosError(err) && err.response?.status === 409) {
+        const body = err.response.data as { code?: unknown };
+        if (body?.code === "DUPLICATE_REVIEW_REQUIRED" || body?.code === "DUPLICATE_REVIEW_CHANGED") {
+          const review = duplicateReviewFrom(body, body.code === "DUPLICATE_REVIEW_CHANGED");
+          if (review) {
+            setDuplicateReview(review);
+            setDuplicateAcknowledged(false);
+            setConfirmError(null);
+            return;
+          }
+        }
+      }
+      const status = isAxiosError(err) ? err.response?.status : undefined;
+      if (!signal.aborted && (status === undefined || status === 409 || status >= 500)) {
+        try {
+          const latest = await api.get<ScanResult>(`/records/receipts/${scan.id}`, { signal });
+          signal.throwIfAborted();
+          if (latest.data.id === scan.id && latest.data.confirmationStatus === "Confirmed") {
+            await finishConfirmedReceipt(null);
+            return;
+          }
+        } catch {
+          // Keep the original confirmation error when its outcome cannot be resolved.
+        }
+      }
       if (!signal.aborted) setConfirmError(getErrorMessage(err));
     } finally {
       savePending.current = false;
@@ -645,24 +1002,16 @@ function ScanReceiptForm() {
     }
   }
 
-  /**
-   * Clears everything one scan populated, without touching `fileQueue`.
-   *
-   * Shared by handleRescan (the button — an explicit "start over", which also
-   * abandons any queued batch, below) and handleConfirm's queue advance
-   * (which resets the review fields for the NEXT queued receipt and must
-   * NOT clear the queue it is about to consume from). Keeping the two
-   * separate is what stops handleConfirm's `setQueuePosition((p) => p + 1)`
-   * from racing a `setQueuePosition(0)` in the same state-update batch — both
-   * queued in the same render would apply in call order, not in the order
-   * that makes sense, and the position would come out wrong by one.
-   */
+  /** Clears one review without changing the remaining batch queue. */
   function resetReviewFields() {
     setScan(null);
+    setPausedScan(null);
     setSplits([{ categoryId: "", amount: "" }]);
     setItemCategories({});
     setCreatingCategoryFor(null);
     setAddedItems([]);
+    setEditingItem(null);
+    setUpdatingItemId(null);
     setGapPlan(null);
     setGapCategoryId("");
     setDate("");
@@ -671,29 +1020,25 @@ function ScanReceiptForm() {
     setAmount("");
     setConfirmError(null);
     setScanError(null);
+    setDuplicateReview(null);
+    setDuplicateLoading(false);
+    setDuplicateAcknowledged(false);
   }
 
-  /**
-   * Back to the file picker, without dragging the last scan's answers along.
-   *
-   * This used to only null `scan`, which left every extracted value and the
-   * chosen category sitting in state. Re-submitting the same file then produced
-   * a second ReceiptScan row and a second stored image server-side while the
-   * first was orphaned in "Pending". The image is deliberately kept — the
-   * common case is rescanning the same photo — but everything derived from the
-   * previous read is cleared.
-   *
-   * Also abandons any queued "separate receipts" batch. Rescan is a
-   * deliberate "start over", and leaving a stale "2 of 4" behind with no way
-   * to act on it would be worse than dropping the rest of the batch.
-   */
+  /** Abandons the local selection and any unfinished separate-receipt queue. */
   function handleRescan() {
     resetReviewFields();
-    setPickedFiles(currentFiles.current);
+    setPickedFiles([]);
     setFileQueue([]);
     setQueuePosition(0);
     setQueueTotal(0);
     setQueueHistory([]);
+    batchUpload.current = null;
+    currentFiles.current = [];
+    acceptingScans.current.clear();
+    acceptedScans.current.clear();
+    uploadKeys.current.clear();
+    combinedUpload.current = null;
   }
 
   // OCR never reads a description. The backend synthesises one from the vendor
@@ -834,7 +1179,8 @@ function ScanReceiptForm() {
 
   const itemsAreComplete = everyItemHasCategory && gapPlanIsResolved;
 
-  const readyToConfirm = isItemised ? itemsAreComplete : splitsAreComplete;
+  const readyToConfirm =
+    (isItemised ? itemsAreComplete : splitsAreComplete) && editingItem === null && updatingItemId === null;
 
   /*
    * The amount actually sent is derived in lib/receiptConfirm, not here.
@@ -861,6 +1207,46 @@ function ScanReceiptForm() {
     setAddedItems((prev) => prev.filter((a) => a.key !== key));
   }
 
+  function beginItemEdit(item: ScannedItem) {
+    setEditingItem({ id: item.id, name: item.name, amount: item.amount });
+    setConfirmError(null);
+  }
+
+  async function saveItemEdit() {
+    if (!scan || !editingItem || updatingItemId !== null) return;
+    const name = editingItem.name.trim();
+    const nextAmount = Number(editingItem.amount);
+    if (!name || !Number.isFinite(nextAmount) || nextAmount <= 0) {
+      setConfirmError("Enter an item name and an amount greater than zero.");
+      return;
+    }
+
+    setUpdatingItemId(editingItem.id);
+    setConfirmError(null);
+    try {
+      const { data } = await api.patch<ScanResult>(
+        `/records/receipts/${scan.id}/items/${editingItem.id}`,
+        { name, amount: nextAmount, expectedScanRevision: scan.scanRevision },
+      );
+      setScan(data);
+      setEditingItem(null);
+    } catch (err) {
+      if (isAxiosError(err) && err.response?.status === 409) {
+        try {
+          const { data: latest } = await api.get<ScanResult>(`/records/receipts/${scan.id}`);
+          setScan(latest);
+          setConfirmError("This receipt changed in another request. Your edit is still here; review it and save again.");
+        } catch (refreshError) {
+          setConfirmError(getErrorMessage(refreshError));
+        }
+      } else {
+        setConfirmError(getErrorMessage(err));
+      }
+    } finally {
+      setUpdatingItemId(null);
+    }
+  }
+
   /**
    * Drops a line OCR read that was never a purchase.
    *
@@ -880,7 +1266,10 @@ function ScanReceiptForm() {
     setRemovingItemId(itemId);
     setConfirmError(null);
     try {
-      const { data } = await api.delete<ScanResult>(`/records/receipts/${scan.id}/items/${itemId}`);
+      const { data } = await api.delete<ScanResult>(
+        `/records/receipts/${scan.id}/items/${itemId}`,
+        { params: { expectedScanRevision: scan.scanRevision } },
+      );
       setScan(data);
       setItemCategories((prev) => {
         const next = { ...prev };
@@ -928,36 +1317,70 @@ function ScanReceiptForm() {
     return name;
   }
 
-  const receiptPreview = previewUrl ? (
-    <>
-      <button
-        type="button"
-        onClick={() => zoomRef.current?.showModal()}
-        className="block w-full cursor-zoom-in overflow-hidden rounded-xl border border-paper-200 bg-paper-100"
-      >
-        <img
-          src={previewUrl}
-          alt="The receipt you uploaded"
-          className="mx-auto max-h-[70vh] w-full object-contain"
-        />
-      </button>
-      <p className="mt-2 text-center text-xs text-ink-500">Tap the photo to enlarge it.</p>
-
-      <dialog
-        ref={zoomRef}
-        onClick={() => zoomRef.current?.close()}
-        className="confirm-dialog max-h-[92vh] w-[min(60rem,calc(100vw-2rem))] rounded-2xl border border-paper-200 bg-paper p-2"
-      >
-        <img src={previewUrl} alt="The receipt you uploaded, enlarged" className="w-full object-contain" />
-        <p className="py-2 text-center text-xs text-ink-500">Tap anywhere to close.</p>
-      </dialog>
-    </>
+  const receiptPreview = scan && (reviewFiles.length > 0 || (scan.pageEvidence?.length ?? 0) > 0) ? (
+    <ReceiptPagePreview
+      scanId={scan.id}
+      files={reviewFiles}
+      pageEvidence={scan?.pageEvidence}
+      pageProcessing={scan?.pageProcessing}
+      pageQualities={scan?.pageQualities}
+    />
   ) : null;
 
   // ---- stage 1: choose a photo ------------------------------------------
   if (!scan) {
     return (
       <FormPage eyebrow="Records" title="Scan a receipt">
+        {resumeLoading ? <p className="mb-4 text-sm text-ink-500" role="status">Checking unfinished scans…</p> : null}
+        {resumeError ? <p className="mb-4 text-sm text-tone-danger" role="alert">{resumeError}</p> : null}
+        {resumeScans.length > 0 ? (
+          <section aria-labelledby="unfinished-receipts-title" className="mb-4 rounded-xl border border-paper-200 bg-paper-50 p-3">
+            <h2 id="unfinished-receipts-title" className="text-sm font-semibold text-ink-800">
+              Continue an unfinished scan
+            </h2>
+            <ul className="mt-2 space-y-2">
+              {resumeScans.map((pending) => (
+                <li key={pending.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-paper px-3 py-2 ring-1 ring-paper-200">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-ink-800">
+                      {pending.extractedVendor ?? pending.extractedDescription ?? `Receipt scan ${pending.id}`}
+                    </p>
+                    <p className="text-xs text-ink-500">
+                      {pending.processingStatus === "Processing"
+                        ? "Still reading"
+                        : pending.processingStatus === "Failed"
+                          ? "Needs another processing attempt"
+                          : "Ready to review"}
+                      {pending.receiptOrdinal ? ` · Receipt ${pending.receiptOrdinal}` : ""}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant={pending.allowedActions.reviewResult ? "primary" : "secondary"}
+                      disabled={scanning || deletingScanId !== null}
+                      onClick={() => void openStoredScan(pending)}
+                    >
+                      {pending.allowedActions.retryProcessing
+                        ? "Retry processing"
+                        : pending.allowedActions.reviewResult
+                          ? "Review result"
+                          : "Continue waiting"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="danger"
+                      disabled={scanning || deletingScanId !== null}
+                      onClick={() => void deleteUnconfirmedScan(pending)}
+                    >
+                      {deletingScanId === pending.id ? "Deleting…" : "Delete scan"}
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
         <form onSubmit={handleStartScanning} className="space-y-4">
           <Field label="Receipt photo" htmlFor="receipt-files" required>
             <MultiFileInput
@@ -1013,6 +1436,12 @@ function ScanReceiptForm() {
           */}
           {scanning ? <ScanProgress stage={scanStage} /> : null}
 
+          {scanning ? (
+            <Button type="button" variant="secondary" fullWidth onClick={handleStopWaiting}>
+              {scanStage === "uploading" ? "Cancel upload" : "Stop waiting"}
+            </Button>
+          ) : null}
+
           <Button
             type="submit"
             variant="primary"
@@ -1021,6 +1450,8 @@ function ScanReceiptForm() {
           >
             {scanning
               ? "Reading receipt…"
+              : pausedScan
+                ? "Review result"
               : pickedFilesError
                 ? "Fix selected photos to continue"
                 : pickedFiles.length > 1 && combineChoice === "separate"
@@ -1028,6 +1459,48 @@ function ScanReceiptForm() {
                 : "Scan receipt"}
           </Button>
         </form>
+      </FormPage>
+    );
+  }
+
+  if (scan.processingStatus === "Failed") {
+    return (
+      <FormPage eyebrow="Records" title="Receipt needs another try">
+        <div className="space-y-4">
+          <Callout tone="warn">
+            <p className="font-semibold">FinSight could not finish reading this receipt.</p>
+            <p className="mt-1 text-sm">
+              {scan.processingError ?? "The saved images are still available for another processing attempt."}
+            </p>
+          </Callout>
+          {receiptPreview}
+          {scanError ? <FormError>{scanError}</FormError> : null}
+          {scanning ? <ScanProgress stage={scanStage} /> : null}
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="primary" onClick={retryProcessing} disabled={scanning}>
+              {scanning ? "Retrying…" : "Retry processing"}
+            </Button>
+            {scanning ? (
+              <Button type="button" variant="secondary" onClick={handleStopWaiting}>
+                Stop waiting
+              </Button>
+            ) : null}
+            <Link to="/records/expenses/new" className="tap-inline inline-flex items-center font-semibold text-tone-brand underline">
+              Enter manually
+            </Link>
+            <Button type="button" variant="secondary" onClick={handleRescan} disabled={scanning}>
+              Choose another image
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              onClick={() => void deleteUnconfirmedScan(scan)}
+              disabled={scanning || deletingScanId !== null}
+            >
+              {deletingScanId === scan.id ? "Deleting…" : "Delete scan"}
+            </Button>
+          </div>
+        </div>
       </FormPage>
     );
   }
@@ -1047,7 +1520,18 @@ function ScanReceiptForm() {
           ) : null}
           <PrintedReceiptDetails details={scan.receiptDetails} />
           {receiptPreview}
-          <Button type="button" variant="secondary" onClick={handleRescan}>Choose another receipt</Button>
+          {scanError ? <FormError>{scanError}</FormError> : null}
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="secondary" onClick={handleRescan}>Choose another receipt</Button>
+            <Button
+              type="button"
+              variant="danger"
+              onClick={() => void deleteUnconfirmedScan(scan)}
+              disabled={deletingScanId !== null}
+            >
+              {deletingScanId === scan.id ? "Deleting…" : "Delete scan"}
+            </Button>
+          </div>
         </div>
       </FormPage>
     );
@@ -1106,6 +1590,18 @@ function ScanReceiptForm() {
                   Receipt {n} · Saved — view it
                   <span className="sr-only">(opens in a new tab)</span>
                 </a>
+              );
+            }
+            if (history) {
+              return (
+                <span
+                  key={n}
+                  role="listitem"
+                  className="inline-flex items-center gap-1.5 rounded-full bg-tint-brand px-3 py-1.5 text-xs font-medium text-tone-brand ring-1 ring-edge-brand"
+                >
+                  <span aria-hidden>✓</span>
+                  Receipt {n} · Saved
+                </span>
               );
             }
             return (
@@ -1194,7 +1690,10 @@ function ScanReceiptForm() {
                 type="date"
                 required
                 value={date}
-                onChange={(e) => setDate(e.target.value)}
+                onChange={(e) => {
+                  setDate(e.target.value);
+                  setDuplicateAcknowledged(false);
+                }}
                 className={provisionalClass(
                   originOf(date, scan.extractedDate ? scan.extractedDate.slice(0, 10) : null),
                 )}
@@ -1211,7 +1710,10 @@ function ScanReceiptForm() {
               <TextInput
                 required
                 value={description}
-                onChange={(e) => setDescription(e.target.value)}
+                onChange={(e) => {
+                  setDescription(e.target.value);
+                  setDuplicateAcknowledged(false);
+                }}
                 placeholder="What did you buy?"
                 className={provisionalClass(descriptionOrigin)}
               />
@@ -1227,7 +1729,10 @@ function ScanReceiptForm() {
             >
               <TextInput
                 value={vendor}
-                onChange={(e) => setVendor(e.target.value)}
+                onChange={(e) => {
+                  setVendor(e.target.value);
+                  setDuplicateAcknowledged(false);
+                }}
                 className={provisionalClass(originOf(vendor, scan.extractedVendor))}
               />
             </ScannedField>
@@ -1244,7 +1749,10 @@ function ScanReceiptForm() {
                 min={0.01}
                 required
                 value={amount}
-                onChange={(e) => setAmount(e.target.value === "" ? "" : Number(e.target.value))}
+                onChange={(e) => {
+                  setAmount(e.target.value === "" ? "" : Number(e.target.value));
+                  setDuplicateAcknowledged(false);
+                }}
                 className={provisionalClass(
                   originOf(
                     String(amount),
@@ -1320,7 +1828,24 @@ function ScanReceiptForm() {
                       {items.map((item) => (
                         <tr key={item.id} className="border-t border-paper-200 align-middle">
                           <td className="px-3 py-2 text-ink-800">
-                            {item.name}
+                            {editingItem?.id === item.id ? (
+                              <>
+                                <label htmlFor={`item-name-${item.id}`} className="sr-only">
+                                  Item name
+                                </label>
+                                <TextInput
+                                  id={`item-name-${item.id}`}
+                                  value={editingItem.name}
+                                  onChange={(event) =>
+                                    setEditingItem((current) => current
+                                      ? { ...current, name: event.target.value }
+                                      : current)
+                                  }
+                                />
+                              </>
+                            ) : (
+                              item.name
+                            )}
                             {/*
                               When the items do not add up, the server names
                               the line it is least sure of. Pointing beats
@@ -1346,6 +1871,11 @@ function ScanReceiptForm() {
                                 AI read this from the photo
                               </span>
                             ) : null}
+                            {item.ownerEditedFields?.length ? (
+                              <span className="ml-1.5 inline-flex rounded-full bg-tint-brand px-1.5 py-0.5 text-[10px] font-medium text-tone-brand ring-1 ring-edge-brand align-middle">
+                                Corrected by you
+                              </span>
+                            ) : null}
                             {/*
                               The printed line this row came off, quoted. It is
                               the cheapest possible way to check a row: the
@@ -1362,12 +1892,28 @@ function ScanReceiptForm() {
                             {item.quantity ?? "—"}
                           </td>
                           <td className="px-3 py-2 text-right">
-                            {/* decimals: an item price is a real cent value.
-                                The default whole-peso rendering reads faster in
-                                summaries but here it turned 3.19 into "PHP 3",
-                                which made three correct prices look like they
-                                did not add up to their own correct subtotal. */}
-                            <Money value={item.amount} decimals />
+                            {editingItem?.id === item.id ? (
+                              <>
+                                <label htmlFor={`item-amount-${item.id}`} className="sr-only">
+                                  Item amount
+                                </label>
+                                <MoneyInput
+                                  id={`item-amount-${item.id}`}
+                                  min={0.01}
+                                  value={editingItem.amount}
+                                  onChange={(event) =>
+                                    setEditingItem((current) => current
+                                      ? {
+                                          ...current,
+                                          amount: event.target.value === "" ? "" : Number(event.target.value),
+                                        }
+                                      : current)
+                                  }
+                                />
+                              </>
+                            ) : (
+                              <Money value={item.amount} decimals />
+                            )}
                             {/*
                               The engine's own doubt about THIS figure. Shown
                               only when it is low enough to act on — a
@@ -1414,16 +1960,40 @@ function ScanReceiptForm() {
                                   }
                                 />
                               </div>
-                              {/*
-                                Removing a line OCR should never have read.
-                                Named by the item rather than by position, so
-                                the announcement says what is being removed
-                                instead of "remove item 4".
-                              */}
+                              {editingItem?.id === item.id ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => void saveItemEdit()}
+                                    disabled={updatingItemId === item.id}
+                                    className="tap-inline shrink-0 rounded-lg px-2 py-1 text-xs font-semibold text-tone-brand transition hover:bg-tint-brand disabled:opacity-50"
+                                  >
+                                    {updatingItemId === item.id ? "Saving…" : "Save"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditingItem(null)}
+                                    disabled={updatingItemId === item.id}
+                                    className="tap-inline shrink-0 rounded-lg px-2 py-1 text-xs font-medium text-ink-600 transition hover:bg-paper-100 disabled:opacity-50"
+                                  >
+                                    Cancel
+                                  </button>
+                                </>
+                              ) : (
+                                <button
+                                  type="button"
+                                  aria-label={`Edit ${item.name}`}
+                                  onClick={() => beginItemEdit(item)}
+                                  disabled={editingItem !== null || removingItemId !== null}
+                                  className="tap-inline shrink-0 rounded-lg px-2 py-1 text-xs font-semibold text-tone-brand transition hover:bg-tint-brand disabled:opacity-50"
+                                >
+                                  Edit
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => removeScannedItem(item.id)}
-                                disabled={removingItemId === item.id}
+                                disabled={removingItemId === item.id || editingItem !== null}
                                 className="tap-inline shrink-0 rounded-lg px-1.5 py-1 text-xs font-medium text-ink-500 transition hover:text-tone-danger disabled:opacity-50"
                               >
                                 <span aria-hidden>×</span>
@@ -1817,13 +2387,84 @@ function ScanReceiptForm() {
               </Callout>
             ) : null}
 
+            {duplicateLoading ? (
+              <p className="text-xs text-ink-500" role="status">Checking for possible duplicate receipts…</p>
+            ) : null}
+
+            {duplicateReview ? (
+              <section
+                aria-labelledby="duplicate-review-title"
+                className="space-y-3 rounded-xl border border-edge-warning bg-tint-warning p-4"
+              >
+                <div>
+                  <h2 id="duplicate-review-title" className="text-sm font-semibold text-ink-900">
+                    Possible duplicate {duplicateReview.candidateCount === 1 ? "receipt" : "receipts"}
+                  </h2>
+                  <p className="mt-1 text-xs leading-relaxed text-ink-600">
+                    {duplicateReview.changed
+                      ? "The matches changed while you were reviewing. Check this current list before choosing again."
+                      : "FinSight found an earlier record with matching details. Compare it before saving another copy."}
+                  </p>
+                </div>
+                <ul className="space-y-2">
+                  {duplicateReview.candidates.map((candidate) => (
+                    <li key={candidate.id} className="rounded-lg border border-paper-200 bg-paper px-3 py-2">
+                      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                        <span className="text-sm font-medium text-ink-800">
+                          {candidate.vendor?.trim() || "Earlier expense"}
+                        </span>
+                        <Money value={candidate.total} />
+                      </div>
+                      <p className="mt-1 text-xs text-ink-600">
+                        <time dateTime={candidate.date}>{candidate.date.slice(0, 10)}</time>
+                        {candidate.reasons.length > 0
+                          ? ` · ${candidate.reasons.map((reason) => DUPLICATE_REASON_COPY[reason]).join(", ")}`
+                          : ""}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+                {!duplicateListComplete ? (
+                  <div className="space-y-2">
+                    <p className="text-xs text-ink-600" role="status">
+                      Showing {duplicateReview.candidates.length} of {duplicateReview.candidateCount} matches.
+                      Load the rest before deciding.
+                    </p>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      disabled={duplicateLoading}
+                      onClick={() => { void loadMoreDuplicateCandidates(); }}
+                    >
+                      {duplicateLoading ? "Loading matches…" : "Load remaining matches"}
+                    </Button>
+                  </div>
+                ) : (
+                  <Checkbox
+                    checked={duplicateAcknowledged}
+                    onChange={(checked) => {
+                      setDuplicateAcknowledged(checked);
+                      if (checked) setConfirmError(null);
+                    }}
+                    label="I reviewed these matches and still want to save this receipt."
+                    hint="This choice applies to this full list. If the list changes, FinSight will ask again."
+                  />
+                )}
+              </section>
+            ) : null}
+
             {confirmError ? <FormError>{confirmError}</FormError> : null}
 
             <div className="flex flex-wrap gap-3">
               <Button
                 type="submit"
                 variant="primary"
-                disabled={confirming || !readyToConfirm || Boolean(foreignCurrency)}
+                disabled={
+                  confirming
+                  || !readyToConfirm
+                  || Boolean(foreignCurrency)
+                  || (duplicateReview !== null && (!duplicateListComplete || !duplicateAcknowledged))
+                }
                 className="flex-1"
               >
                 {confirming
@@ -1835,11 +2476,20 @@ function ScanReceiptForm() {
                       // categories save as two expenses, and the button has to
                       // say so or the Records table is a surprise.
                       const n = isItemised ? itemGroups.length : isSplit ? splits.length : 1;
+                      if (duplicateReview) return n === 1 ? "Save anyway" : `Save anyway as ${n} expenses`;
                       return n === 1 ? "Confirm & save expense" : `Confirm & save ${n} expenses`;
                     })()}
               </Button>
               <Button type="button" variant="secondary" onClick={handleRescan} disabled={confirming}>
-                Rescan
+                Choose another image
+              </Button>
+              <Button
+                type="button"
+                variant="danger"
+                onClick={() => void deleteUnconfirmedScan(scan)}
+                disabled={confirming || deletingScanId !== null}
+              >
+                {deletingScanId === scan.id ? "Deleting…" : "Delete scan"}
               </Button>
             </div>
           </form>

@@ -14,6 +14,7 @@ import { runCsvImportWorkerOnce, sweepStalledCsvImports } from "./services/csvIm
 import { cleanUpExpiredRateLimits } from "./middleware/rateLimit.middleware";
 import { enqueueDailyProfileAnalyses, runAnalysisWorkerOnce } from "./services/anomalyDetection/job.service";
 import { purgeUnverifiedRegistrations, runAccountDeletionWorkerOnce } from "./services/accountDeletion.service";
+import { runReceiptPurgeWorkerOnce } from "./services/receiptPurge.service";
 
 logger.info({ pid: process.pid }, "FinSight worker starting");
 
@@ -29,6 +30,7 @@ async function work(): Promise<void> {
     // Drain immediately available jobs but cap each pass so the event loop
     // returns regularly under a backlog.
     for (let i = 0; i < 5 && (await runReceiptWorkerOnce()); i++);
+    await runReceiptPurgeWorkerOnce();
     /*
      * Two imports per pass, not five: one large import can be tens of
      * thousands of rows, and it yields between chunks rather than at the end,
