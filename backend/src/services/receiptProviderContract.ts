@@ -395,9 +395,34 @@ export type ProviderMergeResult = {
   appliedFields: ("date" | "vendor" | "currency" | "total" | "items")[];
   providerResultAccepted: boolean;
   reason: ProviderOutcomeRejectReason | "NOT_SUCCESSFUL" | "NO_SAFER_FIELDS" | "MERGED";
+  /**
+   * True when `items` came from the provider without reconciling to the total.
+   * They are prefilled for the owner to check against the paper, never booked
+   * as validated; the worker turns this into a scan warning.
+   */
+  itemsOwnerReviewRequired: boolean;
 };
 
-/** Keeps the local value on invalid, weaker, equal, or unvalidated external evidence. */
+function markedForOwnerReview(evidence: NormalizedEvidence): NormalizedEvidence {
+  return {
+    ...evidence,
+    confidenceBand: "LOW",
+    validationState: "UNVALIDATED",
+    validationCodes: evidence.validationCodes.includes("OWNER_REVIEW_REQUIRED")
+      ? evidence.validationCodes
+      : [...evidence.validationCodes, "OWNER_REVIEW_REQUIRED"],
+  };
+}
+
+/**
+ * Keeps the local value on invalid, weaker, equal, or unvalidated external
+ * evidence, with one exception for line items: when the provider was asked
+ * for every receipt (always routing) or the local read found no items at all,
+ * provider items that do not add up to the total are still prefilled, marked
+ * UNVALIDATED / OWNER_REVIEW_REQUIRED. Dropping them left the owner typing a
+ * list the provider had already read. A local list that reconciled is never
+ * replaced this way.
+ */
 export function mergeReceiptProviderOutcome(
   localInput: NormalizedReceiptExtraction,
   request: ReceiptProviderRequest,
@@ -406,10 +431,22 @@ export function mergeReceiptProviderOutcome(
   const local = normalizedReceiptExtractionSchema.parse(localInput);
   const validation = validateReceiptProviderOutcome(request, providerInput);
   if (!validation.ok) {
-    return { receipt: local, appliedFields: [], providerResultAccepted: false, reason: validation.reason };
+    return {
+      receipt: local,
+      appliedFields: [],
+      providerResultAccepted: false,
+      reason: validation.reason,
+      itemsOwnerReviewRequired: false,
+    };
   }
   if (validation.outcome.status !== "SUCCEEDED") {
-    return { receipt: local, appliedFields: [], providerResultAccepted: true, reason: "NOT_SUCCESSFUL" };
+    return {
+      receipt: local,
+      appliedFields: [],
+      providerResultAccepted: true,
+      reason: "NOT_SUCCESSFUL",
+      itemsOwnerReviewRequired: false,
+    };
   }
 
   const external = validation.outcome.extraction;
@@ -422,12 +459,20 @@ export function mergeReceiptProviderOutcome(
   const localItemsStrength = evidenceStrength(local.itemsEvidence);
   const replaceItems =
     external.items.length > 0 && externalItemsStrength >= 2 && externalItemsStrength > localItemsStrength;
+  const alwaysRouted = request.rescueDecision.reasons.includes("PROVIDER_ROUTING_ALWAYS");
+  const prefillUnreconciledItems =
+    !replaceItems &&
+    external.items.length > 0 &&
+    external.itemsEvidence !== null &&
+    externalItemsStrength === 0 &&
+    localItemsStrength === 0 &&
+    (alwaysRouted || local.items.length === 0);
   const appliedFields: ProviderMergeResult["appliedFields"] = [];
   if (date.changed) appliedFields.push("date");
   if (vendor.changed) appliedFields.push("vendor");
   if (currency.changed) appliedFields.push("currency");
   if (total.changed) appliedFields.push("total");
-  if (replaceItems) appliedFields.push("items");
+  if (replaceItems || prefillUnreconciledItems) appliedFields.push("items");
 
   if (appliedFields.length === 0) {
     return {
@@ -435,9 +480,20 @@ export function mergeReceiptProviderOutcome(
       appliedFields,
       providerResultAccepted: true,
       reason: "NO_SAFER_FIELDS",
+      itemsOwnerReviewRequired: false,
     };
   }
 
+  const items = replaceItems
+    ? external.items
+    : prefillUnreconciledItems
+      ? external.items.map((item) => ({ ...item, evidence: markedForOwnerReview(item.evidence) }))
+      : local.items;
+  const itemsEvidence = replaceItems
+    ? external.itemsEvidence
+    : prefillUnreconciledItems
+      ? markedForOwnerReview(external.itemsEvidence!)
+      : local.itemsEvidence;
   const merged = normalizedReceiptExtractionSchema.parse({
     ...local,
     source: "merged",
@@ -446,8 +502,8 @@ export function mergeReceiptProviderOutcome(
     vendor: vendor.field,
     currency: currency.field,
     total: total.field,
-    items: replaceItems ? external.items : local.items,
-    itemsEvidence: replaceItems ? external.itemsEvidence : local.itemsEvidence,
+    items,
+    itemsEvidence,
   });
 
   return {
@@ -455,5 +511,6 @@ export function mergeReceiptProviderOutcome(
     appliedFields,
     providerResultAccepted: true,
     reason: "MERGED",
+    itemsOwnerReviewRequired: prefillUnreconciledItems,
   };
 }

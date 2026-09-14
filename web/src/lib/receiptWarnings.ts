@@ -23,6 +23,8 @@ export const RECEIPT_WARNING_CODES = [
   "VISION_INTERPRETED",
   "AMBIGUOUS_DATE",
   "UNREADABLE_FIELD",
+  /** Line items an outside provider read that do not add up to the total; prefilled for review, never validated. */
+  "UNVERIFIED_ITEMS",
 ] as const;
 
 export type ReceiptWarningCode = (typeof RECEIPT_WARNING_CODES)[number];
@@ -74,6 +76,7 @@ const WARNING_HEADLINE: Record<ReceiptWarningCode, string> = {
   VISION_INTERPRETED: "Some values were interpreted from the photo",
   AMBIGUOUS_DATE: "The printed date could be read two ways",
   UNREADABLE_FIELD: "Part of this receipt couldn't be read",
+  UNVERIFIED_ITEMS: "The AI-read items still need checking",
 };
 
 export function warningHeadline(code: string): string {

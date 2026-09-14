@@ -11,6 +11,7 @@ import {
   evidence,
   localExtraction,
   providerRequest,
+  rescueDecision,
   successfulOutcome,
 } from "../helpers/receiptProviderFixtures";
 
@@ -110,6 +111,7 @@ describe("receipt provider outcome validation and merge", () => {
       appliedFields: [],
       providerResultAccepted: false,
       reason: "INVALID_OUTCOME",
+      itemsOwnerReviewRequired: false,
     });
     expect(mergeReceiptProviderOutcome(local, request, {
       ...successfulOutcome(request),
@@ -189,6 +191,90 @@ describe("receipt provider outcome validation and merge", () => {
 
     expect(result.receipt.items).toEqual(local.items);
     expect(result.appliedFields).not.toContain("items");
+  });
+});
+
+describe("unreconciled provider items", () => {
+  const unvalidated = evidence("gemini", {
+    confidenceBand: "LOW",
+    validationState: "UNVALIDATED",
+    sourceVersion: "provider-v1",
+  });
+  const providerItems = [
+    { name: "Provider item A", quantity: 1, amount: 60, evidence: unvalidated },
+    { name: "Provider item B", quantity: 1, amount: 50, evidence: unvalidated },
+  ];
+  const alwaysRouted = () => providerRequest({
+    rescueDecision: rescueDecision({ reasons: ["PROVIDER_ROUTING_ALWAYS"] }),
+  });
+
+  function outcomeWithItems(request: ReturnType<typeof providerRequest>) {
+    const extraction = successfulOutcome(request).extraction!;
+    return successfulOutcome(request, { extraction: { ...extraction, items: providerItems, itemsEvidence: unvalidated } });
+  }
+
+  it("applies them for owner review when the local read has no items", () => {
+    const request = providerRequest();
+    const result = mergeReceiptProviderOutcome(localExtraction(), request, outcomeWithItems(request));
+
+    expect(result.reason).toBe("MERGED");
+    expect(result.appliedFields).toContain("items");
+    expect(result.itemsOwnerReviewRequired).toBe(true);
+    expect(result.receipt.items.map((item) => item.name)).toEqual(["Provider item A", "Provider item B"]);
+    for (const itemEvidence of [result.receipt.itemsEvidence!, ...result.receipt.items.map((item) => item.evidence)]) {
+      expect(itemEvidence.validationState).toBe("UNVALIDATED");
+      expect(itemEvidence.confidenceBand).toBe("LOW");
+      expect(itemEvidence.validationCodes).toContain("OWNER_REVIEW_REQUIRED");
+    }
+  });
+
+  it("applies them for owner review under always routing when the local list is unvalidated", () => {
+    const request = alwaysRouted();
+    const localUnvalidated = evidence("local-tesseract", {
+      confidenceBand: "LOW",
+      validationState: "UNVALIDATED",
+      sourceVersion: "tesseract-v1",
+    });
+    const local = localExtraction({
+      items: [{ name: "Local item", quantity: 1, amount: 100, evidence: localUnvalidated }],
+      itemsEvidence: localUnvalidated,
+    });
+
+    const result = mergeReceiptProviderOutcome(local, request, outcomeWithItems(request));
+    expect(result.appliedFields).toContain("items");
+    expect(result.itemsOwnerReviewRequired).toBe(true);
+    expect(result.receipt.items).toHaveLength(2);
+  });
+
+  it("never replaces a validated local list, even under always routing", () => {
+    const request = alwaysRouted();
+    const localValidated = evidence("local-tesseract", { confidenceBand: "MEDIUM", sourceVersion: "tesseract-v1" });
+    const local = localExtraction({
+      items: [{ name: "Local item", quantity: 1, amount: 100, evidence: localValidated }],
+      itemsEvidence: localValidated,
+    });
+
+    const result = mergeReceiptProviderOutcome(local, request, outcomeWithItems(request));
+    expect(result.receipt.items).toEqual(local.items);
+    expect(result.appliedFields).not.toContain("items");
+    expect(result.itemsOwnerReviewRequired).toBe(false);
+  });
+
+  it("still drops them under rescue routing when the local read has its own items", () => {
+    const request = providerRequest();
+    const localUnvalidated = evidence("local-tesseract", {
+      confidenceBand: "LOW",
+      validationState: "UNVALIDATED",
+      sourceVersion: "tesseract-v1",
+    });
+    const local = localExtraction({
+      items: [{ name: "Local item", quantity: 1, amount: 100, evidence: localUnvalidated }],
+      itemsEvidence: localUnvalidated,
+    });
+
+    const result = mergeReceiptProviderOutcome(local, request, outcomeWithItems(request));
+    expect(result.receipt.items).toEqual(local.items);
+    expect(result.itemsOwnerReviewRequired).toBe(false);
   });
 });
 

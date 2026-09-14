@@ -293,6 +293,21 @@ describe("abandoned-scan sweep: protected states", () => {
     expect(await purgeJobsFor(alreadyScheduled.id)).toHaveLength(1);
   });
 
+  it("answers an owner delete that arrives after the sweep with a plain conflict and no key instructions", async () => {
+    const abandoned = await makeScan({ lastActivityAt: new Date(CUTOFF.getTime() - DAY_MS) });
+    await expect(sweepAbandonedReceiptScans({ now: NOW })).resolves.toMatchObject({ enqueued: 1 });
+
+    const conflict = await request(app)
+      .delete(`${RECEIPTS}/${abandoned.id}`)
+      .set(...auth("owner-token"))
+      .set("Idempotency-Key", "owner-deletes-after-sweep");
+    expect(conflict.status).toBe(409);
+    expect(conflict.body.error).toBe("This receipt is already being deleted.");
+    expect(conflict.body.code).toBe("PURGE_IN_PROGRESS");
+    expect(JSON.stringify(conflict.body)).not.toMatch(/idempotency|key/i);
+    expect(await purgeJobsFor(abandoned.id)).toHaveLength(1);
+  });
+
   it("leaves a scan the owner deleted first to the owner's own job", async () => {
     const abandoned = await makeScan({ lastActivityAt: new Date(CUTOFF.getTime() - DAY_MS) });
     const accepted = await request(app)
@@ -589,11 +604,12 @@ describe("abandoned-scan sweep: adversarial states", () => {
       },
     });
 
-    // Candidate by the index read, refused under the row lock.
+    // Never a candidate: the read excludes it so it cannot occupy a batch
+    // slot every tick; the locked re-check still refuses it in a race.
     await expect(sweepAbandonedReceiptScans({ now: NOW })).resolves.toMatchObject({
-      candidates: 1,
+      candidates: 0,
       enqueued: 0,
-      skipped: 1,
+      skipped: 0,
     });
     expect(await purgeJobsFor(halfConfirmed.id)).toHaveLength(0);
     expect(await prisma.receiptScan.findUniqueOrThrow({ where: { id: halfConfirmed.id } })).toMatchObject({
@@ -632,5 +648,126 @@ describe("abandoned-scan sweep: adversarial states", () => {
     // Neither party enqueues a second job once the row is Deletion Pending.
     await expect(sweepAbandonedReceiptScans({ now: NOW })).resolves.toMatchObject({ enqueued: 0 });
     expect(await purgeJobsFor(abandoned.id)).toHaveLength(1);
+  });
+});
+
+describe("abandoned-scan sweep: head-of-list starvation", () => {
+  it("does not let older permanently ineligible rows fill the batch and hide a younger abandoned scan", async () => {
+    const older = new Date(CUTOFF.getTime() - 3 * DAY_MS);
+    const halfConfirmed = [];
+    for (let index = 0; index < 3; index++) {
+      const scan = await makeScan({ lastActivityAt: new Date(older.getTime() + index), label: `half-${index}` });
+      await prisma.expenseRecord.create({
+        data: {
+          businessProfileId: owner.profile.id,
+          categoryId: owner.categories.Inventory!,
+          receiptScanId: scan.id,
+          date: new Date("2026-09-01T00:00:00.000Z"),
+          description: "Rice purchase",
+          amount: 100,
+          source: "RECEIPT_SCAN",
+        },
+      });
+      halfConfirmed.push(scan);
+    }
+    const younger = await makeScan({ lastActivityAt: new Date(CUTOFF.getTime() - DAY_MS), label: "younger" });
+
+    // Batch of two: the three older rows would otherwise be the whole read,
+    // every tick, and the younger scan would never be reached.
+    await expect(sweepAbandonedReceiptScans({ now: NOW, batchSize: 2 })).resolves.toMatchObject({
+      candidates: 1,
+      enqueued: 1,
+      skipped: 0,
+    });
+    expect(await purgeJobsFor(younger.id)).toHaveLength(1);
+    for (const scan of halfConfirmed) {
+      expect(await purgeJobsFor(scan.id)).toHaveLength(0);
+      expect(await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).toMatchObject({
+        confirmationStatus: "Pending",
+      });
+    }
+  });
+});
+
+describe("abandoned-scan sweep: capture batches", () => {
+  async function makeBatch(expectedReceiptCount: number, businessProfileId = owner.profile.id) {
+    return prisma.receiptCaptureBatch.create({
+      data: {
+        businessProfileId,
+        clientBatchKey: `sweep-batch-${Math.random().toString(36).slice(2, 10)}`,
+        expectedReceiptCount,
+      },
+    });
+  }
+
+  it("leaves a batch alone while a sibling is still under review, then sweeps it whole", async () => {
+    const batch = await makeBatch(2);
+    const stale = new Date(CUTOFF.getTime() - DAY_MS);
+    const recent = new Date(NOW.getTime() - 2 * DAY_MS);
+    const abandonedChild = await makeScan({ lastActivityAt: stale, captureBatchId: batch.id, receiptOrdinal: 1, label: "child-1" });
+    const reviewedChild = await makeScan({ lastActivityAt: recent, captureBatchId: batch.id, receiptOrdinal: 2, label: "child-2" });
+
+    await expect(sweepAbandonedReceiptScans({ now: NOW })).resolves.toMatchObject({ candidates: 0, enqueued: 0 });
+    expect(await purgeJobsFor(abandonedChild.id)).toHaveLength(0);
+    expect(await prisma.receiptCaptureBatch.findUniqueOrThrow({ where: { id: batch.id } })).toMatchObject({
+      status: "COLLECTING",
+      finishedAt: null,
+    });
+    const batchView = await request(app)
+      .get(`/api/v1/records/receipt-batches/${batch.id}`)
+      .set(...auth("owner-token"));
+    expect(batchView.status).toBe(200);
+    expect(batchView.body.status).not.toBe("CANCELLED");
+    expect(batchView.body.receipts).toHaveLength(2);
+
+    // Once the reviewed sibling has also gone quiet for a week, the batch is
+    // abandoned as a whole: both children go and the batch is cancelled.
+    const later = new Date(recent.getTime() + ABANDONED_SCAN_RETENTION_MS + MINUTE_MS);
+    await expect(sweepAbandonedReceiptScans({ now: later })).resolves.toMatchObject({ enqueued: 2 });
+    expect(await purgeJobsFor(abandonedChild.id)).toHaveLength(1);
+    expect(await purgeJobsFor(reviewedChild.id)).toHaveLength(1);
+    expect(await prisma.receiptCaptureBatch.findUniqueOrThrow({ where: { id: batch.id } })).toMatchObject({
+      status: "CANCELLED",
+      finishedAt: expect.any(Date),
+    });
+  });
+
+  it("treats a sibling still owned by the processing pipeline as live", async () => {
+    const batch = await makeBatch(2);
+    const stale = new Date(CUTOFF.getTime() - DAY_MS);
+    const finished = await makeScan({ lastActivityAt: stale, captureBatchId: batch.id, receiptOrdinal: 1 });
+    await makeScan({ processingStatus: "Processing", lastActivityAt: stale, captureBatchId: batch.id, receiptOrdinal: 2 });
+
+    await expect(sweepAbandonedReceiptScans({ now: NOW })).resolves.toMatchObject({ candidates: 0, enqueued: 0 });
+    expect(await purgeJobsFor(finished.id)).toHaveLength(0);
+    expect(await prisma.receiptCaptureBatch.findUniqueOrThrow({ where: { id: batch.id } })).toMatchObject({
+      status: "COLLECTING",
+    });
+  });
+
+  it("sweeps a stale child whose only sibling is already confirmed, and cancels the batch", async () => {
+    const batch = await makeBatch(2);
+    const stale = new Date(CUTOFF.getTime() - DAY_MS);
+    const abandonedChild = await makeScan({ lastActivityAt: stale, captureBatchId: batch.id, receiptOrdinal: 1 });
+    const confirmedChild = await makeScan({
+      confirmationStatus: "Confirmed",
+      lastActivityAt: new Date(NOW.getTime() - MINUTE_MS),
+      captureBatchId: batch.id,
+      receiptOrdinal: 2,
+    });
+
+    await expect(sweepAbandonedReceiptScans({ now: NOW })).resolves.toMatchObject({ candidates: 1, enqueued: 1 });
+    expect(await purgeJobsFor(abandonedChild.id)).toHaveLength(1);
+    expect(await purgeJobsFor(confirmedChild.id)).toHaveLength(0);
+    expect(await prisma.receiptCaptureBatch.findUniqueOrThrow({ where: { id: batch.id } })).toMatchObject({
+      status: "CANCELLED",
+    });
+
+    expect(await runReceiptPurgeWorkerOnce()).toBe(true);
+    expect(await runReceiptPurgeWorkerOnce()).toBe(true);
+    expect(await prisma.receiptScan.findUnique({ where: { id: abandonedChild.id } })).toBeNull();
+    expect(await prisma.receiptScan.findUniqueOrThrow({ where: { id: confirmedChild.id } })).toMatchObject({
+      confirmationStatus: "Confirmed",
+    });
   });
 });

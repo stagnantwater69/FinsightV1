@@ -344,6 +344,92 @@ describe("receipt scan review workflow", () => {
     });
   });
 
+  const storedSummary81 = {
+    id: 81,
+    businessProfileId: 1,
+    receiptBatchId: null,
+    receiptOrdinal: null,
+    scanRevision: 0,
+    processingStatus: "Processing",
+    confirmationStatus: "Pending",
+    processingError: null,
+    processingErrorCode: null,
+    extractedDate: null,
+    extractedVendor: null,
+    extractedDescription: null,
+    extractedAmount: null,
+    createdAt: "2026-09-13T10:00:00.000Z",
+    pageCount: 2,
+    allowedActions: { retryProcessing: false, reviewResult: false },
+  };
+  const emptySourceImages = (container: Awaited<ReturnType<typeof render>>["container"]) =>
+    container.queryAll((node) => /Image/.test(node.type) && node.props.source?.uri === "");
+
+  it("shows stored-page placeholders instead of empty images while a resumed receipt is read and after its read fails", async () => {
+    let failPoll!: (error: Error) => void;
+    get.mockImplementation(async (path: string) => {
+      if (path.includes("provider-consent")) return unavailableConsent;
+      if (path === "/records/receipts") return { items: [storedSummary81], nextCursor: null };
+      if (path === "/records/receipts/81") return { ...accepted, id: 81 };
+      throw new Error(`Unexpected GET ${path}`);
+    });
+    poll.mockImplementation(() => new Promise((_, reject) => { failPoll = reject; }));
+    const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
+    await waitFor(() => expect(q.getByRole("button", { name: /^Continue waiting for Stored receipt 81/ })).toBeEnabled());
+
+    await fireEvent.press(q.getByRole("button", { name: /^Continue waiting for Stored receipt 81/ }));
+    await waitFor(() => expect(q.getByRole("button", { name: "Stop waiting" })).toBeTruthy());
+    expect(q.getByText("Reading receipt…")).toBeTruthy();
+    expect(emptySourceImages(q.container)).toHaveLength(0);
+    expect(q.getByText("Stored receipt image")).toBeTruthy();
+
+    await act(async () => { failPoll(new Error("Network interrupted")); });
+    await waitFor(() => expect(q.getByRole("button", { name: "Review result" })).toBeEnabled());
+    expect(emptySourceImages(q.container)).toHaveLength(0);
+    expect(q.getAllByText("Stored")).toHaveLength(2);
+    expect(upload).not.toHaveBeenCalled();
+  });
+
+  it("offers Stop waiting, not Cancel upload, while a stored receipt is being opened and says what stopping leaves behind", async () => {
+    let finishGet!: (value: unknown) => void;
+    get.mockImplementation(async (path: string) => {
+      if (path.includes("provider-consent")) return unavailableConsent;
+      if (path === "/records/receipts") return { items: [storedSummary81], nextCursor: null };
+      if (path === "/records/receipts/81") return new Promise((resolve) => { finishGet = resolve; });
+      throw new Error(`Unexpected GET ${path}`);
+    });
+    const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
+    await waitFor(() => expect(q.getByRole("button", { name: /^Continue waiting for Stored receipt 81/ })).toBeEnabled());
+
+    await fireEvent.press(q.getByRole("button", { name: /^Continue waiting for Stored receipt 81/ }));
+    await waitFor(() => expect(q.getByText("Reading stored receipt…")).toBeTruthy());
+    expect(q.queryByRole("button", { name: "Cancel upload" })).toBeNull();
+    await fireEvent.press(q.getByRole("button", { name: "Stop waiting" }));
+    expect(q.getByText("Nothing changed. The receipt is still listed under Receipts to finish.")).toBeTruthy();
+    expect(q.queryByText(/selected images are kept/)).toBeNull();
+    expect(q.getByRole("button", { name: /^Continue waiting for Stored receipt 81/ })).toBeEnabled();
+    await act(async () => { finishGet({ ...accepted, id: 81 }); });
+    expect(poll).not.toHaveBeenCalled();
+  });
+
+  it("tells the owner the stored receipt is kept when they stop waiting on its read", async () => {
+    get.mockImplementation(async (path: string) => {
+      if (path.includes("provider-consent")) return unavailableConsent;
+      if (path === "/records/receipts") return { items: [storedSummary81], nextCursor: null };
+      if (path === "/records/receipts/81") return { ...accepted, id: 81 };
+      throw new Error(`Unexpected GET ${path}`);
+    });
+    poll.mockImplementation(() => new Promise(() => {}));
+    const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
+    await waitFor(() => expect(q.getByRole("button", { name: /^Continue waiting for Stored receipt 81/ })).toBeEnabled());
+    await fireEvent.press(q.getByRole("button", { name: /^Continue waiting for Stored receipt 81/ }));
+    await waitFor(() => expect(q.getByRole("button", { name: "Stop waiting" })).toBeTruthy());
+
+    await fireEvent.press(q.getByRole("button", { name: "Stop waiting" }));
+    expect(q.getByText("The stored receipt is kept. Review the result when you're ready.")).toBeTruthy();
+    expect(q.getByRole("button", { name: "Review result" })).toBeEnabled();
+  });
+
   it("retries a discovered failed receipt using its stored bytes", async () => {
     const failedSummary = {
       id: 83,
@@ -916,6 +1002,39 @@ describe("receipt scan review workflow", () => {
     expect(q.getByRole("button", { name: "Save item changes" })).toBeEnabled();
   });
 
+  it("reloads the latest receipt after a stale item removal so the next Remove sends the current revision", async () => {
+    const itemised = {
+      ...complete,
+      extractedAmount: 300,
+      items: [
+        { id: 5, name: "Coffee beans", amount: 250, categoryId: 10 },
+        { id: 6, name: "Sugar", amount: 50, categoryId: 10 },
+      ],
+    };
+    const latest = { ...itemised, scanRevision: 3, items: [itemised.items[0]!, { ...itemised.items[1]!, name: "Brown sugar" }] };
+    poll.mockResolvedValue(itemised);
+    remove.mockImplementation(async (path: string) => {
+      if (path.endsWith("expectedScanRevision=0")) throw Object.assign(new Error("Receipt scan changed"), { status: 409 });
+      return { ...latest, scanRevision: 4, items: [latest.items[1]!] };
+    });
+    get.mockImplementation(async (path: string) => {
+      if (path.includes("provider-consent")) return unavailableConsent;
+      if (path === "/records/receipts") return { items: [], nextCursor: null };
+      return latest;
+    });
+    const q = await readyReceipt();
+    await fireEvent.press(q.getByRole("button", { name: "Scan this receipt" }));
+    await waitFor(() => expect(q.getByRole("button", { name: /^Remove Coffee beans/ })).toBeEnabled());
+    await fireEvent.press(q.getByRole("button", { name: /^Remove Coffee beans/ }));
+    await waitFor(() => expect(q.getByText(/Check the latest items and try again/)).toBeTruthy());
+    expect(get).toHaveBeenCalledWith("/records/receipts/41", undefined, expect.any(AbortSignal));
+    expect(q.getByText("Brown sugar")).toBeTruthy();
+
+    await fireEvent.press(q.getByRole("button", { name: /^Remove Coffee beans/ }));
+    await waitFor(() => expect(q.queryByText("Coffee beans")).toBeNull());
+    expect(remove).toHaveBeenLastCalledWith("/records/receipts/41/items/5?expectedScanRevision=3");
+  });
+
   it("shows profile-safe duplicate candidates and saves only after an explicit override", async () => {
     const duplicateBody = {
       error: "Review possible duplicates before saving.",
@@ -1182,6 +1301,59 @@ describe("receipt scan review workflow", () => {
       expect(q.queryByRole("button", { name: "Revoke future cloud sends" })).toBeNull();
       expect(put).not.toHaveBeenCalled();
       expect(q.getByRole("button", { name: "Scan receipt" })).toBeEnabled();
+    });
+
+    it("offers to allow cloud reading again when automatic mode is blocked by the owner's revoke", async () => {
+      get.mockImplementation(async (path: string) => path === "/records/receipts"
+        ? { items: [], nextCursor: null }
+        : { ...availableConsent, mode: "automatic", policyBlocked: true });
+      put.mockResolvedValue({ ...grantedConsent, mode: "automatic", policyBlocked: false });
+      const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
+      const allow = await waitFor(() => q.getByRole("button", { name: "Allow cloud reading again" }));
+      expect(q.getByText(/Cloud receipt reading stays off because you revoked it/)).toBeTruthy();
+      expect(q.queryByRole("checkbox", { name: /I allow FinSight to send these receipt images/ })).toBeNull();
+      expect(q.queryByRole("button", { name: "Allow optional cloud help" })).toBeNull();
+      expect(put).not.toHaveBeenCalled();
+
+      await fireEvent.press(allow);
+      await waitFor(() => expect(q.getByText("Cloud receipt reading is allowed again.")).toBeTruthy());
+      expect(put).toHaveBeenCalledTimes(1);
+      expect(put).toHaveBeenCalledWith(
+        "/records/receipts/provider-consent/1",
+        {
+          provider: "gemini",
+          policyVersion: "receipt-provider-policy-v1",
+          purpose: "RECEIPT_EXTRACTION",
+          dataClasses: ["RECEIPT_IMAGE", "DERIVED_RECEIPT_IMAGE"],
+          region: "global",
+          retentionHours: 0,
+          trainingAllowed: false,
+        },
+      );
+      expect(q.queryByRole("button", { name: "Allow cloud reading again" })).toBeNull();
+      expect(q.getByRole("button", { name: "Scan receipt" })).toBeEnabled();
+    });
+
+    it("renders nothing in automatic mode when the policy is not blocked", async () => {
+      get.mockImplementation(async (path: string) => path === "/records/receipts"
+        ? { items: [], nextCursor: null }
+        : { ...availableConsent, mode: "automatic", policyBlocked: false });
+      const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
+      await waitFor(() => expect(q.queryByText("Checking optional cloud receipt settings…")).toBeNull());
+      expect(q.queryByRole("button", { name: "Allow cloud reading again" })).toBeNull();
+      expect(q.queryByText(/Cloud receipt reading stays off/)).toBeNull();
+      expect(put).not.toHaveBeenCalled();
+    });
+
+    it("keeps the explicit consent card unchanged when the server also sends policyBlocked", async () => {
+      get.mockImplementation(async (path: string) => path === "/records/receipts"
+        ? { items: [], nextCursor: null }
+        : { ...availableConsent, mode: "explicit", policyBlocked: true });
+      const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
+      await waitFor(() => expect(q.getByRole("checkbox", { name: "I allow FinSight to send these receipt images to Google Gemini under the terms above" })).toBeTruthy());
+      expect(q.getByRole("button", { name: "Allow optional cloud help" })).toBeDisabled();
+      expect(q.queryByRole("button", { name: "Allow cloud reading again" })).toBeNull();
+      expect(q.queryByText(/Cloud receipt reading stays off/)).toBeNull();
     });
 
     it("still shows the consent card when the server reports explicit mode", async () => {

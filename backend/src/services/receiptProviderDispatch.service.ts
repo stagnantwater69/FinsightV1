@@ -99,6 +99,7 @@ type Reservation = {
   provider: "gemini" | "veryfi";
   cycleStart: Date;
   businessProfileId: number;
+  receiptScanId: number | null;
   status: "RESERVED" | "SUBMITTED" | "SUCCEEDED" | "FAILED" | "CANCELLED" | "AMBIGUOUS";
 };
 
@@ -142,6 +143,7 @@ function skipped(local: NormalizedReceiptExtraction, code: ReceiptProviderGateCo
       appliedFields: [],
       providerResultAccepted: false,
       reason: "NOT_SUCCESSFUL",
+      itemsOwnerReviewRequired: false,
     },
   };
 }
@@ -591,6 +593,63 @@ export async function reconcileStaleReceiptProviderDispatches(
   return result;
 }
 
+/*
+ * A worker that dies after a successful dispatch used to lose the paid answer:
+ * the row read SUCCEEDED and the next attempt was refused. The validated
+ * outcome is written in the same transaction that settles billing, and a
+ * later attempt on the same reservation key replays it through the same
+ * merge with no second call.
+ *
+ * ExternalProviderDispatchOutcome cascades from the receipt so the extraction
+ * dies with the scan on purge, while the dispatch audit row survives and
+ * stays free of receipt content. A SUCCEEDED dispatch with no stored outcome
+ * (written before outcomes were kept) is still refused on retry.
+ */
+function storeSucceededOutcome(
+  tx: Prisma.TransactionClient,
+  reservation: Reservation,
+  outcome: ReceiptProviderOutcome,
+): Promise<unknown> {
+  if (outcome.status !== "SUCCEEDED" || reservation.receiptScanId === null) return Promise.resolve();
+  return tx.externalProviderDispatchOutcome.create({
+    data: {
+      dispatchId: reservation.id,
+      businessProfileId: reservation.businessProfileId,
+      receiptScanId: reservation.receiptScanId,
+      receiptScanBusinessProfileId: reservation.businessProfileId,
+      outcome: outcome as unknown as Prisma.InputJsonObject,
+    },
+    select: { dispatchId: true },
+  });
+}
+
+async function loadStoredOutcome(existing: {
+  id: number;
+  businessProfileId: number;
+  receiptScanId: number | null;
+}): Promise<unknown | null> {
+  if (existing.receiptScanId === null) return null;
+  const row = await prisma.externalProviderDispatchOutcome.findFirst({
+    where: {
+      dispatchId: existing.id,
+      businessProfileId: existing.businessProfileId,
+      receiptScanId: existing.receiptScanId,
+      receiptScanBusinessProfileId: existing.businessProfileId,
+    },
+    select: { outcome: true },
+  });
+  return row ? (row.outcome as unknown) : null;
+}
+
+type ReserveResult =
+  | { kind: "reserved"; reservation: Reservation }
+  | { kind: "replay"; reservation: Reservation; outcome: unknown };
+
+/** Never submitted and never billed: the key is free to reserve again. */
+function reservationNeverSubmitted(existing: { status: Reservation["status"]; finalBillableUnits: number | null }): boolean {
+  return existing.status === "CANCELLED" && existing.finalBillableUnits === 0;
+}
+
 async function reserve(
   input: ReceiptProviderDispatchInput,
   config: ReceiptProviderConfiguration & {
@@ -604,19 +663,29 @@ async function reserve(
   reservationKeyHash: string,
   inputHash: string,
   now: Date,
-): Promise<Reservation> {
+): Promise<ReserveResult> {
   const existing = await prisma.externalProviderDispatch.findUnique({ where: { reservationKeyHash } });
+  let rearm: { id: number } | null = null;
   if (existing) {
     if (
       existing.businessProfileId !== input.businessProfileId ||
       existing.receiptScanId !== input.receiptScanId ||
       existing.inputHash !== inputHash ||
-      existing.provider !== config.provider ||
-      existing.status !== "RESERVED"
+      existing.provider !== config.provider
     ) {
       throw new GateRefusal("PROVIDER_DISPATCH_ALREADY_ATTEMPTED");
     }
-    return existing as Reservation;
+    if (existing.status === "RESERVED") return { kind: "reserved", reservation: existing as Reservation };
+    if (existing.status === "SUCCEEDED") {
+      const outcome = await loadStoredOutcome(existing);
+      if (outcome !== null) return { kind: "replay", reservation: existing as Reservation, outcome };
+      throw new GateRefusal("PROVIDER_DISPATCH_ALREADY_ATTEMPTED");
+    }
+    // A reservation the stale reconciler (or a pre-submission check) cancelled
+    // sent nothing and billed nothing, so it is not an attempt. The key is
+    // unique, so the row is re-armed in place rather than duplicated.
+    if (!reservationNeverSubmitted(existing)) throw new GateRefusal("PROVIDER_DISPATCH_ALREADY_ATTEMPTED");
+    rearm = { id: existing.id };
   }
 
   const { start, end } = cycleAt(now);
@@ -674,34 +743,53 @@ async function reserve(
             businessBudgetId = business.id;
           }
 
-          const dispatch = await tx.externalProviderDispatch.create({
-            data: {
-              businessProfileId: input.businessProfileId,
-              receiptScanId: input.receiptScanId,
-              receiptScanBusinessProfileId: input.businessProfileId,
-              consentId: consent.id,
-              resourceBudgetId: resource.id,
-              resourceBudgetScope: "RESOURCE",
-              businessBudgetId,
-              businessBudgetScope: businessBudgetId ? "BUSINESS" : null,
-              businessBudgetProfileId: businessBudgetId ? input.businessProfileId : null,
-              provider: config.provider,
-              providerVersion: config.providerVersion,
-              providerRegion: config.providerRegion,
-              unitType: config.unitType,
-              cycleStart: start,
-              reservationKeyHash,
-              inputHash,
-              preprocessingVersion: input.preprocessingVersion,
-              schemaVersion: input.normalizedSchemaVersion,
-              rescueReasonCode: firstProviderRescueReason(input.rescueDecision.reasons) ?? "LOCAL_VALIDATION_FAILED",
-              reservedUnits,
-              pageCount: input.pages.length,
-              documentCount: 1,
-              status: "RESERVED",
-            },
-          });
-          return dispatch as Reservation;
+          const data = {
+            businessProfileId: input.businessProfileId,
+            receiptScanId: input.receiptScanId,
+            receiptScanBusinessProfileId: input.businessProfileId,
+            consentId: consent.id,
+            resourceBudgetId: resource.id,
+            resourceBudgetScope: "RESOURCE" as const,
+            businessBudgetId,
+            businessBudgetScope: businessBudgetId ? ("BUSINESS" as const) : null,
+            businessBudgetProfileId: businessBudgetId ? input.businessProfileId : null,
+            provider: config.provider,
+            providerVersion: config.providerVersion,
+            providerRegion: config.providerRegion,
+            unitType: config.unitType,
+            cycleStart: start,
+            reservationKeyHash,
+            inputHash,
+            preprocessingVersion: input.preprocessingVersion,
+            schemaVersion: input.normalizedSchemaVersion,
+            rescueReasonCode: firstProviderRescueReason(input.rescueDecision.reasons) ?? "LOCAL_VALIDATION_FAILED",
+            reservedUnits,
+            pageCount: input.pages.length,
+            documentCount: 1,
+            status: "RESERVED" as const,
+          };
+          if (rearm) {
+            // createdAt is what the reconciler reads as the reservation time,
+            // so it moves with the re-arm or the row is cancelled again at once.
+            const rearmed = await tx.externalProviderDispatch.updateMany({
+              where: { id: rearm.id, reservationKeyHash, status: "CANCELLED", finalBillableUnits: 0 },
+              data: {
+                ...data,
+                finalBillableUnits: null,
+                outcomeCode: null,
+                providerRequestIdHash: null,
+                latencyMs: null,
+                submittedAt: null,
+                completedAt: null,
+                createdAt: now,
+              },
+            });
+            if (rearmed.count !== 1) throw new GateRefusal("PROVIDER_DISPATCH_ALREADY_ATTEMPTED");
+            const dispatch = await tx.externalProviderDispatch.findUniqueOrThrow({ where: { id: rearm.id } });
+            return { kind: "reserved", reservation: dispatch as Reservation } satisfies ReserveResult;
+          }
+          const dispatch = await tx.externalProviderDispatch.create({ data });
+          return { kind: "reserved", reservation: dispatch as Reservation } satisfies ReserveResult;
         },
         { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
       );
@@ -713,7 +801,7 @@ async function reserve(
       const raced = await prisma.externalProviderDispatch.findUnique({ where: { reservationKeyHash } });
       if (raced) {
         if (raced.status !== "RESERVED") throw new GateRefusal("PROVIDER_DISPATCH_ALREADY_ATTEMPTED");
-        return raced as Reservation;
+        return { kind: "reserved", reservation: raced as Reservation };
       }
     }
   }
@@ -761,6 +849,7 @@ async function releaseOrConsume(
       },
     });
     if (changed.count !== 1) throw new GateRefusal("PROVIDER_DISPATCH_ALREADY_ATTEMPTED");
+    await storeSucceededOutcome(tx, reservation, outcome);
   });
 }
 
@@ -886,12 +975,18 @@ export async function dispatchReceiptProviderRescue(
     ].join(":"),
   );
   const clock = dependencies.now ?? (() => new Date());
-  let reservation: Reservation;
+  let reserved: ReserveResult;
   try {
-    reservation = await reserve(input, config, reservationKeyHash, inputHash, clock());
+    reserved = await reserve(input, config, reservationKeyHash, inputHash, clock());
   } catch (error) {
     return skipped(localExtraction, error instanceof GateRefusal ? error.code : "PROVIDER_UNAVAILABLE");
   }
+  const reservation = reserved.reservation;
+  // A replay settles nothing: the row is SUCCEEDED and stays so.
+  const settle = async (outcome: ReceiptProviderOutcome) => {
+    if (reserved.kind === "replay") return;
+    await releaseOrConsume(reservation, outcome, clock()).catch(() => undefined);
+  };
 
   const loadStartedAt = Date.now();
   const pages = [] as {
@@ -923,8 +1018,7 @@ export async function dispatchReceiptProviderRescue(
       });
     }
   } catch {
-    const outcome = cancelledOutcome(reservation, config, Date.now() - loadStartedAt);
-    await releaseOrConsume(reservation, outcome, clock()).catch(() => undefined);
+    await settle(cancelledOutcome(reservation, config, Date.now() - loadStartedAt));
     return skipped(localExtraction, "PROVIDER_EVIDENCE_INVALID");
   }
 
@@ -961,9 +1055,26 @@ export async function dispatchReceiptProviderRescue(
       pages,
     });
   } catch {
-    const outcome = cancelledOutcome(reservation, config, Date.now() - loadStartedAt);
-    await releaseOrConsume(reservation, outcome, clock()).catch(() => undefined);
+    await settle(cancelledOutcome(reservation, config, Date.now() - loadStartedAt));
     return skipped(localExtraction, "PROVIDER_EVIDENCE_INVALID");
+  }
+
+  if (reserved.kind === "replay") {
+    // Same bytes (inputHash matched), same request shape, no provider call,
+    // no billing: the stored answer goes through the merge exactly as the
+    // original attempt's would have.
+    const validation = validateReceiptProviderOutcome(request, reserved.outcome);
+    if (!validation.ok || validation.outcome.status !== "SUCCEEDED") {
+      return skipped(localExtraction, "PROVIDER_DISPATCH_ALREADY_ATTEMPTED");
+    }
+    return {
+      code: "PROVIDER_OK",
+      dispatched: true,
+      dispatchStatus: "SUCCEEDED",
+      provider: config.provider,
+      latencyMs: validation.outcome.latencyMs,
+      merge: mergeReceiptProviderOutcome(localExtraction, request, validation.outcome),
+    };
   }
 
   const currentConfig = loadConfiguration();

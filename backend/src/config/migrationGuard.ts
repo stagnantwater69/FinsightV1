@@ -797,6 +797,10 @@ export async function checkPhase2SchemaShape(): Promise<string[]> {
         ) = ARRAY['PENDING', 'SAVED_ANYWAY', 'SUPERSEDED']::text[]),
         ('table.receipt_capture_batch', to_regclass('public."ReceiptCaptureBatch"') IS NOT NULL),
         ('table.receipt_duplicate_candidate', to_regclass('public."ReceiptDuplicateCandidate"') IS NOT NULL),
+        ('table.external_provider_dispatch_outcome', to_regclass('public."ExternalProviderDispatchOutcome"') IS NOT NULL),
+        ('table.external_processing_consent', to_regclass('public."ExternalProcessingConsent"') IS NOT NULL),
+        ('table.external_provider_budget', to_regclass('public."ExternalProviderBudget"') IS NOT NULL),
+        ('table.external_provider_dispatch', to_regclass('public."ExternalProviderDispatch"') IS NOT NULL),
         ('sequence.receipt_capture_batch', to_regclass(
           'public."ReceiptCaptureBatch_ReceiptCaptureBatch_ID_seq"'
         ) IS NOT NULL),
@@ -845,11 +849,35 @@ export async function checkPhase2SchemaShape(): Promise<string[]> {
         ('security.receipt_duplicate_candidate_rls', COALESCE((
           SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass('public."ReceiptDuplicateCandidate"')
         ), FALSE)),
+        ('security.external_provider_dispatch_outcome_rls', COALESCE((
+          SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass('public."ExternalProviderDispatchOutcome"')
+        ), FALSE)),
+        ('security.external_processing_consent_rls', COALESCE((
+          SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass('public."ExternalProcessingConsent"')
+        ), FALSE)),
+        ('security.external_provider_budget_rls', COALESCE((
+          SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass('public."ExternalProviderBudget"')
+        ), FALSE)),
+        ('security.external_provider_dispatch_rls', COALESCE((
+          SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass('public."ExternalProviderDispatch"')
+        ), FALSE)),
         ('security.receipt_capture_batch_no_policies', NOT EXISTS (
           SELECT 1 FROM pg_policy WHERE polrelid = to_regclass('public."ReceiptCaptureBatch"')
         )),
         ('security.receipt_duplicate_candidate_no_policies', NOT EXISTS (
           SELECT 1 FROM pg_policy WHERE polrelid = to_regclass('public."ReceiptDuplicateCandidate"')
+        )),
+        ('security.external_provider_dispatch_outcome_no_policies', NOT EXISTS (
+          SELECT 1 FROM pg_policy WHERE polrelid = to_regclass('public."ExternalProviderDispatchOutcome"')
+        )),
+        ('security.external_processing_consent_no_policies', NOT EXISTS (
+          SELECT 1 FROM pg_policy WHERE polrelid = to_regclass('public."ExternalProcessingConsent"')
+        )),
+        ('security.external_provider_budget_no_policies', NOT EXISTS (
+          SELECT 1 FROM pg_policy WHERE polrelid = to_regclass('public."ExternalProviderBudget"')
+        )),
+        ('security.external_provider_dispatch_no_policies', NOT EXISTS (
+          SELECT 1 FROM pg_policy WHERE polrelid = to_regclass('public."ExternalProviderDispatch"')
         )),
         ('security.receipt_tables_no_direct_api_grants', NOT EXISTS (
           SELECT 1

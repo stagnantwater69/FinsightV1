@@ -120,6 +120,46 @@ function isCancelledReceiptBatch(value: unknown): boolean {
     && (value as { status?: unknown }).status === "CANCELLED");
 }
 
+/**
+ * DELETE /records/receipts/:id answers 409 for more than one reason. Only the
+ * "purge already running" one means the row is gone; a scan that already has
+ * financial records, or a reused idempotency key, still needs the owner to read
+ * the message.
+ */
+function isDeletionAlreadyUnderway(error: unknown): boolean {
+  if (!isAxiosError(error) || error.response?.status !== 409) return false;
+  const body = error.response.data as { error?: unknown; code?: unknown } | undefined;
+  // The stable code is the contract; the message match keeps older servers working.
+  return body?.code === "PURGE_IN_PROGRESS" || (typeof body?.error === "string" && /already being deleted/i.test(body.error));
+}
+
+/**
+ * The confirm-time hash when a DUPLICATE_REVIEW_CHANGED answer names exactly the
+ * acknowledged target records. Row ids move with the edited identity; targets do not.
+ */
+function sameMatchesHash(error: unknown, acknowledged: DuplicateReviewState): string | null {
+  if (!isAxiosError(error) || error.response?.status !== 409) return null;
+  const body = error.response.data as { code?: unknown };
+  if (body?.code !== "DUPLICATE_REVIEW_CHANGED") return null;
+  const current = duplicateReviewFrom(body, true);
+  if (!current || current.nextCursor !== null || current.candidates.length !== current.candidateCount) return null;
+  const targetKey = (candidate: ReceiptDuplicateCandidate) => `${candidate.target.kind}:${candidate.target.id}`;
+  const acknowledgedTargets = new Set(acknowledged.candidates.map(targetKey));
+  const currentTargets = new Set(current.candidates.map(targetKey));
+  if (acknowledgedTargets.size !== currentTargets.size) return null;
+  for (const key of currentTargets) if (!acknowledgedTargets.has(key)) return null;
+  return current.candidateSetHash;
+}
+
+function recoveryRowActionId(scanId: number): string {
+  return `unfinished-scan-${scanId}-action`;
+}
+
+/** The server binds an upload key to one batch slot or to a single receipt. */
+function uploadBindingKey(batch?: BatchReceiptBinding): string {
+  return batch ? `batch:${batch.batchId}:${batch.receiptOrdinal}` : "single";
+}
+
 function duplicateReviewFrom(value: unknown, changed = false): DuplicateReviewState | null {
   if (!value || typeof value !== "object") return null;
   const candidateSetHash = (value as { candidateSetHash?: unknown }).candidateSetHash;
@@ -290,9 +330,11 @@ function ScanReceiptForm() {
   // failure, so retry resumes the stored scan instead of uploading twice.
   // An accepting promise is held separately from reading: a receipt batch must
   // finish storing every child before the first one is presented for review.
-  const acceptingScans = useRef<Map<File, Promise<ScanResult>>>(new Map());
-  const acceptedScans = useRef<Map<File, ScanResult>>(new Map());
-  const uploadKeys = useRef<Map<File, string>>(new Map());
+  // Keyed by File plus batch binding: the server ties an upload key and its
+  // scan to one binding and answers 409 when the same key arrives bound differently.
+  const acceptingScans = useRef<Map<File, { binding: string; promise: Promise<ScanResult> }>>(new Map());
+  const acceptedScans = useRef<Map<File, { binding: string; scan: ScanResult }>>(new Map());
+  const uploadKeys = useRef<Map<File, { binding: string; key: string }>>(new Map());
   const combinedUpload = useRef<{ files: File[]; key: string; scan?: ScanResult } | null>(null);
   const batchUpload = useRef<{
     clientBatchKey: string;
@@ -308,7 +350,12 @@ function ScanReceiptForm() {
   const startPending = useRef(false);
   const savePending = useRef(false);
   const stopRequested = useRef(false);
+  /** The unfinished-scans row being waited on, when the wait is not a local upload. */
+  const waitingStoredScan = useRef<ReceiptScanSummary | null>(null);
   const deleteKeys = useRef<Map<number, string>>(new Map());
+  // A history page requested before a delete can settle after it and put the row back.
+  const purgedScanIds = useRef<Set<number>>(new Set());
+  const [focusRowAfterDelete, setFocusRowAfterDelete] = useState<{ scanId: number | null } | null>(null);
 
   useEffect(() => {
     requests.current = new AbortController();
@@ -340,9 +387,11 @@ function ScanReceiptForm() {
         signal,
       });
       signal.throwIfAborted();
-      const page = excludeScanId === undefined
-        ? data
-        : { ...data, items: data.items.filter((candidate) => candidate.id !== excludeScanId) };
+      const purged = purgedScanIds.current;
+      const page = {
+        ...data,
+        items: data.items.filter((candidate) => candidate.id !== excludeScanId && !purged.has(candidate.id)),
+      };
       setResumeHistory((current) => reconcileFirstPage(current, page));
     } catch (error) {
       if (!signal.aborted) setResumeError({ message: getErrorMessage(error), failed: "refresh" });
@@ -363,7 +412,11 @@ function ScanReceiptForm() {
         signal,
       });
       signal.throwIfAborted();
-      setResumeHistory((current) => appendOlderPage(current, data));
+      const purged = purgedScanIds.current;
+      setResumeHistory((current) => appendOlderPage(current, {
+        ...data,
+        items: data.items.filter((candidate) => !purged.has(candidate.id)),
+      }));
     } catch (error) {
       if (!signal.aborted) setResumeError({ message: getErrorMessage(error), failed: "older" });
     } finally {
@@ -509,6 +562,15 @@ function ScanReceiptForm() {
     );
   }, [categories, scan]);
 
+  useEffect(() => {
+    if (!focusRowAfterDelete) return;
+    setFocusRowAfterDelete(null);
+    const { scanId } = focusRowAfterDelete;
+    // Next row's action, or the photo picker once the list is empty.
+    const next = scanId === null ? null : document.getElementById(recoveryRowActionId(scanId));
+    (next ?? document.getElementById("receipt-files"))?.focus();
+  }, [focusRowAfterDelete]);
+
   if (!selected) return <NoBusinessProfile />;
 
   async function ensureReceiptBatch(expectedReceiptCount: number): Promise<number> {
@@ -546,18 +608,23 @@ function ScanReceiptForm() {
   }
 
   function ensureAccepted(file: File, batch?: BatchReceiptBinding): Promise<ScanResult> {
+    const binding = uploadBindingKey(batch);
     const accepted = acceptedScans.current.get(file);
-    if (accepted) return Promise.resolve(accepted);
+    if (accepted?.binding === binding) return Promise.resolve(accepted.scan);
     const existing = acceptingScans.current.get(file);
-    if (existing) return existing;
+    if (existing?.binding === binding) return existing.promise;
 
     const promise = (async () => {
       const signal = requests.current.signal;
       const formData = new FormData();
       formData.append("files", file);
       formData.append("businessProfileId", String(selected!.id));
-      if (!uploadKeys.current.has(file)) uploadKeys.current.set(file, randomId());
-      formData.append("idempotencyKey", uploadKeys.current.get(file)!);
+      let upload = uploadKeys.current.get(file);
+      if (upload?.binding !== binding) {
+        upload = { binding, key: randomId() };
+        uploadKeys.current.set(file, upload);
+      }
+      formData.append("idempotencyKey", upload.key);
       if (batch) {
         formData.append("receiptBatchId", String(batch.batchId));
         formData.append("receiptOrdinal", String(batch.receiptOrdinal));
@@ -567,15 +634,14 @@ function ScanReceiptForm() {
         signal,
       });
       signal.throwIfAborted();
-      acceptedScans.current.set(file, data);
+      acceptedScans.current.set(file, { binding, scan: data });
       return data;
     })();
-    acceptingScans.current.set(file, promise);
-    void promise.then(() => {
-      if (acceptingScans.current.get(file) === promise) acceptingScans.current.delete(file);
-    }, () => {
-      if (acceptingScans.current.get(file) === promise) acceptingScans.current.delete(file);
-    });
+    acceptingScans.current.set(file, { binding, promise });
+    const settle = () => {
+      if (acceptingScans.current.get(file)?.promise === promise) acceptingScans.current.delete(file);
+    };
+    void promise.then(settle, settle);
     return promise;
   }
 
@@ -788,10 +854,19 @@ function ScanReceiptForm() {
     requests.current = new AbortController();
     currentFiles.current.forEach((file) => acceptingScans.current.delete(file));
 
+    const stored = waitingStoredScan.current;
+    if (stored) {
+      // Nothing local was sent, so the picked photos and any paused upload stay put.
+      waitingStoredScan.current = null;
+      setScanning(false);
+      setScanError(`Stopped waiting. ${recoveryRowTitle(stored)} stays in unfinished scans.`);
+      return;
+    }
+
     const accepted = currentFiles.current.length === 1
-      ? acceptedScans.current.get(currentFiles.current[0]!)
+      ? acceptedScans.current.get(currentFiles.current[0]!)?.scan
       : combinedUpload.current?.scan
-        ?? currentFiles.current.map((file) => acceptedScans.current.get(file)).find(Boolean);
+        ?? currentFiles.current.map((file) => acceptedScans.current.get(file)?.scan).find(Boolean);
     setPausedScan(accepted ?? null);
     setPickedFiles(currentFiles.current);
     setScanning(false);
@@ -830,6 +905,7 @@ function ScanReceiptForm() {
 
   async function openStoredScan(summary: ReceiptScanSummary) {
     const signal = requests.current.signal;
+    waitingStoredScan.current = summary;
     setScanning(true);
     setScanStage(summary.allowedActions.retryProcessing ? "reading" : "checking");
     setScanError(null);
@@ -851,7 +927,10 @@ function ScanReceiptForm() {
     } catch (err) {
       if (!signal.aborted) setScanError(getErrorMessage(err));
     } finally {
-      if (!signal.aborted) setScanning(false);
+      if (!signal.aborted) {
+        waitingStoredScan.current = null;
+        setScanning(false);
+      }
     }
   }
 
@@ -882,6 +961,11 @@ function ScanReceiptForm() {
         throw new Error("FinSight returned a deletion result that did not match this receipt scan.");
       }
       deleteKeys.current.delete(target.id);
+      purgedScanIds.current.add(target.id);
+      const rowIndex = resumeScans.findIndex((row) => row.id === target.id);
+      const neighbour = rowIndex === -1
+        ? null
+        : resumeScans[rowIndex + 1] ?? resumeScans[rowIndex - 1] ?? null;
       setResumeHistory((current) => withoutScan(current, target.id));
 
       if (scan?.id === target.id) {
@@ -896,13 +980,32 @@ function ScanReceiptForm() {
           : "Scan removed. Its private files will be deleted in the background.");
         return;
       }
+      // The focused Delete button unmounts with its row; otherwise focus drops to <body>.
+      setFocusRowAfterDelete({ scanId: neighbour?.id ?? null });
       toast("Scan removed. Its private files will be deleted in the background.");
     } catch (error) {
+      if (isDeletionAlreadyUnderway(error)) {
+        // Another tab or an earlier retry won the delete. The purge is running,
+        // so the row is as gone as a fresh 200 would have made it; keeping it
+        // with an error would invite a third attempt at the same thing.
+        deleteKeys.current.delete(target.id);
+        purgedScanIds.current.add(target.id);
+        const rowIndex = resumeScans.findIndex((row) => row.id === target.id);
+        const neighbour = rowIndex === -1
+          ? null
+          : resumeScans[rowIndex + 1] ?? resumeScans[rowIndex - 1] ?? null;
+        setResumeHistory((current) => withoutScan(current, target.id));
+        if (scan?.id === target.id) resetScanSession();
+        else setFocusRowAfterDelete({ scanId: neighbour?.id ?? null });
+        toast("This scan is already being deleted. Its private files will be deleted in the background.");
+        return;
+      }
       setScanError(getErrorMessage(error));
     } finally {
       setDeletingScanId(null);
     }
   }
+
 
   /**
    * Accepts a category FinSight proposed for items nothing existing fitted.
@@ -981,43 +1084,51 @@ function ScanReceiptForm() {
     const signal = requests.current.signal;
     setConfirming(true);
     setConfirmError(null);
-    try {
+    const acknowledged = duplicateReview && duplicateListComplete && duplicateAcknowledged
+      ? duplicateReview
+      : null;
+    const send = (candidateSetHash: string | null) => api.post(
+      `/records/receipts/${scan.id}/confirm`,
       // Two shapes, one endpoint — both built in lib/receiptConfirm, where
       // they are tested against the server's real schema. This request is the
       // one that silently broke against it on mobile.
-      const records = await api.post(
-        `/records/receipts/${scan.id}/confirm`,
-        buildReceiptConfirmPayload({
-          expectedScanRevision: scan.scanRevision,
-          ...(duplicateReview && duplicateListComplete && duplicateAcknowledged
-            ? {
-                duplicateDecision: {
-                  action: "SAVE_ANYWAY" as const,
-                  candidateSetHash: duplicateReview.candidateSetHash,
-                },
-              }
-            : {}),
-          date,
-          description,
-          vendor,
-          amount: Number(amount),
-          isItemised,
-          itemAssignments: items.map((i) => ({ itemId: i.id, categoryId: Number(itemCategories[i.id]) })),
-          additionalItems: addedItems.map((a) => ({
-            name: a.name.trim(),
-            amount: Number(a.amount),
-            categoryId: Number(a.categoryId),
-          })),
-          itemsTotal: itemsTotalCentavos / 100,
-          gapPlan,
-          gapCategoryId: gapCategoryId === "" ? null : gapCategoryId,
-          splits: splits.map((s) => ({
-            categoryId: Number(s.categoryId),
-            amount: Number(isSplit ? s.amount : amount),
-          })),
-        }),
-        { signal },
-      );
+      buildReceiptConfirmPayload({
+        expectedScanRevision: scan.scanRevision,
+        ...(candidateSetHash === null
+          ? {}
+          : { duplicateDecision: { action: "SAVE_ANYWAY" as const, candidateSetHash } }),
+        date,
+        description,
+        vendor,
+        amount: Number(amount),
+        isItemised,
+        itemAssignments: items.map((i) => ({ itemId: i.id, categoryId: Number(itemCategories[i.id]) })),
+        additionalItems: addedItems.map((a) => ({
+          name: a.name.trim(),
+          amount: Number(a.amount),
+          categoryId: Number(a.categoryId),
+        })),
+        itemsTotal: itemsTotalCentavos / 100,
+        gapPlan,
+        gapCategoryId: gapCategoryId === "" ? null : gapCategoryId,
+        splits: splits.map((s) => ({
+          categoryId: Number(s.categoryId),
+          amount: Number(isSplit ? s.amount : amount),
+        })),
+      }),
+      { signal },
+    );
+    try {
+      let records;
+      try {
+        records = await send(acknowledged?.candidateSetHash ?? null);
+      } catch (err) {
+        // The set hash covers the confirm-time identity, so a field edit changes it
+        // even when the matches are the same records the owner already acknowledged.
+        const retryHash = acknowledged && !signal.aborted ? sameMatchesHash(err, acknowledged) : null;
+        if (retryHash === null) throw err;
+        records = await send(retryHash);
+      }
       signal.throwIfAborted();
       const saved = records.data as { id: number }[];
       await finishConfirmedReceipt(saved);
@@ -1093,7 +1204,7 @@ function ScanReceiptForm() {
     const abandoned: ScanResult[] = [];
     if (scan && scan.confirmationStatus !== "Confirmed") abandoned.push(scan);
     for (const file of fileQueue) {
-      const accepted = acceptedScans.current.get(file);
+      const accepted = acceptedScans.current.get(file)?.scan;
       if (accepted && !abandoned.some((row) => row.id === accepted.id)) abandoned.push(accepted);
     }
     resetScanSession();
@@ -1469,6 +1580,7 @@ function ScanReceiptForm() {
                     <div className="flex flex-wrap gap-2">
                       <Button
                         type="button"
+                        id={recoveryRowActionId(pending.id)}
                         variant={pending.allowedActions.reviewResult ? "primary" : "secondary"}
                         disabled={scanning || deletingScanId !== null}
                         onClick={() => void openStoredScan(pending)}

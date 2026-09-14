@@ -19,6 +19,7 @@ import {
 } from "../storage.service";
 import {
   lockReceiptCaptureBatchForMutation,
+  RECEIPT_CAPTURE_BATCH_MAX_RECEIPTS,
   lockReceiptCaptureBatchSlot,
   refreshReceiptCaptureBatchStatus,
   validateReceiptCaptureBatchSlot,
@@ -137,7 +138,7 @@ export async function uploadAndScan(userId: number, input: ReceiptUploadSubmissi
     && (
       !Number.isInteger(input.receiptOrdinal)
       || input.receiptOrdinal < 1
-      || input.receiptOrdinal > RECEIPT_UPLOAD_MAX_LOGICAL_PAGES
+      || input.receiptOrdinal > RECEIPT_CAPTURE_BATCH_MAX_RECEIPTS
     )
   ) {
     throw new ApiError(400, "Invalid receipt position");

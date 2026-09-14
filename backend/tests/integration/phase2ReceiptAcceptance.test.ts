@@ -72,7 +72,9 @@ import {
 } from "../../src/services/receiptScan/worker";
 import { refreshReceiptDuplicateCandidatesForScan } from "../../src/services/receiptDuplicate.service";
 import {
+  PURGE_REDRIVE_COOLDOWN_MS,
   countStalledReceiptPurges,
+  redriveStrandedReceiptPurges,
   runReceiptPurgeWorkerOnce,
 } from "../../src/services/receiptPurge.service";
 import {
@@ -260,6 +262,135 @@ describe("Phase 2 startup migration guard", () => {
           ON DELETE NO ACTION ON UPDATE CASCADE
       `);
     }
+  });
+});
+
+/**
+ * Takes the deny-all posture apart one control at a time and expects the
+ * guard to name it. The api-role cases create the Supabase roles when the
+ * disposable database lacks them, so those branches are not vacuous.
+ */
+describe("Phase 2 startup migration guard: security sentinels", () => {
+  async function ensureRole(name: string): Promise<boolean> {
+    const [row] = await prisma.$queryRaw<{ present: boolean }[]>`
+      SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = ${name}) AS present
+    `;
+    if (row?.present) return false;
+    await prisma.$executeRawUnsafe(`CREATE ROLE "${name}" NOLOGIN`);
+    return true;
+  }
+
+  async function expectDrift(issue: string): Promise<void> {
+    await expect(checkMigrationDrift()).resolves.toMatchObject({
+      status: "drift",
+      schemaIssues: expect.arrayContaining([issue]),
+    });
+  }
+
+  async function expectClean(): Promise<void> {
+    await expect(checkMigrationDrift()).resolves.toMatchObject({ status: "ok", schemaIssues: [] });
+  }
+
+  it.each([
+    ["ReceiptCaptureBatch", "security.receipt_capture_batch_rls"],
+    ["ReceiptDuplicateCandidate", "security.receipt_duplicate_candidate_rls"],
+  ])("rejects %s with row level security switched off", async (table, issue) => {
+    await prisma.$executeRawUnsafe(`ALTER TABLE "${table}" DISABLE ROW LEVEL SECURITY`);
+    try {
+      await expectDrift(issue);
+    } finally {
+      await prisma.$executeRawUnsafe(`ALTER TABLE "${table}" ENABLE ROW LEVEL SECURITY`);
+    }
+    await expectClean();
+  });
+
+  it.each([
+    ["ReceiptCaptureBatch", "security.receipt_capture_batch_no_policies"],
+    ["ReceiptDuplicateCandidate", "security.receipt_duplicate_candidate_no_policies"],
+  ])("rejects %s once any policy opens it, even a permissive read for everyone", async (table, issue) => {
+    await prisma.$executeRawUnsafe(`CREATE POLICY qa_open_read ON "${table}" FOR SELECT USING (TRUE)`);
+    try {
+      await expectDrift(issue);
+    } finally {
+      await prisma.$executeRawUnsafe(`DROP POLICY qa_open_read ON "${table}"`);
+    }
+    await expectClean();
+  });
+
+  it.each([
+    ["ReceiptCaptureBatch"],
+    ["ReceiptDuplicateCandidate"],
+  ])("rejects a PUBLIC table grant on %s", async (table) => {
+    await prisma.$executeRawUnsafe(`GRANT SELECT ON TABLE "${table}" TO PUBLIC`);
+    try {
+      await expectDrift("security.receipt_tables_no_public_grants");
+    } finally {
+      await prisma.$executeRawUnsafe(`REVOKE ALL PRIVILEGES ON TABLE "${table}" FROM PUBLIC`);
+    }
+    await expectClean();
+  });
+
+  it.each([
+    ["anon", "ReceiptCaptureBatch", "SELECT"],
+    ["authenticated", "ReceiptDuplicateCandidate", "SELECT"],
+    ["service_role", "ReceiptDuplicateCandidate", "REFERENCES"],
+  ])("rejects a direct %s grant on %s (%s)", async (role, table, privilege) => {
+    const created = await ensureRole(role);
+    try {
+      await prisma.$executeRawUnsafe(`GRANT ${privilege} ON TABLE "${table}" TO "${role}"`);
+      try {
+        await expectDrift("security.receipt_tables_no_direct_api_grants");
+      } finally {
+        await prisma.$executeRawUnsafe(`REVOKE ALL PRIVILEGES ON TABLE "${table}" FROM "${role}"`);
+      }
+      await expectClean();
+    } finally {
+      if (created) await prisma.$executeRawUnsafe(`DROP ROLE "${role}"`);
+    }
+  });
+
+  it("rejects a PUBLIC sequence grant", async () => {
+    const sequence = '"ReceiptDuplicateCandidate_ReceiptDuplicateCandidate_ID_seq"';
+    await prisma.$executeRawUnsafe(`GRANT USAGE ON SEQUENCE ${sequence} TO PUBLIC`);
+    try {
+      await expectDrift("security.receipt_sequences_no_public_grants");
+    } finally {
+      await prisma.$executeRawUnsafe(`REVOKE ALL PRIVILEGES ON SEQUENCE ${sequence} FROM PUBLIC`);
+    }
+    await expectClean();
+  });
+
+  it("rejects a direct api-role sequence grant", async () => {
+    const sequence = '"ReceiptCaptureBatch_ReceiptCaptureBatch_ID_seq"';
+    const created = await ensureRole("authenticated");
+    try {
+      await prisma.$executeRawUnsafe(`GRANT SELECT ON SEQUENCE ${sequence} TO "authenticated"`);
+      try {
+        await expectDrift("security.receipt_sequences_no_direct_api_grants");
+      } finally {
+        await prisma.$executeRawUnsafe(`REVOKE ALL PRIVILEGES ON SEQUENCE ${sequence} FROM "authenticated"`);
+      }
+      await expectClean();
+    } finally {
+      if (created) await prisma.$executeRawUnsafe(`DROP ROLE "authenticated"`);
+    }
+  });
+
+  it("names every broken control at once rather than stopping at the first", async () => {
+    await prisma.$executeRawUnsafe(`ALTER TABLE "ReceiptDuplicateCandidate" DISABLE ROW LEVEL SECURITY`);
+    await prisma.$executeRawUnsafe(`GRANT SELECT ON TABLE "ReceiptCaptureBatch" TO PUBLIC`);
+    try {
+      const drift = await checkMigrationDrift();
+      expect(drift.status).toBe("drift");
+      expect(drift.schemaIssues).toEqual(expect.arrayContaining([
+        "security.receipt_duplicate_candidate_rls",
+        "security.receipt_tables_no_public_grants",
+      ]));
+    } finally {
+      await prisma.$executeRawUnsafe(`ALTER TABLE "ReceiptDuplicateCandidate" ENABLE ROW LEVEL SECURITY`);
+      await prisma.$executeRawUnsafe(`REVOKE ALL PRIVILEGES ON TABLE "ReceiptCaptureBatch" FROM PUBLIC`);
+    }
+    await expectClean();
   });
 });
 
@@ -1036,13 +1167,17 @@ describe("Phase 2 durable receipt purge", () => {
     expect(await prisma.receiptPurgeJob.findUniqueOrThrow({ where: { id: accepted.body.id } })).toMatchObject({
       status: "PENDING",
       stage: "DATABASE",
+      // The ceiling is per stage: the database stage starts its own count.
+      attemptCount: 0,
       lastErrorCode: null,
     });
+    expect(await countStalledReceiptPurges()).toBe(0);
 
     expect(await runReceiptPurgeWorkerOnce()).toBe(true);
     expect(await prisma.receiptPurgeJob.findUniqueOrThrow({ where: { id: accepted.body.id } })).toMatchObject({
       status: "COMPLETE",
       stage: "COMPLETE",
+      attemptCount: 1,
     });
     expect(await prisma.receiptScan.findUnique({ where: { id: scan.id } })).toBeNull();
     expect(await countStalledReceiptPurges()).toBe(0);
@@ -1480,6 +1615,239 @@ describe("Phase 2 durable receipt purge", () => {
       processing.id,
     ]));
     expect(storage.deleteReceiptImage).not.toHaveBeenCalled();
+  });
+
+  it("keeps an expired FAILED deletion on the books while its scan still exists", async () => {
+    const scan = await makeEditableScan({ path: `${owner.profile.id}/expired-failed.jpg` });
+    const accepted = await request(app)
+      .delete(`${RECEIPTS}/${scan.id}`)
+      .set(...auth("owner-token"))
+      .set("Idempotency-Key", "expired-failed-deletion");
+    expect(accepted.status).toBe(202);
+    await prisma.receiptPurgeJob.update({
+      where: { id: accepted.body.id },
+      data: {
+        status: "FAILED",
+        attemptCount: 10,
+        lastErrorCode: "PURGE_STORAGE_DELETE_FAILED",
+        requestedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000),
+        expiresAt: new Date(Date.now() - 24 * 60 * 60 * 1_000),
+      },
+    });
+
+    expect(await runReceiptPurgeWorkerOnce()).toBe(false);
+    expect(await prisma.receiptPurgeJob.findUnique({ where: { id: accepted.body.id } })).toMatchObject({
+      status: "FAILED",
+      receiptScanId: scan.id,
+    });
+    expect(await countStalledReceiptPurges()).toBe(1);
+    const hidden = await request(app).get(`${RECEIPTS}/${scan.id}`).set(...auth("owner-token"));
+    expect(hidden.status).toBe(404);
+    const history = await request(app)
+      .get(`${RECEIPTS}?businessProfileId=${owner.profile.id}&status=all`)
+      .set(...auth("owner-token"));
+    expect(history.status).toBe(200);
+    expect(JSON.stringify(history.body)).not.toContain(`"id":${scan.id}`);
+  });
+
+  it("lets the owner re-drive a failed deletion with a fresh key and retires the failed job with the scan", async () => {
+    const scan = await makeEditableScan({ path: `${owner.profile.id}/owner-redrive.jpg` });
+    const first = await request(app)
+      .delete(`${RECEIPTS}/${scan.id}`)
+      .set(...auth("owner-token"))
+      .set("Idempotency-Key", "owner-redrive-first");
+    expect(first.status).toBe(202);
+    await prisma.receiptPurgeJob.update({
+      where: { id: first.body.id },
+      data: { status: "FAILED", attemptCount: 10, lastErrorCode: "PURGE_STORAGE_DELETE_FAILED" },
+    });
+    expect(await countStalledReceiptPurges()).toBe(1);
+
+    // The original key still replays the failed job; it does not re-drive.
+    const replay = await request(app)
+      .delete(`${RECEIPTS}/${scan.id}`)
+      .set(...auth("owner-token"))
+      .set("Idempotency-Key", "owner-redrive-first");
+    expect(replay.status).toBe(202);
+    expect(replay.body).toMatchObject({ id: first.body.id, status: "FAILED" });
+
+    const foreign = await request(app)
+      .delete(`${RECEIPTS}/${scan.id}`)
+      .set(...auth("other-token"))
+      .set("Idempotency-Key", "owner-redrive-second");
+    expect(foreign.status).toBe(404);
+
+    const second = await request(app)
+      .delete(`${RECEIPTS}/${scan.id}`)
+      .set(...auth("owner-token"))
+      .set("Idempotency-Key", "owner-redrive-second");
+    expect(second.status).toBe(202);
+    expect(second.body.id).not.toBe(first.body.id);
+    expect(second.body).toMatchObject({
+      receiptScanId: scan.id,
+      mode: "DELETE_SCAN",
+      reason: "OWNER_REQUEST",
+      status: "PENDING",
+      stage: "STORAGE",
+      storageObjectsExpected: 2,
+    });
+    expect(await countStalledReceiptPurges()).toBe(0);
+    const readiness = await request(app).get("/api/v1/health/ready");
+    expect(readiness.body).toMatchObject({ queuedReceiptPurges: 1, failedReceiptPurges: 0 });
+
+    expect(await runReceiptPurgeWorkerOnce()).toBe(true);
+    expect(await runReceiptPurgeWorkerOnce()).toBe(true);
+    expect(await prisma.receiptScan.findUnique({ where: { id: scan.id } })).toBeNull();
+    expect(await prisma.receiptPurgeJob.findUniqueOrThrow({ where: { id: second.body.id } })).toMatchObject({
+      status: "COMPLETE",
+      receiptScanId: null,
+    });
+    // The failed row is now history: its target is gone, so the TTL applies.
+    await prisma.receiptPurgeJob.update({
+      where: { id: first.body.id },
+      data: { requestedAt: new Date(Date.now() - 60_000), expiresAt: new Date(Date.now() - 1_000) },
+    });
+    expect(await runReceiptPurgeWorkerOnce()).toBe(false);
+    expect(await prisma.receiptPurgeJob.findUnique({ where: { id: first.body.id } })).toBeNull();
+    expect(await countStalledReceiptPurges()).toBe(0);
+  });
+
+  it("re-drives a burned-out deletion after its cool-down with a fresh job that carries the original reason", async () => {
+    const scan = await makeEditableScan({ path: `${owner.profile.id}/system-redrive.jpg` });
+    const accepted = await request(app)
+      .delete(`${RECEIPTS}/${scan.id}`)
+      .set(...auth("owner-token"))
+      .set("Idempotency-Key", "system-redrive");
+    expect(accepted.status).toBe(202);
+    const failedAt = new Date();
+    await prisma.receiptPurgeJob.update({
+      where: { id: accepted.body.id },
+      data: { status: "FAILED", attemptCount: 10, lastErrorCode: "PURGE_STORAGE_DELETE_FAILED", updatedAt: failedAt },
+    });
+
+    const tooSoon = new Date(failedAt.getTime() + PURGE_REDRIVE_COOLDOWN_MS - 60_000);
+    await expect(redriveStrandedReceiptPurges({ now: tooSoon })).resolves.toEqual({ candidates: 0, enqueued: 0 });
+    expect(await prisma.receiptPurgeJob.count({ where: { receiptScanId: scan.id } })).toBe(1);
+
+    const due = new Date(failedAt.getTime() + PURGE_REDRIVE_COOLDOWN_MS + 60_000);
+    await expect(redriveStrandedReceiptPurges({ now: due })).resolves.toEqual({ candidates: 1, enqueued: 1 });
+    const jobs = await prisma.receiptPurgeJob.findMany({ where: { receiptScanId: scan.id }, orderBy: { id: "asc" } });
+    expect(jobs).toHaveLength(2);
+    expect(jobs[0]).toMatchObject({ id: accepted.body.id, status: "FAILED" });
+    expect(jobs[1]).toMatchObject({
+      businessProfileId: owner.profile.id,
+      receiptScanBusinessProfileId: owner.profile.id,
+      mode: "DELETE_SCAN",
+      reason: "OWNER_REQUEST",
+      status: "PENDING",
+      stage: "STORAGE",
+      attemptCount: 0,
+      storageObjectsExpected: 2,
+    });
+    expect(jobs[1]!.requestKeyHash).not.toBe(jobs[0]!.requestKeyHash);
+    expect(await countStalledReceiptPurges()).toBe(0);
+
+    // Not again while the fresh series is active.
+    await expect(redriveStrandedReceiptPurges({ now: due })).resolves.toEqual({ candidates: 0, enqueued: 0 });
+
+    expect(await runReceiptPurgeWorkerOnce()).toBe(true);
+    expect(await runReceiptPurgeWorkerOnce()).toBe(true);
+    expect(await prisma.receiptScan.findUnique({ where: { id: scan.id } })).toBeNull();
+    expect(storage.deleteReceiptImage).toHaveBeenCalledWith(`${owner.profile.id}/system-redrive.jpg`);
+  });
+
+  it("re-drives a second time with a distinct key when the fresh series also burns out", async () => {
+    const scan = await makeEditableScan({ path: `${owner.profile.id}/system-redrive-twice.jpg` });
+    const accepted = await request(app)
+      .delete(`${RECEIPTS}/${scan.id}`)
+      .set(...auth("owner-token"))
+      .set("Idempotency-Key", "system-redrive-twice");
+    expect(accepted.status).toBe(202);
+    const failedAt = new Date();
+    await prisma.receiptPurgeJob.update({
+      where: { id: accepted.body.id },
+      data: { status: "FAILED", attemptCount: 10, lastErrorCode: "PURGE_STORAGE_DELETE_FAILED", updatedAt: failedAt },
+    });
+    const due = new Date(failedAt.getTime() + PURGE_REDRIVE_COOLDOWN_MS + 60_000);
+    await expect(redriveStrandedReceiptPurges({ now: due })).resolves.toMatchObject({ enqueued: 1 });
+    const second = await prisma.receiptPurgeJob.findFirstOrThrow({
+      where: { receiptScanId: scan.id, status: "PENDING" },
+    });
+    await prisma.receiptPurgeJob.update({
+      where: { id: second.id },
+      data: { status: "FAILED", attemptCount: 10, lastErrorCode: "PURGE_STORAGE_DELETE_FAILED", updatedAt: due },
+    });
+    expect(await countStalledReceiptPurges()).toBe(1);
+
+    const dueAgain = new Date(due.getTime() + PURGE_REDRIVE_COOLDOWN_MS + 60_000);
+    await expect(redriveStrandedReceiptPurges({ now: dueAgain })).resolves.toMatchObject({ enqueued: 1 });
+    const jobs = await prisma.receiptPurgeJob.findMany({ where: { receiptScanId: scan.id } });
+    expect(jobs).toHaveLength(3);
+    expect(new Set(jobs.map((job) => job.requestKeyHash)).size).toBe(3);
+    expect(jobs.filter((job) => job.status === "PENDING")).toHaveLength(1);
+  });
+
+  it("does not re-drive a failed evidence detachment, and stops counting it once the evidence is gone", async () => {
+    const scan = await makeEditableScan({
+      confirmationStatus: "Confirmed",
+      path: `${owner.profile.id}/detach-failed.jpg`,
+    });
+    // Linked record: the audit row outlives its evidence instead of being
+    // swept as an orphan once the detachment lands.
+    await prisma.expenseRecord.create({
+      data: {
+        businessProfileId: owner.profile.id,
+        categoryId: owner.categories.Inventory!,
+        receiptScanId: scan.id,
+        date: new Date("2026-09-13T00:00:00.000Z"),
+        description: "Rice purchase",
+        amount: 100,
+        source: "RECEIPT_SCAN",
+      },
+    });
+    const first = await request(app)
+      .delete(`${RECEIPTS}/${scan.id}/images`)
+      .set(...auth("owner-token"))
+      .set("Idempotency-Key", "detach-failed-first");
+    expect(first.status).toBe(202);
+    const failedAt = new Date(Date.now() - 2 * PURGE_REDRIVE_COOLDOWN_MS);
+    await prisma.receiptPurgeJob.update({
+      where: { id: first.body.id },
+      data: {
+        status: "FAILED",
+        attemptCount: 10,
+        lastErrorCode: "PURGE_STORAGE_DELETE_FAILED",
+        updatedAt: failedAt,
+        requestedAt: new Date(Date.now() - 60_000),
+        expiresAt: new Date(Date.now() - 1_000),
+      },
+    });
+
+    await expect(redriveStrandedReceiptPurges()).resolves.toEqual({ candidates: 0, enqueued: 0 });
+    expect(await runReceiptPurgeWorkerOnce()).toBe(false);
+    expect(await prisma.receiptPurgeJob.findUnique({ where: { id: first.body.id } })).toMatchObject({ status: "FAILED" });
+    expect(await countStalledReceiptPurges()).toBe(1);
+    // The confirmed scan stays on screen for the owner to act on.
+    const visible = await request(app).get(`${RECEIPTS}/${scan.id}`).set(...auth("owner-token"));
+    expect(visible.status).toBe(200);
+
+    const second = await request(app)
+      .delete(`${RECEIPTS}/${scan.id}/images`)
+      .set(...auth("owner-token"))
+      .set("Idempotency-Key", "detach-failed-second");
+    expect(second.status).toBe(202);
+    expect(second.body.id).not.toBe(first.body.id);
+    expect(await countStalledReceiptPurges()).toBe(0);
+    expect(await runReceiptPurgeWorkerOnce()).toBe(true);
+    expect(await runReceiptPurgeWorkerOnce()).toBe(true);
+    expect(await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).toMatchObject({
+      confirmationStatus: "Confirmed",
+      evidenceDeletedAt: expect.any(Date),
+    });
+    // Evidence is gone, so the stale FAILED row is now expirable.
+    expect(await runReceiptPurgeWorkerOnce()).toBe(false);
+    expect(await prisma.receiptPurgeJob.findUnique({ where: { id: first.body.id } })).toBeNull();
+    expect(await countStalledReceiptPurges()).toBe(0);
   });
 });
 

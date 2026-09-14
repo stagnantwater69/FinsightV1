@@ -129,6 +129,32 @@ const manualBody = () => ({
   splits: [{ categoryId: ctx.categories.Inventory, amount: LARGE_AMOUNT }],
 });
 
+/** Same day, total and merchant: what makes the POSSIBLE_DUPLICATE branch run. */
+async function priorMatchingExpense(amount: number) {
+  return prisma.expenseRecord.create({
+    data: {
+      businessProfileId: ctx.profile.id,
+      categoryId: ctx.categories.Inventory!,
+      date: new Date("2026-07-20T00:00:00.000Z"),
+      description: "Earlier stock purchase",
+      vendor: VENDOR,
+      amount,
+      source: "MANUAL_ENTRY",
+    },
+  });
+}
+
+/** The pre-save review answers 409 for the prior match; acknowledge it and save anyway. */
+async function confirmAcknowledgingDuplicates(scanId: number, body: Record<string, unknown>) {
+  const first = await confirm(scanId, body);
+  if (first.status !== 409 || first.body.code !== "DUPLICATE_REVIEW_REQUIRED") return first;
+  expect(first.body.candidates.length).toBeGreaterThan(0);
+  return confirm(scanId, {
+    ...body,
+    duplicateDecision: { action: "SAVE_ANYWAY", candidateSetHash: first.body.candidateSetHash },
+  });
+}
+
 async function expectBookedOnce(scanId: number, expectedRecords: number, expectedTotal: number) {
   const records = await prisma.expenseRecord.findMany({ where: { receiptScanId: scanId } });
   expect(records).toHaveLength(expectedRecords);
@@ -179,6 +205,37 @@ describe("a noncritical post-commit effect that fails", () => {
     await expectRetryRefusedWithoutWriting(scan.id, manualBody(), 1);
   });
 
+  it("possible-duplicate notification: the flagged record is still returned and the retry writes nothing", async () => {
+    const prior = await priorMatchingExpense(LARGE_AMOUNT);
+    const scan = await makeReadScan();
+    effects.notification.fail = true;
+
+    const response = await confirmAcknowledgingDuplicates(scan.id, manualBody());
+
+    expect(response.status).toBe(201);
+    expect(response.body).toHaveLength(1);
+    expect(response.body[0]).toMatchObject({
+      receiptScanId: scan.id,
+      duplicateStatus: "Flagged",
+      duplicateOfRecordId: prior.id,
+      largeExpenseFlag: true,
+    });
+    // The duplicate notification is first in the tail and throws, so the
+    // large-expense one after it is never attempted; both are lost, nothing else is.
+    expect(effects.notification.calls).toBe(1);
+    expect(await prisma.notification.count()).toBe(0);
+    expect(await prisma.expenseRecord.count()).toBe(2);
+    expect(await prisma.expenseRecord.findMany({ where: { receiptScanId: scan.id } })).toHaveLength(1);
+    expect(await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).toMatchObject({
+      confirmationStatus: "Confirmed",
+    });
+
+    const retry = await confirm(scan.id, manualBody());
+    expect(retry.status).toBe(400);
+    expect(retry.body.error).toMatch(/already been confirmed/i);
+    expect(await prisma.expenseRecord.count()).toBe(2);
+  });
+
   it("analysis queueing: the committed records are returned and the retry writes nothing", async () => {
     const scan = await makeReadScan();
     effects.analysis.fail = true;
@@ -222,6 +279,10 @@ describe("a noncritical post-commit effect that fails", () => {
       { name: "Electricity", amount: 10000 },
     ]);
     const [rice, electricity] = scan.items;
+    // Matches the Inventory split (30050) on date, amount and merchant. Neither
+    // split crosses the 31250 large-expense threshold, so this is the only
+    // thing that makes the notification injection fire.
+    const prior = await priorMatchingExpense(30050);
     const body = {
       amount: LARGE_AMOUNT + 50,
       itemAssignments: [
@@ -234,19 +295,37 @@ describe("a noncritical post-commit effect that fails", () => {
     effects.analysis.fail = true;
     effects.feedback.fail = true;
 
-    const response = await confirm(scan.id, body);
+    const response = await confirmAcknowledgingDuplicates(scan.id, body);
 
     expect(response.status).toBe(201);
     expect(response.body).toHaveLength(2);
-    await expectBookedOnce(scan.id, 2, LARGE_AMOUNT + 50);
-    // A failure on the first record's tail did not stop the second record's tail.
-    expect(effects.analysis.calls).toBe(2);
+    const inventory = response.body.find((row: { categoryId: number }) => row.categoryId === ctx.categories.Inventory);
+    const utilities = response.body.find((row: { categoryId: number }) => row.categoryId === ctx.categories.Utilities);
+    expect(inventory).toMatchObject({ amount: 30050, duplicateStatus: "Flagged", duplicateOfRecordId: prior.id });
+    expect(utilities).toMatchObject({ amount: 10000, duplicateStatus: "Not a Duplicate" });
+    const booked = await prisma.expenseRecord.findMany({ where: { receiptScanId: scan.id } });
+    expect(booked).toHaveLength(2);
+    expect(booked.reduce((sum, r) => sum + Number(r.amount), 0)).toBe(LARGE_AMOUNT + 50);
+    expect(await prisma.expenseRecord.count()).toBe(3);
+    expect(await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).toMatchObject({
+      confirmationStatus: "Confirmed",
+    });
+    // The first record's failed notification stops the rest of its own tail
+    // (its analysis enqueue never runs) but not the second record's tail or
+    // the feedback ledger. Pinned as shipped; changing it should be deliberate.
+    expect(effects.notification.calls).toBe(1);
+    expect(effects.analysis.calls).toBe(1);
     expect(effects.feedback.calls).toBe(1);
+    expect(await prisma.notification.count()).toBe(0);
+    expect(await prisma.analysisJob.count()).toBe(0);
     const items = await prisma.receiptScanItem.findMany({ where: { receiptScanId: scan.id } });
     expect(items).toHaveLength(3);
     expect(items.every((item) => item.expenseRecordId !== null)).toBe(true);
 
-    await expectRetryRefusedWithoutWriting(scan.id, body, 2);
+    const retry = await confirm(scan.id, body);
+    expect(retry.status).toBe(400);
+    expect(retry.body.error).toMatch(/already been confirmed/i);
+    expect(await prisma.expenseRecord.count()).toBe(3);
   });
 
   it("a retry that lands while the tail is still running finds the scan already confirmed", async () => {
@@ -287,5 +366,18 @@ describe("with every post-commit effect healthy", () => {
     expect(await prisma.notification.count()).toBe(1);
     expect(await prisma.analysisJob.count()).toBe(1);
     expect(await prisma.receiptFieldCorrection.count({ where: { receiptScanId: scan.id } })).toBeGreaterThan(0);
+  });
+
+  it("sends both the possible-duplicate and the large-expense notification for one flagged record", async () => {
+    const prior = await priorMatchingExpense(LARGE_AMOUNT);
+    const scan = await makeReadScan();
+
+    const response = await confirmAcknowledgingDuplicates(scan.id, manualBody());
+
+    expect(response.status).toBe(201);
+    expect(response.body[0]).toMatchObject({ duplicateStatus: "Flagged", duplicateOfRecordId: prior.id });
+    const notifications = await prisma.notification.findMany({ orderBy: { id: "asc" } });
+    expect(notifications.map((row) => row.type)).toEqual(["Possible Duplicate", "Large Expense Flag"]);
+    expect(notifications.every((row) => row.expenseRecordId === response.body[0].id)).toBe(true);
   });
 });

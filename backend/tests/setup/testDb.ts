@@ -10,6 +10,7 @@ const TABLES = [
   "ApiRateLimit",
   "ReceiptDuplicateCandidate",
   "ReceiptPurgeJob",
+  "ExternalProviderDispatchOutcome",
   "ExternalProviderDispatch",
   "ExternalProviderBudget",
   "ExternalProcessingConsent",

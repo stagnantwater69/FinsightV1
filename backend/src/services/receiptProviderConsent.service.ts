@@ -1,4 +1,4 @@
-import { Prisma } from "@prisma/client";
+import { Prisma, type ExternalProcessingConsentSource } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import {
   getReceiptProviderConfiguration,
@@ -91,6 +91,8 @@ interface ConsentRowTerms {
   dataClasses: readonly ("RECEIPT_IMAGE" | "DERIVED_RECEIPT_IMAGE")[];
   region: string;
   retentionHours: number;
+  /** Omitted for an owner's own grant; the schema default is OWNER. */
+  source?: ExternalProcessingConsentSource;
 }
 
 /** Closes every open receipt grant for the provider and opens one on the current terms. */
@@ -117,6 +119,7 @@ async function supersedeReceiptProviderConsent(tx: Prisma.TransactionClient, ter
       providerRetentionHours: terms.retentionHours,
       providerTrainingAllowed: false,
       grantedAt: now,
+      ...(terms.source ? { source: terms.source } : {}),
     },
   });
 }
@@ -126,8 +129,8 @@ async function supersedeReceiptProviderConsent(tx: Prisma.TransactionClient, ter
  * dispatch reservation transaction so the grant and the dispatch commit together.
  * The owner's last action wins: an open grant is superseded like an owner
  * re-grant, a closed grant with nothing open is a revoke and is never overridden.
- * The schema has no column marking a row as policy-issued, so the origin is
- * logged with ids only. Returns null when no policy grant may be made.
+ * The row is marked OPERATOR_POLICY so it can be told from an owner's grant.
+ * Returns null when no policy grant may be made.
  */
 export async function grantReceiptProviderConsentByPolicy(
   tx: Prisma.TransactionClient,
@@ -166,6 +169,7 @@ export async function grantReceiptProviderConsentByPolicy(
     dataClasses: config.allowedDataClasses,
     region: config.providerRegion,
     retentionHours: config.providerRetentionHours,
+    source: "OPERATOR_POLICY",
   });
   logger.info(
     { businessProfileId, consentId: created.id, supersededConsentId: open?.id ?? null, source: "operator-policy" },
@@ -206,8 +210,22 @@ export async function getReceiptProviderConsentState(userId: number, businessPro
       provider: null,
       consent: null,
       activeConsents: activeConsents.map(activeConsentDTO),
+      policyBlocked: false,
     };
   }
+  // Same rule as grantReceiptProviderConsentByPolicy: an owner revoke with
+  // nothing open afterwards keeps automatic mode from granting again.
+  const policyBlocked =
+    mode === "automatic" &&
+    !activeConsents.some((consent) => consent.provider === provider.key) &&
+    (await prisma.externalProcessingConsent.count({
+      where: {
+        businessProfileId,
+        provider: { in: ["gemini", "veryfi"] },
+        purpose: "RECEIPT_EXTRACTION",
+        revokedAt: { not: null },
+      },
+    })) > 0;
   const current = activeConsents.find(
     (consent) =>
       consent.provider === provider.key &&
@@ -225,6 +243,7 @@ export async function getReceiptProviderConsentState(userId: number, businessPro
     provider,
     consent: consentDTO(current ? { id: current.id, grantedAt: current.grantedAt, revokedAt: null } : null),
     activeConsents: activeConsents.map(activeConsentDTO),
+    policyBlocked,
   };
 }
 
@@ -296,7 +315,7 @@ export async function revokeReceiptProviderConsent(userId: number, businessProfi
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     ),
   );
-  const config = getReceiptProviderConfiguration();
-  const provider = publicReceiptProviderDetails(config);
-  return { available: provider !== null, mode: config.consentMode, provider, consent: null, activeConsents: [] };
+  // Read back rather than assembled here, so a revoke answers with the same
+  // fields (including policyBlocked) the next GET would.
+  return getReceiptProviderConsentState(userId, businessProfileId);
 }

@@ -97,7 +97,10 @@ function safeErrorDetail(err: unknown): Record<string, unknown> {
       const record = issue as { path?: unknown[]; code?: unknown };
       return { path: Array.isArray(record.path) ? record.path.join(".") : "", code: record.code };
     });
-  } else if (/^(TypeError|RangeError|ReferenceError|PrismaClient\w*Error)$/.test(err.constructor.name)) {
+  } else if (
+    // PrismaClientValidationError repeats query arguments, so it stays out.
+    /^(TypeError|RangeError|ReferenceError|PrismaClientKnownRequestError|PrismaClientInitializationError|PrismaClientRustPanicError)$/.test(err.constructor.name)
+  ) {
     detail.errorMessage = err.message.slice(0, 200);
   }
   return detail;
@@ -224,7 +227,7 @@ function mergeIntoRescuedFields(
     visionModel: gate.dispatched ? providerVersion : null,
     visionRejectReason: null,
     verifier: gate.provider === "gemini" && gate.code === "PROVIDER_OK" ? "accepted" : null,
-    visionWarnings: [],
+    visionWarnings: gate.merge.itemsOwnerReviewRequired ? [{ code: "UNVERIFIED_ITEMS" }] : [],
     itemEvidence: providerItems
       ? receipt.items.map((item) => ({ pageNumber: item.evidence.pageNumber, sourceText: null }))
       : null,

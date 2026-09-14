@@ -18,10 +18,52 @@ import {
   refreshReceiptCaptureBatchStatus,
 } from "./receiptCaptureBatch.service";
 
+/*
+ * Receipt purge contract
+ *
+ * The obligation lives on the scan, not on the job. A DELETE_SCAN request
+ * moves the scan to confirmationStatus "Deletion Pending" and stamps
+ * evidenceDeletionRequestedAt; from then on every owner-facing read hides it,
+ * and the only way out is the row being deleted. A job is one bounded series
+ * of attempts at meeting that obligation: MAX_PURGE_ATTEMPTS claims per stage,
+ * one lease at a time, checkpointed per page. FAILED is terminal for the job
+ * and never for the obligation.
+ *
+ * - A FAILED job is never resumed. Re-driving means a fresh job: fresh
+ *   counters, a new request key, storageObjectsExpected recomputed from the
+ *   scan as it is now.
+ * - Two re-drive paths. The owner: DELETE /records/receipts/:id with a new
+ *   Idempotency-Key (assertRequestState accepts DELETE_SCAN on "Deletion
+ *   Pending", and a FAILED job does not count as active). The system:
+ *   redriveStrandedReceiptPurges, on the hourly sweep timer, re-enqueues every
+ *   "Deletion Pending" scan whose jobs are all terminal and whose last job
+ *   went quiet more than PURGE_REDRIVE_COOLDOWN_MS ago, carrying the reason
+ *   of the job it replaces.
+ * - Expiry removes COMPLETE jobs and FAILED jobs whose target is already gone
+ *   (scan deleted, or evidence detached). A FAILED job whose obligation is
+ *   still open outlives its TTL, so expiry can never un-hide a half-deleted
+ *   scan or drop it from readiness.
+ * - Readiness counts obligations nobody is working on: scans under deletion
+ *   whose jobs are all terminal failures, plus jobs stranded at the ceiling.
+ * - DETACH_EVIDENCE targets stay Confirmed and visible; the owner re-drives
+ *   through the same evidence-deletion endpoint with a new key. The system
+ *   does not re-drive DETACH_EVIDENCE: the scan is on screen and the FAILED
+ *   job stays counted until evidenceDeletedAt is set.
+ */
+
 const PURGE_WORKER_ID = `${hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`;
 const PURGE_LEASE_MS = 2 * 60 * 1000;
 const PURGE_RESULT_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 const MAX_PURGE_ATTEMPTS = 10;
+/**
+ * One job's retry ladder spans about six hours; a day between series keeps a
+ * scan with a permanent fault (unsafe storage reference, records attached
+ * after the request) to one short job per day while it stays loud on
+ * readiness.
+ */
+export const PURGE_REDRIVE_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+/** Per re-drive pass. */
+export const PURGE_REDRIVE_BATCH_SIZE = 50;
 const RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000, 60 * 60_000] as const;
 
 const ACTIVE_PURGE_STATUSES = [
@@ -75,6 +117,10 @@ function internalOrphanKeyHash(businessProfileId: number, receiptScanId: number)
 
 function abandonedScanKeyHash(businessProfileId: number, receiptScanId: number): string {
   return sha256(`receipt-purge-abandoned-v1\0${businessProfileId}\0${receiptScanId}`);
+}
+
+function redriveKeyHash(businessProfileId: number, receiptScanId: number, replacedJobId: number): string {
+  return sha256(`receipt-purge-redrive-v1\0${businessProfileId}\0${receiptScanId}\0${replacedJobId}`);
 }
 
 function targetReferenceHash(businessProfileId: number, receiptScanId: number, mode: ReceiptPurgeMode): string {
@@ -232,7 +278,7 @@ async function enqueueOwnedPurge(
         ACTIVE_PURGE_STATUSES.includes(candidate.status as (typeof ACTIVE_PURGE_STATUSES)[number]),
       );
       if (active) {
-        throw new ApiError(409, "A deletion is already scheduled for this receipt. Retry with its original idempotency key.");
+        throw new ApiError(409, "This receipt is already being deleted.", { code: "PURGE_IN_PROGRESS" });
       }
       if (mode === ReceiptPurgeMode.DELETE_SCAN) {
         const records = await tx.expenseRecord.count({ where: { receiptScanId } });
@@ -284,7 +330,7 @@ async function enqueueOwnedPurge(
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       const winner = await existingReplay(userId, hash, receiptScanId, mode, ReceiptPurgeReason.OWNER_REQUEST);
       if (winner) return toDTO(winner, receiptScanId);
-      throw new ApiError(409, "A deletion is already scheduled for this receipt");
+      throw new ApiError(409, "This receipt is already being deleted.", { code: "PURGE_IN_PROGRESS" });
     }
     throw error;
   }
@@ -406,6 +452,22 @@ async function scheduleInternalScanDeletion(
 type AbandonedSweepOutcome = "enqueued" | "alreadyScheduled" | "skipped";
 
 /**
+ * A capture batch is abandoned as a whole or not at all. Scheduling one
+ * child cancels the batch, so a sibling the owner is still reviewing, or one
+ * the processing pipeline still owns, keeps every child out of the sweep.
+ * Confirmed siblings are finished and hold nothing open.
+ */
+function liveBatchSiblingWhere(cutoff: Date): Prisma.ReceiptScanWhereInput {
+  return {
+    confirmationStatus: "Pending",
+    OR: [
+      { lastActivityAt: { gte: cutoff } },
+      { processingStatus: { in: ["Pending", "Processing"] } },
+    ],
+  };
+}
+
+/**
  * Re-checks one candidate under its row lock. The owner may have viewed,
  * edited, retried, or deleted it since the sweep's read; the lock orders
  * their stamp either before this check or after the scan has left Pending.
@@ -456,6 +518,14 @@ async function enqueueAbandonedReceiptPurge(receiptScanId: number, cutoff: Date,
       }
       // A scan with records is confirmed in all but name; not ours to purge.
       if (await tx.expenseRecord.count({ where: { receiptScanId } })) return "skipped";
+      if (
+        scan.captureBatchId !== null
+        && (await tx.receiptScan.count({
+          where: { captureBatchId: scan.captureBatchId, id: { not: receiptScanId }, ...liveBatchSiblingWhere(cutoff) },
+        })) > 0
+      ) {
+        return "skipped";
+      }
 
       await scheduleInternalScanDeletion(tx, scan, scan.businessProfileId, {
         requestKeyHash: abandonedScanKeyHash(scan.businessProfileId, receiptScanId),
@@ -507,6 +577,10 @@ export async function sweepAbandonedReceiptScans(
   const result: AbandonedSweepResult = { candidates: 0, enqueued: 0, alreadyScheduled: 0, skipped: 0 };
 
   for (const processingStatus of ["Complete", "Failed"] as const) {
+    // Every condition the locked re-check can refuse for good is also here.
+    // The read takes the oldest rows each tick, so a row that is selected
+    // and then refused every hour would sit at the head of the list forever
+    // and, once fifty of them share a pass, hide every younger candidate.
     const candidates = await prisma.receiptScan.findMany({
       where: {
         confirmationStatus: "Pending",
@@ -515,6 +589,11 @@ export async function sweepAbandonedReceiptScans(
         businessProfileId: { not: null },
         evidenceDeletionRequestedAt: null,
         purgeJobs: { none: { status: { in: [...ACTIVE_PURGE_STATUSES] } } },
+        expenseRecords: { none: {} },
+        OR: [
+          { captureBatchId: null },
+          { captureBatch: { receiptScans: { none: liveBatchSiblingWhere(cutoff) } } },
+        ],
       },
       orderBy: [{ lastActivityAt: "asc" }, { id: "asc" }],
       take: batchSize,
@@ -528,6 +607,101 @@ export async function sweepAbandonedReceiptScans(
   }
 
   return result;
+}
+
+async function redriveStrandedReceiptPurge(receiptScanId: number, quietBefore: Date, now: Date): Promise<boolean> {
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const batchLink = await tx.receiptScan.findUnique({
+        where: { id: receiptScanId },
+        select: { captureBatchId: true },
+      });
+      if (!batchLink) return false;
+      if (
+        batchLink.captureBatchId !== null
+        && !(await lockReceiptCaptureBatchForMutation(tx, batchLink.captureBatchId))
+      ) {
+        return false;
+      }
+
+      const locked = await tx.$queryRaw<{ id: number }[]>`
+        SELECT "ReceiptScan_ID" AS id
+        FROM "ReceiptScan"
+        WHERE "ReceiptScan_ID" = ${receiptScanId}
+        FOR UPDATE
+      `;
+      if (locked.length !== 1) return false;
+
+      const scan = await tx.receiptScan.findUnique({
+        where: { id: receiptScanId },
+        include: {
+          pages: { orderBy: { pageNumber: "asc" } },
+          purgeJobs: { orderBy: [{ updatedAt: "desc" }, { id: "desc" }] },
+        },
+      });
+      if (!scan?.businessProfileId || scan.confirmationStatus !== "Deletion Pending") return false;
+      const latest = scan.purgeJobs[0];
+      if (
+        !latest
+        || latest.mode !== ReceiptPurgeMode.DELETE_SCAN
+        || latest.status !== ReceiptPurgeStatus.FAILED
+        || latest.updatedAt >= quietBefore
+      ) {
+        return false;
+      }
+
+      await scheduleInternalScanDeletion(tx, scan, scan.businessProfileId, {
+        requestKeyHash: redriveKeyHash(scan.businessProfileId, receiptScanId, latest.id),
+        reason: latest.reason,
+        storageObjectsExpected: artifactCount(scan),
+        now,
+      });
+      return true;
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") return false;
+    throw error;
+  }
+}
+
+/**
+ * Fresh DELETE_SCAN jobs for scans whose deletion series burned out. See the
+ * contract at the top of this file. Both enqueue paths leave a "Deletion
+ * Pending" scan at processingStatus "Failed", so both leading columns of
+ * ReceiptScan_abandoned_sweep_idx are pinned and the read is bounded.
+ */
+export async function redriveStrandedReceiptPurges(
+  options: { now?: Date; batchSize?: number } = {},
+): Promise<{ candidates: number; enqueued: number }> {
+  const now = options.now ?? new Date();
+  const batchSize = options.batchSize ?? PURGE_REDRIVE_BATCH_SIZE;
+  const quietBefore = new Date(now.getTime() - PURGE_REDRIVE_COOLDOWN_MS);
+
+  const candidates = await prisma.receiptScan.findMany({
+    where: {
+      confirmationStatus: "Deletion Pending",
+      processingStatus: "Failed",
+      businessProfileId: { not: null },
+      purgeJobs: {
+        some: { mode: ReceiptPurgeMode.DELETE_SCAN, status: ReceiptPurgeStatus.FAILED },
+        none: {
+          OR: [
+            { status: { in: [...ACTIVE_PURGE_STATUSES] } },
+            { updatedAt: { gte: quietBefore } },
+          ],
+        },
+      },
+    },
+    orderBy: [{ lastActivityAt: "asc" }, { id: "asc" }],
+    take: batchSize,
+    select: { id: true },
+  });
+
+  let enqueued = 0;
+  for (const candidate of candidates) {
+    if (await redriveStrandedReceiptPurge(candidate.id, quietBefore, now)) enqueued += 1;
+  }
+  return { candidates: candidates.length, enqueued };
 }
 
 type ClaimedPurge = {
@@ -823,7 +997,16 @@ async function deleteExpiredTerminalPurgeResults(now = new Date()): Promise<void
   await prisma.receiptPurgeJob.deleteMany({
     where: {
       expiresAt: { lte: now },
-      status: { in: [ReceiptPurgeStatus.COMPLETE, ReceiptPurgeStatus.FAILED] },
+      OR: [
+        { status: ReceiptPurgeStatus.COMPLETE },
+        {
+          status: ReceiptPurgeStatus.FAILED,
+          // Only once the target is gone (SetNull on scan delete) or its
+          // evidence detached. The job row is what keeps a half-deleted scan
+          // hidden and counted; losing it would put the scan back on screen.
+          OR: [{ receiptScanId: null }, { receiptScan: { evidenceDeletedAt: { not: null } } }],
+        },
+      ],
     },
   });
 }
@@ -889,13 +1072,26 @@ export async function runReceiptPurgeWorkerOnce(): Promise<boolean> {
   return true;
 }
 
-export function countStalledReceiptPurges(): Promise<number> {
-  return prisma.receiptPurgeJob.count({
-    where: {
-      OR: [
-        { status: ReceiptPurgeStatus.FAILED },
-        exhaustedActivePurgeWhere(new Date()),
-      ],
-    },
-  });
+/**
+ * Deletions nobody is working on: one per scan still owed a deletion whose
+ * jobs are all terminal failures (a re-drive in flight moves it back to the
+ * queued gauge), plus jobs stranded at the ceiling awaiting terminalization.
+ */
+export async function countStalledReceiptPurges(): Promise<number> {
+  const [stranded, exhausted] = await Promise.all([
+    prisma.receiptScan.count({
+      where: {
+        OR: [
+          { confirmationStatus: "Deletion Pending" },
+          { evidenceDeletionRequestedAt: { not: null }, evidenceDeletedAt: null },
+        ],
+        purgeJobs: {
+          some: { status: ReceiptPurgeStatus.FAILED },
+          none: { status: { in: [...ACTIVE_PURGE_STATUSES] } },
+        },
+      },
+    }),
+    prisma.receiptPurgeJob.count({ where: exhaustedActivePurgeWhere(new Date()) }),
+  ]);
+  return stranded + exhausted;
 }

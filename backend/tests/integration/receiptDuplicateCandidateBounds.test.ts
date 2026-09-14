@@ -505,11 +505,9 @@ describe("duplicate-candidate cursor tampering", () => {
   });
 
   /*
-   * Pinned defect (QA, 2026-09-14, owner backend-api): cursorId() accepts any
-   * positive integer, so an id past int4 reaches Prisma and surfaces as a 500
-   * from client-controlled input. The body leaks nothing; the status and the
-   * error-level log entry are the problem. Flip to `it` once the decode
-   * bounds the id (history.ts decodeCursor has the same gap).
+   * Was a pinned defect (QA, 2026-09-14): a path or cursor id past int4
+   * reached Prisma and surfaced as a 500 from client-controlled input. Both
+   * decoders now bound the id; these cases keep them that way.
    */
   it("a path id past the int4 range is refused as a bad id, not a server error", async () => {
     for (const path of [
@@ -538,5 +536,32 @@ describe("duplicate-candidate cursor tampering", () => {
         .set(...auth("owner-token"));
       expect(response.status, String(id)).toBe(400);
     }
+  });
+
+  it("a history cursor id past the int4 range is refused as a bad cursor, not a server error", async () => {
+    await makeSource();
+    for (const id of [2147483648, Number.MAX_SAFE_INTEGER]) {
+      const response = await request(app)
+        .get(RECEIPTS)
+        .query({
+          businessProfileId: owner.profile.id,
+          status: "all",
+          cursor: encode({ v: 1, createdAt: DAY.toISOString(), id }),
+        })
+        .set(...auth("owner-token"));
+      expect(response.status, String(id)).toBe(400);
+      expect(response.body.error, String(id)).toMatch(/Invalid receipt history cursor/);
+      expect(response.body.items, String(id)).toBeUndefined();
+    }
+    // Same shape, in-range id: the refusal above is the bound, not the shape.
+    const valid = await request(app)
+      .get(RECEIPTS)
+      .query({
+        businessProfileId: owner.profile.id,
+        status: "all",
+        cursor: encode({ v: 1, createdAt: DAY.toISOString(), id: 2147483647 }),
+      })
+      .set(...auth("owner-token"));
+    expect(valid.status).toBe(200);
   });
 });

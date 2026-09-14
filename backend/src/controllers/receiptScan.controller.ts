@@ -30,6 +30,7 @@ import {
   requestReceiptScanDeletion,
 } from "../services/receiptPurge.service";
 import { listReceiptDuplicateCandidates } from "../services/receiptDuplicate.service";
+import { RECEIPT_CAPTURE_BATCH_MAX_RECEIPTS } from "../services/receiptCaptureBatch.service";
 
 const uploadSchema = z
   .object({
@@ -37,7 +38,8 @@ const uploadSchema = z
     captureMetadata: z.string().max(50_000).optional(),
     idempotencyKey: z.string().min(8).max(100).optional(),
     receiptBatchId: z.coerce.number().int().positive().optional(),
-    receiptOrdinal: z.coerce.number().int().min(1).max(RECEIPT_UPLOAD_MAX_LOGICAL_PAGES).optional(),
+    // A position in a batch, so bounded by the batch size, not by pages per scan.
+    receiptOrdinal: z.coerce.number().int().min(1).max(RECEIPT_CAPTURE_BATCH_MAX_RECEIPTS).optional(),
   })
   .superRefine((input, context) => {
     if ((input.receiptBatchId === undefined) !== (input.receiptOrdinal === undefined)) {

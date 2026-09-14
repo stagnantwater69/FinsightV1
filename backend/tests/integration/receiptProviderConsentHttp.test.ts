@@ -91,6 +91,7 @@ describe("mocked provider consent HTTP contract", () => {
       },
       consent: null,
       activeConsents: [],
+      policyBlocked: false,
     });
     expect(JSON.stringify(response.body)).not.toContain("mocked-provider-key");
   });
@@ -125,7 +126,7 @@ describe("mocked provider consent HTTP contract", () => {
 
     const revoked = await request(app).delete(url).set(...AUTH);
     expect(revoked.status).toBe(200);
-    expect(revoked.body).toMatchObject({ available: true, consent: null, activeConsents: [] });
+    expect(revoked.body).toMatchObject({ available: true, consent: null, activeConsents: [], policyBlocked: false });
     const stored = await prisma.externalProcessingConsent.findFirstOrThrow();
     expect(stored.revokedAt).toBeInstanceOf(Date);
   });
@@ -145,7 +146,14 @@ describe("mocked provider consent HTTP contract", () => {
 
     const revoked = await request(app).delete(url).set(...AUTH);
     expect(revoked.status).toBe(200);
-    expect(revoked.body).toEqual({ available: false, mode: "explicit", provider: null, consent: null, activeConsents: [] });
+    expect(revoked.body).toEqual({
+      available: false,
+      mode: "explicit",
+      provider: null,
+      consent: null,
+      activeConsents: [],
+      policyBlocked: false,
+    });
   });
 
   it("does not reveal, grant, or revoke another owner's consent", async () => {
@@ -168,7 +176,14 @@ describe("mocked provider consent HTTP contract", () => {
     const state = await request(app).get(url).set(...AUTH);
     const grant = await request(app).put(url).set(...AUTH).send(consentTerms());
     expect(state.status).toBe(200);
-    expect(state.body).toEqual({ available: false, mode: "explicit", provider: null, consent: null, activeConsents: [] });
+    expect(state.body).toEqual({
+      available: false,
+      mode: "explicit",
+      provider: null,
+      consent: null,
+      activeConsents: [],
+      policyBlocked: false,
+    });
     expect(grant.status).toBe(404);
     expect(await prisma.externalProcessingConsent.count()).toBe(0);
   });

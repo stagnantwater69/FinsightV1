@@ -458,13 +458,144 @@ describe("mocked receipt provider dispatch gate", () => {
     const repeated = await dispatchReceiptProviderRescue(input, { adapter: mockedAdapter, configuration: config });
 
     expect(first).toMatchObject({ code: "PROVIDER_OK", dispatched: true, dispatchStatus: "SUCCEEDED" });
-    expect(repeated).toMatchObject({
-      code: "PROVIDER_DISPATCH_ALREADY_ATTEMPTED",
-      dispatched: false,
-      dispatchStatus: "SKIPPED",
-    });
+    // The repeat is served from the stored outcome; the provider is called once.
+    expect(repeated).toMatchObject({ code: "PROVIDER_OK", dispatchStatus: "SUCCEEDED" });
     expect(mockedAdapter.extract).toHaveBeenCalledTimes(1);
     expect(await prisma.externalProviderDispatch.count()).toBe(1);
+  });
+
+  it("replays a stored provider outcome for a later attempt without a second call or charge", async () => {
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const scan = await scanFor(owner.profile.id, "replay");
+    const mockedAdapter = adapter();
+    const config = getReceiptProviderConfiguration();
+
+    const first = await dispatchReceiptProviderRescue(dispatchInput(owner.profile.id, scan.id), {
+      adapter: mockedAdapter,
+      configuration: config,
+    });
+    expect(first).toMatchObject({ code: "PROVIDER_OK", dispatched: true, dispatchStatus: "SUCCEEDED" });
+    const budgetsAfterFirst = await prisma.externalProviderBudget.findMany({ orderBy: { id: "asc" } });
+
+    // The worker died after the dispatch; the scan is reclaimed as attempt 2.
+    await prisma.receiptScan.update({
+      where: { id: scan.id },
+      data: { processingAttemptCount: 2, processingHeartbeatAt: new Date() },
+    });
+    const replayed = await dispatchReceiptProviderRescue(
+      dispatchInput(owner.profile.id, scan.id, { processingLease: { workerId: TEST_WORKER_ID, attempt: 2 } }),
+      { adapter: mockedAdapter, configuration: config },
+    );
+
+    expect(replayed).toMatchObject({ code: "PROVIDER_OK", dispatched: true, dispatchStatus: "SUCCEEDED" });
+    expect(replayed.merge).toEqual(first.merge);
+    expect(mockedAdapter.extract).toHaveBeenCalledTimes(1);
+    expect(await prisma.externalProviderDispatch.count()).toBe(1);
+    expect(await prisma.externalProviderBudget.findMany({ orderBy: { id: "asc" } })).toEqual(budgetsAfterFirst);
+    // The content lives in the outcome row, scoped to the same profile and
+    // scan; the audit row itself still carries none of it.
+    const audit = await prisma.externalProviderDispatch.findFirstOrThrow();
+    expect(JSON.stringify(audit)).not.toContain("Provider Store");
+    const stored = await prisma.externalProviderDispatchOutcome.findUniqueOrThrow({ where: { dispatchId: audit.id } });
+    expect(stored).toMatchObject({
+      businessProfileId: owner.profile.id,
+      receiptScanId: scan.id,
+      receiptScanBusinessProfileId: owner.profile.id,
+    });
+    expect(JSON.stringify(stored.outcome)).toContain("Provider Store");
+  });
+
+  it("still refuses a repeat attempt when a SUCCEEDED dispatch has no stored outcome", async () => {
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const scan = await scanFor(owner.profile.id, "no-stored-outcome");
+    const mockedAdapter = adapter();
+    const config = getReceiptProviderConfiguration();
+
+    const first = await dispatchReceiptProviderRescue(dispatchInput(owner.profile.id, scan.id), {
+      adapter: mockedAdapter,
+      configuration: config,
+    });
+    expect(first).toMatchObject({ code: "PROVIDER_OK", dispatched: true });
+    // A dispatch settled before outcomes were kept has a SUCCEEDED audit row
+    // and nothing to replay.
+    expect(await prisma.externalProviderDispatchOutcome.deleteMany()).toEqual({ count: 1 });
+
+    const repeated = await dispatchReceiptProviderRescue(dispatchInput(owner.profile.id, scan.id), {
+      adapter: mockedAdapter,
+      configuration: config,
+    });
+
+    expect(repeated).toMatchObject({ code: "PROVIDER_DISPATCH_ALREADY_ATTEMPTED", dispatched: false });
+    expect(mockedAdapter.extract).toHaveBeenCalledTimes(1);
+    expect(await prisma.externalProviderDispatch.count()).toBe(1);
+  });
+
+  it("reserves again after the stale reconciler cancelled a never-submitted reservation", async () => {
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const scan = await scanFor(owner.profile.id, "reconciled-then-retried");
+    const config = getReceiptProviderConfiguration();
+
+    // Attempt 1 reserves, then its process dies while evidence loads.
+    let releaseFirst!: () => void;
+    const firstBlocked = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let firstReserved!: () => void;
+    const reservedByFirst = new Promise<void>((resolve) => { firstReserved = resolve; });
+    const firstInput = dispatchInput(owner.profile.id, scan.id);
+    firstInput.pages[0]!.loadBytes = vi.fn(async () => {
+      firstReserved();
+      await firstBlocked;
+      return MOCK_PROVIDER_BYTES;
+    });
+    const firstAdapter = adapter();
+    const first = dispatchReceiptProviderRescue(firstInput, { adapter: firstAdapter, configuration: config });
+    await reservedByFirst;
+    const reservation = await prisma.externalProviderDispatch.findFirstOrThrow();
+    expect(reservation.status).toBe("RESERVED");
+
+    const staleAt = new Date(Date.now() - RECEIPT_PROVIDER_DISPATCH_STALE_MS - 60_000);
+    await prisma.receiptScan.update({ where: { id: scan.id }, data: { processingHeartbeatAt: staleAt } });
+    await prisma.externalProviderDispatch.update({ where: { id: reservation.id }, data: { createdAt: staleAt } });
+    expect(await reconcileStaleReceiptProviderDispatches()).toEqual({ cancelled: 1, ambiguous: 0 });
+    releaseFirst();
+    // The dead attempt's lease is stale by now, so it is refused before it
+    // can notice the cancelled row; either refusal leaves nothing submitted.
+    const firstResult = await first;
+    expect(firstResult.dispatched).toBe(false);
+    expect(["PROVIDER_UNAVAILABLE", "PROVIDER_DISPATCH_ALREADY_ATTEMPTED"]).toContain(firstResult.code);
+    expect(firstAdapter.extract).not.toHaveBeenCalled();
+    expect(await prisma.externalProviderDispatch.findUniqueOrThrow({ where: { id: reservation.id } })).toMatchObject({
+      status: "CANCELLED",
+      outcomeCode: "RECONCILED_STALE_RESERVATION",
+      finalBillableUnits: 0,
+    });
+
+    // Attempt 2 reclaims the scan with the same local read and the same key.
+    await prisma.receiptScan.update({
+      where: { id: scan.id },
+      data: { processingAttemptCount: 2, processingHeartbeatAt: new Date() },
+    });
+    const secondAdapter = adapter();
+    const second = await dispatchReceiptProviderRescue(
+      dispatchInput(owner.profile.id, scan.id, { processingLease: { workerId: TEST_WORKER_ID, attempt: 2 } }),
+      { adapter: secondAdapter, configuration: config },
+    );
+
+    expect(second).toMatchObject({ code: "PROVIDER_OK", dispatched: true, dispatchStatus: "SUCCEEDED" });
+    expect(secondAdapter.extract).toHaveBeenCalledTimes(1);
+    expect(await prisma.externalProviderDispatch.count()).toBe(1);
+    expect(await prisma.externalProviderDispatch.findFirstOrThrow()).toMatchObject({
+      id: reservation.id,
+      status: "SUCCEEDED",
+      outcomeCode: "OK",
+      finalBillableUnits: 2,
+    });
+    for (const budget of await prisma.externalProviderBudget.findMany()) {
+      expect(budget.reservedUnits).toBe(0);
+      expect(budget.usedUnits).toBe(2);
+    }
   });
 
   it("rechecks the kill switch after reservation and releases the unused units", async () => {

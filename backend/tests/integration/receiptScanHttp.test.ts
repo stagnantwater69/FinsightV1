@@ -14,13 +14,15 @@ import { readdir } from "node:fs/promises";
  * Storage and the read pipeline are mocked for the same reason they are
  * everywhere else — what is under test here is the wiring, not OCR accuracy.
  */
-vi.mock("../../src/services/storage.service", async () => {
+vi.mock("../../src/services/storage.service", async (importOriginal) => {
   const { tinyReceiptJpeg } = await import("../helpers/receiptImageFixtures");
   const storedBytes = tinyReceiptJpeg();
+  // The real TTL, so the ten-minute assertion is not against a number this mock made up.
+  const { RECEIPT_URL_TTL_SECONDS } = await importOriginal<typeof import("../../src/services/storage.service")>();
   return {
     uploadReceiptImage: vi.fn(async () => "1/mock-receipt.jpg"),
     uploadCsvFile: vi.fn(async () => "1/mock.csv"),
-    RECEIPT_URL_TTL_SECONDS: 600,
+    RECEIPT_URL_TTL_SECONDS,
     signedReceiptImageUrl: vi.fn(async () => "https://example.test/signed.jpg"),
     deleteReceiptImage: vi.fn(async () => true),
     inspectReceiptImage: vi.fn(async () => ({ sizeBytes: storedBytes.length, mimetype: "image/jpeg" })),
@@ -496,7 +498,8 @@ describe("GET /api/v1/records/receipts/:id", () => {
       width: 3000,
       height: 4000,
       url: "https://example.test/signed.jpg",
-      expiresInSeconds: 600,
+      // Ten minutes, the acceptance figure.
+      expiresInSeconds: 10 * 60,
     });
     expect(signedReceiptImageUrl).toHaveBeenLastCalledWith(`${ctx.profile.id}/source-1.jpg`);
 

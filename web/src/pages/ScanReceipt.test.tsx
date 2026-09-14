@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -264,6 +264,98 @@ describe("receipt upload and review", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("This receipt batch no longer matches the selected images.");
     expect(mocks.post.mock.calls.filter(([url]) => url === "/records/receipts")).toHaveLength(0);
+  });
+
+  it("mints a new upload key when a cancelled single upload is re-sent as a batch child", async () => {
+    const user = userEvent.setup();
+    mocks.post.mockImplementation(async (url: string, body: unknown, config?: { signal?: AbortSignal }) => {
+      if (url === "/records/receipt-batches") {
+        return { data: {
+          id: 7, businessProfileId: 1, expectedReceiptCount: 2, status: "COLLECTING",
+          uploadedReceiptCount: 0, createdAt: "2026-09-13T00:00:00.000Z", finishedAt: null, receipts: [],
+        } };
+      }
+      if (url === "/records/receipts") {
+        const form = body as FormData;
+        if (!form.has("receiptBatchId")) {
+          // The single upload stays in flight until the owner cancels it.
+          return new Promise((_, reject) => {
+            config?.signal?.addEventListener("abort", () => reject(new Error("canceled")));
+          });
+        }
+        const ordinal = Number(form.get("receiptOrdinal"));
+        return { data: { ...receipt, id: 10 + ordinal, receiptBatchId: 7, receiptOrdinal: ordinal } };
+      }
+      return { data: receipt };
+    });
+
+    render(page());
+    const input = screen.getByLabelText(/Receipt photo/);
+    await user.upload(input, photo("a.png", "photo a"));
+    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+    await user.click(await screen.findByRole("button", { name: "Cancel upload" }));
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo("b.png", "photo b"));
+    await user.click(screen.getByRole("button", { name: "Scan 2 receipts" }));
+    await screen.findByRole("heading", { name: "Check what FinSight read" });
+
+    const uploads = mocks.post.mock.calls
+      .filter(([url]) => url === "/records/receipts")
+      .map(([, body]) => body as FormData);
+    expect(uploads).toHaveLength(3);
+    expect(uploads[0]!.has("receiptBatchId")).toBe(false);
+    expect(uploads[1]!.get("receiptBatchId")).toBe("7");
+    expect((uploads[1]!.get("files") as File).name).toBe("a.png");
+    expect(uploads[1]!.get("idempotencyKey")).not.toBe(uploads[0]!.get("idempotencyKey"));
+    expect(uploads[2]!.get("idempotencyKey")).not.toBe(uploads[0]!.get("idempotencyKey"));
+  });
+
+  it("re-accepts cached children under a re-planned batch instead of reusing another batch's scans", async () => {
+    const user = userEvent.setup();
+    let batchNumber = 0;
+    let failedOnce = false;
+    mocks.post.mockImplementation(async (url: string, body: unknown) => {
+      if (url === "/records/receipt-batches") {
+        batchNumber += 1;
+        const request = body as { expectedReceiptCount: number };
+        return { data: {
+          id: 900 + batchNumber, businessProfileId: 1, expectedReceiptCount: request.expectedReceiptCount,
+          status: "COLLECTING", uploadedReceiptCount: 0, createdAt: "2026-09-13T00:00:00.000Z",
+          finishedAt: null, receipts: [],
+        } };
+      }
+      if (url === "/records/receipts") {
+        const form = body as FormData;
+        const ordinal = Number(form.get("receiptOrdinal"));
+        if (ordinal === 3 && !failedOnce) {
+          failedOnce = true;
+          throw new Error("Connection lost");
+        }
+        const batchId = Number(form.get("receiptBatchId"));
+        return { data: { ...receipt, id: batchId * 10 + ordinal, receiptBatchId: batchId, receiptOrdinal: ordinal } };
+      }
+      return { data: receipt };
+    });
+
+    render(page());
+    const input = screen.getByLabelText(/Receipt photo/);
+    await user.upload(input, photo("one.png", "one"));
+    await user.upload(input, photo("two.png", "two"));
+    await user.upload(input, photo("three.png", "three"));
+    await user.click(screen.getByRole("button", { name: "Scan 3 receipts" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Connection lost");
+
+    await user.click(screen.getByRole("button", { name: "Remove page 3" }));
+    await user.click(screen.getByRole("button", { name: "Scan 2 receipts" }));
+    await screen.findByRole("heading", { name: "Check what FinSight read" });
+
+    const uploads = mocks.post.mock.calls
+      .filter(([url]) => url === "/records/receipts")
+      .map(([, body]) => body as FormData);
+    const bindings = uploads.map((form) => `${form.get("receiptBatchId")}:${form.get("receiptOrdinal")}`);
+    expect(bindings).toEqual(["901:1", "901:2", "901:3", "902:1", "902:2"]);
+    expect(uploads[3]!.get("idempotencyKey")).not.toBe(uploads[0]!.get("idempotencyKey"));
+    expect(uploads[4]!.get("idempotencyKey")).not.toBe(uploads[1]!.get("idempotencyKey"));
+    expect(within(screen.getByRole("list", { name: "Receipts in this batch" })).getAllByRole("listitem")).toHaveLength(2);
   });
 
   it("lets the owner inspect every long-receipt page and reports which evidence OCR used", async () => {
@@ -698,6 +790,150 @@ describe("receipt upload and review", () => {
     expect(screen.getByRole("button", { name: "Save anyway" })).toBeDisabled();
     await user.click(acknowledgement);
     expect(screen.getByRole("button", { name: "Save anyway" })).toBeEnabled();
+  });
+
+  describe("duplicate acknowledgement after a field edit (PR-2 review, open item 4)", () => {
+    const candidate = (id: number, targetId: number) => ({
+      id,
+      target: { kind: "expense" as const, id: targetId },
+      vendor: "Paper shop",
+      date: "2026-09-01T00:00:00.000Z",
+      total: 500,
+      scoreBand: "EXACT" as const,
+      reasons: ["SAME_VENDOR" as const, "SAME_DATE" as const, "SAME_TOTAL" as const],
+    });
+    const prefetchedHash = "a".repeat(64);
+    const confirmTimeHash = "b".repeat(64);
+
+    function changedResponse(candidates: ReturnType<typeof candidate>[]) {
+      return Object.assign(new Error("Possible duplicate receipt"), {
+        isAxiosError: true,
+        response: {
+          status: 409,
+          data: {
+            error: "The possible duplicates changed",
+            code: "DUPLICATE_REVIEW_CHANGED",
+            sourceFingerprint: "e".repeat(64),
+            candidateSetHash: confirmTimeHash,
+            candidateCount: candidates.length,
+            candidatesTruncated: false,
+            nextCursor: null,
+            candidates,
+          },
+        },
+      });
+    }
+
+    async function reviewEditAndAcknowledge(user: ReturnType<typeof userEvent.setup>) {
+      mocks.get.mockImplementation(async (url: string) => {
+        if (url === "/records/receipts") return { data: { items: [], nextCursor: null } };
+        if (url.startsWith("/records/receipts/provider-consent/")) {
+          return { data: { available: false, provider: null, consent: null, activeConsents: [] } };
+        }
+        if (url === "/records/receipts/10/duplicate-candidates") {
+          return { data: {
+            sourceFingerprint: "d".repeat(64),
+            candidateSetHash: prefetchedHash,
+            candidateCount: 1,
+            candidatesTruncated: false,
+            candidates: [candidate(81, 501)],
+            nextCursor: null,
+          } };
+        }
+        return { data: receipt };
+      });
+      render(page());
+      await user.upload(screen.getByLabelText(/Receipt photo/), photo());
+      await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+      await screen.findByRole("heading", { name: "Check what FinSight read" });
+      await user.selectOptions(screen.getByLabelText(/^Category/), "2");
+      await user.clear(screen.getByLabelText(/^Vendor/));
+      await user.type(screen.getByLabelText(/^Vendor/), "Paper Shop Manila");
+      await user.click(await screen.findByRole("checkbox", { name: /I reviewed these matches/ }));
+      await user.click(screen.getByRole("button", { name: "Save anyway" }));
+    }
+
+    it("keeps the acknowledgement and saves with the confirm-time hash when the matches are the same", async () => {
+      const user = userEvent.setup();
+      let confirmAttempts = 0;
+      mocks.post.mockImplementation(async (url: string) => {
+        if (url === "/records/receipts/10/confirm") {
+          confirmAttempts += 1;
+          // Same target, new row id: the server re-persisted the set under the edited identity.
+          if (confirmAttempts === 1) throw changedResponse([candidate(93, 501)]);
+          return { data: [{ id: 502 }] };
+        }
+        return { data: receipt };
+      });
+
+      await reviewEditAndAcknowledge(user);
+
+      await waitFor(() => expect(screen.getByTestId("current-path")).toHaveTextContent("/records"));
+      const saves = mocks.post.mock.calls.filter(([url]) => url === "/records/receipts/10/confirm");
+      expect(saves).toHaveLength(2);
+      expect(saves[0]![1]).toMatchObject({ duplicateDecision: { action: "SAVE_ANYWAY", candidateSetHash: prefetchedHash } });
+      expect(saves[1]![1]).toMatchObject({ duplicateDecision: { action: "SAVE_ANYWAY", candidateSetHash: confirmTimeHash } });
+      expect(saves[1]![1]).toMatchObject({ vendor: "Paper Shop Manila" });
+    });
+
+    it("retries at most once: a second same-target CHANGED answer is shown, not re-sent", async () => {
+      const user = userEvent.setup();
+      let confirmAttempts = 0;
+      mocks.post.mockImplementation(async (url: string) => {
+        if (url === "/records/receipts/10/confirm") {
+          confirmAttempts += 1;
+          // Same target set every time: retrying on "same targets" alone would post forever.
+          throw changedResponse([candidate(90 + confirmAttempts, 501)]);
+        }
+        return { data: receipt };
+      });
+
+      await reviewEditAndAcknowledge(user);
+
+      expect(await screen.findByText(/The matches changed while you were reviewing/)).toBeVisible();
+      const saves = mocks.post.mock.calls.filter(([url]) => url === "/records/receipts/10/confirm");
+      expect(saves).toHaveLength(2);
+      expect(saves[1]![1]).toMatchObject({ duplicateDecision: { action: "SAVE_ANYWAY", candidateSetHash: confirmTimeHash } });
+      expect(screen.getByRole("checkbox", { name: /I reviewed these matches/ })).not.toBeChecked();
+      expect(screen.getByTestId("current-path")).toHaveTextContent("/");
+    });
+
+    it("does not retry when the confirm-time list is truncated, even with the same visible targets", async () => {
+      const user = userEvent.setup();
+      mocks.post.mockImplementation(async (url: string) => {
+        if (url === "/records/receipts/10/confirm") {
+          const error = changedResponse([candidate(93, 501)]);
+          throw Object.assign(error, {
+            response: {
+              ...error.response,
+              data: { ...error.response.data, candidateCount: 2, candidatesTruncated: true, nextCursor: "next" },
+            },
+          });
+        }
+        return { data: receipt };
+      });
+
+      await reviewEditAndAcknowledge(user);
+
+      expect(await screen.findByText(/The matches changed while you were reviewing/)).toBeVisible();
+      expect(mocks.post.mock.calls.filter(([url]) => url === "/records/receipts/10/confirm")).toHaveLength(1);
+    });
+
+    it("asks again when the confirm-time matches differ from the acknowledged list", async () => {
+      const user = userEvent.setup();
+      mocks.post.mockImplementation(async (url: string) => {
+        if (url === "/records/receipts/10/confirm") throw changedResponse([candidate(93, 501), candidate(94, 777)]);
+        return { data: receipt };
+      });
+
+      await reviewEditAndAcknowledge(user);
+
+      expect(await screen.findByText(/The matches changed while you were reviewing/)).toBeVisible();
+      expect(screen.getByRole("checkbox", { name: /I reviewed these matches/ })).not.toBeChecked();
+      expect(screen.getByRole("button", { name: "Save anyway" })).toBeDisabled();
+      expect(mocks.post.mock.calls.filter(([url]) => url === "/records/receipts/10/confirm")).toHaveLength(1);
+      expect(screen.getByTestId("current-path")).toHaveTextContent("/");
+    });
   });
 
   it("resolves a lost confirmation response from the stored scan state without posting again", async () => {

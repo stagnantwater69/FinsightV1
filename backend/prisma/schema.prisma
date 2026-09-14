@@ -294,6 +294,15 @@ enum ExternalProcessingPurpose {
   @@map("ExternalProcessingPurpose")
 }
 
+/// Who granted the consent row: the owner in-app, or operator policy on
+/// first dispatch when RECEIPT_PROVIDER_CONSENT_MODE=automatic.
+enum ExternalProcessingConsentSource {
+  OWNER
+  OPERATOR_POLICY
+
+  @@map("ExternalProcessingConsentSource")
+}
+
 enum ExternalProviderBudgetScope {
   RESOURCE
   BUSINESS
@@ -565,6 +574,7 @@ model BusinessProfile {
   externalProcessingConsents        ExternalProcessingConsent[]
   externalProviderBudgets           ExternalProviderBudget[]
   externalProviderDispatches        ExternalProviderDispatch[]
+  externalProviderDispatchOutcomes  ExternalProviderDispatchOutcome[]
   receiptPurgeJobs                  ReceiptPurgeJob[]
 
   @@unique([id, userId], map: "BusinessProfile_ID_User_ID_key")
@@ -948,6 +958,7 @@ model ReceiptScan {
   pages                       ReceiptScanPage[]
   corrections                 ReceiptFieldCorrection[]
   providerDispatches          ExternalProviderDispatch[]
+  providerDispatchOutcomes    ExternalProviderDispatchOutcome[]
   purgeJobs                   ReceiptPurgeJob[]
   duplicateCandidatesAsSource ReceiptDuplicateCandidate[] @relation("ReceiptDuplicateCandidateSource")
   duplicateCandidatesAsTarget ReceiptDuplicateCandidate[] @relation("ReceiptDuplicateCandidateScanTarget")
@@ -960,7 +971,7 @@ model ReceiptScan {
   @@index([businessProfileId, semanticFingerprint], map: "ReceiptScan_profile_semantic_fingerprint_idx")
   /// Cross-profile abandoned-scan sweep: confirmationStatus = 'Pending',
   /// processingStatus IN ('Complete', 'Failed'), lastActivityAt < cutoff,
-  /// ordered by (lastActivityAt, id) for bounded keyset batches.
+  /// ordered by (lastActivityAt, id) for bounded per-tick batches.
   @@index([confirmationStatus, processingStatus, lastActivityAt, id], map: "ReceiptScan_abandoned_sweep_idx")
   // See the ExpenseRecord note on why this carries an explicit `map:` name.
   @@index([processingStatus, nextProcessingAttemptAt, processingHeartbeatAt], map: "ReceiptScan_ReceiptScan_ProcessingStatus_ReceiptScan_NextProces")
@@ -1536,20 +1547,21 @@ model RecoveryPlan {
 /// One grant episode for a provider and business. Revocation closes the row;
 /// a later grant creates a new row so the consent presented at dispatch stays auditable.
 model ExternalProcessingConsent {
-  id                      Int                           @id @default(autoincrement()) @map("ExternalProcessingConsent_ID")
-  businessProfileId       Int                           @map("BusinessProfile_ID")
-  actorUserId             Int                           @map("User_ID")
-  provider                String                        @map("ExternalProcessingConsent_Provider") @db.VarChar(64)
-  policyVersion           String                        @map("ExternalProcessingConsent_PolicyVersion") @db.VarChar(64)
-  purpose                 ExternalProcessingPurpose     @map("ExternalProcessingConsent_Purpose")
-  allowedDataClasses      ExternalProcessingDataClass[] @map("ExternalProcessingConsent_AllowedDataClasses")
-  processingRegion        String                        @map("ExternalProcessingConsent_ProcessingRegion") @db.VarChar(64)
-  providerRetentionHours  Int                           @map("ExternalProcessingConsent_ProviderRetentionHours")
-  providerTrainingAllowed Boolean                       @default(false) @map("ExternalProcessingConsent_ProviderTrainingAllowed")
-  grantedAt               DateTime                      @default(now()) @map("ExternalProcessingConsent_GrantedAt")
-  revokedAt               DateTime?                     @map("ExternalProcessingConsent_RevokedAt")
-  createdAt               DateTime                      @default(now()) @map("ExternalProcessingConsent_CreatedAt")
-  updatedAt               DateTime                      @updatedAt @map("ExternalProcessingConsent_UpdatedAt")
+  id                      Int                             @id @default(autoincrement()) @map("ExternalProcessingConsent_ID")
+  businessProfileId       Int                             @map("BusinessProfile_ID")
+  actorUserId             Int                             @map("User_ID")
+  provider                String                          @map("ExternalProcessingConsent_Provider") @db.VarChar(64)
+  policyVersion           String                          @map("ExternalProcessingConsent_PolicyVersion") @db.VarChar(64)
+  purpose                 ExternalProcessingPurpose       @map("ExternalProcessingConsent_Purpose")
+  allowedDataClasses      ExternalProcessingDataClass[]   @map("ExternalProcessingConsent_AllowedDataClasses")
+  processingRegion        String                          @map("ExternalProcessingConsent_ProcessingRegion") @db.VarChar(64)
+  providerRetentionHours  Int                             @map("ExternalProcessingConsent_ProviderRetentionHours")
+  providerTrainingAllowed Boolean                         @default(false) @map("ExternalProcessingConsent_ProviderTrainingAllowed")
+  source                  ExternalProcessingConsentSource @default(OWNER) @map("ExternalProcessingConsent_Source")
+  grantedAt               DateTime                        @default(now()) @map("ExternalProcessingConsent_GrantedAt")
+  revokedAt               DateTime?                       @map("ExternalProcessingConsent_RevokedAt")
+  createdAt               DateTime                        @default(now()) @map("ExternalProcessingConsent_CreatedAt")
+  updatedAt               DateTime                        @updatedAt @map("ExternalProcessingConsent_UpdatedAt")
 
   businessProfile BusinessProfile            @relation(fields: [businessProfileId, actorUserId], references: [id, userId], onDelete: Cascade)
   dispatches      ExternalProviderDispatch[]
@@ -1628,6 +1640,7 @@ model ExternalProviderDispatch {
   consent         ExternalProcessingConsent @relation(fields: [consentId, businessProfileId, provider], references: [id, businessProfileId, provider], onDelete: NoAction)
   resourceBudget  ExternalProviderBudget    @relation("ExternalProviderResourceBudget", fields: [resourceBudgetId, resourceBudgetScope, provider, cycleStart, unitType], references: [id, scope, provider, cycleStart, unitType], onDelete: Restrict)
   businessBudget  ExternalProviderBudget?   @relation("ExternalProviderBusinessBudget", fields: [businessBudgetId, businessBudgetScope, businessBudgetProfileId, provider, cycleStart, unitType], references: [id, scope, businessProfileId, provider, cycleStart, unitType], onDelete: NoAction)
+  storedOutcome   ExternalProviderDispatchOutcome?
 
   @@index([businessProfileId, createdAt, id], map: "ExternalProviderDispatch_profile_created_idx")
   @@index([businessProfileId, provider, inputHash], map: "ExternalProviderDispatch_profile_provider_input_idx")
@@ -1637,6 +1650,29 @@ model ExternalProviderDispatch {
   @@index([resourceBudgetId, status], map: "ExternalProviderDispatch_resource_status_idx")
   @@index([businessBudgetId, status], map: "ExternalProviderDispatch_business_status_idx")
   @@map("ExternalProviderDispatch")
+}
+
+/// The validated provider outcome for a SUCCEEDED dispatch, stored so a
+/// retry on the same reservation key replays the paid answer instead of
+/// being refused. This row holds receipt content, so it cascades from the
+/// scan: a purge deletes it while the dispatch audit row survives with its
+/// scan columns set to null. Written inside the billing settlement
+/// transaction in receiptProviderDispatch.service.ts and replayed on retry.
+model ExternalProviderDispatchOutcome {
+  dispatchId                   Int      @id @map("ExternalProviderDispatch_ID")
+  businessProfileId            Int      @map("BusinessProfile_ID")
+  receiptScanId                Int      @map("ReceiptScan_ID")
+  receiptScanBusinessProfileId Int      @map("ReceiptScan_BusinessProfile_ID")
+  outcome                      Json     @map("ExternalProviderDispatchOutcome_Outcome") @db.JsonB
+  createdAt                    DateTime @default(now()) @map("ExternalProviderDispatchOutcome_CreatedAt")
+
+  dispatch        ExternalProviderDispatch @relation(fields: [dispatchId], references: [id], onDelete: Cascade)
+  businessProfile BusinessProfile          @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+  receiptScan     ReceiptScan              @relation(fields: [receiptScanId, receiptScanBusinessProfileId], references: [id, businessProfileId], onDelete: Cascade)
+
+  @@index([businessProfileId], map: "ExternalProviderDispatchOutcome_profile_idx")
+  @@index([receiptScanId, receiptScanBusinessProfileId], map: "ExternalProviderDispatchOutcome_receipt_idx")
+  @@map("ExternalProviderDispatchOutcome")
 }
 
 /// A completed purge keeps only hashes, bounded counts, and lifecycle state;

@@ -264,17 +264,48 @@ describe("ReceiptEvidenceViewer stored-image loading", () => {
     expect(veil(q)).toBeNull();
   });
 
-  it("settling a request after unmount does not update state", async () => {
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      const q = await mount();
-      await settleImage(q, 1);
-      const request = takePending(1);
-      await act(async () => { q.unmount(); });
-      await act(async () => { request.resolve(storedImage(1, "https://storage.test/after-unmount")); });
-      expect(consoleError).not.toHaveBeenCalled();
-    } finally {
-      consoleError.mockRestore();
-    }
+  // React 19 no longer warns on setState after unmount, so the old "no console
+  // error" unmount test proved nothing. Close-and-reopen is the observable form.
+  it("a request from before the viewer was closed cannot fill the reopened viewer", async () => {
+    const q = await mount();
+    await settleImage(q, 1);
+    const beforeClose = takePending(1);
+    expect(veil(q)).toBeTruthy();
+
+    const viewer = (visible: boolean) => withTheme(
+      <ReceiptEvidenceViewer
+        pages={pages}
+        scanId={77}
+        pageEvidence={evidence}
+        initialPage={0}
+        visible={visible}
+        onClose={vi.fn()}
+      />,
+    );
+    await act(async () => { q.rerender(viewer(false)); });
+    await act(async () => { q.rerender(viewer(true)); });
+    await settleImage(q, 1);
+    expect(apiGet).toHaveBeenCalledTimes(2);
+    expect(veil(q)).toBeTruthy();
+
+    await act(async () => { beforeClose.resolve(storedImage(1, "https://storage.test/before-close")); });
+    expect(image(q, 1).props.source.uri).toBe("file:///one-source.jpg");
+    expect(veil(q)).toBeTruthy();
+
+    await resolvePending(1, "https://storage.test/after-reopen");
+    await settleImage(q, 1);
+    expect(image(q, 1).props.source.uri).toBe("https://storage.test/after-reopen");
+    expect(veil(q)).toBeNull();
+  });
+
+  it("a request settling after unmount is dropped without touching the shared request log", async () => {
+    // Nothing is on screen after unmount; only a zombie re-request would be visible.
+    const q = await mount();
+    await settleImage(q, 1);
+    const request = takePending(1);
+    await act(async () => { q.unmount(); });
+    await act(async () => { request.resolve(storedImage(1, "https://storage.test/after-unmount")); });
+    expect(apiGet).toHaveBeenCalledTimes(1);
+    expect(pending).toHaveLength(0);
   });
 });

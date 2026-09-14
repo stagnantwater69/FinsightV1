@@ -87,6 +87,16 @@ describe("receipt provider consent contract", () => {
     expect(parseReceiptProviderConsentState({ ...unavailable, mode: "automatic" })?.mode).toBe("automatic");
   });
 
+  it("carries policyBlocked and defaults it to false when absent or malformed", () => {
+    const base = { available: true, provider: terms, consent: null, activeConsents: [], mode: "automatic" };
+    expect(parseReceiptProviderConsentState({ ...base, policyBlocked: true })?.policyBlocked).toBe(true);
+    expect(parseReceiptProviderConsentState({ ...base, policyBlocked: false })?.policyBlocked).toBe(false);
+    expect(parseReceiptProviderConsentState(base)?.policyBlocked).toBe(false);
+    expect(parseReceiptProviderConsentState({ ...base, policyBlocked: "true" })?.policyBlocked).toBe(false);
+    expect(parseReceiptProviderConsentState({ ...unavailable, policyBlocked: true })?.policyBlocked).toBe(true);
+    expect(parseReceiptProviderConsentState(unavailable)?.policyBlocked).toBe(false);
+  });
+
   it("does not expose grant terms when unavailable", () => {
     expect(parseReceiptProviderConsentState({
       available: false,

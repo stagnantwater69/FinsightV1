@@ -83,12 +83,23 @@ async function waitForPostgres(containerName: string): Promise<void> {
   throw new Error(`Disposable PostgreSQL container ${containerName} did not become ready.`);
 }
 
+// Only these two host paths are mounted; backend/.env and the rest of
+// backend/ never enter the container.
+const CONTAINER_MOUNTS: { host: string; container: string }[] = [
+  { host: MIGRATIONS_DIR, container: "/workspace/prisma/migrations" },
+  { host: LEGACY_FIXTURE, container: "/workspace/tests/fixtures/phase2-legacy-scanner.sql" },
+];
+
 function containerFile(localPath: string): string {
-  const relative = path.relative(BACKEND_ROOT, localPath);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`Refusing to read a fixture outside ${BACKEND_ROOT}.`);
+  const resolved = path.resolve(localPath);
+  for (const mount of CONTAINER_MOUNTS) {
+    if (resolved === mount.host) return mount.container;
+    const relative = path.relative(mount.host, resolved);
+    if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+      return path.posix.join(mount.container, ...relative.split(path.sep));
+    }
   }
-  return path.posix.join("/workspace", ...relative.split(path.sep));
+  throw new Error(`Refusing to read ${localPath}: it is not inside a mounted path.`);
 }
 
 function psql(
@@ -367,7 +378,7 @@ function applyRecordedMigration(containerName: string, database: string, migrati
 
 function applyLegacyFixture(containerName: string, database: string): void {
   executeFile(containerName, database, LEGACY_FIXTURE);
-  // The fixture recreates the proven legacy catalog; this checksum selects that supported source path.
+  // The fixture is a reconstruction of the a0e4f792 catalog (that migration text is in no git object); the checksum selects the legacy path.
   recordMigration(containerName, database, PHASE2_MIGRATION, LEGACY_CHECKSUM);
 }
 
@@ -469,8 +480,7 @@ async function main(): Promise<void> {
       `POSTGRES_PASSWORD=${POSTGRES_PASSWORD}`,
       "-p",
       `127.0.0.1:${port}:5432`,
-      "-v",
-      `${BACKEND_ROOT}:/workspace:ro`,
+      ...CONTAINER_MOUNTS.flatMap((mount) => ["-v", `${mount.host}:${mount.container}:ro`]),
       "postgres:16-alpine",
     ],
     { stdio: "ignore" },

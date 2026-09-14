@@ -399,6 +399,13 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
       if (confirmation.mode === "itemised") {
         ownerAdded = await persistOwnerAddedItems(tx, scan.id, confirmation.additionalItems);
         splits = await groupItemsIntoSplits(tx, scan.id, validCategories, [...confirmation.itemAssignments, ...ownerAdded]);
+        // Nothing itemised means nothing to reconcile: with no items the whole
+        // total would be the "gap", and category mode would book the entire
+        // purchase as tax and charges. A single-category receipt is a manual
+        // split of one, so the refusal names that instead.
+        if (splits.length === 0) {
+          throw new ApiError(400, "Assign the receipt to at least one category");
+        }
         splits = reconcileSplits(splits, totalCentavos, confirmation.reconciliation);
       } else {
         splits = confirmation.splits;

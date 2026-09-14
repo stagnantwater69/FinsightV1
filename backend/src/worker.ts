@@ -14,7 +14,11 @@ import { runCsvImportWorkerOnce, sweepStalledCsvImports } from "./services/csvIm
 import { cleanUpExpiredRateLimits } from "./middleware/rateLimit.middleware";
 import { enqueueDailyProfileAnalyses, runAnalysisWorkerOnce } from "./services/anomalyDetection/job.service";
 import { purgeUnverifiedRegistrations, runAccountDeletionWorkerOnce } from "./services/accountDeletion.service";
-import { runReceiptPurgeWorkerOnce, sweepAbandonedReceiptScans } from "./services/receiptPurge.service";
+import {
+  redriveStrandedReceiptPurges,
+  runReceiptPurgeWorkerOnce,
+  sweepAbandonedReceiptScans,
+} from "./services/receiptPurge.service";
 import { reconcileStaleReceiptProviderDispatches } from "./services/receiptProviderDispatch.service";
 
 logger.info({ pid: process.pid }, "FinSight worker starting");
@@ -144,6 +148,13 @@ function start(): void {
         if (swept.enqueued > 0) logger.info(swept, "swept abandoned receipt scans");
       })
       .catch((error) => logger.error({ err: error }, "abandoned receipt scan sweep failed"));
+    // Same cadence: a deletion whose job series burned out gets a fresh
+    // series once its cool-down has passed. Counts only in the log.
+    void redriveStrandedReceiptPurges()
+      .then((redriven) => {
+        if (redriven.enqueued > 0) logger.info(redriven, "re-drove stranded receipt purges");
+      })
+      .catch((error) => logger.error({ err: error }, "stranded receipt purge re-drive failed"));
   }, 60 * 60_000);
 }
 

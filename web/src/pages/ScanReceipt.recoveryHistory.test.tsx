@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { AxiosError, AxiosHeaders } from "axios";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ScanReceipt } from "./ScanReceipt";
@@ -339,5 +340,151 @@ describe("recovery row accessible names (P2-12)", () => {
     const names = screen.getAllByRole("button").map((button) => button.getAttribute("aria-label")).filter(Boolean);
     expect(new Set(names).size).toBe(names.length);
     expect(names).toHaveLength(14);
+  });
+});
+
+describe("round 3: stop waiting, delete races, and focus", () => {
+  function processingRow(id: number, vendor: string) {
+    return summary(id, vendor, {
+      processingStatus: "Processing",
+      allowedActions: { retryProcessing: false, reviewResult: false },
+    });
+  }
+  /** A request that stays open until its abort signal fires, the way axios behaves. */
+  function untilAborted(config?: { signal?: AbortSignal }): Promise<never> {
+    return new Promise((_, reject) => {
+      config?.signal?.addEventListener("abort", () => reject(new Error("canceled")));
+    });
+  }
+
+  it("aborts a wait started after Stop waiting when the page unmounts", async () => {
+    const user = userEvent.setup();
+    history = () => ({ items: [processingRow(91, "Slow shop")], nextCursor: null });
+    mocks.post.mockImplementation((_url: string, _body: unknown, config?: { signal?: AbortSignal }) => untilAborted(config));
+    const baseGet = mocks.get.getMockImplementation()!;
+    mocks.get.mockImplementation(async (url: string, config?: { signal?: AbortSignal; params?: HistoryParams }) =>
+      url === "/records/receipts/91" ? untilAborted(config) : baseGet(url, config));
+
+    const view = render(page());
+    await screen.findByText("Slow shop");
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo());
+    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+    await user.click(await screen.findByRole("button", { name: "Cancel upload" }));
+    await user.click(screen.getByRole("button", { name: "Continue waiting, Slow shop" }));
+
+    const wait = mocks.get.mock.calls.find(([url]) => url === "/records/receipts/91")!;
+    const signal = (wait[1] as { signal: AbortSignal }).signal;
+    expect(signal.aborted).toBe(false);
+    view.unmount();
+    expect(signal.aborted).toBe(true);
+  });
+
+  it("keeps the picked photo when Stop waiting ends a wait on a stored scan", async () => {
+    const user = userEvent.setup();
+    history = () => ({ items: [processingRow(91, "Slow shop")], nextCursor: null });
+    const baseGet = mocks.get.getMockImplementation()!;
+    mocks.get.mockImplementation(async (url: string, config?: { signal?: AbortSignal; params?: HistoryParams }) =>
+      url === "/records/receipts/91" ? untilAborted(config) : baseGet(url, config));
+
+    render(page());
+    await screen.findByText("Slow shop");
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo());
+    await user.click(screen.getByRole("button", { name: "Continue waiting, Slow shop" }));
+    await user.click(await screen.findByRole("button", { name: "Stop waiting" }));
+
+    expect(screen.getByRole("img", { name: "Page 1" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Scan receipt" })).toBeEnabled();
+    expect(screen.getByRole("alert")).toHaveTextContent("Stopped waiting. Slow shop stays in unfinished scans.");
+    expect(screen.getByRole("button", { name: "Continue waiting, Slow shop" })).toBeEnabled();
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it("does not resurrect a deleted row when the abandon-refresh lands after the delete", async () => {
+    const user = userEvent.setup();
+    let releaseRefresh!: () => void;
+    let refreshes = 0;
+    history = () => {
+      refreshes += 1;
+      if (refreshes === 1) return { items: [summary(5, "Older shop")], nextCursor: null };
+      return new Promise<ReceiptScanHistoryPage>((resolve) => {
+        releaseRefresh = () => resolve({ items: [summary(10, "Paper shop"), summary(5, "Older shop")], nextCursor: null });
+      });
+    };
+    mocks.delete.mockResolvedValue({ data: { id: 601, receiptScanId: 10, status: "PENDING" } });
+
+    render(page());
+    await screen.findByText("Older shop");
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo());
+    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await user.click(screen.getByRole("button", { name: "Choose another image" }));
+    await screen.findByRole("heading", { name: "Scan a receipt" });
+    expect(rowTitles()).toEqual(["Paper shop", "Older shop"]);
+
+    await user.click(screen.getByRole("button", { name: "Delete scan, Paper shop" }));
+    await waitFor(() => expect(rowTitles()).toEqual(["Older shop"]));
+    expect(mocks.delete).toHaveBeenCalledWith("/records/receipts/10", expect.anything());
+
+    releaseRefresh();
+    await waitFor(() => expect(screen.queryByText("Checking unfinished scans…")).not.toBeInTheDocument());
+    expect(rowTitles()).toEqual(["Older shop"]);
+  });
+
+  it("drops the row when the server answers that the deletion is already underway", async () => {
+    const user = userEvent.setup();
+    history = () => ({ items: [summary(12, "First shop"), summary(11, "Second shop")], nextCursor: null });
+    mocks.delete.mockRejectedValue(new AxiosError(
+      "Request failed with status code 409", "ERR_BAD_REQUEST", undefined, undefined,
+      { status: 409, statusText: "Conflict", headers: {}, config: { headers: new AxiosHeaders() },
+        data: { error: "This receipt is already being deleted." } },
+    ));
+
+    render(page());
+    await screen.findByText("Second shop");
+    await user.click(screen.getByRole("button", { name: "Delete scan, Second shop" }));
+
+    await waitFor(() => expect(rowTitles()).toEqual(["First shop"]));
+    expect(screen.queryByText("This receipt is already being deleted.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Review result, First shop" })).toHaveFocus();
+  });
+
+  it("keeps the row and shows the message for any other 409 on delete", async () => {
+    const user = userEvent.setup();
+    history = () => ({ items: [summary(12, "First shop"), summary(11, "Second shop")], nextCursor: null });
+    mocks.delete.mockRejectedValue(new AxiosError(
+      "Request failed with status code 409", "ERR_BAD_REQUEST", undefined, undefined,
+      { status: 409, statusText: "Conflict", headers: {}, config: { headers: new AxiosHeaders() },
+        data: { error: "This receipt already has financial records. Delete only its stored evidence." } },
+    ));
+
+    render(page());
+    await screen.findByText("Second shop");
+    await user.click(screen.getByRole("button", { name: "Delete scan, Second shop" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("This receipt already has financial records.");
+    expect(rowTitles()).toEqual(["First shop", "Second shop"]);
+  });
+
+  it("moves focus to the next row's action after deleting a recovery row", async () => {
+    const user = userEvent.setup();
+    history = () => ({ items: [summary(12, "First shop"), summary(11, "Second shop"), summary(10, "Third shop")], nextCursor: null });
+    mocks.delete.mockImplementation(async (url: string) => ({
+      data: { id: 700, receiptScanId: Number(url.split("/").at(-1)), status: "PENDING" },
+    }));
+
+    render(page());
+    await screen.findByText("Second shop");
+    await user.click(screen.getByRole("button", { name: "Delete scan, Second shop" }));
+    await waitFor(() => expect(rowTitles()).toEqual(["First shop", "Third shop"]));
+    expect(screen.getByRole("button", { name: "Review result, Third shop" })).toHaveFocus();
+
+    await user.click(screen.getByRole("button", { name: "Delete scan, Third shop" }));
+    await waitFor(() => expect(rowTitles()).toEqual(["First shop"]));
+    expect(screen.getByRole("button", { name: "Review result, First shop" })).toHaveFocus();
+
+    await user.click(screen.getByRole("button", { name: "Delete scan, First shop" }));
+    await waitFor(() => expect(screen.queryByRole("list", { name: "Unfinished scans" })).not.toBeInTheDocument());
+    expect(screen.getByLabelText(/Receipt photo/)).toHaveFocus();
   });
 });

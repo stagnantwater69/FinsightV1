@@ -10,15 +10,17 @@
 
 **Current decision:** Do not merge or describe Phase 2 as accepted yet
 
+**Status update, 14 September 2026 (after commit):** The fixes were committed on 14 September 2026 as `36223ae` (P1 and P2 fixes, reconciliation migration, `20260914010610`, harness, legacy fixture, and these documents) and `aede3a5` (provider-first routing and policy consent), both pushed to `finsightv1/feat/phase2-scanner-acceptance`. The hosted CI push run on `aede3a5` passed (run 34799460479). PR #1 against `main` is open; its pull-request run was still in progress when this was audited. Sentences below that describe an uncommitted worktree, untracked Phase 2 files, or a pending commit and CI run were accurate at 01:50 PHT and are superseded by this note; the external acceptance gates (Stages 4 to 8) are unchanged.
+
 **Continuation, 14 September 2026 (01:50 PHT):** Stages 0, 0A, 1, 2, and 3 below are complete in the local worktree. All eight P2 findings are fixed, qa-security-reviewed, and verified by complete gates. See [Continuation log](#continuation-log-14-september-2026). Stages 4 to 8 remain open and require people, devices, private data, or owner authorization.
 
 ## Executive handoff
 
-FinSight's Phase 2 receipt workflow is implemented as a review candidate. The four P1 findings from the first review have been fixed and verified locally, and as of 14 September 2026 the eight P2 findings are fixed and verified locally too. Physical Android testing, authorized hosted Supabase and private Storage checks, and a sealed consented real-receipt evaluation remain open, and the P2 snapshot has not been committed.
+FinSight's Phase 2 receipt workflow is implemented as a review candidate. The four P1 findings from the first review have been fixed and verified locally, and as of 14 September 2026 the eight P2 findings are fixed and verified locally too. Physical Android testing, authorized hosted Supabase and private Storage checks, and a sealed consented real-receipt evaluation remain open. The P2 snapshot was committed later on 14 September (`36223ae`, then `aede3a5`; see the status update above).
 
-The exact-snapshot backend replay (Stage 0A) was run and passed before any P2 change, the eight P2 findings were then resolved, and the complete repository and migration gates passed on the resulting snapshot. The immediate next gates are an owner-authorized reviewed commit of the exact intended file list, an independent read-only review of the whole range, and hosted CI on that SHA. The external acceptance work must remain open until the required people, devices, private data, credentials, and explicit authorization are available.
+The exact-snapshot backend replay (Stage 0A) was run and passed before any P2 change, the eight P2 findings were then resolved, and the complete repository and migration gates passed on the resulting snapshot. The independent read-only review of the whole range (PR 2), the commit, and hosted CI on `aede3a5` have since happened; the next gate is the PR #1 merge decision. The external acceptance work must remain open until the required people, devices, private data, credentials, and explicit authorization are available.
 
-There is a large dirty and untracked worktree. Preserve it. Do not clean, reset, delete, stage, or commit unrelated files. No commit or push was made for the post-`28394be` P1 hardening work.
+There is a large dirty and untracked worktree. Preserve it. Do not clean, reset, delete, stage, or commit unrelated files. The post-`28394be` P1 and P2 work was committed as `36223ae`; unrelated untracked files remain uncommitted.
 
 ## Read these first
 
@@ -50,7 +52,7 @@ The wider program also covers CSV import and safe categorization, but the active
 | --- | --- | --- |
 | 0. Baseline and decisions | Freeze schema, corpus policy, benchmark inputs, retention, budget, device targets, and hosted classifications | The repository and migration prerequisite was locally checkpointed. External corpus, device, account, backup, and hosted classifications are still required for release acceptance. |
 | 1. Worker, upload, and cost guardrails | Dedicated OCR worker, bounded uploads, packaged offline language data, local-first routing, provider consent and hard budget controls | Implemented before the Phase 2 branch. Keep its safety properties green. |
-| 2. Scanner acceptance and results | Full-resolution evidence, Standard and Long capture, batches, stored retry, review, item edits, duplicate handling, confirmation, and deletion | Code is implemented. Four P1 review blockers and eight P2 items are fixed locally. External acceptance, a reviewed commit, and hosted CI are still open. |
+| 2. Scanner acceptance and results | Full-resolution evidence, Standard and Long capture, batches, stored retry, review, item edits, duplicate handling, confirmation, and deletion | Code is implemented. Four P1 review blockers and eight P2 items are fixed, committed (`36223ae`, `aede3a5`), and green in hosted CI on `aede3a5`. External acceptance and the PR #1 merge decision are still open. |
 | 3. Extraction and provider benchmark | Normalize expanded fields and compare local OCR with an optional provider under a frozen benchmark | Not the current task. Cloud remains disabled until this phase's separate gates pass. |
 | 4A. CSV result completion | Durable upload-once CSV import, malware checks, row lifecycle, complete report, and recoverable partial failure | Outside the present Phase 2 continuation. |
 | 4B. Safe Excel extension | Add `.xlsx` only if OOXML, security, precision, and resource gates pass | Outside the present Phase 2 continuation. CSV-only is the honest fallback. |
@@ -153,9 +155,9 @@ Key files:
 A new forward-only reconciliation migration handles exactly two supported source histories:
 
 - current source migration checksum `8e03ef8f26dba6af0316d4a6488468afecf4a4bb25a972989a8e7a5dda4f782b`, which takes a verification-only path;
-- known legacy checksum `a0e4f79275cbb0e975f16d4675776ecf954395eaa6dd5900f15cd3f73030ca5b`, repaired only after its exact legacy catalog shape is proven.
+- known legacy checksum `a0e4f79275cbb0e975f16d4675776ecf954395eaa6dd5900f15cd3f73030ca5b`, repaired only after the catalog matches the migration's precondition inventory. That inventory was reconstructed in `backend/tests/fixtures/phase2-legacy-scanner.sql`; the migration text with that checksum exists in no git object.
 
-Unknown checksums, partial state, malformed constraints, weakened predicates, altered collations, and altered operator classes abort and roll back. Verification covers exact CHECK definitions, foreign-key mappings and actions, nineteen index definitions, target tables, btree method, primary and unique flags, validity and readiness, key order and options, predicates, null semantics, no unexpected INCLUDE columns, namespace-qualified collations and operator classes, RLS, policies, and direct grants.
+The migration SQL aborts and rolls back on unknown checksums, partial state, malformed constraints, weakened predicates, altered collations, and altered operator classes; the harness exercises only the weakened legacy CHECK, altered predicate, collation, and operator-class cases (see the acceptance checklist). Verification covers exact CHECK definitions, foreign-key mappings and actions, nineteen index definitions, target tables, btree method, primary and unique flags, validity and readiness, key order and options, predicates, null semantics, no unexpected INCLUDE columns, namespace-qualified collations and operator classes, RLS, policies, and direct grants.
 
 The startup guard now fails closed when the migration directory itself is missing or unreadable and for reachable ledger or catalog failures. It checks the migrations that this checkout recognizes, but it intentionally ignores database-ahead historical ledger rows with no corresponding expected checksum; a subdirectory without `migration.sql` is also excluded from the expected set. It may return an unknown transient state only for classified Prisma database-availability errors `P1001`, `P1002`, `P1008`, or `P1017`.
 
@@ -247,19 +249,17 @@ Rules for every next agent:
 
 At handoff preparation:
 
-- branch and remote branch both point to `28394be`;
-- the post-commit P1 fixes are modified or untracked working-tree files;
-- no commit or push was made for those fixes;
+- at handoff time, branch and remote branch both pointed to `28394be`; they now point to `aede3a5`, and `36223ae` holds the P1 and P2 work;
+- at handoff time, the post-commit P1 fixes were modified or untracked working-tree files; they are now committed;
 - the worktree contains many other untracked files from broader FinSight work;
-- the final reconciliation migration and the 14 September `20260914010610_receipt_scan_last_activity` migration are untracked directories;
-- the policy-v1 evaluator files, the P2 implementation and test files listed in the continuation log, and the Phase 2 review documents are also currently untracked;
+- the final reconciliation migration, the 14 September `20260914010610_receipt_scan_last_activity` migration, the policy-v1 evaluator files, the P2 implementation and test files listed in the continuation log, and the Phase 2 review documents were untracked at handoff time and are now committed in `36223ae`;
 - unrelated files must not be swept into a commit.
 
 Before editing, run `git status --short --branch` and inspect the exact diff for the path you own. Never use a broad reset, checkout, clean, recursive deletion, or blanket `git add .`.
 
 ### Known stale wording in the earlier Phase 2 documents
 
-The PR review, acceptance checklist, and implementation evidence currently call the reconciliation verifier a `committed` harness, and the implementation evidence contains prospective wording about a final commit and hosted CI. Git state disproves those descriptions for the present snapshot: the reconciliation migration, verifier, legacy fixture, PR review, and acceptance checklist are untracked, and the P1 hardening has not been committed or pushed. Treat `committed` and final-CI wording in those earlier documents as stale until a reviewed commit and real CI run exist.
+At handoff time the PR review, acceptance checklist, and implementation evidence called the reconciliation verifier a `committed` harness and used prospective wording about a final commit and hosted CI while those artifacts were still untracked. The commit (`36223ae`) and the hosted CI run on `aede3a5` have since happened, and on 14 September the wording in those documents was corrected to state what is committed, what CI ran on, and exactly which reconciliation branches the harness exercises.
 
 ## Markdown inventory for the recovered plan sequence
 
@@ -298,9 +298,9 @@ Commit `28394be` added the first two Phase 2 records. The next three are current
 
 13. [HOSTED-MIGRATION-INCIDENT.md](./HOSTED-MIGRATION-INCIDENT.md), added in `28394be` and updated during P1 hardening.
 14. [IMPLEMENTATION-EVIDENCE.md](./IMPLEMENTATION-EVIDENCE.md), added in `28394be` and updated during P1 hardening.
-15. [PHASE-2-ACCEPTANCE-CHECKLIST.md](./PHASE-2-ACCEPTANCE-CHECKLIST.md), created during review and acceptance-tooling work and currently untracked.
-16. [PR-1-REVIEW-2026-09-13.md](./PR-1-REVIEW-2026-09-13.md), created during the independent Phase 2 review and currently untracked.
-17. [PHASE-2-HANDOFF-2026-09-14.md](./PHASE-2-HANDOFF-2026-09-14.md), this continuation handoff and currently untracked.
+15. [PHASE-2-ACCEPTANCE-CHECKLIST.md](./PHASE-2-ACCEPTANCE-CHECKLIST.md), created during review and acceptance-tooling work; committed in `36223ae`.
+16. [PR-1-REVIEW-2026-09-13.md](./PR-1-REVIEW-2026-09-13.md), created during the independent Phase 2 review; committed in `36223ae`.
+17. [PHASE-2-HANDOFF-2026-09-14.md](./PHASE-2-HANDOFF-2026-09-14.md), this continuation handoff; committed in `36223ae`.
 
 ### Materially updated but not created in this sequence
 
@@ -311,15 +311,16 @@ Git status contains many other untracked Markdown files from earlier or separate
 
 ## Continuation log, 14 September 2026
 
-Executed by the orchestrator with the specialist agents named in `AGENTS.md`; every implementation report was verified against the actual diff and a re-run of its tests before acceptance. Nothing was committed, pushed, or deployed; hosted Supabase was not accessed by any agent.
+Executed by the orchestrator with the specialist agents named in `AGENTS.md`; every implementation report was verified against the actual diff and a re-run of its tests before acceptance. Nothing was committed, pushed, or deployed during these stages (the commit came later; see the status update at the top); hosted Supabase was not accessed by any agent.
 
 1. **Stage 0.** Preflight matched this document. Node 22.23.2 was installed through nvm alongside the existing v24.18.0, and the nvm default alias was pinned to `24.18.0` so the owner's shells are unchanged. Provider dispatch confirmed disabled with zero network calls.
 2. **Stage 0A.** Passed on the exact P1 snapshot (see the replay note above).
 3. **Stage 1.** Four lanes in parallel, each with its own disposable database: Lane A backend-api (P2-6, P2-7); Lane B database then backend-api (P2-5 schema, P2-8, P2-5 sweep); Lane C mobile (P2-9); Lane D web-frontend (P2-10, P2-11, P2-12). Each started from a failing reproducing test. The per-finding changes and evidence are tabulated in the [PR review](./PR-1-REVIEW-2026-09-13.md#p2-resolution-14-september-2026).
 4. **qa-security review** of the full range: eight verdicts, all verified; one P3 (cursor ids past int4 reached Prisma as a 500) fixed in the same session in both the new duplicate-candidate cursor and the pre-existing history cursor; nine adversarial tests added.
 5. **Stage 2.** Complete gates on the final snapshot: backend 156 files / 2,305 passed / 1 skipped, mobile 98 / 1,064, web 85 / 745 plus 18 Chromium end-to-end, policy-v1 75, fresh replay of 45 migrations with clean status, diff, and guard, reconciliation harness 237 facts, type-check, lint, build, bundle budget, type parity, ops smoke drills, and `docker compose config`. One e2e selector written by Lane D omitted a receipt ordinal and was corrected before the final 18-of-18 run. Full details are in the [acceptance checklist](./PHASE-2-ACCEPTANCE-CHECKLIST.md#p2-snapshot-verification-14-september-2026).
-6. **Stage 3.** The PR review, acceptance checklist, implementation evidence, hosted incident record, and this handoff were reconciled: counts, the 237-fact digest, the untracked (not committed) status of the harness and migrations, and the owner-performed hosted deployment now agree across all five.
-7. **Independent full-range review (PR 2).** A 21-finder, adversarially verified read-only review of `204ca03..28394be` plus the worktree confirmed 2 P1, 24 P2 (about 15 distinct), and 41 P3 findings; 4 were refuted. Both P1s (the `npm test` `DIRECT_URL` guard gap behind the hosted incidents; batch resume dead-ending after an accepted child's files were released) and eleven P2 clusters were fixed in the same session with reproducing tests, including three regressions introduced by the P1 and P2 fixes themselves (splits of one receipt flagging each other, the purge stage ceiling, the discovery cap). Four P2 items need an owner disposition. Record: [PR-2-REVIEW-2026-09-14.md](./PR-2-REVIEW-2026-09-14.md). The complete gates were rerun afterwards; see the acceptance checklist's post-review section.
+6. **Stage 3.** The PR review, acceptance checklist, implementation evidence, hosted incident record, and this handoff were reconciled: counts, the 237-fact digest, the then-untracked status of the harness and migrations, and the owner-performed hosted deployment agreed across all five at that time (the commit came later).
+7. **Independent full-range review (PR 2).** A 21-finder, adversarially verified read-only review of `204ca03..28394be` plus the worktree confirmed 2 P1, 24 P2 (about 15 distinct), and 41 P3 findings; 4 were refuted. Both P1s (the `npm test` `DIRECT_URL` guard gap behind the hosted incidents; batch resume dead-ending after an accepted child's files were released) and eleven P2 clusters were fixed in the same session with reproducing tests, including three regressions introduced by the P1 and P2 fixes themselves (splits of one receipt flagging each other, the purge stage ceiling, the discovery cap). Four P2 items needed an owner disposition; the dispositions are recorded in [PR-2-REVIEW-2026-09-14.md](./PR-2-REVIEW-2026-09-14.md). The complete gates were rerun afterwards; see the acceptance checklist's post-review section.
+8. **Round 3 (after `aede3a5`).** The verified P3 backlog and the follow-ups from the provider work were run as seven owner lanes plus a qa-security review: purge failure-path contract with re-drive, receipt-core P3s, stored provider outcome with replay, unreconciled-items merge policy, consent source and `policyBlocked`, grace migration, guard sentinels, web and mobile P3s, parity tripwire and harness hygiene, docs audit. 48 migrations. Gates: backend 163 / 2,396, web 86 / 770 + 18 e2e, mobile 98 / 1,090. Recorded in the PR 2 review's round 3 section; committed as the next commit after `aede3a5`.
 
 New files (P2 lanes): `backend/prisma/migrations/20260914010610_receipt_scan_last_activity/`, `backend/src/services/receiptScan/confirmMode.ts`, `backend/tests/integration/{receiptAbandonedScanSweep,receiptConfirmPostCommit,receiptConfirmModes,receiptDuplicateCandidateBounds}.test.ts`, `backend/tests/contract/receiptConfirmModes.test.ts`, `mobile/tests/render/receiptEvidenceViewerLoading.test.tsx`, `web/src/pages/scanReceipt/{recoveryHistory.ts,recoveryHistory.test.ts}`, `web/src/pages/ScanReceipt.recoveryHistory.test.tsx`. Modified (P2 lanes): `backend/prisma/schema.prisma`, `backend/src/{worker.ts,controllers/receiptScan.controller.ts,services/receiptDuplicate.service.ts,services/receiptPurge.service.ts,services/receiptScan/{history,queue,reconciliation,types,worker}.ts}`, `mobile/src/screens/records/scanReceipt/ReceiptEvidenceViewer.tsx`, `web/src/pages/{ScanReceipt.tsx,ScanReceipt.test.tsx}`, `web/e2e/phase2-receipt-review.spec.ts`. PR 2 fixes added `backend/tests/integration/{receiptSplitDuplicates,receiptWorkerAttemptCeiling}.test.ts` and `docs/phase-2/PR-2-REVIEW-2026-09-14.md`, and modified `backend/tests/setup/globalSetup.ts`, `backend/src/controllers/receiptCaptureBatch.controller.ts`, `backend/src/services/expenseRecord.service.ts`, `backend/src/config/migrationGuard.ts`, `backend/tests/integration/{phase2ReceiptAcceptance,receiptDuplicateCandidateBounds}.test.ts`, `mobile/src/screens/records/ScanReceiptScreen.tsx`, `mobile/src/screens/records/scanReceipt/ActiveReceiptQueue.tsx`, `mobile/tests/render/receiptImportFlow.test.tsx`, and `web/src/pages/ScanReceipt.tsx` plus its test.
 
@@ -624,13 +625,13 @@ d2f4805aef790c484fd1878edecfcba0a39b93529cb8d9b0879469e2aaa99d46
 
 ### Node 22 gate
 
-The current interactive shell used to prepare this handoff reports Node `v24.18.0`. The project and CI gate use Node 22, and the recorded full backend run used Node `22.23.2`. Activate an approved Node 22 installation or run the gate in CI, then make this guard pass before running any npm, npx, Prisma, Vitest, or TSX command below:
+The interactive shell used to prepare this handoff reported Node `v24.18.0`, and Node `22.23.2` was later installed under nvm (see Stage 0 in the continuation log). The project and CI gate use Node 22, and the recorded full backend run used Node `22.23.2`. Activate an approved Node 22 installation or run the gate in CI, then make this guard pass before running any npm, npx, Prisma, Vitest, or TSX command below:
 
 ```bash
 node -e 'if (Number(process.versions.node.split(".")[0]) !== 22) { console.error(`Node 22 required; found ${process.version}`); process.exit(1); }'
 ```
 
-Do not assume `nvm use 22` will work on this machine. At handoff time, the local nvm versions directory contains only Node `v24.18.0`.
+`nvm use 22` resolves to `v22.23.2` on this machine since Stage 0 (`source ~/.nvm/nvm.sh && nvm use 22`); the nvm default alias is still `24.18.0`, so verify with the guard above in every new shell.
 
 ### Database test safety
 
@@ -701,7 +702,7 @@ npx vitest run tests/render/receiptImportFlow.test.tsx
 
 ### Reconciliation harness
 
-The worktree harness creates isolated local PostgreSQL containers, reconstructs fresh and supported-legacy states, runs adversarial variants, and cleans up its own containers:
+The committed harness creates isolated local PostgreSQL containers, reconstructs fresh and legacy states, runs four adversarial variants (weakened legacy CHECK, altered predicate, collation, operator class), and cleans up its own containers. It bind-mounts only `backend/prisma/migrations` and `backend/tests/fixtures/phase2-legacy-scanner.sql` into the container, read-only, so `backend/.env` is never visible inside it:
 
 ```bash
 cd /home/ken/FinsightV1/backend
@@ -806,7 +807,7 @@ Phase 2 is ready for a merge decision only when all of the following are true:
 
 Until then, the accurate status is:
 
-> Phase 2 is a locally hardened review candidate with all four P1 and all eight P2 findings fixed and verified in the uncommitted worktree, and physical-device, hosted, private-Storage, purge, consented-corpus acceptance, a reviewed commit, an independent full-range review, and hosted CI still pending.
+> Phase 2 is a locally hardened review candidate with all four P1 and all eight P2 findings fixed, verified, independently reviewed (PR 2), committed (`36223ae`, `aede3a5`), and green in hosted CI on `aede3a5`, with physical-device, hosted, private-Storage, purge, and consented-corpus acceptance and the PR #1 merge decision still pending.
 
 ## Starter prompt for another AI
 
@@ -824,14 +825,13 @@ activate and verify Node 22 before npm, npx, Prisma, Vitest, or TSX commands. Pr
 finsight-test-db and finsight-phase2-db-audit containers. Keep provider
 dispatch disabled.
 
-The four P1 and eight P2 findings are fixed locally and verified; read the
-continuation log in the handoff. Node 22.23.2 is installed under nvm
-(`nvm use 22`). The remaining work is: (1) obtain the owner's disposition for the four
-open P2 items in docs/phase-2/PR-2-REVIEW-2026-09-14.md and implement any
-they want fixed first; (2) with explicit owner authorization, assemble the
-exact commit file list from the continuation log, excluding unrelated
-untracked files, and commit and push it; (3) observe hosted CI on that SHA;
-(4) the P3 backlog in the PR 2 review as later lanes. Do not deploy the two outstanding
+The four P1 and eight P2 findings are fixed, verified, and committed
+(36223ae, then aede3a5; hosted CI passed on aede3a5; PR #1 is open); read
+the status update and continuation log in the handoff. Node 22.23.2 is
+installed under nvm (`nvm use 22`). The owner's dispositions for the four
+PR 2 P2 items are recorded in docs/phase-2/PR-2-REVIEW-2026-09-14.md. The
+remaining work is the P3 backlog in the PR 2 review as later lanes, and the
+external acceptance gates. Do not deploy the two outstanding
 migrations to hosted Supabase without an explicit owner instruction for that
 exact operation. Do not call Phase 2 accepted while physical Android,
 authorized hosted Storage/purge, and sealed consented-corpus gates remain

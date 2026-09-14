@@ -55,6 +55,7 @@ const consentStateSchema = z
       .nullable(),
     consent: consentReferenceSchema.nullable(),
     activeConsents: z.array(z.object({ reference: z.string(), provider: z.string() }).passthrough()),
+    policyBlocked: z.boolean(),
   })
   .strict();
 
@@ -94,7 +95,12 @@ describe("provider consent mode contract", () => {
   it("reports explicit mode by default and on unknown values", async () => {
     const absent = await request(app).get(url).set(...AUTH);
     expect(absent.status).toBe(200);
-    expect(consentStateSchema.parse(absent.body)).toMatchObject({ available: true, mode: "explicit", consent: null });
+    expect(consentStateSchema.parse(absent.body)).toMatchObject({
+      available: true,
+      mode: "explicit",
+      consent: null,
+      policyBlocked: false,
+    });
 
     vi.stubEnv("RECEIPT_PROVIDER_CONSENT_MODE", "AUTOMATIC");
     const unknown = await request(app).get(url).set(...AUTH);
@@ -105,7 +111,12 @@ describe("provider consent mode contract", () => {
     vi.stubEnv("RECEIPT_PROVIDER_CONSENT_MODE", "automatic");
     const state = await request(app).get(url).set(...AUTH);
     expect(state.status).toBe(200);
-    expect(consentStateSchema.parse(state.body)).toMatchObject({ available: true, mode: "automatic", consent: null });
+    expect(consentStateSchema.parse(state.body)).toMatchObject({
+      available: true,
+      mode: "automatic",
+      consent: null,
+      policyBlocked: false,
+    });
 
     const granted = await request(app).put(url).set(...AUTH).send({
       provider: "gemini",
@@ -119,10 +130,21 @@ describe("provider consent mode contract", () => {
     expect(granted.status).toBe(200);
     expect(consentStateSchema.parse(granted.body).mode).toBe("automatic");
     expect(granted.body.consent).not.toBeNull();
+    expect(granted.body.policyBlocked).toBe(false);
 
     const revoked = await request(app).delete(url).set(...AUTH);
     expect(revoked.status).toBe(200);
-    expect(consentStateSchema.parse(revoked.body)).toMatchObject({ mode: "automatic", consent: null, activeConsents: [] });
+    expect(consentStateSchema.parse(revoked.body)).toMatchObject({
+      mode: "automatic",
+      consent: null,
+      activeConsents: [],
+      policyBlocked: true,
+    });
+
+    // The same revoked state reads as not blocked once the operator turns automatic mode off.
+    vi.stubEnv("RECEIPT_PROVIDER_CONSENT_MODE", "explicit");
+    const explicitAfterRevoke = await request(app).get(url).set(...AUTH);
+    expect(consentStateSchema.parse(explicitAfterRevoke.body).policyBlocked).toBe(false);
   });
 
   it("reports the mode even when the provider is not available", async () => {
@@ -136,6 +158,7 @@ describe("provider consent mode contract", () => {
       provider: null,
       consent: null,
       activeConsents: [],
+      policyBlocked: false,
     });
   });
 });

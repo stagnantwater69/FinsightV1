@@ -262,14 +262,28 @@ describe("checkMigrationDrift", () => {
     });
   });
 
-  it("fails closed when a required schema sentinel is missing", async () => {
+  it.each([
+    "constraint.receipt_scan_batch_link",
+    "table.external_provider_dispatch_outcome",
+    "security.external_provider_dispatch_outcome_rls",
+    "security.external_provider_dispatch_outcome_no_policies",
+    "table.external_processing_consent",
+    "security.external_processing_consent_rls",
+    "security.external_processing_consent_no_policies",
+    "table.external_provider_budget",
+    "security.external_provider_budget_rls",
+    "security.external_provider_budget_no_policies",
+    "table.external_provider_dispatch",
+    "security.external_provider_dispatch_rls",
+    "security.external_provider_dispatch_no_policies",
+  ])("fails closed when the %s schema sentinel is missing", async (issue) => {
     queryRaw
       .mockResolvedValueOnce(repositoryRows())
-      .mockResolvedValueOnce([{ issue: "constraint.receipt_scan_batch_link" }]);
+      .mockResolvedValueOnce([{ issue }]);
 
     await expect(checkMigrationDrift()).resolves.toMatchObject({
       status: "drift",
-      schemaIssues: ["constraint.receipt_scan_batch_link"],
+      schemaIssues: [issue],
     });
   });
 

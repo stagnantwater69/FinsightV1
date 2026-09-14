@@ -370,6 +370,43 @@ function targetKey(candidate: CandidateTargetRef): string {
 }
 
 
+/**
+ * Holds every discovered target row until this transaction ends and reports
+ * which ones still exist. An owner delete does not take the profile gate, so
+ * without this the FK check on the insert waits on the delete and fails with
+ * P2003 once it commits. KEY SHARE is the lock the FK check takes anyway.
+ */
+async function lockCandidateTargets(
+  db: Prisma.TransactionClient,
+  businessProfileId: number,
+  targets: CandidateTargetRef[],
+): Promise<Set<string>> {
+  const expenseIds = targets.flatMap((row) => (row.candidateExpenseRecordId === null ? [] : [row.candidateExpenseRecordId]));
+  const scanIds = targets.flatMap((row) => (row.candidateReceiptScanId === null ? [] : [row.candidateReceiptScanId]));
+  const surviving = new Set<string>();
+  if (expenseIds.length > 0) {
+    const rows = await db.$queryRaw<{ id: number }[]>`
+      SELECT "ExpenseRecord_ID" AS id
+      FROM "ExpenseRecord"
+      WHERE "BusinessProfile_ID" = ${businessProfileId}
+        AND "ExpenseRecord_ID" IN (${Prisma.join(expenseIds)})
+      FOR KEY SHARE
+    `;
+    for (const row of rows) surviving.add(`expense:${row.id}`);
+  }
+  if (scanIds.length > 0) {
+    const rows = await db.$queryRaw<{ id: number }[]>`
+      SELECT "ReceiptScan_ID" AS id
+      FROM "ReceiptScan"
+      WHERE "BusinessProfile_ID" = ${businessProfileId}
+        AND "ReceiptScan_ID" IN (${Prisma.join(scanIds)})
+      FOR KEY SHARE
+    `;
+    for (const row of rows) surviving.add(`receipt:${row.id}`);
+  }
+  return surviving;
+}
+
 async function persistCandidateSet(
   db: Prisma.TransactionClient,
   businessProfileId: number,
@@ -474,7 +511,15 @@ async function persistCandidateSet(
     });
   }
   if (creates.length > 0) {
-    await db.receiptDuplicateCandidate.createMany({ data: creates });
+    const refs = creates.map((row) => ({
+      candidateReceiptScanId: row.candidateReceiptScanId ?? null,
+      candidateExpenseRecordId: row.candidateExpenseRecordId ?? null,
+    }));
+    const surviving = await lockCandidateTargets(db, businessProfileId, refs);
+    const present = creates.filter((_row, index) => surviving.has(targetKey(refs[index]!)));
+    if (present.length > 0) {
+      await db.receiptDuplicateCandidate.createMany({ data: present });
+    }
   }
 
   const sourceUpdated = await db.receiptScan.updateMany({
@@ -501,21 +546,35 @@ function reasonCodes(candidate: CandidateWithTarget): ReceiptDuplicateReasonCode
   );
 }
 
+/**
+ * Null for a receipt target with nothing left to compare against: a scan
+ * confirmed before extracted values were written whose expense records have
+ * since been deleted. The row stays PENDING until the next refresh supersedes
+ * it; it is left out of the page rather than served as a candidate with no
+ * date or total.
+ */
 function candidateDTO(candidate: CandidateWithTarget) {
   const scan = candidate.candidateReceiptScan;
   const expense = candidate.candidateExpenseRecord;
-  const confirmed = scan ? confirmedScanValues(scan) : null;
+  const values = scan ? confirmedScanValues(scan) : expense;
+  if (!values) return null;
   return {
     id: candidate.id,
     target: scan
       ? { kind: "receipt" as const, id: scan.id }
       : { kind: "expense" as const, id: expense!.id },
-    vendor: confirmed?.vendor ?? expense?.vendor ?? null,
-    date: confirmed?.date ?? expense!.date,
-    total: Number(confirmed?.amount ?? expense!.amount),
+    vendor: values.vendor ?? null,
+    date: values.date,
+    total: Number(values.amount),
     scoreBand: candidate.scoreBand,
     reasons: reasonCodes(candidate),
   };
+}
+
+type CandidateDTO = NonNullable<ReturnType<typeof candidateDTO>>;
+
+function candidateDTOs(candidates: CandidateWithTarget[]): CandidateDTO[] {
+  return candidates.map(candidateDTO).filter((dto): dto is CandidateDTO => dto !== null);
 }
 
 interface PendingCandidateKey extends CandidateTargetRef {
@@ -655,7 +714,7 @@ export async function listReceiptDuplicateCandidates(
   return {
     sourceFingerprint: source.semanticFingerprint,
     candidateSetHash: setHash(source.semanticFingerprint, keys),
-    candidates: page.candidates.map(candidateDTO),
+    candidates: candidateDTOs(page.candidates),
     candidateCount: keys.length,
     candidatesTruncated: page.hasMore,
     nextCursor: page.hasMore ? encodeCursor(page.candidates.at(-1)!.id) : null,
@@ -696,7 +755,7 @@ export type ReceiptDuplicateGate =
       code: "DUPLICATE_REVIEW_REQUIRED" | "DUPLICATE_REVIEW_CHANGED";
       sourceFingerprint: string;
       candidateSetHash: string;
-      candidates: ReturnType<typeof candidateDTO>[];
+      candidates: CandidateDTO[];
       candidateCount: number;
       candidatesTruncated: boolean;
       nextCursor: string | null;
@@ -720,7 +779,7 @@ async function reviewRequired(
     code,
     sourceFingerprint: scope.sourceFingerprint,
     candidateSetHash: setHash(scope.sourceFingerprint, keys)!,
-    candidates: page.candidates.map(candidateDTO),
+    candidates: candidateDTOs(page.candidates),
     candidateCount: keys.length,
     candidatesTruncated: page.hasMore,
     nextCursor: page.hasMore ? encodeCursor(page.candidates.at(-1)!.id) : null,

@@ -52,6 +52,7 @@ vi.mock("../../src/services/receiptScan/providerAdapters", async (importOriginal
 import { prisma } from "../../src/config/prisma";
 import { getReceiptProviderConfiguration } from "../../src/config/receiptProvider";
 import {
+  getReceiptProviderConsentState,
   grantReceiptProviderConsent,
   revokeReceiptProviderConsent,
 } from "../../src/services/receiptProviderConsent.service";
@@ -256,7 +257,7 @@ describe("RECEIPT_PROVIDER_ROUTING", () => {
     expect(stored.versions.rescueReasonCodes).not.toContain("PROVIDER_ROUTING_ALWAYS");
   });
 
-  it("dispatches an always-routing decision through the gate once and never twice", async () => {
+  it("dispatches an always-routing decision through the gate once and replays it, never calling twice", async () => {
     enableMockedGeminiProvider({ RECEIPT_PROVIDER_ROUTING: "always" });
     const owner = await makeOwnerWithProfile();
     await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
@@ -267,15 +268,19 @@ describe("RECEIPT_PROVIDER_ROUTING", () => {
     });
 
     const first = await dispatchReceiptProviderRescue(input, { adapter, configuration: getReceiptProviderConfiguration() });
+    const budgetsAfterFirst = await prisma.externalProviderBudget.findMany({ orderBy: { id: "asc" } });
     const second = await dispatchReceiptProviderRescue(input, { adapter, configuration: getReceiptProviderConfiguration() });
 
     expect(first).toMatchObject({ code: "PROVIDER_OK", dispatched: true, dispatchStatus: "SUCCEEDED" });
-    expect(second).toMatchObject({ code: "PROVIDER_DISPATCH_ALREADY_ATTEMPTED", dispatched: false });
+    expect(second).toMatchObject({ code: "PROVIDER_OK", dispatched: true, dispatchStatus: "SUCCEEDED" });
+    expect(second.merge).toEqual(first.merge);
     expect(adapter.extract).toHaveBeenCalledTimes(1);
+    expect(await prisma.externalProviderDispatch.count()).toBe(1);
     expect(await prisma.externalProviderDispatch.findFirstOrThrow()).toMatchObject({
       rescueReasonCode: "PROVIDER_ROUTING_ALWAYS",
       finalBillableUnits: 2,
     });
+    expect(await prisma.externalProviderBudget.findMany({ orderBy: { id: "asc" } })).toEqual(budgetsAfterFirst);
   });
 });
 
@@ -329,6 +334,7 @@ describe("RECEIPT_PROVIDER_CONSENT_MODE", () => {
       providerRetentionHours: 0,
       providerTrainingAllowed: false,
       revokedAt: null,
+      source: "OPERATOR_POLICY",
     });
     expect(await prisma.externalProcessingConsent.count({ where: { businessProfileId: bystander.profile.id } })).toBe(0);
     for (const dispatch of await prisma.externalProviderDispatch.findMany()) {
@@ -365,7 +371,12 @@ describe("RECEIPT_PROVIDER_CONSENT_MODE", () => {
     expect(rows).toHaveLength(2);
     expect(rows[0]).toMatchObject({ id: stale.id, policyVersion: "superseded-policy-v0" });
     expect(rows[0]!.revokedAt).toBeInstanceOf(Date);
-    expect(rows[1]).toMatchObject({ policyVersion: "receipt-provider-policy-v1", revokedAt: null, actorUserId: owner.user.id });
+    expect(rows[1]).toMatchObject({
+      policyVersion: "receipt-provider-policy-v1",
+      revokedAt: null,
+      actorUserId: owner.user.id,
+      source: "OPERATOR_POLICY",
+    });
     expect(await prisma.externalProviderDispatch.findFirstOrThrow()).toMatchObject({ consentId: rows[1]!.id });
   });
 
@@ -386,7 +397,26 @@ describe("RECEIPT_PROVIDER_CONSENT_MODE", () => {
     expect(adapter.extract).not.toHaveBeenCalled();
     expect(await prisma.externalProcessingConsent.count()).toBe(1);
     expect(await prisma.externalProcessingConsent.count({ where: { revokedAt: null } })).toBe(0);
+    expect(await prisma.externalProcessingConsent.findFirstOrThrow()).toMatchObject({ source: "OWNER" });
     expect(await prisma.externalProviderDispatch.count()).toBe(0);
+    expect(await getReceiptProviderConsentState(owner.user.id, owner.profile.id)).toMatchObject({
+      mode: "automatic",
+      consent: null,
+      policyBlocked: true,
+    });
+
+    // An owner grant after the revoke lifts the block and dispatch resumes.
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    expect(await getReceiptProviderConsentState(owner.user.id, owner.profile.id)).toMatchObject({
+      mode: "automatic",
+      policyBlocked: false,
+    });
+    const resumed = await dispatchReceiptProviderRescue(dispatchInput(owner.profile.id, scan.id), {
+      adapter,
+      configuration: getReceiptProviderConfiguration(),
+    });
+    expect(resumed).toMatchObject({ code: "PROVIDER_OK", dispatched: true });
+    expect(adapter.extract).toHaveBeenCalledTimes(1);
   });
 
   it("reads every receipt with no owner tap when both opt-ins are set together", async () => {

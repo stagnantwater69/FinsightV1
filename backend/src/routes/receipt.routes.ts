@@ -100,12 +100,20 @@ receiptRouter.get(
   "/:id/pages/:pageNumber/image/:variant",
   asyncHandler(receiptScanController.showPageImage),
 );
-receiptRouter.get("/:id/duplicate-candidates", asyncHandler(receiptScanController.duplicateCandidates));
+receiptRouter.get(
+  "/:id/duplicate-candidates",
+  rateLimit(LIMITS.RECEIPT_DUPLICATE_READ),
+  asyncHandler(receiptScanController.duplicateCandidates),
+);
 receiptRouter.get("/:id", asyncHandler(receiptScanController.show));
 receiptRouter.post("/:id/retry", rateLimit(LIMITS.SCAN_RECEIPT_BURST), asyncHandler(receiptScanController.retry));
 receiptRouter.patch("/:id/items/:itemId", asyncHandler(receiptScanController.updateItem));
 receiptRouter.delete("/:id/items/:itemId", asyncHandler(receiptScanController.deleteItem));
-receiptRouter.post("/:id/confirm", asyncHandler(receiptScanController.confirm));
+receiptRouter.post(
+  "/:id/confirm",
+  rateLimit(LIMITS.RECEIPT_CONFIRM_WRITE),
+  asyncHandler(receiptScanController.confirm),
+);
 receiptRouter.delete(
   "/:id/images",
   rateLimit(LIMITS.RECEIPT_DELETE_WRITE),

@@ -53,6 +53,7 @@ import { FIELD_LIMITS } from "../../lib/fieldLimits";
 import { CategoryPicker, todayISO } from "./shared";
 import { ScanBand } from "./scanReceipt/ScanBand";
 import { ScanningThumbnail } from "./scanReceipt/ScanningThumbnail";
+import { StoredPagePlaceholder } from "./scanReceipt/StoredPagePlaceholder";
 import { ReviewNotices } from "./scanReceipt/ReviewNotices";
 import { ReviewSection } from "./scanReceipt/ReviewSection";
 import { EvidenceNote } from "./scanReceipt/EvidenceNote";
@@ -225,8 +226,37 @@ function storedReceiptPages(result: ReceiptScanResult, pageCount: number): Captu
   });
 }
 
+/**
+ * Every local copy a page can point at. The gallery source is the picker's
+ * own cache copy, not the owner's photo library; receiptScannerCache refuses
+ * anything outside the app's receipt cache folders regardless.
+ */
+/**
+ * Phases where cancelling stops bytes leaving the phone. Every other phase
+ * is a wait on a receipt the server already holds, so "Cancel upload" would
+ * promise an undo that is not on offer.
+ */
+function cancelsAnUpload(phase: string): boolean {
+  return phase.startsWith("Uploading")
+    || phase === "Checking receipt size…"
+    || phase === "Creating receipt batch…"
+    || phase === "Replacing cancelled receipt batch…";
+}
+
+/** What stopping leaves the owner with, by what this phone actually holds. */
+function stoppedWaitingMessage(accepted: boolean, hasLocalImages: boolean): string {
+  if (accepted) {
+    return hasLocalImages
+      ? "Your uploaded images are kept. Review the result when you're ready."
+      : "The stored receipt is kept. Review the result when you're ready.";
+  }
+  return hasLocalImages
+    ? "Your selected images are kept. Start the upload again when you're ready."
+    : "Nothing changed. The receipt is still listed under Receipts to finish.";
+}
+
 function scannerFileUris(list: readonly CapturedPage[]): (string | undefined)[] {
-  return list.flatMap((page) => [page.originalUri, page.uri]);
+  return list.flatMap((page) => [page.originalUri, page.uri, page.sourceAssetUri]);
 }
 
 /**
@@ -1654,7 +1684,28 @@ export function ScanReceiptScreen({ navigation }: any) {
       });
     } catch (err) {
       if (!operation.current(task)) return;
-      setError(describeActionFailure(toLoadFailure(err), "The item is still on the receipt."));
+      const status = typeof err === "object" && err !== null && "status" in err
+        ? Number((err as { status: unknown }).status)
+        : null;
+      // Same recovery as saveItemEdit: without adopting the latest revision,
+      // a second tap would resend the stale one and hit the same 409.
+      if (status === 409) {
+        try {
+          const latest = verifiedReceiptScan(
+            await api.get<ReceiptScanResult>(`/records/receipts/${scan.id}`, undefined, task.controller.signal),
+            scan.id,
+            selected!.id,
+          );
+          if (!operation.current(task)) return;
+          setScan(latest);
+          setError("This receipt changed before the item was removed. Check the latest items and try again.");
+        } catch (refreshError) {
+          if (!operation.current(task)) return;
+          setError(describeActionFailure(toLoadFailure(refreshError), "The item is still on the receipt."));
+        }
+      } else {
+        setError(describeActionFailure(toLoadFailure(err), "The item is still on the receipt."));
+      }
     } finally {
       if (operation.current(task)) setRemovingItemId(null);
       operation.finish(task);
@@ -2015,13 +2066,12 @@ export function ScanReceiptScreen({ navigation }: any) {
                   <SkeletonBox height={14} />
                   <SkeletonBox width="70%" height={14} />
                   <SkeletonBox width="55%" height={14} />
-                  <Button title={phase === "Reading receipt…" ? "Stop waiting" : "Cancel upload"} variant="ghost" onPress={() => {
+                  <Button title={cancelsAnUpload(phase) ? "Cancel upload" : "Stop waiting"} variant="ghost" onPress={() => {
                     operation.cancel();
                     setBusy(false);
-                    if (uploadAttempt.current?.accepted) setScanRecoveryAction("review");
-                    setError(uploadAttempt.current?.accepted
-                      ? "Your uploaded images are kept. Review the result when you're ready."
-                      : "Your selected images are kept. Start the upload again when you're ready.");
+                    const accepted = Boolean(uploadAttempt.current?.accepted);
+                    if (accepted) setScanRecoveryAction("review");
+                    setError(stoppedWaitingMessage(accepted, pages.some((page) => Boolean(page.uri))));
                   }} />
                 </View>
               ) : (
@@ -2048,7 +2098,11 @@ export function ScanReceiptScreen({ navigation }: any) {
                                 borderColor: ink[200],
                               }}
                             >
-                              <Image source={{ uri: p.uri }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+                              {p.uri ? (
+                                <Image source={{ uri: p.uri }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+                              ) : (
+                                <StoredPagePlaceholder label="Stored" compact />
+                              )}
                               <View
                                 style={{
                                   position: "absolute",

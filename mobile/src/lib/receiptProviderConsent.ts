@@ -36,6 +36,12 @@ export interface ReceiptProviderConsentState {
   provider: ReceiptProviderTerms | null;
   consent: { reference: string; grantedAt: string; revokedAt: null } | null;
   activeConsents: ActiveReceiptProviderConsent[];
+  /**
+   * Automatic mode only: the owner revoked cloud reading and nothing is open
+   * since, so the operator policy will not grant again until the owner does.
+   * Absent on older servers; treated as false.
+   */
+  policyBlocked: boolean;
 }
 
 export interface ReceiptProviderConsentGrant {
@@ -157,6 +163,7 @@ export function parseReceiptProviderConsentState(value: unknown): ReceiptProvide
       provider: null,
       consent: null,
       activeConsents: activeConsents as ActiveReceiptProviderConsent[],
+      policyBlocked: input.policyBlocked === true,
     };
   }
 
@@ -168,6 +175,7 @@ export function parseReceiptProviderConsentState(value: unknown): ReceiptProvide
     provider,
     consent,
     activeConsents: activeConsents as ActiveReceiptProviderConsent[],
+    policyBlocked: input.policyBlocked === true,
   };
 }
 
