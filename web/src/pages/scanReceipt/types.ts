@@ -1,7 +1,21 @@
 import type { FieldEvidence, ReceiptWarning } from "../../lib/receiptWarnings";
 
-export interface ScanResult {
+/**
+ * Every value the server writes to ReceiptScan.confirmationStatus (a plain
+ * varchar, not a Prisma enum): "Pending" and "Confirmed" from the scan
+ * pipeline, "Deletion Pending" from receiptPurge.service.ts. The batch and
+ * history DTOs pass the column through unfiltered, so all three can appear
+ * on any of the shapes below. Not exported: scripts/check-type-parity.mjs
+ * compares exported names against mobile, which has no equivalent alias.
+ */
+type ReceiptConfirmationStatus = "Pending" | "Confirmed" | "Deletion Pending";
+
+export interface ReceiptScanResult {
   id: number;
+  confirmationStatus?: ReceiptConfirmationStatus;
+  receiptBatchId?: number | null;
+  receiptOrdinal?: number | null;
+  scanRevision: number;
   extractedDate: string | null;
   extractedVendor: string | null;
   extractedDescription: string | null;
@@ -37,7 +51,24 @@ export interface ScanResult {
    * is — it answers "should you retake one of these?", which stops mattering
    * once the scan is confirmed or abandoned.
    */
-  pageQualities?: ({ sharpness: number; brightness: number; tooBlurredToTrust: boolean } | null)[];
+  pageQualities?: ({
+    sharpness: number;
+    brightness: number;
+    tooBlurredToTrust: boolean;
+    width?: number | null;
+    height?: number | null;
+    tooSmallToRead?: boolean | null;
+  } | null)[];
+  /**
+   * Which stored variant OCR used for each page, in capture order.
+   *
+   * The review may still show the local source photo. Keeping that separate
+   * from the OCR source prevents an adjusted image from being presented as
+   * though it replaced the owner's original evidence.
+   */
+  pageProcessing?: ReceiptPageProcessing[];
+  /** Ordered, provider-neutral source and derived evidence for page review. */
+  pageEvidence?: ReceiptPageEvidence[];
   /**
    * 1-indexed page numbers that read as the same page photographed twice.
    * Empty on a single-page scan — there is nothing adjacent to compare.
@@ -84,6 +115,41 @@ export interface ScanResult {
   requiresManualCurrencyConversion?: boolean;
 }
 
+export interface ReceiptPageProcessing {
+  pageNumber?: number;
+  source: "original" | "processed";
+  hasProcessedVariant: boolean;
+  captureMetadata: unknown;
+}
+
+export interface ReceiptPageEvidenceVariant {
+  variant: "source" | "derived";
+  label: "Source" | "Composite source" | "Rectified" | "Enhanced color" | "Enhanced grayscale" | "Enhanced black and white" | "Processed";
+  width: number | null;
+  height: number | null;
+}
+
+export interface ReceiptPageEvidence {
+  pageNumber: number;
+  captureMode: "standard" | "long" | null;
+  processingMode: string | null;
+  ocrInput: "source" | "derived";
+  source: ReceiptPageEvidenceVariant;
+  derived: ReceiptPageEvidenceVariant | null;
+}
+
+export interface ReceiptPageImage {
+  pageNumber: number;
+  variant: "source" | "derived";
+  label: string;
+  width: number | null;
+  height: number | null;
+  url: string;
+  expiresInSeconds: number;
+}
+
+export type ReceiptPageQuality = NonNullable<ReceiptScanResult["pageQualities"]>[number];
+
 export interface ScannedItem {
   id: number;
   lineNumber: number;
@@ -115,6 +181,129 @@ export interface ScannedItem {
   amountConfidence?: number | null;
   /** Which page and printed line this item was read from, and by what. */
   evidence?: FieldEvidence | null;
+  /** Values the owner has corrected after OCR completed. */
+  ownerEditedFields?: ("name" | "amount")[];
+}
+
+export type ReceiptCaptureBatchStatus =
+  | "COLLECTING"
+  | "PROCESSING"
+  | "READY_FOR_REVIEW"
+  | "PARTIAL_FAILURE"
+  | "FAILED"
+  | "COMPLETE"
+  | "CANCELLED";
+
+export interface ReceiptCaptureBatch {
+  id: number;
+  businessProfileId: number;
+  expectedReceiptCount: number;
+  status: ReceiptCaptureBatchStatus;
+  uploadedReceiptCount: number;
+  createdAt: string;
+  finishedAt: string | null;
+  receipts: {
+    receiptOrdinal: number;
+    id: number;
+    processingStatus: "Processing" | "Complete" | "Failed";
+    confirmationStatus: ReceiptConfirmationStatus;
+    processingError: string | null;
+    processingErrorCode: string | null;
+    extractedDate: string | null;
+    extractedVendor: string | null;
+    extractedAmount: number | null;
+    allowedActions: {
+      retryProcessing: boolean;
+      reviewResult: boolean;
+    };
+  }[];
+}
+
+export interface ReceiptHistoryItem {
+  id: number;
+  businessProfileId: number;
+  receiptBatchId: number | null;
+  receiptOrdinal: number | null;
+  scanRevision: number;
+  processingStatus: "Processing" | "Complete" | "Failed";
+  confirmationStatus: ReceiptConfirmationStatus;
+  processingError: string | null;
+  processingErrorCode: string | null;
+  extractedDate: string | null;
+  extractedVendor: string | null;
+  extractedDescription: string | null;
+  extractedAmount: number | null;
+  createdAt: string;
+  pageCount: number;
+  allowedActions: {
+    retryProcessing: boolean;
+    reviewResult: boolean;
+  };
+}
+
+export interface ReceiptHistoryPage {
+  items: ReceiptHistoryItem[];
+  nextCursor: string | null;
+}
+
+export interface ReceiptPurgeJob {
+  id: number;
+  receiptScanId: number;
+  reason: string;
+  status: string;
+  stage: string;
+  storageObjectsExpected: number;
+  storageObjectsDeleted: number;
+  requestedAt: string;
+  completedAt: string | null;
+  lastErrorCode: string | null;
+}
+
+export type ReceiptDuplicateReason =
+  | "EXACT_IMAGE"
+  | "SAME_VENDOR"
+  | "SAME_DESCRIPTION"
+  | "SAME_DATE"
+  | "SAME_TOTAL";
+
+export interface ReceiptDuplicateCandidate {
+  id: number;
+  target: { kind: "receipt" | "expense"; id: number };
+  vendor: string | null;
+  date: string;
+  total: number;
+  scoreBand: "EXACT" | "LIKELY";
+  reasons: ReceiptDuplicateReason[];
+}
+
+/**
+ * The 409 body from POST /records/receipts/:id/confirm when the server wants
+ * the owner to look at possible duplicates before it writes anything.
+ * DUPLICATE_REVIEW_CHANGED means the matches moved since the last acknowledgement.
+ */
+export interface ReceiptDuplicateReview {
+  code: "DUPLICATE_REVIEW_REQUIRED" | "DUPLICATE_REVIEW_CHANGED";
+  sourceFingerprint: string | null;
+  candidateSetHash: string;
+  candidates: ReceiptDuplicateCandidate[];
+  candidateCount: number;
+  candidatesTruncated: boolean;
+  nextCursor: string | null;
+}
+
+/** The owner's answer to a duplicate review, sent back with the confirm body. */
+export interface ReceiptDuplicateDecision {
+  action: "SAVE_ANYWAY";
+  candidateSetHash: string;
+}
+
+export interface ReceiptDuplicateCandidatePage {
+  sourceFingerprint: string | null;
+  candidateSetHash: string | null;
+  candidates: ReceiptDuplicateCandidate[];
+  candidateCount: number;
+  candidatesTruncated: boolean;
+  nextCursor: string | null;
 }
 
 /**

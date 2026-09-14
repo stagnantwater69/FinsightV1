@@ -21,6 +21,7 @@
     "ratelimit:clear": "tsx scripts/clear-rate-limits.ts",
     "migrate:author": "tsx scripts/migrate-workflow/author.ts",
     "migrate:validate": "tsx scripts/migrate-workflow/validate.ts",
+    "migrate:verify-phase2-reconciliation": "tsx scripts/migrate-workflow/verify-phase2-reconciliation.ts",
     "migrate:deploy-hosted": "tsx scripts/migrate-workflow/deploy-hosted.ts",
     "storage:buckets:verify": "tsx scripts/storage-buckets/verify.ts",
     "storage:buckets:configure": "tsx scripts/storage-buckets/configure.ts",
@@ -33,6 +34,9 @@
     "test:unit": "vitest --config vitest.config.mts run tests/unit",
     "test:integration": "vitest --config vitest.config.mts run tests/integration",
     "evaluate:receipt-scanner": "tsx tests/receipt-scanner-evaluation/run-evaluation.ts",
+    "evaluate:receipt-scanner:policy-v1": "tsx tests/receipt-scanner-evaluation/run-policy-v1-evaluation.ts",
+    "test:receipt-scanner:policy-v1": "vitest --config tests/receipt-scanner-evaluation/vitest.policy-v1.config.mts run",
+    "typecheck:receipt-scanner:policy-v1": "tsc -p tests/receipt-scanner-evaluation/tsconfig.policy-v1.json",
     "test:db:up": "docker run -d --name finsight-test-db -e POSTGRES_PASSWORD=testpass -e POSTGRES_USER=testuser -e POSTGRES_DB=finsight_test -p 55432:5432 postgres:16-alpine",
     "test:db:down": "docker rm -f finsight-test-db",
     "test:db:reset": "npm run test:db:down --silent || true && npm run test:db:up"

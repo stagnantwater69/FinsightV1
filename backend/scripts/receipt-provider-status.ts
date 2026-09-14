@@ -55,6 +55,8 @@ export async function providerStatus(
       routingCalibration: configuration.routingCalibrated ? "ready" : "not-ready",
       resourceBudget: resourceBudgetState,
       businessBudget: businessBudgetState,
+      routing: configuration.routing,
+      consentMode: configuration.consentMode,
       providerNetworkCalls: 0,
       ...(requirementMet ? {} : { errorCode: "REQUIRED_PROVIDER_STATE_NOT_MET" }),
     },

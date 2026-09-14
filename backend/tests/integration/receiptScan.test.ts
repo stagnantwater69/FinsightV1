@@ -182,7 +182,7 @@ describe("upload and scan", () => {
   it("creates a Pending scan with the extracted fields", async () => {
     const scan = await upload();
     expect(scan.confirmationStatus).toBe("Pending");
-    expect(scan.imageFile).toBe("1/mock-receipt.jpg");
+    expect(scan).not.toHaveProperty("imageFile");
     expect(scan.extractedAmount).toBe(1400);
     expect(scan.extractedVendor).toBe("ABC SARI-SARI STORE");
     expect(scan.extractedDate?.toISOString().slice(0, 10)).toBe("2026-07-20");
@@ -1408,11 +1408,28 @@ describe("confirm", () => {
     });
 
     const second = await upload();
-    const [dup] = await confirmReceipt(ctx.user.id, second.id, {
+    const input = {
       date: day,
       description: "Rice",
       amount: 1400,
       splits: [{ categoryId: ctx.categories.Inventory!, amount: 1400 }],
+    };
+    const review = await confirmReceipt(ctx.user.id, second.id, input).then(
+      () => null,
+      (error: unknown) => error as {
+        status: number;
+        code: string;
+        responseDetails: { candidateSetHash: string };
+      },
+    );
+    expect(review).toMatchObject({ status: 409, code: "DUPLICATE_REVIEW_REQUIRED" });
+
+    const [dup] = await confirmReceipt(ctx.user.id, second.id, {
+      ...input,
+      duplicateDecision: {
+        action: "SAVE_ANYWAY",
+        candidateSetHash: review!.responseDetails.candidateSetHash,
+      },
     });
     expect(dup.duplicateStatus).toBe("Flagged");
   });

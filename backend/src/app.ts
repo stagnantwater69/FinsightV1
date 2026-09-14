@@ -14,12 +14,14 @@ import { expenseRecordRouter } from "./routes/expenseRecord.routes";
 import { salesRecordRouter } from "./routes/salesRecord.routes";
 import { recordsRouter } from "./routes/records.routes";
 import { receiptRouter } from "./routes/receipt.routes";
+import { receiptCaptureBatchRouter } from "./routes/receiptCaptureBatch.routes";
 import { csvImportRouter } from "./routes/csvImport.routes";
 import { dashboardRouter } from "./routes/dashboard.routes";
 import { notificationRouter } from "./routes/notification.routes";
 import { insightsRouter } from "./routes/insights.routes";
 import { errorHandler, notFoundHandler } from "./middleware/error.middleware";
 import { countStalledAccountDeletions } from "./services/accountDeletion.service";
+import { countStalledReceiptPurges } from "./services/receiptPurge.service";
 
 export const app = express();
 
@@ -100,6 +102,9 @@ app.get(["/api/v1/health", "/api/v1/health/ready"], async (req, res) => {
       queuedAnalysisJobs,
       oldestQueuedAnalysisJob,
       failedAnalysisJobs,
+      queuedReceiptPurges,
+      oldestQueuedReceiptPurge,
+      failedReceiptPurges,
       stalledAccountDeletions,
     ] = await Promise.all([
       prisma.receiptScan.count({ where: { processingStatus: "Processing" } }),
@@ -121,6 +126,13 @@ app.get(["/api/v1/health", "/api/v1/health/ready"], async (req, res) => {
         select: { createdAt: true },
       }),
       prisma.analysisJob.count({ where: { status: "FAILED" } }),
+      prisma.receiptPurgeJob.count({ where: { status: { in: ["PENDING", "PROCESSING", "RETRY"] } } }),
+      prisma.receiptPurgeJob.findFirst({
+        where: { status: { in: ["PENDING", "PROCESSING", "RETRY"] } },
+        orderBy: { requestedAt: "asc" },
+        select: { requestedAt: true },
+      }),
+      countStalledReceiptPurges(),
       // Surfaced because a deletion that has exhausted its retries is a data
       // obligation nobody is working on. It is quiet by design — the owner was
       // already told their account was gone — so it needs somewhere to be loud.
@@ -131,6 +143,8 @@ app.get(["/api/v1/health", "/api/v1/health/ready"], async (req, res) => {
     // worker process is behind or down.
     const ageSeconds = (row: { createdAt: Date } | null): number | null =>
       row ? Math.max(0, Math.floor((Date.now() - row.createdAt.getTime()) / 1000)) : null;
+    const requestedAgeSeconds = (row: { requestedAt: Date } | null): number | null =>
+      row ? Math.max(0, Math.floor((Date.now() - row.requestedAt.getTime()) / 1000)) : null;
     res.status(200).json({
       status: "ready",
       database: "ok",
@@ -143,6 +157,9 @@ app.get(["/api/v1/health", "/api/v1/health/ready"], async (req, res) => {
             queuedAnalysisJobs,
             oldestQueuedAnalysisJobAgeSeconds: ageSeconds(oldestQueuedAnalysisJob),
             failedAnalysisJobs,
+            queuedReceiptPurges,
+            oldestQueuedReceiptPurgeAgeSeconds: requestedAgeSeconds(oldestQueuedReceiptPurge),
+            failedReceiptPurges,
             stalledAccountDeletions,
           }
         : {}),
@@ -160,6 +177,7 @@ app.use("/api/v1/records/categories", expenseCategoryRouter);
 app.use("/api/v1/records/expenses", expenseRecordRouter);
 app.use("/api/v1/records/sales", salesRecordRouter);
 app.use("/api/v1/records/receipts", receiptRouter);
+app.use("/api/v1/records/receipt-batches", receiptCaptureBatchRouter);
 app.use("/api/v1/records/csv-imports", csvImportRouter);
 app.use("/api/v1/records", recordsRouter);
 app.use("/api/v1/dashboard", dashboardRouter);

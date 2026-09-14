@@ -71,7 +71,7 @@ export async function uploadReceiptImage(
  * passed around. The receipts bucket is private precisely so these links are
  * the only way in.
  */
-const RECEIPT_URL_TTL_SECONDS = 10 * 60;
+export const RECEIPT_URL_TTL_SECONDS = 10 * 60;
 
 /**
  * A temporary link to a stored receipt image.

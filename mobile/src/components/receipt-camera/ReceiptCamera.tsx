@@ -26,6 +26,7 @@ import { NativeReceiptCamera } from './NativeReceiptCamera';
 import { CameraAction } from './CameraAction';
 import { CropEditor } from './CropEditor';
 import { getCustomScannerView, parseScannerStatus, receiptSectionFromNative, type ScannerCommand } from '../../lib/customReceiptScanner';
+import { deleteReceiptScannerFiles } from '../../lib/receiptScannerCache';
 
 export interface ReceiptCameraProps { initialSections?: ReceiptSection[]; onCancel: () => void; onDone: (sections: ReceiptSection[]) => void; }
 export interface ReceiptCameraHandle { requestClose: () => void; }
@@ -37,7 +38,7 @@ function CustomReceiptCamera({ initialSections = [], onCancel, onDone, handleRef
   const t = useTheme(); const insets = useSafeAreaInsets();
   const { fontScale } = useWindowDimensions();
   const NativeScanner = getCustomScannerView();
-  const continuous = NativeScanner !== null;
+  const nativeScannerAvailable = NativeScanner !== null;
   const [command, setCommand] = useState<ScannerCommand>({ id: 0, type: 'reset' });
   const [scanning, setScanning] = useState(false);
   const [hasAcceptedReceipt, setHasAcceptedReceipt] = useState(false);
@@ -47,10 +48,14 @@ function CustomReceiptCamera({ initialSections = [], onCancel, onDone, handleRef
   const nativeVisible = useRef(false);
   const nativeEpoch = useRef(0);
   const longStarted = useRef(false);
+  const [scannerFileLifecycle] = useState(() => ({ created: new Set<string>(), handedOff: false }));
   const eventEpoch = nativeEpoch.current;
   const [permission, requestPermission, getPermission] = useCameraPermissions();
   const [sections, setSections] = useState<ReceiptSection[]>(() => [...initialSections]);
-  const [mode, setMode] = useState<'standard' | 'long'>(initialSections.length ? 'long' : 'standard');
+  const [mode, setMode] = useState<'standard' | 'long'>(initialSections[0]?.captureMode ?? (initialSections.length ? 'long' : 'standard'));
+  const [manualSections, setManualSections] = useState(() => initialSections.some(
+    (section) => section.captureMode === 'long' && section.captureSource !== 'native-document-scanner',
+  ));
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [replaceId, setReplaceId] = useState<string | null>(null);
   const [cropping, setCropping] = useState(false);
@@ -70,12 +75,16 @@ function CustomReceiptCamera({ initialSections = [], onCancel, onDone, handleRef
   const [cameraError, setCameraError] = useState(false);
   const camera = useRef<CameraView>(null);
   const mounted = useRef(true); const locked = useRef(false); const version = useRef(0); const dirty = useRef(false);
+  const captureActivity = useRef({ mode, scanning, nativeProcessing });
+  captureActivity.current = { mode, scanning, nativeProcessing };
+  const interruptedLongScan = useRef(false);
   const operationAbort = useRef<AbortController | null>(null);
   const closeRef = useRef<() => void>(() => {});
   useImperativeHandle(handleRef, () => ({ requestClose: () => closeRef.current() }), []);
   const selected = sections.find(s => s.localId === selectedId);
-  // Custom native evidence is rectified, but not enhanced; it is not the full
-  // camera frame. Derive this from capture provenance so crop/rotate keep it.
+  const continuous = nativeScannerAvailable && !manualSections;
+  // Native capture preserves its source beside the derived scan. Derive this
+  // from provenance so crop and rotate operations keep that evidence link.
   const selectedCustomScan = selected?.captureSource === 'native-document-scanner' && selected.captureMode !== undefined;
   const previous = sections.at(-1);
   const full = sections.length >= MAX_SECTIONS && !replaceId;
@@ -84,19 +93,58 @@ function CustomReceiptCamera({ initialSections = [], onCancel, onDone, handleRef
     mounted.current = true;
     const sub = AppState.addEventListener('change', state => {
       const foreground = state === 'active'; setActive(foreground);
-      if (!foreground) { nativeEpoch.current++; longStarted.current = false; nativeVisible.current = false; setTorch(false); setReady(false); setScanning(false); setNativeProcessing(false); setCommand(c => ({ id: c.id + 1, type: 'reset' })); setScannerMessage('Camera paused. Position the receipt and start again.'); }
+      if (!foreground) {
+        const capture = captureActivity.current;
+        interruptedLongScan.current = capture.mode === 'long' && (capture.scanning || capture.nativeProcessing);
+        nativeEpoch.current++; longStarted.current = false; nativeVisible.current = false; setTorch(false); setReady(false); setScanning(false); setNativeProcessing(false); setCommand(c => ({ id: c.id + 1, type: 'reset' })); setScannerMessage('Camera paused. Position the receipt and start again.');
+      }
       else {
         // Android can update native font scaling before Dimensions reflects
         // it. Recreate only text/control hosts on return from Settings.
         setTextLayoutRevision((revision) => revision + 1);
         void getPermission().catch(() => undefined);
+        if (interruptedLongScan.current) {
+          interruptedLongScan.current = false;
+          Alert.alert(
+            'Long scan was interrupted',
+            'Android stopped the unfinished sweep while FinSight was in the background. No partial image was saved; previously reviewed images are kept.',
+            [
+              {
+                text: 'Use manual pages',
+                onPress: () => {
+                  setMode('long');
+                  setManualSections(true);
+                  setScannerMessage('Photograph each part in printed order with a few lines of overlap.');
+                },
+              },
+              {
+                text: 'Restart long scan',
+                onPress: () => {
+                  setMode('long');
+                  setManualSections(false);
+                  setScannerMessage('Position the top of the receipt, then start scanning.');
+                },
+              },
+            ],
+          );
+        }
       }
     });
     const back = BackHandler.addEventListener('hardwareBackPress', () => { closeRef.current(); return true; });
-    // This is an operation counter, not a host view ref; invalidate late captures.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    return () => { mounted.current = false; version.current++; operationAbort.current?.abort(); sub.remove(); back.remove(); };
-  }, [getPermission]);
+    // Invalidate late async camera work before releasing listeners and files.
+    return () => {
+      mounted.current = false;
+      // Cleanup must invalidate the latest operation, not the value at effect setup.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      version.current++;
+      operationAbort.current?.abort();
+      sub.remove();
+      back.remove();
+      if (!scannerFileLifecycle.handedOff) {
+        void deleteReceiptScannerFiles([...scannerFileLifecycle.created]);
+      }
+    };
+  }, [getPermission, scannerFileLifecycle]);
 
   function close() {
     if (scanning || nativeProcessing) {
@@ -115,7 +163,7 @@ function CustomReceiptCamera({ initialSections = [], onCancel, onDone, handleRef
     if (selected) { nativeEpoch.current++; setSelectedId(null); return; }
     if (replaceId) { nativeEpoch.current++; longStarted.current = false; setReplaceId(null); return; }
     if (dirty.current) Alert.alert('Discard this capture session?', 'Your captured sections have not been sent for scanning.', [
-      { text: 'Keep editing', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: onCancel },
+      { text: 'Keep editing', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: () => { void deleteReceiptScannerFiles([...scannerFileLifecycle.created]); onCancel(); } },
     ]); else onCancel();
   }
   closeRef.current = close;
@@ -256,6 +304,8 @@ function CustomReceiptCamera({ initialSections = [], onCancel, onDone, handleRef
       // locked on "Finishing…" with nothing left to finish it.
       if (section.captureMode !== mode) { nativeEpoch.current++; longStarted.current = false; setScanning(false); setNativeProcessing(false); setCommand(c => ({ id: c.id + 1, type: 'reset' })); return; }
       nativeAccepted.current = true;
+      scannerFileLifecycle.created.add(section.originalUri);
+      scannerFileLifecycle.created.add(section.processedUri);
       put(addSessionSections(sections, [section], replaceId)); setSelectedId(replaceId ?? section.localId);
       nativeEpoch.current++; longStarted.current = false;
       setReplaceId(null); setScanning(false); setNativeProcessing(false); setTorch(false); haptics.committed();
@@ -288,7 +338,7 @@ function CustomReceiptCamera({ initialSections = [], onCancel, onDone, handleRef
     {cropping && selected ? <CropEditor key={selected.localId} uri={selected.originalUri} width={selected.originalWidth ?? selected.width} height={selected.originalHeight ?? selected.height} initial={selected.cropCorners} busy={busy} onApply={corners => void applyCrop(corners)} onCancel={() => setCropping(false)} onDetect={detect} /> : <>
       <View style={styles.viewfinder}>
         {selected ? <Image accessibilityLabel={`Preview of receipt section ${sections.indexOf(selected) + 1}`} source={{ uri: selected.processedUri }} style={StyleSheet.absoluteFill} resizeMode="contain" /> : readyToReview ? <Image accessibilityLabel="Receipt awaiting review" source={{ uri: sections[0]!.processedUri }} style={StyleSheet.absoluteFill} resizeMode="contain" /> : showCamera ? <>
-          {NativeScanner ? <NativeScanner key={`${mode}-${replaceId ?? 'new'}`} style={StyleSheet.absoluteFill} active={!busy && !full && (!sections.length || Boolean(replaceId))} mode={mode} torch={torch} command={command}
+          {continuous && NativeScanner ? <NativeScanner key={`${mode}-${replaceId ?? 'new'}`} style={StyleSheet.absoluteFill} active={!busy && !full && (!sections.length || Boolean(replaceId))} mode={mode} torch={torch} command={command}
             onStatus={event => { if (!mounted.current || eventEpoch !== nativeEpoch.current || !nativeVisible.current) return; const status = parseScannerStatus(event.nativeEvent); if (status) {
               setScannerMessage(status.message); setNativeProcessing(status.state === 'processing');
               if (longStarted.current) {
@@ -349,16 +399,16 @@ function CustomReceiptCamera({ initialSections = [], onCancel, onDone, handleRef
           </View>
           <Text style={[styles.small, ink]}>Quality checks and crop correction send this photo securely for processing.</Text>
           <View style={styles.row}>
-            <CameraAction label="Retake" icon="camera-outline" onPress={() => { nativeAccepted.current = false; setMode(selected.captureMode ?? 'standard'); setCommand(c => ({ id: c.id + 1, type: 'reset' })); setReplaceId(selected.localId); setSelectedId(null); setReady(false); }} disabled={busy} />
+            <CameraAction label="Retake" icon="camera-outline" onPress={() => { nativeAccepted.current = false; setMode(selected.captureMode ?? 'standard'); setManualSections(selected.captureMode === 'long' && selected.captureSource !== 'native-document-scanner'); setCommand(c => ({ id: c.id + 1, type: 'reset' })); setReplaceId(selected.localId); setSelectedId(null); setReady(false); }} disabled={busy} />
             <CameraAction label="Remove" icon="trash-outline" onPress={() => { nativeAccepted.current = false; setCommand(c => ({ id: c.id + 1, type: 'reset' })); put(removeSessionSection(sections, selected.localId)); setSelectedId(null); setReady(false); }} disabled={busy} />
-            {selected.processedUri !== selected.originalUri ? <CameraAction label={selectedCustomScan ? 'Use unenhanced scan' : 'Use original'} onPress={() => updateSection({ ...selected, processedUri: selected.originalUri, processedMimeType: selected.originalMimeType ?? 'image/jpeg', width: selected.originalWidth ?? selected.width, height: selected.originalHeight ?? selected.height, quality: null, cropCorners: undefined, processingMode: 'original', transformVersion: selectedCustomScan ? selected.captureMode === 'long' ? 'custom-panorama-v1' : 'custom-frame-v1' : undefined })} disabled={busy} /> : null}
+            {selected.processedUri !== selected.originalUri ? <CameraAction label={selectedCustomScan ? 'Use unenhanced scan' : 'Use original'} onPress={() => updateSection({ ...selected, processedUri: selected.originalUri, processedMimeType: selected.originalMimeType ?? 'image/jpeg', width: selected.originalWidth ?? selected.width, height: selected.originalHeight ?? selected.height, quality: null, cropCorners: undefined, processingMode: 'original', transformVersion: selectedCustomScan ? selected.captureMode === 'long' ? 'custom-panorama-v1' : selected.transformVersion === 'custom-still-v2' ? 'custom-still-source-v1' : 'custom-frame-v1' : undefined })} disabled={busy} /> : null}
           </View>
           {sections.length > 1 ? <View style={styles.row}>
             <CameraAction label="Move earlier" icon="arrow-back" onPress={() => put(moveSessionSection(sections, selected.localId, -1))} disabled={busy || sections[0]?.localId === selected.localId} />
             <CameraAction label="Move later" icon="arrow-forward" onPress={() => put(moveSessionSection(sections, selected.localId, 1))} disabled={busy || previous?.localId === selected.localId} />
           </View> : null}
           <View style={styles.row}>
-            {!continuous && sections.length < MAX_SECTIONS ? <CameraAction label="Add section" icon="add-outline" onPress={() => { setMode('long'); setSelectedId(null); setReady(false); }} disabled={busy} /> : null}
+            {!continuous && sections.length < MAX_SECTIONS ? <CameraAction label="Add section" icon="add-outline" onPress={() => { setMode('long'); setManualSections(true); setSelectedId(null); setReady(false); }} disabled={busy} /> : null}
             {/* The lock is released in `finally`, and re-entry is held off by
                 `submitting` instead. Held by the ref alone, a parent that did
                 not unmount this screen — because `onDone` threw — left every
@@ -367,14 +417,31 @@ function CustomReceiptCamera({ initialSections = [], onCancel, onDone, handleRef
             <CameraAction primary label={sections.length === 1 ? 'Use this receipt' : `Use ${sections.length} sections`} onPress={() => {
               if (locked.current || submitting) return;
               locked.current = true; setSubmitting(true); setError(null);
-              try { onDone(sections); }
+              try {
+                const retained = new Set(sections.flatMap(section => [section.originalUri, section.processedUri]));
+                void deleteReceiptScannerFiles([...scannerFileLifecycle.created].filter(uri => !retained.has(uri)));
+                onDone(sections);
+                scannerFileLifecycle.handedOff = true;
+              }
               catch (e) { setSubmitting(false); setError(e instanceof Error ? e.message : 'Could not continue with this receipt. Please try again.'); haptics.failed(); }
               finally { locked.current = false; }
             }} disabled={busy || submitting} />
           </View>
         </> : readyToReview ? <CameraAction primary label="Review receipt" icon="checkmark-outline" onPress={() => setSelectedId(sections[0]!.localId)} disabled={busy} /> : <>
           <View style={styles.row}>
-            {(['standard', 'long'] as const).map(value => <Pressable key={value} accessibilityRole="tab" accessibilityLabel={value === 'long' ? continuous ? 'Long receipt' : 'Manual sections' : 'Standard receipt'} accessibilityState={{ selected: mode === value, disabled: busy || scanning || nativeProcessing }} disabled={busy || scanning || nativeProcessing} onPress={() => { nativeEpoch.current++; nativeAccepted.current = false; setCommand(c => ({ id: c.id + 1, type: 'reset' })); setScannerMessage(value === 'long' ? 'Position the top of the receipt, then start scanning.' : 'Position the receipt on a contrasting surface.'); setMode(value); haptics.tapped(); }} style={[styles.mode, { minWidth: 48, minHeight: 48, backgroundColor: mode === value ? t.brandFill : t.cameraSurface }]}><Text style={[styles.body, ink]}>{value === 'long' ? continuous ? 'Long receipt' : 'Manual sections' : 'Standard'}</Text></Pressable>)}
+            {(nativeScannerAvailable
+              ? [
+                  { key: 'standard', label: 'Standard receipt', text: 'Standard', mode: 'standard' as const, manual: false },
+                  { key: 'long', label: 'Long receipt', text: 'Long receipt', mode: 'long' as const, manual: false },
+                  { key: 'manual', label: 'Manual sections', text: 'Manual pages', mode: 'long' as const, manual: true },
+                ]
+              : [
+                  { key: 'standard', label: 'Standard receipt', text: 'Standard', mode: 'standard' as const, manual: false },
+                  { key: 'manual', label: 'Manual sections', text: 'Manual sections', mode: 'long' as const, manual: true },
+                ]).map(choice => {
+                  const selectedChoice = mode === choice.mode && manualSections === choice.manual;
+                  return <Pressable key={choice.key} accessibilityRole="tab" accessibilityLabel={choice.label} accessibilityState={{ selected: selectedChoice, disabled: busy || scanning || nativeProcessing }} disabled={busy || scanning || nativeProcessing} onPress={() => { nativeEpoch.current++; nativeAccepted.current = false; setCommand(c => ({ id: c.id + 1, type: 'reset' })); setScannerMessage(choice.key === 'long' ? 'Position the top of the receipt, then start scanning.' : choice.key === 'manual' ? 'Photograph each part in printed order with a few lines of overlap.' : 'Position the receipt on a contrasting surface.'); setMode(choice.mode); setManualSections(choice.manual); haptics.tapped(); }} style={[styles.mode, { minWidth: 48, minHeight: 48, backgroundColor: selectedChoice ? t.brandFill : t.cameraSurface }]}><Text style={[styles.body, ink]}>{choice.text}</Text></Pressable>;
+                })}
           </View>
           <View style={styles.shutterRow}>
             <CameraAction label="Gallery" icon="images-outline" onPress={() => void gallery()} disabled={busy || full || scanning || nativeProcessing || (continuous && sections.length > 0 && !replaceId)} />

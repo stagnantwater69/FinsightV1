@@ -51,7 +51,12 @@ async function clearStorage(userId: number): Promise<void> {
       businessProfiles: {
         select: {
           logoUrl: true,
-          receiptScans: { select: { pages: { select: { imageFile: true, processedImageFile: true } } } },
+          receiptScans: {
+            select: {
+              imageFile: true,
+              pages: { select: { imageFile: true, processedImageFile: true } },
+            },
+          },
           csvImportBatches: { select: { fileReference: true } },
         },
       },
@@ -59,11 +64,14 @@ async function clearStorage(userId: number): Promise<void> {
   });
   if (!user) return;
 
-  const receiptPaths = user.businessProfiles.flatMap((profile) =>
+  const receiptPaths = [...new Set(user.businessProfiles.flatMap((profile) =>
     profile.receiptScans.flatMap((scan) =>
-      scan.pages.flatMap((page) => [page.imageFile, page.processedImageFile]).filter((path): path is string => Boolean(path)),
+      [
+        scan.imageFile,
+        ...scan.pages.flatMap((page) => [page.imageFile, page.processedImageFile]),
+      ].filter((path): path is string => Boolean(path)),
     ),
-  );
+  ))];
   const csvPaths = user.businessProfiles
     .flatMap((profile) => profile.csvImportBatches.map((batch) => batch.fileReference))
     .filter((path): path is string => Boolean(path));
@@ -144,6 +152,7 @@ async function deleteRelationalData(userId: number): Promise<void> {
     }
 
     if (scanIds.length > 0) {
+      await tx.receiptPurgeJob.deleteMany({ where: { businessProfileId: { in: profileIds } } });
       await tx.receiptFieldCorrection.deleteMany({ where: { receiptScanId: { in: scanIds } } });
       await tx.receiptScanItem.deleteMany({ where: { receiptScanId: { in: scanIds } } });
       await tx.receiptScanPage.deleteMany({ where: { receiptScanId: { in: scanIds } } });

@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "../..",
+    "types": ["node", "vitest/globals"]
+  },
+  "include": [
+    "policy-v1-*.ts",
+    "run-policy-v1-evaluation.ts"
+  ]
+}

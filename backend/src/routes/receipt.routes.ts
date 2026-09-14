@@ -53,6 +53,7 @@ receiptRouter.post(
   ]),
   asyncHandler(receiptScanController.upload),
 );
+receiptRouter.get("/", asyncHandler(receiptScanController.index));
 /*
  * One photo's own readability, checked the moment it is taken — see the
  * controller for why this is separate from the full upload.
@@ -95,7 +96,31 @@ receiptRouter.post(
  * write, and it is called REPEATEDLY by design — a burst limit sized for
  * scans would start rejecting the very polling that scanning now depends on.
  */
+receiptRouter.get(
+  "/:id/pages/:pageNumber/image/:variant",
+  asyncHandler(receiptScanController.showPageImage),
+);
+receiptRouter.get(
+  "/:id/duplicate-candidates",
+  rateLimit(LIMITS.RECEIPT_DUPLICATE_READ),
+  asyncHandler(receiptScanController.duplicateCandidates),
+);
 receiptRouter.get("/:id", asyncHandler(receiptScanController.show));
 receiptRouter.post("/:id/retry", rateLimit(LIMITS.SCAN_RECEIPT_BURST), asyncHandler(receiptScanController.retry));
+receiptRouter.patch("/:id/items/:itemId", asyncHandler(receiptScanController.updateItem));
 receiptRouter.delete("/:id/items/:itemId", asyncHandler(receiptScanController.deleteItem));
-receiptRouter.post("/:id/confirm", asyncHandler(receiptScanController.confirm));
+receiptRouter.post(
+  "/:id/confirm",
+  rateLimit(LIMITS.RECEIPT_CONFIRM_WRITE),
+  asyncHandler(receiptScanController.confirm),
+);
+receiptRouter.delete(
+  "/:id/images",
+  rateLimit(LIMITS.RECEIPT_DELETE_WRITE),
+  asyncHandler(receiptScanController.removeImages),
+);
+receiptRouter.delete(
+  "/:id",
+  rateLimit(LIMITS.RECEIPT_DELETE_WRITE),
+  asyncHandler(receiptScanController.remove),
+);

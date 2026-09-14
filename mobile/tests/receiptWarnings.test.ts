@@ -49,6 +49,17 @@ describe("the warning vocabulary", () => {
   });
 
   /*
+   * UNVERIFIED_ITEMS is the provider-items case: the lines were prefilled for
+   * review, never validated. Its headline is its own, not the generic
+   * fallback, and it is a real warning rather than an informational note.
+   */
+  it("names unverified provider items rather than falling through to the generic headline", () => {
+    expect(warningHeadline("UNVERIFIED_ITEMS")).toBe("These line items couldn't be verified");
+    expect(warningHeadline("UNVERIFIED_ITEMS")).not.toContain("\u2014");
+    expect(warningTone("UNVERIFIED_ITEMS")).toBe("warn");
+  });
+
+  /*
    * OVERLAPPING_PAGES describes the capture overlap the multi-page guide ASKS
    * for. Warning an owner for following the instructions is how a warning
    * system loses its meaning.

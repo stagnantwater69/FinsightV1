@@ -5,7 +5,8 @@ import { ApiError } from "../middleware/error.middleware";
 import { cleanUpImportBatchIfOrphaned, cleanUpReceiptScanIfOrphaned } from "../lib/sourceCleanup";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
 import { DEFAULT_RECORD_SORT, recordCursorWhere, recordOrderBy, type RecordCursor, type RecordSort } from "../lib/recordSort";
-import { lockDuplicateKey } from "../lib/recordLock";
+import { expenseDuplicateKeysOf, sameExpenseDuplicateIdentity } from "../lib/expenseDuplicateIdentity";
+import { lockDuplicateKey, lockExpenseDuplicateWriteGate } from "../lib/recordLock";
 import { createNotification, NOTIFICATION_TYPES } from "./notification.service";
 import { signedReceiptImageUrl, signedCsvFileUrl } from "./storage.service";
 import { logger } from "../config/logger";
@@ -80,28 +81,57 @@ async function queueAnalysis(businessProfileId: number, expenseRecordId: number)
   });
 }
 
+/**
+ * Runs one post-commit side effect of a create or update and swallows its
+ * failure, so a notification that cannot be written never skips the analysis
+ * enqueue after it, and a failed tail never turns a committed record into a 500.
+ * Only identifiers reach the log; the description, vendor and amount do not.
+ */
+async function runSideEffect(
+  effect: "notification" | "analysis",
+  ids: { businessProfileId: number; expenseRecordId: number; receiptScanId: number | null },
+  run: () => Promise<void>,
+): Promise<void> {
+  try {
+    await run();
+  } catch (err) {
+    logger.error({ err, ...ids, effect, code: "EXPENSE_RECORD_SIDE_EFFECT_FAILED" }, "expense record side effect failed");
+  }
+}
+
 async function findDuplicate(
   businessProfileId: number,
   date: Date,
   amount: Prisma.Decimal,
   description: string,
+  vendor?: string | null,
   excludeId?: number,
   // Defaults to the shared client, so every existing caller is unchanged. A
   // caller inside an interactive transaction must pass its own client, or the
   // records it has already written in that transaction would be invisible here
   // and a real duplicate would be recorded as "Not a Duplicate".
   db: BulkDbClient = prisma,
+  // Category splits of one receipt share its date and vendor, so two equal
+  // splits would otherwise flag each other. Records from the same scan are
+  // never duplicates of one another.
+  excludeReceiptScanId?: number,
 ) {
-  return db.expenseRecord.findFirst({
+  const candidates = await db.expenseRecord.findMany({
     where: {
       businessProfileId,
       date,
       amount,
-      description: { equals: description, mode: "insensitive" },
       ...(excludeId ? { id: { not: excludeId } } : {}),
+      ...(excludeReceiptScanId
+        ? { OR: [{ receiptScanId: null }, { receiptScanId: { not: excludeReceiptScanId } }] }
+        : {}),
     },
-    orderBy: { createdAt: "asc" },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
+  return candidates.find((candidate) => sameExpenseDuplicateIdentity(
+    { date, amount, description, vendor },
+    candidate,
+  ));
 }
 
 // ============================================================
@@ -120,14 +150,7 @@ export function largeExpenseThresholdFor(profile: {
   return Number(profile.expectedMonthlyExpenses) * (Number(profile.largeExpenseThresholdPercent) / 100);
 }
 
-/**
- * The identity two records must share to count as duplicates of each other.
- *
- * Mirrors findDuplicate's WHERE clause exactly: same calendar date, same
- * amount, same description ignoring case. Anything that changes there has to
- * change here in the same commit, or a CSV import and a typed-in record will
- * disagree about what a duplicate is.
- */
+/** Description-only identity retained for sales records, whose rule has not changed. */
 export function duplicateKeyOf(date: Date, amount: Prisma.Decimal | number, description: string): string {
   return [
     date.toISOString().slice(0, 10),
@@ -157,7 +180,9 @@ async function verifyCategoryBelongsToProfile(categoryId: number, businessProfil
  * The notifications and the queued analysis stay OUTSIDE the transaction, via
  * `runSideEffects` — a notification that fails to send must never roll back a
  * record the owner has already been told was saved, and the analysis job
- * carries a foreign key to a row that is not committed yet.
+ * carries a foreign key to a row that is not committed yet. `runSideEffects`
+ * never throws: each effect is isolated, so the response is the committed
+ * record whatever happened to the tail.
  */
 export async function createExpenseRecord(userId: number, input: CreateInput) {
   const { record, runSideEffects } = await prisma.$transaction((tx) =>
@@ -200,20 +225,30 @@ export async function createExpenseRecordWithin(
   db: BulkDbClient,
   options: { serializeDuplicateCheck?: boolean } = {},
 ) {
-  // Read through the shared client on purpose: the profile is not written by
-  // any caller's transaction, and requireOwnedBusinessProfile is the one
-  // ownership gate every records service shares.
-  const profile = await requireOwnedBusinessProfile(userId, input.businessProfileId);
+  // Keep every query on the caller's transaction connection. Using the shared
+  // client here can deadlock a small pool when several interactive creates
+  // are already holding all available connections.
+  const profile = await requireOwnedBusinessProfile(userId, input.businessProfileId, db);
   await verifyCategoryBelongsToProfile(input.categoryId, input.businessProfileId, db);
 
   const date = new Date(input.date);
   const amount = new Prisma.Decimal(input.amount);
 
   if (options.serializeDuplicateCheck) {
+    await lockExpenseDuplicateWriteGate(db, input.businessProfileId);
     await lockDuplicateKey(db, input.businessProfileId, `expense:${duplicateKeyOf(date, amount, input.description)}`);
   }
 
-  const duplicate = await findDuplicate(input.businessProfileId, date, amount, input.description, undefined, db);
+  const duplicate = await findDuplicate(
+    input.businessProfileId,
+    date,
+    amount,
+    input.description,
+    input.vendor,
+    undefined,
+    db,
+    input.receiptScanId,
+  );
   const largeExpenseFlag = input.amount >= largeExpenseThresholdFor(profile);
 
   const record = await db.expenseRecord.create({
@@ -236,27 +271,30 @@ export async function createExpenseRecordWithin(
     },
   });
 
+  const ids = { businessProfileId: record.businessProfileId, expenseRecordId: record.id, receiptScanId: record.receiptScanId };
   const runSideEffects = async () => {
     if (duplicate) {
-      await createNotification(
-        userId,
-        input.businessProfileId,
-        NOTIFICATION_TYPES.POSSIBLE_DUPLICATE,
-        `Possible duplicate: "${input.description}" (PHP ${input.amount}) on ${input.date}`,
-        record.id
-      );
+      await runSideEffect("notification", ids, () =>
+        createNotification(
+          userId,
+          input.businessProfileId,
+          NOTIFICATION_TYPES.POSSIBLE_DUPLICATE,
+          `Possible duplicate: "${input.description}" (PHP ${input.amount}) on ${input.date}`,
+          record.id,
+        ));
     }
     if (largeExpenseFlag) {
-      await createNotification(
-        userId,
-        input.businessProfileId,
-        NOTIFICATION_TYPES.LARGE_EXPENSE_FLAG,
-        `Large expense flagged: "${input.description}" (PHP ${input.amount}) on ${input.date}`,
-        record.id
-      );
+      await runSideEffect("notification", ids, () =>
+        createNotification(
+          userId,
+          input.businessProfileId,
+          NOTIFICATION_TYPES.LARGE_EXPENSE_FLAG,
+          `Large expense flagged: "${input.description}" (PHP ${input.amount}) on ${input.date}`,
+          record.id,
+        ));
     }
 
-    await queueAnalysis(record.businessProfileId, record.id);
+    await runSideEffect("analysis", ids, () => queueAnalysis(record.businessProfileId, record.id));
   };
 
   return { record: toDTO(record), runSideEffects };
@@ -315,6 +353,9 @@ export async function bulkCreateExpenseRecords(
   const businessProfileId = profile.id;
   const threshold = largeExpenseThresholdFor(profile);
 
+  // Hold the shared receipt/manual/CSV gate from the candidate read through the insert.
+  await lockExpenseDuplicateWriteGate(db, businessProfileId);
+
   // Only records sharing a date with some row in the file can possibly be a
   // duplicate of one, so the candidate set is bounded by the file's date range
   // rather than by the business's whole history.
@@ -324,13 +365,16 @@ export async function bulkCreateExpenseRecords(
     // findDuplicate takes the OLDEST match; id breaks createdAt ties, which a
     // previous bulk import can now produce since its rows share a timestamp.
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    select: { id: true, date: true, amount: true, description: true },
+    select: { id: true, date: true, amount: true, description: true, vendor: true },
   });
 
   const existingIdByKey = new Map<string, number>();
-  for (const c of candidates) {
-    const key = duplicateKeyOf(c.date, c.amount, c.description);
-    if (!existingIdByKey.has(key)) existingIdByKey.set(key, c.id);
+  const candidateRankById = new Map<number, number>();
+  for (const [rank, candidate] of candidates.entries()) {
+    candidateRankById.set(candidate.id, rank);
+    for (const key of expenseDuplicateKeysOf(candidate)) {
+      if (!existingIdByKey.has(key)) existingIdByKey.set(key, candidate.id);
+    }
   }
 
   // A row can also duplicate an earlier row of the SAME file, which the old
@@ -343,14 +387,18 @@ export async function bulkCreateExpenseRecords(
   const data = rows.map((row, i) => {
     const date = new Date(row.date);
     const amount = new Prisma.Decimal(row.amount);
-    const key = duplicateKeyOf(date, amount, row.description);
-
-    const existingId = existingIdByKey.get(key);
-    const earlierIndex = firstIndexByKey.get(key);
-    if (existingId === undefined && earlierIndex === undefined) {
-      firstIndexByKey.set(key, i);
-    } else if (existingId === undefined) {
+    const keys = expenseDuplicateKeysOf({ date, amount, description: row.description, vendor: row.vendor });
+    const existingId = keys
+      .flatMap((key) => existingIdByKey.get(key) ?? [])
+      .sort((left, right) => candidateRankById.get(left)! - candidateRankById.get(right)!)[0];
+    const earlierIndex = keys
+      .flatMap((key) => firstIndexByKey.get(key) ?? [])
+      .sort((left, right) => left - right)[0];
+    if (existingId === undefined && earlierIndex !== undefined) {
       duplicatesEarlierRow.set(i, earlierIndex!);
+    }
+    for (const key of keys) {
+      if (!firstIndexByKey.has(key)) firstIndexByKey.set(key, i);
     }
 
     const largeExpenseFlag = row.amount >= threshold;
@@ -482,7 +530,13 @@ export async function getExpenseRecord(userId: number, id: number) {
         include: { category: { select: { id: true, name: true } } },
       },
       receiptScan: {
-        select: { id: true, imageFile: true, extractedVendor: true, createdAt: true },
+        select: {
+          id: true,
+          imageFile: true,
+          evidenceDeletionRequestedAt: true,
+          extractedVendor: true,
+          createdAt: true,
+        },
       },
       importBatch: {
         select: { id: true, title: true, uploadDate: true, fileReference: true, status: true },
@@ -498,7 +552,13 @@ export async function getExpenseRecord(userId: number, id: number) {
 
 type RecordWithOrigin = ExpenseRecord & {
   receiptItems: (ReceiptScanItem & { category: { id: number; name: string } | null })[];
-  receiptScan: { id: number; imageFile: string; extractedVendor: string | null; createdAt: Date } | null;
+  receiptScan: {
+    id: number;
+    imageFile: string | null;
+    evidenceDeletionRequestedAt: Date | null;
+    extractedVendor: string | null;
+    createdAt: Date;
+  } | null;
   importBatch: {
     id: number;
     title: string;
@@ -530,7 +590,9 @@ async function buildOrigin(record: RecordWithOrigin) {
       scanId: record.receiptScan.id,
       scannedAt: record.receiptScan.createdAt,
       extractedVendor: record.receiptScan.extractedVendor,
-      imageUrl: await signedReceiptImageUrl(record.receiptScan.imageFile),
+      imageUrl: record.receiptScan.imageFile && !record.receiptScan.evidenceDeletionRequestedAt
+        ? await signedReceiptImageUrl(record.receiptScan.imageFile)
+        : null,
       items: record.receiptItems.map((i) => ({
         id: i.id,
         lineNumber: i.lineNumber,
@@ -602,80 +664,104 @@ async function buildOrigin(record: RecordWithOrigin) {
 }
 
 export async function updateExpenseRecord(userId: number, id: number, input: UpdateInput) {
-  const existing = await prisma.expenseRecord.findFirst({
-    where: { id, businessProfile: { userId } },
-    include: { businessProfile: true },
-  });
-  if (!existing) {
-    throw new ApiError(404, "Expense record not found");
-  }
+  const valueFieldsChanged = input.date !== undefined
+    || input.amount !== undefined
+    || input.description !== undefined
+    || input.vendor !== undefined;
+  const result = await prisma.$transaction(async (tx) => {
+    let existing = await tx.expenseRecord.findFirst({
+      where: { id, businessProfile: { userId } },
+      include: { businessProfile: true },
+    });
+    if (!existing) throw new ApiError(404, "Expense record not found");
 
-  if (input.categoryId) {
-    await verifyCategoryBelongsToProfile(input.categoryId, existing.businessProfileId);
-  }
-
-  const nextDate = input.date ? new Date(input.date) : existing.date;
-  const nextAmount = input.amount !== undefined ? new Prisma.Decimal(input.amount) : existing.amount;
-  const nextDescription = input.description ?? existing.description;
-
-  // Re-run duplicate detection and the large-expense check whenever a
-  // value field that affects them changes — a stale flag from before the
-  // edit would be misleading.
-  const valueFieldsChanged = input.date !== undefined || input.amount !== undefined || input.description !== undefined;
-  let duplicateStatus = input.duplicateStatus ?? existing.duplicateStatus;
-  let duplicateOfRecordId = existing.duplicateOfRecordId;
-  let largeExpenseFlag = existing.largeExpenseFlag;
-  let reviewStatus = input.reviewStatus ?? existing.reviewStatus;
-
-  if (valueFieldsChanged) {
-    const duplicate = await findDuplicate(existing.businessProfileId, nextDate, nextAmount, nextDescription, existing.id);
-    duplicateStatus = duplicate ? "Flagged" : "Not a Duplicate";
-    duplicateOfRecordId = duplicate?.id ?? null;
-
-    largeExpenseFlag = Number(nextAmount) >= largeExpenseThresholdFor(existing.businessProfile);
-    if (input.reviewStatus === undefined) {
-      reviewStatus = largeExpenseFlag ? "Needs Review" : "Reviewed";
+    if (valueFieldsChanged) {
+      await lockExpenseDuplicateWriteGate(tx, existing.businessProfileId);
+      existing = await tx.expenseRecord.findFirst({
+        where: { id, businessProfile: { userId } },
+        include: { businessProfile: true },
+      });
+      if (!existing) throw new ApiError(404, "Expense record not found");
     }
-  }
 
-  const record = await prisma.expenseRecord.update({
-    where: { id },
-    data: {
-      categoryId: input.categoryId,
-      date: nextDate,
-      description: nextDescription,
-      vendor: input.vendor,
-      amount: nextAmount,
-      largeExpenseFlag,
-      reviewStatus,
-      duplicateStatus,
-      duplicateOfRecordId,
-    },
+    if (input.categoryId) {
+      await verifyCategoryBelongsToProfile(input.categoryId, existing.businessProfileId, tx);
+    }
+
+    const nextDate = input.date ? new Date(input.date) : existing.date;
+    const nextAmount = input.amount !== undefined ? new Prisma.Decimal(input.amount) : existing.amount;
+    const nextDescription = input.description ?? existing.description;
+    const nextVendor = input.vendor === undefined ? existing.vendor : input.vendor;
+    let duplicateStatus = input.duplicateStatus ?? existing.duplicateStatus;
+    let duplicateOfRecordId = existing.duplicateOfRecordId;
+    let largeExpenseFlag = existing.largeExpenseFlag;
+    let reviewStatus = input.reviewStatus ?? existing.reviewStatus;
+
+    if (valueFieldsChanged) {
+      const duplicate = await findDuplicate(
+        existing.businessProfileId,
+        nextDate,
+        nextAmount,
+        nextDescription,
+        nextVendor,
+        existing.id,
+        tx,
+      );
+      duplicateStatus = duplicate ? "Flagged" : "Not a Duplicate";
+      duplicateOfRecordId = duplicate?.id ?? null;
+      largeExpenseFlag = Number(nextAmount) >= largeExpenseThresholdFor(existing.businessProfile);
+      if (input.reviewStatus === undefined) {
+        reviewStatus = largeExpenseFlag ? "Needs Review" : "Reviewed";
+      }
+    }
+
+    const record = await tx.expenseRecord.update({
+      where: { id },
+      data: {
+        categoryId: input.categoryId,
+        date: nextDate,
+        description: nextDescription,
+        vendor: input.vendor,
+        amount: nextAmount,
+        largeExpenseFlag,
+        reviewStatus,
+        duplicateStatus,
+        duplicateOfRecordId,
+      },
+    });
+    return { existing, record, nextDate, nextAmount, nextDescription, duplicateStatus, largeExpenseFlag };
   });
+  const { existing, record, nextDate, nextAmount, nextDescription, duplicateStatus, largeExpenseFlag } = result;
+
+  // The edit is committed; from here on nothing may turn it into a 500. Same
+  // per-effect isolation as the create path.
+  const ids = { businessProfileId: record.businessProfileId, expenseRecordId: record.id, receiptScanId: record.receiptScanId };
 
   // Only alert on a fresh transition into the flagged state — not on
   // every edit to a record that was already flagged (or stays clear).
   if (duplicateStatus === "Flagged" && existing.duplicateStatus !== "Flagged") {
-    await createNotification(
-      userId,
-      existing.businessProfileId,
-      NOTIFICATION_TYPES.POSSIBLE_DUPLICATE,
-      `Possible duplicate: "${nextDescription}" (PHP ${Number(nextAmount)}) on ${nextDate.toISOString().slice(0, 10)}`,
-      record.id
-    );
+    await runSideEffect("notification", ids, () =>
+      createNotification(
+        userId,
+        existing.businessProfileId,
+        NOTIFICATION_TYPES.POSSIBLE_DUPLICATE,
+        `Possible duplicate: "${nextDescription}" (PHP ${Number(nextAmount)}) on ${nextDate.toISOString().slice(0, 10)}`,
+        record.id,
+      ));
   }
   if (largeExpenseFlag && !existing.largeExpenseFlag) {
-    await createNotification(
-      userId,
-      existing.businessProfileId,
-      NOTIFICATION_TYPES.LARGE_EXPENSE_FLAG,
-      `Large expense flagged: "${nextDescription}" (PHP ${Number(nextAmount)}) on ${nextDate.toISOString().slice(0, 10)}`,
-      record.id
-    );
+    await runSideEffect("notification", ids, () =>
+      createNotification(
+        userId,
+        existing.businessProfileId,
+        NOTIFICATION_TYPES.LARGE_EXPENSE_FLAG,
+        `Large expense flagged: "${nextDescription}" (PHP ${Number(nextAmount)}) on ${nextDate.toISOString().slice(0, 10)}`,
+        record.id,
+      ));
   }
 
   if (valueFieldsChanged || input.vendor !== undefined || input.categoryId !== undefined) {
-    await queueAnalysis(record.businessProfileId, record.id);
+    await runSideEffect("analysis", ids, () => queueAnalysis(record.businessProfileId, record.id));
   }
 
   return toDTO(record);

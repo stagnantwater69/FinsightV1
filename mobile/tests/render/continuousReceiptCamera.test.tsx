@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render } from '@testing-library/react-native';
 import { Alert, AppState, Dimensions, type AppStateStatus } from 'react-native';
 
-const mocks = vi.hoisted(() => ({ nativeProps: null as any, permission: { granted: true, canAskAgain: true }, request: vi.fn(), get: vi.fn(async () => undefined), upload: vi.fn(), gallery: vi.fn(async () => ({ canceled: true })) }));
+const mocks = vi.hoisted(() => ({ nativeProps: null as any, permission: { granted: true, canAskAgain: true }, request: vi.fn(), get: vi.fn(async () => undefined), upload: vi.fn(), gallery: vi.fn(async () => ({ canceled: true })), cleanup: vi.fn(async () => 0) }));
 vi.mock('expo-modules-core', () => ({ requireNativeViewManager: vi.fn(), requireOptionalNativeModule: vi.fn(() => null) }));
 vi.mock('../../src/lib/customReceiptScanner', async importOriginal => {
   const actual = await importOriginal<any>(); const React = await import('react'); const { View } = await import('react-native');
@@ -11,13 +11,14 @@ vi.mock('../../src/lib/customReceiptScanner', async importOriginal => {
   return { ...actual, getCustomScannerView: () => Native };
 });
 vi.mock('../../src/lib/api', () => ({ api: { upload: mocks.upload } }));
+vi.mock('../../src/lib/receiptScannerCache', () => ({ deleteReceiptScannerFiles: mocks.cleanup }));
 vi.mock('../../src/lib/receiptScannerFeature', () => ({ USE_NATIVE_RECEIPT_CAMERA: false, ANDROID_RECEIPT_SCANNER_ENABLED: false }));
 vi.mock('expo-image-picker', () => ({ launchImageLibraryAsync: mocks.gallery }));
 vi.mock('expo-image-manipulator', () => ({ manipulateAsync: vi.fn(), SaveFormat: { JPEG: 'jpeg' } }));
 vi.mock('expo-camera', () => ({ useCameraPermissions: () => [mocks.permission, mocks.request, mocks.get], CameraView: () => null }));
 const { ReceiptCamera } = await import('../../src/components/receipt-camera/ReceiptCamera');
 const { ThemeProvider } = await import('../../src/context/ThemeContext');
-const payload = (mode = 'standard') => ({ originalUri: 'file:///raw.jpg', processedUri: 'file:///scan.jpg', originalWidth: 1200, originalHeight: 2400, width: 1000, height: 2000, mode, transformVersion: mode === 'long' ? 'custom-panorama-v1' : 'custom-frame-v1' });
+const payload = (mode = 'standard') => ({ originalUri: 'file:///raw.jpg', processedUri: 'file:///scan.jpg', originalWidth: 1200, originalHeight: 2400, width: 1000, height: 2000, mode, processingMode: 'clear-colour', transformVersion: mode === 'long' ? 'custom-panorama-v1' : 'custom-still-v2', ...(mode === 'standard' ? { corners: { topLeft: { x: 100, y: 100 }, topRight: { x: 1100, y: 100 }, bottomRight: { x: 1100, y: 2300 }, bottomLeft: { x: 100, y: 2300 } } } : {}) });
 const screen = (props: any = {}) => render(<ThemeProvider initialMode="dark"><ReceiptCamera onCancel={vi.fn()} onDone={vi.fn()} {...props} /></ThemeProvider>);
 beforeEach(() => { vi.clearAllMocks(); mocks.nativeProps = null; Object.defineProperty(AppState, 'currentState', { configurable: true, value: 'active' }); });
 
@@ -78,6 +79,20 @@ describe('continuous scanner UI contract (native pixels mocked)', () => {
     await fireEvent.press(q.getByRole('button', { name: 'Use this receipt' }));
     expect(done).toHaveBeenCalledWith([expect.objectContaining({ originalUri: 'file:///raw.jpg', processedUri: 'file:///scan.jpg', captureMode: 'standard' })]);
   });
+  it('cleans native files on an abandoned unmount but leaves handed-off files to the parent', async () => {
+    const abandoned = await screen();
+    await act(async () => mocks.nativeProps.onCapture({ nativeEvent: payload() }));
+    mocks.cleanup.mockClear();
+    await act(async () => abandoned.unmount());
+    expect(mocks.cleanup).toHaveBeenCalledWith(['file:///raw.jpg', 'file:///scan.jpg']);
+
+    const handedOff = await screen();
+    await act(async () => mocks.nativeProps.onCapture({ nativeEvent: payload() }));
+    await fireEvent.press(handedOff.getByRole('button', { name: 'Use this receipt' }));
+    mocks.cleanup.mockClear();
+    await act(async () => handedOff.unmount());
+    expect(mocks.cleanup).not.toHaveBeenCalled();
+  });
   it('starts and finishes long capture into one reviewed image, not manual pages', async () => {
     const done = vi.fn(); const q = await screen({ onDone: done });
     await fireEvent.press(q.getByRole('tab', { name: 'Long receipt' }));
@@ -121,7 +136,7 @@ describe('continuous scanner UI contract (native pixels mocked)', () => {
     expect(q.queryByRole('button', { name: 'Use original' })).toBeNull();
     await fireEvent.press(q.getByRole('button', { name: 'Use unenhanced scan' }));
     await fireEvent.press(q.getByRole('button', { name: 'Use this receipt' }));
-    expect(done.mock.calls[0][0][0]).toMatchObject({ processedUri: 'file:///raw.jpg', captureMode: mode, transformVersion: payload(mode).transformVersion, processingMode: 'original' });
+    expect(done.mock.calls[0][0][0]).toMatchObject({ processedUri: 'file:///raw.jpg', captureMode: mode, transformVersion: mode === 'long' ? 'custom-panorama-v1' : 'custom-still-source-v1', processingMode: 'original' });
   });
   it('allows finishing again when the native engine asks to show the bottom edge', async () => {
     const q = await screen();
@@ -178,6 +193,33 @@ describe('continuous scanner UI contract (native pixels mocked)', () => {
     await act(async () => stale({ nativeEvent: payload() }));
     expect(q.queryByRole('button', { name: 'Use this receipt' })).toBeNull();
     spy.mockRestore();
+  });
+  it('offers restart or manual pages after background interrupts a long scan', async () => {
+    const listeners: ((state: AppStateStatus) => void)[] = [];
+    const stateSpy = vi.spyOn(AppState, 'addEventListener').mockImplementation((_type, listener) => { listeners.push(listener); return { remove: vi.fn() }; });
+    const alert = vi.spyOn(Alert, 'alert').mockImplementation(() => {});
+    try {
+      const q = await screen();
+      await fireEvent.press(q.getByRole('tab', { name: 'Long receipt' }));
+      await fireEvent.press(q.getByRole('button', { name: 'Start scanning' }));
+      await act(async () => mocks.nativeProps.onStatus({ nativeEvent: { state: 'scanning', message: 'Move slowly down', acceptedHeight: 1800 } }));
+      await act(async () => listeners[0]('background'));
+      await act(async () => listeners[0]('active'));
+
+      expect(alert).toHaveBeenCalledWith(
+        'Long scan was interrupted',
+        expect.stringContaining('No partial image was saved'),
+        expect.any(Array),
+      );
+      const manual = alert.mock.calls.at(-1)?.[2]?.find(button => button.text === 'Use manual pages');
+      await act(async () => manual?.onPress?.());
+      expect(q.getByRole('tab', { name: 'Manual sections' }).props.accessibilityState.selected).toBe(true);
+      expect(q.queryByTestId('continuous-native-view')).toBeNull();
+      expect(q.getByText('Manual camera · Tap Capture to take a photo.')).toBeTruthy();
+    } finally {
+      alert.mockRestore();
+      stateSpy.mockRestore();
+    }
   });
   it('recovers the primary action when the engine returns a result for another mode', async () => {
     const q = await screen();

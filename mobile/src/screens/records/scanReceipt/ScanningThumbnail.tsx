@@ -3,6 +3,7 @@ import { Animated, Image, View } from "react-native";
 import { useReducedMotion } from "../../../lib/useReducedMotion";
 import { radius } from "../../../theme/tokens";
 import { useTheme } from "../../../context/ThemeContext";
+import { StoredPagePlaceholder } from "./StoredPagePlaceholder";
 
 const HEIGHT = 220;
 const LINE_HEIGHT = 3;
@@ -15,6 +16,9 @@ const LINE_HEIGHT = 3;
  * Same `Animated`/`useReducedMotion` shape as `Skeleton.tsx`'s pulse: no new
  * animation library, and Reduce Motion rests the line at the vertical centre
  * instead of sweeping, the same fallback `SkeletonBox` already uses.
+ *
+ * A resumed stored receipt has no local photo; the line then sweeps a
+ * placeholder rather than an `Image` with nothing behind it.
  */
 export function ScanningThumbnail({ uri }: { uri: string }) {
   const t = useTheme();
@@ -53,7 +57,11 @@ export function ScanningThumbnail({ uri }: { uri: string }) {
         borderColor: t.ink[200],
       }}
     >
-      <Image source={{ uri }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+      {uri ? (
+        <Image source={{ uri }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+      ) : (
+        <StoredPagePlaceholder label="Stored receipt image" />
+      )}
       <Animated.View
         pointerEvents="none"
         style={{

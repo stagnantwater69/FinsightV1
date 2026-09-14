@@ -18,6 +18,9 @@ import { API_BASE_URL, supabase } from "./supabase";
 
 export class ApiError extends Error {
   status: number;
+  /** Stable server code and structured response used by guarded review flows. */
+  code?: string;
+  responseBody?: unknown;
   /**
    * Per-field messages, when the server rejected specific fields.
    *
@@ -33,10 +36,18 @@ export class ApiError extends Error {
    */
   fieldErrors: Record<string, string>;
 
-  constructor(status: number, message: string, fieldErrors: Record<string, string> = {}) {
+  constructor(
+    status: number,
+    message: string,
+    fieldErrors: Record<string, string> = {},
+    code?: string,
+    responseBody?: unknown,
+  ) {
     super(message);
     this.status = status;
     this.fieldErrors = fieldErrors;
+    this.code = code;
+    this.responseBody = responseBody;
   }
 }
 
@@ -175,8 +186,10 @@ async function toError(res: Response, path: string): Promise<ApiError> {
   let message = `Request failed (${res.status})`;
   let fieldErrors: Record<string, string> = {};
   let code: string | undefined;
+  let responseBody: unknown;
   try {
     const body = await res.json();
+    responseBody = body;
     fieldErrors = fieldErrorsFrom(body);
     code = codeFrom(body);
     if (typeof body?.error === "string") message = body.error;
@@ -202,7 +215,7 @@ async function toError(res: Response, path: string): Promise<ApiError> {
   if (res.status >= 500 && res.status !== 503) {
     message = "FinSight's server had a problem with that. Please try again in a moment.";
   }
-  return new ApiError(res.status, message, fieldErrors);
+  return new ApiError(res.status, message, fieldErrors, code, responseBody);
 }
 
 function networkError(err: unknown): ApiError {
@@ -218,6 +231,7 @@ async function request<T>(method: string, path: string, opts: {
   body?: unknown;
   query?: Record<string, string | number | boolean | undefined>;
   signal?: AbortSignal;
+  headers?: Record<string, string>;
   /**
    * A specific token to authenticate with, instead of the stored session.
    *
@@ -235,6 +249,7 @@ async function request<T>(method: string, path: string, opts: {
       method,
       signal: opts.signal,
       headers: {
+        ...opts.headers,
         ...(opts.authToken ? { Authorization: `Bearer ${opts.authToken}` } : await authHeader()),
         "Content-Type": "application/json",
       },
@@ -323,8 +338,10 @@ function uploadRequest<T>(path: string, formData: FormData, signal?: AbortSignal
         let message = `Request failed (${status})`;
         let fieldErrors: Record<string, string> = {};
         let code: string | undefined;
+        let responseBody: unknown;
         try {
           const body = JSON.parse(text);
+          responseBody = body;
           fieldErrors = fieldErrorsFrom(body);
           code = codeFrom(body);
           if (typeof body?.error === "string") message = body.error;
@@ -340,7 +357,7 @@ function uploadRequest<T>(path: string, formData: FormData, signal?: AbortSignal
         if (status >= 500 && status !== 503) {
           message = "FinSight's server had a problem with that. Please try again in a moment.";
         }
-        reject(new ApiError(status, message, fieldErrors));
+        reject(new ApiError(status, message, fieldErrors, code, responseBody));
       };
 
       // XHR reports every transport failure as a bare event with no reason
@@ -375,7 +392,7 @@ export const api = {
     body?: unknown,
     query?: Record<string, string | number | boolean | undefined>,
   ) => request<T>("PATCH", path, { body, query }),
-  delete: <T>(path: string, body?: unknown) => request<T>("DELETE", path, { body }),
+  delete: <T>(path: string, body?: unknown, headers?: Record<string, string>) => request<T>("DELETE", path, { body, headers }),
   upload: <T>(path: string, formData: FormData, signal?: AbortSignal) => uploadRequest<T>(path, formData, signal),
 };
 

@@ -150,7 +150,9 @@ describe("multi-page receipt upload", () => {
     });
     expect(pages.map((p) => p.pageNumber)).toEqual([1, 2, 3]);
     expect(pages.map((p) => p.imageFile)).toEqual(["1/mock-page-1.jpg", "1/mock-page-2.jpg", "1/mock-page-3.jpg"]);
-    expect(scan.imageFile).toBe(pages[0]!.imageFile);
+    const storedScan = await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } });
+    expect(storedScan.imageFile).toBe(pages[0]!.imageFile);
+    expect(scan).not.toHaveProperty("imageFile");
   });
 
   it("rejects more than MAX_PAGES photographs", async () => {

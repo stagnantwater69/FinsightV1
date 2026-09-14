@@ -755,6 +755,24 @@ Notes:
   migrations in this repo are additive (new tables and defaulted columns), so
   the practical undo is a restore from backup — which is the reason §6 exists.
 - Take a backup *before* migrating, not after.
+- **On any database with real owners, `20260914104600_receipt_scan_last_activity_grace`
+  must be applied in the same `migrate deploy` as
+  `20260914010610_receipt_scan_last_activity`, or at least before the first
+  hourly abandoned-scan sweep runs after it.** `20260914010610` backfills
+  `ReceiptScan.lastActivityAt` from the timestamps the database already had,
+  and none of them recorded owner *views*. A pending scan the owner merely
+  opened last week therefore looks inactive since its last edit or OCR pass,
+  and the sweep would queue it for purge on its first run. The grace
+  migration floors `lastActivityAt` for unconfirmed scans at its own ledger
+  `started_at` minus six days, so every owner gets at least a day to resume
+  before anything is deleted; re-running it computes the same floor and
+  changes no rows. Because the chain is ordered, one `migrate deploy` that
+  has both pending applies them back to back, leaving a window of seconds;
+  the real exposure is a deploy that stops after `20260914010610` while a
+  worker is running.
+  The development project was migrated without the grace floor on
+  14 September 2026 (owner decision, synthetic data); see
+  `docs/phase-2/PR-2-REVIEW-2026-09-14.md`, open item 1.
 
 ---
 

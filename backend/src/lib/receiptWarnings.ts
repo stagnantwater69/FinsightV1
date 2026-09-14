@@ -34,6 +34,8 @@ export const WARNING_CODES = [
   "AMBIGUOUS_DATE",
   /** A field that could not be read from the document, or that a verifier pass rejected as unsupported. */
   "UNREADABLE_FIELD",
+  /** Line items an external provider read that do not add up to the total; prefilled for review, never validated. */
+  "UNVERIFIED_ITEMS",
 ] as const;
 
 export type ReceiptWarningCode = (typeof WARNING_CODES)[number];
@@ -71,4 +73,5 @@ export const WARNING_GUIDANCE: Record<ReceiptWarningCode, string> = {
   VISION_INTERPRETED: "AI helped read this receipt. Review the details.",
   AMBIGUOUS_DATE: "Check the day and month.",
   UNREADABLE_FIELD: "Fill in the missing value from the receipt.",
+  UNVERIFIED_ITEMS: "AI read these items but they don't add up to the total. Check each line against the receipt.",
 };

@@ -14,6 +14,12 @@ import { runCsvImportWorkerOnce, sweepStalledCsvImports } from "./services/csvIm
 import { cleanUpExpiredRateLimits } from "./middleware/rateLimit.middleware";
 import { enqueueDailyProfileAnalyses, runAnalysisWorkerOnce } from "./services/anomalyDetection/job.service";
 import { purgeUnverifiedRegistrations, runAccountDeletionWorkerOnce } from "./services/accountDeletion.service";
+import {
+  redriveStrandedReceiptPurges,
+  runReceiptPurgeWorkerOnce,
+  sweepAbandonedReceiptScans,
+} from "./services/receiptPurge.service";
+import { reconcileStaleReceiptProviderDispatches } from "./services/receiptProviderDispatch.service";
 
 logger.info({ pid: process.pid }, "FinSight worker starting");
 
@@ -26,9 +32,18 @@ async function work(): Promise<void> {
   if (shuttingDown || workerBusy) return;
   workerBusy = true;
   try {
+    try {
+      const reconciled = await reconcileStaleReceiptProviderDispatches();
+      if (reconciled.cancelled > 0 || reconciled.ambiguous > 0) {
+        logger.warn(reconciled, "reconciled stale receipt provider dispatches");
+      }
+    } catch (error) {
+      logger.error({ err: error }, "receipt provider dispatch reconciliation failed");
+    }
     // Drain immediately available jobs but cap each pass so the event loop
     // returns regularly under a backlog.
     for (let i = 0; i < 5 && (await runReceiptWorkerOnce()); i++);
+    await runReceiptPurgeWorkerOnce();
     /*
      * Two imports per pass, not five: one large import can be tens of
      * thousands of rows, and it yields between chunks rather than at the end,
@@ -59,6 +74,7 @@ let rateLimitCleanupTimer: NodeJS.Timeout | undefined;
 let csvSweepTimer: NodeJS.Timeout | undefined;
 let dailyAnalysisTimer: NodeJS.Timeout | undefined;
 let unverifiedPurgeTimer: NodeJS.Timeout | undefined;
+let abandonedScanSweepTimer: NodeJS.Timeout | undefined;
 
 /** Every recurring job the worker owns. See start()'s caller for the boot gate. */
 function start(): void {
@@ -112,6 +128,34 @@ function start(): void {
   void purgeUnverifiedRegistrations().catch((error) =>
     logger.error({ err: error }, "initial unverified registration purge failed"),
   );
+
+  /*
+   * Unconfirmed scans the owner walked away from expire after seven days.
+   * Hourly like the registration purge: two bounded index reads that usually
+   * return nothing, and the sweep only enqueues; the purge worker in work()
+   * does the deleting. The log carries counts only.
+   *
+   * No sweep at boot on purpose. The first deploy of the activity clock
+   * backfills it from timestamps that never recorded owner views, so a sweep
+   * in the same second as startup would purge scans the owner opened
+   * yesterday before anyone can read the counts. One interval of delay keeps
+   * the first pass observable.
+   */
+  abandonedScanSweepTimer = setInterval(() => {
+    if (shuttingDown) return;
+    void sweepAbandonedReceiptScans()
+      .then((swept) => {
+        if (swept.enqueued > 0) logger.info(swept, "swept abandoned receipt scans");
+      })
+      .catch((error) => logger.error({ err: error }, "abandoned receipt scan sweep failed"));
+    // Same cadence: a deletion whose job series burned out gets a fresh
+    // series once its cool-down has passed. Counts only in the log.
+    void redriveStrandedReceiptPurges()
+      .then((redriven) => {
+        if (redriven.enqueued > 0) logger.info(redriven, "re-drove stranded receipt purges");
+      })
+      .catch((error) => logger.error({ err: error }, "stranded receipt purge re-drive failed"));
+  }, 60 * 60_000);
 }
 
 async function shutdown(signal: string): Promise<void> {
@@ -126,6 +170,7 @@ async function shutdown(signal: string): Promise<void> {
   clearInterval(csvSweepTimer);
   clearInterval(dailyAnalysisTimer);
   clearInterval(unverifiedPurgeTimer);
+  clearInterval(abandonedScanSweepTimer);
 
   const forceTimer = setTimeout(() => {
     logger.fatal("worker graceful shutdown timed out; forcing exit mid-job");

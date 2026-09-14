@@ -128,7 +128,7 @@ export interface Corners {
 }
 
 export type CaptureSource = "manual-camera" | "native-document-scanner" | "gallery";
-export type ReceiptProcessingMode = "original" | "manual-crop" | "native-selected";
+export type ReceiptProcessingMode = "original" | "manual-crop" | "native-selected" | "clear-colour" | "grayscale" | "black-white";
 
 export type ReceiptLikelihoodOutcome = "likely-receipt" | "uncertain" | "obvious-non-receipt";
 

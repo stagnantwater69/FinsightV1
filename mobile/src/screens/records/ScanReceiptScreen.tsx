@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Image,
   KeyboardAvoidingView,
   Modal,
@@ -52,13 +53,21 @@ import { FIELD_LIMITS } from "../../lib/fieldLimits";
 import { CategoryPicker, todayISO } from "./shared";
 import { ScanBand } from "./scanReceipt/ScanBand";
 import { ScanningThumbnail } from "./scanReceipt/ScanningThumbnail";
+import { StoredPagePlaceholder } from "./scanReceipt/StoredPagePlaceholder";
 import { ReviewNotices } from "./scanReceipt/ReviewNotices";
 import { ReviewSection } from "./scanReceipt/ReviewSection";
 import { EvidenceNote } from "./scanReceipt/EvidenceNote";
 import { CategoryChips } from "./scanReceipt/CategoryChips";
 import { GapOption } from "./scanReceipt/GapOption";
-import { pollUntilRead, pagesFromSections, sectionsFromPages } from "./scanReceipt/helpers";
-import { groupReceiptMembers } from "../../lib/receiptGrouping";
+import { pollUntilRead, pagesFromSections, ReceiptReadFailure, sectionsFromPages } from "./scanReceipt/helpers";
+import {
+  canMoveWithinReceipt,
+  groupReceiptMembers,
+  makeReceiptGroupsExplicit,
+  MAX_RECEIPTS_PER_CAPTURE_BATCH,
+  newReceiptGroupId,
+  receiptGroupKey,
+} from "../../lib/receiptGrouping";
 import {
   inspectReceiptUpload,
   RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES,
@@ -68,9 +77,189 @@ import {
 } from "../../lib/receiptUploadContract";
 import { localFileByteSize } from "../../lib/localFileSize";
 import { ReceiptProviderConsent } from "./scanReceipt/ReceiptProviderConsent";
-import type { CapturedPage, ReceiptScanResult, ReviewNotice } from "./scanReceipt/types";
+import { ReceiptEvidenceViewer } from "./scanReceipt/ReceiptEvidenceViewer";
+import { ActiveReceiptQueue, type ReceiptResumeAction } from "./scanReceipt/ActiveReceiptQueue";
+import { seedLocalReceipts, summaryFromScan } from "./scanReceipt/activeReceipts";
+import { deleteReceiptScannerFiles } from "../../lib/receiptScannerCache";
+import {
+  duplicateCandidatePageFromResponse,
+  duplicateReasonLabel,
+  duplicateReviewFromError,
+  duplicateReviewIsComplete,
+  type ReceiptDuplicateDecision,
+  type ReceiptDuplicateReview,
+} from "./scanReceipt/duplicateReview";
+import type {
+  CapturedPage,
+  ReceiptCaptureBatch,
+  ReceiptHistoryItem,
+  ReceiptHistoryPage,
+  ReceiptPurgeJob,
+  ReceiptScanResult,
+  ReviewNotice,
+} from "./scanReceipt/types";
 
 const MIB = 1024 * 1024;
+
+/**
+ * DELETE /records/receipts/:id answers 409 PURGE_IN_PROGRESS when a purge for
+ * that scan is already running. The code is the contract; the sentence is a
+ * fallback for a server build that predates it.
+ */
+function purgeAlreadyUnderway(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const { status, code, responseBody, message } = err as {
+    status?: unknown; code?: unknown; responseBody?: unknown; message?: unknown;
+  };
+  if (status !== 409) return false;
+  const bodyCode = (responseBody as { code?: unknown } | null | undefined)?.code;
+  if (code === "PURGE_IN_PROGRESS" || bodyCode === "PURGE_IN_PROGRESS") return true;
+  return typeof message === "string" && /already being deleted/i.test(message);
+}
+
+interface ReceiptBatchChild {
+  batchId: number;
+  ordinal: number;
+  /** Present for a newly created batch; history summaries expose only this child's binding. */
+  expectedReceiptCount?: number;
+}
+
+interface QueuedReceipt {
+  pages: CapturedPage[];
+  batchChild: ReceiptBatchChild;
+  /** Present only after the server has accepted this child and owns its images. */
+  accepted: ReceiptScanResult | null;
+}
+
+type ScanRecoveryAction = "review" | "retry" | null;
+type ScanRunMode = "upload" | "review" | "retry";
+type CameraIntent =
+  | { kind: "replace-all" }
+  | { kind: "replace-group"; groupKey: string; groupId: string }
+  | { kind: "append-receipt"; groupId: string };
+
+const RECEIPT_PROCESSING_MODES = new Set([
+  "original",
+  "manual-crop",
+  "native-selected",
+  "clear-colour",
+  "grayscale",
+  "black-white",
+]);
+
+function validEvidenceVariant(value: unknown, variant: "source" | "derived") {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const data = value as Record<string, unknown>;
+  const dimension = (candidate: unknown) => candidate === null
+    || (Number.isInteger(candidate) && Number(candidate) > 0 && Number(candidate) <= 40000);
+  return data.variant === variant
+    && typeof data.label === "string" && data.label.length > 0 && data.label.length <= 80
+    && dimension(data.width) && dimension(data.height);
+}
+
+/** Rejects a mismatched scan or evidence map before it can drive review UI. */
+function verifiedReceiptScan(
+  value: unknown,
+  expectedId?: number,
+  expectedBusinessProfileId?: number,
+  expectedBatchChild?: Pick<ReceiptBatchChild, "batchId" | "ordinal"> | null,
+): ReceiptScanResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("FinSight returned a receipt result that could not be verified.");
+  }
+  const result = value as ReceiptScanResult;
+  if (!Number.isInteger(result.id) || result.id <= 0
+    || (expectedId !== undefined && result.id !== expectedId)
+    || !Number.isInteger(result.businessProfileId) || result.businessProfileId <= 0
+    || (expectedBusinessProfileId !== undefined && result.businessProfileId !== expectedBusinessProfileId)
+    || (result.receiptBatchId !== null && (!Number.isInteger(result.receiptBatchId) || result.receiptBatchId <= 0))
+    || (result.receiptOrdinal !== null && (!Number.isInteger(result.receiptOrdinal) || result.receiptOrdinal <= 0))
+    || ((result.receiptBatchId === null) !== (result.receiptOrdinal === null))
+    || (expectedBatchChild === null && (result.receiptBatchId !== null || result.receiptOrdinal !== null))
+    || (expectedBatchChild !== undefined && expectedBatchChild !== null && (
+      result.receiptBatchId !== expectedBatchChild.batchId
+      || result.receiptOrdinal !== expectedBatchChild.ordinal
+    ))
+    || !Number.isInteger(result.scanRevision) || result.scanRevision < 0
+    || (result.confirmationStatus !== "Pending"
+      && result.confirmationStatus !== "Confirmed"
+      && result.confirmationStatus !== "Deletion Pending")) {
+    throw new Error("FinSight returned a receipt result that could not be verified.");
+  }
+  if (result.pageEvidence !== undefined) {
+    if (!Array.isArray(result.pageEvidence) || result.pageEvidence.length > RECEIPT_UPLOAD_MAX_LOGICAL_PAGES) {
+      throw new Error("FinSight returned receipt image evidence that could not be verified.");
+    }
+    for (const [index, page] of result.pageEvidence.entries()) {
+      if (!page || page.pageNumber !== index + 1
+        || (page.captureMode !== null && page.captureMode !== "standard" && page.captureMode !== "long")
+        || !RECEIPT_PROCESSING_MODES.has(page.processingMode)
+        || (page.ocrInput !== "source" && page.ocrInput !== "derived")
+        || !validEvidenceVariant(page.source, "source")
+        || (page.derived !== null && !validEvidenceVariant(page.derived, "derived"))
+        || (page.ocrInput === "derived" && page.derived === null)) {
+        throw new Error("FinSight returned receipt image evidence that could not be verified.");
+      }
+    }
+  }
+  return result;
+}
+
+function storedReceiptPages(result: ReceiptScanResult, pageCount: number): CapturedPage[] {
+  const evidence = [...(result.pageEvidence ?? [])].sort((left, right) => left.pageNumber - right.pageNumber);
+  const count = Math.max(1, pageCount, evidence.length);
+  return Array.from({ length: count }, (_, index) => {
+    const page = evidence.find((candidate) => candidate.pageNumber === index + 1);
+    return {
+      key: `stored-${result.id}-${index + 1}`,
+      uri: "",
+      fileName: `stored-receipt-${result.id}-page-${index + 1}.jpg`,
+      mimeType: "image/jpeg",
+      originalMimeType: "image/jpeg",
+      quality: null,
+      checkingQuality: false,
+      width: page?.derived?.width ?? page?.source.width ?? 0,
+      height: page?.derived?.height ?? page?.source.height ?? 0,
+      originalWidth: page?.source.width ?? 0,
+      originalHeight: page?.source.height ?? 0,
+      captureMode: page?.captureMode ?? undefined,
+      processingMode: page?.processingMode,
+    };
+  });
+}
+
+/**
+ * Every local copy a page can point at. The gallery source is the picker's
+ * own cache copy, not the owner's photo library; receiptScannerCache refuses
+ * anything outside the app's receipt cache folders regardless.
+ */
+/**
+ * Phases where cancelling stops bytes leaving the phone. Every other phase
+ * is a wait on a receipt the server already holds, so "Cancel upload" would
+ * promise an undo that is not on offer.
+ */
+function cancelsAnUpload(phase: string): boolean {
+  return phase.startsWith("Uploading")
+    || phase === "Checking receipt size…"
+    || phase === "Creating receipt batch…"
+    || phase === "Replacing cancelled receipt batch…";
+}
+
+/** What stopping leaves the owner with, by what this phone actually holds. */
+function stoppedWaitingMessage(accepted: boolean, hasLocalImages: boolean): string {
+  if (accepted) {
+    return hasLocalImages
+      ? "Your uploaded images are kept. Review the result when you're ready."
+      : "The stored receipt is kept. Review the result when you're ready.";
+  }
+  return hasLocalImages
+    ? "Your selected images are kept. Start the upload again when you're ready."
+    : "Nothing changed. The receipt is still listed under Receipts to finish.";
+}
+
+function scannerFileUris(list: readonly CapturedPage[]): (string | undefined)[] {
+  return list.flatMap((page) => [page.originalUri, page.uri, page.sourceAssetUri]);
+}
 
 /**
  * Capture (custom camera or gallery; optional native scanner rollout flag) →
@@ -98,6 +287,9 @@ export function ScanReceiptScreen({ navigation }: any) {
   const [picking, setPicking] = useState(false);
   const operation = useImportOperation(selected?.id);
   const uploadAttempt = useRef<{ signature: string; key: string; accepted: ReceiptScanResult | null } | null>(null);
+  const receiptBatchAttempt = useRef<{ signature: string; key: string; batch: ReceiptCaptureBatch | null } | null>(null);
+  const batchChildAttempts = useRef(new Map<string, { signature: string; key: string; accepted: ReceiptScanResult | null }>());
+  const batchGroupsForAcceptance = useRef<CapturedPage[][] | null>(null);
 
   /**
    * Photos captured so far in this session, before the receipt is scanned.
@@ -109,8 +301,20 @@ export function ScanReceiptScreen({ navigation }: any) {
    * the common case.
    */
   const [pages, setPages] = useState<CapturedPage[]>([]);
-  const [queuedReceiptGroups, setQueuedReceiptGroups] = useState<CapturedPage[][]>([]);
+  const [queuedReceiptGroups, setQueuedReceiptGroups] = useState<QueuedReceipt[]>([]);
+  const [activeBatchChild, setActiveBatchChild] = useState<ReceiptBatchChild | null>(null);
+  const [scanRecoveryAction, setScanRecoveryAction] = useState<ScanRecoveryAction>(null);
+  const [scanStarted, setScanStarted] = useState(false);
   const [uploadIssuePageKeys, setUploadIssuePageKeys] = useState<Record<string, true>>({});
+  const [evidencePage, setEvidencePage] = useState<number | null>(null);
+  const [activeReceipts, setActiveReceipts] = useState<ReceiptHistoryItem[]>([]);
+  const [activeReceiptsCursor, setActiveReceiptsCursor] = useState<string | null>(null);
+  const [activeReceiptsLoading, setActiveReceiptsLoading] = useState(true);
+  const [activeReceiptsLoadingMore, setActiveReceiptsLoadingMore] = useState(false);
+  const [activeReceiptsError, setActiveReceiptsError] = useState<string | null>(null);
+  const activeReceiptsRequest = useRef<AbortController | null>(null);
+  const [deletingScanId, setDeletingScanId] = useState<number | null>(null);
+  const deleteScanKeys = useRef<Record<number, string>>({});
 
   /**
    * Whether FinSight's own camera is up.
@@ -130,6 +334,7 @@ export function ScanReceiptScreen({ navigation }: any) {
    * this screen.
    */
   const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraIntent, setCameraIntent] = useState<CameraIntent>({ kind: "replace-all" });
   const receiptCameraRef = useRef<ReceiptCameraHandle>(null);
 
   const [categoryId, setCategoryId] = useState<number | null>(null);
@@ -162,6 +367,12 @@ export function ScanReceiptScreen({ navigation }: any) {
   >([]);
   /** The extracted line currently being removed, so its row can show progress. */
   const [removingItemId, setRemovingItemId] = useState<number | null>(null);
+  const [editingItem, setEditingItem] = useState<{ id: number; name: string; amount: string } | null>(null);
+  const [editingItemErrors, setEditingItemErrors] = useState<{ name?: string; amount?: string }>({});
+  const [savingItemId, setSavingItemId] = useState<number | null>(null);
+  const [duplicateReview, setDuplicateReview] = useState<ReceiptDuplicateReview | null>(null);
+  const [duplicateCandidatesError, setDuplicateCandidatesError] = useState<string | null>(null);
+  const duplicateReviewIdentity = useRef("");
 
   /** The review form's chain: Description → Vendor → Amount. */
   const vendorRef = useRef<TextInput>(null);
@@ -193,14 +404,82 @@ export function ScanReceiptScreen({ navigation }: any) {
     operation.cancel();
     setBusy(false);
     setPicking(false);
+    // The per-action flags are cleared in their `finally` blocks only while
+    // the operation is still current, which it no longer is after cancel.
+    // Left set, they would keep every row and save button disabled for as
+    // long as this screen stays mounted.
+    setDeletingScanId(null);
+    setSavingItemId(null);
+    setRemovingItemId(null);
+    setCreatingCategoryFor(null);
   }, [operation]));
+
+  const loadActiveReceipts = useCallback(async (cursor?: string) => {
+    const businessProfileId = selected?.id;
+    if (!businessProfileId) return;
+    activeReceiptsRequest.current?.abort();
+    const controller = new AbortController();
+    activeReceiptsRequest.current = controller;
+    if (cursor) setActiveReceiptsLoadingMore(true);
+    else {
+      setActiveReceiptsLoading(true);
+      setActiveReceiptsError(null);
+    }
+    try {
+      const result = await api.get<ReceiptHistoryPage>(
+        "/records/receipts",
+        { businessProfileId, status: "active", take: 50, cursor },
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
+      if (!result || !Array.isArray(result.items) || result.items.some((item) => item.businessProfileId !== businessProfileId)) {
+        throw new Error("FinSight returned a receipt list that could not be verified for this business.");
+      }
+      setActiveReceipts((current) => {
+        if (!cursor) return result.items;
+        const byId = new Map(current.map((item) => [item.id, item]));
+        for (const item of result.items) byId.set(item.id, item);
+        return [...byId.values()];
+      });
+      setActiveReceiptsCursor(result.nextCursor ?? null);
+      setActiveReceiptsError(null);
+    } catch (err) {
+      if (!controller.signal.aborted) {
+        setActiveReceiptsError(describeActionFailure(toLoadFailure(err), "You can still capture a new receipt."));
+      }
+    } finally {
+      if (!controller.signal.aborted) {
+        setActiveReceiptsLoading(false);
+        setActiveReceiptsLoadingMore(false);
+      }
+    }
+  }, [selected?.id]);
+
+  useFocusEffect(useCallback(() => {
+    void loadActiveReceipts();
+    return () => activeReceiptsRequest.current?.abort();
+  }, [loadActiveReceipts]));
 
   useEffect(() => {
     uploadAttempt.current = null;
+    receiptBatchAttempt.current = null;
+    batchChildAttempts.current.clear();
+    batchGroupsForAcceptance.current = null;
     setScan(null);
     setPages([]);
     setQueuedReceiptGroups([]);
+    setActiveBatchChild(null);
+    setScanRecoveryAction(null);
+    setScanStarted(false);
     setUploadIssuePageKeys({});
+    setEvidencePage(null);
+    setActiveReceipts([]);
+    setActiveReceiptsCursor(null);
+    setActiveReceiptsLoading(true);
+    setActiveReceiptsLoadingMore(false);
+    setActiveReceiptsError(null);
+    setDeletingScanId(null);
+    deleteScanKeys.current = {};
     setBusy(false);
     setPicking(false);
     setCategoryId(null);
@@ -210,8 +489,23 @@ export function ScanReceiptScreen({ navigation }: any) {
     setAmount("");
     setItemCategories({});
     setAddedItems([]);
+    setEditingItem(null);
+    setEditingItemErrors({});
+    setSavingItemId(null);
+    setDuplicateReview(null);
+    setDuplicateCandidatesError(null);
+    duplicateReviewIdentity.current = "";
     setError(null);
   }, [selected?.id]);
+
+  const currentDuplicateIdentity = `${date.trim()}\u0000${vendor.trim()}\u0000${description.trim()}\u0000${amount.trim()}`;
+  useEffect(() => {
+    if (duplicateReview && duplicateReviewIdentity.current !== currentDuplicateIdentity) {
+      setDuplicateReview(null);
+      setDuplicateCandidatesError(null);
+      duplicateReviewIdentity.current = "";
+    }
+  }, [currentDuplicateIdentity, duplicateReview]);
 
   if (!selected) return null;
 
@@ -222,6 +516,77 @@ export function ScanReceiptScreen({ navigation }: any) {
     }
     setUploadIssuePageKeys(pageKeys);
     setError(issues[0]?.message ?? "Check the receipt photos and try again.");
+  }
+
+  function invalidateUnstartedUpload() {
+    uploadAttempt.current = null;
+    receiptBatchAttempt.current = null;
+    batchChildAttempts.current.clear();
+    batchGroupsForAcceptance.current = null;
+    setQueuedReceiptGroups([]);
+    setActiveBatchChild(null);
+    setScanRecoveryAction(null);
+    setScanStarted(false);
+  }
+
+  // Scans the server already accepted stay pending there, so they enter
+  // Receipts to finish at once; the refresh reconciles or, if it fails, leaves them.
+  function resetForAnotherReceipt() {
+    const abandoned: ReceiptHistoryItem[] = [];
+    const now = Date.now();
+    const current = scan ?? uploadAttempt.current?.accepted ?? null;
+    if (current && current.confirmationStatus === "Pending") abandoned.push(summaryFromScan(current, now, pages.length));
+    for (const receipt of queuedReceiptGroups) {
+      if (receipt.accepted && receipt.accepted.confirmationStatus === "Pending" && !abandoned.some((row) => row.id === receipt.accepted!.id)) {
+        abandoned.push(summaryFromScan(receipt.accepted, now, receipt.pages.length));
+      }
+    }
+    // Starting over clears device-side files without changing the stored scan's deletion lifecycle.
+    void deleteReceiptScannerFiles(scannerFileUris([
+      ...pages,
+      ...queuedReceiptGroups.flatMap((receipt) => receipt.pages),
+    ]));
+    operation.cancel();
+    if (abandoned.length > 0) {
+      setActiveReceipts((list) => seedLocalReceipts(list, abandoned));
+      void loadActiveReceipts();
+    }
+    uploadAttempt.current = null;
+    receiptBatchAttempt.current = null;
+    batchChildAttempts.current.clear();
+    batchGroupsForAcceptance.current = null;
+    duplicateReviewIdentity.current = "";
+    addedAmountRefs.current = {};
+    setScan(null);
+    setPages([]);
+    setQueuedReceiptGroups([]);
+    setActiveBatchChild(null);
+    setScanRecoveryAction(null);
+    setScanStarted(false);
+    setUploadIssuePageKeys({});
+    setEvidencePage(null);
+    setCameraOpen(false);
+    setCameraIntent({ kind: "replace-all" });
+    setBusy(false);
+    setPicking(false);
+    setPhase("Uploading receipt…");
+    setCategoryId(null);
+    setDate("");
+    setDescription("");
+    setVendor("");
+    setAmount("");
+    setItemCategories({});
+    setPlan(null);
+    setGapCategoryId(null);
+    setCreatingCategoryFor(null);
+    setAddedItems([]);
+    setRemovingItemId(null);
+    setEditingItem(null);
+    setEditingItemErrors({});
+    setSavingItemId(null);
+    setDuplicateReview(null);
+    setDuplicateCandidatesError(null);
+    setError(null);
   }
 
   /**
@@ -239,7 +604,8 @@ export function ScanReceiptScreen({ navigation }: any) {
    * page they just photographed.
    */
   async function addPage(asset: ImagePicker.ImagePickerAsset, task: NonNullable<ReturnType<typeof operation.begin>>) {
-    if (!operation.current(task) || !canAddSection(pages.length)) return;
+    const existingGroup = groupReceiptMembers(pages);
+    if (!operation.current(task) || scanStarted || existingGroup.length > 1 || !canAddSection(existingGroup[0]?.length ?? 0)) return;
     const key = `${Date.now()}-${Math.random()}`;
     const uri = asset.uri;
     const fileName = asset.fileName ?? `receipt-${Date.now()}.jpg`;
@@ -252,12 +618,14 @@ export function ScanReceiptScreen({ navigation }: any) {
       fileName,
       mimeType,
       originalMimeType: mimeType,
+      receiptGroupId: existingGroup[0]?.[0]?.receiptGroupId,
       quality: null,
       checkingQuality: true,
       width: asset.width,
       height: asset.height,
     };
     const nextPages = [...pages, page];
+    invalidateUnstartedUpload();
     setPages(nextPages);
     setUploadIssuePageKeys({});
     setError(null);
@@ -304,6 +672,10 @@ export function ScanReceiptScreen({ navigation }: any) {
   }
 
   function removePage(key: string) {
+    if (scanStarted) return;
+    invalidateUnstartedUpload();
+    const removed = pages.find((page) => page.key === key);
+    if (removed) void deleteReceiptScannerFiles(scannerFileUris([removed]));
     setPages((prev) => prev.filter((p) => p.key !== key));
     setUploadIssuePageKeys({});
     setError(null);
@@ -311,120 +683,323 @@ export function ScanReceiptScreen({ navigation }: any) {
 
   /** Moves a page earlier (delta -1) or later (delta +1) in the sequence. */
   function movePage(key: string, delta: number) {
+    if (scanStarted) return;
     setPages((prev) => {
       const index = prev.findIndex((p) => p.key === key);
       const target = index + delta;
-      if (index === -1 || target < 0 || target >= prev.length) return prev;
+      if (!canMoveWithinReceipt(prev, index, delta)) return prev;
       const next = [...prev];
       const [moved] = next.splice(index, 1);
       next.splice(target, 0, moved!);
       return next;
     });
+    invalidateUnstartedUpload();
     setUploadIssuePageKeys({});
     setError(null);
   }
 
-  /**
-   * Sends every captured page as ONE scan. A single photo is simply a
-   * one-element page list — there is no separate upload path for it.
-   */
-  async function scanSingleReceipt(list: CapturedPage[]) {
+  function showReceiptResult(result: ReceiptScanResult) {
+    setScan(result);
+    setScanRecoveryAction(null);
+    setDuplicateReview(null);
+    setDuplicateCandidatesError(null);
+    duplicateReviewIdentity.current = "";
+    setDate(result.extractedDate ? String(result.extractedDate).slice(0, 10) : "");
+    setVendor(result.extractedVendor ?? "");
+    setDescription(result.extractedDescription ?? "");
+    setCategoryId(result.items.length === 1 ? result.items[0]!.categoryId : null);
+    setAmount(result.extractedAmount != null ? result.extractedAmount.toFixed(2) : "");
+    setItemCategories(Object.fromEntries(result.items.map((item) => [item.id, item.categoryId ?? null])));
+    setAddedItems([]);
+    setEditingItem(null);
+    setEditingItemErrors({});
+    setPlan(null);
+    setGapCategoryId(null);
+    if (result.visionAssisted) haptics.warned();
+    else haptics.succeeded();
+  }
+
+  function uploadSignature(list: CapturedPage[], batchChild: ReceiptBatchChild | null): string {
+    return `${selected!.id}:${batchChild?.batchId ?? "single"}:${batchChild?.ordinal ?? 1}:${list.map((page) => `${page.key}:${page.uri}:${page.originalUri ?? ""}`).join("|")}`;
+  }
+
+  async function acceptReceiptUpload(
+    list: CapturedPage[],
+    batchChild: ReceiptBatchChild | null,
+    task: NonNullable<ReturnType<typeof operation.begin>>,
+    phaseLabel = "Uploading receipt…",
+  ) {
+    const signature = uploadSignature(list, batchChild);
+    const attempts = batchChild ? batchChildAttempts.current : null;
+    let attempt = attempts?.get(signature) ?? uploadAttempt.current;
+    if (!attempt || attempt.signature !== signature) {
+      attempt = { signature, key: newIdempotencyKey(), accepted: null };
+      if (attempts) attempts.set(signature, attempt);
+      if (!batchChild || batchChild.ordinal === 1) uploadAttempt.current = attempt;
+    }
+    if (attempt.accepted) return attempt.accepted;
+
+    const inspection = await inspectReceiptUpload(list, localFileByteSize);
+    if (!operation.current(task)) return null;
+    if (!inspection.ok) {
+      haptics.warned();
+      showUploadIssues(inspection.issues);
+      return null;
+    }
+    setUploadIssuePageKeys({});
+    setScanStarted(true);
+    setPhase(phaseLabel);
+    const form = new FormData();
+    form.append("businessProfileId", String(selected!.id));
+    form.append("idempotencyKey", attempt.key);
+    if (batchChild) {
+      form.append("receiptBatchId", String(batchChild.batchId));
+      form.append("receiptOrdinal", String(batchChild.ordinal));
+    }
+    for (const object of inspection.objects) {
+      const page = list[object.pageNumber - 1]!;
+      const originalExtension = object.mediaType === "image/png" ? "png" : object.mediaType === "image/webp" ? "webp" : "jpg";
+      form.append(object.variant === "processed" ? "files" : "originalFiles", {
+        uri: object.uri,
+        name: object.variant === "processed"
+          ? page.fileName
+          : `receipt-section-${object.pageNumber}-original.${originalExtension}`,
+        type: object.mediaType,
+      } as any);
+    }
+    form.append("captureMetadata", JSON.stringify(list.map((page) => ({
+      captureMode: page.captureMode,
+      source: page.captureSource,
+      processingMode: page.processingMode ?? "original",
+      originalWidth: page.originalWidth ?? page.width,
+      originalHeight: page.originalHeight ?? page.height,
+      processedWidth: page.width,
+      processedHeight: page.height,
+      corners: page.cropCorners,
+      transformVersion: page.transformVersion,
+      documentConfidence: page.documentConfidence,
+      ownerOverrodeLikelihood: page.ownerOverrodeLikelihood,
+    }))));
+    const accepted = verifiedReceiptScan(
+      await api.upload<ReceiptScanResult>("/records/receipts", form, task.controller.signal),
+      undefined,
+      selected!.id,
+      batchChild,
+    );
+    if (!operation.current(task)) return null;
+    attempt.accepted = accepted;
+    return accepted;
+  }
+
+  async function scanSingleReceipt(
+    list: CapturedPage[],
+    options: {
+      mode?: ScanRunMode;
+      batchChild?: ReceiptBatchChild | null;
+      batchGroups?: CapturedPage[][];
+    } = {},
+  ) {
     if (list.length === 0) return;
     const task = operation.begin();
     if (!task) return;
+    const mode = options.mode ?? "upload";
+    let batchChild = options.batchChild ?? null;
+    let activeList = list;
     setBusy(true);
     setPhase("Checking receipt size…");
     setError(null);
     try {
-      const signature = `${selected!.id}:${list.map((page) => `${page.key}:${page.uri}:${page.originalUri ?? ""}`).join("|")}`;
+      const batchGroups = options.batchGroups ?? [];
+      if (batchGroups.length > 1) {
+        const batchSignature = `${selected!.id}:${batchGroups
+          .map((group) => group.map((page) => `${page.key}:${page.uri}:${page.originalUri ?? ""}`).join("|"))
+          .join("||")}`;
+        // On a resumed batch, children the server already accepted have had
+        // their local files released below; inspecting them again would fail
+        // on the missing files and block the children that still need sending.
+        const resumedBatch = receiptBatchAttempt.current?.signature === batchSignature
+          ? receiptBatchAttempt.current.batch
+          : null;
+        for (const [index, group] of batchGroups.entries()) {
+          if (resumedBatch && batchChildAttempts.current.get(uploadSignature(group, {
+            batchId: resumedBatch.id,
+            ordinal: index + 1,
+            expectedReceiptCount: batchGroups.length,
+          }))?.accepted) {
+            continue;
+          }
+          const inspection = await inspectReceiptUpload(group, localFileByteSize);
+          if (!operation.current(task)) return;
+          if (!inspection.ok) {
+            haptics.warned();
+            showUploadIssues(inspection.issues);
+            return;
+          }
+        }
+
+        if (receiptBatchAttempt.current?.signature !== batchSignature) {
+          receiptBatchAttempt.current = { signature: batchSignature, key: newIdempotencyKey(), batch: null };
+          batchChildAttempts.current.clear();
+        }
+        let batchAttempt = receiptBatchAttempt.current;
+        setPhase("Creating receipt batch…");
+        if (!batchAttempt.batch) {
+          batchAttempt.batch = await api.post<ReceiptCaptureBatch>("/records/receipt-batches", {
+            businessProfileId: selected!.id,
+            clientBatchKey: batchAttempt.key,
+            expectedReceiptCount: batchGroups.length,
+          });
+          if (!operation.current(task)) return;
+        }
+        if (batchAttempt.batch.status === "CANCELLED") {
+          batchAttempt = { signature: batchSignature, key: newIdempotencyKey(), batch: null };
+          receiptBatchAttempt.current = batchAttempt;
+          setPhase("Replacing cancelled receipt batch…");
+          batchAttempt.batch = await api.post<ReceiptCaptureBatch>("/records/receipt-batches", {
+            businessProfileId: selected!.id,
+            clientBatchKey: batchAttempt.key,
+            expectedReceiptCount: batchGroups.length,
+          });
+          if (!operation.current(task)) return;
+        }
+        if (!Number.isInteger(batchAttempt.batch.id) || batchAttempt.batch.id <= 0
+          || batchAttempt.batch.businessProfileId !== selected!.id
+          || batchAttempt.batch.expectedReceiptCount !== batchGroups.length
+          || batchAttempt.batch.status !== "COLLECTING"
+          || batchAttempt.batch.uploadedReceiptCount !== 0
+          || !Array.isArray(batchAttempt.batch.receipts)
+          || batchAttempt.batch.receipts.length !== 0) {
+          if (batchAttempt.batch.status === "CANCELLED") batchAttempt.key = newIdempotencyKey();
+          batchAttempt.batch = null;
+          throw new Error("This receipt batch no longer matches the selected images.");
+        }
+        batchChild = {
+          batchId: batchAttempt.batch.id,
+          ordinal: 1,
+          expectedReceiptCount: batchGroups.length,
+        };
+        setActiveBatchChild(batchChild);
+        setQueuedReceiptGroups(batchGroups.slice(1).map((group, index) => ({
+          pages: group,
+          batchChild: {
+            batchId: batchAttempt.batch!.id,
+            ordinal: index + 2,
+            expectedReceiptCount: batchGroups.length,
+          },
+          accepted: null,
+        })));
+        setPages(batchGroups[0]!);
+        setScanStarted(true);
+        batchGroupsForAcceptance.current = batchGroups;
+
+        let firstAccepted: ReceiptScanResult | null = null;
+        for (const [index, group] of batchGroups.entries()) {
+          const child: ReceiptBatchChild = {
+            batchId: batchAttempt.batch.id,
+            ordinal: index + 1,
+            expectedReceiptCount: batchGroups.length,
+          };
+          const acceptedChild = await acceptReceiptUpload(
+            group,
+            child,
+            task,
+            `Uploading receipt ${index + 1} of ${batchGroups.length}…`,
+          );
+          if (!acceptedChild || !operation.current(task)) return;
+          if (index === 0) {
+            firstAccepted = acceptedChild;
+            continue;
+          }
+          // The server has acknowledged this child, so its source images are
+          // now durable. Release only this accepted child's local files.
+          void deleteReceiptScannerFiles(scannerFileUris(group));
+          setQueuedReceiptGroups((current) => current.map((receipt) => (
+            receipt.batchChild.ordinal === child.ordinal
+              ? { ...receipt, pages: [], accepted: acceptedChild }
+              : receipt
+          )));
+        }
+        if (!firstAccepted) throw new Error("FinSight did not accept the first receipt in this batch.");
+        activeList = batchGroups[0]!;
+        batchChild = {
+          batchId: batchAttempt.batch.id,
+          ordinal: 1,
+          expectedReceiptCount: batchGroups.length,
+        };
+        // Every child is now independently durable and visible in receipt
+        // history. OCR may continue while the owner reviews receipt 1.
+        void loadActiveReceipts();
+
+        const signature = `${selected!.id}:${batchChild.batchId}:${batchChild.ordinal}:${activeList.map((page) => `${page.key}:${page.uri}:${page.originalUri ?? ""}`).join("|")}`;
+        const firstAttempt = batchChildAttempts.current.get(signature);
+        if (!firstAttempt) throw new Error("FinSight lost the first receipt upload binding.");
+        uploadAttempt.current = firstAttempt;
+        batchChildAttempts.current.clear();
+        batchGroupsForAcceptance.current = null;
+      }
+
+      const signature = `${selected!.id}:${batchChild?.batchId ?? "single"}:${batchChild?.ordinal ?? 1}:${activeList.map((page) => `${page.key}:${page.uri}:${page.originalUri ?? ""}`).join("|")}`;
       if (uploadAttempt.current?.signature !== signature) {
         uploadAttempt.current = { signature, key: newIdempotencyKey(), accepted: null };
       }
       const attempt = uploadAttempt.current;
       let accepted = attempt.accepted;
-      if (!accepted) {
-        const inspection = await inspectReceiptUpload(list, localFileByteSize);
-        if (!operation.current(task)) return;
-        if (!inspection.ok) {
-          haptics.warned();
-          showUploadIssues(inspection.issues);
-          return;
-        }
-        setUploadIssuePageKeys({});
-        setPhase("Uploading receipt…");
-        const form = new FormData();
-        form.append("businessProfileId", String(selected!.id));
-        form.append("idempotencyKey", attempt.key);
-        for (const object of inspection.objects) {
-          const page = list[object.pageNumber - 1]!;
-          const originalExtension = object.mediaType === "image/png" ? "png" : object.mediaType === "image/webp" ? "webp" : "jpg";
-          form.append(object.variant === "processed" ? "files" : "originalFiles", {
-            uri: object.uri,
-            name: object.variant === "processed"
-              ? page.fileName
-              : `receipt-section-${object.pageNumber}-original.${originalExtension}`,
-            type: object.mediaType,
-          } as any);
-        }
-        form.append("captureMetadata", JSON.stringify(list.map((page) => ({
-          captureMode: page.captureMode,
-          source: page.captureSource,
-          processingMode: page.processingMode ?? "original",
-          originalWidth: page.originalWidth ?? page.width,
-          originalHeight: page.originalHeight ?? page.height,
-          processedWidth: page.width,
-          processedHeight: page.height,
-          corners: page.cropCorners,
-          transformVersion: page.transformVersion,
-          documentConfidence: page.documentConfidence,
-          ownerOverrodeLikelihood: page.ownerOverrodeLikelihood,
-        }))));
-        accepted = await api.upload<ReceiptScanResult>("/records/receipts", form, task.controller.signal);
+      if (mode === "review") {
+        if (!accepted) throw new Error("This receipt has not finished uploading yet.");
+        setPhase("Checking receipt result…");
+        accepted = verifiedReceiptScan(
+          await api.get<ReceiptScanResult>(`/records/receipts/${accepted.id}`, undefined, task.controller.signal),
+          accepted.id,
+          selected!.id,
+          batchChild,
+        );
         if (!operation.current(task)) return;
         attempt.accepted = accepted;
+      } else if (mode === "retry") {
+        if (!accepted) throw new Error("This receipt has not finished uploading yet.");
+        setPhase("Retrying stored receipt…");
+        accepted = verifiedReceiptScan(
+          await api.post<ReceiptScanResult>(`/records/receipts/${accepted.id}/retry`),
+          accepted.id,
+          selected!.id,
+          batchChild,
+        );
+        if (!operation.current(task)) return;
+        attempt.accepted = accepted;
+      } else if (!accepted) {
+        accepted = await acceptReceiptUpload(activeList, batchChild, task);
+        if (!accepted || !operation.current(task)) return;
+        attempt.accepted = accepted;
       }
+      setScanRecoveryAction("review");
       setPhase("Reading receipt…");
       // The upload returns as soon as the photos are stored; the read itself
       // finishes behind it. See pollUntilRead.
-      const result = await pollUntilRead(accepted, true, task.controller.signal);
-      if (!operation.current(task)) return;
-      setScan(result);
-      // Pre-fill from OCR — as a draft the owner checks, never as truth.
-      setDate(result.extractedDate ? String(result.extractedDate).slice(0, 10) : "");
-      setVendor(result.extractedVendor ?? "");
-      setDescription(result.extractedDescription ?? "");
-      setCategoryId(result.items?.length === 1 ? result.items[0]!.categoryId : null);
-      /*
-        Two decimal places, always. `String(1475.5)` is "1475.5", which reads
-        as an amount somebody typed carelessly rather than one read off a
-        receipt — and it is the field the owner is asked to check against
-        printed centavos.
-      */
-      setAmount(result.extractedAmount != null ? result.extractedAmount.toFixed(2) : "");
-      // Seed the per-item categories from what FinSight assigned. A starting
-      // point, not a decision — every row stays editable below.
-      setItemCategories(
-        Object.fromEntries((result.items ?? []).map((i) => [i.id, i.categoryId ?? null])),
+      const result = verifiedReceiptScan(
+        await pollUntilRead(accepted, task.controller.signal),
+        accepted.id,
+        selected!.id,
+        batchChild,
       );
-      setPlan(null);
-      setGapCategoryId(null);
-      // A vision-assisted read is a guess, not a reading — it deserves a
-      // different signal from a clean scan, so the owner is primed to check
-      // it before they even look down.
-      if (result.visionAssisted) {
-        haptics.warned();
-      } else {
-        haptics.succeeded();
-      }
+      if (!operation.current(task)) return;
+      showReceiptResult(result);
     } catch (err) {
       if (!operation.current(task)) return;
       haptics.failed();
-      // The captured pages are untouched by a failed read, so this offers the
-      // retry that costs nothing rather than sending the owner back to the
-      // camera for photographs they already have.
-      setError(
-        describeActionFailure(toLoadFailure(err), "Your photos are still here — try scanning them again."),
-      );
+      const hasStoredScan = Boolean(uploadAttempt.current?.accepted);
+      const errorStatus = typeof err === "object" && err !== null && "status" in err
+        ? Number((err as { status: unknown }).status)
+        : null;
+      const retryWasAmbiguous = mode === "retry" && (errorStatus === 0 || errorStatus === 409);
+      if (hasStoredScan) {
+        setScanRecoveryAction(err instanceof ReceiptReadFailure && err.kind === "failed" && !retryWasAmbiguous ? "retry" : "review");
+      }
+      setError(describeActionFailure(
+        toLoadFailure(err),
+        hasStoredScan
+          ? "Your uploaded images and review changes are still here."
+          : "Your selected images are still here.",
+      ));
     } finally {
       if (operation.current(task)) setBusy(false);
       operation.finish(task);
@@ -434,10 +1009,208 @@ export function ScanReceiptScreen({ navigation }: any) {
   async function scanPages(list: CapturedPage[] = pages) {
     const groups = groupReceiptMembers(list);
     if (groups.length === 0) return;
-    setQueuedReceiptGroups(groups.slice(1));
-    setPages(groups[0]!);
     setUploadIssuePageKeys({});
-    await scanSingleReceipt(groups[0]!);
+    await scanSingleReceipt(groups[0]!, { batchGroups: groups });
+  }
+
+  function continueReceiptScan() {
+    if (batchGroupsForAcceptance.current && queuedReceiptGroups.some((receipt) => receipt.accepted === null)) {
+      return void scanSingleReceipt(pages, { batchGroups: batchGroupsForAcceptance.current });
+    }
+    if (scanRecoveryAction) {
+      void scanSingleReceipt(pages, { mode: scanRecoveryAction, batchChild: activeBatchChild });
+      return;
+    }
+    if (scanStarted) {
+      void scanSingleReceipt(pages, { batchChild: activeBatchChild });
+      return;
+    }
+    void scanPages();
+  }
+
+  async function resumeStoredReceipt(item: ReceiptHistoryItem, action: ReceiptResumeAction) {
+    const task = operation.begin();
+    if (!task) return;
+    setBusy(true);
+    setPhase(action === "retry" ? "Retrying stored receipt…" : action === "review" ? "Opening receipt result…" : "Reading stored receipt…");
+    setError(null);
+    try {
+      const expectedStoredBatch = item.receiptBatchId !== null && item.receiptOrdinal !== null
+        ? { batchId: item.receiptBatchId, ordinal: item.receiptOrdinal }
+        : null;
+      let accepted = verifiedReceiptScan(
+        await api.get<ReceiptScanResult>(`/records/receipts/${item.id}`, undefined, task.controller.signal),
+        item.id,
+        selected!.id,
+        expectedStoredBatch,
+      );
+      if (!operation.current(task)) return;
+
+      const storedPages = storedReceiptPages(accepted, item.pageCount);
+      const signature = `${selected!.id}:${expectedStoredBatch?.batchId ?? "single"}:${expectedStoredBatch?.ordinal ?? 1}:${storedPages.map((page) => `${page.key}:${page.uri}:${page.originalUri ?? ""}`).join("|")}`;
+      uploadAttempt.current = { signature, key: newIdempotencyKey(), accepted };
+      receiptBatchAttempt.current = null;
+      setQueuedReceiptGroups([]);
+      // Keep a discovered child's durable batch binding. If polling fails and
+      // the owner taps Review result, the follow-up GET must still be checked
+      // against the same batch/ordinal instead of being rejected as a single.
+      setActiveBatchChild(expectedStoredBatch);
+      setPages(storedPages);
+      setScanStarted(true);
+      setScanRecoveryAction("review");
+
+      if (action === "retry") {
+        if (!item.allowedActions.retryProcessing) throw new Error("This receipt is no longer available for processing retry.");
+        accepted = verifiedReceiptScan(
+          await api.post<ReceiptScanResult>(`/records/receipts/${item.id}/retry`),
+          item.id,
+          selected!.id,
+          expectedStoredBatch,
+        );
+        if (!operation.current(task)) return;
+        uploadAttempt.current.accepted = accepted;
+      }
+
+      setPhase("Reading receipt…");
+      const result = verifiedReceiptScan(
+        await pollUntilRead(accepted, task.controller.signal),
+        accepted.id,
+        selected!.id,
+        expectedStoredBatch,
+      );
+      if (!operation.current(task)) return;
+      showReceiptResult(result);
+    } catch (err) {
+      if (!operation.current(task)) return;
+      haptics.failed();
+      const hasStoredScan = Boolean(uploadAttempt.current?.accepted);
+      const errorStatus = typeof err === "object" && err !== null && "status" in err
+        ? Number((err as { status: unknown }).status)
+        : null;
+      const retryWasAmbiguous = action === "retry" && (errorStatus === 0 || errorStatus === 409);
+      if (hasStoredScan) {
+        setScanRecoveryAction(err instanceof ReceiptReadFailure && err.kind === "failed" && !retryWasAmbiguous ? "retry" : "review");
+      }
+      setError(describeActionFailure(toLoadFailure(err), "This receipt and its stored images are still available."));
+    } finally {
+      if (operation.current(task)) setBusy(false);
+      operation.finish(task);
+    }
+  }
+
+  function confirmDeleteStoredScan(scanId: number) {
+    Alert.alert(
+      "Delete this receipt scan?",
+      "This permanently removes its stored source and processed images. A confirmed expense record is not deleted.",
+      [
+        { text: "Keep scan", style: "cancel" },
+        { text: "Delete scan", style: "destructive", onPress: () => { void deleteStoredScan(scanId); } },
+      ],
+    );
+  }
+
+  async function deleteStoredScan(scanId: number) {
+    const task = operation.begin();
+    if (!task) return;
+    const isCurrent = scan?.id === scanId || uploadAttempt.current?.accepted?.id === scanId;
+    setDeletingScanId(scanId);
+    if (isCurrent) setError(null);
+    else setActiveReceiptsError(null);
+    try {
+      const idempotencyKey = deleteScanKeys.current[scanId] ?? newIdempotencyKey();
+      deleteScanKeys.current[scanId] = idempotencyKey;
+      let job: ReceiptPurgeJob | null = null;
+      try {
+        job = await api.delete<ReceiptPurgeJob>(
+          `/records/receipts/${scanId}`,
+          undefined,
+          { "Idempotency-Key": idempotencyKey },
+        );
+      } catch (err) {
+        // A purge that is already running is the outcome the owner asked for,
+        // so the row leaves the list the same way a fresh purge does.
+        if (!purgeAlreadyUnderway(err)) throw err;
+      }
+      if (!operation.current(task)) return;
+      if (job && (job.receiptScanId !== scanId || !Number.isInteger(job.id))) {
+        throw new Error("FinSight returned a deletion result that did not match this receipt scan.");
+      }
+      const deletionLead = job ? "Receipt scan deletion started." : "This receipt scan was already being deleted.";
+
+      if (isCurrent) void deleteReceiptScannerFiles(scannerFileUris(pages));
+
+      delete deleteScanKeys.current[scanId];
+      setActiveReceipts((current) => current.filter((item) => item.id !== scanId));
+      if (isCurrent) {
+        uploadAttempt.current = null;
+        batchChildAttempts.current.clear();
+        batchGroupsForAcceptance.current = null;
+        setScan(null);
+        setCategoryId(null);
+        setDate("");
+        setDescription("");
+        setVendor("");
+        setAmount("");
+        setItemCategories({});
+        setAddedItems([]);
+        setEditingItem(null);
+        setEditingItemErrors({});
+        setPlan(null);
+        setGapCategoryId(null);
+        setEvidencePage(null);
+        setScanRecoveryAction(null);
+        setUploadIssuePageKeys({});
+        receiptBatchAttempt.current = null;
+        // Children the server never accepted exist only as local files, so
+        // they become a fresh capture session instead of being dropped.
+        const storedSiblings = queuedReceiptGroups.some((receipt) => receipt.accepted !== null);
+        const unsentPages = queuedReceiptGroups
+          .filter((receipt) => receipt.accepted === null)
+          .flatMap((receipt) => receipt.pages);
+        setQueuedReceiptGroups([]);
+        setPages(unsentPages);
+        setActiveBatchChild(null);
+        setScanStarted(false);
+        setFlash(
+          unsentPages.length > 0 && storedSiblings
+            ? `${deletionLead} The receipts you haven't sent yet are still here, ready to scan. The other stored receipts from this batch are still in Receipts to finish.`
+            : unsentPages.length > 0
+              ? `${deletionLead} The receipts you haven't sent yet are still here, ready to scan.`
+              : storedSiblings
+                ? `${deletionLead} The other stored receipts from this batch are still in Receipts to finish.`
+                : deletionLead,
+        );
+        void loadActiveReceipts();
+      } else {
+        setFlash(deletionLead);
+      }
+    } catch (err) {
+      if (!operation.current(task)) return;
+      const failure = toLoadFailure(err);
+      const message = failure.reach === "unreachable"
+        ? "FinSight couldn't confirm whether deletion started. This scan stays shown here; try Delete scan again when your connection is back."
+        : `${failure.message} The receipt scan and its stored images have not been deleted.`;
+      if (isCurrent) setError(message);
+      else setActiveReceiptsError(message);
+    } finally {
+      if (operation.current(task)) setDeletingScanId(null);
+      operation.finish(task);
+    }
+  }
+
+  function chooseAnotherImage() {
+    Alert.alert(
+      "Choose another image?",
+      "This removes the images in this capture session. Any uploaded scan stays private until FinSight's abandoned-scan cleanup removes it.",
+      [
+        { text: "Keep these images", style: "cancel" },
+        {
+          text: "Choose another image",
+          style: "destructive",
+          onPress: resetForAnotherReceipt,
+        },
+      ],
+    );
   }
 
   /**
@@ -448,11 +1221,41 @@ export function ScanReceiptScreen({ navigation }: any) {
    * for, offer the gallery instead, and point at Settings once the system has
    * stopped asking — none of which a one-line error on this card could do.
    */
-  function capturePage() {
-    if (busy || picking) return;
+  function openCamera(intent: CameraIntent) {
+    if (busy || picking || scanStarted) return;
     haptics.committed();
     setError(null);
+    setCameraIntent(intent);
     setCameraOpen(true);
+  }
+
+  function capturePage() {
+    const groups = groupReceiptMembers(pages);
+    if (groups.length <= 1) {
+      openCamera({ kind: "replace-all" });
+      return;
+    }
+    reviewReceipt(0);
+  }
+
+  function reviewReceipt(index: number) {
+    if (busy || picking || scanStarted) return;
+    const explicit = makeReceiptGroupsExplicit(pages);
+    const group = groupReceiptMembers(explicit)[index];
+    if (!group?.[0]?.receiptGroupId) return;
+    setPages(explicit);
+    openCamera({
+      kind: "replace-group",
+      groupKey: receiptGroupKey(group[0]),
+      groupId: group[0].receiptGroupId,
+    });
+  }
+
+  function captureSeparateReceipt() {
+    if (groupReceiptMembers(pages).length >= MAX_RECEIPTS_PER_CAPTURE_BATCH) return;
+    const explicit = makeReceiptGroupsExplicit(pages);
+    setPages(explicit);
+    openCamera({ kind: "append-receipt", groupId: newReceiptGroupId() });
   }
 
   /**
@@ -541,7 +1344,47 @@ export function ScanReceiptScreen({ navigation }: any) {
     plan === "shrink" ||
     (plan === "category" && canFileGapOnItsOwn && gapCategoryId != null);
 
-  async function confirm() {
+  async function finishReceiptConfirmation(task: NonNullable<ReturnType<typeof operation.begin>>) {
+    // Cache cleanup must not delay or overturn a confirmed financial write.
+    void deleteReceiptScannerFiles(scannerFileUris(pages));
+    haptics.succeeded();
+    setDuplicateReview(null);
+    setDuplicateCandidatesError(null);
+    duplicateReviewIdentity.current = "";
+    if (queuedReceiptGroups.length > 0) {
+      const [next, ...remaining] = queuedReceiptGroups;
+      if (!next?.accepted) {
+        throw new Error("FinSight has not accepted every receipt in this batch yet.");
+      }
+      const storedPages = storedReceiptPages(next.accepted, next.pages.length);
+      const signature = `${selected!.id}:${next.batchChild.batchId}:${next.batchChild.ordinal}:${storedPages.map((page) => `${page.key}:${page.uri}:${page.originalUri ?? ""}`).join("|")}`;
+      uploadAttempt.current = { signature, key: newIdempotencyKey(), accepted: next.accepted };
+      setQueuedReceiptGroups(remaining);
+      setPages(storedPages);
+      setActiveBatchChild(next.batchChild);
+      setUploadIssuePageKeys({});
+      setScan(null);
+      setCategoryId(null);
+      setDate("");
+      setDescription("");
+      setVendor("");
+      setAmount("");
+      setItemCategories({});
+      setAddedItems([]);
+      setEditingItem(null);
+      setEditingItemErrors({});
+      setPlan(null);
+      setGapCategoryId(null);
+      setFlash(`Receipt saved. ${remaining.length + 1} stored receipt${remaining.length === 0 ? "" : "s"} remain to review.`);
+      operation.finish(task);
+      await scanSingleReceipt(storedPages, { batchChild: next.batchChild });
+      return;
+    }
+    setFlash("Receipt saved to your records.");
+    navigation.goBack();
+  }
+
+  async function confirm(duplicateDecision?: ReceiptDuplicateDecision) {
     if (requiresManualCurrencyConversion) return setError("Enter this receipt manually in PHP.");
     const value = Number(amount);
     if (!Number.isFinite(value) || value <= 0) return setError("Enter an amount greater than zero.");
@@ -561,7 +1404,7 @@ export function ScanReceiptScreen({ navigation }: any) {
       // Both shapes and their rules live in lib/receiptConfirm, where they can
       // be tested against the server's schema — this call is what silently
       // broke against it before.
-      const payload = isItemised
+      const details = isItemised
         ? buildItemisedConfirmPayload({
             date,
             description,
@@ -578,40 +1421,113 @@ export function ScanReceiptScreen({ navigation }: any) {
             gapCategoryId,
           })
         : buildReceiptConfirmPayload({ date, description, vendor, amount: value, categoryId: categoryId! });
+      const payload = {
+        ...details,
+        expectedScanRevision: scan!.scanRevision,
+        ...(duplicateDecision ? { duplicateDecision } : {}),
+      };
 
       await api.post(`/records/receipts/${scan!.id}/confirm`, payload);
       if (!operation.current(task)) return;
-      haptics.succeeded();
-      if (queuedReceiptGroups.length > 0) {
-        const [next, ...remaining] = queuedReceiptGroups;
-        setQueuedReceiptGroups(remaining);
-        setPages(next!);
-        setUploadIssuePageKeys({});
-        setScan(null);
-        setCategoryId(null);
-        setDate("");
-        setDescription("");
-        setVendor("");
-        setAmount("");
-        setItemCategories({});
-        setAddedItems([]);
-        setPlan(null);
-        setGapCategoryId(null);
-        setFlash(`Receipt saved. ${remaining.length + 1} more receipt${remaining.length === 0 ? "" : "s"} to review.`);
-        operation.finish(task);
-        await scanSingleReceipt(next!);
-      } else {
-        setFlash("Receipt saved to your records.");
-        navigation.goBack();
-      }
+      await finishReceiptConfirmation(task);
     } catch (err) {
       if (!operation.current(task)) return;
-      // Every corrected field, every per-item category and the photographs
-      // themselves are still here — the screen only leaves on success — and
-      // the wording says so rather than leaving the owner to guess whether
-      // they have to rescan. It does not offer to save it later; nothing in
-      // this app would. See lib/connectionState.ts.
+      const duplicate = duplicateReviewFromError(err);
+      if (duplicate) {
+        duplicateReviewIdentity.current = currentDuplicateIdentity;
+        setDuplicateReview(duplicate);
+        setDuplicateCandidatesError(null);
+        setError(null);
+        haptics.warned();
+        return;
+      }
+
+      const status = typeof err === "object" && err !== null && "status" in err
+        ? Number((err as { status: unknown }).status)
+        : null;
+      const responseWasAmbiguous = status === 0
+        || status === 409
+        || (status !== null && status >= 500)
+        || err instanceof SyntaxError;
+      if (responseWasAmbiguous) {
+        try {
+          const latest = verifiedReceiptScan(
+            await api.get<ReceiptScanResult>(`/records/receipts/${scan!.id}`, undefined, task.controller.signal),
+            scan!.id,
+            selected!.id,
+          );
+          if (!operation.current(task)) return;
+          if (latest.confirmationStatus === "Confirmed") {
+            await finishReceiptConfirmation(task);
+            return;
+          }
+          setScan(latest);
+          setItemCategories((current) => Object.fromEntries(latest.items.map((item) => [
+            item.id,
+            current[item.id] ?? item.categoryId ?? null,
+          ])));
+          setError(status === 409
+            ? "This receipt changed before it was saved. The latest scan result is shown, and your review changes are kept. Check it before saving again."
+            : "FinSight did not confirm whether the save request arrived. The receipt is still pending, and your review changes are kept. Try saving again.");
+          return;
+        } catch {
+          if (!operation.current(task)) return;
+          setError("FinSight couldn't confirm whether the receipt was saved. Your review changes and images are still here. Check your connection, then try again.");
+          return;
+        }
+      }
+
+      // Every correction and photograph remains in place until confirmation.
       setError(saveFailureMessage(err, "Save this expense"));
+    } finally {
+      if (operation.current(task)) setBusy(false);
+      operation.finish(task);
+    }
+  }
+
+  async function loadRemainingDuplicateCandidates() {
+    const review = duplicateReview;
+    if (!review?.nextCursor || duplicateReviewIsComplete(review)) return;
+    const task = operation.begin();
+    if (!task) return;
+    const reviewIdentity = duplicateReviewIdentity.current;
+    setBusy(true);
+    setDuplicateCandidatesError(null);
+    try {
+      const response = await api.get<unknown>(
+        `/records/receipts/${scan!.id}/duplicate-candidates`,
+        { cursor: review.nextCursor, take: 20 },
+        task.controller.signal,
+      );
+      if (!operation.current(task) || duplicateReviewIdentity.current !== reviewIdentity) return;
+      const page = duplicateCandidatePageFromResponse(response, review);
+      const existingIds = new Set(review.candidates.map((candidate) => candidate.id));
+      const duplicatesExisting = page?.candidates.some((candidate) => existingIds.has(candidate.id));
+      const merged = page ? [...review.candidates, ...page.candidates] : [];
+      const inconsistentCount = !page
+        || duplicatesExisting
+        || merged.length > review.candidateCount
+        || (page.nextCursor === null && merged.length !== review.candidateCount)
+        || (page.nextCursor !== null && merged.length >= review.candidateCount);
+      if (inconsistentCount) {
+        setDuplicateReview(null);
+        duplicateReviewIdentity.current = "";
+        setError("The possible matches changed while they were loading. Select Save again to review the latest complete list.");
+        return;
+      }
+      setDuplicateReview({
+        ...review,
+        candidates: merged,
+        candidatesTruncated: page.nextCursor !== null,
+        nextCursor: page.nextCursor,
+      });
+    } catch (err) {
+      if (operation.current(task)) {
+        setDuplicateCandidatesError(describeActionFailure(
+          toLoadFailure(err),
+          "The matches already shown are still here. Try loading the rest again.",
+        ));
+      }
     } finally {
       if (operation.current(task)) setBusy(false);
       operation.finish(task);
@@ -673,6 +1589,72 @@ export function ScanReceiptScreen({ navigation }: any) {
     }
   }
 
+  async function saveScannedItem() {
+    if (!scan || !editingItem) return;
+    const name = editingItem.name.trim();
+    const value = Number(editingItem.amount);
+    const fieldErrors = {
+      ...(!name ? { name: "Enter the item name printed on the receipt." } : name.length > 255 ? { name: "Use 255 characters or fewer." } : {}),
+      ...(!Number.isFinite(value) || value <= 0 ? { amount: "Enter an amount greater than zero." } : {}),
+    };
+    setEditingItemErrors(fieldErrors);
+    if (Object.keys(fieldErrors).length > 0) return;
+    if (!Number.isInteger(scan.scanRevision) || scan.scanRevision < 0) {
+      setError("This receipt result is missing its edit version. Review the result again before changing an item.");
+      return;
+    }
+
+    const task = operation.begin();
+    if (!task) return;
+    setSavingItemId(editingItem.id);
+    setError(null);
+    try {
+      const updated = verifiedReceiptScan(
+        await api.patch<ReceiptScanResult>(
+          `/records/receipts/${scan.id}/items/${editingItem.id}`,
+          { name, amount: value, expectedScanRevision: scan.scanRevision },
+        ),
+        scan.id,
+        selected!.id,
+        scan.receiptBatchId !== null && scan.receiptOrdinal !== null
+          ? { batchId: scan.receiptBatchId, ordinal: scan.receiptOrdinal }
+          : null,
+      );
+      if (!operation.current(task)) return;
+      setScan(updated);
+      setEditingItem(null);
+      setEditingItemErrors({});
+      setPlan(null);
+      setGapCategoryId(null);
+      haptics.succeeded();
+    } catch (err) {
+      if (!operation.current(task)) return;
+      const status = typeof err === "object" && err !== null && "status" in err
+        ? Number((err as { status: unknown }).status)
+        : null;
+      if (status === 409) {
+        try {
+          const latest = verifiedReceiptScan(
+            await api.get<ReceiptScanResult>(`/records/receipts/${scan.id}`, undefined, task.controller.signal),
+            scan.id,
+            selected!.id,
+          );
+          if (!operation.current(task)) return;
+          setScan(latest);
+          setError("This receipt changed before your edit was saved. Your typed correction is still here; compare it with the latest result and save again.");
+        } catch (refreshError) {
+          if (!operation.current(task)) return;
+          setError(describeActionFailure(toLoadFailure(refreshError), "Your typed correction is still here."));
+        }
+      } else {
+        setError(describeActionFailure(toLoadFailure(err), "Your typed correction is still here."));
+      }
+    } finally {
+      if (operation.current(task)) setSavingItemId(null);
+      operation.finish(task);
+    }
+  }
+
   /**
    * Drops a line OCR read that was never a purchase.
    *
@@ -687,12 +1669,22 @@ export function ScanReceiptScreen({ navigation }: any) {
    */
   async function removeScannedItem(itemId: number) {
     if (!scan) return;
+    if (!Number.isInteger(scan.scanRevision) || scan.scanRevision < 0) {
+      setError("This receipt result is missing its edit version. Review the result again before removing an item.");
+      return;
+    }
     const task = operation.begin();
     if (!task) return;
     setRemovingItemId(itemId);
     setError(null);
     try {
-      const updated = await api.delete<ReceiptScanResult>(`/records/receipts/${scan.id}/items/${itemId}`);
+      const updated = verifiedReceiptScan(
+        await api.delete<ReceiptScanResult>(
+          `/records/receipts/${scan.id}/items/${itemId}?expectedScanRevision=${scan.scanRevision}`,
+        ),
+        scan.id,
+        selected!.id,
+      );
       if (!operation.current(task)) return;
       setScan(updated);
       setItemCategories((prev) => {
@@ -702,7 +1694,28 @@ export function ScanReceiptScreen({ navigation }: any) {
       });
     } catch (err) {
       if (!operation.current(task)) return;
-      setError(describeActionFailure(toLoadFailure(err), "The item is still on the receipt."));
+      const status = typeof err === "object" && err !== null && "status" in err
+        ? Number((err as { status: unknown }).status)
+        : null;
+      // Same recovery as saveItemEdit: without adopting the latest revision,
+      // a second tap would resend the stale one and hit the same 409.
+      if (status === 409) {
+        try {
+          const latest = verifiedReceiptScan(
+            await api.get<ReceiptScanResult>(`/records/receipts/${scan.id}`, undefined, task.controller.signal),
+            scan.id,
+            selected!.id,
+          );
+          if (!operation.current(task)) return;
+          setScan(latest);
+          setError("This receipt changed before the item was removed. Check the latest items and try again.");
+        } catch (refreshError) {
+          if (!operation.current(task)) return;
+          setError(describeActionFailure(toLoadFailure(refreshError), "The item is still on the receipt."));
+        }
+      } else {
+        setError(describeActionFailure(toLoadFailure(err), "The item is still on the receipt."));
+      }
     } finally {
       if (operation.current(task)) setRemovingItemId(null);
       operation.finish(task);
@@ -842,7 +1855,7 @@ export function ScanReceiptScreen({ navigation }: any) {
      * stronger warning there would be false, and false in the direction that
      * teaches owners to skip warnings.
      */
-    if (scan.items?.some((i) => i.extractedByVision)) {
+    if (scan.items.some((i) => i.extractedByVision)) {
       notices.push({
         tone: "warn",
         text: "AI interpreted these values. Check every field and the total against the receipt.",
@@ -870,6 +1883,23 @@ export function ScanReceiptScreen({ navigation }: any) {
     for (const a of usableAddedItems) add(a.categoryId, Number(a.amount));
     return [...groups.entries()];
   })();
+
+  const capturedReceiptGroups = groupReceiptMembers(pages);
+  const receiptPositionByPage = new Map<string, { receipt: number; page: number; pages: number }>();
+  capturedReceiptGroups.forEach((group, receiptIndex) => {
+    group.forEach((page, pageIndex) => {
+      receiptPositionByPage.set(page.key, {
+        receipt: receiptIndex + 1,
+        page: pageIndex + 1,
+        pages: group.length,
+      });
+    });
+  });
+  const cameraSeedPages = cameraIntent.kind === "replace-all"
+    ? pages
+    : cameraIntent.kind === "replace-group"
+      ? pages.filter((page) => receiptGroupKey(page) === cameraIntent.groupKey)
+      : [];
 
   /*
    * The camera takes the WHOLE screen — a Modal, not an early return.
@@ -912,7 +1942,7 @@ export function ScanReceiptScreen({ navigation }: any) {
       {cameraOpen ? (
         <ReceiptCamera
           ref={receiptCameraRef}
-          initialSections={sectionsFromPages(pages)}
+          initialSections={sectionsFromPages(cameraSeedPages)}
           /*
            * Closing the camera — for any reason, including zero pages —
            * reveals the capture card behind it rather than leaving this
@@ -923,21 +1953,69 @@ export function ScanReceiptScreen({ navigation }: any) {
            * ReceiptCamera.tsx and ScannerStatusStates.tsx), so this is the
            * only place that alternative is reachable from.
            */
-          onCancel={() => setCameraOpen(false)}
+          onCancel={() => {
+            setCameraOpen(false);
+            setCameraIntent({ kind: "replace-all" });
+          }}
           onDone={(sections) => {
-            setPages(pagesFromSections(sections));
+            const captured = pagesFromSections(sections);
+            if (captured.length > 0) {
+              const capturedGroups = groupReceiptMembers(captured);
+              const normalized = capturedGroups.flatMap((group, index) => {
+                const groupId = index === 0 && cameraIntent.kind !== "replace-all"
+                  ? cameraIntent.groupId
+                  : newReceiptGroupId();
+                return group.map((page) => ({ ...page, receiptGroupId: groupId }));
+              });
+              setPages((current) => {
+                if (cameraIntent.kind === "replace-all") return captured;
+                if (cameraIntent.kind === "append-receipt") return [...current, ...normalized];
+                const next: CapturedPage[] = [];
+                let inserted = false;
+                for (const page of current) {
+                  if (receiptGroupKey(page) === cameraIntent.groupKey) {
+                    if (!inserted) next.push(...normalized);
+                    inserted = true;
+                  } else {
+                    next.push(page);
+                  }
+                }
+                return inserted ? next : current;
+              });
+              const retainedUris = new Set(scannerFileUris(normalized));
+              const replaced = cameraIntent.kind === "replace-all"
+                ? pages
+                : cameraIntent.kind === "replace-group"
+                  ? pages.filter((page) => receiptGroupKey(page) === cameraIntent.groupKey)
+                  : [];
+              void deleteReceiptScannerFiles(scannerFileUris(replaced).filter((uri) => !uri || !retainedUris.has(uri)));
+              invalidateUnstartedUpload();
+            }
             setUploadIssuePageKeys({});
             setError(null);
             setCameraOpen(false);
+            setCameraIntent({ kind: "replace-all" });
           }}
         />
       ) : null}
     </Modal>
   );
 
+  const evidenceViewer = (
+    <ReceiptEvidenceViewer
+      pages={pages}
+      scanId={scan?.id}
+      pageEvidence={scan?.pageEvidence}
+      initialPage={evidencePage ?? 0}
+      visible={evidencePage !== null}
+      onClose={() => setEvidencePage(null)}
+    />
+  );
+
   return (
     <Screen>
       {camera}
+      {evidenceViewer}
       {/*
         Nothing is rendered behind the camera.
 
@@ -965,8 +2043,25 @@ export function ScanReceiptScreen({ navigation }: any) {
               <T variant="caption" style={{ marginBottom: space.lg }}>
                 {pages.length === 0
                   ? "Capture or upload a receipt. Review the details before saving."
-                  : "Your receipt is ready to read."}
+                  : capturedReceiptGroups.length > 1
+                    ? `${capturedReceiptGroups.length} separate receipts are ready. FinSight will upload and review them one at a time.`
+                    : "These sections belong to one receipt. Add another section for a long receipt, or start a separate receipt."}
               </T>
+
+              {pages.length === 0 && !busy ? (
+                <ActiveReceiptQueue
+                  items={activeReceipts}
+                  loading={activeReceiptsLoading}
+                  loadingMore={activeReceiptsLoadingMore}
+                  hasMore={Boolean(activeReceiptsCursor)}
+                  error={activeReceiptsError}
+                  deletingId={deletingScanId}
+                  onRefresh={() => { void loadActiveReceipts(); }}
+                  onLoadMore={() => { if (activeReceiptsCursor) void loadActiveReceipts(activeReceiptsCursor); }}
+                  onOpen={(item, action) => { void resumeStoredReceipt(item, action); }}
+                  onDelete={(item) => confirmDeleteStoredScan(item.id)}
+                />
+              ) : null}
 
               {busy ? (
                 // The OCR wait is the app's slowest interaction — commit to
@@ -981,10 +2076,12 @@ export function ScanReceiptScreen({ navigation }: any) {
                   <SkeletonBox height={14} />
                   <SkeletonBox width="70%" height={14} />
                   <SkeletonBox width="55%" height={14} />
-                  <Button title={phase === "Reading receipt…" ? "Stop waiting" : "Cancel upload"} variant="ghost" onPress={() => {
+                  <Button title={cancelsAnUpload(phase) ? "Cancel upload" : "Stop waiting"} variant="ghost" onPress={() => {
                     operation.cancel();
                     setBusy(false);
-                    setError("Your photos are kept. Scan again to resume.");
+                    const accepted = Boolean(uploadAttempt.current?.accepted);
+                    if (accepted) setScanRecoveryAction("review");
+                    setError(stoppedWaitingMessage(accepted, pages.some((page) => Boolean(page.uri))));
                   }} />
                 </View>
               ) : (
@@ -1011,7 +2108,11 @@ export function ScanReceiptScreen({ navigation }: any) {
                                 borderColor: ink[200],
                               }}
                             >
-                              <Image source={{ uri: p.uri }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+                              {p.uri ? (
+                                <Image source={{ uri: p.uri }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+                              ) : (
+                                <StoredPagePlaceholder label="Stored" compact />
+                              )}
                               <View
                                 style={{
                                   position: "absolute",
@@ -1023,10 +2124,15 @@ export function ScanReceiptScreen({ navigation }: any) {
                                   paddingVertical: 1,
                                 }}
                               >
-                                <T style={{ fontSize: typeScale.micro, fontFamily: font.sansSemibold, color: ink[700] }}>{i + 1}</T>
+                                <T style={{ fontSize: typeScale.micro, fontFamily: font.sansSemibold, color: ink[700] }}>
+                                  {capturedReceiptGroups.length > 1
+                                    ? `R${receiptPositionByPage.get(p.key)?.receipt} · P${receiptPositionByPage.get(p.key)?.page}`
+                                    : i + 1}
+                                </T>
                               </View>
                               <Pressable
                                 onPress={() => removePage(p.key)}
+                                disabled={scanStarted}
                                 accessibilityRole="button"
                                 accessibilityLabel={`Remove page ${i + 1}`}
                                 // The visible chip stays 22px so it doesn't
@@ -1044,6 +2150,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                                   backgroundColor: "rgba(255,255,255,0.9)",
                                   alignItems: "center",
                                   justifyContent: "center",
+                                  opacity: scanStarted ? 0.35 : 1,
                                 }}
                               >
                                 <Ionicons name="close" size={14} color={ink[700]} />
@@ -1072,21 +2179,21 @@ export function ScanReceiptScreen({ navigation }: any) {
                             <View style={{ flexDirection: "row", justifyContent: "center", gap: 2, marginTop: 2 }}>
                               <Pressable
                                 onPress={() => movePage(p.key, -1)}
-                                disabled={i === 0}
+                                disabled={scanStarted || !canMoveWithinReceipt(pages, i, -1)}
                                 accessibilityRole="button"
                                 accessibilityLabel={`Move page ${i + 1} earlier`}
                                 hitSlop={8}
-                                style={{ padding: 4, opacity: i === 0 ? 0.3 : 1 }}
+                                style={{ padding: 4, opacity: scanStarted || !canMoveWithinReceipt(pages, i, -1) ? 0.3 : 1 }}
                               >
                                 <Ionicons name="chevron-up" size={16} color={ink[600]} />
                               </Pressable>
                               <Pressable
                                 onPress={() => movePage(p.key, 1)}
-                                disabled={i === pages.length - 1}
+                                disabled={scanStarted || !canMoveWithinReceipt(pages, i, 1)}
                                 accessibilityRole="button"
                                 accessibilityLabel={`Move page ${i + 1} later`}
                                 hitSlop={8}
-                                style={{ padding: 4, opacity: i === pages.length - 1 ? 0.3 : 1 }}
+                                style={{ padding: 4, opacity: scanStarted || !canMoveWithinReceipt(pages, i, 1) ? 0.3 : 1 }}
                               >
                                 <Ionicons name="chevron-down" size={16} color={ink[600]} />
                               </Pressable>
@@ -1144,11 +2251,19 @@ export function ScanReceiptScreen({ navigation }: any) {
                       <>
                         <Button
                           title={
-                            pages.length === 1 ? "Scan this receipt" : `Scan these ${pages.length} sections`
+                            batchGroupsForAcceptance.current && queuedReceiptGroups.some((receipt) => receipt.accepted === null)
+                              ? "Continue batch upload"
+                              : scanRecoveryAction === "retry"
+                              ? "Retry processing"
+                              : scanRecoveryAction === "review"
+                                ? "Review result"
+                                : capturedReceiptGroups.length > 1
+                                  ? `Scan ${capturedReceiptGroups.length} separate receipts`
+                                  : pages.length === 1 ? "Scan this receipt" : `Scan these ${pages.length} sections`
                           }
                           variant="primary"
-                          onPress={() => void scanPages()}
-                          disabled={picking || pages.some((page) => page.checkingQuality)}
+                          onPress={continueReceiptScan}
+                          disabled={deletingScanId !== null || picking || pages.some((page) => page.checkingQuality)}
                         />
                         {/*
                           Reopens the camera on the session already captured,
@@ -1157,8 +2272,23 @@ export function ScanReceiptScreen({ navigation }: any) {
                           server refuses a ninth page, and a button that can
                           only produce a 400 is worse than no button.
                         */}
-                        <Button title="Review photos" variant="secondary" onPress={capturePage} disabled={picking} />
-                        {canAddSection(pages.length) ? <Button title="Add from Files" variant="ghost" onPress={pickFile} disabled={picking} /> : null}
+                        {capturedReceiptGroups.length === 1 ? (
+                          <Button title="Review photos" variant="secondary" onPress={capturePage} disabled={picking || scanStarted} />
+                        ) : capturedReceiptGroups.map((group, index) => (
+                          <Button
+                            key={receiptGroupKey(group[0]!)}
+                            title={`Review receipt ${index + 1} photos`}
+                            variant="secondary"
+                            onPress={() => reviewReceipt(index)}
+                            disabled={picking || scanStarted}
+                          />
+                        ))}
+                        {!scanStarted && capturedReceiptGroups.length < MAX_RECEIPTS_PER_CAPTURE_BATCH ? (
+                          <Button title="Capture a separate receipt" variant="ghost" onPress={captureSeparateReceipt} disabled={picking} />
+                        ) : null}
+                        {!scanStarted && capturedReceiptGroups.length === 1 && canAddSection(capturedReceiptGroups[0]!.length) ? (
+                          <Button title="Add another section from Files" variant="ghost" onPress={pickFile} disabled={picking} />
+                        ) : null}
                       </>
                     )}
                   </View>
@@ -1169,7 +2299,18 @@ export function ScanReceiptScreen({ navigation }: any) {
                 </>
               )}
               {error ? <View style={{ marginTop: space.md }}><ErrorNote>{error}</ErrorNote></View> : null}
-              {error && !busy ? <Button title="Enter expense manually" variant="ghost" onPress={() => navigation.navigate("AddExpense")} /> : null}
+              {error && !busy && uploadAttempt.current?.accepted ? (
+                <Button title="Choose another image" variant="ghost" disabled={deletingScanId !== null} onPress={chooseAnotherImage} />
+              ) : null}
+              {error && !busy && uploadAttempt.current?.accepted ? (
+                <Button
+                  title="Delete stored scan"
+                  variant="danger"
+                  loading={deletingScanId === uploadAttempt.current.accepted.id}
+                  onPress={() => confirmDeleteStoredScan(uploadAttempt.current!.accepted!.id)}
+                />
+              ) : null}
+              {error && !busy ? <Button title="Enter expense manually" variant="ghost" disabled={deletingScanId !== null} onPress={() => navigation.navigate("AddExpense")} /> : null}
               {!busy ? <ReceiptProviderConsent businessProfileId={selected.id} /> : null}
             </Card>
           ) : (
@@ -1188,13 +2329,16 @@ export function ScanReceiptScreen({ navigation }: any) {
                 <Card>
                   <T variant="title" style={{ marginBottom: 2 }}>Check the details</T>
                   <T variant="caption" style={{ marginBottom: space.md }}>
-                    Receipt scanned. Review the details before saving.
+                    Receipt scanned. Open each page to check the source image and any edited version before saving.
                   </T>
                   <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                     <View style={{ flexDirection: "row", gap: space.sm }}>
                       {pages.map((p, i) => (
-                        <View
+                        <Pressable
                           key={p.key}
+                          accessibilityRole="button"
+                          accessibilityLabel={pages.length === 1 ? "Inspect receipt image" : `Inspect receipt page ${i + 1} of ${pages.length}`}
+                          onPress={() => setEvidencePage(i)}
                           style={{
                             width: 96,
                             height: 128,
@@ -1205,19 +2349,20 @@ export function ScanReceiptScreen({ navigation }: any) {
                             borderColor: ink[200],
                           }}
                         >
-                          <Image
-                            source={{ uri: p.uri }}
-                            style={{ width: "100%", height: "100%" }}
-                            resizeMode="cover"
-                            // See PhotoUpload: an Image needs `accessible`
-                            // before its label is surfaced at all.
-                            accessible
-                            accessibilityRole="image"
-                            accessibilityLabel={
-                              pages.length === 1 ? "The receipt you photographed" : `Section ${i + 1} of ${pages.length}`
-                            }
-                            accessibilityIgnoresInvertColors
-                          />
+                          {p.uri ? (
+                            <Image
+                              source={{ uri: p.uri }}
+                              style={{ width: "100%", height: "100%" }}
+                              resizeMode="cover"
+                              accessible={false}
+                              accessibilityIgnoresInvertColors
+                            />
+                          ) : (
+                            <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: space.xs, padding: space.xs }}>
+                              <Ionicons name="receipt-outline" size={24} color={ink[500]} />
+                              <T variant="caption" style={{ color: ink[600], textAlign: "center" }}>Open stored image</T>
+                            </View>
+                          )}
                           {pages.length > 1 ? (
                             <View
                               style={{
@@ -1233,7 +2378,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                               <T style={{ fontSize: typeScale.micro, fontFamily: font.monoMedium, color: ink[700] }}>{i + 1}</T>
                             </View>
                           ) : null}
-                        </View>
+                        </Pressable>
                       ))}
                     </View>
                   </ScrollView>
@@ -1281,7 +2426,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                 <View style={{ gap: space.sm }}>
                   <ErrorNote>{foreignCurrency ? `This receipt is in ${foreignCurrency}. Enter the converted PHP amount manually before saving.` : "Enter this receipt manually with the amount paid in PHP."}</ErrorNote>
                   <Button title="Enter expense manually" variant="primary" onPress={() => navigation.navigate("AddExpense")} />
-                  <Button title="Choose another receipt" variant="ghost" onPress={() => { setScan(null); setPages([]); setUploadIssuePageKeys({}); }} />
+                  <Button title="Choose another receipt" variant="ghost" onPress={resetForAnotherReceipt} />
                 </View>
               ) : <>
 
@@ -1371,7 +2516,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                       }}
                     >
                       <View style={{ flexDirection: "row", alignItems: "flex-start", gap: space.sm }}>
-                        <T style={{ flex: 1, fontSize: typeScale.bodySm, color: ink[900], lineHeight: 20 }} numberOfLines={2}>
+                        <T style={{ flex: 1, fontSize: typeScale.bodySm, color: ink[900], lineHeight: 20 }}>
                           {item.name}
                           {item.quantity != null ? (
                             <T variant="caption"> × {item.quantity}</T>
@@ -1388,24 +2533,40 @@ export function ScanReceiptScreen({ navigation }: any) {
                           review passes it on every amount for this reason.
                         */}
                         <Money value={item.amount} size={14} weight="semibold" decimals />
+                        <Pressable
+                          onPress={() => {
+                            setEditingItem({ id: item.id, name: item.name, amount: item.amount.toFixed(2) });
+                            setEditingItemErrors({});
+                            setError(null);
+                          }}
+                          disabled={editingItem !== null || savingItemId !== null || removingItemId !== null}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Edit ${item.name}`}
+                          style={{
+                            width: TAP_FLOOR,
+                            height: TAP_FLOOR,
+                            borderRadius: radius.full,
+                            alignItems: "center",
+                            justifyContent: "center",
+                            opacity: editingItem !== null || savingItemId !== null || removingItemId !== null ? 0.4 : 1,
+                          }}
+                        >
+                          <Ionicons name="pencil-outline" size={18} color={ink[600]} />
+                        </Pressable>
                         {/* Removing a line OCR should never have read. */}
                         <Pressable
                           onPress={() => removeScannedItem(item.id)}
-                          disabled={removingItemId === item.id}
+                          disabled={editingItem !== null || savingItemId !== null || removingItemId !== null}
                           accessibilityRole="button"
                           accessibilityLabel={`Remove ${item.name} — this was not a purchase`}
-                          // 24px visible, but the actual tap target needs to
-                          // clear TAP (44px) — 6px of hitSlop left it 8px
-                          // short.
-                          hitSlop={10}
                           style={{
-                            width: 24,
-                            height: 24,
+                            width: TAP_FLOOR,
+                            height: TAP_FLOOR,
                             borderRadius: radius.full,
                             alignItems: "center",
                             justifyContent: "center",
                             backgroundColor: paper[100],
-                            opacity: removingItemId === item.id ? 0.4 : 1,
+                            opacity: editingItem !== null || savingItemId !== null || removingItemId !== null ? 0.4 : 1,
                           }}
                         >
                           {/*
@@ -1417,6 +2578,51 @@ export function ScanReceiptScreen({ navigation }: any) {
                           <Ionicons name="close" size={13} color={ink[500]} />
                         </Pressable>
                       </View>
+
+                      {editingItem?.id === item.id ? (
+                        <View style={{ marginTop: space.sm }}>
+                          <Field
+                            label="Item name"
+                            accessibilityLabel={`Edit item name for ${item.name}`}
+                            value={editingItem.name}
+                            maxLength={255}
+                            error={editingItemErrors.name}
+                            onChangeText={(name) => {
+                              setEditingItem((current) => current ? { ...current, name } : current);
+                              setEditingItemErrors((current) => ({ ...current, name: undefined }));
+                            }}
+                            returnKeyType="next"
+                          />
+                          <Field
+                            label="Item amount (PHP)"
+                            accessibilityLabel={`Edit item amount for ${item.name}`}
+                            value={editingItem.amount}
+                            error={editingItemErrors.amount}
+                            onChangeText={(itemAmount) => {
+                              setEditingItem((current) => current ? { ...current, amount: itemAmount } : current);
+                              setEditingItemErrors((current) => ({ ...current, amount: undefined }));
+                            }}
+                            keyboardType="decimal-pad"
+                            returnKeyType="done"
+                            onSubmitEditing={() => void saveScannedItem()}
+                          />
+                          <Button
+                            title="Save item changes"
+                            variant="secondary"
+                            loading={savingItemId === item.id}
+                            onPress={() => void saveScannedItem()}
+                          />
+                          <Button
+                            title="Cancel item edit"
+                            variant="ghost"
+                            disabled={savingItemId === item.id}
+                            onPress={() => {
+                              setEditingItem(null);
+                              setEditingItemErrors({});
+                            }}
+                          />
+                        </View>
+                      ) : null}
 
                       {/*
                         A line a model inferred from a photograph must not look
@@ -1765,6 +2971,72 @@ export function ScanReceiptScreen({ navigation }: any) {
                 </Card>
               ) : null}
 
+              {duplicateReview ? (
+                <Card emphasis>
+                  <T variant="title" accessibilityRole="header">Possible duplicate</T>
+                  <T variant="caption" style={{ marginTop: 2, marginBottom: space.md }}>
+                    {duplicateReview.code === "DUPLICATE_REVIEW_CHANGED"
+                      ? "The possible matches changed while you were reviewing them. Compare this latest list before deciding."
+                      : "This receipt may already be in your records. Compare the vendor, date and total before saving another copy."}
+                  </T>
+                  <T variant="caption" accessibilityLiveRegion="polite" style={{ marginBottom: space.sm }}>
+                    Showing {duplicateReview.candidates.length} of {duplicateReview.candidateCount} possible {duplicateReview.candidateCount === 1 ? "match" : "matches"}.
+                  </T>
+                  <View style={{ gap: space.sm }}>
+                    {duplicateReview.candidates.map((candidate) => (
+                      <View
+                        key={candidate.id}
+                        style={{ borderTopWidth: 1, borderTopColor: t.border, paddingTop: space.sm, gap: 2 }}
+                      >
+                        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "baseline", gap: space.sm }}>
+                          <T variant="heading" style={{ flex: 1 }}>{candidate.vendor?.trim() || "Vendor not recorded"}</T>
+                          <Money value={candidate.total} decimals />
+                        </View>
+                        <T variant="caption">{candidate.date.slice(0, 10)} · {candidate.scoreBand === "EXACT" ? "Exact match" : "Likely match"}</T>
+                        <T variant="caption">
+                          {candidate.reasons.length > 0
+                            ? [...new Set(candidate.reasons.map(duplicateReasonLabel))].join(" · ")
+                            : "Similar receipt details"}
+                        </T>
+                      </View>
+                    ))}
+                  </View>
+                  <View style={{ gap: space.sm, marginTop: space.md }}>
+                    {duplicateCandidatesError ? <ErrorNote>{duplicateCandidatesError}</ErrorNote> : null}
+                    {!duplicateReviewIsComplete(duplicateReview) ? (
+                      <>
+                        <T variant="caption">Load and review every possible match before saving another copy.</T>
+                        <Button
+                          title={duplicateCandidatesError ? "Try loading remaining matches again" : "Load remaining matches"}
+                          variant="secondary"
+                          loading={busy}
+                          disabled={deletingScanId !== null || removingItemId !== null || creatingCategoryFor !== null || editingItem !== null || savingItemId !== null}
+                          onPress={() => { void loadRemainingDuplicateCandidates(); }}
+                        />
+                      </>
+                    ) : null}
+                    <Button
+                      title="Save anyway"
+                      variant="danger"
+                      loading={busy}
+                      disabled={!duplicateReviewIsComplete(duplicateReview) || deletingScanId !== null || removingItemId !== null || creatingCategoryFor !== null || editingItem !== null || savingItemId !== null}
+                      onPress={() => { void confirm({ action: "SAVE_ANYWAY", candidateSetHash: duplicateReview.candidateSetHash }); }}
+                    />
+                    <Button
+                      title="Go back and edit"
+                      variant="ghost"
+                      disabled={busy}
+                      onPress={() => {
+                        setDuplicateReview(null);
+                        setDuplicateCandidatesError(null);
+                        duplicateReviewIdentity.current = "";
+                        setError(null);
+                      }}
+                    />
+                  </View>
+                </Card>
+              ) : null}
+
               {/*
                 The actions sit outside the sections rather than at the end of
                 the last one. They apply to the whole review, and putting them
@@ -1774,30 +3046,31 @@ export function ScanReceiptScreen({ navigation }: any) {
               */}
               <View>
                 {error ? <View style={{ marginBottom: space.sm }}><ErrorNote>{error}</ErrorNote></View> : null}
-                <Button
-                  title={
-                    isItemised && itemGroups.length > 1
-                      ? `Save ${itemGroups.length} expenses`
-                      : "Save this expense"
-                  }
-                  variant="primary"
-                  onPress={confirm}
-                  loading={busy}
-                  disabled={removingItemId !== null || creatingCategoryFor !== null}
-                />
+                {!duplicateReview ? (
+                  <Button
+                    title={
+                      isItemised && itemGroups.length > 1
+                        ? `Save ${itemGroups.length} expenses`
+                        : "Save this expense"
+                    }
+                    variant="primary"
+                    onPress={() => { void confirm(); }}
+                    loading={busy}
+                    disabled={deletingScanId !== null || removingItemId !== null || creatingCategoryFor !== null || editingItem !== null || savingItemId !== null}
+                  />
+                ) : null}
                 <Button
                   title="Retake photo"
                   variant="ghost"
-                  disabled={busy || removingItemId !== null || creatingCategoryFor !== null}
-                  onPress={() => {
-                    setScan(null);
-                    // Rescan is a deliberate "start over" — the captured pages
-                    // belonged to the receipt just reviewed, and carrying them
-                    // into a new session would mean the next scan quietly
-                    // starts with photos of the WRONG receipt already loaded.
-                    setPages([]);
-                    setUploadIssuePageKeys({});
-                  }}
+                  disabled={deletingScanId !== null || busy || removingItemId !== null || creatingCategoryFor !== null || savingItemId !== null}
+                  onPress={resetForAnotherReceipt}
+                />
+                <Button
+                  title="Delete scan"
+                  variant="danger"
+                  loading={deletingScanId === scan.id}
+                  disabled={busy || removingItemId !== null || creatingCategoryFor !== null || savingItemId !== null}
+                  onPress={() => confirmDeleteStoredScan(scan.id)}
                 />
               </View>
               </>}

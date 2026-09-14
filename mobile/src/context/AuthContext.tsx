@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { api, errorMessage, setSessionEndedHandler, type SessionEndReason } from "../lib/api";
 import { supabase } from "../lib/supabase";
 import { commitPreferences, DEFAULT_PREFERENCES } from "../lib/preferences";
+import { clearReceiptScannerCache } from "../lib/receiptScannerCache";
 import type {
   BusinessProfile,
   LoginInput,
@@ -167,6 +168,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setProfile(null);
       setPreferences(null);
       void supabase.auth.signOut();
+      void clearReceiptScannerCache();
     });
     return () => setSessionEndedHandler(null);
   }, []);
@@ -220,6 +222,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         bootstrapProfiles.current = null;
         setProfile(null);
         setPreferences(null);
+        void clearReceiptScannerCache();
       }
     });
 
@@ -297,6 +300,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function clearLocalSession() {
+    await clearReceiptScannerCache();
     await supabase.auth.signOut();
     // Nothing fetched under the old token may survive into the next session.
     bootstrapProfiles.current = null;

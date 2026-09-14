@@ -45,4 +45,16 @@ describe("receipt API and worker process boundary", () => {
     expect(queue).not.toMatch(/extractReceipt|dispatchReceiptProviderRescue|createGeminiReceiptAdapter|createVeryfiReceiptAdapter/);
     expect(server).not.toMatch(/from ["']\.\/worker|runReceiptWorkerOnce|claimAndProcessScan/);
   });
+
+  it("schedules stale provider-dispatch reconciliation only in the durable worker", () => {
+    const app = readFileSync(join(backendRoot, "src/app.ts"), "utf8");
+    const server = readFileSync(join(backendRoot, "src/server.ts"), "utf8");
+    const worker = readFileSync(join(backendRoot, "src/worker.ts"), "utf8");
+
+    expect(worker).toMatch(/import \{ reconcileStaleReceiptProviderDispatches \}/);
+    expect(worker).toMatch(/await reconcileStaleReceiptProviderDispatches\(\)/);
+    expect(app).not.toContain("reconcileStaleReceiptProviderDispatches");
+    expect(server).not.toContain("reconcileStaleReceiptProviderDispatches");
+    expect(worker).not.toMatch(/createGeminiReceiptAdapter|createVeryfiReceiptAdapter/);
+  });
 });

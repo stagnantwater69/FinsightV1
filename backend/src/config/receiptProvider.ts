@@ -7,6 +7,10 @@ export const RECEIPT_PROVIDER_ALLOWED_DATA_CLASSES = ["RECEIPT_IMAGE", "DERIVED_
 export const RECEIPT_PROVIDER_PURPOSE = "RECEIPT_EXTRACTION" as const;
 
 export type EnabledReceiptProvider = "gemini" | "veryfi";
+/** `rescue` sends the provider only what local OCR could not settle; `always` sends every scan. */
+export type ReceiptProviderRouting = "rescue" | "always";
+/** `explicit` needs an owner tap per business profile; `automatic` grants by operator policy. */
+export type ReceiptProviderConsentMode = "explicit" | "automatic";
 
 const PROVIDER_DETAILS = {
   gemini: { label: "Google Gemini", supportedVersion: "gemini-3.5-flash-lite", unitType: "DOCUMENT" },
@@ -32,6 +36,8 @@ export interface ReceiptProviderConfiguration {
   resourceMonthlyUnitLimit: number;
   businessMonthlyUnitLimit: number | null;
   unitType: "DOCUMENT" | "PAGE" | null;
+  routing: ReceiptProviderRouting;
+  consentMode: ReceiptProviderConsentMode;
   operational: boolean;
 }
 
@@ -39,6 +45,14 @@ function strictBoolean(value: string | undefined, safeDefault: boolean): boolean
   if (value === "true") return true;
   if (value === "false") return false;
   return safeDefault;
+}
+
+function strictRouting(value: string | undefined): ReceiptProviderRouting {
+  return value === "always" ? "always" : "rescue";
+}
+
+function strictConsentMode(value: string | undefined): ReceiptProviderConsentMode {
+  return value === "automatic" ? "automatic" : "explicit";
 }
 
 function finiteInteger(value: string | undefined, fallback: number): number {
@@ -134,6 +148,8 @@ export function getReceiptProviderConfiguration(
     resourceMonthlyUnitLimit,
     businessMonthlyUnitLimit,
     unitType: details?.unitType ?? null,
+    routing: strictRouting(source.RECEIPT_PROVIDER_ROUTING),
+    consentMode: strictConsentMode(source.RECEIPT_PROVIDER_CONSENT_MODE),
     operational: dispatchEnabled && !killSwitchActive && complete,
   };
 }

@@ -217,6 +217,7 @@ describe("account deletion leaves no receipt data behind", () => {
         requestKeyHash: "c".repeat(64),
         targetReferenceHash: "d".repeat(64),
         reason: "ACCOUNT_DELETION",
+        mode: "DELETE_SCAN",
         expiresAt: new Date(now.getTime() + 86_400_000),
       },
     });

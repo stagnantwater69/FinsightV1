@@ -1,6 +1,6 @@
 import { scanConfidenceBand } from "../../lib/confidenceBands";
 import { fieldsNeedingAttention, type ReceiptField } from "../../lib/receiptWarnings";
-import type { Origin, ScanResult } from "./types";
+import type { Origin, ReceiptScanResult } from "./types";
 
 export function originOf(current: string, extracted: string | null): Origin {
   if (extracted === null || extracted === "") return current === "" ? "missing" : "edited";
@@ -37,7 +37,7 @@ export function provisionalClass(origin: Origin): string {
  * Module-level rather than inline so the focus effect and the render agree by
  * construction: the field that gets focus is the same one the callout names.
  */
-export function attentionFieldsFor(scan: ScanResult | null): ReceiptField[] {
+export function attentionFieldsFor(scan: ReceiptScanResult | null): ReceiptField[] {
   if (!scan) return [];
   const named = new Set<ReceiptField>(fieldsNeedingAttention(scan.warnings ?? []));
   if (!scan.extractedDate) named.add("date");

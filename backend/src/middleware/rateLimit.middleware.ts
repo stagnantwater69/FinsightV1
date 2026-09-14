@@ -270,6 +270,14 @@ export const LIMITS = {
   PROVIDER_CONSENT_WRITE: { name: "provider-consent-write", limit: 20, windowMs: 60_000 },
   SCAN_RECEIPT_BURST: { name: "scan-receipt-burst", limit: 15, windowMs: 60_000 },
   SCAN_RECEIPT_HOURLY: { name: "scan-receipt-hourly", limit: 200, windowMs: 60 * 60_000 },
+  RECEIPT_DELETE_WRITE: { name: "receipt-delete-write", limit: 10, windowMs: 60_000 },
+  // Confirm takes the profile-wide duplicate write gate and rewrites the
+  // candidate set on every call, so a stuck retry loop would hold that gate
+  // against the worker. Sized apart from SCAN_RECEIPT_BURST because a batch
+  // of receipts is uploaded and then confirmed in the same minute.
+  RECEIPT_CONFIRM_WRITE: { name: "receipt-confirm-write", limit: 30, windowMs: 60_000 },
+  // Read once per review screen plus a page per 50 candidates; not polled.
+  RECEIPT_DUPLICATE_READ: { name: "receipt-duplicate-read", limit: 60, windowMs: 60_000 },
   // Generous relative to SCAN_RECEIPT_BURST: this fires once per SHUTTER
   // PRESS during a multi-page capture session (up to MAX_PAGES photos, plus
   // retakes), not once per submitted receipt — a real session can call this

@@ -14,12 +14,15 @@ import { readdir } from "node:fs/promises";
  * Storage and the read pipeline are mocked for the same reason they are
  * everywhere else — what is under test here is the wiring, not OCR accuracy.
  */
-vi.mock("../../src/services/storage.service", async () => {
+vi.mock("../../src/services/storage.service", async (importOriginal) => {
   const { tinyReceiptJpeg } = await import("../helpers/receiptImageFixtures");
   const storedBytes = tinyReceiptJpeg();
+  // The real TTL, so the ten-minute assertion is not against a number this mock made up.
+  const { RECEIPT_URL_TTL_SECONDS } = await importOriginal<typeof import("../../src/services/storage.service")>();
   return {
     uploadReceiptImage: vi.fn(async () => "1/mock-receipt.jpg"),
     uploadCsvFile: vi.fn(async () => "1/mock.csv"),
+    RECEIPT_URL_TTL_SECONDS,
     signedReceiptImageUrl: vi.fn(async () => "https://example.test/signed.jpg"),
     deleteReceiptImage: vi.fn(async () => true),
     inspectReceiptImage: vi.fn(async () => ({ sizeBytes: storedBytes.length, mimetype: "image/jpeg" })),
@@ -89,7 +92,11 @@ import { prisma } from "../../src/config/prisma";
 import { RECEIPT_UPLOAD_MAX_LOGICAL_PAGES, RECEIPT_UPLOAD_MAX_OBJECT_BYTES } from "../../src/lib/receiptUploadContract";
 import { resetRateLimits } from "../../src/middleware/rateLimit.middleware";
 import { runReceiptWorkerOnce } from "../../src/services/receiptScan/worker";
-import { deleteReceiptImage, uploadReceiptImage } from "../../src/services/storage.service";
+import {
+  deleteReceiptImage,
+  signedReceiptImageUrl,
+  uploadReceiptImage,
+} from "../../src/services/storage.service";
 import {
   disconnectDb,
   makeOwnerWithProfile,
@@ -111,6 +118,7 @@ beforeEach(async () => {
   let storedFiles = 0;
   vi.mocked(uploadReceiptImage).mockReset().mockImplementation(async () => `1/mock-receipt-${++storedFiles}.jpg`);
   vi.mocked(deleteReceiptImage).mockClear();
+  vi.mocked(signedReceiptImageUrl).mockClear();
 });
 
 afterAll(disconnectDb);
@@ -328,6 +336,8 @@ describe("POST /api/v1/records/receipts", () => {
     // renders from one type throughout — the figures are simply still null.
     expect(res.body).toHaveProperty("extractedAmount", null);
     expect(res.body).toHaveProperty("items");
+    expect(res.body).not.toHaveProperty("imageFile");
+    expect(JSON.stringify(res.body)).not.toContain("mock-receipt-");
 
     await new Promise((resolve) => setTimeout(resolve, 25));
     expect(await prisma.receiptScan.findUnique({
@@ -351,13 +361,13 @@ describe("POST /api/v1/records/receipts", () => {
       source: "manual-camera",
       captureMode: "long",
       processingMode: "manual-crop",
-      originalWidth: 1200,
-      originalHeight: 2000,
-      processedWidth: 900,
-      processedHeight: 1700,
+      originalWidth: 80,
+      originalHeight: 120,
+      processedWidth: 80,
+      processedHeight: 120,
       corners: {
-        topLeft: { x: 100, y: 100 }, topRight: { x: 1000, y: 100 },
-        bottomRight: { x: 1000, y: 1800 }, bottomLeft: { x: 100, y: 1800 },
+        topLeft: { x: 5, y: 5 }, topRight: { x: 75, y: 5 },
+        bottomRight: { x: 75, y: 115 }, bottomLeft: { x: 5, y: 115 },
       },
       transformVersion: "manual-axis-crop-v1",
     }];
@@ -376,6 +386,53 @@ describe("POST /api/v1/records/receipts", () => {
     expect(page.captureMetadata).toMatchObject({ processingMode: "manual-crop", captureMode: "long" });
     expect(page.originalRawText).toContain("TOTAL 1220.00");
     expect(page.processedRawText).toContain("TOTAL 1220.00");
+
+    const review = await request(app).get(`/api/v1/records/receipts/${res.body.id}`).set(...AUTH);
+    expect(review.body.pageEvidence).toEqual([{
+      pageNumber: 1,
+      captureMode: "long",
+      processingMode: "manual-crop",
+      ocrInput: "source",
+      source: { variant: "source", label: "Composite source", width: 80, height: 120 },
+      derived: { variant: "derived", label: "Rectified", width: 80, height: 120 },
+    }]);
+  });
+
+  it("rejects capture dimensions that do not match the uploaded evidence", async () => {
+    const res = await request(app)
+      .post("/api/v1/records/receipts")
+      .set(...AUTH)
+      .field("businessProfileId", String(ctx.profile.id))
+      .field("captureMetadata", JSON.stringify([{
+        processingMode: "original",
+        originalWidth: 800,
+        originalHeight: 1200,
+      }]))
+      .attach("files", PNG, { filename: "receipt.jpg", contentType: "image/jpeg" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/dimensions do not match/i);
+    expect(uploadReceiptImage).not.toHaveBeenCalled();
+    expect(await prisma.receiptScan.count()).toBe(0);
+  });
+
+  it("requires the source image when a page is declared as processed", async () => {
+    const res = await request(app)
+      .post("/api/v1/records/receipts")
+      .set(...AUTH)
+      .field("businessProfileId", String(ctx.profile.id))
+      .field("captureMetadata", JSON.stringify([{
+        processingMode: "manual-crop",
+        originalWidth: 80,
+        originalHeight: 120,
+        processedWidth: 80,
+        processedHeight: 120,
+      }]))
+      .attach("files", PNG, { filename: "processed.jpg", contentType: "image/jpeg" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/must include its source image/i);
+    expect(uploadReceiptImage).not.toHaveBeenCalled();
   });
 
   it("rejects crop metadata whose corners leave the original image", async () => {
@@ -384,11 +441,11 @@ describe("POST /api/v1/records/receipts", () => {
       .set(...AUTH)
       .field("businessProfileId", String(ctx.profile.id))
       .field("captureMetadata", JSON.stringify([{
-        originalWidth: 100,
-        originalHeight: 100,
+        originalWidth: 80,
+        originalHeight: 120,
         corners: {
-          topLeft: { x: 0, y: 0 }, topRight: { x: 101, y: 0 },
-          bottomRight: { x: 101, y: 100 }, bottomLeft: { x: 0, y: 100 },
+          topLeft: { x: 0, y: 0 }, topRight: { x: 81, y: 0 },
+          bottomRight: { x: 81, y: 120 }, bottomLeft: { x: 0, y: 120 },
         },
       }]))
       .attach("files", PNG, { filename: "receipt.jpg", contentType: "image/jpeg" });
@@ -406,6 +463,84 @@ describe("POST /api/v1/records/receipts", () => {
 });
 
 describe("GET /api/v1/records/receipts/:id", () => {
+  it("signs only the requested owned page variant for ten minutes", async () => {
+    const scan = await prisma.receiptScan.create({
+      data: {
+        businessProfileId: ctx.profile.id,
+        imageFile: `${ctx.profile.id}/source-1.jpg`,
+        processingStatus: "Complete",
+        pages: {
+          create: [{
+            pageNumber: 1,
+            imageFile: `${ctx.profile.id}/source-1.jpg`,
+            processedImageFile: `${ctx.profile.id}/derived-1.jpg`,
+            captureMetadata: {
+              captureMode: "standard",
+              processingMode: "grayscale",
+              originalWidth: 3000,
+              originalHeight: 4000,
+              processedWidth: 1200,
+              processedHeight: 1600,
+            },
+          }],
+        },
+      },
+    });
+
+    const source = await request(app)
+      .get(`/api/v1/records/receipts/${scan.id}/pages/1/image/source`)
+      .set(...AUTH);
+    expect(source.status).toBe(200);
+    expect(source.body).toEqual({
+      pageNumber: 1,
+      variant: "source",
+      label: "Source",
+      width: 3000,
+      height: 4000,
+      url: "https://example.test/signed.jpg",
+      // Ten minutes, the acceptance figure.
+      expiresInSeconds: 10 * 60,
+    });
+    expect(signedReceiptImageUrl).toHaveBeenLastCalledWith(`${ctx.profile.id}/source-1.jpg`);
+
+    const derived = await request(app)
+      .get(`/api/v1/records/receipts/${scan.id}/pages/1/image/derived`)
+      .set(...AUTH);
+    expect(derived.status).toBe(200);
+    expect(derived.body).toMatchObject({
+      pageNumber: 1,
+      variant: "derived",
+      label: "Enhanced grayscale",
+      width: 1200,
+      height: 1600,
+      expiresInSeconds: 600,
+    });
+    expect(signedReceiptImageUrl).toHaveBeenLastCalledWith(`${ctx.profile.id}/derived-1.jpg`);
+    expect(source.body).not.toHaveProperty("imageFile");
+    expect(derived.body).not.toHaveProperty("imageFile");
+  });
+
+  it("does not sign a page variant for another owner", async () => {
+    const scan = await prisma.receiptScan.create({
+      data: {
+        businessProfileId: ctx.profile.id,
+        imageFile: `${ctx.profile.id}/source.jpg`,
+        processingStatus: "Complete",
+        pages: { create: [{ pageNumber: 1, imageFile: `${ctx.profile.id}/source.jpg` }] },
+      },
+    });
+    const other = await makeOwnerWithProfile();
+    authUserId.value = other.user.authId;
+    vi.mocked(signedReceiptImageUrl).mockClear();
+
+    const response = await request(app)
+      .get(`/api/v1/records/receipts/${scan.id}/pages/1/image/source`)
+      .set(...AUTH);
+
+    expect(response.status).toBe(404);
+    expect(signedReceiptImageUrl).not.toHaveBeenCalled();
+  });
+
   it("returns printed details and blocks foreign-currency confirmation at the HTTP boundary", async () => {
     const scan = await prisma.receiptScan.create({ data: {
       businessProfileId: ctx.profile.id, imageFile: "1/foreign.jpg", processingStatus: "Complete",

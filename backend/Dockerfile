@@ -41,6 +41,9 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY prisma ./prisma
 RUN npx prisma generate
+# npm installs Prisma's optional CLI peer with @prisma/client. Keep the
+# generated client and query engine, but remove the build-only CLI afterward.
+RUN npm uninstall --no-save --ignore-scripts --omit=dev prisma
 
 # ---------------------------------------------------------------------------
 # Runtime

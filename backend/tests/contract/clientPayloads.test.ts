@@ -167,6 +167,7 @@ describe("mobile -> POST /records/receipts/:id/confirm (itemised)", () => {
  */
 describe("web -> POST /records/receipts/:id/confirm", () => {
   const common = {
+    expectedScanRevision: 4,
     date: "2026-07-31",
     description: "Grocery run",
     vendor: "Savemore",

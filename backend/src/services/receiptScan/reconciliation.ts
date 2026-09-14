@@ -1,11 +1,156 @@
+import { Prisma, ReceiptPurgeMode } from "@prisma/client";
+import { logger } from "../../config/logger";
 import { prisma } from "../../config/prisma";
 import { ApiError } from "../../middleware/error.middleware";
 import { createExpenseRecordWithin, type BulkDbClient } from "../expenseRecord.service";
 import { allocateProportionally, type ReconciliationMode } from "../../lib/allocation";
-import { recordConfirmationFeedback, recordDeletedLine, snapshotItemCategories } from "../extractionFeedback.service";
+import { recordConfirmationFeedback, snapshotItemCategories } from "../extractionFeedback.service";
+import {
+  lockReceiptCaptureBatchForMutation,
+  refreshReceiptCaptureBatchStatus,
+} from "../receiptCaptureBatch.service";
+import { evaluateReceiptDuplicateGate } from "../receiptDuplicate.service";
+import { resolveConfirmationMode } from "./confirmMode";
 import { toDTO } from "./dto";
 import { CHARGES_DESCRIPTION, type ConfirmInput, type ReceiptSplit } from "./types";
 import { requiresManualCurrencyConversion } from "../../lib/receiptDetails";
+
+interface ItemUpdateInput {
+  name: string;
+  amount: number;
+  expectedScanRevision: number;
+}
+
+async function claimEditableScan(
+  tx: Prisma.TransactionClient,
+  userId: number,
+  receiptScanId: number,
+  expectedScanRevision: number | undefined,
+  nonEditableStatus: 400 | 409,
+): Promise<void> {
+  const current = await tx.receiptScan.findFirst({
+    where: {
+      id: receiptScanId,
+      businessProfile: { userId },
+      evidenceDeletionRequestedAt: null,
+      purgeJobs: { none: { mode: ReceiptPurgeMode.DELETE_SCAN } },
+    },
+    select: { confirmationStatus: true, processingStatus: true, scanRevision: true },
+  });
+  if (!current) throw new ApiError(404, "Receipt scan not found");
+  if (current.confirmationStatus !== "Pending") {
+    throw new ApiError(nonEditableStatus, "This receipt scan has already been confirmed");
+  }
+  if (current.processingStatus !== "Complete") {
+    throw new ApiError(nonEditableStatus, "This receipt must finish processing before its items can be edited");
+  }
+  if (expectedScanRevision !== undefined && current.scanRevision !== expectedScanRevision) {
+    throw new ApiError(409, "This receipt changed while you were editing it. Review the latest result and try again.");
+  }
+
+  const revision = expectedScanRevision ?? current.scanRevision;
+  const claimed = await tx.receiptScan.updateMany({
+    where: {
+      id: receiptScanId,
+      businessProfile: { userId },
+      confirmationStatus: "Pending",
+      processingStatus: "Complete",
+      scanRevision: revision,
+      evidenceDeletionRequestedAt: null,
+      purgeJobs: { none: { mode: ReceiptPurgeMode.DELETE_SCAN } },
+    },
+    // Item edits move the abandoned-scan clock; stamping the claim covers
+    // both update and delete inside their own transaction.
+    data: { scanRevision: { increment: 1 }, lastActivityAt: new Date() },
+  });
+  if (claimed.count !== 1) {
+    throw new ApiError(409, "This receipt changed while you were editing it. Review the latest result and try again.");
+  }
+}
+
+async function editableScanDTO(tx: Prisma.TransactionClient, receiptScanId: number) {
+  const scan = await tx.receiptScan.findUniqueOrThrow({
+    where: { id: receiptScanId },
+    include: {
+      corrections: true,
+      items: { orderBy: { lineNumber: "asc" } },
+      pages: true,
+    },
+  });
+  return toDTO(scan, scan.items, scan.pages, scan.corrections);
+}
+
+export async function updateScanItem(
+  userId: number,
+  receiptScanId: number,
+  itemId: number,
+  input: ItemUpdateInput,
+) {
+  return prisma.$transaction(async (tx) => {
+    await claimEditableScan(tx, userId, receiptScanId, input.expectedScanRevision, 409);
+
+    const item = await tx.receiptScanItem.findFirst({
+      where: { id: itemId, receiptScanId },
+    });
+    if (!item) throw new ApiError(404, "Item not found on this receipt scan");
+
+    const nameChanged = item.name !== input.name;
+    const amountChanged = !item.amount.equals(new Prisma.Decimal(input.amount));
+    const earlierCorrections = await tx.receiptFieldCorrection.findMany({
+      where: {
+        receiptScanId,
+        lineNumber: item.lineNumber,
+        field: { in: ["itemName", "itemAmount"] },
+        wasEdited: true,
+      },
+      select: { field: true },
+    });
+    const earlierFields = new Set(earlierCorrections.map((correction) => correction.field));
+
+    await tx.receiptScanItem.update({
+      where: { id: item.id },
+      data: {
+        name: input.name,
+        amount: new Prisma.Decimal(input.amount),
+        ...(amountChanged ? { amountConfidence: null } : {}),
+      },
+    });
+
+    const source = item.extractedByVision ? "vision" : "ocr";
+    const corrections: Prisma.ReceiptFieldCorrectionCreateManyInput[] = [];
+    if (nameChanged) {
+      corrections.push({
+        receiptScanId,
+        lineNumber: item.lineNumber,
+        field: "itemName",
+        source: earlierFields.has("itemName") ? "owner" : source,
+        originalValue: item.name,
+        finalValue: input.name,
+        itemName: input.name,
+        confidence: null,
+        wasEdited: true,
+      });
+    }
+    if (amountChanged) {
+      corrections.push({
+        receiptScanId,
+        lineNumber: item.lineNumber,
+        field: "itemAmount",
+        source: earlierFields.has("itemAmount") ? "owner" : source,
+        originalValue: Number(item.amount).toFixed(2),
+        finalValue: input.amount.toFixed(2),
+        itemName: input.name,
+        confidence: earlierFields.has("itemAmount") ? null : item.amountConfidence,
+        wasEdited: true,
+      });
+    }
+    if (corrections.length > 0) {
+      await tx.receiptFieldCorrection.createMany({ data: corrections });
+    }
+
+    return editableScanDTO(tx, receiptScanId);
+  });
+}
 
 /**
  * Removes a line the owner says was never a purchase.
@@ -25,54 +170,60 @@ import { requiresManualCurrencyConversion } from "../../lib/receiptDetails";
  * That is correct and is left to the reconciliation step, which already
  * exists to answer exactly that question.
  */
-export async function deleteScanItem(userId: number, receiptScanId: number, itemId: number) {
-  const scan = await prisma.receiptScan.findFirst({
-    where: { id: receiptScanId, businessProfile: { userId } },
+export async function deleteScanItem(
+  userId: number,
+  receiptScanId: number,
+  itemId: number,
+  expectedScanRevision?: number,
+) {
+  return prisma.$transaction(async (tx) => {
+    await claimEditableScan(tx, userId, receiptScanId, expectedScanRevision, 400);
+
+    const item = await tx.receiptScanItem.findFirst({ where: { id: itemId, receiptScanId } });
+    if (!item) throw new ApiError(404, "Item not found on this receipt scan");
+
+    await tx.receiptScanItem.delete({ where: { id: item.id } });
+    if (!item.addedByOwner) {
+      await tx.receiptFieldCorrection.create({
+        data: {
+          receiptScanId,
+          field: "itemPresence",
+          source: item.extractedByVision ? "vision" : "ocr",
+          originalValue: item.name,
+          finalValue: null,
+          itemName: item.name,
+          lineNumber: item.lineNumber,
+          confidence: item.amountConfidence,
+          wasEdited: true,
+        },
+      });
+    }
+
+    return editableScanDTO(tx, receiptScanId);
   });
-  if (!scan) {
-    throw new ApiError(404, "Receipt scan not found");
-  }
-  if (scan.confirmationStatus === "Confirmed") {
-    throw new ApiError(400, "This receipt scan has already been confirmed");
-  }
-
-  // Read before the delete, because "OCR read a line that was not a purchase"
-  // is a fact about a row that is about to stop existing. Scoped to the scan
-  // for the same reason the delete is: an id from someone else's receipt must
-  // not be readable by guessing it.
-  const doomed = await prisma.receiptScanItem.findFirst({ where: { id: itemId, receiptScanId } });
-
-  const deleted = await prisma.receiptScanItem.deleteMany({ where: { id: itemId, receiptScanId } });
-  if (deleted.count === 0) {
-    throw new ApiError(404, "Item not found on this receipt scan");
-  }
-
-  // After the delete has actually succeeded, so a failed removal cannot leave
-  // behind a record of a false positive that was never removed.
-  if (doomed) {
-    await recordDeletedLine(scan, doomed);
-  }
-
-  const [items, pages] = await Promise.all([
-    prisma.receiptScanItem.findMany({ where: { receiptScanId }, orderBy: { lineNumber: "asc" } }),
-    // Loaded so the returned scan keeps its per-page quality and
-    // duplicate-page findings — the review screen re-renders from this
-    // response, and dropping them here would make those warnings vanish the
-    // moment an owner removed one line.
-    prisma.receiptScanPage.findMany({ where: { receiptScanId } }),
-  ]);
-  return toDTO(scan, items, pages);
 }
 
 export async function confirmReceipt(userId: number, receiptScanId: number, input: ConfirmInput) {
+  // Refused before any read: a body that mixes the two modes carries
+  // financial input one of the paths below would never look at.
+  const confirmation = resolveConfirmationMode(input);
+
   const scan = await prisma.receiptScan.findFirst({
-    where: { id: receiptScanId, businessProfile: { userId } },
+    where: {
+      id: receiptScanId,
+      businessProfile: { userId },
+      evidenceDeletionRequestedAt: null,
+      purgeJobs: { none: { mode: ReceiptPurgeMode.DELETE_SCAN } },
+    },
   });
   if (!scan) {
     throw new ApiError(404, "Receipt scan not found");
   }
   if (scan.confirmationStatus === "Confirmed") {
     throw new ApiError(400, "This receipt scan has already been confirmed");
+  }
+  if (input.expectedScanRevision !== undefined && input.expectedScanRevision !== scan.scanRevision) {
+    throw new ApiError(409, "This receipt changed while you were reviewing it. Review the latest result and try again.");
   }
   /*
    * A scan still being read cannot be confirmed.
@@ -126,11 +277,13 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
       })
     ).map((c) => c.id),
   );
-  const namedCategories = [
-    ...(input.itemAssignments ?? []).map((a) => a.categoryId),
-    ...(input.additionalItems ?? []).map((i) => i.categoryId),
-    ...(input.reconciliation?.mode === "category" ? [input.reconciliation.categoryId] : []),
-  ];
+  const namedCategories = confirmation.mode === "itemised"
+    ? [
+        ...confirmation.itemAssignments.map((a) => a.categoryId),
+        ...confirmation.additionalItems.map((i) => i.categoryId),
+        ...(confirmation.reconciliation.mode === "category" ? [confirmation.reconciliation.categoryId] : []),
+      ]
+    : [];
   if (namedCategories.some((id) => !validCategories.has(id))) {
     throw new ApiError(400, "Category does not belong to this business profile");
   }
@@ -189,11 +342,46 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
    * never roll back the books, and the analysis job carries a foreign key to a
    * record that does not exist outside the transaction yet.
    */
-  const { records, deferredEffects, splits, ownerAdded } = await prisma.$transaction(
+  const outcome = await prisma.$transaction(
     async (tx) => {
+      if (
+        scan.captureBatchId !== null
+        && !(await lockReceiptCaptureBatchForMutation(tx, scan.captureBatchId))
+      ) {
+        throw new ApiError(409, "This receipt batch is no longer available");
+      }
+      const duplicateGate = await evaluateReceiptDuplicateGate(tx, {
+        userId,
+        businessProfileId,
+        receiptScanId: scan.id,
+        date: input.date,
+        vendor: input.vendor,
+        description: input.description,
+        amount: input.amount,
+        sourceImageHash: scan.sourceImageHash,
+        decision: input.duplicateDecision,
+      });
+      if (duplicateGate.kind === "review-required") return duplicateGate;
+
       const claimed = await tx.receiptScan.updateMany({
-        where: { id: scan.id, confirmationStatus: "Pending" },
-        data: { confirmationStatus: "Confirmed" },
+        where: {
+          id: scan.id,
+          businessProfileId,
+          businessProfile: { userId },
+          confirmationStatus: "Pending",
+          processingStatus: "Complete",
+          scanRevision: input.expectedScanRevision ?? scan.scanRevision,
+          evidenceDeletionRequestedAt: null,
+          purgeJobs: { none: { mode: ReceiptPurgeMode.DELETE_SCAN } },
+        },
+        data: {
+          confirmationStatus: "Confirmed",
+          extractedDate: new Date(`${input.date}T00:00:00.000Z`),
+          extractedVendor: input.vendor ?? null,
+          extractedDescription: input.description,
+          extractedAmount: new Prisma.Decimal(input.amount),
+          semanticFingerprint: duplicateGate.sourceFingerprint,
+        },
       });
       if (claimed.count === 0) {
         // 409 rather than the 400 the read guard gives: the guard answers
@@ -208,12 +396,19 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
       // grouping and cannot drift apart.
       let splits: ReceiptSplit[];
       let ownerAdded: { itemId: number; categoryId: number; name: string; lineNumber: number }[] = [];
-      if (input.itemAssignments) {
-        ownerAdded = await persistOwnerAddedItems(tx, scan.id, input.additionalItems);
-        splits = await groupItemsIntoSplits(tx, scan.id, validCategories, [...input.itemAssignments, ...ownerAdded]);
-        splits = reconcileSplits(splits, totalCentavos, input.reconciliation ?? { mode: "none" });
+      if (confirmation.mode === "itemised") {
+        ownerAdded = await persistOwnerAddedItems(tx, scan.id, confirmation.additionalItems);
+        splits = await groupItemsIntoSplits(tx, scan.id, validCategories, [...confirmation.itemAssignments, ...ownerAdded]);
+        // Nothing itemised means nothing to reconcile: with no items the whole
+        // total would be the "gap", and category mode would book the entire
+        // purchase as tax and charges. A single-category receipt is a manual
+        // split of one, so the refusal names that instead.
+        if (splits.length === 0) {
+          throw new ApiError(400, "Assign the receipt to at least one category");
+        }
+        splits = reconcileSplits(splits, totalCentavos, confirmation.reconciliation);
       } else {
-        splits = input.splits ?? [];
+        splits = confirmation.splits;
       }
 
       if (splits.length === 0) {
@@ -280,7 +475,17 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
         }
       }
 
-      return { records: created, deferredEffects: effects, splits, ownerAdded };
+      if (scan.captureBatchId !== null) {
+        await refreshReceiptCaptureBatchStatus(tx, scan.captureBatchId);
+      }
+
+      return {
+        kind: "confirmed" as const,
+        records: created,
+        deferredEffects: effects,
+        splits,
+        ownerAdded,
+      };
     },
     // Generous relative to the handful of statements above, because a second
     // confirm of the same scan waits here on the claim's row lock rather than
@@ -289,9 +494,37 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
     { timeout: 20_000, maxWait: 10_000 },
   );
 
-  // After COMMIT, in the order the records were written.
-  for (const runSideEffects of deferredEffects) {
-    await runSideEffects();
+  if (outcome.kind === "review-required") {
+    throw new ApiError(
+      409,
+      outcome.code === "DUPLICATE_REVIEW_CHANGED"
+        ? "The possible matches changed while you were reviewing them. Review the latest matches before saving."
+        : "This receipt may already be recorded. Review the possible matches before saving.",
+      {
+        code: outcome.code,
+        responseDetails: {
+          sourceFingerprint: outcome.sourceFingerprint,
+          candidateSetHash: outcome.candidateSetHash,
+          candidates: outcome.candidates,
+          candidateCount: outcome.candidateCount,
+          candidatesTruncated: outcome.candidatesTruncated,
+          nextCursor: outcome.nextCursor,
+        },
+      },
+    );
+  }
+
+  const { records, deferredEffects, splits, ownerAdded } = outcome;
+
+  /*
+   * Everything from here on runs after COMMIT and is noncritical: the books
+   * are already written and the scan is already Confirmed. A failure here is
+   * logged and the committed records are still returned, because a 500 at
+   * this point told the owner a booked receipt had failed and invited a retry
+   * that could only answer "already confirmed".
+   */
+  for (const [index, runSideEffects] of deferredEffects.entries()) {
+    await runPostCommitEffect("expense-record-side-effects", scan.id, records[index]?.id, runSideEffects);
   }
 
   /*
@@ -312,15 +545,39 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
     for (const itemId of split.itemIds ?? []) finalCategoryByItemId.set(itemId, split.categoryId);
   }
 
-  await recordConfirmationFeedback({
-    scan,
-    confirmed: { date: input.date, vendor: input.vendor, amount: input.amount },
-    priorItems,
-    finalCategoryByItemId,
-    ownerAddedItems: ownerAdded.map((i) => ({ name: i.name, lineNumber: i.lineNumber })),
-  });
+  await runPostCommitEffect("confirmation-feedback", scan.id, undefined, () =>
+    recordConfirmationFeedback({
+      scan,
+      confirmed: { date: input.date, vendor: input.vendor, amount: input.amount },
+      priorItems,
+      finalCategoryByItemId,
+      ownerAddedItems: ownerAdded.map((i) => ({ name: i.name, lineNumber: i.lineNumber })),
+    }));
 
   return records;
+}
+
+/**
+ * Runs one post-commit effect of a confirmation and swallows its failure.
+ *
+ * Only identifiers reach the log. The receipt's vendor, amounts and item
+ * names never do, and the thrown error is passed through as-is for the same
+ * key-based redaction every other logged error gets.
+ */
+async function runPostCommitEffect(
+  effect: "expense-record-side-effects" | "confirmation-feedback",
+  receiptScanId: number,
+  expenseRecordId: number | undefined,
+  run: () => Promise<void>,
+): Promise<void> {
+  try {
+    await run();
+  } catch (err) {
+    logger.error(
+      { err, receiptScanId, expenseRecordId, effect, code: "RECEIPT_CONFIRM_POST_COMMIT_EFFECT_FAILED" },
+      "receipt confirmation post-commit effect failed",
+    );
+  }
 }
 
 /**
@@ -346,9 +603,9 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
 async function persistOwnerAddedItems(
   db: BulkDbClient,
   receiptScanId: number,
-  additionalItems: { name: string; amount: number; categoryId: number }[] | undefined,
+  additionalItems: { name: string; amount: number; categoryId: number }[],
 ): Promise<{ itemId: number; categoryId: number; name: string; lineNumber: number }[]> {
-  if (!additionalItems || additionalItems.length === 0) return [];
+  if (additionalItems.length === 0) return [];
 
   const existing = await db.receiptScanItem.findMany({
     where: { receiptScanId },

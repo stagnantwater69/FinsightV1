@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ReceiptProviderRouting } from "../config/receiptProvider";
 
 export const RESCUE_DECISION_VERSION = "receipt-rescue-v1" as const;
 
@@ -68,6 +69,7 @@ export const rescueReasonCodeSchema = z.enum([
   "DAMAGE_UNASSESSED",
   "CALIBRATION_UNAVAILABLE",
   "CALIBRATION_OUT_OF_SCOPE",
+  "PROVIDER_ROUTING_ALWAYS",
 ]);
 export type RescueReasonCode = z.infer<typeof rescueReasonCodeSchema>;
 
@@ -83,7 +85,13 @@ const PROVIDER_RESCUE_REASONS = new Set<RescueReasonCode>([
   "CONFLICTING_CRITICAL_TOTAL",
   "HANDWRITING_SUSPECTED",
   "DAMAGE_SUSPECTED",
+  "PROVIDER_ROUTING_ALWAYS",
 ]);
+
+/** The reason that actually opened the provider gate, skipping review-only signals. */
+export function firstProviderRescueReason(reasons: readonly RescueReasonCode[]): RescueReasonCode | null {
+  return reasons.find((reason) => PROVIDER_RESCUE_REASONS.has(reason)) ?? null;
+}
 
 export const rescueDecisionSchema = z
   .object({
@@ -143,8 +151,16 @@ function fieldReason(prefix: "MISSING" | "CONFLICTING", field: CriticalReceiptFi
   return `${prefix}_CRITICAL_${field.toUpperCase()}` as RescueReasonCode;
 }
 
-/** Produces routing metadata only; raw OCR confidence and receipt content are not inputs. */
-export function decideReceiptRescue(input: LocalReceiptAssessment): RescueDecision {
+export interface RescueDecisionOptions {
+  routing?: ReceiptProviderRouting;
+}
+
+/**
+ * Produces routing metadata only; raw OCR confidence and receipt content are
+ * not inputs. `routing: "always"` adds a policy reason so a clean local read
+ * still requests the provider, but calibration keeps the final say.
+ */
+export function decideReceiptRescue(input: LocalReceiptAssessment, options: RescueDecisionOptions = {}): RescueDecision {
   const assessment = localReceiptAssessmentSchema.parse(input);
   const reasons: RescueReasonCode[] = [];
   const rescueReasons = new Set<RescueReasonCode>();
@@ -181,6 +197,11 @@ export function decideReceiptRescue(input: LocalReceiptAssessment): RescueDecisi
     rescueReasons.add("DAMAGE_SUSPECTED");
   } else if (assessment.damage === "UNKNOWN") {
     reasons.push("DAMAGE_UNASSESSED");
+  }
+
+  if (options.routing === "always") {
+    reasons.push("PROVIDER_ROUTING_ALWAYS");
+    rescueReasons.add("PROVIDER_ROUTING_ALWAYS");
   }
 
   if (assessment.calibration.state === "UNCALIBRATED") {

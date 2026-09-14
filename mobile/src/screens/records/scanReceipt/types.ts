@@ -11,6 +11,11 @@ import type { FieldEvidence, ReceiptWarning } from "../../../lib/receiptWarnings
  */
 export interface ReceiptScanResult {
   id: number;
+  businessProfileId: number;
+  receiptBatchId: number | null;
+  receiptOrdinal: number | null;
+  /** Optimistic guard for edits to OCR-derived values. */
+  scanRevision: number;
   extractedDate: string | null;
   extractedVendor: string | null;
   extractedDescription: string | null;
@@ -57,11 +62,15 @@ export interface ReceiptScanResult {
     score: number;
     outcome: "likely-receipt" | "uncertain" | "obvious-non-receipt";
   } | null;
-  pageProcessing?: {
-    source: "original" | "processed";
-    hasProcessedVariant: boolean;
-    captureMetadata: unknown;
-  }[];
+  /**
+   * Which stored variant OCR used for each page, in capture order.
+   *
+   * Kept separate from pageEvidence so an adjusted image is never presented as
+   * though it replaced the owner's original photograph.
+   */
+  pageProcessing?: ReceiptPageProcessing[];
+  /** Stored evidence variants available for each page, in printed order. */
+  pageEvidence?: ReceiptPageEvidence[];
   /**
    * Every page's own quality reading, in the order they were photographed.
    * Present only on the upload response, for the same reason captureQuality
@@ -106,6 +115,7 @@ export interface ReceiptScanResult {
    * this is what pollUntilRead waits on.
    */
   processingStatus?: "Processing" | "Complete" | "Failed";
+  confirmationStatus: "Pending" | "Confirmed" | "Deletion Pending";
   /** Why the read failed. Present only when processingStatus is "Failed". */
   processingError?: string | null;
   /** Stable failure code used for recovery choices without exposing provider details. */
@@ -113,25 +123,147 @@ export interface ReceiptScanResult {
   /**
    * The individual lines the server read, each with the category it assigned.
    * A receipt with more than one is reviewed line by line below; anything
-   * less keeps the single-category flow.
+   * less keeps the single-category flow. Always present — the server sends
+   * an empty array when no item lines parsed.
    */
-  items?: {
+  items: ScannedItem[];
+}
+
+/** One entry of ReceiptScanResult.pageProcessing. */
+export interface ReceiptPageProcessing {
+  pageNumber?: number;
+  source: "original" | "processed";
+  hasProcessedVariant: boolean;
+  captureMetadata: unknown;
+}
+
+/**
+ * One line the server read off the receipt, as returned in
+ * ReceiptScanResult.items. Field set matches backend/src/services/receiptScan/dto.ts
+ * and web's ScannedItem; mobile reads only a subset today.
+ */
+export interface ScannedItem {
+  id: number;
+  lineNumber: number;
+  name: string;
+  quantity: number | null;
+  unitPrice: number | null;
+  amount: number;
+  /** What FinSight assigned. Null when nothing on the list fitted. */
+  categoryId: number | null;
+  /** True for a line the owner typed in, false for one OCR read. */
+  addedByOwner?: boolean;
+  /** True for a line a vision model produced rather than OCR text. */
+  extractedByVision?: boolean;
+  /** A category FinSight thinks is missing. Only ever an offer. */
+  suggestedCategoryName?: string | null;
+  /** How sure OCR was about THIS amount, 0-100, or null if not measured. */
+  amountConfidence?: number | null;
+  /** Which page and printed line this item came from, and by what. Null
+   *  where nothing could be located, including every older scan. */
+  evidence?: FieldEvidence | null;
+  /** Values the owner has corrected after OCR completed. */
+  ownerEditedFields?: ("name" | "amount")[];
+}
+
+export type ReceiptCaptureBatchStatus =
+  | "COLLECTING"
+  | "PROCESSING"
+  | "READY_FOR_REVIEW"
+  | "PARTIAL_FAILURE"
+  | "FAILED"
+  | "COMPLETE"
+  | "CANCELLED";
+
+/**
+ * What POST /records/receipt-batches returns.
+ *
+ * Each child's confirmationStatus is the same set the server writes on any
+ * scan: an unreviewed child can be moved to "Deletion Pending" by a purge.
+ */
+export interface ReceiptCaptureBatch {
+  id: number;
+  businessProfileId: number;
+  expectedReceiptCount: number;
+  status: ReceiptCaptureBatchStatus;
+  uploadedReceiptCount: number;
+  createdAt: string;
+  finishedAt: string | null;
+  receipts: {
+    receiptOrdinal: number;
     id: number;
-    name: string;
-    quantity: number | null;
-    amount: number;
-    /** What FinSight assigned. Null when nothing on the list fitted. */
-    categoryId: number | null;
-    /** True for a line a vision model produced rather than OCR text. */
-    extractedByVision?: boolean;
-    /** A category FinSight thinks is missing. Only ever an offer. */
-    suggestedCategoryName?: string | null;
-    /** How sure OCR was about THIS amount, 0-100, or null if not measured. */
-    amountConfidence?: number | null;
-    /** Which page and printed line this item came from, and by what. Null
-     *  where nothing could be located, including every older scan. */
-    evidence?: FieldEvidence | null;
+    processingStatus: "Processing" | "Complete" | "Failed";
+    confirmationStatus: "Pending" | "Confirmed" | "Deletion Pending";
+    processingError: string | null;
+    processingErrorCode: string | null;
+    extractedDate: string | null;
+    extractedVendor: string | null;
+    extractedAmount: number | null;
+    allowedActions: { retryProcessing: boolean; reviewResult: boolean };
   }[];
+}
+
+/**
+ * Labels are the fixed set backend/src/services/receiptScan/pageEvidence.ts
+ * emits; web's ReceiptPageEvidenceVariant lists the same seven.
+ */
+export interface ReceiptPageEvidenceVariant {
+  variant: "source" | "derived";
+  label: "Source" | "Composite source" | "Rectified" | "Enhanced color" | "Enhanced grayscale" | "Enhanced black and white" | "Processed";
+  width: number | null;
+  height: number | null;
+}
+
+export interface ReceiptPageEvidence {
+  pageNumber: number;
+  captureMode: "standard" | "long" | null;
+  processingMode: ReceiptProcessingMode;
+  ocrInput: "source" | "derived";
+  source: ReceiptPageEvidenceVariant;
+  derived: ReceiptPageEvidenceVariant | null;
+}
+
+export interface ReceiptPageImage extends ReceiptPageEvidenceVariant {
+  pageNumber: number;
+  url: string;
+  expiresInSeconds: number;
+}
+
+export interface ReceiptHistoryItem {
+  id: number;
+  businessProfileId: number;
+  receiptBatchId: number | null;
+  receiptOrdinal: number | null;
+  scanRevision: number;
+  processingStatus: "Processing" | "Complete" | "Failed";
+  confirmationStatus: "Pending" | "Confirmed" | "Deletion Pending";
+  processingError: string | null;
+  processingErrorCode: string | null;
+  extractedDate: string | null;
+  extractedVendor: string | null;
+  extractedDescription: string | null;
+  extractedAmount: number | null;
+  createdAt: string;
+  pageCount: number;
+  allowedActions: { retryProcessing: boolean; reviewResult: boolean };
+}
+
+export interface ReceiptHistoryPage {
+  items: ReceiptHistoryItem[];
+  nextCursor: string | null;
+}
+
+export interface ReceiptPurgeJob {
+  id: number;
+  receiptScanId: number;
+  reason: string;
+  status: string;
+  stage: string;
+  storageObjectsExpected: number;
+  storageObjectsDeleted: number;
+  requestedAt: string;
+  completedAt: string | null;
+  lastErrorCode: string | null;
 }
 
 /** One photograph in a capture session, before it has been scanned. */

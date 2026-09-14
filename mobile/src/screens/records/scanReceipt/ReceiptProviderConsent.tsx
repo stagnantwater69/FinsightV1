@@ -71,8 +71,10 @@ export function ReceiptProviderConsent({ businessProfileId }: { businessProfileI
     };
   }, [load]);
 
-  async function grant(terms: ReceiptProviderTerms) {
-    if (!checked || actionInFlight.current) return;
+  // The explicit path needs the checkbox ticked; the automatic re-grant is
+  // one deliberate tap, since the owner already had cloud reading on by policy.
+  async function grant(terms: ReceiptProviderTerms, options: { requireChecked: boolean; confirmed: string }) {
+    if ((options.requireChecked && !checked) || actionInFlight.current) return;
     const version = requestVersion.current;
     actionInFlight.current = true;
     setAction("grant");
@@ -87,7 +89,7 @@ export function ReceiptProviderConsent({ businessProfileId }: { businessProfileI
       if (requestVersion.current !== version) return;
       setLoadState({ status: "ready", value: parsed });
       setChecked(false);
-      setConfirmation("Optional cloud receipt help is allowed for these terms.");
+      setConfirmation(options.confirmed);
     } catch (error) {
       if (requestVersion.current === version) {
         setActionError(describeActionFailure(toLoadFailure(error), "Check the terms and try allowing it again."));
@@ -148,6 +150,33 @@ export function ReceiptProviderConsent({ businessProfileId }: { businessProfileI
   }
 
   const state = loadState.value;
+  // Automatic mode: the operator grants consent server-side, so there is nothing
+  // for the owner to allow or revoke here, unless their own earlier revoke is
+  // what keeps the policy from granting again.
+  if (state.mode === "automatic") {
+    if (!state.policyBlocked || !state.available || !state.provider) {
+      return confirmation ? (
+        <View style={{ borderTopWidth: 1, borderTopColor: t.border, paddingTop: space.md }}>
+          <T variant="caption" accessibilityLiveRegion="polite" style={{ color: t.statusText.good }}>{confirmation}</T>
+        </View>
+      ) : null;
+    }
+    const provider = state.provider;
+    return (
+      <View style={{ borderTopWidth: 1, borderTopColor: t.border, paddingTop: space.md, gap: space.sm }}>
+        <T variant="caption" accessibilityLiveRegion="polite">
+          Cloud receipt reading stays off because you revoked it. Receipts use the standard reader until you allow it again.
+        </T>
+        <Button
+          title="Allow cloud reading again"
+          variant="ghost"
+          loading={action === "grant"}
+          onPress={() => void grant(provider, { requireChecked: false, confirmed: "Cloud receipt reading is allowed again." })}
+        />
+        {actionError ? <ErrorNote>{actionError}</ErrorNote> : null}
+      </View>
+    );
+  }
   const previousOnly = state.activeConsents.length > 0 && state.consent === null;
   if (!state.available && !previousOnly && !confirmation) return null;
 
@@ -215,7 +244,7 @@ export function ReceiptProviderConsent({ businessProfileId }: { businessProfileI
                 variant="brand"
                 disabled={!checked}
                 loading={action === "grant"}
-                onPress={() => void grant(state.provider!)}
+                onPress={() => void grant(state.provider!, { requireChecked: true, confirmed: "Optional cloud receipt help is allowed for these terms." })}
               />
             </>
           )}

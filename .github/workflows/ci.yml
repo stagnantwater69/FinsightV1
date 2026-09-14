@@ -47,6 +47,13 @@ jobs:
       # prisma itself, which doesn't recognize it and prints its help text.
       - run: npx prisma generate
         working-directory: backend
+      - name: Verify Phase 2 reconciliation paths
+        run: npm run migrate:verify-phase2-reconciliation
+        working-directory: backend
+        timeout-minutes: 10
+        env:
+          DATABASE_URL: postgresql://testuser:testpass@localhost:55432/finsight_test
+          DIRECT_URL: postgresql://testuser:testpass@localhost:55432/finsight_test
       # Explicit gate for "does the migration history apply cleanly to a
       # brand-new database", run separately from the test suite so a
       # migration failure shows up as its own red step instead of buried
@@ -231,6 +238,15 @@ jobs:
       # have made the smoke below poll an image that never listens.
       - run: docker build --target api -t finsight-backend:ci ./backend
       - run: docker build --target worker -t finsight-worker:ci ./backend
+      - name: Verify production dependency boundary
+        run: |
+          docker run --rm --entrypoint sh finsight-backend:ci -c '
+            test ! -e /app/node_modules/prisma
+            test ! -e /app/node_modules/.bin/prisma
+            test ! -e /app/node_modules/@prisma/config
+            test ! -e /app/node_modules/deepmerge-ts
+            test -s /app/node_modules/.prisma/client/libquery_engine-debian-openssl-3.0.x.so.node
+          '
       - run: |
           api_cmd="$(docker inspect --format '{{json .Config.Cmd}}' finsight-backend:ci)"
           worker_cmd="$(docker inspect --format '{{json .Config.Cmd}}' finsight-worker:ci)"
@@ -270,7 +286,8 @@ jobs:
             -e SUPABASE_ANON_KEY="ci-placeholder-anon-key" \
             -e SUPABASE_SERVICE_ROLE_KEY="ci-placeholder-service-role-key" \
             -e TRUST_PROXY_HOPS=0 \
-            finsight-worker:ci node - <<'NODE'
+            --entrypoint node \
+            finsight-worker:ci - <<'NODE'
           const { extractText } = require("./dist/services/ocr.service.js");
           const receipt = Buffer.from(
             "iVBORw0KGgoAAAANSUhEUgAAAyAAAACgAQMAAADO5ppuAAAABlBMVEX///8NDQ2WBULdAAAACXBIWXMAAAsTAAALEwEAmpwYAAADsklEQVRoge2Yy5HkKBCGIYgYjpiAKRovxpsFD9YlPFgXiFgDhiMHLWwkL6GSUEF19GUi/wOtklB+/YtXAiEoFAqFQqFQKBQKhUKhUCgUCvUnKfq3VVh0hBA+UfMSHOQIi6Fce0KUI4SGvta2QwF1iEple+DSa/sURMSoxxCeokSow1L5CvFTEBmjGUMUQCC8SaXtnqw42eDVBvF3EJ7CA8RdIHNOFBQVEl8hsUKg8U4h44qTaJUfQ1SG2OgJS2UVLZC3HW4zUFlLqLilzw0hb5zsRO6EeShPkFM/fIRAjAKhF4j6FyCOiJ0wTXg4D51ZCAuEJYgByH+vkB0e8hqeHY/47xXInl/NTi6QnwD5UcPTDyF8z68mJ2wPryOe5Wag8SiTxD8rEF8g4IT5Zwg5IHIRkl7NToYQcoH8vQARFQJOuI+zkE2sQFznhDv1fRBdncxD/lqFKH040ZOQ8BEEnAi3zUL2FYjsnQj7DKENQv1HkOTEbuZxMIZ2O0OEnoPYzokcQ0L6cUBc6jETqUWDmOJEGvkI4W2q5wUS1yDmEcLSn7TyZIgtELPsZDPSjiH017HGiwqxy07GEA7rchdSmgJx6060GEBEhrTOJLVYWOPPTuDVe4gDyPEk1SQxrdeLTtQQIm1y0m6rhHVEhmUnSvMBZMsQc4ZoIsK6k7ZQvkJUSmyOZg4JAknLspM4hMTU5K2Z6V4g3ao/62QIoTmW2L8IAScB0sRbSEg/WnLHfIEUiwtOaEr07iCsn8FOEJhcl5yMIfyUGOXE9RNIdkLvIaK0eIUIuw4p6wnsQMItRJa+W0N2ELMCsU+QzV4hfgHSrfFjiDIvkLyBqvnaNKQ4ibeQqL8E6fMuPoLQ2uDbBTL1ufoMcghh9Vb9vz+FVCf6BsLrdKKuEL2ScNv66W4gok6M1zaZg3T7kyFE1im+C7kyGGHafetE2iFkaoJs27kyMDdzA9lq60LIYmsJUjem9gGiaqTURXIDrawnbYv95CQWSAp5cjK3/LJwnEhkN1cITZFgN59arzn50S1jjxAa86IK19nNFcJytm1yyMMJN5PZCo2mHeAUCIyB2p02yKnzTMA92cLJCdyZSu5IdGlUNSfuBFENoqHsBg1AZtPUfKiWnUAnEo8Qf3Yym3Dn48F8/R7iLk6mtg75oLNz4p8g9uJkahMEc129huHAHyH64uQdoxza5OwfnMAbYwgph8/diH97znk6e50Sv7SyeN8kKBQKhUKhUCgUCoVCoVAoFPlu/Q+wTzG/CPK8NAAAAABJRU5ErkJggg==",

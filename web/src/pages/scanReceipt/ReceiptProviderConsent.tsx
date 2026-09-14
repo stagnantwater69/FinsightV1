@@ -2,48 +2,13 @@ import { useEffect, useState } from "react";
 import { Button } from "../../components/Button";
 import { Pill } from "../../components/ui";
 import { api } from "../../lib/api";
-
-type ProviderKey = "gemini" | "veryfi";
-type DataClass = "RECEIPT_IMAGE" | "DERIVED_RECEIPT_IMAGE";
-
-interface ProviderTerms {
-  key: ProviderKey;
-  label: string;
-  version: string;
-  region: string;
-  policyVersion: string;
-  purpose: "RECEIPT_EXTRACTION";
-  dataClasses: DataClass[];
-  retentionHours: number;
-  trainingAllowed: false;
-  revocable: true;
-}
-
-interface ConsentReference {
-  reference: string;
-  grantedAt: string;
-  revokedAt: string | null;
-}
-
-interface ActiveConsent {
-  reference: string;
-  provider: string;
-  policyVersion: string;
-  purpose: "RECEIPT_EXTRACTION";
-  dataClasses: DataClass[];
-  region: string;
-  retentionHours: number;
-  trainingAllowed: boolean;
-  grantedAt: string;
-  revocable: true;
-}
-
-interface ProviderConsentState {
-  available: boolean;
-  provider: ProviderTerms | null;
-  consent: ConsentReference | null;
-  activeConsents: ActiveConsent[];
-}
+import type {
+  ActiveReceiptProviderConsent,
+  ReceiptProviderConsentGrant,
+  ReceiptProviderConsentState,
+  ReceiptProviderDataClass,
+  ReceiptProviderTerms,
+} from "../../lib/receiptProviderConsent";
 
 type LoadState =
   | { status: "loading" }
@@ -51,18 +16,20 @@ type LoadState =
   | { status: "error" }
   | {
       status: "revoke-only";
-      value: ProviderConsentState & { activeConsents: [ActiveConsent, ...ActiveConsent[]] };
+      value: ReceiptProviderConsentState & { activeConsents: [ActiveReceiptProviderConsent, ...ActiveReceiptProviderConsent[]] };
     }
-  | { status: "ready"; value: ProviderConsentState & { available: true; provider: ProviderTerms } };
+  | { status: "ready"; value: ReceiptProviderConsentState & { available: true; provider: ReceiptProviderTerms } };
 
-function readyState(value: ProviderConsentState): LoadState {
+function readyState(value: ReceiptProviderConsentState): LoadState {
+  // Automatic mode: consent is granted by operator policy on the server; older servers omit the field.
+  if (value.mode === "automatic") return { status: "unavailable" };
   if (value.available && value.provider) {
     return { status: "ready", value: { ...value, available: true, provider: value.provider } };
   }
   if (value.activeConsents.length > 0) {
     return {
       status: "revoke-only",
-      value: { ...value, activeConsents: value.activeConsents as [ActiveConsent, ...ActiveConsent[]] },
+      value: { ...value, activeConsents: value.activeConsents as [ActiveReceiptProviderConsent, ...ActiveReceiptProviderConsent[]] },
     };
   }
   return { status: "unavailable" };
@@ -73,7 +40,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   veryfi: "Veryfi",
 };
 
-const DATA_CLASS_LABELS: Record<DataClass, string> = {
+const DATA_CLASS_LABELS: Record<ReceiptProviderDataClass, string> = {
   RECEIPT_IMAGE: "The receipt photos you uploaded.",
   DERIVED_RECEIPT_IMAGE: "Cropped or enhanced copies FinSight made from those photos.",
 };
@@ -108,7 +75,7 @@ export function ReceiptProviderConsent({
     setAccepted(false);
     setFeedback(null);
     api
-      .get<ProviderConsentState>(`/records/receipts/provider-consent/${businessProfileId}`, {
+      .get<ReceiptProviderConsentState>(`/records/receipts/provider-consent/${businessProfileId}`, {
         signal: controller.signal,
       })
       .then(({ data }) => {
@@ -125,7 +92,7 @@ export function ReceiptProviderConsent({
     setPending("revoke");
     setFeedback(null);
     try {
-      const { data } = await api.delete<ProviderConsentState>(
+      const { data } = await api.delete<ReceiptProviderConsentState>(
         `/records/receipts/provider-consent/${businessProfileId}`,
       );
       setState(readyState(data));
@@ -278,17 +245,18 @@ export function ReceiptProviderConsent({
     setPending("grant");
     setFeedback(null);
     try {
-      const { data } = await api.put<ProviderConsentState>(
+      const grant: ReceiptProviderConsentGrant = {
+        provider: provider.key,
+        policyVersion: provider.policyVersion,
+        purpose: provider.purpose,
+        dataClasses: [...provider.dataClasses],
+        region: provider.region,
+        retentionHours: provider.retentionHours,
+        trainingAllowed: provider.trainingAllowed,
+      };
+      const { data } = await api.put<ReceiptProviderConsentState>(
         `/records/receipts/provider-consent/${businessProfileId}`,
-        {
-          provider: provider.key,
-          policyVersion: provider.policyVersion,
-          purpose: provider.purpose,
-          dataClasses: [...provider.dataClasses],
-          region: provider.region,
-          retentionHours: provider.retentionHours,
-          trainingAllowed: provider.trainingAllowed,
-        },
+        grant,
       );
       setState(readyState(data));
       setAccepted(false);

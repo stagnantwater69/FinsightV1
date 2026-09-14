@@ -149,6 +149,7 @@ export function Button({
   disabled,
   loading,
   style,
+  accessibilityLabel = title,
 }: {
   title: string;
   onPress: () => void;
@@ -156,6 +157,7 @@ export function Button({
   disabled?: boolean;
   loading?: boolean;
   style?: ViewStyle;
+  accessibilityLabel?: string;
 }) {
   const t = useTheme();
   const styles = useStyles();
@@ -199,15 +201,14 @@ export function Button({
        * which has no text at all. So a reader parked on a button at the exact
        * moment it becomes busy lost the name of the control it was on: it
        * announced the busy state of *something*, with nothing to say what.
-       * Pinning the label to `title` makes the name survive the visual swap.
+       * Defaulting the label to `title` makes the name survive the visual swap.
        *
        * It is set unconditionally rather than only while loading, because a
-       * name that appears and disappears is its own bug — and because the
-       * label then always equals the visible text, which is what keeps the
-       * resend control's countdown ("Send again in 12s") readable: that title
-       * changes every second and the announced name changes with it.
+       * name that appears and disappears is its own bug. By default it follows
+       * the visible title; callers can add row context when several actions
+       * would otherwise have the same spoken name.
        */
-      accessibilityLabel={title}
+      accessibilityLabel={accessibilityLabel}
       /*
        * `busy` is what carries the loading state now. `disabled` stays true as
        * well because the button genuinely cannot be pressed while loading, and

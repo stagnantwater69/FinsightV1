@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import type { Request, Response } from "express";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../src/config/prisma";
-import { rateLimit, resetRateLimits } from "../../src/middleware/rateLimit.middleware";
+import { LIMITS, rateLimit, resetRateLimits } from "../../src/middleware/rateLimit.middleware";
 import { disconnectDb } from "../setup/testDb";
 
 // NODE_ENV=test normally selects the deterministic in-memory test double.
@@ -52,6 +52,26 @@ describe("deployed login rate-limit storage", () => {
     const afterRestart = await call(durableLimiter("qa-durable", 3));
     expect(afterRestart.res.statusCode).toBe(429);
     expect(afterRestart.next).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["RECEIPT_DELETE_WRITE", LIMITS.RECEIPT_DELETE_WRITE],
+    ["RECEIPT_CONFIRM_WRITE", LIMITS.RECEIPT_CONFIRM_WRITE],
+    ["RECEIPT_DUPLICATE_READ", LIMITS.RECEIPT_DUPLICATE_READ],
+  ])("persists the %s quota in the database and answers 429 past it after a restart", async (_name, limit) => {
+    const attempts = [];
+    for (let attempt = 0; attempt < limit.limit; attempt++) {
+      attempts.push(await call(durableLimiter(limit.name, limit.limit)));
+    }
+    expect(attempts.every(({ next }) => next.mock.calls.length === 1)).toBe(true);
+
+    resetRateLimits();
+    const overLimit = await call(durableLimiter(limit.name, limit.limit));
+    expect(overLimit.res.statusCode).toBe(429);
+    expect(overLimit.next).not.toHaveBeenCalled();
+    const stored = await prisma.apiRateLimit.findMany();
+    expect(stored).toHaveLength(1);
+    expect(stored[0]!.count).toBe(limit.limit + 1);
   });
 
   it("fails closed during a database outage and uses the persisted quota after recovery", async () => {
