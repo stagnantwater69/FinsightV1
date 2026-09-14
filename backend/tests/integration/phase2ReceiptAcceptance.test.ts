@@ -74,6 +74,7 @@ import { refreshReceiptDuplicateCandidatesForScan } from "../../src/services/rec
 import {
   PURGE_REDRIVE_COOLDOWN_MS,
   countStalledReceiptPurges,
+  enqueueReceiptPurgeIfOrphaned,
   redriveStrandedReceiptPurges,
   runReceiptPurgeWorkerOnce,
 } from "../../src/services/receiptPurge.service";
@@ -1648,6 +1649,61 @@ describe("Phase 2 durable receipt purge", () => {
       .set(...auth("owner-token"));
     expect(history.status).toBe(200);
     expect(JSON.stringify(history.body)).not.toContain(`"id":${scan.id}`);
+  });
+
+  it("keeps an expired FAILED deletion of a previously detached scan until the scan row is gone", async () => {
+    // A scan whose evidence was detached earlier and that still carries an
+    // object path: once its last record goes, orphan cleanup owes it a
+    // DELETE_SCAN. The detach stamp must not let expiry retire that job.
+    const scan = await makeEditableScan({
+      path: `${owner.profile.id}/detached-then-orphaned.jpg`,
+      confirmationStatus: "Confirmed",
+    });
+    await prisma.receiptScan.update({
+      where: { id: scan.id },
+      data: {
+        evidenceDeletionRequestedAt: new Date(Date.now() - 31 * 24 * 60 * 60 * 1_000),
+        evidenceDeletedAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000),
+      },
+    });
+    await enqueueReceiptPurgeIfOrphaned(scan.id);
+    const job = await prisma.receiptPurgeJob.findFirstOrThrow({ where: { receiptScanId: scan.id } });
+    expect(job).toMatchObject({ mode: "DELETE_SCAN", status: "PENDING" });
+    expect(await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).toMatchObject({
+      confirmationStatus: "Deletion Pending",
+    });
+    const failedAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1_000);
+    await prisma.receiptPurgeJob.update({
+      where: { id: job.id },
+      data: {
+        status: "FAILED",
+        attemptCount: 10,
+        lastErrorCode: "PURGE_STORAGE_DELETE_FAILED",
+        requestedAt: new Date(failedAt.getTime() - 60 * 60 * 1_000),
+        updatedAt: failedAt,
+        expiresAt: new Date(Date.now() - 24 * 60 * 60 * 1_000),
+      },
+    });
+
+    expect(await runReceiptPurgeWorkerOnce()).toBe(false);
+    expect(await prisma.receiptPurgeJob.findUnique({ where: { id: job.id } })).toMatchObject({
+      status: "FAILED",
+      receiptScanId: scan.id,
+    });
+    expect(await countStalledReceiptPurges()).toBe(1);
+    await expect(redriveStrandedReceiptPurges()).resolves.toEqual({ candidates: 1, enqueued: 1 });
+    expect(await runReceiptPurgeWorkerOnce()).toBe(true);
+    expect(await runReceiptPurgeWorkerOnce()).toBe(true);
+    expect(await prisma.receiptScan.findUnique({ where: { id: scan.id } })).toBeNull();
+    // With the target gone, both jobs are retired on the next expiry pass.
+    await prisma.receiptPurgeJob.updateMany({
+      data: {
+        requestedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1_000),
+        expiresAt: new Date(Date.now() - 24 * 60 * 60 * 1_000),
+      },
+    });
+    expect(await runReceiptPurgeWorkerOnce()).toBe(false);
+    expect(await prisma.receiptPurgeJob.count()).toBe(0);
   });
 
   it("lets the owner re-drive a failed deletion with a fresh key and retires the failed job with the scan", async () => {

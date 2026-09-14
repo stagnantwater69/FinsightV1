@@ -579,6 +579,96 @@ describe("receipt scan review workflow", () => {
     }
   });
 
+  it("drops a stored scan whose purge is already running instead of showing the 409 as a failure", async () => {
+    const pendingSummary = {
+      id: 85,
+      businessProfileId: 1,
+      receiptBatchId: null,
+      receiptOrdinal: null,
+      scanRevision: 0,
+      processingStatus: "Complete" as const,
+      confirmationStatus: "Pending" as const,
+      processingError: null,
+      processingErrorCode: null,
+      extractedDate: "2026-09-01",
+      extractedVendor: "Supplier",
+      extractedDescription: null,
+      extractedAmount: 120,
+      createdAt: "2026-09-13T10:00:00.000Z",
+      pageCount: 1,
+      allowedActions: { retryProcessing: false, reviewResult: true },
+    };
+    get.mockImplementation(async (path: string) => {
+      if (path.includes("provider-consent")) return unavailableConsent;
+      if (path === "/records/receipts") return { items: [pendingSummary], nextCursor: null };
+      throw new Error(`Unexpected GET ${path}`);
+    });
+    remove.mockRejectedValueOnce(Object.assign(new Error("This receipt is already being deleted."), {
+      status: 409,
+      code: "PURGE_IN_PROGRESS",
+      responseBody: { error: "This receipt is already being deleted.", code: "PURGE_IN_PROGRESS" },
+    }));
+    const alert = vi.spyOn(Alert, "alert").mockImplementation((_title, _message, buttons) => {
+      buttons?.find((button) => button.style === "destructive")?.onPress?.();
+    });
+    try {
+      const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
+      const deleteButton = await waitFor(() => q.getByRole("button", { name: /^Delete scan for Supplier/ }));
+
+      await fireEvent.press(deleteButton);
+      await waitFor(() => expect(q.queryByRole("button", { name: /^Delete scan for Supplier/ })).toBeNull());
+
+      expect(remove).toHaveBeenCalledTimes(1);
+      expect(remove.mock.calls[0]![0]).toBe("/records/receipts/85");
+      expect(q.queryByText(/have not been deleted/i)).toBeNull();
+      expect(q.queryByText(/already being deleted/i)).toBeNull();
+      expect(takeFlash()).toBe("This receipt scan was already being deleted.");
+    } finally {
+      alert.mockRestore();
+    }
+  });
+
+  it("keeps a stored scan and reports the failure when a 409 is not a purge already in progress", async () => {
+    const pendingSummary = {
+      id: 86,
+      businessProfileId: 1,
+      receiptBatchId: null,
+      receiptOrdinal: null,
+      scanRevision: 0,
+      processingStatus: "Complete" as const,
+      confirmationStatus: "Pending" as const,
+      processingError: null,
+      processingErrorCode: null,
+      extractedDate: "2026-09-01",
+      extractedVendor: "Supplier",
+      extractedDescription: null,
+      extractedAmount: 120,
+      createdAt: "2026-09-13T10:00:00.000Z",
+      pageCount: 1,
+      allowedActions: { retryProcessing: false, reviewResult: true },
+    };
+    get.mockImplementation(async (path: string) => {
+      if (path.includes("provider-consent")) return unavailableConsent;
+      if (path === "/records/receipts") return { items: [pendingSummary], nextCursor: null };
+      throw new Error(`Unexpected GET ${path}`);
+    });
+    remove.mockRejectedValueOnce(Object.assign(new Error("This receipt was confirmed and cannot be deleted."), {
+      status: 409,
+      code: "RECEIPT_CONFIRMED",
+    }));
+    const alert = vi.spyOn(Alert, "alert").mockImplementation((_title, _message, buttons) => {
+      buttons?.find((button) => button.style === "destructive")?.onPress?.();
+    });
+    try {
+      const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
+      await fireEvent.press(await waitFor(() => q.getByRole("button", { name: /^Delete scan for Supplier/ })));
+      await waitFor(() => expect(q.getByText(/have not been deleted/i)).toBeTruthy());
+      expect(q.getByRole("button", { name: /^Delete scan for Supplier/ })).toBeTruthy();
+    } finally {
+      alert.mockRestore();
+    }
+  });
+
   it("accepts every durable batch child before polling or reviewing receipt 1", async () => {
     cameraSections = [{
       localId: "receipt-two",

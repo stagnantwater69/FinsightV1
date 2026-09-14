@@ -40,9 +40,9 @@ import {
  *   went quiet more than PURGE_REDRIVE_COOLDOWN_MS ago, carrying the reason
  *   of the job it replaces.
  * - Expiry removes COMPLETE jobs and FAILED jobs whose target is already gone
- *   (scan deleted, or evidence detached). A FAILED job whose obligation is
- *   still open outlives its TTL, so expiry can never un-hide a half-deleted
- *   scan or drop it from readiness.
+ *   (DELETE_SCAN: the scan row deleted; DETACH_EVIDENCE: evidenceDeletedAt
+ *   set). A FAILED job whose obligation is still open outlives its TTL, so
+ *   expiry can never un-hide a half-deleted scan or drop it from readiness.
  * - Readiness counts obligations nobody is working on: scans under deletion
  *   whose jobs are all terminal failures, plus jobs stranded at the ceiling.
  * - DETACH_EVIDENCE targets stay Confirmed and visible; the owner re-drives
@@ -1001,10 +1001,15 @@ async function deleteExpiredTerminalPurgeResults(now = new Date()): Promise<void
         { status: ReceiptPurgeStatus.COMPLETE },
         {
           status: ReceiptPurgeStatus.FAILED,
-          // Only once the target is gone (SetNull on scan delete) or its
-          // evidence detached. The job row is what keeps a half-deleted scan
-          // hidden and counted; losing it would put the scan back on screen.
-          OR: [{ receiptScanId: null }, { receiptScan: { evidenceDeletedAt: { not: null } } }],
+          // Only once the obligation is met: the scan row gone (SetNull on
+          // scan delete) or, for a detach, its evidence gone. A DELETE_SCAN
+          // job's obligation is the row itself, so an earlier detach stamp on
+          // the scan does not retire it. The job row is what keeps a
+          // half-deleted scan on re-drive and readiness.
+          OR: [
+            { receiptScanId: null },
+            { mode: ReceiptPurgeMode.DETACH_EVIDENCE, receiptScan: { evidenceDeletedAt: { not: null } } },
+          ],
         },
       ],
     },

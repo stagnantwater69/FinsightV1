@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ScanReceipt } from "./ScanReceipt";
-import type { ScanResult } from "./scanReceipt/types";
+import type { ReceiptScanResult } from "./scanReceipt/types";
 
 const mocks = vi.hoisted(() => ({
   post: vi.fn(),
@@ -25,7 +25,7 @@ vi.mock("../context/ExpenseCategoryContext", () => ({ useExpenseCategories: () =
 vi.mock("../components/Toast", () => ({ useToast: () => vi.fn() }));
 vi.mock("../components/ConfirmDialog", () => ({ useConfirm: () => mocks.confirm }));
 
-const receipt: ScanResult = {
+const receipt: ReceiptScanResult = {
   id: 10, scanRevision: 0, processingStatus: "Complete", extractedDate: "2026-09-01", extractedDescription: "Paper supplies",
   extractedVendor: "Paper shop", extractedAmount: 500, items: [], ocrConfidence: 98,
 };
@@ -643,7 +643,7 @@ describe("receipt upload and review", () => {
 
   it("ignores a late upload after switching businesses", async () => {
     const user = userEvent.setup();
-    let finish!: (value: { data: ScanResult }) => void;
+    let finish!: (value: { data: ReceiptScanResult }) => void;
     mocks.post.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     const view = render(page());
     await user.upload(screen.getByLabelText(/Receipt photo/), photo());
@@ -659,7 +659,7 @@ describe("receipt upload and review", () => {
 
   it("locks same-tick duplicate submits and saves reviewed values once", async () => {
     const user = userEvent.setup();
-    let finish!: (value: { data: ScanResult }) => void;
+    let finish!: (value: { data: ReceiptScanResult }) => void;
     mocks.post.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     render(page());
     await user.upload(screen.getByLabelText(/Receipt photo/), photo());
@@ -985,7 +985,7 @@ describe("receipt upload and review", () => {
         { ...itemised.items[0], name: "A4 printer paper", amount: 260, ownerEditedFields: ["name", "amount"] },
         itemised.items[1],
       ],
-    } satisfies ScanResult;
+    } satisfies ReceiptScanResult;
     mocks.post.mockImplementation(async (url: string) =>
       url.endsWith("/confirm") ? { data: [{ id: 501 }] } : { data: itemised });
     mocks.patch.mockResolvedValue({ data: corrected });
@@ -1113,7 +1113,7 @@ describe("receipt upload and review", () => {
       ],
     };
     mocks.post.mockResolvedValue({ data: itemised });
-    let settlePatch!: (value: { data: ScanResult }) => void;
+    let settlePatch!: (value: { data: ReceiptScanResult }) => void;
     mocks.patch.mockImplementation(() => new Promise((resolve) => { settlePatch = resolve; }));
 
     render(page());

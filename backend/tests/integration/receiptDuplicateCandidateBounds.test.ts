@@ -265,6 +265,69 @@ describe("oversized duplicate-candidate sets", () => {
   });
 });
 
+describe("candidates the owner cannot see", () => {
+  it("counts and hashes only the rows served, so an acknowledgement over the visible set is accepted", async () => {
+    // An exact-image match against a confirmed scan with no extracted values
+    // and no records left: discovered, persisted, but nothing to show. The
+    // owner is asked to acknowledge two candidates, not three.
+    const imageHash = "b".repeat(64);
+    await prisma.receiptScan.create({
+      data: {
+        businessProfileId: owner.profile.id,
+        imageFile: `${owner.profile.id}/valueless-twin.jpg`,
+        sourceImageHash: imageHash,
+        processingStatus: "Complete",
+        confirmationStatus: "Confirmed",
+      },
+    });
+    await seedManualMatches(owner, 2);
+    const source = await makeSource();
+    await prisma.receiptScan.update({ where: { id: source.id }, data: { sourceImageHash: imageHash } });
+    await refresh(source.id);
+    expect(await pendingRows(source.id)).toHaveLength(3);
+
+    const listed = await request(app)
+      .get(`${RECEIPTS}/${source.id}/duplicate-candidates`)
+      .set(...auth("owner-token"));
+    expect(listed.status).toBe(200);
+    expect(listed.body.candidates).toHaveLength(2);
+    expect(listed.body.candidateCount).toBe(2);
+    expect(listed.body.candidatesTruncated).toBe(false);
+    expect(listed.body.nextCursor).toBeNull();
+
+    // Confirmed as read, so the source fingerprint (and with it the hash the
+    // owner acknowledges) is the one the list was served under.
+    const body = {
+      expectedScanRevision: 0,
+      date: "2026-09-13",
+      vendor: "Bound Merchant",
+      description: "Bounded source",
+      amount: 250,
+      splits: [{ categoryId: owner.categories.Inventory, amount: 250 }],
+    };
+    const review = await request(app)
+      .post(`${RECEIPTS}/${source.id}/confirm`)
+      .set(...auth("owner-token"))
+      .send(body);
+    expect(review.status).toBe(409);
+    expect(review.body).toMatchObject({
+      code: "DUPLICATE_REVIEW_REQUIRED",
+      candidateSetHash: listed.body.candidateSetHash,
+      candidateCount: 2,
+    });
+    expect(review.body.candidates).toHaveLength(2);
+
+    const saved = await request(app)
+      .post(`${RECEIPTS}/${source.id}/confirm`)
+      .set(...auth("owner-token"))
+      .send({ ...body, duplicateDecision: { action: "SAVE_ANYWAY", candidateSetHash: listed.body.candidateSetHash } });
+    expect(saved.status).toBe(201);
+    expect(await prisma.receiptDuplicateCandidate.count({
+      where: { sourceReceiptScanId: source.id, reviewStatus: "SAVED_ANYWAY" },
+    })).toBe(2);
+  });
+});
+
 describe("repeated and concurrent candidate persistence", () => {
   it("still discovers an exact-image and same-total match beyond the cap's worth of same-date scans", async () => {
     // More than the cap of older confirmed scans on the receipt's date, none of

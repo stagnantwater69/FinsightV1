@@ -886,7 +886,11 @@ export async function checkPhase2SchemaShape(): Promise<string[]> {
           WHERE api_role.rolname IN ('anon', 'authenticated', 'service_role')
             AND table_object.oid IN (
               to_regclass('public."ReceiptCaptureBatch"'),
-              to_regclass('public."ReceiptDuplicateCandidate"')
+              to_regclass('public."ReceiptDuplicateCandidate"'),
+              to_regclass('public."ExternalProcessingConsent"'),
+              to_regclass('public."ExternalProviderBudget"'),
+              to_regclass('public."ExternalProviderDispatch"'),
+              to_regclass('public."ExternalProviderDispatchOutcome"')
             )
             AND has_table_privilege(
               api_role.oid,
@@ -900,7 +904,11 @@ export async function checkPhase2SchemaShape(): Promise<string[]> {
           CROSS JOIN LATERAL aclexplode(COALESCE(table_object.relacl, '{}'::aclitem[])) grant_entry
           WHERE table_object.oid IN (
               to_regclass('public."ReceiptCaptureBatch"'),
-              to_regclass('public."ReceiptDuplicateCandidate"')
+              to_regclass('public."ReceiptDuplicateCandidate"'),
+              to_regclass('public."ExternalProcessingConsent"'),
+              to_regclass('public."ExternalProviderBudget"'),
+              to_regclass('public."ExternalProviderDispatch"'),
+              to_regclass('public."ExternalProviderDispatchOutcome"')
             )
             AND grant_entry.grantee = 0
         )),
@@ -911,7 +919,10 @@ export async function checkPhase2SchemaShape(): Promise<string[]> {
           WHERE api_role.rolname IN ('anon', 'authenticated', 'service_role')
             AND sequence_object.oid IN (
               to_regclass('public."ReceiptCaptureBatch_ReceiptCaptureBatch_ID_seq"'),
-              to_regclass('public."ReceiptDuplicateCandidate_ReceiptDuplicateCandidate_ID_seq"')
+              to_regclass('public."ReceiptDuplicateCandidate_ReceiptDuplicateCandidate_ID_seq"'),
+              to_regclass('public."ExternalProcessingConsent_ExternalProcessingConsent_ID_seq"'),
+              to_regclass('public."ExternalProviderBudget_ExternalProviderBudget_ID_seq"'),
+              to_regclass('public."ExternalProviderDispatch_ExternalProviderDispatch_ID_seq"')
             )
             AND has_sequence_privilege(api_role.oid, sequence_object.oid, 'USAGE,SELECT,UPDATE')
         )),
@@ -921,7 +932,10 @@ export async function checkPhase2SchemaShape(): Promise<string[]> {
           CROSS JOIN LATERAL aclexplode(COALESCE(sequence_object.relacl, '{}'::aclitem[])) grant_entry
           WHERE sequence_object.oid IN (
               to_regclass('public."ReceiptCaptureBatch_ReceiptCaptureBatch_ID_seq"'),
-              to_regclass('public."ReceiptDuplicateCandidate_ReceiptDuplicateCandidate_ID_seq"')
+              to_regclass('public."ReceiptDuplicateCandidate_ReceiptDuplicateCandidate_ID_seq"'),
+              to_regclass('public."ExternalProcessingConsent_ExternalProcessingConsent_ID_seq"'),
+              to_regclass('public."ExternalProviderBudget_ExternalProviderBudget_ID_seq"'),
+              to_regclass('public."ExternalProviderDispatch_ExternalProviderDispatch_ID_seq"')
             )
             AND grant_entry.grantee = 0
         ))

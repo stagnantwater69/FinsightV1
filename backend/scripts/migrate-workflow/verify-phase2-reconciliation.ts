@@ -10,6 +10,8 @@ const LEGACY_FIXTURE = path.join(BACKEND_ROOT, "tests", "fixtures", "phase2-lega
 const PHASE2_MIGRATION = "20260913100918_receipt_capture_batches_and_scan_revision";
 const RECONCILIATION = "20260913230000_reconcile_phase2_scanner_migration_drift";
 const LEGACY_CHECKSUM = "a0e4f79275cbb0e975f16d4675776ecf954395eaa6dd5900f15cd3f73030ca5b";
+// Neither the current 8e03ef8f... nor the legacy a0e4f792... revision; the migration must refuse it.
+const UNKNOWN_CHECKSUM = "0000000000000000000000000000000000000000000000000000000000000000";
 const POSTGRES_USER = "phase2check";
 const POSTGRES_PASSWORD = "phase2check";
 
@@ -400,6 +402,69 @@ function expectMigrationFailure(
   throw new Error(`Reconciliation unexpectedly accepted malformed database ${database}.`);
 }
 
+function expectDeployFailure(url: string, expectedMessage: string): void {
+  let output = "";
+  try {
+    output = execFileSync("npx", ["prisma", "migrate", "deploy"], {
+      cwd: BACKEND_ROOT,
+      encoding: "utf8",
+      stdio: "pipe",
+      env: { ...process.env, DATABASE_URL: url, DIRECT_URL: url },
+    });
+  } catch (error) {
+    const failure = error as { stdout?: string | Buffer; stderr?: string | Buffer };
+    output = `${failure.stdout?.toString() ?? ""}\n${failure.stderr?.toString() ?? ""}`;
+    if (!output.includes(expectedMessage)) {
+      throw new Error(`prisma migrate deploy failed for an unexpected reason:\n${output}`);
+    }
+    return;
+  }
+  throw new Error(`prisma migrate deploy unexpectedly succeeded against ${url}:\n${output}`);
+}
+
+// A rejected reconciliation must leave the legacy database exactly as it found it: none of the
+// objects the repair path would create, and no completed ledger row for the reconciliation.
+function assertRejectionLeftNothingBehind(
+  containerName: string,
+  database: string,
+  options: { expectPurgeModeEnum: boolean },
+): void {
+  const repairAbsent = queryScalar(containerName, database, `
+    SELECT (
+      (to_regtype('public."ReceiptPurgeMode"') IS NULL) = ${options.expectPurgeModeEnum ? "FALSE" : "TRUE"}
+      AND to_regtype('public."ReceiptDuplicateScoreBand"') IS NULL
+      AND to_regtype('public."ReceiptDuplicateReviewStatus"') IS NULL
+      AND to_regclass('public."ReceiptDuplicateCandidate"') IS NULL
+      AND to_regclass('public."ReceiptPurgeJob_active_profile_receipt_key"') IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND (
+            (table_name = 'ReceiptScan' AND column_name IN (
+              'ReceiptScan_EvidenceDeletedAt',
+              'ReceiptScan_EvidenceDeletionRequestedAt',
+              'ReceiptScan_SemanticFingerprint'
+            ))
+            OR (table_name = 'ReceiptPurgeJob' AND column_name = 'ReceiptPurgeJob_Mode')
+          )
+      )
+    )::text
+  `);
+  if (repairAbsent !== "true") {
+    throw new Error(`Rejected reconciliation of ${database} left partial repair objects behind.`);
+  }
+  const completedLedgerRows = queryScalar(containerName, database, `
+    SELECT count(*)::text
+    FROM public."_prisma_migrations"
+    WHERE migration_name = '${RECONCILIATION}'
+      AND finished_at IS NOT NULL
+      AND rolled_back_at IS NULL
+  `);
+  if (completedLedgerRows !== "0") {
+    throw new Error(`Rejected reconciliation of ${database} recorded a completed ledger row.`);
+  }
+}
+
 function databaseUrl(port: number, database: string): string {
   return `postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@127.0.0.1:${port}/${database}`;
 }
@@ -502,6 +567,8 @@ async function main(): Promise<void> {
       "current_malformed",
       "current_malformed_opclass",
       "current_malformed_collation",
+      "unknown_checksum",
+      "legacy_partial",
     ]) {
       executeSql(containerName, "postgres", `CREATE DATABASE ${database} TEMPLATE phase2_template`);
     }
@@ -589,10 +656,32 @@ async function main(): Promise<void> {
       );
     }
 
+    // Ledger row for 20260913100918 carries a checksum the migration does not recognize.
+    executeFile(containerName, "unknown_checksum", LEGACY_FIXTURE);
+    recordMigration(containerName, "unknown_checksum", PHASE2_MIGRATION, UNKNOWN_CHECKSUM);
+    for (const name of between) applyRecordedMigration(containerName, "unknown_checksum", name);
+    expectDeployFailure(
+      databaseUrl(port, "unknown_checksum"),
+      `Unsupported checksum for ${PHASE2_MIGRATION}: ${UNKNOWN_CHECKSUM}.`,
+    );
+    assertRejectionLeftNothingBehind(containerName, "unknown_checksum", { expectPurgeModeEnum: false });
+
+    // Legacy revision where one later Phase 2 object (the purge-mode enum) already exists.
+    applyLegacyFixture(containerName, "legacy_partial");
+    for (const name of between) applyRecordedMigration(containerName, "legacy_partial", name);
+    executeSql(containerName, "legacy_partial", `
+      CREATE TYPE "ReceiptPurgeMode" AS ENUM ('DELETE_SCAN', 'DETACH_EVIDENCE')
+    `);
+    expectDeployFailure(
+      databaseUrl(port, "legacy_partial"),
+      "Unsupported legacy Phase 2 shape: later Phase 2 objects are partially present.",
+    );
+    assertRejectionLeftNothingBehind(containerName, "legacy_partial", { expectPurgeModeEnum: true });
+
     console.log(
       `Phase 2 reconciliation verification passed: fresh and legacy catalogs share ` +
-      `${catalog.factCount} facts (${catalog.digest}); malformed legacy, predicate, collation, and ` +
-      `operator-class states were rejected.`,
+      `${catalog.factCount} facts (${catalog.digest}); malformed legacy, predicate, collation, ` +
+      `operator-class, unknown-checksum, and partially-present states were rejected.`,
     );
   } finally {
     if (containerName.startsWith("finsight-phase2-reconciliation-test-")) {

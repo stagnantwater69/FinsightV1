@@ -60,22 +60,7 @@ const GROUPS = [
       CapturedPage: "mobile-only: an unsent photograph in the capture session",
       ReviewNotice: "mobile-only: rendered warning row derived from server warnings",
     },
-    knownDrift: {
-      // Same server contract, different local name or inlined on one side.
-      // Owner: web-frontend and mobile, to agree one name per contract.
-      ScanResult: "web name for POST /records/receipts response; mobile calls it ReceiptScanResult",
-      ReceiptScanResult: "mobile name for POST /records/receipts response; web calls it ScanResult",
-      ReceiptScanSummary: "web name for a history row; mobile calls it ReceiptHistoryItem",
-      ReceiptHistoryItem: "mobile name for a history row; web calls it ReceiptScanSummary",
-      ReceiptScanHistoryPage: "web name for the history page; mobile calls it ReceiptHistoryPage",
-      ReceiptHistoryPage: "mobile name for the history page; web calls it ReceiptScanHistoryPage",
-      ReceiptPageProcessing: "web exports it; mobile inlines the shape in ReceiptScanResult.pageProcessing",
-      ScannedItem: "web exports it; mobile inlines the shape in ReceiptScanResult.items",
-      ReceiptCaptureBatch: "web exports it; mobile keeps a non-exported copy in ScanReceiptScreen.tsx",
-      ReceiptCaptureBatchStatus: "web exports it; mobile inlines the union in ScanReceiptScreen.tsx",
-      ReceiptDuplicateReview: "mobile exports the 409 duplicate-review body; web reads it untyped in ScanReceipt.tsx",
-      ReceiptDuplicateDecision: "mobile exports it; web inlines the shape in lib/receiptConfirm.ts",
-    },
+    knownDrift: {},
   },
   {
     name: "receipt provider consent",

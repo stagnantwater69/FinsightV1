@@ -44,11 +44,12 @@ import type {
   ReceiptDuplicateCandidate,
   ReceiptDuplicateCandidatePage,
   ReceiptDuplicateReason,
+  ReceiptDuplicateReview,
   ReceiptPurgeJob,
-  ReceiptScanHistoryPage,
-  ReceiptScanSummary,
+  ReceiptHistoryPage,
+  ReceiptHistoryItem,
   ScannedItem,
-  ScanResult,
+  ReceiptScanResult,
   ScanStage,
   Split,
 } from "./scanReceipt/types";
@@ -77,11 +78,10 @@ interface BatchReceiptBinding {
   receiptOrdinal: number;
 }
 
-interface DuplicateReviewState {
-  candidateSetHash: string;
-  candidates: ReceiptDuplicateCandidate[];
-  candidateCount: number;
-  nextCursor: string | null;
+interface DuplicateReviewState extends Pick<
+  ReceiptDuplicateReview,
+  "candidateSetHash" | "candidates" | "candidateCount" | "nextCursor"
+> {
   changed: boolean;
 }
 
@@ -139,7 +139,7 @@ function isDeletionAlreadyUnderway(error: unknown): boolean {
  */
 function sameMatchesHash(error: unknown, acknowledged: DuplicateReviewState): string | null {
   if (!isAxiosError(error) || error.response?.status !== 409) return null;
-  const body = error.response.data as { code?: unknown };
+  const body = error.response.data as Partial<ReceiptDuplicateReview> | undefined;
   if (body?.code !== "DUPLICATE_REVIEW_CHANGED") return null;
   const current = duplicateReviewFrom(body, true);
   if (!current || current.nextCursor !== null || current.candidates.length !== current.candidateCount) return null;
@@ -151,8 +151,12 @@ function sameMatchesHash(error: unknown, acknowledged: DuplicateReviewState): st
   return current.candidateSetHash;
 }
 
+function recoveryRowId(scanId: number): string {
+  return `unfinished-scan-${scanId}`;
+}
+
 function recoveryRowActionId(scanId: number): string {
-  return `unfinished-scan-${scanId}-action`;
+  return `${recoveryRowId(scanId)}-action`;
 }
 
 /** The server binds an upload key to one batch slot or to a single receipt. */
@@ -229,8 +233,8 @@ function ScanReceiptForm() {
    */
   const [scanStage, setScanStage] = useState<ScanStage>("uploading");
   const [scanError, setScanError] = useState<string | null>(null);
-  const [scan, setScan] = useState<ScanResult | null>(null);
-  const [pausedScan, setPausedScan] = useState<ScanResult | null>(null);
+  const [scan, setScan] = useState<ReceiptScanResult | null>(null);
+  const [pausedScan, setPausedScan] = useState<ReceiptScanResult | null>(null);
   const [resumeHistory, setResumeHistory] = useState<RecoveryHistoryState>(EMPTY_RECOVERY_HISTORY);
   const resumeScans = resumeHistory.scans;
   const [resumeLoading, setResumeLoading] = useState(false);
@@ -332,10 +336,10 @@ function ScanReceiptForm() {
   // finish storing every child before the first one is presented for review.
   // Keyed by File plus batch binding: the server ties an upload key and its
   // scan to one binding and answers 409 when the same key arrives bound differently.
-  const acceptingScans = useRef<Map<File, { binding: string; promise: Promise<ScanResult> }>>(new Map());
-  const acceptedScans = useRef<Map<File, { binding: string; scan: ScanResult }>>(new Map());
+  const acceptingScans = useRef<Map<File, { binding: string; promise: Promise<ReceiptScanResult> }>>(new Map());
+  const acceptedScans = useRef<Map<File, { binding: string; scan: ReceiptScanResult }>>(new Map());
   const uploadKeys = useRef<Map<File, { binding: string; key: string }>>(new Map());
-  const combinedUpload = useRef<{ files: File[]; key: string; scan?: ScanResult } | null>(null);
+  const combinedUpload = useRef<{ files: File[]; key: string; scan?: ReceiptScanResult } | null>(null);
   const batchUpload = useRef<{
     clientBatchKey: string;
     expectedReceiptCount: number;
@@ -351,11 +355,11 @@ function ScanReceiptForm() {
   const savePending = useRef(false);
   const stopRequested = useRef(false);
   /** The unfinished-scans row being waited on, when the wait is not a local upload. */
-  const waitingStoredScan = useRef<ReceiptScanSummary | null>(null);
+  const waitingStoredScan = useRef<Pick<ReceiptHistoryItem, "id" | "extractedVendor" | "extractedDescription"> | null>(null);
   const deleteKeys = useRef<Map<number, string>>(new Map());
   // A history page requested before a delete can settle after it and put the row back.
   const purgedScanIds = useRef<Set<number>>(new Set());
-  const [focusRowAfterDelete, setFocusRowAfterDelete] = useState<{ scanId: number | null } | null>(null);
+  const [focusRowAfterDelete, setFocusRowAfterDelete] = useState<{ deletedScanId: number; nextScanId: number | null } | null>(null);
 
   useEffect(() => {
     requests.current = new AbortController();
@@ -382,7 +386,7 @@ function ScanReceiptForm() {
     setResumeLoading(true);
     setResumeError(null);
     try {
-      const { data } = await api.get<ReceiptScanHistoryPage>("/records/receipts", {
+      const { data } = await api.get<ReceiptHistoryPage>("/records/receipts", {
         params: { businessProfileId: selectedBusinessProfileId, status: "active", take: 20 },
         signal,
       });
@@ -407,7 +411,7 @@ function ScanReceiptForm() {
     setResumeLoadingOlder(true);
     setResumeError(null);
     try {
-      const { data } = await api.get<ReceiptScanHistoryPage>("/records/receipts", {
+      const { data } = await api.get<ReceiptHistoryPage>("/records/receipts", {
         params: { businessProfileId: selectedBusinessProfileId, status: "active", take: 20, cursor: resumeCursor },
         signal,
       });
@@ -565,9 +569,16 @@ function ScanReceiptForm() {
   useEffect(() => {
     if (!focusRowAfterDelete) return;
     setFocusRowAfterDelete(null);
-    const { scanId } = focusRowAfterDelete;
+    const { deletedScanId, nextScanId } = focusRowAfterDelete;
+    // The delete took a round trip. If the owner has moved on to a form field
+    // meanwhile, taking focus away from it would undo their keystroke.
+    const active = document.activeElement;
+    const focusLostWithRow = !active
+      || active === document.body
+      || active.closest(`#${recoveryRowId(deletedScanId)}`) !== null;
+    if (!focusLostWithRow) return;
     // Next row's action, or the photo picker once the list is empty.
-    const next = scanId === null ? null : document.getElementById(recoveryRowActionId(scanId));
+    const next = nextScanId === null ? null : document.getElementById(recoveryRowActionId(nextScanId));
     (next ?? document.getElementById("receipt-files"))?.focus();
   }, [focusRowAfterDelete]);
 
@@ -607,7 +618,7 @@ function ScanReceiptForm() {
     return data.id;
   }
 
-  function ensureAccepted(file: File, batch?: BatchReceiptBinding): Promise<ScanResult> {
+  function ensureAccepted(file: File, batch?: BatchReceiptBinding): Promise<ReceiptScanResult> {
     const binding = uploadBindingKey(batch);
     const accepted = acceptedScans.current.get(file);
     if (accepted?.binding === binding) return Promise.resolve(accepted.scan);
@@ -629,7 +640,7 @@ function ScanReceiptForm() {
         formData.append("receiptBatchId", String(batch.batchId));
         formData.append("receiptOrdinal", String(batch.receiptOrdinal));
       }
-      const { data } = await api.post<ScanResult>("/records/receipts", formData, {
+      const { data } = await api.post<ReceiptScanResult>("/records/receipts", formData, {
         headers: { "Content-Type": "multipart/form-data" },
         signal,
       });
@@ -645,7 +656,7 @@ function ScanReceiptForm() {
     return promise;
   }
 
-  async function ensureScanned(file: File, batch?: BatchReceiptBinding): Promise<ScanResult> {
+  async function ensureScanned(file: File, batch?: BatchReceiptBinding): Promise<ReceiptScanResult> {
     const accepted = await ensureAccepted(file, batch);
     // The photos are on the server. Whether OCR has started is the server's
     // business; what the client knows is that the upload is over.
@@ -684,9 +695,9 @@ function ScanReceiptForm() {
 
   /** Polls an accepted scan until it is complete, failed, or times out locally. */
   async function pollUntilRead(
-    initial: ScanResult,
+    initial: ReceiptScanResult,
     signal = requests.current.signal,
-  ): Promise<ScanResult> {
+  ): Promise<ReceiptScanResult> {
     signal.throwIfAborted();
     if (initial.processingStatus && initial.processingStatus !== "Processing") {
       return initial;
@@ -696,7 +707,7 @@ function ScanReceiptForm() {
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, SCAN_POLL_INTERVAL_MS));
       signal.throwIfAborted();
-      const { data } = await api.get<ScanResult>(`/records/receipts/${initial.id}`, { signal });
+      const { data } = await api.get<ReceiptScanResult>(`/records/receipts/${initial.id}`, { signal });
       if (data.processingStatus === "Failed") return data;
       if (data.processingStatus === "Complete") return data;
     }
@@ -709,7 +720,7 @@ function ScanReceiptForm() {
     throw new Error("This receipt is taking longer than expected to read. Try scanning it again.");
   }
 
-  async function presentCompletedScan(data: ScanResult, signal: AbortSignal) {
+  async function presentCompletedScan(data: ReceiptScanResult, signal: AbortSignal) {
     setScanStage("checking");
     await refreshCategories();
     signal.throwIfAborted();
@@ -751,7 +762,7 @@ function ScanReceiptForm() {
               filesToSend.forEach((f) => formData.append("files", f));
               formData.append("businessProfileId", String(selected!.id));
               formData.append("idempotencyKey", upload.key);
-              const res = await api.post<ScanResult>("/records/receipts", formData, {
+              const res = await api.post<ReceiptScanResult>("/records/receipts", formData, {
                 headers: { "Content-Type": "multipart/form-data" },
                 signal,
               });
@@ -880,11 +891,14 @@ function ScanReceiptForm() {
   async function retryProcessing() {
     if (!scan || scan.processingStatus !== "Failed") return;
     const signal = requests.current.signal;
+    // A Failed scan opened from unfinished scans has no local photos; Stop
+    // waiting must then leave the row where it is rather than "cancel an upload".
+    if (currentFiles.current.length === 0) waitingStoredScan.current = scan;
     setScanning(true);
     setScanStage("reading");
     setScanError(null);
     try {
-      const { data: queued } = await api.post<ScanResult>(
+      const { data: queued } = await api.post<ReceiptScanResult>(
         `/records/receipts/${scan.id}/retry`,
         undefined,
         { signal },
@@ -899,11 +913,14 @@ function ScanReceiptForm() {
     } catch (err) {
       if (!signal.aborted) setScanError(getErrorMessage(err));
     } finally {
-      if (!signal.aborted) setScanning(false);
+      if (!signal.aborted) {
+        waitingStoredScan.current = null;
+        setScanning(false);
+      }
     }
   }
 
-  async function openStoredScan(summary: ReceiptScanSummary) {
+  async function openStoredScan(summary: ReceiptHistoryItem) {
     const signal = requests.current.signal;
     waitingStoredScan.current = summary;
     setScanning(true);
@@ -913,8 +930,8 @@ function ScanReceiptForm() {
     currentFiles.current = [];
     try {
       const response = summary.allowedActions.retryProcessing
-        ? await api.post<ScanResult>(`/records/receipts/${summary.id}/retry`, undefined, { signal })
-        : await api.get<ScanResult>(`/records/receipts/${summary.id}`, { signal });
+        ? await api.post<ReceiptScanResult>(`/records/receipts/${summary.id}/retry`, undefined, { signal })
+        : await api.get<ReceiptScanResult>(`/records/receipts/${summary.id}`, { signal });
       const result = response.data.processingStatus === "Processing"
         ? await pollUntilRead(response.data, signal)
         : response.data;
@@ -934,7 +951,7 @@ function ScanReceiptForm() {
     }
   }
 
-  async function deleteUnconfirmedScan(target: Pick<ReceiptScanSummary, "id" | "extractedVendor" | "extractedDescription">) {
+  async function deleteUnconfirmedScan(target: Pick<ReceiptHistoryItem, "id" | "extractedVendor" | "extractedDescription">) {
     if (deletingScanId !== null) return;
     const label = target.extractedVendor ?? target.extractedDescription ?? `scan ${target.id}`;
     const approved = await confirm({
@@ -981,7 +998,7 @@ function ScanReceiptForm() {
         return;
       }
       // The focused Delete button unmounts with its row; otherwise focus drops to <body>.
-      setFocusRowAfterDelete({ scanId: neighbour?.id ?? null });
+      setFocusRowAfterDelete({ deletedScanId: target.id, nextScanId: neighbour?.id ?? null });
       toast("Scan removed. Its private files will be deleted in the background.");
     } catch (error) {
       if (isDeletionAlreadyUnderway(error)) {
@@ -996,7 +1013,7 @@ function ScanReceiptForm() {
           : resumeScans[rowIndex + 1] ?? resumeScans[rowIndex - 1] ?? null;
         setResumeHistory((current) => withoutScan(current, target.id));
         if (scan?.id === target.id) resetScanSession();
-        else setFocusRowAfterDelete({ scanId: neighbour?.id ?? null });
+        else setFocusRowAfterDelete({ deletedScanId: target.id, nextScanId: neighbour?.id ?? null });
         toast("This scan is already being deleted. Its private files will be deleted in the background.");
         return;
       }
@@ -1134,7 +1151,7 @@ function ScanReceiptForm() {
       await finishConfirmedReceipt(saved);
     } catch (err) {
       if (!signal.aborted && isAxiosError(err) && err.response?.status === 409) {
-        const body = err.response.data as { code?: unknown };
+        const body = err.response.data as Partial<ReceiptDuplicateReview> | undefined;
         if (body?.code === "DUPLICATE_REVIEW_REQUIRED" || body?.code === "DUPLICATE_REVIEW_CHANGED") {
           const review = duplicateReviewFrom(body, body.code === "DUPLICATE_REVIEW_CHANGED");
           if (review) {
@@ -1148,7 +1165,7 @@ function ScanReceiptForm() {
       const status = isAxiosError(err) ? err.response?.status : undefined;
       if (!signal.aborted && (status === undefined || status === 409 || status >= 500)) {
         try {
-          const latest = await api.get<ScanResult>(`/records/receipts/${scan.id}`, { signal });
+          const latest = await api.get<ReceiptScanResult>(`/records/receipts/${scan.id}`, { signal });
           signal.throwIfAborted();
           if (latest.data.id === scan.id && latest.data.confirmationStatus === "Confirmed") {
             await finishConfirmedReceipt(null);
@@ -1201,7 +1218,7 @@ function ScanReceiptForm() {
    * unfinished list at once; a refresh then reconciles them.
    */
   function handleRescan() {
-    const abandoned: ScanResult[] = [];
+    const abandoned: ReceiptScanResult[] = [];
     if (scan && scan.confirmationStatus !== "Confirmed") abandoned.push(scan);
     for (const file of fileQueue) {
       const accepted = acceptedScans.current.get(file)?.scan;
@@ -1417,7 +1434,7 @@ function ScanReceiptForm() {
     setConfirmError(null);
     const signal = requests.current.signal;
     try {
-      const { data } = await api.patch<ScanResult>(
+      const { data } = await api.patch<ReceiptScanResult>(
         `/records/receipts/${scan.id}/items/${editingItem.id}`,
         { name, amount: nextAmount, expectedScanRevision: scan.scanRevision },
         { signal },
@@ -1429,7 +1446,7 @@ function ScanReceiptForm() {
       if (signal.aborted) return;
       if (isAxiosError(err) && err.response?.status === 409) {
         try {
-          const { data: latest } = await api.get<ScanResult>(`/records/receipts/${scan.id}`, { signal });
+          const { data: latest } = await api.get<ReceiptScanResult>(`/records/receipts/${scan.id}`, { signal });
           setScan((current) => (current?.id === latest.id ? latest : current));
           setConfirmError("This receipt changed in another request. Your edit is still here; review it and save again.");
         } catch (refreshError) {
@@ -1463,7 +1480,7 @@ function ScanReceiptForm() {
     setConfirmError(null);
     const signal = requests.current.signal;
     try {
-      const { data } = await api.delete<ScanResult>(
+      const { data } = await api.delete<ReceiptScanResult>(
         `/records/receipts/${scan.id}/items/${itemId}`,
         { params: { expectedScanRevision: scan.scanRevision }, signal },
       );
@@ -1477,7 +1494,7 @@ function ScanReceiptForm() {
       if (signal.aborted) return;
       if (isAxiosError(err) && err.response?.status === 409) {
         try {
-          const { data: latest } = await api.get<ScanResult>(`/records/receipts/${scan.id}`, { signal });
+          const { data: latest } = await api.get<ReceiptScanResult>(`/records/receipts/${scan.id}`, { signal });
           setScan((current) => (current?.id === latest.id ? latest : current));
           setConfirmError("This receipt changed in another request. Check the latest items and try again.");
         } catch (refreshError) {
@@ -1565,7 +1582,7 @@ function ScanReceiptForm() {
                     : "Continue waiting";
                 const deleteLabel = deletingScanId === pending.id ? "Deleting…" : "Delete scan";
                 return (
-                  <li key={pending.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-paper px-3 py-2 ring-1 ring-paper-200">
+                  <li key={pending.id} id={recoveryRowId(pending.id)} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-paper px-3 py-2 ring-1 ring-paper-200">
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium text-ink-800">{recoveryRowTitle(pending)}</p>
                       <p className="text-xs text-ink-500">

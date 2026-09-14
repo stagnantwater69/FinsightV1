@@ -1,4 +1,4 @@
-import type { ReceiptScanHistoryPage, ReceiptScanSummary, ScanResult } from "./types";
+import type { ReceiptHistoryPage, ReceiptHistoryItem, ReceiptScanResult } from "./types";
 
 /**
  * Every server page merged so far, plus scans abandoned locally before a
@@ -6,7 +6,7 @@ import type { ReceiptScanHistoryPage, ReceiptScanSummary, ScanResult } from "./t
  * for the oldest loaded row; it is passed back as-is and never inspected.
  */
 export interface RecoveryHistoryState {
-  scans: ReceiptScanSummary[];
+  scans: ReceiptHistoryItem[];
   nextCursor: string | null;
   /** Server pages merged in. Zero until the first fetch settles. */
   pagesLoaded: number;
@@ -15,7 +15,7 @@ export interface RecoveryHistoryState {
 export const EMPTY_RECOVERY_HISTORY: RecoveryHistoryState = { scans: [], nextCursor: null, pagesLoaded: 0 };
 
 /** Server order: createdAt descending, then id descending. */
-function isOlderThan(candidate: ReceiptScanSummary, boundary: ReceiptScanSummary): boolean {
+function isOlderThan(candidate: ReceiptHistoryItem, boundary: ReceiptHistoryItem): boolean {
   const candidateTime = Date.parse(candidate.createdAt);
   const boundaryTime = Date.parse(boundary.createdAt);
   if (candidateTime !== boundaryTime) return candidateTime < boundaryTime;
@@ -27,7 +27,7 @@ function isOlderThan(candidate: ReceiptScanSummary, boundary: ReceiptScanSummary
  * for the window it covers, so rows inside that window it no longer returns
  * are dropped. Rows older than its last row keep their deeper cursor.
  */
-export function reconcileFirstPage(state: RecoveryHistoryState, page: ReceiptScanHistoryPage): RecoveryHistoryState {
+export function reconcileFirstPage(state: RecoveryHistoryState, page: ReceiptHistoryPage): RecoveryHistoryState {
   const pagesLoaded = Math.max(1, state.pagesLoaded);
   if (page.nextCursor === null || page.items.length === 0) {
     return { scans: page.items, nextCursor: page.nextCursor, pagesLoaded };
@@ -43,7 +43,7 @@ export function reconcileFirstPage(state: RecoveryHistoryState, page: ReceiptSca
 }
 
 /** Appends an older page fetched with `state.nextCursor`, skipping rows already shown. */
-export function appendOlderPage(state: RecoveryHistoryState, page: ReceiptScanHistoryPage): RecoveryHistoryState {
+export function appendOlderPage(state: RecoveryHistoryState, page: ReceiptHistoryPage): RecoveryHistoryState {
   const seen = new Set(state.scans.map((row) => row.id));
   return {
     scans: [...state.scans, ...page.items.filter((row) => !seen.has(row.id))],
@@ -60,10 +60,10 @@ export function withoutScan(state: RecoveryHistoryState, scanId: number): Recove
  * Shows just-abandoned scans before the server confirms them, so a pending or
  * failed refresh never hides them. A known row keeps its server `createdAt`.
  */
-export function seedLocalScans(state: RecoveryHistoryState, local: ReceiptScanSummary[]): RecoveryHistoryState {
+export function seedLocalScans(state: RecoveryHistoryState, local: ReceiptHistoryItem[]): RecoveryHistoryState {
   if (local.length === 0) return state;
   const byId = new Map(state.scans.map((row) => [row.id, row]));
-  const fresh: ReceiptScanSummary[] = [];
+  const fresh: ReceiptHistoryItem[] = [];
   for (const row of local) {
     const existing = byId.get(row.id);
     if (existing) byId.set(row.id, { ...row, createdAt: existing.createdAt });
@@ -73,7 +73,7 @@ export function seedLocalScans(state: RecoveryHistoryState, local: ReceiptScanSu
 }
 
 /** Shapes a scan the review screen holds into the row history would show for it. */
-export function summaryFromScan(scan: ScanResult, businessProfileId: number, createdAt: string): ReceiptScanSummary {
+export function summaryFromScan(scan: ReceiptScanResult, businessProfileId: number, createdAt: string): ReceiptHistoryItem {
   const processingStatus = scan.processingStatus ?? "Complete";
   return {
     id: scan.id,
@@ -98,7 +98,7 @@ export function summaryFromScan(scan: ScanResult, businessProfileId: number, cre
   };
 }
 
-export function recoveryRowTitle(row: Pick<ReceiptScanSummary, "id" | "extractedVendor" | "extractedDescription">): string {
+export function recoveryRowTitle(row: Pick<ReceiptHistoryItem, "id" | "extractedVendor" | "extractedDescription">): string {
   return row.extractedVendor ?? row.extractedDescription ?? `Receipt scan ${row.id}`;
 }
 
@@ -106,7 +106,7 @@ export function recoveryRowTitle(row: Pick<ReceiptScanSummary, "id" | "extracted
  * Per-row accessible name from what the row already shows (title, receipt
  * number). Rows that still read the same get the scan id the fallback uses.
  */
-export function recoveryRowNames(scans: ReceiptScanSummary[]): Map<number, string> {
+export function recoveryRowNames(scans: ReceiptHistoryItem[]): Map<number, string> {
   const base = new Map<number, string>();
   const counts = new Map<string, number>();
   for (const row of scans) {

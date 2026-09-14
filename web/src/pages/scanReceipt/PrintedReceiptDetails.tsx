@@ -1,7 +1,7 @@
 import { ResultDetails } from "../../components/ResultDetails";
-import type { ScanResult } from "./types";
+import type { ReceiptScanResult } from "./types";
 
-export function PrintedReceiptDetails({ details }: { details: ScanResult["receiptDetails"] }) {
+export function PrintedReceiptDetails({ details }: { details: ReceiptScanResult["receiptDetails"] }) {
   if (!details) return null;
   const money = (value: number | null) => value === null ? null : `${details.currency ? `${details.currency} ` : ""}${new Intl.NumberFormat("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value)}`;
   const fields = [

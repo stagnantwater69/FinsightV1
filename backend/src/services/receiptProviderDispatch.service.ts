@@ -229,6 +229,24 @@ function dispatchableReceiptWhere(input: ReceiptProviderDispatchInput, now: Date
   };
 }
 
+/** The exact-term consent a live reserve, a submission recheck, and a replay all require. */
+function activeConsentWhere(
+  businessProfileId: number,
+  config: ReceiptProviderConfiguration & { provider: "gemini" | "veryfi"; providerRegion: string; providerRetentionHours: number },
+): Prisma.ExternalProcessingConsentWhereInput {
+  return {
+    businessProfileId,
+    provider: config.provider,
+    policyVersion: config.policyVersion,
+    purpose: "RECEIPT_EXTRACTION",
+    allowedDataClasses: { equals: [...config.allowedDataClasses] },
+    processingRegion: config.providerRegion,
+    providerRetentionHours: config.providerRetentionHours,
+    providerTrainingAllowed: false,
+    revokedAt: null,
+  };
+}
+
 async function ensureBudget(
   tx: Prisma.TransactionClient,
   input: {
@@ -678,8 +696,22 @@ async function reserve(
     if (existing.status === "RESERVED") return { kind: "reserved", reservation: existing as Reservation };
     if (existing.status === "SUCCEEDED") {
       const outcome = await loadStoredOutcome(existing);
-      if (outcome !== null) return { kind: "replay", reservation: existing as Reservation, outcome };
-      throw new GateRefusal("PROVIDER_DISPATCH_ALREADY_ATTEMPTED");
+      if (outcome === null) throw new GateRefusal("PROVIDER_DISPATCH_ALREADY_ATTEMPTED");
+      // A replay sends nothing and bills nothing, but it still applies
+      // provider output to the receipt, so it answers to the same two gates a
+      // live submission does. Read-only: a revoked consent is not re-granted
+      // by policy here.
+      const receipt = await prisma.receiptScan.findFirst({
+        where: dispatchableReceiptWhere(input, now),
+        select: { id: true },
+      });
+      if (!receipt) throw new GateRefusal("PROVIDER_UNAVAILABLE");
+      const consent = await prisma.externalProcessingConsent.findFirst({
+        where: activeConsentWhere(input.businessProfileId, config),
+        select: { id: true },
+      });
+      if (!consent) throw new GateRefusal("PROVIDER_CONSENT_REQUIRED");
+      return { kind: "replay", reservation: existing as Reservation, outcome };
     }
     // A reservation the stale reconciler (or a pre-submission check) cancelled
     // sent nothing and billed nothing, so it is not an attempt. The key is
@@ -701,17 +733,7 @@ async function reserve(
           if (!receipt) throw new GateRefusal("PROVIDER_UNAVAILABLE");
           const consent =
             (await tx.externalProcessingConsent.findFirst({
-              where: {
-                businessProfileId: input.businessProfileId,
-                provider: config.provider,
-                policyVersion: config.policyVersion,
-                purpose: "RECEIPT_EXTRACTION",
-                allowedDataClasses: { equals: [...config.allowedDataClasses] },
-                processingRegion: config.providerRegion,
-                providerRetentionHours: config.providerRetentionHours,
-                providerTrainingAllowed: false,
-                revokedAt: null,
-              },
+              where: activeConsentWhere(input.businessProfileId, config),
               orderBy: { id: "desc" },
               select: { id: true },
             })) ?? (await grantReceiptProviderConsentByPolicy(tx, input.businessProfileId, config));
@@ -1116,18 +1138,7 @@ export async function dispatchReceiptProviderRescue(
     `;
     if (locked.length !== 1) return "CONSENT_REVOKED" as const;
     const consent = await tx.externalProcessingConsent.findFirst({
-      where: {
-        id: reservation.consentId,
-        businessProfileId: input.businessProfileId,
-        provider: config.provider,
-        policyVersion: config.policyVersion,
-        purpose: "RECEIPT_EXTRACTION",
-        allowedDataClasses: { equals: [...config.allowedDataClasses] },
-        processingRegion: config.providerRegion,
-        providerRetentionHours: config.providerRetentionHours,
-        providerTrainingAllowed: false,
-        revokedAt: null,
-      },
+      where: { id: reservation.consentId, ...activeConsentWhere(input.businessProfileId, config) },
       select: { id: true },
     });
     if (!consent) return "CONSENT_REVOKED" as const;

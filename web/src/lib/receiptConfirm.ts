@@ -17,6 +17,8 @@
  *     a split of one.
  */
 
+import type { ReceiptDuplicateDecision } from "../pages/scanReceipt/types";
+
 export type ReconciliationMode =
   | { mode: "none" }
   | { mode: "proportional" }
@@ -27,7 +29,7 @@ export type GapPlan = "proportional" | "category" | "shrink" | null;
 
 export interface ReceiptConfirmPayload {
   expectedScanRevision: number;
-  duplicateDecision?: { action: "SAVE_ANYWAY"; candidateSetHash: string };
+  duplicateDecision?: ReceiptDuplicateDecision;
   date: string;
   description: string;
   vendor?: string;
@@ -40,7 +42,7 @@ export interface ReceiptConfirmPayload {
 
 export interface ReceiptConfirmInput {
   expectedScanRevision: number;
-  duplicateDecision?: { action: "SAVE_ANYWAY"; candidateSetHash: string };
+  duplicateDecision?: ReceiptDuplicateDecision;
   date: string;
   description: string;
   vendor: string;

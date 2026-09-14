@@ -89,30 +89,32 @@ import {
   type ReceiptDuplicateDecision,
   type ReceiptDuplicateReview,
 } from "./scanReceipt/duplicateReview";
-import type { CapturedPage, ReceiptHistoryItem, ReceiptHistoryPage, ReceiptPurgeJob, ReceiptScanResult, ReviewNotice } from "./scanReceipt/types";
+import type {
+  CapturedPage,
+  ReceiptCaptureBatch,
+  ReceiptHistoryItem,
+  ReceiptHistoryPage,
+  ReceiptPurgeJob,
+  ReceiptScanResult,
+  ReviewNotice,
+} from "./scanReceipt/types";
 
 const MIB = 1024 * 1024;
 
-interface ReceiptCaptureBatch {
-  id: number;
-  businessProfileId: number;
-  expectedReceiptCount: number;
-  status: "COLLECTING" | "PROCESSING" | "READY_FOR_REVIEW" | "PARTIAL_FAILURE" | "FAILED" | "COMPLETE" | "CANCELLED";
-  uploadedReceiptCount: number;
-  createdAt: string;
-  finishedAt: string | null;
-  receipts: {
-    receiptOrdinal: number;
-    id: number;
-    processingStatus: "Processing" | "Complete" | "Failed";
-    confirmationStatus: "Pending" | "Confirmed";
-    processingError: string | null;
-    processingErrorCode: string | null;
-    extractedDate: string | null;
-    extractedVendor: string | null;
-    extractedAmount: number | null;
-    allowedActions: { retryProcessing: boolean; reviewResult: boolean };
-  }[];
+/**
+ * DELETE /records/receipts/:id answers 409 PURGE_IN_PROGRESS when a purge for
+ * that scan is already running. The code is the contract; the sentence is a
+ * fallback for a server build that predates it.
+ */
+function purgeAlreadyUnderway(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const { status, code, responseBody, message } = err as {
+    status?: unknown; code?: unknown; responseBody?: unknown; message?: unknown;
+  };
+  if (status !== 409) return false;
+  const bodyCode = (responseBody as { code?: unknown } | null | undefined)?.code;
+  if (code === "PURGE_IN_PROGRESS" || bodyCode === "PURGE_IN_PROGRESS") return true;
+  return typeof message === "string" && /already being deleted/i.test(message);
 }
 
 interface ReceiptBatchChild {
@@ -1117,15 +1119,23 @@ export function ScanReceiptScreen({ navigation }: any) {
     try {
       const idempotencyKey = deleteScanKeys.current[scanId] ?? newIdempotencyKey();
       deleteScanKeys.current[scanId] = idempotencyKey;
-      const job = await api.delete<ReceiptPurgeJob>(
-        `/records/receipts/${scanId}`,
-        undefined,
-        { "Idempotency-Key": idempotencyKey },
-      );
+      let job: ReceiptPurgeJob | null = null;
+      try {
+        job = await api.delete<ReceiptPurgeJob>(
+          `/records/receipts/${scanId}`,
+          undefined,
+          { "Idempotency-Key": idempotencyKey },
+        );
+      } catch (err) {
+        // A purge that is already running is the outcome the owner asked for,
+        // so the row leaves the list the same way a fresh purge does.
+        if (!purgeAlreadyUnderway(err)) throw err;
+      }
       if (!operation.current(task)) return;
-      if (job.receiptScanId !== scanId || !Number.isInteger(job.id)) {
+      if (job && (job.receiptScanId !== scanId || !Number.isInteger(job.id))) {
         throw new Error("FinSight returned a deletion result that did not match this receipt scan.");
       }
+      const deletionLead = job ? "Receipt scan deletion started." : "This receipt scan was already being deleted.";
 
       if (isCurrent) void deleteReceiptScannerFiles(scannerFileUris(pages));
 
@@ -1163,16 +1173,16 @@ export function ScanReceiptScreen({ navigation }: any) {
         setScanStarted(false);
         setFlash(
           unsentPages.length > 0 && storedSiblings
-            ? "Receipt scan deletion started. The receipts you haven't sent yet are still here, ready to scan. The other stored receipts from this batch are still in Receipts to finish."
+            ? `${deletionLead} The receipts you haven't sent yet are still here, ready to scan. The other stored receipts from this batch are still in Receipts to finish.`
             : unsentPages.length > 0
-              ? "Receipt scan deletion started. The receipts you haven't sent yet are still here, ready to scan."
+              ? `${deletionLead} The receipts you haven't sent yet are still here, ready to scan.`
               : storedSiblings
-                ? "Receipt scan deletion started. The other stored receipts from this batch are still in Receipts to finish."
-                : "Receipt scan deletion started.",
+                ? `${deletionLead} The other stored receipts from this batch are still in Receipts to finish.`
+                : deletionLead,
         );
         void loadActiveReceipts();
       } else {
-        setFlash("Receipt scan deletion started.");
+        setFlash(deletionLead);
       }
     } catch (err) {
       if (!operation.current(task)) return;

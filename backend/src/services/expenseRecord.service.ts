@@ -81,6 +81,24 @@ async function queueAnalysis(businessProfileId: number, expenseRecordId: number)
   });
 }
 
+/**
+ * Runs one post-commit side effect of a create and swallows its failure, so
+ * a notification that cannot be written never skips the analysis enqueue
+ * after it, and a failed tail never turns a committed record into a 500.
+ * Only identifiers reach the log; the description, vendor and amount do not.
+ */
+async function runSideEffect(
+  effect: "notification" | "analysis",
+  ids: { businessProfileId: number; expenseRecordId: number; receiptScanId: number | null },
+  run: () => Promise<void>,
+): Promise<void> {
+  try {
+    await run();
+  } catch (err) {
+    logger.error({ err, ...ids, effect, code: "EXPENSE_RECORD_SIDE_EFFECT_FAILED" }, "expense record side effect failed");
+  }
+}
+
 async function findDuplicate(
   businessProfileId: number,
   date: Date,
@@ -162,7 +180,9 @@ async function verifyCategoryBelongsToProfile(categoryId: number, businessProfil
  * The notifications and the queued analysis stay OUTSIDE the transaction, via
  * `runSideEffects` — a notification that fails to send must never roll back a
  * record the owner has already been told was saved, and the analysis job
- * carries a foreign key to a row that is not committed yet.
+ * carries a foreign key to a row that is not committed yet. `runSideEffects`
+ * never throws: each effect is isolated, so the response is the committed
+ * record whatever happened to the tail.
  */
 export async function createExpenseRecord(userId: number, input: CreateInput) {
   const { record, runSideEffects } = await prisma.$transaction((tx) =>
@@ -251,27 +271,30 @@ export async function createExpenseRecordWithin(
     },
   });
 
+  const ids = { businessProfileId: record.businessProfileId, expenseRecordId: record.id, receiptScanId: record.receiptScanId };
   const runSideEffects = async () => {
     if (duplicate) {
-      await createNotification(
-        userId,
-        input.businessProfileId,
-        NOTIFICATION_TYPES.POSSIBLE_DUPLICATE,
-        `Possible duplicate: "${input.description}" (PHP ${input.amount}) on ${input.date}`,
-        record.id
-      );
+      await runSideEffect("notification", ids, () =>
+        createNotification(
+          userId,
+          input.businessProfileId,
+          NOTIFICATION_TYPES.POSSIBLE_DUPLICATE,
+          `Possible duplicate: "${input.description}" (PHP ${input.amount}) on ${input.date}`,
+          record.id,
+        ));
     }
     if (largeExpenseFlag) {
-      await createNotification(
-        userId,
-        input.businessProfileId,
-        NOTIFICATION_TYPES.LARGE_EXPENSE_FLAG,
-        `Large expense flagged: "${input.description}" (PHP ${input.amount}) on ${input.date}`,
-        record.id
-      );
+      await runSideEffect("notification", ids, () =>
+        createNotification(
+          userId,
+          input.businessProfileId,
+          NOTIFICATION_TYPES.LARGE_EXPENSE_FLAG,
+          `Large expense flagged: "${input.description}" (PHP ${input.amount}) on ${input.date}`,
+          record.id,
+        ));
     }
 
-    await queueAnalysis(record.businessProfileId, record.id);
+    await runSideEffect("analysis", ids, () => queueAnalysis(record.businessProfileId, record.id));
   };
 
   return { record: toDTO(record), runSideEffects };

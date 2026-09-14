@@ -195,7 +195,9 @@ describe("a noncritical post-commit effect that fails", () => {
     expect(entry, "a failed post-commit effect must be logged").toBeDefined();
     expect(entry![0]).toMatchObject({
       receiptScanId: scan.id,
-      code: "RECEIPT_CONFIRM_POST_COMMIT_EFFECT_FAILED",
+      expenseRecordId: response.body[0].id,
+      effect: "notification",
+      code: "EXPENSE_RECORD_SIDE_EFFECT_FAILED",
     });
     const serialised = JSON.stringify(entry, (_key, value) => (value instanceof Error ? value.message : value));
     expect(serialised).not.toMatch(new RegExp(VENDOR));
@@ -220,10 +222,13 @@ describe("a noncritical post-commit effect that fails", () => {
       duplicateOfRecordId: prior.id,
       largeExpenseFlag: true,
     });
-    // The duplicate notification is first in the tail and throws, so the
-    // large-expense one after it is never attempted; both are lost, nothing else is.
-    expect(effects.notification.calls).toBe(1);
+    // Each effect runs on its own: the large-expense notification is still
+    // attempted after the duplicate one throws, and the analysis is still
+    // queued. Both notifications are lost, and nothing else is.
+    expect(effects.notification.calls).toBe(2);
     expect(await prisma.notification.count()).toBe(0);
+    expect(effects.analysis.calls).toBe(1);
+    expect(await prisma.analysisJob.count()).toBe(1);
     expect(await prisma.expenseRecord.count()).toBe(2);
     expect(await prisma.expenseRecord.findMany({ where: { receiptScanId: scan.id } })).toHaveLength(1);
     expect(await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).toMatchObject({
@@ -310,11 +315,11 @@ describe("a noncritical post-commit effect that fails", () => {
     expect(await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).toMatchObject({
       confirmationStatus: "Confirmed",
     });
-    // The first record's failed notification stops the rest of its own tail
-    // (its analysis enqueue never runs) but not the second record's tail or
-    // the feedback ledger. Pinned as shipped; changing it should be deliberate.
+    // The first record's failed notification does not stop its own analysis
+    // enqueue, the second record's tail, or the feedback ledger: every effect
+    // is attempted once.
     expect(effects.notification.calls).toBe(1);
-    expect(effects.analysis.calls).toBe(1);
+    expect(effects.analysis.calls).toBe(2);
     expect(effects.feedback.calls).toBe(1);
     expect(await prisma.notification.count()).toBe(0);
     expect(await prisma.analysisJob.count()).toBe(0);
@@ -352,6 +357,45 @@ describe("a noncritical post-commit effect that fails", () => {
     const response = await first;
     expect(response.status).toBe(201);
     await expectBookedOnce(scan.id, 1, LARGE_AMOUNT);
+  });
+});
+
+describe("the typed-in expense create with a failing post-commit effect", () => {
+  const EXPENSES = "/api/v1/records/expenses";
+
+  it("notification write: answers 201 with the record saved and the analysis still queued", async () => {
+    const logged = vi.spyOn(logger, "error");
+    effects.notification.fail = true;
+
+    const response = await request(app)
+      .post(EXPENSES)
+      .set(...AUTH)
+      .send({
+        businessProfileId: ctx.profile.id,
+        categoryId: ctx.categories.Inventory,
+        date: "2026-07-20",
+        description: "Stock purchase",
+        vendor: VENDOR,
+        amount: LARGE_AMOUNT,
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toMatchObject({ largeExpenseFlag: true, amount: LARGE_AMOUNT });
+    expect(await prisma.expenseRecord.count({ where: { id: response.body.id } })).toBe(1);
+    expect(effects.notification.calls).toBe(1);
+    expect(await prisma.notification.count()).toBe(0);
+    expect(effects.analysis.calls).toBe(1);
+    expect(await prisma.analysisJob.count({ where: { expenseRecordId: response.body.id } })).toBe(1);
+
+    const entry = logged.mock.calls.find(([fields]) =>
+      typeof fields === "object" && fields !== null && "code" in fields
+      && (fields as { code: unknown }).code === "EXPENSE_RECORD_SIDE_EFFECT_FAILED");
+    expect(entry, "a failed side effect must be logged").toBeDefined();
+    expect(entry![0]).toMatchObject({ expenseRecordId: response.body.id, receiptScanId: null, effect: "notification" });
+    const serialised = JSON.stringify(entry, (_key, value) => (value instanceof Error ? value.message : value));
+    expect(serialised).not.toMatch(new RegExp(VENDOR));
+    expect(serialised).not.toContain(String(LARGE_AMOUNT));
+    expect(serialised).not.toContain("Stock purchase");
   });
 });
 

@@ -506,6 +506,67 @@ describe("mocked receipt provider dispatch gate", () => {
     expect(JSON.stringify(stored.outcome)).toContain("Provider Store");
   });
 
+  it("refuses to replay a stored outcome after the owner revoked consent", async () => {
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const scan = await scanFor(owner.profile.id, "replay-revoked");
+    const mockedAdapter = adapter();
+    const config = getReceiptProviderConfiguration();
+
+    const first = await dispatchReceiptProviderRescue(dispatchInput(owner.profile.id, scan.id), {
+      adapter: mockedAdapter,
+      configuration: config,
+    });
+    expect(first).toMatchObject({ code: "PROVIDER_OK", dispatched: true, dispatchStatus: "SUCCEEDED" });
+    await revokeReceiptProviderConsent(owner.user.id, owner.profile.id);
+    await prisma.receiptScan.update({
+      where: { id: scan.id },
+      data: { processingAttemptCount: 2, processingHeartbeatAt: new Date() },
+    });
+
+    const replayed = await dispatchReceiptProviderRescue(
+      dispatchInput(owner.profile.id, scan.id, { processingLease: { workerId: TEST_WORKER_ID, attempt: 2 } }),
+      { adapter: mockedAdapter, configuration: config },
+    );
+
+    // Same gate code a live submission answers with, and the settled row is
+    // untouched: no second call, no second charge, nothing cancelled.
+    expect(replayed).toMatchObject({ code: "PROVIDER_CONSENT_REQUIRED", dispatched: false, dispatchStatus: "SKIPPED" });
+    expect(mockedAdapter.extract).toHaveBeenCalledTimes(1);
+    expect(await prisma.externalProviderDispatch.findMany()).toHaveLength(1);
+    expect(await prisma.externalProviderDispatch.findFirst()).toMatchObject({ status: "SUCCEEDED" });
+    expect(await prisma.externalProviderDispatchOutcome.count()).toBe(1);
+  });
+
+  it("refuses to replay a stored outcome once the receipt is no longer dispatchable", async () => {
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const scan = await scanFor(owner.profile.id, "replay-deleted");
+    const mockedAdapter = adapter();
+    const config = getReceiptProviderConfiguration();
+
+    const first = await dispatchReceiptProviderRescue(dispatchInput(owner.profile.id, scan.id), {
+      adapter: mockedAdapter,
+      configuration: config,
+    });
+    expect(first).toMatchObject({ code: "PROVIDER_OK", dispatched: true, dispatchStatus: "SUCCEEDED" });
+    await requestReceiptScanDeletion(owner.user.id, scan.id, "delete-before-replay");
+    expect(await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).toMatchObject({
+      confirmationStatus: "Deletion Pending",
+      evidenceDeletionRequestedAt: expect.any(Date),
+    });
+
+    const replayed = await dispatchReceiptProviderRescue(dispatchInput(owner.profile.id, scan.id), {
+      adapter: mockedAdapter,
+      configuration: config,
+    });
+
+    expect(replayed).toMatchObject({ code: "PROVIDER_UNAVAILABLE", dispatched: false, dispatchStatus: "SKIPPED" });
+    expect(mockedAdapter.extract).toHaveBeenCalledTimes(1);
+    expect(await prisma.externalProviderDispatch.findMany()).toHaveLength(1);
+    expect(await prisma.externalProviderDispatch.findFirst()).toMatchObject({ status: "SUCCEEDED" });
+  });
+
   it("still refuses a repeat attempt when a SUCCEEDED dispatch has no stored outcome", async () => {
     const owner = await makeOwnerWithProfile();
     await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());

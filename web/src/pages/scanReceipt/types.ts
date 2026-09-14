@@ -1,6 +1,6 @@
 import type { FieldEvidence, ReceiptWarning } from "../../lib/receiptWarnings";
 
-export interface ScanResult {
+export interface ReceiptScanResult {
   id: number;
   confirmationStatus?: "Pending" | "Confirmed" | "Deletion Pending";
   receiptBatchId?: number | null;
@@ -138,7 +138,7 @@ export interface ReceiptPageImage {
   expiresInSeconds: number;
 }
 
-export type ReceiptPageQuality = NonNullable<ScanResult["pageQualities"]>[number];
+export type ReceiptPageQuality = NonNullable<ReceiptScanResult["pageQualities"]>[number];
 
 export interface ScannedItem {
   id: number;
@@ -209,7 +209,7 @@ export interface ReceiptCaptureBatch {
   }[];
 }
 
-export interface ReceiptScanSummary {
+export interface ReceiptHistoryItem {
   id: number;
   businessProfileId: number;
   receiptBatchId: number | null;
@@ -231,8 +231,8 @@ export interface ReceiptScanSummary {
   };
 }
 
-export interface ReceiptScanHistoryPage {
-  items: ReceiptScanSummary[];
+export interface ReceiptHistoryPage {
+  items: ReceiptHistoryItem[];
   nextCursor: string | null;
 }
 
@@ -264,6 +264,27 @@ export interface ReceiptDuplicateCandidate {
   total: number;
   scoreBand: "EXACT" | "LIKELY";
   reasons: ReceiptDuplicateReason[];
+}
+
+/**
+ * The 409 body from POST /records/receipts/:id/confirm when the server wants
+ * the owner to look at possible duplicates before it writes anything.
+ * DUPLICATE_REVIEW_CHANGED means the matches moved since the last acknowledgement.
+ */
+export interface ReceiptDuplicateReview {
+  code: "DUPLICATE_REVIEW_REQUIRED" | "DUPLICATE_REVIEW_CHANGED";
+  sourceFingerprint: string | null;
+  candidateSetHash: string;
+  candidates: ReceiptDuplicateCandidate[];
+  candidateCount: number;
+  candidatesTruncated: boolean;
+  nextCursor: string | null;
+}
+
+/** The owner's answer to a duplicate review, sent back with the confirm body. */
+export interface ReceiptDuplicateDecision {
+  action: "SAVE_ANYWAY";
+  candidateSetHash: string;
 }
 
 export interface ReceiptDuplicateCandidatePage {

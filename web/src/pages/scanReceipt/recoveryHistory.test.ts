@@ -8,9 +8,9 @@ import {
   summaryFromScan,
   withoutScan,
 } from "./recoveryHistory";
-import type { ReceiptScanSummary } from "./types";
+import type { ReceiptHistoryItem } from "./types";
 
-function row(id: number, second = id, overrides: Partial<ReceiptScanSummary> = {}): ReceiptScanSummary {
+function row(id: number, second = id, overrides: Partial<ReceiptHistoryItem> = {}): ReceiptHistoryItem {
   return {
     id,
     businessProfileId: 1,
@@ -31,7 +31,7 @@ function row(id: number, second = id, overrides: Partial<ReceiptScanSummary> = {
     ...overrides,
   };
 }
-const ids = (state: { scans: ReceiptScanSummary[] }) => state.scans.map((scan) => scan.id);
+const ids = (state: { scans: ReceiptHistoryItem[] }) => state.scans.map((scan) => scan.id);
 
 describe("reconcileFirstPage", () => {
   it("takes a page with no cursor as the complete list", () => {

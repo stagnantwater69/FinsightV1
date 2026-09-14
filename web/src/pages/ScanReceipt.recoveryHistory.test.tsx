@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AxiosError, AxiosHeaders } from "axios";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ScanReceipt } from "./ScanReceipt";
-import type { ReceiptScanHistoryPage, ReceiptScanSummary, ScanResult } from "./scanReceipt/types";
+import type { ReceiptHistoryPage, ReceiptHistoryItem, ReceiptScanResult } from "./scanReceipt/types";
 
 const mocks = vi.hoisted(() => ({
   post: vi.fn(),
@@ -26,7 +26,7 @@ vi.mock("../context/ExpenseCategoryContext", () => ({ useExpenseCategories: () =
 vi.mock("../components/Toast", () => ({ useToast: () => vi.fn() }));
 vi.mock("../components/ConfirmDialog", () => ({ useConfirm: () => mocks.confirm }));
 
-const receipt: ScanResult = {
+const receipt: ReceiptScanResult = {
   id: 10, scanRevision: 0, processingStatus: "Complete", extractedDate: "2026-09-01", extractedDescription: "Paper supplies",
   extractedVendor: "Paper shop", extractedAmount: 500, items: [], ocrConfidence: 98,
 };
@@ -34,7 +34,7 @@ const photo = () => new File(["receipt image"], "receipt.png", { type: "image/pn
 function page() { return <MemoryRouter><ScanReceipt /></MemoryRouter>; }
 
 /** Newest first: a higher id is a later createdAt, matching the server's keyset order. */
-function summary(id: number, vendor: string | null, overrides: Partial<ReceiptScanSummary> = {}): ReceiptScanSummary {
+function summary(id: number, vendor: string | null, overrides: Partial<ReceiptHistoryItem> = {}): ReceiptHistoryItem {
   return {
     id,
     businessProfileId: 1,
@@ -55,14 +55,14 @@ function summary(id: number, vendor: string | null, overrides: Partial<ReceiptSc
     ...overrides,
   };
 }
-function range(from: number, to: number): ReceiptScanSummary[] {
-  const rows: ReceiptScanSummary[] = [];
+function range(from: number, to: number): ReceiptHistoryItem[] {
+  const rows: ReceiptHistoryItem[] = [];
   for (let id = from; id >= to; id -= 1) rows.push(summary(id, `Shop ${id}`));
   return rows;
 }
 
 type HistoryParams = { businessProfileId: number; status: string; take: number; cursor?: string };
-type HistoryHandler = (params: HistoryParams) => ReceiptScanHistoryPage | Promise<ReceiptScanHistoryPage>;
+type HistoryHandler = (params: HistoryParams) => ReceiptHistoryPage | Promise<ReceiptHistoryPage>;
 let history: HistoryHandler;
 function historyCalls(): HistoryParams[] {
   return mocks.get.mock.calls
@@ -406,7 +406,7 @@ describe("round 3: stop waiting, delete races, and focus", () => {
     history = () => {
       refreshes += 1;
       if (refreshes === 1) return { items: [summary(5, "Older shop")], nextCursor: null };
-      return new Promise<ReceiptScanHistoryPage>((resolve) => {
+      return new Promise<ReceiptHistoryPage>((resolve) => {
         releaseRefresh = () => resolve({ items: [summary(10, "Paper shop"), summary(5, "Older shop")], nextCursor: null });
       });
     };
@@ -486,5 +486,58 @@ describe("round 3: stop waiting, delete races, and focus", () => {
     await user.click(screen.getByRole("button", { name: "Delete scan, First shop" }));
     await waitFor(() => expect(screen.queryByRole("list", { name: "Unfinished scans" })).not.toBeInTheDocument());
     expect(screen.getByLabelText(/Receipt photo/)).toHaveFocus();
+  });
+
+  it("leaves focus alone when the owner moved to a form field while the delete was in flight", async () => {
+    const user = userEvent.setup();
+    history = () => ({ items: [summary(12, "First shop"), summary(11, "Second shop"), summary(10, "Third shop")], nextCursor: null });
+    let releaseDelete!: () => void;
+    mocks.delete.mockImplementation(() => new Promise((resolve) => {
+      releaseDelete = () => resolve({ data: { id: 700, receiptScanId: 11, status: "PENDING" } });
+    }));
+
+    render(page());
+    await screen.findByText("Second shop");
+    await user.click(screen.getByRole("button", { name: "Delete scan, Second shop" }));
+    expect(screen.getByRole("button", { name: "Deleting…, Second shop" })).toHaveFocus();
+
+    const photoInput = screen.getByLabelText(/Receipt photo/);
+    act(() => photoInput.focus());
+    expect(photoInput).toHaveFocus();
+
+    releaseDelete();
+    await waitFor(() => expect(rowTitles()).toEqual(["First shop", "Third shop"]));
+    expect(photoInput).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Review result, Third shop" })).not.toHaveFocus();
+  });
+
+  it("keeps the row in unfinished scans when Stop waiting ends a retry on a stored Failed scan", async () => {
+    const user = userEvent.setup();
+    history = () => ({
+      items: [summary(25, "Broken shop", { processingStatus: "Failed", allowedActions: { retryProcessing: true, reviewResult: false } })],
+      nextCursor: null,
+    });
+    const failed: ReceiptScanResult = {
+      ...receipt, id: 25, extractedVendor: "Broken shop", processingStatus: "Failed", processingError: "OCR timed out.",
+    };
+    let retries = 0;
+    mocks.post.mockImplementation(async (url: string, _body: unknown, config?: { signal?: AbortSignal }) => {
+      if (url !== "/records/receipts/25/retry") throw new Error(`unexpected post ${url}`);
+      retries += 1;
+      return retries === 1 ? { data: failed } : untilAborted(config);
+    });
+
+    render(page());
+    await screen.findByText("Broken shop");
+    await user.click(screen.getByRole("button", { name: "Retry processing, Broken shop" }));
+    await screen.findByRole("heading", { name: "Receipt needs another try" });
+
+    await user.click(screen.getByRole("button", { name: "Retry processing" }));
+    await user.click(await screen.findByRole("button", { name: "Stop waiting" }));
+
+    expect(retries).toBe(2);
+    expect(screen.getByRole("alert")).toHaveTextContent("Stopped waiting. Broken shop stays in unfinished scans.");
+    expect(screen.queryByText("Upload cancelled. Your selected image is still here.")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry processing" })).toBeEnabled();
   });
 });

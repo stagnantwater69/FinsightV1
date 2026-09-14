@@ -62,12 +62,13 @@ export interface ReceiptScanResult {
     score: number;
     outcome: "likely-receipt" | "uncertain" | "obvious-non-receipt";
   } | null;
-  pageProcessing?: {
-    pageNumber?: number;
-    source: "original" | "processed";
-    hasProcessedVariant: boolean;
-    captureMetadata: unknown;
-  }[];
+  /**
+   * Which stored variant OCR used for each page, in capture order.
+   *
+   * Kept separate from pageEvidence so an adjusted image is never presented as
+   * though it replaced the owner's original photograph.
+   */
+  pageProcessing?: ReceiptPageProcessing[];
   /** Stored evidence variants available for each page, in printed order. */
   pageEvidence?: ReceiptPageEvidence[];
   /**
@@ -124,22 +125,80 @@ export interface ReceiptScanResult {
    * A receipt with more than one is reviewed line by line below; anything
    * less keeps the single-category flow.
    */
-  items?: {
+  items?: ScannedItem[];
+}
+
+/** One entry of ReceiptScanResult.pageProcessing. */
+export interface ReceiptPageProcessing {
+  pageNumber?: number;
+  source: "original" | "processed";
+  hasProcessedVariant: boolean;
+  captureMetadata: unknown;
+}
+
+/**
+ * One line the server read off the receipt, as returned in
+ * ReceiptScanResult.items. Field set matches backend/src/services/receiptScan/dto.ts
+ * and web's ScannedItem; mobile reads only a subset today.
+ */
+export interface ScannedItem {
+  id: number;
+  lineNumber: number;
+  name: string;
+  quantity: number | null;
+  unitPrice: number | null;
+  amount: number;
+  /** What FinSight assigned. Null when nothing on the list fitted. */
+  categoryId: number | null;
+  /** True for a line the owner typed in, false for one OCR read. */
+  addedByOwner?: boolean;
+  /** True for a line a vision model produced rather than OCR text. */
+  extractedByVision?: boolean;
+  /** A category FinSight thinks is missing. Only ever an offer. */
+  suggestedCategoryName?: string | null;
+  /** How sure OCR was about THIS amount, 0-100, or null if not measured. */
+  amountConfidence?: number | null;
+  /** Which page and printed line this item came from, and by what. Null
+   *  where nothing could be located, including every older scan. */
+  evidence?: FieldEvidence | null;
+  /** Values the owner has corrected after OCR completed. */
+  ownerEditedFields?: ("name" | "amount")[];
+}
+
+export type ReceiptCaptureBatchStatus =
+  | "COLLECTING"
+  | "PROCESSING"
+  | "READY_FOR_REVIEW"
+  | "PARTIAL_FAILURE"
+  | "FAILED"
+  | "COMPLETE"
+  | "CANCELLED";
+
+/**
+ * What POST /records/receipt-batches returns.
+ *
+ * Mobile narrows each child's confirmationStatus to the two values a batch
+ * child can hold before review; web types it as string.
+ */
+export interface ReceiptCaptureBatch {
+  id: number;
+  businessProfileId: number;
+  expectedReceiptCount: number;
+  status: ReceiptCaptureBatchStatus;
+  uploadedReceiptCount: number;
+  createdAt: string;
+  finishedAt: string | null;
+  receipts: {
+    receiptOrdinal: number;
     id: number;
-    name: string;
-    quantity: number | null;
-    amount: number;
-    /** What FinSight assigned. Null when nothing on the list fitted. */
-    categoryId: number | null;
-    /** True for a line a vision model produced rather than OCR text. */
-    extractedByVision?: boolean;
-    /** A category FinSight thinks is missing. Only ever an offer. */
-    suggestedCategoryName?: string | null;
-    /** How sure OCR was about THIS amount, 0-100, or null if not measured. */
-    amountConfidence?: number | null;
-    /** Which page and printed line this item came from, and by what. Null
-     *  where nothing could be located, including every older scan. */
-    evidence?: FieldEvidence | null;
+    processingStatus: "Processing" | "Complete" | "Failed";
+    confirmationStatus: "Pending" | "Confirmed";
+    processingError: string | null;
+    processingErrorCode: string | null;
+    extractedDate: string | null;
+    extractedVendor: string | null;
+    extractedAmount: number | null;
+    allowedActions: { retryProcessing: boolean; reviewResult: boolean };
   }[];
 }
 

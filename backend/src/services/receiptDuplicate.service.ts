@@ -549,14 +549,20 @@ function reasonCodes(candidate: CandidateWithTarget): ReceiptDuplicateReasonCode
 /**
  * Null for a receipt target with nothing left to compare against: a scan
  * confirmed before extracted values were written whose expense records have
- * since been deleted. The row stays PENDING until the next refresh supersedes
- * it; it is left out of the page rather than served as a candidate with no
- * date or total.
+ * since been deleted. `visibleCandidateWhere` keeps such rows out of every
+ * pending read; this is the in-memory form of the same rule, kept so a row
+ * whose target loses its values between the read and this call cannot be
+ * served as a candidate with no date or total.
  */
+function visibleCandidateValues(candidate: CandidateWithTarget) {
+  const scan = candidate.candidateReceiptScan;
+  return scan ? confirmedScanValues(scan) : candidate.candidateExpenseRecord;
+}
+
 function candidateDTO(candidate: CandidateWithTarget) {
   const scan = candidate.candidateReceiptScan;
   const expense = candidate.candidateExpenseRecord;
-  const values = scan ? confirmedScanValues(scan) : expense;
+  const values = visibleCandidateValues(candidate);
   if (!values) return null;
   return {
     id: candidate.id,
@@ -589,6 +595,29 @@ function setHash(sourceFingerprint: string, candidates: CandidateTargetRef[]): s
     .digest("hex");
 }
 
+/**
+ * The database form of `visibleCandidateValues(row) !== null`: a target the
+ * owner can be shown. Part of the pending filter so the page, the count, the
+ * set hash and the Save-anyway decision all cover exactly the rows served.
+ */
+const visibleCandidateWhere = {
+  OR: [
+    // The scalar, not the relation: the target cascades on delete, and the
+    // compound-key relation's `isNot: null` matches every row.
+    { candidateExpenseRecordId: { not: null } },
+    {
+      candidateReceiptScan: {
+        is: {
+          OR: [
+            { expenseRecords: { some: {} } },
+            { extractedDate: { not: null }, extractedAmount: { not: null } },
+          ],
+        },
+      },
+    },
+  ],
+} satisfies Prisma.ReceiptDuplicateCandidateWhereInput;
+
 const pendingCandidateFilter = (
   businessProfileId: number,
   sourceReceiptScanId: number,
@@ -599,6 +628,7 @@ const pendingCandidateFilter = (
   sourceFingerprint,
   detectorVersion: RECEIPT_DUPLICATE_DETECTOR_VERSION,
   reviewStatus: ReceiptDuplicateReviewStatus.PENDING,
+  ...visibleCandidateWhere,
 }) satisfies Prisma.ReceiptDuplicateCandidateWhereInput;
 
 /**
