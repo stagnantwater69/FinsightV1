@@ -492,7 +492,7 @@ For each lane:
 
 Do not mark the checklist item complete from an implementation report alone. The orchestrator must verify the diff and test output.
 
-### Stage 2: integration and fresh-database verification (done 14 September, except hosted CI)
+### Stage 2: integration and fresh-database verification (done 14 September; hosted CI green on every pushed commit)
 
 After all P2 lanes are integrated:
 
@@ -540,7 +540,7 @@ This stage requires two real human custodians and approved private storage outsi
 
 The private evaluator command and exact input contracts are in the acceptance checklist. Do not use the legacy tracked evaluator for private data because it reads and overwrites tracked fixtures.
 
-### Stage 5: physical Android acceptance
+### Stage 5: physical Android acceptance (partly done 14 September: login, manual capture, Gemini items, plain-surface Capture now on a Poco X6 5G; the device matrix below remains open)
 
 This stage cannot be completed by source review, an emulator, or a built instrumentation APK.
 
@@ -555,7 +555,7 @@ This stage cannot be completed by source review, an emulator, or a built instrum
 9. Record no OOM, ANR, or thermal shutdown.
 10. Verify source, rectified, enhanced, composite labels, page order, batch boundaries, and readable evidence review.
 
-### Stage 6: authorized hosted private-Storage and purge acceptance
+### Stage 6: authorized hosted private-Storage and purge acceptance (partly done 14 September: owner-run read-only ledger, guard, RLS, and grant check passed; Storage policies, backups, and drills remain open)
 
 This stage requires explicit authorization for the exact hosted project and operations.
 
@@ -591,7 +591,7 @@ A database status alone is not evidence that private Storage was purged.
 
 Thirty receipts can support a capstone demonstration and transparent point estimates. They do not support a production accuracy claim.
 
-### Stage 8: final merge and release decision
+### Stage 8: final merge and release decision (merge done: PR #1 merged as `ef8ea68` on 14 September; the release decision waits on Stages 4 to 7)
 
 Only after repository review and all mandatory external evidence:
 
@@ -809,7 +809,7 @@ Phase 2 is ready for a merge decision only when all of the following are true:
 
 Until then, the accurate status is:
 
-> Phase 2 is a locally hardened review candidate with all four P1 and all eight P2 findings fixed, verified, independently reviewed (PR 2), committed (`36223ae`, `aede3a5`), and green in hosted CI on `aede3a5`, with physical-device, hosted, private-Storage, purge, and consented-corpus acceptance and the PR #1 merge decision still pending.
+> Phase 2 is merged on `main` (`ef8ea68`, 14 September 2026) as a hardened, twice-reviewed candidate: every P1, P2, and P3 finding from both reviews is fixed or explicitly dispositioned, hosted CI passed on every commit, the hosted ledger, guard, RLS, and grant posture were verified read-only by the owner, and a first device pass on a Poco X6 5G exercised login, manual capture, Gemini item extraction, and plain-surface native capture. It is not an accepted release: the Android device matrix, hosted Storage/backup/purge drills, and the sealed consented-receipt corpus (Stages 4 to 7) remain open.
 
 ## Starter prompt for another AI
 
