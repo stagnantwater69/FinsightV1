@@ -707,9 +707,9 @@ export function ScanReceiptScreen({ navigation }: any) {
     setDate(result.extractedDate ? String(result.extractedDate).slice(0, 10) : "");
     setVendor(result.extractedVendor ?? "");
     setDescription(result.extractedDescription ?? "");
-    setCategoryId(result.items?.length === 1 ? result.items[0]!.categoryId : null);
+    setCategoryId(result.items.length === 1 ? result.items[0]!.categoryId : null);
     setAmount(result.extractedAmount != null ? result.extractedAmount.toFixed(2) : "");
-    setItemCategories(Object.fromEntries((result.items ?? []).map((item) => [item.id, item.categoryId ?? null])));
+    setItemCategories(Object.fromEntries(result.items.map((item) => [item.id, item.categoryId ?? null])));
     setAddedItems([]);
     setEditingItem(null);
     setEditingItemErrors({});
@@ -1462,7 +1462,7 @@ export function ScanReceiptScreen({ navigation }: any) {
             return;
           }
           setScan(latest);
-          setItemCategories((current) => Object.fromEntries((latest.items ?? []).map((item) => [
+          setItemCategories((current) => Object.fromEntries(latest.items.map((item) => [
             item.id,
             current[item.id] ?? item.categoryId ?? null,
           ])));
@@ -1855,7 +1855,7 @@ export function ScanReceiptScreen({ navigation }: any) {
      * stronger warning there would be false, and false in the direction that
      * teaches owners to skip warnings.
      */
-    if (scan.items?.some((i) => i.extractedByVision)) {
+    if (scan.items.some((i) => i.extractedByVision)) {
       notices.push({
         tone: "warn",
         text: "AI interpreted these values. Check every field and the total against the receipt.",

@@ -44,14 +44,14 @@ const evidenceFor = (pageNumber: number): ReceiptPageEvidence => ({
   captureMode: "standard",
   processingMode: "clear-colour",
   ocrInput: "derived",
-  source: { variant: "source", label: "Unenhanced scan", width: 3024, height: 4032 },
+  source: { variant: "source", label: "Source", width: 3024, height: 4032 },
   derived: { variant: "derived", label: "Enhanced color", width: 1800, height: 3000 },
 });
 
 const storedImage = (pageNumber: number, url: string): ReceiptPageImage => ({
   pageNumber,
   variant: "source",
-  label: "Unenhanced scan",
+  label: "Source",
   width: 3024,
   height: 4032,
   url,
@@ -80,7 +80,7 @@ function mount(overrides: { pages?: CapturedPage[]; pageEvidence?: ReceiptPageEv
 type Queries = Awaited<ReturnType<typeof mount>>;
 
 const veil = (q: Queries) => q.queryByText(/^Opening /);
-const image = (q: Queries, pageNumber: number) => q.getByRole("image", { name: `Receipt page ${pageNumber}, Unenhanced scan` });
+const image = (q: Queries, pageNumber: number) => q.getByRole("image", { name: `Receipt page ${pageNumber}, Source` });
 
 // The <Image> mock never fires load events, so settle the image by hand.
 // Any veil left after this belongs to the stored-image request.
@@ -244,9 +244,9 @@ describe("ReceiptEvidenceViewer stored-image loading", () => {
     expect(apiGet).toHaveBeenLastCalledWith("/records/receipts/77/pages/1/image/derived");
     expect(q.queryByText("Opening enhanced color…")).toBeTruthy();
 
-    await fireEvent.press(q.getByRole("tab", { name: "Unenhanced scan" }));
+    await fireEvent.press(q.getByRole("tab", { name: "Source" }));
     expect(apiGet).toHaveBeenCalledTimes(3);
-    expect(q.queryByText("Opening unenhanced scan…")).toBeTruthy();
+    expect(q.queryByText("Opening source…")).toBeTruthy();
 
     await act(async () => { staleSource.resolve(storedImage(1, "https://storage.test/stale-source")); });
     expect(image(q, 1).props.source.uri).toBe("file:///one-source.jpg");

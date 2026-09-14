@@ -123,9 +123,10 @@ export interface ReceiptScanResult {
   /**
    * The individual lines the server read, each with the category it assigned.
    * A receipt with more than one is reviewed line by line below; anything
-   * less keeps the single-category flow.
+   * less keeps the single-category flow. Always present — the server sends
+   * an empty array when no item lines parsed.
    */
-  items?: ScannedItem[];
+  items: ScannedItem[];
 }
 
 /** One entry of ReceiptScanResult.pageProcessing. */
@@ -177,8 +178,8 @@ export type ReceiptCaptureBatchStatus =
 /**
  * What POST /records/receipt-batches returns.
  *
- * Mobile narrows each child's confirmationStatus to the two values a batch
- * child can hold before review; web types it as string.
+ * Each child's confirmationStatus is the same set the server writes on any
+ * scan: an unreviewed child can be moved to "Deletion Pending" by a purge.
  */
 export interface ReceiptCaptureBatch {
   id: number;
@@ -192,7 +193,7 @@ export interface ReceiptCaptureBatch {
     receiptOrdinal: number;
     id: number;
     processingStatus: "Processing" | "Complete" | "Failed";
-    confirmationStatus: "Pending" | "Confirmed";
+    confirmationStatus: "Pending" | "Confirmed" | "Deletion Pending";
     processingError: string | null;
     processingErrorCode: string | null;
     extractedDate: string | null;
@@ -202,9 +203,13 @@ export interface ReceiptCaptureBatch {
   }[];
 }
 
+/**
+ * Labels are the fixed set backend/src/services/receiptScan/pageEvidence.ts
+ * emits; web's ReceiptPageEvidenceVariant lists the same seven.
+ */
 export interface ReceiptPageEvidenceVariant {
   variant: "source" | "derived";
-  label: string;
+  label: "Source" | "Composite source" | "Rectified" | "Enhanced color" | "Enhanced grayscale" | "Enhanced black and white" | "Processed";
   width: number | null;
   height: number | null;
 }
@@ -231,7 +236,7 @@ export interface ReceiptHistoryItem {
   receiptOrdinal: number | null;
   scanRevision: number;
   processingStatus: "Processing" | "Complete" | "Failed";
-  confirmationStatus: "Pending" | "Confirmed";
+  confirmationStatus: "Pending" | "Confirmed" | "Deletion Pending";
   processingError: string | null;
   processingErrorCode: string | null;
   extractedDate: string | null;

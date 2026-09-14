@@ -165,7 +165,7 @@ round 3 section) rather than here; resolved in round 4 as follows.
   after the record existed. Fixed: `expenseRecord.service.ts` isolates each effect
   (`EXPENSE_RECORD_SIDE_EFFECT_FAILED`, ids only) so every effect is attempted; the
   manual POST now returns 201 with the record and analysis queued when a
-  notification throws. `updateExpenseRecord` still has the older pattern (open, P3).
+  notification throws. `updateExpenseRecord` received the same isolation in round 5.
 - **5. Candidate count and hash included rows the owner could not see.** Fixed: the
   list, count, hash, confirm-time recheck and Save-anyway decision all derive from one
   visible-set predicate in `receiptDuplicate.service.ts`.
@@ -179,12 +179,30 @@ round 3 section) rather than here; resolved in round 4 as follows.
 - **8. Web post-delete focus could steal focus from a field the owner had moved to.**
   Fixed: focus moves only when the active element is the body or the deleted row.
 
+## Fixed, round 5 (14 September 2026)
+
+### Reconciliation harness left the second partial-state branch unexercised
+
+`20260913230000_reconcile_phase2_scanner_migration_drift` refuses a legacy database in
+which any of the twelve replacement indexes or the `ReceiptPurgeJob_active_target_check`
+constraint already exists ("replacement indexes or constraints are partially present"),
+but until round 5 no harness scenario reached that `RAISE`.
+**Fixed 14 September 2026:** `verify-phase2-reconciliation.ts` builds a ninth database,
+`legacy_partial_index`, that loads the legacy fixture and pre-creates
+`ReceiptScan_history_created_idx` with the migration's own definition. `prisma migrate
+deploy` is asserted to fail with the migration's exact message, no repair object exists
+afterwards, the pre-created index is the only replacement object present, the two legacy
+indexes the repair path drops survive, and the ledger holds no completed non-rolled-back
+reconciliation row. Verified on a disposable PostgreSQL 16 database with both URLs pinned:
+237 facts at `eb4d357d…` unchanged, seven rejections. A mutation run with a wrong expected
+message failed at the migration's PL/pgSQL line 272 `RAISE`, so the scenario is not
+passing vacuously. Migration, fixture, and `migrationGuard.ts` were not edited.
+
 ## Open — needs an owner decision
 
-- `updateExpenseRecord` post-commit tail (note 4 residual). Owner: backend-api. P3.
-- The migration's second partial-state branch ("replacement indexes or constraints are
-  partially present") is still unexercised by the reconciliation harness. Owner:
-  qa-security. P3.
+None from the receipt-workflow reviews as of 14 September 2026 (round 5). The
+external acceptance gates (physical device, authorized hosted checks, consented
+corpus) are tracked in `docs/phase-2/PHASE-2-ACCEPTANCE-CHECKLIST.md`.
 
 ---
 

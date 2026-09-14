@@ -1,8 +1,18 @@
 import type { FieldEvidence, ReceiptWarning } from "../../lib/receiptWarnings";
 
+/**
+ * Every value the server writes to ReceiptScan.confirmationStatus (a plain
+ * varchar, not a Prisma enum): "Pending" and "Confirmed" from the scan
+ * pipeline, "Deletion Pending" from receiptPurge.service.ts. The batch and
+ * history DTOs pass the column through unfiltered, so all three can appear
+ * on any of the shapes below. Not exported: scripts/check-type-parity.mjs
+ * compares exported names against mobile, which has no equivalent alias.
+ */
+type ReceiptConfirmationStatus = "Pending" | "Confirmed" | "Deletion Pending";
+
 export interface ReceiptScanResult {
   id: number;
-  confirmationStatus?: "Pending" | "Confirmed" | "Deletion Pending";
+  confirmationStatus?: ReceiptConfirmationStatus;
   receiptBatchId?: number | null;
   receiptOrdinal?: number | null;
   scanRevision: number;
@@ -196,7 +206,7 @@ export interface ReceiptCaptureBatch {
     receiptOrdinal: number;
     id: number;
     processingStatus: "Processing" | "Complete" | "Failed";
-    confirmationStatus: string;
+    confirmationStatus: ReceiptConfirmationStatus;
     processingError: string | null;
     processingErrorCode: string | null;
     extractedDate: string | null;
@@ -216,7 +226,7 @@ export interface ReceiptHistoryItem {
   receiptOrdinal: number | null;
   scanRevision: number;
   processingStatus: "Processing" | "Complete" | "Failed";
-  confirmationStatus: string;
+  confirmationStatus: ReceiptConfirmationStatus;
   processingError: string | null;
   processingErrorCode: string | null;
   extractedDate: string | null;

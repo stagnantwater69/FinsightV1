@@ -569,6 +569,7 @@ async function main(): Promise<void> {
       "current_malformed_collation",
       "unknown_checksum",
       "legacy_partial",
+      "legacy_partial_index",
     ]) {
       executeSql(containerName, "postgres", `CREATE DATABASE ${database} TEMPLATE phase2_template`);
     }
@@ -678,10 +679,61 @@ async function main(): Promise<void> {
     );
     assertRejectionLeftNothingBehind(containerName, "legacy_partial", { expectPurgeModeEnum: true });
 
+    // Legacy revision where one replacement index the repair path would create already exists.
+    // The definition is copied verbatim from the migration's repair branch.
+    applyLegacyFixture(containerName, "legacy_partial_index");
+    for (const name of between) applyRecordedMigration(containerName, "legacy_partial_index", name);
+    executeSql(containerName, "legacy_partial_index", `
+      CREATE INDEX "ReceiptScan_history_created_idx"
+        ON "ReceiptScan"(
+          "BusinessProfile_ID",
+          "ReceiptScan_CreatedAt" DESC,
+          "ReceiptScan_ID" DESC
+        )
+    `);
+    expectDeployFailure(
+      databaseUrl(port, "legacy_partial_index"),
+      "Unsupported legacy Phase 2 shape: replacement indexes or constraints are partially present.",
+    );
+    assertRejectionLeftNothingBehind(containerName, "legacy_partial_index", { expectPurgeModeEnum: false });
+    // The pre-created index must be the only replacement object present, and the two legacy
+    // indexes the repair path drops must still exist.
+    const replacementIndexesUntouched = queryScalar(containerName, "legacy_partial_index", `
+      SELECT (
+        to_regclass('public."ReceiptScan_history_created_idx"') IS NOT NULL
+        AND to_regclass('public."ReceiptScan_BusinessProfile_ID_idx"') IS NOT NULL
+        AND to_regclass('public."ReceiptPurgeJob_profile_receipt_key"') IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM unnest(ARRAY[
+            'ReceiptScan_history_status_created_idx',
+            'ReceiptScan_profile_semantic_fingerprint_idx',
+            'ExpenseRecord_ID_BusinessProfile_ID_key',
+            'ReceiptDuplicateCandidate_source_review_idx',
+            'ReceiptDuplicateCandidate_scan_target_idx',
+            'ReceiptDuplicateCandidate_expense_target_idx',
+            'ReceiptDuplicateCandidate_decision_owner_idx',
+            'ReceiptDuplicateCandidate_source_scan_target_key',
+            'ReceiptDuplicateCandidate_source_expense_target_key',
+            'ReceiptPurgeJob_profile_receipt_idx'
+          ]) AS other(index_name)
+          WHERE to_regclass(format('public.%I', other.index_name)) IS NOT NULL
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conrelid = 'public."ReceiptPurgeJob"'::regclass
+            AND conname = 'ReceiptPurgeJob_active_target_check'
+        )
+      )::text
+    `);
+    if (replacementIndexesUntouched !== "true") {
+      throw new Error("Rejected reconciliation of legacy_partial_index changed the index or constraint set.");
+    }
+
     console.log(
       `Phase 2 reconciliation verification passed: fresh and legacy catalogs share ` +
       `${catalog.factCount} facts (${catalog.digest}); malformed legacy, predicate, collation, ` +
-      `operator-class, unknown-checksum, and partially-present states were rejected.`,
+      `operator-class, unknown-checksum, partially-present-enum, and partially-present-index states were rejected.`,
     );
   } finally {
     if (containerName.startsWith("finsight-phase2-reconciliation-test-")) {

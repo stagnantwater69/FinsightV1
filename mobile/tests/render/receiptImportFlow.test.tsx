@@ -280,7 +280,7 @@ describe("receipt scan review workflow", () => {
         captureMode: "standard",
         processingMode: "clear-colour",
         ocrInput: "derived",
-        source: { variant: "source", label: "Unenhanced scan", width: 3024, height: 4032 },
+        source: { variant: "source", label: "Source", width: 3024, height: 4032 },
         derived: { variant: "derived", label: "Enhanced color", width: 1800, height: 3000 },
       }],
     };
@@ -312,7 +312,7 @@ describe("receipt scan review workflow", () => {
       if (path === "/records/receipts/82/pages/1/image/source") return {
         pageNumber: 1,
         variant: "source",
-        label: "Unenhanced scan",
+        label: "Source",
         width: 3024,
         height: 4032,
         url: "https://storage.test/receipt-82-source",
@@ -339,7 +339,7 @@ describe("receipt scan review workflow", () => {
 
     await fireEvent.press(q.getByRole("button", { name: "Inspect receipt image" }));
     await waitFor(() => {
-      expect(q.getByRole("image", { name: "Receipt page 1, Unenhanced scan" }).props.source.uri)
+      expect(q.getByRole("image", { name: "Receipt page 1, Source" }).props.source.uri)
         .toBe("https://storage.test/receipt-82-source");
     });
   });

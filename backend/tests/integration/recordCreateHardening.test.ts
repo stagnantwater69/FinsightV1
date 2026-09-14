@@ -16,8 +16,22 @@ vi.mock("../../src/config/supabase", async (importOriginal) => {
   };
 });
 
+const { notificationEffect } = vi.hoisted(() => ({ notificationEffect: { fail: false, calls: 0 } }));
+vi.mock("../../src/services/notification.service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/services/notification.service")>();
+  return {
+    ...actual,
+    createNotification: async (...args: Parameters<typeof actual.createNotification>) => {
+      notificationEffect.calls += 1;
+      if (notificationEffect.fail) throw new Error("simulated notification write failure");
+      return actual.createNotification(...args);
+    },
+  };
+});
+
 import request from "supertest";
 import { app } from "../../src/app";
+import { logger } from "../../src/config/logger";
 import { prisma } from "../../src/config/prisma";
 import { resetRateLimits } from "../../src/middleware/rateLimit.middleware";
 import { disconnectDb, makeOwnerWithProfile, resetDb, utcDayString } from "../setup/testDb";
@@ -32,6 +46,9 @@ beforeEach(async () => {
   resetRateLimits();
   ctx = await makeOwnerWithProfile({}, ["Inventory"]);
   authUserId.value = ctx.user.authId;
+  notificationEffect.fail = false;
+  notificationEffect.calls = 0;
+  vi.restoreAllMocks();
 });
 afterAll(disconnectDb);
 
@@ -212,5 +229,72 @@ describe("concurrent create is not a read-then-write race", () => {
 
     expect(res.status).toBe(400);
     expect(await prisma.expenseRecord.count()).toBe(0);
+  });
+});
+
+/**
+ * The update's post-commit tail. An edit that crosses the large-expense
+ * threshold commits the new amount and then raises a notification and requeues
+ * the analysis job outside the transaction. The notification used to be
+ * awaited bare: if it threw, the enqueue after it never ran and the owner got
+ * a 500 for an edit that was already in the books, the same gap the create
+ * path closed in round 4.
+ */
+describe("a post-commit effect of an update that fails", () => {
+  const VENDOR = "Sari-sari Wholesale Depot";
+  // Above the default large-expense threshold (125000 * 25% = 31250).
+  const LARGE_AMOUNT = 40000;
+
+  it("notification write: answers 200 with the edit committed, the analysis still queued, and an ids-only log entry", async () => {
+    const created = await request(app)
+      .post(EXPENSES)
+      .set(...AUTH)
+      .send({
+        businessProfileId: ctx.profile.id,
+        categoryId: ctx.categories.Inventory,
+        date: utcDayString(),
+        description: "Stock purchase",
+        vendor: VENDOR,
+        amount: 500,
+      });
+    expect(created.status).toBe(201);
+    expect(created.body.largeExpenseFlag).toBe(false);
+    // Drain the create's own job so the edit's requeue is observable.
+    await prisma.analysisJob.deleteMany({ where: { expenseRecordId: created.body.id } });
+
+    const logged = vi.spyOn(logger, "error");
+    notificationEffect.calls = 0;
+    notificationEffect.fail = true;
+
+    const res = await request(app)
+      .patch(`${EXPENSES}/${created.body.id}`)
+      .set(...AUTH)
+      .send({ amount: LARGE_AMOUNT });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: created.body.id, largeExpenseFlag: true, reviewStatus: "Needs Review" });
+    expect(notificationEffect.calls).toBe(1);
+
+    const stored = await prisma.expenseRecord.findUniqueOrThrow({ where: { id: created.body.id } });
+    expect(Number(stored.amount)).toBe(LARGE_AMOUNT);
+    expect(stored.largeExpenseFlag).toBe(true);
+    // The notification itself is lost, and the loss is the only thing that is.
+    expect(await prisma.notification.count()).toBe(0);
+    expect(await prisma.analysisJob.findUnique({ where: { idempotencyKey: `transaction:${created.body.id}` } }))
+      .toMatchObject({ status: "PENDING" });
+
+    const entry = logged.mock.calls.find(([fields]) =>
+      typeof fields === "object" && fields !== null
+      && (fields as { code?: unknown }).code === "EXPENSE_RECORD_SIDE_EFFECT_FAILED");
+    expect(entry, "a failed post-commit effect must be logged").toBeDefined();
+    expect(entry![0]).toMatchObject({
+      businessProfileId: ctx.profile.id,
+      expenseRecordId: created.body.id,
+      effect: "notification",
+    });
+    const serialised = JSON.stringify(entry, (_key, value) => (value instanceof Error ? value.message : value));
+    expect(serialised).not.toMatch(new RegExp(VENDOR));
+    expect(serialised).not.toContain(String(LARGE_AMOUNT));
+    expect(serialised).not.toContain("Stock purchase");
   });
 });

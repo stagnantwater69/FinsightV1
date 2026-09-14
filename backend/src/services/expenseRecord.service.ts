@@ -82,9 +82,9 @@ async function queueAnalysis(businessProfileId: number, expenseRecordId: number)
 }
 
 /**
- * Runs one post-commit side effect of a create and swallows its failure, so
- * a notification that cannot be written never skips the analysis enqueue
- * after it, and a failed tail never turns a committed record into a 500.
+ * Runs one post-commit side effect of a create or update and swallows its
+ * failure, so a notification that cannot be written never skips the analysis
+ * enqueue after it, and a failed tail never turns a committed record into a 500.
  * Only identifiers reach the log; the description, vendor and amount do not.
  */
 async function runSideEffect(
@@ -733,29 +733,35 @@ export async function updateExpenseRecord(userId: number, id: number, input: Upd
   });
   const { existing, record, nextDate, nextAmount, nextDescription, duplicateStatus, largeExpenseFlag } = result;
 
+  // The edit is committed; from here on nothing may turn it into a 500. Same
+  // per-effect isolation as the create path.
+  const ids = { businessProfileId: record.businessProfileId, expenseRecordId: record.id, receiptScanId: record.receiptScanId };
+
   // Only alert on a fresh transition into the flagged state — not on
   // every edit to a record that was already flagged (or stays clear).
   if (duplicateStatus === "Flagged" && existing.duplicateStatus !== "Flagged") {
-    await createNotification(
-      userId,
-      existing.businessProfileId,
-      NOTIFICATION_TYPES.POSSIBLE_DUPLICATE,
-      `Possible duplicate: "${nextDescription}" (PHP ${Number(nextAmount)}) on ${nextDate.toISOString().slice(0, 10)}`,
-      record.id
-    );
+    await runSideEffect("notification", ids, () =>
+      createNotification(
+        userId,
+        existing.businessProfileId,
+        NOTIFICATION_TYPES.POSSIBLE_DUPLICATE,
+        `Possible duplicate: "${nextDescription}" (PHP ${Number(nextAmount)}) on ${nextDate.toISOString().slice(0, 10)}`,
+        record.id,
+      ));
   }
   if (largeExpenseFlag && !existing.largeExpenseFlag) {
-    await createNotification(
-      userId,
-      existing.businessProfileId,
-      NOTIFICATION_TYPES.LARGE_EXPENSE_FLAG,
-      `Large expense flagged: "${nextDescription}" (PHP ${Number(nextAmount)}) on ${nextDate.toISOString().slice(0, 10)}`,
-      record.id
-    );
+    await runSideEffect("notification", ids, () =>
+      createNotification(
+        userId,
+        existing.businessProfileId,
+        NOTIFICATION_TYPES.LARGE_EXPENSE_FLAG,
+        `Large expense flagged: "${nextDescription}" (PHP ${Number(nextAmount)}) on ${nextDate.toISOString().slice(0, 10)}`,
+        record.id,
+      ));
   }
 
   if (valueFieldsChanged || input.vendor !== undefined || input.categoryId !== undefined) {
-    await queueAnalysis(record.businessProfileId, record.id);
+    await runSideEffect("analysis", ids, () => queueAnalysis(record.businessProfileId, record.id));
   }
 
   return toDTO(record);

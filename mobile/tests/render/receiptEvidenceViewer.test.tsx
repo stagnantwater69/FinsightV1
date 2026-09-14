@@ -37,7 +37,7 @@ const evidence: ReceiptPageEvidence[] = [{
   captureMode: "standard",
   processingMode: "clear-colour",
   ocrInput: "derived",
-  source: { variant: "source", label: "Unenhanced scan", width: 3024, height: 4032 },
+  source: { variant: "source", label: "Source", width: 3024, height: 4032 },
   derived: { variant: "derived", label: "Enhanced color", width: 1800, height: 3000 },
 }];
 
@@ -88,7 +88,7 @@ describe("ReceiptEvidenceViewer", () => {
     apiGet.mockResolvedValue({
       pageNumber: 1,
       variant: "source",
-      label: "Unenhanced scan",
+      label: "Source",
       width: 3024,
       height: 4032,
       url: "https://storage.test/source-signed",
@@ -99,13 +99,13 @@ describe("ReceiptEvidenceViewer", () => {
     ));
 
     await waitFor(() => {
-      expect(q.getByRole("image", { name: "Receipt page 1, Unenhanced scan" }).props.source.uri)
+      expect(q.getByRole("image", { name: "Receipt page 1, Source" }).props.source.uri)
         .toBe("https://storage.test/source-signed");
     });
-    await fireEvent(q.getByRole("image", { name: "Receipt page 1, Unenhanced scan" }), "error");
+    await fireEvent(q.getByRole("image", { name: "Receipt page 1, Source" }), "error");
 
     await waitFor(() => {
-      expect(q.getByRole("image", { name: "Receipt page 1, Unenhanced scan" }).props.source.uri)
+      expect(q.getByRole("image", { name: "Receipt page 1, Source" }).props.source.uri)
         .toBe("file:///one-source.jpg");
     });
     expect(q.getByRole("alert", { name: /stored image is temporarily unavailable/i })).toBeTruthy();
@@ -115,7 +115,7 @@ describe("ReceiptEvidenceViewer", () => {
     apiGet.mockResolvedValue({
       pageNumber: 1,
       variant: "source",
-      label: "Unenhanced scan",
+      label: "Source",
       width: 3024,
       height: 4032,
       url: "https://storage.test/source-signed",
@@ -125,12 +125,12 @@ describe("ReceiptEvidenceViewer", () => {
       <ReceiptEvidenceViewer pages={[page("one")]} scanId={41} pageEvidence={evidence} initialPage={0} visible onClose={vi.fn()} />,
     ));
 
-    await waitFor(() => expect(q.getByRole("image", { name: "Receipt page 1, Unenhanced scan" }).props.source.uri)
+    await waitFor(() => expect(q.getByRole("image", { name: "Receipt page 1, Source" }).props.source.uri)
       .toBe("https://storage.test/source-signed"));
-    await fireEvent(q.getByRole("image", { name: "Receipt page 1, Unenhanced scan" }), "error");
-    await waitFor(() => expect(q.getByRole("image", { name: "Receipt page 1, Unenhanced scan" }).props.source.uri)
+    await fireEvent(q.getByRole("image", { name: "Receipt page 1, Source" }), "error");
+    await waitFor(() => expect(q.getByRole("image", { name: "Receipt page 1, Source" }).props.source.uri)
       .toBe("file:///one-source.jpg"));
-    await fireEvent(q.getByRole("image", { name: "Receipt page 1, Unenhanced scan" }), "error");
+    await fireEvent(q.getByRole("image", { name: "Receipt page 1, Source" }), "error");
 
     await waitFor(() => expect(q.getByRole("alert", { name: /neither copy/i })).toBeTruthy());
     expect(q.getByRole("button", { name: "Try stored image again" })).toBeEnabled();
@@ -140,7 +140,7 @@ describe("ReceiptEvidenceViewer", () => {
     apiGet.mockResolvedValue({
       pageNumber: 1,
       variant: "source",
-      label: "Unenhanced scan",
+      label: "Source",
       width: 3024,
       height: 4032,
       url: "https://storage.test/stored-only-source",
@@ -158,7 +158,7 @@ describe("ReceiptEvidenceViewer", () => {
     ));
 
     await waitFor(() => {
-      expect(q.getByRole("image", { name: "Receipt page 1, Unenhanced scan" }).props.source.uri)
+      expect(q.getByRole("image", { name: "Receipt page 1, Source" }).props.source.uri)
         .toBe("https://storage.test/stored-only-source");
     });
     expect(apiGet).toHaveBeenCalledWith("/records/receipts/52/pages/1/image/source");
