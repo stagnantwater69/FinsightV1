@@ -1,4 +1,5 @@
 import { Prisma, ReceiptPurgeMode } from "@prisma/client";
+import { logger } from "../../config/logger";
 import { prisma } from "../../config/prisma";
 import { ApiError } from "../../middleware/error.middleware";
 import { createExpenseRecordWithin, type BulkDbClient } from "../expenseRecord.service";
@@ -9,6 +10,7 @@ import {
   refreshReceiptCaptureBatchStatus,
 } from "../receiptCaptureBatch.service";
 import { evaluateReceiptDuplicateGate } from "../receiptDuplicate.service";
+import { resolveConfirmationMode } from "./confirmMode";
 import { toDTO } from "./dto";
 import { CHARGES_DESCRIPTION, type ConfirmInput, type ReceiptSplit } from "./types";
 import { requiresManualCurrencyConversion } from "../../lib/receiptDetails";
@@ -57,7 +59,9 @@ async function claimEditableScan(
       evidenceDeletionRequestedAt: null,
       purgeJobs: { none: { mode: ReceiptPurgeMode.DELETE_SCAN } },
     },
-    data: { scanRevision: { increment: 1 } },
+    // Item edits move the abandoned-scan clock; stamping the claim covers
+    // both update and delete inside their own transaction.
+    data: { scanRevision: { increment: 1 }, lastActivityAt: new Date() },
   });
   if (claimed.count !== 1) {
     throw new ApiError(409, "This receipt changed while you were editing it. Review the latest result and try again.");
@@ -200,6 +204,10 @@ export async function deleteScanItem(
 }
 
 export async function confirmReceipt(userId: number, receiptScanId: number, input: ConfirmInput) {
+  // Refused before any read: a body that mixes the two modes carries
+  // financial input one of the paths below would never look at.
+  const confirmation = resolveConfirmationMode(input);
+
   const scan = await prisma.receiptScan.findFirst({
     where: {
       id: receiptScanId,
@@ -269,11 +277,13 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
       })
     ).map((c) => c.id),
   );
-  const namedCategories = [
-    ...(input.itemAssignments ?? []).map((a) => a.categoryId),
-    ...(input.additionalItems ?? []).map((i) => i.categoryId),
-    ...(input.reconciliation?.mode === "category" ? [input.reconciliation.categoryId] : []),
-  ];
+  const namedCategories = confirmation.mode === "itemised"
+    ? [
+        ...confirmation.itemAssignments.map((a) => a.categoryId),
+        ...confirmation.additionalItems.map((i) => i.categoryId),
+        ...(confirmation.reconciliation.mode === "category" ? [confirmation.reconciliation.categoryId] : []),
+      ]
+    : [];
   if (namedCategories.some((id) => !validCategories.has(id))) {
     throw new ApiError(400, "Category does not belong to this business profile");
   }
@@ -386,12 +396,12 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
       // grouping and cannot drift apart.
       let splits: ReceiptSplit[];
       let ownerAdded: { itemId: number; categoryId: number; name: string; lineNumber: number }[] = [];
-      if (input.itemAssignments) {
-        ownerAdded = await persistOwnerAddedItems(tx, scan.id, input.additionalItems);
-        splits = await groupItemsIntoSplits(tx, scan.id, validCategories, [...input.itemAssignments, ...ownerAdded]);
-        splits = reconcileSplits(splits, totalCentavos, input.reconciliation ?? { mode: "none" });
+      if (confirmation.mode === "itemised") {
+        ownerAdded = await persistOwnerAddedItems(tx, scan.id, confirmation.additionalItems);
+        splits = await groupItemsIntoSplits(tx, scan.id, validCategories, [...confirmation.itemAssignments, ...ownerAdded]);
+        splits = reconcileSplits(splits, totalCentavos, confirmation.reconciliation);
       } else {
-        splits = input.splits ?? [];
+        splits = confirmation.splits;
       }
 
       if (splits.length === 0) {
@@ -499,9 +509,15 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
 
   const { records, deferredEffects, splits, ownerAdded } = outcome;
 
-  // After COMMIT, in the order the records were written.
-  for (const runSideEffects of deferredEffects) {
-    await runSideEffects();
+  /*
+   * Everything from here on runs after COMMIT and is noncritical: the books
+   * are already written and the scan is already Confirmed. A failure here is
+   * logged and the committed records are still returned, because a 500 at
+   * this point told the owner a booked receipt had failed and invited a retry
+   * that could only answer "already confirmed".
+   */
+  for (const [index, runSideEffects] of deferredEffects.entries()) {
+    await runPostCommitEffect("expense-record-side-effects", scan.id, records[index]?.id, runSideEffects);
   }
 
   /*
@@ -522,15 +538,39 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
     for (const itemId of split.itemIds ?? []) finalCategoryByItemId.set(itemId, split.categoryId);
   }
 
-  await recordConfirmationFeedback({
-    scan,
-    confirmed: { date: input.date, vendor: input.vendor, amount: input.amount },
-    priorItems,
-    finalCategoryByItemId,
-    ownerAddedItems: ownerAdded.map((i) => ({ name: i.name, lineNumber: i.lineNumber })),
-  });
+  await runPostCommitEffect("confirmation-feedback", scan.id, undefined, () =>
+    recordConfirmationFeedback({
+      scan,
+      confirmed: { date: input.date, vendor: input.vendor, amount: input.amount },
+      priorItems,
+      finalCategoryByItemId,
+      ownerAddedItems: ownerAdded.map((i) => ({ name: i.name, lineNumber: i.lineNumber })),
+    }));
 
   return records;
+}
+
+/**
+ * Runs one post-commit effect of a confirmation and swallows its failure.
+ *
+ * Only identifiers reach the log. The receipt's vendor, amounts and item
+ * names never do, and the thrown error is passed through as-is for the same
+ * key-based redaction every other logged error gets.
+ */
+async function runPostCommitEffect(
+  effect: "expense-record-side-effects" | "confirmation-feedback",
+  receiptScanId: number,
+  expenseRecordId: number | undefined,
+  run: () => Promise<void>,
+): Promise<void> {
+  try {
+    await run();
+  } catch (err) {
+    logger.error(
+      { err, receiptScanId, expenseRecordId, effect, code: "RECEIPT_CONFIRM_POST_COMMIT_EFFECT_FAILED" },
+      "receipt confirmation post-commit effect failed",
+    );
+  }
 }
 
 /**
@@ -556,9 +596,9 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
 async function persistOwnerAddedItems(
   db: BulkDbClient,
   receiptScanId: number,
-  additionalItems: { name: string; amount: number; categoryId: number }[] | undefined,
+  additionalItems: { name: string; amount: number; categoryId: number }[],
 ): Promise<{ itemId: number; categoryId: number; name: string; lineNumber: number }[]> {
-  if (!additionalItems || additionalItems.length === 0) return [];
+  if (additionalItems.length === 0) return [];
 
   const existing = await db.receiptScanItem.findMany({
     where: { receiptScanId },

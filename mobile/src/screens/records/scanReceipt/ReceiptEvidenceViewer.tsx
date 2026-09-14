@@ -35,7 +35,9 @@ export function ReceiptEvidenceViewer({
   const [viewport, setViewport] = useState({ width: 1, height: 1 });
   const [storedImages, setStoredImages] = useState<Record<string, ReceiptPageImage>>({});
   const [failedStoredImages, setFailedStoredImages] = useState<Record<string, true>>({});
-  const [storedImageLoading, setStoredImageLoading] = useState(false);
+  // Key of the stored-image request in flight. Comparing it with the
+  // on-screen key keeps a superseded request from veiling another page.
+  const [storedImageLoadingKey, setStoredImageLoadingKey] = useState<string | null>(null);
   const [imageLoading, setImageLoading] = useState(false);
   const [imageError, setImageError] = useState(false);
 
@@ -65,6 +67,7 @@ export function ReceiptEvidenceViewer({
     : "";
   const storedImage = storedImages[storedKey];
   const storedImageError = Boolean(failedStoredImages[storedKey]);
+  const storedImageLoading = storedImageLoadingKey === storedKey;
   const shownUri = storedImage?.url ?? localUri;
   const shownLabel = shownVariant === "source" ? labels.source : labels.processed;
   const scaledWidth = Math.max(1, viewport.width * zoom);
@@ -76,9 +79,9 @@ export function ReceiptEvidenceViewer({
   }, [shownUri]);
 
   useEffect(() => {
-    if (!visible || !scanId || !storedEvidence || storedImages[storedKey] || failedStoredImages[storedKey]) return;
+    if (!visible || !scanId || !storedEvidence || storedImage || storedImageError) return;
     let active = true;
-    setStoredImageLoading(true);
+    setStoredImageLoadingKey(storedKey);
     void api.get<ReceiptPageImage>(`/records/receipts/${scanId}/pages/${pageIndex + 1}/image/${requestVariant}`)
       .then((result) => {
         if (!active) return;
@@ -98,10 +101,13 @@ export function ReceiptEvidenceViewer({
         setFailedStoredImages((current) => ({ ...current, [storedKey]: true }));
       })
       .finally(() => {
-        if (active) setStoredImageLoading(false);
+        if (active) setStoredImageLoadingKey((current) => (current === storedKey ? null : current));
       });
-    return () => { active = false; };
-  }, [failedStoredImages, pageIndex, requestVariant, scanId, storedEvidence, storedImages, storedKey, visible]);
+    return () => {
+      active = false;
+      setStoredImageLoadingKey((current) => (current === storedKey ? null : current));
+    };
+  }, [pageIndex, requestVariant, scanId, storedEvidence, storedImage, storedImageError, storedKey, visible]);
 
   if (!page) return null;
 

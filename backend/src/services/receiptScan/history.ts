@@ -23,7 +23,14 @@ interface ReceiptHistoryCursor {
 function decodeCursor(encoded: string): ReceiptHistoryCursor {
   try {
     const parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as Record<string, unknown>;
-    if (parsed.v !== 1 || typeof parsed.createdAt !== "string" || !Number.isInteger(parsed.id) || Number(parsed.id) <= 0) {
+    // Postgres int4 bound: a larger id would reach Prisma and surface as a 500.
+    if (
+      parsed.v !== 1 ||
+      typeof parsed.createdAt !== "string" ||
+      !Number.isInteger(parsed.id) ||
+      Number(parsed.id) <= 0 ||
+      Number(parsed.id) > 2147483647
+    ) {
       throw new Error("shape");
     }
     const createdAt = new Date(parsed.createdAt);

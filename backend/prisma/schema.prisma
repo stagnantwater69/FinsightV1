@@ -934,6 +934,11 @@ model ReceiptScan {
   /// expense and never replaces the owner's review decision.
   receiptLikelihood           Json?     @map("ReceiptScan_ReceiptLikelihood")
   semanticFingerprint         String?   @map("ReceiptScan_SemanticFingerprint") @db.Char(64)
+  /// When the owner or the worker last touched this scan: upload, view,
+  /// item edit, retry, confirm, processing claim/heartbeat/completion. The
+  /// abandoned-scan sweep purges unconfirmed Complete/Failed scans whose
+  /// clock is more than seven days old, so any owner action must move it.
+  lastActivityAt              DateTime  @default(now()) @map("ReceiptScan_LastActivityAt")
   createdAt                   DateTime  @default(now()) @map("ReceiptScan_CreatedAt")
 
   businessProfile             BusinessProfile?            @relation(fields: [businessProfileId], references: [id], onDelete: SetNull)
@@ -953,6 +958,10 @@ model ReceiptScan {
   @@index([businessProfileId, createdAt(sort: Desc), id(sort: Desc)], map: "ReceiptScan_history_created_idx")
   @@index([businessProfileId, sourceImageHash], map: "ReceiptScan_profile_source_image_hash_idx")
   @@index([businessProfileId, semanticFingerprint], map: "ReceiptScan_profile_semantic_fingerprint_idx")
+  /// Cross-profile abandoned-scan sweep: confirmationStatus = 'Pending',
+  /// processingStatus IN ('Complete', 'Failed'), lastActivityAt < cutoff,
+  /// ordered by (lastActivityAt, id) for bounded keyset batches.
+  @@index([confirmationStatus, processingStatus, lastActivityAt, id], map: "ReceiptScan_abandoned_sweep_idx")
   // See the ExpenseRecord note on why this carries an explicit `map:` name.
   @@index([processingStatus, nextProcessingAttemptAt, processingHeartbeatAt], map: "ReceiptScan_ReceiptScan_ProcessingStatus_ReceiptScan_NextProces")
   @@map("ReceiptScan")

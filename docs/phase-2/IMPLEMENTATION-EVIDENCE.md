@@ -2,7 +2,9 @@
 
 **Branch:** `feat/phase2-scanner-acceptance`
 **Prepared:** 13 September 2026
-**Release status:** Code-complete candidate; physical-device, consented-corpus, and deployed private-storage checks remain open
+**Release status:** Acceptance-blocked candidate; the four P1 and eight P2 findings now have local fixes and coordinated local verification (14 September 2026), while physical-device evidence, consented-corpus evidence, deployed private-storage checks, a reviewed commit, and hosted CI remain open
+
+The current review verdict is recorded in [PR-1-REVIEW-2026-09-13.md](./PR-1-REVIEW-2026-09-13.md). This implementation record preserves the original build evidence; it is not a merge or release approval. Operational closure is tracked in [PHASE-2-ACCEPTANCE-CHECKLIST.md](./PHASE-2-ACCEPTANCE-CHECKLIST.md).
 
 ## Outcome
 
@@ -40,11 +42,10 @@ The default OCR path remains Tesseract with packaged English language data. It r
 
 ## Database evidence
 
-All database-capable verification commands pin both `DATABASE_URL` and `DIRECT_URL` to a disposable PostgreSQL 16 database.
+All database-capable verification commands pin both `DATABASE_URL` and `DIRECT_URL` to a disposable PostgreSQL 16 database. The original database gate, completed before the P1 forward reconciliation, recorded:
 
 - Fresh replay: 43 migrations applied successfully.
-- Prisma migration status: current.
-- Migrated database to `schema.prisma` diff: no difference detected.
+- On that fresh database, Prisma migration status was current and the database-to-`schema.prisma` diff was empty.
 - `sourceImageHash` constraint probe: accepts `NULL` and 64-character lowercase hexadecimal values; rejects uppercase and 63-character values.
 
 Phase 2 migrations and frozen SHA-256 values:
@@ -54,6 +55,15 @@ Phase 2 migrations and frozen SHA-256 values:
 | `20260913100918_receipt_capture_batches_and_scan_revision` | `8e03ef8f26dba6af0316d4a6488468afecf4a4bb25a972989a8e7a5dda4f782b` |
 | `20260913192200_receipt_capture_batch_cancelled_status` | `24b9972b0fa9a4a49f537e946986f2f9cdc43d35bafe0530a6716fa864479281` |
 | `20260913194745_receipt_scan_source_image_hash` | `d33826adc8864f0d682fe03bc3cafeb099b53d51e353e41296c0d3343a4db4d6` |
+| `20260913230000_reconcile_phase2_scanner_migration_drift` | `d2f4805aef790c484fd1878edecfcba0a39b93529cb8d9b0879469e2aaa99d46` |
+
+### Upgrade-path reconciliation
+
+A later review found that an existing disposable local database records `20260913100918_receipt_capture_batches_and_scan_revision` under the earlier checksum `a0e4f79275cbb0e975f16d4675776ecf954395eaa6dd5900f15cd3f73030ca5b`. A read-only database-to-schema diff shows that this database lacks the duplicate table and enums, purge mode, evidence-deletion and semantic-fingerprint fields, history indexes, and other current migration objects. Both Prisma deployment and the application startup guard still treat the migration name as applied. The current tracked file's SHA-256 is `8e03ef8f26dba6af0316d4a6488468afecf4a4bb25a972989a8e7a5dda4f782b`.
+
+The frozen forward-only migration `20260913230000_reconcile_phase2_scanner_migration_drift` now supports exactly two source histories. A database with the current `8e03ef8f...` checksum takes a verification-only path. A database with the known legacy `a0e4f792...` checksum is repaired only after the migration proves the expected legacy catalog shape. Any unknown checksum, unexpected partial Phase 2 state, or malformed legacy shape fails closed.
+
+Local-only verification replayed both supported paths with `DATABASE_URL` and `DIRECT_URL` pinned to disposable PostgreSQL databases. On the P1 snapshot the fresh and reconciled legacy databases produced the same 235-fact canonical Phase 2 catalog and security digest, `5b9fbff1a7f8d9aeb3ca15ebdf484e5078d81ec4541cde9fc716ced4a45e39d3`; with the P2-5 `lastActivityAt` column and sweep index they produce an identical 237-fact catalog at `eb4d357dd91fe66da9f52557dc500b9b6859ed5da9a8f48deedbea886d9c8c50`. Deliberately unknown, partial, and malformed fixtures were rejected. The `migrate:verify-phase2-reconciliation` harness, still untracked and uncommitted, rebuilds both catalogs, executes the forward migration, checks Prisma parity and the startup guard, and proves weakened legacy constraints plus altered predicates, collations, and operator classes are rejected. The startup guard verifies applied checksums, exact Phase 2 CHECK bodies, foreign-key mappings, primary/unique/secondary index semantics including namespace-qualified collations and operator classes, and deny-all security controls. Only classified transient database unavailability may continue startup without a verdict; missing migration assets and ledger or catalog inspection failures refuse startup. No reconciliation migration or schema repair was deployed to the hosted database.
 
 ## Automated verification
 
@@ -75,17 +85,57 @@ The final commit and hosted CI run are recorded in the pull request. Local coord
 
 The pruned production dependency tree no longer contains the high-advisory Prisma CLI chain. Three moderate `qs` findings remain through Express 4 and `body-parser`; these stay visible in the non-blocking audit and are not described as a clean security audit. Updating that chain is a separate compatibility task.
 
+After the review tooling was added, its isolated policy-v1 suite passed 75/75 tests; its focused type-check and lint also passed. The backend suite was then replayed against a newly created disposable database using both explicitly pinned connection URLs. All 43 migrations applied and 151 files passed with 2,206 passing tests and 1 skipped test. The database was removed after the run. At that checkpoint, this fresh-chain result did not close the earlier-revision upgrade-path blocker.
+
+Focused P1 regression verification now covers all four review blockers:
+
+- Provider rescue revalidates the scan under a row lock immediately before submission. The check binds a fresh active worker lease, pending and processing state, undeleted evidence, and absence of a delete-scan purge. PostgreSQL lock-contention tests prove both deletion-first and provider-first ordering with `pg_blocking_pids`. A bounded worker reconciler cancels abandoned `RESERVED` dispatches with exact-once budget release and marks stale `SUBMITTED` dispatches `AMBIGUOUS` without releasing potentially billable units.
+- Receipt purge recovery terminalizes stale jobs abandoned at the ten-attempt ceiling, reports them through readiness, and leaves a final attempt alone while its lease heartbeat is fresh.
+- Mobile's “Choose another receipt” action now uses the complete receipt reset path. Single, batched, and resumed foreign-currency regressions confirm that the next upload receives a new idempotency key and no stale batch binding.
+- Migration regression coverage checks exact SQL checksums, the known legacy exception only after the frozen reconciliation completes, and live schema sentinels. Missing sentinels, unknown checksums, and unverifiable catalog state fail closed.
+
+### Current coordinated P1 gate
+
+The root verification run used Node 22.23.2 and a fresh disposable PostgreSQL database with both connection URLs explicitly pinned. It recorded:
+
+- All 44 migrations applied. `prisma migrate status` reported the chain up to date, and the schema diff exited 0 with no difference.
+- The live local startup guard returned `{status:ok,pending:[],failed:[],checksumMismatches:[],schemaIssues:[]}`.
+- The backend complete suite passed 2,245 tests across 151 files, with 1 intentional skip and 2,246 tests total.
+- The mobile complete suite passed 1,056 tests across 97 files.
+- Backend and mobile type-checks passed.
+- Both lint commands passed. Backend reported 8 existing warnings, and mobile reported 12 existing Fast Refresh warnings; all are outside the P1 changed files.
+- The database cleanup check found zero remaining sessions before removing the disposable database.
+
+This coordinated run used only the disposable local database and performed no hosted deployment. It does not replace physical-device verification or consented real-receipt evidence.
+
+### P2 remediation gate, 14 September 2026
+
+Before any P2 code changed, the exact P1 snapshot was replayed in full on a fresh disposable PostgreSQL 16 database with the frozen reconciliation migration unchanged: 151 files, 2,245 passed, 1 skipped, 2,246 total, with the same 44-migration, status, diff, and guard results as above. That closes the conservative replay note from the handoff.
+
+The eight P2 findings were then fixed by their owning agents, each starting from a failing reproducing test, reviewed as one range by qa-security, and verified again on the final snapshot. The per-finding changes and test files are tabulated in the [PR review](./PR-1-REVIEW-2026-09-13.md#p2-resolution-14-september-2026). The final gate recorded, all under Node 22.23.2 with both connection URLs pinned to disposable databases:
+
+- A new forward-only migration, `20260914010610_receipt_scan_last_activity` (SHA-256 `30c6b971f39a835a00e098bf649277aea219e98530caac1fba47c561587e8038`), bringing the chain to 45. Fresh replay applied all 45; `prisma validate` clean; status current; schema diff clean; live guard `ok`.
+- Backend complete suite: 156 files, 2,305 passed, 1 skipped, 2,306 total. Type-check, lint (8 pre-existing warnings outside the changed files), and production build passed. Zero remaining database sessions.
+- Mobile complete suite: 98 files, 1,064 passed. Type-check and lint passed with the 12 pre-existing Fast Refresh warnings.
+- Web complete suite: 85 files, 745 passed; Chromium end-to-end 18 passed; type-check, lint, production build, and bundle budget passed.
+- Policy-v1 evaluator: 75 passed with clean focused type-check and lint.
+- Backend CI steps reproduced locally: type parity, provider gate smoke with zero provider network calls, queue readiness smoke, provider status `--require-disabled`, queue readiness, and `docker compose config`. `npm audit`, the Docker image and ML jobs, and hosted CI were not reproduced.
+
+An independent full-range review then followed ([PR 2](./PR-2-REVIEW-2026-09-14.md)); its two P1 and eleven P2 fixes were verified by a further complete gate: backend 158 files, 2,313 passed, 1 skipped on a fresh database with all 45 migrations, guard `ok`; web 85 files, 748 passed plus 18 end-to-end; mobile 98 files, 1,069 passed after the owner's dispositions were applied; reconciliation harness 237 facts. Of the four P2 dispositions, one was accepted with a runbook requirement, two were fixed, and one is deferred to after merge. The changes are uncommitted worktree files. No commit, push, or deployment was made by an agent during this work.
+
 ## Incident disclosure
 
 During migration validation, Prisma loaded the configured hosted `DIRECT_URL` even though `DATABASE_URL` pointed to a disposable database. The first additive Phase 2 migration was consequently applied to the hosted Supabase database without authorization. Hosted access stopped immediately. No rollback or compensating write was attempted because the migration is additive and a rollback would be destructive.
 
-Only `20260913100918_receipt_capture_batches_and_scan_revision` reached the hosted database. The later `CANCELLED` and source-image-hash migrations were validated only against disposable local PostgreSQL instances. See [HOSTED-MIGRATION-INCIDENT.md](./HOSTED-MIGRATION-INCIDENT.md) for the preserved artifact hash, impact review, and containment record.
+The incident record states that only `20260913100918_receipt_capture_batches_and_scan_revision` was deployed to the hosted database by the incident. Separately, the owner personally ran `prisma migrate deploy` from the interactive shell twice to restore the development server: on 13 September (applying `20260913192200` and `20260913194745`) and at about 02:07 PHT on 14 September (applying `20260913230000` and `20260914010610`). Those were owner actions on the development project, not agent actions. The hosted ledger is expected to hold all 45 migrations, unverified by an authorized check. At approximately 23:02 to 23:04 PHT on 13 September 2026, three later SELECT-only verification entrypoints accidentally inherited `backend/.env` and reached the hosted database: the Phase 2 schema-sentinel catalog query, the combined migration-ledger and schema-shape guard, and one `SELECT` of the `20260913100918` migration-ledger row. They performed no writes or migrations, read no user or receipt data, and emitted no credential values. Work stopped after the inherited connection was discovered. See [HOSTED-MIGRATION-INCIDENT.md](./HOSTED-MIGRATION-INCIDENT.md) for the full chronology.
 
 The test harness now gives explicitly supplied environment variables precedence over checked-in local defaults. This does not replace reviewed deployment controls: later migrations must still be applied through the authorized deployment workflow.
 
 ## Open release acceptance
 
 These checks require hardware, consented data, or deployed credentials and are not represented as automated passes:
+
+- Current closure status for the [PR review](./PR-1-REVIEW-2026-09-13.md): the four P1 and eight P2 findings have coordinated local remediation evidence. A reviewed commit, an independent review of the full range, and hosted CI on the exact commit remain open.
 
 - Standard, Long, batch, permission, lifecycle, rotation/crop, low-memory, thermal, TalkBack, and large-text journeys on representative Android devices.
 - Authenticated end-to-end retrieval from the deployed private receipt bucket, including signed-link expiry and refresh.

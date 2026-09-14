@@ -18,7 +18,8 @@ const createBatchSchema = z.object({
 
 function parseBatchId(raw: string): number {
   const id = Number(raw);
-  if (!Number.isInteger(id) || id <= 0) throw new ApiError(400, "Invalid receipt batch id");
+  // int4 bound: a larger id would reach Prisma and surface as a 500.
+  if (!Number.isInteger(id) || id <= 0 || id > 2147483647) throw new ApiError(400, "Invalid receipt batch id");
   return id;
 }
 

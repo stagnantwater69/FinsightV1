@@ -16,6 +16,28 @@ import { ApiError } from "../middleware/error.middleware";
 export const RECEIPT_DUPLICATE_DETECTOR_VERSION = "receipt-semantic-v2";
 export const RECEIPT_DUPLICATE_CONFIRM_RESPONSE_LIMIT = 20;
 
+/**
+ * Upper bound on the candidate set kept for one source scan.
+ *
+ * Discovery reads at most this many rows per source table (oldest id first,
+ * so a re-run sees the same window) and persistence keeps at most this many
+ * targets. Past it, more rows change nothing the owner can decide: the
+ * receipt already matches prior records. The pending-key read behind the set
+ * hash, the confirm recheck, and `candidateCount` are all bounded by it.
+ */
+export const RECEIPT_DUPLICATE_CANDIDATE_SET_LIMIT = 200;
+
+/*
+ * Cursor contract for the candidate list and the confirm-time first page.
+ *
+ * Order is candidate row id ascending. A target keeps its row across
+ * refreshes and ids are never reused, so the order cannot shift under a
+ * client walking pages. The cursor is base64url JSON `{ v: 1, id }` naming
+ * the last row served; the next page is every pending row with a greater id.
+ * It is a position, not a snapshot: a refresh between pages can supersede or
+ * add rows, which the client detects through `candidateSetHash` changing.
+ */
+
 export const RECEIPT_DUPLICATE_REASON_CODES = [
   "EXACT_IMAGE",
   "SAME_VENDOR",
@@ -213,38 +235,64 @@ async function discoverCandidates(
   sourceReceiptScanId: number,
   identity: DuplicateIdentity,
 ): Promise<DiscoveredCandidate[]> {
-  const scanCandidates = await db.receiptScan.findMany({
+  // Windows are read oldest-first and capped so the same profile state yields
+  // the same set hash, whatever order the planner returns rows in.
+  const scanScope = {
+    id: { not: sourceReceiptScanId },
+    businessProfileId,
+    confirmationStatus: "Confirmed" as const,
+    purgeJobs: { none: { mode: ReceiptPurgeMode.DELETE_SCAN } },
+  };
+  const scanSelect = {
+    id: true,
+    sourceImageHash: true,
+    semanticFingerprint: true,
+    extractedDate: true,
+    extractedVendor: true,
+    extractedDescription: true,
+    extractedAmount: true,
+    expenseRecords: {
+      select: {
+        date: true,
+        vendor: true,
+        description: true,
+        amount: true,
+      },
+      orderBy: { id: "asc" as const },
+    },
+  } satisfies Prisma.ReceiptScanSelect;
+  // Exact and same-total matches get their own window so the broad same-date
+  // window below can never crowd them out once a profile has more than the
+  // cap's worth of confirmed scans on one date.
+  const preciseCandidates = await db.receiptScan.findMany({
     where: {
-      id: { not: sourceReceiptScanId },
-      businessProfileId,
-      confirmationStatus: "Confirmed",
-      purgeJobs: { none: { mode: ReceiptPurgeMode.DELETE_SCAN } },
+      ...scanScope,
       OR: [
         { semanticFingerprint: identity.fingerprint },
         { extractedDate: identity.date, extractedAmount: identity.amount },
-        { expenseRecords: { some: { date: identity.date } } },
+        // Profile scope repeated on purpose: without it the EXISTS subquery
+        // has only the date and scans every profile's expenses.
+        { expenseRecords: { some: { businessProfileId, date: identity.date, amount: identity.amount } } },
         ...(identity.sourceImageHash ? [{ sourceImageHash: identity.sourceImageHash }] : []),
       ],
     },
-    select: {
-      id: true,
-      sourceImageHash: true,
-      semanticFingerprint: true,
-      extractedDate: true,
-      extractedVendor: true,
-      extractedDescription: true,
-      extractedAmount: true,
-      expenseRecords: {
-        select: {
-          date: true,
-          vendor: true,
-          description: true,
-          amount: true,
-        },
-        orderBy: { id: "asc" },
-      },
-    },
+    orderBy: { id: "asc" },
+    take: RECEIPT_DUPLICATE_CANDIDATE_SET_LIMIT,
+    select: scanSelect,
   });
+  // Same-date scans whose confirmed splits may sum to the receipt total. This
+  // is the only window the cap can truncate.
+  const broadCandidates = await db.receiptScan.findMany({
+    where: {
+      ...scanScope,
+      id: { not: sourceReceiptScanId, notIn: preciseCandidates.map((candidate) => candidate.id) },
+      expenseRecords: { some: { businessProfileId, date: identity.date } },
+    },
+    orderBy: { id: "asc" },
+    take: RECEIPT_DUPLICATE_CANDIDATE_SET_LIMIT,
+    select: scanSelect,
+  });
+  const scanCandidates = [...preciseCandidates, ...broadCandidates];
 
   const discovered: DiscoveredCandidate[] = [];
   for (const candidate of scanCandidates) {
@@ -281,6 +329,8 @@ async function discoverCandidates(
         amount: identity.amount,
       },
       select: { id: true, date: true, amount: true, vendor: true, description: true },
+      orderBy: { id: "asc" },
+      take: RECEIPT_DUPLICATE_CANDIDATE_SET_LIMIT,
     });
     for (const candidate of expenseCandidates) {
       if (!sameSemanticIdentity(identity, candidate)) continue;
@@ -296,25 +346,29 @@ async function discoverCandidates(
     }
   }
 
-  return discovered.sort((left, right) => {
-    const leftKey = left.candidateReceiptScanId === null
-      ? `expense:${left.candidateExpenseRecordId}`
-      : `receipt:${left.candidateReceiptScanId}`;
-    const rightKey = right.candidateReceiptScanId === null
-      ? `expense:${right.candidateExpenseRecordId}`
-      : `receipt:${right.candidateReceiptScanId}`;
-    return leftKey.localeCompare(rightKey);
-  });
+  // Expense targets first, then receipts, oldest first within each: the
+  // order rows are created in, and the order that survives the cap.
+  return discovered
+    .sort((left, right) => {
+      const kind = Number(left.candidateReceiptScanId !== null) - Number(right.candidateReceiptScanId !== null);
+      if (kind !== 0) return kind;
+      return (left.candidateReceiptScanId ?? left.candidateExpenseRecordId!)
+        - (right.candidateReceiptScanId ?? right.candidateExpenseRecordId!);
+    })
+    .slice(0, RECEIPT_DUPLICATE_CANDIDATE_SET_LIMIT);
 }
 
-function targetKey(candidate: {
+interface CandidateTargetRef {
   candidateReceiptScanId: number | null;
   candidateExpenseRecordId: number | null;
-}): string {
+}
+
+function targetKey(candidate: CandidateTargetRef): string {
   return candidate.candidateReceiptScanId === null
     ? `expense:${candidate.candidateExpenseRecordId}`
     : `receipt:${candidate.candidateReceiptScanId}`;
 }
+
 
 async function persistCandidateSet(
   db: Prisma.TransactionClient,
@@ -323,14 +377,32 @@ async function persistCandidateSet(
   identity: DuplicateIdentity,
   discovered: DiscoveredCandidate[],
 ): Promise<void> {
+  // Every row this detector version wrote for the source, keyed by target.
+  // Grows with distinct targets ever matched (each refresh adds at most
+  // RECEIPT_DUPLICATE_CANDIDATE_SET_LIMIT), not with the number of refreshes.
   const current = await db.receiptDuplicateCandidate.findMany({
     where: {
       businessProfileId,
       sourceReceiptScanId,
       detectorVersion: RECEIPT_DUPLICATE_DETECTOR_VERSION,
     },
+    select: {
+      id: true,
+      candidateReceiptScanId: true,
+      candidateExpenseRecordId: true,
+      sourceFingerprint: true,
+      reasonCodes: true,
+      scoreBand: true,
+      reviewStatus: true,
+      decisionSetHash: true,
+      decidedByUserId: true,
+      decidedAt: true,
+    },
+    orderBy: { id: "asc" },
   });
+  const currentByTarget = new Map(current.map((row) => [targetKey(row), row]));
   const discoveredKeys = new Set(discovered.map(targetKey));
+
   const staleIds = current
     .filter((candidate) =>
       candidate.reviewStatus === ReceiptDuplicateReviewStatus.PENDING
@@ -344,33 +416,65 @@ async function persistCandidateSet(
     });
   }
 
+  // A row already in the pending state this run would write is left alone, so
+  // a re-run of the same identity is read-only. Updates are grouped by the only
+  // per-row fields (reason codes, score band), one updateMany per group.
+  // A SAVED_ANYWAY row keeps the owner's decision and is never rewritten.
+  const updateGroups = new Map<string, Pick<DiscoveredCandidate, "reasonCodes" | "scoreBand"> & { ids: number[] }>();
+  const creates: Prisma.ReceiptDuplicateCandidateCreateManyInput[] = [];
   for (const candidate of discovered) {
-    const existing = current.find((row) => targetKey(row) === targetKey(candidate));
-    const data = {
+    const existing = currentByTarget.get(targetKey(candidate));
+    const reasons = JSON.stringify(candidate.reasonCodes);
+    if (existing) {
+      if (existing.reviewStatus === ReceiptDuplicateReviewStatus.SAVED_ANYWAY) continue;
+      const unchanged = existing.reviewStatus === ReceiptDuplicateReviewStatus.PENDING
+        && existing.sourceFingerprint === identity.fingerprint
+        && existing.scoreBand === candidate.scoreBand
+        && JSON.stringify(existing.reasonCodes) === reasons
+        && existing.decisionSetHash === null
+        && existing.decidedByUserId === null
+        && existing.decidedAt === null;
+      if (unchanged) continue;
+      const groupKey = `${candidate.scoreBand}:${reasons}`;
+      const group = updateGroups.get(groupKey)
+        ?? { reasonCodes: candidate.reasonCodes, scoreBand: candidate.scoreBand, ids: [] };
+      group.ids.push(existing.id);
+      updateGroups.set(groupKey, group);
+      continue;
+    }
+    creates.push({
+      businessProfileId,
+      sourceReceiptScanId,
+      candidateReceiptScanId: candidate.candidateReceiptScanId,
+      candidateExpenseRecordId: candidate.candidateExpenseRecordId,
+      detectorVersion: RECEIPT_DUPLICATE_DETECTOR_VERSION,
       sourceFingerprint: identity.fingerprint,
       reasonCodes: candidate.reasonCodes as unknown as Prisma.InputJsonValue,
       scoreBand: candidate.scoreBand,
       reviewStatus: ReceiptDuplicateReviewStatus.PENDING,
-      decisionSetHash: null,
-      decidedByUserId: null,
-      decidedAt: null,
-    };
-    if (existing) {
-      if (existing.reviewStatus !== ReceiptDuplicateReviewStatus.SAVED_ANYWAY) {
-        await db.receiptDuplicateCandidate.update({ where: { id: existing.id }, data });
-      }
-      continue;
-    }
-    await db.receiptDuplicateCandidate.create({
-      data: {
+    });
+  }
+  for (const group of updateGroups.values()) {
+    await db.receiptDuplicateCandidate.updateMany({
+      where: {
+        id: { in: group.ids },
         businessProfileId,
         sourceReceiptScanId,
-        candidateReceiptScanId: candidate.candidateReceiptScanId,
-        candidateExpenseRecordId: candidate.candidateExpenseRecordId,
-        detectorVersion: RECEIPT_DUPLICATE_DETECTOR_VERSION,
-        ...data,
+        reviewStatus: { not: ReceiptDuplicateReviewStatus.SAVED_ANYWAY },
+      },
+      data: {
+        sourceFingerprint: identity.fingerprint,
+        reasonCodes: group.reasonCodes as unknown as Prisma.InputJsonValue,
+        scoreBand: group.scoreBand,
+        reviewStatus: ReceiptDuplicateReviewStatus.PENDING,
+        decisionSetHash: null,
+        decidedByUserId: null,
+        decidedAt: null,
       },
     });
+  }
+  if (creates.length > 0) {
+    await db.receiptDuplicateCandidate.createMany({ data: creates });
   }
 
   const sourceUpdated = await db.receiptScan.updateMany({
@@ -414,7 +518,11 @@ function candidateDTO(candidate: CandidateWithTarget) {
   };
 }
 
-function setHash(sourceFingerprint: string, candidates: CandidateWithTarget[]): string | null {
+interface PendingCandidateKey extends CandidateTargetRef {
+  id: number;
+}
+
+function setHash(sourceFingerprint: string, candidates: CandidateTargetRef[]): string | null {
   if (candidates.length === 0) return null;
   const targets = candidates.map(targetKey).sort();
   return createHash("sha256")
@@ -422,23 +530,54 @@ function setHash(sourceFingerprint: string, candidates: CandidateWithTarget[]): 
     .digest("hex");
 }
 
-async function loadPendingCandidates(
+const pendingCandidateFilter = (
+  businessProfileId: number,
+  sourceReceiptScanId: number,
+  sourceFingerprint: string,
+) => ({
+  businessProfileId,
+  sourceReceiptScanId,
+  sourceFingerprint,
+  detectorVersion: RECEIPT_DUPLICATE_DETECTOR_VERSION,
+  reviewStatus: ReceiptDuplicateReviewStatus.PENDING,
+}) satisfies Prisma.ReceiptDuplicateCandidateWhereInput;
+
+/**
+ * The pending set as (id, target) triples: all the set hash, the count, and
+ * the Save-anyway decision need. Bounded by the persistence cap rather than a
+ * `take` of its own, which would let the hash silently cover a partial set.
+ */
+async function loadPendingCandidateKeys(
   db: Prisma.TransactionClient | typeof prisma,
   businessProfileId: number,
   sourceReceiptScanId: number,
   sourceFingerprint: string,
-): Promise<CandidateWithTarget[]> {
+): Promise<PendingCandidateKey[]> {
   return db.receiptDuplicateCandidate.findMany({
+    where: pendingCandidateFilter(businessProfileId, sourceReceiptScanId, sourceFingerprint),
+    select: { id: true, candidateReceiptScanId: true, candidateExpenseRecordId: true },
+    orderBy: { id: "asc" },
+  });
+}
+
+/** One page of pending candidates with their targets, cursor contract as documented above. */
+async function loadPendingCandidatePage(
+  db: Prisma.TransactionClient | typeof prisma,
+  businessProfileId: number,
+  sourceReceiptScanId: number,
+  sourceFingerprint: string,
+  page: { afterId: number | null; take: number },
+): Promise<{ candidates: CandidateWithTarget[]; hasMore: boolean }> {
+  const rows = await db.receiptDuplicateCandidate.findMany({
     where: {
-      businessProfileId,
-      sourceReceiptScanId,
-      sourceFingerprint,
-      detectorVersion: RECEIPT_DUPLICATE_DETECTOR_VERSION,
-      reviewStatus: ReceiptDuplicateReviewStatus.PENDING,
+      ...pendingCandidateFilter(businessProfileId, sourceReceiptScanId, sourceFingerprint),
+      ...(page.afterId === null ? {} : { id: { gt: page.afterId } }),
     },
     include: candidateTarget,
     orderBy: { id: "asc" },
+    take: page.take + 1,
   });
+  return { candidates: rows.slice(0, page.take), hasMore: rows.length > page.take };
 }
 
 async function refreshCandidateSet(
@@ -447,19 +586,22 @@ async function refreshCandidateSet(
   sourceReceiptScanId: number,
   identity: DuplicateIdentity,
   locksHeld = false,
-): Promise<CandidateWithTarget[]> {
+): Promise<PendingCandidateKey[]> {
   if (!locksHeld) {
     await lockDuplicateIdentitySet(db, businessProfileId, sourceReceiptScanId, identity);
   }
   const discovered = await discoverCandidates(db, businessProfileId, sourceReceiptScanId, identity);
   await persistCandidateSet(db, businessProfileId, sourceReceiptScanId, identity, discovered);
-  return loadPendingCandidates(db, businessProfileId, sourceReceiptScanId, identity.fingerprint);
+  return loadPendingCandidateKeys(db, businessProfileId, sourceReceiptScanId, identity.fingerprint);
 }
 
 function cursorId(encoded: string): number {
   try {
     const decoded = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as Record<string, unknown>;
-    if (decoded.v !== 1 || !Number.isInteger(decoded.id) || Number(decoded.id) <= 0) throw new Error("shape");
+    // Postgres int4 bound: a larger id would reach Prisma and surface as a 500.
+    if (decoded.v !== 1 || !Number.isInteger(decoded.id) || Number(decoded.id) <= 0 || Number(decoded.id) > 2147483647) {
+      throw new Error("shape");
+    }
     return Number(decoded.id);
   } catch {
     throw new ApiError(400, "Invalid duplicate-candidate cursor");
@@ -503,22 +645,20 @@ export async function listReceiptDuplicateCandidates(
     };
   }
 
-  const all = await loadPendingCandidates(
-    prisma,
-    source.businessProfileId,
-    source.id,
-    source.semanticFingerprint,
-  );
-  const visible = all.filter((candidate) => afterId === null || candidate.id > afterId);
-  const page = visible.slice(0, input.take);
-  const hasMore = visible.length > page.length;
+  const [keys, page] = await Promise.all([
+    loadPendingCandidateKeys(prisma, source.businessProfileId, source.id, source.semanticFingerprint),
+    loadPendingCandidatePage(prisma, source.businessProfileId, source.id, source.semanticFingerprint, {
+      afterId,
+      take: input.take,
+    }),
+  ]);
   return {
     sourceFingerprint: source.semanticFingerprint,
-    candidateSetHash: setHash(source.semanticFingerprint, all),
-    candidates: page.map(candidateDTO),
-    candidateCount: all.length,
-    candidatesTruncated: hasMore,
-    nextCursor: hasMore ? encodeCursor(page.at(-1)!.id) : null,
+    candidateSetHash: setHash(source.semanticFingerprint, keys),
+    candidates: page.candidates.map(candidateDTO),
+    candidateCount: keys.length,
+    candidatesTruncated: page.hasMore,
+    nextCursor: page.hasMore ? encodeCursor(page.candidates.at(-1)!.id) : null,
   };
 }
 
@@ -562,21 +702,28 @@ export type ReceiptDuplicateGate =
       nextCursor: string | null;
     };
 
-function reviewRequired(
+async function reviewRequired(
+  db: Prisma.TransactionClient,
   code: "DUPLICATE_REVIEW_REQUIRED" | "DUPLICATE_REVIEW_CHANGED",
-  sourceFingerprint: string,
-  candidates: CandidateWithTarget[],
-): Extract<ReceiptDuplicateGate, { kind: "review-required" }> {
-  const visible = candidates.slice(0, RECEIPT_DUPLICATE_CONFIRM_RESPONSE_LIMIT);
+  scope: { businessProfileId: number; sourceReceiptScanId: number; sourceFingerprint: string },
+  keys: PendingCandidateKey[],
+): Promise<Extract<ReceiptDuplicateGate, { kind: "review-required" }>> {
+  const page = await loadPendingCandidatePage(
+    db,
+    scope.businessProfileId,
+    scope.sourceReceiptScanId,
+    scope.sourceFingerprint,
+    { afterId: null, take: RECEIPT_DUPLICATE_CONFIRM_RESPONSE_LIMIT },
+  );
   return {
     kind: "review-required",
     code,
-    sourceFingerprint,
-    candidateSetHash: setHash(sourceFingerprint, candidates)!,
-    candidates: visible.map(candidateDTO),
-    candidateCount: candidates.length,
-    candidatesTruncated: candidates.length > visible.length,
-    nextCursor: candidates.length > visible.length ? encodeCursor(visible.at(-1)!.id) : null,
+    sourceFingerprint: scope.sourceFingerprint,
+    candidateSetHash: setHash(scope.sourceFingerprint, keys)!,
+    candidates: page.candidates.map(candidateDTO),
+    candidateCount: keys.length,
+    candidatesTruncated: page.hasMore,
+    nextCursor: page.hasMore ? encodeCursor(page.candidates.at(-1)!.id) : null,
   };
 }
 
@@ -630,13 +777,18 @@ export async function evaluateReceiptDuplicateGate(
   const candidateSetHash = setHash(identity.fingerprint, candidates);
   if (!candidateSetHash) return { kind: "allowed", sourceFingerprint: identity.fingerprint };
 
+  const scope = {
+    businessProfileId: input.businessProfileId,
+    sourceReceiptScanId: input.receiptScanId,
+    sourceFingerprint: identity.fingerprint,
+  };
   const code = input.decision?.candidateSetHash === candidateSetHash
     ? null
     : input.decision
       ? "DUPLICATE_REVIEW_CHANGED"
       : "DUPLICATE_REVIEW_REQUIRED";
   if (code) {
-    return reviewRequired(code, identity.fingerprint, candidates);
+    return reviewRequired(db, code, scope, candidates);
   }
 
   const decidedAt = new Date();
@@ -655,14 +807,14 @@ export async function evaluateReceiptDuplicateGate(
     },
   });
   if (decided.count !== candidates.length) {
-    const current = await loadPendingCandidates(
+    const current = await loadPendingCandidateKeys(
       db,
       input.businessProfileId,
       input.receiptScanId,
       identity.fingerprint,
     );
     if (current.length === 0) return { kind: "allowed", sourceFingerprint: identity.fingerprint };
-    return reviewRequired("DUPLICATE_REVIEW_CHANGED", identity.fingerprint, current);
+    return reviewRequired(db, "DUPLICATE_REVIEW_CHANGED", scope, current);
   }
   return { kind: "allowed", sourceFingerprint: identity.fingerprint };
 }

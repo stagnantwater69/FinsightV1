@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { Prisma } from "@prisma/client";
+import { Prisma, ReceiptPurgeMode } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import {
   getReceiptProviderConfiguration,
@@ -46,12 +46,20 @@ export interface ReceiptProviderEvidenceReference {
 export interface ReceiptProviderDispatchInput {
   businessProfileId: number;
   receiptScanId: number;
+  processingLease: {
+    workerId: string;
+    attempt: number;
+  };
   rescueDecision: RescueDecision;
   localExtraction: NormalizedReceiptExtraction;
   pages: ReceiptProviderEvidenceReference[];
   preprocessingVersion: string;
   normalizedSchemaVersion: string;
 }
+
+export const RECEIPT_PROCESSING_LEASE_MS = 2 * 60 * 1000;
+export const RECEIPT_PROVIDER_DISPATCH_STALE_MS = RECEIPT_PROCESSING_LEASE_MS;
+const RECEIPT_PROVIDER_RECONCILIATION_BATCH_SIZE = 50;
 
 export interface ReceiptProviderDispatchDependencies {
   adapter: ReceiptProviderAdapter & { readonly providerVersion: string };
@@ -67,6 +75,11 @@ export interface ReceiptProviderDispatchResult {
   provider: "gemini" | "veryfi" | null;
   latencyMs: number | null;
   merge: ProviderMergeResult;
+}
+
+export interface ReceiptProviderReconciliationResult {
+  cancelled: number;
+  ambiguous: number;
 }
 
 class GateRefusal extends Error {
@@ -87,6 +100,24 @@ type Reservation = {
   businessProfileId: number;
   status: "RESERVED" | "SUBMITTED" | "SUCCEEDED" | "FAILED" | "CANCELLED" | "AMBIGUOUS";
 };
+
+type ReconciliationCandidate = {
+  id: number;
+  businessProfileId: number;
+  receiptScanId: number | null;
+  receiptScanBusinessProfileId: number | null;
+  resourceBudgetId: number;
+  businessBudgetId: number | null;
+  provider: string;
+  unitType: "PAGE" | "DOCUMENT" | "IMAGE_FEATURE";
+  cycleStart: Date;
+  reservedUnits: number;
+  status: "RESERVED" | "SUBMITTED";
+  submittedAt: Date | null;
+  createdAt: Date;
+};
+
+type ReconciliationOutcome = "NONE" | "CANCELLED" | "AMBIGUOUS";
 
 function hash(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
@@ -161,14 +192,38 @@ function evidenceMetadataValid(pages: ReceiptProviderEvidenceReference[]): boole
 }
 
 function dispatchMetadataValid(input: ReceiptProviderDispatchInput): boolean {
+  const lease = input.processingLease;
   return (
     Number.isSafeInteger(input.businessProfileId) &&
     input.businessProfileId > 0 &&
     Number.isSafeInteger(input.receiptScanId) &&
     input.receiptScanId > 0 &&
+    Boolean(lease) &&
+    (
+      typeof lease.workerId === "string" &&
+      lease.workerId.length >= 1 &&
+      lease.workerId.length <= 100 &&
+      Number.isSafeInteger(lease.attempt) &&
+      lease.attempt >= 1
+    ) &&
     /^[A-Za-z0-9._:-]{1,64}$/.test(input.preprocessingVersion) &&
     /^[A-Za-z0-9._:-]{1,64}$/.test(input.normalizedSchemaVersion)
   );
+}
+
+function dispatchableReceiptWhere(input: ReceiptProviderDispatchInput, now: Date): Prisma.ReceiptScanWhereInput {
+  return {
+    id: input.receiptScanId,
+    businessProfileId: input.businessProfileId,
+    businessProfile: { archivedAt: null },
+    confirmationStatus: "Pending",
+    processingStatus: "Processing",
+    evidenceDeletionRequestedAt: null,
+    purgeJobs: { none: { mode: ReceiptPurgeMode.DELETE_SCAN } },
+    processingWorkerId: input.processingLease.workerId,
+    processingAttemptCount: input.processingLease.attempt,
+    processingHeartbeatAt: { gte: new Date(now.getTime() - RECEIPT_PROCESSING_LEASE_MS) },
+  };
 }
 
 async function ensureBudget(
@@ -241,6 +296,300 @@ async function incrementReservation(
   if (updated !== 1) throw new GateRefusal("PROVIDER_QUOTA_EXHAUSTED");
 }
 
+async function lockReconciliationBudget(
+  tx: Prisma.TransactionClient,
+  input: {
+    id: number;
+    scope: "RESOURCE" | "BUSINESS";
+    businessProfileId: number | null;
+    provider: string;
+    unitType: "PAGE" | "DOCUMENT" | "IMAGE_FEATURE";
+    cycleStart: Date;
+  },
+): Promise<void> {
+  const rows = await tx.$queryRaw<{ id: number }[]>`
+    SELECT "ExternalProviderBudget_ID" AS id
+    FROM "ExternalProviderBudget"
+    WHERE "ExternalProviderBudget_ID" = ${input.id}
+      AND "ExternalProviderBudget_Scope" = CAST(${input.scope} AS "ExternalProviderBudgetScope")
+      AND "BusinessProfile_ID" IS NOT DISTINCT FROM CAST(${input.businessProfileId} AS INTEGER)
+      AND "ExternalProviderBudget_Provider" = ${input.provider}
+      AND "ExternalProviderBudget_UnitType" = CAST(${input.unitType} AS "ExternalProviderUnitType")
+      AND "ExternalProviderBudget_CycleStart" = CAST(${input.cycleStart} AS DATE)
+    FOR UPDATE
+  `;
+  if (rows.length !== 1) throw new Error(`Provider reconciliation budget ${input.id} is unavailable`);
+}
+
+async function releaseReconciliationBudget(
+  tx: Prisma.TransactionClient,
+  input: {
+    id: number;
+    scope: "RESOURCE" | "BUSINESS";
+    businessProfileId: number | null;
+    provider: string;
+    unitType: "PAGE" | "DOCUMENT" | "IMAGE_FEATURE";
+    cycleStart: Date;
+    reservedUnits: number;
+  },
+): Promise<void> {
+  const changed = await tx.$executeRaw`
+    UPDATE "ExternalProviderBudget"
+    SET "ExternalProviderBudget_ReservedUnits" = "ExternalProviderBudget_ReservedUnits" - ${input.reservedUnits},
+        "ExternalProviderBudget_UpdatedAt" = CURRENT_TIMESTAMP
+    WHERE "ExternalProviderBudget_ID" = ${input.id}
+      AND "ExternalProviderBudget_Scope" = CAST(${input.scope} AS "ExternalProviderBudgetScope")
+      AND "BusinessProfile_ID" IS NOT DISTINCT FROM CAST(${input.businessProfileId} AS INTEGER)
+      AND "ExternalProviderBudget_Provider" = ${input.provider}
+      AND "ExternalProviderBudget_UnitType" = CAST(${input.unitType} AS "ExternalProviderUnitType")
+      AND "ExternalProviderBudget_CycleStart" = CAST(${input.cycleStart} AS DATE)
+      AND "ExternalProviderBudget_ReservedUnits" >= ${input.reservedUnits}
+  `;
+  if (changed !== 1) throw new Error(`Provider reconciliation budget ${input.id} cannot release reserved units`);
+}
+
+function candidateIsStale(candidate: ReconciliationCandidate, cutoff: Date): boolean {
+  return candidate.status === "RESERVED"
+    ? candidate.createdAt <= cutoff
+    : candidate.submittedAt !== null && candidate.submittedAt <= cutoff;
+}
+
+async function lockEligibleReceipt(
+  tx: Prisma.TransactionClient,
+  candidate: ReconciliationCandidate,
+  heartbeatCutoff: Date,
+): Promise<boolean> {
+  if (candidate.receiptScanId === null || candidate.receiptScanBusinessProfileId === null) return false;
+  const rows = await tx.$queryRaw<{
+    confirmationStatus: string;
+    processingStatus: string;
+    evidenceDeletionRequestedAt: Date | null;
+    processingWorkerId: string | null;
+    processingAttemptCount: number;
+    processingHeartbeatAt: Date | null;
+    profileArchivedAt: Date | null;
+    hasDeletePurge: boolean;
+  }[]>`
+    SELECT
+      scan."ReceiptScan_ConfirmationStatus" AS "confirmationStatus",
+      scan."ReceiptScan_ProcessingStatus" AS "processingStatus",
+      scan."ReceiptScan_EvidenceDeletionRequestedAt" AS "evidenceDeletionRequestedAt",
+      scan."ReceiptScan_ProcessingWorkerID" AS "processingWorkerId",
+      scan."ReceiptScan_ProcessingAttemptCount" AS "processingAttemptCount",
+      scan."ReceiptScan_ProcessingHeartbeatAt" AS "processingHeartbeatAt",
+      profile."BusinessProfile_ArchivedAt" AS "profileArchivedAt",
+      EXISTS (
+        SELECT 1
+        FROM "ReceiptPurgeJob" purge
+        WHERE purge."ReceiptScan_ID" = scan."ReceiptScan_ID"
+          AND purge."ReceiptScan_BusinessProfile_ID" = scan."BusinessProfile_ID"
+          AND purge."ReceiptPurgeJob_Mode" = 'DELETE_SCAN'
+      ) AS "hasDeletePurge"
+    FROM "ReceiptScan" scan
+    INNER JOIN "BusinessProfile" profile
+      ON profile."BusinessProfile_ID" = scan."BusinessProfile_ID"
+    WHERE scan."ReceiptScan_ID" = ${candidate.receiptScanId}
+      AND scan."BusinessProfile_ID" = ${candidate.receiptScanBusinessProfileId}
+    FOR UPDATE OF scan
+  `;
+  const receipt = rows[0];
+  return Boolean(
+    receipt &&
+      receipt.profileArchivedAt === null &&
+      receipt.confirmationStatus === "Pending" &&
+      receipt.processingStatus === "Processing" &&
+      receipt.evidenceDeletionRequestedAt === null &&
+      receipt.processingWorkerId !== null &&
+      receipt.processingAttemptCount >= 1 &&
+      receipt.processingHeartbeatAt !== null &&
+      receipt.processingHeartbeatAt >= heartbeatCutoff &&
+      !receipt.hasDeletePurge,
+  );
+}
+
+async function reconcileCandidate(
+  candidateId: number,
+  dispatchCutoff: Date,
+  heartbeatCutoff: Date,
+  completedAt: Date,
+): Promise<ReconciliationOutcome> {
+  return prisma.$transaction(async (tx) => {
+    const snapshot = await tx.externalProviderDispatch.findFirst({
+      where: { id: candidateId, status: { in: ["RESERVED", "SUBMITTED"] } },
+      select: {
+        id: true,
+        businessProfileId: true,
+        receiptScanId: true,
+        receiptScanBusinessProfileId: true,
+        resourceBudgetId: true,
+        businessBudgetId: true,
+        provider: true,
+        unitType: true,
+        cycleStart: true,
+        reservedUnits: true,
+        status: true,
+        submittedAt: true,
+        createdAt: true,
+      },
+    });
+    if (!snapshot || !candidateIsStale(snapshot as ReconciliationCandidate, dispatchCutoff)) return "NONE";
+    const candidate = snapshot as ReconciliationCandidate;
+
+    await lockReconciliationBudget(tx, {
+      id: candidate.resourceBudgetId,
+      scope: "RESOURCE",
+      businessProfileId: null,
+      provider: candidate.provider,
+      unitType: candidate.unitType,
+      cycleStart: candidate.cycleStart,
+    });
+    if (candidate.businessBudgetId !== null) {
+      await lockReconciliationBudget(tx, {
+        id: candidate.businessBudgetId,
+        scope: "BUSINESS",
+        businessProfileId: candidate.businessProfileId,
+        provider: candidate.provider,
+        unitType: candidate.unitType,
+        cycleStart: candidate.cycleStart,
+      });
+    }
+
+    const eligibleReceipt = candidate.status === "RESERVED"
+      ? await lockEligibleReceipt(tx, candidate, heartbeatCutoff)
+      : false;
+    const lockedRows = await tx.$queryRaw<ReconciliationCandidate[]>`
+      SELECT
+        "ExternalProviderDispatch_ID" AS id,
+        "BusinessProfile_ID" AS "businessProfileId",
+        "ReceiptScan_ID" AS "receiptScanId",
+        "ReceiptScan_BusinessProfile_ID" AS "receiptScanBusinessProfileId",
+        "ExternalProviderDispatch_ResourceBudget_ID" AS "resourceBudgetId",
+        "ExternalProviderDispatch_BusinessBudget_ID" AS "businessBudgetId",
+        "ExternalProviderDispatch_Provider" AS provider,
+        "ExternalProviderDispatch_UnitType" AS "unitType",
+        "ExternalProviderDispatch_CycleStart" AS "cycleStart",
+        "ExternalProviderDispatch_ReservedUnits" AS "reservedUnits",
+        "ExternalProviderDispatch_Status" AS status,
+        "ExternalProviderDispatch_SubmittedAt" AS "submittedAt",
+        "ExternalProviderDispatch_CreatedAt" AS "createdAt"
+      FROM "ExternalProviderDispatch"
+      WHERE "ExternalProviderDispatch_ID" = ${candidate.id}
+      FOR UPDATE
+    `;
+    const locked = lockedRows[0];
+    if (
+      !locked ||
+      (locked.status !== "RESERVED" && locked.status !== "SUBMITTED") ||
+      !candidateIsStale(locked, dispatchCutoff) ||
+      locked.resourceBudgetId !== candidate.resourceBudgetId ||
+      locked.businessBudgetId !== candidate.businessBudgetId ||
+      locked.businessProfileId !== candidate.businessProfileId ||
+      locked.receiptScanId !== candidate.receiptScanId ||
+      locked.receiptScanBusinessProfileId !== candidate.receiptScanBusinessProfileId ||
+      locked.provider !== candidate.provider ||
+      locked.unitType !== candidate.unitType ||
+      locked.cycleStart.getTime() !== candidate.cycleStart.getTime() ||
+      locked.reservedUnits !== candidate.reservedUnits
+    ) {
+      return "NONE";
+    }
+
+    if (locked.status === "SUBMITTED") {
+      const changed = await tx.externalProviderDispatch.updateMany({
+        where: { id: locked.id, status: "SUBMITTED", submittedAt: { lte: dispatchCutoff } },
+        data: {
+          status: "AMBIGUOUS",
+          outcomeCode: "RECONCILED_STALE_SUBMISSION",
+          completedAt,
+        },
+      });
+      return changed.count === 1 ? "AMBIGUOUS" : "NONE";
+    }
+    if (eligibleReceipt) return "NONE";
+
+    await releaseReconciliationBudget(tx, {
+      id: locked.resourceBudgetId,
+      scope: "RESOURCE",
+      businessProfileId: null,
+      provider: locked.provider,
+      unitType: locked.unitType,
+      cycleStart: locked.cycleStart,
+      reservedUnits: locked.reservedUnits,
+    });
+    if (locked.businessBudgetId !== null) {
+      await releaseReconciliationBudget(tx, {
+        id: locked.businessBudgetId,
+        scope: "BUSINESS",
+        businessProfileId: locked.businessProfileId,
+        provider: locked.provider,
+        unitType: locked.unitType,
+        cycleStart: locked.cycleStart,
+        reservedUnits: locked.reservedUnits,
+      });
+    }
+    const changed = await tx.externalProviderDispatch.updateMany({
+      where: { id: locked.id, status: "RESERVED", createdAt: { lte: dispatchCutoff } },
+      data: {
+        status: "CANCELLED",
+        outcomeCode: "RECONCILED_STALE_RESERVATION",
+        finalBillableUnits: 0,
+        completedAt,
+      },
+    });
+    if (changed.count !== 1) throw new Error(`Provider reconciliation lost dispatch ${locked.id}`);
+    return "CANCELLED";
+  });
+}
+
+export async function reconcileStaleReceiptProviderDispatches(
+  now = new Date(),
+): Promise<ReceiptProviderReconciliationResult> {
+  const dispatchCutoff = new Date(now.getTime() - RECEIPT_PROVIDER_DISPATCH_STALE_MS);
+  const heartbeatCutoff = new Date(now.getTime() - RECEIPT_PROCESSING_LEASE_MS);
+  const candidates = await prisma.$queryRaw<{ id: number }[]>`
+    SELECT dispatch."ExternalProviderDispatch_ID" AS id
+    FROM "ExternalProviderDispatch" dispatch
+    WHERE (
+      dispatch."ExternalProviderDispatch_Status" = 'SUBMITTED'
+      AND dispatch."ExternalProviderDispatch_SubmittedAt" <= ${dispatchCutoff}
+    ) OR (
+      dispatch."ExternalProviderDispatch_Status" = 'RESERVED'
+      AND dispatch."ExternalProviderDispatch_CreatedAt" <= ${dispatchCutoff}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM "ReceiptScan" scan
+        INNER JOIN "BusinessProfile" profile
+          ON profile."BusinessProfile_ID" = scan."BusinessProfile_ID"
+        WHERE scan."ReceiptScan_ID" = dispatch."ReceiptScan_ID"
+          AND scan."BusinessProfile_ID" = dispatch."ReceiptScan_BusinessProfile_ID"
+          AND profile."BusinessProfile_ArchivedAt" IS NULL
+          AND scan."ReceiptScan_ConfirmationStatus" = 'Pending'
+          AND scan."ReceiptScan_ProcessingStatus" = 'Processing'
+          AND scan."ReceiptScan_EvidenceDeletionRequestedAt" IS NULL
+          AND scan."ReceiptScan_ProcessingWorkerID" IS NOT NULL
+          AND scan."ReceiptScan_ProcessingAttemptCount" >= 1
+          AND scan."ReceiptScan_ProcessingHeartbeatAt" >= ${heartbeatCutoff}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM "ReceiptPurgeJob" purge
+            WHERE purge."ReceiptScan_ID" = scan."ReceiptScan_ID"
+              AND purge."ReceiptScan_BusinessProfile_ID" = scan."BusinessProfile_ID"
+              AND purge."ReceiptPurgeJob_Mode" = 'DELETE_SCAN'
+          )
+      )
+    )
+    ORDER BY dispatch."ExternalProviderDispatch_CreatedAt", dispatch."ExternalProviderDispatch_ID"
+    LIMIT ${RECEIPT_PROVIDER_RECONCILIATION_BATCH_SIZE}
+  `;
+  const result: ReceiptProviderReconciliationResult = { cancelled: 0, ambiguous: 0 };
+  for (const candidate of candidates) {
+    const outcome = await reconcileCandidate(candidate.id, dispatchCutoff, heartbeatCutoff, now);
+    if (outcome === "CANCELLED") result.cancelled += 1;
+    if (outcome === "AMBIGUOUS") result.ambiguous += 1;
+  }
+  return result;
+}
+
 async function reserve(
   input: ReceiptProviderDispatchInput,
   config: ReceiptProviderConfiguration & {
@@ -276,11 +625,7 @@ async function reserve(
       return await prisma.$transaction(
         async (tx) => {
           const receipt = await tx.receiptScan.findFirst({
-            where: {
-              id: input.receiptScanId,
-              businessProfileId: input.businessProfileId,
-              businessProfile: { archivedAt: null },
-            },
+            where: dispatchableReceiptWhere(input, now),
             select: { id: true },
           });
           if (!receipt) throw new GateRefusal("PROVIDER_UNAVAILABLE");
@@ -636,8 +981,19 @@ export async function dispatchReceiptProviderRescue(
     return skipped(localExtraction, "PROVIDER_UNAVAILABLE");
   }
 
-  const submittedAt = clock();
   const submitResult = await prisma.$transaction(async (tx) => {
+    const lockedReceipt = await tx.$queryRaw<{ id: number }[]>`
+      SELECT scan."ReceiptScan_ID" AS id
+      FROM "ReceiptScan" scan
+      INNER JOIN "BusinessProfile" profile
+        ON profile."BusinessProfile_ID" = scan."BusinessProfile_ID"
+      WHERE scan."ReceiptScan_ID" = ${input.receiptScanId}
+        AND scan."BusinessProfile_ID" = ${input.businessProfileId}
+        AND profile."BusinessProfile_ArchivedAt" IS NULL
+      FOR UPDATE OF scan
+    `;
+    if (lockedReceipt.length !== 1) return "SCAN_UNAVAILABLE" as const;
+
     const locked = await tx.$queryRaw<{ id: number }[]>`
       SELECT "ExternalProcessingConsent_ID" AS id
       FROM "ExternalProcessingConsent"
@@ -661,8 +1017,19 @@ export async function dispatchReceiptProviderRescue(
       select: { id: true },
     });
     if (!consent) return "CONSENT_REVOKED" as const;
+    const submittedAt = clock();
+    const receipt = await tx.receiptScan.findFirst({
+      where: dispatchableReceiptWhere(input, submittedAt),
+      select: { id: true },
+    });
+    if (!receipt) return "SCAN_UNAVAILABLE" as const;
     const changed = await tx.externalProviderDispatch.updateMany({
-      where: { id: reservation.id, status: "RESERVED" },
+      where: {
+        id: reservation.id,
+        businessProfileId: input.businessProfileId,
+        receiptScanId: input.receiptScanId,
+        status: "RESERVED",
+      },
       data: { status: "SUBMITTED", submittedAt },
     });
     return changed.count === 1 ? ("SUBMITTED" as const) : ("RACED" as const);
@@ -671,6 +1038,11 @@ export async function dispatchReceiptProviderRescue(
     const outcome = cancelledOutcome(reservation, config, Date.now() - loadStartedAt);
     await releaseOrConsume(reservation, outcome, clock()).catch(() => undefined);
     return skipped(localExtraction, "PROVIDER_CONSENT_REQUIRED");
+  }
+  if (submitResult === "SCAN_UNAVAILABLE") {
+    const outcome = cancelledOutcome(reservation, config, Date.now() - loadStartedAt);
+    await releaseOrConsume(reservation, outcome, clock()).catch(() => undefined);
+    return skipped(localExtraction, "PROVIDER_UNAVAILABLE");
   }
   if (submitResult === "RACED") return skipped(localExtraction, "PROVIDER_DISPATCH_ALREADY_ATTEMPTED");
 

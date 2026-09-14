@@ -755,6 +755,18 @@ Notes:
   migrations in this repo are additive (new tables and defaulted columns), so
   the practical undo is a restore from backup — which is the reason §6 exists.
 - Take a backup *before* migrating, not after.
+- **Before the first deploy of `20260914010610_receipt_scan_last_activity`
+  to a database with real owners, add a forward-only grace migration.** That
+  migration backfills `ReceiptScan.lastActivityAt` from the timestamps the
+  database already had, and none of them recorded owner *views*. A pending
+  scan the owner merely opened last week therefore looks inactive since its
+  last edit or OCR pass, and the hourly abandoned-scan sweep will queue it for
+  purge on its first run after deploy. The grace migration should floor
+  `lastActivityAt` at deploy time minus six days for unconfirmed scans, giving
+  every owner at least a day to resume before anything is deleted. The
+  development project was migrated without it on 14 September 2026 (owner
+  decision, synthetic data); see
+  `docs/phase-2/PR-2-REVIEW-2026-09-14.md`, open item 1.
 
 ---
 

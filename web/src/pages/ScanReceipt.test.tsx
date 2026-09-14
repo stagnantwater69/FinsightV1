@@ -538,7 +538,7 @@ describe("receipt upload and review", () => {
     });
 
     render(page());
-    await user.click(await screen.findByRole("button", { name: "Review result" }));
+    await user.click(await screen.findByRole("button", { name: "Review result, Paper shop" }));
     await screen.findByRole("heading", { name: "Check what FinSight read" });
     expect(await screen.findByRole("img", { name: "Source, receipt page 1 of 1" })).toHaveAttribute(
       "src",
@@ -770,6 +770,7 @@ describe("receipt upload and review", () => {
     expect(mocks.patch).toHaveBeenCalledWith(
       "/records/receipts/10/items/41",
       { name: "A4 printer paper", amount: 260, expectedScanRevision: 3 },
+      { signal: expect.any(AbortSignal) },
     );
     await user.click(screen.getByRole("radio", { name: /A discount on the whole receipt/ }));
     await user.click(screen.getByRole("button", { name: "Confirm & save expense" }));
@@ -823,6 +824,108 @@ describe("receipt upload and review", () => {
       name: "A4 paper draft",
       expectedScanRevision: 4,
     });
+  });
+
+  it("adopts the newer revision after a stale confirm so the next save can succeed", async () => {
+    const user = userEvent.setup();
+    const stale = { ...receipt, scanRevision: 3 };
+    let confirms = 0;
+    mocks.post.mockImplementation(async (url: string) => {
+      if (url !== "/records/receipts/10/confirm") return { data: stale };
+      confirms += 1;
+      if (confirms === 1) {
+        throw Object.assign(new Error("Conflict"), {
+          isAxiosError: true,
+          response: { status: 409, data: { error: "This receipt changed while you were reviewing it." } },
+        });
+      }
+      return { data: [{ id: 501 }] };
+    });
+    mocks.get.mockImplementation(async (url: string) =>
+      url === "/records/receipts"
+        ? { data: { items: [], nextCursor: null } }
+        : url === "/records/receipts/10/duplicate-candidates"
+        ? { data: { sourceFingerprint: null, candidateSetHash: null, candidates: [], nextCursor: null } }
+        : url.startsWith("/records/receipts/provider-consent/")
+        ? { data: { available: false, provider: null, consent: null, activeConsents: [] } }
+        : { data: { ...stale, scanRevision: 4 } });
+
+    render(page());
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo());
+    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await user.selectOptions(screen.getByLabelText(/^Category/), "2");
+    await user.click(screen.getByRole("button", { name: "Confirm & save expense" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/latest version is shown/i);
+    await user.click(screen.getByRole("button", { name: "Confirm & save expense" }));
+    await waitFor(() => expect(confirms).toBe(2));
+    const [, first] = mocks.post.mock.calls.filter(([url]) => url === "/records/receipts/10/confirm")[0]!;
+    const [, second] = mocks.post.mock.calls.filter(([url]) => url === "/records/receipts/10/confirm")[1]!;
+    expect(first).toMatchObject({ expectedScanRevision: 3 });
+    expect(second).toMatchObject({ expectedScanRevision: 4 });
+  });
+
+  it("ignores a late item response after the owner has chosen another image", async () => {
+    const user = userEvent.setup();
+    const itemised = {
+      ...receipt,
+      scanRevision: 3,
+      items: [
+        { id: 41, lineNumber: 1, name: "Printer paper", quantity: 1, unitPrice: 250, amount: 250, categoryId: 2 },
+        { id: 42, lineNumber: 2, name: "Pens", quantity: 5, unitPrice: 50, amount: 250, categoryId: 2 },
+      ],
+    };
+    mocks.post.mockResolvedValue({ data: itemised });
+    let settlePatch!: (value: { data: ScanResult }) => void;
+    mocks.patch.mockImplementation(() => new Promise((resolve) => { settlePatch = resolve; }));
+
+    render(page());
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo());
+    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await user.click(screen.getByRole("button", { name: "Edit Printer paper" }));
+    await user.clear(screen.getByLabelText("Item amount"));
+    await user.type(screen.getByLabelText("Item amount"), "260");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await user.click(screen.getByRole("button", { name: "Choose another image" }));
+    expect(screen.queryByRole("heading", { name: "Check what FinSight read" })).toBeNull();
+
+    settlePatch({ data: { ...itemised, scanRevision: 4, items: [{ ...itemised.items[0], amount: 260 }, itemised.items[1]] } });
+    await waitFor(() => expect(mocks.patch).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("heading", { name: "Check what FinSight read" })).toBeNull();
+    expect(screen.getByLabelText(/Receipt photo/)).toBeInTheDocument();
+  });
+
+  it("does not move focus back to the attention field after an item save", async () => {
+    const user = userEvent.setup();
+    const itemised = {
+      ...receipt,
+      extractedDate: null,
+      scanRevision: 3,
+      items: [
+        { id: 41, lineNumber: 1, name: "Printer paper", quantity: 1, unitPrice: 250, amount: 250, categoryId: 2 },
+        { id: 42, lineNumber: 2, name: "Pens", quantity: 5, unitPrice: 50, amount: 250, categoryId: 2 },
+      ],
+    };
+    mocks.post.mockResolvedValue({ data: itemised });
+    mocks.patch.mockResolvedValue({ data: { ...itemised, scanRevision: 4, items: [{ ...itemised.items[0], amount: 260 }, itemised.items[1]] } });
+
+    render(page());
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo());
+    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await waitFor(() => expect(screen.getByLabelText(/^Date/)).toHaveFocus());
+
+    await user.click(screen.getByRole("button", { name: "Edit Printer paper" }));
+    await user.clear(screen.getByLabelText("Item amount"));
+    await user.type(screen.getByLabelText("Item amount"), "260");
+    const save = screen.getByRole("button", { name: "Save" });
+    await user.click(save);
+    await waitFor(() => expect(mocks.patch).toHaveBeenCalledTimes(1));
+
+    expect(screen.getByLabelText(/^Date/)).not.toHaveFocus();
   });
 
   it("keeps foreign receipt amounts out of the peso confirmation form", async () => {

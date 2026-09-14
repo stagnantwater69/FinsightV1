@@ -47,6 +47,13 @@ jobs:
       # prisma itself, which doesn't recognize it and prints its help text.
       - run: npx prisma generate
         working-directory: backend
+      - name: Verify Phase 2 reconciliation paths
+        run: npm run migrate:verify-phase2-reconciliation
+        working-directory: backend
+        timeout-minutes: 10
+        env:
+          DATABASE_URL: postgresql://testuser:testpass@localhost:55432/finsight_test
+          DIRECT_URL: postgresql://testuser:testpass@localhost:55432/finsight_test
       # Explicit gate for "does the migration history apply cleanly to a
       # brand-new database", run separately from the test suite so a
       # migration failure shows up as its own red step instead of buried

@@ -86,7 +86,11 @@ export function ActiveReceiptQueue({
 
       {items.map((item) => {
         const action = receiptResumeAction(item);
-        const title = item.extractedVendor?.trim() || item.extractedDescription?.trim() || "Stored receipt";
+        const named = item.extractedVendor?.trim() || item.extractedDescription?.trim();
+        // Rows still being read have no vendor yet, so the scan number keeps
+        // two of them apart for a screen reader and for the owner.
+        const title = named || `Stored receipt ${item.id}`;
+        const rowName = item.receiptBatchId && item.receiptOrdinal ? `${title}, receipt ${item.receiptOrdinal}` : title;
         return (
           <View
             key={item.id}
@@ -102,14 +106,14 @@ export function ActiveReceiptQueue({
             ) : null}
             <Button
               title={actionLabel(action)}
-              accessibilityLabel={`${actionLabel(action)} for ${title}`}
+              accessibilityLabel={`${actionLabel(action)} for ${rowName}`}
               variant={action === "review" ? "primary" : "secondary"}
               disabled={!action || deletingId !== null}
               onPress={() => { if (action) onOpen(item, action); }}
             />
             <Button
               title="Delete scan"
-              accessibilityLabel={`Delete scan for ${title}`}
+              accessibilityLabel={`Delete scan for ${rowName}`}
               variant="danger"
               disabled={deletingId !== null && deletingId !== item.id}
               loading={deletingId === item.id}

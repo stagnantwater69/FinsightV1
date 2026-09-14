@@ -30,6 +30,14 @@ const ACTIVE_PURGE_STATUSES = [
   ReceiptPurgeStatus.RETRY,
 ] as const;
 
+/**
+ * Seven days after the last owner or worker touch, an unconfirmed scan that
+ * has finished processing (Complete or Failed) is purged. Plan §10.5.
+ */
+export const ABANDONED_SCAN_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+/** Per processing-status pass, per worker tick. */
+export const ABANDONED_SCAN_SWEEP_BATCH_SIZE = 50;
+
 type PurgeTarget = {
   id: number;
   businessProfileId: number | null;
@@ -63,6 +71,10 @@ function requestKeyHash(userId: number, key: string): string {
 
 function internalOrphanKeyHash(businessProfileId: number, receiptScanId: number): string {
   return sha256(`receipt-purge-orphan-v1\0${businessProfileId}\0${receiptScanId}`);
+}
+
+function abandonedScanKeyHash(businessProfileId: number, receiptScanId: number): string {
+  return sha256(`receipt-purge-abandoned-v1\0${businessProfileId}\0${receiptScanId}`);
 }
 
 function targetReferenceHash(businessProfileId: number, receiptScanId: number, mode: ReceiptPurgeMode): string {
@@ -340,36 +352,182 @@ export async function enqueueReceiptPurgeIfOrphaned(receiptScanId: number | null
     const prior = scan.purgeJobs.find((job) => job.requestKeyHash === hash);
     if (prior) return;
 
-    const now = new Date();
-    await tx.receiptPurgeJob.create({
-      data: {
-        businessProfileId: scan.businessProfileId,
-        receiptScanId,
-        receiptScanBusinessProfileId: scan.businessProfileId,
-        requestKeyHash: hash,
-        targetReferenceHash: targetReferenceHash(scan.businessProfileId, receiptScanId, ReceiptPurgeMode.DELETE_SCAN),
-        reason: ReceiptPurgeReason.OWNER_REQUEST,
-        mode: ReceiptPurgeMode.DELETE_SCAN,
-        storageObjectsExpected: count,
-        expiresAt: new Date(now.getTime() + PURGE_RESULT_TTL_MS),
-      },
+    await scheduleInternalScanDeletion(tx, scan, scan.businessProfileId, {
+      requestKeyHash: hash,
+      reason: ReceiptPurgeReason.OWNER_REQUEST,
+      storageObjectsExpected: count,
     });
-    await tx.receiptScan.update({
-      where: { id: receiptScanId },
-      data: {
-        evidenceDeletionRequestedAt: scan.evidenceDeletionRequestedAt ?? now,
-        confirmationStatus: "Deletion Pending",
-        processingStatus: "Failed",
-        processingError: null,
-        processingErrorCode: null,
-        processingStartedAt: null,
-        processingHeartbeatAt: null,
-        processingWorkerId: null,
-        scanRevision: { increment: 1 },
-      },
-    });
-    if (scan.captureBatchId !== null) await cancelReceiptCaptureBatch(tx, scan.captureBatchId);
   });
+}
+
+/**
+ * DELETE_SCAN enqueue shared by the system-initiated paths (orphan cleanup,
+ * abandoned sweep). Caller holds the row lock and has decided the scan
+ * qualifies; moving it to Deletion Pending is what stops every other path.
+ */
+async function scheduleInternalScanDeletion(
+  tx: Prisma.TransactionClient,
+  scan: Pick<PurgeTarget, "id" | "captureBatchId" | "evidenceDeletionRequestedAt">,
+  businessProfileId: number,
+  input: { requestKeyHash: string; reason: ReceiptPurgeReason; storageObjectsExpected: number; now?: Date },
+): Promise<ReceiptPurgeJob> {
+  const now = input.now ?? new Date();
+  const job = await tx.receiptPurgeJob.create({
+    data: {
+      businessProfileId,
+      receiptScanId: scan.id,
+      receiptScanBusinessProfileId: businessProfileId,
+      requestKeyHash: input.requestKeyHash,
+      targetReferenceHash: targetReferenceHash(businessProfileId, scan.id, ReceiptPurgeMode.DELETE_SCAN),
+      reason: input.reason,
+      mode: ReceiptPurgeMode.DELETE_SCAN,
+      storageObjectsExpected: input.storageObjectsExpected,
+      expiresAt: new Date(now.getTime() + PURGE_RESULT_TTL_MS),
+    },
+  });
+  await tx.receiptScan.update({
+    where: { id: scan.id },
+    data: {
+      evidenceDeletionRequestedAt: scan.evidenceDeletionRequestedAt ?? now,
+      confirmationStatus: "Deletion Pending",
+      processingStatus: "Failed",
+      processingError: null,
+      processingErrorCode: null,
+      processingStartedAt: null,
+      processingHeartbeatAt: null,
+      processingWorkerId: null,
+      scanRevision: { increment: 1 },
+    },
+  });
+  if (scan.captureBatchId !== null) await cancelReceiptCaptureBatch(tx, scan.captureBatchId);
+  return job;
+}
+
+type AbandonedSweepOutcome = "enqueued" | "alreadyScheduled" | "skipped";
+
+/**
+ * Re-checks one candidate under its row lock. The owner may have viewed,
+ * edited, retried, or deleted it since the sweep's read; the lock orders
+ * their stamp either before this check or after the scan has left Pending.
+ */
+async function enqueueAbandonedReceiptPurge(receiptScanId: number, cutoff: Date, now: Date): Promise<AbandonedSweepOutcome> {
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const batchLink = await tx.receiptScan.findUnique({
+        where: { id: receiptScanId },
+        select: { captureBatchId: true },
+      });
+      if (!batchLink) return "skipped";
+      if (
+        batchLink.captureBatchId !== null
+        && !(await lockReceiptCaptureBatchForMutation(tx, batchLink.captureBatchId))
+      ) {
+        return "skipped";
+      }
+
+      const locked = await tx.$queryRaw<{ id: number }[]>`
+        SELECT "ReceiptScan_ID" AS id
+        FROM "ReceiptScan"
+        WHERE "ReceiptScan_ID" = ${receiptScanId}
+        FOR UPDATE
+      `;
+      if (locked.length !== 1) return "skipped";
+
+      const scan = await tx.receiptScan.findUnique({
+        where: { id: receiptScanId },
+        include: {
+          pages: { orderBy: { pageNumber: "asc" } },
+          purgeJobs: { orderBy: { requestedAt: "desc" } },
+        },
+      });
+      if (
+        !scan?.businessProfileId
+        || scan.confirmationStatus !== "Pending"
+        || (scan.processingStatus !== "Complete" && scan.processingStatus !== "Failed")
+        || scan.lastActivityAt >= cutoff
+        || scan.evidenceDeletionRequestedAt !== null
+      ) {
+        return "skipped";
+      }
+      if (scan.purgeJobs.some((job) =>
+        ACTIVE_PURGE_STATUSES.includes(job.status as (typeof ACTIVE_PURGE_STATUSES)[number]),
+      )) {
+        return "alreadyScheduled";
+      }
+      // A scan with records is confirmed in all but name; not ours to purge.
+      if (await tx.expenseRecord.count({ where: { receiptScanId } })) return "skipped";
+
+      await scheduleInternalScanDeletion(tx, scan, scan.businessProfileId, {
+        requestKeyHash: abandonedScanKeyHash(scan.businessProfileId, receiptScanId),
+        reason: ReceiptPurgeReason.ABANDONED_SCAN,
+        storageObjectsExpected: artifactCount(scan),
+        now,
+      });
+      return "enqueued";
+    });
+  } catch (error) {
+    // The active-job partial unique index refused a second job: someone
+    // scheduled this scan first, which is the outcome we wanted anyway.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      return "alreadyScheduled";
+    }
+    throw error;
+  }
+}
+
+export interface AbandonedSweepResult {
+  candidates: number;
+  enqueued: number;
+  alreadyScheduled: number;
+  skipped: number;
+}
+
+/**
+ * Seven-day abandoned-scan cleanup (P2-5). Hands each unconfirmed, finished
+ * scan with no activity inside the window to the DELETE_SCAN purge pipeline
+ * as an ABANDONED_SCAN job; the purge worker does the deleting.
+ *
+ * Scans at processingStatus Pending or Processing are not swept: they belong
+ * to the processing pipeline, and become eligible seven days after the
+ * worker records Complete or Failed (both stamp lastActivityAt).
+ *
+ * Two equality passes, not one IN ('Complete', 'Failed'): with both leading
+ * columns pinned, ReceiptScan_abandoned_sweep_idx yields rows already in
+ * (lastActivityAt, id) order and the LIMIT needs no Sort.
+ *
+ * Cross-profile by design. Each job still carries the scan's own
+ * businessProfileId, which the purge stages re-verify before every write.
+ */
+export async function sweepAbandonedReceiptScans(
+  options: { now?: Date; batchSize?: number } = {},
+): Promise<AbandonedSweepResult> {
+  const now = options.now ?? new Date();
+  const batchSize = options.batchSize ?? ABANDONED_SCAN_SWEEP_BATCH_SIZE;
+  const cutoff = new Date(now.getTime() - ABANDONED_SCAN_RETENTION_MS);
+  const result: AbandonedSweepResult = { candidates: 0, enqueued: 0, alreadyScheduled: 0, skipped: 0 };
+
+  for (const processingStatus of ["Complete", "Failed"] as const) {
+    const candidates = await prisma.receiptScan.findMany({
+      where: {
+        confirmationStatus: "Pending",
+        processingStatus,
+        lastActivityAt: { lt: cutoff },
+        businessProfileId: { not: null },
+        evidenceDeletionRequestedAt: null,
+        purgeJobs: { none: { status: { in: [...ACTIVE_PURGE_STATUSES] } } },
+      },
+      orderBy: [{ lastActivityAt: "asc" }, { id: "asc" }],
+      take: batchSize,
+      select: { id: true },
+    });
+    result.candidates += candidates.length;
+    for (const candidate of candidates) {
+      const outcome = await enqueueAbandonedReceiptPurge(candidate.id, cutoff, now);
+      result[outcome] += 1;
+    }
+  }
+
+  return result;
 }
 
 type ClaimedPurge = {
@@ -397,7 +555,10 @@ async function claimPurge(): Promise<ClaimedPurge | null> {
           ("ReceiptPurgeJob_Status" IN ('PENDING', 'RETRY') AND "ReceiptPurgeJob_NextAttemptAt" <= NOW())
           OR (
             "ReceiptPurgeJob_Status" = 'PROCESSING'
-            AND "ReceiptPurgeJob_HeartbeatAt" < ${staleBefore}
+            AND (
+              "ReceiptPurgeJob_HeartbeatAt" IS NULL
+              OR "ReceiptPurgeJob_HeartbeatAt" < ${staleBefore}
+            )
           )
         )
       ORDER BY "ReceiptPurgeJob_NextAttemptAt", "ReceiptPurgeJob_ID"
@@ -495,6 +656,11 @@ async function processStorageStage(job: ClaimedPurge): Promise<void> {
       status: ReceiptPurgeStatus.PENDING,
       stage: ReceiptPurgeStage.DATABASE,
       storageObjectsDeleted: expected,
+      // The attempt ceiling is per stage. A Storage stage that finally
+      // succeeds on its last allowed claim has done its work; the database
+      // stage must still get its own claims, or the evidence is gone while
+      // the rows and the owner's hidden scan stay behind forever.
+      attemptCount: 0,
       workerId: null,
       leaseStartedAt: null,
       heartbeatAt: null,
@@ -662,10 +828,45 @@ async function deleteExpiredTerminalPurgeResults(now = new Date()): Promise<void
   });
 }
 
+function exhaustedActivePurgeWhere(now: Date): Prisma.ReceiptPurgeJobWhereInput {
+  const staleBefore = new Date(now.getTime() - PURGE_LEASE_MS);
+  return {
+    attemptCount: { gte: MAX_PURGE_ATTEMPTS },
+    OR: [
+      { status: { in: [ReceiptPurgeStatus.PENDING, ReceiptPurgeStatus.RETRY] } },
+      {
+        status: ReceiptPurgeStatus.PROCESSING,
+        OR: [{ heartbeatAt: null }, { heartbeatAt: { lt: staleBefore } }],
+      },
+    ],
+  };
+}
+
+async function terminalizeExhaustedPurges(now = new Date()): Promise<number> {
+  const terminalized = await prisma.receiptPurgeJob.updateMany({
+    where: exhaustedActivePurgeWhere(now),
+    data: {
+      status: ReceiptPurgeStatus.FAILED,
+      workerId: null,
+      leaseStartedAt: null,
+      heartbeatAt: null,
+      lastErrorCode: "PURGE_ATTEMPTS_EXHAUSTED",
+    },
+  });
+  if (terminalized.count > 0) {
+    logger.error(
+      { count: terminalized.count, code: "PURGE_ATTEMPTS_EXHAUSTED" },
+      "terminalized receipt purges abandoned at the attempt limit",
+    );
+  }
+  return terminalized.count;
+}
+
 export async function runReceiptPurgeWorkerOnce(): Promise<boolean> {
   await deleteExpiredTerminalPurgeResults();
+  const terminalized = await terminalizeExhaustedPurges();
   const job = await claimPurge();
-  if (!job) return false;
+  if (!job) return terminalized > 0;
   const heartbeatTimer = setInterval(() => {
     void heartbeatPurge(job).catch(() => undefined);
   }, Math.floor(PURGE_LEASE_MS / 3));
@@ -689,5 +890,12 @@ export async function runReceiptPurgeWorkerOnce(): Promise<boolean> {
 }
 
 export function countStalledReceiptPurges(): Promise<number> {
-  return prisma.receiptPurgeJob.count({ where: { status: ReceiptPurgeStatus.FAILED } });
+  return prisma.receiptPurgeJob.count({
+    where: {
+      OR: [
+        { status: ReceiptPurgeStatus.FAILED },
+        exhaustedActivePurgeWhere(new Date()),
+      ],
+    },
+  });
 }

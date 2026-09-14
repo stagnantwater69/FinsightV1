@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,11 +11,29 @@ vi.mock("../../src/config/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), fatal: vi.fn() },
 }));
 
-import { assertMigrationsApplied, checkMigrationDrift, compareMigrations, readMigrationsOnDisk } from "../../src/config/migrationGuard";
+import {
+  assertMigrationsApplied,
+  checkMigrationDrift,
+  compareMigrations,
+  readMigrationChecksums,
+  readMigrationsOnDisk,
+} from "../../src/config/migrationGuard";
 import { logger } from "../../src/config/logger";
 
-function row(name: string, over: { finished_at?: Date | null; rolled_back_at?: Date | null } = {}) {
+const PHASE2_SCANNER_MIGRATION = "20260913100918_receipt_capture_batches_and_scan_revision";
+const PHASE2_SCANNER_RECONCILIATION = "20260913230000_reconcile_phase2_scanner_migration_drift";
+const PHASE2_SCANNER_LEGACY_CHECKSUM = "a0e4f79275cbb0e975f16d4675776ecf954395eaa6dd5900f15cd3f73030ca5b";
+
+function row(
+  name: string,
+  over: { checksum?: string; finished_at?: Date | null; rolled_back_at?: Date | null } = {},
+) {
   return { migration_name: name, finished_at: new Date(), rolled_back_at: null, ...over };
+}
+
+function repositoryRows() {
+  const checksums = readMigrationChecksums();
+  return readMigrationsOnDisk().map((name) => row(name, { checksum: checksums.get(name) }));
 }
 
 beforeEach(() => {
@@ -68,6 +87,89 @@ describe("compareMigrations", () => {
     const result = compareMigrations(["a"], [row("a"), row("z_from_a_newer_branch")]);
     expect(result.status).toBe("ok");
   });
+
+  it("accepts current migration checksums", () => {
+    const checksums = new Map([["a", "current-a"], ["b", "current-b"]]);
+    const result = compareMigrations(
+      ["a", "b"],
+      [row("a", { checksum: "current-a" }), row("b", { checksum: "current-b" })],
+      checksums,
+    );
+
+    expect(result).toEqual({ status: "ok", pending: [], failed: [], checksumMismatches: [] });
+  });
+
+  it("fails closed on an unknown applied checksum", () => {
+    const result = compareMigrations(
+      ["a"],
+      [row("a", { checksum: "unexpected" })],
+      new Map([["a", "current"]]),
+    );
+
+    expect(result.status).toBe("drift");
+    expect(result.checksumMismatches).toEqual([{
+      migration: "a",
+      expectedChecksum: "current",
+      actualChecksum: "unexpected",
+    }]);
+  });
+
+  it.each([
+    ["missing", row("a")],
+    ["non-string", { ...row("a"), checksum: null }],
+  ])("fails closed when an applied migration checksum is %s", (_state, appliedRow) => {
+    const result = compareMigrations(
+      ["a"],
+      [appliedRow as Parameters<typeof compareMigrations>[1][number]],
+      new Map([["a", "current"]]),
+    );
+
+    expect(result.status).toBe("drift");
+    expect(result.checksumMismatches).toEqual([{
+      migration: "a",
+      expectedChecksum: "current",
+      actualChecksum: null,
+    }]);
+  });
+
+  it("accepts the known legacy scanner checksum only after the exact reconciliation finishes", () => {
+    const checksums = new Map([
+      [PHASE2_SCANNER_MIGRATION, "current-scanner"],
+      [PHASE2_SCANNER_RECONCILIATION, "current-reconciliation"],
+    ]);
+    const result = compareMigrations(
+      [PHASE2_SCANNER_MIGRATION, PHASE2_SCANNER_RECONCILIATION],
+      [
+        row(PHASE2_SCANNER_MIGRATION, { checksum: PHASE2_SCANNER_LEGACY_CHECKSUM }),
+        row(PHASE2_SCANNER_RECONCILIATION, { checksum: "current-reconciliation" }),
+      ],
+      checksums,
+    );
+
+    expect(result).toEqual({ status: "ok", pending: [], failed: [], checksumMismatches: [] });
+  });
+
+  it.each([
+    ["missing", []],
+    ["unfinished", [row(PHASE2_SCANNER_RECONCILIATION, { checksum: "current-reconciliation", finished_at: null })]],
+    ["wrong-checksum", [row(PHASE2_SCANNER_RECONCILIATION, { checksum: "wrong-reconciliation" })]],
+    ["rolled-back", [row(PHASE2_SCANNER_RECONCILIATION, { checksum: "current-reconciliation", rolled_back_at: new Date() })]],
+  ])("rejects the known legacy scanner checksum when reconciliation is %s", (_state, reconciliationRows) => {
+    const checksums = new Map([
+      [PHASE2_SCANNER_MIGRATION, "current-scanner"],
+      [PHASE2_SCANNER_RECONCILIATION, "current-reconciliation"],
+    ]);
+    const result = compareMigrations(
+      [PHASE2_SCANNER_MIGRATION, PHASE2_SCANNER_RECONCILIATION],
+      [row(PHASE2_SCANNER_MIGRATION, { checksum: PHASE2_SCANNER_LEGACY_CHECKSUM }), ...reconciliationRows],
+      checksums,
+    );
+
+    expect(result.status).toBe("drift");
+    expect(result.checksumMismatches).toEqual(expect.arrayContaining([
+      expect.objectContaining({ migration: PHASE2_SCANNER_MIGRATION, actualChecksum: PHASE2_SCANNER_LEGACY_CHECKSUM }),
+    ]));
+  });
 });
 
 describe("readMigrationsOnDisk", () => {
@@ -88,9 +190,30 @@ describe("readMigrationsOnDisk", () => {
 
     expect(readMigrationsOnDisk(dir)).toEqual(["20260101000000_a", "20260102000000_b"]);
   });
+
+  it("hashes the exact migration SQL bytes", () => {
+    const name = "20260101000000_a";
+    const sql = "SELECT 1;\n";
+    mkdirSync(path.join(dir, name));
+    writeFileSync(path.join(dir, name, "migration.sql"), sql);
+
+    expect(readMigrationChecksums(dir).get(name))
+      .toBe(createHash("sha256").update(sql).digest("hex"));
+  });
 });
 
 describe("checkMigrationDrift", () => {
+  it("classifies missing migration assets as unsafe to start", async () => {
+    const missingDir = path.join(tmpdir(), `finsight-missing-migrations-${Date.now()}`);
+
+    await expect(checkMigrationDrift(missingDir)).resolves.toMatchObject({
+      status: "unknown",
+      verificationFailure: "migration_files_unreadable",
+      reason: expect.stringContaining("migrations directory unreadable"),
+    });
+    expect(queryRaw).not.toHaveBeenCalled();
+  });
+
   /*
    * A database that cannot be reached has not told us anything about its
    * schema. Calling that "drift" would refuse to boot on a momentary network
@@ -105,6 +228,7 @@ describe("checkMigrationDrift", () => {
     const drift = await checkMigrationDrift();
 
     expect(drift.status).toBe("unknown");
+    expect(drift.verificationFailure).toBe("database_unavailable");
     expect(drift.reason).toContain("reach database server");
   });
 
@@ -128,8 +252,63 @@ describe("checkMigrationDrift", () => {
   // The real repository against the real migration list: proves the guard
   // agrees with itself when the database is up to date.
   it("passes when every migration in this repository is recorded as applied", async () => {
-    queryRaw.mockResolvedValue(readMigrationsOnDisk().map((name) => row(name)));
-    await expect(checkMigrationDrift()).resolves.toMatchObject({ status: "ok" });
+    queryRaw
+      .mockResolvedValueOnce(repositoryRows())
+      .mockResolvedValueOnce([]);
+    await expect(checkMigrationDrift()).resolves.toMatchObject({
+      status: "ok",
+      checksumMismatches: [],
+      schemaIssues: [],
+    });
+  });
+
+  it("fails closed when a required schema sentinel is missing", async () => {
+    queryRaw
+      .mockResolvedValueOnce(repositoryRows())
+      .mockResolvedValueOnce([{ issue: "constraint.receipt_scan_batch_link" }]);
+
+    await expect(checkMigrationDrift()).resolves.toMatchObject({
+      status: "drift",
+      schemaIssues: ["constraint.receipt_scan_batch_link"],
+    });
+  });
+
+  it("returns checksum drift without running the schema shape query", async () => {
+    const rows = repositoryRows();
+    rows[0] = { ...rows[0]!, checksum: "unexpected" };
+    queryRaw.mockResolvedValueOnce(rows);
+
+    await expect(checkMigrationDrift()).resolves.toMatchObject({
+      status: "drift",
+      checksumMismatches: [expect.objectContaining({ actualChecksum: "unexpected" })],
+    });
+    expect(queryRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it("classifies a reachable database with an unreadable catalog as unsafe to start", async () => {
+    queryRaw
+      .mockResolvedValueOnce(repositoryRows())
+      .mockRejectedValueOnce(new Error("catalog read failed"));
+
+    await expect(checkMigrationDrift()).resolves.toMatchObject({
+      status: "unknown",
+      verificationFailure: "schema_shape_unverifiable",
+      reason: "schema shape check failed: catalog read failed",
+    });
+  });
+
+  it("preserves transient database-unavailable classification when the catalog query loses its connection", async () => {
+    queryRaw
+      .mockResolvedValueOnce(repositoryRows())
+      .mockRejectedValueOnce(
+        new Prisma.PrismaClientKnownRequestError("Connection closed", { code: "P1017", clientVersion: "6.19.3" }),
+      );
+
+    await expect(checkMigrationDrift()).resolves.toMatchObject({
+      status: "unknown",
+      verificationFailure: "database_unavailable",
+      reason: expect.stringContaining("schema shape check failed"),
+    });
   });
 });
 
@@ -159,7 +338,9 @@ describe("assertMigrationsApplied", () => {
   });
 
   it("starts normally when the schema matches", async () => {
-    queryRaw.mockResolvedValue(readMigrationsOnDisk().map((name) => row(name)));
+    queryRaw
+      .mockResolvedValueOnce(repositoryRows())
+      .mockResolvedValueOnce([]);
 
     await assertMigrationsApplied("api");
 
@@ -175,5 +356,47 @@ describe("assertMigrationsApplied", () => {
 
     expect(exit).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it("refuses to start when migration history is reachable but cannot be read", async () => {
+    queryRaw.mockRejectedValue(new Error("permission denied for table _prisma_migrations"));
+
+    await assertMigrationsApplied("api");
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.fatal).toHaveBeenCalledWith(
+      expect.objectContaining({ verificationFailure: "migration_history_unverifiable" }),
+      expect.stringContaining("REFUSING TO START"),
+    );
+  });
+
+  it("refuses to start when packaged migration assets are missing", async () => {
+    const missingDir = path.join(tmpdir(), `finsight-missing-migrations-${Date.now()}`);
+
+    await assertMigrationsApplied("api", missingDir);
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(queryRaw).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.fatal).toHaveBeenCalledWith(
+      expect.objectContaining({ verificationFailure: "migration_files_unreadable" }),
+      expect.stringContaining("REFUSING TO START"),
+    );
+  });
+
+  it("refuses to start when catalog shape inspection fails after reading the ledger", async () => {
+    queryRaw
+      .mockResolvedValueOnce(repositoryRows())
+      .mockRejectedValueOnce(new Error("permission denied for catalog"));
+
+    await assertMigrationsApplied("worker");
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.fatal).toHaveBeenCalledWith(
+      expect.objectContaining({ verificationFailure: "schema_shape_unverifiable" }),
+      expect.stringContaining("REFUSING TO START"),
+    );
   });
 });

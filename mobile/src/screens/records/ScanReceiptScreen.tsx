@@ -78,6 +78,7 @@ import { localFileByteSize } from "../../lib/localFileSize";
 import { ReceiptProviderConsent } from "./scanReceipt/ReceiptProviderConsent";
 import { ReceiptEvidenceViewer } from "./scanReceipt/ReceiptEvidenceViewer";
 import { ActiveReceiptQueue, type ReceiptResumeAction } from "./scanReceipt/ActiveReceiptQueue";
+import { seedLocalReceipts, summaryFromScan } from "./scanReceipt/activeReceipts";
 import { deleteReceiptScannerFiles } from "../../lib/receiptScannerCache";
 import {
   duplicateCandidatePageFromResponse,
@@ -371,6 +372,14 @@ export function ScanReceiptScreen({ navigation }: any) {
     operation.cancel();
     setBusy(false);
     setPicking(false);
+    // The per-action flags are cleared in their `finally` blocks only while
+    // the operation is still current, which it no longer is after cancel.
+    // Left set, they would keep every row and save button disabled for as
+    // long as this screen stays mounted.
+    setDeletingScanId(null);
+    setSavingItemId(null);
+    setRemovingItemId(null);
+    setCreatingCategoryFor(null);
   }, [operation]));
 
   const loadActiveReceipts = useCallback(async (cursor?: string) => {
@@ -486,6 +495,66 @@ export function ScanReceiptScreen({ navigation }: any) {
     setActiveBatchChild(null);
     setScanRecoveryAction(null);
     setScanStarted(false);
+  }
+
+  // Scans the server already accepted stay pending there, so they enter
+  // Receipts to finish at once; the refresh reconciles or, if it fails, leaves them.
+  function resetForAnotherReceipt() {
+    const abandoned: ReceiptHistoryItem[] = [];
+    const now = Date.now();
+    const current = scan ?? uploadAttempt.current?.accepted ?? null;
+    if (current && current.confirmationStatus === "Pending") abandoned.push(summaryFromScan(current, now, pages.length));
+    for (const receipt of queuedReceiptGroups) {
+      if (receipt.accepted && receipt.accepted.confirmationStatus === "Pending" && !abandoned.some((row) => row.id === receipt.accepted!.id)) {
+        abandoned.push(summaryFromScan(receipt.accepted, now, receipt.pages.length));
+      }
+    }
+    // Starting over clears device-side files without changing the stored scan's deletion lifecycle.
+    void deleteReceiptScannerFiles(scannerFileUris([
+      ...pages,
+      ...queuedReceiptGroups.flatMap((receipt) => receipt.pages),
+    ]));
+    operation.cancel();
+    if (abandoned.length > 0) {
+      setActiveReceipts((list) => seedLocalReceipts(list, abandoned));
+      void loadActiveReceipts();
+    }
+    uploadAttempt.current = null;
+    receiptBatchAttempt.current = null;
+    batchChildAttempts.current.clear();
+    batchGroupsForAcceptance.current = null;
+    duplicateReviewIdentity.current = "";
+    addedAmountRefs.current = {};
+    setScan(null);
+    setPages([]);
+    setQueuedReceiptGroups([]);
+    setActiveBatchChild(null);
+    setScanRecoveryAction(null);
+    setScanStarted(false);
+    setUploadIssuePageKeys({});
+    setEvidencePage(null);
+    setCameraOpen(false);
+    setCameraIntent({ kind: "replace-all" });
+    setBusy(false);
+    setPicking(false);
+    setPhase("Uploading receipt…");
+    setCategoryId(null);
+    setDate("");
+    setDescription("");
+    setVendor("");
+    setAmount("");
+    setItemCategories({});
+    setPlan(null);
+    setGapCategoryId(null);
+    setCreatingCategoryFor(null);
+    setAddedItems([]);
+    setRemovingItemId(null);
+    setEditingItem(null);
+    setEditingItemErrors({});
+    setSavingItemId(null);
+    setDuplicateReview(null);
+    setDuplicateCandidatesError(null);
+    setError(null);
   }
 
   /**
@@ -618,13 +687,17 @@ export function ScanReceiptScreen({ navigation }: any) {
     else haptics.succeeded();
   }
 
+  function uploadSignature(list: CapturedPage[], batchChild: ReceiptBatchChild | null): string {
+    return `${selected!.id}:${batchChild?.batchId ?? "single"}:${batchChild?.ordinal ?? 1}:${list.map((page) => `${page.key}:${page.uri}:${page.originalUri ?? ""}`).join("|")}`;
+  }
+
   async function acceptReceiptUpload(
     list: CapturedPage[],
     batchChild: ReceiptBatchChild | null,
     task: NonNullable<ReturnType<typeof operation.begin>>,
     phaseLabel = "Uploading receipt…",
   ) {
-    const signature = `${selected!.id}:${batchChild?.batchId ?? "single"}:${batchChild?.ordinal ?? 1}:${list.map((page) => `${page.key}:${page.uri}:${page.originalUri ?? ""}`).join("|")}`;
+    const signature = uploadSignature(list, batchChild);
     const attempts = batchChild ? batchChildAttempts.current : null;
     let attempt = attempts?.get(signature) ?? uploadAttempt.current;
     if (!attempt || attempt.signature !== signature) {
@@ -706,7 +779,23 @@ export function ScanReceiptScreen({ navigation }: any) {
     try {
       const batchGroups = options.batchGroups ?? [];
       if (batchGroups.length > 1) {
-        for (const group of batchGroups) {
+        const batchSignature = `${selected!.id}:${batchGroups
+          .map((group) => group.map((page) => `${page.key}:${page.uri}:${page.originalUri ?? ""}`).join("|"))
+          .join("||")}`;
+        // On a resumed batch, children the server already accepted have had
+        // their local files released below; inspecting them again would fail
+        // on the missing files and block the children that still need sending.
+        const resumedBatch = receiptBatchAttempt.current?.signature === batchSignature
+          ? receiptBatchAttempt.current.batch
+          : null;
+        for (const [index, group] of batchGroups.entries()) {
+          if (resumedBatch && batchChildAttempts.current.get(uploadSignature(group, {
+            batchId: resumedBatch.id,
+            ordinal: index + 1,
+            expectedReceiptCount: batchGroups.length,
+          }))?.accepted) {
+            continue;
+          }
           const inspection = await inspectReceiptUpload(group, localFileByteSize);
           if (!operation.current(task)) return;
           if (!inspection.ok) {
@@ -716,9 +805,6 @@ export function ScanReceiptScreen({ navigation }: any) {
           }
         }
 
-        const batchSignature = `${selected!.id}:${batchGroups
-          .map((group) => group.map((page) => `${page.key}:${page.uri}:${page.originalUri ?? ""}`).join("|"))
-          .join("||")}`;
         if (receiptBatchAttempt.current?.signature !== batchSignature) {
           receiptBatchAttempt.current = { signature: batchSignature, key: newIdempotencyKey(), batch: null };
           batchChildAttempts.current.clear();
@@ -1035,11 +1121,25 @@ export function ScanReceiptScreen({ navigation }: any) {
         setScanRecoveryAction(null);
         setUploadIssuePageKeys({});
         receiptBatchAttempt.current = null;
+        // Children the server never accepted exist only as local files, so
+        // they become a fresh capture session instead of being dropped.
+        const storedSiblings = queuedReceiptGroups.some((receipt) => receipt.accepted !== null);
+        const unsentPages = queuedReceiptGroups
+          .filter((receipt) => receipt.accepted === null)
+          .flatMap((receipt) => receipt.pages);
         setQueuedReceiptGroups([]);
-        setPages([]);
+        setPages(unsentPages);
         setActiveBatchChild(null);
         setScanStarted(false);
-        setFlash("Receipt scan deletion started. Other stored batch receipts remain available to review.");
+        setFlash(
+          unsentPages.length > 0 && storedSiblings
+            ? "Receipt scan deletion started. The receipts you haven't sent yet are still here, ready to scan. The other stored receipts from this batch are still in Receipts to finish."
+            : unsentPages.length > 0
+              ? "Receipt scan deletion started. The receipts you haven't sent yet are still here, ready to scan."
+              : storedSiblings
+                ? "Receipt scan deletion started. The other stored receipts from this batch are still in Receipts to finish."
+                : "Receipt scan deletion started.",
+        );
         void loadActiveReceipts();
       } else {
         setFlash("Receipt scan deletion started.");
@@ -1067,24 +1167,7 @@ export function ScanReceiptScreen({ navigation }: any) {
         {
           text: "Choose another image",
           style: "destructive",
-          onPress: () => {
-            void deleteReceiptScannerFiles(scannerFileUris([
-              ...pages,
-              ...queuedReceiptGroups.flatMap((receipt) => receipt.pages),
-            ]));
-            operation.cancel();
-            uploadAttempt.current = null;
-            receiptBatchAttempt.current = null;
-            batchChildAttempts.current.clear();
-            batchGroupsForAcceptance.current = null;
-            setPages([]);
-            setQueuedReceiptGroups([]);
-            setActiveBatchChild(null);
-            setScanRecoveryAction(null);
-            setScanStarted(false);
-            setUploadIssuePageKeys({});
-            setError(null);
-          },
+          onPress: resetForAnotherReceipt,
         },
       ],
     );
@@ -2279,7 +2362,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                 <View style={{ gap: space.sm }}>
                   <ErrorNote>{foreignCurrency ? `This receipt is in ${foreignCurrency}. Enter the converted PHP amount manually before saving.` : "Enter this receipt manually with the amount paid in PHP."}</ErrorNote>
                   <Button title="Enter expense manually" variant="primary" onPress={() => navigation.navigate("AddExpense")} />
-                  <Button title="Choose another receipt" variant="ghost" onPress={() => { setScan(null); setPages([]); setUploadIssuePageKeys({}); }} />
+                  <Button title="Choose another receipt" variant="ghost" onPress={resetForAnotherReceipt} />
                 </View>
               ) : <>
 
@@ -2916,30 +2999,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                   title="Retake photo"
                   variant="ghost"
                   disabled={deletingScanId !== null || busy || removingItemId !== null || creatingCategoryFor !== null || savingItemId !== null}
-                  onPress={() => {
-                    void deleteReceiptScannerFiles(scannerFileUris([
-                      ...pages,
-                      ...queuedReceiptGroups.flatMap((receipt) => receipt.pages),
-                    ]));
-                    setScan(null);
-                    // Rescan is a deliberate "start over" — the captured pages
-                    // belonged to the receipt just reviewed, and carrying them
-                    // into a new session would mean the next scan quietly
-                    // starts with photos of the WRONG receipt already loaded.
-                    setPages([]);
-                    uploadAttempt.current = null;
-                    receiptBatchAttempt.current = null;
-                    setQueuedReceiptGroups([]);
-                    setActiveBatchChild(null);
-                    setScanRecoveryAction(null);
-                    setScanStarted(false);
-                    setEditingItem(null);
-                    setEditingItemErrors({});
-                    setDuplicateReview(null);
-                    setDuplicateCandidatesError(null);
-                    duplicateReviewIdentity.current = "";
-                    setUploadIssuePageKeys({});
-                  }}
+                  onPress={resetForAnotherReceipt}
                 />
                 <Button
                   title="Delete scan"

@@ -93,6 +93,10 @@ async function findDuplicate(
   // records it has already written in that transaction would be invisible here
   // and a real duplicate would be recorded as "Not a Duplicate".
   db: BulkDbClient = prisma,
+  // Category splits of one receipt share its date and vendor, so two equal
+  // splits would otherwise flag each other. Records from the same scan are
+  // never duplicates of one another.
+  excludeReceiptScanId?: number,
 ) {
   const candidates = await db.expenseRecord.findMany({
     where: {
@@ -100,6 +104,9 @@ async function findDuplicate(
       date,
       amount,
       ...(excludeId ? { id: { not: excludeId } } : {}),
+      ...(excludeReceiptScanId
+        ? { OR: [{ receiptScanId: null }, { receiptScanId: { not: excludeReceiptScanId } }] }
+        : {}),
     },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
@@ -220,6 +227,7 @@ export async function createExpenseRecordWithin(
     input.vendor,
     undefined,
     db,
+    input.receiptScanId,
   );
   const largeExpenseFlag = input.amount >= largeExpenseThresholdFor(profile);
 

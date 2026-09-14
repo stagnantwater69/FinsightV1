@@ -88,6 +88,38 @@ async function deleteUploadedObjects(imagePaths: string[], processedPaths: (stri
   );
 }
 
+/**
+ * The review screen polls GET /:id every second or two while a scan is
+ * processing; the abandoned-scan sweep only needs "the owner was here
+ * recently", so a view stamps at most once per window per scan.
+ */
+export const RECEIPT_VIEW_ACTIVITY_THROTTLE_MS = 5 * 60_000;
+
+/**
+ * The throttle is a condition on the UPDATE, not a read-then-write, so
+ * concurrent polls still cost one row write. Pending only: no other state
+ * is in the sweep's scope, so its clock is not worth a write.
+ */
+export async function recordScanViewActivity(userId: number, scanId: number, now = new Date()): Promise<void> {
+  await prisma.receiptScan.updateMany({
+    where: {
+      id: scanId,
+      businessProfile: { userId },
+      confirmationStatus: "Pending",
+      lastActivityAt: { lt: new Date(now.getTime() - RECEIPT_VIEW_ACTIVITY_THROTTLE_MS) },
+    },
+    data: { lastActivityAt: now },
+  });
+}
+
+/** An idempotent replay is the owner re-sending the same receipt: activity. */
+async function recordUploadReplayActivity(scanId: number, businessProfileId: number): Promise<void> {
+  await prisma.receiptScan.updateMany({
+    where: { id: scanId, businessProfileId, confirmationStatus: "Pending" },
+    data: { lastActivityAt: new Date() },
+  });
+}
+
 export async function uploadAndScan(userId: number, input: ReceiptUploadSubmission) {
   await requireOwnedBusinessProfile(userId, input.businessProfileId);
 
@@ -184,6 +216,7 @@ export async function uploadAndScan(userId: number, input: ReceiptUploadSubmissi
       if (existing.purgeJobs.some((job) => job.mode === ReceiptPurgeMode.DELETE_SCAN)) {
         throw new ApiError(409, "This receipt is scheduled for deletion. Start a new upload.");
       }
+      await recordUploadReplayActivity(existing.id, input.businessProfileId);
       return toDTO(existing, existing.items, existing.pages, existing.corrections);
     }
   }
@@ -263,6 +296,7 @@ export async function uploadAndScan(userId: number, input: ReceiptUploadSubmissi
         if (winner.purgeJobs.some((job) => job.mode === ReceiptPurgeMode.DELETE_SCAN)) {
           throw new ApiError(409, "This receipt is scheduled for deletion. Start a new upload.");
         }
+        await recordUploadReplayActivity(winner.id, input.businessProfileId);
         return toDTO(winner, winner.items, winner.pages, winner.corrections);
       }
       if (winner) throw new ApiError(409, "This upload key belongs to a different receipt. Start a new upload.");
@@ -312,6 +346,7 @@ export async function retryScan(userId: number, scanId: number) {
         processingWorkerId: null,
         processingHeartbeatAt: null,
         nextProcessingAttemptAt: new Date(),
+        lastActivityAt: new Date(),
       },
     });
     if (retried.count !== 1) throw new ApiError(409, "This receipt scan is already being retried");
@@ -330,6 +365,7 @@ export async function getScan(userId: number, scanId: number) {
     include: { corrections: true, items: { orderBy: { lineNumber: "asc" } }, pages: true },
   });
   if (!scan) throw new ApiError(404, "Receipt scan not found");
+  await recordScanViewActivity(userId, scanId);
   return toDTO(scan, scan.items, scan.pages, scan.corrections);
 }
 
@@ -351,6 +387,7 @@ export async function getScanPageImage(
     },
   });
   if (!page) throw new ApiError(404, "Receipt page not found");
+  await recordScanViewActivity(userId, scanId);
 
   const path = variant === "source" ? page.imageFile : page.processedImageFile;
   if (!path) throw new ApiError(404, "Receipt page image not found");

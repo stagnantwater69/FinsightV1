@@ -228,7 +228,7 @@ test("rediscovers an accepted scan after reload and resumes review from stored e
   await expect(page.getByRole("heading", { name: "Continue an unfinished scan" })).toBeVisible();
   await page.reload();
   await expect(page.getByText("Reloaded merchant", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Review result", exact: true }).click();
+  await page.getByRole("button", { name: "Review result, Reloaded merchant, receipt 2", exact: true }).click();
 
   await expect(page.getByRole("heading", { name: "Check what FinSight read" })).toBeVisible();
   await expect(page.getByRole("img", { name: "Source, receipt page 1 of 1" })).toBeVisible();
@@ -289,7 +289,8 @@ test("reload after the first batch review exposes later receipts that were alrea
   await expect(page.getByRole("heading", { name: "Continue an unfinished scan" })).toBeVisible();
   await expect(page.getByText("First accepted merchant", { exact: true })).toBeVisible();
   await expect(page.getByText("Later accepted merchant", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Review result", exact: true }).nth(1).click();
+  // Each row's action carries its own receipt, so the second review is picked by name, not by position.
+  await page.getByRole("button", { name: "Review result, Later accepted merchant, receipt 2", exact: true }).click();
   await expect(page.locator("#vendor")).toHaveValue("Later accepted merchant");
   expect(uploads).toBe(2);
 });

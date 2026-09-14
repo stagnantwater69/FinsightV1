@@ -46,7 +46,10 @@ import {
   type NormalizedEvidence,
   type NormalizedReceiptExtraction,
 } from "../receiptProviderContract";
-import { dispatchReceiptProviderRescue } from "../receiptProviderDispatch.service";
+import {
+  dispatchReceiptProviderRescue,
+  RECEIPT_PROCESSING_LEASE_MS,
+} from "../receiptProviderDispatch.service";
 import { getReceiptProviderConfiguration } from "../../config/receiptProvider";
 import { createGeminiReceiptAdapter, createVeryfiReceiptAdapter } from "./providerAdapters";
 import {
@@ -56,7 +59,6 @@ import {
 import { refreshReceiptDuplicateCandidatesForScan } from "../receiptDuplicate.service";
 
 const RECEIPT_WORKER_ID = `${hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`;
-const RECEIPT_LEASE_MS = 2 * 60 * 1000;
 const MAX_PROCESSING_ATTEMPTS = 3;
 const RETRY_DELAYS_MS = [15_000, 60_000, 5 * 60_000] as const;
 
@@ -257,6 +259,7 @@ export async function persistReceiptProcessingOutput(
         processingWorkerId: lease.workerId,
         processingAttemptCount: lease.attempt,
         processingHeartbeatAt: new Date(),
+        lastActivityAt: new Date(),
       },
     });
     if (scanUpdated.count !== 1) throw new ReceiptLeaseLostError(`Receipt scan ${scanId} lease was reclaimed`);
@@ -296,6 +299,9 @@ export async function persistReceiptProcessingOutput(
         processingError: null,
         processingWorkerId: null,
         processingHeartbeatAt: null,
+        // Completion starts the abandoned-scan clock: seven days of owner
+        // silence from here and the sweep purges it.
+        lastActivityAt: new Date(),
       },
     });
     if (completed.count !== 1) throw new ReceiptLeaseLostError(`Receipt scan ${scanId} lease was reclaimed`);
@@ -460,6 +466,7 @@ async function processScan(scanId: number, input: StoredInput, attempt: number):
       {
         businessProfileId: input.businessProfileId,
         receiptScanId: scanId,
+        processingLease: { workerId: RECEIPT_WORKER_ID, attempt },
         rescueDecision,
         localExtraction,
         pages: selectedEvidence,
@@ -624,6 +631,7 @@ async function recordProcessingFailure(scanId: number, attempt: number, failure:
         ),
         processingError: failure.publicMessage,
         processingErrorCode: failure.code,
+        lastActivityAt: new Date(),
       },
     });
     if (updated.count === 1 && batchLink?.captureBatchId !== null && batchLink?.captureBatchId !== undefined) {
@@ -643,7 +651,7 @@ async function heartbeatScan(scanId: number, attempt: number): Promise<void> {
       processingWorkerId: RECEIPT_WORKER_ID,
       processingAttemptCount: attempt,
     },
-    data: { processingHeartbeatAt: new Date() },
+    data: { processingHeartbeatAt: new Date(), lastActivityAt: new Date() },
   });
   if (updated.count !== 1) throw new ReceiptLeaseLostError(`Receipt scan ${scanId} lease was reclaimed`);
 }
@@ -720,13 +728,16 @@ async function storedInput(scanId: number, attempt: number): Promise<StoredInput
 /** Atomically lease one eligible scan. The conditional update is the race guard. */
 async function claimScan(): Promise<{ id: number; attempt: number } | null> {
   const now = new Date();
-  const staleBefore = new Date(now.getTime() - RECEIPT_LEASE_MS);
+  const staleBefore = new Date(now.getTime() - RECEIPT_PROCESSING_LEASE_MS);
   const eligible: Prisma.ReceiptScanWhereInput = {
     processingStatus: "Processing",
     confirmationStatus: "Pending",
     evidenceDeletionRequestedAt: null,
     purgeJobs: { none: { mode: ReceiptPurgeMode.DELETE_SCAN } },
     nextProcessingAttemptAt: { lte: now },
+    // A crash mid-OCR never reaches recordProcessingFailure, so the ceiling
+    // has to live in the claim too, or one poison image is reclaimed forever.
+    processingAttemptCount: { lt: MAX_PROCESSING_ATTEMPTS },
     OR: [{ processingWorkerId: null }, { processingHeartbeatAt: null }, { processingHeartbeatAt: { lt: staleBefore } }],
   };
   const candidate = await prisma.receiptScan.findFirst({
@@ -742,6 +753,7 @@ async function claimScan(): Promise<{ id: number; attempt: number } | null> {
       processingStartedAt: now,
       processingHeartbeatAt: now,
       processingAttemptCount: { increment: 1 },
+      lastActivityAt: now,
     },
   });
   return claimed.count === 1 ? { id: candidate.id, attempt: candidate.processingAttemptCount + 1 } : null;
@@ -766,5 +778,33 @@ async function claimAndProcessScan(): Promise<boolean> {
 
 /** Runs at most one durable job; the dedicated worker calls this repeatedly. */
 export async function runReceiptWorkerOnce(): Promise<boolean> {
+  await failExhaustedScans();
   return claimAndProcessScan();
+}
+
+/**
+ * A scan whose worker died mid-attempt on its last allowed attempt has a
+ * stale lease and a full attempt counter. Nothing else will touch it, so it
+ * becomes Failed here, where the owner can retry it or delete it.
+ */
+async function failExhaustedScans(): Promise<number> {
+  const staleBefore = new Date(Date.now() - RECEIPT_PROCESSING_LEASE_MS);
+  const failed = await prisma.receiptScan.updateMany({
+    where: {
+      processingStatus: "Processing",
+      confirmationStatus: "Pending",
+      processingAttemptCount: { gte: MAX_PROCESSING_ATTEMPTS },
+      OR: [{ processingWorkerId: null }, { processingHeartbeatAt: null }, { processingHeartbeatAt: { lt: staleBefore } }],
+    },
+    data: {
+      processingStatus: "Failed",
+      processingWorkerId: null,
+      processingHeartbeatAt: null,
+      processingError: "The receipt could not be read. Try again or enter the values manually.",
+      processingErrorCode: "RECEIPT_PROCESSING_FAILED",
+      lastActivityAt: new Date(),
+    },
+  });
+  if (failed.count > 0) logger.warn({ count: failed.count }, "receipt scans failed after exhausting processing attempts");
+  return failed.count;
 }

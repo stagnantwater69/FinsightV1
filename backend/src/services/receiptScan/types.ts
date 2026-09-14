@@ -100,7 +100,8 @@ export interface ReceiptSplit {
   allocatedCharges?: number;
 }
 
-export interface ConfirmInput {
+/** The fields both confirmation modes carry. */
+export interface ConfirmSharedInput {
   expectedScanRevision?: number;
   duplicateDecision?: {
     action: "SAVE_ANYWAY";
@@ -111,36 +112,51 @@ export interface ConfirmInput {
   vendor?: string;
   /** The receipt's total, as read and confirmed by the owner. */
   amount: number;
-  /**
-   * One entry per category this receipt covers. Must sum to `amount`.
-   * Used by the single-total flow and by a hand-made split.
-   */
-  splits?: ReceiptSplit[];
-  /**
-   * The itemised path: the owner's final say on which category each extracted
-   * line belongs to. When present it takes precedence over `splits` — the
-   * server groups the items itself rather than trusting a client-computed
-   * split, so the item -> record links it writes cannot disagree with the
-   * amounts it posts.
-   */
-  itemAssignments?: { itemId: number; categoryId: number }[];
+}
+
+/**
+ * The single-total flow and a hand-made split: one entry per category this
+ * receipt covers, summing to `amount`. Nothing from the itemised mode may
+ * come along, or it would be financial input the server never read.
+ */
+export interface ManualConfirmInput extends ConfirmSharedInput {
+  splits: ReceiptSplit[];
+  itemAssignments?: undefined;
+  additionalItems?: undefined;
+  reconciliation?: undefined;
+}
+
+/**
+ * The itemised path: the owner's final say on which category each extracted
+ * line belongs to. The server groups the items itself rather than trusting a
+ * client-computed split, so the item -> record links it writes cannot
+ * disagree with the amounts it posts.
+ */
+export interface ItemisedConfirmInput extends ConfirmSharedInput {
+  itemAssignments: { itemId: number; categoryId: number }[];
   /**
    * Lines the owner typed in on the confirm screen because OCR missed them.
    * Stored as real ReceiptScanItem rows (flagged `addedByOwner`) inside the
    * confirmation transaction, before the grouping runs, so a hand-added line
    * is grouped, linked to its record and shown on the record afterwards
-   * exactly like an extracted one — while still being distinguishable from
+   * exactly like an extracted one, while still being distinguishable from
    * something FinSight claims to have read, and never left behind by a
    * confirmation that was refused.
    */
   additionalItems?: { name: string; amount: number; categoryId: number }[];
   /**
    * How to account for any difference between the items and the confirmed
-   * total. Only meaningful on the itemised path. Defaults to `none`, which
-   * requires the items to already reconcile.
+   * total. Defaults to `none`, which requires the items to already reconcile.
    */
   reconciliation?: ReconciliationMode;
+  splits?: undefined;
 }
+
+/**
+ * Exactly one mode per request. Which one is decided by whether `splits` or
+ * `itemAssignments` is present; confirmMode.ts holds that rule.
+ */
+export type ConfirmInput = ManualConfirmInput | ItemisedConfirmInput;
 
 /** Description given to the standalone record that carries a receipt's tax. */
 export const CHARGES_DESCRIPTION = "Tax and charges";

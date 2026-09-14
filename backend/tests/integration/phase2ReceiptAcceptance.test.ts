@@ -49,6 +49,7 @@ vi.mock("../../src/services/storage.service", async (importOriginal) => {
 import request from "supertest";
 import sharp from "sharp";
 import { app } from "../../src/app";
+import { checkMigrationDrift } from "../../src/config/migrationGuard";
 import { prisma } from "../../src/config/prisma";
 import { cleanUpReceiptScanIfOrphaned } from "../../src/lib/sourceCleanup";
 import { lockDuplicateKey } from "../../src/lib/recordLock";
@@ -70,7 +71,10 @@ import {
   runReceiptWorkerOnce,
 } from "../../src/services/receiptScan/worker";
 import { refreshReceiptDuplicateCandidatesForScan } from "../../src/services/receiptDuplicate.service";
-import { runReceiptPurgeWorkerOnce } from "../../src/services/receiptPurge.service";
+import {
+  countStalledReceiptPurges,
+  runReceiptPurgeWorkerOnce,
+} from "../../src/services/receiptPurge.service";
 import {
   disconnectDb,
   makeOwnerWithProfile,
@@ -114,6 +118,150 @@ function page(label: string) {
     originalname: `${label}.jpg`,
   };
 }
+
+describe("Phase 2 startup migration guard", () => {
+  it("accepts the freshly deployed migration history and live catalog shape", async () => {
+    await expect(checkMigrationDrift()).resolves.toMatchObject({
+      status: "ok",
+      checksumMismatches: [],
+      schemaIssues: [],
+    });
+  });
+
+  it("rejects an active-purge partial index whose predicate includes an extra status", async () => {
+    await prisma.$executeRawUnsafe(`DROP INDEX "ReceiptPurgeJob_active_profile_receipt_key"`);
+    await prisma.$executeRawUnsafe(`
+      CREATE UNIQUE INDEX "ReceiptPurgeJob_active_profile_receipt_key"
+      ON "ReceiptPurgeJob"("BusinessProfile_ID", "ReceiptScan_ID")
+      WHERE "ReceiptPurgeJob_Status" IN ('PENDING', 'PROCESSING', 'RETRY', 'FAILED')
+    `);
+
+    try {
+      await expect(checkMigrationDrift()).resolves.toMatchObject({
+        status: "drift",
+        schemaIssues: expect.arrayContaining(["index.receipt_purge_active_partial_unique"]),
+      });
+    } finally {
+      await prisma.$executeRawUnsafe(`DROP INDEX "ReceiptPurgeJob_active_profile_receipt_key"`);
+      await prisma.$executeRawUnsafe(`
+        CREATE UNIQUE INDEX "ReceiptPurgeJob_active_profile_receipt_key"
+        ON "ReceiptPurgeJob"("BusinessProfile_ID", "ReceiptScan_ID")
+        WHERE "ReceiptPurgeJob_Status" IN ('PENDING', 'PROCESSING', 'RETRY')
+      `);
+    }
+  });
+
+  it("rejects NULLS NOT DISTINCT on the batch-ordinal uniqueness boundary", async () => {
+    await prisma.$executeRawUnsafe(`DROP INDEX "ReceiptScan_batch_ordinal_key"`);
+    await prisma.$executeRawUnsafe(`
+      CREATE UNIQUE INDEX "ReceiptScan_batch_ordinal_key"
+      ON "ReceiptScan"("ReceiptCaptureBatch_ID", "ReceiptScan_ReceiptOrdinal")
+      NULLS NOT DISTINCT
+    `);
+
+    try {
+      await expect(checkMigrationDrift()).resolves.toMatchObject({
+        status: "drift",
+        schemaIssues: expect.arrayContaining(["index.receipt_scan_batch_ordinal"]),
+      });
+    } finally {
+      await prisma.$executeRawUnsafe(`DROP INDEX "ReceiptScan_batch_ordinal_key"`);
+      await prisma.$executeRawUnsafe(`
+        CREATE UNIQUE INDEX "ReceiptScan_batch_ordinal_key"
+        ON "ReceiptScan"("ReceiptCaptureBatch_ID", "ReceiptScan_ReceiptOrdinal")
+      `);
+    }
+  });
+
+  it.each([
+    {
+      label: "a non-default operator class",
+      imageHashDefinition: '"ReceiptScan_SourceImageHash" pg_catalog.bpchar_pattern_ops',
+    },
+    {
+      label: "a non-default collation",
+      imageHashDefinition: '"ReceiptScan_SourceImageHash" COLLATE pg_catalog."C"',
+    },
+  ])("rejects $label on an otherwise matching index", async ({ imageHashDefinition }) => {
+    await prisma.$executeRawUnsafe(`DROP INDEX "ReceiptScan_profile_source_image_hash_idx"`);
+    await prisma.$executeRawUnsafe(`
+      CREATE INDEX "ReceiptScan_profile_source_image_hash_idx"
+      ON "ReceiptScan"("BusinessProfile_ID", ${imageHashDefinition})
+    `);
+
+    try {
+      await expect(checkMigrationDrift()).resolves.toMatchObject({
+        status: "drift",
+        schemaIssues: expect.arrayContaining(["index.receipt_scan_source_image_hash"]),
+      });
+    } finally {
+      await prisma.$executeRawUnsafe(`DROP INDEX "ReceiptScan_profile_source_image_hash_idx"`);
+      await prisma.$executeRawUnsafe(`
+        CREATE INDEX "ReceiptScan_profile_source_image_hash_idx"
+        ON "ReceiptScan"("BusinessProfile_ID", "ReceiptScan_SourceImageHash")
+      `);
+    }
+  });
+
+  it("rejects a same-name check constraint whose body was weakened", async () => {
+    await prisma.$executeRawUnsafe(`
+      ALTER TABLE "ReceiptDuplicateCandidate"
+      DROP CONSTRAINT "ReceiptDuplicateCandidate_target_check",
+      ADD CONSTRAINT "ReceiptDuplicateCandidate_target_check" CHECK (TRUE)
+    `);
+
+    try {
+      await expect(checkMigrationDrift()).resolves.toMatchObject({
+        status: "drift",
+        schemaIssues: expect.arrayContaining(["constraint.receipt_duplicate_target"]),
+      });
+    } finally {
+      await prisma.$executeRawUnsafe(`
+        ALTER TABLE "ReceiptDuplicateCandidate"
+        DROP CONSTRAINT "ReceiptDuplicateCandidate_target_check",
+        ADD CONSTRAINT "ReceiptDuplicateCandidate_target_check" CHECK (
+          (
+            "ReceiptDuplicateCandidate_CandidateReceiptScan_ID" IS NOT NULL
+            AND "ReceiptDuplicateCandidate_CandidateExpenseRecord_ID" IS NULL
+            AND "ReceiptDuplicateCandidate_CandidateReceiptScan_ID"
+              <> "ReceiptDuplicateCandidate_SourceReceiptScan_ID"
+          )
+          OR (
+            "ReceiptDuplicateCandidate_CandidateReceiptScan_ID" IS NULL
+            AND "ReceiptDuplicateCandidate_CandidateExpenseRecord_ID" IS NOT NULL
+          )
+        )
+      `);
+    }
+  });
+
+  it("rejects a same-name foreign key with a weaker ownership key", async () => {
+    await prisma.$executeRawUnsafe(`
+      ALTER TABLE "ReceiptScan"
+      DROP CONSTRAINT "ReceiptScan_ReceiptCaptureBatch_ID_BusinessProfile_ID_fkey",
+      ADD CONSTRAINT "ReceiptScan_ReceiptCaptureBatch_ID_BusinessProfile_ID_fkey"
+        FOREIGN KEY ("ReceiptCaptureBatch_ID")
+        REFERENCES "ReceiptCaptureBatch"("ReceiptCaptureBatch_ID")
+        ON DELETE NO ACTION ON UPDATE CASCADE
+    `);
+
+    try {
+      await expect(checkMigrationDrift()).resolves.toMatchObject({
+        status: "drift",
+        schemaIssues: expect.arrayContaining(["foreign_key.receipt_scan_capture_batch_profile"]),
+      });
+    } finally {
+      await prisma.$executeRawUnsafe(`
+        ALTER TABLE "ReceiptScan"
+        DROP CONSTRAINT "ReceiptScan_ReceiptCaptureBatch_ID_BusinessProfile_ID_fkey",
+        ADD CONSTRAINT "ReceiptScan_ReceiptCaptureBatch_ID_BusinessProfile_ID_fkey"
+          FOREIGN KEY ("ReceiptCaptureBatch_ID", "BusinessProfile_ID")
+          REFERENCES "ReceiptCaptureBatch"("ReceiptCaptureBatch_ID", "BusinessProfile_ID")
+          ON DELETE NO ACTION ON UPDATE CASCADE
+      `);
+    }
+  });
+});
 
 async function waitForProfileAdvisoryWaiter(
   businessProfileId: number,
@@ -822,6 +970,138 @@ describe("Phase 2 worker and whole-scan retry", () => {
 });
 
 describe("Phase 2 durable receipt purge", () => {
+  it("terminalizes a stale purge abandoned after its tenth claim and reports it through readiness", async () => {
+    const scan = await makeEditableScan({ path: `${owner.profile.id}/tenth-claim-crash.jpg` });
+    const accepted = await request(app)
+      .delete(`${RECEIPTS}/${scan.id}`)
+      .set(...auth("owner-token"))
+      .set("Idempotency-Key", "tenth-claim-crash");
+    expect(accepted.status).toBe(202);
+    await prisma.receiptPurgeJob.update({
+      where: { id: accepted.body.id },
+      data: {
+        status: "PROCESSING",
+        attemptCount: 10,
+        workerId: "crashed-tenth-worker",
+        leaseStartedAt: new Date(0),
+        heartbeatAt: new Date(0),
+      },
+    });
+
+    expect(await countStalledReceiptPurges()).toBe(1);
+    const beforeRecovery = await request(app).get("/api/v1/health/ready");
+    expect(beforeRecovery.status).toBe(200);
+    expect(beforeRecovery.body).toMatchObject({
+      status: "ready",
+      queuedReceiptPurges: 1,
+      failedReceiptPurges: 1,
+    });
+
+    expect(await runReceiptPurgeWorkerOnce()).toBe(true);
+    expect(storage.deleteReceiptImage).not.toHaveBeenCalled();
+    expect(await prisma.receiptPurgeJob.findUniqueOrThrow({ where: { id: accepted.body.id } })).toMatchObject({
+      status: "FAILED",
+      stage: "STORAGE",
+      attemptCount: 10,
+      workerId: null,
+      leaseStartedAt: null,
+      heartbeatAt: null,
+      lastErrorCode: "PURGE_ATTEMPTS_EXHAUSTED",
+    });
+    expect(await countStalledReceiptPurges()).toBe(1);
+    const afterRecovery = await request(app).get("/api/v1/health/ready");
+    expect(afterRecovery.body).toMatchObject({
+      queuedReceiptPurges: 0,
+      failedReceiptPurges: 1,
+    });
+    expect(await runReceiptPurgeWorkerOnce()).toBe(false);
+  });
+
+  it("runs the database stage after a storage stage that succeeds on its final claim", async () => {
+    const scan = await makeEditableScan({ path: `${owner.profile.id}/tenth-claim-storage-success.jpg` });
+    const accepted = await request(app)
+      .delete(`${RECEIPTS}/${scan.id}`)
+      .set(...auth("owner-token"))
+      .set("Idempotency-Key", "tenth-claim-storage-success");
+    expect(accepted.status).toBe(202);
+    // Nine storage failures already recorded; the tenth claim is the last one
+    // the ceiling allows, and this time storage succeeds.
+    await prisma.receiptPurgeJob.update({
+      where: { id: accepted.body.id },
+      data: { status: "RETRY", attemptCount: 9, nextAttemptAt: new Date(0), lastErrorCode: "PURGE_STORAGE_DELETE_FAILED" },
+    });
+
+    expect(await runReceiptPurgeWorkerOnce()).toBe(true);
+    expect(storage.deleteReceiptImage).toHaveBeenCalledWith(`${owner.profile.id}/tenth-claim-storage-success.jpg`);
+    expect(await prisma.receiptPurgeJob.findUniqueOrThrow({ where: { id: accepted.body.id } })).toMatchObject({
+      status: "PENDING",
+      stage: "DATABASE",
+      lastErrorCode: null,
+    });
+
+    expect(await runReceiptPurgeWorkerOnce()).toBe(true);
+    expect(await prisma.receiptPurgeJob.findUniqueOrThrow({ where: { id: accepted.body.id } })).toMatchObject({
+      status: "COMPLETE",
+      stage: "COMPLETE",
+    });
+    expect(await prisma.receiptScan.findUnique({ where: { id: scan.id } })).toBeNull();
+    expect(await countStalledReceiptPurges()).toBe(0);
+  });
+
+  it.each(["PENDING", "RETRY"] as const)("terminalizes a max-attempt %s purge without another storage attempt", async (status) => {
+    const scan = await makeEditableScan({ path: `${owner.profile.id}/max-attempt-${status.toLowerCase()}.jpg` });
+    const accepted = await request(app)
+      .delete(`${RECEIPTS}/${scan.id}`)
+      .set(...auth("owner-token"))
+      .set("Idempotency-Key", `max-attempt-${status.toLowerCase()}`);
+    expect(accepted.status).toBe(202);
+    await prisma.receiptPurgeJob.update({
+      where: { id: accepted.body.id },
+      data: { status, attemptCount: 10, nextAttemptAt: new Date(0) },
+    });
+
+    expect(await countStalledReceiptPurges()).toBe(1);
+    expect(await runReceiptPurgeWorkerOnce()).toBe(true);
+    expect(storage.deleteReceiptImage).not.toHaveBeenCalled();
+    expect(await prisma.receiptPurgeJob.findUniqueOrThrow({ where: { id: accepted.body.id } })).toMatchObject({
+      status: "FAILED",
+      attemptCount: 10,
+      lastErrorCode: "PURGE_ATTEMPTS_EXHAUSTED",
+    });
+  });
+
+  it("preserves a final-attempt purge while its lease heartbeat is fresh", async () => {
+    const scan = await makeEditableScan({ path: `${owner.profile.id}/fresh-final-attempt.jpg` });
+    const accepted = await request(app)
+      .delete(`${RECEIPTS}/${scan.id}`)
+      .set(...auth("owner-token"))
+      .set("Idempotency-Key", "fresh-final-attempt");
+    expect(accepted.status).toBe(202);
+    const now = new Date();
+    await prisma.receiptPurgeJob.update({
+      where: { id: accepted.body.id },
+      data: {
+        status: "PROCESSING",
+        attemptCount: 10,
+        workerId: "active-final-worker",
+        leaseStartedAt: now,
+        heartbeatAt: now,
+      },
+    });
+
+    expect(await countStalledReceiptPurges()).toBe(0);
+    expect(await runReceiptPurgeWorkerOnce()).toBe(false);
+    expect(storage.deleteReceiptImage).not.toHaveBeenCalled();
+    expect(await prisma.receiptPurgeJob.findUniqueOrThrow({ where: { id: accepted.body.id } })).toMatchObject({
+      status: "PROCESSING",
+      attemptCount: 10,
+      workerId: "active-final-worker",
+      heartbeatAt: now,
+    });
+    const readiness = await request(app).get("/api/v1/health/ready");
+    expect(readiness.body).toMatchObject({ queuedReceiptPurges: 1, failedReceiptPurges: 0 });
+  });
+
   it("cancels a linked capture batch before deleting a child and rejects new slots", async () => {
     const batch = await makeBatch(2);
     const scan = await makeEditableScan({ captureBatchId: batch.id, receiptOrdinal: 1 });
