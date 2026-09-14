@@ -106,6 +106,36 @@ describe("receipt provider configuration", () => {
     expect(publicReceiptProviderDetails(config)).toBeNull();
   });
 
+  it("defaults routing to rescue and consent to explicit when the settings are absent or unknown", () => {
+    const absent = getReceiptProviderConfiguration(operationalGeminiEnv());
+    expect(absent).toMatchObject({ operational: true, routing: "rescue", consentMode: "explicit" });
+
+    for (const value of ["ALWAYS", "Always", " always", "true", "1", "", "automatic", "rescue "]) {
+      const config = getReceiptProviderConfiguration({ ...operationalGeminiEnv(), RECEIPT_PROVIDER_ROUTING: value });
+      expect(config.routing, `routing=${JSON.stringify(value)}`).toBe("rescue");
+    }
+    for (const value of ["AUTOMATIC", "Automatic", " automatic", "true", "1", "", "always", "explicit "]) {
+      const config = getReceiptProviderConfiguration({ ...operationalGeminiEnv(), RECEIPT_PROVIDER_CONSENT_MODE: value });
+      expect(config.consentMode, `consentMode=${JSON.stringify(value)}`).toBe("explicit");
+    }
+  });
+
+  it("accepts the exact opt-in values without changing the operational gate", () => {
+    const optedIn = getReceiptProviderConfiguration({
+      ...operationalGeminiEnv(),
+      RECEIPT_PROVIDER_ROUTING: "always",
+      RECEIPT_PROVIDER_CONSENT_MODE: "automatic",
+    });
+    expect(optedIn).toMatchObject({ operational: true, routing: "always", consentMode: "automatic" });
+
+    const disabled = getReceiptProviderConfiguration({
+      RECEIPT_PROVIDER_ROUTING: "always",
+      RECEIPT_PROVIDER_CONSENT_MODE: "automatic",
+    });
+    expect(disabled).toMatchObject({ operational: false, routing: "always", consentMode: "automatic" });
+    expect(publicReceiptProviderDetails(disabled)).toBeNull();
+  });
+
   it("requires all four Veryfi credentials and the exact configured version", () => {
     const source: NodeJS.ProcessEnv = {
       ...operationalGeminiEnv(),

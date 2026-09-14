@@ -1169,6 +1169,38 @@ describe("receipt scan review workflow", () => {
       expect(q.getByRole("button", { name: "Scan receipt" })).toBeEnabled();
     });
 
+    it("hides the consent card and never grants when the server reports automatic mode", async () => {
+      get.mockImplementation(async (path: string) => path === "/records/receipts"
+        ? { items: [], nextCursor: null }
+        : { ...availableConsent, mode: "automatic" });
+      const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
+      await waitFor(() => expect(get).toHaveBeenCalledWith("/records/receipts/provider-consent/1"));
+      await waitFor(() => expect(q.queryByText("Checking optional cloud receipt settings…")).toBeNull());
+      expect(q.queryByText("Optional cloud receipt help")).toBeNull();
+      expect(q.queryByRole("checkbox", { name: /I allow FinSight to send these receipt images/ })).toBeNull();
+      expect(q.queryByRole("button", { name: "Allow optional cloud help" })).toBeNull();
+      expect(q.queryByRole("button", { name: "Revoke future cloud sends" })).toBeNull();
+      expect(put).not.toHaveBeenCalled();
+      expect(q.getByRole("button", { name: "Scan receipt" })).toBeEnabled();
+    });
+
+    it("still shows the consent card when the server reports explicit mode", async () => {
+      get.mockImplementation(async (path: string) => path === "/records/receipts"
+        ? { items: [], nextCursor: null }
+        : { ...availableConsent, mode: "explicit" });
+      const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
+      await waitFor(() => expect(q.getByRole("checkbox", { name: "I allow FinSight to send these receipt images to Google Gemini under the terms above" })).toBeTruthy());
+      expect(q.getByRole("button", { name: "Allow optional cloud help" })).toBeDisabled();
+    });
+
+    it("still shows the consent card when an older server omits the mode field", async () => {
+      get.mockImplementation(async (path: string) => path === "/records/receipts" ? { items: [], nextCursor: null } : availableConsent);
+      expect("mode" in availableConsent).toBe(false);
+      const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
+      await waitFor(() => expect(q.getByRole("checkbox", { name: "I allow FinSight to send these receipt images to Google Gemini under the terms above" })).toBeTruthy());
+      expect(q.getByRole("button", { name: "Allow optional cloud help" })).toBeDisabled();
+    });
+
     it.each(["light", "dark"] as const)("renders the exact disclosure in %s mode", async (mode) => {
       get.mockImplementation(async (path: string) => path === "/records/receipts" ? { items: [], nextCursor: null } : availableConsent);
       const q = await render(wrapInMode(<ScanReceiptScreen navigation={navigation} />, mode));

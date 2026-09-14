@@ -148,6 +148,8 @@ export function ReceiptProviderConsent({ businessProfileId }: { businessProfileI
   }
 
   const state = loadState.value;
+  // Automatic mode: the operator grants consent server-side, so there is nothing for the user to allow or revoke here.
+  if (state.mode === "automatic") return null;
   const previousOnly = state.activeConsents.length > 0 && state.consent === null;
   if (!state.available && !previousOnly && !confirmation) return null;
 

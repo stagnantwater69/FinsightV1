@@ -83,6 +83,26 @@ function safeProcessingFailure(error: unknown): ReceiptProcessingFailure {
   );
 }
 
+/**
+ * Enough to diagnose a crash without copying receipt text into the log: the
+ * error class, and for schema errors only the paths and codes. Messages are
+ * kept only for classes that never carry payload values.
+ */
+function safeErrorDetail(err: unknown): Record<string, unknown> {
+  if (!(err instanceof Error)) return { errorType: typeof err };
+  const detail: Record<string, unknown> = { errorType: err.constructor.name };
+  const issues = (err as { issues?: unknown }).issues;
+  if (Array.isArray(issues)) {
+    detail.issues = issues.slice(0, 10).map((issue) => {
+      const record = issue as { path?: unknown[]; code?: unknown };
+      return { path: Array.isArray(record.path) ? record.path.join(".") : "", code: record.code };
+    });
+  } else if (/^(TypeError|RangeError|ReferenceError|PrismaClient\w*Error)$/.test(err.constructor.name)) {
+    detail.errorMessage = err.message.slice(0, 200);
+  }
+  return detail;
+}
+
 type StoredEvidence = { path: string; info: ReceiptImageObjectInfo };
 type StoredPage = {
   pageNumber: number;
@@ -459,6 +479,10 @@ async function processScan(scanId: number, input: StoredInput, attempt: number):
         providerConfig.routingCalibrated && providerConfig.calibrationVersion
           ? { state: "CALIBRATED", version: providerConfig.calibrationVersion }
           : { state: "UNCALIBRATED", version: null },
+    }, {
+      // Always-routing is a policy reason, not evidence, so it only counts
+      // while the provider can actually be dispatched to.
+      routing: providerConfig.operational ? providerConfig.routing : "rescue",
     });
     const localExtraction = localNormalizedExtraction(parsed, deterministicItems, currency, reconciliation.reconciled);
     const adapter = providerConfig.provider === "veryfi" ? createVeryfiReceiptAdapter() : createGeminiReceiptAdapter();
@@ -474,6 +498,23 @@ async function processScan(scanId: number, input: StoredInput, attempt: number):
         normalizedSchemaVersion: RECEIPT_PROVIDER_CONTRACT_VERSION,
       },
       { adapter, loadConfiguration: getReceiptProviderConfiguration },
+    );
+    // Operators need to see why a rescue did or did not run without opening
+    // the scan row; ids and gate code only.
+    logger.info(
+      {
+        scanId,
+        code: gate.code,
+        dispatched: gate.dispatched,
+        provider: gate.provider,
+        rescueRequested: rescueDecision.providerRescueRequested,
+        reasons: rescueDecision.reasons,
+        mergeReason: gate.merge.reason,
+        appliedFields: gate.merge.appliedFields,
+        providerItemCount: gate.merge.receipt.items.length,
+        localItemCount: deterministicItems.length,
+      },
+      "receipt provider gate",
     );
     const trigger = determineRescueTrigger(deterministicItems, parsed, combinedText, worstPageConfidence);
     const rescued = mergeIntoRescuedFields(parsed, deterministicItems, gate, trigger, providerConfig.providerVersion);
@@ -592,7 +633,7 @@ async function processScan(scanId: number, input: StoredInput, attempt: number):
     // state with either a success or failure from an expired lease.
     if (err instanceof ReceiptLeaseLostError) return;
     const failure = safeProcessingFailure(err);
-    logger.error({ scanId, code: failure.code }, "receipt scan processing failed");
+    logger.error({ scanId, code: failure.code, ...safeErrorDetail(err) }, "receipt scan processing failed");
     await recordProcessingFailure(scanId, attempt, failure);
   } finally {
     clearInterval(heartbeatTimer);

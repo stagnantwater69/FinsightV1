@@ -17,7 +17,8 @@ import {
   type ReceiptProviderOutcome,
   normalizedReceiptExtractionSchema,
 } from "./receiptProviderContract";
-import { rescueDecisionSchema, type RescueDecision } from "./receiptRescueDecision";
+import { firstProviderRescueReason, rescueDecisionSchema, type RescueDecision } from "./receiptRescueDecision";
+import { grantReceiptProviderConsentByPolicy } from "./receiptProviderConsent.service";
 import {
   RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES,
   RECEIPT_UPLOAD_MAX_LOGICAL_PAGES,
@@ -629,20 +630,22 @@ async function reserve(
             select: { id: true },
           });
           if (!receipt) throw new GateRefusal("PROVIDER_UNAVAILABLE");
-          const consent = await tx.externalProcessingConsent.findFirst({
-            where: {
-              businessProfileId: input.businessProfileId,
-              provider: config.provider,
-              policyVersion: config.policyVersion,
-              purpose: "RECEIPT_EXTRACTION",
-              allowedDataClasses: { equals: [...config.allowedDataClasses] },
-              processingRegion: config.providerRegion,
-              providerRetentionHours: config.providerRetentionHours,
-              providerTrainingAllowed: false,
-              revokedAt: null,
-            },
-            orderBy: { id: "desc" },
-          });
+          const consent =
+            (await tx.externalProcessingConsent.findFirst({
+              where: {
+                businessProfileId: input.businessProfileId,
+                provider: config.provider,
+                policyVersion: config.policyVersion,
+                purpose: "RECEIPT_EXTRACTION",
+                allowedDataClasses: { equals: [...config.allowedDataClasses] },
+                processingRegion: config.providerRegion,
+                providerRetentionHours: config.providerRetentionHours,
+                providerTrainingAllowed: false,
+                revokedAt: null,
+              },
+              orderBy: { id: "desc" },
+              select: { id: true },
+            })) ?? (await grantReceiptProviderConsentByPolicy(tx, input.businessProfileId, config));
           if (!consent) throw new GateRefusal("PROVIDER_CONSENT_REQUIRED");
 
           const resource = await ensureBudget(tx, {
@@ -691,7 +694,7 @@ async function reserve(
               inputHash,
               preprocessingVersion: input.preprocessingVersion,
               schemaVersion: input.normalizedSchemaVersion,
-              rescueReasonCode: input.rescueDecision.reasons[0] ?? "LOCAL_VALIDATION_FAILED",
+              rescueReasonCode: firstProviderRescueReason(input.rescueDecision.reasons) ?? "LOCAL_VALIDATION_FAILED",
               reservedUnits,
               pageCount: input.pages.length,
               documentCount: 1,

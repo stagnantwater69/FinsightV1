@@ -1,9 +1,12 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import {
+  getReceiptProviderConfiguration,
   publicReceiptProviderDetails,
+  type ReceiptProviderConfiguration,
   type ReceiptProviderPublicDetails,
 } from "../config/receiptProvider";
+import { logger } from "../config/logger";
 import { ApiError } from "../middleware/error.middleware";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
 
@@ -80,9 +83,102 @@ async function serializable<T>(operation: () => Promise<T>): Promise<T> {
   throw new Error("unreachable");
 }
 
+interface ConsentRowTerms {
+  businessProfileId: number;
+  actorUserId: number;
+  provider: "gemini" | "veryfi";
+  policyVersion: string;
+  dataClasses: readonly ("RECEIPT_IMAGE" | "DERIVED_RECEIPT_IMAGE")[];
+  region: string;
+  retentionHours: number;
+}
+
+/** Closes every open receipt grant for the provider and opens one on the current terms. */
+async function supersedeReceiptProviderConsent(tx: Prisma.TransactionClient, terms: ConsentRowTerms) {
+  const now = new Date();
+  await tx.externalProcessingConsent.updateMany({
+    where: {
+      businessProfileId: terms.businessProfileId,
+      provider: terms.provider,
+      purpose: "RECEIPT_EXTRACTION",
+      revokedAt: null,
+    },
+    data: { revokedAt: now },
+  });
+  return tx.externalProcessingConsent.create({
+    data: {
+      businessProfileId: terms.businessProfileId,
+      actorUserId: terms.actorUserId,
+      provider: terms.provider,
+      policyVersion: terms.policyVersion,
+      purpose: "RECEIPT_EXTRACTION",
+      allowedDataClasses: [...terms.dataClasses],
+      processingRegion: terms.region,
+      providerRetentionHours: terms.retentionHours,
+      providerTrainingAllowed: false,
+      grantedAt: now,
+    },
+  });
+}
+
+/**
+ * Policy grant for RECEIPT_PROVIDER_CONSENT_MODE=automatic, run inside the
+ * dispatch reservation transaction so the grant and the dispatch commit together.
+ * The owner's last action wins: an open grant is superseded like an owner
+ * re-grant, a closed grant with nothing open is a revoke and is never overridden.
+ * The schema has no column marking a row as policy-issued, so the origin is
+ * logged with ids only. Returns null when no policy grant may be made.
+ */
+export async function grantReceiptProviderConsentByPolicy(
+  tx: Prisma.TransactionClient,
+  businessProfileId: number,
+  config: ReceiptProviderConfiguration & { provider: "gemini" | "veryfi"; providerRegion: string; providerRetentionHours: number },
+): Promise<{ id: number } | null> {
+  if (config.consentMode !== "automatic" || !config.operational) return null;
+  const profile = await tx.businessProfile.findFirst({
+    where: { id: businessProfileId, archivedAt: null },
+    select: { id: true, userId: true },
+  });
+  if (!profile) return null;
+
+  const open = await tx.externalProcessingConsent.findFirst({
+    where: { businessProfileId, provider: config.provider, purpose: "RECEIPT_EXTRACTION", revokedAt: null },
+    select: { id: true },
+  });
+  if (!open) {
+    const revoked = await tx.externalProcessingConsent.findFirst({
+      where: {
+        businessProfileId,
+        provider: { in: ["gemini", "veryfi"] },
+        purpose: "RECEIPT_EXTRACTION",
+        revokedAt: { not: null },
+      },
+      select: { id: true },
+    });
+    if (revoked) return null;
+  }
+
+  const created = await supersedeReceiptProviderConsent(tx, {
+    businessProfileId,
+    actorUserId: profile.userId,
+    provider: config.provider,
+    policyVersion: config.policyVersion,
+    dataClasses: config.allowedDataClasses,
+    region: config.providerRegion,
+    retentionHours: config.providerRetentionHours,
+  });
+  logger.info(
+    { businessProfileId, consentId: created.id, supersededConsentId: open?.id ?? null, source: "operator-policy" },
+    "receipt provider consent granted by policy",
+  );
+  return { id: created.id };
+}
+
 export async function getReceiptProviderConsentState(userId: number, businessProfileId: number) {
   await requireActiveOwnedProfile(userId, businessProfileId);
-  const provider = publicReceiptProviderDetails();
+  const config = getReceiptProviderConfiguration();
+  const provider = publicReceiptProviderDetails(config);
+  const mode = config.consentMode;
   const activeConsents = await prisma.externalProcessingConsent.findMany({
     where: {
       businessProfileId,
@@ -104,7 +200,13 @@ export async function getReceiptProviderConsentState(userId: number, businessPro
     },
   });
   if (!provider) {
-    return { available: false as const, provider: null, consent: null, activeConsents: activeConsents.map(activeConsentDTO) };
+    return {
+      available: false as const,
+      mode,
+      provider: null,
+      consent: null,
+      activeConsents: activeConsents.map(activeConsentDTO),
+    };
   }
   const current = activeConsents.find(
     (consent) =>
@@ -119,6 +221,7 @@ export async function getReceiptProviderConsentState(userId: number, businessPro
   );
   return {
     available: true as const,
+    mode,
     provider,
     consent: consentDTO(current ? { id: current.id, grantedAt: current.grantedAt, revokedAt: null } : null),
     activeConsents: activeConsents.map(activeConsentDTO),
@@ -159,24 +262,14 @@ export async function grantReceiptProviderConsent(
         ) {
           return current;
         }
-        const now = new Date();
-        await tx.externalProcessingConsent.updateMany({
-          where: { businessProfileId, provider: provider.key, purpose: "RECEIPT_EXTRACTION", revokedAt: null },
-          data: { revokedAt: now },
-        });
-        return tx.externalProcessingConsent.create({
-          data: {
-            businessProfileId,
-            actorUserId: userId,
-            provider: provider.key,
-            policyVersion: provider.policyVersion,
-            purpose: "RECEIPT_EXTRACTION",
-            allowedDataClasses: [...provider.dataClasses],
-            processingRegion: provider.region,
-            providerRetentionHours: provider.retentionHours,
-            providerTrainingAllowed: false,
-            grantedAt: now,
-          },
+        return supersedeReceiptProviderConsent(tx, {
+          businessProfileId,
+          actorUserId: userId,
+          provider: provider.key,
+          policyVersion: provider.policyVersion,
+          dataClasses: provider.dataClasses,
+          region: provider.region,
+          retentionHours: provider.retentionHours,
         });
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -203,6 +296,7 @@ export async function revokeReceiptProviderConsent(userId: number, businessProfi
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     ),
   );
-  const provider = publicReceiptProviderDetails();
-  return { available: provider !== null, provider, consent: null, activeConsents: [] };
+  const config = getReceiptProviderConfiguration();
+  const provider = publicReceiptProviderDetails(config);
+  return { available: provider !== null, mode: config.consentMode, provider, consent: null, activeConsents: [] };
 }

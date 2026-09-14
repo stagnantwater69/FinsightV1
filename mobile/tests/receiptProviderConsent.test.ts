@@ -18,6 +18,8 @@ const terms = {
   revocable: true,
 };
 
+const unavailable = { available: false, provider: null, consent: null, activeConsents: [] };
+
 describe("receipt provider consent contract", () => {
   it("echoes only the exact advertised terms in a grant", () => {
     const state = parseReceiptProviderConsentState({
@@ -74,6 +76,15 @@ describe("receipt provider consent contract", () => {
     });
     expect(state).toMatchObject({ available: false, provider: null, consent: null });
     expect(state?.activeConsents).toHaveLength(1);
+  });
+
+  it("carries the server consent mode and defaults to explicit when absent", () => {
+    const base = { available: true, provider: terms, consent: null, activeConsents: [] };
+    expect(parseReceiptProviderConsentState({ ...base, mode: "automatic" })?.mode).toBe("automatic");
+    expect(parseReceiptProviderConsentState({ ...base, mode: "explicit" })?.mode).toBe("explicit");
+    expect(parseReceiptProviderConsentState(base)?.mode).toBe("explicit");
+    expect(parseReceiptProviderConsentState({ ...base, mode: "unknown" })?.mode).toBe("explicit");
+    expect(parseReceiptProviderConsentState({ ...unavailable, mode: "automatic" })?.mode).toBe("automatic");
   });
 
   it("does not expose grant terms when unavailable", () => {

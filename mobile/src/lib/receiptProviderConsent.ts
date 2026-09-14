@@ -27,8 +27,12 @@ export interface ActiveReceiptProviderConsent {
   revocable: true;
 }
 
+export type ReceiptProviderConsentMode = "explicit" | "automatic";
+
 export interface ReceiptProviderConsentState {
   available: boolean;
+  /** Absent on older servers; treated as "explicit". */
+  mode?: ReceiptProviderConsentMode;
   provider: ReceiptProviderTerms | null;
   consent: { reference: string; grantedAt: string; revokedAt: null } | null;
   activeConsents: ActiveReceiptProviderConsent[];
@@ -62,6 +66,10 @@ function retention(value: unknown): number | null {
   return Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= 24
     ? Number(value)
     : null;
+}
+
+function consentMode(value: unknown): ReceiptProviderConsentMode {
+  return value === "automatic" ? "automatic" : "explicit";
 }
 
 function exactDataClasses(value: unknown): value is ["RECEIPT_IMAGE", "DERIVED_RECEIPT_IMAGE"] {
@@ -143,13 +151,20 @@ export function parseReceiptProviderConsentState(value: unknown): ReceiptProvide
 
   if (!input.available) {
     if (input.provider !== null || consent !== null) return null;
-    return { available: false, provider: null, consent: null, activeConsents: activeConsents as ActiveReceiptProviderConsent[] };
+    return {
+      available: false,
+      mode: consentMode(input.mode),
+      provider: null,
+      consent: null,
+      activeConsents: activeConsents as ActiveReceiptProviderConsent[],
+    };
   }
 
   const provider = parseTerms(input.provider);
   if (!provider) return null;
   return {
     available: true,
+    mode: consentMode(input.mode),
     provider,
     consent,
     activeConsents: activeConsents as ActiveReceiptProviderConsent[],

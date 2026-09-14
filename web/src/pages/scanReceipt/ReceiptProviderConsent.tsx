@@ -38,11 +38,14 @@ interface ActiveConsent {
   revocable: true;
 }
 
+type ProviderConsentMode = "explicit" | "automatic";
+
 interface ProviderConsentState {
   available: boolean;
   provider: ProviderTerms | null;
   consent: ConsentReference | null;
   activeConsents: ActiveConsent[];
+  mode?: ProviderConsentMode;
 }
 
 type LoadState =
@@ -56,6 +59,8 @@ type LoadState =
   | { status: "ready"; value: ProviderConsentState & { available: true; provider: ProviderTerms } };
 
 function readyState(value: ProviderConsentState): LoadState {
+  // Automatic mode: consent is granted by operator policy on the server; older servers omit the field.
+  if (value.mode === "automatic") return { status: "unavailable" };
   if (value.available && value.provider) {
     return { status: "ready", value: { ...value, available: true, provider: value.provider } };
   }

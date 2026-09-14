@@ -76,6 +76,7 @@ describe("mocked provider consent HTTP contract", () => {
     expect(response.headers["cache-control"]).toBe("no-store");
     expect(response.body).toEqual({
       available: true,
+      mode: "explicit",
       provider: {
         key: "gemini",
         label: "Google Gemini",
@@ -144,7 +145,7 @@ describe("mocked provider consent HTTP contract", () => {
 
     const revoked = await request(app).delete(url).set(...AUTH);
     expect(revoked.status).toBe(200);
-    expect(revoked.body).toEqual({ available: false, provider: null, consent: null, activeConsents: [] });
+    expect(revoked.body).toEqual({ available: false, mode: "explicit", provider: null, consent: null, activeConsents: [] });
   });
 
   it("does not reveal, grant, or revoke another owner's consent", async () => {
@@ -167,7 +168,7 @@ describe("mocked provider consent HTTP contract", () => {
     const state = await request(app).get(url).set(...AUTH);
     const grant = await request(app).put(url).set(...AUTH).send(consentTerms());
     expect(state.status).toBe(200);
-    expect(state.body).toEqual({ available: false, provider: null, consent: null, activeConsents: [] });
+    expect(state.body).toEqual({ available: false, mode: "explicit", provider: null, consent: null, activeConsents: [] });
     expect(grant.status).toBe(404);
     expect(await prisma.externalProcessingConsent.count()).toBe(0);
   });

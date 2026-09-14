@@ -219,6 +219,43 @@ describe("receipt provider consent", () => {
     expect(screen.getByRole("checkbox")).toBeChecked();
   });
 
+  it("stays hidden and never writes consent when the server grants it automatically", async () => {
+    mocks.get.mockResolvedValue({ data: { ...inactive, mode: "automatic" } });
+    const { container } = render(<ReceiptProviderConsent businessProfileId={7} />);
+
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(mocks.put).not.toHaveBeenCalled();
+  });
+
+  it("stays hidden in automatic mode even when an active consent is reported", async () => {
+    mocks.get.mockResolvedValue({ data: { ...active, mode: "automatic" } });
+    const { container } = render(<ReceiptProviderConsent businessProfileId={7} />);
+
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    expect(container).toBeEmptyDOMElement();
+    expect(mocks.put).not.toHaveBeenCalled();
+    expect(mocks.delete).not.toHaveBeenCalled();
+  });
+
+  it("shows the consent card when the server reports explicit mode", async () => {
+    mocks.get.mockResolvedValue({ data: { ...inactive, mode: "explicit" } });
+    render(<ReceiptProviderConsent businessProfileId={7} />);
+
+    expect(await screen.findByRole("heading", { name: "Optional help for hard-to-read receipts" })).toBeVisible();
+    expect(screen.getByRole("checkbox")).not.toBeChecked();
+  });
+
+  it("shows the consent card when an older server omits the mode field", async () => {
+    mocks.get.mockResolvedValue({ data: inactive });
+    render(<ReceiptProviderConsent businessProfileId={7} />);
+
+    expect(await screen.findByRole("heading", { name: "Optional help for hard-to-read receipts" })).toBeVisible();
+    expect(screen.getByRole("checkbox")).not.toBeChecked();
+    expect("mode" in inactive).toBe(false);
+  });
+
   it("disables every permission action while receipt scanning is in progress", async () => {
     mocks.get.mockResolvedValue({ data: active });
     render(<ReceiptProviderConsent businessProfileId={7} disabled />);

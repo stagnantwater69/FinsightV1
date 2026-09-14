@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   decideReceiptRescue,
+  firstProviderRescueReason,
   localReceiptAssessmentSchema,
   type LocalReceiptAssessment,
 } from "../../src/services/receiptRescueDecision";
@@ -86,6 +87,43 @@ describe("receipt rescue decision", () => {
       reviewLevel: "FOCUSED",
       localResultDisposition: "PREFILL_FOR_REVIEW",
       reasons: ["LOCAL_VALIDATION_FAILED", reason],
+    });
+  });
+
+  it("requests calibrated rescue for a clean validated receipt only under always routing", () => {
+    expect(decideReceiptRescue(assessment(), { routing: "rescue" })).toMatchObject({
+      providerRescueRequested: false,
+      reviewLevel: "STANDARD",
+      reasons: [],
+    });
+    expect(decideReceiptRescue(assessment(), { routing: "always" })).toEqual({
+      version: "receipt-rescue-v1",
+      providerRescueRequested: true,
+      reviewLevel: "FOCUSED",
+      localResultDisposition: "KEEP_AS_FALLBACK",
+      reasons: ["PROVIDER_ROUTING_ALWAYS"],
+      calibration: { state: "CALIBRATED", version: "routing-v1" },
+    });
+  });
+
+  it("lists the always-routing reason after evidence reasons and never overrides calibration", () => {
+    expect(decideReceiptRescue(assessment({ missingCriticalFields: ["total"], handwriting: "UNKNOWN" }), { routing: "always" }))
+      .toMatchObject({
+        providerRescueRequested: true,
+        reasons: ["MISSING_CRITICAL_TOTAL", "HANDWRITING_UNASSESSED", "PROVIDER_ROUTING_ALWAYS"],
+      });
+    expect(firstProviderRescueReason(["HANDWRITING_UNASSESSED", "PROVIDER_ROUTING_ALWAYS"])).toBe("PROVIDER_ROUTING_ALWAYS");
+    expect(firstProviderRescueReason(["HANDWRITING_UNASSESSED", "DAMAGE_SUSPECTED"])).toBe("DAMAGE_SUSPECTED");
+    expect(firstProviderRescueReason(["HANDWRITING_UNASSESSED"])).toBeNull();
+
+    expect(decideReceiptRescue(
+      assessment({ calibration: { state: "UNCALIBRATED", version: null } }),
+      { routing: "always" },
+    )).toMatchObject({
+      providerRescueRequested: false,
+      reviewLevel: "FOCUSED",
+      localResultDisposition: "PREFILL_FOR_REVIEW",
+      reasons: ["PROVIDER_ROUTING_ALWAYS", "CALIBRATION_UNAVAILABLE"],
     });
   });
 
