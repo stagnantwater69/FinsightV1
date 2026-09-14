@@ -218,13 +218,19 @@ describe("receipt provider gate and consent-by-policy log hygiene", () => {
       "dispatched",
       "localItemCount",
       "mergeReason",
+      // Stage timings: millisecond counts only, never receipt content.
+      "ocrMs",
+      "persistMs",
+      "persisted",
       "provider",
       "providerItemCount",
+      "providerMs",
       "reasons",
       "rescueRequested",
       "scanId",
+      "totalMs",
     ]);
-    expect(gate![0]).toMatchObject({ scanId: scan.id, code: "PROVIDER_OK", dispatched: true, provider: "gemini" });
+    expect(gate![0]).toMatchObject({ scanId: scan.id, code: "PROVIDER_OK", dispatched: true, provider: "gemini", persisted: true });
 
     const policy = calls.find(([, message]) => message === "receipt provider consent granted by policy");
     expect(policy, "the consent-by-policy line must be emitted").toBeDefined();

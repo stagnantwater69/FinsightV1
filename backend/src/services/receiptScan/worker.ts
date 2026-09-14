@@ -1,6 +1,7 @@
 import { prisma } from "../../config/prisma";
 import { hostname } from "node:os";
 import { createHash, randomUUID } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import {
   downloadReceiptImageBounded,
   inspectReceiptImage,
@@ -351,7 +352,12 @@ export async function persistReceiptProcessingOutput(
  * reclaim work after the heartbeat expires. Every attempt restores the
  * receipt from private Storage after the worker owns the lease.
  */
-async function processScan(scanId: number, input: StoredInput, attempt: number): Promise<void> {
+async function processScan(
+  scanId: number,
+  input: StoredInput,
+  attempt: number,
+  claimedAt: number = performance.now(),
+): Promise<void> {
   // OCR on one difficult photo can outlast the normal scheduler interval.
   // Refresh independently of page boundaries so another replica never
   // mistakes a healthy long-running read for an abandoned lease.
@@ -366,6 +372,7 @@ async function processScan(scanId: number, input: StoredInput, attempt: number):
     });
   }, 30_000);
   heartbeatTimer.unref();
+  let logProviderGate: ((persisted: boolean) => void) | null = null;
   try {
     const ocrResults: OcrResult[] = [];
     const originalOcrResults: OcrResult[] = [];
@@ -379,10 +386,19 @@ async function processScan(scanId: number, input: StoredInput, attempt: number):
       inputSha256: string;
       loadBytes: () => Promise<Buffer>;
     }[] = [];
+    // Stage clocks for the gate log line: millisecond counts only, no receipt content.
+    let ocrMs = 0;
+    let providerMs = 0;
+    let persistMs = 0;
     for (const page of input.pages) {
-      const original = await readStoredCandidate(page.original, true);
-      await heartbeatScan(scanId, attempt);
-      const processed = page.processed ? await readStoredCandidate(page.processed, false) : null;
+      // Both variants read at once; the OCR pool keeps two workers warm for this pair.
+      // Selection only sees the finished results, so the pick is order-independent.
+      const readStartedAt = performance.now();
+      const [original, processed] = await Promise.all([
+        readStoredCandidate(page.original, true),
+        page.processed ? readStoredCandidate(page.processed, false) : Promise.resolve(null),
+      ]);
+      ocrMs += performance.now() - readStartedAt;
       const selected = selectOcrCandidate(original.ocr, processed?.ocr ?? null);
       const chosenEvidence = selected.source === "processed" && page.processed ? page.processed : page.original;
       const chosenDigest = selected.source === "processed" && processed ? processed.digest : original.digest;
@@ -489,6 +505,7 @@ async function processScan(scanId: number, input: StoredInput, attempt: number):
     });
     const localExtraction = localNormalizedExtraction(parsed, deterministicItems, currency, reconciliation.reconciled);
     const adapter = providerConfig.provider === "veryfi" ? createVeryfiReceiptAdapter() : createGeminiReceiptAdapter();
+    const dispatchStartedAt = performance.now();
     const gate = await dispatchReceiptProviderRescue(
       {
         businessProfileId: input.businessProfileId,
@@ -502,23 +519,33 @@ async function processScan(scanId: number, input: StoredInput, attempt: number):
       },
       { adapter, loadConfiguration: getReceiptProviderConfiguration },
     );
+    providerMs = performance.now() - dispatchStartedAt;
     // Operators need to see why a rescue did or did not run without opening
-    // the scan row; ids and gate code only.
-    logger.info(
-      {
-        scanId,
-        code: gate.code,
-        dispatched: gate.dispatched,
-        provider: gate.provider,
-        rescueRequested: rescueDecision.providerRescueRequested,
-        reasons: rescueDecision.reasons,
-        mergeReason: gate.merge.reason,
-        appliedFields: gate.merge.appliedFields,
-        providerItemCount: gate.merge.receipt.items.length,
-        localItemCount: deterministicItems.length,
-      },
-      "receipt provider gate",
-    );
+    // the scan row; ids, gate code, and stage timings only. Emitted after
+    // persistence so persistMs is real; the catch below emits it on failure.
+    logProviderGate = (persisted: boolean) => {
+      logProviderGate = null;
+      logger.info(
+        {
+          scanId,
+          code: gate.code,
+          dispatched: gate.dispatched,
+          provider: gate.provider,
+          rescueRequested: rescueDecision.providerRescueRequested,
+          reasons: rescueDecision.reasons,
+          mergeReason: gate.merge.reason,
+          appliedFields: gate.merge.appliedFields,
+          providerItemCount: gate.merge.receipt.items.length,
+          localItemCount: deterministicItems.length,
+          persisted,
+          ocrMs: Math.round(ocrMs),
+          providerMs: Math.round(providerMs),
+          persistMs: Math.round(persistMs),
+          totalMs: Math.round(performance.now() - claimedAt),
+        },
+        "receipt provider gate",
+      );
+    };
     const trigger = determineRescueTrigger(deterministicItems, parsed, combinedText, worstPageConfidence);
     const rescued = mergeIntoRescuedFields(parsed, deterministicItems, gate, trigger, providerConfig.providerVersion);
     const vendor = await snapVendorToHistory(input.businessProfileId, combinedText, rescued.vendor);
@@ -564,6 +591,7 @@ async function processScan(scanId: number, input: StoredInput, attempt: number):
     const itemEvidence = rescued.itemsFromVision
       ? rescued.itemEvidence ?? []
       : locateItemLines(pageTexts, rescued.items.map((item) => item.amount));
+    const persistStartedAt = performance.now();
     await persistReceiptProcessingOutput(
       scanId,
       input.businessProfileId,
@@ -631,7 +659,10 @@ async function processScan(scanId: number, input: StoredInput, attempt: number):
         },
       },
     );
+    persistMs = performance.now() - persistStartedAt;
+    logProviderGate?.(true);
   } catch (err) {
+    logProviderGate?.(false);
     // A newer worker owns the row now. The stale worker must not overwrite its
     // state with either a success or failure from an expired lease.
     if (err instanceof ReceiptLeaseLostError) return;
@@ -804,6 +835,7 @@ async function claimScan(): Promise<{ id: number; attempt: number } | null> {
 }
 
 async function claimAndProcessScan(): Promise<boolean> {
+  const claimedAt = performance.now();
   const claimed = await claimScan();
   if (!claimed) return false;
   let input: StoredInput;
@@ -816,7 +848,7 @@ async function claimAndProcessScan(): Promise<boolean> {
     await recordProcessingFailure(claimed.id, claimed.attempt, failure);
     return true;
   }
-  await processScan(claimed.id, input, claimed.attempt);
+  await processScan(claimed.id, input, claimed.attempt, claimedAt);
   return true;
 }
 

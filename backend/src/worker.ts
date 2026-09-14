@@ -10,6 +10,7 @@ import { prisma } from "./config/prisma";
 import { logger } from "./config/logger";
 import { assertMigrationsApplied } from "./config/migrationGuard";
 import { runReceiptWorkerOnce } from "./services/receiptScan/worker";
+import { shutdownOcr } from "./services/ocr.service";
 import { runCsvImportWorkerOnce, sweepStalledCsvImports } from "./services/csvImport.service";
 import { cleanUpExpiredRateLimits } from "./middleware/rateLimit.middleware";
 import { enqueueDailyProfileAnalyses, runAnalysisWorkerOnce } from "./services/anomalyDetection/job.service";
@@ -26,11 +27,17 @@ logger.info({ pid: process.pid }, "FinSight worker starting");
 let shuttingDown = false;
 let workerBusy = false;
 
-async function work(): Promise<void> {
+// An upload waits up to one idle interval to be claimed; a pass that claimed
+// anything is followed at once by another so a backlog drains without sleeping.
+const IDLE_POLL_MS = 1_000;
+
+/** One pass over every queue. Resolves true when at least one job was claimed. */
+async function work(): Promise<boolean> {
   // Stop picking up new passes once shutdown has started — the in-flight
   // pass (if any) is still allowed to finish below, via workerBusy.
-  if (shuttingDown || workerBusy) return;
+  if (shuttingDown || workerBusy) return false;
   workerBusy = true;
+  let claimedAny = false;
   try {
     try {
       const reconciled = await reconcileStaleReceiptProviderDispatches();
@@ -42,7 +49,7 @@ async function work(): Promise<void> {
     }
     // Drain immediately available jobs but cap each pass so the event loop
     // returns regularly under a backlog.
-    for (let i = 0; i < 5 && (await runReceiptWorkerOnce()); i++);
+    for (let i = 0; i < 5 && (await runReceiptWorkerOnce()); i++) claimedAny = true;
     await runReceiptPurgeWorkerOnce();
     /*
      * Two imports per pass, not five: one large import can be tens of
@@ -50,24 +57,33 @@ async function work(): Promise<void> {
      * so a low cap here is what keeps a big import from starving the receipt
      * and analysis work that share this loop.
      */
-    for (let i = 0; i < 2 && (await runCsvImportWorkerOnce()); i++);
-    for (let i = 0; i < 10 && (await runAnalysisWorkerOnce()); i++);
+    for (let i = 0; i < 2 && (await runCsvImportWorkerOnce()); i++) claimedAny = true;
+    for (let i = 0; i < 10 && (await runAnalysisWorkerOnce()); i++) claimedAny = true;
     // One stage per pass rather than draining: each stage of a deletion is
     // irreversible, and a bug that ran them back to back would get through all
     // three before the next pass could be stopped.
-    for (let i = 0; i < 3 && (await runAccountDeletionWorkerOnce()); i++);
+    for (let i = 0; i < 3 && (await runAccountDeletionWorkerOnce()); i++) claimedAny = true;
   } catch (error) {
     logger.error({ err: error }, "receipt worker pass failed");
   } finally {
     workerBusy = false;
   }
+  return claimedAny;
+}
+
+/** Runs a pass, then books the next one: immediately after a claim, else after the idle interval. */
+async function runPass(): Promise<void> {
+  const claimed = await work();
+  if (shuttingDown) return;
+  workerTimer = setTimeout(() => void runPass(), claimed ? 0 : IDLE_POLL_MS);
 }
 
 /*
  * Cleared by shutdown(). Assigned in start(), which does not run until the
  * database has been confirmed to be at the schema this build expects —
  * `undefined` here is the state where a signal arrived during that check,
- * and clearInterval ignores it.
+ * and clearInterval/clearTimeout ignore it. workerTimer is a one-shot timer
+ * re-armed by runPass after each pass, not an interval.
  */
 let workerTimer: NodeJS.Timeout | undefined;
 let rateLimitCleanupTimer: NodeJS.Timeout | undefined;
@@ -78,8 +94,7 @@ let abandonedScanSweepTimer: NodeJS.Timeout | undefined;
 
 /** Every recurring job the worker owns. See start()'s caller for the boot gate. */
 function start(): void {
-  workerTimer = setInterval(() => void work(), 5_000);
-  void work();
+  void runPass();
 
   rateLimitCleanupTimer = setInterval(() => {
     if (shuttingDown) return;
@@ -165,7 +180,7 @@ async function shutdown(signal: string): Promise<void> {
 
   // Stop scheduling new work. Timers are cleared up front so no new pass can
   // be scheduled while we wait below for whatever pass is already running.
-  clearInterval(workerTimer);
+  clearTimeout(workerTimer);
   clearInterval(rateLimitCleanupTimer);
   clearInterval(csvSweepTimer);
   clearInterval(dailyAnalysisTimer);
@@ -187,6 +202,8 @@ async function shutdown(signal: string): Promise<void> {
   }
 
   clearTimeout(forceTimer);
+  // Warm tesseract worker threads end here rather than with the process.
+  await shutdownOcr().catch((error) => logger.error({ err: error }, "OCR shutdown failed"));
   await prisma.$disconnect();
   logger.info("worker graceful shutdown complete");
   process.exit(0);
