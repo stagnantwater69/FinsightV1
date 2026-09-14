@@ -1,4 +1,5 @@
-import { createWorker } from "tesseract.js";
+import { createWorker, type Worker as TesseractWorker } from "tesseract.js";
+import type { Worker as WorkerThread } from "node:worker_threads";
 import sharp from "sharp";
 import { env } from "../config/env";
 import { logger } from "../config/logger";
@@ -38,6 +39,149 @@ const TESSERACT_WORKER_OPTIONS = {
   gzip: false,
   cacheMethod: "none",
 } as const;
+
+/*
+ * Warm tesseract worker pool.
+ *
+ * Creating a worker loads the WASM engine and the packaged language data, a
+ * few hundred milliseconds that used to be paid on every recognition, twice
+ * per page. Workers are created lazily on first use and kept for the life of
+ * the process, with the same options as before, so a warm worker returns the
+ * same text and confidences a cold one did.
+ *
+ * Lifecycle: each slot runs one recognition at a time and further calls
+ * queue in arrival order. A worker whose recognition rejected, or whose
+ * thread exited, is discarded and the next call spawns a fresh one.
+ * `shutdownOcr()` terminates the pool; a call after it starts over.
+ *
+ * Memory: tesseract.js writes each image to one fixed path (`/input`) in the
+ * worker's in-memory FS and `SetImageFile` replaces the previous pix, so at
+ * most the last image read is resident. Nothing on this side keeps the
+ * buffer after `recognize` resolves.
+ *
+ * Idle workers are unref()ed so a one-shot script (the CI offline-OCR smoke)
+ * still exits on its own; a worker is ref()ed while a job runs.
+ */
+
+/** Original + processed image of one page, read side by side. */
+const OCR_POOL_SIZE = 2;
+
+interface PoolSlot {
+  worker: Promise<TesseractWorker> | null;
+  busy: boolean;
+}
+
+const pool: PoolSlot[] = Array.from({ length: OCR_POOL_SIZE }, () => ({ worker: null, busy: false }));
+const waiters: ((slot: PoolSlot) => void)[] = [];
+
+/** The worker_threads handle tesseract.js keeps on its worker object (untyped upstream). */
+function threadOf(worker: TesseractWorker): WorkerThread | undefined {
+  return (worker as unknown as { worker?: WorkerThread }).worker;
+}
+
+function acquireSlot(): Promise<PoolSlot> {
+  const idle = pool.find((slot) => !slot.busy);
+  if (idle) {
+    idle.busy = true;
+    return Promise.resolve(idle);
+  }
+  return new Promise((resolve) => waiters.push(resolve));
+}
+
+function releaseSlot(slot: PoolSlot): void {
+  const next = waiters.shift();
+  if (next) {
+    next(slot); // stays busy, handed straight on
+    return;
+  }
+  slot.busy = false;
+}
+
+async function discardWorker(slot: PoolSlot): Promise<void> {
+  const pending = slot.worker;
+  slot.worker = null;
+  if (!pending) return;
+  try {
+    const worker = await pending;
+    await worker.terminate();
+  } catch {
+    // Already dead or never came up; there is nothing left to release.
+  }
+}
+
+function workerFor(slot: PoolSlot): Promise<TesseractWorker> {
+  if (slot.worker) return slot.worker;
+  const created = createWorker(env.TESSERACT_LANG, undefined, TESSERACT_WORKER_OPTIONS).then((worker) => {
+    const thread = threadOf(worker);
+    thread?.unref();
+    // A thread that dies on its own must not leave a dead handle in the slot.
+    thread?.once("exit", () => {
+      if (slot.worker === created) slot.worker = null;
+    });
+    return worker;
+  });
+  created.catch(() => {
+    if (slot.worker === created) slot.worker = null;
+  });
+  slot.worker = created;
+  return created;
+}
+
+/** Runs one recognition on a pooled worker, queuing when both are busy. */
+async function withPooledWorker<T>(job: (worker: TesseractWorker) => Promise<T>): Promise<T> {
+  const slot = await acquireSlot();
+  try {
+    const worker = await workerFor(slot);
+    const thread = threadOf(worker);
+    thread?.ref();
+    try {
+      return await job(worker);
+    } catch (err) {
+      await discardWorker(slot);
+      throw err;
+    } finally {
+      thread?.unref();
+    }
+  } finally {
+    // A failed creation has already cleared the slot (see workerFor).
+    releaseSlot(slot);
+  }
+}
+
+/**
+ * A throwaway worker for calls that set engine parameters (the accuracy
+ * harness's PSM/DPI sweeps). `setParameters` is sticky on a worker, so a
+ * sweep must not leave its settings on a pooled one.
+ */
+async function withEphemeralWorker<T>(
+  params: Record<string, string>,
+  job: (worker: TesseractWorker) => Promise<T>,
+): Promise<T> {
+  const worker = await createWorker(env.TESSERACT_LANG, undefined, TESSERACT_WORKER_OPTIONS);
+  try {
+    await worker.setParameters(params);
+    return await job(worker);
+  } finally {
+    await worker.terminate();
+  }
+}
+
+function engineParams(options: OcrEngineOptions): Record<string, string> {
+  const params: Record<string, string> = {};
+  if (options.pageSegMode) params.tessedit_pageseg_mode = options.pageSegMode;
+  if (options.dpi) params.user_defined_dpi = options.dpi;
+  return params;
+}
+
+function recognizeWith<T>(options: OcrEngineOptions, job: (worker: TesseractWorker) => Promise<T>): Promise<T> {
+  const params = engineParams(options);
+  return Object.keys(params).length > 0 ? withEphemeralWorker(params, job) : withPooledWorker(job);
+}
+
+/** Terminates every warm worker; for graceful shutdown of the worker process. */
+export async function shutdownOcr(): Promise<void> {
+  await Promise.all(pool.map((slot) => discardWorker(slot)));
+}
 
 /**
  * The width a receipt photo is reduced to before OCR.
@@ -230,13 +374,7 @@ export async function extractReceipt(buffer: Buffer, options: OcrEngineOptions =
     logger.error({ err }, "Receipt image preprocessing failed; reading the original image instead");
   }
 
-  const worker = await createWorker(env.TESSERACT_LANG, undefined, TESSERACT_WORKER_OPTIONS);
-  try {
-    const params: Record<string, string> = {};
-    if (options.pageSegMode) params.tessedit_pageseg_mode = options.pageSegMode;
-    if (options.dpi) params.user_defined_dpi = options.dpi;
-    if (Object.keys(params).length > 0) await worker.setParameters(params);
-
+  return recognizeWith(options, async (worker) => {
     const { data } = await worker.recognize(image, {}, { blocks: true, text: true });
 
     const lines: OcrLine[] = [];
@@ -258,9 +396,7 @@ export async function extractReceipt(buffer: Buffer, options: OcrEngineOptions =
     }
 
     return { text: data.text, confidence: Number(data.confidence ?? 0), lines };
-  } finally {
-    await worker.terminate();
-  }
+  });
 }
 
 /**
@@ -286,8 +422,7 @@ export async function extractText(buffer: Buffer, options: OcrEngineOptions = {}
     logger.error({ err }, "Receipt image preprocessing failed; reading the original image instead");
   }
 
-  const worker = await createWorker(env.TESSERACT_LANG, undefined, TESSERACT_WORKER_OPTIONS);
-  try {
+  return recognizeWith(options, async (worker) => {
     /*
      * DO NOT SET A PAGE SEGMENTATION MODE HERE. It has been measured, and
      * every alternative is worse.
@@ -303,16 +438,9 @@ export async function extractText(buffer: Buffer, options: OcrEngineOptions = {}
      * Full sweep in tests/ocr-accuracy/OCR-ACCURACY-REPORT.md. A DPI hint is
      * neutral, so it is not set either.
      */
-    const params: Record<string, string> = {};
-    if (options.pageSegMode) params.tessedit_pageseg_mode = options.pageSegMode;
-    if (options.dpi) params.user_defined_dpi = options.dpi;
-    if (Object.keys(params).length > 0) await worker.setParameters(params);
-
     const { data } = await worker.recognize(image);
     return data.text;
-  } finally {
-    await worker.terminate();
-  }
+  });
 }
 
 export interface ParsedReceiptFields {

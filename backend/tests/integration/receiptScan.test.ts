@@ -75,7 +75,10 @@ vi.mock("../../src/services/visionOcr.service", async (importOriginal) => {
   return { ...actual, extractReceiptWithVision: visionMock };
 });
 
+import sharp from "sharp";
+import { logger } from "../../src/config/logger";
 import { prisma } from "../../src/config/prisma";
+import { downloadReceiptImageBounded, uploadReceiptImage } from "../../src/services/storage.service";
 import type { VisionReceipt } from "../../src/services/visionOcr.service";
 import { confirmReceipt, deleteScanItem, getScan, uploadAndScan } from "../../src/services/receiptScan.service";
 import { getExpenseRecord } from "../../src/services/expenseRecord.service";
@@ -1578,5 +1581,131 @@ describe("confirm", () => {
         splits: [{ categoryId: ctx.categories.Inventory!, amount: 100 }],
       })
     ).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+/*
+ * The worker reads a page's original and processed variants at the same time
+ * and reports stage timings on the gate line. Both are about HOW the read
+ * runs, not what it reads: the selected candidate must be the one
+ * selectOcrCandidate would have picked from two sequential reads, and the
+ * timings must be plain millisecond counts.
+ */
+describe("receipt worker stage timings and concurrent candidate reads", () => {
+  /** Two byte-distinct JPEGs so the mocked OCR can tell which variant it was handed. */
+  async function solidJpeg(shade: number): Promise<Buffer> {
+    return sharp({ create: { width: 4, height: 4, channels: 3, background: { r: shade, g: shade, b: shade } } })
+      .jpeg()
+      .toBuffer();
+  }
+
+  /**
+   * Routes the original and processed uploads to distinct stored paths and
+   * serves each path its own bytes, so the OCR mock can answer per variant.
+   * Restored after each use: the file-level storage mock is shared.
+   */
+  async function withPairedVariants(
+    originalText: string,
+    processedText: string,
+    run: () => Promise<void>,
+  ): Promise<void> {
+    const originalBytes = await solidJpeg(40);
+    const processedBytes = await solidJpeg(220);
+    const upload = vi.mocked(uploadReceiptImage);
+    const download = vi.mocked(downloadReceiptImageBounded);
+    const previousUpload = upload.getMockImplementation();
+    const previousDownload = download.getMockImplementation();
+    let uploads = 0;
+    upload.mockImplementation(async () => (uploads++ === 0 ? "1/paired-original.jpg" : "1/paired-processed.jpg"));
+    download.mockImplementation(async (path: string) =>
+      path === "1/paired-processed.jpg" ? processedBytes : originalBytes,
+    );
+    extractTextMock.mockImplementation(async (buffer: Buffer) =>
+      buffer.equals(processedBytes) ? processedText : originalText,
+    );
+    try {
+      await run();
+    } finally {
+      upload.mockImplementation(previousUpload!);
+      download.mockImplementation(previousDownload!);
+    }
+  }
+
+  async function uploadPaired() {
+    const created = await uploadAndScan(ctx.user.id, {
+      businessProfileId: ctx.profile.id,
+      pages: [
+        {
+          buffer: Buffer.from("original-bytes"),
+          mimetype: "image/jpeg",
+          originalname: "receipt.jpg",
+          processed: { buffer: Buffer.from("processed-bytes"), mimetype: "image/jpeg", originalname: "processed.jpg" },
+        },
+      ],
+    });
+    await runReceiptWorkerAndWait(created.id);
+    return getScan(ctx.user.id, created.id);
+  }
+
+  it("logs the gate line with the four stage timings as non-negative integers", async () => {
+    const info = vi.spyOn(logger, "info");
+    try {
+      await upload();
+      const gate = info.mock.calls.find(([, message]) => message === "receipt provider gate");
+      expect(gate).toBeDefined();
+      const fields = gate![0] as Record<string, unknown>;
+      for (const key of ["ocrMs", "providerMs", "persistMs", "totalMs"] as const) {
+        expect(Number.isInteger(fields[key]), key).toBe(true);
+        expect(fields[key] as number, key).toBeGreaterThanOrEqual(0);
+      }
+      expect(fields.persisted).toBe(true);
+      // Claim-to-persisted spans every stage, so it bounds their sum.
+      const staged = (fields.ocrMs as number) + (fields.providerMs as number) + (fields.persistMs as number);
+      expect(fields.totalMs as number).toBeGreaterThanOrEqual(staged);
+      expect(JSON.stringify(fields)).not.toContain("SARI-SARI");
+    } finally {
+      info.mockRestore();
+    }
+  });
+
+  it("logs the gate line exactly once per processed scan", async () => {
+    const info = vi.spyOn(logger, "info");
+    try {
+      await upload();
+      expect(info.mock.calls.filter(([, message]) => message === "receipt provider gate")).toHaveLength(1);
+    } finally {
+      info.mockRestore();
+    }
+  });
+
+  it("selects the processed reading when it alone parses the receipt, with both read concurrently", async () => {
+    await withPairedVariants("Rice 25kg 1220.00\nCooking oil 180.00", RECEIPT_TEXT, async () => {
+      const scan = await uploadPaired();
+      expect(scan.pageProcessing).toEqual([
+        expect.objectContaining({ pageNumber: 1, source: "processed", hasProcessedVariant: true }),
+      ]);
+      expect(scan.extractedVendor).toBe("ABC SARI-SARI STORE");
+      expect(scan.extractedAmount).toBe(1400);
+      expect(extractTextMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("keeps the original reading on a tie, whichever variant finished first", async () => {
+    await withPairedVariants(RECEIPT_TEXT, RECEIPT_TEXT, async () => {
+      const scan = await uploadPaired();
+      expect(scan.pageProcessing).toEqual([
+        expect.objectContaining({ pageNumber: 1, source: "original", hasProcessedVariant: true }),
+      ]);
+      expect(scan.extractedVendor).toBe("ABC SARI-SARI STORE");
+      expect(extractTextMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("never lets a processed reading drop a field the original parsed", async () => {
+    await withPairedVariants(RECEIPT_TEXT, "ABC SARI-SARI STORE\nRice 25kg 1220.00\nCooking oil 180.00", async () => {
+      const scan = await uploadPaired();
+      expect(scan.pageProcessing[0]!.source).toBe("original");
+      expect(scan.extractedAmount).toBe(1400);
+    });
   });
 });
