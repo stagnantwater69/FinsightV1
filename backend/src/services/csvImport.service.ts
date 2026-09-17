@@ -271,6 +271,43 @@ class ImportStageError extends Error {
   }
 }
 
+/** Raised when a checkpoint or heartbeat finds the batch is no longer leased
+ * by this attempt. The attempt must stop touching the row: another worker owns
+ * it, and even a failure written from here would overwrite that worker's
+ * state. Same discipline as ReceiptLeaseLostError in receiptScan/worker.ts. */
+class CsvLeaseLostError extends Error {
+  constructor(batchId: number) {
+    super(`CSV import batch ${batchId} lease was reclaimed`);
+    this.name = "CsvLeaseLostError";
+  }
+}
+
+interface ImportLease {
+  workerId: string;
+  attemptCount: number;
+}
+
+/**
+ * Prove this attempt still owns the batch and push the heartbeat forward.
+ *
+ * Called between the worker's long phases (download, parse, validate), none of
+ * which writes anything: a 10 MB file off degraded Storage can outlast
+ * CSV_LEASE_MS before the first chunk checkpoint, and a healthy long download
+ * then reads as an abandoned lease to the next worker tick.
+ */
+async function heartbeatImportBatch(batchId: number, lease: ImportLease): Promise<void> {
+  const beat = await prisma.cSVImportBatch.updateMany({
+    where: {
+      id: batchId,
+      processingStatus: CsvImportProcessingStatus.PROCESSING,
+      workerId: lease.workerId,
+      attemptCount: lease.attemptCount,
+    },
+    data: { heartbeatAt: new Date() },
+  });
+  if (beat.count !== 1) throw new CsvLeaseLostError(batchId);
+}
+
 // ============================================================
 // Parsing
 // ============================================================
@@ -974,9 +1011,10 @@ async function runImportChunks(args: {
   profile: ImportProfile;
   outcomes: RowOutcome[];
   startAtRow: number;
+  lease: ImportLease;
   seed: { imported: number; skippedCount: number; flagged: number; progress: ProgressSummary };
 }): Promise<void> {
-  const { batchId, userId, profile, outcomes, startAtRow, seed } = args;
+  const { batchId, userId, profile, outcomes, startAtRow, lease, seed } = args;
   let imported = seed.imported;
   let skippedCount = seed.skippedCount;
   let flagged = seed.flagged;
@@ -1049,8 +1087,21 @@ async function runImportChunks(args: {
         // Absolute figures rather than increments: this statement may be
         // retried by a reclaimed lease, and "set to what has committed" is
         // idempotent where "add what I think I did" is not.
-        await tx.cSVImportBatch.update({
-          where: { id: batchId },
+        //
+        // Conditional on the lease, and inside the chunk's own transaction, so
+        // it is the inserts above that are gated: if another worker has
+        // claimed this batch — which it may legitimately have done after a
+        // long download — the row count is 0, the throw rolls this chunk's
+        // expenses and sales back, and the loop stops. Without the predicate
+        // both workers resume from the same checkpoint and every row lands
+        // twice.
+        const checkpoint = await tx.cSVImportBatch.updateMany({
+          where: {
+            id: batchId,
+            processingStatus: CsvImportProcessingStatus.PROCESSING,
+            workerId: lease.workerId,
+            attemptCount: lease.attemptCount,
+          },
           data: {
             processedRows: at + chunk.length,
             importedRows: imported,
@@ -1060,6 +1111,7 @@ async function runImportChunks(args: {
             resultSummary: progress as unknown as Prisma.InputJsonObject,
           },
         });
+        if (checkpoint.count !== 1) throw new CsvLeaseLostError(batchId);
       },
       { timeout: 60_000, maxWait: 10_000 },
     );
@@ -1395,6 +1447,9 @@ export async function confirmImport(userId: number, input: ConfirmInput): Promis
       profile,
       outcomes,
       startAtRow: 0,
+      // The batch row was created with this worker id and attemptCount 1, so
+      // the request holds the lease it is about to check itself against.
+      lease: { workerId: SYNC_WORKER_ID, attemptCount: 1 },
       seed: { imported: 0, skippedCount: 0, flagged: 0, progress: emptyProgress() },
     });
   } catch (error) {
@@ -1403,8 +1458,12 @@ export async function confirmImport(userId: number, input: ConfirmInput): Promis
      * how far the committed chunks got, so the durable worker can finish what
      * the request could not. The owner sees an error now and a completed
      * import shortly — never a silent half-import.
+     *
+     * Unless the worker has already taken the batch over (a request slow
+     * enough for its heartbeat to go stale): then the row belongs to that
+     * attempt and this one must not rewrite its status.
      */
-    await deferBatch(batch.id, "insert", error, 1);
+    if (!(error instanceof CsvLeaseLostError)) await deferBatch(batch.id, "insert", error, 1);
     throw error;
   }
 
@@ -1490,10 +1549,17 @@ async function processClaimedBatch(batch: ClaimedBatch): Promise<void> {
   if (!batch.fileReference) {
     throw new ImportStageError("download", "No stored file to import — the upload never completed");
   }
+  const lease: ImportLease = { workerId: CSV_WORKER_ID, attemptCount: batch.attemptCount };
+
   const buffer = await downloadCsvFile(batch.fileReference);
   if (!buffer) {
     throw new ImportStageError("download", `Could not download "${batch.fileReference}" from storage`);
   }
+  // Download, parse and validate all run before the first chunk checkpoint,
+  // and on a large file over slow storage that stretch alone can exceed
+  // CSV_LEASE_MS. A beat after each phase is what keeps this attempt
+  // distinguishable from a dead one.
+  await heartbeatImportBatch(batch.id, lease);
 
   const meta = readMappingMeta(batch.mappingMeta);
 
@@ -1503,6 +1569,7 @@ async function processClaimedBatch(batch: ClaimedBatch): Promise<void> {
   } catch (error) {
     throw new ImportStageError("parse", String(error));
   }
+  await heartbeatImportBatch(batch.id, lease);
 
   let outcomes: RowOutcome[];
   try {
@@ -1510,6 +1577,7 @@ async function processClaimedBatch(batch: ClaimedBatch): Promise<void> {
   } catch (error) {
     throw new ImportStageError("validate", String(error));
   }
+  await heartbeatImportBatch(batch.id, lease);
 
   await runImportChunks({
     batchId: batch.id,
@@ -1517,6 +1585,7 @@ async function processClaimedBatch(batch: ClaimedBatch): Promise<void> {
     profile,
     outcomes,
     startAtRow: batch.processedRows,
+    lease,
     seed: {
       imported: batch.importedRows,
       skippedCount: batch.skippedRows,
@@ -1536,6 +1605,12 @@ export async function runCsvImportWorkerOnce(): Promise<boolean> {
   try {
     await processClaimedBatch(batch);
   } catch (error) {
+    // A newer attempt owns the row now; deferring it here would reset the
+    // status, workerId and nextAttemptAt out from under that worker.
+    if (error instanceof CsvLeaseLostError) {
+      logger.warn({ batchId: batch.id }, "csv import lease reclaimed mid-attempt");
+      return true;
+    }
     const stage = error instanceof ImportStageError ? error.stage : "insert";
     logger.error({ err: error, batchId: batch.id, stage }, "csv import attempt failed");
     await deferBatch(batch.id, stage, error, batch.attemptCount);

@@ -378,3 +378,75 @@ describe("category creation under concurrency", () => {
     expect(categories).toHaveLength(1);
   });
 });
+
+/*
+ * A worker only holds a batch for CSV_LEASE_MS, and download + parse + validate
+ * all run before the first chunk writes anything. On a large file over slow
+ * storage that stretch can outlast the lease, at which point a second worker
+ * legitimately claims the batch. Both attempts then resume from the same
+ * checkpoint, and every expense and sale lands twice.
+ */
+describe("lease loss mid-attempt", () => {
+  /** What a second worker's claim does to the row, done directly. */
+  async function stealLease(batchId: number) {
+    await prisma.cSVImportBatch.update({
+      where: { id: batchId },
+      data: {
+        processingStatus: CsvImportProcessingStatus.PROCESSING,
+        workerId: "csv:other-worker",
+        attemptCount: { increment: 1 },
+        heartbeatAt: new Date(),
+      },
+    });
+  }
+
+  it("inserts nothing when the lease is lost during the download", async () => {
+    const buffer = csvOf(SYNC_ROW_LIMIT + 10);
+    const accepted = await confirmImport(ctx.user.id, confirmArgs(buffer, { idempotencyKey: "lease-download" }));
+
+    downloadCsvFile.mockImplementationOnce(async (_ref: string) => {
+      await stealLease(accepted.batchId);
+      return uploadedBuffer;
+    });
+
+    expect(await runCsvImportWorkerOnce()).toBe(true);
+
+    expect(await prisma.expenseRecord.count({ where: { businessProfileId: ctx.profile.id } })).toBe(0);
+    const batch = await prisma.cSVImportBatch.findUniqueOrThrow({ where: { id: accepted.batchId } });
+    // The reclaiming worker's row state survives untouched: no deferral, no
+    // failure stage written over it.
+    expect(batch.workerId).toBe("csv:other-worker");
+    expect(batch.processingStatus).toBe(CsvImportProcessingStatus.PROCESSING);
+    expect(batch.processedRows).toBe(0);
+  });
+
+  it("stops after the chunk whose checkpoint finds the lease gone", async () => {
+    const buffer = csvOf(SYNC_ROW_LIMIT + 500);
+    const accepted = await confirmImport(ctx.user.id, confirmArgs(buffer, { idempotencyKey: "lease-chunk" }));
+
+    const real = expenseService.bulkCreateExpenseRecords;
+    const spy = vi.spyOn(expenseService, "bulkCreateExpenseRecords");
+    let chunks = 0;
+    spy.mockImplementation(async (...parameters: Parameters<typeof real>) => {
+      chunks += 1;
+      // Between the first chunk's commit and the second chunk's checkpoint —
+      // the window a slow chunk leaves open.
+      if (chunks === 2) await stealLease(accepted.batchId);
+      return real(...parameters);
+    });
+    try {
+      expect(await runCsvImportWorkerOnce()).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+
+    // The second chunk's inserts roll back with its rejected checkpoint, and
+    // the third never runs.
+    expect(await prisma.expenseRecord.count({ where: { businessProfileId: ctx.profile.id } })).toBe(1000);
+    const batch = await prisma.cSVImportBatch.findUniqueOrThrow({ where: { id: accepted.batchId } });
+    expect(batch.processedRows).toBe(1000);
+    expect(batch.importedRows).toBe(1000);
+    expect(batch.workerId).toBe("csv:other-worker");
+    expect(batch.processingStatus).toBe(CsvImportProcessingStatus.PROCESSING);
+  });
+});
