@@ -256,13 +256,12 @@ describe("abandoned-scan sweep: seven-day boundary", () => {
 });
 
 describe("abandoned-scan sweep: protected states", () => {
-  it("leaves confirmed, still-processing, queued, deletion-requested, and already-scheduled scans alone", async () => {
+  it("leaves confirmed, still-processing, deletion-requested, and already-scheduled scans alone", async () => {
     const stale = new Date(CUTOFF.getTime() - 3 * DAY_MS);
     const confirmed = await makeScan({ confirmationStatus: "Confirmed", lastActivityAt: stale });
-    // Pending/Processing belong to the processing pipeline; the clock only
-    // matters once the worker reaches Complete or Failed.
+    // A scan still with the processing pipeline; the clock only starts
+    // mattering once the worker reaches Complete or Failed.
     const processing = await makeScan({ processingStatus: "Processing", lastActivityAt: stale });
-    const queued = await makeScan({ processingStatus: "Pending", lastActivityAt: stale });
     const deletionRequested = await makeScan({ lastActivityAt: stale, evidenceDeletionRequestedAt: stale });
     const alreadyScheduled = await makeScan({ lastActivityAt: stale });
     await prisma.receiptPurgeJob.create({
@@ -288,7 +287,7 @@ describe("abandoned-scan sweep: protected states", () => {
     const result = await sweepAbandonedReceiptScans({ now: NOW });
     expect(result).toMatchObject({ enqueued: 0 });
 
-    for (const scan of [confirmed, processing, queued, deletionRequested]) {
+    for (const scan of [confirmed, processing, deletionRequested]) {
       expect(await purgeJobsFor(scan.id)).toHaveLength(0);
       const stored = await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } });
       expect(stored.confirmationStatus).toBe(scan.confirmationStatus);

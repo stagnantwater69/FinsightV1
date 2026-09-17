@@ -609,7 +609,6 @@ model ExpenseCategory {
   // that turns the race's second insert into a catchable conflict. The
   // migration merges any pre-existing exact duplicates before adding it.
   @@unique([businessProfileId, name])
-  @@index([businessProfileId])
   @@map("ExpenseCategory")
 }
 
@@ -889,6 +888,10 @@ model ReceiptScan {
   extractedVendor             String?   @map("ReceiptScan_ExtractedVendor") @db.VarChar(150)
   extractedDescription        String?   @map("ReceiptScan_ExtractedDescription") @db.VarChar(255)
   extractedAmount             Decimal?  @map("ReceiptScan_ExtractedAmount") @db.Decimal(12, 2)
+  /// "Pending" | "Confirmed" | "Deletion Pending" — the owner's decision, or
+  /// the purge path having taken the scan out of their hands. Held to that set
+  /// by `ReceiptScan_confirmation_status_check`; see `processingStatus` below
+  /// for why a CHECK rather than a Prisma enum.
   confirmationStatus          String    @default("Pending") @map("ReceiptScan_ConfirmationStatus") @db.VarChar(50)
   scanRevision                Int       @default(0) @map("ReceiptScan_ScanRevision")
   /// [ADDED] see schema header note 15. How far the READ has got:
@@ -896,6 +899,13 @@ model ReceiptScan {
   /// confirmationStatus, which is about the OWNER's decision afterwards —
   /// conflating them would make "still being read" and "read, awaiting the
   /// owner" the same state, and they need different screens.
+  ///
+  /// Held to that set by `ReceiptScan_processing_status_check`. A CHECK rather
+  /// than a Prisma enum: an enum is a column rewrite on the busiest table in
+  /// the receipt path and changes the client type in services this file does
+  /// not own. Either way the point is the same — a status outside the set
+  /// matches no claim, no sweep and no failure listing, so the row would sit
+  /// unreachable forever while still holding receipt text and storage paths.
   processingStatus            String    @default("Processing") @map("ReceiptScan_ProcessingStatus") @db.VarChar(50)
   /// Why the read failed, for the owner. Null unless processingStatus is
   /// "Failed".
@@ -951,7 +961,13 @@ model ReceiptScan {
   lastActivityAt              DateTime  @default(now()) @map("ReceiptScan_LastActivityAt")
   createdAt                   DateTime  @default(now()) @map("ReceiptScan_CreatedAt")
 
-  businessProfile             BusinessProfile?            @relation(fields: [businessProfileId], references: [id], onDelete: SetNull)
+  /// Cascade, not SetNull. A detached scan is one nobody owns and nobody can
+  /// reach: account deletion refuses to sweep scans with a null profile, since
+  /// an unattributable row cannot be deleted on one account's behalf, so a scan
+  /// committed while a deletion ran survived it holding rawText, the extracted
+  /// vendor and amount, and the storage paths of the photographs. Cascading
+  /// leaves no instant at which the profile is gone and the scan is not.
+  businessProfile             BusinessProfile?            @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
   captureBatch                ReceiptCaptureBatch?        @relation(fields: [captureBatchId, businessProfileId], references: [id, businessProfileId], onDelete: NoAction)
   expenseRecords              ExpenseRecord[]
   items                       ReceiptScanItem[]
@@ -1052,8 +1068,10 @@ model ReceiptScanPage {
 
   receiptScan ReceiptScan @relation(fields: [receiptScanId], references: [id], onDelete: Cascade)
 
+  // No separate @@index([receiptScanId]): the unique above already indexes
+  // that column first, which is all a lookup or a cascade by scan needs. Two
+  // btrees for one access pattern is two writes per page on the latency path.
   @@unique([receiptScanId, pageNumber])
-  @@index([receiptScanId])
   @@map("ReceiptScanPage")
 }
 
@@ -1101,8 +1119,9 @@ model ReceiptScanItem {
   category      ExpenseCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   expenseRecord ExpenseRecord?   @relation(fields: [expenseRecordId], references: [id], onDelete: SetNull)
 
+  // See the note on ReceiptScanPage: the unique's leading column already
+  // serves every lookup by scan.
   @@unique([receiptScanId, lineNumber])
-  @@index([receiptScanId])
   @@index([expenseRecordId])
   @@index([categoryId])
   @@map("ReceiptScanItem")
@@ -1264,7 +1283,11 @@ model Notification {
   businessProfile BusinessProfile @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
   expenseRecord   ExpenseRecord?  @relation(fields: [expenseRecordId], references: [id], onDelete: SetNull)
 
-  @@index([userId])
+  // The bell filters on user AND profile and orders newest-first. With one
+  // index per column Postgres could narrow but never sort, so the endpoint
+  // read every alert the account had ever accumulated to return one screenful.
+  // Replaces the bare @@index([userId]), whose every use is a prefix of this.
+  @@index([userId, businessProfileId, dateCreated(sort: Desc)], map: "Notification_user_profile_created_idx")
   @@index([businessProfileId])
   @@index([expenseRecordId])
   @@map("Notification")
