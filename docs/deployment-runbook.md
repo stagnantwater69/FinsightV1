@@ -78,6 +78,7 @@ misconfigured deploy dies immediately instead of erroring per-request later.
 | `RECEIPT_UPLOAD_ORPHAN_TTL_SECONDS` | `3600` | Sweeper-only setting; values below 3600 are rejected because an upload request may run for 300 seconds. |
 | `RECEIPT_WORKER_HEALTH_DIR` | `/tmp/finsight-worker-health` outside Compose; `/run/finsight/worker-health` in Compose | Private worker PID and heartbeat markers only; arbitrary or symlink-resolved paths are rejected before cleanup |
 | `RECEIPT_WORKER_HEARTBEAT_MAX_AGE_SECONDS` | `45` | Worker healthcheck range is 15 through 300 seconds |
+| `RECEIPT_WORKER_IDLE_POLL_MS` | `1000` | How long an idle worker sleeps between queue passes. Clamped to 250 through 60000; a bad value falls back to the default instead of blocking boot. See §4. |
 | `RECEIPT_QUEUE_STALE_AFTER_SECONDS` | `300` | Operator-only warning threshold for the read-only queue readiness command |
 
 **Optional receipt-provider gate, safe defaults shown:**
@@ -215,6 +216,54 @@ for a plain up/down check that needs no token.
 **Verified**: this image builds, boots, and answers `/api/v1/health/live` —
 checked against this repo. Tagging by commit rather than `latest` is what
 makes a rollback a matter of running the previous tag.
+
+### Worker idle poll interval
+
+`RECEIPT_WORKER_IDLE_POLL_MS` (default `1000`) is how long the worker sleeps
+after a pass that claimed no job. A pass that did claim one is followed
+immediately, so this governs idle replicas only, and both ends of the knob cost
+something:
+
+- **At 1000**, one idle replica runs a queue pass every second, roughly 518,000
+  queue queries a day across the six consumers a pass touches. That is
+  unremarkable against a Postgres you own and material against a metered hosted
+  one, multiplied by every replica you add.
+- **Backing it off** cuts that load in proportion and adds the same amount to
+  the worst-case wait before an upload is picked up. At `5000` an idle replica
+  issues about a fifth the queries and a scan can sit up to five seconds before
+  the worker starts it, on top of the OCR time the owner already waits through.
+
+The value is clamped to 250 through 60000, and anything unparseable, empty,
+zero or negative falls back to 1000: a mistyped poll interval is not worth
+refusing to start the queue consumers over. Changing it needs a worker restart,
+not a rebuild. Leave it at the default until an idle replica's query volume is
+something you are actually measuring.
+
+### Process exit codes and restart policy
+
+Both processes distinguish an orderly stop from a crash, which a supervisor
+reads as the difference between "an operator stopped this" and "restart it":
+
+- **Exit 0** means SIGTERM or SIGINT was received and the drain finished. The
+  API stops accepting connections and lets in-flight responses complete; the
+  worker finishes the pass it was in the middle of, so its lease is released
+  rather than left for a timeout to reclaim.
+- **Exit 1** means a fault. An unhandled promise rejection or an uncaught
+  exception is logged through pino at `fatal` with a `fault` field naming which
+  of the two it was, then routed through that same drain before the process
+  exits non-zero. Exit 1 also covers a drain that ran past its force timer (10s
+  for the API, 30s for the worker), a failed HTTP server close, and the boot
+  refusals: invalid environment variables and the migration guard finding the
+  database behind the build.
+
+A crash used to exit 0, which is what a supervisor sees when someone stops a
+service deliberately. Under `Restart=on-failure`, or any dashboard that reads
+exit status, a crash loop could present as a clean shutdown. Compose's
+`restart: unless-stopped` restarts on either code, so the practical gain there
+is in the logs and the exit status, not the restart itself: grep the fatal line
+(`"fault":"unhandledRejection"` or `"fault":"uncaughtException"`) to tell a
+crash from a deploy. Nothing ships those logs anywhere durable yet, and nothing
+pages anyone on one, see §7.
 
 ### Offline Tesseract language data
 
@@ -514,6 +563,26 @@ pass proves the entrypoint stays alive until that child finishes, propagates
 the child's exit status, and then stops the cleanup loop. This is local wrapper
 evidence only. The authenticated upload-abort and deployed restart drills in
 the temporary-upload section remain release checks.
+
+#### Worker graceful-stop and readiness drill
+
+Run the isolated worker test used by CI:
+
+```bash
+bash backend/docker/verify-receipt-worker-readiness.sh
+```
+
+It runs the worker entrypoint against a synthetic child in a task-named OS
+temporary directory. A pass proves four things: the readiness probe succeeds
+while the worker runs, it fails once the worker stops, an arbitrary private
+health directory is rejected without its marker files being deleted, and the
+entrypoint stays alive until a child that takes one second to stop has
+finished, then exits with that child's status.
+
+The last of those is what stands between a graceful stop and the orchestrator
+SIGKILLing a half-written job at the end of `stop_grace_period` (35s for the
+worker service in `docker-compose.yml`). This is local wrapper evidence only;
+the queue-recovery drill below remains the release check.
 
 #### Queue-recovery drill
 

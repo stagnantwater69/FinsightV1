@@ -208,7 +208,11 @@ jobs:
       # even parse without it — not because the values are read, only because
       # the file must exist — so a placeholder copy of the example file is
       # enough. Nothing here starts a container.
-      - run: cp backend/.env.example backend/.env
+      # -n, not a bare cp: run on a self-hosted runner or a local CI
+      # simulation, an unguarded copy overwrites the real credential file,
+      # which has gone missing four times. On a hosted runner nothing exists
+      # to skip and this behaves as before.
+      - run: cp -n backend/.env.example backend/.env
       - run: docker compose config --quiet
       # nginx.conf's upstream block names the backend service by its
       # docker-compose hostname. `nginx -t` resolves upstream hosts as part of
@@ -402,6 +406,16 @@ jobs:
       # along in the same script because tsc cannot see the drift it catches —
       # a raw fontSize is just a number.
       - run: npm run lint --prefix mobile
+      # Nothing else here resolves app.config.ts the way a build does; the test
+      # runner only imports it. Takes ~1s and fails on a config that throws, a
+      # config plugin that no longer resolves, and a plugin that throws
+      # (all three checked against this checkout).
+      #
+      # It does not validate intentFilter contents or referenced asset paths:
+      # both were tried here and still exited 0. Those need a real
+      # `expo prebuild`, which downloads a template and is not cheap.
+      - run: npx expo config --type prebuild
+        working-directory: mobile
       - run: npm test --prefix mobile
       # Non-blocking: report-only, not a merge gate. As of 2026-08-21, `npm
       # audit --audit-level=high --prefix mobile` finds 16 findings (8 high,
