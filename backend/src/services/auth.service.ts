@@ -520,6 +520,24 @@ export async function createSessionHandoff(accessToken: string, refreshToken: st
 }
 
 /**
+ * Did Auth fail to ANSWER, as opposed to answering "no"?
+ *
+ * The distinction decides whether a handoff code survives a failed redemption,
+ * so it fails closed: anything not recognisably a transport failure is treated
+ * as a verdict, and the code dies as it always did.
+ *
+ * supabase-js answers a refused refresh token with a 4xx `AuthApiError`. A
+ * connection it could not make becomes `AuthRetryableFetchError` with status
+ * 0, and it wraps a 5xx in the same class — the service saying it could not
+ * decide either. Those are the two cases where nothing was really spent.
+ */
+function isAuthUnreachable(error: { status?: number; name?: string } | null): boolean {
+  if (!error) return false;
+  if (error.name === "AuthRetryableFetchError") return true;
+  return error.status !== undefined && (error.status === 0 || error.status >= 500);
+}
+
+/**
  * Redeems a handoff code for a real session, once.
  *
  * SINGLE USE IS ENFORCED BY THE UPDATE, not by a read followed by a write. Two
@@ -543,20 +561,49 @@ export async function exchangeSessionHandoff(code: string) {
   if (claimed.count !== 1) throw dead;
 
   const row = await prisma.authHandoff.findUnique({ where: { codeHash } });
-  // Deleted rather than left to expire: it has done its one job, and the
-  // ciphertext it holds is dead weight from here on.
-  if (row) await prisma.authHandoff.delete({ where: { id: row.id } }).catch(() => undefined);
   if (!row) throw dead;
 
+  /*
+   * Deleted rather than left to expire: once it has done its one job the
+   * ciphertext it holds is dead weight. But NOT before the session exists.
+   *
+   * It used to be deleted here, immediately after the claim and before Auth
+   * was called at all. A few seconds of Auth being unreachable therefore
+   * destroyed a code that was still perfectly valid, and the owner — who did
+   * nothing wrong and has a link that has not expired — was told "that link
+   * has expired or has already been used" and had to go back to the browser
+   * and start the handoff again.
+   */
+  const discard = () => prisma.authHandoff.delete({ where: { id: row.id } }).catch(() => undefined);
+
   const refreshToken = openSealed(row.refreshTokenCipher);
-  if (!refreshToken) throw dead;
+  if (!refreshToken) {
+    await discard();
+    throw dead;
+  }
 
   const client = createAnonAuthClient();
   const { data, error } = await client.auth.refreshSession({ refresh_token: refreshToken });
   if (error || !data.session || !data.user) {
     securityEvent("handoff.failed", { userId: row.userId, reason: error?.message ?? "no session" });
+    if (isAuthUnreachable(error)) {
+      /*
+       * Auth never gave a verdict, so neither do we. Releasing the claim lets
+       * the same code be spent once, later, inside the two minutes it already
+       * had — the single-use guarantee is the conditional update above, and a
+       * redemption that produced no session spent nothing. A code that Auth
+       * actually REFUSED is not released: that is an answer, and the row dies
+       * with it.
+       */
+      await prisma.authHandoff
+        .updateMany({ where: { id: row.id, consumedAt: { not: null } }, data: { consumedAt: null } })
+        .catch(() => undefined);
+      throw new ApiError(503, "We could not sign you in. Open the link again in a moment.");
+    }
+    await discard();
     throw dead;
   }
+  await discard();
 
   const user = await prisma.user.findUnique({ where: { id: row.userId } });
   if (!user || user.authId !== data.user.id) throw dead;

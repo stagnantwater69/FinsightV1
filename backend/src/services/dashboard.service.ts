@@ -2,7 +2,7 @@ import { prisma } from "../config/prisma";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
 import { listNotifications } from "./notification.service";
 import { loadRecoveryTargets } from "./insights.service";
-import { resolveBusinessToday, utcAddDays, utcDateKey, utcEndOfDay, utcMonthKey, utcToday } from "../lib/dates";
+import { resolveBusinessToday, utcAddDays, utcDateKey, utcEndOfDay, utcMonthKey } from "../lib/dates";
 
 /**
  * The period selector's "All time" setting.
@@ -60,7 +60,21 @@ async function activitySpan(businessProfileId: number) {
 export async function getDashboardSummary(userId: number, businessProfileId: number, periodDays: number) {
   const profile = await requireOwnedBusinessProfile(userId, businessProfileId);
 
-  const today = utcToday();
+  /*
+   * "Today" is the business's own calendar day, not the server's.
+   *
+   * Record dates are date-only values stored at UTC midnight, so the boundary
+   * helpers below stay UTC — what this fixes is which calendar day counts as
+   * today. A Manila business (UTC+8) turns over eight hours before UTC does:
+   * between 00:00 and 08:00 local, utcToday() still reported yesterday, and an
+   * expense the owner had just entered for today fell outside both the period
+   * window and the upper bound. They saw their own morning's spending missing
+   * from every figure on the page.
+   *
+   * Recovery Target already resolved it this way (plan §9.1); the rest of the
+   * dashboard now agrees with it instead of disagreeing for eight hours a day.
+   */
+  const today = resolveBusinessToday(profile.timezone);
   const allTime = periodDays === ALL_TIME_PERIOD;
   const startDate = allTime ? null : utcAddDays(today, -(periodDays - 1));
 
@@ -109,13 +123,12 @@ export async function getDashboardSummary(userId: number, businessProfileId: num
     // selector — it's a month-to-date tracker, so it reads the same
     // whether the user is looking at Today, This week, or This month.
     //
-    // Its own "today" is resolved in the business's local timezone rather
-    // than reusing the dashboard's UTC `today` above — see
-    // RECOVERY-TARGET-IMPROVEMENT-PLAN.md §9.1 and getRecoveryInsight's own
-    // resolution in insights.service.ts, which this must agree with so the
-    // Dashboard and the Recovery Target screen never disagree right at the
-    // UTC boundary.
-    loadRecoveryTargets(profile, resolveBusinessToday(profile.timezone)),
+    // Shares the dashboard's `today` above, which is now resolved in the
+    // business's own timezone — see RECOVERY-TARGET-IMPROVEMENT-PLAN.md §9.1
+    // and getRecoveryInsight's matching resolution in insights.service.ts,
+    // which this must agree with so the Dashboard and the Recovery Target
+    // screen never disagree right at a day boundary.
+    loadRecoveryTargets(profile, today),
     /*
      * WHAT THIS BUSINESS HAS EVER RECORDED, deliberately outside the period.
      *
@@ -216,9 +229,12 @@ export async function getDashboardCashflow(
   businessProfileId: number,
   granularity: CashflowGranularity = "daily",
 ): Promise<{ granularity: CashflowGranularity; points: CashflowPoint[] }> {
-  await requireOwnedBusinessProfile(userId, businessProfileId);
+  const profile = await requireOwnedBusinessProfile(userId, businessProfileId);
 
-  const today = utcToday();
+  // Same business-local "today" as the summary above: the chart's last bucket
+  // has to be the day the owner is living in, or their morning's records land
+  // outside the window entirely between local midnight and 08:00.
+  const today = resolveBusinessToday(profile.timezone);
 
   if (granularity === "monthly") {
     const startMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - (CASHFLOW_MONTHS - 1), 1));

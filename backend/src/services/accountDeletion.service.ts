@@ -253,7 +253,36 @@ export async function purgeUnverifiedRegistrations(): Promise<number> {
     // Same non-cascading receipt rows as the main deletion path — an
     // unverified registration is not expected to own any, but "not expected
     // to" is what left them behind there too.
-    await deleteRelationalData(user.id).catch(() => undefined);
+    try {
+      await deleteRelationalData(user.id);
+    } catch (error) {
+      /*
+       * This failure used to be swallowed and still counted as a purge.
+       *
+       * The auth user has already been deleted by the time we get here, so a
+       * failure leaves the worst of both: Supabase has released the address
+       * but our `User` row still holds it against the unique constraint, and
+       * the person it belongs to gets "that email is taken" from an account
+       * that no longer exists anywhere else. The log said the purge
+       * succeeded, so nothing pointed at the cause.
+       *
+       * The row stays PENDING_VERIFICATION and past the cutoff, so the next
+       * hourly pass retries it; deleting an already-deleted auth user is a
+       * 404, which the branch above tolerates. What must not happen is
+       * claiming it worked.
+       */
+      logger.error(
+        { userId: user.id, err: error },
+        "unverified registration purge left its User row behind; the address is still held",
+      );
+      securityEvent("account.deletion_failed", {
+        userId: user.id,
+        email: user.email,
+        stage: "relational",
+        reason: "unverified expiry: relational delete failed",
+      });
+      continue;
+    }
     securityEvent("account.deletion_completed", { userId: user.id, email: user.email, reason: "unverified expiry" });
     purged++;
   }

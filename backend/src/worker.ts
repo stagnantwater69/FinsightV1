@@ -6,12 +6,14 @@
  * runReceiptWorkerOnce, runCsvImportWorkerOnce, etc. are untouched, and so are
  * the per-pass caps below.
  */
+import { env } from "./config/env";
 import { prisma } from "./config/prisma";
 import { logger } from "./config/logger";
 import { assertMigrationsApplied } from "./config/migrationGuard";
 import { runReceiptWorkerOnce } from "./services/receiptScan/worker";
 import { shutdownOcr } from "./services/ocr.service";
 import { workerHeartbeatPath, writeWorkerHeartbeat } from "./lib/workerHeartbeat";
+import { registerProcessFaultHandlers } from "./lib/processFaults";
 import { runCsvImportWorkerOnce, sweepStalledCsvImports } from "./services/csvImport.service";
 import { cleanUpExpiredRateLimits } from "./middleware/rateLimit.middleware";
 import { enqueueDailyProfileAnalyses, runAnalysisWorkerOnce } from "./services/anomalyDetection/job.service";
@@ -27,10 +29,18 @@ logger.info({ pid: process.pid }, "FinSight worker starting");
 
 let shuttingDown = false;
 let workerBusy = false;
+/**
+ * 0 for a signal, 1 once a process-level fault has been seen. The drain below
+ * is the same either way — the in-flight pass still finishes and its lease is
+ * still released — but a supervisor has to be able to tell the two apart.
+ */
+let exitCode = 0;
 
 // An upload waits up to one idle interval to be claimed; a pass that claimed
 // anything is followed at once by another so a backlog drains without sleeping.
-const IDLE_POLL_MS = 1_000;
+// Operator-tunable (RECEIPT_WORKER_IDLE_POLL_MS) because the idle cost of this
+// interval scales with replica count — see config/env for the clamp.
+const IDLE_POLL_MS = env.RECEIPT_WORKER_IDLE_POLL_MS;
 
 // Comfortably inside the probe's 45s staleness ceiling, so a single missed
 // write is not a restart. See lib/workerHeartbeat for what it does and does
@@ -234,11 +244,24 @@ async function shutdown(signal: string): Promise<void> {
   await prisma.$disconnect();
   clearTimeout(forceTimer);
   logger.info("worker graceful shutdown complete");
-  process.exit(0);
+  process.exit(exitCode);
 }
 
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 process.on("SIGINT", () => void shutdown("SIGINT"));
+
+// A rejection or throw that escaped a pass's own try/catch — a timer callback,
+// an event handler, a promise nobody awaited. Drained through the same path as
+// SIGTERM so the in-flight job finishes and tesseract's threads are shut down,
+// rather than dying mid-job for a lease timeout to reclaim minutes later.
+registerProcessFaultHandlers({
+  process,
+  logger,
+  onFatal: (kind) => {
+    exitCode = 1;
+    void shutdown(kind);
+  },
+});
 
 /*
  * NO JOB RUNS UNTIL THE SCHEMA IS VERIFIED — see config/migrationGuard.

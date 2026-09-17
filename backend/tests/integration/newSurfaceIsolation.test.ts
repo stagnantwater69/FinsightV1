@@ -73,18 +73,33 @@ describe("CSV import state machine", () => {
   });
 
   it("does not let a replayed key read another owner's import", async () => {
-    await aliceImport("iso-replay-1");
-    await expect(
-      confirmImport(mallory.user.id, {
-        businessProfileId: mallory.profile.id,
-        recordType: "expense",
-        title: "Replay probe",
-        buffer: Buffer.from(["Date,Description,Amount,Category", `${utcDayString(0)},Y,10,Inventory`].join("\n")),
-        originalname: "y.csv",
-        columnMapping: { date: "Date", description: "Description", amount: "Amount", category: "Category" },
-        idempotencyKey: "iso-replay-1",
-      }),
-    ).rejects.toMatchObject({ status: 409 });
+    /*
+     * The invariant is that Mallory never observes Alice's import. This used
+     * to be enforced by refusing her key outright with a 409, which also meant
+     * whoever claimed a guessable key first held it against every other
+     * tenant. The key is now hashed with the profile, so Mallory gets her own
+     * import and still sees nothing of Alice's.
+     */
+    const alices = await aliceImport("iso-replay-1");
+
+    const mallorys = await confirmImport(mallory.user.id, {
+      businessProfileId: mallory.profile.id,
+      recordType: "expense",
+      title: "Replay probe",
+      buffer: Buffer.from(["Date,Description,Amount,Category", `${utcDayString(0)},Y,10,Inventory`].join("\n")),
+      originalname: "y.csv",
+      columnMapping: { date: "Date", description: "Description", amount: "Amount", category: "Category" },
+      idempotencyKey: "iso-replay-1",
+    });
+
+    expect(mallorys.batchId).not.toBe(alices.batchId);
+    expect(mallorys.title).toBe("Replay probe");
+    // Nothing of Alice's crossed: not the batch, not the counts, not the rows.
+    await expect(getImportBatchStatus(mallory.user.id, alices.batchId)).rejects.toMatchObject({ status: 404 });
+    const batch = await prisma.cSVImportBatch.findUniqueOrThrow({ where: { id: mallorys.batchId } });
+    expect(batch.businessProfileId).toBe(mallory.profile.id);
+    expect(await prisma.expenseRecord.count({ where: { businessProfileId: mallory.profile.id } })).toBe(1);
+    expect(await prisma.expenseRecord.count({ where: { businessProfileId: alice.profile.id } })).toBe(1);
   });
 
   it("keeps imported records and their categories inside the importing profile", async () => {

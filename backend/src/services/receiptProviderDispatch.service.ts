@@ -1053,6 +1053,9 @@ export async function dispatchReceiptProviderRescue(
       providerRegion: config.providerRegion,
       normalizedSchemaVersion: input.normalizedSchemaVersion,
       preprocessingVersion: input.preprocessingVersion,
+      // The PER-CALL deadline the adapter applies to each fetch. The gate's own
+      // wall-clock budget (config.gateTimeoutMs) is larger and deliberately not
+      // recorded here: this field describes what the provider was asked for.
       timeoutMs: config.timeoutMs,
       consent: {
         reference: `consent:${reservation.consentId}`,
@@ -1178,7 +1181,10 @@ export async function dispatchReceiptProviderRescue(
     rawOutcome = await Promise.race([
       dependencies.adapter.extract(request),
       new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => reject(new GateRefusal("PROVIDER_TIMEOUT")), config.timeoutMs);
+        // The adapter's whole budget, not one call's — a Gemini extraction is
+        // two 20s calls in series, and cutting it at 20s discarded answers the
+        // dispatch had already been billed for. See config/receiptProvider.
+        timeout = setTimeout(() => reject(new GateRefusal("PROVIDER_TIMEOUT")), config.gateTimeoutMs);
         timeout.unref();
       }),
     ]);

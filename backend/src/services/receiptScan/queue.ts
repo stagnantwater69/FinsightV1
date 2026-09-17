@@ -319,10 +319,21 @@ export async function retryScan(userId: number, scanId: number) {
         businessProfile: { userId },
         purgeJobs: { none: { mode: ReceiptPurgeMode.DELETE_SCAN } },
       },
-      select: { captureBatchId: true, confirmationStatus: true, processingStatus: true },
+      select: { captureBatchId: true, confirmationStatus: true, processingStatus: true, scanRevision: true },
     });
     if (!scan) throw new ApiError(404, "Receipt scan not found");
     if (scan.processingStatus !== "Failed" || scan.confirmationStatus !== "Pending") {
+      // Already reading, and still unconfirmed: this is a retry whose answer
+      // the client never received, not a request to retry something that
+      // cannot be. Both are 409, so the code is what tells them apart —
+      // without it a client has no way to know its own retry landed, and both
+      // clients currently treat this as an ambiguous outcome.
+      if (scan.processingStatus === "Processing" && scan.confirmationStatus === "Pending") {
+        throw new ApiError(409, "This receipt is already being read.", {
+          code: "RECEIPT_RETRY_IN_PROGRESS",
+          responseDetails: { scanId, processingStatus: scan.processingStatus, scanRevision: scan.scanRevision },
+        });
+      }
       throw new ApiError(409, "Only an unconfirmed failed receipt scan can be retried");
     }
     if (
@@ -350,7 +361,13 @@ export async function retryScan(userId: number, scanId: number) {
         lastActivityAt: new Date(),
       },
     });
-    if (retried.count !== 1) throw new ApiError(409, "This receipt scan is already being retried");
+    if (retried.count !== 1) {
+      // Lost the race to a concurrent retry of the same scan; same answer.
+      throw new ApiError(409, "This receipt is already being read.", {
+        code: "RECEIPT_RETRY_IN_PROGRESS",
+        responseDetails: { scanId, processingStatus: "Processing", scanRevision: scan.scanRevision },
+      });
+    }
     if (scan.captureBatchId !== null) await refreshReceiptCaptureBatchStatus(tx, scan.captureBatchId);
   });
   return getScan(userId, scanId);

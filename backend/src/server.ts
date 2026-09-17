@@ -4,6 +4,7 @@ import { env } from "./config/env";
 import { prisma } from "./config/prisma";
 import { logger } from "./config/logger";
 import { assertMigrationsApplied } from "./config/migrationGuard";
+import { registerProcessFaultHandlers } from "./lib/processFaults";
 
 /*
  * API process only. The background queue consumers (receipt scans, CSV
@@ -18,6 +19,11 @@ import { assertMigrationsApplied } from "./config/migrationGuard";
 let server: Server | undefined;
 
 let shuttingDown = false;
+/**
+ * 0 for a signal, 1 once a process-level fault has been seen — a supervisor
+ * reads the code, and a crash that exits 0 looks like an orderly stop.
+ */
+let exitCode = 0;
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -32,18 +38,30 @@ async function shutdown(signal: string): Promise<void> {
   if (!server) {
     await prisma.$disconnect();
     logger.info("graceful shutdown complete");
-    return process.exit(0);
+    return process.exit(exitCode);
   }
   server.close(async (error) => {
     await prisma.$disconnect();
     if (error) logger.error({ err: error }, "HTTP server close failed");
     logger.info("graceful shutdown complete");
-    process.exit(error ? 1 : 0);
+    process.exit(error ? 1 : exitCode);
   });
 }
 
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 process.on("SIGINT", () => void shutdown("SIGINT"));
+
+// A rejection or throw that reached the process rather than an asyncHandler.
+// Logged through pino and drained through the same close path as a signal —
+// in-flight responses finish, the force timer above still caps the wait.
+registerProcessFaultHandlers({
+  process,
+  logger,
+  onFatal: (kind) => {
+    exitCode = 1;
+    void shutdown(kind);
+  },
+});
 
 /*
  * THE PORT OPENS ONLY AFTER THE SCHEMA IS VERIFIED — see config/migrationGuard.

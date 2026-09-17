@@ -1218,7 +1218,8 @@ describe("mocked receipt provider dispatch gate", () => {
       configuration: getReceiptProviderConfiguration(),
     });
     await started;
-    await vi.advanceTimersByTimeAsync(20_000);
+    // The gate's whole budget, not one call's — see receiptProviderGateTimeoutMs.
+    await vi.advanceTimersByTimeAsync(getReceiptProviderConfiguration().gateTimeoutMs);
     const result = await pending;
     vi.useRealTimers();
 
@@ -1238,6 +1239,41 @@ describe("mocked receipt provider dispatch gate", () => {
       expect(budget.reservedUnits).toBe(2);
       expect(budget.usedUnits).toBe(0);
     }
+  });
+
+  it("lets a two-call Gemini extraction finish instead of aborting it at one call's deadline", async () => {
+    /*
+     * The Gemini adapter extracts, then sends the answer back for a second
+     * model to verify — two 20s deadlines in series. The gate's budget used to
+     * equal one of them, so a 12s extraction plus a 9s verification was killed
+     * as PROVIDER_TIMEOUT at 20s: both calls billed, the answer discarded, and
+     * the owner dropped back to the local read for no reason.
+     */
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const scan = await scanFor(owner.profile.id, "two-phase-adapter");
+
+    let extractStarted!: () => void;
+    const started = new Promise<void>((resolve) => { extractStarted = resolve; });
+    const mockedAdapter = adapter(async (request) => {
+      extractStarted();
+      await new Promise((resolve) => setTimeout(resolve, 12_000)); // extraction
+      await new Promise((resolve) => setTimeout(resolve, 9_000)); // verification
+      return successfulOutcome(request);
+    });
+
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    const pending = dispatchReceiptProviderRescue(dispatchInput(owner.profile.id, scan.id), {
+      adapter: mockedAdapter,
+      configuration: getReceiptProviderConfiguration(),
+    });
+    await started;
+    await vi.advanceTimersByTimeAsync(21_000);
+    const result = await pending;
+    vi.useRealTimers();
+
+    expect(result).toMatchObject({ code: "PROVIDER_OK", dispatched: true, dispatchStatus: "SUCCEEDED" });
+    expect(await prisma.externalProviderDispatch.findFirst()).toMatchObject({ status: "SUCCEEDED" });
   });
 
   it("marks finalization ambiguous and preserves reservations when accounting cannot settle", async () => {

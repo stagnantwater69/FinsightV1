@@ -30,6 +30,34 @@ const AVATAR_BUCKET = "avatars";
 // it's still reasonable for real transients, but it is no longer load-
 // bearing: an RLS 403 here now means something is genuinely misconfigured
 // and should be investigated, not retried away.
+/**
+ * How long to wait before the second attempt.
+ *
+ * An owner is holding a phone waiting for this, so it is a pause, not a
+ * backoff schedule. Retrying in the same tick — which is what it used to do —
+ * re-ran the request while whatever caused the first failure was still
+ * happening, which is the one moment it is least likely to work.
+ */
+const UPLOAD_RETRY_DELAY_MS = 250;
+
+/**
+ * Is a second attempt worth the owner's time?
+ *
+ * Only a failure that might not repeat. A 4xx is Storage stating something
+ * about THIS request — the object already exists, the path is invalid, the
+ * key is not allowed — and repeating it verbatim gets the same answer, so it
+ * used to cost two round trips to reach the same 502. 429 is the exception:
+ * it is a 4xx that explicitly means "later". A failure with no status at all
+ * is a transport failure, which is the case the retry exists for.
+ */
+function isRetryableStorageFailure(error: unknown): boolean {
+  const raw = (error as { status?: number; statusCode?: string | number }).status
+    ?? (error as { statusCode?: string | number }).statusCode;
+  const status = typeof raw === "string" ? Number(raw) : raw;
+  if (status === undefined || !Number.isFinite(status)) return true;
+  return status === 429 || status >= 500;
+}
+
 async function uploadWithRetry(bucket: string, path: string, buffer: Buffer, contentType: string) {
   for (let attempt = 1; attempt <= 2; attempt++) {
     const { error } = await supabaseAdmin.storage.from(bucket).upload(path, buffer, { contentType });
@@ -37,11 +65,13 @@ async function uploadWithRetry(bucket: string, path: string, buffer: Buffer, con
 
     const status = (error as { status?: number }).status;
     const statusCode = (error as { statusCode?: string }).statusCode;
-    logger.error({ bucket, attempt, status, statusCode }, "Storage upload failed");
+    const retryable = isRetryableStorageFailure(error);
+    logger.error({ bucket, attempt, status, statusCode, retryable }, "Storage upload failed");
 
-    if (attempt === 2) {
+    if (attempt === 2 || !retryable) {
       throw new ApiError(502, "Could not upload file to storage");
     }
+    await new Promise((resolve) => setTimeout(resolve, UPLOAD_RETRY_DELAY_MS));
   }
 }
 

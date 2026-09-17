@@ -295,6 +295,27 @@ interface ImportLease {
  * CSV_LEASE_MS before the first chunk checkpoint, and a healthy long download
  * then reads as an abandoned lease to the next worker tick.
  */
+/**
+ * The predicate every write by this attempt carries.
+ *
+ * `a2fff99` fixed the path that mattered — a reclaimed lease no longer
+ * replays chunks from row 0 — but the TERMINAL transitions still wrote by id
+ * alone. An attempt that has lost the row can still reach them (the loss is
+ * only detected on the next guarded write), and each of them rewrites status,
+ * workerId and nextAttemptAt: complete would mark the new owner's in-flight
+ * attempt COMPLETE and send the owner a summary notification built from stale
+ * counts; defer would reset it to PENDING mid-chunk. Unreachable today is not
+ * the same as guarded.
+ */
+function ownedByAttempt(batchId: number, lease: ImportLease) {
+  return {
+    id: batchId,
+    processingStatus: CsvImportProcessingStatus.PROCESSING,
+    workerId: lease.workerId,
+    attemptCount: lease.attemptCount,
+  };
+}
+
 async function heartbeatImportBatch(batchId: number, lease: ImportLease): Promise<void> {
   const beat = await prisma.cSVImportBatch.updateMany({
     where: {
@@ -1132,7 +1153,7 @@ async function runImportChunks(args: {
  * old code did after its inserts — the owner-facing status, the one summary
  * notification, and the coalesced profile-refresh analysis job.
  */
-async function completeBatch(batchId: number, userId: number, businessProfileId: number) {
+async function completeBatch(batchId: number, userId: number, businessProfileId: number, lease: ImportLease) {
   const batch = await prisma.cSVImportBatch.findUniqueOrThrow({ where: { id: batchId } });
   const progress = readProgress(batch.resultSummary);
 
@@ -1142,8 +1163,8 @@ async function completeBatch(batchId: number, userId: number, businessProfileId:
   const needsReview = batch.skippedRows > 0 || batch.flaggedRows > 0 || progress.largeExpenseFlagged > 0;
   const status = needsReview ? "Needs Review" : "Completed";
 
-  const updated = await prisma.cSVImportBatch.update({
-    where: { id: batchId },
+  const updated = await prisma.cSVImportBatch.updateMany({
+    where: ownedByAttempt(batchId, lease),
     data: {
       status,
       processingStatus: CsvImportProcessingStatus.COMPLETE,
@@ -1153,6 +1174,14 @@ async function completeBatch(batchId: number, userId: number, businessProfileId:
       lastError: null,
     },
   });
+
+  if (updated.count !== 1) {
+    // Another attempt owns the row and will finish it, notification and
+    // refresh included. Report what is actually there rather than what this
+    // attempt believed.
+    logger.warn({ batchId }, "csv import completion skipped: the lease was reclaimed");
+    return prisma.cSVImportBatch.findUniqueOrThrow({ where: { id: batchId } });
+  }
 
   if (needsReview) {
     const parts = [`${batch.skippedRows} row(s) skipped`, `${batch.flaggedRows} flagged as possible duplicates`];
@@ -1173,46 +1202,59 @@ async function completeBatch(batchId: number, userId: number, businessProfileId:
     logger.error({ err: error, batchId }, "failed to enqueue profile refresh after import");
   });
 
-  return updated;
+  return prisma.cSVImportBatch.findUniqueOrThrow({ where: { id: batchId } });
 }
 
 /**
  * Terminal failure: mark FAILED with the stage that broke, and compensate the
  * storage upload. The delete is best-effort — an orphaned object is a cost, a
  * throw here would mask the error that actually mattered.
+ *
+ * The status is claimed BEFORE the file is deleted, and only under this
+ * attempt's lease. Deleting first would let an attempt that has already lost
+ * the row destroy the stored file the new owner is about to download.
  */
-async function failBatch(batchId: number, stage: string, error: unknown): Promise<void> {
-  const batch = await prisma.cSVImportBatch.findUnique({
-    where: { id: batchId },
-    select: { fileReference: true },
-  });
-  let fileReference = batch?.fileReference ?? null;
-  if (fileReference) {
-    const gone = await deleteCsvFile(fileReference).catch(() => false);
-    if (gone) fileReference = null;
-  }
-  await prisma.cSVImportBatch.update({
-    where: { id: batchId },
+async function failBatch(batchId: number, stage: string, error: unknown, lease: ImportLease): Promise<void> {
+  const failed = await prisma.cSVImportBatch.updateMany({
+    where: ownedByAttempt(batchId, lease),
     data: {
       processingStatus: CsvImportProcessingStatus.FAILED,
       failureStage: stage,
       lastError: String(error).slice(0, 1000),
       workerId: null,
-      fileReference,
     },
   });
+  if (failed.count !== 1) {
+    logger.warn({ batchId, stage }, "csv import failure not recorded: the lease was reclaimed");
+    return;
+  }
+
+  const batch = await prisma.cSVImportBatch.findUnique({
+    where: { id: batchId },
+    select: { fileReference: true },
+  });
+  if (batch?.fileReference) {
+    const gone = await deleteCsvFile(batch.fileReference).catch(() => false);
+    if (gone) await prisma.cSVImportBatch.update({ where: { id: batchId }, data: { fileReference: null } });
+  }
 }
 
 /** Retryable failure: back off and hand the batch to the worker; terminal
  * once the attempt budget is spent. Mirrors the analysis worker's schedule. */
-async function deferBatch(batchId: number, stage: string, error: unknown, attemptCount: number): Promise<void> {
+async function deferBatch(
+  batchId: number,
+  stage: string,
+  error: unknown,
+  attemptCount: number,
+  lease: ImportLease,
+): Promise<void> {
   if (attemptCount >= CSV_MAX_ATTEMPTS) {
-    await failBatch(batchId, stage, error);
+    await failBatch(batchId, stage, error, lease);
     return;
   }
   const delayMinutes = Math.min(2 ** attemptCount, 60);
-  await prisma.cSVImportBatch.update({
-    where: { id: batchId },
+  const deferred = await prisma.cSVImportBatch.updateMany({
+    where: ownedByAttempt(batchId, lease),
     data: {
       processingStatus: CsvImportProcessingStatus.PENDING,
       failureStage: stage,
@@ -1221,6 +1263,9 @@ async function deferBatch(batchId: number, stage: string, error: unknown, attemp
       workerId: null,
     },
   });
+  if (deferred.count !== 1) {
+    logger.warn({ batchId, stage }, "csv import deferral skipped: the lease was reclaimed");
+  }
 }
 
 /** The response a replayed idempotency key gets: the SAME logical import at
@@ -1263,25 +1308,64 @@ function replayResponse(
 // Confirm
 // ============================================================
 
+/**
+ * The key actually stored, which is the owner's key hashed WITH their profile.
+ *
+ * `CSVImportBatch.idempotencyKey` is globally unique, and the raw key used to
+ * go into it verbatim. A client that sent something non-random — "import-1",
+ * a date, a filename — therefore claimed that string for the whole
+ * installation: every other business sending the same string got a 409 for an
+ * import that was not theirs and could never be replayed, permanently. No data
+ * crossed, but the key was theirs to hold forever.
+ *
+ * Hashing with the profile id is the same construction receiptScan/queue.ts
+ * already uses for the upload key, so the two paths do not disagree about what
+ * scoping an idempotency key means.
+ */
+function scopedImportKey(businessProfileId: number, requestedKey: string): string {
+  return createHash("sha256").update(`csv-import-idempotency-v1\0${businessProfileId}\0${requestedKey}`).digest("hex");
+}
+
+/**
+ * The batch a replay should observe.
+ *
+ * Two lookups because keys stored before scoping are raw. A legacy row is only
+ * honoured for the profile that created it; one belonging to somebody else is
+ * ignored rather than answered with a 409, which is the block this fixes.
+ * Legacy rows age out, and nothing writes an unscoped key any more.
+ */
+async function findReplayableBatch(businessProfileId: number, scopedKey: string, requestedKey: string) {
+  const candidates = await prisma.cSVImportBatch.findMany({
+    where: { idempotencyKey: { in: [scopedKey, requestedKey] } },
+  });
+  return (
+    candidates.find((batch) => batch.idempotencyKey === scopedKey) ??
+    candidates.find((batch) => batch.businessProfileId === businessProfileId) ??
+    null
+  );
+}
+
 export async function confirmImport(userId: number, input: ConfirmInput): Promise<ConfirmResult> {
   const profile = await requireOwnedBusinessProfile(userId, input.businessProfileId);
 
   // Direct service callers (tests, scripts) may omit the key; they get a
   // fresh import each call, exactly the pre-idempotency behaviour. The HTTP
   // layer always sends one — its own or the deprecation shim's.
-  const idempotencyKey = input.idempotencyKey ?? `service-${randomUUID()}`;
+  const requestedKey = input.idempotencyKey ?? `service-${randomUUID()}`;
+  const idempotencyKey = scopedImportKey(input.businessProfileId, requestedKey);
 
   /*
    * REPLAY CHECK FIRST — before parsing, before storage, before anything that
    * costs. A retried confirm (timeout, refresh, double-click) must observe
    * the import it already started, never start a second one.
    */
-  const existing = await prisma.cSVImportBatch.findUnique({ where: { idempotencyKey } });
+  const existing = await findReplayableBatch(input.businessProfileId, idempotencyKey, requestedKey);
   if (existing) {
     if (existing.businessProfileId !== input.businessProfileId) {
-      // A key is scoped to the import it named. Reusing it against a
-      // different profile is a client bug (or a probe); replaying the other
-      // profile's counts here would leak them.
+      // Unreachable now that the stored key carries the profile — a match
+      // means a SHA-256 collision, not a reused key. Kept because replaying
+      // another profile's counts would be a leak, and this is the one line
+      // between that and a hash assumption.
       throw new ApiError(409, "This idempotency key was already used by a different import");
     }
     return replayResponse(existing);
@@ -1401,7 +1485,7 @@ export async function confirmImport(userId: number, input: ConfirmInput): Promis
   } catch (error) {
     // Terminal, not retryable: the bytes lived only in this request, so
     // there is nothing for a later attempt to download.
-    await failBatch(batch.id, "upload", error);
+    await failBatch(batch.id, "upload", error, { workerId: SYNC_WORKER_ID, attemptCount: batch.attemptCount });
     throw error;
   }
 
@@ -1463,11 +1547,16 @@ export async function confirmImport(userId: number, input: ConfirmInput): Promis
      * enough for its heartbeat to go stale): then the row belongs to that
      * attempt and this one must not rewrite its status.
      */
-    if (!(error instanceof CsvLeaseLostError)) await deferBatch(batch.id, "insert", error, 1);
+    if (!(error instanceof CsvLeaseLostError)) {
+      await deferBatch(batch.id, "insert", error, 1, { workerId: SYNC_WORKER_ID, attemptCount: 1 });
+    }
     throw error;
   }
 
-  const completed = await completeBatch(batch.id, userId, input.businessProfileId);
+  const completed = await completeBatch(batch.id, userId, input.businessProfileId, {
+    workerId: SYNC_WORKER_ID,
+    attemptCount: 1,
+  });
   const progress = readProgress(completed.resultSummary);
 
   return {
@@ -1594,7 +1683,7 @@ async function processClaimedBatch(batch: ClaimedBatch): Promise<void> {
     },
   });
 
-  await completeBatch(batch.id, profile.userId, batch.businessProfileId);
+  await completeBatch(batch.id, profile.userId, batch.businessProfileId, lease);
 }
 
 /** Runs at most one durable import attempt; the server scheduler calls this
@@ -1613,7 +1702,10 @@ export async function runCsvImportWorkerOnce(): Promise<boolean> {
     }
     const stage = error instanceof ImportStageError ? error.stage : "insert";
     logger.error({ err: error, batchId: batch.id, stage }, "csv import attempt failed");
-    await deferBatch(batch.id, stage, error, batch.attemptCount);
+    await deferBatch(batch.id, stage, error, batch.attemptCount, {
+      workerId: CSV_WORKER_ID,
+      attemptCount: batch.attemptCount,
+    });
   }
   return true;
 }

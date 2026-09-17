@@ -120,16 +120,106 @@ describe("idempotent confirmation", () => {
     expect(await prisma.expenseRecord.count()).toBe(6);
   });
 
-  it("refuses a key already used by a different business profile", async () => {
+  it("does not let one tenant's idempotency key block another's", async () => {
+    /*
+     * The key used to be stored raw in a globally unique column, so the first
+     * business to send a guessable string — "import-1", today's date, the
+     * filename — owned it for the whole installation. Every other business
+     * sending the same string got a 409 for an import that was not theirs and
+     * that they could never replay, permanently. Nothing leaked; the key was
+     * simply taken. It is now hashed with the profile id, the way
+     * receiptScan/queue.ts already scopes its upload key.
+     */
     const other = await makeOwnerWithProfile({ name: "Other Store" }, ["Inventory"]);
-    await confirmImport(ctx.user.id, confirmArgs(csvOf(3), { idempotencyKey: "shared-key" }));
+    const mine = await confirmImport(ctx.user.id, confirmArgs(csvOf(3), { idempotencyKey: "import-1" }));
 
-    await expect(
-      confirmImport(
-        other.user.id,
-        confirmArgs(csvOf(3), { idempotencyKey: "shared-key", businessProfileId: other.profile.id }),
-      ),
-    ).rejects.toMatchObject({ status: 409 });
+    const theirs = await confirmImport(
+      other.user.id,
+      confirmArgs(csvOf(3), { idempotencyKey: "import-1", businessProfileId: other.profile.id }),
+    );
+
+    expect(theirs.batchId).not.toBe(mine.batchId);
+    expect(theirs.imported).toBe(3);
+    expect(await prisma.cSVImportBatch.count({ where: { businessProfileId: other.profile.id } })).toBe(1);
+    // Each side still replays its own key to its own import.
+    const replay = await confirmImport(
+      other.user.id,
+      confirmArgs(csvOf(3), { idempotencyKey: "import-1", businessProfileId: other.profile.id }),
+    );
+    expect(replay.batchId).toBe(theirs.batchId);
+    expect(await prisma.cSVImportBatch.count({ where: { businessProfileId: other.profile.id } })).toBe(1);
+  });
+
+  it("stores the key hashed with the profile, never the owner's own string", async () => {
+    await confirmImport(ctx.user.id, confirmArgs(csvOf(2), { idempotencyKey: "import-1" }));
+
+    const batch = await prisma.cSVImportBatch.findFirstOrThrow({ where: { businessProfileId: ctx.profile.id } });
+    expect(batch.idempotencyKey).not.toBe("import-1");
+    expect(batch.idempotencyKey).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("still replays a key stored before scoping, for its own profile only", async () => {
+    // Rows written by the previous build hold the raw key. A retry of one of
+    // those must still find its import rather than starting a second one.
+    const first = await confirmImport(ctx.user.id, confirmArgs(csvOf(3), { idempotencyKey: "legacy-key" }));
+    await prisma.cSVImportBatch.update({ where: { id: first.batchId }, data: { idempotencyKey: "legacy-key" } });
+
+    const replay = await confirmImport(ctx.user.id, confirmArgs(csvOf(3), { idempotencyKey: "legacy-key" }));
+
+    expect(replay.batchId).toBe(first.batchId);
+    expect(await prisma.cSVImportBatch.count()).toBe(1);
+
+    // And a different tenant sending that same string is not blocked by it.
+    const other = await makeOwnerWithProfile({ name: "Third Store" }, ["Inventory"]);
+    const theirs = await confirmImport(
+      other.user.id,
+      confirmArgs(csvOf(3), { idempotencyKey: "legacy-key", businessProfileId: other.profile.id }),
+    );
+    expect(theirs.batchId).not.toBe(first.batchId);
+  });
+
+  it("does not let an attempt that lost the lease write the terminal transition", async () => {
+    /*
+     * a2fff99 stopped a reclaimed lease from replaying chunks from row 0, but
+     * completeBatch and failBatch/deferBatch still wrote by id alone. An
+     * attempt only learns it has lost the row on its next guarded write, so it
+     * can still reach the terminal one — and that one flips status, clears
+     * workerId and, on the happy path, sends the owner a summary notification
+     * built from counts the new owner has already moved past.
+     *
+     * The steal is staged on completeBatch's own first read, which is the last
+     * thing that happens before the terminal update.
+     */
+    const buffer = csvOf(3);
+    const read = prisma.cSVImportBatch.findUniqueOrThrow.bind(prisma.cSVImportBatch);
+    const spy = vi
+      .spyOn(prisma.cSVImportBatch, "findUniqueOrThrow")
+      .mockImplementationOnce((async (args: Parameters<typeof read>[0]) => {
+        const batch = await read(args);
+        // Another worker reclaims the row between the last checkpoint and the
+        // completion write.
+        await prisma.cSVImportBatch.update({
+          where: { id: batch.id },
+          data: { workerId: "another-worker", attemptCount: batch.attemptCount + 1 },
+        });
+        return batch;
+      }) as typeof prisma.cSVImportBatch.findUniqueOrThrow);
+
+    try {
+      const result = await confirmImport(ctx.user.id, confirmArgs(buffer, { idempotencyKey: "lease-lost" }));
+      // Reported as it actually stands, not as this attempt wished it were.
+      expect(result.processingStatus).toBe(CsvImportProcessingStatus.PROCESSING);
+    } finally {
+      spy.mockRestore();
+    }
+
+    const batch = await prisma.cSVImportBatch.findFirstOrThrow({ where: { businessProfileId: ctx.profile.id } });
+    expect(batch.processingStatus).toBe(CsvImportProcessingStatus.PROCESSING);
+    // The new owner still holds it — status, worker and completion untouched.
+    expect(batch.workerId).toBe("another-worker");
+    expect(batch.completedAt).toBeNull();
+    // And no owner-facing summary was sent about an import still running.
+    expect(await prisma.notification.count({ where: { businessProfileId: ctx.profile.id } })).toBe(0);
   });
 
   it("survives two concurrent confirms of the same key without duplicating records", async () => {

@@ -126,6 +126,29 @@ vi.mock("../../src/config/supabase", async (importOriginal) => {
          */
         async refreshSession({ refresh_token }: { refresh_token: string }) {
           supabaseCalls.push({ method: "refreshSession", args: [refresh_token] });
+          // Auth unreachable, as supabase-js reports it: a transport failure,
+          // not a verdict about the token. Distinct from the refusal below.
+          if (supabaseFailures.has("refreshSessionOutage")) {
+            return {
+              data: { session: null, user: null },
+              error: { name: "AuthRetryableFetchError", status: 0, message: "fetch failed" },
+            };
+          }
+          /*
+           * A refusal that CARRIES a status. The plain `refreshSession`
+           * failure below has none, so on its own it cannot tell a correct
+           * `status >= 500` test from a wrong `status >= 400` one — both burn
+           * an error with no status. 429 is the shape most likely to be
+           * mistaken for retryable, and supabase-js reports it as an
+           * AuthApiError, not an AuthRetryableFetchError: only 500-504,
+           * 520-530 and an unmade request get that class.
+           */
+          if (supabaseFailures.has("refreshSessionRateLimited")) {
+            return {
+              data: { session: null, user: null },
+              error: { name: "AuthApiError", status: 429, message: "rate limit exceeded" },
+            };
+          }
           if (supabaseFailures.has("refreshSession") || refresh_token !== "valid-refresh-token") {
             return { data: { session: null, user: null }, error: { message: "invalid refresh token" } };
           }
@@ -376,6 +399,39 @@ describe("registration proves the address before the account works", () => {
     });
     expect(await purgeUnverifiedRegistrations()).toBe(1);
     expect(await prisma.user.findUnique({ where: { id: pending.id } })).toBeNull();
+  });
+
+  it("does not report a purge it did not manage to finish", async () => {
+    /*
+     * The auth user is deleted first, so a failure in the relational delete
+     * leaves the address released on Supabase's side and still held on ours:
+     * the person it belongs to is told the email is taken by an account that
+     * no longer exists. This used to be swallowed with `.catch(() => undefined)`
+     * and counted as a success, so the log said the opposite of what happened.
+     */
+    await request(app).post("/api/v1/auth/register").send(registration());
+    const pending = await prisma.user.findUniqueOrThrow({ where: { email: "new-owner@shop.ph" } });
+    await prisma.user.update({
+      where: { id: pending.id },
+      data: { createdAt: new Date(Date.now() - 73 * 60 * 60 * 1000) },
+    });
+    loggedEvents.length = 0;
+    const transaction = vi
+      .spyOn(prisma, "$transaction")
+      .mockRejectedValueOnce(new Error("relational delete went away"));
+
+    try {
+      expect(await purgeUnverifiedRegistrations()).toBe(0);
+    } finally {
+      transaction.mockRestore();
+    }
+
+    expect(loggedEvents).toContain("account.deletion_failed");
+    expect(loggedEvents).not.toContain("account.deletion_completed");
+    // Still there, still holding the address — and still eligible for the
+    // next hourly pass, which is what makes this recoverable.
+    expect(await prisma.user.findUnique({ where: { id: pending.id } })).not.toBeNull();
+    expect(await purgeUnverifiedRegistrations()).toBe(1);
   });
 });
 
@@ -929,6 +985,71 @@ describe("web → mobile session handoff", () => {
 
     const res = await request(app).post("/api/v1/auth/handoff/exchange").send({ code: first.body.code });
     expect(res.status).toBe(400);
+  });
+
+  it("keeps the code alive when Auth could not be reached, so the owner can just tap again", async () => {
+    /*
+     * The row used to be deleted straight after the claim, before Auth was
+     * called at all. A few seconds of Auth being unreachable therefore
+     * destroyed a code that had not expired and had bought nothing, and the
+     * owner was told the link had expired with no way to retry but to go back
+     * to the browser and start over.
+     */
+    const { body } = await issue();
+    supabaseFailures.add("refreshSessionOutage");
+
+    const outage = await request(app).post("/api/v1/auth/handoff/exchange").send({ code: body.code });
+
+    expect(outage.status).toBe(503);
+    expect(outage.body.message ?? outage.body.error).not.toMatch(/expired/i);
+    expect(await prisma.authHandoff.count({ where: { userId: ctx.user.id } })).toBe(1);
+
+    supabaseFailures.delete("refreshSessionOutage");
+    const retry = await request(app).post("/api/v1/auth/handoff/exchange").send({ code: body.code });
+
+    expect(retry.status).toBe(200);
+    expect(retry.body.session.access_token).toBe("rotated-access-token");
+    // And once it has actually bought a session, it is gone for good.
+    expect(await prisma.authHandoff.count({ where: { userId: ctx.user.id } })).toBe(0);
+  });
+
+  it("still burns a code that Auth refused outright", async () => {
+    // A verdict, not an outage: the sealed token is dead, so the row is too.
+    const { body } = await issue();
+    supabaseFailures.add("refreshSession");
+
+    const res = await request(app).post("/api/v1/auth/handoff/exchange").send({ code: body.code });
+
+    expect(res.status).toBe(400);
+    expect(await prisma.authHandoff.count({ where: { userId: ctx.user.id } })).toBe(0);
+    supabaseFailures.delete("refreshSession");
+  });
+
+  /*
+   * The release above is the only thing standing between a one-time code and
+   * a retryable one, and it turns on one predicate. Anything Auth ANSWERED —
+   * including the answers that read as temporary — has to burn the code, or a
+   * 4xx becomes a licence to try the same code again inside its two minutes.
+   *
+   * 429 is the case to pin: it is a 4xx that sounds retryable, and widening
+   * the predicate to `status >= 400` is the easiest way to get this wrong.
+   * The test above cannot catch that widening, because its fixture carries no
+   * status at all.
+   */
+  it("burns a code on a 4xx that only sounds retryable", async () => {
+    const { body } = await issue();
+    supabaseFailures.add("refreshSessionRateLimited");
+
+    const refused = await request(app).post("/api/v1/auth/handoff/exchange").send({ code: body.code });
+
+    expect(refused.status).toBe(400);
+    expect(refused.body.message ?? refused.body.error).toMatch(/expired or has already been used/i);
+    expect(await prisma.authHandoff.count({ where: { userId: ctx.user.id } })).toBe(0);
+
+    // And it stays spent once Auth is answering normally again.
+    supabaseFailures.delete("refreshSessionRateLimited");
+    const replay = await request(app).post("/api/v1/auth/handoff/exchange").send({ code: body.code });
+    expect(replay.status).toBe(400);
   });
 
   it("will not hand a session to a suspended account", async () => {

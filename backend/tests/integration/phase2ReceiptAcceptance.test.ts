@@ -999,6 +999,25 @@ describe("Phase 2 worker and whole-scan retry", () => {
     ]);
     expect([first.status, second.status].sort()).toEqual([202, 409]);
 
+    /*
+     * The loser of that race, and the client whose 202 was lost on the way
+     * back, get the same 409 — and used to have no way to tell it apart from
+     * "this scan cannot be retried at all". Both clients therefore treated a
+     * retry outcome as ambiguous. The code and the state say which it is.
+     */
+    const conflict = [first, second].find((response) => response.status === 409)!;
+    expect(conflict.body).toMatchObject({
+      code: "RECEIPT_RETRY_IN_PROGRESS",
+      scanId: failed.id,
+      processingStatus: "Processing",
+    });
+    expect(typeof conflict.body.scanRevision).toBe("number");
+
+    // A later retry of the same scan, still reading, answers the same way.
+    const again = await request(app).post(`${RECEIPTS}/${failed.id}/retry`).set(...auth("owner-token"));
+    expect(again.status).toBe(409);
+    expect(again.body.code).toBe("RECEIPT_RETRY_IN_PROGRESS");
+
     const stored = await prisma.receiptScan.findUniqueOrThrow({
       where: { id: failed.id },
       include: { pages: true },

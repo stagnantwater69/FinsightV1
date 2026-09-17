@@ -150,7 +150,10 @@ async function readStoredCandidate(evidence: StoredEvidence, withQuality: boolea
   const digest = sha256(buffer);
   const quality = withQuality ? await assessImageQuality(buffer) : null;
   const ocr = await extractReceipt(buffer);
-  return { ocr, digest, quality, buffer };
+  // The buffer deliberately does not escape: nothing downstream needs the
+  // bytes, and returning them is how they used to stay resident for the whole
+  // scan. The provider gate re-downloads the page it actually sends.
+  return { ocr, digest, quality };
 }
 
 function localEvidence(validated: boolean, arithmetic = false): NormalizedEvidence {
@@ -461,11 +464,28 @@ async function processScan(
         dataClass: selected.source === "processed" ? "DERIVED_RECEIPT_IMAGE" : "RECEIPT_IMAGE",
         mediaType: chosenEvidence.info.mimetype,
         inputSha256: chosen.digest,
-        // The bytes just read and hashed, not a second download of the same
-        // object. inputSha256 came from THIS buffer, so the dispatch gate's
-        // re-hash is a tautology on this path — it still guards a caller that
-        // sources the digest independently, and must not be removed there.
-        loadBytes: () => Promise.resolve(chosen.buffer),
+        /*
+         * RE-DOWNLOADED ON DEMAND, not held from the read above.
+         *
+         * Closing over the decoded buffer kept every page's bytes alive for
+         * the whole scan — through parsing, reconciliation, the provider
+         * decision and persistence — and kept them even on the majority of
+         * scans where the gate decides not to call a provider at all. At the
+         * 10 MiB per-object ceiling and 8 pages that is 80 MiB of resident
+         * heap per concurrent scan, bought for nothing.
+         *
+         * The peak at dispatch is unchanged: the gate loads every page before
+         * it calls the adapter either way. What changes is that the bytes are
+         * collectable the moment this page's OCR is done.
+         *
+         * This also makes the gate's re-hash against `inputSha256` a real
+         * check rather than the tautology it was when the same buffer was
+         * handed straight back: a re-read that does not match the digest this
+         * scan was parsed from refuses the dispatch, which is the behaviour
+         * that guard exists for.
+         */
+        loadBytes: () =>
+          downloadReceiptImageBounded(chosenEvidence.path, RECEIPT_UPLOAD_MAX_OBJECT_BYTES, chosenEvidence.info),
       });
       await heartbeatScan(scanId, attempt);
     }
@@ -923,6 +943,14 @@ async function failExhaustedScans(): Promise<number> {
       processingStatus: "Processing",
       confirmationStatus: "Pending",
       processingAttemptCount: { gte: MAX_PROCESSING_ATTEMPTS },
+      // The same purge predicates claimScan and storedInput carry. Without
+      // them this transition was the one write in the pipeline that could
+      // touch a scan already scheduled for deletion: it would set a fresh
+      // lastActivityAt and an owner-facing error on a row the purge worker is
+      // about to remove, resurrecting it into the owner's list of failed
+      // scans — and, if the purge lost its race, leaving it there.
+      evidenceDeletionRequestedAt: null,
+      purgeJobs: { none: { mode: ReceiptPurgeMode.DELETE_SCAN } },
       OR: [{ processingWorkerId: null }, { processingHeartbeatAt: null }, { processingHeartbeatAt: { lt: staleBefore } }],
     },
     data: {

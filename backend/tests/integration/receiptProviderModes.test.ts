@@ -64,6 +64,7 @@ import {
   type ReceiptProviderDispatchInput,
 } from "../../src/services/receiptProviderDispatch.service";
 import { runReceiptWorkerOnce } from "../../src/services/receiptScan/worker";
+import { downloadReceiptImageBounded } from "../../src/services/storage.service";
 import {
   MOCK_PROVIDER_BYTES,
   MOCK_PROVIDER_SHA256,
@@ -306,6 +307,45 @@ describe("RECEIPT_PROVIDER_ROUTING", () => {
  * answered; the local read fills what it left null. The one exception is a
  * locale-ambiguous date the provider merely read the other way round.
  */
+describe("page bytes are not held for the whole scan", () => {
+  /*
+   * The gate's page evidence used to close over the buffer the OCR read had
+   * already decoded. That kept every page's bytes resident from the read all
+   * the way through parsing and persistence — including on the majority of
+   * scans where no provider is called at all. At the 10 MiB object ceiling and
+   * 8 pages that is 80 MiB per concurrent scan held for nothing.
+   *
+   * The observable consequence of the fix is that the page the gate actually
+   * sends is re-downloaded at dispatch, instead of arriving free from a
+   * closure. Counting the downloads is what distinguishes the two.
+   */
+  it("re-downloads the page it dispatches rather than carrying it from the read", async () => {
+    enableMockedGeminiProvider({ RECEIPT_PROVIDER_ROUTING: "always" });
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    await queuedScan(owner.profile.id, "lazy-bytes-dispatched");
+    vi.mocked(downloadReceiptImageBounded).mockClear();
+
+    expect(await runReceiptWorkerOnce()).toBe(true);
+
+    expect(adapterExtract.current).toHaveBeenCalledTimes(1);
+    // One download for the OCR read of the single page, one for the dispatch.
+    expect(downloadReceiptImageBounded).toHaveBeenCalledTimes(2);
+  });
+
+  it("downloads nothing extra when the gate decides not to call a provider", async () => {
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    await queuedScan(owner.profile.id, "lazy-bytes-skipped");
+    vi.mocked(downloadReceiptImageBounded).mockClear();
+
+    expect(await runReceiptWorkerOnce()).toBe(true);
+
+    expect(adapterExtract.current).not.toHaveBeenCalled();
+    expect(downloadReceiptImageBounded).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("provider merge against the local read", () => {
   const providerField = (value: string | number) => ({
     value,
