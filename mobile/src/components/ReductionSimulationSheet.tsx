@@ -224,7 +224,7 @@ export function ReductionSimulationSheet({
                   setKind(v);
                   setValueError(null);
                 }}
-                accessibilityLabel="Reduce by percent or peso amount"
+                accessibilityLabel="Reduce by"
               />
             </View>
 
@@ -296,7 +296,10 @@ function ReductionSimulationResult({ result }: { result: ReductionSimulation }) 
   const t = useTheme();
   return (
     <View
-      accessibilityLabel="Hypothetical simulation result"
+      // Same as RecoveryScenarioSheet: the label here was on a View with no
+      // `accessible`, so it was never announced, and adding `accessible`
+      // would have swallowed the figures below it. The heading inside carries
+      // the meaning instead.
       style={{
         backgroundColor: t.surfaceMuted,
         borderRadius: radius.md,

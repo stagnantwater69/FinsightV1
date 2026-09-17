@@ -311,29 +311,35 @@ describe('Spending Impact — when the AI is unreachable', () => {
   });
 });
 
+/**
+ * The segment names carry the group's name as well as their own
+ * ("Comparison period, Month"), because React Native has nowhere else to put
+ * it: a label on the track around them is set on a plain View and is never
+ * read. Querying by the full name is the check that it is actually there.
+ */
 describe('Spending Impact — the period control', () => {
   it('reports which comparison period is selected', async () => {
     const queries = await renderScreen();
 
-    const thirtyDays = queries.getByRole('button', { name: 'Month' });
+    const thirtyDays = queries.getByRole('button', { name: 'Comparison period, Month' });
     expect(thirtyDays.props.accessibilityState.selected).toBe(true);
 
-    const today = queries.getByRole('button', { name: 'Today' });
+    const today = queries.getByRole('button', { name: 'Comparison period, Today' });
     expect(today.props.accessibilityState.selected).toBe(false);
   });
 
   it('moves the selected state when a different period is chosen', async () => {
     const queries = await renderScreen();
 
-    await fireEvent.press(queries.getByRole('button', { name: 'Today' }));
+    await fireEvent.press(queries.getByRole('button', { name: 'Comparison period, Today' }));
 
     await waitFor(() => {
       expect(
-        queries.getByRole('button', { name: 'Today' }).props.accessibilityState
+        queries.getByRole('button', { name: 'Comparison period, Today' }).props.accessibilityState
           .selected,
       ).toBe(true);
       expect(
-        queries.getByRole('button', { name: 'Month' }).props
+        queries.getByRole('button', { name: 'Comparison period, Month' }).props
           .accessibilityState.selected,
       ).toBe(false);
     });

@@ -645,7 +645,7 @@ describe('Reduction opportunities — Simulate reduction', () => {
     const queries = await openSheetOnStock();
 
     await queries.findByText('Simulate a reduction');
-    await fireEvent.press(queries.getByRole('button', { name: 'Peso amount' }));
+    await fireEvent.press(queries.getByRole('button', { name: 'Reduce by, Peso amount' }));
     await fireEvent.changeText(queries.getByLabelText('Reduction amount, in Philippine pesos'), '1000');
     await fireEvent.press(queries.getByRole('button', { name: 'Simulate' }));
 
@@ -673,7 +673,7 @@ describe('Reduction opportunities — Simulate reduction', () => {
     const queries = await openSheetOnStock();
     await queries.findByText('Simulate a reduction');
 
-    await fireEvent.press(queries.getByRole('button', { name: 'Peso amount' }));
+    await fireEvent.press(queries.getByRole('button', { name: 'Reduce by, Peso amount' }));
     // The Stock card's own evidence total is 8400.
     await fireEvent.changeText(queries.getByLabelText('Reduction amount, in Philippine pesos'), '9000');
     await fireEvent.press(queries.getByRole('button', { name: 'Simulate' }));

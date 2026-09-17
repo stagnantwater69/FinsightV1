@@ -178,6 +178,14 @@ function FinFlipbook({ label }: { label: string }) {
         // be announced only when the speech bubble beside it was absent —
         // otherwise the bubble's own "Fin" label said the name a second time
         // for one line. There is no bubble on this card any more.
+        //
+        // `accessible` is not decoration here: RN only turns an Image into an
+        // accessibility element when it is given `alt`, or told to be one. A
+        // label on its own left this name unread on both platforms — the same
+        // defect as a role on a plain View, in the one place the mascot is
+        // supposed to introduce itself.
+        accessible
+        accessibilityRole="image"
         accessibilityLabel={label}
       />
       <Animated.Image

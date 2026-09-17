@@ -265,7 +265,7 @@ export function OperatingScheduleScreen() {
               ]}
               value={newType}
               onChange={setNewType}
-              accessibilityLabel="Closed or open on this date"
+              accessibilityLabel="This date is"
             />
           </View>
 

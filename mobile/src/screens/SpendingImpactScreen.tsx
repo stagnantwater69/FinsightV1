@@ -615,7 +615,7 @@ export function SpendingImpactScreen({ navigation }: any) {
               options={PERIOD_OPTIONS.map((option) => ({ label: option.label, value: option.days }))}
               value={periodDays}
               onChange={(days) => setPeriodDays(days as PeriodDays)}
-              accessibilityLabel="Comparison period for recorded expenses"
+              accessibilityLabel="Comparison period"
             />
             <T variant="caption" style={{ marginTop: 6 }}>
               Recorded expenses are compared against {periodPhrase(periodDays)}. Your available funds do not change

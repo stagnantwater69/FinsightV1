@@ -242,7 +242,11 @@ function RecoveryScenarioResult({ result }: { result: RecoveryScenario }) {
   const t = useTheme();
   return (
     <View
-      accessibilityLabel="Hypothetical recovery scenario result"
+      // No accessibilityLabel on this container. It used to carry one, which
+      // was never read (a View without `accessible` is not an accessibility
+      // element), and making it read would have meant collapsing every figure
+      // below into a single node announcing only the heading. The first line
+      // inside already says what this is.
       style={{
         backgroundColor: t.surfaceMuted,
         borderRadius: radius.md,

@@ -712,7 +712,7 @@ export function SegmentedControl<Value extends string | number>({
   value,
   onChange,
   accessibilityLabel,
-  stacked = false,
+  stacked,
 }: {
   // readonly so a call-site can declare its options `as const` and have the
   // literal value types flow through to `onChange` — without that, `value`
@@ -720,20 +720,49 @@ export function SegmentedControl<Value extends string | number>({
   options: readonly { label: string; value: Value; icon?: keyof typeof Ionicons.glyphMap }[];
   value: Value;
   onChange: (v: Value) => void;
+  /**
+   * What the group of options is FOR. Prefixed onto each segment's spoken
+   * name rather than set on the track, because a label on the track is
+   * silence: the track is a plain View, and a View is not an accessibility
+   * element unless it sets `accessible` — which here would swallow the very
+   * buttons it describes. Six call-sites were passing this and none of it was
+   * ever read aloud.
+   */
   accessibilityLabel?: string;
-  /** Keep choices readable in compact layouts or with larger accessibility text. */
+  /**
+   * Force the stacked layout. Left undefined, the control decides for itself
+   * from the window — see below. Pass it only to override that.
+   */
   stacked?: boolean;
 }) {
   const t = useTheme();
   const styles = useStyles();
+  /*
+   * ADAPTIVE BY DEFAULT, not by remembering to ask.
+   *
+   * Side by side, each segment gets a fraction of the row and its label wraps
+   * as the system font grows — "Opportunities" at 200% text becomes a column
+   * of syllables, and three of those make a control taller than the card it
+   * filters. The same happens on a narrow phone at normal text.
+   *
+   * The rule (width < 360 || fontScale > 1.2) is the one SettingsScreen had
+   * already worked out by hand. It was the only call-site of six that passed
+   * it, so the theme picker reflowed on a large-text phone and the Insights
+   * tabs, the record-type filter, the comparison period, the what-if unit and
+   * the open/closed picker did not. Owning the decision here is what makes it
+   * true everywhere instead of wherever someone thought to type it.
+   */
+  const { width, fontScale } = useWindowDimensions();
+  const stacks = stacked ?? (width < 360 || fontScale > 1.2);
   return (
-    <View style={[styles.segmentTrack, stacked && { flexDirection: "column" }]} accessibilityLabel={accessibilityLabel}>
+    <View style={[styles.segmentTrack, stacks && { flexDirection: "column" }]}>
       {options.map((option) => {
         const selected = option.value === value;
         return (
           <Pressable
             key={String(option.value)}
             accessibilityRole="button"
+            accessibilityLabel={accessibilityLabel ? `${accessibilityLabel}, ${option.label}` : undefined}
             accessibilityState={{ selected }}
             onPress={() => {
               haptics.tapped();
@@ -741,7 +770,7 @@ export function SegmentedControl<Value extends string | number>({
             }}
             style={({ pressed }) => [
               styles.segment,
-              stacked && { flex: 0, paddingVertical: space.sm },
+              stacks && { flex: 0, paddingVertical: space.sm },
               {
                 backgroundColor: selected ? t.brandFill : "transparent",
                 opacity: pressed ? 0.85 : 1,

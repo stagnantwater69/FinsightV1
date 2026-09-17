@@ -1,5 +1,12 @@
 import { useCallback, useState } from "react";
-import { ActivityIndicator, Pressable, RefreshControl, ScrollView, View } from "react-native";
+import {
+  AccessibilityInfo,
+  ActivityIndicator,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  View,
+} from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { Alert, Button, EmptyState, ErrorNote, Screen, ScreenHeader, T } from "../components/ui";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
@@ -91,9 +98,24 @@ export function NotificationsScreen() {
   async function markAllRead() {
     if (!selected) return;
     const previous = notifications;
+    const cleared = previous.filter((n) => !n.readStatus).length;
     setNotifications((prev) => prev.map((n) => ({ ...n, readStatus: true })));
     try {
       await api.patch("/notifications/read-all", undefined, { businessProfileId: selected.id });
+      /*
+       * SAY SO. Marking everything read succeeds by making the button that did
+       * it disappear and the eyebrow above it change to "All caught up" — a
+       * clear enough confirmation to see, and nothing at all to hear. The
+       * control the reader was parked on is simply gone, with no statement
+       * that it worked.
+       *
+       * announceForAccessibility rather than a live region: the thing that
+       * changed is the absence of a control, so there is no element left to
+       * hang a region on. It is a no-op when no reader is running.
+       */
+      AccessibilityInfo.announceForAccessibility(
+        cleared === 1 ? "1 alert marked as read." : `${cleared} alerts marked as read.`,
+      );
     } catch (err) {
       setNotifications(previous);
       setError(describeActionFailure(toLoadFailure(err), "Your alerts are still unread."));
