@@ -331,7 +331,11 @@ export function AllBusinessProfiles() {
             return (
               <Card
                 key={p.id}
-                className={`flex h-full flex-col p-5 ${isActive ? "bg-tint-brand ring-2 ring-edge-brand" : ""}`}
+                /* `min-w-0`: a grid item defaults to min-width:auto, so without
+                   it the card refuses to shrink below the widest label row and
+                   pushes the page sideways at a 200px viewport (400px at 200%
+                   zoom) instead of reflowing inside its track. */
+                className={`flex h-full min-w-0 flex-col p-5 ${isActive ? "bg-tint-brand ring-2 ring-edge-brand" : ""}`}
               >
                 <div className="mb-3 flex items-start justify-between gap-2">
                   <Avatar photoUrl={p.logoUrl} label={p.name} />
@@ -344,31 +348,31 @@ export function AllBusinessProfiles() {
                 <p className="text-sm text-ink-500">{p.type}</p>
 
                 <dl className="mt-3 space-y-1.5 border-t border-paper-200 pt-3 text-sm">
-                  <div className="flex justify-between gap-3">
+                  <div className="flex flex-wrap justify-between gap-x-3 gap-y-0.5">
                     <dt className="text-ink-500">Available Business Funds</dt>
                     <dd className="figure font-medium text-ink-900">
                       {formatMoney(p.availableFunds)}
                     </dd>
                   </div>
-                  <div className="flex justify-between gap-3">
+                  <div className="flex flex-wrap justify-between gap-x-3 gap-y-0.5">
                     <dt className="text-ink-500">Expected Monthly Expenses</dt>
                     <dd className="figure font-medium text-ink-900">
                       {formatMoney(p.expectedMonthlyExpenses)}
                     </dd>
                   </div>
-                  <div className="flex justify-between gap-3">
+                  <div className="flex flex-wrap justify-between gap-x-3 gap-y-0.5">
                     <dt className="text-ink-500">Operating Days / Month</dt>
                     <dd className="figure font-medium text-ink-900">
                       {p.operatingDays}
                     </dd>
                   </div>
-                  <div className="flex justify-between gap-3">
+                  <div className="flex flex-wrap justify-between gap-x-3 gap-y-0.5">
                     <dt className="text-ink-500">Records</dt>
                     <dd className="figure font-medium text-ink-900">
                       {p.recordCount}
                     </dd>
                   </div>
-                  <div className="flex justify-between gap-3">
+                  <div className="flex flex-wrap justify-between gap-x-3 gap-y-0.5">
                     <dt className="text-ink-500">Large-expense threshold</dt>
                     <dd className="figure font-medium text-ink-900">
                       {p.largeExpenseThresholdPercent}%
@@ -376,7 +380,9 @@ export function AllBusinessProfiles() {
                   </div>
                 </dl>
 
-                <div className="mt-auto flex gap-2 pt-5">
+                {/* Wraps: the two actions side by side set the card's minimum
+                    width, which scrolled the page at 200px (400px at 200% zoom). */}
+                <div className="mt-auto flex flex-wrap gap-2 pt-5">
                   {isActive ? (
                     <Button variant="secondary" size="sm" fullWidth disabled>
                       Currently Active

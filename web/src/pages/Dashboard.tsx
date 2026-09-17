@@ -346,7 +346,9 @@ export function Dashboard() {
         }
         actions={
           <>
-            <div className="flex gap-1 rounded-xl border border-paper-200 bg-paper-100 p-1">
+            {/* Wraps rather than pushing the page sideways once the four
+                labels no longer fit on one line (400px at 200% zoom). */}
+            <div className="flex flex-wrap gap-1 rounded-xl border border-paper-200 bg-paper-100 p-1">
               {PERIOD_OPTIONS.map((opt) => (
                 <button
                   key={opt.days}

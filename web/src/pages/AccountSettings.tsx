@@ -27,8 +27,10 @@ export function AccountSettings() {
       />
 
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.55fr)_minmax(320px,0.75fr)] xl:gap-8">
+        {/* Both columns are grid items, which default to min-width:auto and
+            so hold the page wider than a 200px viewport (400px at 200% zoom). */}
         <GuidancePanel />
-        <div className="space-y-6">
+        <div className="min-w-0 space-y-6">
           <AppearancePanel />
           <PreferenceDetailsPanel />
         </div>
@@ -39,8 +41,10 @@ export function AccountSettings() {
 
 function GuidancePanel() {
   return (
-    <Card className="overflow-hidden">
-      <div className="flex items-start justify-between gap-5 bg-brand-900 px-5 py-5 sm:px-6 sm:py-6">
+    <Card className="min-w-0 overflow-hidden">
+      {/* Wraps so Fin drops below the copy instead of holding the panel wider
+          than a 200px viewport (400px at 200% zoom). */}
+      <div className="flex flex-wrap items-start justify-between gap-5 bg-brand-900 px-5 py-5 sm:px-6 sm:py-6">
         <div className="min-w-0">
           <span className="mb-4 flex size-10 items-center justify-center rounded-xl bg-white/10 text-brand-100">
             <Sparkles size={19} aria-hidden />

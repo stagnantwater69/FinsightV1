@@ -620,7 +620,12 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="flex min-w-0 flex-col">
         {/* ---------------------------- TOPBAR ---------------------------- */}
         <header className="sticky top-0 z-30 border-b border-paper-200 bg-paper/85 backdrop-blur">
-          <div className="shell flex h-[var(--topbar-h)] items-center gap-2">
+          {/* Wraps rather than overflows. At a 200px CSS viewport (400px at
+              200% browser zoom) the mark, search and action cluster cannot
+              share one line, and a fixed height forced the page to scroll
+              sideways instead. `min-h` + `py-1.5` keeps the unwrapped row at
+              exactly the old 56px. */}
+          <div className="shell flex min-h-[var(--topbar-h)] flex-wrap items-center gap-2 py-1.5">
             {/* Mark — the sidebar carries it from lg up, so this is mobile only. */}
             <Link
               to="/dashboard"
@@ -639,7 +644,10 @@ export function AppShell({ children }: { children: ReactNode }) {
               <GlobalSearch className="hidden min-w-0 flex-1 md:block md:max-w-lg lg:max-w-xl" />
             ) : null}
 
-            <div className="ml-auto flex shrink-0 items-center gap-0.5 sm:gap-1">
+            {/* `shrink-0` stays: the search field is the flex item that should
+                give way first. `max-w-full` + `flex-wrap` only bind once the
+                row itself has wrapped, so nothing moves above ~360px. */}
+            <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-0.5 sm:gap-1">
               {/* Search collapses to an icon below `md`, where a full field
                   would crowd out everything else in the row. */}
               {selected ? (

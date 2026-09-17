@@ -123,7 +123,10 @@ export function Profile() {
       />
 
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(300px,340px)_minmax(0,1fr)] xl:gap-8">
-        <aside className="xl:sticky xl:top-[calc(var(--topbar-h)+1.5rem)]">
+        {/* `min-w-0`: as a grid item this defaults to min-width:auto and would
+            not shrink below the identity card's min-content width, scrolling
+            the page sideways at a 200px viewport (400px at 200% zoom). */}
+        <aside className="min-w-0 xl:sticky xl:top-[calc(var(--topbar-h)+1.5rem)]">
           <Card className="overflow-hidden">
             <div className="bg-brand-900 px-5 py-5 sm:px-6">
               <div className="mb-4 flex size-10 items-center justify-center rounded-xl bg-white/10 text-brand-100">

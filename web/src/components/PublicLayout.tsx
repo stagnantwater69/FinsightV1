@@ -301,7 +301,9 @@ export function PublicLayout({ children }: { children: ReactNode }) {
               : "border-transparent bg-landing-cream/90 md:bg-landing-cream/78"
         }`}
       >
-        <div className="mx-auto flex max-w-[1240px] items-center justify-between gap-4 px-4 py-3 lg:px-6">
+        {/* Wraps so the menu button drops below the wordmark instead of pushing
+            the page sideways at a 200px CSS viewport (400px at 200% zoom). */}
+        <div className="mx-auto flex max-w-[1240px] flex-wrap items-center justify-between gap-4 px-4 py-3 lg:px-6">
           {/* The logo is also a link to "/" — same back-to-top fix as Home. */}
           <Link to="/" onClick={handleHomeClick} className="tap shrink-0 rounded-xl">
             <Brand />

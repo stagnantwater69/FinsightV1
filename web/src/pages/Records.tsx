@@ -1024,7 +1024,10 @@ export function Records() {
                   <span className="text-xs text-ink-500">
                     {RECORD_SOURCE_LABELS[r.source as RecordSource] ?? r.source}
                   </span>
-                  <div className="flex gap-1">
+                  {/* Wraps: three labelled actions are wider than a 200px
+                      viewport (400px at 200% zoom) and were scrolling the page
+                      sideways rather than stacking. */}
+                  <div className="flex flex-wrap justify-end gap-1">
                     {r.duplicateStatus === "Flagged" ? (
                       <button
                         type="button"
