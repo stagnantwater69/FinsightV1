@@ -88,8 +88,10 @@ export function AvatarUpload({
     }
   }
 
+  // Wraps so "Change photo" and the identity details drop under the avatar at
+  // a 160px viewport (a 320px phone at 200% zoom) instead of overflowing.
   return (
-    <div className="flex items-center gap-4">
+    <div className="flex flex-wrap items-center gap-4">
       <Avatar photoUrl={photoUrl} label={label} size="lg" />
       <div className="min-w-0">
         {details ? <div className="mb-2 min-w-0">{details}</div> : null}

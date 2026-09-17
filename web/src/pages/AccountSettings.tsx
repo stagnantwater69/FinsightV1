@@ -173,14 +173,16 @@ function SettingHeading({
   description: string;
   tone?: "brand" | "info";
 }) {
+  // Wraps so the heading drops under its icon at a 160px viewport (a 320px
+  // phone at 200% zoom) rather than holding the panel wider than the screen.
   return (
-    <div className="mb-4 flex items-start gap-3">
+    <div className="mb-4 flex flex-wrap items-start gap-3">
       <span
         className={`flex size-10 shrink-0 items-center justify-center rounded-xl ${tone === "info" ? "bg-tint-info text-tone-info" : "bg-tint-brand text-tone-brand"}`}
       >
         {icon}
       </span>
-      <div>
+      <div className="min-w-0">
         <h2 id={id} className="text-base font-semibold text-ink-900">
           {title}
         </h2>
