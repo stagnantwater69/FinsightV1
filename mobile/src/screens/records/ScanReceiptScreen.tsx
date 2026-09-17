@@ -38,7 +38,7 @@ import {
 } from "../../lib/receiptWarnings";
 import { ReceiptCamera } from "../../components/receipt-camera";
 import type { ReceiptCameraHandle } from "../../components/receipt-camera/ReceiptCamera";
-import { canAddSection, CAPTURE_QUALITY } from "../../lib/receiptCapture";
+import { CAPTURE_QUALITY } from "../../lib/receiptCapture";
 import { analysisImageUri } from "../../lib/analysisImage";
 import { setFlash } from "../../lib/flash";
 import { SkeletonBox } from "../../components/Skeleton";
@@ -59,6 +59,8 @@ import { EvidenceNote } from "./scanReceipt/EvidenceNote";
 import { CategoryChips } from "./scanReceipt/CategoryChips";
 import { GapOption } from "./scanReceipt/GapOption";
 import { pollUntilRead, pagesFromSections, ReceiptReadFailure, sectionsFromPages } from "./scanReceipt/helpers";
+import { verifiedReceiptScan, type ExpectedBatchChild } from "./scanReceipt/verifiedScan";
+import { retryAlreadyUnderway, retryLandingUnknown } from "./scanReceipt/retryConflict";
 import {
   canMoveWithinReceipt,
   groupReceiptMembers,
@@ -136,73 +138,6 @@ type CameraIntent =
   | { kind: "replace-all" }
   | { kind: "replace-group"; groupKey: string; groupId: string }
   | { kind: "append-receipt"; groupId: string };
-
-const RECEIPT_PROCESSING_MODES = new Set([
-  "original",
-  "manual-crop",
-  "native-selected",
-  "clear-colour",
-  "grayscale",
-  "black-white",
-]);
-
-function validEvidenceVariant(value: unknown, variant: "source" | "derived") {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const data = value as Record<string, unknown>;
-  const dimension = (candidate: unknown) => candidate === null
-    || (Number.isInteger(candidate) && Number(candidate) > 0 && Number(candidate) <= 40000);
-  return data.variant === variant
-    && typeof data.label === "string" && data.label.length > 0 && data.label.length <= 80
-    && dimension(data.width) && dimension(data.height);
-}
-
-/** Rejects a mismatched scan or evidence map before it can drive review UI. */
-function verifiedReceiptScan(
-  value: unknown,
-  expectedId?: number,
-  expectedBusinessProfileId?: number,
-  expectedBatchChild?: Pick<ReceiptBatchChild, "batchId" | "ordinal"> | null,
-): ReceiptScanResult {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("FinSight returned a receipt result that could not be verified.");
-  }
-  const result = value as ReceiptScanResult;
-  if (!Number.isInteger(result.id) || result.id <= 0
-    || (expectedId !== undefined && result.id !== expectedId)
-    || !Number.isInteger(result.businessProfileId) || result.businessProfileId <= 0
-    || (expectedBusinessProfileId !== undefined && result.businessProfileId !== expectedBusinessProfileId)
-    || (result.receiptBatchId !== null && (!Number.isInteger(result.receiptBatchId) || result.receiptBatchId <= 0))
-    || (result.receiptOrdinal !== null && (!Number.isInteger(result.receiptOrdinal) || result.receiptOrdinal <= 0))
-    || ((result.receiptBatchId === null) !== (result.receiptOrdinal === null))
-    || (expectedBatchChild === null && (result.receiptBatchId !== null || result.receiptOrdinal !== null))
-    || (expectedBatchChild !== undefined && expectedBatchChild !== null && (
-      result.receiptBatchId !== expectedBatchChild.batchId
-      || result.receiptOrdinal !== expectedBatchChild.ordinal
-    ))
-    || !Number.isInteger(result.scanRevision) || result.scanRevision < 0
-    || (result.confirmationStatus !== "Pending"
-      && result.confirmationStatus !== "Confirmed"
-      && result.confirmationStatus !== "Deletion Pending")) {
-    throw new Error("FinSight returned a receipt result that could not be verified.");
-  }
-  if (result.pageEvidence !== undefined) {
-    if (!Array.isArray(result.pageEvidence) || result.pageEvidence.length > RECEIPT_UPLOAD_MAX_LOGICAL_PAGES) {
-      throw new Error("FinSight returned receipt image evidence that could not be verified.");
-    }
-    for (const [index, page] of result.pageEvidence.entries()) {
-      if (!page || page.pageNumber !== index + 1
-        || (page.captureMode !== null && page.captureMode !== "standard" && page.captureMode !== "long")
-        || !RECEIPT_PROCESSING_MODES.has(page.processingMode)
-        || (page.ocrInput !== "source" && page.ocrInput !== "derived")
-        || !validEvidenceVariant(page.source, "source")
-        || (page.derived !== null && !validEvidenceVariant(page.derived, "derived"))
-        || (page.ocrInput === "derived" && page.derived === null)) {
-        throw new Error("FinSight returned receipt image evidence that could not be verified.");
-      }
-    }
-  }
-  return result;
-}
 
 function storedReceiptPages(result: ReceiptScanResult, pageCount: number): CapturedPage[] {
   const evidence = [...(result.pageEvidence ?? [])].sort((left, right) => left.pageNumber - right.pageNumber);
@@ -603,8 +538,9 @@ export function ScanReceiptScreen({ navigation }: any) {
    * page they just photographed.
    */
   async function addPage(asset: ImagePicker.ImagePickerAsset, task: NonNullable<ReturnType<typeof operation.begin>>) {
-    const existingGroup = groupReceiptMembers(pages);
-    if (!operation.current(task) || scanStarted || existingGroup.length > 1 || !canAddSection(existingGroup[0]?.length ?? 0)) return;
+    // Only reachable from the gallery button, which renders only while the
+    // session is empty, so there is no existing group to extend or cap here.
+    if (!operation.current(task) || scanStarted) return;
     const key = `${Date.now()}-${Math.random()}`;
     const uri = asset.uri;
     const fileName = asset.fileName ?? `receipt-${Date.now()}.jpg`;
@@ -617,7 +553,6 @@ export function ScanReceiptScreen({ navigation }: any) {
       fileName,
       mimeType,
       originalMimeType: mimeType,
-      receiptGroupId: existingGroup[0]?.[0]?.receiptGroupId,
       quality: null,
       checkingQuality: true,
       width: asset.width,
@@ -716,6 +651,39 @@ export function ScanReceiptScreen({ navigation }: any) {
     setGapCategoryId(null);
     if (result.visionAssisted) haptics.warned();
     else haptics.succeeded();
+  }
+
+  /**
+   * Retries a stored scan, treating "already being read" as the retry landing.
+   *
+   * The server answers 409 RECEIPT_RETRY_IN_PROGRESS when the scan is already
+   * Processing: a retry whose response never arrived, or one that raced a
+   * concurrent retry. Either way the work is underway, so this resumes with
+   * the stored scan marked Processing and the caller polls it, rather than
+   * reporting a failure for work the server is doing.
+   */
+  async function retriedScan(
+    stored: ReceiptScanResult,
+    batchChild: ExpectedBatchChild | null,
+  ): Promise<ReceiptScanResult> {
+    try {
+      return verifiedReceiptScan(
+        await api.post<ReceiptScanResult>(`/records/receipts/${stored.id}/retry`),
+        stored.id,
+        selected!.id,
+        batchChild,
+      );
+    } catch (err) {
+      const underway = retryAlreadyUnderway(err, stored.id);
+      if (!underway) throw err;
+      return {
+        ...stored,
+        processingStatus: "Processing",
+        processingError: null,
+        processingErrorCode: null,
+        scanRevision: underway.scanRevision,
+      };
+    }
   }
 
   function uploadSignature(list: CapturedPage[], batchChild: ReceiptBatchChild | null): string {
@@ -957,12 +925,7 @@ export function ScanReceiptScreen({ navigation }: any) {
       } else if (mode === "retry") {
         if (!accepted) throw new Error("This receipt has not finished uploading yet.");
         setPhase("Retrying stored receipt…");
-        accepted = verifiedReceiptScan(
-          await api.post<ReceiptScanResult>(`/records/receipts/${accepted.id}/retry`),
-          accepted.id,
-          selected!.id,
-          batchChild,
-        );
+        accepted = await retriedScan(accepted, batchChild);
         if (!operation.current(task)) return;
         attempt.accepted = accepted;
       } else if (!accepted) {
@@ -989,9 +952,9 @@ export function ScanReceiptScreen({ navigation }: any) {
       const errorStatus = typeof err === "object" && err !== null && "status" in err
         ? Number((err as { status: unknown }).status)
         : null;
-      const retryWasAmbiguous = mode === "retry" && (errorStatus === 0 || errorStatus === 409);
+      const retryOutcomeUnknown = mode === "retry" && retryLandingUnknown(errorStatus);
       if (hasStoredScan) {
-        setScanRecoveryAction(err instanceof ReceiptReadFailure && err.kind === "failed" && !retryWasAmbiguous ? "retry" : "review");
+        setScanRecoveryAction(err instanceof ReceiptReadFailure && err.kind === "failed" && !retryOutcomeUnknown ? "retry" : "review");
       }
       setError(describeActionFailure(
         toLoadFailure(err),
@@ -1060,12 +1023,7 @@ export function ScanReceiptScreen({ navigation }: any) {
 
       if (action === "retry") {
         if (!item.allowedActions.retryProcessing) throw new Error("This receipt is no longer available for processing retry.");
-        accepted = verifiedReceiptScan(
-          await api.post<ReceiptScanResult>(`/records/receipts/${item.id}/retry`),
-          item.id,
-          selected!.id,
-          expectedStoredBatch,
-        );
+        accepted = await retriedScan(accepted, expectedStoredBatch);
         if (!operation.current(task)) return;
         uploadAttempt.current.accepted = accepted;
       }
@@ -1086,9 +1044,9 @@ export function ScanReceiptScreen({ navigation }: any) {
       const errorStatus = typeof err === "object" && err !== null && "status" in err
         ? Number((err as { status: unknown }).status)
         : null;
-      const retryWasAmbiguous = action === "retry" && (errorStatus === 0 || errorStatus === 409);
+      const retryOutcomeUnknown = action === "retry" && retryLandingUnknown(errorStatus);
       if (hasStoredScan) {
-        setScanRecoveryAction(err instanceof ReceiptReadFailure && err.kind === "failed" && !retryWasAmbiguous ? "retry" : "review");
+        setScanRecoveryAction(err instanceof ReceiptReadFailure && err.kind === "failed" && !retryOutcomeUnknown ? "retry" : "review");
       }
       setError(describeActionFailure(toLoadFailure(err), "This receipt and its stored images are still available."));
     } finally {

@@ -227,6 +227,47 @@ function networkError(err: unknown): ApiError {
   );
 }
 
+/**
+ * How long a JSON call may take before the client stops waiting.
+ *
+ * WHAT BREAKS WITHOUT IT. `fetch` has no timeout of its own, so a half-open
+ * connection leaves the promise pending for ever, and nothing downstream can
+ * recover: `pollUntilRead` re-checks its ceiling only between polls, so one
+ * stalled GET pins the receipt screen on "Reading receipt…" past the
+ * three-minute limit meant to end it.
+ *
+ * Lower than uploadRequest's 120s because nothing here sends a photograph;
+ * these are the same calls web runs under axios' 90s ceiling.
+ */
+const JSON_REQUEST_TIMEOUT_MS = 90_000;
+
+/**
+ * A signal that aborts when the caller's does, or when `ms` elapses.
+ *
+ * Kept separate from the caller's signal so a timeout can be told apart from
+ * a cancellation: both reach `fetch` as the same AbortError, and only one of
+ * them is worth reporting as "timed out".
+ */
+function withTimeout(signal: AbortSignal | undefined, ms: number) {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, ms);
+  const forward = () => controller.abort();
+  if (signal?.aborted) controller.abort();
+  else signal?.addEventListener("abort", forward, { once: true });
+  return {
+    signal: controller.signal,
+    timedOut: () => timedOut,
+    release: () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", forward);
+    },
+  };
+}
+
 async function request<T>(method: string, path: string, opts: {
   body?: unknown;
   query?: Record<string, string | number | boolean | undefined>;
@@ -243,27 +284,39 @@ async function request<T>(method: string, path: string, opts: {
    */
   authToken?: string;
 } = {}): Promise<T> {
-  let res: Response;
+  // The clock covers reading the body too: a connection can stall after the
+  // headers arrive, which looks identical to a hang from the screen's side.
+  const deadline = withTimeout(opts.signal, JSON_REQUEST_TIMEOUT_MS);
   try {
-    res = await fetch(buildUrl(path, opts.query), {
-      method,
-      signal: opts.signal,
-      headers: {
-        ...opts.headers,
-        ...(opts.authToken ? { Authorization: `Bearer ${opts.authToken}` } : await authHeader()),
-        "Content-Type": "application/json",
-      },
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-    });
-  } catch (err) {
-    throw networkError(err);
+    let res: Response;
+    try {
+      res = await fetch(buildUrl(path, opts.query), {
+        method,
+        signal: deadline.signal,
+        headers: {
+          ...opts.headers,
+          ...(opts.authToken ? { Authorization: `Bearer ${opts.authToken}` } : await authHeader()),
+          "Content-Type": "application/json",
+        },
+        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      });
+    } catch (err) {
+      throw deadline.timedOut() ? networkError(new Error("The request timed out")) : networkError(err);
+    }
+
+    if (!res.ok) throw await toError(res, path);
+    if (res.status === 204) return undefined as T;
+
+    let text: string;
+    try {
+      text = await res.text();
+    } catch (err) {
+      throw deadline.timedOut() ? networkError(new Error("The request timed out")) : networkError(err);
+    }
+    return (text ? JSON.parse(text) : undefined) as T;
+  } finally {
+    deadline.release();
   }
-
-  if (!res.ok) throw await toError(res, path);
-  if (res.status === 204) return undefined as T;
-
-  const text = await res.text();
-  return (text ? JSON.parse(text) : undefined) as T;
 }
 
 /**
@@ -378,9 +431,15 @@ export const api = {
     query?: Record<string, string | number | boolean | undefined>,
     signal?: AbortSignal,
   ) => request<T>("GET", path, { query, signal }),
-  post: <T>(path: string, body?: unknown) => request<T>("POST", path, { body }),
+  /*
+   * `signal` is on every verb, not just GET and upload. A screen that blurs
+   * mid-confirm calls operation.cancel(), and without a signal here the
+   * request it cancelled carried on to completion — the abort stopped the
+   * state update, never the call.
+   */
+  post: <T>(path: string, body?: unknown, signal?: AbortSignal) => request<T>("POST", path, { body, signal }),
   /** Whole-resource replacement — used by the operating-schedule endpoint, which takes exactly seven entries at once rather than one field at a time (that's what `patch` is for). */
-  put: <T>(path: string, body?: unknown) => request<T>("PUT", path, { body }),
+  put: <T>(path: string, body?: unknown, signal?: AbortSignal) => request<T>("PUT", path, { body, signal }),
   /** POST authenticated by a one-off token from an auth deep link — see `authToken`. */
   postWithToken: <T>(path: string, authToken: string, body?: unknown) =>
     request<T>("POST", path, { body, authToken }),
@@ -391,8 +450,10 @@ export const api = {
     path: string,
     body?: unknown,
     query?: Record<string, string | number | boolean | undefined>,
-  ) => request<T>("PATCH", path, { body, query }),
-  delete: <T>(path: string, body?: unknown, headers?: Record<string, string>) => request<T>("DELETE", path, { body, headers }),
+    signal?: AbortSignal,
+  ) => request<T>("PATCH", path, { body, query, signal }),
+  delete: <T>(path: string, body?: unknown, headers?: Record<string, string>, signal?: AbortSignal) =>
+    request<T>("DELETE", path, { body, headers, signal }),
   upload: <T>(path: string, formData: FormData, signal?: AbortSignal) => uploadRequest<T>(path, formData, signal),
 };
 

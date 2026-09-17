@@ -6,7 +6,7 @@ import {
 /** Mirrors the API upload middleware; content bytes are still checked server-side. */
 export const RECEIPT_MAX_BYTES = RECEIPT_UPLOAD_MAX_OBJECT_BYTES;
 export const CSV_MAX_BYTES = 5 * 1024 * 1024;
-export const RECEIPT_MIME_TYPES: string[] = [...RECEIPT_UPLOAD_ALLOWED_MIME_TYPES];
+const RECEIPT_MIME_TYPES: string[] = [...RECEIPT_UPLOAD_ALLOWED_MIME_TYPES];
 
 export function receiptFileError(file: { name: string; size?: number; mimeType?: string }): string | null {
   if (file.size === 0) return "This file is empty. Choose another receipt.";
@@ -16,10 +16,6 @@ export function receiptFileError(file: { name: string; size?: number; mimeType?:
     return "Choose a JPG, PNG, or WebP image. PDF receipts are not supported.";
   }
   return null;
-}
-
-export function receiptMimeType(name: string): string {
-  return /\.png$/i.test(name) ? "image/png" : /\.webp$/i.test(name) ? "image/webp" : "image/jpeg";
 }
 
 export function csvFileError(file: { name: string; size?: number }): string | null {

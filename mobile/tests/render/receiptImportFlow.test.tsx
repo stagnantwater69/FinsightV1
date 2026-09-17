@@ -68,7 +68,9 @@ const { AddExpenseScreen } = await import("../../src/screens/records/AddExpenseS
 const navigation = { navigate: vi.fn(), goBack: vi.fn() };
 const wrapInMode = (node: React.ReactNode, mode: "light" | "dark") => <ThemeProvider initialMode={mode}>{node}</ThemeProvider>;
 const wrap = (node: React.ReactNode) => wrapInMode(node, "light");
-const accepted = { id: 41, businessProfileId: 1, receiptBatchId: null, receiptOrdinal: null, scanRevision: 0, processingStatus: "Processing", confirmationStatus: "Pending" };
+// items is [] rather than absent: toDTO always sends the array, empty while
+// the read is still queued.
+const accepted = { id: 41, businessProfileId: 1, receiptBatchId: null, receiptOrdinal: null, scanRevision: 0, processingStatus: "Processing", confirmationStatus: "Pending", items: [] };
 const complete = { id: 41, businessProfileId: 1, receiptBatchId: null, receiptOrdinal: null, scanRevision: 0, processingStatus: "Complete", confirmationStatus: "Pending", extractedDate: "2026-09-01", extractedVendor: "Supplier", extractedDescription: "Coffee beans", extractedAmount: 250, items: [{ id: 5, name: "Coffee beans", amount: 250, categoryId: 10 }], warnings: [], ocrConfidence: 96 };
 const unavailableConsent = { available: false, provider: null, consent: null, activeConsents: [] };
 const providerTerms = {
@@ -449,6 +451,64 @@ describe("receipt scan review workflow", () => {
     await waitFor(() => expect(q.getByRole("button", { name: "Save this expense" })).toBeEnabled());
     expect(post).toHaveBeenCalledWith("/records/receipts/83/retry");
     expect(upload.mock.calls.filter(([path]) => path === "/records/receipts")).toHaveLength(0);
+  });
+
+  /*
+   * The server answers 409 RECEIPT_RETRY_IN_PROGRESS when the scan is already
+   * being read: a retry whose response was lost, or one that raced another.
+   * The work is underway, so the screen polls it rather than reporting a
+   * failed retry for a read the server is already doing.
+   */
+  it("resumes polling when the server says the retry is already underway", async () => {
+    const failedSummary = {
+      id: 83,
+      businessProfileId: 1,
+      receiptBatchId: null,
+      receiptOrdinal: null,
+      scanRevision: 0,
+      processingStatus: "Failed" as const,
+      confirmationStatus: "Pending" as const,
+      processingError: "The receipt could not be read.",
+      processingErrorCode: "OCR_FAILED",
+      extractedDate: null,
+      extractedVendor: null,
+      extractedDescription: null,
+      extractedAmount: null,
+      createdAt: "2026-09-13T10:00:00.000Z",
+      pageCount: 1,
+      allowedActions: { retryProcessing: true, reviewResult: false },
+    };
+    const failed = { ...complete, id: 83, processingStatus: "Failed" as const, processingError: failedSummary.processingError };
+    const retried = { ...complete, id: 83, scanRevision: 4 };
+    get.mockImplementation(async (path: string) => {
+      if (path.includes("provider-consent")) return unavailableConsent;
+      if (path === "/records/receipts") return { items: [failedSummary], nextCursor: null };
+      if (path === "/records/receipts/83") return failed;
+      throw new Error(`Unexpected GET ${path}`);
+    });
+    const conflictBody = {
+      error: "This receipt is already being read.",
+      code: "RECEIPT_RETRY_IN_PROGRESS",
+      scanId: 83,
+      processingStatus: "Processing",
+      scanRevision: 4,
+    };
+    post.mockImplementation(async (path: string) => {
+      if (path !== "/records/receipts/83/retry") return {};
+      throw Object.assign(new Error(conflictBody.error), { status: 409, code: conflictBody.code, responseBody: conflictBody });
+    });
+    poll.mockResolvedValue(retried);
+    const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
+
+    await waitFor(() => expect(q.getByRole("button", { name: /^Retry processing for Stored receipt 83/ })).toBeEnabled());
+    await fireEvent.press(q.getByRole("button", { name: /^Retry processing for Stored receipt 83/ }));
+
+    await waitFor(() => expect(q.getByRole("button", { name: "Save this expense" })).toBeEnabled());
+    expect(poll).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 83, processingStatus: "Processing", processingError: null, scanRevision: 4 }),
+      expect.anything(),
+    );
+    expect(q.queryByText(/already being read/)).toBeNull();
   });
 
   it("retains a discovered receipt's batch binding across a transient poll failure", async () => {
