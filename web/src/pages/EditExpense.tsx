@@ -5,7 +5,7 @@ import { api } from "../lib/api";
 import { getErrorMessage } from "../lib/errors";
 import type { RecordDetail } from "../lib/types";
 import { Callout, FormPage } from "../components/ui";
-import { Button } from "../components/Button";
+import { Button, ButtonLink } from "../components/Button";
 import { RecordOriginPanel } from "../components/RecordOriginPanel";
 import { Money } from "../components/Money";
 import { useToast } from "../components/Toast";
@@ -23,18 +23,40 @@ export function EditExpense() {
   const [vendor, setVendor] = useState("");
   const [amount, setAmount] = useState<number | "">("");
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   const [submitting, setSubmitting] = useState(false);
 
+  /*
+    The read, with both endings handled.
+
+    A record deleted from another tab answers 404 and a lapsed session answers
+    403; without a catch the page held its "Loading…" line for the rest of the
+    session. `cancelled` covers the other half — a response landing after the
+    owner has navigated away, or after `attempt` has already started a newer
+    request, must not overwrite what is on screen.
+  */
   useEffect(() => {
-    api.get<RecordDetail>(`/records/expenses/${id}`).then(({ data }) => {
-      setRecord(data);
-      setCategoryId(data.categoryId ?? "");
-      setDate(data.date.slice(0, 10));
-      setDescription(data.description);
-      setVendor(data.vendor ?? "");
-      setAmount(data.amount);
-    });
-  }, [id]);
+    let cancelled = false;
+    setLoadError(null);
+    api
+      .get<RecordDetail>(`/records/expenses/${id}`)
+      .then(({ data }) => {
+        if (cancelled) return;
+        setRecord(data);
+        setCategoryId(data.categoryId ?? "");
+        setDate(data.date.slice(0, 10));
+        setDescription(data.description);
+        setVendor(data.vendor ?? "");
+        setAmount(data.amount);
+      })
+      .catch((err) => {
+        if (!cancelled) setLoadError(getErrorMessage(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, attempt]);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -56,6 +78,24 @@ export function EditExpense() {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  if (loadError) {
+    return (
+      <FormPage eyebrow="Records" title="Edit expense">
+        <Callout tone="warn">
+          <b className="font-semibold">Couldn't load this expense.</b> {loadError}
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button type="button" variant="secondary" size="sm" onClick={() => setAttempt((n) => n + 1)}>
+              Retry
+            </Button>
+            <ButtonLink to="/records" variant="ghost" size="sm">
+              Back to records
+            </ButtonLink>
+          </div>
+        </Callout>
+      </FormPage>
+    );
   }
 
   if (!record) {

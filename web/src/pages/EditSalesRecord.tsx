@@ -3,8 +3,8 @@ import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { getErrorMessage } from "../lib/errors";
 import type { RecordItem } from "../lib/types";
-import { FormPage } from "../components/ui";
-import { Button } from "../components/Button";
+import { Callout, FormPage } from "../components/ui";
+import { Button, ButtonLink } from "../components/Button";
 import { useToast } from "../components/Toast";
 import { Field, FormError, MoneyInput, TextInput } from "../components/Field";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
@@ -18,16 +18,35 @@ export function EditSalesRecord() {
   const [description, setDescription] = useState("");
   const [amount, setAmount] = useState<number | "">("");
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   const [submitting, setSubmitting] = useState(false);
 
+  /*
+    The read, with both endings handled — see the matching note on EditExpense.
+    A deleted record (404) or a lapsed session (403) has to say so; a response
+    arriving after unmount, or after Retry has queued a newer request, is
+    dropped rather than written into state.
+  */
   useEffect(() => {
-    api.get<RecordItem>(`/records/sales/${id}`).then(({ data }) => {
-      setRecord(data);
-      setDate(data.date.slice(0, 10));
-      setDescription(data.description);
-      setAmount(data.amount);
-    });
-  }, [id]);
+    let cancelled = false;
+    setLoadError(null);
+    api
+      .get<RecordItem>(`/records/sales/${id}`)
+      .then(({ data }) => {
+        if (cancelled) return;
+        setRecord(data);
+        setDate(data.date.slice(0, 10));
+        setDescription(data.description);
+        setAmount(data.amount);
+      })
+      .catch((err) => {
+        if (!cancelled) setLoadError(getErrorMessage(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, attempt]);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -43,6 +62,24 @@ export function EditSalesRecord() {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  if (loadError) {
+    return (
+      <FormPage eyebrow="Records" title="Edit sales reference">
+        <Callout tone="warn">
+          <b className="font-semibold">Couldn't load this sales reference.</b> {loadError}
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button type="button" variant="secondary" size="sm" onClick={() => setAttempt((n) => n + 1)}>
+              Retry
+            </Button>
+            <ButtonLink to="/records" variant="ghost" size="sm">
+              Back to records
+            </ButtonLink>
+          </div>
+        </Callout>
+      </FormPage>
+    );
   }
 
   if (!record) {
