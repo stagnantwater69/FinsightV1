@@ -120,6 +120,30 @@ export async function mockBackendSession(
   const businessProfiles = opts.businessProfiles ?? [TEST_BUSINESS_PROFILE];
   const categories = opts.categories ?? TEST_CATEGORIES;
 
+  /*
+   * Backstop for any API call no spec thought to mock.
+   *
+   * Registered FIRST on purpose: Playwright tries handlers most-recent-first,
+   * so everything below — and everything a spec adds afterwards — is matched
+   * before this one, and only a genuinely unmocked request reaches it.
+   *
+   * Without it, an unmocked call leaves the browser and is proxied by the Vite
+   * dev server to http://localhost:4000 (see web/vite.config.ts). What happens
+   * next then depends on the developer's machine rather than on the code: with
+   * no backend running the call fails to connect and the app shows a local
+   * error, but with a real backend running it answers 401 to the suite's fake
+   * token, api.ts fires the session-expired handler, and the owner is thrown
+   * back to /login mid-test. That is how receipt-review.spec.ts came to pass in
+   * CI (nothing listens on :4000 there) and fail on a machine with `npm run
+   * dev` up. Refusing the connection here makes every run behave the same way,
+   * and names the missing mock instead of leaving a mystery timeout.
+   */
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    console.warn(`[e2e] unmocked API request: ${request.method()} ${request.url()}`);
+    await route.abort("connectionrefused");
+  });
+
   await page.route("**/auth/login", async (route) => {
     await route.fulfill({
       status: 200,
@@ -206,10 +230,12 @@ export async function chooseUpload(
   label: "Choose a file" | "Choose photos",
   file: { name: string; mimeType: string; buffer: Buffer },
 ) {
-  const [chooser] = await Promise.all([
-    page.waitForEvent("filechooser"),
-    page.getByText(label, { exact: true }).click(),
-  ]);
+  // Waiting for the picker first turns "the page navigated away and the picker
+  // is gone" into that sentence, instead of a 30s timeout on an event that was
+  // never going to fire.
+  const picker = page.getByText(label, { exact: true });
+  await picker.waitFor({ state: "visible" });
+  const [chooser] = await Promise.all([page.waitForEvent("filechooser"), picker.click()]);
   await chooser.setFiles(file);
 }
 

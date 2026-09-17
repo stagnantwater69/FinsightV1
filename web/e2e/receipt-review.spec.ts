@@ -21,6 +21,13 @@ test("upload, review optional details, correct and save a receipt across web lay
     uploadBody = route.request().postData() ?? "";
     await route.fulfill({ json: { ...receipt, processingStatus: "Processing" } });
   });
+  // The scan page asks for unfinished scans on mount and again after an upload
+  // (ScanReceipt.tsx's refreshActiveReceiptHistory). A query string makes the
+  // URL miss the `**/records/receipts` glob above, so it needs its own route —
+  // this owner has nothing left half-scanned.
+  await page.route("**/records/receipts?*", async (route) => {
+    await route.fulfill({ json: { items: [], nextCursor: null } });
+  });
   await page.route("**/records/receipts/700", async (route) => { await route.fulfill({ json: receipt }); });
   await page.route("**/records/receipts/700/duplicate-candidates**", async (route) => {
     await route.fulfill({
