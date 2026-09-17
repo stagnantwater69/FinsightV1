@@ -55,12 +55,18 @@ function normalized(
   const itemSum = receipt.items.reduce((sum, item) => sum + Math.round(item.amount * 100), 0);
   const totalCents = receipt.amount === null ? null : Math.round(receipt.amount * 100);
   const itemsReconcile = receipt.items.length > 0 && totalCents !== null && itemSum === totalCents;
+  // Only the arithmetic may validate the collection. A verifier pass is a second
+  // model agreeing with the first, so it supports the claim but never replaces it:
+  // 100 + 100 + 100 against a printed 350 must reach the owner marked for review.
   const collectionEvidence = evidence(
     source,
     request.providerVersion,
-    verifierAccepted || itemsReconcile ? "VALIDATED" : "UNVALIDATED",
+    itemsReconcile ? "VALIDATED" : "UNVALIDATED",
     [
-      ...(itemsReconcile ? (["ARITHMETIC_VALID"] as const) : (["OWNER_REVIEW_REQUIRED"] as const)),
+      ...(itemsReconcile
+        ? (["ARITHMETIC_VALID"] as const)
+        : (["OWNER_REVIEW_REQUIRED"] as const)),
+      ...(verifierAccepted ? (["FORMAT_VALID"] as const) : ([] as const)),
       "REGION_UNAVAILABLE",
     ],
   );
