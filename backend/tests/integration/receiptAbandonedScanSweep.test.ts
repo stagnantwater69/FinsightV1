@@ -276,6 +276,11 @@ describe("abandoned-scan sweep: protected states", () => {
         mode: "DELETE_SCAN",
         status: "RETRY",
         storageObjectsExpected: 2,
+        // Pinned to this suite's clock, not left to default to the real one:
+        // the ExpiresAt > RequestedAt constraint compares the two, so a
+        // default real `now()` made this row unsatisfiable the moment the
+        // wall clock passed NOW + 1 day.
+        requestedAt: NOW,
         expiresAt: new Date(NOW.getTime() + DAY_MS),
       },
     });
