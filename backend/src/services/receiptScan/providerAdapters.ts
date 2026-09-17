@@ -10,6 +10,7 @@ import {
   extractReceiptWithVision,
   verifyVisionReceipt,
   VISION_MODEL,
+  type VisionVerifierFailure,
 } from "../visionOcr.service";
 import { extractReceiptWithVeryfi } from "../veryfiOcr.service";
 
@@ -118,15 +119,53 @@ function ambiguous(request: ReceiptProviderRequest, latencyMs: number): ReceiptP
   };
 }
 
-function invalid(request: ReceiptProviderRequest, latencyMs: number, units: number): ReceiptProviderOutcome {
+function failed(
+  request: ReceiptProviderRequest,
+  latencyMs: number,
+  units: number,
+  outcomeCode: "HTTP_ERROR" | "TRANSPORT_ERROR" | "INVALID_RESULT",
+): ReceiptProviderOutcome {
   return {
     ...metadata(request, latencyMs),
     status: "FAILED",
     timeoutOutcome: "NOT_TIMED_OUT",
-    outcomeCode: "INVALID_RESULT",
+    outcomeCode,
     finalBillableUnits: units,
     extraction: null,
   };
+}
+
+function invalid(request: ReceiptProviderRequest, latencyMs: number, units: number): ReceiptProviderOutcome {
+  return failed(request, latencyMs, units, "INVALID_RESULT");
+}
+
+/**
+ * How an absent verifier verdict is recorded.
+ *
+ * AMBIGUOUS / TIMEOUT_AFTER_SUBMISSION is a claim about billing: reached,
+ * possibly charged, outcome unknown. Recording every absent verdict that way
+ * put spend in the telemetry that a rotated key or a dropped connection never
+ * incurred, and hid the misconfiguration behind a plausible timeout. Only a
+ * real timeout is ambiguous; the rest are billed for the extraction alone.
+ */
+function verifierUnavailable(
+  request: ReceiptProviderRequest,
+  latencyMs: number,
+  failure: VisionVerifierFailure,
+): ReceiptProviderOutcome {
+  switch (failure) {
+    case "timeout":
+      return ambiguous(request, latencyMs);
+    case "not_attempted":
+    case "transport":
+      return failed(request, latencyMs, 1, "TRANSPORT_ERROR");
+    case "http":
+      return failed(request, latencyMs, 1, "HTTP_ERROR");
+    case "unusable":
+      // Reached, answered, and the answer was not a verdict — the verify call
+      // itself completed, so it counts against the budget like any other.
+      return failed(request, latencyMs, 2, "INVALID_RESULT");
+  }
 }
 
 function bytesAsBuffer(bytes: Uint8Array): Buffer {
@@ -147,9 +186,11 @@ export function createGeminiReceiptAdapter(): ReceiptProviderAdapter & { readonl
       if (extraction === null) return ambiguous(request, Date.now() - started);
       if (extraction.receipt === null) return invalid(request, Date.now() - started, 1);
 
-      const verdict = await verifyVisionReceipt(pages, extraction.receipt);
-      if (verdict === null) return ambiguous(request, Date.now() - started);
-      if (!verdict.accept) return invalid(request, Date.now() - started, 2);
+      const verification = await verifyVisionReceipt(pages, extraction.receipt);
+      if (verification.failure !== null) {
+        return verifierUnavailable(request, Date.now() - started, verification.failure);
+      }
+      if (!verification.verdict.accept) return invalid(request, Date.now() - started, 2);
       return {
         ...metadata(request, Date.now() - started),
         status: "SUCCEEDED",

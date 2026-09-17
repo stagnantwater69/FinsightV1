@@ -1256,6 +1256,15 @@ export function detectionMethod(
 // must each exceed an eighth of a total that contains all of them), so the
 // fallback cannot reintroduce the quadratic it replaces.
 //
+// THAT COUNTING ARGUMENT ONLY COVERS THE DOMINANT-TERM TEST. The condition has
+// a second arm, a shifted sum that is not positive at all, and every candidate
+// can satisfy it at once: a category of N identical amounts has a sum of
+// squared deviations of exactly zero. 20,000 such records made a GET the
+// Dashboard calls on mount do ~4e8 synchronous operations. So this arm is
+// budgeted too, and past the cap the two agree by construction — no measurable
+// spread means the clamped amortised variance and an exact recompute are both
+// zero.
+//
 // A second, budgeted fallback recomputes any candidate that the amortised pass
 // says is unusual, so every number actually REPORTED to an owner comes from the
 // original code path bit-for-bit. That one is capped, because a pathological
@@ -1266,6 +1275,8 @@ export function detectionMethod(
 const ILL_CONDITIONED_SHARE = 0.125;
 /** Cap on the "recompute exactly so the reported figure is bit-identical" fallback, per category. */
 const EXACT_RECOMPUTE_BUDGET = 32;
+/** Cap on the degenerate-input recompute (non-positive shifted sum), per category. */
+const ILL_CONDITIONED_RECOMPUTE_BUDGET = 64;
 
 export interface LeaveOneOutRecord {
   id: number;
@@ -1355,6 +1366,7 @@ export function scanUnusualExpenses(
     }
 
     let exactBudget = EXACT_RECOMPUTE_BUDGET;
+    let illConditionedBudget = ILL_CONDITIONED_RECOMPUTE_BUDGET;
     const exactStatsFor = (id: number) =>
       computeCategoryStats(records.filter((r) => r.id !== id).map((r) => r.amount));
 
@@ -1372,8 +1384,16 @@ export function scanUnusualExpenses(
 
       let stats: CategoryStats = { mean, stdDev: Math.sqrt(variance), count: baselineCount };
       let exact = false;
-      // Unbounded in principle, bounded in fact — see the note above.
-      if (!(shiftedSquares > 0) || ownShare > ILL_CONDITIONED_SHARE * shiftedSquares) {
+      // Same two arms as before, in the same order, so which one a candidate
+      // takes is unchanged. The non-positive arm now spends a budget, because
+      // it is the one the counting argument in the note above does not bound.
+      if (!(shiftedSquares > 0)) {
+        if (illConditionedBudget > 0) {
+          illConditionedBudget -= 1;
+          stats = exactStatsFor(candidate.id);
+          exact = true;
+        }
+      } else if (ownShare > ILL_CONDITIONED_SHARE * shiftedSquares) {
         stats = exactStatsFor(candidate.id);
         exact = true;
       }

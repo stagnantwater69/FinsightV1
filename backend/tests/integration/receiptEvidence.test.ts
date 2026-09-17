@@ -119,7 +119,7 @@ beforeEach(async () => {
   visionMock.mockReset();
   visionMock.mockResolvedValue(null);
   verifierMock.mockReset();
-  verifierMock.mockResolvedValue(null);
+  verifierMock.mockResolvedValue({ verdict: null, failure: "not_attempted" });
 });
 
 afterAll(disconnectDb);
@@ -276,7 +276,7 @@ describe("legacy verifier isolation", () => {
 
   it("does not invoke the legacy verifier or accept its reply outside the provider gate", async () => {
     noTotalRead();
-    verifierMock.mockResolvedValue({ accept: true, rejectedFields: [] });
+    verifierMock.mockResolvedValue({ verdict: { accept: true, rejectedFields: [] }, failure: null });
 
     const scan = await upload();
     expect(verifierMock).not.toHaveBeenCalled();
@@ -287,7 +287,7 @@ describe("legacy verifier isolation", () => {
 
   it("keeps the deterministic result when an un-gated verifier mock would reject", async () => {
     noTotalRead();
-    verifierMock.mockResolvedValue({ accept: false, rejectedFields: ["amount"] });
+    verifierMock.mockResolvedValue({ verdict: { accept: false, rejectedFields: ["amount"] }, failure: null });
 
     const scan = await upload();
     expect(scan!.extractedAmount).toBeNull();
@@ -308,7 +308,7 @@ describe("legacy verifier isolation", () => {
 
   it("keeps a missing local total reviewable when no gated rescue runs", async () => {
     noTotalRead();
-    verifierMock.mockResolvedValue(null); // no key / provider down
+    verifierMock.mockResolvedValue({ verdict: null, failure: "not_attempted" }); // no key / provider down
 
     const scan = await upload();
     expect(scan!.extractedAmount).toBeNull();
@@ -317,7 +317,7 @@ describe("legacy verifier isolation", () => {
 
   it("never asks the legacy verifier directly", async () => {
     noTotalRead();
-    verifierMock.mockResolvedValue({ accept: true, rejectedFields: [] });
+    verifierMock.mockResolvedValue({ verdict: { accept: true, rejectedFields: [] }, failure: null });
     await upload();
     expect(verifierMock).not.toHaveBeenCalled();
   });

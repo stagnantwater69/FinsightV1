@@ -7,6 +7,7 @@ import { saveFinding } from "./finding.service";
 
 export const TREND_VERSION = "trend-v1";
 const TREND_WINDOWS = [7, 30] as const;
+const MAXIMUM_WINDOW_RECORDS = 10_000;
 const MINIMUM_PERCENT_CHANGE = 0.25;
 
 export async function refreshTrendFindings(
@@ -18,15 +19,30 @@ export async function refreshTrendFindings(
   if (!config.featureFlags.trends) return [];
   const profile = await requireOwnedBusinessProfile(userId, businessProfileId);
   const categories = await prisma.expenseCategory.findMany({ where: { businessProfileId }, select: { id: true, name: true } });
+  // Bounded like every sibling detector (behavioralNovelty 1,000, velocity
+  // 5,000, recurring 10,000). Newest first, so an account past the ceiling
+  // keeps the two current windows intact and only the comparison periods
+  // degrade.
   const records = await prisma.expenseRecord.findMany({
     where: { businessProfileId, date: { gte: utcAddDays(today, -59), lte: utcEndOfDay(today) } },
     select: { categoryId: true, amount: true, date: true },
+    orderBy: [{ date: "desc" }, { id: "desc" }],
+    take: MAXIMUM_WINDOW_RECORDS,
   });
   const materialPesoChange = Math.max(500, Number(profile.expectedMonthlyExpenses) * 0.02);
   const findings = [];
 
+  // Grouped once: the old shape re-scanned the whole window per category, and
+  // twice more per window, for at most 2 sums per category.
+  const recordsByCategory = new Map<number, typeof records>();
+  for (const record of records) {
+    const bucket = recordsByCategory.get(record.categoryId);
+    if (bucket) bucket.push(record);
+    else recordsByCategory.set(record.categoryId, [record]);
+  }
+
   for (const category of categories) {
-    const categoryRecords = records.filter((record) => record.categoryId === category.id);
+    const categoryRecords = recordsByCategory.get(category.id) ?? [];
     for (const windowDays of TREND_WINDOWS) {
       const currentStart = utcAddDays(today, -(windowDays - 1));
       const previousEnd = utcAddDays(currentStart, -1);

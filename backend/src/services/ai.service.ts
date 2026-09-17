@@ -33,6 +33,20 @@ export const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta
 const OPENROUTER_MODEL = "anthropic/claude-haiku-4.5";
 const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 
+/**
+ * Deadline on every model call, the same `AbortSignal.timeout` the OCR
+ * services put on theirs. Without one, undici's default applies: a connection
+ * that goes quiet holds the request for ~300s, and these calls chain Gemini
+ * into an OpenRouter fallback, so one stall cost about ten minutes.
+ *
+ * Two values because the calls are not the same size. Chat and the
+ * single-category classifier cap the model at 400 and 20 output tokens;
+ * receipt item categorisation asks for a JSON array at up to 2,000, and the
+ * short deadline would cut off reads that work today.
+ */
+const AI_TIMEOUT_MS = 20_000;
+const AI_BULK_TIMEOUT_MS = 30_000;
+
 // The grounding rule stays first and unconditional. An open-ended chat
 // gives the model far more room to drift into invented figures than the
 // old single-shot "Explain this" did, so this is the one instruction that
@@ -98,6 +112,7 @@ async function callGemini(input: AskInput): Promise<string> {
       contents,
       generationConfig: { temperature: 0.3, maxOutputTokens: 400 },
     }),
+    signal: AbortSignal.timeout(AI_TIMEOUT_MS),
   });
 
   if (!res.ok) {
@@ -134,6 +149,7 @@ async function callOpenRouter(input: AskInput): Promise<string> {
       temperature: 0.3,
       max_tokens: 400,
     }),
+    signal: AbortSignal.timeout(AI_TIMEOUT_MS),
   });
 
   if (!res.ok) {
@@ -341,6 +357,7 @@ async function classifyWithGemini(description: string, categoryNames: string[]):
       // category every time for the same input, and it is at most a few words.
       generationConfig: { temperature: 0, maxOutputTokens: 20 },
     }),
+    signal: AbortSignal.timeout(AI_TIMEOUT_MS),
   });
 
   if (!res.ok) {
@@ -373,6 +390,7 @@ async function classifyWithOpenRouter(description: string, categoryNames: string
       temperature: 0,
       max_tokens: 20,
     }),
+    signal: AbortSignal.timeout(AI_TIMEOUT_MS),
   });
 
   if (!res.ok) {
@@ -555,6 +573,7 @@ async function classifyItemsWithGemini(
       // temperature 0: the same receipt must categorise the same way twice.
       generationConfig: { temperature: 0, maxOutputTokens: 2000, responseMimeType: "application/json" },
     }),
+    signal: AbortSignal.timeout(AI_BULK_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`Gemini responded ${res.status}: ${await res.text()}`);
   const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
@@ -580,6 +599,7 @@ async function classifyItemsWithOpenRouter(
       temperature: 0,
       max_tokens: 2000,
     }),
+    signal: AbortSignal.timeout(AI_BULK_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`OpenRouter responded ${res.status}: ${await res.text()}`);
   const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
@@ -844,6 +864,7 @@ async function reviewPurchaseWithGemini(item: string, amount: number | null, bus
       // enough that the classification does not wander between calls.
       generationConfig: { temperature: 0.4, maxOutputTokens: 700, responseMimeType: "application/json" },
     }),
+    signal: AbortSignal.timeout(AI_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`Gemini responded ${res.status}: ${await res.text()}`);
   const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
@@ -865,6 +886,7 @@ async function reviewPurchaseWithOpenRouter(item: string, amount: number | null,
       temperature: 0.4,
       max_tokens: 700,
     }),
+    signal: AbortSignal.timeout(AI_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`OpenRouter responded ${res.status}: ${await res.text()}`);
   const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };

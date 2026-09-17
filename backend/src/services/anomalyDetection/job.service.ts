@@ -16,7 +16,41 @@ import { NOTIFICATION_TYPES } from "../notification.service";
 
 const WORKER_ID = `analysis-${process.pid}-${randomUUID().slice(0, 8)}`;
 const LEASE_MS = 5 * 60_000;
+const HEARTBEAT_MS = 30_000;
 const MAX_ATTEMPTS = 5;
+
+/**
+ * Thrown when a newer worker already owns this job, so nothing further may be
+ * written for it. Same rule and same name shape as the receipt worker's
+ * `ReceiptLeaseLostError`.
+ */
+export class AnalysisLeaseLostError extends Error {}
+
+/**
+ * `claimJob` reclaims a PROCESSING job whose heartbeat is older than the
+ * lease, and nothing refreshed that heartbeat once processing began. A
+ * PROFILE_REFRESH rebuilds category statistics, recurring patterns and trends
+ * for a whole profile, so passing five minutes is ordinary rather than a dead
+ * worker: the reclaim landed a second worker on the same CategoryStatistics
+ * rows, and whichever wrote last won.
+ */
+async function heartbeatJob(job: ClaimedJob): Promise<void> {
+  const updated = await prisma.analysisJob.updateMany({
+    where: {
+      id: job.id,
+      status: AnalysisJobStatus.PROCESSING,
+      workerId: WORKER_ID,
+      attemptCount: job.attemptCount,
+    },
+    data: { heartbeatAt: new Date() },
+  });
+  if (updated.count !== 1) throw new AnalysisLeaseLostError(`Analysis job ${job.id} lease was reclaimed`);
+}
+
+/** Every terminal write re-checks the lease, so a superseded worker records nothing. */
+function leaseGuard(job: ClaimedJob) {
+  return { id: job.id, workerId: WORKER_ID, attemptCount: job.attemptCount };
+}
 
 // Severity gate moved to ./config so the recurring watchdog, which emits from
 // the PROFILE_REFRESH path, applies the identical rule. Behaviour unchanged.
@@ -152,17 +186,37 @@ async function processJob(job: ClaimedJob) {
 export async function runAnalysisWorkerOnce() {
   const job = await claimJob();
   if (!job) return false;
+  const heartbeatTimer = setInterval(() => {
+    void heartbeatJob(job).catch((error) => {
+      if (error instanceof AnalysisLeaseLostError) return;
+      logger.error({ err: error, analysisJobId: job.id }, "analysis job heartbeat failed");
+    });
+  }, HEARTBEAT_MS);
+  heartbeatTimer.unref();
   try {
     await processJob(job);
-    await prisma.analysisJob.update({ where: { id: job.id }, data: { status: AnalysisJobStatus.COMPLETE, heartbeatAt: new Date(), workerId: null, lastError: null } });
+    const completed = await prisma.analysisJob.updateMany({
+      where: leaseGuard(job),
+      data: { status: AnalysisJobStatus.COMPLETE, heartbeatAt: new Date(), workerId: null, lastError: null },
+    });
+    if (completed.count !== 1) {
+      logger.warn({ analysisJobId: job.id }, "analysis job lease was reclaimed before completion; result discarded");
+    }
   } catch (error) {
     const failed = job.attemptCount >= MAX_ATTEMPTS;
     const delayMinutes = Math.min(2 ** job.attemptCount, 60);
-    await prisma.analysisJob.update({
-      where: { id: job.id },
+    // Guarded for the same reason the completion is: rescheduling a job the
+    // reclaiming worker is already running would undo its claim.
+    const recorded = await prisma.analysisJob.updateMany({
+      where: leaseGuard(job),
       data: { status: failed ? AnalysisJobStatus.FAILED : AnalysisJobStatus.PENDING, nextAttemptAt: new Date(Date.now() + delayMinutes * 60_000), workerId: null, lastError: String(error).slice(0, 1000) },
     });
+    if (recorded.count !== 1) {
+      logger.warn({ analysisJobId: job.id }, "analysis job lease was reclaimed before its failure could be recorded");
+    }
     logger.error({ err: error, analysisJobId: job.id }, "analysis job failed");
+  } finally {
+    clearInterval(heartbeatTimer);
   }
   return true;
 }

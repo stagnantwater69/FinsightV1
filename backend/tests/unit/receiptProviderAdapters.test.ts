@@ -49,7 +49,7 @@ describe("provider adapter item evidence", () => {
 
   it("does not validate a Gemini item list that misses the total, even when the verifier accepts", async () => {
     extractReceiptWithVision.mockResolvedValue({ receipt: unreconciledReceipt });
-    verifyVisionReceipt.mockResolvedValue({ accept: true });
+    verifyVisionReceipt.mockResolvedValue({ verdict: { accept: true, rejectedFields: [] }, failure: null });
 
     const request = providerRequest();
     const outcome = await createGeminiReceiptAdapter().extract(request);
@@ -65,7 +65,7 @@ describe("provider adapter item evidence", () => {
 
   it("still validates a Gemini item list that adds up to the total", async () => {
     extractReceiptWithVision.mockResolvedValue({ receipt: reconciledReceipt });
-    verifyVisionReceipt.mockResolvedValue({ accept: true });
+    verifyVisionReceipt.mockResolvedValue({ verdict: { accept: true, rejectedFields: [] }, failure: null });
 
     const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
 
@@ -83,7 +83,7 @@ describe("provider adapter item evidence", () => {
 
   it("prefills unreconciled always-routed items for owner review instead of replacing the local list", async () => {
     extractReceiptWithVision.mockResolvedValue({ receipt: unreconciledReceipt });
-    verifyVisionReceipt.mockResolvedValue({ accept: true });
+    verifyVisionReceipt.mockResolvedValue({ verdict: { accept: true, rejectedFields: [] }, failure: null });
 
     const request = providerRequest({
       rescueDecision: {
@@ -102,5 +102,77 @@ describe("provider adapter item evidence", () => {
     expect(merged.itemsOwnerReviewRequired).toBe(true);
     expect(merged.receipt.items).toHaveLength(3);
     expect(merged.receipt.itemsEvidence?.validationState).toBe("UNVALIDATED");
+  });
+});
+
+/*
+ * AMBIGUOUS / TIMEOUT_AFTER_SUBMISSION is a claim about billing: submitted,
+ * possibly charged, outcome unknown. Recording every absent verifier verdict
+ * that way put spend in the dispatch telemetry that a rotated key or a dead
+ * socket never incurred, and buried the misconfiguration behind it.
+ */
+describe("verifier reachability", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    extractReceiptWithVision.mockResolvedValue({ receipt: reconciledReceipt });
+  });
+
+  it("records an unconfigured verifier as a transport failure billed for the extraction only", async () => {
+    verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "not_attempted" });
+
+    const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
+
+    expect(outcome.status).toBe("FAILED");
+    expect(outcome.outcomeCode).toBe("TRANSPORT_ERROR");
+    expect(outcome.timeoutOutcome).toBe("NOT_TIMED_OUT");
+    expect(outcome.finalBillableUnits).toBe(1);
+  });
+
+  it("records a refused request as an HTTP error, not a timeout", async () => {
+    verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "http" });
+
+    const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
+
+    expect(outcome.status).toBe("FAILED");
+    expect(outcome.outcomeCode).toBe("HTTP_ERROR");
+    expect(outcome.finalBillableUnits).toBe(1);
+  });
+
+  it("records a dropped connection as a transport failure", async () => {
+    verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "transport" });
+
+    const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
+
+    expect(outcome.outcomeCode).toBe("TRANSPORT_ERROR");
+    expect(outcome.finalBillableUnits).toBe(1);
+  });
+
+  it("still records a real timeout as ambiguous, because the charge is genuinely unknown", async () => {
+    verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "timeout" });
+
+    const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
+
+    expect(outcome.status).toBe("AMBIGUOUS");
+    expect(outcome.outcomeCode).toBe("TIMEOUT_AFTER_SUBMISSION");
+    expect(outcome.finalBillableUnits).toBeNull();
+  });
+
+  it("bills both calls when the verifier answered with something that is not a verdict", async () => {
+    verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "unusable" });
+
+    const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
+
+    expect(outcome.status).toBe("FAILED");
+    expect(outcome.outcomeCode).toBe("INVALID_RESULT");
+    expect(outcome.finalBillableUnits).toBe(2);
+  });
+
+  it("leaves an accepted verdict succeeding as before", async () => {
+    verifyVisionReceipt.mockResolvedValue({ verdict: { accept: true, rejectedFields: [] }, failure: null });
+
+    const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
+
+    expect(outcome.status).toBe("SUCCEEDED");
+    expect(outcome.finalBillableUnits).toBe(2);
   });
 });

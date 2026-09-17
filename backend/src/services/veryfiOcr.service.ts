@@ -140,9 +140,14 @@ async function readOnePage(page: VeryfiPage): Promise<{ ok: true; doc: Record<st
  *
  * A network-level failure (thrown, not an HTTP error response) on ANY page
  * makes the whole call return null — an unreachable provider, not a partial
- * read. An HTTP error response on a page still counts as that page having
- * been reached; if every page comes back that way there is nothing to merge
- * and this returns a `"http"` rejection instead of null.
+ * read.
+ *
+ * AN HTTP ERROR ON ANY PAGE REJECTS THE WHOLE READING. "Amount from the last
+ * page that supplies one" is the grand total only while every page was read:
+ * lose page 3 of 3 and the last survivor is page 2's running subtotal, which
+ * looks exactly like a valid total and, under `always` routing, replaces the
+ * local reading. A partial read cannot be told from a complete one after the
+ * fact, so `"http"` sends the scan back to the local reading instead.
  */
 export async function extractReceiptWithVeryfi(pages: VeryfiPage[]): Promise<VeryfiExtraction | null> {
   if (!env.VERYFI_CLIENT_ID || !env.VERYFI_USERNAME || !env.VERYFI_API_KEY) return null;
@@ -160,7 +165,13 @@ export async function extractReceiptWithVeryfi(pages: VeryfiPage[]): Promise<Ver
     return null;
   }
 
-  if (docs.length === 0) return { receipt: null, rejectReason: "http" };
+  if (docs.length !== pages.length) {
+    logger.error(
+      { provider: "veryfi", operation: "receipt-extraction", pages: pages.length, pagesRead: docs.length },
+      "Veryfi read fewer pages than were sent; rejecting the whole reading",
+    );
+    return { receipt: null, rejectReason: "http" };
+  }
 
   const vendor = docs.map((d) => coerceVendor(d.vendor)).find((v) => v !== null) ?? null;
   const date = docs.map((d) => coerceDate(d.date)).find((v) => v !== null) ?? null;

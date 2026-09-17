@@ -454,6 +454,32 @@ const verifierSchema = z
   });
 
 /**
+ * Why no verdict came back.
+ *
+ * A bare null could not tell "the key is rotated and the call was refused"
+ * from "the request was accepted and never answered": the first is a
+ * misconfiguration nobody was billed for, the second is spend of unknown
+ * outcome. Collapsed, every unreachable verifier looked like a timeout in the
+ * dispatch telemetry.
+ *
+ *   - `not_attempted` — no API key, or no pages; nothing left this process
+ *   - `transport`     — the request never completed a round trip
+ *   - `timeout`       — sent, deadline passed, answer unknown (the only
+ *                       genuinely ambiguous case)
+ *   - `http`          — reached and refused with an error status
+ *   - `unusable`      — answered 200 with something that is not a verdict
+ */
+export type VisionVerifierFailure = "not_attempted" | "transport" | "timeout" | "http" | "unusable";
+
+export type VisionVerifierOutcome =
+  | { verdict: VisionVerifierVerdict; failure: null }
+  | { verdict: null; failure: VisionVerifierFailure };
+
+function verifierFailed(failure: VisionVerifierFailure): VisionVerifierOutcome {
+  return { verdict: null, failure };
+}
+
+/**
  * One accept/reject pass over a HIGH-RISK vision result, against the same
  * page images.
  *
@@ -464,18 +490,18 @@ const verifierSchema = z
  * it can do is send the scan back to the deterministic result — which is the
  * state the rescue started from.
  *
- * Returns null when it cannot run or cannot be understood (no key, provider
- * down, malformed verdict). The caller treats null as "no verdict" and keeps
- * the vision result, because the verifier is an ADDED check on a path that
- * previously shipped unverified — its unavailability must not regress the
- * rescue into never working.
+ * Returns a named failure rather than a verdict when it cannot run or cannot
+ * be understood (no key, provider down, malformed verdict). "No verdict" is
+ * never an accept: the verifier is an ADDED check, and the caller decides
+ * what an absent one means — see `VisionVerifierFailure` for why the reason
+ * travels with it.
  */
 export async function verifyVisionReceipt(
   pages: VisionPage[],
   candidate: { date: string | null; vendor: string | null; amount: number | null; items: { name: string; amount: number }[] },
-): Promise<VisionVerifierVerdict | null> {
-  if (!env.GOOGLE_GEMINI_API_KEY) return null;
-  if (pages.length === 0) return null;
+): Promise<VisionVerifierOutcome> {
+  if (!env.GOOGLE_GEMINI_API_KEY) return verifierFailed("not_attempted");
+  if (pages.length === 0) return verifierFailed("not_attempted");
 
   const prompt = `You are verifying a proposed extraction against the attached photograph(s) of ONE receipt (pages in order).
 
@@ -517,26 +543,28 @@ A null proposed value needs no support — do not reject a field for being null.
         { provider: "gemini", operation: "receipt-verification", httpStatus: res.status },
         "Vision verifier failed",
       );
-      return null;
+      return verifierFailed("http");
     }
 
     const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) return null;
+    if (!text) return verifierFailed("unusable");
 
     let parsed: unknown;
     try {
       parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/, "").trim());
     } catch {
-      return null;
+      return verifierFailed("unusable");
     }
     const result = verifierSchema.safeParse(parsed);
-    return result.success ? result.data : null;
+    if (!result.success || result.data === null) return verifierFailed("unusable");
+    return { verdict: result.data, failure: null };
   } catch (err) {
+    const failureKind = safeFailureKind(err);
     logger.error(
-      { provider: "gemini", operation: "receipt-verification", failureKind: safeFailureKind(err) },
+      { provider: "gemini", operation: "receipt-verification", failureKind },
       "Vision verifier failed",
     );
-    return null;
+    return verifierFailed(failureKind);
   }
 }
