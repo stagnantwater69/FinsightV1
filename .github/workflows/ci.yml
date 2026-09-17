@@ -9,6 +9,13 @@ on:
   push:
     branches: ["**"]
   pull_request:
+  # Nightly, so time-dependent rot is caught without waiting for a commit.
+  # A suite whose fixtures pin a clock can start failing with nothing changed:
+  # the abandoned-scan sweep pinned NOW to a date its purge-job row then
+  # outlived, and it failed for two days before anyone ran the suite.
+  schedule:
+    - cron: "17 19 * * *"
+  workflow_dispatch:
 
 jobs:
   backend:

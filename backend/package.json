@@ -17,6 +17,7 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "db:check": "tsx scripts/dev-database.ts check",
+    "doctor": "tsx scripts/doctor.ts",
     "db:check:direct": "tsx scripts/check-database.ts",
     "ratelimit:clear": "tsx scripts/clear-rate-limits.ts",
     "migrate:author": "tsx scripts/migrate-workflow/author.ts",
