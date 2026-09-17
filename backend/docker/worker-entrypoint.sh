@@ -64,10 +64,22 @@ printf '%s\n' "$worker_pid" > "$pid_file"
 : > "$heartbeat_file"
 chmod 600 -- "$pid_file" "$heartbeat_file"
 
+# A BRIDGE, not the heartbeat itself.
+#
+# dist/worker.js writes this file from a timer of its own (see
+# src/lib/workerHeartbeat.ts), which is what makes the probe's mtime mean "the
+# event loop is still turning" rather than "a pid exists" — the latter kept a
+# wedged worker reporting healthy indefinitely. Until the worker's first write
+# lands, keep the file fresh so a slow boot (Prisma connect, migration guard,
+# against only a 5s start period) is not read as a stall, then stand down so
+# the two never both claim to be the heartbeat.
 heartbeat() {
   while kill -0 "$worker_pid" 2>/dev/null; do
+    if [ "$(head -c 4 -- "$heartbeat_file" 2>/dev/null)" = node ]; then
+      return
+    fi
     touch -- "$heartbeat_file" || exit 1
-    sleep 10
+    sleep 2
   done
 }
 

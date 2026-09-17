@@ -11,6 +11,7 @@ import { logger } from "./config/logger";
 import { assertMigrationsApplied } from "./config/migrationGuard";
 import { runReceiptWorkerOnce } from "./services/receiptScan/worker";
 import { shutdownOcr } from "./services/ocr.service";
+import { workerHeartbeatPath, writeWorkerHeartbeat } from "./lib/workerHeartbeat";
 import { runCsvImportWorkerOnce, sweepStalledCsvImports } from "./services/csvImport.service";
 import { cleanUpExpiredRateLimits } from "./middleware/rateLimit.middleware";
 import { enqueueDailyProfileAnalyses, runAnalysisWorkerOnce } from "./services/anomalyDetection/job.service";
@@ -30,6 +31,22 @@ let workerBusy = false;
 // An upload waits up to one idle interval to be claimed; a pass that claimed
 // anything is followed at once by another so a backlog drains without sleeping.
 const IDLE_POLL_MS = 1_000;
+
+// Comfortably inside the probe's 45s staleness ceiling, so a single missed
+// write is not a restart. See lib/workerHeartbeat for what it does and does
+// not attest to.
+const HEARTBEAT_INTERVAL_MS = 10_000;
+const heartbeatFile = workerHeartbeatPath();
+let heartbeatWritable = true;
+
+async function beatLiveness(): Promise<void> {
+  const written = await writeWorkerHeartbeat(heartbeatFile);
+  // Logged on the edge only: outside a container this fails on every tick and
+  // is unremarkable, but a container that stops being able to write it is
+  // about to be restarted and the reason should be in the log.
+  if (!written && heartbeatWritable) logger.warn({ file: heartbeatFile }, "worker liveness heartbeat is not writable");
+  heartbeatWritable = written;
+}
 
 /** One pass over every queue. Resolves true when at least one job was claimed. */
 async function work(): Promise<boolean> {
@@ -86,6 +103,7 @@ async function runPass(): Promise<void> {
  * re-armed by runPass after each pass, not an interval.
  */
 let workerTimer: NodeJS.Timeout | undefined;
+let livenessTimer: NodeJS.Timeout | undefined;
 let rateLimitCleanupTimer: NodeJS.Timeout | undefined;
 let csvSweepTimer: NodeJS.Timeout | undefined;
 let dailyAnalysisTimer: NodeJS.Timeout | undefined;
@@ -94,6 +112,9 @@ let abandonedScanSweepTimer: NodeJS.Timeout | undefined;
 
 /** Every recurring job the worker owns. See start()'s caller for the boot gate. */
 function start(): void {
+  void beatLiveness();
+  livenessTimer = setInterval(() => void beatLiveness(), HEARTBEAT_INTERVAL_MS);
+
   void runPass();
 
   rateLimitCleanupTimer = setInterval(() => {
@@ -181,6 +202,10 @@ async function shutdown(signal: string): Promise<void> {
   // Stop scheduling new work. Timers are cleared up front so no new pass can
   // be scheduled while we wait below for whatever pass is already running.
   clearTimeout(workerTimer);
+  // Stops here rather than in the tail below: once shutdown has begun this
+  // worker should stop asserting it is live, so a probe sees the truth even
+  // if the drain runs long.
+  clearInterval(livenessTimer);
   clearInterval(rateLimitCleanupTimer);
   clearInterval(csvSweepTimer);
   clearInterval(dailyAnalysisTimer);
