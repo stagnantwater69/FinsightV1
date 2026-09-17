@@ -39,7 +39,7 @@ function dayLabel(iso: string) {
 
 export function Notifications() {
   const { selected } = useBusinessProfiles();
-  const { notifications, unreadCount, loading, error, markRead, markAllRead } = useNotifications();
+  const { notifications, unreadCount, loading, error, markRead, markAllRead, refresh } = useNotifications();
   const [filter, setFilter] = useState<FilterKey>("all");
 
   const visible = useMemo(
@@ -117,9 +117,12 @@ export function Notifications() {
       </div>
 
       {error ? (
-        <p className="mb-4 rounded-xl bg-tint-danger px-3.5 py-3 text-sm text-tone-danger ring-1 ring-edge-danger">
-          {error}
-        </p>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-tint-danger px-3.5 py-3 text-sm text-tone-danger ring-1 ring-edge-danger">
+          <p>{error}</p>
+          <Button variant="secondary" size="sm" onClick={() => void refresh()}>
+            Try again
+          </Button>
+        </div>
       ) : null}
 
       {loading ? (
@@ -129,7 +132,13 @@ export function Notifications() {
             <div key={i} className="skeleton h-[4.5rem] rounded-xl" aria-hidden />
           ))}
         </div>
-      ) : visible.length === 0 ? (
+      ) : visible.length === 0 && !error ? (
+        /*
+         * NOT shown when the load failed. "Nothing needs your attention" is a
+         * claim about the server's list, and a request that never answered
+         * gives no grounds for it — under the error banner it read as an
+         * all-clear the app could not possibly have verified.
+         */
         <EmptyState
           title={filter === "unread" ? "Nothing unread" : "Nothing needs your attention"}
           icon="✓"

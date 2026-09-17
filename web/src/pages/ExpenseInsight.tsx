@@ -635,10 +635,16 @@ async function loadPanel<T>(
   request: Promise<{ data: T }>,
   apply: (value: T) => void,
   onUnavailable: () => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   try {
-    apply((await request).data);
+    const value = (await request).data;
+    // A superseded request must not write anything: the panel belongs to the
+    // business profile that is on screen NOW, not the one this was asked for.
+    if (signal?.aborted) return;
+    apply(value);
   } catch {
+    if (signal?.aborted) return;
     // Swallowed on purpose. The panel's own state now says "unavailable", and
     // an error banner for a secondary panel over a page that rendered fine
     // would be telling the owner their numbers are suspect when they are not.
@@ -717,7 +723,7 @@ export function ExpenseInsight() {
    * cards on screen. Kept out of `loadPanel`'s silent-unavailable pattern
    * because this panel needs a user-facing retry, not just a hidden state.
    */
-  async function loadReductionOpportunities() {
+  async function loadReductionOpportunities(signal?: AbortSignal) {
     if (!selected) return;
     setReductionLoading(true);
     setReductionError(null);
@@ -725,6 +731,7 @@ export function ExpenseInsight() {
       const res = await api.get<ReductionOpportunityResponse>(
         "/insights/reduction-opportunities",
         {
+          signal,
           params: {
             businessProfileId: selected.id,
             periodDays,
@@ -734,14 +741,15 @@ export function ExpenseInsight() {
       );
       setReductionOpportunities(res.data);
     } catch (err) {
+      if (signal?.aborted) return;
       setReductionOpportunities(null);
       setReductionError(getErrorMessage(err));
     } finally {
-      setReductionLoading(false);
+      if (!signal?.aborted) setReductionLoading(false);
     }
   }
 
-  async function load() {
+  async function load(signal?: AbortSignal) {
     /*
      * No business — an owner who chose "Skip for now". Settles instead of
      * bailing: `loading` starts true and `isInitialLoad` is `loading && !data`,
@@ -768,9 +776,10 @@ export function ExpenseInsight() {
     // Still fired together, so the page costs one round trip's worth of
     // latency as before — they are only SETTLED apart.
     const supplements = Promise.all([
-      loadReductionOpportunities(),
+      loadReductionOpportunities(signal),
       loadPanel(
         api.get<FlaggedRecordPage>("/records/flagged", {
+          signal,
           params: { businessProfileId, limit: FLAGGED_PANEL_PAGE_SIZE },
         }),
         (page) =>
@@ -780,28 +789,34 @@ export function ExpenseInsight() {
               .sort((a, b) => (a.date < b.date ? 1 : -1)),
           ),
         () => setFlaggedExpenses([]),
+        signal,
       ),
       loadPanel(
         api.get<FlaggedRecordCounts>("/records/flagged/count", {
+          signal,
           params: { businessProfileId },
         }),
         (counts) => setFlaggedExpenseCount(counts.expenses),
         () => setFlaggedExpenseCount(null),
+        signal,
       ),
       loadPanel(
         api.get<AnomalyFindingPage>("/insights/findings", {
+          signal,
           params: { businessProfileId, status: "OPEN", take: 20 },
         }),
         (page) => setFindings(page.items),
         () => setFindings([]),
+        signal,
       ),
-      loadRecurring(),
+      loadRecurring(signal),
     ]);
 
     try {
       const behavior = await api.get<ExpenseInsightData>(
         "/insights/expense-behavior",
         {
+          signal,
           params: {
             businessProfileId,
             periodDays,
@@ -811,11 +826,14 @@ export function ExpenseInsight() {
       );
       setData(behavior.data);
     } catch (err) {
+      // A superseded request is not a failure — and settling it would put the
+      // previous business profile's behaviour under the new one's heading.
+      if (signal?.aborted) return;
       // The core read. Nothing on this page is readable without it, so this one
       // failure IS the page's failure.
       setError(getErrorMessage(err));
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
 
     // Awaited so the page is not still writing state after the caller believes
@@ -882,30 +900,36 @@ export function ExpenseInsight() {
    * in a `Promise.all` they failed as one, so a dark schedules endpoint also
    * emptied the candidates panel that was working perfectly.
    */
-  async function loadRecurring() {
+  async function loadRecurring(signal?: AbortSignal) {
     if (!selected) return;
     const businessProfileId = selected.id;
     await Promise.all([
       loadPanel(
         api.get<RecurringPattern[]>("/insights/recurring-patterns", {
+          signal,
           params: { businessProfileId },
         }),
         setRecurringPatterns,
         () => setRecurringPatterns([]),
+        signal,
       ),
       loadPanel(
         api.get<RecurringSchedule[]>("/insights/recurring-schedules", {
+          signal,
           params: { businessProfileId },
         }),
         setRecurringSchedules,
         // Null, not []. See the state declaration: hidden, not "none".
         () => setRecurringSchedules(null),
+        signal,
       ),
     ]);
   }
 
   useEffect(() => {
-    load();
+    const controller = new AbortController();
+    load(controller.signal);
+    return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id, periodDays, endDate]);
 

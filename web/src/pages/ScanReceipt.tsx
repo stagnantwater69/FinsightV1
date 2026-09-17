@@ -159,6 +159,14 @@ function recoveryRowActionId(scanId: number): string {
   return `${recoveryRowId(scanId)}-action`;
 }
 
+function scannedItemRowId(itemId: number): string {
+  return `scanned-item-${itemId}`;
+}
+
+function scannedItemRemoveId(itemId: number): string {
+  return `${scannedItemRowId(itemId)}-remove`;
+}
+
 /** The server binds an upload key to one batch slot or to a single receipt. */
 function uploadBindingKey(batch?: BatchReceiptBinding): string {
   return batch ? `batch:${batch.batchId}:${batch.receiptOrdinal}` : "single";
@@ -360,6 +368,7 @@ function ScanReceiptForm() {
   // A history page requested before a delete can settle after it and put the row back.
   const purgedScanIds = useRef<Set<number>>(new Set());
   const [focusRowAfterDelete, setFocusRowAfterDelete] = useState<{ deletedScanId: number; nextScanId: number | null } | null>(null);
+  const [focusItemAfterRemove, setFocusItemAfterRemove] = useState<{ removedItemId: number; nextItemId: number | null } | null>(null);
 
   useEffect(() => {
     requests.current = new AbortController();
@@ -581,6 +590,23 @@ function ScanReceiptForm() {
     const next = nextScanId === null ? null : document.getElementById(recoveryRowActionId(nextScanId));
     (next ?? document.getElementById("receipt-files"))?.focus();
   }, [focusRowAfterDelete]);
+
+  // Same problem one table down: the × unmounts with its row, so without this
+  // a keyboard user is dropped onto <body> after every removal.
+  useEffect(() => {
+    if (!focusItemAfterRemove) return;
+    setFocusItemAfterRemove(null);
+    const { removedItemId, nextItemId } = focusItemAfterRemove;
+    const active = document.activeElement;
+    const focusLostWithRow = !active
+      || active === document.body
+      || active.closest(`#${scannedItemRowId(removedItemId)}`) !== null;
+    if (!focusLostWithRow) return;
+    // The neighbouring row's × if any line is left, otherwise the Amount
+    // field — the item table is gone once it empties.
+    const next = nextItemId === null ? null : document.getElementById(scannedItemRemoveId(nextItemId));
+    (next ?? document.getElementById("amount"))?.focus();
+  }, [focusItemAfterRemove]);
 
   if (!selected) return <NoBusinessProfile />;
 
@@ -1473,9 +1499,29 @@ function ScanReceiptForm() {
    * the gap against the total, which the reconciliation question below picks
    * up on the next render — that is the intended consequence, not a side
    * effect to suppress.
+   *
+   * Because the delete is server-side and the API has no way to put a read
+   * line back — re-adding it locally would file it as `addedByOwner`, i.e.
+   * claim a human typed something FinSight read — there is no undo to offer
+   * afterwards. The confirm step IS the way back, so it is not optional here
+   * the way it would be for a removal the toast could reverse.
    */
-  async function removeScannedItem(itemId: number) {
-    if (!scan) return;
+  async function removeScannedItem(item: ScannedItem) {
+    if (!scan || removingItemId !== null) return;
+    const itemId = item.id;
+    const index = scan.items.findIndex((candidate) => candidate.id === itemId);
+    const neighbour = index === -1
+      ? null
+      : scan.items[index + 1] ?? scan.items[index - 1] ?? null;
+
+    const approved = await confirm({
+      title: `Remove "${item.name}"?`,
+      body: "FinSight cannot put this line back once it's gone. What's left will be checked against the receipt total again.",
+      confirmLabel: "Remove item",
+      tone: "danger",
+    });
+    if (!approved) return;
+
     setRemovingItemId(itemId);
     setConfirmError(null);
     const signal = requests.current.signal;
@@ -1490,6 +1536,8 @@ function ScanReceiptForm() {
         delete next[itemId];
         return next;
       });
+      setFocusItemAfterRemove({ removedItemId: itemId, nextItemId: neighbour?.id ?? null });
+      toast("Item removed from this receipt.");
     } catch (err) {
       if (signal.aborted) return;
       if (isAxiosError(err) && err.response?.status === 409) {
@@ -2089,7 +2137,7 @@ function ScanReceiptForm() {
                     </thead>
                     <tbody>
                       {items.map((item) => (
-                        <tr key={item.id} className="border-t border-paper-200 align-middle">
+                        <tr key={item.id} id={scannedItemRowId(item.id)} className="border-t border-paper-200 align-middle">
                           <td className="px-3 py-2 text-ink-800">
                             {editingItem?.id === item.id ? (
                               <>
@@ -2284,10 +2332,19 @@ function ScanReceiptForm() {
                                   Edit
                                 </button>
                               )}
+                              {/*
+                                Disabled while ANY row is being removed, not
+                                just this one. Each × sends the scan revision
+                                it was rendered with, so a second click during
+                                a delete in flight comes back 409 — "this
+                                receipt changed in another request" — for a
+                                change the owner made themselves a moment ago.
+                              */}
                               <button
                                 type="button"
-                                onClick={() => removeScannedItem(item.id)}
-                                disabled={removingItemId === item.id || editingItem !== null}
+                                id={scannedItemRemoveId(item.id)}
+                                onClick={() => void removeScannedItem(item)}
+                                disabled={removingItemId !== null || editingItem !== null}
                                 className="tap-inline shrink-0 rounded-lg px-1.5 py-1 text-xs font-medium text-ink-500 transition hover:text-tone-danger disabled:opacity-50"
                               >
                                 <span aria-hidden>×</span>

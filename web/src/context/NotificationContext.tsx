@@ -40,7 +40,14 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
   const businessProfileId = selected?.id;
 
-  const refresh = useCallback(async () => {
+  /*
+   * `signal` is optional so the public `refresh()` and the poll can both call
+   * it bare. The mount effect passes one: without it, switching business
+   * profile while a slow /notifications request was in flight settled the
+   * PREVIOUS business's alerts into the bell and the notifications page,
+   * under the new business's name.
+   */
+  const refresh = useCallback(async (signal?: AbortSignal) => {
     if (!businessProfileId) {
       setNotifications([]);
       setLoading(false);
@@ -48,11 +55,14 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     }
     try {
       const { data } = await api.get<Notification[]>("/notifications", {
+        signal,
         params: { businessProfileId },
       });
+      if (signal?.aborted) return;
       setNotifications(data);
       setError(null);
     } catch {
+      if (signal?.aborted) return;
       // Deliberately quiet. Alerts are ambient information, not something the
       // user asked for right now — an error banner across the app because a
       // background poll failed would be far more disruptive than a bell that
@@ -60,13 +70,15 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       // itself, where the user IS asking.
       setError("Couldn't load notifications.");
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [businessProfileId]);
 
   useEffect(() => {
     setLoading(true);
-    refresh();
+    const controller = new AbortController();
+    refresh(controller.signal);
+    return () => controller.abort();
   }, [refresh]);
 
   // Alerts are raised by work the user didn't necessarily start here — a CSV
@@ -74,8 +86,14 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   // the badge honest without needing a socket.
   useEffect(() => {
     if (!businessProfileId) return;
-    const id = window.setInterval(refresh, POLL_MS);
-    return () => window.clearInterval(id);
+    // The poll gets a controller too: clearing the interval stops the NEXT
+    // tick, not the request the current one already sent.
+    const controller = new AbortController();
+    const id = window.setInterval(() => void refresh(controller.signal), POLL_MS);
+    return () => {
+      window.clearInterval(id);
+      controller.abort();
+    };
   }, [businessProfileId, refresh]);
 
   const markRead = useCallback(async (id: number) => {

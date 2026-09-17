@@ -57,7 +57,7 @@ export function Dashboard() {
   // be typed into the box for them — it is never sent on their behalf.
   const askFinSight = useAskFinSight("Dashboard");
 
-  async function load() {
+  async function load(signal?: AbortSignal) {
     /*
      * No business — an owner who chose "Skip for now". This must SETTLE, not
      * just return: `loading` starts true, so bailing out silently left the
@@ -75,18 +75,25 @@ export function Dashboard() {
     setSummary(null);
     try {
       const { data } = await api.get<DashboardSummary>("/dashboard/summary", {
+        signal,
         params: { businessProfileId: selected.id, periodDays },
       });
       setSummary(data);
     } catch (err) {
+      // A superseded request is not a failure. Without this guard, switching
+      // business while the summary was still in flight settled the OLD
+      // business's figures under the NEW business's heading.
+      if (signal?.aborted) return;
       setError(getErrorMessage(err));
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }
 
   useEffect(() => {
-    load();
+    const controller = new AbortController();
+    load(controller.signal);
+    return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id, periodDays]);
 
@@ -466,7 +473,7 @@ export function Dashboard() {
             <b className="font-semibold">Your dashboard couldn’t load.</b>
             <p className="mt-0.5">{error}</p>
           </div>
-          <button type="button" onClick={load} className="tap rounded-lg bg-paper px-3 py-2 font-semibold text-ink-800 shadow-sm">
+          <button type="button" onClick={() => void load()} className="tap rounded-lg bg-paper px-3 py-2 font-semibold text-ink-800 shadow-sm">
             Try again
           </button>
         </div>

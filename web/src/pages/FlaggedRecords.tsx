@@ -199,7 +199,7 @@ export function FlaggedRecords() {
   const askFinSight = useAskFinSight("Records Review");
   const queueId = useId();
 
-  async function load() {
+  async function load(signal?: AbortSignal) {
     /*
      * No business — an owner who chose "Skip for now". Settles rather than
      * bails: `loading` starts true, so returning silently held the queue under
@@ -227,33 +227,46 @@ export function FlaggedRecords() {
        */
       const [flagged, findingPage, importBatches] = await Promise.all([
         api.get<FlaggedRecordPage>("/records/flagged", {
+          signal,
           params: { businessProfileId: selected.id, limit: FLAGGED_PAGE_SIZE },
         }),
         api
           .get<AnomalyFindingPage>("/insights/findings", {
+            signal,
             params: { businessProfileId: selected.id, status: "OPEN", take: FINDINGS_PAGE_SIZE },
           })
           .catch(() => ({ data: { items: [], nextCursor: null } as AnomalyFindingPage })),
         api
           .get<ImportBatchSummary[]>("/records/csv-imports/batches", {
+            signal,
             params: { businessProfileId: selected.id },
           })
           .catch(() => ({ data: [] as ImportBatchSummary[] })),
       ]);
+      /*
+       * The two supplements swallow their own rejection, so an abort reaches
+       * here as an empty page rather than a throw. Checked before ANY write:
+       * a superseded queue settling would put the previous business profile's
+       * flagged records — or a spurious empty queue — under the new one.
+       */
+      if (signal?.aborted) return;
       setRecords(flagged.data.items);
       setFlaggedCursor(flagged.data.nextCursor);
       setFindings(findingPage.data.items);
       setFindingsCursor(findingPage.data.nextCursor);
       setBatches(importBatches.data);
     } catch (err) {
+      if (signal?.aborted) return;
       setError(getErrorMessage(err));
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }
 
   useEffect(() => {
-    load();
+    const controller = new AbortController();
+    load(controller.signal);
+    return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id]);
 
