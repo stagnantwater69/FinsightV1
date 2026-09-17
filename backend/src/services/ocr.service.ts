@@ -127,6 +127,50 @@ function workerFor(slot: PoolSlot): Promise<TesseractWorker> {
   return created;
 }
 
+/**
+ * How long one recognition may take before its worker is presumed wedged.
+ *
+ * Measured worst case across the corpus is a few seconds on a large photo, so
+ * nothing healthy comes near this. It is a safety net for a WASM loop that
+ * never returns: tripping it fails one scan, where the alternative is the
+ * whole worker process stopping forever.
+ */
+const RECOGNITION_TIMEOUT_MS = 120_000;
+
+/**
+ * A promise that rejects when the worker's thread dies.
+ *
+ * tesseract.js settles a job only on a `message` from its thread, and its node
+ * transport listens for nothing else — no `error`, no `exit`. So a thread that
+ * aborts mid-recognition (a WASM out-of-memory on a large page) leaves the job
+ * promise pending FOREVER. Without this, that pending promise held the pool
+ * slot busy, held `workerBusy` in worker.ts true, and let the scan's heartbeat
+ * keep renewing a lease nobody was working on: one bad image stopped every
+ * receipt, CSV, purge and analysis job in the process until it was restarted.
+ *
+ * Promise.race subscribes to this, so a rejection arriving after the job
+ * already won is delivered to a handler rather than becoming an unhandled
+ * rejection. `dispose` keeps a long-lived thread from accumulating listeners.
+ */
+function threadDeath(thread: WorkerThread | undefined): { promise: Promise<never>; dispose: () => void } {
+  if (!thread) return { promise: new Promise<never>(() => {}), dispose: () => {} };
+  const onExit = (code: number) => rejectWith(new Error(`OCR worker thread exited (code ${code}) mid-recognition`));
+  const onError = (err: Error) => rejectWith(err);
+  let rejectWith: (err: Error) => void = () => {};
+  const promise = new Promise<never>((_, reject) => {
+    rejectWith = reject;
+    thread.once("exit", onExit);
+    thread.once("error", onError);
+  });
+  return {
+    promise,
+    dispose: () => {
+      thread.off("exit", onExit);
+      thread.off("error", onError);
+    },
+  };
+}
+
 /** Runs one recognition on a pooled worker, queuing when both are busy. */
 async function withPooledWorker<T>(job: (worker: TesseractWorker) => Promise<T>): Promise<T> {
   const slot = await acquireSlot();
@@ -134,12 +178,27 @@ async function withPooledWorker<T>(job: (worker: TesseractWorker) => Promise<T>)
     const worker = await workerFor(slot);
     const thread = threadOf(worker);
     thread?.ref();
+    const death = threadDeath(thread);
+    let timer: NodeJS.Timeout | undefined;
     try {
-      return await job(worker);
+      return await Promise.race([
+        job(worker),
+        death.promise,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`OCR recognition exceeded ${RECOGNITION_TIMEOUT_MS} ms`)),
+            RECOGNITION_TIMEOUT_MS,
+          );
+          timer.unref();
+        }),
+      ]);
     } catch (err) {
+      // Includes the two cases above: the worker is not trustworthy either way.
       await discardWorker(slot);
       throw err;
     } finally {
+      if (timer) clearTimeout(timer);
+      death.dispose();
       thread?.unref();
     }
   } finally {
@@ -178,9 +237,22 @@ function recognizeWith<T>(options: OcrEngineOptions, job: (worker: TesseractWork
   return Object.keys(params).length > 0 ? withEphemeralWorker(params, job) : withPooledWorker(job);
 }
 
-/** Terminates every warm worker; for graceful shutdown of the worker process. */
+/**
+ * Terminates every warm worker; for graceful shutdown of the worker process.
+ *
+ * Slots are released and anyone still queued is rejected rather than left
+ * waiting on a pool that no longer has workers. The pool is not sealed: a
+ * later call spawns fresh workers, which is what the accuracy harness and the
+ * tests that call this directly rely on.
+ */
 export async function shutdownOcr(): Promise<void> {
+  const queued = waiters.splice(0, waiters.length);
   await Promise.all(pool.map((slot) => discardWorker(slot)));
+  for (const slot of pool) slot.busy = false;
+  // Resolved, not rejected: each waiter re-enters withPooledWorker's try block
+  // and spawns a fresh worker, so a shutdown racing a queued call costs a
+  // cold start rather than failing that scan.
+  for (const resolve of queued) resolve(pool[0]!);
 }
 
 /**

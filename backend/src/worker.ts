@@ -201,10 +201,13 @@ async function shutdown(signal: string): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
 
-  clearTimeout(forceTimer);
-  // Warm tesseract worker threads end here rather than with the process.
+  // The force timer stays armed across both awaits below. A warm tesseract
+  // thread that refuses to terminate, or a pooler that will not answer
+  // $disconnect, would otherwise hang here unbounded past the container's
+  // stop grace period and be SIGKILLed mid-disconnect.
   await shutdownOcr().catch((error) => logger.error({ err: error }, "OCR shutdown failed"));
   await prisma.$disconnect();
+  clearTimeout(forceTimer);
   logger.info("worker graceful shutdown complete");
   process.exit(0);
 }

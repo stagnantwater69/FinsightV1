@@ -28,9 +28,11 @@ vi.mock("../../src/services/ocr.service", async (importOriginal) => {
   };
 });
 
-const { adapterExtract, adapterMode } = vi.hoisted(() => ({
+const { adapterExtract, adapterMode, adapterExtraction } = vi.hoisted(() => ({
   adapterExtract: { current: vi.fn() },
   adapterMode: { value: "succeed" as "succeed" | "throw" },
+  /** Field overrides applied to the provider's normalized extraction. */
+  adapterExtraction: { value: {} as Record<string, unknown> },
 }));
 
 vi.mock("../../src/services/receiptScan/providerAdapters", async (importOriginal) => {
@@ -43,7 +45,8 @@ vi.mock("../../src/services/receiptScan/providerAdapters", async (importOriginal
       providerVersion: "gemini-3.5-flash-lite",
       extract: adapterExtract.current.mockImplementation(async (request) => {
         if (adapterMode.value === "throw") throw new Error("mocked provider outage");
-        return successfulOutcome(request);
+        const outcome = successfulOutcome(request);
+        return { ...outcome, extraction: { ...outcome.extraction, ...adapterExtraction.value } };
       }),
     }),
   };
@@ -173,11 +176,25 @@ async function extractorVersions(scanId: number) {
   };
 }
 
+async function storedFields(scanId: number) {
+  const scan = await prisma.receiptScan.findUniqueOrThrow({ where: { id: scanId }, include: { items: true } });
+  const evidence = (scan.fieldEvidence ?? {}) as Record<string, { source: string }>;
+  return {
+    items: scan.items.map((item) => item.name),
+    vendor: scan.extractedVendor,
+    date: scan.extractedDate?.toISOString().slice(0, 10) ?? null,
+    amount: scan.extractedAmount === null ? null : Number(scan.extractedAmount),
+    sources: Object.fromEntries(Object.entries(evidence).map(([field, entry]) => [field, entry.source])),
+    warnings: ((scan.warnings ?? []) as { code: string; field?: string }[]).map((w) => `${w.code}:${w.field ?? ""}`),
+  };
+}
+
 beforeEach(async () => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   adapterExtract.current = vi.fn();
   adapterMode.value = "succeed";
+  adapterExtraction.value = {};
   ocrText.value = "LOCAL STORE\n2026-09-01\nRice 100.00\nTOTAL PHP 100.00";
   enableMockedGeminiProvider();
   await resetDb();
@@ -281,6 +298,97 @@ describe("RECEIPT_PROVIDER_ROUTING", () => {
       finalBillableUnits: 2,
     });
     expect(await prisma.externalProviderBudget.findMany({ orderBy: { id: "asc" } })).toEqual(budgetsAfterFirst);
+  });
+});
+
+/*
+ * Which reading wins under always routing: the provider's, wherever it
+ * answered; the local read fills what it left null. The one exception is a
+ * locale-ambiguous date the provider merely read the other way round.
+ */
+describe("provider merge against the local read", () => {
+  const providerField = (value: string | number) => ({
+    value,
+    evidence: {
+      source: "gemini",
+      sourceVersion: "gemini-3.5-flash-lite",
+      pageNumber: null,
+      regionStatus: "UNAVAILABLE",
+      region: null,
+      confidenceBand: "MEDIUM",
+      calibrationState: "UNCALIBRATED",
+      validationState: "VALIDATED",
+      validationCodes: ["FORMAT_VALID", "REGION_UNAVAILABLE", "OWNER_REVIEW_REQUIRED"],
+    },
+  });
+
+  async function readWithProvider(suffix: string) {
+    enableMockedGeminiProvider({ RECEIPT_PROVIDER_ROUTING: "always" });
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const scan = await queuedScan(owner.profile.id, suffix);
+    expect(await runReceiptWorkerOnce()).toBe(true);
+    expect(adapterExtract.current).toHaveBeenCalledTimes(1);
+    expect((await extractorVersions(scan.id)).versions.providerGateCode).toBe("PROVIDER_OK");
+    return storedFields(scan.id);
+  }
+
+  it("replaces a misread vendor, an ambiguous date and an unreconciled total with the provider's reading", async () => {
+    // A garbage header, "03/09/2026" (both parts <= 12), and an item that does not reach the total.
+    ocrText.value = "bn eee ippines, Inc. i\n03/09/2026\nRice 60.00\nTOTAL PHP 100.00";
+    adapterExtraction.value = { date: providerField("2026-09-14"), total: providerField(125) };
+
+    const stored = await readWithProvider("merge-corrects");
+
+    expect(stored).toMatchObject({ vendor: "Provider Store", date: "2026-09-14", amount: 125 });
+    expect(stored.sources).toEqual({ vendor: "vision", date: "vision", amount: "vision" });
+    expect(stored.warnings).not.toContain("AMBIGUOUS_DATE:date");
+  });
+
+  it("reads the provider first even over a clean local read, and keeps the local items it did not replace", async () => {
+    // A loyalty-card expiry the parser mistakes for the date, plus items that reconcile locally.
+    ocrText.value = "LOCAL STORE\nCard Expiry : 12/30/2056\nRice 100.00\nTOTAL PHP 100.00";
+    adapterExtraction.value = { date: providerField("2026-09-01"), total: providerField(100) };
+
+    const stored = await readWithProvider("merge-provider-first");
+
+    expect(stored).toMatchObject({ vendor: "Provider Store", date: "2026-09-01", amount: 100 });
+    expect(stored.sources).toMatchObject({ vendor: "vision", date: "vision", amount: "ocr" });
+    expect(stored.items).toEqual(["Rice"]);
+  });
+
+  /*
+   * Rescue routing, not always routing: the provider was called because the
+   * local read failed, so it may only replace a field whose evidence is
+   * genuinely weaker. A total with no items read is unverified, not
+   * contradicted — nothing on the receipt disputes it — so it holds against a
+   * provider total of equal strength.
+   */
+  it("keeps a printed total that no items contradict when the provider is only a rescue", async () => {
+    enableMockedGeminiProvider();
+    ocrText.value = "2026-09-01\nTOTAL 100.00";
+    adapterExtraction.value = { total: providerField(125) };
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const scan = await queuedScan(owner.profile.id, "rescue-total-holds");
+
+    expect(await runReceiptWorkerOnce()).toBe(true);
+    expect(adapterExtract.current).toHaveBeenCalledTimes(1);
+
+    const stored = await storedFields(scan.id);
+    expect(stored.amount).toBe(100);
+    expect(stored.sources.amount).toBe("ocr");
+  });
+
+  it("keeps the parser's DD/MM reading of an ambiguous date when the provider only swaps day and month", async () => {
+    ocrText.value = "LOCAL STORE\n03/09/2026\nRice 100.00\nTOTAL PHP 100.00";
+    adapterExtraction.value = { date: providerField("2026-03-09") };
+
+    const stored = await readWithProvider("merge-date-swap");
+
+    expect(stored.date).toBe("2026-09-03");
+    expect(stored.sources.date).toBe("ocr");
+    expect(stored.warnings).toContain("AMBIGUOUS_DATE:date");
   });
 });
 

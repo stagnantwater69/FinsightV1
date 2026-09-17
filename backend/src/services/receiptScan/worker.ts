@@ -150,7 +150,7 @@ async function readStoredCandidate(evidence: StoredEvidence, withQuality: boolea
   const digest = sha256(buffer);
   const quality = withQuality ? await assessImageQuality(buffer) : null;
   const ocr = await extractReceipt(buffer);
-  return { ocr, digest, quality };
+  return { ocr, digest, quality, buffer };
 }
 
 function localEvidence(validated: boolean, arithmetic = false): NormalizedEvidence {
@@ -171,21 +171,46 @@ function localEvidence(validated: boolean, arithmetic = false): NormalizedEviden
   };
 }
 
+/*
+ * What the local read can honestly claim for each field, in the vocabulary
+ * the provider merge compares on. The merge keeps a VALIDATED local value over
+ * a provider value of equal strength, so anything marked validated here is
+ * out of the provider's reach — and the rescue decision above reports an
+ * ambiguous date and an unreconciled total as conflicts to be resolved. The
+ * two must agree: a field only counts as validated when something on the
+ * receipt corroborated it.
+ *
+ *   - date: validated unless the parser flagged it locale-ambiguous.
+ *   - vendor: never validated; it is the parser's guess at a header line and
+ *     nothing on the receipt checks it.
+ *   - total: contradicted only when items WERE read and do not add up to it;
+ *     no items at all leaves it unverified, not disproved. This is the same
+ *     predicate the rescue decision uses for `validation`, and the two must
+ *     not disagree about the same receipt.
+ *   - currency: a symbol or code printed on the receipt; validated as read.
+ */
 function localNormalizedExtraction(
   parsed: ReturnType<typeof parseReceiptFields>,
   items: ReturnType<typeof parseLineItems>,
   currency: string | null,
   reconciled: boolean,
 ): NormalizedReceiptExtraction {
-  const itemEvidence = localEvidence(reconciled, reconciled);
+  // reconcileItems reports `reconciled: true` for "not-comparable" — no total
+  // to check against. That is the absence of arithmetic, not passing it, so
+  // items may not claim ARITHMETIC_VALID on a receipt with no printed total.
+  const itemsCorroborated = items.length > 0 && parsed.amount !== null && reconciled;
+  const itemEvidence = localEvidence(itemsCorroborated, itemsCorroborated);
+  const dateValidated = !parsed.dateAmbiguous;
+  const totalReconciled = items.length > 0 && reconciled;
+  const totalValidated = items.length === 0 || reconciled;
   return {
     schemaVersion: RECEIPT_PROVIDER_CONTRACT_VERSION,
     source: "local-tesseract",
     sourceVersion: PARSER_VERSION,
-    date: { value: parsed.date, evidence: parsed.date ? localEvidence(true) : null },
-    vendor: { value: parsed.vendor, evidence: parsed.vendor ? localEvidence(true) : null },
+    date: { value: parsed.date, evidence: parsed.date ? localEvidence(dateValidated) : null },
+    vendor: { value: parsed.vendor, evidence: parsed.vendor ? localEvidence(false) : null },
     currency: { value: currency, evidence: currency ? localEvidence(true) : null },
-    total: { value: parsed.amount, evidence: parsed.amount ? localEvidence(true, reconciled) : null },
+    total: { value: parsed.amount, evidence: parsed.amount ? localEvidence(totalValidated, totalReconciled) : null },
     items: items.map((item) => ({
       name: item.name,
       quantity: item.quantity,
@@ -194,6 +219,13 @@ function localNormalizedExtraction(
     })),
     itemsEvidence: items.length > 0 ? itemEvidence : null,
   };
+}
+
+/** True when two ISO dates are the same year with day and month exchanged. */
+function isDayMonthSwap(left: string, right: string): boolean {
+  const [ly, lm, ld] = left.split("-");
+  const [ry, rm, rd] = right.split("-");
+  return ly === ry && lm === rd && ld === rm && lm !== ld;
 }
 
 function mergeIntoRescuedFields(
@@ -212,14 +244,31 @@ function mergeIntoRescuedFields(
     amount: item.amount,
   }));
   const providerItems = applied.has("items");
+  /*
+   * A locale-ambiguous local date ("03/09/2026") is offered to the provider
+   * as unvalidated, so its answer normally replaces it. The one answer that
+   * settles nothing is the same digits read the other way round: measured
+   * across repeat runs the model resolves that case inconsistently, whereas
+   * the parser applies the DD/MM convention every time. Then the parser's
+   * reading stands and stays flagged for the owner; a provider date that is
+   * not the swap is a different reading of the paper and wins as any other
+   * field does.
+   */
+  const providerDateIsSwap =
+    applied.has("date")
+    && parsed.dateAmbiguous
+    && parsed.date !== null
+    && receipt.date.value !== null
+    && isDayMonthSwap(parsed.date, receipt.date.value);
+  const dateApplied = applied.has("date") && !providerDateIsSwap;
   return {
-    date: receipt.date.value,
+    date: dateApplied ? receipt.date.value : parsed.date,
     vendor: receipt.vendor.value,
     description: receipt.vendor.value ? `Purchase from ${receipt.vendor.value}` : "Receipt purchase",
     amount: receipt.total.value,
     items: providerItems ? items : localItems,
-    dateAmbiguous: applied.has("date") ? false : parsed.dateAmbiguous,
-    dateSourceText: applied.has("date") ? null : parsed.dateSourceText,
+    dateAmbiguous: dateApplied ? false : parsed.dateAmbiguous,
+    dateSourceText: dateApplied ? null : parsed.dateSourceText,
     visionAssisted: applied.size > 0,
     itemsFromVision: providerItems,
     visionTrigger: trigger,
@@ -401,7 +450,7 @@ async function processScan(
       ocrMs += performance.now() - readStartedAt;
       const selected = selectOcrCandidate(original.ocr, processed?.ocr ?? null);
       const chosenEvidence = selected.source === "processed" && page.processed ? page.processed : page.original;
-      const chosenDigest = selected.source === "processed" && processed ? processed.digest : original.digest;
+      const chosen = selected.source === "processed" && processed ? processed : original;
       originalOcrResults.push(original.ocr);
       processedOcrResults.push(processed?.ocr ?? null);
       ocrResults.push(selected.result);
@@ -411,8 +460,12 @@ async function processScan(
         pageNumber: page.pageNumber,
         dataClass: selected.source === "processed" ? "DERIVED_RECEIPT_IMAGE" : "RECEIPT_IMAGE",
         mediaType: chosenEvidence.info.mimetype,
-        inputSha256: chosenDigest,
-        loadBytes: () => downloadReceiptImageBounded(chosenEvidence.path, RECEIPT_UPLOAD_MAX_OBJECT_BYTES, chosenEvidence.info),
+        inputSha256: chosen.digest,
+        // The bytes just read and hashed, not a second download of the same
+        // object. inputSha256 came from THIS buffer, so the dispatch gate's
+        // re-hash is a tautology on this path — it still guards a caller that
+        // sources the digest independently, and must not be removed there.
+        loadBytes: () => Promise.resolve(chosen.buffer),
       });
       await heartbeatScan(scanId, attempt);
     }

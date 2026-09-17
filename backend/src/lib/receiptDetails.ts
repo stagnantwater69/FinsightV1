@@ -18,7 +18,24 @@ function printedCurrencies(text: string): Set<string> {
     found.add(match[1]!.toUpperCase());
   }
   for (const match of text.matchAll(new RegExp(`\\d\\s*(${CURRENCY_CODES})\\b`, "gi"))) found.add(match[1]!.toUpperCase());
-  const symbols: [RegExp, string][] = [[/₱/, "PHP"], [/€/, "EUR"], [/£/, "GBP"], [/\bUS\$/, "USD"], [/\b(?:AU|A)\$/, "AUD"], [/\b(?:CA|C)\$/, "CAD"], [/\bNZ\$/, "NZD"], [/\b(?:SG|S)\$/, "SGD"], [/\bHK\$/, "HKD"]];
+  // A symbol counts only on a printed amount ("£12.50"), never on its own:
+  // OCR of a logo or a decorative rule throws off stray "£" and "$" characters,
+  // and one of those must not turn a peso receipt into a foreign-currency one.
+  // Philippine registers print pesos as a bare "P" before the amount.
+  // Horizontal space only, any amount of it: a receipt column right-aligns its
+  // figures, so "US$      12.50" is one printed amount, while `\s` would let a
+  // symbol on one line pair with a number on the next and invent a currency.
+  const symbols: [RegExp, string][] = [
+    [/(?:₱|\bP)[ \t]*\d[\d,]*[.,][ \t]*\d{2}\b/, "PHP"],
+    [/€[ \t]*\d[\d,]*[.,]\d{2}\b/, "EUR"],
+    [/£[ \t]*\d[\d,]*[.,]\d{2}\b/, "GBP"],
+    [/\bUS\$[ \t]*\d/, "USD"],
+    [/\b(?:AU|A)\$[ \t]*\d/, "AUD"],
+    [/\b(?:CA|C)\$[ \t]*\d/, "CAD"],
+    [/\bNZ\$[ \t]*\d/, "NZD"],
+    [/\b(?:SG|S)\$[ \t]*\d/, "SGD"],
+    [/\bHK\$[ \t]*\d/, "HKD"],
+  ];
   for (const [pattern, code] of symbols) if (pattern.test(text)) found.add(code);
   return found;
 }
@@ -28,7 +45,7 @@ export function requiresManualCurrencyConversion(rawText: string | null | undefi
   // Dollar and yen/yuan symbols do not identify one exact currency, but they
   // still must not be booked as PHP. Keep the displayed currency unknown and
   // require the owner to enter the actual PHP amount paid.
-  return /[$¥￥]/.test(text) || [...printedCurrencies(text)].some((currency) => currency !== "PHP");
+  return /[$¥￥][ \t]*\d/.test(text) || [...printedCurrencies(text)].some((currency) => currency !== "PHP");
 }
 
 function printedAmount(lines: string[], label: RegExp, allowNegative = false): number | null {

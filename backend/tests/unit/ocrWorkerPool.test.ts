@@ -38,7 +38,12 @@ interface FakeWorker {
   recognize: ReturnType<typeof vi.fn>;
   setParameters: ReturnType<typeof vi.fn>;
   terminate: ReturnType<typeof vi.fn>;
-  worker: { ref: ReturnType<typeof vi.fn>; unref: ReturnType<typeof vi.fn>; once: ReturnType<typeof vi.fn> };
+  worker: {
+    ref: ReturnType<typeof vi.fn>;
+    unref: ReturnType<typeof vi.fn>;
+    once: ReturnType<typeof vi.fn>;
+    off: ReturnType<typeof vi.fn>;
+  };
 }
 
 const created: FakeWorker[] = [];
@@ -49,7 +54,7 @@ async function fakeWorker(..._args: unknown[]): Promise<FakeWorker> {
     recognize: vi.fn(async () => ({ data: { text: `read by worker ${id}`, confidence: 90, blocks: [] } })),
     setParameters: vi.fn(async () => ({})),
     terminate: vi.fn(async () => ({})),
-    worker: { ref: vi.fn(), unref: vi.fn(), once: vi.fn() },
+    worker: { ref: vi.fn(), unref: vi.fn(), once: vi.fn(), off: vi.fn() },
   };
   created.push(fake);
   return fake;
@@ -117,7 +122,7 @@ describe("warm tesseract worker pool", () => {
         }),
         setParameters: vi.fn(async () => ({})),
         terminate: vi.fn(async () => ({})),
-        worker: { ref: vi.fn(), unref: vi.fn(), once: vi.fn() },
+        worker: { ref: vi.fn(), unref: vi.fn(), once: vi.fn(), off: vi.fn() },
       };
       created.push(fake);
       return fake;
@@ -168,6 +173,36 @@ describe("warm tesseract worker pool", () => {
     const text = await ocr.extractText(image);
     expect(createWorkerMock).toHaveBeenCalledTimes(2);
     expect(text).toBe("read by worker 2");
+  });
+
+  /*
+   * tesseract.js settles a job only on a `message` from its thread, so a
+   * thread that aborts mid-recognition leaves the job pending forever. That
+   * used to hold the slot busy and stop the whole worker process; the pool
+   * now watches the thread itself.
+   */
+  it("rejects a recognition whose thread dies, and frees the slot", async () => {
+    const image = await png();
+    const neverSettles = deferred<unknown>();
+    createWorkerMock.mockImplementation(async () => {
+      const fake = await fakeWorker();
+      fake.recognize = vi.fn(() => neverSettles.promise);
+      return fake;
+    });
+
+    const wedged = ocr.extractText(image);
+    const exitHandlers = () =>
+      created[0]!.worker.once.mock.calls.filter(([event]) => event === "exit").map(([, fn]) => fn as (code: number) => void);
+    // The per-job watcher is registered after the lifecycle one from creation.
+    await vi.waitFor(() => expect(exitHandlers().length).toBeGreaterThan(1));
+    exitHandlers().at(-1)!(1);
+
+    await expect(wedged).rejects.toThrow(/exited/);
+    expect(created[0]!.terminate).toHaveBeenCalled();
+
+    // The slot is usable again rather than stuck busy.
+    createWorkerMock.mockImplementation(fakeWorker);
+    await expect(ocr.extractText(image)).resolves.toBe("read by worker 2");
   });
 
   it("shutdownOcr terminates the pool; a later call starts over", async () => {

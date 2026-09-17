@@ -31,6 +31,26 @@ describe("printed receipt details", () => {
     expect(requiresManualCurrencyConversion("TOTAL PHP 500.00")).toBe(false);
   });
 
+  it("reads a peso receipt as PHP and ignores a stray symbol that is not on an amount", () => {
+    // OCR of a Robinsons logo: "£0" is noise in the header, the money is printed as "P938.00".
+    const robinsons = "hs w— . of £0\nCHARMEE AN LONG 10S 62.00 V\nTOTAL P62 .00\nCASH P1,000.00\nChange P938.00";
+    expect(parseReceiptDetails(robinsons).currency).toBe("PHP");
+    expect(requiresManualCurrencyConversion(robinsons)).toBe(false);
+    expect(parseReceiptDetails("Total ₱ 62.00").currency).toBe("PHP");
+    expect(requiresManualCurrencyConversion("**** $ ****\nTOTAL P62.00")).toBe(false);
+    // A right-aligned column puts several spaces between symbol and figure,
+    // and that is still one printed amount.
+    expect(requiresManualCurrencyConversion("TOTAL US$   12.50")).toBe(true);
+    expect(requiresManualCurrencyConversion("TOTAL:   $   45.20")).toBe(true);
+    expect(parseReceiptDetails("TOTAL US$   12.50").currency).toBe("USD");
+    // But a symbol and a figure on different lines are not.
+    expect(requiresManualCurrencyConversion("SUBTOTAL $\n62.00")).toBe(false);
+    // A symbol on an amount still counts.
+    expect(parseReceiptDetails("TOTAL £12.50").currency).toBe("GBP");
+    expect(requiresManualCurrencyConversion("TOTAL £12.50")).toBe(true);
+    expect(parseReceiptDetails("TOTAL €12.50").currency).toBe("EUR");
+  });
+
   it("does not guess between conflicting labelled values or payment methods", () => {
     const details = parseReceiptDetails("Subtotal 10.00\nSubtotal 20.00\nCash 10.00\nVisa 10.00\nReceipt # A1\nReceipt # A2");
     expect(details.subtotal).toBeNull();

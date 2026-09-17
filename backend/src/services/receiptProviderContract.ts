@@ -381,9 +381,13 @@ function mergeField<T>(
   local: { value: T | null; evidence: NormalizedEvidence | null },
   external: { value: T | null; evidence: NormalizedEvidence | null },
   equal: (left: T, right: T) => boolean,
+  providerFirst: boolean,
 ): { field: typeof local; changed: boolean } {
   if (external.value === null || external.evidence === null) return { field: local, changed: false };
   if (local.value !== null && equal(local.value, external.value)) return { field: local, changed: false };
+  if (providerFirst) {
+    return evidenceStrength(external.evidence) >= 1 ? { field: external, changed: true } : { field: local, changed: false };
+  }
   if (evidenceStrength(external.evidence) < 2 || evidenceStrength(external.evidence) <= evidenceStrength(local.evidence)) {
     return { field: local, changed: false };
   }
@@ -415,13 +419,25 @@ function markedForOwnerReview(evidence: NormalizedEvidence): NormalizedEvidence 
 }
 
 /**
- * Keeps the local value on invalid, weaker, equal, or unvalidated external
- * evidence, with one exception for line items: when the provider was asked
- * for every receipt (always routing) or the local read found no items at all,
- * provider items that do not add up to the total are still prefilled, marked
- * UNVALIDATED / OWNER_REVIEW_REQUIRED. Dropping them left the owner typing a
- * list the provider had already read. A local list that reconciled is never
- * replaced this way.
+ * Which reading wins depends on why the provider was asked.
+ *
+ * RESCUE (the default): the provider was called because the local read
+ * failed, and only a stronger validated provider field replaces a local one.
+ * The local value stays on invalid, weaker, equal, or unvalidated external
+ * evidence.
+ *
+ * ALWAYS routing: the operator chose the provider as the primary reader, so
+ * its validated answer replaces the local one wherever it answered at all and
+ * the local read is the fallback for what it left null. Items follow the
+ * rule the pre-contract rescue used: the provider's list wins when it adds up
+ * to the total or the local read found no items; a provider list that does
+ * not add up never displaces a local list that does.
+ *
+ * In either mode, provider items that do not add up to the total are still
+ * prefilled for owner review (UNVALIDATED / OWNER_REVIEW_REQUIRED) when the
+ * provider was asked for every receipt or the local read found no items at
+ * all. Dropping them left the owner typing a list the provider had already
+ * read.
  */
 export function mergeReceiptProviderOutcome(
   localInput: NormalizedReceiptExtraction,
@@ -450,16 +466,23 @@ export function mergeReceiptProviderOutcome(
   }
 
   const external = validation.outcome.extraction;
-  const date = mergeField(local.date, external.date, (left, right) => left === right);
-  const vendor = mergeField(local.vendor, external.vendor, (left, right) => left.trim().toLowerCase() === right.trim().toLowerCase());
-  const currency = mergeField(local.currency, external.currency, (left, right) => left === right);
-  const total = mergeField(local.total, external.total, sameMoney);
+  const alwaysRouted = request.rescueDecision.reasons.includes("PROVIDER_ROUTING_ALWAYS");
+  const date = mergeField(local.date, external.date, (left, right) => left === right, alwaysRouted);
+  const vendor = mergeField(
+    local.vendor,
+    external.vendor,
+    (left, right) => left.trim().toLowerCase() === right.trim().toLowerCase(),
+    alwaysRouted,
+  );
+  const currency = mergeField(local.currency, external.currency, (left, right) => left === right, alwaysRouted);
+  const total = mergeField(local.total, external.total, sameMoney, alwaysRouted);
 
   const externalItemsStrength = evidenceStrength(external.itemsEvidence);
   const localItemsStrength = evidenceStrength(local.itemsEvidence);
   const replaceItems =
-    external.items.length > 0 && externalItemsStrength >= 2 && externalItemsStrength > localItemsStrength;
-  const alwaysRouted = request.rescueDecision.reasons.includes("PROVIDER_ROUTING_ALWAYS");
+    external.items.length > 0
+    && ((externalItemsStrength >= 2 && externalItemsStrength > localItemsStrength)
+      || (alwaysRouted && externalItemsStrength >= 2));
   const prefillUnreconciledItems =
     !replaceItems &&
     external.items.length > 0 &&

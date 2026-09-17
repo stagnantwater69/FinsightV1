@@ -194,6 +194,75 @@ describe("receipt provider outcome validation and merge", () => {
   });
 });
 
+describe("always routing: the provider reads first", () => {
+  const alwaysRouted = () => providerRequest({
+    rescueDecision: rescueDecision({ reasons: ["PROVIDER_ROUTING_ALWAYS"] }),
+  });
+
+  it("replaces every validated local field the provider answered, at equal strength", () => {
+    const request = alwaysRouted();
+    const local = localExtraction();
+    const merged = mergeReceiptProviderOutcome(local, request, successfulOutcome(request));
+
+    expect(merged.reason).toBe("MERGED");
+    expect(merged.appliedFields).toEqual(["date", "vendor", "total"]);
+    expect(merged.receipt.date.value).toBe("2026-09-14");
+    expect(merged.receipt.vendor.value).toBe("Provider Store");
+    expect(merged.receipt.total.value).toBe(125);
+    // The provider gave no currency; the local read is the fallback.
+    expect(merged.receipt.currency).toEqual(local.currency);
+  });
+
+  it("falls back to the local value where the provider answered null or unvalidated", () => {
+    const request = alwaysRouted();
+    const local = localExtraction();
+    const extraction = successfulOutcome(request).extraction!;
+    const merged = mergeReceiptProviderOutcome(local, request, successfulOutcome(request, {
+      extraction: {
+        ...extraction,
+        date: { value: null, evidence: null },
+        total: {
+          value: 125,
+          evidence: evidence("gemini", { validationState: "UNVALIDATED", confidenceBand: "LOW", sourceVersion: "provider-v1" }),
+        },
+      },
+    }));
+
+    expect(merged.appliedFields).toEqual(["vendor"]);
+    expect(merged.receipt.date).toEqual(local.date);
+    expect(merged.receipt.total).toEqual(local.total);
+  });
+
+  it("takes a provider item list that adds up even over a reconciled local list, never one that does not", () => {
+    const request = alwaysRouted();
+    const localItemEvidence = evidence("local-tesseract", { confidenceBand: "MEDIUM", sourceVersion: "tesseract-v1" });
+    const local = localExtraction({
+      items: [{ name: "Local item", quantity: 1, amount: 100, evidence: localItemEvidence }],
+      itemsEvidence: localItemEvidence,
+    });
+    const extraction = successfulOutcome(request).extraction!;
+    const providerItems = (validationState: "VALIDATED" | "UNVALIDATED") => {
+      const itemEvidence = evidence("gemini", { validationState, confidenceBand: validationState === "VALIDATED" ? "MEDIUM" : "LOW", sourceVersion: "provider-v1" });
+      return successfulOutcome(request, {
+        extraction: {
+          ...extraction,
+          items: [{ name: "Provider item", quantity: 1, amount: 125, evidence: itemEvidence }],
+          itemsEvidence: itemEvidence,
+        },
+      });
+    };
+
+    const reconciled = mergeReceiptProviderOutcome(local, request, providerItems("VALIDATED"));
+    expect(reconciled.appliedFields).toContain("items");
+    expect(reconciled.receipt.items.map((item) => item.name)).toEqual(["Provider item"]);
+    expect(reconciled.itemsOwnerReviewRequired).toBe(false);
+
+    const unreconciled = mergeReceiptProviderOutcome(local, request, providerItems("UNVALIDATED"));
+    expect(unreconciled.appliedFields).not.toContain("items");
+    expect(unreconciled.receipt.items).toEqual(local.items);
+  });
+});
+
 describe("unreconciled provider items", () => {
   const unvalidated = evidence("gemini", {
     confidenceBand: "LOW",

@@ -184,12 +184,14 @@ export function buildFieldEvidence(
   // The date is located by the RAW matched text ("25/07/2026"), because the
   // normalised ISO value the parser returns is not what is printed. The
   // vendor is located by its FINAL spelling; a history-corrected name that no
-  // longer appears verbatim on the receipt honestly locates nowhere.
-  const date = entry(rescued.date, parsed.date !== null, rescued.dateSourceText);
-  const vendorEntry = entry(vendor, parsed.vendor !== null, vendor);
+  // longer appears verbatim on the receipt honestly locates nowhere. A value
+  // is OCR's only while it is still the parser's own: one the provider
+  // replaced is the model's reading even though the parser also had one.
+  const date = entry(rescued.date, parsed.date !== null && rescued.date === parsed.date, rescued.dateSourceText);
+  const vendorEntry = entry(vendor, parsed.vendor !== null && rescued.vendor === parsed.vendor, vendor);
   const amount = entry(
     rescued.amount !== null ? rescued.amount.toFixed(2) : null,
-    parsed.amount !== null,
+    parsed.amount !== null && rescued.amount === parsed.amount,
     rescued.amount !== null ? rescued.amount.toFixed(2) : null,
   );
 
