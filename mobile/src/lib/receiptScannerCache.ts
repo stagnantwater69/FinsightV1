@@ -5,7 +5,7 @@
  *   the Kotlin module; reached through the bridge wrapper).
  * - `Camera/`: expo-camera stills from the manual shutter.
  * - `ImagePicker/`: gallery picks, both on this screen and inside the camera.
- * - `DocumentPicker/`: "Choose a receipt from Files" copies (and CSV imports).
+ * - `DocumentPicker/`: CSV import copies.
  * - `ImageManipulator/`: gallery JPEG normalisation, rotate, the crop written
  *   back from the server transform, and the analysis downscales.
  *

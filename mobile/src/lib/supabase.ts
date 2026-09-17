@@ -2,6 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
 import Constants from "expo-constants";
+import { resolveApiBaseUrl } from "./apiBaseUrl";
 
 /**
  * Supabase client for React Native, with the session held in the device
@@ -94,7 +95,17 @@ const extra = (Constants.expoConfig?.extra ?? {}) as Record<string, string | und
 
 export const SUPABASE_URL = extra.supabaseUrl ?? "";
 export const SUPABASE_ANON_KEY = extra.supabaseAnonKey ?? "";
-export const API_BASE_URL = extra.apiBaseUrl ?? "";
+/*
+ * The backend address follows the host this bundle was served from while
+ * developing, so one build works over WiFi, over Tailscale, and for a
+ * teammate on Expo Go without anyone editing an env file. See
+ * resolveApiBaseUrl for the cases it deliberately leaves alone.
+ */
+export const API_BASE_URL = resolveApiBaseUrl(
+  extra.apiBaseUrl ?? "",
+  Constants.expoConfig?.hostUri ?? null,
+  __DEV__,
+);
 
 if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !API_BASE_URL) {
   throw new Error(

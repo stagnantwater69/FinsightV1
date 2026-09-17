@@ -2064,7 +2064,7 @@ function ScanReceiptForm() {
                 </p>
 
                 <div className="mt-2 overflow-x-auto rounded-xl border border-paper-200">
-                  <table className="w-full min-w-[30rem] text-left text-sm">
+                  <table className="w-full min-w-[38rem] text-left text-sm">
                     <caption className="sr-only">
                       Each item read from the receipt, with the category it will be filed under
                     </caption>
@@ -2079,8 +2079,11 @@ function ScanReceiptForm() {
                         <th scope="col" className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600">
                           Price
                         </th>
-                        <th scope="col" className="w-48 px-3 py-2 text-xs font-semibold uppercase tracking-[0.06em] text-ink-600">
+                        <th scope="col" className="w-56 px-3 py-2 text-xs font-semibold uppercase tracking-[0.06em] text-ink-600">
                           Category
+                        </th>
+                        <th scope="col" className="w-24 px-3 py-2">
+                          <span className="sr-only">Actions</span>
                         </th>
                       </tr>
                     </thead>
@@ -2207,19 +2210,50 @@ function ScanReceiptForm() {
                             ) : null}
                           </td>
                           <td className="px-3 py-2">
-                            <div className="flex items-center gap-1.5">
-                              <div className="min-w-0 flex-1">
-                                <label htmlFor={`item-category-${item.id}`} className="sr-only">
-                                  Category for {item.name}
-                                </label>
-                                <CategorySelect
-                                  id={`item-category-${item.id}`}
-                                  value={itemCategories[item.id] ?? ""}
-                                  onChange={(categoryId) =>
-                                    setItemCategories((prev) => ({ ...prev, [item.id]: categoryId }))
-                                  }
-                                />
-                              </div>
+                            <label htmlFor={`item-category-${item.id}`} className="sr-only">
+                              Category for {item.name}
+                            </label>
+                            <CategorySelect
+                              id={`item-category-${item.id}`}
+                              value={itemCategories[item.id] ?? ""}
+                              onChange={(categoryId) =>
+                                setItemCategories((prev) => ({ ...prev, [item.id]: categoryId }))
+                              }
+                            />
+                            {/*
+                              A category FinSight thinks is missing.
+
+                              Shown only where it is still useful — see
+                              suggestedNewCategoryFor. Phrased as an offer
+                              rather than an assignment, because nothing is
+                              created until the owner says so; the whole
+                              reason this is a suggestion and not a decision
+                              is that inventing categories in someone's books
+                              is not FinSight's call to make.
+                            */}
+                            {suggestedNewCategoryFor(item) ? (
+                              <p className="mt-1.5 text-[11px] leading-relaxed text-ink-500">
+                                <span aria-hidden className="text-tone-accent">
+                                  ✦
+                                </span>{" "}
+                                Nothing fits this. FinSight suggests a new category,{" "}
+                                <b className="font-semibold text-ink-700">{item.suggestedCategoryName}</b>.{" "}
+                                <button
+                                  type="button"
+                                  onClick={() => acceptSuggestedCategory(item.suggestedCategoryName!)}
+                                  disabled={creatingCategoryFor !== null}
+                                  className="tap-inline font-medium text-tone-brand underline transition hover:decoration-2 disabled:opacity-50"
+                                >
+                                  {creatingCategoryFor === item.suggestedCategoryName
+                                    ? "Creating…"
+                                    : "Create it"}
+                                  <span className="sr-only"> and file {item.name} under it</span>
+                                </button>
+                              </p>
+                            ) : null}
+                          </td>
+                          <td className="px-3 py-2">
+                            <div className="flex items-center justify-end gap-1">
                               {editingItem?.id === item.id ? (
                                 <>
                                   <button
@@ -2263,37 +2297,6 @@ function ScanReceiptForm() {
                               </button>
                             </div>
 
-                            {/*
-                              A category FinSight thinks is missing.
-
-                              Shown only where it is still useful — see
-                              suggestedNewCategoryFor. Phrased as an offer
-                              rather than an assignment, because nothing is
-                              created until the owner says so; the whole
-                              reason this is a suggestion and not a decision
-                              is that inventing categories in someone's books
-                              is not FinSight's call to make.
-                            */}
-                            {suggestedNewCategoryFor(item) ? (
-                              <p className="mt-1.5 text-[11px] leading-relaxed text-ink-500">
-                                <span aria-hidden className="text-tone-accent">
-                                  ✦
-                                </span>{" "}
-                                Nothing fits this. FinSight suggests a new category,{" "}
-                                <b className="font-semibold text-ink-700">{item.suggestedCategoryName}</b>.{" "}
-                                <button
-                                  type="button"
-                                  onClick={() => acceptSuggestedCategory(item.suggestedCategoryName!)}
-                                  disabled={creatingCategoryFor !== null}
-                                  className="tap-inline font-medium text-tone-brand underline transition hover:decoration-2 disabled:opacity-50"
-                                >
-                                  {creatingCategoryFor === item.suggestedCategoryName
-                                    ? "Creating…"
-                                    : "Create it"}
-                                  <span className="sr-only"> and file {item.name} under it</span>
-                                </button>
-                              </p>
-                            ) : null}
                           </td>
                         </tr>
                       ))}
@@ -2338,17 +2341,17 @@ function ScanReceiptForm() {
                             />
                           </td>
                           <td className="px-3 py-2">
-                            <div className="flex items-center gap-1.5">
-                              <div className="min-w-0 flex-1">
-                                <label htmlFor={`added-category-${added.key}`} className="sr-only">
-                                  Category for added item {i + 1}
-                                </label>
-                                <CategorySelect
-                                  id={`added-category-${added.key}`}
-                                  value={added.categoryId}
-                                  onChange={(categoryId) => updateAddedItem(added.key, { categoryId })}
-                                />
-                              </div>
+                            <label htmlFor={`added-category-${added.key}`} className="sr-only">
+                              Category for added item {i + 1}
+                            </label>
+                            <CategorySelect
+                              id={`added-category-${added.key}`}
+                              value={added.categoryId}
+                              onChange={(categoryId) => updateAddedItem(added.key, { categoryId })}
+                            />
+                          </td>
+                          <td className="px-3 py-2">
+                            <div className="flex items-center justify-end gap-1">
                               <button
                                 type="button"
                                 onClick={() => removeAddedItem(added.key)}

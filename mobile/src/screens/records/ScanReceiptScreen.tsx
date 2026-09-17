@@ -13,9 +13,8 @@ import {
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import * as ImagePicker from "expo-image-picker";
-import * as DocumentPicker from "expo-document-picker";
 import { ResultDetails } from "../../components/ResultDetails";
-import { RECEIPT_MIME_TYPES, receiptFileError, receiptMimeType } from "../../lib/importFiles";
+import { receiptFileError } from "../../lib/importFiles";
 import { useImportOperation } from "../../lib/useImportOperation";
 import { newIdempotencyKey } from "../../lib/csvImport";
 import { Button, Card, ErrorNote, Field, Money, Screen, T } from "../../components/ui";
@@ -1286,26 +1285,6 @@ export function ScanReceiptScreen({ navigation }: any) {
     }
   }
 
-  async function pickFile() {
-    const task = operation.begin();
-    if (!task) return;
-    setPicking(true);
-    try {
-      const result = await DocumentPicker.getDocumentAsync({ type: RECEIPT_MIME_TYPES, copyToCacheDirectory: true });
-      if (!operation.current(task) || result.canceled || !result.assets[0]) return;
-      const file = result.assets[0];
-      const validation = receiptFileError({ name: file.name, mimeType: file.mimeType });
-      if (validation) { setError(validation); return; }
-      const dimensions = await Image.getSize(file.uri);
-      await addPage({ uri: file.uri, width: dimensions.width, height: dimensions.height, fileName: file.name, mimeType: file.mimeType === "application/octet-stream" ? receiptMimeType(file.name) : file.mimeType ?? receiptMimeType(file.name), fileSize: file.size }, task);
-    } catch (err) {
-      if (operation.current(task)) setError(describeActionFailure(toLoadFailure(err), "Choose another receipt image."));
-    } finally {
-      if (operation.current(task)) setPicking(false);
-      operation.finish(task);
-    }
-  }
-
   /*
    * Two review modes, exactly as web has.
    *
@@ -2236,16 +2215,6 @@ export function ScanReceiptScreen({ navigation }: any) {
                         >
                           <Ionicons name="image-outline" size={22} color={t.brandText} />
                         </Pressable>
-                        <Pressable
-                          onPress={pickFile}
-                          accessibilityRole="button"
-                          accessibilityLabel="Choose a receipt from Files"
-                          disabled={picking}
-                          accessibilityState={{ disabled: picking }}
-                          style={{ width: TAP_FLOOR, height: TAP_FLOOR, borderRadius: radius.md, backgroundColor: t.surface, borderWidth: 1, borderColor: t.border, alignItems: "center", justifyContent: "center" }}
-                        >
-                          <Ionicons name="document-outline" size={22} color={t.brandText} />
-                        </Pressable>
                       </View>
                     ) : (
                       <>
@@ -2285,9 +2254,6 @@ export function ScanReceiptScreen({ navigation }: any) {
                         ))}
                         {!scanStarted && capturedReceiptGroups.length < MAX_RECEIPTS_PER_CAPTURE_BATCH ? (
                           <Button title="Capture a separate receipt" variant="ghost" onPress={captureSeparateReceipt} disabled={picking} />
-                        ) : null}
-                        {!scanStarted && capturedReceiptGroups.length === 1 && canAddSection(capturedReceiptGroups[0]!.length) ? (
-                          <Button title="Add another section from Files" variant="ghost" onPress={pickFile} disabled={picking} />
                         ) : null}
                       </>
                     )}

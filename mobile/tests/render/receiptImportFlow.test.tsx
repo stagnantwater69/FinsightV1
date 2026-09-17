@@ -1,7 +1,7 @@
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, waitFor } from "@testing-library/react-native";
-import { Alert, Image } from "react-native";
+import { Alert } from "react-native";
 import * as fixtures from "./support/fixtures";
 import { RECEIPT_UPLOAD_MAX_OBJECT_BYTES } from "../../src/lib/receiptUploadContract";
 
@@ -223,24 +223,6 @@ describe("receipt scan review workflow", () => {
     expect(q.queryByRole("button", { name: "Save this expense" })).toBeNull();
     expect(q.getByRole("button", { name: "Choose a photo from your gallery" })).toBeEnabled();
     expect(navigation.goBack).not.toHaveBeenCalled();
-  });
-
-  it.each(["file:///cache/receipt.PNG", "content://documents/receipt/123"])("uploads a supported Files image from %s", async (uri) => {
-    const size = vi.spyOn(Image, "getSize").mockImplementation(async () => ({ width: 600, height: 1000 }));
-    const append = vi.spyOn(FormData.prototype, "append");
-    document.mockResolvedValue({ canceled: false, assets: [{ uri, name: "receipt.PNG", mimeType: "application/octet-stream", size: 1500 }] });
-    try {
-      const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
-      await fireEvent.press(q.getByRole("button", { name: "Choose a receipt from Files" }));
-      await waitFor(() => expect(q.getByRole("button", { name: "Scan this receipt" })).toBeEnabled());
-      expect(size).toHaveBeenCalledWith(uri);
-      await fireEvent.press(q.getByRole("button", { name: "Scan this receipt" }));
-      await waitFor(() => expect(q.getByRole("button", { name: "Save this expense" })).toBeTruthy());
-      expect(append).toHaveBeenCalledWith("files", { uri, name: "receipt.PNG", type: "image/png" });
-    } finally {
-      size.mockRestore();
-      append.mockRestore();
-    }
   });
 
   it("resumes an accepted scan without uploading it again after polling fails", async () => {
@@ -1311,14 +1293,6 @@ describe("receipt scan review workflow", () => {
     await fireEvent.press(q.getByRole("button", { name: "Enter expense manually" }));
     expect(navigation.navigate).toHaveBeenCalledWith("AddExpense");
     expect(post).not.toHaveBeenCalled();
-  });
-
-  it("rejects unsupported receipt files before contacting the server", async () => {
-    document.mockResolvedValue({ canceled: false, assets: [{ uri: "file:///receipt.pdf", name: "receipt.pdf", mimeType: "application/pdf", size: 1500 }] });
-    const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
-    await fireEvent.press(q.getByRole("button", { name: "Choose a receipt from Files" }));
-    await waitFor(() => expect(q.getByText(/PDF receipts are not supported/)).toBeTruthy());
-    expect(upload).not.toHaveBeenCalled();
   });
 
   it("keeps mocked oversized gallery evidence available for review or removal and never uploads it", async () => {

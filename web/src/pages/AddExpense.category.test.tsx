@@ -17,18 +17,15 @@ vi.mock("../components/Toast", () => ({ useToast: () => vi.fn() }));
 beforeEach(() => { mocks.post.mockReset(); mocks.remember.mockReset(); mocks.selected = { id: 1 }; });
 
 describe("manual expense categories", () => {
-  it("searches categories and preserves the current selection until changed", async () => {
+  it("remembers the chosen category and offers no separate search control", async () => {
     const user = userEvent.setup();
     render(<MemoryRouter><AddExpense /></MemoryRouter>);
     await user.selectOptions(screen.getByLabelText(/^Category/), "2");
     expect(mocks.remember).toHaveBeenCalledWith(2);
-    await user.click(screen.getByRole("button", { name: "Search categories" }));
-    await user.type(screen.getByRole("searchbox"), "util");
-    expect(screen.getByLabelText(/^Category/)).toHaveValue("2");
     expect(screen.getByRole("group", { name: "Recently used" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Search categories" })).not.toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText(/^Category/), "3");
     expect(screen.getByRole("combobox", { name: /^Category/ })).toHaveValue("3");
-    expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
   });
 
   it("requires Apply suggestion before changing a chosen category", async () => {
