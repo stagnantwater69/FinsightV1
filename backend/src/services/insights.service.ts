@@ -29,11 +29,11 @@ import {
 // UTC midnight, so local-time boundaries drop or double-count the edge days.
 // See lib/dates.ts.
 //
-// Recovery Target's "today", specifically, is resolved in the business's own
-// IANA timezone instead (resolveBusinessToday) — see the comment on
-// loadRecoveryTargets below and RECOVERY-TARGET-IMPROVEMENT-PLAN.md §9.1. It
-// still produces a UTC-midnight-encoded Date, so it plugs into these same
-// date-only boundary helpers unchanged.
+// Which calendar day counts as "today" is a separate question, and the answer
+// is the business's own IANA timezone (resolveBusinessToday), not the server's
+// clock — see RECOVERY-TARGET-IMPROVEMENT-PLAN.md §9.1. It still produces a
+// UTC-midnight-encoded Date, so it plugs into these same date-only boundary
+// helpers unchanged.
 import {
   resolveBusinessToday,
   utcAddDays,
@@ -43,7 +43,6 @@ import {
   utcEndOfDay,
   utcMonthKey,
   utcStartOfMonth,
-  utcToday,
 } from "../lib/dates";
 import { loadBoundedCategoryHistory } from "./anomalyDetection/categoryStatistics.service";
 import { DEFAULT_DETECTION_CONFIG } from "./anomalyDetection/config";
@@ -75,10 +74,12 @@ function toRecoveryTargetCalendarInput(exact: ExactOperatingCounts | null) {
 // caller needs another figure, add it here.
 //
 // `today` is a caller-supplied date-only boundary, not computed here — see
-// each caller for how it's resolved. `getRecoveryInsight` and
-// `simulateRecoveryScenario` (below, in this file) resolve it in the
-// business's own local timezone via `resolveBusinessToday`; `dashboard.service.ts`
-// currently still passes `utcToday()`, which is out of scope for this task.
+// each caller for how it's resolved. Every caller now resolves it in the
+// business's own local timezone via `resolveBusinessToday`: `getRecoveryInsight`
+// and `simulateRecoveryScenario` below, `aiContext.service.ts`, and
+// `dashboard.service.ts` (which used to pass `utcToday()`, so the Dashboard
+// and the Recovery Target screen disagreed for the eight hours a day between
+// Manila midnight and UTC midnight).
 // `precomputedExactCalendar` is an optional third argument, additive to the
 // original two-argument signature every existing caller (dashboard.service.ts,
 // aiContext.service.ts) already uses unchanged. Pass it when a caller has
@@ -687,9 +688,13 @@ export async function getExpenseBehavior(
    */
   endDate?: Date,
 ) {
-  await requireOwnedBusinessProfile(userId, businessProfileId);
+  const profile = await requireOwnedBusinessProfile(userId, businessProfileId);
 
-  const today = endDate ?? utcToday();
+  // The business's own calendar day, not the server's: between local midnight
+  // and 08:00 in Manila, a UTC "today" put the owner's newest expense outside
+  // both the current window and the previous one, so a morning's spending
+  // showed up in neither the period total nor the comparison against it.
+  const today = endDate ?? resolveBusinessToday(profile.timezone);
   const periodStart = utcAddDays(today, -(periodDays - 1));
   const previousPeriodEnd = utcAddDays(periodStart, -1);
   const previousPeriodStart = utcAddDays(previousPeriodEnd, -(periodDays - 1));
@@ -814,14 +819,27 @@ export async function getExpenseBehavior(
   // Current-period candidates are merged even when they sit just outside the
   // baseline (the API permits a 366-day view), so a visible row is never
   // silently omitted from eligibility checks.
+  //
+  // THE MERGE CARRIES THE SAME PER-CATEGORY CEILING THE BASELINE DOES.
+  // `loadBoundedCategoryHistory` caps each category in SQL; the merge used to
+  // add the selected period on top without a limit, so a category with 20,000
+  // records in the window handed all 20,000 to a leave-one-out scan on a
+  // synchronous path an authenticated GET holds. `maximumCategoryRecords` is
+  // the ceiling every sibling detector applies. Newest first, so what it can
+  // drop is the oldest end of the window, not spending just entered.
+  const maximumPerCategory = DEFAULT_DETECTION_CONFIG.maximumCategoryRecords;
   const recordsByCategory = new Map<number, Map<number, { id: number; amount: number }>>();
   for (const r of boundedCategoryHistory) {
     const records = recordsByCategory.get(r.categoryId) ?? new Map();
     records.set(r.id, { id: r.id, amount: Number(r.amount) });
     recordsByCategory.set(r.categoryId, records);
   }
-  for (const r of currentRecords) {
+  const currentNewestFirst = [...currentRecords].sort(
+    (a, b) => b.date.getTime() - a.date.getTime() || b.id - a.id,
+  );
+  for (const r of currentNewestFirst) {
     const records = recordsByCategory.get(r.categoryId) ?? new Map();
+    if (!records.has(r.id) && records.size >= maximumPerCategory) continue;
     records.set(r.id, { id: r.id, amount: Number(r.amount) });
     recordsByCategory.set(r.categoryId, records);
   }
@@ -1173,7 +1191,10 @@ export async function simulateSpendingImpact(
 ) {
   const profile = await requireOwnedBusinessProfile(userId, businessProfileId);
 
-  const today = utcToday();
+  // Business-local "today" — see getExpenseBehavior above. The recent-spending
+  // baseline this compares a planned purchase against must not silently drop
+  // the day the owner is standing in.
+  const today = resolveBusinessToday(profile.timezone);
   const periodStart = utcAddDays(today, -(periodDays - 1));
   const endOfToday = utcEndOfDay(today);
 
@@ -1301,6 +1322,65 @@ export function significantWords(description: string): string[] {
 }
 
 /**
+ * The term handed to SQL for a search word.
+ *
+ * A plural and its singular are the same purchase — an owner who typed
+ * "chairs" means the record that says "chair". The prefilter searches the
+ * shorter form so both come back, and `describesSameItem` below decides
+ * which of them actually count.
+ */
+export function searchTerm(word: string): string {
+  return word.endsWith("s") && word.length > 4 ? word.slice(0, -1) : word;
+}
+
+const WORD_SPLIT = /[^a-z0-9]+/;
+
+/** `chair` and `chairs`, `box` and `boxes` — the same thing, typed differently. */
+function sameWord(a: string, b: string): boolean {
+  return a === b || a + "s" === b || b + "s" === a || a + "es" === b || b + "es" === a;
+}
+
+/**
+ * Does this record describe the item the owner asked about?
+ *
+ * THIS EXISTS BECAUSE `contains` IS A SUBSTRING MATCH, AND A SUBSTRING MATCH
+ * LIES. An owner pricing a "house" was shown a snack receipt, because one of
+ * its lines read "Piattos Roadhouse BBQ" and "Roadhouse" contains "house".
+ * The same trap catches "oven" in "proven", "rice" in "price", "cart" in
+ * "cartons" and "pack" in "backpack" — all of them ordinary words in an
+ * ordinary ledger.
+ *
+ * That kind of wrong answer is worse here than anywhere else in FinSight: the
+ * card presents this half as counted from the owner's own records rather than
+ * written by AI, which is exactly the label that tells them to trust it.
+ *
+ * So the SQL `contains` stays as a cheap prefilter, and every candidate is
+ * re-checked here against whole words before it is allowed to count.
+ */
+export function describesSameItem(description: string, words: string[]): boolean {
+  if (words.length === 0) return false;
+  const tokens = description.toLowerCase().split(WORD_SPLIT).filter(Boolean);
+  return words.every((word) => tokens.some((token) => sameWord(token, word)));
+}
+
+/**
+ * A description holding a whole basket rather than one purchase.
+ *
+ * A confirmed receipt scan writes every line it read into one record: "Piattos
+ * Roadhouse BBQ (40g) - Bag, Mr. Chips Nacho Cheese (24g) - Bag, Presto Creams
+ * Peanut Butter (30g) - Pack of 10, ...". The amount on that record is the
+ * whole shop, so quoting it as what the owner paid "last time you bought
+ * something like this" overstates the item's price by however many other
+ * things were in the basket — even when the word match is genuine.
+ *
+ * Four or more comma-separated parts is the signal. Three or fewer is the
+ * ordinary way anyone writes one thing down: "Rice, 25kg sack, premium".
+ */
+export function looksLikeBasket(description: string): boolean {
+  return description.split(",").filter((part) => part.trim().length > 0).length >= 4;
+}
+
+/**
  * Where the planned amount sits against what this owner usually pays.
  *
  * The bands are deliberately wide. Prices move, sizes differ, and a 15%
@@ -1330,9 +1410,9 @@ export async function buildPurchasePriceContext(
   plannedAmount: number | null,
   categoryId: number | null,
 ): Promise<PurchasePriceContext> {
-  await requireOwnedBusinessProfile(userId, businessProfileId);
+  const profile = await requireOwnedBusinessProfile(userId, businessProfileId);
 
-  const since = utcAddDays(utcToday(), -PRICE_HISTORY_DAYS);
+  const since = utcAddDays(resolveBusinessToday(profile.timezone), -PRICE_HISTORY_DAYS);
   const words = significantWords(description);
 
   /*
@@ -1340,7 +1420,7 @@ export async function buildPurchasePriceContext(
    * check above has already tied to this user. A description search that
    * reached across profiles would be a data leak wearing a helpful face.
    */
-  const [similarRecords, categoryRecords] = await Promise.all([
+  const [candidateRecords, categoryRecords] = await Promise.all([
     words.length
       ? prisma.expenseRecord.findMany({
           where: {
@@ -1348,13 +1428,22 @@ export async function buildPurchasePriceContext(
             date: { gte: since },
             // AND, not OR: "display fridge" should find the fridge, not every
             // record with the word "display" in it.
+            //
+            // This is only the PREFILTER. `contains` is a substring match, so
+            // it also returns "Roadhouse" for "house"; describesSameItem below
+            // is what decides. Searching the singular stem keeps a plural and
+            // its singular in the same result set for it to judge.
             AND: words.map((word) => ({
-              description: { contains: word, mode: "insensitive" as const },
+              description: { contains: searchTerm(word), mode: "insensitive" as const },
             })),
           },
           select: { description: true, amount: true, date: true, category: { select: { name: true } } },
           orderBy: { date: "desc" },
-          take: 3,
+          // Deliberately more than the three that are shown: most of what the
+          // substring prefilter returns is about to be thrown away, and taking
+          // three here would mean three false matches crowding out the real
+          // one further down the list.
+          take: 30,
         })
       : Promise.resolve([]),
     categoryId
@@ -1375,6 +1464,17 @@ export async function buildPurchasePriceContext(
         select: { id: true, name: true },
       })
     : null;
+
+  /*
+   * What survives both checks, newest first, capped at the three the card
+   * shows. An empty list here is the honest outcome when the only records
+   * mentioning the word were mentioning a different thing: the card falls
+   * back to the category spread, and says it has no matching purchase rather
+   * than offering one it cannot stand behind.
+   */
+  const similarRecords = candidateRecords
+    .filter((r) => describesSameItem(r.description, words) && !looksLikeBasket(r.description))
+    .slice(0, 3);
 
   const amounts = categoryRecords.map((r) => Number(r.amount)).sort((a, b) => a - b);
   const typicalAmount = median(amounts);

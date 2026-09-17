@@ -511,6 +511,7 @@ export function AskFinSight({
           <View
             style={{
               flexDirection: "row",
+              alignItems: "flex-end",
               gap: space.sm,
               padding: space.md,
               paddingBottom: space.md + insets.bottom,
@@ -525,7 +526,15 @@ export function AskFinSight({
               placeholder="Ask about your numbers…"
               placeholderTextColor={ink[400]}
               maxLength={FIELD_LIMITS.aiQuestion}
-              onSubmitEditing={() => submit(chat.input)}
+              /*
+                Multi-line, so a question longer than the box stays readable
+                while it is being written — a single line scrolled its own start
+                out of sight. Return inserts a line break rather than sending;
+                Send is the only way out, which is what every phone keyboard's
+                return key already implies here.
+              */
+              multiline
+              textAlignVertical="top"
               onFocus={() => setInputFocused(true)}
               onBlur={() => setInputFocused(false)}
               /*
@@ -540,10 +549,16 @@ export function AskFinSight({
               style={{
                 flex: 1,
                 minHeight: TAP,
+                // Around six lines. Past that the field scrolls, so the
+                // composer can never grow over the conversation behind it.
+                maxHeight: 140,
                 borderWidth: 1,
                 borderColor: inputFocused ? brand[600] : ink[200],
-                borderRadius: radius.full,
+                // Not radius.full: at one line this reads as the same pill as
+                // before, but a pill on a six-line box bows its own edges.
+                borderRadius: radius.xl,
                 paddingHorizontal: space.md,
+                paddingVertical: space.md,
                 fontSize: typeScale.body,
                 color: ink[900],
               }}

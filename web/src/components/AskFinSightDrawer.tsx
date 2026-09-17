@@ -1,12 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { List } from "lucide-react";
 import { useAiChat } from "../context/AiChatContext";
 import { useFocusTrap } from "../lib/hooks";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
-import { IconArrowRight, IconPlus } from "./icons";
+import { IconArrowUp, IconPlus } from "./icons";
 import { ChatHistoryOverlay } from "./aiChat/ChatHistoryOverlay";
 import { ChatMessages, MODULE_COPY } from "./aiChat/ChatMessages";
+
+/** Roughly seven lines of the composer's 20px line height, plus its padding. */
+const COMPOSER_MAX_PX = 164;
 
 /**
  * Ask FinSight, as a narrow right-side drawer over whatever page you are on.
@@ -70,7 +73,24 @@ export function AskFinSightDrawer() {
    */
   const [historyOpen, setHistoryOpen] = useState(false);
 
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  /**
+   * The composer grows with the question. A single-line box scrolled the start
+   * of a long question out of sight, so an owner writing three sentences could
+   * not re-read what they had typed before sending it.
+   *
+   * Height is measured from the content on every change, which keeps a pasted
+   * question and a typed one the same size. Past COMPOSER_MAX_PX the textarea
+   * scrolls instead of growing, so the composer can never push the
+   * conversation off the screen.
+   */
+  useLayoutEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_PX)}px`;
+  }, [input, open]);
 
   // A conversation's own origin governs its welcome copy; a blank panel uses
   // whatever screen the owner opened it from.
@@ -217,33 +237,86 @@ export function AskFinSightDrawer() {
           ) : null}
         </div>
 
+        {/*
+          One box, not a field beside a button. The composer is a single
+          surface that the question and the way to send it both live inside, so
+          the drawer ends in one shape rather than two competing round ones.
+          The border belongs to the box and lights on `focus-within`, which is
+          what keeps the focus ring honest now that the textarea itself has no
+          edge of its own.
+        */}
         <form
           onSubmit={(e) => {
             e.preventDefault();
             send(input);
           }}
-          className="flex items-center gap-2 border-t border-paper-200 px-4 py-3"
+          className="border-t border-paper-200 px-4 py-3"
         >
-          <label className="sr-only" htmlFor="ai-chat-question">
-            Ask about your numbers
-          </label>
-          <input
-            id="ai-chat-question"
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask about your numbers…"
-            maxLength={FIELD_LIMITS.aiQuestion}
-            className="min-h-tap flex-1 rounded-full border border-ink-200 bg-paper px-4 text-sm text-ink-900 placeholder:text-ink-400"
-          />
-          <button
-            type="submit"
-            disabled={sending || !input.trim()}
-            className="tap shrink-0 rounded-full bg-brand-600 text-white transition-colors hover:bg-brand-700 active:bg-brand-800 disabled:cursor-not-allowed disabled:opacity-60"
-            aria-label="Send"
-          >
-            <IconArrowRight className="h-5 w-5" />
-          </button>
+          {/*
+            The focus indicator belongs to the BOX, not to the textarea inside
+            it. index.css rings every :focus-visible element globally, which
+            drew a hard rectangle around the textarea inside the rounded pill:
+            two focus shapes, and the inner one the wrong shape entirely.
+            `has-[:focus-visible]` moves the app's standard ring onto the pill,
+            where it follows the rounded edge.
+
+            What it gets instead is its own edge, drawn as border + a ring at
+            offset 0 so the two sit flush and read as one 2px teal outline
+            rather than a ring floating off a border. Browsers treat a text
+            field as focus-visible even when it was CLICKED, so whatever is
+            used here fires on click as well as on Tab: it has to be something
+            that looks deliberate at every focus, not only at a keyboard one.
+          */}
+          <div className="flex items-end gap-2 rounded-3xl border border-ink-200 bg-paper p-1 pl-4 transition-colors focus-within:border-brand-600 focus-within:ring-1 focus-within:ring-brand-600 focus-within:ring-offset-0">
+            <label className="sr-only" htmlFor="ai-chat-question">
+              Ask about your numbers
+            </label>
+            <textarea
+              id="ai-chat-question"
+              ref={inputRef}
+              rows={1}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                // Enter sends, because that is what every chat does and the send
+                // button is one tab away for anyone who wants it. Shift+Enter is
+                // the escape hatch for a deliberate line break. `isComposing`
+                // guards IME input, where Enter commits the candidate word and
+                // must not also fire off a half-typed question.
+                if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
+                e.preventDefault();
+                send(input);
+              }}
+              placeholder="Ask about your numbers…"
+              maxLength={FIELD_LIMITS.aiQuestion}
+              aria-describedby="ai-chat-question-hint"
+              className="scroll-none min-h-tap flex-1 resize-none overflow-y-auto border-0 bg-transparent px-0 py-3 text-sm leading-5 text-ink-900 outline-none placeholder:text-ink-400 focus:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0"
+            />
+            <p id="ai-chat-question-hint" className="sr-only">
+              Press Enter to send, Shift plus Enter for a new line.
+            </p>
+            {/*
+              Off until there is something to send. An always-brand button in
+              an empty composer promises an action that would do nothing, and
+              `disabled` alone is invisible on a phone where there is no hover
+              to discover it with. The colour IS the affordance here, so it
+              carries a real contrast step rather than a dimmed brand fill:
+              ink-200 on paper reads as "not yet", and the icon stays legible.
+
+              Bottom-aligned rather than centred: at one line there is nothing
+              to tell them apart, and at six the button belongs beside the last
+              line being written, not floating halfway up the question.
+            */}
+            <button
+              type="submit"
+              disabled={sending || !input.trim()}
+              className="tap shrink-0 rounded-full bg-brand-600 text-white transition-colors hover:bg-brand-700 active:bg-brand-800 disabled:cursor-not-allowed disabled:bg-ink-200 disabled:text-ink-400 disabled:hover:bg-ink-200"
+              aria-label="Send"
+            >
+              {/* Up, not right: the question travels up into the thread above it. */}
+              <IconArrowUp className="h-5 w-5" />
+            </button>
+          </div>
         </form>
       </aside>
     </>,

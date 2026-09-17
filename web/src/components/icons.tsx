@@ -199,6 +199,14 @@ export function IconArrowRight(p: IconProps) {
   );
 }
 
+export function IconArrowUp(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M12 19V5M6 11l6-6 6 6" strokeWidth={2} />
+    </Svg>
+  );
+}
+
 export function IconArrowLeft(p: IconProps) {
   return (
     <Svg {...p}>

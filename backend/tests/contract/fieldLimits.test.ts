@@ -150,15 +150,44 @@ describe("each client cap equals the server rule behind it", () => {
   });
 
   /**
-   * The one cap that is not a column width. Ask FinSight sends the question to
-   * a paid model, so this bounds a bill rather than a database write — which is
-   * why it is the cap that was already present on both clients before any of
-   * the others.
+   * The one cap that is not a column width of its own. It is bounded by
+   * `ChatMessage.content` VARCHAR(2000), which has to hold the question after
+   * the model call succeeds — past that an owner's own words would come back
+   * clipped in their history.
    */
-  it("AI question — a cost ceiling, not a column", async () => {
+  it("AI question — /ai/ask", async () => {
     const { askSchema } = await import("../../src/controllers/ai.controller");
     const base = { businessProfileId: 1, module: "Dashboard" };
     expect(schemaMax(askSchema, "question", base)).toBe(webLimits.aiQuestion);
+  });
+
+  /*
+   * THREE schemas take a question, not one: /ai/ask, opening a conversation,
+   * and adding to an open one. The controller says in a comment that they must
+   * not disagree about what a sendable question is, and a comment is not a
+   * test — the composer's `maxLength` is a single number, so a limit raised on
+   * one of the three would leave the same box either truncating silently or
+   * offering length the API refuses, depending on which route it hit.
+   */
+  it("AI question — opening a conversation", async () => {
+    const { createConversationSchema } = await import("../../src/controllers/ai.controller");
+    const base = { businessProfileId: 1, originModule: "Dashboard" };
+    expect(schemaMax(createConversationSchema, "question", base)).toBe(webLimits.aiQuestion);
+  });
+
+  it("AI question — adding to an open conversation", async () => {
+    const { appendMessageSchema } = await import("../../src/controllers/ai.controller");
+    expect(schemaMax(appendMessageSchema, "question", {})).toBe(webLimits.aiQuestion);
+  });
+
+  /*
+   * The question limit is the one cap that has a hard ceiling above it rather
+   * than a column of its own: whatever it is raised to, the stored message
+   * still has to fit VARCHAR(2000) unclipped.
+   */
+  it("a question always fits the column that has to store it", async () => {
+    const { MESSAGE_MAX_LENGTH } = await import("../../src/services/conversation.service");
+    expect(webLimits.aiQuestion).toBeLessThanOrEqual(MESSAGE_MAX_LENGTH);
   });
 });
 

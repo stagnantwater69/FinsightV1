@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { SpendingImpact } from "./SpendingImpact";
 import { discussionPrompt } from "../lib/purchaseConversation";
+import { FIELD_LIMITS } from "../lib/fieldLimits";
 import type {
   BusinessProfile,
   PurchasePriceContext,
@@ -357,14 +358,18 @@ describe("carrying the card into a conversation", () => {
 
 describe("the primed question itself", () => {
   /**
-   * The API caps a question at 500 characters and the drawer's input carries
-   * the same maxLength, so an over-long prompt would arrive as a sentence the
-   * owner never wrote, cut mid-word.
+   * The API caps a question and the drawer's input carries the same maxLength,
+   * so an over-long prompt would arrive as a sentence the owner never wrote,
+   * cut mid-word.
+   *
+   * Read off FIELD_LIMITS rather than restated: discussionPrompt drops clauses
+   * to fit THAT number, so a literal here would go on asserting an old cap
+   * against code that had already moved to a new one.
    */
   it("stays inside the question limit even when the AI was wordy", () => {
     const wordy = { ...review, ongoingCosts: "Electricity, ".repeat(60) };
     const prompt = discussionPrompt("Display fridge", wordy, 11000);
-    expect(prompt.length).toBeLessThanOrEqual(500);
+    expect(prompt.length).toBeLessThanOrEqual(FIELD_LIMITS.aiQuestion);
     expect(prompt.trim()).toMatch(/\?$/);
   });
 

@@ -59,7 +59,7 @@ const reductionOpportunitySchema: z.ZodType<ReductionOpportunity> = z.object({
 export const askSchema = z.object({
   businessProfileId: z.number().int().positive(),
   module: z.enum(aiService.INTERACTION_MODULES),
-  question: z.string().min(1).max(500),
+  question: z.string().min(1).max(1000),
   // Omitted by the Ask FinSight drawer on purpose — with no override the
   // server builds the context from data queried at this moment, which is
   // what keeps a follow-up answer current.
@@ -171,13 +171,13 @@ export async function purchaseReview(req: Request, res: Response) {
  *
  * Exported for the contract tests alongside `askSchema`: the chat composer's
  * `maxLength` is checked against THIS rule, and the question limit is
- * deliberately the same 500 as `/ai/ask` so the two entry points cannot
+ * deliberately the same 1000 as `/ai/ask` so the two entry points cannot
  * disagree about what a sendable question is.
  */
 export const createConversationSchema = z.object({
   businessProfileId: z.number().int().positive(),
   originModule: z.enum(aiService.INTERACTION_MODULES),
-  question: z.string().min(1).max(500),
+  question: z.string().min(1).max(1000),
   // Optional: derived server-side from `question` when omitted, so the stored
   // title can never be empty regardless of client. 120 matches the column.
   title: z.string().min(1).max(conversationService.TITLE_MAX_LENGTH).optional(),
@@ -188,7 +188,7 @@ export const createConversationSchema = z.object({
 });
 
 export const appendMessageSchema = z.object({
-  question: z.string().min(1).max(500),
+  question: z.string().min(1).max(1000),
   context: z.string().max(3000).optional(),
   reductionOpportunity: reductionOpportunitySchema.optional(),
 });
