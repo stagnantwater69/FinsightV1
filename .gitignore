@@ -33,3 +33,6 @@ backend/tests/ocr-accuracy/live-feedback.json
 # Python (ml worker)
 ml/.venv/
 __pycache__/
+
+# Load-test output: run artefacts, not source.
+backend/tests/load/results/
