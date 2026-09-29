@@ -23,6 +23,8 @@ const TABLES = [
   "ChatMessage",
   "Conversation",
   "Notification",
+  "CSVSourcePurgeJob",
+  "CSVImportStageChunk",
   "CSVImportBatch",
   "ReceiptScan",
   "ReceiptCaptureBatch",

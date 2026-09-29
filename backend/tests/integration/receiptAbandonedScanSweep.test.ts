@@ -563,6 +563,7 @@ describe("worker activity stamps", () => {
           amountConfidences: [],
           itemEvidence: [],
         },
+        providerRead: true,
       },
     );
 

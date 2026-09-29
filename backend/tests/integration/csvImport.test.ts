@@ -4,10 +4,15 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 // test exercises real parsing, real category resolution and real DB writes
 // without needing network or credentials. The upload itself is covered by the
 // live regression pass, not here.
-vi.mock("../../src/services/storage.service", () => ({
-  uploadCsvFile: vi.fn(async () => "test/mock-csv-path.csv"),
-  uploadReceiptImage: vi.fn(async () => "test/mock-receipt-path.jpg"),
-}));
+vi.mock("../../src/services/storage.service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/services/storage.service")>();
+  return {
+    ...actual,
+    uploadCsvFile: vi.fn(async () => "test/mock-csv-path.csv"),
+    uploadCsvFileAtReference: vi.fn(async () => undefined),
+    uploadReceiptImage: vi.fn(async () => "test/mock-receipt-path.jpg"),
+  };
+});
 
 import { prisma } from "../../src/config/prisma";
 import { confirmImport, MAX_IMPORT_ROWS, previewCsv } from "../../src/services/csvImport.service";
@@ -377,7 +382,9 @@ describe("import of a file with a mix of valid and invalid rows", () => {
   it("records the batch with a stored file reference (NOT NULL in the dictionary)", async () => {
     const result = await importExpenses(csv([`${utcDayString(-1)},Supplier stocks,1400,Inventory`]));
     const batch = await prisma.cSVImportBatch.findUniqueOrThrow({ where: { id: result.batchId } });
-    expect(batch.fileReference).toBe("test/mock-csv-path.csv");
+    expect(batch.fileReference).toMatch(
+      new RegExp(`^${ctx.profile.id}/[0-9a-f-]{36}-test\\.csv$`, "i"),
+    );
     expect(batch.title).toBe("Test batch");
   });
 });

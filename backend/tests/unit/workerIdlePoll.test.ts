@@ -51,8 +51,10 @@ describe("worker idle poll interval", () => {
 
   it("is what the worker loop actually sleeps on", async () => {
     // Read statically: importing worker.ts starts the loop and the boot gate.
-    const source = readFileSync(resolve(__dirname, "../../src/worker.ts"), "utf8");
-    expect(source).toMatch(/const IDLE_POLL_MS = env\.RECEIPT_WORKER_IDLE_POLL_MS;/);
-    expect(source).toMatch(/setTimeout\(\(\) => void runPass\(\), claimed \? 0 : IDLE_POLL_MS\)/);
+    const worker = readFileSync(resolve(__dirname, "../../src/worker.ts"), "utf8");
+    const scheduler = readFileSync(resolve(__dirname, "../../src/lib/workerLaneScheduler.ts"), "utf8");
+    expect(worker).toMatch(/const IDLE_POLL_MS = env\.RECEIPT_WORKER_IDLE_POLL_MS;/);
+    expect(worker).toMatch(/idlePollMs: IDLE_POLL_MS/);
+    expect(scheduler).toMatch(/claimed \? 0 : idlePollMs/);
   });
 });

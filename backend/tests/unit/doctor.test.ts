@@ -9,7 +9,12 @@ import { checkQueues, type Readiness } from "../../scripts/doctor";
  * up.
  */
 describe("doctor: queue line", () => {
-  const idle: Readiness = { queuedReceiptScans: 0, queuedCsvImports: 0, queuedAnalysisJobs: 0 };
+  const idle: Readiness = {
+    queuedReceiptScans: 0,
+    queuedCsvImports: 0,
+    queuedCsvSourcePurges: 0,
+    queuedAnalysisJobs: 0,
+  };
 
   it("fails and names the worker when a receipt has waited past a claim interval", () => {
     const check = checkQueues({ ...idle, queuedReceiptScans: 3, oldestQueuedReceiptScanAgeSeconds: 900 });
@@ -27,6 +32,18 @@ describe("doctor: queue line", () => {
     const check = checkQueues({ ...idle, stalledAccountDeletions: 2 });
     expect(check.state).toBe("WARN");
     expect(check.summary).toContain("2 stalled");
+  });
+
+  it("fails when CSV source cleanup has stopped moving", () => {
+    const check = checkQueues({ ...idle, queuedCsvSourcePurges: 1, oldestQueuedCsvSourcePurgeAgeSeconds: 61 });
+    expect(check.state).toBe("FAIL");
+    expect(check.summary).toContain("oldest CSV purge waiting 61s");
+  });
+
+  it("warns when a CSV path remains after cleanup exhausts its retries", () => {
+    const check = checkQueues({ ...idle, failedCsvSourcePurges: 1 });
+    expect(check.state).toBe("WARN");
+    expect(check.summary).toContain("1 failed CSV purge");
   });
 
   it("skips rather than guessing when the API is down or withholding detail", () => {

@@ -112,6 +112,7 @@ describe("receipt provider outcome validation and merge", () => {
       providerResultAccepted: false,
       reason: "INVALID_OUTCOME",
       itemsOwnerReviewRequired: false,
+      providerCurrency: null,
     });
     expect(mergeReceiptProviderOutcome(local, request, {
       ...successfulOutcome(request),

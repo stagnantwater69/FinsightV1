@@ -1,11 +1,16 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../src/services/storage.service", () => ({
-  uploadCsvFile: vi.fn(async () => "test/mock-csv-path.csv"),
-  downloadCsvFile: vi.fn(async () => Buffer.from("")),
-  deleteCsvFile: vi.fn(async () => true),
-  uploadReceiptImage: vi.fn(async () => "test/mock-receipt.jpg"),
-}));
+vi.mock("../../src/services/storage.service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/services/storage.service")>();
+  return {
+    ...actual,
+    uploadCsvFile: vi.fn(async () => "test/mock-csv-path.csv"),
+    uploadCsvFileAtReference: vi.fn(async () => undefined),
+    downloadCsvFile: vi.fn(async () => Buffer.from("")),
+    deleteCsvFile: vi.fn(async () => true),
+    uploadReceiptImage: vi.fn(async () => "test/mock-receipt.jpg"),
+  };
+});
 
 import { AnomalyFindingSeverity, AnomalyFindingStatus, AnomalyFindingType } from "@prisma/client";
 import { prisma } from "../../src/config/prisma";

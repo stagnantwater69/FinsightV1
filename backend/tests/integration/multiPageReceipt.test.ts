@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 
 /*
  * Storage is mocked the same way receiptScan.test.ts mocks it, except the
@@ -6,44 +7,52 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
  * does this (a random UUID per upload), and a test asserting page ORDER needs
  * distinguishable paths to assert against.
  */
-const { uploadCallCount, uploadFailureAt, deletedReceiptPaths } = vi.hoisted(() => ({
+const {
+  uploadCallCount,
+  uploadFailureAt,
+  deletedReceiptPaths,
+  sourceOcrResults,
+  storedOcrResults,
+  downloadedOcrResults,
+} = vi.hoisted(() => ({
   uploadCallCount: { value: 0 },
   uploadFailureAt: { value: null as number | null },
   deletedReceiptPaths: [] as string[],
+  sourceOcrResults: new WeakMap<Buffer, { text: string; confidence: number }>(),
+  storedOcrResults: new Map<string, { text: string; confidence: number }>(),
+  downloadedOcrResults: new WeakMap<Buffer, { text: string; confidence: number }>(),
 }));
 vi.mock("../../src/services/storage.service", async () => {
   const { tinyReceiptJpeg } = await import("../helpers/receiptImageFixtures");
   const storedBytes = tinyReceiptJpeg();
   return {
-    uploadReceiptImage: vi.fn(async () => {
+    uploadReceiptImage: vi.fn(async (_businessProfileId: number, buffer: Buffer) => {
       const call = ++uploadCallCount.value;
       if (uploadFailureAt.value === call) throw new Error("storage upload failed");
-      return `1/mock-page-${call}.jpg`;
+      const path = `1/mock-page-${call}.jpg`;
+      const ocrResult = sourceOcrResults.get(buffer);
+      if (ocrResult) storedOcrResults.set(path, ocrResult);
+      return path;
     }),
     inspectReceiptImage: vi.fn(async () => ({ sizeBytes: storedBytes.length, mimetype: "image/jpeg" })),
-    downloadReceiptImageBounded: vi.fn(async () => storedBytes),
+    downloadReceiptImageBounded: vi.fn(async (path: string) => {
+      const buffer = Buffer.from(storedBytes);
+      const ocrResult = storedOcrResults.get(path);
+      if (ocrResult) downloadedOcrResults.set(buffer, ocrResult);
+      return buffer;
+    }),
     uploadCsvFile: vi.fn(async () => "1/mock.csv"),
     signedReceiptImageUrl: vi.fn(async () => "https://example.test/signed.jpg"),
     deleteReceiptImage: vi.fn(async (path: string) => (deletedReceiptPaths.push(path), true)),
   };
 });
 
-/*
- * extractReceipt is driven by a QUEUE of {text, confidence} results consumed
- * one per call — one call happens per page, in page order — so a test can
- * give page 1 and page 2 different text and different confidence, which is
- * exactly what the concatenation and worst-page-confidence behaviour this
- * file tests need to control independently.
- */
-const { pageQueue } = vi.hoisted(() => ({
-  pageQueue: [] as { text: string; confidence: number }[],
-}));
 vi.mock("../../src/services/ocr.service", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/services/ocr.service")>();
   return {
     ...actual,
-    extractReceipt: async () => {
-      const next = pageQueue.shift() ?? { text: "", confidence: 95 };
+    extractReceipt: async (buffer: Buffer) => {
+      const next = downloadedOcrResults.get(buffer) ?? { text: "", confidence: 95 };
       return { text: next.text, confidence: next.confidence, lines: [] };
     },
   };
@@ -63,7 +72,11 @@ vi.mock("../../src/services/visionOcr.service", async (importOriginal) => {
 
 import { prisma } from "../../src/config/prisma";
 import * as ocrService from "../../src/services/ocr.service";
-import { downloadReceiptImageBounded } from "../../src/services/storage.service";
+import {
+  deleteReceiptImage,
+  downloadReceiptImageBounded,
+  uploadReceiptImage,
+} from "../../src/services/storage.service";
 import {
   confirmReceipt,
   getScan,
@@ -91,7 +104,18 @@ beforeEach(async () => {
   uploadCallCount.value = 0;
   uploadFailureAt.value = null;
   deletedReceiptPaths.length = 0;
-  pageQueue.length = 0;
+  storedOcrResults.clear();
+  vi.mocked(uploadReceiptImage).mockReset().mockImplementation(async (_businessProfileId, buffer) => {
+    const call = ++uploadCallCount.value;
+    if (uploadFailureAt.value === call) throw new Error("storage upload failed");
+    const path = `1/mock-page-${call}.jpg`;
+    const ocrResult = sourceOcrResults.get(buffer);
+    if (ocrResult) storedOcrResults.set(path, ocrResult);
+    return path;
+  });
+  vi.mocked(deleteReceiptImage).mockReset().mockImplementation(async (path: string) => (
+    deletedReceiptPaths.push(path), true
+  ));
   categoriseMock.mockReset();
   categoriseMock.mockResolvedValue([]);
   visionMock.mockReset();
@@ -101,8 +125,10 @@ beforeEach(async () => {
 
 afterAll(disconnectDb);
 
-function page(text: string) {
-  return { buffer: Buffer.from(`fake-bytes-${text.length}`), mimetype: "image/jpeg", originalname: "page.jpg" };
+function page(source: string, ocrResult: { text: string; confidence?: number } = { text: source }) {
+  const buffer = Buffer.from(`fake-bytes-${source}`);
+  sourceOcrResults.set(buffer, { text: ocrResult.text, confidence: ocrResult.confidence ?? 95 });
+  return { buffer, mimetype: "image/jpeg", originalname: "page.jpg" };
 }
 
 /**
@@ -111,10 +137,9 @@ function page(text: string) {
  * assertions exercise the real upload-then-poll contract.
  */
 async function uploadPages(texts: { text: string; confidence?: number }[]) {
-  for (const t of texts) pageQueue.push({ text: t.text, confidence: t.confidence ?? 95 });
   const created = await uploadAndScan(ctx.user.id, {
     businessProfileId: ctx.profile.id,
-    pages: texts.map((t) => page(t.text)),
+    pages: texts.map((result, index) => page(`page-${index + 1}`, result)),
   });
   await runReceiptWorkerAndWait(created.id);
   return getScan(ctx.user.id, created.id);
@@ -181,6 +206,117 @@ describe("multi-page receipt upload", () => {
       }],
     })).rejects.toThrow("storage upload failed");
     expect(deletedReceiptPaths).toEqual(["1/mock-page-1.jpg"]);
+    expect(await prisma.receiptScan.count()).toBe(0);
+  });
+
+  it("stores at most two variants concurrently without changing page order or fingerprints", async () => {
+    const releases = new Map<string, () => void>();
+    let active = 0;
+    let maxActive = 0;
+    vi.mocked(uploadReceiptImage).mockImplementation(async (businessProfileId, _buffer, _mimetype, originalname) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise<void>((resolve) => releases.set(originalname, resolve));
+      active -= 1;
+      return `${businessProfileId}/${originalname}`;
+    });
+    const pages = [
+      {
+        buffer: Buffer.from("source-one"),
+        mimetype: "image/jpeg",
+        originalname: "source-1.jpg",
+        processed: {
+          buffer: Buffer.from("derived-one"),
+          mimetype: "image/jpeg",
+          originalname: "derived-1.jpg",
+        },
+        metadata: { captureMode: "long" as const },
+      },
+      { buffer: Buffer.from("source-two"), mimetype: "image/jpeg", originalname: "source-2.jpg" },
+      { buffer: Buffer.from("source-three"), mimetype: "image/jpeg", originalname: "source-3.jpg" },
+    ];
+
+    const pending = uploadAndScan(ctx.user.id, { businessProfileId: ctx.profile.id, pages });
+    await vi.waitFor(() => expect(uploadReceiptImage).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(uploadReceiptImage).mock.calls.map((call) => call[3])).toEqual([
+      "source-1.jpg",
+      "derived-1.jpg",
+    ]);
+    releases.get("derived-1.jpg")!();
+    await vi.waitFor(() => expect(uploadReceiptImage).toHaveBeenCalledTimes(3));
+    releases.get("source-2.jpg")!();
+    await vi.waitFor(() => expect(uploadReceiptImage).toHaveBeenCalledTimes(4));
+    releases.get("source-3.jpg")!();
+    releases.get("source-1.jpg")!();
+    const created = await pending;
+
+    const storedPages = await prisma.receiptScanPage.findMany({
+      where: { receiptScanId: created.id },
+      orderBy: { pageNumber: "asc" },
+    });
+    expect(maxActive).toBe(2);
+    expect(storedPages.map((stored) => [stored.imageFile, stored.processedImageFile])).toEqual([
+      [`${ctx.profile.id}/source-1.jpg`, `${ctx.profile.id}/derived-1.jpg`],
+      [`${ctx.profile.id}/source-2.jpg`, null],
+      [`${ctx.profile.id}/source-3.jpg`, null],
+    ]);
+
+    const uploadFingerprint = createHash("sha256");
+    const sourceFingerprint = createHash("sha256");
+    sourceFingerprint.update("finsight-source-image-v1\0");
+    sourceFingerprint.update(`${pages.length}\0`);
+    for (const [index, uploadedPage] of pages.entries()) {
+      uploadFingerprint.update(JSON.stringify({
+        mimetype: uploadedPage.mimetype,
+        size: uploadedPage.buffer.length,
+        processedType: uploadedPage.processed?.mimetype ?? null,
+        processedSize: uploadedPage.processed?.buffer.length ?? 0,
+        metadata: uploadedPage.metadata ?? null,
+      }));
+      sourceFingerprint.update(`${index}:${uploadedPage.buffer.length}\0`);
+      uploadFingerprint.update(uploadedPage.buffer);
+      sourceFingerprint.update(uploadedPage.buffer);
+      if (uploadedPage.processed) uploadFingerprint.update(uploadedPage.processed.buffer);
+    }
+    const storedScan = await prisma.receiptScan.findUniqueOrThrow({ where: { id: created.id } });
+    expect(storedScan.uploadHash).toBe(uploadFingerprint.digest("hex"));
+    expect(storedScan.sourceImageHash).toBe(sourceFingerprint.digest("hex"));
+  });
+
+  it("waits for an in-flight upload and cleans it after a sibling upload fails", async () => {
+    let releaseSlow!: () => void;
+    const slowUpload = new Promise<void>((resolve) => { releaseSlow = resolve; });
+    vi.mocked(uploadReceiptImage).mockImplementation(async (businessProfileId, _buffer, _mimetype, originalname) => {
+      if (originalname === "slow.jpg") {
+        await slowUpload;
+        return `${businessProfileId}/slow.jpg`;
+      }
+      if (originalname === "failure.jpg") throw new Error("storage upload failed");
+      return `${businessProfileId}/${originalname}`;
+    });
+    const outcome = uploadAndScan(ctx.user.id, {
+      businessProfileId: ctx.profile.id,
+      pages: [
+        { buffer: Buffer.from("slow"), mimetype: "image/jpeg", originalname: "slow.jpg" },
+        { buffer: Buffer.from("failure"), mimetype: "image/jpeg", originalname: "failure.jpg" },
+        { buffer: Buffer.from("not-started"), mimetype: "image/jpeg", originalname: "not-started.jpg" },
+      ],
+    }).then(
+      (value) => ({ status: "fulfilled" as const, value }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+    let settled = false;
+    void outcome.then(() => { settled = true; });
+
+    await vi.waitFor(() => expect(uploadReceiptImage).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+    releaseSlow();
+
+    const result = await outcome;
+    expect(result).toMatchObject({ status: "rejected", error: { message: "storage upload failed" } });
+    expect(vi.mocked(uploadReceiptImage).mock.calls.map((call) => call[3])).toEqual(["slow.jpg", "failure.jpg"]);
+    expect(deletedReceiptPaths).toEqual([`${ctx.profile.id}/slow.jpg`]);
     expect(await prisma.receiptScan.count()).toBe(0);
   });
 
@@ -251,10 +387,9 @@ describe("multi-page receipt upload", () => {
  */
 describe("background processing", () => {
   it("returns before the read has finished, with the scan already pollable", async () => {
-    pageQueue.push({ text: "Date: 2026-07-20\nItem A 10.00\nTOTAL 10.00", confidence: 95 });
     const created = await uploadAndScan(ctx.user.id, {
       businessProfileId: ctx.profile.id,
-      pages: [page("x")],
+      pages: [page("pollable", { text: "Date: 2026-07-20\nItem A 10.00\nTOTAL 10.00", confidence: 95 })],
     });
 
     // The row exists and is addressable immediately — that is what makes
@@ -269,10 +404,12 @@ describe("background processing", () => {
   });
 
   it("reaches Complete, and only then carries the extracted fields", async () => {
-    pageQueue.push({ text: "ABC STORE\nDate: 2026-07-20\nRice 25kg 1220.00\nTOTAL 1220.00", confidence: 95 });
     const created = await uploadAndScan(ctx.user.id, {
       businessProfileId: ctx.profile.id,
-      pages: [page("x")],
+      pages: [page("complete", {
+        text: "ABC STORE\nDate: 2026-07-20\nRice 25kg 1220.00\nTOTAL 1220.00",
+        confidence: 95,
+      })],
     });
 
     expect(await runReceiptWorkerAndWait(created.id)).toBe("Complete");
@@ -284,11 +421,10 @@ describe("background processing", () => {
   });
 
   it("allows concurrent workers to claim the queued scan only once", async () => {
-    pageQueue.push({ text: "ABC STORE\nItem A 10.00\nTOTAL 10.00", confidence: 95 });
     const extractSpy = vi.spyOn(ocrService, "extractReceipt");
     const created = await uploadAndScan(ctx.user.id, {
       businessProfileId: ctx.profile.id,
-      pages: [page("one-claim")],
+      pages: [page("one-claim", { text: "ABC STORE\nItem A 10.00\nTOTAL 10.00", confidence: 95 })],
     });
 
     const claims = await Promise.all([runReceiptWorkerOnce(), runReceiptWorkerOnce()]);
@@ -306,7 +442,7 @@ describe("background processing", () => {
 
     const created = await uploadAndScan(ctx.user.id, {
       businessProfileId: ctx.profile.id,
-      pages: [page("x")],
+      pages: [page("retry", { text: "ABC STORE\nItem A 10.00\nTOTAL 10.00", confidence: 95 })],
     });
 
     expect(await runReceiptWorkerOnce()).toBe(true);
@@ -323,7 +459,6 @@ describe("background processing", () => {
 
     // Make the backoff due now. The next worker has no request buffer, so its
     // success proves the page was reconstructed from durable Storage.
-    pageQueue.push({ text: "ABC STORE\nItem A 10.00\nTOTAL 10.00", confidence: 95 });
     await prisma.receiptScan.update({ where: { id: created.id }, data: { nextProcessingAttemptAt: new Date(0) } });
     expect(await runReceiptWorkerOnce()).toBe(true);
     expect((await getScan(ctx.user.id, created.id)).processingStatus).toBe("Complete");
@@ -378,10 +513,9 @@ describe("background processing", () => {
 
   it("does not hand another owner's scan to a poller", async () => {
     const other = await makeOwnerWithProfile();
-    pageQueue.push({ text: "TOTAL 10.00", confidence: 95 });
     const created = await uploadAndScan(ctx.user.id, {
       businessProfileId: ctx.profile.id,
-      pages: [page("x")],
+      pages: [page("owner-isolation", { text: "TOTAL 10.00", confidence: 95 })],
     });
     await runReceiptWorkerAndWait(created.id);
 

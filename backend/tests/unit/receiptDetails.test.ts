@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseReceiptDetails, requiresManualCurrencyConversion } from "../../src/lib/receiptDetails";
+import {
+  parseReceiptDetails,
+  providerReportedCurrency,
+  requiresManualCurrencyConversion,
+} from "../../src/lib/receiptDetails";
 
 describe("printed receipt details", () => {
   it("extracts labelled details without storing card digits or changing the total", () => {
@@ -73,5 +77,24 @@ describe("printed receipt details", () => {
     expect(details.transactionTime).toBeNull();
     expect(parseReceiptDetails("Subtotal 1.2.34").subtotal).toBeNull();
     expect(parseReceiptDetails("Subtotal 1.234.50").subtotal).toBeNull();
+  });
+});
+
+describe("provider-reported currency", () => {
+  it("refuses a peso booking when only the provider could read the currency", () => {
+    expect(requiresManualCurrencyConversion("Total 12.50")).toBe(false);
+    expect(requiresManualCurrencyConversion("Total 12.50", "USD")).toBe(true);
+  });
+
+  it("does not let a provider PHP answer clear a refusal the printed text earned", () => {
+    expect(requiresManualCurrencyConversion("Total US$ 12.50", "PHP")).toBe(true);
+  });
+
+  it("reads the code off extractorVersions and ignores anything that is not one", () => {
+    expect(providerReportedCurrency({ providerCurrency: "USD" })).toBe("USD");
+    expect(providerReportedCurrency({ providerCurrency: "us dollars" })).toBeNull();
+    expect(providerReportedCurrency({ providerCurrency: null })).toBeNull();
+    expect(providerReportedCurrency(null)).toBeNull();
+    expect(providerReportedCurrency("USD")).toBeNull();
   });
 });

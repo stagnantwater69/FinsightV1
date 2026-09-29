@@ -107,6 +107,16 @@ describe("warm tesseract worker pool", () => {
     expect(typeof (options as { langPath: string }).langPath).toBe("string");
   });
 
+  it("warms both workers without running recognition and reuses them", async () => {
+    await expect(ocr.warmOcrPool()).resolves.toBe(2);
+
+    expect(createWorkerMock).toHaveBeenCalledTimes(2);
+    expect(created.every((worker) => worker.recognize.mock.calls.length === 0)).toBe(true);
+
+    await Promise.all([ocr.extractText(await png()), ocr.extractText(await png())]);
+    expect(createWorkerMock).toHaveBeenCalledTimes(2);
+  });
+
   it("caps concurrent workers at two and queues the rest", async () => {
     const image = await png();
     const gates: Deferred<unknown>[] = [];

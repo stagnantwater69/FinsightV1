@@ -9,12 +9,17 @@ const uploadCsvFile = vi.fn(async () => "test/mock-csv-path.csv");
 const downloadCsvFile = vi.fn(async (_ref: string) => uploadedBuffer);
 const deleteCsvFile = vi.fn(async () => true);
 
-vi.mock("../../src/services/storage.service", () => ({
-  uploadCsvFile: (...args: unknown[]) => uploadCsvFile(...(args as [])),
-  downloadCsvFile: (ref: string) => downloadCsvFile(ref),
-  deleteCsvFile: (...args: unknown[]) => deleteCsvFile(...(args as [])),
-  uploadReceiptImage: vi.fn(async () => "test/mock-receipt-path.jpg"),
-}));
+vi.mock("../../src/services/storage.service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/services/storage.service")>();
+  return {
+    ...actual,
+    uploadCsvFile: (...args: unknown[]) => uploadCsvFile(...(args as [])),
+    uploadCsvFileAtReference: (...args: unknown[]) => uploadCsvFile(...(args as [])),
+    downloadCsvFile: (ref: string) => downloadCsvFile(ref),
+    deleteCsvFile: (...args: unknown[]) => deleteCsvFile(...(args as [])),
+    uploadReceiptImage: vi.fn(async () => "test/mock-receipt-path.jpg"),
+  };
+});
 
 import { CsvImportProcessingStatus } from "@prisma/client";
 import { prisma } from "../../src/config/prisma";
@@ -24,6 +29,7 @@ import {
   runCsvImportWorkerOnce,
   SYNC_ROW_LIMIT,
 } from "../../src/services/csvImport.service";
+import { runCsvSourcePurgeWorkerOnce } from "../../src/services/csvSourcePurge.service";
 import * as expenseService from "../../src/services/expenseRecord.service";
 import { disconnectDb, makeOwnerWithProfile, resetDb, utcDayString } from "../setup/testDb";
 
@@ -108,6 +114,100 @@ describe("idempotent confirmation", () => {
     expect(second.imported).toBe(first.imported);
     expect(await prisma.expenseRecord.count({ where: { businessProfileId: ctx.profile.id } })).toBe(5);
     expect(await prisma.cSVImportBatch.count()).toBe(1);
+  });
+
+  it("rejects a reused key with different bytes before parsing or Storage", async () => {
+    const original = csvOf(2);
+    const first = await confirmImport(ctx.user.id, confirmArgs(original, {
+      idempotencyKey: "legacy-byte-conflict",
+    }));
+    const storageCalls = uploadCsvFile.mock.calls.length;
+    const malformedDifferentBytes = Buffer.from(`Date,Description\n${utcDayString(0)},"unterminated`);
+
+    await expect(confirmImport(ctx.user.id, confirmArgs(malformedDifferentBytes, {
+      idempotencyKey: "legacy-byte-conflict",
+    }))).rejects.toMatchObject({ status: 409, code: "CSV_IMPORT_KEY_CONFLICT" });
+    expect(uploadCsvFile).toHaveBeenCalledTimes(storageCalls);
+    expect(await prisma.cSVImportBatch.count()).toBe(1);
+    expect(await prisma.expenseRecord.count()).toBe(2);
+    expect(await prisma.cSVImportBatch.findUniqueOrThrow({ where: { id: first.batchId } }))
+      .toMatchObject({ confirmInputHash: expect.stringMatching(/^[0-9a-f]{64}$/) });
+  });
+
+  it.each([
+    ["title", { title: "Changed title" }],
+    ["mapping", { columnMapping: { ...MAPPING, description: "Category" } }],
+    ["corrections", { corrections: { "2": { amount: "101" } } }],
+    ["date strategy", { dateFormat: "iso" }],
+    ["mixed strategy", { mixedStrategy: "sign" }],
+  ] as const)("rejects a reused key when the %s changes", async (_field, override) => {
+    const buffer = csvOf(2);
+    await confirmImport(ctx.user.id, confirmArgs(buffer, { idempotencyKey: "legacy-details-conflict" }));
+    const storageCalls = uploadCsvFile.mock.calls.length;
+
+    await expect(confirmImport(ctx.user.id, confirmArgs(buffer, {
+      idempotencyKey: "legacy-details-conflict",
+      ...override,
+    }))).rejects.toMatchObject({ status: 409, code: "CSV_IMPORT_KEY_CONFLICT" });
+    expect(uploadCsvFile).toHaveBeenCalledTimes(storageCalls);
+    expect(await prisma.cSVImportBatch.count()).toBe(1);
+    expect(await prisma.expenseRecord.count()).toBe(2);
+  });
+
+  it("applies legacy replay checks when concurrent callers race on one key", async () => {
+    let releaseUpload!: () => void;
+    let signalUploadStarted!: () => void;
+    const uploadReleased = new Promise<void>((resolve) => { releaseUpload = resolve; });
+    const uploadStarted = new Promise<void>((resolve) => { signalUploadStarted = resolve; });
+    uploadCsvFile.mockImplementationOnce(async () => {
+      signalUploadStarted();
+      await uploadReleased;
+      return "test/mock-csv-path.csv";
+    });
+    const firstBuffer = csvOf(2);
+    const secondBuffer = Buffer.from(
+      `Date,Description,Amount,Category\n${utcDayString(0)},Different,999,Inventory`,
+    );
+
+    const first = confirmImport(ctx.user.id, confirmArgs(firstBuffer, {
+      idempotencyKey: "legacy-concurrent-conflict",
+    }));
+    await uploadStarted;
+    const second = confirmImport(ctx.user.id, confirmArgs(secondBuffer, {
+      idempotencyKey: "legacy-concurrent-conflict",
+    }));
+    releaseUpload();
+    const outcomes = await Promise.allSettled([first, second]);
+    expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+    const rejected = outcomes.find((outcome) => outcome.status === "rejected");
+    if (!rejected || rejected.status !== "rejected") throw new Error("expected an idempotency conflict");
+    expect(rejected.reason).toMatchObject({ status: 409, code: "CSV_IMPORT_KEY_CONFLICT" });
+    expect(uploadCsvFile).toHaveBeenCalledTimes(1);
+    expect(await prisma.cSVImportBatch.count()).toBe(1);
+    expect(await prisma.expenseRecord.count()).toBe(2);
+  });
+
+  it("keeps null-hash legacy rows compatible only when their file bytes match", async () => {
+    const buffer = csvOf(2);
+    const first = await confirmImport(ctx.user.id, confirmArgs(buffer, {
+      idempotencyKey: "legacy-null-confirm-hash",
+    }));
+    await prisma.cSVImportBatch.update({
+      where: { id: first.batchId },
+      data: { confirmInputHash: null },
+    });
+
+    const compatible = await confirmImport(ctx.user.id, confirmArgs(buffer, {
+      idempotencyKey: "legacy-null-confirm-hash",
+      title: "Old client changed details",
+    }));
+    expect(compatible.batchId).toBe(first.batchId);
+    await expect(confirmImport(ctx.user.id, confirmArgs(Buffer.from(`${buffer.toString("utf8")}\n`), {
+      idempotencyKey: "legacy-null-confirm-hash",
+    }))).rejects.toMatchObject({ status: 409, code: "CSV_IMPORT_KEY_CONFLICT" });
+    expect(uploadCsvFile).toHaveBeenCalledTimes(1);
+    expect(await prisma.cSVImportBatch.count()).toBe(1);
+    expect(await prisma.expenseRecord.count()).toBe(2);
   });
 
   it("imports separately when the keys differ, and says the file was seen before", async () => {
@@ -365,8 +465,17 @@ describe("asynchronous import", () => {
     const status = await getImportBatchStatus(ctx.user.id, accepted.batchId);
     expect(status).toMatchObject({ processingStatus: "FAILED", processedRows: 1000, importedRows: 1000, skippedRows: 0 });
     expect(await prisma.expenseRecord.count()).toBe(1000);
-    expect(deleteCsvFile).toHaveBeenCalledTimes(1);
+    expect(deleteCsvFile).not.toHaveBeenCalled();
     expect((await prisma.cSVImportBatch.findUniqueOrThrow({ where: { id: accepted.batchId } })).fileReference).toBeNull();
+    const purge = await prisma.cSVSourcePurgeJob.findFirstOrThrow({
+      where: { sourceBatchId: accepted.batchId },
+    });
+    expect(purge).toMatchObject({
+      status: "PENDING",
+      fileReference: expect.stringMatching(new RegExp(`^${ctx.profile.id}/`)),
+    });
+    expect(await runCsvSourcePurgeWorkerOnce()).toBe(true);
+    expect(deleteCsvFile).toHaveBeenCalledWith(purge.fileReference);
     const replay = await confirmImport(ctx.user.id, args);
     expect(replay).toMatchObject({ batchId: accepted.batchId, processingStatus: "FAILED", imported: 1000, skippedCount: 0 });
     expect(await runCsvImportWorkerOnce()).toBe(false);
@@ -388,7 +497,44 @@ describe("asynchronous import", () => {
     const status = await getImportBatchStatus(ctx.user.id, accepted.batchId);
     expect(status.processingStatus).toBe(CsvImportProcessingStatus.COMPLETE);
     expect(status.importedRows).toBe(rows);
+    // Legacy batches have no chunks, so the worker must still download and parse Storage bytes.
+    expect(downloadCsvFile).toHaveBeenCalledTimes(1);
+    expect(await prisma.cSVImportStageChunk.count({ where: { importBatchId: accepted.batchId } })).toBe(0);
     expect(await prisma.expenseRecord.count({ where: { businessProfileId: ctx.profile.id } })).toBe(rows);
+  }, 120_000);
+
+  it("reuses one category map across chunks and updates it after creating a category", async () => {
+    const rows = SYNC_ROW_LIMIT + 10;
+    const lines = ["Date,Description,Amount,Category"];
+    for (let index = 0; index < rows; index += 1) {
+      const category = index < 1_000 ? "Inventory" : "Transport";
+      lines.push(`${utcDayString(-index)},Item ${index},${100 + index},${category}`);
+    }
+    const buffer = Buffer.from(lines.join("\n"));
+    uploadedBuffer = buffer;
+    const accepted = await confirmImport(
+      ctx.user.id,
+      confirmArgs(buffer, { idempotencyKey: "category-cache-across-chunks" }),
+    );
+    const categoryReads = vi.spyOn(prisma.expenseCategory, "findMany");
+    let categoryReadCount = 0;
+
+    try {
+      await drainWorker();
+      categoryReadCount = categoryReads.mock.calls.length;
+    } finally {
+      categoryReads.mockRestore();
+    }
+
+    // Initial load, then one refresh after Transport is created. The final
+    // chunk reuses the updated map instead of reading every category again.
+    expect(categoryReadCount).toBe(2);
+    expect(await prisma.expenseCategory.count({
+      where: { businessProfileId: ctx.profile.id, name: "Transport" },
+    })).toBe(1);
+    expect((await getImportBatchStatus(ctx.user.id, accepted.batchId)).processingStatus).toBe(
+      CsvImportProcessingStatus.COMPLETE,
+    );
   }, 120_000);
 
   it("resumes after a mid-import failure without duplicating committed rows", async () => {

@@ -28,6 +28,7 @@ vi.mock("../../src/services/storage.service", () => ({
 
 import { prisma } from "../../src/config/prisma";
 import { listImportBatches, previewImportBatch } from "../../src/services/csvImport.service";
+import { runCsvSourcePurgeWorkerOnce } from "../../src/services/csvSourcePurge.service";
 import {
   bulkResolveExpenseDuplicates,
   searchExpenseRecords,
@@ -50,7 +51,7 @@ async function makeBatch(title = "March expenses") {
       businessProfileId: ctx.profile.id,
       title,
       uploadDate: utcDay(-1),
-      fileReference: "test/mock-csv-path.csv",
+      fileReference: `${ctx.profile.id}/mock-csv-path.csv`,
       status: "Needs Review",
     },
   });
@@ -180,6 +181,8 @@ describe("bulkResolveExpenseDuplicates", () => {
     // Now nothing is left that came from it.
     await bulkResolveExpenseDuplicates(ctx.user.id, ctx.profile.id, [original.id], "discard");
     expect(await prisma.cSVImportBatch.findUnique({ where: { id: batch.id } })).toBeNull();
+    expect(deleteCsvFile).not.toHaveBeenCalled();
+    expect(await runCsvSourcePurgeWorkerOnce()).toBe(true);
     expect(deleteCsvFile).toHaveBeenCalledTimes(1);
   });
 

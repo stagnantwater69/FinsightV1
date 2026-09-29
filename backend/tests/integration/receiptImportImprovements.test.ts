@@ -3,6 +3,7 @@ import { prisma } from "../../src/config/prisma";
 import { previewCsv, previewCsvForProfile } from "../../src/services/csvImport.service";
 import { suggestCategoryForDescription } from "../../src/services/ai.service";
 import { confirmReceipt } from "../../src/services/receiptScan/reconciliation";
+import { persistReceiptProcessingOutput } from "../../src/services/receiptScan/worker";
 import { disconnectDb, makeOwnerWithProfile, resetDb } from "../setup/testDb";
 
 const mapping = { date: "Date", description: "Description", amount: "Amount", category: "Category" };
@@ -95,5 +96,102 @@ describe("category history and foreign receipt safety", () => {
     await expect(confirmReceipt(owner.user.id, scan.id, { date: "2026-09-01", description: "Rice", amount: 100, splits: [{ categoryId: owner.categories.Inventory!, amount: 100 }] })).rejects.toThrow(/foreign currency/i);
     expect(await prisma.expenseRecord.count()).toBe(0);
     expect((await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).confirmationStatus).toBe("Pending");
+  });
+});
+
+/*
+ * QA P2-1. A retry resets the scan to Processing with attempt 0 and the next
+ * pass rebuilds extractorVersions from scratch. When that pass never reaches
+ * the provider — budget spent, consent withdrawn — the rebuilt record used to
+ * say providerCurrency: null, and the refusal fell back to the local text that
+ * could not read the currency in the first place.
+ */
+describe("re-scanning a receipt a provider read as foreign", () => {
+  const WORKER = "retry-worker";
+
+  /** A scan mid-second-pass, already carrying what the first pass recorded. */
+  async function scanOnItsSecondPass(priorVersions: unknown) {
+    return prisma.receiptScan.create({
+      data: {
+        businessProfileId: owner.profile.id,
+        imageFile: "private/blurry-usd.jpg",
+        rawText: "TOTAL 100.00",
+        processingStatus: "Processing",
+        processingWorkerId: WORKER,
+        processingAttemptCount: 0,
+        extractorVersions: priorVersions as object,
+      },
+    });
+  }
+
+  function secondPassOutput(providerCurrency: string | null, providerRead: boolean) {
+    return {
+      scan: {
+        rawText: "TOTAL 100.00",
+        extractorVersions: { parserVersion: "tesseract-v1", providerCurrency },
+      },
+      pages: [],
+      items: { parsedItems: [], vendor: null, extractedByVision: false, amountConfidences: [], itemEvidence: [] },
+      providerRead,
+    };
+  }
+
+  async function confirm(scanId: number) {
+    return confirmReceipt(owner.user.id, scanId, {
+      date: "2026-09-01",
+      description: "Rice",
+      amount: 100,
+      splits: [{ categoryId: owner.categories.Inventory!, amount: 100 }],
+    });
+  }
+
+  it("still refuses when the second pass never reached the provider", async () => {
+    const scan = await scanOnItsSecondPass({ parserVersion: "tesseract-v1", providerCurrency: "USD" });
+
+    await persistReceiptProcessingOutput(scan.id, owner.profile.id, { workerId: WORKER, attempt: 0 }, secondPassOutput(null, false));
+
+    expect((await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).extractorVersions)
+      .toMatchObject({ parserVersion: "tesseract-v1", providerCurrency: "USD" });
+    await expect(confirm(scan.id)).rejects.toThrow(/foreign currency/i);
+    expect(await prisma.expenseRecord.count()).toBe(0);
+  });
+
+  it("lets a pass that did read the paper clear the currency it corrected", async () => {
+    const scan = await scanOnItsSecondPass({ parserVersion: "tesseract-v1", providerCurrency: "USD" });
+
+    await persistReceiptProcessingOutput(scan.id, owner.profile.id, { workerId: WORKER, attempt: 0 }, secondPassOutput(null, true));
+
+    expect((await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).extractorVersions)
+      .toMatchObject({ providerCurrency: null });
+    await expect(confirm(scan.id)).resolves.toBeDefined();
+  });
+
+  it("lets a pass that did read the paper record a different foreign currency", async () => {
+    const scan = await scanOnItsSecondPass({ parserVersion: "tesseract-v1", providerCurrency: "USD" });
+
+    await persistReceiptProcessingOutput(scan.id, owner.profile.id, { workerId: WORKER, attempt: 0 }, secondPassOutput("JPY", true));
+
+    expect((await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).extractorVersions)
+      .toMatchObject({ providerCurrency: "JPY" });
+    await expect(confirm(scan.id)).rejects.toThrow(/foreign currency/i);
+  });
+
+  it("carries nothing forward when no earlier pass recorded a currency", async () => {
+    const scan = await scanOnItsSecondPass({ parserVersion: "tesseract-v1" });
+
+    await persistReceiptProcessingOutput(scan.id, owner.profile.id, { workerId: WORKER, attempt: 0 }, secondPassOutput(null, false));
+
+    expect((await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).extractorVersions)
+      .toMatchObject({ providerCurrency: null });
+    await expect(confirm(scan.id)).resolves.toBeDefined();
+  });
+
+  it("survives a malformed prior record rather than throwing", async () => {
+    const scan = await scanOnItsSecondPass({ providerCurrency: "not a code" });
+
+    await expect(
+      persistReceiptProcessingOutput(scan.id, owner.profile.id, { workerId: WORKER, attempt: 0 }, secondPassOutput(null, false)),
+    ).resolves.toBeUndefined();
+    await expect(confirm(scan.id)).resolves.toBeDefined();
   });
 });

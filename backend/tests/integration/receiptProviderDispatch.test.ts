@@ -9,6 +9,7 @@ import {
 import {
   dispatchReceiptProviderRescue,
   reconcileStaleReceiptProviderDispatches,
+  RECEIPT_PROVIDER_COOLDOWN_MS,
   RECEIPT_PROVIDER_DISPATCH_STALE_MS,
   RECEIPT_PROCESSING_LEASE_MS,
   type ReceiptProviderDispatchInput,
@@ -174,6 +175,28 @@ function adapter(
   };
 }
 
+function failedOutcome(
+  request: ReceiptProviderRequest,
+  outcomeCode: "AUTH_ERROR" | "RATE_LIMITED" | "PROVIDER_SERVER_ERROR" | "TRANSPORT_ERROR",
+  retryAfterMs = 30_000,
+): ReceiptProviderOutcome {
+  return {
+    contractVersion: request.contractVersion,
+    provider: request.provider,
+    providerVersion: request.providerVersion,
+    providerRegion: request.providerRegion,
+    dispatchReference: request.reservation.dispatchReference,
+    providerRequestIdHash: null,
+    latencyMs: 25,
+    retryAfterMs: outcomeCode === "RATE_LIMITED" ? retryAfterMs : null,
+    status: "FAILED",
+    timeoutOutcome: "NOT_TIMED_OUT",
+    outcomeCode,
+    finalBillableUnits: outcomeCode === "TRANSPORT_ERROR" ? 1 : 0,
+    extraction: null,
+  };
+}
+
 async function scanFor(businessProfileId: number, suffix: string) {
   const now = new Date();
   return prisma.receiptScan.create({
@@ -300,6 +323,104 @@ afterAll(async () => {
 });
 
 describe("mocked receipt provider dispatch gate", () => {
+  it("shares an authentication cooldown through persisted dispatch history", async () => {
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const firstScan = await scanFor(owner.profile.id, "auth-cooldown-first");
+    const failingAdapter = adapter(async (request) => failedOutcome(request, "AUTH_ERROR"));
+
+    const first = await dispatchReceiptProviderRescue(dispatchInput(owner.profile.id, firstScan.id), {
+      adapter: failingAdapter,
+      configuration: getReceiptProviderConfiguration(),
+    });
+    expect(first).toMatchObject({
+      code: "PROVIDER_RESULT_REJECTED",
+      dispatched: true,
+      telemetry: { outcomeCode: "AUTH_ERROR" },
+    });
+
+    const secondScan = await scanFor(owner.profile.id, "auth-cooldown-second");
+    const healthyAdapter = adapter();
+    const second = await dispatchReceiptProviderRescue(dispatchInput(owner.profile.id, secondScan.id), {
+      adapter: healthyAdapter,
+      configuration: getReceiptProviderConfiguration(),
+    });
+
+    expect(second).toMatchObject({
+      code: "PROVIDER_COOLDOWN_ACTIVE",
+      dispatched: false,
+      provider: "gemini",
+      telemetry: {
+        cooldown: { reasonCode: "AUTH_ERROR", failureCount: 1 },
+      },
+    });
+    expect(healthyAdapter.extract).not.toHaveBeenCalled();
+    expect(await prisma.externalProviderDispatch.count()).toBe(1);
+  });
+
+  it("opens after three persisted transient failures and not before", async () => {
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const failingAdapter = adapter(async (request) => failedOutcome(request, "PROVIDER_SERVER_ERROR"));
+
+    for (let index = 0; index < 3; index += 1) {
+      const scan = await scanFor(owner.profile.id, `server-failure-${index}`);
+      const result = await dispatchReceiptProviderRescue(dispatchInput(owner.profile.id, scan.id), {
+        adapter: failingAdapter,
+        configuration: getReceiptProviderConfiguration(),
+      });
+      expect(result.dispatched).toBe(true);
+    }
+
+    const fourthScan = await scanFor(owner.profile.id, "server-cooldown");
+    const healthyAdapter = adapter();
+    const fourth = await dispatchReceiptProviderRescue(dispatchInput(owner.profile.id, fourthScan.id), {
+      adapter: healthyAdapter,
+      configuration: getReceiptProviderConfiguration(),
+    });
+
+    expect(fourth).toMatchObject({
+      code: "PROVIDER_COOLDOWN_ACTIVE",
+      dispatched: false,
+      telemetry: {
+        cooldown: { reasonCode: "PROVIDER_SERVER_ERROR", failureCount: 3 },
+      },
+    });
+    expect(healthyAdapter.extract).not.toHaveBeenCalled();
+    expect(await prisma.externalProviderDispatch.count()).toBe(3);
+  });
+
+  it("honors a persisted Retry-After across dispatch calls beyond the default cooldown", async () => {
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const firstScan = await scanFor(owner.profile.id, "rate-limit-first");
+    const rateLimitedAdapter = adapter(async (request) => failedOutcome(request, "RATE_LIMITED", 5 * 60 * 1000));
+
+    await dispatchReceiptProviderRescue(dispatchInput(owner.profile.id, firstScan.id), {
+      adapter: rateLimitedAdapter,
+      configuration: getReceiptProviderConfiguration(),
+    });
+
+    const stored = await prisma.externalProviderDispatch.findFirstOrThrow();
+    expect(stored.outcomeCode).toBe("RATE_LIMITED");
+    expect(stored.providerRetryAt).toEqual(new Date(stored.completedAt!.getTime() + 5 * 60 * 1000));
+
+    const secondScan = await scanFor(owner.profile.id, "rate-limit-second");
+    const healthyAdapter = adapter();
+    const result = await dispatchReceiptProviderRescue(dispatchInput(owner.profile.id, secondScan.id), {
+      adapter: healthyAdapter,
+      configuration: getReceiptProviderConfiguration(),
+      now: () => new Date(stored.completedAt!.getTime() + RECEIPT_PROVIDER_COOLDOWN_MS + 1),
+    });
+
+    expect(result).toMatchObject({
+      code: "PROVIDER_COOLDOWN_ACTIVE",
+      dispatched: false,
+      telemetry: { cooldown: { reasonCode: "RATE_LIMITED" } },
+    });
+    expect(healthyAdapter.extract).not.toHaveBeenCalled();
+  });
+
   it("performs zero dispatches when credentials exist but the server gate is incomplete", async () => {
     vi.unstubAllEnvs();
     vi.stubEnv("RECEIPT_PROVIDER", "gemini");

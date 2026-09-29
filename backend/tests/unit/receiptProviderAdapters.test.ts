@@ -117,25 +117,49 @@ describe("verifier reachability", () => {
     extractReceiptWithVision.mockResolvedValue({ receipt: reconciledReceipt });
   });
 
-  it("records an unconfigured verifier as a transport failure billed for the extraction only", async () => {
+  it("records an unconfigured verifier as an authentication failure billed for the extraction only", async () => {
     verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "not_attempted" });
 
     const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
 
     expect(outcome.status).toBe("FAILED");
-    expect(outcome.outcomeCode).toBe("TRANSPORT_ERROR");
+    expect(outcome.outcomeCode).toBe("AUTH_ERROR");
     expect(outcome.timeoutOutcome).toBe("NOT_TIMED_OUT");
     expect(outcome.finalBillableUnits).toBe(1);
   });
 
-  it("records a refused request as an HTTP error, not a timeout", async () => {
-    verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "http" });
+  it("keeps an authentication rejection distinct from a generic HTTP failure", async () => {
+    verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "auth", httpStatus: 403 });
 
     const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
 
     expect(outcome.status).toBe("FAILED");
-    expect(outcome.outcomeCode).toBe("HTTP_ERROR");
+    expect(outcome.outcomeCode).toBe("AUTH_ERROR");
     expect(outcome.finalBillableUnits).toBe(1);
+  });
+
+  it("preserves a verifier rate limit and Retry-After", async () => {
+    verifyVisionReceipt.mockResolvedValue({
+      verdict: null,
+      failure: "rate_limited",
+      httpStatus: 429,
+      retryAfterMs: 45_000,
+    });
+
+    const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
+
+    expect(outcome.status).toBe("FAILED");
+    expect(outcome.outcomeCode).toBe("RATE_LIMITED");
+    expect(outcome.retryAfterMs).toBe(45_000);
+  });
+
+  it("keeps provider 5xx failures distinct from transport failures", async () => {
+    verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "server", httpStatus: 503 });
+
+    const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
+
+    expect(outcome.status).toBe("FAILED");
+    expect(outcome.outcomeCode).toBe("PROVIDER_SERVER_ERROR");
   });
 
   it("records a dropped connection as a transport failure", async () => {
@@ -157,6 +181,15 @@ describe("verifier reachability", () => {
     expect(outcome.finalBillableUnits).toBeNull();
   });
 
+  it("keeps cancellation distinct from timeout", async () => {
+    verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "cancelled" });
+
+    const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
+
+    expect(outcome.status).toBe("AMBIGUOUS");
+    expect(outcome.outcomeCode).toBe("REQUEST_CANCELLED");
+  });
+
   it("bills both calls when the verifier answered with something that is not a verdict", async () => {
     verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "unusable" });
 
@@ -174,5 +207,111 @@ describe("verifier reachability", () => {
 
     expect(outcome.status).toBe("SUCCEEDED");
     expect(outcome.finalBillableUnits).toBe(2);
+  });
+});
+
+describe("extraction failure taxonomy", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each([
+    ["auth", "AUTH_ERROR", "FAILED"],
+    ["server", "PROVIDER_SERVER_ERROR", "FAILED"],
+    ["transport", "TRANSPORT_ERROR", "AMBIGUOUS"],
+    ["cancelled", "REQUEST_CANCELLED", "AMBIGUOUS"],
+    ["timeout", "TIMEOUT_AFTER_SUBMISSION", "AMBIGUOUS"],
+  ] as const)("maps %s without collapsing it", async (kind, outcomeCode, status) => {
+    extractReceiptWithVision.mockResolvedValue({
+      receipt: null,
+      rejectReason: null,
+      failure: { kind, httpStatus: null, retryAfterMs: null },
+      requestMs: 17,
+    });
+
+    const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
+
+    expect(outcome).toMatchObject({ status, outcomeCode, stageTimings: { extractionMs: 17, verificationMs: 0 } });
+    expect(verifyVisionReceipt).not.toHaveBeenCalled();
+  });
+
+  it("preserves extraction rate-limit delay", async () => {
+    extractReceiptWithVision.mockResolvedValue({
+      receipt: null,
+      rejectReason: null,
+      failure: { kind: "rate_limited", httpStatus: 429, retryAfterMs: 30_000 },
+      requestMs: 12,
+    });
+
+    const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
+
+    expect(outcome).toMatchObject({
+      status: "FAILED",
+      outcomeCode: "RATE_LIMITED",
+      retryAfterMs: 30_000,
+    });
+  });
+});
+
+/*
+ * A blurry foreign receipt that tesseract could not read at all used to be
+ * booked as pesos: the adapter hardcoded a null currency, so the only currency
+ * signal at confirm time was the local rawText the provider was called to
+ * replace.
+ */
+describe("provider currency", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("carries a Veryfi currency through with evidence, unvalidated", async () => {
+    extractReceiptWithVeryfi.mockResolvedValue({ receipt: { ...reconciledReceipt, currency: "USD" } });
+
+    const outcome = await createVeryfiReceiptAdapter().extract(providerRequest({ provider: "veryfi" }));
+
+    expect(outcome.extraction?.currency.value).toBe("USD");
+    expect(outcome.extraction?.currency.evidence).toMatchObject({
+      source: "veryfi",
+      validationState: "UNVALIDATED",
+      confidenceBand: "LOW",
+    });
+    expect(outcome.extraction?.currency.evidence?.validationCodes).toContain("OWNER_REVIEW_REQUIRED");
+  });
+
+  it("reports the provider currency without letting it displace the printed local one", async () => {
+    extractReceiptWithVeryfi.mockResolvedValue({ receipt: { ...reconciledReceipt, currency: "USD" } });
+
+    const request = providerRequest({ provider: "veryfi" });
+    const outcome = await createVeryfiReceiptAdapter().extract(request);
+    const merged = mergeReceiptProviderOutcome(localExtraction(), request, outcome);
+
+    expect(merged.providerCurrency).toBe("USD");
+    expect(merged.appliedFields).not.toContain("currency");
+    expect(merged.receipt.currency.value).toBe("PHP");
+  });
+
+  it("reports it even when the local read found no currency at all", async () => {
+    extractReceiptWithVeryfi.mockResolvedValue({ receipt: { ...reconciledReceipt, currency: "USD" } });
+
+    const request = providerRequest({ provider: "veryfi" });
+    const outcome = await createVeryfiReceiptAdapter().extract(request);
+    const merged = mergeReceiptProviderOutcome(
+      localExtraction({ currency: { value: null, evidence: null } }),
+      request,
+      outcome,
+    );
+
+    expect(merged.providerCurrency).toBe("USD");
+    expect(merged.receipt.currency.value).toBeNull();
+  });
+
+  it("leaves the currency null when the provider did not report one", async () => {
+    extractReceiptWithVeryfi.mockResolvedValue({ receipt: reconciledReceipt });
+
+    const request = providerRequest({ provider: "veryfi" });
+    const outcome = await createVeryfiReceiptAdapter().extract(request);
+
+    expect(outcome.extraction?.currency).toEqual({ value: null, evidence: null });
+    expect(mergeReceiptProviderOutcome(localExtraction(), request, outcome).providerCurrency).toBeNull();
   });
 });

@@ -13,6 +13,46 @@ NAME="${1:?stage name}"; TARGET="${2:?target vus}"; RAMP="${3:-30s}"; HOLD="${4:
 OUT="$SP/results/$NAME"
 mkdir -p "$OUT"
 
+SAMPLER=""
+K6_PID=""
+
+stop_k6() {
+  signal="${1:-TERM}"
+  if [ -n "$K6_PID" ]; then
+    kill "-$signal" "$K6_PID" 2>/dev/null || true
+    wait "$K6_PID" 2>/dev/null || true
+    K6_PID=""
+  fi
+}
+
+stop_sampler() {
+  if [ -n "$SAMPLER" ]; then
+    kill "$SAMPLER" 2>/dev/null || true
+    wait "$SAMPLER" 2>/dev/null || true
+    SAMPLER=""
+  fi
+}
+
+on_exit() {
+  rc=$?
+  stop_k6
+  stop_sampler
+  trap - EXIT
+  exit "$rc"
+}
+
+on_signal() {
+  signal="$1"
+  status="$2"
+  stop_k6 "$signal"
+  exit "$status"
+}
+
+trap on_exit EXIT
+trap 'on_signal INT 130' INT
+trap 'on_signal TERM 143' TERM
+trap 'on_signal HUP 129' HUP
+
 K6="${K6:-$(command -v k6 || true)}"
 if [ -z "$K6" ]; then echo "k6 not found: install it or set K6=/path/to/k6" >&2; exit 2; fi
 
@@ -35,15 +75,23 @@ DB="${LOAD_DB_CONTAINER:-finsight-loadtest-db}"
   done
 ) > "$OUT/samples.csv" &
 SAMPLER=$!
+if [ -n "${LOAD_TEST_SAMPLER_PID_FILE:-}" ]; then
+  printf '%s\n' "$SAMPLER" > "$LOAD_TEST_SAMPLER_PID_FILE"
+fi
 
 STAGES="[{\"duration\":\"$RAMP\",\"target\":$TARGET},{\"duration\":\"$HOLD\",\"target\":$TARGET},{\"duration\":\"15s\",\"target\":0}]"
-STAGES="$STAGES" "$K6" run --quiet --summary-export "$OUT/summary.json" "$SP/session.js" > "$OUT/k6.txt" 2>&1
+STAGES="$STAGES" "$K6" run --quiet --summary-export "$OUT/summary.json" "$SP/session.js" > "$OUT/k6.txt" 2>&1 &
+K6_PID=$!
+wait "$K6_PID"
 RC=$?
+K6_PID=""
 
-kill "$SAMPLER" 2>/dev/null
+stop_sampler
 
 echo "=== $NAME (target ${TARGET} VUs) k6 exit=$RC ==="
 grep -E "flow_|http_req_duration|http_req_failed|http_reqs|iterations\.|rate_limited|server_errors|business_errors|vus_max" "$OUT/k6.txt" | sed 's/^\s*//'
 echo "--- server side (max observed) ---"
 awk -F, 'NR>1 && $2!="" {if($2+0>rss)rss=$2; if($3+0>cpu)cpu=$3; if($5+0>c)c=$5; if($6+0>a)a=$6}
   END{printf "api_rss_mb_max=%d db_cpu_pct_max=%.1f pg_conns_max=%d pg_active_max=%d\n", rss, cpu, c, a}' "$OUT/samples.csv"
+
+exit "$RC"

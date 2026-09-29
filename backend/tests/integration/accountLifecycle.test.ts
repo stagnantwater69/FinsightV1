@@ -38,6 +38,9 @@ const { authUserId, supabaseCalls, supabaseFailures, signInConfirmed } = vi.hois
 
 function record(method: string, ...args: unknown[]) {
   supabaseCalls.push({ method, args });
+  if (supabaseFailures.has(`${method}Throws`)) {
+    throw new Error(`${method} request failed`);
+  }
   if (supabaseFailures.has(method)) {
     return { data: { user: null }, error: { message: `${method} failed`, status: 500 } };
   }
@@ -205,11 +208,12 @@ import {
   purgeUnverifiedRegistrations,
   runAccountDeletionWorkerOnce,
 } from "../../src/services/accountDeletion.service";
-import { resetRateLimits } from "../../src/middleware/rateLimit.middleware";
+import { LIMITS, resetRateLimits } from "../../src/middleware/rateLimit.middleware";
 import { disconnectDb, makeOwnerWithProfile, resetDb } from "../setup/testDb";
 
 let ctx: Awaited<ReturnType<typeof makeOwnerWithProfile>>;
 const AUTH = ["Authorization", "Bearer valid-token"] as const;
+const LOGOUT_AUTH = ["Authorization", "Bearer header.payload.signature"] as const;
 const PASSWORD = "correct-horse-battery";
 
 /** Registrations that would satisfy every rule, so a test can vary one thing. */
@@ -504,6 +508,27 @@ describe("changing a password keeps this session and ends the others", () => {
 
     expect(res.status).toBe(200);
     expect(callsTo("signOut").map((c) => c.args[1])).toEqual(["others"]);
+    expect(
+      supabaseCalls.filter((call) => call.method === "signOut" || call.method === "updateUserById").map((call) => call.method),
+    ).toEqual(["signOut", "updateUserById"]);
+    expect(loggedEvents).toContain("sessions.revoked");
+    expect(loggedEvents).toContain("password.changed");
+  });
+
+  it("leaves the password unchanged when other sessions cannot be revoked", async () => {
+    supabaseFailures.add("signOut");
+
+    const res = await request(app)
+      .post("/api/v1/auth/change-password")
+      .set(...AUTH)
+      .send({ currentPassword: PASSWORD, newPassword: "a-brand-new-passphrase" });
+
+    expect(res.status).toBe(502);
+    expect(res.body).toEqual({ error: "Could not securely finish changing your password. Please try again." });
+    expect(callsTo("updateUserById")).toHaveLength(0);
+    expect(loggedEvents).toContain("sessions.revoke_failed");
+    expect(loggedEvents).not.toContain("sessions.revoked");
+    expect(loggedEvents).not.toContain("password.changed");
   });
 
   it("refuses on a wrong current password, so a stolen token cannot take the account", async () => {
@@ -532,13 +557,76 @@ describe("changing a password keeps this session and ends the others", () => {
   });
 
   it("signs out this device only on an ordinary logout", async () => {
-    await request(app).post("/api/v1/auth/logout").set(...AUTH);
+    const res = await request(app).post("/api/v1/auth/logout").set(...LOGOUT_AUTH);
+
+    expect(res.status).toBe(204);
     expect(callsTo("signOut").map((c) => c.args[1])).toEqual(["local"]);
+    expect(loggedEvents).toContain("sessions.revoked");
+    expect(loggedEvents).not.toContain("sessions.revoke_failed");
   });
 
   it("signs out everywhere only when that is what was asked for", async () => {
-    await request(app).post("/api/v1/auth/logout-all").set(...AUTH);
+    const res = await request(app).post("/api/v1/auth/logout-all").set(...AUTH);
+
+    expect(res.status).toBe(204);
     expect(callsTo("signOut").map((c) => c.args[1])).toEqual(["global"]);
+    expect(loggedEvents).toContain("sessions.revoked");
+    expect(loggedEvents).not.toContain("sessions.revoke_failed");
+  });
+
+  it("returns a retryable failure when global revocation is refused upstream", async () => {
+    supabaseFailures.add("signOut");
+
+    const res = await request(app).post("/api/v1/auth/logout-all").set(...AUTH);
+
+    expect(res.status).toBe(502);
+    expect(res.body).toEqual({ error: "Could not sign out everywhere right now. Please try again." });
+    expect(JSON.stringify(res.body)).not.toContain("signOut failed");
+    expect(loggedEvents).toContain("sessions.revoke_failed");
+    expect(loggedEvents).not.toContain("sessions.revoked");
+  });
+
+  it("returns the same safe failure when global revocation throws", async () => {
+    supabaseFailures.add("signOutThrows");
+
+    const res = await request(app).post("/api/v1/auth/logout-all").set(...AUTH);
+
+    expect(res.status).toBe(502);
+    expect(res.body).toEqual({ error: "Could not sign out everywhere right now. Please try again." });
+    expect(JSON.stringify(res.body)).not.toContain("signOut request failed");
+    expect(loggedEvents).toContain("sessions.revoke_failed");
+    expect(loggedEvents).not.toContain("sessions.revoked");
+  });
+
+  it("keeps local logout best-effort when revocation is refused upstream", async () => {
+    supabaseFailures.add("signOut");
+
+    const res = await request(app).post("/api/v1/auth/logout").set(...LOGOUT_AUTH);
+
+    expect(res.status).toBe(204);
+    expect(loggedEvents).toContain("sessions.revoke_failed");
+    expect(loggedEvents).not.toContain("sessions.revoked");
+  });
+
+  it("does not send a malformed bearer token to Supabase", async () => {
+    const res = await request(app)
+      .post("/api/v1/auth/logout")
+      .set("Authorization", "Bearer not-a-jwt");
+
+    expect(res.status).toBe(204);
+    expect(callsTo("signOut")).toHaveLength(0);
+  });
+
+  it("rate limits anonymous logout traffic by IP", async () => {
+    const responses = [];
+    for (let attempt = 0; attempt <= LIMITS.AUTH_LOGOUT.limit; attempt += 1) {
+      responses.push(await request(app).post("/api/v1/auth/logout"));
+    }
+    const res = responses.at(-1)!;
+
+    expect(res.status).toBe(429);
+    expect(res.headers["retry-after"]).toBeDefined();
+    expect(callsTo("signOut")).toHaveLength(0);
   });
 });
 
@@ -634,6 +722,10 @@ describe("deletion ends access immediately and destroys data in the background",
     expect(user.deletionLastError).toContain("could not be removed");
 
     storageFails.value = false;
+    await prisma.user.update({
+      where: { id: ctx.user.id },
+      data: { deletionNextAttemptAt: new Date(0) },
+    });
     await runAccountDeletionWorkerOnce();
     user = await prisma.user.findUniqueOrThrow({ where: { id: ctx.user.id } });
     expect(user.deletionStage).toBe(AccountDeletionStage.STORAGE_CLEARED);
@@ -648,6 +740,10 @@ describe("deletion ends access immediately and destroys data in the background",
     });
 
     supabaseFailures.clear();
+    await prisma.user.update({
+      where: { id: ctx.user.id },
+      data: { deletionNextAttemptAt: new Date(0) },
+    });
     await runAccountDeletionWorkerOnce();
     await runAccountDeletionWorkerOnce();
     expect(await prisma.user.findUnique({ where: { id: ctx.user.id } })).toBeNull();
@@ -657,7 +753,13 @@ describe("deletion ends access immediately and destroys data in the background",
     await requestDeletion();
     storageFails.value = true;
 
-    for (let i = 0; i < 12; i++) await runAccountDeletionWorkerOnce();
+    for (let i = 0; i < 10; i++) {
+      await prisma.user.update({
+        where: { id: ctx.user.id },
+        data: { deletionNextAttemptAt: new Date(0) },
+      });
+      await runAccountDeletionWorkerOnce();
+    }
 
     const user = await prisma.user.findUniqueOrThrow({ where: { id: ctx.user.id } });
     expect(user.deletionAttempts).toBe(10);
@@ -719,9 +821,32 @@ describe("password recovery", () => {
     expect(res.status).toBe(200);
   });
 
-  it("ends every session once a reset completes", async () => {
-    await request(app).post("/api/v1/auth/reset-password/complete").set(...AUTH);
+  it("revokes every refresh session once a reset completes", async () => {
+    const res = await request(app).post("/api/v1/auth/reset-password/complete").set(...AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      message: "Your password has been changed. Log in with it to continue.",
+      refreshSessionsRevoked: true,
+    });
     expect(callsTo("signOut").map((c) => c.args[1])).toEqual(["global"]);
+    expect(loggedEvents).toContain("sessions.revoked");
+    expect(loggedEvents).not.toContain("sessions.revoke_failed");
+  });
+
+  it("reports reset completion truthfully when old sessions could not be revoked", async () => {
+    supabaseFailures.add("signOut");
+
+    const res = await request(app).post("/api/v1/auth/reset-password/complete").set(...AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      message: "Your password has been changed. Log in with it to continue.",
+      refreshSessionsRevoked: false,
+    });
+    expect(loggedEvents).toContain("password.changed");
+    expect(loggedEvents).toContain("sessions.revoke_failed");
+    expect(loggedEvents).not.toContain("sessions.revoked");
   });
 
   /**
