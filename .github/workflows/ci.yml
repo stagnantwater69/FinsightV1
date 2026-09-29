@@ -117,9 +117,67 @@ jobs:
       - run: npm test --prefix backend
         env:
           DATABASE_URL: postgresql://testuser:testpass@localhost:55432/finsight_test
+      # npm reports Prisma's optional CLI peer even with --omit=dev; the Docker
+      # job proves it is absent at runtime. Any other moderate+ advisory blocks.
+      - name: Enforce backend production dependency allowlist
+        run: |
+          report="$(mktemp)"
+          npm audit --omit=dev --json --prefix backend > "$report" || true
+          node - "$report" <<'NODE'
+          const fs = require("node:fs");
+          const report = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+          const vulnerabilities = report.vulnerabilities;
+          if (!vulnerabilities || typeof vulnerabilities !== "object") {
+            throw new Error("npm audit returned no vulnerability map");
+          }
+
+          const gatedSeverities = new Set(["moderate", "high", "critical"]);
+          const allowed = new Set(["prisma", "@prisma/config", "deepmerge-ts"]);
+          const gated = Object.entries(vulnerabilities)
+            .filter(([, finding]) => gatedSeverities.has(finding.severity));
+          const unexpected = gated.filter(([name]) => !allowed.has(name));
+          if (unexpected.length > 0) {
+            console.error("Unexpected backend production advisories:");
+            for (const [name, finding] of unexpected) {
+              console.error(`  ${name}: ${finding.severity}`);
+            }
+            process.exit(1);
+          }
+
+          const presentAllowed = new Set(gated.map(([name]) => name));
+          const completeKnownChain = [...allowed].every((name) => presentAllowed.has(name));
+          if (presentAllowed.size > 0 && !completeKnownChain) {
+            throw new Error("The allowed Prisma CLI advisory chain changed shape; review the allowlist");
+          }
+          const viaNames = (finding) => finding.via
+            .map((item) => typeof item === "string" ? item : item.name)
+            .sort();
+          if (completeKnownChain) {
+            const expectedVia = {
+              prisma: ["@prisma/config"],
+              "@prisma/config": ["deepmerge-ts"],
+              "deepmerge-ts": ["deepmerge-ts"],
+            };
+            for (const [name, expected] of Object.entries(expectedVia)) {
+              if (JSON.stringify(viaNames(vulnerabilities[name])) !== JSON.stringify(expected)) {
+                throw new Error(`${name} has a new advisory path; review the allowlist`);
+              }
+            }
+            const direct = vulnerabilities["deepmerge-ts"].via;
+            const knownAdvisory = direct.length === 1 &&
+              typeof direct[0] === "object" &&
+              direct[0].source === 1145093 &&
+              direct[0].url === "https://github.com/advisories/GHSA-ggr8-5vv4-36mx" &&
+              direct[0].range === "<8.0.0";
+            if (!knownAdvisory) {
+              throw new Error("The deepmerge-ts advisory identity changed; review the allowlist");
+            }
+          }
+          console.log(`Backend production audit gate: ${gated.length} known CLI-chain finding(s), 0 unexpected.`);
+          NODE
       # Non-blocking: report-only, not a merge gate, until a maintainer
-      # triages these. As of 2026-08-21, `npm audit --audit-level=high`
-      # here finds 3 high findings, all inside `prisma`'s own dev-time CLI
+      # triages these. `npm audit --audit-level=high`
+      # currently finds 3 high findings, all inside `prisma`'s own CLI
       # dependency chain (deepmerge-ts via @prisma/config via prisma) —
       # nothing in the runtime dependency graph the built image ships (the
       # Dockerfile's runtime stage never installs the `prisma` CLI, only the
@@ -171,13 +229,11 @@ jobs:
           VITE_SUPABASE_URL: "https://example.supabase.co"
           VITE_SUPABASE_ANON_KEY: "ci-placeholder-anon-key"
           VITE_API_BASE_URL: "http://localhost:4000/api/v1"
-      # Non-blocking: report-only, not a merge gate, until a maintainer
-      # triages this. As of 2026-08-21, `npm audit --audit-level=high` here
-      # finds 1 high finding (nanoid, a transitive dev-tooling dependency —
-      # not shipped in the built bundle). continue-on-error surfaces the
-      # failed step in the Actions UI without failing the job.
-      - run: npm audit --audit-level=high --prefix web
-        continue-on-error: true
+      # The deployed web artifact has no production dependency advisories in
+      # the current lockfile. Keep that true: development-tool findings remain
+      # visible to local/all-dependency audits without weakening this release
+      # gate for packages that can reach the shipped application.
+      - run: npm audit --omit=dev --audit-level=moderate --prefix web
 
   docker:
     runs-on: ubuntu-latest
@@ -327,6 +383,24 @@ jobs:
             exit 1
           fi
 
+      - name: Production requires an explicit proxy hop count
+        run: |
+          set +e
+          output="$(docker run --rm --network none \
+            -e DATABASE_URL="postgresql://offline:offline@127.0.0.1/offline" \
+            -e DIRECT_URL="postgresql://offline:offline@127.0.0.1/offline" \
+            -e SUPABASE_URL="https://example.supabase.co" \
+            -e SUPABASE_ANON_KEY="ci-placeholder-anon-key" \
+            -e SUPABASE_SERVICE_ROLE_KEY="ci-placeholder-service-role-key" \
+            -e CORS_ORIGIN="https://app.example.com" \
+            -e NODE_ENV=production \
+            finsight-backend:ci 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          [ "$status" -ne 0 ]
+          printf '%s\n' "$output" | grep -q 'TRUST_PROXY_HOPS must be set explicitly in production'
+
       # --network host: the container needs to reach the postgres *service
       # container*, which GitHub Actions publishes on the runner's own
       # localhost, not on a user-defined bridge network the app container is
@@ -345,8 +419,11 @@ jobs:
             -e SUPABASE_URL="https://example.supabase.co" \
             -e SUPABASE_ANON_KEY="ci-placeholder-anon-key" \
             -e SUPABASE_SERVICE_ROLE_KEY="ci-placeholder-service-role-key" \
+            -e CORS_ORIGIN="https://app.example.com" \
+            -e TRUST_PROXY_HOPS=0 \
+            -e HEALTH_DETAIL_TOKEN="ci-health-detail-token" \
             -e PORT=4577 \
-            -e NODE_ENV=development \
+            -e NODE_ENV=production \
             finsight-backend:ci
 
       # Polls rather than sleeping a fixed amount: the compose healthcheck
@@ -363,9 +440,64 @@ jobs:
           curl -sf http://127.0.0.1:4577/api/v1/health/live
           echo
           echo "Checking /health/ready hits a real database round trip..."
-          response="$(curl -sf http://127.0.0.1:4577/api/v1/health/ready)"
-          echo "$response"
-          echo "$response" | grep -q '"database":"ok"'
+          public_response="$(curl -sf http://127.0.0.1:4577/api/v1/health/ready)"
+          echo "$public_response"
+          node -e '
+            const body = JSON.parse(process.argv[1]);
+            const keys = Object.keys(body).sort();
+            if (body.status !== "ready" || body.database !== "ok") process.exit(1);
+            if (JSON.stringify(keys) !== JSON.stringify(["database", "status"])) process.exit(1);
+          ' "$public_response"
+
+          invalid_token_response="$(curl -sf \
+            -H 'x-health-token: wrong-ci-health-detail-token' \
+            http://127.0.0.1:4577/api/v1/health/ready)"
+          echo "$invalid_token_response"
+          node -e '
+            const body = JSON.parse(process.argv[1]);
+            const keys = Object.keys(body).sort();
+            if (body.status !== "ready" || body.database !== "ok") process.exit(1);
+            if (JSON.stringify(keys) !== JSON.stringify(["database", "status"])) process.exit(1);
+          ' "$invalid_token_response"
+
+          detail_response="$(curl -sf \
+            -H 'x-health-token: ci-health-detail-token' \
+            http://127.0.0.1:4577/api/v1/health/ready)"
+          echo "$detail_response"
+          node -e '
+            const body = JSON.parse(process.argv[1]);
+            const detailKeys = [
+              "queuedReceiptScans",
+              "oldestQueuedReceiptScanAgeSeconds",
+              "queuedCsvImports",
+              "oldestQueuedCsvImportAgeSeconds",
+              "pendingCsvImports",
+              "oldestPendingCsvImportAgeSeconds",
+              "processingCsvImports",
+              "oldestProcessingCsvImportAgeSeconds",
+              "queuedCsvSourcePurges",
+              "oldestQueuedCsvSourcePurgeAgeSeconds",
+              "failedCsvSourcePurges",
+              "stagedCsvUploads",
+              "oldestStagedCsvUploadAgeSeconds",
+              "queuedAnalysisJobs",
+              "oldestQueuedAnalysisJobAgeSeconds",
+              "failedAnalysisJobs",
+              "queuedReceiptPurges",
+              "oldestQueuedReceiptPurgeAgeSeconds",
+              "failedReceiptPurges",
+              "stalledAccountDeletions",
+            ];
+            if (body.status !== "ready" || body.database !== "ok") process.exit(1);
+            if (!detailKeys.every((key) => Object.hasOwn(body, key))) process.exit(1);
+          ' "$detail_response"
+      # Exercise the redacted CSV monitor against the running production-mode
+      # image. Missing protected metrics or an invalid token must fail closed.
+      - run: npx tsx scripts/csv-import-readiness.ts
+        working-directory: backend
+        env:
+          CSV_READINESS_URL: http://127.0.0.1:4577/api/v1/health/ready
+          HEALTH_DETAIL_TOKEN: ci-health-detail-token
       - if: always()
         run: docker logs finsight-backend-smoke || true
       - if: always()
@@ -417,13 +549,17 @@ jobs:
       - run: npx expo config --type prebuild
         working-directory: mobile
       - run: npm test --prefix mobile
-      # Non-blocking: report-only, not a merge gate. As of 2026-08-21, `npm
-      # audit --audit-level=high --prefix mobile` finds 16 findings (8 high,
-      # 8 moderate), rooted in Expo's own config-plugins/xcode tooling chain
-      # (uuid, metro-transform-worker) — dev/build tooling, not runtime app
-      # code. `npm audit fix --force` there pulls a breaking Expo SDK bump,
-      # which is exactly the kind of change this pipeline should not make
-      # unilaterally. continue-on-error surfaces the failed step in the
-      # Actions UI without failing the job, so new findings stay visible.
-      - run: npm audit --audit-level=high --prefix mobile
+      # Critical production advisories are always a release blocker, even
+      # while the lower-severity Expo migration below remains scheduled work.
+      - run: npm audit --omit=dev --audit-level=critical --prefix mobile
+      # High/moderate findings remain report-only. As of 2026-09-27, `npm
+      # audit --omit=dev --prefix mobile` finds 18 findings (3 high,
+      # 15 moderate). The high findings are in Expo/Metro build tooling
+      # (`@xmldom/xmldom`, `image-size`, and `js-yaml`); the moderate set also
+      # includes React Navigation's `query-string` chain, so it must not be
+      # described as tooling-only. npm's proposed fixes cross major versions
+      # or downgrade Expo, which this pipeline must not do unilaterally.
+      # continue-on-error keeps the debt visible without applying an unsafe
+      # automated migration.
+      - run: npm audit --omit=dev --audit-level=high --prefix mobile
         continue-on-error: true

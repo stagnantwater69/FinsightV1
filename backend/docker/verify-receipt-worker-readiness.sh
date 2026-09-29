@@ -93,6 +93,38 @@ if TESSERACT_LANG=eng \
   exit 1
 fi
 
+# A non-receipt lane must not depend on or validate OCR language data.
+WORKER_LANES=csv \
+TESSERACT_LANG=missing \
+TESSERACT_LANG_PATH="$lang_dir" \
+RECEIPT_WORKER_HEALTH_DIR="$health_dir" \
+  "$script_dir/worker-entrypoint.sh" node -e \
+    'process.on("SIGTERM", () => process.exit(0)); setInterval(() => {}, 1000)' &
+entrypoint_pid=$!
+
+jobs_probe=""
+attempt=0
+while [ "$attempt" -lt 30 ]; do
+  attempt=$((attempt + 1))
+  jobs_probe=$(WORKER_LANES=csv \
+    TESSERACT_LANG=missing \
+    TESSERACT_LANG_PATH="$lang_dir" \
+    RECEIPT_WORKER_HEALTH_DIR="$health_dir" \
+      "$script_dir/worker-readiness.sh" 2>/dev/null || true)
+  case "$jobs_probe" in
+    *"status=ok"*) break ;;
+  esac
+  sleep 1
+done
+case "$jobs_probe" in
+  *"status=ok"*"language=not_required"*) ;;
+  *) exit 1 ;;
+esac
+
+kill -TERM "$entrypoint_pid"
+wait "$entrypoint_pid" 2>/dev/null || true
+entrypoint_pid=""
+
 # Slow-shutdown drill. The stub above exits the instant it sees TERM, which
 # looks the same whether the entrypoint waited for it or abandoned it. A child
 # that takes a second to finish separates the two, and abandoning it is what
@@ -140,4 +172,4 @@ entrypoint_pid=""
 [ -f "$marker_dir/shutdown-complete" ] || exit 1
 
 printf '%s\n' \
-  'receipt_worker_readiness_drill status=ok running_probe_passed=1 stopped_probe_failed=1 unsafe_root_rejected=1 slow_child_shutdown_waited=1 child_exit_propagated=1'
+  'receipt_worker_readiness_drill status=ok running_probe_passed=1 stopped_probe_failed=1 unsafe_root_rejected=1 non_receipt_ocr_skipped=1 slow_child_shutdown_waited=1 child_exit_propagated=1'

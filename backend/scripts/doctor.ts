@@ -182,6 +182,9 @@ export interface Readiness {
   oldestQueuedReceiptScanAgeSeconds?: number | null;
   failedAnalysisJobs?: number;
   queuedCsvImports?: number;
+  queuedCsvSourcePurges?: number;
+  oldestQueuedCsvSourcePurgeAgeSeconds?: number | null;
+  failedCsvSourcePurges?: number;
   queuedAnalysisJobs?: number;
   stalledAccountDeletions?: number;
 }
@@ -260,15 +263,33 @@ export function checkQueues(readiness: Readiness | null): Check {
   }
   const scans = readiness.queuedReceiptScans ?? 0;
   const csv = readiness.queuedCsvImports ?? 0;
+  const csvPurges = readiness.queuedCsvSourcePurges ?? 0;
   const analysis = readiness.queuedAnalysisJobs ?? 0;
   const oldest = readiness.oldestQueuedReceiptScanAgeSeconds ?? null;
-  const summary = `receipts ${scans}, csv ${csv}, analysis ${analysis}`;
+  const oldestCsvPurge = readiness.oldestQueuedCsvSourcePurgeAgeSeconds ?? null;
+  const summary = `receipts ${scans}, csv imports ${csv}, csv purges ${csvPurges}, analysis ${analysis}`;
   if (oldest !== null && oldest > 60) {
     return {
       name: "queues",
       state: "FAIL",
       summary: `${summary} — oldest receipt waiting ${oldest}s`,
       hint: "Nothing is consuming. Start the worker: npm run worker:dev --prefix backend",
+    };
+  }
+  if (oldestCsvPurge !== null && oldestCsvPurge > 60) {
+    return {
+      name: "queues",
+      state: "FAIL",
+      summary: `${summary} — oldest CSV purge waiting ${oldestCsvPurge}s`,
+      hint: "Nothing is consuming. Start the worker: npm run worker:dev --prefix backend",
+    };
+  }
+  if ((readiness.failedCsvSourcePurges ?? 0) > 0) {
+    return {
+      name: "queues",
+      state: "WARN",
+      summary: `${summary} — ${readiness.failedCsvSourcePurges} failed CSV purge(s)`,
+      hint: "A CSV object path is retained but Storage cleanup has exhausted its retries",
     };
   }
   if ((readiness.stalledAccountDeletions ?? 0) > 0) {

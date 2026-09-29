@@ -58,20 +58,34 @@ services:
       start_period: 40s
 
   worker:
-    # Same image, `worker` target: the background queue consumers (receipt
-    # scans, CSV imports, anomaly analysis, account deletion) and periodic
-    # sweeps, split into their own process — see backend/src/worker.ts. No
-    # `expose`/`ports`: this process serves no HTTP traffic. Scale this
-    # service independently of `backend` to add worker throughput without
-    # adding API capacity, or vice versa.
+    # Receipt OCR and provider dispatch get their own process so a large CSV
+    # import or analysis backlog cannot delay a newly uploaded receipt. The
+    # service name stays `worker` for compatibility with existing receipt
+    # readiness commands.
     build:
       context: ./backend
       target: worker
     env_file: ./backend/.env
     environment:
-      RECEIPT_WORKER_HEALTH_DIR: /run/finsight/worker-health
+      WORKER_LANES: receipt
+      RECEIPT_WORKER_HEALTH_DIR: /run/finsight/receipt-worker-health
     tmpfs:
-      - /run/finsight/worker-health:rw,noexec,nosuid,nodev,size=1048576,mode=0700,uid=1000,gid=1000
+      - /run/finsight/receipt-worker-health:rw,noexec,nosuid,nodev,size=1048576,mode=0700,uid=1000,gid=1000
+    restart: unless-stopped
+    stop_grace_period: 35s
+
+  jobs-worker:
+    # CSV imports, analysis, purges, account deletion, and recurring sweeps
+    # poll on independent in-process lanes. No worker exposes a network port.
+    build:
+      context: ./backend
+      target: worker
+    env_file: ./backend/.env
+    environment:
+      WORKER_LANES: csv,analysis,maintenance
+      RECEIPT_WORKER_HEALTH_DIR: /run/finsight/jobs-worker-health
+    tmpfs:
+      - /run/finsight/jobs-worker-health:rw,noexec,nosuid,nodev,size=1048576,mode=0700,uid=1000,gid=1000
     restart: unless-stopped
     stop_grace_period: 35s
 

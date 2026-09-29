@@ -13,9 +13,9 @@ been verified, it says so rather than implying it works.
 
 | Piece | What it is | How it ships |
 |---|---|---|
-| `backend/` | Express + Prisma API | Docker image (`backend/Dockerfile`, multi-stage, `node:24-bookworm-slim`) |
+| `backend/` | Express + Prisma API | Docker image (`backend/Dockerfile`, multi-stage, `node:22-bookworm-slim`) |
 | `web/` | React + Vite SPA | Static files from `npm run build` → `web/dist/` |
-| `mobile/` | React Native / Expo | APK or store build via Expo — **not covered here**, no build has been produced from this repo yet |
+| `mobile/` | React Native / Expo | Debug and instrumentation APKs have been built for scanner verification. No signed release or store artifact has been produced; release distribution is **not covered here** |
 | Database + Storage + Auth | Supabase project | Already hosted; you provision the project, not the server |
 
 `nginx/nginx.conf` and `docker-compose.yml` exist and put nginx in front of
@@ -76,7 +76,9 @@ misconfigured deploy dies immediately instead of erroring per-request later.
 | `TESSERACT_LANG_PATH` | backend root locally; `/app/tessdata` in Docker | Optional for direct npm development; the source and compiled config both resolve the tracked backend bundle when it is unset. Docker sets its root-owned, read-only bundle explicitly. |
 | `RECEIPT_UPLOAD_TEMP_ROOT` | OS temp directory plus `finsight-receipt-uploads` locally; `/run/finsight/receipt-uploads` in Docker | Must resolve to an absolute, private directory. Compose supplies a bounded tmpfs rather than a host volume. |
 | `RECEIPT_UPLOAD_ORPHAN_TTL_SECONDS` | `3600` | Sweeper-only setting; values below 3600 are rejected because an upload request may run for 300 seconds. |
-| `RECEIPT_WORKER_HEALTH_DIR` | `/tmp/finsight-worker-health` outside Compose; `/run/finsight/worker-health` in Compose | Private worker PID and heartbeat markers only; arbitrary or symlink-resolved paths are rejected before cleanup |
+| `WORKER_LANES` | `all` | `receipt`, `csv`, `analysis`, `maintenance`, or a comma-separated subset. `all` is valid only by itself. Compose overrides this with two worker services; see §4. |
+| `CSV_SOURCE_RETENTION_DAYS` | `90` | Completed CSV source files enter the durable purge queue after this many days; imported records and batch history remain. Accepts 30 through 365. |
+| `RECEIPT_WORKER_HEALTH_DIR` | `/tmp/finsight-worker-health` outside Compose; lane-specific `/run/finsight/*-worker-health` tmpfs paths in Compose | Private worker PID and heartbeat markers only; arbitrary or symlink-resolved paths are rejected before cleanup |
 | `RECEIPT_WORKER_HEARTBEAT_MAX_AGE_SECONDS` | `45` | Worker healthcheck range is 15 through 300 seconds |
 | `RECEIPT_WORKER_IDLE_POLL_MS` | `1000` | How long an idle worker sleeps between queue passes. Clamped to 250 through 60000; a bad value falls back to the default instead of blocking boot. See §4. |
 | `RECEIPT_QUEUE_STALE_AFTER_SECONDS` | `300` | Operator-only warning threshold for the read-only queue readiness command |
@@ -191,9 +193,10 @@ curl -s http://localhost:4000/api/v1/health/live    # → {"status":"ok","uptime
 
 The Dockerfile has two deployable targets: `api` (HTTP server, `dist/server.js`,
 with a HEALTHCHECK) and `worker` (queue consumers, `dist/worker.js`, with no
-HTTP endpoint). The worker entrypoint and container healthcheck verify its
-configured Tesseract files before work starts. An untargeted build resolves to
-`api`, but always name the target
+HTTP endpoint). A worker that owns the `receipt` lane verifies its configured
+Tesseract files before work starts; non-receipt workers report
+`language=not_required` and do not warm or shut down an OCR pool. An untargeted
+build resolves to `api`, but always name the target
 — a stage-order slip once made the default image the worker, which never
 listens, so compose's healthcheck failed and nginx never started
 (QA finding OPS-DEPLOY-01). CI now asserts each image's CMD.
@@ -217,17 +220,44 @@ for a plain up/down check that needs no token.
 checked against this repo. Tagging by commit rather than `latest` is what
 makes a rollback a matter of running the previous tag.
 
-### Worker idle poll interval
+### Worker lanes and idle poll interval
+
+`WORKER_LANES` assigns queue ownership to a process:
+
+| Lane | Work owned |
+|---|---|
+| `receipt` | Receipt OCR, optional provider dispatch, and stale provider-dispatch reconciliation |
+| `csv` | Durable CSV imports and the stalled-import sweep |
+| `analysis` | Financial and anomaly analysis jobs plus the daily analysis enqueue |
+| `maintenance` | Receipt and CSV source purges, one account-deletion stage per pass, rate-limit cleanup, unverified-registration cleanup, and abandoned-receipt purge sweeps |
+
+For staged CSV imports, use the [CSV import release and monitoring runbook](csv-import-release-runbook.md)
+for migration order, protected queue monitoring, synthetic staging checks, and
+rollout decisions.
+
+Unset or `all` runs all four lanes in one process, preserving direct local
+development with `npm run worker:dev`. Named lanes may be combined with commas;
+unknown, empty, repeated, and `all,receipt`-style values fail environment
+validation. Every selected lane has its own busy state and poll timer, so a
+large CSV import cannot delay receipt pickup or analysis even when the lanes
+share a process.
+
+Compose starts two services by default: `worker` owns only `receipt`, while
+`jobs-worker` owns `csv,analysis,maintenance`. Each has its own heartbeat tmpfs.
+Scale a service only for throughput in the lanes it owns. If an operator splits
+the jobs service further, every required lane must still have at least one
+owner, and exactly one deployed service set should own `maintenance` to avoid
+duplicating recurring sweeps.
 
 `RECEIPT_WORKER_IDLE_POLL_MS` (default `1000`) is how long the worker sleeps
-after a pass that claimed no job. A pass that did claim one is followed
-immediately, so this governs idle replicas only, and both ends of the knob cost
-something:
+after one of its lanes claimed no job. A lane that did claim one is followed
+immediately without making other lanes wait, so this governs idle lane replicas
+only, and both ends of the knob cost something:
 
-- **At 1000**, one idle replica runs a queue pass every second, roughly 518,000
-  queue queries a day across the six consumers a pass touches. That is
-  unremarkable against a Postgres you own and material against a metered hosted
-  one, multiplied by every replica you add.
+- **At 1000**, each selected idle lane runs a pass every second. An `all`
+  process invokes seven consumer/reconciliation entry points per idle cycle;
+  the number of SQL statements is service-dependent. That load is multiplied
+  by every replica that owns the same lane.
 - **Backing it off** cuts that load in proportion and adds the same amount to
   the worst-case wait before an upload is picked up. At `5000` an idle replica
   issues about a fifth the queries and a scan can sit up to five seconds before
@@ -448,7 +478,8 @@ single green process check.
 |---|---|---|
 | API process | `curl --max-time 5 --fail-with-body http://127.0.0.1:8080/api/v1/health/live` | HTTP 200 and `status: ok` |
 | Database from the API | `curl --max-time 45 --fail-with-body http://127.0.0.1:8080/api/v1/health/ready` | HTTP 200 and `database: ok` |
-| Worker process and language bundle | `docker compose exec -T worker finsight-worker-readiness` | `status=ok process=ok language=ok` |
+| Receipt worker process and language bundle | `docker compose exec -T worker finsight-worker-readiness` | `status=ok process=ok language=ok` |
+| Jobs worker process | `docker compose exec -T jobs-worker finsight-worker-readiness` | `status=ok process=ok language=not_required` |
 | Migrations and queue freshness | from `backend/`, `npm run ops:receipt-queue:readiness` | `status: ok`, `databaseTransaction: read-only`, `migrations: ok`, `workerQueue` not `stale`, and `providerDispatchReview: ok` |
 | Private Storage contract | from `backend/`, `npm run storage:buckets:verify` | `status: ok` and `bucketMismatchCount: 0` |
 | Optional provider | from `backend/`, `npm run ops:receipt-provider:status` | `disabled` for local-only mode, or `operational` after every optional gate is approved |
@@ -458,13 +489,14 @@ running the three backend operator commands. The queue and Storage commands do
 not load `backend/.env` to fill missing credentials. A developer file must not
 silently turn a target readiness check into a check of another environment.
 
-The API liveness endpoint does not prove database access. The worker container
-healthcheck proves that its child process is alive, its heartbeat is fresh, and
-every configured Tesseract language file is readable, read-only, and matches
-the packaged checksum. It does not prove that work is draining. The queue
-readiness command fills that gap with read-only counts from the same database
-route as the application. Run it from the worker's network context when the
-host cannot reach `DATABASE_URL`.
+The API liveness endpoint does not prove database access. Each worker
+healthcheck proves that its child process is alive and its heartbeat is fresh;
+the receipt worker additionally verifies that every configured Tesseract
+language file is readable, read-only, and matches the packaged checksum. These
+checks do not prove that work is draining. The queue readiness command fills
+that gap with read-only counts from the same database route as the application.
+Run it from a worker's network context when the host cannot reach
+`DATABASE_URL`.
 
 The queue command reports an otherwise eligible receipt as stale after 300
 seconds by default. Set `RECEIPT_QUEUE_STALE_AFTER_SECONDS` from 60 through
@@ -580,8 +612,8 @@ entrypoint stays alive until a child that takes one second to stop has
 finished, then exits with that child's status.
 
 The last of those is what stands between a graceful stop and the orchestrator
-SIGKILLing a half-written job at the end of `stop_grace_period` (35s for the
-worker service in `docker-compose.yml`). This is local wrapper evidence only;
+SIGKILLing a half-written job at the end of `stop_grace_period` (35s for both
+worker services in `docker-compose.yml`). This is local wrapper evidence only;
 the queue-recovery drill below remains the release check.
 
 #### Queue-recovery drill

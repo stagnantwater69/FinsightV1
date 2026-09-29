@@ -7,11 +7,11 @@ emit_failure() {
 }
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-preflight=/usr/local/bin/finsight-tesseract-preflight
-if [ ! -x "$preflight" ] && [ -x "$script_dir/tesseract-entrypoint.sh" ]; then
-  preflight="$script_dir/tesseract-entrypoint.sh"
-fi
-[ -x "$preflight" ] || emit_failure TESSERACT_PREFLIGHT_MISSING
+worker_lanes=$(printf '%s' "${WORKER_LANES:-all}" | tr -d '[:space:]')
+needs_ocr=0
+case ",$worker_lanes," in
+  ,all,|*,receipt,*) needs_ocr=1 ;;
+esac
 
 health_dir=${RECEIPT_WORKER_HEALTH_DIR:-/tmp/finsight-worker-health}
 max_age=${RECEIPT_WORKER_HEARTBEAT_MAX_AGE_SECONDS:-45}
@@ -23,7 +23,7 @@ case "$health_dir" in
   /|*/../*|*/..|*/./*|*//*|*/.|*/|*[!A-Za-z0-9_./-]*) emit_failure HEALTH_DIRECTORY_INVALID ;;
 esac
 case "$health_dir" in
-  /tmp/finsight-worker-health|/tmp/*/finsight/worker-health|/run/finsight/worker-health) ;;
+  /tmp/finsight-worker-health|/tmp/*/finsight/worker-health|/run/finsight/worker-health|/run/finsight/receipt-worker-health|/run/finsight/jobs-worker-health) ;;
   *) emit_failure HEALTH_DIRECTORY_INVALID ;;
 esac
 case "$max_age" in
@@ -79,9 +79,18 @@ if [ "$heartbeat_age" -gt "$max_age" ]; then
   emit_failure HEARTBEAT_STALE
 fi
 
-if ! "$preflight" --check-only; then
-  emit_failure LANGUAGE_DATA_UNAVAILABLE
+language_status=not_required
+if [ "$needs_ocr" -eq 1 ]; then
+  preflight=/usr/local/bin/finsight-tesseract-preflight
+  if [ ! -x "$preflight" ] && [ -x "$script_dir/tesseract-entrypoint.sh" ]; then
+    preflight="$script_dir/tesseract-entrypoint.sh"
+  fi
+  [ -x "$preflight" ] || emit_failure TESSERACT_PREFLIGHT_MISSING
+  if ! "$preflight" --check-only; then
+    emit_failure LANGUAGE_DATA_UNAVAILABLE
+  fi
+  language_status=ok
 fi
 
 printf '%s\n' \
-  "receipt_worker_readiness status=ok process=ok language=ok heartbeat_age_seconds=$heartbeat_age code=NONE"
+  "receipt_worker_readiness status=ok process=ok language=$language_status heartbeat_age_seconds=$heartbeat_age code=NONE"

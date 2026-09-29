@@ -11,11 +11,11 @@ if [ "$#" -eq 0 ]; then
 fi
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-preflight=/usr/local/bin/finsight-tesseract-preflight
-if [ ! -x "$preflight" ] && [ -x "$script_dir/tesseract-entrypoint.sh" ]; then
-  preflight="$script_dir/tesseract-entrypoint.sh"
-fi
-[ -x "$preflight" ] || fail TESSERACT_PREFLIGHT_MISSING
+worker_lanes=$(printf '%s' "${WORKER_LANES:-all}" | tr -d '[:space:]')
+needs_ocr=0
+case ",$worker_lanes," in
+  ,all,|*,receipt,*) needs_ocr=1 ;;
+esac
 
 health_dir=${RECEIPT_WORKER_HEALTH_DIR:-/tmp/finsight-worker-health}
 case "$health_dir" in
@@ -26,7 +26,7 @@ case "$health_dir" in
   /|*/../*|*/..|*/./*|*//*|*/.|*/|*[!A-Za-z0-9_./-]*) fail HEALTH_DIRECTORY_INVALID ;;
 esac
 case "$health_dir" in
-  /tmp/finsight-worker-health|/tmp/*/finsight/worker-health|/run/finsight/worker-health) ;;
+  /tmp/finsight-worker-health|/tmp/*/finsight/worker-health|/run/finsight/worker-health|/run/finsight/receipt-worker-health|/run/finsight/jobs-worker-health) ;;
   *) fail HEALTH_DIRECTORY_INVALID ;;
 esac
 if [ -L "$health_dir" ] || { [ -e "$health_dir" ] && [ ! -d "$health_dir" ]; }; then
@@ -56,7 +56,14 @@ if [ -L "$pid_file" ] || [ -L "$heartbeat_file" ]; then
 fi
 rm -f -- "$pid_file" "$heartbeat_file"
 
-"$preflight" --check-only || fail LANGUAGE_DATA_UNAVAILABLE
+if [ "$needs_ocr" -eq 1 ]; then
+  preflight=/usr/local/bin/finsight-tesseract-preflight
+  if [ ! -x "$preflight" ] && [ -x "$script_dir/tesseract-entrypoint.sh" ]; then
+    preflight="$script_dir/tesseract-entrypoint.sh"
+  fi
+  [ -x "$preflight" ] || fail TESSERACT_PREFLIGHT_MISSING
+  "$preflight" --check-only || fail LANGUAGE_DATA_UNAVAILABLE
+fi
 
 "$@" &
 worker_pid=$!
