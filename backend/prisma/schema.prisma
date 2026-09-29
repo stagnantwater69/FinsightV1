@@ -247,8 +247,24 @@ enum CsvImportProcessingStatus {
   PROCESSING
   COMPLETE
   FAILED
+  /// A private source object is being uploaded and parsed into durable chunks.
+  /// This state is never eligible for the import worker.
+  STAGING
+  /// Upload and parse completed; the owner may map, review, and confirm it.
+  /// Expired rows are handed to the durable CSV source-purge queue.
+  STAGED
 
   @@map("CsvImportProcessingStatus")
+}
+
+enum CsvSourcePurgeStatus {
+  PENDING
+  PROCESSING
+  RETRY
+  COMPLETE
+  FAILED
+
+  @@map("CsvSourcePurgeStatus")
 }
 
 // [ADDED] The account lifecycle, as an enum rather than the dictionary's free
@@ -439,12 +455,19 @@ model User {
   avatarUrl   String?       @map("User_AvatarURL") @db.VarChar(500) // [ADDED] see schema header note
   createdAt   DateTime      @default(now()) @map("User_CreatedAt")
 
-  // [ADDED] Deletion bookkeeping. Null on every account that has not asked to
-  // be deleted; see accountDeletion.service.ts for how the job drains them.
-  deletionRequestedAt DateTime?             @map("User_DeletionRequestedAt")
-  deletionStage       AccountDeletionStage? @map("User_DeletionStage")
-  deletionAttempts    Int                   @default(0) @map("User_DeletionAttempts")
-  deletionLastError   String?               @map("User_DeletionLastError") @db.VarChar(500)
+  // Deletion requests stay null until an owner asks; the remaining fields
+  // provide durable scheduling, lease fencing, and Storage resume state.
+  deletionRequestedAt         DateTime?             @map("User_DeletionRequestedAt")
+  deletionStage               AccountDeletionStage? @map("User_DeletionStage")
+  deletionAttempts            Int                   @default(0) @map("User_DeletionAttempts")
+  deletionLastError           String?               @map("User_DeletionLastError") @db.VarChar(500)
+  deletionNextAttemptAt       DateTime              @default(now()) @map("User_DeletionNextAttemptAt")
+  deletionLeaseStartedAt      DateTime?             @map("User_DeletionLeaseStartedAt")
+  deletionHeartbeatAt         DateTime?             @map("User_DeletionHeartbeatAt")
+  deletionWorkerId            String?               @map("User_DeletionWorkerID") @db.VarChar(100)
+  deletionClaimVersion        Int                   @default(0) @map("User_DeletionClaimVersion")
+  deletionStorageManifestHash String?               @map("User_DeletionStorageManifestHash") @db.Char(64)
+  deletionStorageCheckpoint   Int                   @default(0) @map("User_DeletionStorageCheckpoint")
 
   // [ADDED] User-level preferences, shared by web and mobile.
   //
@@ -478,8 +501,7 @@ model User {
   reductionOpportunityFeedback ReductionOpportunityFeedback[]
   authHandoffs                 AuthHandoff[]
 
-  // The deletion worker claims the oldest unfinished request on every pass.
-  @@index([status, deletionRequestedAt], map: "User_DeletionQueue_idx")
+  @@index([status, deletionNextAttemptAt, deletionRequestedAt, id], map: "User_DeletionQueue_idx")
   @@map("User")
 }
 
@@ -521,6 +543,7 @@ model AuthHandoff {
 
   // The sweep that clears expired rows orders by this.
   @@index([expiresAt], map: "AuthHandoff_Expiry_idx")
+  @@index([userId], map: "AuthHandoff_User_ID_idx")
   @@map("AuthHandoff")
 }
 
@@ -916,6 +939,7 @@ model ReceiptScan {
   /// is fresh; after a crash another worker can safely reclaim the same row.
   processingAttemptCount      Int       @default(0) @map("ReceiptScan_ProcessingAttemptCount")
   processingStartedAt         DateTime? @map("ReceiptScan_ProcessingStartedAt")
+  processingCompletedAt       DateTime? @map("ReceiptScan_ProcessingCompletedAt")
   processingHeartbeatAt       DateTime? @map("ReceiptScan_ProcessingHeartbeatAt")
   nextProcessingAttemptAt     DateTime  @default(now()) @map("ReceiptScan_NextProcessingAttemptAt")
   processingWorkerId          String?   @map("ReceiptScan_ProcessingWorkerID") @db.VarChar(100)
@@ -967,8 +991,8 @@ model ReceiptScan {
   /// committed while a deletion ran survived it holding rawText, the extracted
   /// vendor and amount, and the storage paths of the photographs. Cascading
   /// leaves no instant at which the profile is gone and the scan is not.
-  businessProfile             BusinessProfile?            @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
-  captureBatch                ReceiptCaptureBatch?        @relation(fields: [captureBatchId, businessProfileId], references: [id, businessProfileId], onDelete: NoAction)
+  businessProfile             BusinessProfile?                  @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+  captureBatch                ReceiptCaptureBatch?              @relation(fields: [captureBatchId, businessProfileId], references: [id, businessProfileId], onDelete: NoAction)
   expenseRecords              ExpenseRecord[]
   items                       ReceiptScanItem[]
   pages                       ReceiptScanPage[]
@@ -976,8 +1000,8 @@ model ReceiptScan {
   providerDispatches          ExternalProviderDispatch[]
   providerDispatchOutcomes    ExternalProviderDispatchOutcome[]
   purgeJobs                   ReceiptPurgeJob[]
-  duplicateCandidatesAsSource ReceiptDuplicateCandidate[] @relation("ReceiptDuplicateCandidateSource")
-  duplicateCandidatesAsTarget ReceiptDuplicateCandidate[] @relation("ReceiptDuplicateCandidateScanTarget")
+  duplicateCandidatesAsSource ReceiptDuplicateCandidate[]       @relation("ReceiptDuplicateCandidateSource")
+  duplicateCandidatesAsTarget ReceiptDuplicateCandidate[]       @relation("ReceiptDuplicateCandidateScanTarget")
 
   @@unique([id, businessProfileId], map: "ReceiptScan_ID_BusinessProfile_ID_key")
   @@unique([captureBatchId, receiptOrdinal], map: "ReceiptScan_batch_ordinal_key")
@@ -1258,15 +1282,77 @@ model CSVImportBatch {
   /// Bounded result evidence: per-row skip/flag reasons (capped), counts by
   /// record type. What the response body used to carry and then lose.
   resultSummary    Json?                     @map("ImportBatch_ResultSummary")
+  /// Opaque public handle for the upload/review phase. The integer batch id is
+  /// not exposed until confirmation starts the actual import.
+  stageId          String?                   @unique @map("ImportBatch_StageID") @db.Uuid
+  /// Hard deadline for an unconfirmed upload. Confirmed imports retain the
+  /// timestamp as audit evidence, but only STAGING/STAGED rows are swept.
+  stageExpiresAt   DateTime?                 @map("ImportBatch_StageExpiresAt")
+  /// Set only after both the private Storage object and every parsed chunk are
+  /// durable. Null while the bounded upload reservation is still in flight.
+  stagedAt         DateTime?                 @map("ImportBatch_StagedAt")
+  /// First successful transition out of STAGED. Together with createdAt,
+  /// stagedAt and completedAt this provides durable end-to-end milestones.
+  confirmedAt      DateTime?                 @map("ImportBatch_ConfirmedAt")
+  /// SHA-256 of the canonical mapping/corrections/title payload. Repeated
+  /// confirms may replay only when this value agrees.
+  confirmInputHash String?                   @map("ImportBatch_ConfirmInputHash") @db.Char(64)
 
   businessProfile       BusinessProfile        @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
   expenseRecords        ExpenseRecord[]
   salesReferenceRecords SalesReferenceRecord[]
+  stageChunks           CSVImportStageChunk[]
 
   @@index([businessProfileId])
   // The async-import worker's claim scan, mirroring AnalysisJob's.
   @@index([processingStatus, nextAttemptAt, heartbeatAt])
+  @@index([processingStatus, completedAt], map: "CSVImportBatch_retention_idx")
   @@map("CSVImportBatch")
+}
+
+/// Short-lived, server-generated parse snapshot for one staged CSV upload.
+///
+/// Rows are encoded as gzip-compressed compact string arrays so a maximum-size
+/// import occupies at most 30 bounded child rows without repeating JSON object
+/// keys. The source CSV remains the audit artefact in private Storage; these
+/// chunks are immutable derivatives used only to keep review and confirmation
+/// from downloading and parsing that source again. Services delete them when
+/// an import completes or fails, and the cascade removes abandoned stages.
+model CSVImportStageChunk {
+  importBatchId Int      @map("ImportBatch_ID")
+  chunkIndex    Int      @map("CSVImportStageChunk_Index")
+  rowCount      Int      @map("CSVImportStageChunk_RowCount")
+  payload       Bytes    @map("CSVImportStageChunk_Payload")
+  payloadHash   String   @map("CSVImportStageChunk_PayloadHash") @db.Char(64)
+  createdAt     DateTime @default(now()) @map("CSVImportStageChunk_CreatedAt")
+
+  importBatch CSVImportBatch @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
+
+  @@id([importBatchId, chunkIndex])
+  @@map("CSVImportStageChunk")
+}
+
+model CSVSourcePurgeJob {
+  id                Int                  @id @default(autoincrement()) @map("CSVSourcePurgeJob_ID")
+  businessProfileId Int                  @map("BusinessProfile_ID")
+  sourceBatchId     Int                  @map("ImportBatch_ID")
+  targetHash        String               @unique @map("CSVSourcePurgeJob_TargetHash") @db.Char(64)
+  fileReference     String?              @map("CSVSourcePurgeJob_FileReference") @db.VarChar(255)
+  status            CsvSourcePurgeStatus @default(PENDING) @map("CSVSourcePurgeJob_Status")
+  attemptCount      Int                  @default(0) @map("CSVSourcePurgeJob_AttemptCount")
+  nextAttemptAt     DateTime             @default(now()) @map("CSVSourcePurgeJob_NextAttemptAt")
+  leaseStartedAt    DateTime?            @map("CSVSourcePurgeJob_LeaseStartedAt")
+  heartbeatAt       DateTime?            @map("CSVSourcePurgeJob_HeartbeatAt")
+  workerId          String?              @map("CSVSourcePurgeJob_WorkerID") @db.VarChar(100)
+  lastErrorCode     String?              @map("CSVSourcePurgeJob_LastErrorCode") @db.VarChar(64)
+  requestedAt       DateTime             @default(now()) @map("CSVSourcePurgeJob_RequestedAt")
+  completedAt       DateTime?            @map("CSVSourcePurgeJob_CompletedAt")
+  updatedAt         DateTime             @updatedAt @map("CSVSourcePurgeJob_UpdatedAt")
+
+  @@index([status, nextAttemptAt, heartbeatAt], map: "CSVSourcePurgeJob_claim_idx")
+  @@index([status, requestedAt], map: "CSVSourcePurgeJob_status_requested_idx")
+  @@index([businessProfileId, status, requestedAt], map: "CSVSourcePurgeJob_profile_status_requested_idx")
+  @@map("CSVSourcePurgeJob")
 }
 
 model Notification {
@@ -1334,6 +1420,7 @@ model Conversation {
   // The sidebar's only query: this owner's threads for the active profile,
   // newest activity first.
   @@index([userId, businessProfileId, lastMessageAt])
+  @@index([businessProfileId], map: "Conversation_BusinessProfile_ID_idx")
   @@map("Conversation")
 }
 
@@ -1385,6 +1472,7 @@ model ReductionOpportunityFeedback {
 
   @@unique([businessProfileId, opportunityId, userId], map: "ReductionOpportunityFeedback_profile_opportunity_user_key")
   @@index([businessProfileId, opportunityId], map: "ReductionOpportunityFeedback_profile_opportunity_idx")
+  @@index([userId], map: "ReductionOpportunityFeedback_User_ID_idx")
   @@map("ReductionOpportunityFeedback")
 }
 
@@ -1655,14 +1743,15 @@ model ExternalProviderDispatch {
   outcomeCode                  String?                        @map("ExternalProviderDispatch_OutcomeCode") @db.VarChar(64)
   submittedAt                  DateTime?                      @map("ExternalProviderDispatch_SubmittedAt")
   completedAt                  DateTime?                      @map("ExternalProviderDispatch_CompletedAt")
+  providerRetryAt              DateTime?                      @map("ExternalProviderDispatch_ProviderRetryAt")
   createdAt                    DateTime                       @default(now()) @map("ExternalProviderDispatch_CreatedAt")
   updatedAt                    DateTime                       @updatedAt @map("ExternalProviderDispatch_UpdatedAt")
 
-  businessProfile BusinessProfile           @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
-  receiptScan     ReceiptScan?              @relation(fields: [receiptScanId, receiptScanBusinessProfileId], references: [id, businessProfileId], onDelete: SetNull)
-  consent         ExternalProcessingConsent @relation(fields: [consentId, businessProfileId, provider], references: [id, businessProfileId, provider], onDelete: NoAction)
-  resourceBudget  ExternalProviderBudget    @relation("ExternalProviderResourceBudget", fields: [resourceBudgetId, resourceBudgetScope, provider, cycleStart, unitType], references: [id, scope, provider, cycleStart, unitType], onDelete: Restrict)
-  businessBudget  ExternalProviderBudget?   @relation("ExternalProviderBusinessBudget", fields: [businessBudgetId, businessBudgetScope, businessBudgetProfileId, provider, cycleStart, unitType], references: [id, scope, businessProfileId, provider, cycleStart, unitType], onDelete: NoAction)
+  businessProfile BusinessProfile                  @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+  receiptScan     ReceiptScan?                     @relation(fields: [receiptScanId, receiptScanBusinessProfileId], references: [id, businessProfileId], onDelete: SetNull)
+  consent         ExternalProcessingConsent        @relation(fields: [consentId, businessProfileId, provider], references: [id, businessProfileId, provider], onDelete: NoAction)
+  resourceBudget  ExternalProviderBudget           @relation("ExternalProviderResourceBudget", fields: [resourceBudgetId, resourceBudgetScope, provider, cycleStart, unitType], references: [id, scope, provider, cycleStart, unitType], onDelete: Restrict)
+  businessBudget  ExternalProviderBudget?          @relation("ExternalProviderBusinessBudget", fields: [businessBudgetId, businessBudgetScope, businessBudgetProfileId, provider, cycleStart, unitType], references: [id, scope, businessProfileId, provider, cycleStart, unitType], onDelete: NoAction)
   storedOutcome   ExternalProviderDispatchOutcome?
 
   @@index([businessProfileId, createdAt, id], map: "ExternalProviderDispatch_profile_created_idx")
@@ -1670,6 +1759,7 @@ model ExternalProviderDispatch {
   @@index([receiptScanId, receiptScanBusinessProfileId], map: "ExternalProviderDispatch_receipt_idx")
   @@index([consentId, businessProfileId, provider], map: "ExternalProviderDispatch_consent_idx")
   @@index([status, createdAt], map: "ExternalProviderDispatch_status_created_idx")
+  @@index([provider, providerVersion, providerRegion, completedAt], map: "ExternalProviderDispatch_provider_completed_idx")
   @@index([resourceBudgetId, status], map: "ExternalProviderDispatch_resource_status_idx")
   @@index([businessBudgetId, status], map: "ExternalProviderDispatch_business_status_idx")
   @@map("ExternalProviderDispatch")
