@@ -33,6 +33,16 @@ export interface PreviewResult {
   };
 }
 
+/**
+ * The first preview also creates the private, owner-scoped upload that every
+ * later check and confirm reuses. Keeping this separate from PreviewResult
+ * makes the upload boundary explicit: validation responses do not need to
+ * mint or echo another handle.
+ */
+export interface StagedPreviewResult extends PreviewResult {
+  stagedUploadId: string;
+}
+
 export interface ImportResult {
   batchId: number;
   title: string;
@@ -91,6 +101,6 @@ export interface MappedColumn {
   /** True while this is still FinSight's guess rather than the owner's choice. */
   auto: boolean;
   align?: "right";
-  /** Leaving it unmapped is a valid choice — currently Vendor alone. */
+  /** Leaving it unmapped is valid for optional Category and Vendor fields. */
   optional?: boolean;
 }

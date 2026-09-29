@@ -12,7 +12,7 @@ import {
   type SelectHTMLAttributes,
   type TextareaHTMLAttributes,
 } from "react";
-import { IconEye, IconEyeOff } from "./icons";
+import { IconAlertTriangle, IconCheck, IconEye, IconEyeOff, IconUpload } from "./icons";
 
 /**
  * Form fields, with the labelling and error obligations built in.
@@ -441,6 +441,9 @@ export function FileInput({
   hintText,
   disabled = false,
   id: idProp,
+  presentation = "compact",
+  chooseLabel = "Choose a file",
+  showSelectionSummary = true,
 }: {
   accept?: string;
   /** Rejects anything larger, before it is ever uploaded. */
@@ -452,6 +455,9 @@ export function FileInput({
   hintText?: string;
   disabled?: boolean;
   id?: string;
+  presentation?: "compact" | "hero";
+  chooseLabel?: string;
+  showSelectionSummary?: boolean;
 }) {
   const ctx = useContext(FieldContext);
   const generatedId = useId();
@@ -490,7 +496,7 @@ export function FileInput({
     }
     if (maxBytes && f.size > maxBytes) {
       const limit = Math.round(maxBytes / (1024 * 1024));
-      setRejected(`${f.name} is ${formatBytes(f.size)}. The limit is ${limit}MB — try a smaller file.`);
+      setRejected(`${f.name} is ${formatBytes(f.size)}. The limit is ${limit}MB. Choose a smaller file.`);
       onSelect(null);
       return;
     }
@@ -499,6 +505,19 @@ export function FileInput({
 
   return (
     <div>
+      <input
+        id={id}
+        type="file"
+        accept={accept}
+        aria-label={chooseLabel}
+        disabled={disabled}
+        className="peer sr-only"
+        onChange={(e) => {
+          const next = e.target.files?.[0];
+          if (next) take(next);
+          e.target.value = "";
+        }}
+      />
       <label
         htmlFor={id}
         onDragOver={(e) => {
@@ -517,7 +536,11 @@ export function FileInput({
           }
           take(e.dataTransfer.files?.[0] ?? null);
         }}
-        className={`flex min-h-tap cursor-pointer flex-wrap items-center justify-center gap-2 rounded-xl border border-dashed px-4 py-5 text-center text-sm transition-colors ${
+        className={`cursor-pointer rounded-xl border border-dashed text-center text-sm transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-brand-500 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-transparent ${
+          presentation === "hero"
+            ? "flex min-h-[11rem] flex-col items-center justify-center gap-2 px-5 py-4 sm:min-h-[12rem] sm:py-5"
+            : "flex min-h-tap flex-wrap items-center justify-center gap-2 px-4 py-5"
+        } ${
           disabled
             ? "cursor-not-allowed border-ink-200 bg-paper-100 opacity-60"
             : dragging
@@ -525,25 +548,27 @@ export function FileInput({
               : "border-ink-200 bg-paper-100 text-ink-600 hover:border-edge-brand hover:bg-tint-brand"
         }`}
       >
-        <span aria-hidden className="text-base">
-          ⇪
-        </span>
-        <span className="font-medium">{file ? "Choose a different file" : "Choose a file"}</span>
-        <span className="text-ink-600">or drag it here</span>
+        {presentation === "hero" ? (
+          <>
+            <span aria-hidden className="flex h-12 w-12 items-center justify-center rounded-xl bg-tint-brand text-tone-brand sm:h-14 sm:w-14 sm:rounded-2xl">
+              <IconUpload className="h-6 w-6 sm:h-7 sm:w-7" />
+            </span>
+            <span className="font-display text-base font-semibold text-ink-900 sm:text-lg">
+              {file ? "Drop a replacement CSV file here" : "Drag and drop your CSV file here"}
+            </span>
+            <span className="text-xs text-ink-600">or</span>
+            <span className="inline-flex min-h-tap items-center justify-center rounded-lg bg-accent-400 px-5 py-2.5 font-semibold text-accent-950 shadow-sm">
+              {chooseLabel}
+            </span>
+          </>
+        ) : (
+          <>
+            <IconUpload className="h-4 w-4" />
+            <span className="font-medium">{file ? "Choose a different file" : chooseLabel}</span>
+            <span className="text-ink-600">or drag it here</span>
+          </>
+        )}
       </label>
-
-      <input
-        id={id}
-        type="file"
-        accept={accept}
-        disabled={disabled}
-        className="sr-only"
-        onChange={(e) => {
-          const next = e.target.files?.[0];
-          if (next) take(next);
-          e.target.value = "";
-        }}
-      />
 
       {hintText ? <p className="mt-1.5 text-xs text-ink-500">{hintText}</p> : null}
 
@@ -551,9 +576,9 @@ export function FileInput({
         The filename echo. Without it the only confirmation that a file was
         picked is the native control's own label, which this replaces.
       */}
-      {file ? (
+      {file && showSelectionSummary ? (
         <p className="mt-2 flex items-center gap-2 rounded-lg bg-tint-brand px-3 py-2 text-xs text-tone-brand ring-1 ring-edge-brand">
-          <span aria-hidden>✓</span>
+          <IconCheck className="h-4 w-4 shrink-0" />
           <span className="min-w-0 flex-1 truncate font-medium">{file.name}</span>
           <span className="figure shrink-0 text-ink-600">{formatBytes(file.size)}</span>
         </p>
@@ -561,9 +586,7 @@ export function FileInput({
 
       {rejected ? (
         <p role="alert" className="mt-2 flex items-start gap-1.5 text-xs text-tone-danger">
-          <span aria-hidden className="mt-px shrink-0">
-            ⚠
-          </span>
+          <IconAlertTriangle className="mt-px h-4 w-4 shrink-0" />
           <span className="min-w-0">{rejected}</span>
         </p>
       ) : null}

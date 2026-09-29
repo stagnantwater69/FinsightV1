@@ -65,7 +65,7 @@ export function ImportProgress({
       </div>
       <p className="text-xs text-ink-500">
         This file is large enough that FinSight is importing it in the background. You can leave this
-        page — the import finishes either way.
+        page; the import finishes either way.
       </p>
     </div>
   );

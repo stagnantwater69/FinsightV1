@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { isAxiosError } from "axios";
 import { useLocation } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
@@ -20,7 +21,13 @@ import {
 import { ImportProgress } from "./importCsv/ImportProgress";
 import { ImportResultSummary } from "./importCsv/ImportResultSummary";
 import { FileSelectStage } from "./importCsv/FileSelectStage";
-import { CellValue, MappedHeader, RowTypeBadge } from "./importCsv/ColumnMappingTable";
+import { ColumnMappingFields } from "./importCsv/ColumnMappingTable";
+import { CsvDataPreview } from "./importCsv/CsvDataPreview";
+import {
+  CsvFileSummary,
+  CsvImportBreadcrumbs,
+  CsvImportStepper,
+} from "./importCsv/CsvImportStepper";
 import type {
   ImportRecordType,
   ImportResult,
@@ -28,9 +35,26 @@ import type {
   MappedField,
   MixedStrategy,
   PreviewResult,
+  StagedPreviewResult,
 } from "./importCsv/types";
 import { NoBusinessProfile } from "../components/NoBusinessProfile";
 import { ResultDetails } from "../components/ResultDetails";
+
+const STAGED_UPLOAD_UNAVAILABLE = new Set([
+  "CSV_STAGE_EXPIRED",
+  "CSV_STAGE_NOT_FOUND",
+  "CSV_STAGE_UNAVAILABLE",
+  "CSV_IMPORT_STAGE_EXPIRED",
+  "CSV_IMPORT_STAGE_NOT_FOUND",
+]);
+
+function isStagedUploadUnavailable(error: unknown): boolean {
+  if (!isAxiosError(error)) return false;
+  const status = error.response?.status;
+  if (status === 404 || status === 410) return true;
+  const code = (error.response?.data as { code?: unknown } | undefined)?.code;
+  return typeof code === "string" && STAGED_UPLOAD_UNAVAILABLE.has(code);
+}
 
 export function ImportCsv() {
   const { selected } = useBusinessProfiles();
@@ -50,6 +74,9 @@ function ImportCsvForm() {
   const fromOnboarding = Boolean((useLocation().state as { fromOnboarding?: boolean } | null)?.fromOnboarding);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<PreviewResult | null>(null);
+  const [stagedUploadId, setStagedUploadId] = useState<string | null>(null);
+  const [stage, setStage] = useState<"upload" | "map" | "review">("upload");
+  const [previewExpanded, setPreviewExpanded] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
 
@@ -96,8 +123,11 @@ function ImportCsvForm() {
   /** Invalidates an in-flight poll loop when the owner starts over. */
   const pollToken = useRef(0);
   const requests = useRef(new AbortController());
+  const stageHeading = useRef<HTMLDivElement>(null);
   const previewPending = useRef(false);
   const confirmPending = useRef(false);
+  /** Keeps mapping edits when an expired stage has to upload the same file again. */
+  const restaging = useRef(false);
   const [validation, setValidation] = useState<PreviewResult["validation"]>();
   const [categorySuggestions, setCategorySuggestions] = useState<NonNullable<PreviewResult["categorySuggestions"]>>([]);
   const [categorySuggestionsTruncated, setCategorySuggestionsTruncated] = useState(false);
@@ -132,15 +162,17 @@ function ImportCsvForm() {
    */
   const previewRowTypes = useMemo(() => {
     if (!preview || recordType !== "mixed") return null;
-    return preview.previewRows.map((row): RowRecordType | null => {
+    return preview.previewRows.map((row, index): RowRecordType | null => {
       if (mixedStrategy === "sign") {
-        const amount = amountCol ? parseSignedAmount(row[amountCol]) : null;
+        const rowNumber = index + 2;
+        const amountValue = corrections[rowNumber]?.Amount ?? (amountCol ? row[amountCol] : "");
+        const amount = parseSignedAmount(amountValue);
         if (amount === null || amount === 0) return null;
         return amount < 0 ? "expense" : "sales";
       }
       return typeCol ? classifyTypeValue(row[typeCol]) : null;
     });
-  }, [preview, recordType, mixedStrategy, amountCol, typeCol]);
+  }, [preview, recordType, mixedStrategy, amountCol, typeCol, corrections]);
 
   const typeSplit = useMemo(() => {
     if (!previewRowTypes) return null;
@@ -151,7 +183,16 @@ function ImportCsvForm() {
     };
   }, [previewRowTypes]);
 
+  useEffect(() => {
+    setConfirmError(null);
+  }, [recordType, mixedStrategy, typeCol, title, dateCol, descriptionCol, amountCol, categoryCol, vendorCol, corrections, dateFormat, stagedUploadId]);
+
+  useEffect(() => {
+    if (stage !== "upload") stageHeading.current?.focus();
+  }, [stage]);
+
   if (!selected) return <NoBusinessProfile />;
+  const businessProfileId = selected.id;
 
   /**
    * One CSV column mapped to two FinSight fields is always a mistake — it would
@@ -172,7 +213,7 @@ function ImportCsvForm() {
   // Vendor is checked for collisions but not for completeness: it is optional
   // (ExpenseRecord.vendor is nullable), so leaving it unmapped is a valid
   // choice, while pointing it at a column another field already owns is not.
-  // Category joins it in the optional-but-exclusive set for mixed files.
+  // Category joins it in the optional-but-exclusive set.
   const allMapping: [string, string][] = [
     ...requiredMapping,
     ...(usesCategory ? ([["vendor", vendorCol]] as [string, string][]) : []),
@@ -195,8 +236,8 @@ function ImportCsvForm() {
    * question at the only moment the answer is cheap.
    */
   const dateChoiceNeeded = preview?.dateFormatAmbiguous === true && dateFormat === "";
-  const readyToImport = mappingIsValid && !dateChoiceNeeded;
-  const inputKey = JSON.stringify([recordType, mixedStrategy, dateCol, descriptionCol, amountCol, categoryCol, vendorCol, typeCol, corrections, dateFormat]);
+  const readyToImport = Boolean(stagedUploadId) && mappingIsValid && !dateChoiceNeeded && (preview?.totalRows ?? 0) > 0 && title.trim() !== "";
+  const inputKey = JSON.stringify([stagedUploadId, recordType, mixedStrategy, dateCol, descriptionCol, amountCol, categoryCol, vendorCol, typeCol, corrections, dateFormat]);
   const currentValidation = validatedInput.current === inputKey ? validation : undefined;
   const currentSuggestions = validatedInput.current === inputKey ? categorySuggestions : [];
 
@@ -220,7 +261,11 @@ function ImportCsvForm() {
 
   async function handlePreview(e: FormEvent) {
     e.preventDefault();
-    if (!file || previewPending.current) return;
+    if (file && preview && stagedUploadId) {
+      setStage("map");
+      return;
+    }
+    if (!file || !idempotencyKey || previewPending.current) return;
     previewPending.current = true;
     const signal = requests.current.signal;
     setPreviewing(true);
@@ -228,62 +273,75 @@ function ImportCsvForm() {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const { data } = await api.post<PreviewResult>("/records/csv-imports/preview", formData, {
+      formData.append("businessProfileId", String(businessProfileId));
+      formData.append("idempotencyKey", idempotencyKey);
+      const { data } = await api.post<StagedPreviewResult>("/records/csv-imports/preview", formData, {
         headers: { "Content-Type": "multipart/form-data" },
         signal,
       });
       signal.throwIfAborted();
+      if (typeof data.stagedUploadId !== "string" || data.stagedUploadId.trim() === "") {
+        setPreviewError("FinSight couldn't prepare this upload for review. Try previewing the file again.");
+        return;
+      }
+      const preserveDraft = restaging.current;
+      restaging.current = false;
+      setStagedUploadId(data.stagedUploadId);
       setPreview(data);
-      setTitle(file.name.replace(/\.csv$/i, ""));
+      setStage("map");
+      setPreviewExpanded(false);
+      if (!preserveDraft) setTitle(file.name.replace(/\.csv$/i, ""));
 
       // Guess the mapping from the headings. Anything not recognised stays
       // empty and the owner picks it, which is the behaviour that existed for
       // all four columns before.
-      const guessed = {
-        date: data.suggestedMapping?.date ?? guessColumn(data.headers, "date"),
-        description: data.suggestedMapping?.description ?? guessColumn(data.headers, "description"),
-        amount: data.suggestedMapping?.amount ?? guessColumn(data.headers, "amount"),
-        category: data.suggestedMapping?.category ?? guessColumn(data.headers, "category"),
-        vendor: data.suggestedMapping?.vendor ?? guessColumn(data.headers, "vendor"),
-      };
-      setDateCol(guessed.date);
-      setDescriptionCol(guessed.description);
-      setAmountCol(guessed.amount);
-      setCategoryCol(guessed.category);
-      setVendorCol(guessed.vendor);
-      /*
-       * OFFERED, NOT APPLIED SILENTLY — the owner still sees "Import as" and
-       * can change it, and the table below badges every row so the split is
-       * visible before anything is written.
-       *
-       * A detected type column also steals itself back from `category`, whose
-       * synonym list contains "type": a file with a Type column of Sale/Expense
-       * values would otherwise be auto-mapped as if those were category names,
-       * and quietly create categories called "Sale" and "Expense".
-       */
-      const detectedType = data.detectedTypeColumn ?? "";
-      if (detectedType) {
-        setRecordType("mixed");
-        setMixedStrategy("column");
-        setTypeCol(detectedType);
-        if (guessed.category === detectedType) {
-          guessed.category = "";
-          setCategoryCol("");
+      if (!preserveDraft) {
+        const guessed = {
+          date: data.suggestedMapping?.date ?? guessColumn(data.headers, "date"),
+          description: data.suggestedMapping?.description ?? guessColumn(data.headers, "description"),
+          amount: data.suggestedMapping?.amount ?? guessColumn(data.headers, "amount"),
+          category: data.suggestedMapping?.category ?? guessColumn(data.headers, "category"),
+          vendor: data.suggestedMapping?.vendor ?? guessColumn(data.headers, "vendor"),
+        };
+        setDateCol(guessed.date);
+        setDescriptionCol(guessed.description);
+        setAmountCol(guessed.amount);
+        setCategoryCol(guessed.category);
+        setVendorCol(guessed.vendor);
+        /*
+         * OFFERED, NOT APPLIED SILENTLY — the owner still sees "Import as" and
+         * can change it, and the table below badges every row so the split is
+         * visible before anything is written.
+         *
+         * A detected type column also steals itself back from `category`, whose
+         * synonym list contains "type": a file with a Type column of Sale/Expense
+         * values would otherwise be auto-mapped as if those were category names,
+         * and quietly create categories called "Sale" and "Expense".
+         */
+        const detectedType = data.detectedTypeColumn ?? "";
+        if (detectedType) {
+          setRecordType("mixed");
+          setMixedStrategy("column");
+          setTypeCol(detectedType);
+          if (guessed.category === detectedType) {
+            guessed.category = "";
+            setCategoryCol("");
+          }
+        } else if ((data.columnsWithNegatives ?? []).includes(guessed.amount) && guessed.amount) {
+          setRecordType("mixed");
+          setMixedStrategy("sign");
+          setTypeCol("");
+        } else {
+          setTypeCol("");
         }
-      } else if ((data.columnsWithNegatives ?? []).includes(guessed.amount) && guessed.amount) {
-        setRecordType("mixed");
-        setMixedStrategy("sign");
-        setTypeCol("");
-      } else {
-        setTypeCol("");
-      }
 
-      setAutoMapped(
-        new Set([
-          ...(Object.keys(guessed) as (keyof typeof guessed)[]).filter((k) => guessed[k] !== ""),
-          ...(detectedType ? ["recordType"] : []),
-        ]),
-      );
+        setAutoMapped(
+          new Set([
+            ...(Object.keys(guessed) as (keyof typeof guessed)[]).filter((k) => guessed[k] !== ""),
+            ...(detectedType ? ["recordType"] : []),
+          ]),
+        );
+      }
     } catch (err) {
       if (!signal.aborted) setPreviewError(getErrorMessage(err));
     } finally {
@@ -301,14 +359,11 @@ function ImportCsvForm() {
    */
   function handleSelectFile(next: File | null) {
     if (previewPending.current || confirmPending.current) return;
-    setFile(next);
-    setIdempotencyKey(next ? randomId() : null);
-    setDateFormat("");
-    setProgress(null);
-    setConfirmError(null);
-    setPreviewError(null);
-    setValidation(undefined);
-    validatedInput.current = null;
+    handleChooseDifferentFile();
+    if (next) {
+      setFile(next);
+      setIdempotencyKey(randomId());
+    }
   }
 
   /**
@@ -320,13 +375,23 @@ function ImportCsvForm() {
    */
   function handleChooseDifferentFile() {
     if (confirmPending.current) return;
+    const discardedStage = stagedUploadId;
+    if (discardedStage) {
+      void api
+        .delete(`/records/csv-imports/stages/${encodeURIComponent(discardedStage)}`)
+        .catch(() => undefined);
+    }
     // A different file is a different import, so the replay token goes with
     // it — reusing one across files would make the server answer with the
     // FIRST file's import.
     pollToken.current += 1;
+    restaging.current = false;
+    setStagedUploadId(null);
     setIdempotencyKey(null);
     setDateFormat("");
     setProgress(null);
+    setStage("upload");
+    setPreviewExpanded(false);
     setPreview(null);
     setFile(null);
     setTitle("");
@@ -341,67 +406,76 @@ function ImportCsvForm() {
     setAutoMapped(new Set());
     setCorrections({});
     setConfirmError(null);
+    setPreviewError(null);
     setValidation(undefined);
+    setCategorySuggestions([]);
+    setCategorySuggestionsTruncated(false);
     validatedInput.current = null;
   }
 
-  async function handleConfirm(e: FormEvent, previewOnly = false) {
+  function recoverUnavailableStagedUpload() {
+    pollToken.current += 1;
+    restaging.current = Boolean(file);
+    setStagedUploadId(null);
+    setIdempotencyKey(file ? randomId() : null);
+    setStage("upload");
+    setPreviewExpanded(false);
+    setPreview(null);
+    setProgress(null);
+    setConfirmError(null);
+    setPreviewError(
+      file
+        ? "This upload is no longer available. Preview the selected CSV file again to continue."
+        : "This upload is no longer available. Choose the CSV file again to continue.",
+    );
+    setValidation(undefined);
+    setCategorySuggestions([]);
+    setCategorySuggestionsTruncated(false);
+    validatedInput.current = null;
+  }
+
+  async function handleConfirm(e: FormEvent, mode: "review" | "import" = "import") {
     e.preventDefault();
-    if (!file || !mappingIsValid || dateChoiceNeeded || confirmPending.current) return;
+    if (!file || !stagedUploadId || !idempotencyKey || !mappingIsValid || dateChoiceNeeded || title.trim() === "" || confirmPending.current) return;
     confirmPending.current = true;
     const signal = requests.current.signal;
     setConfirming(true);
     setConfirmError(null);
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("businessProfileId", String(selected!.id));
-      formData.append("recordType", recordType);
-      if (isMixed) formData.append("mixedStrategy", mixedStrategy);
-      formData.append("title", title);
-      formData.append(
-        "columnMapping",
-        JSON.stringify({
-          date: dateCol,
-          description: descriptionCol,
-          amount: amountCol,
-          // Omitted entirely when unmapped — the server's schema takes these as
-          // optional, not as an empty string.
-          ...(usesCategory && categoryCol ? { category: categoryCol } : {}),
-          ...(usesCategory && vendorCol ? { vendor: vendorCol } : {}),
-          ...(isMixed && mixedStrategy === "column" && typeCol ? { recordType: typeCol } : {}),
-        }),
+      const columnMapping = {
+        date: dateCol,
+        description: descriptionCol,
+        amount: amountCol,
+        ...(usesCategory && categoryCol ? { category: categoryCol } : {}),
+        ...(usesCategory && vendorCol ? { vendor: vendorCol } : {}),
+        ...(isMixed && mixedStrategy === "column" && typeCol ? { recordType: typeCol } : {}),
+      };
+      const submittedCorrections = Object.fromEntries(
+        Object.entries(corrections).map(([rowNumber, fields]) => [
+          rowNumber,
+          Object.fromEntries(Object.entries(fields).map(([key, value]) => [key.toLowerCase(), value])),
+        ]),
       );
-      if (Object.keys(corrections).length > 0) {
-        // Lower-cased keys, because the server names its fields the way the
-        // columnMapping does rather than the way the table headings read.
-        formData.append(
-          "corrections",
-          JSON.stringify(
-            Object.fromEntries(
-              Object.entries(corrections).map(([rowNumber, fields]) => [
-                rowNumber,
-                Object.fromEntries(Object.entries(fields).map(([k, v]) => [k.toLowerCase(), v])),
-              ]),
-            ),
-          ),
-        );
-      }
-      // Sent on EVERY attempt, retries included. See the state declaration.
-      if (idempotencyKey) formData.append("idempotencyKey", idempotencyKey);
-      // Sent only when the owner was asked. An unambiguous file speaks for
-      // itself, and overriding it with a convention nobody chose would be a
-      // guess wearing a decision's clothes.
-      if (dateFormat) formData.append("dateFormat", dateFormat);
+      const reviewPayload = {
+        stagedUploadId,
+        businessProfileId,
+        recordType,
+        ...(isMixed ? { mixedStrategy } : {}),
+        columnMapping,
+        ...(Object.keys(submittedCorrections).length > 0 ? { corrections: submittedCorrections } : {}),
+        ...(dateFormat ? { dateFormat } : {}),
+      };
 
       // Validate the entire file using the server's import rules. A changed
       // mapping or correction needs fresh validation; a second confirm accepts
       // the displayed skipped-row count without importing the file twice.
       if (validatedInput.current !== inputKey) {
         setChecking(true);
-        const { data: checked } = await api.post<PreviewResult>("/records/csv-imports/preview", formData, {
-          headers: { "Content-Type": "multipart/form-data" }, signal,
-        });
+        const { data: checked } = await api.post<PreviewResult>(
+          "/records/csv-imports/preview",
+          reviewPayload,
+          { signal },
+        );
         signal.throwIfAborted();
         setChecking(false);
         if (checked.dateFormatAmbiguous && !dateFormat) {
@@ -409,11 +483,32 @@ function ImportCsvForm() {
           setConfirmError("Choose the date format before importing.");
           return;
         }
-        setValidation(checked.validation);
+        setPreview((current) => current ? {
+          ...current,
+          ...(checked.detectedDateFormat ? { detectedDateFormat: checked.detectedDateFormat } : {}),
+          ...(checked.dateFormatAmbiguous !== undefined
+            ? { dateFormatAmbiguous: checked.dateFormatAmbiguous }
+            : {}),
+        } : current);
         setCategorySuggestions(checked.categorySuggestions ?? []);
         setCategorySuggestionsTruncated(checked.categorySuggestionsTruncated ?? false);
+        if (!checked.validation) {
+          setValidation(undefined);
+          validatedInput.current = null;
+          setConfirmError("FinSight could not validate this file. Check the mapping and try again.");
+          return;
+        }
+        setValidation(checked.validation);
         validatedInput.current = inputKey;
-        if (checked.validation && (checked.validation.invalidRows > 0 || (checked.validation.possibleDuplicateRows ?? 0) > 0 || (checked.categorySuggestions?.length ?? 0) > 0)) {
+        if (mode === "review") {
+          setStage("review");
+          return;
+        }
+        if (checked.validation.validRows === 0) {
+          setConfirmError("No rows are ready to import. Correct the file or column mapping first.");
+          return;
+        }
+        if (checked.validation.invalidRows > 0 || (checked.validation.possibleDuplicateRows ?? 0) > 0 || (checked.categorySuggestions?.length ?? 0) > 0) {
           setConfirmError(checked.validation.validRows > 0
             ? checked.validation.invalidRows > 0
               ? `${checked.validation.invalidRows} rows will be skipped. Review the details, then press Import again to save the valid rows.`
@@ -427,12 +522,21 @@ function ImportCsvForm() {
         setConfirmError("No rows are ready to import. Correct the file or column mapping first.");
         return;
       }
-      if (previewOnly) return;
+      if (mode === "review") {
+        setStage("review");
+        return;
+      }
 
-      const response = await api.post<ImportResult>("/records/csv-imports/confirm", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-        signal,
-      });
+      const response = await api.post<ImportResult>(
+        "/records/csv-imports/confirm",
+        {
+          ...reviewPayload,
+          title,
+          // Sent on every attempt, retries included. See the state declaration.
+          idempotencyKey,
+        },
+        { signal },
+      );
       signal.throwIfAborted();
 
       /*
@@ -461,7 +565,10 @@ function ImportCsvForm() {
 
       setResult(response.data);
     } catch (err) {
-      if (!signal.aborted) setConfirmError(getErrorMessage(err));
+      if (!signal.aborted) {
+        if (isStagedUploadUnavailable(err)) recoverUnavailableStagedUpload();
+        else setConfirmError(getErrorMessage(err));
+      }
     } finally {
       confirmPending.current = false;
       if (!signal.aborted) { setConfirming(false); setChecking(false); }
@@ -512,14 +619,20 @@ function ImportCsvForm() {
       setProgress(status);
 
       if (status.processingStatus === "COMPLETE") {
-        setResult(resultFromStatus(status, initial.title || title));
+        setResult({
+          ...resultFromStatus(status, initial.title || title),
+          duplicateOfBatchId: initial.duplicateOfBatchId,
+        });
         return;
       }
       if (status.processingStatus === "FAILED") {
         setProgress(null);
         // A terminal failure can leave committed chunks. Its replay key is
         // not resumable; show the saved rows before a new partial-file import.
-        setResult(resultFromStatus(status, initial.title || title));
+        setResult({
+          ...resultFromStatus(status, initial.title || title),
+          duplicateOfBatchId: initial.duplicateOfBatchId,
+        });
         return;
       }
 
@@ -532,10 +645,11 @@ function ImportCsvForm() {
   }
 
   // ---- stage 1: choose a file -------------------------------------------
-  if (!preview) {
+  if (stage === "upload" || !preview) {
     return (
       <FileSelectStage
         file={file}
+        totalRows={preview?.totalRows}
         previewError={previewError}
         previewing={previewing}
         onSelectFile={handleSelectFile}
@@ -570,30 +684,6 @@ function ImportCsvForm() {
       },
       auto: autoMapped.has("description"),
     },
-    ...(recordType === "expense"
-      ? [
-          {
-            field: "Category" as const,
-            value: categoryCol,
-            onChange: (v: string) => {
-              setCategoryCol(v);
-              clearAuto("category");
-            },
-            auto: autoMapped.has("category"),
-            optional: true,
-          },
-          {
-            field: "Vendor" as const,
-            value: vendorCol,
-            onChange: (v: string) => {
-              setVendorCol(v);
-              clearAuto("vendor");
-            },
-            auto: autoMapped.has("vendor"),
-            optional: true,
-          },
-        ]
-      : []),
     {
       field: "Amount",
       value: amountCol,
@@ -604,6 +694,30 @@ function ImportCsvForm() {
       auto: autoMapped.has("amount"),
       align: "right" as const,
     },
+    ...(usesCategory
+      ? [
+          {
+            field: "Vendor" as const,
+            value: vendorCol,
+            onChange: (v: string) => {
+              setVendorCol(v);
+              clearAuto("vendor");
+            },
+            auto: autoMapped.has("vendor"),
+            optional: true,
+          },
+          {
+            field: "Category" as const,
+            value: categoryCol,
+            onChange: (v: string) => {
+              setCategoryCol(v);
+              clearAuto("category");
+            },
+            auto: autoMapped.has("category"),
+            optional: true,
+          },
+        ]
+      : []),
   ];
 
   /**
@@ -625,7 +739,13 @@ function ImportCsvForm() {
       // The owner's stated convention when they were asked for one, otherwise
       // whatever the server detected from the file itself — the same answer
       // the import will use, so the two cannot disagree.
-      problem: problemWith(values, recordType === "expense", dateFormat || (preview.detectedDateFormat ?? "iso")),
+      problem: problemWith(
+        values,
+        recordType === "expense",
+        dateFormat || (preview.detectedDateFormat ?? "iso"),
+        recordType === "mixed" && mixedStrategy === "sign",
+      ),
+      recordType: previewRowTypes?.[i],
     };
   });
   const brokenRows = mappingIsValid ? analysed.filter((r) => r.problem !== null) : [];
@@ -650,12 +770,13 @@ function ImportCsvForm() {
    * callout says which rows it looked at whenever the preview is truncated —
    * a category first appearing at row 300 of a 500-row file is not something
    * this can see, and implying otherwise would be worse than saying nothing.
-   */
+  */
   const newCategoryNames = (() => {
-    if (recordType !== "expense" || !categoryCol) return [];
+    if (!usesCategory || !categoryCol) return [];
     const existing = new Set(categories.map((c) => c.name.trim().toLowerCase()));
     const seen = new Map<string, string>();
-    for (const { values } of analysed) {
+    for (const { values, recordType: rowRecordType } of analysed) {
+      if (isMixed && rowRecordType !== "expense") continue;
       const raw = values.Category?.trim();
       if (!raw) continue;
       const key = raw.toLowerCase();
@@ -676,22 +797,36 @@ function ImportCsvForm() {
     setCorrections((prev) => ({ ...prev, [rowNumber]: { ...prev[rowNumber], [field]: value } }));
   }
 
+  const validatedRows = currentValidation?.validRows;
+  const rowsToImport = validatedRows ?? Math.max(0, preview.totalRows - brokenRows.length);
+  const importActionLabel = `Import ${rowsToImport.toLocaleString()} of ${preview.totalRows.toLocaleString()} row${preview.totalRows === 1 ? "" : "s"}`;
+  const reviewCanImport = readyToImport && currentValidation?.validRows !== 0;
+
   return (
     <div>
-      <PageHead
-        eyebrow="Records"
-        title="Map your columns"
-        subtitle="Each heading below picks which column of your file feeds it. The rows underneath are your real data, read through those choices — what you see is what gets imported."
-        actions={
-          <Button type="button" variant="secondary" size="sm" onClick={handleChooseDifferentFile} disabled={confirming}>
-            Choose a different file
-          </Button>
-        }
-      />
+      <CsvImportBreadcrumbs />
+      <div ref={stageHeading} tabIndex={-1} className="outline-none">
+        <PageHead
+          title={stage === "map" ? "Map and review columns" : "Review and import"}
+          subtitle={
+            stage === "map"
+              ? "Choose which columns from your file match each FinSight field, then inspect a sample of your data."
+              : "Check the full-file validation results and warnings before saving any records."
+          }
+        />
+      </div>
 
-      <form onSubmit={handleConfirm}>
-        <fieldset disabled={confirming} className="min-w-0 space-y-4">
+      <div className="space-y-6">
+        <CsvImportStepper current={stage === "map" ? 2 : 3} />
+        <CsvFileSummary file={file!} totalRows={preview.totalRows} onChange={handleChooseDifferentFile} disabled={confirming} />
+
+      <form onSubmit={(event) => { void handleConfirm(event, stage === "map" ? "review" : "import"); }}>
+        <fieldset disabled={confirming} className="min-w-0 space-y-5">
+        {stage === "map" ? (
+          <>
         <Card className="p-5">
+          <h2 className="text-base font-semibold text-ink-900">Import setup</h2>
+          <p className="mt-1 text-xs text-ink-500">Tell FinSight how to read the rows and name this batch.</p>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field
               label="Import as"
@@ -699,7 +834,7 @@ function ImportCsvForm() {
               required
               hint={
                 isMixed
-                  ? "FinSight will sort each row using your file's own values — check the Type column below before importing."
+                  ? "FinSight will sort each row using your file's own values. Check the Type column before importing."
                   : undefined
               }
             >
@@ -709,7 +844,7 @@ function ImportCsvForm() {
               >
                 <option value="expense">Expense records</option>
                 <option value="sales">Sales reference records</option>
-                <option value="mixed">Both — my file has sales and expenses</option>
+                <option value="mixed">Both: my file has sales and expenses</option>
               </SelectInput>
             </Field>
             <Field
@@ -734,7 +869,7 @@ function ImportCsvForm() {
             "strategy" is.
           */}
           {isMixed ? (
-            <div className="mt-4 border-t border-paper-200 pt-4">
+            <div className="mt-4 grid gap-4 border-t border-paper-200 pt-4 sm:grid-cols-2">
               <Field
                 label="How does your file say which is which?"
                 htmlFor="csv-mixed-strategy"
@@ -757,7 +892,7 @@ function ImportCsvForm() {
                   error={duplicateError(typeCol)}
                   hint={
                     autoMapped.has("recordType")
-                      ? "Matched automatically from your file — change it if that's wrong."
+                      ? "Matched automatically from your file. Change it if needed."
                       : undefined
                   }
                 >
@@ -779,26 +914,36 @@ function ImportCsvForm() {
                 dashboard a week later.
               */}
               {typeSplit ? (
-                <Callout tone={typeSplit.unknown > 0 ? "warn" : "info"}>
-                  {preview.totalRows > preview.previewRows.length ? (
-                    <>In the first {preview.previewRows.length} rows: </>
-                  ) : (
-                    <>In this file: </>
-                  )}
-                  <b className="font-semibold">{typeSplit.sales} sales</b> ·{" "}
-                  <b className="font-semibold">{typeSplit.expenses} expenses</b>
-                  {typeSplit.unknown > 0 ? (
-                    <>
-                      {" "}
-                      · <b className="font-semibold">{typeSplit.unknown} unrecognised</b>. Rows
-                      FinSight can't read a type from are skipped and listed after the import — they
-                      are never guessed.
-                    </>
-                  ) : (
-                    <>. Every row below shows which it will become.</>
-                  )}
-                </Callout>
+                <div className="sm:col-span-2">
+                  <Callout tone={typeSplit.unknown > 0 ? "warn" : "brand"}>
+                    {preview.totalRows > preview.previewRows.length ? (
+                      <>In the first {preview.previewRows.length} rows: </>
+                    ) : (
+                      <>In this file: </>
+                    )}
+                    <b className="font-semibold">{typeSplit.sales} sales</b> ·{" "}
+                    <b className="font-semibold">{typeSplit.expenses} expenses</b>
+                    {typeSplit.unknown > 0 ? (
+                      <>
+                        {" "}
+                        · <b className="font-semibold">{typeSplit.unknown} unrecognised</b>. Rows
+                        FinSight can't read a type from are skipped and listed after the import. They
+                        are never guessed.
+                      </>
+                    ) : (
+                      <>. Every row below shows which it will become.</>
+                    )}
+                  </Callout>
+                </div>
               ) : null}
+            </div>
+          ) : null}
+          {!isMixed ? (
+            <div className="mt-4">
+              <Callout tone="brand">
+                <b className="font-semibold">{preview.totalRows.toLocaleString()} row{preview.totalRows === 1 ? "" : "s"} in this file.</b>{" "}
+                FinSight will read {preview.totalRows === 1 ? "it" : "them"} as {recordType === "expense" ? "expenses" : "sales reference records"}. The full-file check runs next.
+              </Callout>
             </div>
           ) : null}
         </Card>
@@ -826,12 +971,12 @@ function ImportCsvForm() {
                 {sampleDate ? (
                   <>
                     Your file has dates like <b className="figure font-semibold text-ink-700">{sampleDate}</b>,
-                    which could be read either way. FinSight won't guess — every date in the file is read the
+                    which could be read either way. FinSight will not guess. Every date in the file is read the
                     way you choose here.
                   </>
                 ) : (
                   <>
-                    The dates in this file could be read either way. FinSight won't guess — every date is read
+                    The dates in this file could be read either way. FinSight will not guess. Every date is read
                     the way you choose here.
                   </>
                 )}
@@ -839,8 +984,8 @@ function ImportCsvForm() {
               <div className="mt-3 space-y-2">
                 {(
                   [
-                    { value: "dmy", label: "Day first — 03/04 means 3 April", hint: "Usual in the Philippines, the UK and most of Europe." },
-                    { value: "mdy", label: "Month first — 03/04 means 4 March", hint: "Usual in the United States, and in some POS exports." },
+                    { value: "dmy", label: "Day first: 03/04 means 3 April", hint: "Usual in the Philippines, the UK and most of Europe." },
+                    { value: "mdy", label: "Month first: 03/04 means 4 March", hint: "Usual in the United States, and in some POS exports." },
                   ] as { value: CsvConfirmDateFormat; label: string; hint: string }[]
                 ).map((option) => (
                   <label
@@ -870,106 +1015,59 @@ function ImportCsvForm() {
           </Card>
         ) : null}
 
-        {/*
-          The mapping lives in the table header rather than in four selects
-          stacked above it.
+        <Card className="p-5">
+          <h2 className="text-base font-semibold text-ink-900">Map your columns</h2>
+          <p className="mt-1 text-xs text-ink-500">Each FinSight field below must point to the matching heading in your CSV file.</p>
+          <div className="mt-4">
+            <ColumnMappingFields columns={columns} headers={preview.headers} errorFor={duplicateError} />
+          </div>
+          {usesCategory ? (
+            <p className="mt-3 text-xs text-ink-500">
+              Category and vendor can be left unmapped. Expense rows without a category are checked for saved-category suggestions before import.
+            </p>
+          ) : null}
+        </Card>
+          </>
+        ) : (
+          <Card className="p-5">
+            <h2 className="text-base font-semibold text-ink-900">Import summary</h2>
+            <p className="mt-1 text-xs text-ink-500">These are the current settings and full-file check results.</p>
+            <dl className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div>
+                <dt className="text-xs font-medium text-ink-500">Batch title</dt>
+                <dd className="mt-1 break-words text-sm font-semibold text-ink-900">{title}</dd>
+              </div>
+              <div>
+                <dt className="text-xs font-medium text-ink-500">Import as</dt>
+                <dd className="mt-1 text-sm font-semibold text-ink-900">
+                  {recordType === "expense" ? "Expenses" : recordType === "sales" ? "Sales reference records" : "Sales and expenses"}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs font-medium text-ink-500">Rows in file</dt>
+                <dd className="figure mt-1 text-sm font-semibold text-ink-900">{preview.totalRows.toLocaleString()}</dd>
+              </div>
+              <div>
+                <dt className="text-xs font-medium text-ink-500">Ready to import</dt>
+                <dd className="figure mt-1 text-sm font-semibold text-ink-900">
+                  {currentValidation ? currentValidation.validRows.toLocaleString() : "Needs another check"}
+                </dd>
+              </div>
+            </dl>
+          </Card>
+        )}
 
-          It used to be both: four full-height <Field> rows saying "Date ←
-          txn_date", and then a preview immediately below re-stating the same
-          four mappings as its column headings. The owner scrolled past ~400px
-          of controls — usually all four already correct, since the header
-          guess in HEADER_SYNONYMS lands on most real exports — to reach the
-          data they actually wanted to look at.
-
-          Merging the two puts each choice against the values it governs, so a
-          wrong guess is visible rather than inferred, and gives the table the
-          vertical space that the duplicated controls were using. The submitted
-          columnMapping is byte-for-byte what it was.
-        */}
-        {/*
-          A capped height, deliberately, rather than letting the table run the
-          full length of the page.
-
-          `overflow-x: auto` is needed so a narrow screen scrolls the table
-          instead of the document, and that computes `overflow-y` to `auto`
-          too — which makes this div a scroll container whether or not it is
-          told a height. Without a max-height it is a scroll container that can
-          never scroll, and `sticky` on the headers then resolves against it and
-          silently does nothing: scroll the page on a 50-row file and the
-          mapping controls leave the screen with no way back. Capping it makes
-          the sticky header real, so the pickers stay pinned above the data
-          they govern for the whole scroll.
-        */}
-        <div className="max-h-[70vh] overflow-auto rounded-2xl border border-paper-200 bg-paper shadow-sm">
-          <table className="w-full min-w-[58rem] border-collapse text-left text-sm">
-            <caption className="sr-only">
-              Your CSV data, shown through the current column mapping
-            </caption>
-            <thead>
-              <tr>
-                {/* A row-number gutter, so "Row 3" in the panel below is
-                    something the owner can actually find up here — and the
-                    same number their spreadsheet uses. */}
-                <th
-                  scope="col"
-                  className="sticky top-0 z-10 w-12 border-b border-paper-200 bg-paper-100/95 px-3 py-2.5 align-top text-right backdrop-blur"
-                >
-                  <span className="text-xs font-semibold uppercase tracking-[0.06em] text-ink-600">#</span>
-                </th>
-                {/* Only for a mixed file: the column that says what each row
-                    becomes, which is the whole thing being checked here. */}
-                {isMixed ? (
-                  <th
-                    scope="col"
-                    className="sticky top-0 z-10 w-28 border-b border-paper-200 bg-paper-100/95 px-3 py-2.5 align-top backdrop-blur"
-                  >
-                    <span className="text-xs font-semibold uppercase tracking-[0.06em] text-ink-600">
-                      Imports as
-                    </span>
-                  </th>
-                ) : null}
-                {columns.map((c) => (
-                  <MappedHeader
-                    key={c.field}
-                    column={c}
-                    headers={preview.headers}
-                    error={duplicateError(c.value)}
-                  />
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {analysed.map(({ rowNumber, values, problem }, rowIndex) => (
-                <tr
-                  key={rowNumber}
-                  // A row that won't import is marked here too, so the count in
-                  // the panel below corresponds to something visible in the data
-                  // rather than being a number the owner has to take on trust.
-                  className={`border-t border-paper-200 ${
-                    problem ? "bg-tint-danger/40" : "even:bg-paper-100/40"
-                  }`}
-                >
-                  <td className="figure px-3 py-2 text-right text-xs text-ink-500">{rowNumber}</td>
-                  {isMixed ? (
-                    <td className="whitespace-nowrap px-3 py-2 align-top">
-                      <RowTypeBadge type={previewRowTypes?.[rowIndex] ?? null} />
-                    </td>
-                  ) : null}
-                  {columns.map((c) => (
-                    <td
-                      key={c.field}
-                      className={`px-3 py-2 align-top text-ink-700 ${
-                        c.align === "right" ? "text-right" : ""
-                      } ${c.field === "Description" ? "" : "whitespace-nowrap"}`}
-                    >
-                      <CellValue value={values[c.field]} column={c} isProblem={problem?.field === c.field} />
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <Card className="p-5">
+          <CsvDataPreview
+            rows={analysed}
+            columns={columns}
+            totalRows={preview.totalRows}
+            mappingIsValid={mappingIsValid}
+            mixed={isMixed}
+            expanded={previewExpanded}
+            onExpandedChange={setPreviewExpanded}
+          />
+        </Card>
 
         {/*
           What this import will ADD, not just what it will bring in.
@@ -1007,14 +1105,14 @@ function ImportCsvForm() {
           same three cells are editable here, and the fixes ride along with
           the import as corrections applied over the file.
         */}
-        {brokenRows.length > 0 ? (
+        {stage === "map" && brokenRows.length > 0 ? (
           <Card className="border-edge-accent p-5">
             <h2 className="text-sm font-semibold text-ink-900">
               {brokenRows.length} row{brokenRows.length === 1 ? "" : "s"} won't import as{" "}
               {brokenRows.length === 1 ? "it is" : "they are"}
             </h2>
             <p className="mt-1 text-xs leading-relaxed text-ink-500">
-              Fix the highlighted cell to bring the row in, or leave it and it will be skipped — the
+              Fix the highlighted cell to bring the row in, or leave it and it will be skipped. The
               rest of the file imports either way. Nothing here changes your original file.
             </p>
 
@@ -1057,7 +1155,7 @@ function ImportCsvForm() {
                             />
                           ) : (
                             <p className="truncate pt-1.5 text-sm text-ink-600" title={values[c.field]}>
-                              {values[c.field] || "—"}
+                              {values[c.field] || "Empty"}
                             </p>
                           )}
                         </div>
@@ -1068,13 +1166,17 @@ function ImportCsvForm() {
               ))}
             </ul>
           </Card>
-        ) : fixedCount > 0 ? (
+        ) : stage === "map" && fixedCount > 0 ? (
           <Callout tone="brand">
             Every row is ready to import now.
           </Callout>
         ) : null}
 
-        {currentSuggestions.length > 0 ? (
+        {stage === "review" && !currentValidation ? (
+          <Callout tone="info">Your changes will be checked against the full file again before import.</Callout>
+        ) : null}
+
+        {stage === "review" && currentSuggestions.length > 0 ? (
           <Callout tone="info">
             <p className="font-semibold">{currentSuggestions.length} missing categories have suggestions from your saved records.</p>
             <Button type="button" variant="secondary" disabled={confirming} onClick={() => {
@@ -1098,10 +1200,10 @@ function ImportCsvForm() {
             </ResultDetails>
           </Callout>
         ) : null}
-        {currentValidation && currentValidation.invalidRows === 0 && !currentValidation.possibleDuplicateRows && currentSuggestions.length === 0 ? (
+        {stage === "review" && currentValidation && currentValidation.invalidRows === 0 && !currentValidation.possibleDuplicateRows && currentSuggestions.length === 0 ? (
           <Callout tone="brand">File checked. {currentValidation.validRows} rows are ready to import.</Callout>
         ) : null}
-        {currentValidation && (currentValidation.invalidRows > 0 || (currentValidation.possibleDuplicateRows ?? 0) > 0) ? (
+        {stage === "review" && currentValidation && (currentValidation.invalidRows > 0 || (currentValidation.possibleDuplicateRows ?? 0) > 0) ? (
           <Callout tone="warn">
             <p className="font-semibold">File check: {currentValidation.validRows} valid, {currentValidation.invalidRows} skipped.</p>
             {currentValidation.possibleDuplicateRows ? <p>{currentValidation.possibleDuplicateRows} possible duplicate{currentValidation.possibleDuplicateRows === 1 ? "" : "s"} will be included and flagged for review.</p> : null}
@@ -1131,61 +1233,47 @@ function ImportCsvForm() {
           empty bar and calling it 0%.
         */}
         {checking ? (
-          <p role="status" aria-busy="true" className="text-sm text-ink-600">Checking every row before import…</p>
+          <p role="status" aria-busy="true" className="text-sm text-ink-600">Checking every row before import...</p>
         ) : confirming ? (
           <ImportProgress progress={progress} totalRows={preview.totalRows} />
         ) : null}
 
-        {/*
-          The action bar sticks to the bottom of the viewport rather than
-          sitting at the end of the page.
-
-          WHY: this screen is deliberately tall — a 70vh table, and under it one
-          editable card per row that won't import. Ending with the button meant
-          the owner scrolled the whole file AND every fix panel to reach
-          "Import", and then scrolled back down again after correcting a cell.
-          The primary action of a screen should not be the hardest thing on it
-          to reach.
-
-          It also keeps the row count permanently in view, which is the number
-          that tells the owner whether the mapping above is doing what they
-          think — that count used to scroll away with the table it described.
-        */}
-        <div className="sticky bottom-0 -mx-1 flex flex-wrap items-center justify-between gap-3 border-t border-paper-200 bg-paper/95 px-1 py-3 backdrop-blur">
-          <div className="flex flex-wrap gap-3">
-            <Button type="button" variant="secondary" disabled={confirming || !readyToImport} onClick={(event) => { void handleConfirm(event, true); }}>
-              Check all rows
-            </Button>
-            {/*
-              The count promises what will actually land. Saying "Import 35 rows"
-              over a file where three of them are going to be skipped is a small
-              lie the owner only discovers on the results screen — and the
-              preview is capped, so it is only a reliable count when the whole
-              file is on screen.
-            */}
-            <Button type="submit" variant="primary" disabled={confirming || !readyToImport}>
+        <div className="-mx-1 flex flex-col gap-3 border-t border-paper-200 bg-paper/95 px-1 py-4 sm:flex-row sm:items-center sm:justify-between lg:sticky lg:bottom-0 lg:z-20 lg:backdrop-blur">
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={confirming}
+            onClick={() => setStage(stage === "map" ? "upload" : "map")}
+          >
+            {stage === "map" ? "Back" : "Back to mapping"}
+          </Button>
+          <div className="flex flex-col gap-2 sm:items-end">
+            <p className="text-xs text-ink-500">
+              {stage === "map"
+                ? "The next step checks every row. No records are saved yet."
+                : currentValidation
+                  ? `${currentValidation.validRows.toLocaleString()} ready, ${currentValidation.invalidRows.toLocaleString()} skipped.`
+                  : "Your latest changes will be checked before import."}
+            </p>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={confirming || (stage === "map" ? !readyToImport : !reviewCanImport)}
+              className="w-full sm:w-auto"
+            >
               {confirming
-                ? checking ? "Checking rows…" : "Importing…"
-                : currentValidation && currentValidation.invalidRows > 0
-                  ? `Import ${currentValidation.validRows} of ${preview.totalRows} rows`
-                  : brokenRows.length > 0 && preview.previewRows.length === preview.totalRows
-                  ? `Import ${preview.totalRows - brokenRows.length} of ${preview.totalRows} rows`
-                  : `Import ${preview.totalRows} row${preview.totalRows === 1 ? "" : "s"}`}
-            </Button>
-            <Button type="button" variant="secondary" onClick={handleChooseDifferentFile} disabled={confirming}>
-              Choose a different file
+                ? checking
+                  ? "Checking file..."
+                  : "Importing..."
+                : stage === "map"
+                  ? "Continue to review"
+                  : importActionLabel}
             </Button>
           </div>
-          <p className="text-xs text-ink-500">
-            Showing {preview.previewRows.length} of {preview.totalRows} row
-            {preview.totalRows === 1 ? "" : "s"}.{" "}
-            {brokenRows.length === 0
-              ? "The full file is checked before importing."
-              : `${brokenRows.length} won't import as ${brokenRows.length === 1 ? "it is" : "they are"}.`}
-          </p>
         </div>
         </fieldset>
       </form>
+      </div>
     </div>
   );
 }

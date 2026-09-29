@@ -1,34 +1,9 @@
-import { Tag } from "../../components/ui";
-import { SelectInput } from "../../components/Field";
+import { Field, SelectInput } from "../../components/Field";
 import { Money } from "../../components/Money";
-import type { RowRecordType } from "../../lib/recordTypeDetection";
-import type { MappedColumn, MappedField } from "./types";
+import { Tag } from "../../components/ui";
+import { parseSignedAmount, type RowRecordType } from "../../lib/recordTypeDetection";
+import type { MappedColumn } from "./types";
 
-/**
- * Per-column widths.
- *
- * Left to itself the table gives five equal columns, which is wrong in both
- * directions at once: a date needs about nine characters and a description
- * routinely runs past forty, so the dates sit in a sea of whitespace while the
- * descriptions wrap. These are the shape of the data, not the header.
- */
-export const COLUMN_WIDTH: Record<MappedField, string> = {
-  Date: "w-[9.5rem]",
-  Description: "w-auto",
-  Category: "w-[11rem]",
-  Vendor: "w-[11rem]",
-  Amount: "w-[9.5rem]",
-};
-
-/**
- * What one row of a mixed file will become.
- *
- * Reuses the app's existing expense/sales Tag so an imported row is labelled
- * here exactly as it will be labelled everywhere else. The unreadable case gets
- * its own treatment rather than a third colour of the same chip: it is not a
- * third kind of record, it is a row that will not be imported at all, and it
- * has to read as a problem.
- */
 export function RowTypeBadge({ type }: { type: RowRecordType | null }) {
   if (type === null) {
     return (
@@ -40,95 +15,54 @@ export function RowTypeBadge({ type }: { type: RowRecordType | null }) {
   return <Tag kind={type === "expense" ? "expense" : "sales"} />;
 }
 
-/**
- * A column heading that is also its own column picker.
- *
- * `scope="col"` and the visible field name are kept so the header still does
- * its ordinary table job for a screen reader; the select carries an explicit
- * aria-label because "Date" alone doesn't say what choosing something here
- * would do.
- */
-export function MappedHeader({
-  column,
+export function ColumnMappingFields({
+  columns,
   headers,
-  error,
+  errorFor,
 }: {
-  column: MappedColumn;
+  columns: MappedColumn[];
   headers: string[];
-  error: string | null;
+  errorFor: (value: string) => string | null;
 }) {
-  const id = `csv-map-${column.field.toLowerCase()}`;
   return (
-    <th
-      scope="col"
-      className={`sticky top-0 z-10 border-b border-paper-200 bg-paper-100/95 px-3 py-2.5 align-top backdrop-blur ${COLUMN_WIDTH[column.field]}`}
-    >
-      <label htmlFor={id} className="block text-xs font-semibold uppercase tracking-[0.06em] text-ink-500">
-        {column.field}
-        {column.optional ? (
-          <span className="ml-1 font-normal normal-case tracking-normal text-ink-500">(optional)</span>
-        ) : (
-          <span className="ml-1 text-tone-danger" title="Required">
-            <span aria-hidden>*</span>
-            <span className="sr-only">(required)</span>
-          </span>
-        )}
-      </label>
-      <SelectInput
-        id={id}
-        required={!column.optional}
-        value={column.value}
-        onChange={(e) => column.onChange(e.target.value)}
-        aria-label={`Which CSV column holds the ${column.field.toLowerCase()}?`}
-        aria-invalid={error ? true : undefined}
-        className={`mt-1.5 ${error ? "border-edge-danger" : ""}`}
-      >
-        {/* An optional field has to be un-choosable again, or a stray guess
-            could never be undone. The required ones keep a disabled prompt. */}
-        <option value="" disabled={!column.optional}>
-          {column.optional ? "Don't import this" : "Select a column"}
-        </option>
-        {headers.map((h) => (
-          <option key={h} value={h}>
-            {h}
-          </option>
-        ))}
-      </SelectInput>
-      {error ? (
-        <p role="alert" className="mt-1.5 flex items-start gap-1 text-[11px] font-normal normal-case tracking-normal text-tone-danger">
-          <span aria-hidden>⚠</span>
-          <span className="min-w-0">{error}</span>
-        </p>
-      ) : column.auto ? (
-        // Shortened to two words. At four columns the full sentence was a
-        // useful nudge; at five it is the same forty characters repeated five
-        // times across the widest element on the page, which reads as noise
-        // and pushes the data further down. The title carries the long form.
-        <p
-          className="mt-1.5 text-[11px] font-normal normal-case tracking-normal text-ink-500"
-          title="FinSight matched this column automatically — change it if that's wrong."
-        >
-          ✦ Auto-matched
-        </p>
-      ) : (
-        // Holds the row height steady so the header doesn't jump as hints
-        // appear and disappear while the owner works through the columns.
-        <p aria-hidden className="mt-1.5 text-[11px] text-transparent">
-          &nbsp;
-        </p>
-      )}
-    </th>
+    <div className={`grid gap-4 sm:grid-cols-2 ${columns.length >= 5 ? "xl:grid-cols-5" : "lg:grid-cols-3"}`}>
+      {columns.map((column) => {
+        const id = `csv-map-${column.field.toLowerCase()}`;
+        const error = errorFor(column.value);
+        return (
+          <Field
+            key={column.field}
+            htmlFor={id}
+            label={column.field}
+            required={!column.optional}
+            optional={column.optional}
+            error={error}
+            hint={column.auto ? "Matched from your file. Change it if needed." : undefined}
+            fillRow
+          >
+            <SelectInput
+              id={id}
+              required={!column.optional}
+              value={column.value}
+              onChange={(event) => column.onChange(event.target.value)}
+              aria-label={`Which CSV column holds the ${column.field.toLowerCase()}?`}
+            >
+              <option value="" disabled={!column.optional}>
+                {column.optional ? "Do not import this" : "Select a column"}
+              </option>
+              {headers.map((header) => (
+                <option key={header} value={header}>
+                  {header}
+                </option>
+              ))}
+            </SelectInput>
+          </Field>
+        );
+      })}
+    </div>
   );
 }
 
-/**
- * One preview cell.
- *
- * An unmapped column shows a placeholder rather than blanking the whole table:
- * the previous version hid the preview entirely until all four selects were
- * filled, which meant the data an owner needed in order to CHOOSE a mapping
- * only appeared once they had finished choosing it.
- */
 export function CellValue({
   value,
   column,
@@ -139,20 +73,20 @@ export function CellValue({
   isProblem?: boolean;
 }) {
   if (column.value === "") {
-    return <span className="text-ink-500">—</span>;
+    return <span className="text-ink-500">Not mapped</span>;
   }
 
   if (column.field === "Amount") {
-    const parsed = Number(value.replace(/,/g, ""));
-    return Number.isFinite(parsed) && value.trim() !== "" ? (
+    const parsed = parseSignedAmount(value);
+    return parsed !== null && value.trim() !== "" ? (
       <Money value={parsed} />
     ) : (
-      <span className="text-tone-danger">{value || "—"}</span>
+      <span className="text-tone-danger">{value || "Empty"}</span>
     );
   }
 
   if (isProblem) {
-    return <span className="text-tone-danger">{value || "—"}</span>;
+    return <span className="text-tone-danger">{value || "Empty"}</span>;
   }
-  return <>{value || <span className="text-ink-500">—</span>}</>;
+  return <>{value || <span className="text-ink-500">Empty</span>}</>;
 }

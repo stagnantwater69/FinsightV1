@@ -1,4 +1,5 @@
 import { parseCsvDate } from "../../lib/csvDates";
+import { parseSignedAmount } from "../../lib/recordTypeDetection";
 import type { CsvDateFormat, CsvImportStatus } from "../../lib/types";
 import type { ImportResult, MappedField, RowProblem } from "./types";
 
@@ -64,6 +65,7 @@ export function problemWith(
   values: Record<MappedField, string>,
   needsCategory: boolean,
   dateFormat: CsvDateFormat,
+  usesSignedAmounts = false,
 ): RowProblem {
   if (!values.Description.trim()) return { field: "Description", reason: "Missing description" };
 
@@ -82,8 +84,9 @@ export function problemWith(
   }
 
   const rawAmount = values.Amount.trim();
-  const amount = rawAmount ? Number(rawAmount.replace(/,/g, "")) : NaN;
-  if (!Number.isFinite(amount) || amount <= 0) {
+  const signedAmount = parseSignedAmount(rawAmount);
+  const amount = usesSignedAmounts && signedAmount !== null ? Math.abs(signedAmount) : signedAmount;
+  if (amount === null || !Number.isFinite(amount) || amount <= 0) {
     return { field: "Amount", reason: `Invalid amount: "${rawAmount}"` };
   }
 

@@ -25,6 +25,7 @@ import type { BusinessProfile } from "../lib/types";
 const profile = { id: 1, name: "Sari-sari" } as unknown as BusinessProfile;
 
 const previewBody = {
+  stagedUploadId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
   headers: ["date", "description", "amount", "category"],
   previewRows: [{ date: "03/04/2026", description: "Rice sack", amount: "2400", category: "Inventory" }],
   totalRows: 1,
@@ -37,20 +38,31 @@ const previewBody = {
 interface PostCall {
   url: string;
   fields: Record<string, string>;
+  transport: "multipart" | "json";
 }
 
 let posts: PostCall[];
+let deletes: string[];
+let deleteShouldFail: boolean;
+let nextJsonPreviewError: unknown | null;
 /** Queued responses for POST /confirm, consumed in order. */
 let confirmResponses: (() => { status: number; data: unknown })[];
 let statusResponses: unknown[];
 let previewExtra: Record<string, unknown>;
 let deferredPreview: Promise<unknown> | null;
 
-function fieldsOf(body: FormData): Record<string, string> {
+function fieldsOf(body: FormData | Record<string, unknown>): Record<string, string> {
   const out: Record<string, string> = {};
-  body.forEach((value, key) => {
-    out[key] = value instanceof File ? value.name : String(value);
-  });
+  if (body instanceof FormData) {
+    body.forEach((value, key) => {
+      out[key] = value instanceof File ? value.name : String(value);
+    });
+  } else {
+    for (const [key, value] of Object.entries(body)) {
+      if (value === undefined) continue;
+      out[key] = typeof value === "string" ? value : JSON.stringify(value);
+    }
+  }
   return out;
 }
 
@@ -63,14 +75,27 @@ vi.mock("../lib/api", () => ({
       }
       throw new Error(`unmocked GET ${url}`);
     },
-    post: async (url: string, body: FormData) => {
-      posts.push({ url, fields: fieldsOf(body) });
-      if (url.endsWith("/preview")) return { status: 200, data: deferredPreview ? await deferredPreview : { ...previewBody, ...previewExtra } };
+    post: async (url: string, body: FormData | Record<string, unknown>) => {
+      const transport = body instanceof FormData ? "multipart" : "json";
+      posts.push({ url, fields: fieldsOf(body), transport });
+      if (url.endsWith("/preview")) {
+        if (transport === "json" && nextJsonPreviewError) {
+          const error = nextJsonPreviewError;
+          nextJsonPreviewError = null;
+          throw error;
+        }
+        return { status: 200, data: deferredPreview ? await deferredPreview : { ...previewBody, ...previewExtra } };
+      }
       const next = confirmResponses.shift();
       if (!next) throw new Error("no queued confirm response");
       const result = next();
       if (result.status >= 400) throw new Error("Request failed with status code 500");
       return result;
+    },
+    delete: async (url: string) => {
+      deletes.push(url);
+      if (deleteShouldFail) throw new Error("cleanup failed");
+      return { status: 204, data: undefined };
     },
   },
 }));
@@ -90,20 +115,59 @@ function renderPage() {
   );
 }
 
-/** Walks the picker and the preview so the test starts at the Import button. */
+function expectCurrentStep(label: string) {
+  const progress = screen.getByRole("list", { name: "CSV import progress" });
+  const current = progress.querySelector('[aria-current="step"]');
+  expect(current).not.toBeNull();
+  expect(current).toHaveTextContent(label);
+}
+
+/** Walks the picker and preview so the test starts on column mapping. */
 async function reachMappingScreen(user: ReturnType<typeof userEvent.setup>) {
   const file = new File(["date,description,amount,category\n"], "march.csv", { type: "text/csv" });
   await user.upload(screen.getByLabelText(/CSV file/i), file);
-  await user.click(screen.getByRole("button", { name: "Preview" }));
-  await screen.findByText("Map your columns");
+  await user.click(screen.getByRole("button", { name: "Preview file" }));
+  await screen.findByRole("heading", { level: 1, name: "Map and review columns" });
+}
+
+async function continueToReview(
+  user: ReturnType<typeof userEvent.setup>,
+  validation: PreviewResultValidation = {
+    validRows: 1,
+    invalidRows: 0,
+    skipped: [],
+    skippedTruncated: false,
+  },
+) {
+  previewExtra.validation = validation;
+  await user.click(screen.getByRole("button", { name: "Continue to review" }));
+  await screen.findByRole("heading", { level: 1, name: "Review and import" });
+}
+
+interface PreviewResultValidation {
+  validRows: number;
+  invalidRows: number;
+  skipped: { row: number; reason: string }[];
+  skippedTruncated: boolean;
+  possibleDuplicateRows?: number;
+  duplicateRows?: number[];
+  duplicateRowsTruncated?: boolean;
+}
+
+function importButton() {
+  return screen.getByRole("button", { name: /^Import \d/ });
 }
 
 beforeEach(() => {
   posts = [];
+  deletes = [];
+  deleteShouldFail = false;
+  nextJsonPreviewError = null;
   confirmResponses = [];
   statusResponses = [];
   previewExtra = {};
   deferredPreview = null;
+  previewBody.dateFormatAmbiguous = false;
   vi.stubGlobal("crypto", { ...globalThis.crypto, randomUUID: () => "11111111-2222-3333-4444-555555555555" });
 });
 
@@ -113,6 +177,164 @@ afterEach(() => {
 });
 
 describe("CSV full-file review", () => {
+  it("marks each current stage and never confirms before the review screen", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    expectCurrentStep("Upload file");
+    await reachMappingScreen(user);
+    expectCurrentStep("Map columns");
+
+    await continueToReview(user);
+    expectCurrentStep("Review and import");
+    expect(posts.filter((post) => post.url.endsWith("/confirm"))).toHaveLength(0);
+    const previews = posts.filter((post) => post.url.endsWith("/preview"));
+    expect(previews).toHaveLength(2);
+    expect(previews[0]).toMatchObject({
+      transport: "multipart",
+      fields: {
+        file: "march.csv",
+        businessProfileId: "1",
+        idempotencyKey: "11111111-2222-3333-4444-555555555555",
+      },
+    });
+    expect(previews[1]).toMatchObject({
+      transport: "json",
+      fields: { stagedUploadId: previewBody.stagedUploadId },
+    });
+    expect(previews.filter((post) => post.fields.file !== undefined)).toHaveLength(1);
+  });
+
+  it("confirms with the same staged upload and never sends the CSV bytes again", async () => {
+    const user = userEvent.setup();
+    confirmResponses = [() => ({ status: 201, data: {
+      batchId: 3, title: "march", status: "Reviewed", processingStatus: "COMPLETE",
+      totalRows: 1, imported: 1, skipped: [], flagged: 0, largeExpenseFlagged: 0,
+    } })];
+    renderPage();
+    await reachMappingScreen(user);
+    await continueToReview(user);
+    await user.click(importButton());
+    await screen.findByText("Import complete");
+
+    const confirm = posts.find((post) => post.url.endsWith("/confirm"));
+    expect(confirm).toMatchObject({
+      transport: "json",
+      fields: {
+        stagedUploadId: previewBody.stagedUploadId,
+        businessProfileId: "1",
+        idempotencyKey: "11111111-2222-3333-4444-555555555555",
+      },
+    });
+    expect(posts.filter((post) => post.fields.file !== undefined)).toHaveLength(1);
+  });
+
+  it("fails closed when the upload response does not include a stage handle", async () => {
+    const user = userEvent.setup();
+    previewExtra = { stagedUploadId: undefined };
+    renderPage();
+
+    const file = new File(["date,description,amount\n"], "march.csv", { type: "text/csv" });
+    await user.upload(screen.getByLabelText(/CSV file/i), file);
+    await user.click(screen.getByRole("button", { name: "Preview file" }));
+
+    expect(await screen.findByText(/couldn't prepare this upload for review/i)).toBeVisible();
+    expect(screen.getByRole("heading", { level: 1, name: "Import CSV records" })).toBeVisible();
+    expect(screen.queryByRole("heading", { level: 1, name: "Map and review columns" })).not.toBeInTheDocument();
+  });
+
+  it("clears the picker immediately even if staged cleanup fails", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await reachMappingScreen(user);
+    deleteShouldFail = true;
+
+    await user.click(screen.getByRole("button", { name: "Change file" }));
+
+    expect(screen.getByRole("heading", { level: 1, name: "Import CSV records" })).toBeVisible();
+    await waitFor(() => expect(deletes).toEqual([
+      `/records/csv-imports/stages/${previewBody.stagedUploadId}`,
+    ]));
+    const replacement = new File(["date,description,amount\n"], "april.csv", { type: "text/csv" });
+    await user.upload(screen.getByLabelText(/CSV file/i), replacement);
+    expect(screen.getByText("april.csv")).toBeVisible();
+  });
+
+  it("recovers an expired stage without discarding mapping edits", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await reachMappingScreen(user);
+    const title = screen.getByRole("textbox", { name: /Batch title/ });
+    await user.clear(title);
+    await user.type(title, "March corrected");
+    nextJsonPreviewError = {
+      isAxiosError: true,
+      message: "Request failed with status code 410",
+      response: { status: 410, data: { code: "CSV_STAGE_EXPIRED" } },
+    };
+
+    await user.click(screen.getByRole("button", { name: "Continue to review" }));
+
+    expect(await screen.findByText("This upload is no longer available. Preview the selected CSV file again to continue.")).toBeVisible();
+    expect(screen.getByText("march.csv")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Preview file" }));
+    await screen.findByRole("heading", { level: 1, name: "Map and review columns" });
+    expect(screen.getByRole("textbox", { name: /Batch title/ })).toHaveValue("March corrected");
+    expect(posts.filter((post) => post.fields.file !== undefined)).toHaveLength(2);
+  });
+
+  it("retains the batch title and mapping when returning from review", async () => {
+    const user = userEvent.setup();
+    previewExtra = {
+      headers: ["date", "description", "amount", "category", "posted"],
+      previewRows: [{ date: "03/04/2026", posted: "04/03/2026", description: "Rice sack", amount: "2400", category: "Inventory" }],
+    };
+    renderPage();
+    await reachMappingScreen(user);
+
+    const title = screen.getByRole("textbox", { name: /Batch title/ });
+    const dateMapping = screen.getByRole("combobox", { name: "Which CSV column holds the date?" });
+    await user.clear(title);
+    await user.type(title, "March POS cleanup");
+    await user.selectOptions(dateMapping, "posted");
+
+    await continueToReview(user);
+    expect(screen.getByText("March POS cleanup")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Back to mapping" }));
+
+    expect(screen.getByRole("textbox", { name: /Batch title/ })).toHaveValue("March POS cleanup");
+    expect(screen.getByRole("combobox", { name: "Which CSV column holds the date?" })).toHaveValue("posted");
+    expect(posts.filter((post) => post.url.endsWith("/confirm"))).toHaveLength(0);
+  });
+
+  it("blocks review while two fields point to the same CSV column", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await reachMappingScreen(user);
+
+    const amountMapping = screen.getByRole("combobox", { name: "Which CSV column holds the amount?" });
+    const continueButton = screen.getByRole("button", { name: "Continue to review" });
+    await user.selectOptions(amountMapping, "description");
+
+    expect(continueButton).toBeDisabled();
+    expect(screen.getAllByText(/is already mapped to another field/)).toHaveLength(2);
+    expect(posts.filter((post) => post.url.endsWith("/confirm"))).toHaveLength(0);
+
+    await user.selectOptions(amountMapping, "amount");
+    expect(continueButton).toBeEnabled();
+  });
+
+  it("blocks a header-only file before review", async () => {
+    const user = userEvent.setup();
+    previewExtra = { previewRows: [], totalRows: 0 };
+    renderPage();
+    await reachMappingScreen(user);
+
+    expect(screen.getByText("This file has headings but no records.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Continue to review" })).toBeDisabled();
+    expect(posts.filter((post) => post.url.endsWith("/confirm"))).toHaveLength(0);
+  });
+
   it("locks mapping and row corrections while the server checks the reviewed values", async () => {
     const user = userEvent.setup();
     previewExtra.previewRows = [{ date: "03/04/2026", description: "Rice sack", amount: "invalid", category: "Inventory" }];
@@ -123,7 +345,7 @@ describe("CSV full-file review", () => {
     const mapping = screen.getByRole("combobox", { name: "Which CSV column holds the amount?" });
     const correction = document.getElementById("fix-2-Amount") as HTMLInputElement;
     const title = screen.getByRole("textbox", { name: /Batch title/ });
-    await user.click(screen.getByRole("button", { name: "Check all rows" }));
+    await user.click(screen.getByRole("button", { name: "Continue to review" }));
     expect(mapping).toBeDisabled();
     expect(correction).toBeDisabled();
     expect(title).toBeDisabled();
@@ -132,34 +354,27 @@ describe("CSV full-file review", () => {
     expect(mapping).toHaveValue("amount");
     expect(correction).toHaveValue("invalid");
     await act(async () => { finish({ ...previewBody, validation: { validRows: 0, invalidRows: 1, skipped: [{ row: 2, reason: "Invalid amount" }], skippedTruncated: false } }); });
+    await screen.findByRole("heading", { level: 1, name: "Review and import" });
+    await user.click(screen.getByRole("button", { name: "Back to mapping" }));
     expect(mapping).toBeEnabled();
     expect(correction).toBeEnabled();
+    expect(title).toBeEnabled();
     expect(posts.filter((post) => post.url.endsWith("/confirm"))).toHaveLength(0);
   });
 
-  it("can check all rows without creating an import", async () => {
-    const user = userEvent.setup();
-    renderPage();
-    await reachMappingScreen(user);
-    previewExtra.validation = { validRows: 1, invalidRows: 0, skipped: [], skippedTruncated: false };
-    await user.click(screen.getByRole("button", { name: "Check all rows" }));
-    await screen.findByText(/File checked/);
-    expect(posts.filter((post) => post.url.endsWith("/confirm"))).toHaveLength(0);
-  });
-  it("requires acknowledgement of skipped rows before writing and collapses details", async () => {
+  it("shows skipped-row warnings for review before writing and collapses details", async () => {
     const user = userEvent.setup();
     previewExtra = { totalRows: 3 };
     renderPage();
     await reachMappingScreen(user);
-    previewExtra.validation = { validRows: 2, invalidRows: 1, skipped: [{ row: 4, reason: "Invalid amount" }], skippedTruncated: false };
-    await user.click(screen.getByRole("button", { name: "Import 3 rows" }));
+    await continueToReview(user, { validRows: 2, invalidRows: 1, skipped: [{ row: 4, reason: "Invalid amount" }], skippedTruncated: false });
     await screen.findByText(/File check: 2 valid, 1 skipped/);
     expect(posts.filter((post) => post.url.endsWith("/confirm"))).toHaveLength(0);
     expect(screen.getByText("Row 4: Invalid amount")).not.toBeVisible();
     await user.click(screen.getByRole("button", { name: "Show more" }));
     expect(screen.getByText("Row 4: Invalid amount")).toBeVisible();
     confirmResponses = [() => ({ status: 201, data: { batchId: 3, title: "march", status: "Reviewed", totalRows: 3, imported: 2, skipped: [{ row: 4, reason: "Invalid amount" }], flagged: 0, largeExpenseFlagged: 0 } })];
-    await user.click(screen.getByRole("button", { name: "Import 2 of 3 rows" }));
+    await user.click(importButton());
     await screen.findByText("Import complete");
     expect(posts.filter((post) => post.url.endsWith("/confirm"))).toHaveLength(1);
     expect(screen.getByText("Row 4: Invalid amount")).not.toBeVisible();
@@ -169,8 +384,7 @@ describe("CSV full-file review", () => {
     const user = userEvent.setup();
     renderPage();
     await reachMappingScreen(user);
-    previewExtra.validation = { validRows: 1, invalidRows: 0, skipped: [], skippedTruncated: false, possibleDuplicateRows: 1, duplicateRows: [2] };
-    await user.click(screen.getByRole("button", { name: "Import 1 row" }));
+    await continueToReview(user, { validRows: 1, invalidRows: 0, skipped: [], skippedTruncated: false, possibleDuplicateRows: 1, duplicateRows: [2] });
     await screen.findByText(/possible duplicate will be included and flagged/);
     expect(posts.filter((post) => post.url.endsWith("/confirm"))).toHaveLength(0);
     expect(screen.getByText(/Possible duplicate rows: 2/)).not.toBeVisible();
@@ -182,21 +396,57 @@ describe("CSV full-file review", () => {
     const user = userEvent.setup();
     renderPage();
     await reachMappingScreen(user);
-    previewExtra.validation = { validRows: 0, invalidRows: 1, skipped: [{ row: 2, reason: "Invalid date" }], skippedTruncated: false };
-    await user.click(screen.getByRole("button", { name: "Import 1 row" }));
-    await screen.findByText(/No rows are ready/);
-    await user.click(screen.getByRole("button", { name: "Import 0 of 1 rows" }));
+    await continueToReview(user, { validRows: 0, invalidRows: 1, skipped: [{ row: 2, reason: "Invalid date" }], skippedTruncated: false });
+    expect(importButton()).toBeDisabled();
     expect(posts.filter((post) => post.url.endsWith("/confirm"))).toHaveLength(0);
+  });
+
+  it("fails closed when the full-file check omits its validation result", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await reachMappingScreen(user);
+
+    await user.click(screen.getByRole("button", { name: "Continue to review" }));
+    expect(await screen.findByText("FinSight could not validate this file. Check the mapping and try again.")).toBeVisible();
+    expect(screen.getByRole("heading", { level: 1, name: "Map and review columns" })).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Continue to review" }));
+    expect(screen.getByRole("heading", { level: 1, name: "Map and review columns" })).toBeVisible();
+    expect(posts.filter((post) => post.url.endsWith("/preview"))).toHaveLength(3);
+    expect(posts.filter((post) => post.url.endsWith("/confirm"))).toHaveLength(0);
+  });
+
+  it("uses the mapped column's date convention after the full-file check", async () => {
+    const user = userEvent.setup();
+    previewExtra = {
+      headers: ["date", "posted", "description", "amount", "category"],
+      previewRows: [{ date: "13/04/2026", posted: "04/13/2026", description: "Rice sack", amount: "2400", category: "Inventory" }],
+      detectedDateFormat: "dmy",
+    };
+    renderPage();
+    await reachMappingScreen(user);
+    await user.selectOptions(screen.getByRole("combobox", { name: "Which CSV column holds the date?" }), "posted");
+
+    previewExtra.detectedDateFormat = "mdy";
+    previewExtra.validation = { validRows: 1, invalidRows: 0, skipped: [], skippedTruncated: false };
+    await user.click(screen.getByRole("button", { name: "Continue to review" }));
+
+    await screen.findByRole("heading", { level: 1, name: "Review and import" });
+    expect(screen.getAllByText("Preview ready")).toHaveLength(2);
+    expect(screen.queryByText("Needs review")).not.toBeInTheDocument();
   });
 
   it("applies historical category suggestions only after an explicit action and rechecks", async () => {
     const user = userEvent.setup();
-    previewExtra = { headers: ["date", "description", "amount"], previewRows: [{ date: "03/04/2026", description: "Rice sack", amount: "2400" }] };
+    previewExtra = {
+      headers: ["date", "description", "amount"],
+      previewRows: [{ date: "03/04/2026", description: "Rice sack", amount: "2400" }],
+    };
     renderPage();
     await reachMappingScreen(user);
     previewExtra.validation = { validRows: 0, invalidRows: 1, skipped: [{ row: 2, reason: "Missing category" }], skippedTruncated: false };
     previewExtra.categorySuggestions = [{ row: 2, categoryId: 1, categoryName: "Inventory", source: "history" }];
-    await user.click(screen.getByRole("button", { name: "Import 0 of 1 rows" }));
+    await user.click(screen.getByRole("button", { name: "Continue to review" }));
     await screen.findByRole("button", { name: "Apply category suggestions" });
     const preflight = posts.filter((post) => post.url.endsWith("/preview")).at(-1)!;
     expect(preflight.fields.corrections).toBeUndefined();
@@ -204,7 +454,7 @@ describe("CSV full-file review", () => {
     previewExtra.validation = { validRows: 1, invalidRows: 0, skipped: [], skippedTruncated: false };
     previewExtra.categorySuggestions = [];
     confirmResponses = [() => ({ status: 201, data: { batchId: 3, title: "march", status: "Reviewed", totalRows: 1, imported: 1, skipped: [], flagged: 0, largeExpenseFlagged: 0 } })];
-    await user.click(screen.getByRole("button", { name: "Import 1 row" }));
+    await user.click(importButton());
     await screen.findByText("Import complete");
     const confirm = posts.find((post) => post.url.endsWith("/confirm"))!;
     expect(JSON.parse(confirm.fields.corrections!)).toEqual({ "2": { category: "Inventory" } });
@@ -234,11 +484,12 @@ describe("CSV import — idempotent confirm", () => {
     ];
     renderPage();
     await reachMappingScreen(user);
+    await continueToReview(user);
 
-    await user.click(screen.getByRole("button", { name: /^Import 1 row$/ }));
+    await user.click(importButton());
     await screen.findByText(/status code 500/);
 
-    await user.click(screen.getByRole("button", { name: /^Import 1 row$/ }));
+    await user.click(importButton());
     await screen.findByText("Import complete");
 
     const confirms = posts.filter((p) => p.url.endsWith("/confirm"));
@@ -268,7 +519,8 @@ describe("CSV import — idempotent confirm", () => {
     ];
     renderPage();
     await reachMappingScreen(user);
-    await user.click(screen.getByRole("button", { name: /^Import 1 row$/ }));
+    await continueToReview(user);
+    await user.click(importButton());
     await screen.findByText("Import complete");
 
     const confirm = posts.find((p) => p.url.endsWith("/confirm"))!;
@@ -301,13 +553,14 @@ describe("CSV import — ambiguous dates", () => {
       await reachMappingScreen(user);
 
       expect(screen.getByText("Which way round are your dates?")).toBeInTheDocument();
-      const importButton = screen.getByRole("button", { name: /^Import 1 row$/ });
-      expect(importButton).toBeDisabled();
+      const continueButton = screen.getByRole("button", { name: "Continue to review" });
+      expect(continueButton).toBeDisabled();
 
       await user.click(screen.getByRole("radio", { name: /Month first/ }));
-      expect(importButton).toBeEnabled();
+      expect(continueButton).toBeEnabled();
 
-      await user.click(importButton);
+      await continueToReview(user);
+      await user.click(importButton());
       await screen.findByText("Import complete");
 
       const confirm = posts.find((p) => p.url.endsWith("/confirm"))!;
@@ -373,7 +626,8 @@ describe("CSV import — a large file that finishes on the worker", () => {
 
     renderPage();
     await reachMappingScreen(user);
-    await user.click(screen.getByRole("button", { name: /^Import 1 row$/ }));
+    await continueToReview(user);
+    await user.click(importButton());
 
     // Real progress, from the server's own count — not an animation.
     const bar = await screen.findByRole("progressbar");
@@ -399,7 +653,8 @@ describe("CSV import — a large file that finishes on the worker", () => {
     ];
     renderPage();
     await reachMappingScreen(user);
-    await user.click(screen.getByRole("button", { name: "Import 1 row" }));
+    await continueToReview(user);
+    await user.click(importButton());
     await screen.findByText("Import stopped");
     expect(screen.getByText("380")).toBeVisible();
     expect(screen.getByText("20")).toBeVisible();
@@ -412,6 +667,28 @@ describe("CSV import — a large file that finishes on the worker", () => {
     expect(confirms).toHaveLength(1);
   });
 
+  it("does not claim records were saved when a worker fails before importing any rows", async () => {
+    const user = userEvent.setup();
+    confirmResponses = [() => ({ status: 202, data: {
+      batchId: 9, title: "march", status: "Pending Review", processingStatus: "PENDING",
+      totalRows: 1000, imported: 0, skipped: [], flagged: 0,
+    } })];
+    statusResponses = [{
+      batchId: 9, status: "Pending Review", processingStatus: "FAILED", totalRows: 1000,
+      processedRows: 0, importedRows: 0, skippedRows: 0, flaggedRows: 0,
+      failureStage: "validate", resultSummary: null,
+    }];
+    renderPage();
+    await reachMappingScreen(user);
+    await continueToReview(user);
+    await user.click(importButton());
+
+    await screen.findByText("Import stopped");
+    expect(screen.getByText("No records were saved. Check the source file, then import it again.")).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Review saved records" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Import another file" })).toBeVisible();
+  });
+
   it("does not celebrate a terminal FAILED replay returned directly by confirm", async () => {
     const user = userEvent.setup();
     confirmResponses = [() => ({ status: 200, data: {
@@ -420,7 +697,8 @@ describe("CSV import — a large file that finishes on the worker", () => {
     } })];
     renderPage();
     await reachMappingScreen(user);
-    await user.click(screen.getByRole("button", { name: "Import 1 row" }));
+    await continueToReview(user);
+    await user.click(importButton());
     await screen.findByText("Import stopped");
     expect(screen.getByText("380")).toBeVisible();
     expect(screen.getByRole("link", { name: "Review saved records" })).toBeVisible();
@@ -435,7 +713,8 @@ describe("CSV import — a large file that finishes on the worker", () => {
     } })];
     renderPage();
     await reachMappingScreen(user);
-    await user.click(screen.getByRole("button", { name: "Import 1 row" }));
+    await continueToReview(user);
+    await user.click(importButton());
     await screen.findByText("Import complete");
     expect(screen.getByText("30")).toBeVisible();
     expect(screen.getByText("Row 4: Invalid amount")).not.toBeVisible();
@@ -464,7 +743,8 @@ describe("CSV import — a large file that finishes on the worker", () => {
     ];
     renderPage();
     await reachMappingScreen(user);
-    await user.click(screen.getByRole("button", { name: /^Import 1 row$/ }));
+    await continueToReview(user);
+    await user.click(importButton());
 
     await screen.findByText("Import complete");
     await waitFor(() =>

@@ -227,7 +227,7 @@ export async function loginViaUi(page: Page, email = TEST_PROFILE.email, passwor
  */
 export async function chooseUpload(
   page: Page,
-  label: "Choose a file" | "Choose photos",
+  label: "Choose a file" | "Choose photos" | "Choose CSV file",
   file: { name: string; mimeType: string; buffer: Buffer },
 ) {
   // Waiting for the picker first turns "the page navigated away and the picker
