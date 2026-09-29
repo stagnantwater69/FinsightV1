@@ -230,11 +230,9 @@ export async function resolveDuplicates(req: Request, res: Response) {
   const userId = req.user!.id;
 
   /*
-   * Sequential, not Promise.all. Both halves can delete records that share an
-   * import batch, and cleanUpImportBatchIfOrphaned decides whether to remove
-   * that batch by counting what is left across BOTH tables — running the two
-   * concurrently lets each count rows the other is in the middle of deleting,
-   * and the batch survives with nothing pointing at it.
+   * Sequential because both halves may drain the same import batch. Each
+   * service locks the batch before it checks both record tables and schedules
+   * source cleanup, so one half must finish before the other makes that check.
    */
   const expenses = await expenseRecordService.bulkResolveExpenseDuplicates(
     userId,

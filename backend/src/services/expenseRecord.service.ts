@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import type { ExpenseRecord, ExpenseRecordSource, ReceiptScanItem } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { ApiError } from "../middleware/error.middleware";
-import { cleanUpImportBatchIfOrphaned, cleanUpReceiptScanIfOrphaned } from "../lib/sourceCleanup";
+import { cleanUpReceiptScanIfOrphaned } from "../lib/sourceCleanup";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
 import { DEFAULT_RECORD_SORT, recordCursorWhere, recordOrderBy, type RecordCursor, type RecordSort } from "../lib/recordSort";
 import { expenseDuplicateKeysOf, sameExpenseDuplicateIdentity } from "../lib/expenseDuplicateIdentity";
@@ -11,6 +11,7 @@ import { createNotification, NOTIFICATION_TYPES } from "./notification.service";
 import { signedReceiptImageUrl, signedCsvFileUrl } from "./storage.service";
 import { logger } from "../config/logger";
 import { enqueueExpenseAnalyses, enqueueExpenseAnalysis } from "./anomalyDetection/job.service";
+import { enqueueCsvSourcePurgesIfOrphaned } from "./csvSourcePurge.service";
 
 interface CreateInput {
   businessProfileId: number;
@@ -768,23 +769,23 @@ export async function updateExpenseRecord(userId: number, id: number, input: Upd
 }
 
 export async function deleteExpenseRecord(userId: number, id: number) {
-  const existing = await prisma.expenseRecord.findFirst({ where: { id, businessProfile: { userId } } });
-  if (!existing) {
-    throw new ApiError(404, "Expense record not found");
-  }
-  await prisma.expenseRecord.delete({ where: { id } });
+  const existing = await prisma.$transaction(async (tx) => {
+    const record = await tx.expenseRecord.findFirst({ where: { id, businessProfile: { userId } } });
+    if (!record) throw new ApiError(404, "Expense record not found");
+    await tx.expenseRecord.delete({ where: { id } });
+    await enqueueCsvSourcePurgesIfOrphaned(tx, [record.importBatchId]);
+    return record;
+  });
 
   /*
    * The uploaded file this record came from goes too, once this was the last
    * record that came from it. Read the ids off `existing` BEFORE the delete —
    * afterwards there is no row left to read them from.
    *
-   * After the delete rather than in a transaction with it: these touch object
-   * storage, which cannot take part in a database transaction, and a storage
-   * failure must not roll back a deletion the owner asked for.
+   * Receipt cleanup has its own durable queue. CSV cleanup was scheduled in
+   * the delete transaction above, so neither path waits on object storage.
    */
   await cleanUpReceiptScanIfOrphaned(existing.receiptScanId);
-  await cleanUpImportBatchIfOrphaned(existing.importBatchId);
 }
 
 /**
@@ -819,22 +820,25 @@ export async function bulkResolveExpenseDuplicates(
   if (ids.length === 0) return 0;
   await requireOwnedBusinessProfile(userId, businessProfileId);
 
-  const owned = await prisma.expenseRecord.findMany({
-    where: { id: { in: ids }, businessProfileId },
-    select: { id: true, receiptScanId: true, importBatchId: true },
-  });
-  if (owned.length === 0) return 0;
-  const ownedIds = owned.map((r) => r.id);
-
   if (action === "keep") {
     const { count } = await prisma.expenseRecord.updateMany({
-      where: { id: { in: ownedIds } },
+      where: { id: { in: ids }, businessProfileId },
       data: { duplicateStatus: "Not a Duplicate", reviewStatus: "Reviewed" },
     });
     return count;
   }
 
-  await prisma.expenseRecord.deleteMany({ where: { id: { in: ownedIds } } });
+  const owned = await prisma.$transaction(async (tx) => {
+    const records = await tx.expenseRecord.findMany({
+      where: { id: { in: ids }, businessProfileId },
+      select: { id: true, receiptScanId: true, importBatchId: true },
+    });
+    if (records.length === 0) return records;
+    await tx.expenseRecord.deleteMany({ where: { id: { in: records.map((record) => record.id) } } });
+    await enqueueCsvSourcePurgesIfOrphaned(tx, records.map((record) => record.importBatchId));
+    return records;
+  });
+  if (owned.length === 0) return 0;
 
   /*
    * The same source cleanup deleteExpenseRecord performs, but run once per
@@ -843,11 +847,9 @@ export async function bulkResolveExpenseDuplicates(
    * rows fetched above, since after deleteMany there is nothing left to read.
    */
   const scanIds = [...new Set(owned.map((r) => r.receiptScanId).filter((v): v is number => v !== null))];
-  const batchIds = [...new Set(owned.map((r) => r.importBatchId).filter((v): v is number => v !== null))];
   for (const scanId of scanIds) await cleanUpReceiptScanIfOrphaned(scanId);
-  for (const batchId of batchIds) await cleanUpImportBatchIfOrphaned(batchId);
 
-  return ownedIds.length;
+  return owned.length;
 }
 
 export async function searchExpenseRecords(userId: number, filters: SearchFilters) {

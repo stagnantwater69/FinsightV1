@@ -30,6 +30,8 @@ export interface VeryfiReceiptItem {
 export interface VeryfiReceipt {
   date: string | null;
   vendor: string | null;
+  /** ISO 4217 code as Veryfi read it, never a conversion. */
+  currency: string | null;
   amount: number | null;
   items: VeryfiReceiptItem[];
 }
@@ -74,6 +76,12 @@ function coerceVendor(v: unknown): string | null {
     return name ? name.slice(0, 150) : null;
   }
   return null;
+}
+
+function coerceCurrency(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const code = v.trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(code) ? code : null;
 }
 
 function coerceItems(v: unknown): VeryfiReceiptItem[] {
@@ -133,8 +141,8 @@ async function readOnePage(page: VeryfiPage): Promise<{ ok: true; doc: Record<st
  * Veryfi's document endpoint reads one image per call, unlike Gemini's
  * single multi-part request for every page — so a multi-page receipt costs
  * one Veryfi request PER PAGE. Pages are merged the same way the deterministic
- * parser's own multi-page combination already works: vendor and date from the
- * first page that supplies one, amount from the LAST page that supplies one
+ * parser's own multi-page combination already works: vendor, date and currency
+ * from the first page that supplies one, amount from the LAST page that supplies one
  * (the total is conventionally on the final page), and items concatenated
  * across every page in order.
  *
@@ -175,6 +183,7 @@ export async function extractReceiptWithVeryfi(pages: VeryfiPage[]): Promise<Ver
 
   const vendor = docs.map((d) => coerceVendor(d.vendor)).find((v) => v !== null) ?? null;
   const date = docs.map((d) => coerceDate(d.date)).find((v) => v !== null) ?? null;
+  const currency = docs.map((d) => coerceCurrency(d.currency_code)).find((v) => v !== null) ?? null;
   const amounts = docs.map((d) => finiteNumber(d.total)).filter((v): v is number => v !== null && v > 0);
   const amount = amounts.length > 0 ? amounts[amounts.length - 1]! : null;
   const items = docs.flatMap((d) => coerceItems(d.line_items));
@@ -182,5 +191,5 @@ export async function extractReceiptWithVeryfi(pages: VeryfiPage[]): Promise<Ver
   if (vendor === null && date === null && amount === null && items.length === 0) {
     return { receipt: null, rejectReason: "empty" };
   }
-  return { receipt: { vendor, date, amount, items }, rejectReason: null };
+  return { receipt: { vendor, date, currency, amount, items }, rejectReason: null };
 }

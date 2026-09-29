@@ -42,6 +42,7 @@ export type SecurityEvent =
   | "recovery.delivery_failed"
   | "password.changed"
   | "sessions.revoked"
+  | "sessions.revoke_failed"
   /**
    * The web → mobile session handoff. `issued` is a browser asking for a code,
    * `redeemed` is the app spending one, `failed` is a code that could not be
@@ -80,7 +81,7 @@ interface SecurityEventDetail {
  */
 export function securityEvent(event: SecurityEvent, detail: SecurityEventDetail = {}): void {
   const failure =
-    event.endsWith(".failed") ||
+    event.endsWith("failed") ||
     event.endsWith(".rejected") ||
     event.endsWith(".exhausted") ||
     event.endsWith(".refused_status") ||

@@ -55,7 +55,7 @@ authRouter.post(
   rateLimit(LIMITS.AUTH_LOGIN_EMAIL),
   asyncHandler(authController.login),
 );
-authRouter.post("/logout", asyncHandler(authController.logout));
+authRouter.post("/logout", rateLimit(LIMITS.AUTH_LOGOUT), asyncHandler(authController.logout));
 authRouter.post("/logout-all", requireAuth, asyncHandler(authController.logoutEverywhere));
 
 authRouter.post(

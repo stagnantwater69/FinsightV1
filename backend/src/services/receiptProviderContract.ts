@@ -2,6 +2,7 @@ import { z } from "zod";
 import { RESCUE_DECISION_VERSION, rescueDecisionSchema } from "./receiptRescueDecision";
 
 export const RECEIPT_PROVIDER_CONTRACT_VERSION = "receipt-provider-contract-v1" as const;
+export const RECEIPT_PROVIDER_MAX_RETRY_AFTER_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_EXTERNAL_PROVIDER_UNIT_LIMIT = 0 as const;
 
 export const receiptProviderSchema = z.enum(["gemini", "veryfi", "azure-document-intelligence"]);
@@ -271,12 +272,24 @@ const outcomeMetadataShape = {
   dispatchReference: referenceSchema,
   providerRequestIdHash: sha256Schema.nullable(),
   latencyMs: z.number().int().nonnegative().max(300_000),
+  retryAfterMs: z.number().int().nonnegative().max(RECEIPT_PROVIDER_MAX_RETRY_AFTER_MS).nullable().optional(),
+  stageTimings: z
+    .object({
+      extractionMs: z.number().int().nonnegative().max(300_000),
+      verificationMs: z.number().int().nonnegative().max(300_000),
+    })
+    .strict()
+    .optional(),
 } as const;
 
 export const providerOutcomeCodeSchema = z.enum([
   "OK",
+  "AUTH_ERROR",
+  "RATE_LIMITED",
+  "PROVIDER_SERVER_ERROR",
   "HTTP_ERROR",
   "TRANSPORT_ERROR",
+  "REQUEST_CANCELLED",
   "INVALID_RESULT",
   "TIMEOUT_BEFORE_SUBMISSION",
   "TIMEOUT_AFTER_SUBMISSION",
@@ -298,7 +311,14 @@ export const receiptProviderOutcomeSchema = z.discriminatedUnion("status", [
       ...outcomeMetadataShape,
       status: z.literal("FAILED"),
       timeoutOutcome: z.literal("NOT_TIMED_OUT"),
-      outcomeCode: z.enum(["HTTP_ERROR", "TRANSPORT_ERROR", "INVALID_RESULT"]),
+      outcomeCode: z.enum([
+        "AUTH_ERROR",
+        "RATE_LIMITED",
+        "PROVIDER_SERVER_ERROR",
+        "HTTP_ERROR",
+        "TRANSPORT_ERROR",
+        "INVALID_RESULT",
+      ]),
       finalBillableUnits: z.number().int().nonnegative(),
       extraction: z.null(),
     })
@@ -318,13 +338,20 @@ export const receiptProviderOutcomeSchema = z.discriminatedUnion("status", [
       ...outcomeMetadataShape,
       status: z.literal("AMBIGUOUS"),
       timeoutOutcome: z.literal("AFTER_SUBMISSION_UNKNOWN"),
-      outcomeCode: z.literal("TIMEOUT_AFTER_SUBMISSION"),
+      outcomeCode: z.enum(["TIMEOUT_AFTER_SUBMISSION", "TRANSPORT_ERROR", "REQUEST_CANCELLED"]),
       finalBillableUnits: z.null(),
       extraction: z.null(),
     })
     .strict(),
 ]);
 export type ReceiptProviderOutcome = z.infer<typeof receiptProviderOutcomeSchema>;
+
+export function isRetryableProviderOutcomeCode(code: string | null): boolean {
+  return code === "RATE_LIMITED"
+    || code === "PROVIDER_SERVER_ERROR"
+    || code === "TRANSPORT_ERROR"
+    || code === "TIMEOUT_AFTER_SUBMISSION";
+}
 
 export type ProviderOutcomeRejectReason =
   | "INVALID_OUTCOME"
@@ -405,6 +432,12 @@ export type ProviderMergeResult = {
    * as validated; the worker turns this into a scan warning.
    */
   itemsOwnerReviewRequired: boolean;
+  /**
+   * The currency the provider reported, whether or not the merge adopted it.
+   * Unvalidated provider evidence never displaces the printed local reading,
+   * but a non-PHP answer is still grounds to send the owner to manual entry.
+   */
+  providerCurrency: string | null;
 };
 
 function markedForOwnerReview(evidence: NormalizedEvidence): NormalizedEvidence {
@@ -453,6 +486,7 @@ export function mergeReceiptProviderOutcome(
       providerResultAccepted: false,
       reason: validation.reason,
       itemsOwnerReviewRequired: false,
+      providerCurrency: null,
     };
   }
   if (validation.outcome.status !== "SUCCEEDED") {
@@ -462,6 +496,7 @@ export function mergeReceiptProviderOutcome(
       providerResultAccepted: true,
       reason: "NOT_SUCCESSFUL",
       itemsOwnerReviewRequired: false,
+      providerCurrency: null,
     };
   }
 
@@ -504,6 +539,7 @@ export function mergeReceiptProviderOutcome(
       providerResultAccepted: true,
       reason: "NO_SAFER_FIELDS",
       itemsOwnerReviewRequired: false,
+      providerCurrency: external.currency.value,
     };
   }
 
@@ -535,5 +571,6 @@ export function mergeReceiptProviderOutcome(
     providerResultAccepted: true,
     reason: "MERGED",
     itemsOwnerReviewRequired: prefillUnreconciledItems,
+    providerCurrency: external.currency.value,
   };
 }

@@ -259,6 +259,42 @@ export async function deleteCsvFile(path: string): Promise<boolean> {
   return removeObject(CSV_IMPORT_BUCKET, path);
 }
 
+export interface StoredCsvObject {
+  path: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export async function listCsvFilesForProfile(
+  businessProfileId: number,
+  maxObjects: number,
+  offset = 0,
+): Promise<{ objects: StoredCsvObject[]; truncated: boolean }> {
+  const objects: StoredCsvObject[] = [];
+  const prefix = `${businessProfileId}/`;
+  let scanned = 0;
+  while (scanned < maxObjects + 1) {
+    const limit = Math.min(100, maxObjects + 1 - scanned);
+    const { data, error } = await supabaseAdmin.storage.from(CSV_IMPORT_BUCKET).list(String(businessProfileId), {
+      limit,
+      offset: offset + scanned,
+      sortBy: { column: "name", order: "asc" },
+    });
+    if (error || !data) throw new Error("Could not list CSV Storage objects");
+    for (const object of data) {
+      if (!object.id || object.name.includes("/")) continue;
+      objects.push({
+        path: `${prefix}${object.name}`,
+        createdAt: object.created_at ?? null,
+        updatedAt: object.updated_at ?? null,
+      });
+    }
+    scanned += data.length;
+    if (data.length < limit) break;
+  }
+  return { objects: objects.slice(0, maxObjects), truncated: scanned > maxObjects };
+}
+
 /** Removes an avatar/logo from its persisted public URL, including cache-bust query strings. */
 export async function deletePublicImageUrl(url: string): Promise<boolean> {
   const marker = `/storage/v1/object/public/${AVATAR_BUCKET}/`;
@@ -328,13 +364,48 @@ export function safeStoredFileName(originalname: string): string {
   const cleaned = basename
     .replace(/[^a-zA-Z0-9._-]/g, "_")
     .replace(/^\.+/, "")
+    .replace(/\.{2,}/g, "_")
     .slice(0, 100);
   return cleaned || "upload.csv";
 }
 
-export async function uploadCsvFile(businessProfileId: number, buffer: Buffer, originalname: string) {
-  const path = `${businessProfileId}/${randomUUID()}-${safeStoredFileName(originalname)}`;
+/**
+ * Chooses the private object path before an upload starts.
+ *
+ * Staged CSV imports persist this path before touching Storage. If the process
+ * dies after Storage accepted the bytes but before the request completes, the
+ * database still names the object and the expiry/purge worker can remove it.
+ */
+export function csvFileReference(
+  businessProfileId: number,
+  objectId: string,
+  originalname: string,
+): string {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(objectId)) {
+    throw new ApiError(500, "Could not prepare CSV storage");
+  }
+  return `${businessProfileId}/${objectId}-${safeStoredFileName(originalname)}`;
+}
+
+/** Uploads only to the already-persisted path for this business profile. */
+export async function uploadCsvFileAtReference(
+  businessProfileId: number,
+  path: string,
+  buffer: Buffer,
+): Promise<void> {
+  const safeReference = new RegExp(
+    `^${businessProfileId}/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}-[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}$`,
+    "i",
+  );
+  if (!safeReference.test(path) || path.includes("..") || path.length > 255) {
+    throw new ApiError(500, "Could not prepare CSV storage");
+  }
   await uploadWithRetry(CSV_IMPORT_BUCKET, path, buffer, "text/csv");
+}
+
+export async function uploadCsvFile(businessProfileId: number, buffer: Buffer, originalname: string) {
+  const path = csvFileReference(businessProfileId, randomUUID(), originalname);
+  await uploadCsvFileAtReference(businessProfileId, path, buffer);
   return path;
 }
 

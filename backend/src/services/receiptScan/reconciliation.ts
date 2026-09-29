@@ -13,7 +13,7 @@ import { evaluateReceiptDuplicateGate } from "../receiptDuplicate.service";
 import { resolveConfirmationMode } from "./confirmMode";
 import { toDTO } from "./dto";
 import { CHARGES_DESCRIPTION, type ConfirmInput, type ReceiptSplit } from "./types";
-import { requiresManualCurrencyConversion } from "../../lib/receiptDetails";
+import { providerReportedCurrency, requiresManualCurrencyConversion } from "../../lib/receiptDetails";
 
 interface ItemUpdateInput {
   name: string;
@@ -245,7 +245,7 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
   if (!scan.businessProfileId) {
     throw new ApiError(400, "Receipt scan is not linked to a business profile");
   }
-  if (requiresManualCurrencyConversion(scan.rawText)) {
+  if (requiresManualCurrencyConversion(scan.rawText, providerReportedCurrency(scan.extractorVersions))) {
     throw new ApiError(400, "This receipt uses a foreign currency. Enter an expense manually with the amount paid in PHP.");
   }
 

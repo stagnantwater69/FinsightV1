@@ -40,8 +40,23 @@ function printedCurrencies(text: string): Set<string> {
   return found;
 }
 
-export function requiresManualCurrencyConversion(rawText: string | null | undefined): boolean {
+/**
+ * The currency a rescue provider reported, read back off ReceiptScan.extractorVersions.
+ * It never reaches the extracted fields, because unvalidated provider evidence
+ * cannot displace the printed local reading, but it still has to block a peso booking.
+ */
+export function providerReportedCurrency(extractorVersions: unknown): string | null {
+  if (typeof extractorVersions !== "object" || extractorVersions === null) return null;
+  const code = (extractorVersions as Record<string, unknown>).providerCurrency;
+  return typeof code === "string" && /^[A-Z]{3}$/.test(code) ? code : null;
+}
+
+export function requiresManualCurrencyConversion(
+  rawText: string | null | undefined,
+  providerCurrency: string | null = null,
+): boolean {
   const text = rawText ?? "";
+  if (providerCurrency !== null && providerCurrency !== "PHP") return true;
   // Dollar and yen/yuan symbols do not identify one exact currency, but they
   // still must not be booked as PHP. Keep the displayed currency unknown and
   // require the owner to enter the actual PHP amount paid.

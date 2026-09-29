@@ -46,6 +46,7 @@ import {
 } from "../lib/dates";
 import { loadBoundedCategoryHistory } from "./anomalyDetection/categoryStatistics.service";
 import { DEFAULT_DETECTION_CONFIG } from "./anomalyDetection/config";
+import { MAXIMUM_WINDOW_RECORDS } from "./anomalyDetection/trend.service";
 import {
   deriveOperatingCounts,
   resolveExactOperatingCounts,
@@ -699,19 +700,32 @@ export async function getExpenseBehavior(
   const previousPeriodEnd = utcAddDays(periodStart, -1);
   const previousPeriodStart = utcAddDays(previousPeriodEnd, -(periodDays - 1));
 
-  const [currentRecords, previousRecords, categories] = await Promise.all([
+  const currentWindow = { businessProfileId, date: { gte: periodStart, lte: utcEndOfDay(today) } };
+  // Every figure the owner is SHOWN is summed by Postgres over the whole window;
+  // only the leave-one-out detector reads rows, and only it carries the ceiling.
+  // Sharing one query meant a bound added for the detector silently turned
+  // "total expenses this period" into "total of the newest 10,000".
+  const [currentRecords, currentByCategory, currentByDay, previousByCategory, categories] = await Promise.all([
     prisma.expenseRecord.findMany({
       // Explicit projection, not the whole row. A 366-day window on a busy
       // account is thousands of records, and every column this does not name
       // is bytes over the wire and a Decimal/Date object built for nothing.
-      // These five are exactly what the aggregation, the daily series and the
-      // unusual-expense output below read.
-      where: { businessProfileId, date: { gte: periodStart, lte: utcEndOfDay(today) } },
+      // These five are exactly what the unusual-expense scan and its output read.
+      where: currentWindow,
       select: { id: true, categoryId: true, amount: true, date: true, description: true },
+      // Bounded on the trend detector's ceiling, newest first: past it, an
+      // account loses the oldest end of the window, not what was just entered.
+      orderBy: [{ date: "desc" }, { id: "desc" }],
+      take: MAXIMUM_WINDOW_RECORDS,
     }),
-    prisma.expenseRecord.findMany({
+    prisma.expenseRecord.groupBy({ by: ["categoryId"], where: currentWindow, _sum: { amount: true }, _count: true }),
+    // Record dates are date-only values stored at UTC midnight, so the column
+    // itself is the daily bucket — no truncation or raw SQL needed.
+    prisma.expenseRecord.groupBy({ by: ["date"], where: currentWindow, _sum: { amount: true }, _count: true }),
+    prisma.expenseRecord.groupBy({
+      by: ["categoryId"],
       where: { businessProfileId, date: { gte: previousPeriodStart, lte: previousPeriodEnd } },
-      select: { categoryId: true, amount: true },
+      _sum: { amount: true },
     }),
     prisma.expenseCategory.findMany({ where: { businessProfileId } }),
   ]);
@@ -730,17 +744,12 @@ export async function getExpenseBehavior(
   // existing enum-to-API convention (e.g. `direction`/`detectedBy` below).
   const categoryCostBehavior = new Map(categories.map((c) => [c.id, c.costBehavior]));
 
-  const currentTotals = new Map<number, number>();
+  const currentTotals = new Map(currentByCategory.map((g) => [g.categoryId, Number(g._sum.amount ?? 0)]));
   // How many expenses make up each category's total. A category can be large
   // because of one big purchase or because of forty small ones, and those are
   // completely different problems — the count is what tells them apart.
-  const currentCounts = new Map<number, number>();
-  for (const r of currentRecords) {
-    currentTotals.set(r.categoryId, (currentTotals.get(r.categoryId) ?? 0) + Number(r.amount));
-    currentCounts.set(r.categoryId, (currentCounts.get(r.categoryId) ?? 0) + 1);
-  }
-  const previousTotals = new Map<number, number>();
-  for (const r of previousRecords) previousTotals.set(r.categoryId, (previousTotals.get(r.categoryId) ?? 0) + Number(r.amount));
+  const currentCounts = new Map(currentByCategory.map((g) => [g.categoryId, g._count]));
+  const previousTotals = new Map(previousByCategory.map((g) => [g.categoryId, Number(g._sum.amount ?? 0)]));
 
   const categoryIds = new Set([...currentTotals.keys(), ...previousTotals.keys()]);
   const categoryTrends = [...categoryIds]
@@ -799,12 +808,11 @@ export async function getExpenseBehavior(
   for (let i = 0; i < periodDays; i++) {
     dailyMap.set(utcDateKey(utcAddDays(periodStart, i)), { total: 0, count: 0 });
   }
-  for (const r of currentRecords) {
-    const key = utcDateKey(r.date);
-    const entry = dailyMap.get(key);
+  for (const group of currentByDay) {
+    const entry = dailyMap.get(utcDateKey(group.date));
     if (entry) {
-      entry.total += Number(r.amount);
-      entry.count += 1;
+      entry.total = Number(group._sum.amount ?? 0);
+      entry.count = group._count;
     }
   }
   const dailyTotals = [...dailyMap.entries()].map(([date, v]) => ({

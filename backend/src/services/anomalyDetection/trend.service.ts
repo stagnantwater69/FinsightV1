@@ -7,7 +7,8 @@ import { saveFinding } from "./finding.service";
 
 export const TREND_VERSION = "trend-v1";
 const TREND_WINDOWS = [7, 30] as const;
-const MAXIMUM_WINDOW_RECORDS = 10_000;
+/** Shared with insights.service's dashboard behaviour query, which bounds the same way. */
+export const MAXIMUM_WINDOW_RECORDS = 10_000;
 const MINIMUM_PERCENT_CHANGE = 0.25;
 
 export async function refreshTrendFindings(

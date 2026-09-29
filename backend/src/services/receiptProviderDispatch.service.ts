@@ -1,12 +1,15 @@
 import { createHash } from "node:crypto";
 import { Prisma, ReceiptPurgeMode } from "@prisma/client";
 import { prisma } from "../config/prisma";
+import { logger } from "../config/logger";
 import {
   getReceiptProviderConfiguration,
   type ReceiptProviderConfiguration,
 } from "../config/receiptProvider";
 import {
   RECEIPT_PROVIDER_CONTRACT_VERSION,
+  RECEIPT_PROVIDER_MAX_RETRY_AFTER_MS,
+  isRetryableProviderOutcomeCode,
   mergeReceiptProviderOutcome,
   parseReceiptProviderRequest,
   validateReceiptProviderOutcome,
@@ -32,6 +35,7 @@ export type ReceiptProviderGateCode =
   | "PROVIDER_QUOTA_EXHAUSTED"
   | "PROVIDER_DISPATCH_ALREADY_ATTEMPTED"
   | "PROVIDER_EVIDENCE_INVALID"
+  | "PROVIDER_COOLDOWN_ACTIVE"
   | "PROVIDER_TIMEOUT"
   | "PROVIDER_RESULT_REJECTED"
   | "PROVIDER_OK";
@@ -60,6 +64,10 @@ export interface ReceiptProviderDispatchInput {
 
 export const RECEIPT_PROCESSING_LEASE_MS = 2 * 60 * 1000;
 export const RECEIPT_PROVIDER_DISPATCH_STALE_MS = RECEIPT_PROCESSING_LEASE_MS;
+export const RECEIPT_PROVIDER_COOLDOWN_WINDOW_MS = 5 * 60 * 1000;
+export const RECEIPT_PROVIDER_COOLDOWN_MS = 60 * 1000;
+export const RECEIPT_PROVIDER_AUTH_COOLDOWN_MS = 5 * 60 * 1000;
+export const RECEIPT_PROVIDER_TRANSIENT_FAILURE_THRESHOLD = 3;
 const RECEIPT_PROVIDER_RECONCILIATION_BATCH_SIZE = 50;
 
 export interface ReceiptProviderDispatchDependencies {
@@ -76,11 +84,125 @@ export interface ReceiptProviderDispatchResult {
   provider: "gemini" | "veryfi" | null;
   latencyMs: number | null;
   merge: ProviderMergeResult;
+  telemetry?: ReceiptProviderDispatchTelemetry;
+}
+
+export interface ReceiptProviderDispatchTelemetry {
+  outcomeCode: string | null;
+  retryAfterMs: number | null;
+  providerStages: { extractionMs: number; verificationMs: number } | null;
+  gateStages: {
+    cooldownLookupMs: number;
+    reservationMs: number;
+    evidenceLoadMs: number;
+    submissionMs: number;
+    providerMs: number;
+    settlementMs: number;
+    totalMs: number;
+  };
+  cooldown: {
+    reasonCode: string;
+    failureCount: number;
+    retryAt: string;
+  } | null;
 }
 
 export interface ReceiptProviderReconciliationResult {
   cancelled: number;
   ambiguous: number;
+}
+
+export interface ReceiptProviderFailureHistoryEntry {
+  outcomeCode: string | null;
+  completedAt: Date | null;
+  providerRetryAt?: Date | null;
+}
+
+export interface ReceiptProviderCooldown {
+  reasonCode: string;
+  failureCount: number;
+  retryAt: Date;
+}
+
+export function evaluateReceiptProviderCooldown(
+  history: readonly ReceiptProviderFailureHistoryEntry[],
+  now: Date,
+): ReceiptProviderCooldown | null {
+  const windowStart = now.getTime() - RECEIPT_PROVIDER_COOLDOWN_WINDOW_MS;
+  const historyStart = now.getTime() - RECEIPT_PROVIDER_MAX_RETRY_AFTER_MS;
+  const ordered = history
+    .filter((entry): entry is ReceiptProviderFailureHistoryEntry & { completedAt: Date } => (
+      entry.completedAt !== null
+      && entry.completedAt.getTime() <= now.getTime()
+      && entry.completedAt.getTime() >= historyStart
+    ))
+    .sort((left, right) => right.completedAt.getTime() - left.completedAt.getTime());
+  const latest = ordered[0];
+  if (!latest?.outcomeCode) return null;
+
+  if (latest.outcomeCode === "AUTH_ERROR" || latest.outcomeCode === "RATE_LIMITED") {
+    const durationMs = latest.outcomeCode === "AUTH_ERROR"
+      ? RECEIPT_PROVIDER_AUTH_COOLDOWN_MS
+      : RECEIPT_PROVIDER_COOLDOWN_MS;
+    const fallbackRetryAtMs = latest.completedAt.getTime() + durationMs;
+    const boundedPersistedRetryAtMs = latest.providerRetryAt
+      ? Math.min(
+        latest.providerRetryAt.getTime(),
+        latest.completedAt.getTime() + RECEIPT_PROVIDER_MAX_RETRY_AFTER_MS,
+      )
+      : null;
+    const retryAt = new Date(boundedPersistedRetryAtMs ?? fallbackRetryAtMs);
+    if (retryAt.getTime() <= now.getTime()) return null;
+    return { reasonCode: latest.outcomeCode, failureCount: 1, retryAt };
+  }
+
+  if (
+    latest.completedAt.getTime() < windowStart
+    || !isRetryableProviderOutcomeCode(latest.outcomeCode)
+  ) {
+    return null;
+  }
+
+  const consecutive = ordered
+    .filter((entry) => entry.completedAt.getTime() >= windowStart)
+    .slice(0, RECEIPT_PROVIDER_TRANSIENT_FAILURE_THRESHOLD);
+  if (
+    consecutive.length === RECEIPT_PROVIDER_TRANSIENT_FAILURE_THRESHOLD
+    && consecutive.every((entry) => isRetryableProviderOutcomeCode(entry.outcomeCode))
+  ) {
+    const retryAt = new Date(latest.completedAt.getTime() + RECEIPT_PROVIDER_COOLDOWN_MS);
+    if (retryAt.getTime() <= now.getTime()) return null;
+    return {
+      reasonCode: latest.outcomeCode,
+      failureCount: consecutive.length,
+      retryAt,
+    };
+  }
+  return null;
+}
+
+async function loadReceiptProviderCooldown(
+  provider: "gemini" | "veryfi",
+  providerVersion: string,
+  providerRegion: string,
+  now: Date,
+): Promise<ReceiptProviderCooldown | null> {
+  const history = await prisma.externalProviderDispatch.findMany({
+    where: {
+      provider,
+      providerVersion,
+      providerRegion,
+      completedAt: {
+        gte: new Date(now.getTime() - RECEIPT_PROVIDER_MAX_RETRY_AFTER_MS),
+        lte: now,
+      },
+      status: { in: ["SUCCEEDED", "FAILED", "AMBIGUOUS"] },
+    },
+    orderBy: [{ completedAt: "desc" }, { id: "desc" }],
+    take: RECEIPT_PROVIDER_TRANSIENT_FAILURE_THRESHOLD,
+    select: { outcomeCode: true, completedAt: true, providerRetryAt: true },
+  });
+  return evaluateReceiptProviderCooldown(history, now);
 }
 
 class GateRefusal extends Error {
@@ -144,6 +266,7 @@ function skipped(local: NormalizedReceiptExtraction, code: ReceiptProviderGateCo
       providerResultAccepted: false,
       reason: "NOT_SUCCESSFUL",
       itemsOwnerReviewRequired: false,
+      providerCurrency: null,
     },
   };
 }
@@ -801,6 +924,7 @@ async function reserve(
                 outcomeCode: null,
                 providerRequestIdHash: null,
                 latencyMs: null,
+                providerRetryAt: null,
                 submittedAt: null,
                 completedAt: null,
                 createdAt: now,
@@ -835,6 +959,11 @@ async function releaseOrConsume(
   outcome: ReceiptProviderOutcome,
   now: Date,
 ): Promise<void> {
+  const providerRetryAt = outcome.outcomeCode === "RATE_LIMITED"
+    ? new Date(now.getTime() + Math.max(RECEIPT_PROVIDER_COOLDOWN_MS, outcome.retryAfterMs ?? 0))
+    : outcome.outcomeCode === "AUTH_ERROR"
+      ? new Date(now.getTime() + RECEIPT_PROVIDER_AUTH_COOLDOWN_MS)
+      : null;
   await prisma.$transaction(async (tx) => {
     if (outcome.status !== "AMBIGUOUS") {
       const finalUnits = outcome.finalBillableUnits;
@@ -868,6 +997,7 @@ async function releaseOrConsume(
         providerRequestIdHash: outcome.providerRequestIdHash,
         latencyMs: outcome.latencyMs,
         completedAt: now,
+        providerRetryAt,
       },
     });
     if (changed.count !== 1) throw new GateRefusal("PROVIDER_DISPATCH_ALREADY_ATTEMPTED");
@@ -951,11 +1081,40 @@ function invalidOutcome(
   };
 }
 
+function dispatchTelemetry(
+  outcome: ReceiptProviderOutcome | null,
+  cooldown: ReceiptProviderCooldown | null,
+  stages: Omit<ReceiptProviderDispatchTelemetry["gateStages"], "totalMs">,
+  startedAt: number,
+): ReceiptProviderDispatchTelemetry {
+  return {
+    outcomeCode: outcome?.outcomeCode ?? null,
+    retryAfterMs: outcome?.retryAfterMs ?? null,
+    providerStages: outcome?.stageTimings ?? null,
+    gateStages: { ...stages, totalMs: Date.now() - startedAt },
+    cooldown: cooldown
+      ? {
+          reasonCode: cooldown.reasonCode,
+          failureCount: cooldown.failureCount,
+          retryAt: cooldown.retryAt.toISOString(),
+        }
+      : null,
+  };
+}
+
 /** The only route from a receipt worker to an external extraction provider. */
 export async function dispatchReceiptProviderRescue(
   input: ReceiptProviderDispatchInput,
   dependencies: ReceiptProviderDispatchDependencies,
 ): Promise<ReceiptProviderDispatchResult> {
+  const gateStartedAt = Date.now();
+  const clock = dependencies.now ?? (() => new Date());
+  let cooldownLookupMs = 0;
+  let reservationMs = 0;
+  let evidenceLoadMs = 0;
+  let submissionMs = 0;
+  let providerMs = 0;
+  let settlementMs = 0;
   if (!dispatchMetadataValid(input)) {
     return skipped(input.localExtraction, "PROVIDER_EVIDENCE_INVALID");
   }
@@ -974,6 +1133,50 @@ export async function dispatchReceiptProviderRescue(
   const config = loadConfiguration();
   if (!configurationReady(config, input, dependencies.adapter)) return skipped(localExtraction, "PROVIDER_UNAVAILABLE");
   if (!evidenceMetadataValid(input.pages)) return skipped(localExtraction, "PROVIDER_EVIDENCE_INVALID");
+
+  const cooldownStartedAt = Date.now();
+  let cooldown: ReceiptProviderCooldown | null;
+  try {
+    cooldown = await loadReceiptProviderCooldown(
+      config.provider,
+      config.providerVersion,
+      config.providerRegion,
+      clock(),
+    );
+  } catch (error) {
+    cooldownLookupMs = Date.now() - cooldownStartedAt;
+    logger.warn(
+      { provider: config.provider, failureKind: error instanceof Error ? error.name : "unknown" },
+      "receipt provider cooldown lookup failed",
+    );
+    return {
+      ...skipped(localExtraction, "PROVIDER_UNAVAILABLE"),
+      provider: config.provider,
+      telemetry: dispatchTelemetry(null, null, {
+        cooldownLookupMs,
+        reservationMs,
+        evidenceLoadMs,
+        submissionMs,
+        providerMs,
+        settlementMs,
+      }, gateStartedAt),
+    };
+  }
+  cooldownLookupMs = Date.now() - cooldownStartedAt;
+  if (cooldown !== null) {
+    return {
+      ...skipped(localExtraction, "PROVIDER_COOLDOWN_ACTIVE"),
+      provider: config.provider,
+      telemetry: dispatchTelemetry(null, cooldown, {
+        cooldownLookupMs,
+        reservationMs,
+        evidenceLoadMs,
+        submissionMs,
+        providerMs,
+        settlementMs,
+      }, gateStartedAt),
+    };
+  }
 
   const inputHash = hash(
     input.pages
@@ -996,13 +1199,15 @@ export async function dispatchReceiptProviderRescue(
       inputHash,
     ].join(":"),
   );
-  const clock = dependencies.now ?? (() => new Date());
   let reserved: ReserveResult;
+  const reservationStartedAt = Date.now();
   try {
     reserved = await reserve(input, config, reservationKeyHash, inputHash, clock());
   } catch (error) {
+    reservationMs = Date.now() - reservationStartedAt;
     return skipped(localExtraction, error instanceof GateRefusal ? error.code : "PROVIDER_UNAVAILABLE");
   }
+  reservationMs = Date.now() - reservationStartedAt;
   const reservation = reserved.reservation;
   // A replay settles nothing: the row is SUCCEEDED and stays so.
   const settle = async (outcome: ReceiptProviderOutcome) => {
@@ -1040,9 +1245,11 @@ export async function dispatchReceiptProviderRescue(
       });
     }
   } catch {
+    evidenceLoadMs = Date.now() - loadStartedAt;
     await settle(cancelledOutcome(reservation, config, Date.now() - loadStartedAt));
     return skipped(localExtraction, "PROVIDER_EVIDENCE_INVALID");
   }
+  evidenceLoadMs = Date.now() - loadStartedAt;
 
   let request;
   try {
@@ -1099,9 +1306,18 @@ export async function dispatchReceiptProviderRescue(
       provider: config.provider,
       latencyMs: validation.outcome.latencyMs,
       merge: mergeReceiptProviderOutcome(localExtraction, request, validation.outcome),
+      telemetry: dispatchTelemetry(validation.outcome, null, {
+        cooldownLookupMs,
+        reservationMs,
+        evidenceLoadMs,
+        submissionMs,
+        providerMs,
+        settlementMs,
+      }, gateStartedAt),
     };
   }
 
+  const submissionStartedAt = Date.now();
   const currentConfig = loadConfiguration();
   if (
     !configurationReady(currentConfig, input, dependencies.adapter) ||
@@ -1162,6 +1378,7 @@ export async function dispatchReceiptProviderRescue(
     });
     return changed.count === 1 ? ("SUBMITTED" as const) : ("RACED" as const);
   });
+  submissionMs = Date.now() - submissionStartedAt;
   if (submitResult === "CONSENT_REVOKED") {
     const outcome = cancelledOutcome(reservation, config, Date.now() - loadStartedAt);
     await releaseOrConsume(reservation, outcome, clock()).catch(() => undefined);
@@ -1193,14 +1410,17 @@ export async function dispatchReceiptProviderRescue(
   } finally {
     if (timeout) clearTimeout(timeout);
   }
+  providerMs = Date.now() - started;
   const validation = validateReceiptProviderOutcome(request, rawOutcome);
   const outcome =
     validation.ok && validation.outcome.status !== "CANCELLED"
       ? validation.outcome
       : invalidOutcome(reservation, config, Date.now() - started);
+  const settlementStartedAt = Date.now();
   try {
     await releaseOrConsume(reservation, outcome, clock());
   } catch {
+    settlementMs = Date.now() - settlementStartedAt;
     await markFinalizationAmbiguous(reservation, outcome.latencyMs, clock()).catch(() => undefined);
     return {
       ...skipped(localExtraction, "PROVIDER_RESULT_REJECTED"),
@@ -1208,16 +1428,37 @@ export async function dispatchReceiptProviderRescue(
       dispatchStatus: "AMBIGUOUS",
       provider: config.provider,
       latencyMs: outcome.latencyMs,
+      telemetry: dispatchTelemetry(outcome, null, {
+        cooldownLookupMs,
+        reservationMs,
+        evidenceLoadMs,
+        submissionMs,
+        providerMs,
+        settlementMs,
+      }, gateStartedAt),
     };
   }
+  settlementMs = Date.now() - settlementStartedAt;
 
   const merge = mergeReceiptProviderOutcome(localExtraction, request, outcome);
   return {
-    code: outcome.status === "SUCCEEDED" ? "PROVIDER_OK" : outcome.status === "AMBIGUOUS" ? "PROVIDER_TIMEOUT" : "PROVIDER_RESULT_REJECTED",
+    code: outcome.status === "SUCCEEDED"
+      ? "PROVIDER_OK"
+      : outcome.outcomeCode === "TIMEOUT_AFTER_SUBMISSION"
+        ? "PROVIDER_TIMEOUT"
+        : "PROVIDER_RESULT_REJECTED",
     dispatched: true,
     dispatchStatus: outcome.status,
     provider: config.provider,
     latencyMs: outcome.latencyMs,
     merge,
+    telemetry: dispatchTelemetry(outcome, null, {
+      cooldownLookupMs,
+      reservationMs,
+      evidenceLoadMs,
+      submissionMs,
+      providerMs,
+      settlementMs,
+    }, gateStartedAt),
   };
 }

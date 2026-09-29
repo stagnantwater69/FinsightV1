@@ -207,6 +207,16 @@ async function withPooledWorker<T>(job: (worker: TesseractWorker) => Promise<T>)
   }
 }
 
+export async function warmOcrPool(): Promise<number> {
+  const slots = await Promise.all(Array.from({ length: OCR_POOL_SIZE }, () => acquireSlot()));
+  try {
+    await Promise.all(slots.map((slot) => workerFor(slot)));
+    return slots.length;
+  } finally {
+    for (const slot of slots) releaseSlot(slot);
+  }
+}
+
 /**
  * A throwaway worker for calls that set engine parameters (the accuracy
  * harness's PSM/DPI sweeps). `setParameters` is sticky on a worker, so a

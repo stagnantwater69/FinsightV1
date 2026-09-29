@@ -313,6 +313,7 @@ export const LIMITS = {
    * legitimately confirms ten imports a minute.
    */
   CSV_PREVIEW_BURST: { name: "csv-preview-burst", limit: 20, windowMs: 60_000 },
+  CSV_STAGE_UPLOAD_BURST: { name: "csv-stage-upload-burst", limit: 6, windowMs: 60_000 },
   CSV_CONFIRM_BURST: { name: "csv-confirm-burst", limit: 10, windowMs: 60_000 },
   CSV_CONFIRM_HOURLY: { name: "csv-confirm-hourly", limit: 60, windowMs: 60 * 60_000 },
   ASK_BURST: { name: "ai-ask-burst", limit: 20, windowMs: 60_000 },
@@ -385,6 +386,10 @@ export const LIMITS = {
    * minutes is far more than someone changing their own password needs.
    */
   AUTH_REAUTH: { name: "auth-reauth", limit: 5, windowMs: 15 * 60_000 },
+  // Logout intentionally accepts an expired/invalid token so the client can
+  // always clear itself. Its IP gate bounds anonymous provider calls without
+  // turning a dead session into a reason the owner cannot leave the app.
+  AUTH_LOGOUT: { name: "auth-logout", limit: 30, windowMs: 60_000 },
   /*
    * The same reasoning as AUTH_RECOVERY_EMAIL, for the same reason: this is the
    * button someone presses when the confirmation email has not arrived, so the

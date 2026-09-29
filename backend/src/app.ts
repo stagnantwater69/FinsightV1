@@ -22,6 +22,7 @@ import { insightsRouter } from "./routes/insights.routes";
 import { errorHandler, notFoundHandler } from "./middleware/error.middleware";
 import { countStalledAccountDeletions } from "./services/accountDeletion.service";
 import { countStalledReceiptPurges } from "./services/receiptPurge.service";
+import { countFailedCsvSourcePurges } from "./services/csvSourcePurge.service";
 
 export const app = express();
 
@@ -94,17 +95,27 @@ function maySeeHealthDetail(req: express.Request): boolean {
 app.get(["/api/v1/health", "/api/v1/health/ready"], async (req, res) => {
   try {
     await prisma.$queryRaw`SELECT 1`;
+    const readinessNow = new Date();
     const [
       queuedScans,
       oldestQueuedScan,
       queuedCsvImports,
       oldestQueuedCsvImport,
+      pendingCsvImports,
+      oldestPendingCsvImport,
+      processingCsvImports,
+      oldestProcessingCsvImport,
       queuedAnalysisJobs,
       oldestQueuedAnalysisJob,
       failedAnalysisJobs,
       queuedReceiptPurges,
       oldestQueuedReceiptPurge,
       failedReceiptPurges,
+      queuedCsvSourcePurges,
+      oldestQueuedCsvSourcePurge,
+      failedCsvSourcePurges,
+      stagedCsvUploads,
+      oldestStagedCsvUpload,
       stalledAccountDeletions,
     ] = await Promise.all([
       prisma.receiptScan.count({ where: { processingStatus: "Processing" } }),
@@ -116,6 +127,20 @@ app.get(["/api/v1/health", "/api/v1/health/ready"], async (req, res) => {
       prisma.cSVImportBatch.count({ where: { processingStatus: { in: ["PENDING", "PROCESSING"] } } }),
       prisma.cSVImportBatch.findFirst({
         where: { processingStatus: { in: ["PENDING", "PROCESSING"] } },
+        orderBy: { createdAt: "asc" },
+        select: { createdAt: true },
+      }),
+      prisma.cSVImportBatch.count({
+        where: { processingStatus: "PENDING", nextAttemptAt: { lte: readinessNow } },
+      }),
+      prisma.cSVImportBatch.findFirst({
+        where: { processingStatus: "PENDING", nextAttemptAt: { lte: readinessNow } },
+        orderBy: { createdAt: "asc" },
+        select: { createdAt: true },
+      }),
+      prisma.cSVImportBatch.count({ where: { processingStatus: "PROCESSING" } }),
+      prisma.cSVImportBatch.findFirst({
+        where: { processingStatus: "PROCESSING" },
         orderBy: { createdAt: "asc" },
         select: { createdAt: true },
       }),
@@ -133,6 +158,19 @@ app.get(["/api/v1/health", "/api/v1/health/ready"], async (req, res) => {
         select: { requestedAt: true },
       }),
       countStalledReceiptPurges(),
+      prisma.cSVSourcePurgeJob.count({ where: { status: { in: ["PENDING", "PROCESSING", "RETRY"] } } }),
+      prisma.cSVSourcePurgeJob.findFirst({
+        where: { status: { in: ["PENDING", "PROCESSING", "RETRY"] } },
+        orderBy: { requestedAt: "asc" },
+        select: { requestedAt: true },
+      }),
+      countFailedCsvSourcePurges(),
+      prisma.cSVImportBatch.count({ where: { processingStatus: { in: ["STAGING", "STAGED"] } } }),
+      prisma.cSVImportBatch.findFirst({
+        where: { processingStatus: { in: ["STAGING", "STAGED"] } },
+        orderBy: { createdAt: "asc" },
+        select: { createdAt: true },
+      }),
       // Surfaced because a deletion that has exhausted its retries is a data
       // obligation nobody is working on. It is quiet by design — the owner was
       // already told their account was gone — so it needs somewhere to be loud.
@@ -154,12 +192,21 @@ app.get(["/api/v1/health", "/api/v1/health/ready"], async (req, res) => {
             oldestQueuedReceiptScanAgeSeconds: ageSeconds(oldestQueuedScan),
             queuedCsvImports,
             oldestQueuedCsvImportAgeSeconds: ageSeconds(oldestQueuedCsvImport),
+            pendingCsvImports,
+            oldestPendingCsvImportAgeSeconds: ageSeconds(oldestPendingCsvImport),
+            processingCsvImports,
+            oldestProcessingCsvImportAgeSeconds: ageSeconds(oldestProcessingCsvImport),
             queuedAnalysisJobs,
             oldestQueuedAnalysisJobAgeSeconds: ageSeconds(oldestQueuedAnalysisJob),
             failedAnalysisJobs,
             queuedReceiptPurges,
             oldestQueuedReceiptPurgeAgeSeconds: requestedAgeSeconds(oldestQueuedReceiptPurge),
             failedReceiptPurges,
+            queuedCsvSourcePurges,
+            oldestQueuedCsvSourcePurgeAgeSeconds: requestedAgeSeconds(oldestQueuedCsvSourcePurge),
+            failedCsvSourcePurges,
+            stagedCsvUploads,
+            oldestStagedCsvUploadAgeSeconds: ageSeconds(oldestStagedCsvUpload),
             stalledAccountDeletions,
           }
         : {}),

@@ -1,6 +1,5 @@
-import { prisma } from "../config/prisma";
+import { enqueueCsvSourcePurgeIfOrphaned } from "../services/csvSourcePurge.service";
 import { enqueueReceiptPurgeIfOrphaned } from "../services/receiptPurge.service";
-import { deleteCsvFile } from "../services/storage.service";
 
 /**
  * Removes the uploaded file a deleted record came from, once nothing is left
@@ -19,9 +18,9 @@ import { deleteCsvFile } from "../services/storage.service";
  * file the others still came from. So the rule is reference counting — the
  * file goes when the LAST record that came from it goes.
  *
- * Called after the record delete has already committed. Receipt cleanup is
- * queued before any private object path is removed; CSV cleanup still follows
- * the older immediate path below.
+ * Receipt cleanup is called after a record commit. CSV callers that need the
+ * delete and enqueue to be atomic use enqueueCsvSourcePurgesIfOrphaned inside
+ * their transaction; the wrapper below remains for other callers.
  */
 
 /**
@@ -39,28 +38,12 @@ export async function cleanUpReceiptScanIfOrphaned(receiptScanId: number | null 
 }
 
 /**
- * Deletes an import batch and its CSV if no record from it survives.
+ * Queues deletion of an import batch's CSV if no record from it survives.
  *
  * Both record types have to be counted: one spreadsheet can produce expense
  * records, sales reference records, or both, and a batch is only spent when
  * every row it created is gone.
  */
 export async function cleanUpImportBatchIfOrphaned(importBatchId: number | null | undefined) {
-  if (!importBatchId) return;
-
-  const batch = await prisma.cSVImportBatch.findUnique({
-    where: { id: importBatchId },
-    select: { id: true, fileReference: true },
-  });
-  if (!batch) return;
-
-  const [expenses, sales] = await Promise.all([
-    prisma.expenseRecord.count({ where: { importBatchId } }),
-    prisma.salesReferenceRecord.count({ where: { importBatchId } }),
-  ]);
-  if (expenses > 0 || sales > 0) return;
-
-  await prisma.cSVImportBatch.delete({ where: { id: importBatchId } });
-  // Null when the upload stage never completed — there is no object to delete.
-  if (batch.fileReference) await deleteCsvFile(batch.fileReference);
+  await enqueueCsvSourcePurgeIfOrphaned(importBatchId);
 }

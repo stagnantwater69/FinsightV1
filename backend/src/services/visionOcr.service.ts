@@ -3,6 +3,7 @@ import { env } from "../config/env";
 import { GEMINI_ENDPOINT } from "./ai.service";
 import { logger } from "../config/logger";
 import { isReceiptWarningCode, WARNING_CODES, type ReceiptWarningCode } from "../lib/receiptWarnings";
+import { RECEIPT_PROVIDER_MAX_RETRY_AFTER_MS } from "./receiptProviderContract";
 
 /**
  * Reading a receipt photograph with a multimodal model, for the receipts the
@@ -77,8 +78,60 @@ const TIMEOUT_MS = 20_000;
 /** A receipt cannot plausibly have more lines than this; a longer list is a runaway answer. */
 const MAX_ITEMS = 100;
 
-function safeFailureKind(error: unknown): "timeout" | "transport" {
-  return error instanceof Error && error.name === "TimeoutError" ? "timeout" : "transport";
+export type VisionProviderFailureKind =
+  | "not_attempted"
+  | "auth"
+  | "rate_limited"
+  | "server"
+  | "http"
+  | "transport"
+  | "cancelled"
+  | "timeout"
+  | "unusable";
+
+export interface VisionProviderFailure {
+  kind: VisionProviderFailureKind;
+  httpStatus: number | null;
+  retryAfterMs: number | null;
+}
+
+export function parseRetryAfterMs(value: string | null, nowMs = Date.now()): number | null {
+  if (value === null) return null;
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) {
+    return Math.min(Number(trimmed) * 1000, RECEIPT_PROVIDER_MAX_RETRY_AFTER_MS);
+  }
+  const retryAt = Date.parse(trimmed);
+  if (!Number.isFinite(retryAt)) return null;
+  return Math.min(Math.max(0, retryAt - nowMs), RECEIPT_PROVIDER_MAX_RETRY_AFTER_MS);
+}
+
+export function classifyVisionHttpFailure(
+  status: number,
+  retryAfter: string | null,
+  nowMs = Date.now(),
+): VisionProviderFailure {
+  const kind = status === 401 || status === 403
+    ? "auth"
+    : status === 429
+      ? "rate_limited"
+      : status >= 500
+        ? "server"
+        : "http";
+  return {
+    kind,
+    httpStatus: status,
+    retryAfterMs: kind === "rate_limited" ? parseRetryAfterMs(retryAfter, nowMs) : null,
+  };
+}
+
+export function classifyVisionTransportFailure(error: unknown): VisionProviderFailure {
+  const name = error instanceof Error ? error.name : null;
+  return {
+    kind: name === "TimeoutError" ? "timeout" : name === "AbortError" ? "cancelled" : "transport",
+    httpStatus: null,
+    retryAfterMs: null,
+  };
 }
 
 export interface VisionReceiptItem {
@@ -333,17 +386,36 @@ export interface VisionPage {
 }
 
 /**
- * What a vision call produced. Three states, and the distinction is what the
- * per-scan version record needs:
- *   - null (from the function below):   the provider was never usefully
- *     reached — no key, network failure, timeout, HTTP error;
- *   - { receipt: null, rejectReason }:  the provider ANSWERED and the answer
- *     was refused at the validation boundary;
- *   - { receipt, rejectReason: null }:  an accepted reading.
+ * A provider failure is separate from a 200 response rejected by schema
+ * validation, because only the former should influence provider cooldowns.
  */
 export interface VisionExtraction {
   receipt: VisionReceipt | null;
   rejectReason: VisionRejectReason | null;
+}
+
+export type VisionExtractionOutcome =
+  | (VisionExtraction & {
+      failure: null;
+      requestMs: number;
+    })
+  | {
+      receipt: null;
+      rejectReason: null;
+      failure: VisionProviderFailure;
+      requestMs: number;
+    };
+
+function extractionFailed(
+  failure: VisionProviderFailure,
+  startedAt: number,
+): VisionExtractionOutcome {
+  return {
+    receipt: null,
+    rejectReason: null,
+    failure,
+    requestMs: Date.now() - startedAt,
+  };
 }
 
 /**
@@ -357,16 +429,14 @@ export interface VisionExtraction {
  * triple the bill and hand back three unrelated extractions with no shared
  * notion of "the total is on the last page, the items span all three".
  *
- * Returns null rather than throwing on every UNREACHABLE-provider path — no
- * key, provider down, timeout. This is a last-ditch attempt to rescue a scan
- * that already failed to parse; it must never be the reason an upload is
- * lost, which is the same promise the categoriser makes. An answer that
- * arrived but failed validation returns { receipt: null, rejectReason }
- * instead, so the caller can record WHY the rescue bought nothing.
+ * Provider failures are returned as typed metadata rather than thrown, so the
+ * deterministic result remains usable while dispatch telemetry stays exact.
  */
-export async function extractReceiptWithVision(pages: VisionPage[]): Promise<VisionExtraction | null> {
-  if (!env.GOOGLE_GEMINI_API_KEY) return null;
-  if (pages.length === 0) return null;
+export async function extractReceiptWithVision(pages: VisionPage[]): Promise<VisionExtractionOutcome | null> {
+  const startedAt = Date.now();
+  if (!env.GOOGLE_GEMINI_API_KEY || pages.length === 0) {
+    return extractionFailed({ kind: "not_attempted", httpStatus: null, retryAfterMs: null }, startedAt);
+  }
 
   try {
     const res = await fetch(GEMINI_ENDPOINT, {
@@ -402,23 +472,29 @@ export async function extractReceiptWithVision(pages: VisionPage[]): Promise<Vis
         { provider: "gemini", operation: "receipt-extraction", httpStatus: res.status },
         "Vision receipt read failed",
       );
-      return null;
+      return extractionFailed(
+        classifyVisionHttpFailure(res.status, res.headers.get("retry-after")),
+        startedAt,
+      );
     }
 
     const data = (await res.json()) as {
       candidates?: { content?: { parts?: { text?: string }[] } }[];
     };
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) return { receipt: null, rejectReason: "empty" };
+    if (!text) return { receipt: null, rejectReason: "empty", failure: null, requestMs: Date.now() - startedAt };
 
     const validated = validateVisionReceipt(text);
-    return validated.ok ? { receipt: validated.receipt, rejectReason: null } : { receipt: null, rejectReason: validated.reason };
+    return validated.ok
+      ? { receipt: validated.receipt, rejectReason: null, failure: null, requestMs: Date.now() - startedAt }
+      : { receipt: null, rejectReason: validated.reason, failure: null, requestMs: Date.now() - startedAt };
   } catch (err) {
+    const failure = classifyVisionTransportFailure(err);
     logger.error(
-      { provider: "gemini", operation: "receipt-extraction", failureKind: safeFailureKind(err) },
+      { provider: "gemini", operation: "receipt-extraction", failureKind: failure.kind },
       "Vision receipt read failed",
     );
-    return null;
+    return extractionFailed(failure, startedAt);
   }
 }
 
@@ -462,21 +538,29 @@ const verifierSchema = z
  * outcome. Collapsed, every unreachable verifier looked like a timeout in the
  * dispatch telemetry.
  *
- *   - `not_attempted` — no API key, or no pages; nothing left this process
- *   - `transport`     — the request never completed a round trip
- *   - `timeout`       — sent, deadline passed, answer unknown (the only
- *                       genuinely ambiguous case)
- *   - `http`          — reached and refused with an error status
- *   - `unusable`      — answered 200 with something that is not a verdict
+ * HTTP authentication, quota and server failures remain distinct from local
+ * cancellation, transport loss, timeout and an unusable 200 response.
  */
-export type VisionVerifierFailure = "not_attempted" | "transport" | "timeout" | "http" | "unusable";
+export type VisionVerifierFailure = VisionProviderFailureKind;
 
 export type VisionVerifierOutcome =
-  | { verdict: VisionVerifierVerdict; failure: null }
-  | { verdict: null; failure: VisionVerifierFailure };
+  | { verdict: VisionVerifierVerdict; failure: null; httpStatus: null; retryAfterMs: null; requestMs: number }
+  | {
+      verdict: null;
+      failure: VisionVerifierFailure;
+      httpStatus: number | null;
+      retryAfterMs: number | null;
+      requestMs: number;
+    };
 
-function verifierFailed(failure: VisionVerifierFailure): VisionVerifierOutcome {
-  return { verdict: null, failure };
+function verifierFailed(failure: VisionProviderFailure, startedAt: number): VisionVerifierOutcome {
+  return {
+    verdict: null,
+    failure: failure.kind,
+    httpStatus: failure.httpStatus,
+    retryAfterMs: failure.retryAfterMs,
+    requestMs: Date.now() - startedAt,
+  };
 }
 
 /**
@@ -500,8 +584,10 @@ export async function verifyVisionReceipt(
   pages: VisionPage[],
   candidate: { date: string | null; vendor: string | null; amount: number | null; items: { name: string; amount: number }[] },
 ): Promise<VisionVerifierOutcome> {
-  if (!env.GOOGLE_GEMINI_API_KEY) return verifierFailed("not_attempted");
-  if (pages.length === 0) return verifierFailed("not_attempted");
+  const startedAt = Date.now();
+  if (!env.GOOGLE_GEMINI_API_KEY || pages.length === 0) {
+    return verifierFailed({ kind: "not_attempted", httpStatus: null, retryAfterMs: null }, startedAt);
+  }
 
   const prompt = `You are verifying a proposed extraction against the attached photograph(s) of ONE receipt (pages in order).
 
@@ -543,28 +629,39 @@ A null proposed value needs no support — do not reject a field for being null.
         { provider: "gemini", operation: "receipt-verification", httpStatus: res.status },
         "Vision verifier failed",
       );
-      return verifierFailed("http");
+      return verifierFailed(
+        classifyVisionHttpFailure(res.status, res.headers.get("retry-after")),
+        startedAt,
+      );
     }
 
     const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) return verifierFailed("unusable");
+    if (!text) return verifierFailed({ kind: "unusable", httpStatus: null, retryAfterMs: null }, startedAt);
 
     let parsed: unknown;
     try {
       parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/, "").trim());
     } catch {
-      return verifierFailed("unusable");
+      return verifierFailed({ kind: "unusable", httpStatus: null, retryAfterMs: null }, startedAt);
     }
     const result = verifierSchema.safeParse(parsed);
-    if (!result.success || result.data === null) return verifierFailed("unusable");
-    return { verdict: result.data, failure: null };
+    if (!result.success || result.data === null) {
+      return verifierFailed({ kind: "unusable", httpStatus: null, retryAfterMs: null }, startedAt);
+    }
+    return {
+      verdict: result.data,
+      failure: null,
+      httpStatus: null,
+      retryAfterMs: null,
+      requestMs: Date.now() - startedAt,
+    };
   } catch (err) {
-    const failureKind = safeFailureKind(err);
+    const failure = classifyVisionTransportFailure(err);
     logger.error(
-      { provider: "gemini", operation: "receipt-verification", failureKind },
+      { provider: "gemini", operation: "receipt-verification", failureKind: failure.kind },
       "Vision verifier failed",
     );
-    return verifierFailed(failureKind);
+    return verifierFailed(failure, startedAt);
   }
 }

@@ -1,20 +1,23 @@
 /*
- * Background worker process — the durable DB-backed queue consumers, split out
- * of the API process so the two can scale and restart independently. The API
- * process (server.ts) never runs this loop; this process never calls
- * app.listen. Nothing about the queue logic itself changed in this split —
- * runReceiptWorkerOnce, runCsvImportWorkerOnce, etc. are untouched, and so are
- * the per-pass caps below.
+ * Durable DB-backed queue consumers, kept outside the API process. Each
+ * configured lane polls independently so long OCR or CSV work cannot delay an
+ * unrelated queue in the same process.
  */
 import { env } from "./config/env";
 import { prisma } from "./config/prisma";
 import { logger } from "./config/logger";
 import { assertMigrationsApplied } from "./config/migrationGuard";
+import { hasWorkerLane, type WorkerLane } from "./config/workerLanes";
 import { runReceiptWorkerOnce } from "./services/receiptScan/worker";
-import { shutdownOcr } from "./services/ocr.service";
+import { shutdownOcr, warmOcrPool } from "./services/ocr.service";
 import { workerHeartbeatPath, writeWorkerHeartbeat } from "./lib/workerHeartbeat";
 import { registerProcessFaultHandlers } from "./lib/processFaults";
-import { runCsvImportWorkerOnce, sweepStalledCsvImports } from "./services/csvImport.service";
+import { createWorkerLaneScheduler, type WorkerLaneScheduler } from "./lib/workerLaneScheduler";
+import {
+  runCsvImportWorkerOnce,
+  sweepExpiredCsvStages,
+  sweepStalledCsvImports,
+} from "./services/csvImport.service";
 import { cleanUpExpiredRateLimits } from "./middleware/rateLimit.middleware";
 import { enqueueDailyProfileAnalyses, runAnalysisWorkerOnce } from "./services/anomalyDetection/job.service";
 import { purgeUnverifiedRegistrations, runAccountDeletionWorkerOnce } from "./services/accountDeletion.service";
@@ -24,22 +27,20 @@ import {
   sweepAbandonedReceiptScans,
 } from "./services/receiptPurge.service";
 import { reconcileStaleReceiptProviderDispatches } from "./services/receiptProviderDispatch.service";
+import { runCsvSourcePurgeWorkerOnce, sweepRetainedCsvSources } from "./services/csvSourcePurge.service";
 
-logger.info({ pid: process.pid }, "FinSight worker starting");
+const SELECTED_LANES = env.WORKER_LANES;
+
+logger.info({ pid: process.pid, lanes: SELECTED_LANES }, "FinSight worker starting");
 
 let shuttingDown = false;
-let workerBusy = false;
 /**
- * 0 for a signal, 1 once a process-level fault has been seen. The drain below
- * is the same either way — the in-flight pass still finishes and its lease is
- * still released — but a supervisor has to be able to tell the two apart.
+ * 0 for a signal, 1 once a process-level fault has been seen. Both paths drain
+ * in-flight lane passes, but a supervisor must be able to tell them apart.
  */
 let exitCode = 0;
 
-// An upload waits up to one idle interval to be claimed; a pass that claimed
-// anything is followed at once by another so a backlog drains without sleeping.
-// Operator-tunable (RECEIPT_WORKER_IDLE_POLL_MS) because the idle cost of this
-// interval scales with replica count — see config/env for the clamp.
+// A lane that claimed work runs again immediately. Only idle lanes sleep.
 const IDLE_POLL_MS = env.RECEIPT_WORKER_IDLE_POLL_MS;
 
 // Comfortably inside the probe's 45s staleness ceiling, so a single missed
@@ -58,81 +59,79 @@ async function beatLiveness(): Promise<void> {
   heartbeatWritable = written;
 }
 
-/** One pass over every queue. Resolves true when at least one job was claimed. */
-async function work(): Promise<boolean> {
-  // Stop picking up new passes once shutdown has started — the in-flight
-  // pass (if any) is still allowed to finish below, via workerBusy.
-  if (shuttingDown || workerBusy) return false;
-  workerBusy = true;
+async function runReceiptLane(): Promise<boolean> {
   let claimedAny = false;
   try {
-    try {
-      const reconciled = await reconcileStaleReceiptProviderDispatches();
-      if (reconciled.cancelled > 0 || reconciled.ambiguous > 0) {
-        logger.warn(reconciled, "reconciled stale receipt provider dispatches");
-      }
-    } catch (error) {
-      logger.error({ err: error }, "receipt provider dispatch reconciliation failed");
+    const reconciled = await reconcileStaleReceiptProviderDispatches();
+    if (reconciled.cancelled > 0 || reconciled.ambiguous > 0) {
+      logger.warn(reconciled, "reconciled stale receipt provider dispatches");
     }
-    // Drain immediately available jobs but cap each pass so the event loop
-    // returns regularly under a backlog.
-    for (let i = 0; i < 5 && (await runReceiptWorkerOnce()); i++) claimedAny = true;
-    await runReceiptPurgeWorkerOnce();
-    /*
-     * Two imports per pass, not five: one large import can be tens of
-     * thousands of rows, and it yields between chunks rather than at the end,
-     * so a low cap here is what keeps a big import from starving the receipt
-     * and analysis work that share this loop.
-     */
-    for (let i = 0; i < 2 && (await runCsvImportWorkerOnce()); i++) claimedAny = true;
-    for (let i = 0; i < 10 && (await runAnalysisWorkerOnce()); i++) claimedAny = true;
-    // One stage per pass rather than draining: each stage of a deletion is
-    // irreversible, and a bug that ran them back to back would get through all
-    // three before the next pass could be stopped.
-    for (let i = 0; i < 3 && (await runAccountDeletionWorkerOnce()); i++) claimedAny = true;
   } catch (error) {
-    logger.error({ err: error }, "receipt worker pass failed");
-  } finally {
-    workerBusy = false;
+    logger.error({ err: error }, "receipt provider dispatch reconciliation failed");
   }
+
+  // A cap returns control regularly even while receipt work is backlogged.
+  for (let i = 0; i < 5 && (await runReceiptWorkerOnce()); i++) claimedAny = true;
   return claimedAny;
 }
 
-/** Runs a pass, then books the next one: immediately after a claim, else after the idle interval. */
-async function runPass(): Promise<void> {
-  const claimed = await work();
-  if (shuttingDown) return;
-  workerTimer = setTimeout(() => void runPass(), claimed ? 0 : IDLE_POLL_MS);
+async function runCsvLane(): Promise<boolean> {
+  let claimedAny = false;
+  // Imports yield within chunks, and the cap also lets this lane observe shutdown.
+  for (let i = 0; i < 2 && (await runCsvImportWorkerOnce()); i++) claimedAny = true;
+  return claimedAny;
 }
 
-/*
- * Cleared by shutdown(). Assigned in start(), which does not run until the
- * database has been confirmed to be at the schema this build expects —
- * `undefined` here is the state where a signal arrived during that check,
- * and clearInterval/clearTimeout ignore it. workerTimer is a one-shot timer
- * re-armed by runPass after each pass, not an interval.
- */
-let workerTimer: NodeJS.Timeout | undefined;
+async function runAnalysisLane(): Promise<boolean> {
+  let claimedAny = false;
+  for (let i = 0; i < 10 && (await runAnalysisWorkerOnce()); i++) claimedAny = true;
+  return claimedAny;
+}
+
+async function runMaintenanceJob(name: string, job: () => Promise<boolean>): Promise<boolean> {
+  try {
+    return await job();
+  } catch (error) {
+    logger.error({ err: error, job: name }, "maintenance job failed");
+    return false;
+  }
+}
+
+async function runMaintenanceLane(): Promise<boolean> {
+  let claimedAny = false;
+
+  // One claim per subqueue keeps all three moving under a sustained backlog.
+  if (await runMaintenanceJob("receipt-purge", runReceiptPurgeWorkerOnce)) claimedAny = true;
+  if (await runMaintenanceJob("csv-source-purge", runCsvSourcePurgeWorkerOnce)) claimedAny = true;
+  // Account deletion advances one irreversible stage per pass.
+  if (await runMaintenanceJob("account-deletion", runAccountDeletionWorkerOnce)) claimedAny = true;
+
+  return claimedAny;
+}
+
+const laneWork: Record<WorkerLane, () => Promise<boolean>> = {
+  receipt: runReceiptLane,
+  csv: runCsvLane,
+  analysis: runAnalysisLane,
+  maintenance: runMaintenanceLane,
+};
+
+async function runLane(lane: WorkerLane): Promise<boolean> {
+  if (shuttingDown) return false;
+  return laneWork[lane]();
+}
+
+let laneScheduler: WorkerLaneScheduler<WorkerLane> | undefined;
 let livenessTimer: NodeJS.Timeout | undefined;
 let rateLimitCleanupTimer: NodeJS.Timeout | undefined;
 let csvSweepTimer: NodeJS.Timeout | undefined;
+let csvStageSweepTimer: NodeJS.Timeout | undefined;
 let dailyAnalysisTimer: NodeJS.Timeout | undefined;
 let unverifiedPurgeTimer: NodeJS.Timeout | undefined;
 let abandonedScanSweepTimer: NodeJS.Timeout | undefined;
+let csvRetentionSweepTimer: NodeJS.Timeout | undefined;
 
-/** Every recurring job the worker owns. See start()'s caller for the boot gate. */
-function start(): void {
-  void beatLiveness();
-  livenessTimer = setInterval(() => void beatLiveness(), HEARTBEAT_INTERVAL_MS);
-
-  void runPass();
-
-  rateLimitCleanupTimer = setInterval(() => {
-    if (shuttingDown) return;
-    void cleanUpExpiredRateLimits().catch((error) => logger.error({ err: error }, "rate-limit cleanup failed"));
-  }, 60 * 60_000);
-  void cleanUpExpiredRateLimits().catch((error) => logger.error({ err: error }, "initial rate-limit cleanup failed"));
-
+function startCsvSchedules(): void {
   /*
    * Imports that were claimed and then abandoned — the process died mid-chunk,
    * or a lease expired with attempts exhausted. Hourly rather than per-pass
@@ -140,20 +139,66 @@ function start(): void {
    * own lease reclaim handles the ordinary crash, and this only catches what has
    * stayed stuck long enough to be certainly dead.
    */
+  let stalledSweepRunning = false;
+  let stageSweepRunning = false;
+  const sweepStalled = async (): Promise<void> => {
+    if (shuttingDown || stalledSweepRunning) return;
+    stalledSweepRunning = true;
+    try {
+      await sweepStalledCsvImports();
+    } catch (error) {
+      logger.error(
+        { failureKind: error instanceof Error ? error.name : "unknown" },
+        "CSV import sweep failed",
+      );
+    } finally {
+      stalledSweepRunning = false;
+    }
+  };
+  const sweepStages = async (): Promise<void> => {
+    if (shuttingDown || stageSweepRunning) return;
+    stageSweepRunning = true;
+    try {
+      await sweepExpiredCsvStages();
+    } catch (error) {
+      logger.error(
+        { failureKind: error instanceof Error ? error.name : "unknown" },
+        "CSV stage sweep failed",
+      );
+    } finally {
+      stageSweepRunning = false;
+    }
+  };
   csvSweepTimer = setInterval(() => {
-    if (shuttingDown) return;
-    void sweepStalledCsvImports()
-      .then((swept) => {
-        if (swept > 0) logger.warn({ swept }, "swept stalled CSV imports");
-      })
-      .catch((error) => logger.error({ err: error }, "CSV import sweep failed"));
+    void sweepStalled();
   }, 60 * 60_000);
+  csvStageSweepTimer = setInterval(() => {
+    void sweepStages();
+  }, 60_000);
+  void sweepStalled();
+  void sweepStages();
+}
 
+function startAnalysisSchedules(): void {
   dailyAnalysisTimer = setInterval(() => {
     if (shuttingDown) return;
     void enqueueDailyProfileAnalyses().catch((error) => logger.error({ err: error }, "daily analysis enqueue failed"));
   }, 60 * 60_000);
   void enqueueDailyProfileAnalyses().catch((error) => logger.error({ err: error }, "initial daily analysis enqueue failed"));
+}
+
+/** Recurring cleanup has one owner even when queue lanes run in parallel. */
+function startMaintenanceSchedules(): void {
+  csvRetentionSweepTimer = setInterval(() => {
+    if (shuttingDown) return;
+    void sweepRetainedCsvSources()
+      .catch((error) => logger.error({ err: error }, "completed CSV source retention sweep failed"));
+  }, 60 * 60_000);
+  rateLimitCleanupTimer = setInterval(() => {
+    if (shuttingDown) return;
+    void cleanUpExpiredRateLimits().catch((error) => logger.error({ err: error }, "rate-limit cleanup failed"));
+  }, 60 * 60_000);
+  void cleanUpExpiredRateLimits().catch((error) => logger.error({ err: error }, "initial rate-limit cleanup failed"));
 
   /*
    * Unconfirmed registrations expire.
@@ -178,8 +223,8 @@ function start(): void {
   /*
    * Unconfirmed scans the owner walked away from expire after seven days.
    * Hourly like the registration purge: two bounded index reads that usually
-   * return nothing, and the sweep only enqueues; the purge worker in work()
-   * does the deleting. The log carries counts only.
+   * return nothing, and the sweep only enqueues; the maintenance lane does the
+   * deleting. The log carries counts only.
    *
    * No sweep at boot on purpose. The first deploy of the activity clock
    * backfills it from timestamps that never recorded owner views, so a sweep
@@ -204,23 +249,42 @@ function start(): void {
   }, 60 * 60_000);
 }
 
+/** Starts only after the migration guard and receipt-only OCR warmup finish. */
+function start(): void {
+  void beatLiveness();
+  livenessTimer = setInterval(() => void beatLiveness(), HEARTBEAT_INTERVAL_MS);
+
+  laneScheduler = createWorkerLaneScheduler({
+    lanes: SELECTED_LANES,
+    idlePollMs: IDLE_POLL_MS,
+    runLane,
+    onError: (lane, error) => logger.error({ err: error, lane }, "worker lane pass failed"),
+  });
+  laneScheduler.start();
+
+  if (hasWorkerLane(SELECTED_LANES, "csv")) startCsvSchedules();
+  if (hasWorkerLane(SELECTED_LANES, "analysis")) startAnalysisSchedules();
+  if (hasWorkerLane(SELECTED_LANES, "maintenance")) startMaintenanceSchedules();
+}
+
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   logger.info({ signal }, "worker graceful shutdown started");
 
-  // Stop scheduling new work. Timers are cleared up front so no new pass can
-  // be scheduled while we wait below for whatever pass is already running.
-  clearTimeout(workerTimer);
+  // Stop scheduling new work before waiting for every active lane to drain.
+  laneScheduler?.stop();
   // Stops here rather than in the tail below: once shutdown has begun this
   // worker should stop asserting it is live, so a probe sees the truth even
   // if the drain runs long.
   clearInterval(livenessTimer);
   clearInterval(rateLimitCleanupTimer);
   clearInterval(csvSweepTimer);
+  clearInterval(csvStageSweepTimer);
   clearInterval(dailyAnalysisTimer);
   clearInterval(unverifiedPurgeTimer);
   clearInterval(abandonedScanSweepTimer);
+  clearInterval(csvRetentionSweepTimer);
 
   const forceTimer = setTimeout(() => {
     logger.fatal("worker graceful shutdown timed out; forcing exit mid-job");
@@ -228,11 +292,9 @@ async function shutdown(signal: string): Promise<void> {
   }, 30_000);
   forceTimer.unref();
 
-  // Let the in-flight pass finish rather than killing it mid-job — each job
-  // inside a pass already checkpoints its own progress in the DB (lease +
-  // attempt count), but finishing the current job cleanly is strictly better
-  // than abandoning it for a lease timeout to reclaim later.
-  while (workerBusy) {
+  // Each queue checkpoints progress in the DB, but a clean lane drain avoids
+  // waiting for a lease timeout to reclaim an interrupted job.
+  while (laneScheduler?.isBusy()) {
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
 
@@ -240,7 +302,9 @@ async function shutdown(signal: string): Promise<void> {
   // thread that refuses to terminate, or a pooler that will not answer
   // $disconnect, would otherwise hang here unbounded past the container's
   // stop grace period and be SIGKILLed mid-disconnect.
-  await shutdownOcr().catch((error) => logger.error({ err: error }, "OCR shutdown failed"));
+  if (hasWorkerLane(SELECTED_LANES, "receipt")) {
+    await shutdownOcr().catch((error) => logger.error({ err: error }, "OCR shutdown failed"));
+  }
   await prisma.$disconnect();
   clearTimeout(forceTimer);
   logger.info("worker graceful shutdown complete");
@@ -275,6 +339,15 @@ registerProcessFaultHandlers({
  */
 void (async () => {
   await assertMigrationsApplied("worker");
+  if (shuttingDown) return;
+  if (hasWorkerLane(SELECTED_LANES, "receipt")) {
+    try {
+      const workers = await warmOcrPool();
+      logger.info({ workers }, "OCR worker pool warmed");
+    } catch (error) {
+      logger.warn({ err: error }, "OCR worker pool warmup failed");
+    }
+  }
   if (shuttingDown) return;
   start();
 })();

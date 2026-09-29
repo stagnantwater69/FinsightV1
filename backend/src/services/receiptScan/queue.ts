@@ -1,14 +1,15 @@
-import { createHash, type Hash } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { Prisma, ReceiptPurgeMode } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import {
+  RECEIPT_UPLOAD_ACCEPTANCE_CONCURRENCY,
   RECEIPT_UPLOAD_ALLOWED_MIME_TYPES,
   RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES,
   RECEIPT_UPLOAD_MAX_LOGICAL_PAGES,
   RECEIPT_UPLOAD_MAX_OBJECT_BYTES,
 } from "../../lib/receiptUploadContract";
+import { mapWithConcurrency } from "../../lib/boundedConcurrency";
 import { requireOwnedBusinessProfile } from "../../lib/ownership";
 import { ApiError } from "../../middleware/error.middleware";
 import {
@@ -46,18 +47,12 @@ async function byteLength(file: ReceiptUploadFile): Promise<number> {
   }
 }
 
-async function updateFingerprints(hashes: readonly Hash[], file: ReceiptUploadFile): Promise<void> {
-  if (!isTemporaryFile(file)) {
-    for (const hash of hashes) hash.update(file.buffer);
-    return;
-  }
+async function bytesForFingerprint(file: ReceiptUploadFile): Promise<Buffer> {
+  if (!isTemporaryFile(file)) return file.buffer;
   try {
-    let bytesRead = 0;
-    for await (const chunk of createReadStream(file.temporaryPath)) {
-      bytesRead += chunk.length;
-      for (const hash of hashes) hash.update(chunk);
-    }
-    if (bytesRead !== file.sizeBytes) throw new Error("size changed");
+    const buffer = await readFile(file.temporaryPath);
+    if (buffer.length !== file.sizeBytes) throw new Error("size changed");
+    return buffer;
   } catch {
     throw new ApiError(400, "A receipt upload file is no longer available. Choose the receipt again.");
   }
@@ -83,9 +78,11 @@ async function uploadOneReceiptFile(businessProfileId: number, file: ReceiptUplo
   return uploadReceiptImage(businessProfileId, buffer, file.mimetype, file.originalname);
 }
 
-async function deleteUploadedObjects(imagePaths: string[], processedPaths: (string | null)[]): Promise<void> {
-  await Promise.all(
-    [...imagePaths, ...processedPaths.filter((path): path is string => Boolean(path))].map(deleteReceiptImage),
+async function deleteUploadedObjects(paths: readonly (string | null | undefined)[]): Promise<void> {
+  await mapWithConcurrency(
+    paths.filter((path): path is string => Boolean(path)),
+    RECEIPT_UPLOAD_ACCEPTANCE_CONCURRENCY,
+    deleteReceiptImage,
   );
 }
 
@@ -149,26 +146,32 @@ export async function uploadAndScan(userId: number, input: ReceiptUploadSubmissi
     throw new ApiError(400, `A receipt can have at most ${RECEIPT_UPLOAD_MAX_LOGICAL_PAGES} pages`);
   }
 
-  const pageSizes: { original: number; processed: number }[] = [];
-  let aggregateBytes = 0;
-  for (const page of input.pages) {
-    const original = await byteLength(page);
-    const processed = page.processed ? await byteLength(page.processed) : 0;
-    for (const file of [page, page.processed].filter((item): item is ReceiptUploadFile => Boolean(item))) {
+  const uploadFiles = input.pages.flatMap((page, pageIndex) => [
+    { file: page as ReceiptUploadFile, pageIndex, variant: "original" as const },
+    ...(page.processed
+      ? [{ file: page.processed, pageIndex, variant: "processed" as const }]
+      : []),
+  ]);
+  const measuredFiles = await mapWithConcurrency(
+    uploadFiles,
+    RECEIPT_UPLOAD_ACCEPTANCE_CONCURRENCY,
+    async (entry) => {
+      const size = await byteLength(entry.file);
+      const file = entry.file;
       if (!receiptMimeTypes.has(file.mimetype)) throw new ApiError(400, "Use a JPEG, PNG, or WebP receipt image.");
-    }
-    if (original === 0 || (page.processed && processed === 0)) {
-      throw new ApiError(400, "This receipt file is empty. Choose another image.");
-    }
-    if (original > RECEIPT_UPLOAD_MAX_OBJECT_BYTES || processed > RECEIPT_UPLOAD_MAX_OBJECT_BYTES) {
-      throw new ApiError(400, "Each receipt image must be 10 MiB or smaller.");
-    }
-    aggregateBytes += original + processed;
-    pageSizes.push({ original, processed });
-  }
+      if (size === 0) throw new ApiError(400, "This receipt file is empty. Choose another image.");
+      if (size > RECEIPT_UPLOAD_MAX_OBJECT_BYTES) {
+        throw new ApiError(400, "Each receipt image must be 10 MiB or smaller.");
+      }
+      return { ...entry, size };
+    },
+  );
+  const aggregateBytes = measuredFiles.reduce((total, entry) => total + entry.size, 0);
   if (aggregateBytes > RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES) {
     throw new ApiError(413, "Receipt upload files must total 80 MiB or less");
   }
+  const pageSizes = input.pages.map(() => ({ original: 0, processed: 0 }));
+  for (const entry of measuredFiles) pageSizes[entry.pageIndex]![entry.variant] = entry.size;
 
   const uploadKey = input.idempotencyKey
     ? createHash("sha256").update(`${input.businessProfileId}:${input.idempotencyKey}`).digest("hex")
@@ -184,18 +187,32 @@ export async function uploadAndScan(userId: number, input: ReceiptUploadSubmissi
       receiptOrdinal: input.receiptOrdinal,
     }));
   }
-  for (const [index, page] of input.pages.entries()) {
-    const sizes = pageSizes[index]!;
-    fingerprint.update(JSON.stringify({
-      mimetype: page.mimetype,
-      size: sizes.original,
-      processedType: page.processed?.mimetype ?? null,
-      processedSize: sizes.processed,
-      metadata: page.metadata ?? null,
-    }));
-    sourceFingerprint.update(`${index}:${sizes.original}\0`);
-    await updateFingerprints([fingerprint, sourceFingerprint], page);
-    if (page.processed) await updateFingerprints([fingerprint], page.processed);
+  for (let offset = 0; offset < uploadFiles.length; offset += RECEIPT_UPLOAD_ACCEPTANCE_CONCURRENCY) {
+    const batch = uploadFiles.slice(offset, offset + RECEIPT_UPLOAD_ACCEPTANCE_CONCURRENCY);
+    const buffers = await mapWithConcurrency(
+      batch,
+      RECEIPT_UPLOAD_ACCEPTANCE_CONCURRENCY,
+      (entry) => bytesForFingerprint(entry.file),
+    );
+    for (const [batchIndex, entry] of batch.entries()) {
+      const buffer = buffers[batchIndex]!;
+      if (entry.variant === "original") {
+        const page = input.pages[entry.pageIndex]!;
+        const sizes = pageSizes[entry.pageIndex]!;
+        fingerprint.update(JSON.stringify({
+          mimetype: page.mimetype,
+          size: sizes.original,
+          processedType: page.processed?.mimetype ?? null,
+          processedSize: sizes.processed,
+          metadata: page.metadata ?? null,
+        }));
+        sourceFingerprint.update(`${entry.pageIndex}:${sizes.original}\0`);
+        fingerprint.update(buffer);
+        sourceFingerprint.update(buffer);
+      } else {
+        fingerprint.update(buffer);
+      }
+    }
   }
   const uploadHash = fingerprint.digest("hex");
   const sourceImageHash = sourceFingerprint.digest("hex");
@@ -230,16 +247,27 @@ export async function uploadAndScan(userId: number, input: ReceiptUploadSubmissi
     });
   }
 
-  const imagePaths: string[] = [];
-  const processedPaths: (string | null)[] = [];
+  const uploadedPaths = new Array<string | undefined>(uploadFiles.length);
+  let storedPaths: string[];
   try {
-    for (const page of input.pages) {
-      imagePaths.push(await uploadOneReceiptFile(input.businessProfileId, page));
-      processedPaths.push(page.processed ? await uploadOneReceiptFile(input.businessProfileId, page.processed) : null);
-    }
+    storedPaths = await mapWithConcurrency(
+      uploadFiles,
+      RECEIPT_UPLOAD_ACCEPTANCE_CONCURRENCY,
+      async (entry, index) => {
+        const path = await uploadOneReceiptFile(input.businessProfileId, entry.file);
+        uploadedPaths[index] = path;
+        return path;
+      },
+    );
   } catch (error) {
-    await deleteUploadedObjects(imagePaths, processedPaths);
+    await deleteUploadedObjects(uploadedPaths);
     throw error;
+  }
+  const imagePaths = new Array<string>(input.pages.length);
+  const processedPaths = new Array<string | null>(input.pages.length).fill(null);
+  for (const [index, entry] of uploadFiles.entries()) {
+    if (entry.variant === "original") imagePaths[entry.pageIndex] = storedPaths[index]!;
+    else processedPaths[entry.pageIndex] = storedPaths[index]!;
   }
 
   let scan;
@@ -281,7 +309,7 @@ export async function uploadAndScan(userId: number, input: ReceiptUploadSubmissi
       return created;
     });
   } catch (error) {
-    await deleteUploadedObjects(imagePaths, processedPaths);
+    await deleteUploadedObjects([...imagePaths, ...processedPaths]);
     if (uploadKey && error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       const winner = await prisma.receiptScan.findUnique({
         where: { uploadKey },
@@ -355,6 +383,7 @@ export async function retryScan(userId: number, scanId: number) {
         processingErrorCode: null,
         processingAttemptCount: 0,
         processingStartedAt: null,
+        processingCompletedAt: null,
         processingWorkerId: null,
         processingHeartbeatAt: null,
         nextProcessingAttemptAt: new Date(),

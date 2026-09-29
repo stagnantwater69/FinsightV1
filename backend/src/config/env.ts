@@ -2,6 +2,7 @@ import "dotenv/config";
 import { tmpdir } from "node:os";
 import { isAbsolute, normalize, resolve } from "node:path";
 import { z } from "zod";
+import { workerLanesSchema } from "./workerLanes";
 
 const DEFAULT_TESSERACT_LANG_PATH = resolve(__dirname, "../..");
 const DEFAULT_RECEIPT_UPLOAD_TEMP_ROOT = resolve(tmpdir(), "finsight-receipt-uploads");
@@ -13,6 +14,7 @@ const envSchema = z.object({
   SUPABASE_ANON_KEY: z.string().min(1),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   SUPABASE_STORAGE_BUCKET: z.string().default("receipts"),
+  CSV_SOURCE_RETENTION_DAYS: z.coerce.number().int().min(30).max(365).default(90),
   PORT: z.coerce.number().default(4000),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   CORS_ORIGIN: z.string().default("http://localhost:5173"),
@@ -90,6 +92,7 @@ const envSchema = z.object({
   ANOMALY_ISOLATION_FOREST_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
   /** The Python scoring sidecar (ml/worker/server.py). Local-only by default. */
   ML_WORKER_URL: z.string().url().default("http://127.0.0.1:8321"),
+  WORKER_LANES: workerLanesSchema,
   /**
    * How long the worker sleeps after a pass that claimed nothing.
    *

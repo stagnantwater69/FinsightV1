@@ -698,9 +698,35 @@ export async function loginUser(input: LoginInput) {
  * signed the owner out of the phone in their pocket, with nothing on screen to
  * say so. "Log out everywhere" is now a separate, deliberate action.
  */
+type SessionRevocationScope = "local" | "global" | "others";
+
+async function revokeSessions(
+  accessToken: string,
+  scope: SessionRevocationScope,
+  detail: Record<string, unknown> = {},
+): Promise<boolean> {
+  let error: { message?: string } | null;
+  try {
+    ({ error } = await supabaseAdmin.auth.admin.signOut(accessToken, scope));
+  } catch {
+    securityEvent("sessions.revoke_failed", { ...detail, scope, failureKind: "request-failed" });
+    return false;
+  }
+
+  if (error) {
+    securityEvent("sessions.revoke_failed", { ...detail, scope, failureKind: "provider-error" });
+    return false;
+  }
+
+  securityEvent("sessions.revoked", { ...detail, scope });
+  return true;
+}
+
 export async function logoutUser(accessToken: string, scope: "local" | "global" = "local") {
-  await supabaseAdmin.auth.admin.signOut(accessToken, scope).catch(() => undefined);
-  securityEvent("sessions.revoked", { scope });
+  const revoked = await revokeSessions(accessToken, scope);
+  if (!revoked && scope === "global") {
+    throw new ApiError(502, "Could not sign out everywhere right now. Please try again.");
+  }
 }
 
 export async function requestPasswordRecovery(email: string, platform: ClientPlatform = "web") {
@@ -788,21 +814,26 @@ export async function completePasswordReset(accessToken: string) {
     securityEvent("register.verified", { userId: user.id, email: user.email });
   }
 
-  await supabaseAdmin.auth.admin.signOut(accessToken, "global").catch(() => undefined);
+  const refreshSessionsRevoked = await revokeSessions(accessToken, "global", {
+    userId: user.id,
+    reason: "password reset",
+  });
   securityEvent("password.changed", { userId: user.id, email: user.email, via: "reset" });
-  securityEvent("sessions.revoked", { userId: user.id, scope: "global", reason: "password reset" });
 
-  return { message: "Your password has been changed. Log in with it to continue." };
+  return {
+    message: "Your password has been changed. Log in with it to continue.",
+    refreshSessionsRevoked,
+  };
 }
 
 /**
  * Changes a password for someone who is already signed in.
  *
  * SESSION POLICY, applied identically here and on both clients: the session
- * doing the changing survives, every other session is revoked. The person who
- * just proved they know the current password should not be thrown back to a
- * login form for having done the right thing; anyone else holding a token
- * should be gone by the time this returns.
+ * doing the changing survives and every other refresh session is revoked. The
+ * person who just proved they know the current password should not be thrown
+ * back to a login form for having done the right thing. Already-issued access
+ * JWTs remain valid until their configured expiry, as Supabase documents.
  *
  * `others` is passed explicitly rather than relied upon as a side effect of the
  * password update. The mobile client used to sign itself out on the belief that
@@ -828,14 +859,20 @@ export async function changePassword(
     throw new ApiError(400, "Current password is incorrect");
   }
 
+  const revoked = await revokeSessions(accessToken, "others", {
+    userId,
+    reason: "password change",
+  });
+  if (!revoked) {
+    throw new ApiError(502, "Could not securely finish changing your password. Please try again.");
+  }
+
   const { error } = await supabaseAdmin.auth.admin.updateUserById(user.authId, { password: newPassword });
   if (error) {
     throw new ApiError(400, error.message);
   }
 
-  await supabaseAdmin.auth.admin.signOut(accessToken, "others").catch(() => undefined);
   securityEvent("password.changed", { userId, email: user.email, via: "profile" });
-  securityEvent("sessions.revoked", { userId, scope: "others", reason: "password changed" });
 }
 
 /**
@@ -909,9 +946,21 @@ export async function deleteAccount(userId: number, currentPassword: string): Pr
     throw new ApiError(400, "Current password is incorrect");
   }
 
+  const requestedAt = new Date();
   await transition(user, AccountStatus.DELETION_PENDING, {
     reason: "owner requested deletion",
-    data: { deletionRequestedAt: new Date(), deletionStage: "REQUESTED", deletionAttempts: 0, deletionLastError: null },
+    data: {
+      deletionRequestedAt: requestedAt,
+      deletionStage: "REQUESTED",
+      deletionAttempts: 0,
+      deletionLastError: null,
+      deletionNextAttemptAt: requestedAt,
+      deletionLeaseStartedAt: null,
+      deletionHeartbeatAt: null,
+      deletionWorkerId: null,
+      deletionStorageManifestHash: null,
+      deletionStorageCheckpoint: 0,
+    },
   });
   securityEvent("account.deletion_requested", { userId, email: user.email });
 

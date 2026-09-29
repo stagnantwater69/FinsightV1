@@ -33,8 +33,9 @@ import {
 } from "./extraction";
 import type { ReceiptCaptureMetadata, RescuedFields } from "./types";
 import { selectOcrCandidate } from "./ocrCandidateSelection";
+import { readReceiptPagesWithinOcrBudget } from "./ocrPageScheduling";
 import { assessReceiptLikelihood } from "../../lib/receiptLikelihood";
-import { parseReceiptDetails } from "../../lib/receiptDetails";
+import { parseReceiptDetails, providerReportedCurrency } from "../../lib/receiptDetails";
 import { validateReceiptUpload } from "../../lib/receiptUploadValidation";
 import {
   RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES,
@@ -138,6 +139,13 @@ export interface ReceiptProcessingOutput {
   scan: Prisma.ReceiptScanUpdateManyMutationInput;
   pages: ReceiptPageProcessingOutput[];
   items: ReceiptItemProcessingOutput;
+  /**
+   * Whether the provider actually read the paper on this pass. False carries an
+   * earlier pass's currency forward, so a re-scan that never reached the
+   * provider cannot clear a refusal a pass that did reach it had earned. A pass
+   * that did read replaces it, null included: that is a re-reading, not silence.
+   */
+  providerRead: boolean;
 }
 
 function sha256(buffer: Buffer): string {
@@ -287,6 +295,19 @@ function mergeIntoRescuedFields(
   };
 }
 
+/**
+ * Puts a carried-forward currency back into the versions blob this pass built.
+ * An absent blob is left absent: the column would otherwise be overwritten
+ * with a fragment, losing the very record being preserved.
+ */
+function withProviderCurrency(
+  versions: Prisma.ReceiptScanUpdateManyMutationInput["extractorVersions"],
+  currency: string,
+): Prisma.InputJsonValue | undefined {
+  if (typeof versions !== "object" || versions === null || Array.isArray(versions)) return undefined;
+  return { ...(versions as Record<string, unknown>), providerCurrency: currency } as Prisma.InputJsonValue;
+}
+
 /** Commit every derived receipt value only while this attempt still owns the lease. */
 export async function persistReceiptProcessingOutput(
   scanId: number,
@@ -306,9 +327,12 @@ export async function persistReceiptProcessingOutput(
         processingWorkerId: lease.workerId,
         processingAttemptCount: lease.attempt,
       },
-      select: { captureBatchId: true },
+      select: { captureBatchId: true, extractorVersions: true },
     });
     if (!batchLink) throw new ReceiptLeaseLostError(`Receipt scan ${scanId} lease was reclaimed`);
+    // Read under the same lease predicate as the write below, so the value
+    // carried forward is the one this attempt is still entitled to overwrite.
+    const carriedCurrency = output.providerRead ? null : providerReportedCurrency(batchLink.extractorVersions);
     if (
       batchLink.captureBatchId !== null
       && !(await lockReceiptCaptureBatchForMutation(tx, batchLink.captureBatchId))
@@ -331,7 +355,9 @@ export async function persistReceiptProcessingOutput(
       },
       data: {
         ...output.scan,
+        ...(carriedCurrency === null ? {} : { extractorVersions: withProviderCurrency(output.scan.extractorVersions, carriedCurrency) }),
         processingStatus: "Processing",
+        processingCompletedAt: null,
         processingWorkerId: lease.workerId,
         processingAttemptCount: lease.attempt,
         processingHeartbeatAt: new Date(),
@@ -359,6 +385,7 @@ export async function persistReceiptProcessingOutput(
       tx,
     );
 
+    const completedAt = new Date();
     const completed = await tx.receiptScan.updateMany({
       where: {
         id: scanId,
@@ -372,12 +399,13 @@ export async function persistReceiptProcessingOutput(
       },
       data: {
         processingStatus: "Complete",
+        processingCompletedAt: completedAt,
         processingError: null,
         processingWorkerId: null,
         processingHeartbeatAt: null,
         // Completion starts the abandoned-scan clock: seven days of owner
         // silence from here and the sweep purges it.
-        lastActivityAt: new Date(),
+        lastActivityAt: completedAt,
       },
     });
     if (completed.count !== 1) throw new ReceiptLeaseLostError(`Receipt scan ${scanId} lease was reclaimed`);
@@ -442,15 +470,16 @@ async function processScan(
     let ocrMs = 0;
     let providerMs = 0;
     let persistMs = 0;
-    for (const page of input.pages) {
-      // Both variants read at once; the OCR pool keeps two workers warm for this pair.
-      // Selection only sees the finished results, so the pick is order-independent.
-      const readStartedAt = performance.now();
+    const ocrStartedAt = performance.now();
+    const pageReads = await readReceiptPagesWithinOcrBudget(input.pages, async (page) => {
       const [original, processed] = await Promise.all([
         readStoredCandidate(page.original, true),
         page.processed ? readStoredCandidate(page.processed, false) : Promise.resolve(null),
       ]);
-      ocrMs += performance.now() - readStartedAt;
+      return { page, original, processed };
+    });
+    ocrMs = performance.now() - ocrStartedAt;
+    for (const { page, original, processed } of pageReads) {
       const selected = selectOcrCandidate(original.ocr, processed?.ocr ?? null);
       const chosenEvidence = selected.source === "processed" && page.processed ? page.processed : page.original;
       const chosen = selected.source === "processed" && processed ? processed : original;
@@ -613,6 +642,7 @@ async function processScan(
           persisted,
           ocrMs: Math.round(ocrMs),
           providerMs: Math.round(providerMs),
+          providerTelemetry: gate.telemetry ?? null,
           persistMs: Math.round(persistMs),
           totalMs: Math.round(performance.now() - claimedAt),
         },
@@ -648,10 +678,18 @@ async function processScan(
       visionRejectReason: rescued.visionRejectReason,
       verifier: rescued.verifier,
       providerGateCode: gate.code,
+      providerOutcomeCode: gate.telemetry?.outcomeCode ?? null,
+      providerCooldown: gate.telemetry?.cooldown ?? null,
+      providerStageTimings: gate.telemetry?.providerStages ?? null,
+      providerGateTimings: gate.telemetry?.gateStages ?? null,
       providerDispatchStatus: gate.dispatchStatus,
       rescueDecisionVersion: RESCUE_DECISION_VERSION,
       rescueReasonCodes: rescueDecision.reasons,
       providerContractVersion: RECEIPT_PROVIDER_CONTRACT_VERSION,
+      // Read back at confirm time by requiresManualCurrencyConversion: the merge
+      // cannot adopt it, but it still has to block a peso booking. Superseded by
+      // the prior pass's value when this one never read the paper (`providerRead`).
+      providerCurrency: gate.merge.providerCurrency,
       ocrCandidateSources: ocrSources,
     };
     const receiptLikelihood = assessReceiptLikelihood({
@@ -730,6 +768,10 @@ async function processScan(
           // located in the page text. Unverifiable items remain evidence-less.
           itemEvidence,
         },
+        // A skipped, failed, cancelled or timed-out dispatch produced no
+        // reading of the paper, so it may not overwrite what an earlier pass
+        // read. Only SUCCEEDED means the provider answered and was accepted.
+        providerRead: gate.dispatchStatus === "SUCCEEDED",
       },
     );
     persistMs = performance.now() - persistStartedAt;
@@ -761,6 +803,7 @@ async function recordProcessingFailure(scanId: number, attempt: number, failure:
     ) {
       return;
     }
+    const transitionAt = new Date();
     const updated = await tx.receiptScan.updateMany({
       where: {
         id: scanId,
@@ -772,14 +815,15 @@ async function recordProcessingFailure(scanId: number, attempt: number, failure:
       },
       data: {
         processingStatus: retryable ? "Processing" : "Failed",
+        processingCompletedAt: retryable ? null : transitionAt,
         processingWorkerId: null,
         processingHeartbeatAt: null,
         nextProcessingAttemptAt: new Date(
-          Date.now() + RETRY_DELAYS_MS[Math.min(attempt - 1, RETRY_DELAYS_MS.length - 1)]!,
+          transitionAt.getTime() + RETRY_DELAYS_MS[Math.min(attempt - 1, RETRY_DELAYS_MS.length - 1)]!,
         ),
         processingError: failure.publicMessage,
         processingErrorCode: failure.code,
-        lastActivityAt: new Date(),
+        lastActivityAt: transitionAt,
       },
     });
     if (updated.count === 1 && batchLink?.captureBatchId !== null && batchLink?.captureBatchId !== undefined) {
@@ -899,6 +943,7 @@ async function claimScan(): Promise<{ id: number; attempt: number } | null> {
     data: {
       processingWorkerId: RECEIPT_WORKER_ID,
       processingStartedAt: now,
+      processingCompletedAt: null,
       processingHeartbeatAt: now,
       processingAttemptCount: { increment: 1 },
       lastActivityAt: now,
@@ -937,7 +982,8 @@ export async function runReceiptWorkerOnce(): Promise<boolean> {
  * becomes Failed here, where the owner can retry it or delete it.
  */
 async function failExhaustedScans(): Promise<number> {
-  const staleBefore = new Date(Date.now() - RECEIPT_PROCESSING_LEASE_MS);
+  const completedAt = new Date();
+  const staleBefore = new Date(completedAt.getTime() - RECEIPT_PROCESSING_LEASE_MS);
   const failed = await prisma.receiptScan.updateMany({
     where: {
       processingStatus: "Processing",
@@ -955,11 +1001,12 @@ async function failExhaustedScans(): Promise<number> {
     },
     data: {
       processingStatus: "Failed",
+      processingCompletedAt: completedAt,
       processingWorkerId: null,
       processingHeartbeatAt: null,
       processingError: "The receipt could not be read. Try again or enter the values manually.",
       processingErrorCode: "RECEIPT_PROCESSING_FAILED",
-      lastActivityAt: new Date(),
+      lastActivityAt: completedAt,
     },
   });
   if (failed.count > 0) logger.warn({ count: failed.count }, "receipt scans failed after exhausting processing attempts");

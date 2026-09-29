@@ -2,12 +2,12 @@ import { Prisma } from "@prisma/client";
 import type { SalesReferenceRecord, SalesRecordSource } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { ApiError } from "../middleware/error.middleware";
-import { cleanUpImportBatchIfOrphaned } from "../lib/sourceCleanup";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
 import { DEFAULT_RECORD_SORT, recordCursorWhere, recordOrderBy, type RecordCursor, type RecordSort } from "../lib/recordSort";
 import { lockDuplicateKey } from "../lib/recordLock";
 import { createNotification, NOTIFICATION_TYPES } from "./notification.service";
 import { duplicateKeyOf, type BulkDbClient, type FlaggedListOptions } from "./expenseRecord.service";
+import { enqueueCsvSourcePurgesIfOrphaned } from "./csvSourcePurge.service";
 
 interface CreateInput {
   businessProfileId: number;
@@ -298,14 +298,12 @@ export async function updateSalesRecord(userId: number, id: number, input: Updat
 }
 
 export async function deleteSalesRecord(userId: number, id: number) {
-  const existing = await prisma.salesReferenceRecord.findFirst({ where: { id, businessProfile: { userId } } });
-  if (!existing) {
-    throw new ApiError(404, "Sales reference record not found");
-  }
-  await prisma.salesReferenceRecord.delete({ where: { id } });
-
-  // A sales record only ever comes from a spreadsheet, never a receipt.
-  await cleanUpImportBatchIfOrphaned(existing.importBatchId);
+  await prisma.$transaction(async (tx) => {
+    const existing = await tx.salesReferenceRecord.findFirst({ where: { id, businessProfile: { userId } } });
+    if (!existing) throw new ApiError(404, "Sales reference record not found");
+    await tx.salesReferenceRecord.delete({ where: { id } });
+    await enqueueCsvSourcePurgesIfOrphaned(tx, [existing.importBatchId]);
+  });
 }
 
 /**
@@ -327,27 +325,25 @@ export async function bulkResolveSalesDuplicates(
   if (ids.length === 0) return 0;
   await requireOwnedBusinessProfile(userId, businessProfileId);
 
-  const owned = await prisma.salesReferenceRecord.findMany({
-    where: { id: { in: ids }, businessProfileId },
-    select: { id: true, importBatchId: true },
-  });
-  if (owned.length === 0) return 0;
-  const ownedIds = owned.map((r) => r.id);
-
   if (action === "keep") {
     const { count } = await prisma.salesReferenceRecord.updateMany({
-      where: { id: { in: ownedIds } },
+      where: { id: { in: ids }, businessProfileId },
       data: { duplicateStatus: "Not a Duplicate", reviewStatus: "Reviewed" },
     });
     return count;
   }
 
-  await prisma.salesReferenceRecord.deleteMany({ where: { id: { in: ownedIds } } });
-
-  const batchIds = [...new Set(owned.map((r) => r.importBatchId).filter((v): v is number => v !== null))];
-  for (const batchId of batchIds) await cleanUpImportBatchIfOrphaned(batchId);
-
-  return ownedIds.length;
+  const owned = await prisma.$transaction(async (tx) => {
+    const records = await tx.salesReferenceRecord.findMany({
+      where: { id: { in: ids }, businessProfileId },
+      select: { id: true, importBatchId: true },
+    });
+    if (records.length === 0) return records;
+    await tx.salesReferenceRecord.deleteMany({ where: { id: { in: records.map((record) => record.id) } } });
+    await enqueueCsvSourcePurgesIfOrphaned(tx, records.map((record) => record.importBatchId));
+    return records;
+  });
+  return owned.length;
 }
 
 export async function searchSalesRecords(userId: number, filters: SearchFilters) {

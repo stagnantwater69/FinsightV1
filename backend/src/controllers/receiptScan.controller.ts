@@ -21,9 +21,11 @@ import {
   validateReceiptUpload,
 } from "../lib/receiptUploadValidation";
 import {
+  RECEIPT_UPLOAD_ACCEPTANCE_CONCURRENCY,
   RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES,
   RECEIPT_UPLOAD_MAX_LOGICAL_PAGES,
 } from "../lib/receiptUploadContract";
+import { mapWithConcurrency } from "../lib/boundedConcurrency";
 import { cleanupReceiptUploadTemporaryFiles } from "../middleware/upload.middleware";
 import {
   requestConfirmedReceiptEvidenceDeletion,
@@ -310,18 +312,22 @@ export async function upload(req: Request, res: Response) {
 
     const metadata = parseCaptureMetadata(captureMetadata, files.length);
     const uploadedFiles = [...files, ...originals];
-    const actualSizes = new Map<Express.Multer.File, number>();
-    let aggregateBytes = 0;
-    for (const file of uploadedFiles) {
-      const size = await receiptUploadByteLength(file);
-      actualSizes.set(file, size);
-      aggregateBytes += size;
-    }
+    const measuredSizes = await mapWithConcurrency(
+      uploadedFiles,
+      RECEIPT_UPLOAD_ACCEPTANCE_CONCURRENCY,
+      receiptUploadByteLength,
+    );
+    const aggregateBytes = measuredSizes.reduce((total, size) => total + size, 0);
     if (aggregateBytes > RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES) {
       throw new ApiError(413, "Receipt upload files must total 80 MiB or less");
     }
-    const imageInfo = new Map<Express.Multer.File, ReceiptUploadImageInfo>();
-    for (const file of uploadedFiles) imageInfo.set(file, await inspectReceiptUpload(file));
+    const inspectedImages = await mapWithConcurrency(
+      uploadedFiles,
+      RECEIPT_UPLOAD_ACCEPTANCE_CONCURRENCY,
+      inspectReceiptUpload,
+    );
+    const actualSizes = new Map(uploadedFiles.map((file, index) => [file, measuredSizes[index]!]));
+    const imageInfo = new Map(uploadedFiles.map((file, index) => [file, inspectedImages[index]!]));
 
     const queueFile = (file: Express.Multer.File): ReceiptUploadFile => file.path
       ? {

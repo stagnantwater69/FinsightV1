@@ -92,10 +92,101 @@ const previewSchema = confirmSchema.pick({
   message: "Provide both recordType and columnMapping to validate the CSV.",
 });
 
-export async function preview(req: Request, res: Response) {
-  if (!req.file) {
-    throw new ApiError(400, "CSV file is required");
+const stageUploadSchema = z.object({
+  businessProfileId: z.coerce.number().int().positive(),
+  idempotencyKey: z.string().min(8).max(100),
+});
+
+const stagedReviewSchema = z.object({
+  stagedUploadId: z.string().uuid(),
+  businessProfileId: z.coerce.number().int().positive(),
+  recordType: z.enum(["expense", "sales", "mixed"]),
+  mixedStrategy: z.enum(["column", "sign"]).optional(),
+  columnMapping: columnMappingSchema,
+  corrections: correctionsSchema.optional(),
+  dateFormat: z.enum(["iso", "dmy", "mdy"]).optional(),
+});
+
+const stagedConfirmSchema = stagedReviewSchema.extend({
+  title: z.string().min(1).max(150),
+  idempotencyKey: z.string().min(8).max(100).optional(),
+});
+
+function validateMixedInput(input: {
+  recordType: "expense" | "sales" | "mixed";
+  mixedStrategy?: "column" | "sign";
+  columnMapping: z.infer<typeof columnMappingSchema>;
+}): void {
+  if (input.recordType !== "mixed") return;
+  if (!input.mixedStrategy) {
+    throw new ApiError(400, "mixedStrategy is required when recordType is mixed");
   }
+  if (input.mixedStrategy === "column" && !input.columnMapping.recordType) {
+    throw new ApiError(400, "columnMapping.recordType is required for the column strategy");
+  }
+}
+
+function setServerTiming(res: Response, timings: csvImportService.CsvOperationTimings): void {
+  const phases: [string, number | undefined][] = [
+    ["total", timings.totalMs],
+    ["parse", timings.parseMs],
+    ["storage", timings.storageMs],
+    ["validation", timings.validationMs],
+    ["chunk-encode", timings.chunkEncodeMs],
+    ["chunk-persist", timings.chunkPersistMs],
+    ["chunk-load", timings.chunkLoadMs],
+    ["decompress", timings.decompressMs],
+    ["insert", timings.insertMs],
+  ];
+  res.setHeader(
+    "Server-Timing",
+    phases
+      .filter((phase): phase is [string, number] => typeof phase[1] === "number" && Number.isFinite(phase[1]))
+      .map(([name, duration]) => `${name};dur=${Math.max(0, duration).toFixed(1)}`)
+      .join(", "),
+  );
+}
+
+export async function preview(req: Request, res: Response) {
+  const startedAt = performance.now();
+  if (
+    req.file &&
+    req.body !== null &&
+    typeof req.body === "object" &&
+    Object.prototype.hasOwnProperty.call(req.body, "idempotencyKey")
+  ) {
+    const input = stageUploadSchema.parse(req.body);
+    const staged = await csvImportService.stageCsvUpload(req.user!.id, {
+      businessProfileId: input.businessProfileId,
+      buffer: req.file.buffer,
+      originalname: req.file.originalname,
+      idempotencyKey: input.idempotencyKey,
+    });
+    setServerTiming(res, staged.timings);
+    res.status(200).json(staged.result);
+    return;
+  }
+
+  if (!req.file) {
+    const input = stagedReviewSchema.parse(req.body);
+    validateMixedInput(input);
+    const staged = await csvImportService.previewStagedCsv(
+      req.user!.id,
+      input.businessProfileId,
+      input.stagedUploadId,
+      {
+        recordType: input.recordType,
+        columnMapping: input.columnMapping,
+        corrections: input.corrections,
+        mixedStrategy: input.mixedStrategy,
+        dateFormat: input.dateFormat,
+      },
+    );
+    setServerTiming(res, staged.timings);
+    res.status(200).json(staged.result);
+    return;
+  }
+
   const input = previewSchema.parse(req.body);
   const options = input.recordType && input.columnMapping ? {
     recordType: input.recordType,
@@ -107,6 +198,7 @@ export async function preview(req: Request, res: Response) {
   const result = input.businessProfileId
     ? await csvImportService.previewCsvForProfile(req.user!.id, input.businessProfileId, req.file.buffer, options)
     : csvImportService.previewCsv(req.file.buffer, options);
+  setServerTiming(res, { totalMs: performance.now() - startedAt });
   res.status(200).json(result);
 }
 
@@ -138,8 +230,27 @@ export async function previewBatch(req: Request, res: Response) {
 
 export async function confirm(req: Request, res: Response) {
   if (!req.file) {
-    throw new ApiError(400, "CSV file is required");
+    const input = stagedConfirmSchema.parse(req.body);
+    validateMixedInput(input);
+    const staged = await csvImportService.confirmStagedImport(
+      req.user!.id,
+      input.businessProfileId,
+      input.stagedUploadId,
+      {
+        recordType: input.recordType,
+        mixedStrategy: input.mixedStrategy,
+        title: input.title,
+        columnMapping: input.columnMapping,
+        corrections: input.corrections,
+        dateFormat: input.dateFormat,
+      },
+    );
+    setServerTiming(res, staged.timings);
+    const accepted = staged.result.processingStatus === "PENDING" || staged.result.processingStatus === "PROCESSING";
+    res.status(accepted ? 202 : 201).json(staged.result);
+    return;
   }
+  const startedAt = performance.now();
   const input = confirmSchema.parse(req.body);
 
   /*
@@ -148,14 +259,7 @@ export async function confirm(req: Request, res: Response) {
    * is guessing which rows are money in and which are money out, and getting
    * that silently wrong is the one outcome this whole feature must not produce.
    */
-  if (input.recordType === "mixed") {
-    if (!input.mixedStrategy) {
-      throw new ApiError(400, "mixedStrategy is required when recordType is mixed");
-    }
-    if (input.mixedStrategy === "column" && !input.columnMapping.recordType) {
-      throw new ApiError(400, "columnMapping.recordType is required for the column strategy");
-    }
-  }
+  validateMixedInput(input);
 
   // Older clients also need replay protection after a lost network response.
   // A fresh explicit token still allows an intentional new import of the file.
@@ -184,7 +288,18 @@ export async function confirm(req: Request, res: Response) {
    * finished and the counts in the body are final.
    */
   const accepted = result.processingStatus === "PENDING" || result.processingStatus === "PROCESSING";
+  setServerTiming(res, { totalMs: performance.now() - startedAt });
   res.status(accepted ? 202 : 201).json(result);
+}
+
+const stageParamsSchema = z.object({
+  stageId: z.string().uuid(),
+});
+
+export async function deleteStage(req: Request, res: Response) {
+  const { stageId } = stageParamsSchema.parse(req.params);
+  await csvImportService.deleteStagedCsvUpload(req.user!.id, stageId);
+  res.status(204).send();
 }
 
 export async function batchStatus(req: Request, res: Response) {

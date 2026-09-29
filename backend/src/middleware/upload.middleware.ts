@@ -20,6 +20,12 @@ import {
 const storage = multer.memoryStorage();
 const receiptMimeTypes = new Set<string>(RECEIPT_UPLOAD_ALLOWED_MIME_TYPES);
 
+export const CSV_UPLOAD_MAX_FILE_BYTES = 5 * 1024 * 1024;
+export const CSV_UPLOAD_MAX_FIELDS = 10;
+export const CSV_UPLOAD_MAX_PARTS = CSV_UPLOAD_MAX_FIELDS + 1;
+export const CSV_UPLOAD_MAX_FIELD_NAME_BYTES = 100;
+export const CSV_UPLOAD_MAX_FIELD_BYTES = 1024 * 1024;
+
 interface ReceiptTemporaryUploadState {
   directory: string;
   receivedBytes: number;
@@ -195,7 +201,14 @@ export const uploadReceiptImage = multer({
 
 export const uploadCsv = multer({
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 },
+  limits: {
+    fileSize: CSV_UPLOAD_MAX_FILE_BYTES,
+    files: 1,
+    fields: CSV_UPLOAD_MAX_FIELDS,
+    parts: CSV_UPLOAD_MAX_PARTS,
+    fieldNameSize: CSV_UPLOAD_MAX_FIELD_NAME_BYTES,
+    fieldSize: CSV_UPLOAD_MAX_FIELD_BYTES,
+  },
   fileFilter: (_req, file, cb) => {
     const allowed = ["text/csv", "application/vnd.ms-excel", "application/csv", "text/plain"];
     if (!allowed.includes(file.mimetype) && !file.originalname.toLowerCase().endsWith(".csv")) {

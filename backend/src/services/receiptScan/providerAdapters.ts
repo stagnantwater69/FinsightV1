@@ -10,6 +10,7 @@ import {
   extractReceiptWithVision,
   verifyVisionReceipt,
   VISION_MODEL,
+  type VisionProviderFailure,
   type VisionVerifierFailure,
 } from "../visionOcr.service";
 import { extractReceiptWithVeryfi } from "../veryfiOcr.service";
@@ -41,6 +42,7 @@ function normalized(
   receipt: {
     date: string | null;
     vendor: string | null;
+    currency?: string | null;
     amount: number | null;
     items: { name: string; quantity: number | null; amount: number; pageNumber?: number | null }[];
   },
@@ -71,6 +73,15 @@ function normalized(
       "REGION_UNAVAILABLE",
     ],
   );
+  // Nothing on the paper corroborates a currency the provider merely asserts,
+  // so it is offered UNVALIDATED and cannot displace the printed local reading.
+  const currency = receipt.currency ?? null;
+  const currencyEvidence = evidence(
+    source,
+    request.providerVersion,
+    "UNVALIDATED",
+    ["REGION_UNAVAILABLE", "OWNER_REVIEW_REQUIRED"],
+  );
   const items = receipt.items.map((item) => ({
     name: item.name,
     quantity: item.quantity,
@@ -89,14 +100,24 @@ function normalized(
     sourceVersion: request.providerVersion,
     date: { value: receipt.date, evidence: receipt.date === null ? null : formatEvidence },
     vendor: { value: receipt.vendor, evidence: receipt.vendor === null ? null : formatEvidence },
-    currency: { value: null, evidence: null },
+    currency: { value: currency, evidence: currency === null ? null : currencyEvidence },
     total: { value: receipt.amount, evidence: receipt.amount === null ? null : formatEvidence },
     items,
     itemsEvidence: items.length > 0 ? collectionEvidence : null,
   };
 }
 
-function metadata(request: ReceiptProviderRequest, latencyMs: number) {
+type ProviderStageTimings = {
+  extractionMs: number;
+  verificationMs: number;
+};
+
+function metadata(
+  request: ReceiptProviderRequest,
+  latencyMs: number,
+  retryAfterMs: number | null = null,
+  stageTimings?: ProviderStageTimings,
+) {
   return {
     contractVersion: RECEIPT_PROVIDER_CONTRACT_VERSION,
     provider: request.provider,
@@ -105,15 +126,22 @@ function metadata(request: ReceiptProviderRequest, latencyMs: number) {
     dispatchReference: request.reservation.dispatchReference,
     providerRequestIdHash: null,
     latencyMs,
+    retryAfterMs,
+    ...(stageTimings ? { stageTimings } : {}),
   } as const;
 }
 
-function ambiguous(request: ReceiptProviderRequest, latencyMs: number): ReceiptProviderOutcome {
+function ambiguous(
+  request: ReceiptProviderRequest,
+  latencyMs: number,
+  outcomeCode: "TIMEOUT_AFTER_SUBMISSION" | "TRANSPORT_ERROR" | "REQUEST_CANCELLED" = "TIMEOUT_AFTER_SUBMISSION",
+  stageTimings?: ProviderStageTimings,
+): ReceiptProviderOutcome {
   return {
-    ...metadata(request, latencyMs),
+    ...metadata(request, latencyMs, null, stageTimings),
     status: "AMBIGUOUS",
     timeoutOutcome: "AFTER_SUBMISSION_UNKNOWN",
-    outcomeCode: "TIMEOUT_AFTER_SUBMISSION",
+    outcomeCode,
     finalBillableUnits: null,
     extraction: null,
   };
@@ -123,10 +151,18 @@ function failed(
   request: ReceiptProviderRequest,
   latencyMs: number,
   units: number,
-  outcomeCode: "HTTP_ERROR" | "TRANSPORT_ERROR" | "INVALID_RESULT",
+  outcomeCode:
+    | "AUTH_ERROR"
+    | "RATE_LIMITED"
+    | "PROVIDER_SERVER_ERROR"
+    | "HTTP_ERROR"
+    | "TRANSPORT_ERROR"
+    | "INVALID_RESULT",
+  retryAfterMs: number | null = null,
+  stageTimings?: ProviderStageTimings,
 ): ReceiptProviderOutcome {
   return {
-    ...metadata(request, latencyMs),
+    ...metadata(request, latencyMs, retryAfterMs, stageTimings),
     status: "FAILED",
     timeoutOutcome: "NOT_TIMED_OUT",
     outcomeCode,
@@ -135,8 +171,40 @@ function failed(
   };
 }
 
-function invalid(request: ReceiptProviderRequest, latencyMs: number, units: number): ReceiptProviderOutcome {
-  return failed(request, latencyMs, units, "INVALID_RESULT");
+function invalid(
+  request: ReceiptProviderRequest,
+  latencyMs: number,
+  units: number,
+  stageTimings?: ProviderStageTimings,
+): ReceiptProviderOutcome {
+  return failed(request, latencyMs, units, "INVALID_RESULT", null, stageTimings);
+}
+
+function extractionUnavailable(
+  request: ReceiptProviderRequest,
+  latencyMs: number,
+  failure: VisionProviderFailure,
+  stageTimings: ProviderStageTimings,
+): ReceiptProviderOutcome {
+  switch (failure.kind) {
+    case "not_attempted":
+    case "auth":
+      return failed(request, latencyMs, 0, "AUTH_ERROR", null, stageTimings);
+    case "rate_limited":
+      return failed(request, latencyMs, 0, "RATE_LIMITED", failure.retryAfterMs, stageTimings);
+    case "server":
+      return failed(request, latencyMs, 0, "PROVIDER_SERVER_ERROR", null, stageTimings);
+    case "http":
+      return failed(request, latencyMs, 0, "HTTP_ERROR", null, stageTimings);
+    case "transport":
+      return ambiguous(request, latencyMs, "TRANSPORT_ERROR", stageTimings);
+    case "cancelled":
+      return ambiguous(request, latencyMs, "REQUEST_CANCELLED", stageTimings);
+    case "timeout":
+      return ambiguous(request, latencyMs, "TIMEOUT_AFTER_SUBMISSION", stageTimings);
+    case "unusable":
+      return invalid(request, latencyMs, 1, stageTimings);
+  }
 }
 
 /**
@@ -152,19 +220,27 @@ function verifierUnavailable(
   request: ReceiptProviderRequest,
   latencyMs: number,
   failure: VisionVerifierFailure,
+  retryAfterMs: number | null,
+  stageTimings: ProviderStageTimings,
 ): ReceiptProviderOutcome {
   switch (failure) {
     case "timeout":
-      return ambiguous(request, latencyMs);
+      return ambiguous(request, latencyMs, "TIMEOUT_AFTER_SUBMISSION", stageTimings);
+    case "cancelled":
+      return ambiguous(request, latencyMs, "REQUEST_CANCELLED", stageTimings);
     case "not_attempted":
+    case "auth":
+      return failed(request, latencyMs, 1, "AUTH_ERROR", null, stageTimings);
+    case "rate_limited":
+      return failed(request, latencyMs, 1, "RATE_LIMITED", retryAfterMs, stageTimings);
+    case "server":
+      return failed(request, latencyMs, 1, "PROVIDER_SERVER_ERROR", null, stageTimings);
     case "transport":
-      return failed(request, latencyMs, 1, "TRANSPORT_ERROR");
+      return failed(request, latencyMs, 1, "TRANSPORT_ERROR", null, stageTimings);
     case "http":
-      return failed(request, latencyMs, 1, "HTTP_ERROR");
+      return failed(request, latencyMs, 1, "HTTP_ERROR", null, stageTimings);
     case "unusable":
-      // Reached, answered, and the answer was not a verdict — the verify call
-      // itself completed, so it counts against the budget like any other.
-      return failed(request, latencyMs, 2, "INVALID_RESULT");
+      return failed(request, latencyMs, 2, "INVALID_RESULT", null, stageTimings);
   }
 }
 
@@ -184,15 +260,30 @@ export function createGeminiReceiptAdapter(): ReceiptProviderAdapter & { readonl
       const pages = request.pages.map((page) => ({ buffer: bytesAsBuffer(page.bytes), mimetype: page.mediaType }));
       const extraction = await extractReceiptWithVision(pages);
       if (extraction === null) return ambiguous(request, Date.now() - started);
-      if (extraction.receipt === null) return invalid(request, Date.now() - started, 1);
+      const extractionMs = extraction.requestMs ?? Date.now() - started;
+      const extractionStages = { extractionMs, verificationMs: 0 };
+      if (extraction.failure !== null && extraction.failure !== undefined) {
+        return extractionUnavailable(request, Date.now() - started, extraction.failure, extractionStages);
+      }
+      if (extraction.receipt === null) return invalid(request, Date.now() - started, 1, extractionStages);
 
       const verification = await verifyVisionReceipt(pages, extraction.receipt);
+      const stageTimings = {
+        extractionMs,
+        verificationMs: verification.requestMs ?? Math.max(0, Date.now() - started - extractionMs),
+      };
       if (verification.failure !== null) {
-        return verifierUnavailable(request, Date.now() - started, verification.failure);
+        return verifierUnavailable(
+          request,
+          Date.now() - started,
+          verification.failure,
+          verification.retryAfterMs ?? null,
+          stageTimings,
+        );
       }
-      if (!verification.verdict.accept) return invalid(request, Date.now() - started, 2);
+      if (!verification.verdict.accept) return invalid(request, Date.now() - started, 2, stageTimings);
       return {
-        ...metadata(request, Date.now() - started),
+        ...metadata(request, Date.now() - started, null, stageTimings),
         status: "SUCCEEDED",
         timeoutOutcome: "NOT_TIMED_OUT",
         outcomeCode: "OK",
@@ -215,7 +306,10 @@ export function createVeryfiReceiptAdapter(): ReceiptProviderAdapter & { readonl
       if (result === null) return ambiguous(request, Date.now() - started);
       if (result.receipt === null) return invalid(request, Date.now() - started, request.pages.length);
       return {
-        ...metadata(request, Date.now() - started),
+        ...metadata(request, Date.now() - started, null, {
+          extractionMs: Date.now() - started,
+          verificationMs: 0,
+        }),
         status: "SUCCEEDED",
         timeoutOutcome: "NOT_TIMED_OUT",
         outcomeCode: "OK",
