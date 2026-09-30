@@ -3,6 +3,11 @@
     "id": "real-01-ph-pos-photo",
     "file": "real-01-ph-pos-photo.jpeg",
     "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
     "conditions": "Real phone photo, PH POS thermal receipt, on wooden table, slight crumple, store name cropped out of frame",
     "expected": {
       "date": "2026-07-11",
@@ -27,6 +32,11 @@
     "id": "real-02-clean-digital",
     "file": "real-02-clean-digital.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
     "conditions": "Clean digitally-generated receipt, high contrast, US layout, vendor at top, no TOTAL keyword (uses AMT/BALANCE)",
     "expected": {
       "date": "2019-12-27",
@@ -55,6 +65,11 @@
     "id": "real-03-ph-sales-invoice",
     "file": "real-03-ph-sales-invoice.jpeg",
     "kind": "real",
+    "provenance": {
+      "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+      "consentRecorded": false,
+      "sourceAttributionRecorded": false
+    },
     "conditions": "Real phone photo, PH thermal SALES INVOICE, 8 items with a quantity column and per-item unit prices on a wrapped second line, a discount line, and two emoji stickers overlaid on one item row by whoever shared it",
     "known_ambiguous": true,
     "expected": {
@@ -794,6 +809,12 @@
     "id": "real-04-cropped-vendor-glare",
     "file": "real-04-cropped-vendor-glare.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, Indonesian drink-stall thermal receipt, header block blurred/illegible, single item, tight crop",
     "expected": {
       "date": null,
@@ -813,6 +834,12 @@
     "id": "real-05-bintang-juice-camscan-watermark",
     "file": "real-05-bintang-juice-camscan-watermark.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo scanned through the CamScanner app (adds a small logo + 'Scanned with CamScanner' watermark, bottom-left), Indonesian juice stall, otherwise clear print",
     "expected": {
       "date": "2019-08-01",
@@ -838,6 +865,12 @@
     "id": "real-06-severe-blur-curled-thermal",
     "file": "real-06-severe-blur-curled-thermal.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, curled/perforated thermal receipt edge, out-of-focus capture, black background",
     "expected": {
       "date": "2017-11-24",
@@ -857,6 +890,12 @@
     "id": "real-07-glare-finger-obstruction",
     "file": "real-07-glare-finger-obstruction.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, strong glare plus the photographer's own thumb partially covering the lower-right corner, single item, bakery chain receipt",
     "expected": {
       "date": null,
@@ -877,6 +916,12 @@
     "id": "real-08-diagonal-watermark-blur",
     "file": "real-08-diagonal-watermark-blur.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, blurred header, a repeating diagonal text watermark ('D'crepes') overlaid across the whole frame by whoever shared the photo — distinct from the receipt's own printed content",
     "expected": {
       "date": null,
@@ -897,6 +942,12 @@
     "id": "real-09-severe-blur-duplicate-items",
     "file": "real-09-severe-blur-duplicate-items.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, severe blur, vendor and every administrative line illegible, TWO separate identical-item order lines (not a quantity of 2 on one line)",
     "expected": {
       "date": null,
@@ -922,6 +973,12 @@
     "id": "real-10-chopstick-obstruction-crumple",
     "file": "real-10-chopstick-obstruction-crumple.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo on a wood-grain table, wooden chopsticks and a pink napkin partially resting on/behind the receipt, blurred header, single abbreviated item name",
     "expected": {
       "date": null,
@@ -942,6 +999,12 @@
     "id": "real-11-thumb-obstruction-single-item",
     "file": "real-11-thumb-obstruction-single-item.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, blurred header, photographer's thumb visible at the left edge, single high-value electronics item, no tax line",
     "expected": {
       "date": null,
@@ -961,6 +1024,12 @@
     "id": "real-12-long-13-item-blurry-header",
     "file": "real-12-long-13-item-blurry-header.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, long 13-line itemised restaurant receipt with small print, header fully blurred, some leading quantity digits at the left margin partly cut off",
     "expected": {
       "date": null,
@@ -1041,6 +1110,12 @@
     "id": "real-13-blur-vendor-two-item",
     "file": "real-13-blur-vendor-two-item.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, blurred café/bakery header, two items, service charge + tax lines",
     "expected": {
       "date": null,
@@ -1066,6 +1141,12 @@
     "id": "real-14-lamp-glare-discount-multiplier",
     "file": "real-14-lamp-glare-discount-multiplier.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo taken under a warm lamp with strong glare and a pixelated/redacted-looking header, one item with a '2x' multiplier prefix AND a 30% discount line reducing it",
     "expected": {
       "date": null,
@@ -1086,6 +1167,12 @@
     "id": "real-15-ikea-uk-dd-mm-date",
     "file": "real-15-ikea-uk-dd-mm-date.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, IKEA Food UK receipt, clean print, GBP, DD/MM/YYYY date format",
     "expected": {
       "date": "2016-04-06",
@@ -1126,6 +1213,12 @@
     "id": "real-16-new-china-us-date",
     "file": "real-16-new-china-us-date.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, US restaurant receipt (Mesa, AZ), MM-DD-YYYY date format, clean print",
     "expected": {
       "date": "2016-03-12",
@@ -1161,6 +1254,12 @@
     "id": "real-17-decorative-banner-wood-table",
     "file": "real-17-decorative-banner-wood-table.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo on a dark wood table, upscale restaurant receipt (Dublin, Ireland), unambiguous month-name date, no decorative banner but tight crop",
     "expected": {
       "date": "2019-02-16",
@@ -1204,6 +1303,12 @@
     "id": "real-18-via-emilia-clean",
     "file": "real-18-via-emilia-clean.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, clean US restaurant receipt (Miami Beach, FL), month-name date, an order-tracking URL/code line",
     "expected": {
       "date": "2017-04-27",
@@ -1232,6 +1337,12 @@
     "id": "real-19-togo-banner-asterisks",
     "file": "real-19-togo-banner-asterisks.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, decorative asterisk banner ('*** TO GO ***') above the vendor block, US date, unambiguous",
     "expected": {
       "date": "2018-12-31",
@@ -1261,6 +1372,12 @@
     "id": "real-20-cluttered-menu-background-tilt",
     "file": "real-20-cluttered-menu-background-tilt.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, receipt photographed resting on top of a restaurant menu (cluttered background text behind/around it), slight tilt, US date",
     "expected": {
       "date": "2014-08-30",
@@ -1291,6 +1408,12 @@
     "id": "real-21-jts-diner-clean",
     "file": "real-21-jts-diner-clean.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, clean US diner receipt, US date with AM/PM time, a '(2 @2.95)' multiplier notation",
     "expected": {
       "date": "2016-02-12",
@@ -1324,6 +1447,12 @@
     "id": "real-22-blank-total-field-curl",
     "file": "real-22-blank-total-field-curl.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, curled/curved credit-card slip photographed on a white envelope with shadow, 'Tip' and 'Total' lines printed but left BLANK for the customer to fill in — only 'AMOUNT' is printed",
     "expected": {
       "date": "2017-06-05",
@@ -1338,6 +1467,12 @@
     "id": "real-23-handwritten-total-override",
     "file": "real-23-handwritten-total-override.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, US sushi restaurant receipt, printed itemised total, PLUS a handwritten total ('153.71') pen-written over/near the printed total ($143.71) — apparently a tip-adjusted figure added by hand",
     "expected": {
       "date": "2018-05-11",
@@ -1398,6 +1533,12 @@
     "id": "real-24-yauatcha-no-date",
     "file": "real-24-yauatcha-no-date.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo on a dark wood table, upscale restaurant (Honolulu, HI), 8 items, no date visible anywhere in the visible receipt body",
     "expected": {
       "date": null,
@@ -1451,6 +1592,12 @@
     "id": "real-25-boa-dark-background",
     "file": "real-25-boa-dark-background.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo against a near-black tablecloth (low background/receipt contrast in the photo, though the print itself is clean), suggested-gratuity lines below the total",
     "expected": {
       "date": "2017-12-20",
@@ -1474,6 +1621,12 @@
     "id": "real-26-friendly-reds-clean",
     "file": "real-26-friendly-reds-clean.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, clean US restaurant receipt, '(2 @14.00)' multiplier notation, unambiguous US date",
     "expected": {
       "date": "2018-07-21",
@@ -1517,6 +1670,12 @@
     "id": "real-27-pappadeaux-ambiguous-us-date",
     "file": "real-27-pappadeaux-ambiguous-us-date.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, US restaurant receipt (Houston, TX), date printed as '01/07/17' — both components <=12, genuinely ambiguous without locale context",
     "expected": {
       "date": "2017-01-07",
@@ -1547,6 +1706,12 @@
     "id": "real-28-carls-jr-translucent-bleed",
     "file": "real-28-carls-jr-translucent-bleed.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, thin/translucent thermal paper on a reflective wood table — a promotional background pattern printed on the paper's reverse bleeds through faintly behind the text, several $0.00 combo-modifier lines",
     "expected": {
       "date": "2017-09-27",
@@ -1567,6 +1732,12 @@
     "id": "real-29-saska-paperclip-clipboard",
     "file": "real-29-saska-paperclip-clipboard.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, receipt held to a wooden clipboard by a large metal binder clip whose reflective wire partially crosses the header text, US date, suggested-tip lines",
     "expected": {
       "date": "2017-08-15",
@@ -1622,6 +1793,12 @@
     "id": "real-30-wings-things-over-menu-crumple",
     "file": "real-30-wings-things-over-menu-crumple.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, crumpled receipt resting on top of a bright yellow/red takeout menu (cluttered, high-contrast background bleeding into the frame around the receipt edges), no date visible in the photographed portion",
     "expected": {
       "date": null,
@@ -1651,6 +1828,12 @@
     "id": "real-31-lan-sheng-item-price-column-shift",
     "file": "real-31-lan-sheng-item-price-column-shift.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo on a fabric tablecloth, US Chinese restaurant receipt, 6 items where one line ('White Rice (S)') has no price printed in its row and the subtotal does not cleanly reconcile against the visibly legible per-item prices",
     "expected": {
       "date": "2017-06-13",
@@ -1691,6 +1874,12 @@
     "id": "real-32-mynews-handwritten-margin",
     "file": "real-32-mynews-handwritten-margin.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, Malaysian convenience-store tax invoice, a handwritten alphanumeric code ('A03115') pen-written in the top-right margin (unrelated to the transaction), GST columns",
     "expected": {
       "date": "2018-03-23",
@@ -1709,6 +1898,12 @@
     "id": "real-33-mcdonalds-my-combo-submenu",
     "file": "real-33-mcdonalds-my-combo-submenu.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, clean scan-quality Malaysian McDonald's receipt, a combo-meal line with indented sub-components (Coke, Fries) printed with no individual price of their own",
     "expected": {
       "date": "2018-05-30",
@@ -1729,6 +1924,12 @@
     "id": "real-34-parking-ticket-stamped-redacted",
     "file": "real-34-parking-ticket-stamped-redacted.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, Malaysian parking-garage tax invoice (not a merchandise receipt), a black circular redaction mark over part of the GST ID, a 'POSTED' rubber stamp printed diagonally across the fee amount, entry/paid timestamps rather than a single transaction time",
     "expected": {
       "date": "2017-04-30",
@@ -1749,6 +1950,12 @@
     "id": "real-35-kings-confectionery-discount-column",
     "file": "real-35-kings-confectionery-discount-column.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, Malaysian bakery tax invoice, Code/Description/Qty/Price/Discount%/Amount column layout, one item carries a 30% line-level discount already applied to its Amount",
     "expected": {
       "date": "2018-03-11",
@@ -1788,6 +1995,12 @@
     "id": "real-36-mrdiy-multiline-item-layout",
     "file": "real-36-mrdiy-multiline-item-layout.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, Malaysian hardware-store tax invoice, each item spans THREE printed lines (name, size/SKU code line, then quantity x unit-price = amount on a separate line) rather than one line per item",
     "expected": {
       "date": "2016-02-01",
@@ -1811,6 +2024,12 @@
     "id": "real-37-gardenia-torn-multi-subtotal",
     "file": "real-37-gardenia-torn-multi-subtotal.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, top-left corner of the receipt physically torn off, a small paper/sticker patch obscuring part of one line, TWO separate zero-rated and standard-rated subtotals before the final Total Payable",
     "expected": {
       "date": "2017-09-22",
@@ -1861,6 +2080,12 @@
     "id": "real-38-super-seven-dot-noise-duplicate-lines",
     "file": "real-38-super-seven-dot-noise-duplicate-lines.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, scattered small dark speckle/dot noise across the whole image (dust or a dirty lens), a duplicate item line (same SKU/product printed twice, two separate purchases of the same item), a handwritten total ('18.30') and checkmarks added over the printed Net Total",
     "expected": {
       "date": "2018-03-21",
@@ -1906,6 +2131,12 @@
     "id": "real-39-sanyu-stationery-clean",
     "file": "real-39-sanyu-stationery-clean.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, clean Malaysian stationery-shop tax invoice, a single SKU line with an inline '3 x 2.9000' quantity/unit-price notation, faint decorative background pattern printed on the paper itself",
     "expected": {
       "date": "2017-09-12",
@@ -1924,6 +2155,12 @@
     "id": "real-40-portugalia-euro-redaction-dots",
     "file": "real-40-portugalia-euro-redaction-dots.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, Portuguese restaurant receipt (Lisbon), Euro currency, ISO date-time already printed, hand-applied black circular redaction dots over the customer tax-ID and part of the payment-method breakdown, a two-tier IVA(VAT)-rate breakdown table",
     "expected": {
       "date": "2017-11-20",
@@ -2004,6 +2241,12 @@
     "id": "real-41-caravela-simple-euro",
     "file": "real-41-caravela-simple-euro.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, Portuguese shopping-mall food-court receipt, single item, Euro, ISO date already printed",
     "expected": {
       "date": "2019-04-25",
@@ -2022,6 +2265,12 @@
     "id": "real-42-fuel-pump-receipt-redaction",
     "file": "real-42-fuel-pump-receipt-redaction.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, Portuguese fuel-pump receipt (not a merchandise purchase — litres of diesel at a per-litre rate), a black circular redaction mark over part of the total, an IVA/net breakdown table",
     "expected": {
       "date": "2019-10-30",
@@ -2042,6 +2291,12 @@
     "id": "real-43-pollux-torn-skew-barcode",
     "file": "real-43-pollux-torn-skew-barcode.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, long Portuguese invoice photographed at a skewed angle, a black circular redaction dot over part of the quantity/description column, a printed barcode near the footer, single low-value item",
     "expected": {
       "date": "2019-10-15",
@@ -2062,6 +2317,12 @@
     "id": "real-44-oriente-perfeito-handwritten-note",
     "file": "real-44-oriente-perfeito-handwritten-note.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, Portuguese small-business invoice, a handwritten note ('#788 Rueb') pen-written in the right margin next to the vendor block — unrelated to the transaction, does not overlap any printed field",
     "expected": {
       "date": "2019-07-14",
@@ -2080,6 +2341,12 @@
     "id": "real-45-sticker-obstruction-cropped-vendor",
     "file": "real-45-sticker-obstruction-cropped-vendor.jpg",
     "kind": "real",
+    "provenance": {
+      "label": "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+      "sourceAttributionRecorded": true,
+      "licenseAttributionRecorded": true,
+      "groundTruthReviewerCount": 1
+    },
     "conditions": "Real phone photo, an orange adhesive tab/sticker (unrelated object) overlapping the top-left corner of the frame, the issuing vendor's own name is above the top edge of the photographed area (only the recipient/client block is visible), a black redaction dot over part of a payment line",
     "expected": {
       "date": null,

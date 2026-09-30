@@ -105,12 +105,7 @@ describe("provider adapter item evidence", () => {
   });
 });
 
-/*
- * AMBIGUOUS / TIMEOUT_AFTER_SUBMISSION is a claim about billing: submitted,
- * possibly charged, outcome unknown. Recording every absent verifier verdict
- * that way put spend in the dispatch telemetry that a rotated key or a dead
- * socket never incurred, and buried the misconfiguration behind it.
- */
+/* A missing response after submission cannot prove whether the verifier was billed. */
 describe("verifier reachability", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -153,22 +148,29 @@ describe("verifier reachability", () => {
     expect(outcome.retryAfterMs).toBe(45_000);
   });
 
-  it("keeps provider 5xx failures distinct from transport failures", async () => {
-    verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "server", httpStatus: 503 });
+  it("keeps provider 5xx failures distinct and preserves Retry-After", async () => {
+    verifyVisionReceipt.mockResolvedValue({
+      verdict: null,
+      failure: "server",
+      httpStatus: 503,
+      retryAfterMs: 45_000,
+    });
 
     const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
 
     expect(outcome.status).toBe("FAILED");
     expect(outcome.outcomeCode).toBe("PROVIDER_SERVER_ERROR");
+    expect(outcome.retryAfterMs).toBe(45_000);
   });
 
-  it("records a dropped connection as a transport failure", async () => {
+  it("records a dropped connection as billing-ambiguous while preserving its code", async () => {
     verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "transport" });
 
     const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
 
+    expect(outcome.status).toBe("AMBIGUOUS");
     expect(outcome.outcomeCode).toBe("TRANSPORT_ERROR");
-    expect(outcome.finalBillableUnits).toBe(1);
+    expect(outcome.finalBillableUnits).toBeNull();
   });
 
   it("still records a real timeout as ambiguous, because the charge is genuinely unknown", async () => {
@@ -188,6 +190,7 @@ describe("verifier reachability", () => {
 
     expect(outcome.status).toBe("AMBIGUOUS");
     expect(outcome.outcomeCode).toBe("REQUEST_CANCELLED");
+    expect(outcome.finalBillableUnits).toBeNull();
   });
 
   it("bills both calls when the verifier answered with something that is not a verdict", async () => {
@@ -249,6 +252,23 @@ describe("extraction failure taxonomy", () => {
       status: "FAILED",
       outcomeCode: "RATE_LIMITED",
       retryAfterMs: 30_000,
+    });
+  });
+
+  it("preserves extraction server Retry-After", async () => {
+    extractReceiptWithVision.mockResolvedValue({
+      receipt: null,
+      rejectReason: null,
+      failure: { kind: "server", httpStatus: 503, retryAfterMs: 45_000 },
+      requestMs: 12,
+    });
+
+    const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
+
+    expect(outcome).toMatchObject({
+      status: "FAILED",
+      outcomeCode: "PROVIDER_SERVER_ERROR",
+      retryAfterMs: 45_000,
     });
   });
 });

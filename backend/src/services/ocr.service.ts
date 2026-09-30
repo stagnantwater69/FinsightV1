@@ -1,8 +1,10 @@
 import { createWorker, type Worker as TesseractWorker } from "tesseract.js";
 import type { Worker as WorkerThread } from "node:worker_threads";
+import { performance } from "node:perf_hooks";
 import sharp from "sharp";
 import { env } from "../config/env";
 import { logger } from "../config/logger";
+import { reconcileItems } from "../lib/receiptTextSignals";
 export {
   findPageSeams,
   joinPagesWithoutSeams,
@@ -24,7 +26,11 @@ export type { PageSeam, Reconciliation, ReconciliationReason } from "../lib/rece
  * "the parser". Bump the tag with any behaviour-relevant change to the
  * corresponding code, so accuracy reports can split before/after.
  */
-export const PARSER_VERSION = "ocr-parser-v2";
+// v3 normalized confidence values and added stage timings. v4 adds locale-aware
+// totals and structural vendor filters; neither version changes provider dispatch.
+// v5 reads two-line item rows (figures on one line, name on the other) and the
+// "T" VAT flag, so long supermarket receipts in those layouts return items.
+export const PARSER_VERSION = "ocr-parser-v5";
 /**
  * v2: the downscale cap follows the SHORT edge on an elongated LANDSCAPE image
  * (a long receipt lying along the frame's long axis) instead of always the
@@ -441,6 +447,12 @@ export interface OcrResult {
   lines: OcrLine[];
 }
 
+function normaliseOcrConfidence(value: unknown): number {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.min(100, Math.max(0, Math.round(numeric)));
+}
+
 /**
  * Reads a receipt, keeping the confidence tesseract reports.
  *
@@ -449,36 +461,75 @@ export interface OcrResult {
  * simply are not there unless asked for.
  */
 export async function extractReceipt(buffer: Buffer, options: OcrEngineOptions = {}): Promise<OcrResult> {
+  const startedAt = performance.now();
+  const preprocessingStartedAt = performance.now();
   let image = buffer;
+  let usedPreprocessedImage = false;
   try {
     image = await preprocessReceiptImage(buffer);
+    usedPreprocessedImage = true;
   } catch (err) {
     logger.error({ err }, "Receipt image preprocessing failed; reading the original image instead");
   }
+  const preprocessingMs = Math.max(0, Math.round(performance.now() - preprocessingStartedAt));
+  const engineStartedAt = performance.now();
 
-  return recognizeWith(options, async (worker) => {
-    const { data } = await worker.recognize(image, {}, { blocks: true, text: true });
+  try {
+    const result = await recognizeWith(options, async (worker) => {
+      const { data } = await worker.recognize(image, {}, { blocks: true, text: true });
 
-    const lines: OcrLine[] = [];
-    // The tree is block -> paragraph -> line -> word. Typed loosely because
-    // tesseract.js's own types do not describe the optional block output.
-    for (const block of ((data as unknown as { blocks?: unknown[] }).blocks ?? []) as any[]) {
-      for (const paragraph of block?.paragraphs ?? []) {
-        for (const line of paragraph?.lines ?? []) {
-          lines.push({
-            text: String(line?.text ?? ""),
-            confidence: Number(line?.confidence ?? 0),
-            words: (line?.words ?? []).map((w: any) => ({
-              text: String(w?.text ?? ""),
-              confidence: Number(w?.confidence ?? 0),
-            })),
-          });
+      const lines: OcrLine[] = [];
+      // Tesseract's types omit the optional block tree requested above.
+      for (const block of ((data as unknown as { blocks?: unknown[] }).blocks ?? []) as any[]) {
+        for (const paragraph of block?.paragraphs ?? []) {
+          for (const line of paragraph?.lines ?? []) {
+            lines.push({
+              text: String(line?.text ?? ""),
+              confidence: normaliseOcrConfidence(line?.confidence),
+              words: (line?.words ?? []).map((w: any) => ({
+                text: String(w?.text ?? ""),
+                confidence: normaliseOcrConfidence(w?.confidence),
+              })),
+            });
+          }
         }
       }
-    }
 
-    return { text: data.text, confidence: Number(data.confidence ?? 0), lines };
-  });
+      return { text: data.text, confidence: normaliseOcrConfidence(data.confidence), lines };
+    });
+    const engineMs = Math.max(0, Math.round(performance.now() - engineStartedAt));
+    logger.info(
+      {
+        operation: "receipt-ocr",
+        outcome: "succeeded",
+        usedPreprocessedImage,
+        stageTimings: {
+          preprocessingMs,
+          engineMs,
+          totalMs: Math.max(0, Math.round(performance.now() - startedAt)),
+        },
+      },
+      "Receipt OCR completed",
+    );
+    return result;
+  } catch (error) {
+    const failureKind = error instanceof Error ? error.name : "unknown";
+    logger.error(
+      {
+        operation: "receipt-ocr",
+        outcome: "failed",
+        failureKind,
+        usedPreprocessedImage,
+        stageTimings: {
+          preprocessingMs,
+          engineMs: Math.max(0, Math.round(performance.now() - engineStartedAt)),
+          totalMs: Math.max(0, Math.round(performance.now() - startedAt)),
+        },
+      },
+      "Receipt OCR failed",
+    );
+    throw error;
+  }
 }
 
 /**
@@ -674,18 +725,39 @@ const TAX_INCLUSIVE_NOTE = /\btotal\b[^\n]*\binclud(?:e[sd]?|ing)\b[^\n]*\b(gst|
  * amount larger than the total (change owed, or a round banknote handed
  * over) would otherwise be picked as "the" amount.
  */
-const TENDER_LINE = /\b(cash\s+tendered|tendered|amount\s+tendered|change\s+due)\b/i;
+const TENDER_LINE = /\b(cash(?:\s+tendered)?|tendered|amount\s+tendered|change(?:\s+due)?)\b/i;
 
 function parseAmount(text: string): number | null {
+  return readReceiptTotal(text)?.value ?? null;
+}
+
+/**
+ * The receipt's total, and whether the paper labelled it as one.
+ *
+ * `labelled` is false only for the last-resort reading, the largest figure on
+ * the page, which on a section photographed above the TOTAL line is simply
+ * the most expensive purchase.
+ */
+function readReceiptTotal(text: string): { value: number; labelled: boolean } | null {
   const lines = text.split("\n");
-  // \d{1,3} on its own before the optional comma groups would truncate a
-  // plain 4+ digit total with no thousands separator (e.g. "1220.00"
-  // matched as "220.00") — confirmed against a real test receipt. \d+
-  // greedily consumes the whole integer part first.
-  const moneyPattern = /(\d+(?:,\d{3})*\.\d{2})/;
+  // Require two decimal digits in both locale formats, including OCR-inserted spaces.
+  // The lookarounds prevent partial matches inside dates and longer decimals.
+  const moneySource = String.raw`(?<![\d.,])(?:\d+(?:,\d{3})*\s*\.\s*\d{2}|\d+(?:\.\d{3})*\s*,\s*\d{2})(?![\d.,])`;
+  const moneyPattern = new RegExp(`(${moneySource})`);
+  const parseMoney = (raw: string): number => {
+    const compact = raw.replace(/\s/g, "");
+    const comma = compact.lastIndexOf(",");
+    const point = compact.lastIndexOf(".");
+    return comma > point
+      ? Number(compact.replace(/\./g, "").replace(",", "."))
+      : Number(compact.replace(/,/g, ""));
+  };
 
   const totalCandidates = lines.filter(
-    (line) => /\btotal\b/i.test(line) && !/subtotal/i.test(line) && !TAX_INCLUSIVE_NOTE.test(line),
+    (line) => /\btotal\b/i.test(line)
+      && !/\bsub\s*-?\s*total\b/i.test(line)
+      && !/\btotal\s+incid[eê]ncias\b/i.test(line)
+      && !TAX_INCLUSIVE_NOTE.test(line),
   );
 
   /*
@@ -721,9 +793,18 @@ function parseAmount(text: string): number | null {
   // way through to the max-value fallback below, where a "Cash Tendered"
   // line could win instead. Measured on a real McDonald's receipt.
   for (const line of ordered) {
-    const match = line.match(moneyPattern);
-    if (match) return Number(match[1]!.replace(/,/g, ""));
+    const total = /\btotal\b/i.exec(line);
+    const afterLabel = total ? line.slice(total.index + total[0].length).match(moneyPattern) : null;
+    const match = afterLabel ?? line.match(moneyPattern);
+    if (match) return { value: parseMoney(match[1]!), labelled: true };
   }
+
+  // A strict Qty/count/money summary can recover a payable amount when its label is unreadable.
+  // Tesseract's evidenced Q-to-B confusion is allowed only within that complete row shape.
+  const quantitySummaryPattern = new RegExp(String.raw`^\s*[qb]ty\s+\d+\s+${moneySource}\s*$`, "i");
+  const quantitySummary = lines.find((line) => quantitySummaryPattern.test(line));
+  const summaryMatch = quantitySummary?.match(moneyPattern);
+  if (summaryMatch) return { value: parseMoney(summaryMatch[1]!), labelled: true };
 
   // Fall back to the largest decimal-looking number anywhere in the
   // receipt — usually the total is the biggest line-item-shaped number.
@@ -731,10 +812,10 @@ function parseAmount(text: string): number | null {
   // owed, cannot be mistaken for the total when no line reads as one.
   const allMatches = lines
     .filter((line) => !TENDER_LINE.test(line))
-    .flatMap((line) => [...line.matchAll(new RegExp(moneyPattern, "g"))])
-    .map((m) => Number(m[1]!.replace(/,/g, "")));
+    .flatMap((line) => [...line.matchAll(new RegExp(`(${moneySource})`, "g"))])
+    .map((m) => parseMoney(m[1]!));
   if (allMatches.length > 0) {
-    return Math.max(...allMatches);
+    return { value: Math.max(...allMatches), labelled: false };
   }
 
   return null;
@@ -743,6 +824,8 @@ function parseAmount(text: string): number | null {
 // Generic document furniture that is never the store's name.
 const NOT_A_VENDOR =
   /^[\W_]*(sales\s+invoice|official\s+receipt|invoice|receipt|cash\s+invoice|statement|order\s+slip)[\W_]*$/i;
+
+const BARE_BUSINESS_CATEGORY = /^[\W_]*(restaurant|store|shop|market|bakery|cafe)[\W_]*$/i;
 
 // Decorative banner punctuation ("*** SALES INVOICE ***", "=== STORE COPY ===",
 // "~~~ Thank you ~~~"). These characters never appear in a printed business
@@ -785,6 +868,9 @@ const CONTACT_CENTER_LINE =
  * the vendor over "SASKA'S" a few lines above it.
  */
 const GRATUITY_BOILERPLATE_LINE = /\b(suggested\s+(tip|gratuity)|before\s+discounts?)\b/i;
+
+const CHECK_SPLIT_LINE = /\b(separate|split)\s+checks?\b/i;
+const SERVICE_METADATA_LINE = /\b(table|party|check|server|svr\w*)\s*(?:#|:)?\s*\d/i;
 
 /**
  * Words that mark a line as a business name rather than an address or a
@@ -839,6 +925,8 @@ function parseVendor(text: string): string | null {
     // footer boilerplate, same reasoning as CLOSING_LINE just above.
     .filter(({ line }) => !CONTACT_CENTER_LINE.test(line))
     .filter(({ line }) => !GRATUITY_BOILERPLATE_LINE.test(line))
+    .filter(({ line }) => !CHECK_SPLIT_LINE.test(line))
+    .filter(({ line }) => !SERVICE_METADATA_LINE.test(line))
     // A line that is mostly digits/punctuation is a reference number, not a name.
     .filter(({ line }) => {
       const letters = (line.match(/[a-zA-Z]/g) ?? []).length;
@@ -854,6 +942,7 @@ function parseVendor(text: string): string | null {
 
     // The strongest signal available: the line says what kind of business it is.
     if (VENDOR_KEYWORD.test(line)) points += 60;
+    if (BARE_BUSINESS_CATEGORY.test(line)) points -= 80;
 
     // Near the top still matters, it just no longer decides alone. Only the
     // first handful of lines get anything, and the bonus decays.
@@ -895,6 +984,11 @@ function parseVendor(text: string): string | null {
     ) {
       points -= 30;
     }
+    // Address structure outweighs a business-like phrase such as "Market Place".
+    if (
+      /^\W*\d+\s+.*\b(st|street|ave|avenue|blvd|boulevard|rd|road|place|plaza|highway)\b/i.test(line)
+      || /\b[A-Z]{2}\s+\d{4,6}\s*$/i.test(line)
+    ) points -= 100;
     // Digits belong to addresses and reference numbers far more than to names.
     points -= (line.match(/\d/g) ?? []).length * 2;
 
@@ -1007,9 +1101,11 @@ const NOT_AN_ITEM = new RegExp(
  * BIR-accredited registers print hard against the amount: "129.00V" (VATable),
  * "0.00Z" (zero-rated), "E" (exempt), "X" (non-taxable). Without it this
  * pattern misses every item line on a compliant PH receipt — found on
- * real-01-ph-pos-photo in the corpus, not hypothesised.
+ * real-01-ph-pos-photo in the corpus, not hypothesised. Gaisano registers
+ * print "T" (taxable) in the same position: "115.25T" on a real three-page
+ * Gaisano Grand receipt left every one of its 53 items unread.
  */
-const TRAILING_AMOUNT = /(\d{1,3}(?:,\d{3})*\.\d{2}|\d+\.\d{2})\s*[VZEX]?\s*$/i;
+const TRAILING_AMOUNT = /(\d{1,3}(?:,\d{3})*\.\d{2}|\d+\.\d{2})\s*[VZEXT]?\s*$/i;
 
 /** A leading "2 x " / "2x" / "2 @ " quantity prefix. */
 const LEADING_QUANTITY = /^\s*(\d+(?:\.\d+)?)\s*(?:x|@|pcs?|pc)\s+/i;
@@ -1076,8 +1172,255 @@ function cleanItemName(raw: string): string {
     .replace(/(?<=[A-Za-z0-9])\]/g, "l")
     .replace(/[[\]]/g, " ")
     .replace(/\s{2,}/g, " ")
-    .replace(/[.\s]+$/, "")
+    .replace(/[.\s|\\]+$/, "")
     .trim();
+}
+
+// ============================================================
+// Two-line item rows
+// ============================================================
+// Many Philippine supermarket registers print one purchase across TWO lines:
+// the figures on one (quantity, unit price, line total, often a product code
+// in front) and the description on the other. Which comes first depends on
+// the register:
+//
+//   figures first (Gaisano)            name first (Puregold-style)
+//   005705486  1  115.25  115.25T      OISHI FISH CRACKERS 24g/100
+//   FEMME BT300 2PLY 128+CTTN              4     6.80    27.20V
+//
+// A single-line reader sees neither half as a purchase — the figures line has
+// no name and the name line has no amount — so a long receipt printed this way
+// came back with no items at all.
+//
+// The figures line is what makes pairing safe: quantity x unit price has to
+// equal the line total, so a row of unrelated numbers (a VAT breakdown, a
+// cashier number) is never read as a purchase, and the OCR tolerances below
+// can only ever admit a row the arithmetic has already confirmed.
+
+/** The figures half of a two-line row. */
+interface FiguresRow {
+  /** The printed product code, when the register prints one ("005705486"). */
+  code: string | null;
+  quantity: number;
+  unitPrice: number;
+  amount: number;
+}
+
+/**
+ * Table edges and stray punctuation OCR leaves around a column of figures: a
+ * dark margin read as "|", a speck read as "'" or ".". Never a minus sign or
+ * a parenthesis: "20.00-" and "(20.00)" are how registers print a void or a
+ * return, and stripping them would book money coming back as money spent.
+ */
+const FIGURES_EDGE_NOISE = /^[\s|¦![\]{}~_"'`:;,.*•·»«]+|[\s|¦![\]{}~_"'`:;,.*•·»«]+$/g;
+
+/**
+ * A printed money figure, with the decimal point OCR sometimes reads as a
+ * comma ("27,20"). The optional trailing character is the VAT class flag on a
+ * line total ("115.25T"), which tesseract reads as often as not as a digit
+ * ("115.257", "115.251"); it is only accepted on the total and only because
+ * the row must multiply out. A unit price may have lost its last zero
+ * ("130.5"), for the same reason.
+ */
+const FIGURE_MONEY = /^(\d{1,3}(?:,\d{3})+|\d+)[.,](\d{2})([A-Za-z*#]|\d)?$/;
+const FIGURE_UNIT_PRICE = /^(\d{1,3}(?:,\d{3})+|\d+)[.,](\d{1,2})$/;
+
+/** A quantity column: whole units, or a weight to three decimals. l, I and | are misread ones. */
+const FIGURE_QUANTITY = /^[0-9OoIl|]{1,4}(?:\.\d{1,3})?$/;
+
+/** The separator some registers print between quantity and unit price ("4 x 6.80", "4 @ 6.80"). */
+const FIGURE_TIMES = /^[x×@*]$/i;
+
+/**
+ * A lone symbol OCR made of a speck, a pen stroke or a misread digit ("¥",
+ * "©", "§"). Dropped from a figures row before it is read; whatever it hid, the
+ * row still has to multiply out to be believed.
+ */
+const FIGURE_SPECK = /^[^\p{L}\p{N}.,@*×()-]$/u;
+
+function figureMoney(token: string, unitPrice = false): number | null {
+  // O read for 0 and l/I for 1 inside the figure itself, never in the flag.
+  const figure = token.replace(/^[\dOoIl,]+[.,][\dOoIl]{1,2}/, (digits) => digits.replace(/[Oo]/g, "0").replace(/[Il]/g, "1"));
+  const match = (unitPrice ? FIGURE_UNIT_PRICE : FIGURE_MONEY).exec(figure);
+  if (!match) return null;
+  const value = Number(`${match[1]!.replace(/,/g, "")}.${match[2]}`);
+  return Number.isFinite(value) && value > 0 && value < 10_000_000 ? value : null;
+}
+
+function figureQuantity(token: string): number | null {
+  const quantity = token.replace(/\.$/, "");
+  if (!FIGURE_QUANTITY.test(quantity)) return null;
+  const value = Number(quantity.replace(/[Oo]/g, "0").replace(/[Il|]/g, "1"));
+  return Number.isFinite(value) && value > 0 && value < 10_000 ? value : null;
+}
+
+/**
+ * A product code: mostly digits, O and l/I read for 0 and 1, and the odd
+ * symbol OCR puts in place of a digit ("004%7265"). Only ever a fallback name
+ * and a key for matching the same row in two photographs.
+ */
+function figureCode(token: string): string | null {
+  if (!/^[A-Za-z0-9%#&$§-]{4,20}$/.test(token)) return null;
+  const normalised = token.replace(/[Oo]/g, "0").replace(/[Il]/g, "1");
+  const digits = (normalised.match(/\d/g) ?? []).length;
+  return digits >= 4 && digits / normalised.length >= 0.6 ? normalised : null;
+}
+
+/**
+ * Reads a line that is ONLY figures: `[code] [qty] [x|@] unitPrice amount[flag]`.
+ *
+ * Returns null for anything with words on it — those are single-line items or
+ * not purchases at all — and for any row whose figures do not multiply out.
+ * When the printed quantity does not multiply out but the total is an exact
+ * whole multiple of the unit price, the multiple is the quantity: the same
+ * correction the inline "@" reading makes, for the same reason (a 1 read as 7
+ * must not put seven units in the owner's books).
+ */
+function parseFiguresRow(rawLine: string): FiguresRow | null {
+  const line = rawLine.replace(/₱|PHP|Php/g, " ").replace(FIGURES_EDGE_NOISE, "");
+  if (!line) return null;
+  const tokens = line.split(/\s+/).filter((token) => !FIGURE_SPECK.test(token));
+  // A flag printed apart from the total ("115.25 T"), or a speck after it.
+  const last = tokens[tokens.length - 1];
+  if (tokens.length > 3 && last && /^[A-Za-z0-9|¦!*#]{1,2}$/.test(last) && figureMoney(tokens[tokens.length - 2]!) !== null) {
+    tokens.pop();
+  }
+  if (tokens.length < 3 || tokens.length > 5) return null;
+
+  const amount = figureMoney(tokens[tokens.length - 1]!);
+  const unitPrice = figureMoney(tokens[tokens.length - 2]!, true);
+  if (amount === null || unitPrice === null) return null;
+
+  const leading = tokens.slice(0, -2);
+  if (leading.length > 0 && FIGURE_TIMES.test(leading[leading.length - 1]!)) leading.pop();
+  let code: string | null = null;
+  let printedQuantity: number | null = null;
+  if (leading.length === 2) {
+    code = figureCode(leading[0]!);
+    printedQuantity = figureQuantity(leading[1]!);
+    if (code === null || printedQuantity === null) return null;
+  } else if (leading.length === 1) {
+    printedQuantity = figureQuantity(leading[0]!);
+    if (printedQuantity === null) {
+      code = figureCode(leading[0]!);
+      if (code === null) return null;
+    }
+  } else {
+    return null;
+  }
+
+  if (printedQuantity !== null && Math.abs(printedQuantity * unitPrice - amount) < 0.02) {
+    return { code, quantity: printedQuantity, unitPrice, amount };
+  }
+  const implied = amount / unitPrice;
+  const whole = Math.round(implied);
+  if (whole >= 1 && whole < 10_000 && Math.abs(implied - whole) < 0.005) {
+    return { code, quantity: whole, unitPrice, amount };
+  }
+  return null;
+}
+
+/**
+ * "PWD" on a supermarket description is POWDER ("BEAR BRAND PWD SWAK 33G/1",
+ * "TIDE PWD 70G"); the persons-with-disability discount it also names comes
+ * with its own context on the line — a rate, "disc", an ID, "SC/PWD".
+ */
+const PWD_DISCOUNT_CONTEXT = /%|\bdisc|\bid\b|#|\bname\b|\bsc\s*\//i;
+
+/**
+ * A line that can be the description half of a two-line row: real words, no
+ * money at the end, and none of the furniture the item parser already refuses.
+ */
+function isItemNameLine(rawLine: string): boolean {
+  const line = rawLine.replace(/₱|PHP|Php|\$/g, " ").trim();
+  if (!line) return false;
+  const denylisted = PWD_DISCOUNT_CONTEXT.test(line) ? line : line.replace(/\bpwd\b/gi, "powder");
+  if (ADMINISTRATIVE_LINE.test(line) || NOT_AN_ITEM.test(denylisted) || CLOSING_LINE.test(line)) return false;
+  // A line ending in money is a purchase or a summary in its own right.
+  if (TRAILING_AMOUNT.test(line)) return false;
+  // "ADDRESS:" and "No Of Items : 239" are labels, not products.
+  if (/:\s*$/.test(line) || /\s:\s/.test(line)) return false;
+  const visible = line.replace(/\s/g, "");
+  const letters = (visible.match(/[A-Za-z]/g) ?? []).length;
+  const digits = (visible.match(/\d/g) ?? []).length;
+  return letters >= 3 && letters / visible.length >= 0.3 && (letters + digits) / visible.length >= 0.6;
+}
+
+interface TwoLineRows {
+  /** Figures line index -> the item it carries (null when it could not be named). */
+  rows: Map<number, { name: string; row: FiguresRow } | null>;
+  /** Line indexes consumed as the description half of a row. */
+  names: Set<number>;
+}
+
+/**
+ * Pairs each figures line with its description, deciding once per receipt
+ * whether descriptions print above or below their figures.
+ *
+ * The decision is a count, not a guess: a figures-first block starts with a
+ * figures line under the column header and ends with a description above the
+ * total, so more figures lines have a description BELOW them than above, and
+ * the other way round for name-first. A tie means both ends of the block are
+ * descriptions — a page that starts mid-receipt, say — and falls to the one
+ * structural hint left: registers that print a product code lead the item
+ * with it (the code sits in the ITEM column), so code-bearing rows read
+ * figures-first.
+ *
+ * A figures line whose description is missing (the line was unreadable, or
+ * cut off at the edge of a photograph) keeps its printed product code as its
+ * name; without a code there is nothing printed to call it, and it is dropped
+ * rather than named by invention — the gap then shows against the total.
+ */
+function pairTwoLineRows(lines: string[]): TwoLineRows {
+  const rows: TwoLineRows["rows"] = new Map();
+  const names = new Set<number>();
+  const present = lines.flatMap((line, index) => (line.trim() ? [index] : []));
+  const figures = new Map<number, FiguresRow>();
+  const nameLines = new Set<number>();
+  for (const index of present) {
+    const row = parseFiguresRow(lines[index]!);
+    if (row) figures.set(index, row);
+    else if (isItemNameLine(lines[index]!)) nameLines.add(index);
+  }
+  if (figures.size === 0) return { rows, names };
+
+  const position = new Map(present.map((index, at) => [index, at]));
+  const neighbour = (index: number, step: -1 | 1): number | undefined => present[position.get(index)! + step];
+  let above = 0;
+  let below = 0;
+  for (const index of figures.keys()) {
+    if (nameLines.has(neighbour(index, -1) ?? -1)) above++;
+    if (nameLines.has(neighbour(index, 1) ?? -1)) below++;
+  }
+  const withCodes = [...figures.values()].filter((row) => row.code !== null).length;
+  const figuresFirst = below > above || (below === above && withCodes * 2 > figures.size);
+
+  for (const [index, row] of figures) {
+    const partner = neighbour(index, figuresFirst ? 1 : -1);
+    if (partner !== undefined && nameLines.has(partner) && !names.has(partner)) {
+      const name = cleanItemName(lines[partner]!);
+      if ((name.match(/[A-Za-z]/g) ?? []).length >= 3) {
+        names.add(partner);
+        rows.set(index, { name, row });
+        continue;
+      }
+    }
+    rows.set(index, row.code ? { name: row.code, row } : null);
+  }
+  return { rows, names };
+}
+
+/**
+ * A purchased line plus where it was printed, for callers that need to know
+ * which photograph an item came from.
+ */
+export interface LocatedLineItem extends ParsedLineItem {
+  /** Index, in `text.split("\n")`, of the line carrying the item's amount. */
+  lineIndex: number;
+  /** The printed product code of a two-line row, when the register prints one. */
+  code: string | null;
+  /** Read from a two-line row, whose printed quantity x unit price made its total. */
+  twoLineRow: boolean;
 }
 
 /**
@@ -1089,15 +1432,59 @@ function cleanItemName(raw: string): string {
  * inventing lines that were never legible.
  */
 export function parseLineItems(text: string): ParsedLineItem[] {
-  const items: ParsedLineItem[] = [];
-  // The receipt's own total, used by the structural guard at the bottom.
-  const receiptTotal = parseAmount(text);
+  return parseLocatedLineItems(text).map(({ name, quantity, unitPrice, amount }) => ({ name, quantity, unitPrice, amount }));
+}
 
-  for (const rawLine of text.split("\n")) {
-    const line = rawLine.replace(/₱|PHP|Php|\$/g, " ").trimEnd();
+/**
+ * A single-line item name that reads as words, for registers that print their
+ * purchases as two-line rows. There a line of text ending in money is rarely
+ * a purchase: it is a figures row OCR garbled past reading ("0F663300 3 0 NB
+ * 299.51", read from 005443300 3 99.75 299.25T), and its "name" is the
+ * wreckage of the code and quantity columns.
+ */
+function readsAsWords(name: string): boolean {
+  const visible = name.replace(/\s/g, "");
+  const letters = (visible.match(/[A-Za-z]/g) ?? []).length;
+  return letters >= 3 && letters / visible.length >= 0.5 && !/^\S*\d{4,}/.test(name);
+}
+
+/** `parseLineItems`, keeping each item's source line and printed product code. */
+export function parseLocatedLineItems(text: string): LocatedLineItem[] {
+  const items: LocatedLineItem[] = [];
+  // The receipt's own total, used by the structural guard at the bottom.
+  const receiptTotal = readReceiptTotal(text);
+  const lines = text.split("\n");
+  const twoLine = pairTwoLineRows(lines);
+  /*
+   * A register that prints its purchases as two-line rows ends them at the
+   * TOTAL line; what follows is tender, change and tax, and a line there that
+   * slipped past the denylist ("OHNGE wwe) 2.75", the CHANGE line) is not a
+   * purchase. Single-line receipts keep every line, as they always have.
+   */
+  const twoLineRegister = twoLine.rows.size >= 3;
+  let lastTotalLine = -1;
+  for (let index = lines.length - 1; twoLineRegister && index >= 0 && lastTotalLine < 0; index--) {
+    const line = lines[index]!;
+    if (/\btotal\b/i.test(line) && !/\bsub\s*-?\s*total\b/i.test(line) && /\d\s*[.,]\s*\d{2}/.test(line)) lastTotalLine = index;
+  }
+
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const pair = twoLine.rows.get(lineIndex);
+    if (pair !== undefined) {
+      if (pair) {
+        const { code, quantity, unitPrice, amount } = pair.row;
+        items.push({ name: pair.name, quantity, unitPrice, amount, lineIndex, code, twoLineRow: true });
+      }
+      continue;
+    }
+    // The description half of a two-line row carries no amount of its own.
+    if (twoLine.names.has(lineIndex)) continue;
+
+    const line = lines[lineIndex]!.replace(/₱|PHP|Php|\$/g, " ").trimEnd();
     if (!line.trim()) continue;
     // Administrative furniture and summary lines are never purchases.
     if (ADMINISTRATIVE_LINE.test(line) || NOT_AN_ITEM.test(line)) continue;
+    if (lastTotalLine >= 0 && lineIndex > lastTotalLine) continue;
 
     // Shape A: "Name   2   25.00   50.00" — quantity and unit price columns.
     const columns = line.match(QTY_UNIT_AMOUNT_TAIL);
@@ -1108,8 +1495,8 @@ export function parseLineItems(text: string): ParsedLineItem[] {
       const amount = money(columns[4]!);
       // Only trust the columns when they actually multiply out; otherwise
       // this is three unrelated numbers that happen to sit in a row.
-      if (name.length >= 2 && Math.abs(quantity * unitPrice - amount) < 0.02) {
-        items.push({ name, quantity, unitPrice, amount });
+      if (name.length >= 2 && Math.abs(quantity * unitPrice - amount) < 0.02 && (!twoLineRegister || readsAsWords(name))) {
+        items.push({ name, quantity, unitPrice, amount, lineIndex, code: null, twoLineRow: false });
         continue;
       }
     }
@@ -1169,12 +1556,16 @@ export function parseLineItems(text: string): ParsedLineItem[] {
     // A line that is all numbers has no name, so it is a column of figures
     // rather than a purchase. Two characters of letters is the floor.
     if ((name.match(/[a-zA-Z]/g) ?? []).length < 2) continue;
+    if (twoLineRegister && !readsAsWords(name)) continue;
 
     items.push({
       name,
       quantity,
       unitPrice: unitPrice ?? (quantity && quantity > 0 ? Math.round((amount / quantity) * 100) / 100 : null),
       amount,
+      lineIndex,
+      code: null,
+      twoLineRow: false,
     });
   }
 
@@ -1189,12 +1580,19 @@ export function parseLineItems(text: string): ParsedLineItem[] {
    *
    * Guarded by `length > 1`, because on a genuine one-item receipt the item
    * legitimately equals the total and must be kept.
+   *
+   * And only against a total the paper actually states. With no TOTAL line
+   * the "total" is merely the largest figure, which on a section photographed
+   * above the TOTAL line is the most expensive purchase — and this used to
+   * delete it from every such page. That figure counts as the total only when
+   * the other items add up to it, i.e. when it IS one with its label misread.
    */
   if (receiptTotal !== null && items.length > 1) {
-    const filtered = items.filter((i) => Math.abs(i.amount - receiptTotal) >= 0.005);
+    const filtered = items.filter((i) => Math.abs(i.amount - receiptTotal.value) >= 0.005);
+    const isTotal = receiptTotal.labelled || reconcileItems(text, filtered, receiptTotal.value).reconciled;
     // Only apply it if something survives — a receipt whose every line equals
     // the total is not something this rule can reason about.
-    if (filtered.length > 0) return filtered;
+    if (filtered.length > 0 && isTotal) return filtered;
   }
 
   return items;
@@ -1246,13 +1644,13 @@ export function confidenceForValue(lines: OcrLine[], value: string | number | nu
     for (const word of line.words) {
       const w = normaliseToken(word.text);
       // An exact word wins outright — that is the token the value came from.
-      if (w === target) return Math.round(word.confidence);
+      if (w === target) return normaliseOcrConfidence(word.confidence);
       if (target.length >= 3 && w.includes(target)) {
-        best = Math.max(best ?? 0, Math.round(word.confidence));
+        best = Math.max(best ?? 0, normaliseOcrConfidence(word.confidence));
       }
     }
     if (best === null && target.length >= 3 && normaliseToken(line.text).includes(target)) {
-      best = Math.round(line.confidence);
+      best = normaliseOcrConfidence(line.confidence);
     }
   }
 
@@ -1266,7 +1664,38 @@ export function confidenceForValue(lines: OcrLine[], value: string | number | nu
  * scale on top would be presenting a guess about a guess.
  */
 export function overallConfidence(result: OcrResult): number {
-  return Math.round(result.confidence);
+  return normaliseOcrConfidence(result.confidence);
+}
+
+/**
+ * The same figure for a receipt photographed in several sections: the mean
+ * over every word on every page, which is what tesseract's own page
+ * confidence is for a single page.
+ *
+ * Not the worst page. One section of a long receipt that reads badly — a
+ * handwritten note across the header, say — used to set the figure for the
+ * whole receipt, so a clean three-page read was presented as "hard to read"
+ * throughout. The weak page is still named, by its own LOW_CONFIDENCE
+ * warning, and still triggers review on its own.
+ */
+export function documentConfidence(results: OcrResult[]): number {
+  if (results.length === 1) return overallConfidence(results[0]!);
+  let sum = 0;
+  let words = 0;
+  for (const result of results) {
+    for (const line of result.lines) {
+      for (const word of line.words) {
+        if (!word.text.trim()) continue;
+        sum += normaliseOcrConfidence(word.confidence);
+        words++;
+      }
+    }
+  }
+  if (words > 0) return normaliseOcrConfidence(sum / words);
+  // No word tree to average: weight each page's own figure by how much it read.
+  const weights = results.map((result) => Math.max(1, result.text.trim().length));
+  const weighted = results.reduce((total, result, index) => total + overallConfidence(result) * weights[index]!, 0);
+  return normaliseOcrConfidence(weighted / weights.reduce((total, weight) => total + weight, 0));
 }
 
 // ============================================================

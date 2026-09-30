@@ -28,6 +28,8 @@ backend/tests/ocr-accuracy/inbox/
 # with live-feedback-report.ts whenever it is needed.
 backend/tests/ocr-accuracy/LIVE-FEEDBACK-REPORT.md
 backend/tests/ocr-accuracy/live-feedback.json
+# Local OCR gate output is generated per machine and includes timing data.
+backend/tests/receipt-scanner-evaluation/local-quality-results.json
 /RECEIPTS/
 
 # Python (ml worker)

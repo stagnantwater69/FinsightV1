@@ -193,7 +193,7 @@ function extractionUnavailable(
     case "rate_limited":
       return failed(request, latencyMs, 0, "RATE_LIMITED", failure.retryAfterMs, stageTimings);
     case "server":
-      return failed(request, latencyMs, 0, "PROVIDER_SERVER_ERROR", null, stageTimings);
+      return failed(request, latencyMs, 0, "PROVIDER_SERVER_ERROR", failure.retryAfterMs, stageTimings);
     case "http":
       return failed(request, latencyMs, 0, "HTTP_ERROR", null, stageTimings);
     case "transport":
@@ -210,11 +210,10 @@ function extractionUnavailable(
 /**
  * How an absent verifier verdict is recorded.
  *
- * AMBIGUOUS / TIMEOUT_AFTER_SUBMISSION is a claim about billing: reached,
- * possibly charged, outcome unknown. Recording every absent verdict that way
- * put spend in the telemetry that a rotated key or a dropped connection never
- * incurred, and hid the misconfiguration behind a plausible timeout. Only a
- * real timeout is ambiguous; the rest are billed for the extraction alone.
+ * AMBIGUOUS is a billing claim, not just a timeout label: the verifier request
+ * may have reached the provider, but no response proved whether it was billed.
+ * Authentication and HTTP responses are definitive; transport loss,
+ * cancellation and timeout after submission are not.
  */
 function verifierUnavailable(
   request: ReceiptProviderRequest,
@@ -234,9 +233,9 @@ function verifierUnavailable(
     case "rate_limited":
       return failed(request, latencyMs, 1, "RATE_LIMITED", retryAfterMs, stageTimings);
     case "server":
-      return failed(request, latencyMs, 1, "PROVIDER_SERVER_ERROR", null, stageTimings);
+      return failed(request, latencyMs, 1, "PROVIDER_SERVER_ERROR", retryAfterMs, stageTimings);
     case "transport":
-      return failed(request, latencyMs, 1, "TRANSPORT_ERROR", null, stageTimings);
+      return ambiguous(request, latencyMs, "TRANSPORT_ERROR", stageTimings);
     case "http":
       return failed(request, latencyMs, 1, "HTTP_ERROR", null, stageTimings);
     case "unusable":
@@ -258,7 +257,9 @@ export function createGeminiReceiptAdapter(): ReceiptProviderAdapter & { readonl
     async extract(request) {
       const started = Date.now();
       const pages = request.pages.map((page) => ({ buffer: bytesAsBuffer(page.bytes), mimetype: page.mediaType }));
-      const extraction = await extractReceiptWithVision(pages);
+      const extraction = await extractReceiptWithVision(pages, {
+        timeoutMs: request.timeoutMs,
+      });
       if (extraction === null) return ambiguous(request, Date.now() - started);
       const extractionMs = extraction.requestMs ?? Date.now() - started;
       const extractionStages = { extractionMs, verificationMs: 0 };
@@ -267,7 +268,9 @@ export function createGeminiReceiptAdapter(): ReceiptProviderAdapter & { readonl
       }
       if (extraction.receipt === null) return invalid(request, Date.now() - started, 1, extractionStages);
 
-      const verification = await verifyVisionReceipt(pages, extraction.receipt);
+      const verification = await verifyVisionReceipt(pages, extraction.receipt, {
+        timeoutMs: request.timeoutMs,
+      });
       const stageTimings = {
         extractionMs,
         verificationMs: verification.requestMs ?? Math.max(0, Date.now() - started - extractionMs),

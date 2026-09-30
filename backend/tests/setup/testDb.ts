@@ -116,6 +116,8 @@ export interface ProfileOverrides {
   largeExpenseThresholdPercent?: number;
   /** IANA timezone identifier. Omitted means the schema default ("Asia/Manila"). */
   timezone?: string;
+  /** The business type chosen at onboarding. Omitted means "Sari-Sari Store". */
+  type?: string;
 }
 
 export async function makeProfile(userId: number, overrides: ProfileOverrides = {}) {
@@ -123,7 +125,7 @@ export async function makeProfile(userId: number, overrides: ProfileOverrides = 
     data: {
       userId,
       name: overrides.name ?? "Test Store",
-      type: "Sari-Sari Store",
+      type: overrides.type ?? "Sari-Sari Store",
       availableFunds: new Prisma.Decimal(overrides.availableFunds ?? 48500),
       expectedMonthlyExpenses: new Prisma.Decimal(overrides.expectedMonthlyExpenses ?? 125000),
       operatingDays: overrides.operatingDays ?? 25,

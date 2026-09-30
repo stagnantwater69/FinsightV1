@@ -2,6 +2,7 @@ import { prisma } from "../config/prisma";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
 import { ApiError } from "../middleware/error.middleware";
 import type { ExpenseCategory, ExpenseCostBehavior } from "@prisma/client";
+import { categoryKind } from "../lib/expenseTaxonomy";
 
 interface CreateInput {
   businessProfileId: number;
@@ -28,6 +29,8 @@ function toDTO(category: ExpenseCategory) {
     description: category.description,
     createdAt: category.createdAt,
     costBehavior: category.costBehavior,
+    /** "business" | "personal", read from the name — see lib/expenseTaxonomy. */
+    kind: categoryKind(category.name),
   };
 }
 

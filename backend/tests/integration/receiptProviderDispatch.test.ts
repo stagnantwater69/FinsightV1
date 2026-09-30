@@ -178,7 +178,7 @@ function adapter(
 function failedOutcome(
   request: ReceiptProviderRequest,
   outcomeCode: "AUTH_ERROR" | "RATE_LIMITED" | "PROVIDER_SERVER_ERROR" | "TRANSPORT_ERROR",
-  retryAfterMs = 30_000,
+  retryAfterMs: number | null = null,
 ): ReceiptProviderOutcome {
   return {
     contractVersion: request.contractVersion,
@@ -188,7 +188,9 @@ function failedOutcome(
     dispatchReference: request.reservation.dispatchReference,
     providerRequestIdHash: null,
     latencyMs: 25,
-    retryAfterMs: outcomeCode === "RATE_LIMITED" ? retryAfterMs : null,
+    retryAfterMs: outcomeCode === "RATE_LIMITED" || outcomeCode === "PROVIDER_SERVER_ERROR"
+      ? retryAfterMs
+      : null,
     status: "FAILED",
     timeoutOutcome: "NOT_TIMED_OUT",
     outcomeCode,
@@ -390,22 +392,25 @@ describe("mocked receipt provider dispatch gate", () => {
     expect(await prisma.externalProviderDispatch.count()).toBe(3);
   });
 
-  it("honors a persisted Retry-After across dispatch calls beyond the default cooldown", async () => {
+  it.each([
+    ["RATE_LIMITED", "rate-limit", "RATE_LIMITED"],
+    ["PROVIDER_SERVER_ERROR", "server-503", "PROVIDER_SERVER_ERROR"],
+  ] as const)("honors a persisted %s Retry-After across dispatch calls", async (outcomeCode, suffix, reasonCode) => {
     const owner = await makeOwnerWithProfile();
     await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
-    const firstScan = await scanFor(owner.profile.id, "rate-limit-first");
-    const rateLimitedAdapter = adapter(async (request) => failedOutcome(request, "RATE_LIMITED", 5 * 60 * 1000));
+    const firstScan = await scanFor(owner.profile.id, `${suffix}-first`);
+    const retryingAdapter = adapter(async (request) => failedOutcome(request, outcomeCode, 5 * 60 * 1000));
 
     await dispatchReceiptProviderRescue(dispatchInput(owner.profile.id, firstScan.id), {
-      adapter: rateLimitedAdapter,
+      adapter: retryingAdapter,
       configuration: getReceiptProviderConfiguration(),
     });
 
     const stored = await prisma.externalProviderDispatch.findFirstOrThrow();
-    expect(stored.outcomeCode).toBe("RATE_LIMITED");
+    expect(stored.outcomeCode).toBe(outcomeCode);
     expect(stored.providerRetryAt).toEqual(new Date(stored.completedAt!.getTime() + 5 * 60 * 1000));
 
-    const secondScan = await scanFor(owner.profile.id, "rate-limit-second");
+    const secondScan = await scanFor(owner.profile.id, `${suffix}-second`);
     const healthyAdapter = adapter();
     const result = await dispatchReceiptProviderRescue(dispatchInput(owner.profile.id, secondScan.id), {
       adapter: healthyAdapter,
@@ -416,7 +421,7 @@ describe("mocked receipt provider dispatch gate", () => {
     expect(result).toMatchObject({
       code: "PROVIDER_COOLDOWN_ACTIVE",
       dispatched: false,
-      telemetry: { cooldown: { reasonCode: "RATE_LIMITED" } },
+      telemetry: { cooldown: { reasonCode, failureCount: 1 } },
     });
     expect(healthyAdapter.extract).not.toHaveBeenCalled();
   });

@@ -348,61 +348,67 @@ export function requestConfirmedReceiptEvidenceDeletion(
   return enqueueOwnedPurge(userId, receiptScanId, idempotencyKey, ReceiptPurgeMode.DETACH_EVIDENCE);
 }
 
-export async function enqueueReceiptPurgeIfOrphaned(receiptScanId: number | null | undefined): Promise<void> {
+export async function enqueueReceiptPurgeIfOrphaned(
+  receiptScanId: number | null | undefined,
+  db: Prisma.TransactionClient | typeof prisma = prisma,
+): Promise<void> {
   if (!receiptScanId) return;
+  if (db === prisma) {
+    await prisma.$transaction((tx) => enqueueReceiptPurgeIfOrphaned(receiptScanId, tx));
+    return;
+  }
 
-  await prisma.$transaction(async (tx) => {
-    const batchLink = await tx.receiptScan.findUnique({
-      where: { id: receiptScanId },
-      select: { captureBatchId: true },
-    });
-    if (!batchLink) return;
-    if (
-      batchLink.captureBatchId !== null
-      && !(await lockReceiptCaptureBatchForMutation(tx, batchLink.captureBatchId))
-    ) {
-      return;
-    }
+  const tx = db;
+  const batchLink = await tx.receiptScan.findUnique({
+    where: { id: receiptScanId },
+    select: { captureBatchId: true },
+  });
+  if (!batchLink) return;
+  if (
+    batchLink.captureBatchId !== null
+    && !(await lockReceiptCaptureBatchForMutation(tx, batchLink.captureBatchId))
+  ) {
+    return;
+  }
 
-    const locked = await tx.$queryRaw<{ id: number }[]>`
-      SELECT "ReceiptScan_ID" AS id
-      FROM "ReceiptScan"
-      WHERE "ReceiptScan_ID" = ${receiptScanId}
-      FOR UPDATE
-    `;
-    if (locked.length !== 1) return;
+  const locked = await tx.$queryRaw<{ id: number }[]>`
+    SELECT "ReceiptScan_ID" AS id
+    FROM "ReceiptScan"
+    WHERE "ReceiptScan_ID" = ${receiptScanId}
+    FOR UPDATE
+  `;
+  if (locked.length !== 1) return;
 
-    const scan = await tx.receiptScan.findUnique({
-      where: { id: receiptScanId },
-      include: {
-        pages: { orderBy: { pageNumber: "asc" } },
-        purgeJobs: { orderBy: { requestedAt: "desc" } },
-      },
-    });
-    if (!scan?.businessProfileId || scan.confirmationStatus !== "Confirmed") return;
-    if (await tx.expenseRecord.count({ where: { receiptScanId } })) return;
+  const scan = await tx.receiptScan.findUnique({
+    where: { id: receiptScanId },
+    include: {
+      pages: { orderBy: { pageNumber: "asc" } },
+      purgeJobs: { orderBy: { requestedAt: "desc" } },
+    },
+  });
+  if (!scan?.businessProfileId || scan.confirmationStatus !== "Confirmed") return;
+  if (await tx.expenseRecord.count({ where: { receiptScanId } })) return;
 
-    const active = scan.purgeJobs.some((job) =>
-      ACTIVE_PURGE_STATUSES.includes(job.status as (typeof ACTIVE_PURGE_STATUSES)[number]),
-    );
-    if (active) return;
+  const active = scan.purgeJobs.some((job) =>
+    ACTIVE_PURGE_STATUSES.includes(job.status as (typeof ACTIVE_PURGE_STATUSES)[number]),
+  );
+  if (active) return;
 
-    const count = artifactCount(scan);
-    if (scan.evidenceDeletedAt && count === 0) {
-      if (scan.captureBatchId !== null) await cancelReceiptCaptureBatch(tx, scan.captureBatchId);
-      await tx.receiptScan.delete({ where: { id: receiptScanId } });
-      return;
-    }
+  const count = artifactCount(scan);
+  if (scan.evidenceDeletedAt && count === 0) {
+    if (scan.captureBatchId !== null) await cancelReceiptCaptureBatch(tx, scan.captureBatchId);
+    await tx.receiptScan.delete({ where: { id: receiptScanId } });
+    return;
+  }
 
-    const hash = internalOrphanKeyHash(scan.businessProfileId, receiptScanId);
-    const prior = scan.purgeJobs.find((job) => job.requestKeyHash === hash);
-    if (prior) return;
+  const hash = internalOrphanKeyHash(scan.businessProfileId, receiptScanId);
+  const prior = scan.purgeJobs.find((job) => job.requestKeyHash === hash);
+  if (prior) return;
 
-    await scheduleInternalScanDeletion(tx, scan, scan.businessProfileId, {
-      requestKeyHash: hash,
-      reason: ReceiptPurgeReason.OWNER_REQUEST,
-      storageObjectsExpected: count,
-    });
+  await scheduleInternalScanDeletion(tx, scan, scan.businessProfileId, {
+    requestKeyHash: hash,
+    reason: ReceiptPurgeReason.OWNER_REQUEST,
+    storageObjectsExpected: count,
   });
 }
 

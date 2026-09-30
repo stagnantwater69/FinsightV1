@@ -13,6 +13,7 @@ import { findKnownVendorInText } from "../../lib/historyMatching";
 import { assessImageQuality } from "../../lib/imageQuality";
 import type { ReceiptWarning } from "../../lib/receiptWarnings";
 import type { FieldEvidenceEntry, RescuedFields } from "./types";
+import type { ProviderSeamRepeats } from "../receiptProviderContract";
 
 /**
  * How many past records are read to build the list of vendors this business
@@ -220,6 +221,13 @@ export function buildScanWarnings(args: {
   parsed: ParsedReceiptFields;
   rescued: RescuedFields;
   worstPageConfidence: number;
+  /**
+   * Each page's own confidence, in page order; names the weak page on a
+   * multi-page scan. Null for a page that could not be read at all.
+   */
+  pageConfidences?: (number | null)[];
+  /** 1-indexed pages neither image of which could be read. */
+  unreadPages?: number[];
 }): ReceiptWarning[] {
   const { pageQualities, pageTexts, combinedText, seamFreeText, parsed, rescued, worstPageConfidence } = args;
   const warnings: ReceiptWarning[] = [];
@@ -261,8 +269,26 @@ export function buildScanWarnings(args: {
     });
   }
 
-  if (worstPageConfidence < LOW_CONFIDENCE) {
-    warnings.push({ code: "LOW_CONFIDENCE", detail: `worst page confidence ${worstPageConfidence}` });
+  /*
+   * One warning per weak page on a multi-page scan, carrying its page number,
+   * so the review screen points at the section to check instead of calling
+   * the whole receipt hard to read because one photograph was.
+   */
+  const pageConfidences = args.pageConfidences ?? [];
+  if (pageConfidences.length > 1) {
+    pageConfidences.forEach((confidence, index) => {
+      if (confidence !== null && confidence < LOW_CONFIDENCE) {
+        warnings.push({ code: "LOW_CONFIDENCE", pageNumber: index + 1, detail: `page ${index + 1} confidence ${confidence}` });
+      }
+    });
+  } else if (worstPageConfidence < LOW_CONFIDENCE && pageConfidences[0] !== null) {
+    warnings.push({ code: "LOW_CONFIDENCE", detail: `page confidence ${worstPageConfidence}` });
+  }
+
+  // A page that could not be read at all: its lines are missing from the
+  // items, and the owner has to take them from the paper or retake it.
+  for (const pageNumber of args.unreadPages ?? []) {
+    warnings.push({ code: "UNREADABLE_FIELD", field: "items", pageNumber, detail: `page ${pageNumber} could not be read` });
   }
 
   if (rescued.visionAssisted) warnings.push({ code: "VISION_INTERPRETED" });
@@ -288,4 +314,37 @@ export function buildScanWarnings(args: {
     seen.add(key);
     return true;
   });
+}
+
+function money(amount: number): string {
+  return amount.toFixed(2);
+}
+
+/**
+ * The overlap outcome, told to the owner: what was counted once, and what
+ * might still be counted twice. Details name the lines so the review screen
+ * can say exactly which ones, not just that something happened.
+ */
+export function seamRepeatWarnings(report: ProviderSeamRepeats | undefined): ReceiptWarning[] {
+  if (!report) return [];
+  const warnings: ReceiptWarning[] = [];
+  const pages = [...new Set(report.removed.map((repeat) => repeat.pageNumber))];
+  for (const pageNumber of pages) {
+    const lines = report.removed.filter((repeat) => repeat.pageNumber === pageNumber);
+    warnings.push({
+      code: "OVERLAP_ITEMS_COUNTED_ONCE",
+      pageNumber,
+      detail: lines.map((repeat) => `${repeat.name} ${money(repeat.amount)}`).join("; ").slice(0, 500),
+    });
+  }
+  const flaggedPages = [...new Set(report.flagged.map((repeat) => repeat.pageNumber))];
+  for (const pageNumber of flaggedPages) {
+    const lines = report.flagged.filter((repeat) => repeat.pageNumber === pageNumber);
+    warnings.push({
+      code: "POSSIBLE_REPEATED_ITEMS",
+      pageNumber,
+      detail: lines.map((repeat) => `${repeat.name} ${money(repeat.amount)}`).join("; ").slice(0, 500),
+    });
+  }
+  return warnings;
 }

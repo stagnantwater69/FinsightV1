@@ -71,9 +71,23 @@ the scenario; `SEED_USERS`, `SEED_RECORDS`, `SEED_FAT_RECORDS` on the seeder;
 `STUB_PORT`, `STUB_LATENCY_MS` on the stub; `K6`, `LOAD_DB_CONTAINER` on the
 runner. `USER_COUNT=1` puts every VU on the fat profile.
 
-The thresholds in `session.js` are the acceptance criteria, so k6 exits
-non-zero when a run breaches them: p95 under 2 s for normal requests, under 5 s
-for reports, errors under 1%.
+The thresholds in `session.js` are machine-enforced. k6 exits non-zero when a
+run breaches them: p95 under 2 s for bootstrap, dashboard, records, and writes;
+p95 under 5 s for insights; errors under 1%. The dashboard budget covers the
+whole summary-plus-flagged-count flow, not one request in isolation.
+
+Deletion sampling is opt-in so the reference session shape stays unchanged.
+Set `DELETE_PCT` to delete that percentage of expenses created by the run. When
+enabled, `flow_delete` must stay below `DELETE_P95_MS` (2,000 ms by default),
+and `DELETE_MIN_SAMPLES` (5 by default) prevents a one-request run from passing.
+For example:
+
+```bash
+WRITE_PCT=100 DELETE_PCT=100 DELETE_MIN_SAMPLES=5 \
+  THINK_MIN=0.1 THINK_MAX=0.2 tests/load/run-stage.sh delete-check 10 5s 20s
+```
+
+The delete flow only targets records that the same load-test session created.
 
 ## Reference numbers
 
@@ -118,9 +132,10 @@ The runner tests five shapes: 50 rows, a file close to the 5 MiB upload limit,
 200 columns, 100 rows with one invalid amount, and the 30,000-row limit. Each
 run uploads once, reviews the staged data, confirms it, and polls until the
 batch completes. It checks imported row counts. The report includes elapsed
-HTTP timings and the API's `Server-Timing` phases. It reports p95 only when a
-phase has at least five samples; five samples are exploratory, so repeat on
-staging before setting an alert threshold.
+HTTP timings and the API's `Server-Timing` phases. The local gate requires at
+least five samples for every measured stage, review, confirm, and terminal
+phase. A phase with fewer samples is reported as `insufficient_samples`, makes
+the gate fail, and is never presented as a performance pass.
 
 From `backend/`:
 
@@ -152,8 +167,9 @@ BENCH_CONTEXTS_FILE="$csv_bench_contexts" BENCH_ITERATIONS=5 \
 Stop the three processes and remove only `finsight-csv-bench-db` when done.
 The context file contains local stub tokens, not hosted credentials. The
 benchmark prints no token and writes no CSV fixtures. It exits nonzero if a
-request fails, a row count differs, or a batch fails or times out. Keep the
-JSON report out of git.
+request fails, a row count differs, a batch fails or times out, a performance
+budget is breached, or any budget has too few samples. Keep the JSON report out
+of git.
 
 Local reference run on 29 September 2026: five samples per shape, one laptop,
 Postgres capped at 2 CPUs and 2 GiB, Auth and in-memory CSV Storage stub at
@@ -172,7 +188,55 @@ Only the 30,000-row shape entered the queue. Its p95 time after the confirm
 response, including pickup, processing, and status polling, was 10,068 ms.
 All 25 batches completed with the expected imported and skipped counts.
 
+The default local regression budgets use three times each reference p95, with a
+100 ms floor for short phases so normal laptop timer and scheduling noise does
+not make the gate brittle. They are regression tripwires for the isolated setup
+above, not production capacity figures or service-level objectives.
+
+| Shape | Stage budget | Review budget | Confirm budget | Terminal budget |
+|---|---:|---:|---:|---:|
+| Small | 135 ms | 100 ms | 126 ms | 129 ms |
+| Near 5 MiB | 1,395 ms | 339 ms | 987 ms | 987 ms |
+| Wide | 237 ms | 117 ms | 192 ms | 192 ms |
+| Invalid amount | 100 ms | 100 ms | 165 ms | 165 ms |
+| Row limit | 663 ms | 1,308 ms | 420 ms | 30,624 ms |
+
+`BENCH_MIN_SAMPLES` changes the required sample count, with five as the minimum
+because the runner does not calculate p95 below five samples. Use exactly one
+of `BENCH_BUDGETS_FILE` or `BENCH_BUDGETS_JSON` to override selected budgets.
+Any omitted phase keeps its default. Unknown scenario or phase names fail fast
+so a misspelled override cannot silently disable a gate.
+
+```json
+{
+  "minimumSamples": 7,
+  "scenarios": {
+    "near-5mb": { "stageMs": 1000 },
+    "30k-rows": { "terminalMs": 25000 }
+  }
+}
+```
+
+`queueAndWorkMs` remains diagnostic. Only asynchronous batches produce that
+sample, while `terminalMs` covers every shape and is therefore the enforced
+end-to-end completion budget.
+
+On local targets, the runner also starts one 30,000-row import and waits until
+the worker has committed at least one chunk while more rows remain. It then
+deletes a manual expense from the same business profile while the import
+continues. The gate checks that the import finishes with all rows, the deleted
+record returns 404, the delete stays within the existing 2,000 ms normal-request
+budget, and total import time stays within the 30,000-row terminal budget.
+`BENCH_MIXED_DELETE_BUDGET_MS` can override the delete budget;
+`BENCH_MIXED_DELETE_TIMEOUT_MS` sets its hard timeout and must be at least as
+large as the budget. The mixed gate is skipped for remote targets.
+
+Set `BENCH_MIXED_ONLY=true` to run just this local contention gate. This mode is
+useful for a focused rerun and is rejected for remote targets. It still needs a
+fresh seeded context file but only uses its first profile.
+
 To test staging, point `BENCH_BASE_URL` to the staging API, provide a contexts
 file with staging test account tokens and profile IDs, and set
 `BENCH_ALLOW_REMOTE=true`. Use an isolated staging business because confirms
-write records. The script never targets a remote host without that flag.
+write records. The script never targets a remote host without that flag. Supply
+staging-specific budgets rather than treating the local defaults as an SLA.

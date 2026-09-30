@@ -379,12 +379,22 @@ describe("file and cell validation", () => {
     expect(await prisma.cSVImportBatch.count()).toBe(0);
   });
 
-  it("rejects a binary payload wearing a .csv name", async () => {
-    const buffer = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00, 0x08, 0x00]);
-    uploadedBuffer = buffer;
-    await expect(confirmImport(ctx.user.id, confirmArgs(buffer, { idempotencyKey: "binary-1" }))).rejects.toMatchObject({
+  it.each([
+    ["PDF signature", Buffer.from("%PDF-1.7\n")],
+    ["ZIP signature", Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00, 0x08, 0x00])],
+    ["PNG signature", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
+    ["forbidden control byte", Buffer.from("Date,Description,Amount\n2026-09-29,Rice\u0000,100")],
+    ["invalid UTF-8", Buffer.from([0x44, 0x61, 0x74, 0x65, 0x0a, 0xc3, 0x28])],
+  ])("rejects a %s payload wearing a .csv name before Storage or database writes", async (label, buffer) => {
+    await expect(confirmImport(ctx.user.id, confirmArgs(buffer, {
+      idempotencyKey: `binary-${label}`,
+    }))).rejects.toMatchObject({
       status: 400,
+      code: "CSV_FILE_TYPE_MISMATCH",
     });
+    expect(uploadCsvFile).not.toHaveBeenCalled();
+    expect(await prisma.cSVImportBatch.count()).toBe(0);
+    expect(await prisma.expenseRecord.count()).toBe(0);
   });
 
   it("imports a semicolon-delimited export instead of reading it as one column", async () => {
@@ -394,6 +404,28 @@ describe("file and cell validation", () => {
     uploadedBuffer = buffer;
     const result = await confirmImport(ctx.user.id, confirmArgs(buffer, { idempotencyKey: "semi-1" }));
     expect(result.imported).toBe(1);
+  });
+
+  it("stores formula-like description cells as inert text without interpreting them", async () => {
+    const descriptions = ["=2+3", "+SUM(2,3)", "-2+3", "@SUM(2,3)"];
+    const csvCell = (value: string) => `"${value.replaceAll('"', '""')}"`;
+    const buffer = Buffer.from([
+      "Date,Description,Amount,Category",
+      ...descriptions.map((description, index) =>
+        `${utcDayString(-index)},${csvCell(description)},${101 + index},Inventory`,
+      ),
+    ].join("\n"));
+    uploadedBuffer = buffer;
+
+    const result = await confirmImport(ctx.user.id, confirmArgs(buffer, { idempotencyKey: "formula-text-1" }));
+    const stored = await prisma.expenseRecord.findMany({
+      where: { businessProfileId: ctx.profile.id },
+      orderBy: { amount: "asc" },
+      select: { description: true },
+    });
+
+    expect(result).toMatchObject({ imported: descriptions.length, skippedCount: 0 });
+    expect(stored.map((record) => record.description)).toEqual(descriptions);
   });
 
   it("skips an over-long cell with a reason rather than dying mid-insert", async () => {

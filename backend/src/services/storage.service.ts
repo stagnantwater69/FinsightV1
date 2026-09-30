@@ -38,7 +38,7 @@ const AVATAR_BUCKET = "avatars";
  * re-ran the request while whatever caused the first failure was still
  * happening, which is the one moment it is least likely to work.
  */
-const UPLOAD_RETRY_DELAY_MS = 250;
+const STORAGE_RETRY_DELAY_MS = 250;
 
 /**
  * Is a second attempt worth the owner's time?
@@ -71,7 +71,7 @@ async function uploadWithRetry(bucket: string, path: string, buffer: Buffer, con
     if (attempt === 2 || !retryable) {
       throw new ApiError(502, "Could not upload file to storage");
     }
-    await new Promise((resolve) => setTimeout(resolve, UPLOAD_RETRY_DELAY_MS));
+    await new Promise((resolve) => setTimeout(resolve, STORAGE_RETRY_DELAY_MS));
   }
 }
 
@@ -241,12 +241,18 @@ export async function signedCsvFileUrl(path: string): Promise<string | null> {
  * count failures can.
  */
 async function removeObject(bucket: string, path: string): Promise<boolean> {
-  const { error } = await supabaseAdmin.storage.from(bucket).remove([path]);
-  if (error) {
-    logger.error({ bucket }, "Could not delete stored object");
-    return false;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const { error } = await supabaseAdmin.storage.from(bucket).remove([path]);
+    if (!error) return true;
+
+    const status = (error as { status?: number }).status;
+    const statusCode = (error as { statusCode?: string }).statusCode;
+    const retryable = isRetryableStorageFailure(error);
+    logger.error({ bucket, attempt, status, statusCode, retryable }, "Storage object deletion failed");
+    if (attempt === 2 || !retryable) return false;
+    await new Promise((resolve) => setTimeout(resolve, STORAGE_RETRY_DELAY_MS));
   }
-  return true;
+  return false;
 }
 
 /** Deletes a receipt image. Safe to call for a path that is already gone. */

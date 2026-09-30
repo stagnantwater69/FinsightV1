@@ -1,10 +1,11 @@
 import { Prisma } from "@prisma/client";
 import type { SalesReferenceRecord, SalesRecordSource } from "@prisma/client";
+import { logger } from "../config/logger";
 import { prisma } from "../config/prisma";
 import { ApiError } from "../middleware/error.middleware";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
 import { DEFAULT_RECORD_SORT, recordCursorWhere, recordOrderBy, type RecordCursor, type RecordSort } from "../lib/recordSort";
-import { lockDuplicateKey } from "../lib/recordLock";
+import { lockSalesDuplicateWriteGate } from "../lib/recordLock";
 import { createNotification, NOTIFICATION_TYPES } from "./notification.service";
 import { duplicateKeyOf, type BulkDbClient, type FlaggedListOptions } from "./expenseRecord.service";
 import { enqueueCsvSourcePurgesIfOrphaned } from "./csvSourcePurge.service";
@@ -56,6 +57,62 @@ function toDTO(record: SalesReferenceRecord) {
   };
 }
 
+async function runPostCommitNotification(
+  ids: { businessProfileId: number; salesRecordId: number },
+  run: () => Promise<void>,
+): Promise<void> {
+  try {
+    await run();
+  } catch {
+    logger.error(
+      {
+        ...ids,
+        effect: "notification",
+        failureKind: "notification-write-failed",
+        code: "SALES_RECORD_SIDE_EFFECT_FAILED",
+      },
+      "sales record post-commit effect failed",
+    );
+  }
+}
+
+type DuplicateCandidate = {
+  id: number;
+  duplicateStatus: string;
+  duplicateOfRecordId: number | null;
+};
+
+function canonicalCandidate<T extends DuplicateCandidate>(records: T[]): T | undefined {
+  return records.find((record) =>
+    record.duplicateStatus === "Not a Duplicate" && record.duplicateOfRecordId === null)
+    ?? records.find((record) => record.duplicateStatus === "Not a Duplicate")
+    ?? records.find((record) => record.duplicateOfRecordId === null)
+    ?? records[0];
+}
+
+function canonicalRank(record: DuplicateCandidate): number {
+  if (record.duplicateStatus === "Not a Duplicate" && record.duplicateOfRecordId === null) return 0;
+  if (record.duplicateStatus === "Not a Duplicate") return 1;
+  if (record.duplicateOfRecordId === null) return 2;
+  return 3;
+}
+
+async function ensureValidDuplicateTarget<T extends DuplicateCandidate>(
+  db: BulkDbClient,
+  businessProfileId: number,
+  candidate: T | undefined,
+): Promise<T | undefined> {
+  if (!candidate) return undefined;
+  const validRoot = candidate.duplicateStatus === "Not a Duplicate" && candidate.duplicateOfRecordId === null;
+  const validFollower = candidate.duplicateStatus === "Flagged" && candidate.duplicateOfRecordId !== null;
+  if (validRoot || validFollower) return candidate;
+  await db.salesReferenceRecord.updateMany({
+    where: { id: candidate.id, businessProfileId },
+    data: { duplicateStatus: "Not a Duplicate", duplicateOfRecordId: null },
+  });
+  return { ...candidate, duplicateStatus: "Not a Duplicate", duplicateOfRecordId: null };
+}
+
 async function findDuplicate(
   businessProfileId: number,
   date: Date,
@@ -67,7 +124,7 @@ async function findDuplicate(
   // transaction has already written would be invisible here.
   db: BulkDbClient = prisma,
 ) {
-  return db.salesReferenceRecord.findFirst({
+  const matches = await db.salesReferenceRecord.findMany({
     where: {
       businessProfileId,
       date,
@@ -75,16 +132,57 @@ async function findDuplicate(
       description: { equals: description, mode: "insensitive" },
       ...(excludeId ? { id: { not: excludeId } } : {}),
     },
-    orderBy: { createdAt: "asc" },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
+  return canonicalCandidate(matches);
+}
+
+async function normalizeDuplicateIdentity(
+  db: BulkDbClient,
+  businessProfileId: number,
+  identity: { date: Date; amount: Prisma.Decimal; description: string },
+  options: { preferredOriginalId?: number; forcedFollowerId?: number } = {},
+): Promise<void> {
+  const matches = await db.salesReferenceRecord.findMany({
+    where: {
+      businessProfileId,
+      date: identity.date,
+      amount: identity.amount,
+      description: { equals: identity.description, mode: "insensitive" },
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    select: { id: true, duplicateStatus: true, duplicateOfRecordId: true },
+  });
+  const available = matches.filter((record) => record.id !== options.forcedFollowerId);
+  const preserved = available.filter((record) => record.duplicateStatus === "Not a Duplicate");
+  const original = available.find((record) => record.id === options.preferredOriginalId)
+    ?? canonicalCandidate(preserved)
+    ?? canonicalCandidate(available)
+    ?? matches[0];
+  if (!original) return;
+
+  const independentIds = preserved.map((record) => record.id);
+  const rootIds = [...new Set([original.id, ...independentIds])];
+  await db.salesReferenceRecord.updateMany({
+    where: { id: { in: rootIds }, businessProfileId },
+    data: { duplicateStatus: "Not a Duplicate", duplicateOfRecordId: null },
+  });
+  const rootIdSet = new Set(rootIds);
+  const duplicateIds = matches.filter((record) => !rootIdSet.has(record.id)).map((record) => record.id);
+  if (duplicateIds.length > 0) {
+    await db.salesReferenceRecord.updateMany({
+      where: { id: { in: duplicateIds }, businessProfileId },
+      data: { duplicateStatus: "Flagged", duplicateOfRecordId: original.id },
+    });
+  }
 }
 
 /**
  * The typed-in single sales-reference create — the same shape, and the same
  * fix, as createExpenseRecord.
  *
- * The duplicate check and the insert now happen inside one transaction, behind
- * the same per-duplicate-key advisory lock (see lib/recordLock.ts), because a
+ * The duplicate check and the insert happen inside one transaction, behind
+ * the profile's shared sales write gate (see lib/recordLock.ts), because a
  * double-tap on Add Sales had exactly the expense side's problem: both
  * requests read "no duplicate" before either wrote, and the owner was told
  * about neither. The duplicate NOTIFICATION is sent after the commit, so a
@@ -98,9 +196,10 @@ export async function createSalesRecord(userId: number, input: CreateInput) {
   const amount = new Prisma.Decimal(input.amount);
 
   const { record, duplicate } = await prisma.$transaction(async (tx) => {
-    await lockDuplicateKey(tx, input.businessProfileId, `sales:${duplicateKeyOf(date, amount, input.description)}`);
+    await lockSalesDuplicateWriteGate(tx, input.businessProfileId);
 
-    const existing = await findDuplicate(input.businessProfileId, date, amount, input.description, undefined, tx);
+    let existing = await findDuplicate(input.businessProfileId, date, amount, input.description, undefined, tx);
+    existing = await ensureValidDuplicateTarget(tx, input.businessProfileId, existing);
 
     const created = await tx.salesReferenceRecord.create({
       data: {
@@ -120,11 +219,14 @@ export async function createSalesRecord(userId: number, input: CreateInput) {
   });
 
   if (duplicate) {
-    await createNotification(
-      userId,
-      input.businessProfileId,
-      NOTIFICATION_TYPES.POSSIBLE_DUPLICATE,
-      `Possible duplicate: "${input.description}" (PHP ${input.amount}) on ${input.date}`
+    await runPostCommitNotification(
+      { businessProfileId: record.businessProfileId, salesRecordId: record.id },
+      () => createNotification(
+        userId,
+        input.businessProfileId,
+        NOTIFICATION_TYPES.POSSIBLE_DUPLICATE,
+        `Possible duplicate: "${input.description}" (PHP ${input.amount}) on ${input.date}`,
+      ),
     );
   }
 
@@ -150,31 +252,57 @@ export async function bulkCreateSalesRecords(
   importBatchId: number,
   rows: BulkSalesRow[],
   db: BulkDbClient = prisma,
-) {
+): Promise<ReturnType<typeof toDTO>[]> {
   if (rows.length === 0) return [];
+  if (db === prisma) {
+    return prisma.$transaction((tx) =>
+      bulkCreateSalesRecords(userId, businessProfileId, importBatchId, rows, tx));
+  }
+
+  await requireOwnedBusinessProfile(userId, businessProfileId, db);
+  await lockSalesDuplicateWriteGate(db, businessProfileId);
 
   const dates = [...new Set(rows.map((r) => r.date))].map((d) => new Date(d));
   const candidates = await db.salesReferenceRecord.findMany({
     where: { businessProfileId, date: { in: dates } },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    select: { id: true, date: true, amount: true, description: true },
+    select: {
+      id: true,
+      date: true,
+      amount: true,
+      description: true,
+      duplicateStatus: true,
+      duplicateOfRecordId: true,
+    },
   });
 
-  const existingIdByKey = new Map<string, number>();
+  const existingByKey = new Map<string, (typeof candidates)[number]>();
   for (const c of candidates) {
     const key = duplicateKeyOf(c.date, c.amount, c.description);
-    if (!existingIdByKey.has(key)) existingIdByKey.set(key, c.id);
+    const current = existingByKey.get(key);
+    if (!current || canonicalRank(c) < canonicalRank(current)) existingByKey.set(key, c);
   }
 
   const firstIndexByKey = new Map<string, number>();
   const duplicatesEarlierRow = new Map<number, number>();
+  const repairedCandidateIds = new Set<number>();
 
   const data = rows.map((row, i) => {
     const date = new Date(row.date);
     const amount = new Prisma.Decimal(row.amount);
     const key = duplicateKeyOf(date, amount, row.description);
 
-    const existingId = existingIdByKey.get(key);
+    const existing = existingByKey.get(key);
+    if (existing) {
+      const validRoot = existing.duplicateStatus === "Not a Duplicate" && existing.duplicateOfRecordId === null;
+      const validFollower = existing.duplicateStatus === "Flagged" && existing.duplicateOfRecordId !== null;
+      if (!validRoot && !validFollower) {
+        existing.duplicateStatus = "Not a Duplicate";
+        existing.duplicateOfRecordId = null;
+        repairedCandidateIds.add(existing.id);
+      }
+    }
+    const existingId = existing?.id;
     const earlierIndex = firstIndexByKey.get(key);
     if (existingId === undefined && earlierIndex === undefined) {
       firstIndexByKey.set(key, i);
@@ -195,6 +323,13 @@ export async function bulkCreateSalesRecords(
     };
   });
 
+  if (repairedCandidateIds.size > 0) {
+    await db.salesReferenceRecord.updateMany({
+      where: { id: { in: [...repairedCandidateIds] }, businessProfileId },
+      data: { duplicateStatus: "Not a Duplicate", duplicateOfRecordId: null },
+    });
+  }
+
   const created = await db.salesReferenceRecord.createManyAndReturn({ data });
   if (created.length !== rows.length) {
     throw new ApiError(500, "Import did not create the expected number of records");
@@ -206,6 +341,7 @@ export async function bulkCreateSalesRecords(
     const rowsByTarget = new Map<number, number[]>();
     for (const [rowIndex, earlierIndex] of duplicatesEarlierRow) {
       const targetId = created[earlierIndex]!.id;
+      created[rowIndex]!.duplicateOfRecordId = targetId;
       const bucket = rowsByTarget.get(targetId);
       if (bucket) bucket.push(created[rowIndex]!.id);
       else rowsByTarget.set(targetId, [created[rowIndex]!.id]);
@@ -252,45 +388,106 @@ export async function getSalesRecord(userId: number, id: number) {
 }
 
 export async function updateSalesRecord(userId: number, id: number, input: UpdateInput) {
-  const existing = await prisma.salesReferenceRecord.findFirst({
-    where: { id, businessProfile: { userId } },
+  const result = await prisma.$transaction(async (tx) => {
+    let existing = await tx.salesReferenceRecord.findFirst({
+      where: { id, businessProfile: { userId } },
+    });
+    if (!existing) throw new ApiError(404, "Sales reference record not found");
+
+    await lockSalesDuplicateWriteGate(tx, existing.businessProfileId);
+    existing = await tx.salesReferenceRecord.findFirst({
+      where: { id, businessProfile: { userId } },
+    });
+    if (!existing) throw new ApiError(404, "Sales reference record not found");
+
+    const nextDate = input.date ? new Date(input.date) : existing.date;
+    const nextAmount = input.amount !== undefined ? new Prisma.Decimal(input.amount) : existing.amount;
+    const nextDescription = input.description ?? existing.description;
+    const valueFieldsChanged = input.date !== undefined || input.amount !== undefined || input.description !== undefined;
+    const previousIdentity = {
+      date: existing.date,
+      amount: existing.amount,
+      description: existing.description,
+    };
+    const nextIdentity = { date: nextDate, amount: nextAmount, description: nextDescription };
+    const identityChanged = duplicateKeyOf(
+      previousIdentity.date,
+      previousIdentity.amount,
+      previousIdentity.description,
+    ) !== duplicateKeyOf(nextIdentity.date, nextIdentity.amount, nextIdentity.description);
+    const targetOriginal = valueFieldsChanged && identityChanged
+      ? await findDuplicate(
+          existing.businessProfileId,
+          nextDate,
+          nextAmount,
+          nextDescription,
+          existing.id,
+          tx,
+        )
+      : undefined;
+    const requestedDuplicate = !valueFieldsChanged && input.duplicateStatus === "Flagged"
+      ? await findDuplicate(
+          existing.businessProfileId,
+          existing.date,
+          existing.amount,
+          existing.description,
+          existing.id,
+          tx,
+        )
+      : undefined;
+
+    const updated = await tx.salesReferenceRecord.updateMany({
+      where: { id, businessProfile: { userId } },
+      data: {
+        date: nextDate,
+        description: nextDescription,
+        amount: nextAmount,
+        reviewStatus: input.reviewStatus ?? existing.reviewStatus,
+        ...(!valueFieldsChanged
+          ? {
+              duplicateStatus: input.duplicateStatus === "Flagged"
+                ? (requestedDuplicate ? "Flagged" : "Not a Duplicate")
+                : (input.duplicateStatus ?? existing.duplicateStatus),
+              duplicateOfRecordId: input.duplicateStatus === "Not a Duplicate"
+                ? null
+                : (input.duplicateStatus === "Flagged"
+                    ? (requestedDuplicate?.id ?? null)
+                    : existing.duplicateOfRecordId),
+            }
+          : {}),
+      },
+    });
+    if (updated.count !== 1) throw new ApiError(404, "Sales reference record not found");
+
+    if (valueFieldsChanged) {
+      await normalizeDuplicateIdentity(tx, existing.businessProfileId, previousIdentity);
+      if (identityChanged) {
+        await normalizeDuplicateIdentity(tx, existing.businessProfileId, nextIdentity, {
+          preferredOriginalId: targetOriginal?.id,
+          forcedFollowerId: targetOriginal ? existing.id : undefined,
+        });
+      }
+    } else if (input.duplicateStatus === "Flagged" && requestedDuplicate) {
+      await normalizeDuplicateIdentity(tx, existing.businessProfileId, nextIdentity, {
+        preferredOriginalId: requestedDuplicate.id,
+        forcedFollowerId: existing.id,
+      });
+    }
+
+    const record = await tx.salesReferenceRecord.findUniqueOrThrow({ where: { id } });
+    return { existing, record, nextDate, nextAmount, nextDescription };
   });
-  if (!existing) {
-    throw new ApiError(404, "Sales reference record not found");
-  }
 
-  const nextDate = input.date ? new Date(input.date) : existing.date;
-  const nextAmount = input.amount !== undefined ? new Prisma.Decimal(input.amount) : existing.amount;
-  const nextDescription = input.description ?? existing.description;
-
-  const valueFieldsChanged = input.date !== undefined || input.amount !== undefined || input.description !== undefined;
-  let duplicateStatus = input.duplicateStatus ?? existing.duplicateStatus;
-  let duplicateOfRecordId = existing.duplicateOfRecordId;
-
-  if (valueFieldsChanged) {
-    const duplicate = await findDuplicate(existing.businessProfileId, nextDate, nextAmount, nextDescription, existing.id);
-    duplicateStatus = duplicate ? "Flagged" : "Not a Duplicate";
-    duplicateOfRecordId = duplicate?.id ?? null;
-  }
-
-  const record = await prisma.salesReferenceRecord.update({
-    where: { id },
-    data: {
-      date: nextDate,
-      description: nextDescription,
-      amount: nextAmount,
-      reviewStatus: input.reviewStatus ?? existing.reviewStatus,
-      duplicateStatus,
-      duplicateOfRecordId,
-    },
-  });
-
-  if (duplicateStatus === "Flagged" && existing.duplicateStatus !== "Flagged") {
-    await createNotification(
-      userId,
-      existing.businessProfileId,
-      NOTIFICATION_TYPES.POSSIBLE_DUPLICATE,
-      `Possible duplicate: "${nextDescription}" (PHP ${Number(nextAmount)}) on ${nextDate.toISOString().slice(0, 10)}`
+  const { existing, record, nextDate, nextAmount, nextDescription } = result;
+  if (record.duplicateStatus === "Flagged" && existing.duplicateStatus !== "Flagged") {
+    await runPostCommitNotification(
+      { businessProfileId: record.businessProfileId, salesRecordId: record.id },
+      () => createNotification(
+        userId,
+        existing.businessProfileId,
+        NOTIFICATION_TYPES.POSSIBLE_DUPLICATE,
+        `Possible duplicate: "${nextDescription}" (PHP ${Number(nextAmount)}) on ${nextDate.toISOString().slice(0, 10)}`,
+      ),
     );
   }
 
@@ -299,9 +496,20 @@ export async function updateSalesRecord(userId: number, id: number, input: Updat
 
 export async function deleteSalesRecord(userId: number, id: number) {
   await prisma.$transaction(async (tx) => {
-    const existing = await tx.salesReferenceRecord.findFirst({ where: { id, businessProfile: { userId } } });
+    let existing = await tx.salesReferenceRecord.findFirst({ where: { id, businessProfile: { userId } } });
     if (!existing) throw new ApiError(404, "Sales reference record not found");
-    await tx.salesReferenceRecord.delete({ where: { id } });
+
+    await lockSalesDuplicateWriteGate(tx, existing.businessProfileId);
+    existing = await tx.salesReferenceRecord.findFirst({ where: { id, businessProfile: { userId } } });
+    if (!existing) throw new ApiError(404, "Sales reference record not found");
+
+    const deleted = await tx.salesReferenceRecord.deleteMany({ where: { id, businessProfile: { userId } } });
+    if (deleted.count !== 1) throw new ApiError(404, "Sales reference record not found");
+    await normalizeDuplicateIdentity(tx, existing.businessProfileId, {
+      date: existing.date,
+      amount: existing.amount,
+      description: existing.description,
+    });
     await enqueueCsvSourcePurgesIfOrphaned(tx, [existing.importBatchId]);
   });
 }
@@ -326,20 +534,49 @@ export async function bulkResolveSalesDuplicates(
   await requireOwnedBusinessProfile(userId, businessProfileId);
 
   if (action === "keep") {
-    const { count } = await prisma.salesReferenceRecord.updateMany({
-      where: { id: { in: ids }, businessProfileId },
-      data: { duplicateStatus: "Not a Duplicate", reviewStatus: "Reviewed" },
+    return prisma.$transaction(async (tx) => {
+      await lockSalesDuplicateWriteGate(tx, businessProfileId);
+      const { count } = await tx.salesReferenceRecord.updateMany({
+        where: { id: { in: ids }, businessProfileId, duplicateStatus: "Flagged" },
+        data: {
+          duplicateStatus: "Not a Duplicate",
+          duplicateOfRecordId: null,
+          reviewStatus: "Reviewed",
+        },
+      });
+      return count;
     });
-    return count;
   }
 
   const owned = await prisma.$transaction(async (tx) => {
+    await lockSalesDuplicateWriteGate(tx, businessProfileId);
     const records = await tx.salesReferenceRecord.findMany({
-      where: { id: { in: ids }, businessProfileId },
-      select: { id: true, importBatchId: true },
+      where: { id: { in: ids }, businessProfileId, duplicateStatus: "Flagged" },
     });
     if (records.length === 0) return records;
-    await tx.salesReferenceRecord.deleteMany({ where: { id: { in: records.map((record) => record.id) } } });
+    const recordIds = records.map((record) => record.id);
+    const affectedFollowers = await tx.salesReferenceRecord.findMany({
+      where: {
+        businessProfileId,
+        duplicateOfRecordId: { in: recordIds },
+        id: { notIn: recordIds },
+      },
+    });
+    await tx.salesReferenceRecord.deleteMany({
+      where: { id: { in: recordIds }, businessProfileId, duplicateStatus: "Flagged" },
+    });
+    const repairs = new Map<string, (typeof affectedFollowers)[number]>();
+    for (const follower of affectedFollowers) {
+      const key = duplicateKeyOf(follower.date, follower.amount, follower.description);
+      if (!repairs.has(key)) repairs.set(key, follower);
+    }
+    for (const follower of repairs.values()) {
+      await normalizeDuplicateIdentity(tx, businessProfileId, {
+        date: follower.date,
+        amount: follower.amount,
+        description: follower.description,
+      });
+    }
     await enqueueCsvSourcePurgesIfOrphaned(tx, records.map((record) => record.importBatchId));
     return records;
   });

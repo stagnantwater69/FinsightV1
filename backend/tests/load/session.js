@@ -13,6 +13,7 @@
  *   write              -> create an expense                (~15% of sessions)
  *
  * Everything is parameterised: BASE_URL, VUS, DURATION, USER_COUNT, WRITE_PCT.
+ * DELETE_PCT optionally measures deletion of records created by this run.
  * No secrets: the bearer token is a seeded synthetic uuid, valid only against
  * the local stub.
  */
@@ -25,6 +26,19 @@ const USER_COUNT = Number(__ENV.USER_COUNT || 60);
 const WRITE_PCT = Number(__ENV.WRITE_PCT || 15);
 const THINK_MIN = Number(__ENV.THINK_MIN || 2);
 const THINK_MAX = Number(__ENV.THINK_MAX || 6);
+const DELETE_PCT = Number(__ENV.DELETE_PCT || 0);
+const DELETE_P95_MS = Number(__ENV.DELETE_P95_MS || 2000);
+const DELETE_MIN_SAMPLES = Number(__ENV.DELETE_MIN_SAMPLES || 5);
+
+if (!Number.isFinite(DELETE_PCT) || DELETE_PCT < 0 || DELETE_PCT > 100) {
+  throw new Error("DELETE_PCT must be between 0 and 100");
+}
+if (!Number.isFinite(DELETE_P95_MS) || DELETE_P95_MS <= 0) {
+  throw new Error("DELETE_P95_MS must be a positive number");
+}
+if (!Number.isInteger(DELETE_MIN_SAMPLES) || DELETE_MIN_SAMPLES < 1) {
+  throw new Error("DELETE_MIN_SAMPLES must be a positive integer");
+}
 
 // Per-flow latency, so a slow report does not hide behind fast bootstrap calls.
 const tBootstrap = new Trend("flow_bootstrap", true);
@@ -32,10 +46,27 @@ const tDashboard = new Trend("flow_dashboard", true);
 const tRecords = new Trend("flow_records", true);
 const tInsights = new Trend("flow_insights", true);
 const tWrite = new Trend("flow_write", true);
+const tDelete = new Trend("flow_delete", true);
 
 const rateLimited = new Counter("rate_limited_429");
 const serverErrors = new Counter("server_errors_5xx");
 const businessErrors = new Rate("business_errors");
+const deleteSamples = new Counter("delete_samples");
+const deleteSetupErrors = new Rate("delete_setup_errors");
+
+const thresholds = {
+  "http_req_failed": ["rate<0.01"],
+  "flow_bootstrap": ["p(95)<2000"],
+  "flow_dashboard": ["p(95)<2000"],
+  "flow_records": ["p(95)<2000"],
+  "flow_insights": ["p(95)<5000"],
+  "flow_write": ["p(95)<2000"],
+};
+if (DELETE_PCT > 0) {
+  thresholds.flow_delete = [`p(95)<${DELETE_P95_MS}`];
+  thresholds.delete_samples = [`count>=${DELETE_MIN_SAMPLES}`];
+  thresholds.delete_setup_errors = ["rate==0"];
+}
 
 export const options = {
   scenarios: {
@@ -46,16 +77,7 @@ export const options = {
       gracefulRampDown: "20s",
     },
   },
-  thresholds: {
-    // Acceptance criteria. k6 fails the run when these are breached, so a
-    // pass is a measured fact rather than a reading of the summary.
-    "http_req_failed": ["rate<0.01"],
-    "flow_bootstrap": ["p(95)<2000"],
-    "flow_dashboard": ["p(95)<2000"],
-    "flow_records": ["p(95)<2000"],
-    "flow_insights": ["p(95)<5000"],
-    "flow_write": ["p(95)<2000"],
-  },
+  thresholds,
   summaryTrendStats: ["avg", "med", "p(95)", "p(99)", "max"],
   discardResponseBodies: false,
 };
@@ -92,6 +114,8 @@ export default function () {
   const h = headersFor(vu);
   let profileId;
 
+  if (DELETE_PCT > 0) deleteSamples.add(0);
+
   group("bootstrap", () => {
     const start = Date.now();
     const me = http.get(`${BASE}/auth/me`, h);
@@ -107,7 +131,7 @@ export default function () {
       try {
         const body = profiles.json();
         if (Array.isArray(body) && body.length > 0) profileId = body[0].id;
-      } catch (_) { /* body shape is asserted by the check above */ }
+      } catch { /* body shape is asserted by the check above */ }
     }
   });
 
@@ -121,7 +145,7 @@ export default function () {
       try {
         const body = cats.json();
         if (Array.isArray(body) && body.length > 0) first = body[0].id;
-      } catch (_) { /* checked below by the write's own assertion */ }
+      } catch { /* checked below by the write's own assertion */ }
     }
     categoryCache[profileId] = first;
   }
@@ -174,6 +198,24 @@ export default function () {
       // 429 is a pass: the limiter doing its job is correct behaviour, not a
       // failure. A 400 is NOT accepted any more — that meant a malformed test.
       check(res, { "write accepted": (r) => r.status === 201 || r.status === 200 || r.status === 429 });
+
+      if ((res.status === 200 || res.status === 201) && Math.random() * 100 < DELETE_PCT) {
+        let recordId;
+        try {
+          recordId = res.json()?.id;
+        } catch { /* The write assertion reports an invalid response separately. */ }
+        const validRecordId = Number.isInteger(recordId) && recordId > 0;
+        deleteSetupErrors.add(!validRecordId);
+        check(res, { "created record id available for deletion": () => validRecordId });
+        if (validRecordId) {
+          group("delete", () => {
+            const deleted = http.del(`${BASE}/records/expenses/${recordId}`, null, h);
+            deleteSamples.add(1);
+            track(deleted, tDelete);
+            check(deleted, { "delete accepted": (r) => r.status === 204 || r.status === 429 });
+          });
+        }
+      }
     });
   }
 

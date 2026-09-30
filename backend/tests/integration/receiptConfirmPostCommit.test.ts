@@ -197,9 +197,13 @@ describe("a noncritical post-commit effect that fails", () => {
       receiptScanId: scan.id,
       expenseRecordId: response.body[0].id,
       effect: "notification",
+      failureKind: "notification-write-failed",
       code: "EXPENSE_RECORD_SIDE_EFFECT_FAILED",
     });
     const serialised = JSON.stringify(entry, (_key, value) => (value instanceof Error ? value.message : value));
+    expect(entry![0]).not.toHaveProperty("err");
+    expect(serialised).not.toContain("simulated notification write failure");
+    expect(serialised).not.toContain("stack");
     expect(serialised).not.toMatch(new RegExp(VENDOR));
     expect(serialised).not.toContain(String(LARGE_AMOUNT));
     expect(serialised).not.toContain("Stock purchase");
@@ -243,6 +247,7 @@ describe("a noncritical post-commit effect that fails", () => {
 
   it("analysis queueing: the committed records are returned and the retry writes nothing", async () => {
     const scan = await makeReadScan();
+    const logged = vi.spyOn(logger, "error");
     effects.analysis.fail = true;
 
     const response = await confirm(scan.id, manualBody());
@@ -253,6 +258,27 @@ describe("a noncritical post-commit effect that fails", () => {
     expect(await prisma.analysisJob.count()).toBe(0);
     // The notification before it in the same tail still landed.
     expect(await prisma.notification.count()).toBe(1);
+
+    const entry = logged.mock.calls.find(([fields]) =>
+      typeof fields === "object" && fields !== null
+      && (fields as { code?: unknown }).code === "EXPENSE_RECORD_SIDE_EFFECT_FAILED"
+      && (fields as { effect?: unknown }).effect === "analysis");
+    expect(entry, "a failed analysis enqueue must be logged").toBeDefined();
+    expect(entry![0]).toMatchObject({
+      businessProfileId: ctx.profile.id,
+      expenseRecordId: response.body[0].id,
+      receiptScanId: scan.id,
+      effect: "analysis",
+      failureKind: "analysis-enqueue-failed",
+      code: "EXPENSE_RECORD_SIDE_EFFECT_FAILED",
+    });
+    expect(entry![0]).not.toHaveProperty("err");
+    const serialised = JSON.stringify(entry, (_key, value) => (value instanceof Error ? value.message : value));
+    expect(serialised).not.toContain("simulated analysis queue failure");
+    expect(serialised).not.toContain("stack");
+    expect(serialised).not.toMatch(new RegExp(VENDOR));
+    expect(serialised).not.toContain(String(LARGE_AMOUNT));
+    expect(serialised).not.toContain("Stock purchase");
 
     await expectRetryRefusedWithoutWriting(scan.id, manualBody(), 1);
   });
@@ -391,8 +417,16 @@ describe("the typed-in expense create with a failing post-commit effect", () => 
       typeof fields === "object" && fields !== null && "code" in fields
       && (fields as { code: unknown }).code === "EXPENSE_RECORD_SIDE_EFFECT_FAILED");
     expect(entry, "a failed side effect must be logged").toBeDefined();
-    expect(entry![0]).toMatchObject({ expenseRecordId: response.body.id, receiptScanId: null, effect: "notification" });
+    expect(entry![0]).toMatchObject({
+      expenseRecordId: response.body.id,
+      receiptScanId: null,
+      effect: "notification",
+      failureKind: "notification-write-failed",
+    });
     const serialised = JSON.stringify(entry, (_key, value) => (value instanceof Error ? value.message : value));
+    expect(entry![0]).not.toHaveProperty("err");
+    expect(serialised).not.toContain("simulated notification write failure");
+    expect(serialised).not.toContain("stack");
     expect(serialised).not.toMatch(new RegExp(VENDOR));
     expect(serialised).not.toContain(String(LARGE_AMOUNT));
     expect(serialised).not.toContain("Stock purchase");

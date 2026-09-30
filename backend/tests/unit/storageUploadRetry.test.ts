@@ -9,16 +9,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * whatever caused the first failure is still happening.
  */
 
-const { upload } = vi.hoisted(() => ({ upload: vi.fn() }));
+const { remove, upload } = vi.hoisted(() => ({ remove: vi.fn(), upload: vi.fn() }));
 
 vi.mock("../../src/config/supabase", () => ({
-  supabaseAdmin: { storage: { from: vi.fn(() => ({ upload })) } },
+  supabaseAdmin: { storage: { from: vi.fn(() => ({ remove, upload })) } },
 }));
 vi.mock("../../src/config/logger", () => ({
   logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }));
 
-import { uploadReceiptImage } from "../../src/services/storage.service";
+import { deleteCsvFile, deleteReceiptImage, uploadReceiptImage } from "../../src/services/storage.service";
 
 const IMAGE = Buffer.from([0xff, 0xd8, 0xff]);
 
@@ -27,6 +27,7 @@ function failWith(error: Record<string, unknown>) {
 }
 
 beforeEach(() => {
+  remove.mockReset();
   upload.mockReset();
 });
 
@@ -99,5 +100,68 @@ describe("storage upload retry", () => {
       status: 502,
     });
     expect(upload).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("storage deletion retry", () => {
+  it.each([
+    ["receipt", () => deleteReceiptImage("7/receipt.jpg")],
+    ["CSV", () => deleteCsvFile("7/books.csv")],
+  ])("retries one transient failure while deleting a %s object", async (_kind, removeFile) => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      remove
+        .mockResolvedValueOnce(failWith({ status: 503, message: "Service unavailable" }))
+        .mockResolvedValueOnce({ data: {}, error: null });
+
+      const pending = removeFile();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(remove).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(250);
+      await expect(pending).resolves.toBe(true);
+      expect(remove).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries a rate limit expressed through Supabase's string statusCode", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      remove
+        .mockResolvedValueOnce(failWith({ statusCode: "429", message: "Too many requests" }))
+        .mockResolvedValueOnce({ data: {}, error: null });
+
+      const pending = deleteReceiptImage("7/receipt.jpg");
+      await vi.advanceTimersByTimeAsync(250);
+
+      await expect(pending).resolves.toBe(true);
+      expect(remove).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry a terminal 4xx deletion failure", async () => {
+    remove.mockResolvedValue(failWith({ status: 403, message: "Forbidden" }));
+
+    await expect(deleteReceiptImage("7/receipt.jpg")).resolves.toBe(false);
+    expect(remove).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns false after the one allowed retry is exhausted", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      remove.mockResolvedValue(failWith({ status: 503, message: "Service unavailable" }));
+
+      const pending = deleteCsvFile("7/books.csv");
+      await vi.advanceTimersByTimeAsync(250);
+
+      await expect(pending).resolves.toBe(false);
+      expect(remove).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

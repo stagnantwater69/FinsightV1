@@ -239,18 +239,19 @@ describe("Phase 3 — dataWarnings, setupIssues, changeSincePreviousDay", () => 
         description: "Confirmed sale",
         amount: 4500,
       });
+      const canonical = await sales.createSalesRecord(ctx.user.id, {
+        businessProfileId: ctx.profile.id,
+        date: utcDayString(0),
+        description: "Possible duplicate sale",
+        amount: 1000,
+      });
       const flagged = await sales.createSalesRecord(ctx.user.id, {
         businessProfileId: ctx.profile.id,
         date: utcDayString(0),
-        description: "Flagged sale",
+        description: "Possible duplicate sale",
         amount: 1000,
       });
-      // createSalesRecord always leaves a fresh record reviewStatus="Reviewed"
-      // — flip duplicateStatus directly (mirrors the existing convention in
-      // tests/integration/aiContextRecoveryPhase3.test.ts) rather than relying
-      // on the automatic same-day/same-amount/same-description duplicate
-      // detector, which this description/amount pair wouldn't trip anyway.
-      await sales.updateSalesRecord(ctx.user.id, flagged.id, { duplicateStatus: "Flagged" });
+      expect(flagged).toMatchObject({ duplicateStatus: "Flagged", duplicateOfRecordId: canonical.id });
 
       const body = await fetchRecovery();
       assertContract(body);
@@ -489,4 +490,3 @@ describe("Phase 4 — weeklyCheckpoints", () => {
     });
   });
 });
-

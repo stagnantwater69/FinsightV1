@@ -176,6 +176,17 @@ export const MAX_PAGES = RECEIPT_UPLOAD_MAX_LOGICAL_PAGES;
  * say WHAT was tried, HOW LONG it took and WHY it was or wasn't used instead
  * of that story living only in a console line.
  */
+/**
+ * Where one extracted item came from, as persisted on ReceiptScanItem.evidence.
+ * `possibleRepeatOf` marks a line that may be the overlap between two photos
+ * read twice (see lib/receiptOverlapItems.ts); the owner decides.
+ */
+export interface ReceiptItemEvidenceInput {
+  pageNumber: number | null;
+  sourceText: string | null;
+  possibleRepeatOf?: { pageNumber: number; name: string; amount: number };
+}
+
 export interface RescuedFields extends ParsedReceiptFields {
   items: ParsedLineItem[];
   /** True when the vision model supplied any of the above. */
@@ -204,7 +215,7 @@ export interface RescuedFields extends ParsedReceiptFields {
    * and source text), aligned with `items`. Null on the deterministic path —
    * the caller locates OCR items in the page text itself.
    */
-  itemEvidence: ({ pageNumber: number | null; sourceText: string | null } | null)[] | null;
+  itemEvidence: (ReceiptItemEvidenceInput | null)[] | null;
 }
 
 /** One field's provenance, as persisted in ReceiptScan.fieldEvidence. */

@@ -348,6 +348,66 @@ describe("unreconciled provider items", () => {
   });
 });
 
+describe("provider items read twice where two photos overlap", () => {
+  const alwaysRouted = () => providerRequest({
+    rescueDecision: rescueDecision({ reasons: ["PROVIDER_ROUTING_ALWAYS"] }),
+  });
+  const unvalidated = evidence("gemini", { confidenceBand: "LOW", validationState: "UNVALIDATED", sourceVersion: "provider-v1" });
+  const onPage = (pageNumber: number) => ({ ...unvalidated, pageNumber });
+  const item = (name: string, amount: number, pageNumber: number) => ({ name, quantity: 1, amount, evidence: onPage(pageNumber) });
+  function outcome(request: ReturnType<typeof providerRequest>, items: ReturnType<typeof item>[]) {
+    const extraction = successfulOutcome(request).extraction!;
+    return successfulOutcome(request, { extraction: { ...extraction, items, itemsEvidence: unvalidated } });
+  }
+
+  it("counts overlap repeats once when that makes the items add up, and validates the list", () => {
+    const request = alwaysRouted();
+    // Printed total is 125; page 2 repeats the last two lines of page 1.
+    const merged = mergeReceiptProviderOutcome(localExtraction(), request, outcome(request, [
+      item("Bread", 50, 1), item("Eggs", 40, 1), item("Rice", 35, 1),
+      item("Eggs", 40, 2), item("Rice", 35, 2),
+    ]));
+
+    expect(merged.appliedFields).toContain("items");
+    expect(merged.receipt.items.map((entry) => entry.name)).toEqual(["Bread", "Eggs", "Rice"]);
+    expect(merged.receipt.itemsEvidence?.validationState).toBe("VALIDATED");
+    expect(merged.receipt.itemsEvidence?.validationCodes).toContain("ARITHMETIC_VALID");
+    expect(merged.itemsOwnerReviewRequired).toBe(false);
+    expect(merged.seamRepeats).toEqual({
+      resolution: "removed-reconciled",
+      removed: [
+        { name: "Eggs", quantity: 1, amount: 40, pageNumber: 2, originalPageNumber: 1 },
+        { name: "Rice", quantity: 1, amount: 35, pageNumber: 2, originalPageNumber: 1 },
+      ],
+      flagged: [],
+    });
+  });
+
+  it("keeps and flags a possible repeat the total cannot settle", () => {
+    const request = alwaysRouted();
+    const merged = mergeReceiptProviderOutcome(localExtraction(), request, outcome(request, [
+      item("Bread", 50, 1), item("Eggs", 40, 1), item("Eggs", 40, 2),
+    ]));
+
+    expect(merged.receipt.items).toHaveLength(3);
+    expect(merged.itemsOwnerReviewRequired).toBe(true);
+    expect(merged.seamRepeats?.resolution).toBe("flagged");
+    expect(merged.seamRepeats?.flagged).toEqual([
+      { name: "Eggs", quantity: 1, amount: 40, pageNumber: 2, originalPageNumber: 1, itemIndex: 2, originalName: "Eggs" },
+    ]);
+  });
+
+  it("leaves a same-line purchase at the seam alone when the list already adds up", () => {
+    const request = alwaysRouted();
+    const merged = mergeReceiptProviderOutcome(localExtraction(), request, outcome(request, [
+      item("Bread", 45, 1), item("Eggs", 40, 1), item("Eggs", 40, 2),
+    ]));
+
+    expect(merged.receipt.items).toHaveLength(3);
+    expect(merged.seamRepeats).toBeUndefined();
+  });
+});
+
 describe("Phase 1 provider implementations", () => {
   it("ships no Azure network adapter or Azure client dependency", () => {
     const adapterSource = readFileSync(join(__dirname, "../../src/services/receiptScan/providerAdapters.ts"), "utf8");

@@ -9,6 +9,7 @@ import {
 } from "../../lib/receiptTextSignals";
 import { MIN_READABLE_EDGE } from "../../lib/imageQuality";
 import { receiptPageEvidence } from "./pageEvidence";
+import type { ItemCategorisation } from "./categorisation";
 
 export function toDTO(
   scan: ReceiptScan,
@@ -241,9 +242,20 @@ export function toDTO(
        * ("ocr" | "vision"). Null where nothing could be located — including
        * every scan read before evidence was recorded.
        */
-      evidence:
-        (i.evidence as unknown as { pageNumber: number | null; sourceText: string | null; source: string } | null) ??
-        null,
+      evidence: itemProvenance(i.evidence),
+      /**
+       * How FinSight chose this line's category: how sure it is, whether the
+       * category is business or personal, why (when the owner should look),
+       * and whether the category was created by this scan. Null on scans
+       * categorised before this was recorded.
+       */
+      categorisation: itemCategorisation(i.evidence),
+      /**
+       * The earlier line this one may repeat, where two photos overlap and the
+       * pipeline could not settle it (lib/receiptOverlapItems.ts). Null when
+       * nothing is in doubt. The owner keeps both or removes this one.
+       */
+      possibleRepeatOf: possibleRepeatOf(i.evidence),
     })),
   };
 }
@@ -283,4 +295,43 @@ function suspectItemId(scan: ReceiptScan, items: ReceiptScanItem[]): number | nu
   if (measured.length === 0) return null;
 
   return measured.reduce((worst, i) => (i.amountConfidence! < worst.amountConfidence! ? i : worst)).id;
+}
+
+/**
+ * The printed line an item was read from, without the categorisation stored
+ * beside it — null where nothing could be located, as before.
+ */
+function itemProvenance(
+  evidence: unknown,
+): { pageNumber: number | null; sourceText: string | null; source: string } | null {
+  if (typeof evidence !== "object" || evidence === null) return null;
+  const { categorisation: _categorisation, ...provenance } = evidence as Record<string, unknown>;
+  if (provenance.pageNumber === undefined && provenance.sourceText === undefined) return null;
+  return provenance as unknown as { pageNumber: number | null; sourceText: string | null; source: string };
+}
+
+function itemCategorisation(evidence: unknown): ItemCategorisation | null {
+  if (typeof evidence !== "object" || evidence === null) return null;
+  const value = (evidence as Record<string, unknown>).categorisation;
+  if (typeof value !== "object" || value === null) return null;
+  const { confidence, source, kind, reason, newCategory } = value as Record<string, unknown>;
+  if (confidence !== "medium" && confidence !== "low") return null;
+  return {
+    confidence,
+    source: source === "history" || source === "item" || source === "shop" ? source : "none",
+    kind: kind === "business" || kind === "personal" ? kind : null,
+    reason: typeof reason === "string" ? reason : null,
+    newCategory: newCategory === true,
+  };
+}
+
+function possibleRepeatOf(evidence: unknown): { pageNumber: number; name: string; amount: number } | null {
+  if (typeof evidence !== "object" || evidence === null) return null;
+  const value = (evidence as Record<string, unknown>).possibleRepeatOf;
+  if (typeof value !== "object" || value === null) return null;
+  const { pageNumber, name, amount } = value as Record<string, unknown>;
+  return Number.isInteger(pageNumber) && (pageNumber as number) >= 1 && typeof name === "string"
+    && typeof amount === "number" && Number.isFinite(amount)
+    ? { pageNumber: pageNumber as number, name, amount }
+    : null;
 }

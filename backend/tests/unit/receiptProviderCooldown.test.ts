@@ -41,6 +41,19 @@ describe("receipt provider cooldown policy", () => {
     expect(cooldown?.retryAt).toEqual(providerRetryAt);
   });
 
+  it("opens immediately for a server failure carrying Retry-After", () => {
+    const providerRetryAt = new Date(now.getTime() + 5 * 60 * 1000);
+    const cooldown = evaluateReceiptProviderCooldown([
+      { ...failure("PROVIDER_SERVER_ERROR"), providerRetryAt },
+    ], now);
+
+    expect(cooldown).toEqual({
+      reasonCode: "PROVIDER_SERVER_ERROR",
+      failureCount: 1,
+      retryAt: providerRetryAt,
+    });
+  });
+
   it("requires three consecutive transient failures", () => {
     expect(evaluateReceiptProviderCooldown([
       failure("PROVIDER_SERVER_ERROR"),

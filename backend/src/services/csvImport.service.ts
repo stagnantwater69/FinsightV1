@@ -41,6 +41,7 @@ import {
 } from "../lib/recordTypeDetection";
 import { categoryFromHistory, loadConfirmedCategoryHistory } from "../lib/categoryHistory";
 import { expenseDuplicateKeysOf } from "../lib/expenseDuplicateIdentity";
+import { validateCsvUploadBytes } from "../lib/csvUploadValidation";
 
 export interface ColumnMapping {
   date: string;
@@ -481,20 +482,7 @@ interface ParsedCsv {
 }
 
 function parseCsv(buffer: Buffer): ParsedCsv {
-  /*
-   * A NUL byte never appears in a text CSV but appears constantly in the
-   * things owners upload by mistake — .xlsx files renamed to .csv, PDFs,
-   * UTF-16 exports. Refused with a message that says what to do, instead of
-   * letting csv-parse produce one garbage column whose every row "fails
-   * validation".
-   */
-  if (buffer.includes(0)) {
-    throw new ApiError(
-      400,
-      "This file is not a plain-text CSV — it contains binary data. " +
-        "If it came from Excel, use File → Save As → CSV and upload that file instead.",
-    );
-  }
+  validateCsvUploadBytes(buffer);
 
   const delimiter = detectDelimiter(buffer);
   let headers: string[] = [];

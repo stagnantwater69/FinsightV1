@@ -196,6 +196,18 @@ describe("POST /api/v1/records/receipts", () => {
     expect(await prisma.receiptScan.count()).toBe(0);
   });
 
+  it("rejects an image whose decoded format disagrees with its multipart MIME type", async () => {
+    const png = await sharp({ create: { width: 80, height: 120, channels: 3, background: "white" } }).png().toBuffer();
+    const response = await request(app).post("/api/v1/records/receipts").set(...AUTH)
+      .field("businessProfileId", String(ctx.profile.id))
+      .attach("files", png, { filename: "receipt.jpg", contentType: "image/jpeg" });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toMatch(/does not match its contents/i);
+    expect(uploadReceiptImage).not.toHaveBeenCalled();
+    expect(await prisma.receiptScan.count()).toBe(0);
+  });
+
   it("rejects more than eight logical pages and cleans its request-owned temporary files", async () => {
     const before = await receiptUploadTempDirectories();
     let upload = request(app).post("/api/v1/records/receipts").set(...AUTH)
@@ -459,6 +471,62 @@ describe("POST /api/v1/records/receipts", () => {
       .attach("files", PNG, { filename: "receipt.jpg", contentType: "image/jpeg" });
 
     expect(res.status).toBe(401);
+  });
+});
+
+describe("receipt item network retries", () => {
+  async function editableScan() {
+    return prisma.receiptScan.create({
+      data: {
+        businessProfileId: ctx.profile.id,
+        imageFile: `${ctx.profile.id}/editable.jpg`,
+        confirmationStatus: "Pending",
+        processingStatus: "Complete",
+        items: {
+          create: [
+            { lineNumber: 1, name: "Rice", amount: 100 },
+            { lineNumber: 2, name: "Oil", amount: 50 },
+          ],
+        },
+      },
+      include: { items: { orderBy: { lineNumber: "asc" } } },
+    });
+  }
+
+  it("leaves an exact repeated delete non-mutating after returning the current 404 contract", async () => {
+    const scan = await editableScan();
+    const url = `/api/v1/records/receipts/${scan.id}/items/${scan.items[0]!.id}`;
+
+    const first = await request(app).delete(url).set(...AUTH);
+    const repeated = await request(app).delete(url).set(...AUTH);
+
+    expect(first.status).toBe(200);
+    expect(repeated.status).toBe(404);
+    expect(await prisma.receiptScanItem.findMany({
+      where: { receiptScanId: scan.id },
+      select: { name: true },
+    })).toEqual([{ name: "Oil" }]);
+    expect(await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).toMatchObject({
+      scanRevision: 1,
+      confirmationStatus: "Pending",
+    });
+    expect(await prisma.receiptFieldCorrection.count({
+      where: { receiptScanId: scan.id, field: "itemPresence" },
+    })).toBe(1);
+  });
+
+  it("rejects a stale-revision delete retry with 409 and does not advance revision twice", async () => {
+    const scan = await editableScan();
+    const url = `/api/v1/records/receipts/${scan.id}/items/${scan.items[0]!.id}?expectedScanRevision=${scan.scanRevision}`;
+
+    expect((await request(app).delete(url).set(...AUTH)).status).toBe(200);
+    expect((await request(app).delete(url).set(...AUTH)).status).toBe(409);
+
+    expect(await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).toMatchObject({ scanRevision: 1 });
+    expect(await prisma.receiptScanItem.count({ where: { receiptScanId: scan.id } })).toBe(1);
+    expect(await prisma.receiptFieldCorrection.count({
+      where: { receiptScanId: scan.id, field: "itemPresence" },
+    })).toBe(1);
   });
 });
 

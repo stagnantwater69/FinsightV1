@@ -9,8 +9,8 @@ import {
 } from "../storage.service";
 import {
   confidenceForValue,
+  documentConfidence,
   extractReceipt,
-  joinPagesWithoutSeams,
   locateItemLines,
   overallConfidence,
   parseLineItems,
@@ -29,9 +29,10 @@ import {
   buildFieldEvidence,
   buildScanWarnings,
   determineRescueTrigger,
+  seamRepeatWarnings,
   snapVendorToHistory,
 } from "./extraction";
-import type { ReceiptCaptureMetadata, RescuedFields } from "./types";
+import type { ReceiptCaptureMetadata, ReceiptItemEvidenceInput, RescuedFields } from "./types";
 import { selectOcrCandidate } from "./ocrCandidateSelection";
 import { readReceiptPagesWithinOcrBudget } from "./ocrPageScheduling";
 import { assessReceiptLikelihood } from "../../lib/receiptLikelihood";
@@ -48,6 +49,8 @@ import {
   type NormalizedEvidence,
   type NormalizedReceiptExtraction,
 } from "../receiptProviderContract";
+import { OVERLAP_RESOLVER_VERSION } from "../../lib/receiptOverlapItems";
+import { readLocalItems } from "./localItems";
 import {
   dispatchReceiptProviderRescue,
   RECEIPT_PROCESSING_LEASE_MS,
@@ -132,7 +135,7 @@ export interface ReceiptItemProcessingOutput {
   vendor: string | null;
   extractedByVision: boolean;
   amountConfidences: (number | null)[];
-  itemEvidence: ({ pageNumber: number | null; sourceText: string | null } | null)[];
+  itemEvidence: (ReceiptItemEvidenceInput | null)[];
 }
 
 export interface ReceiptProcessingOutput {
@@ -157,12 +160,27 @@ async function readStoredCandidate(evidence: StoredEvidence, withQuality: boolea
   await validateReceiptUpload({ buffer, mimetype: evidence.info.mimetype });
   const digest = sha256(buffer);
   const quality = withQuality ? await assessImageQuality(buffer) : null;
-  const ocr = await extractReceipt(buffer);
+  /*
+   * The download and validation above stay fatal: without the evidence there
+   * is nothing to read. A failure of the READ is the page's, not the
+   * receipt's — the page's other image may still read, and the caller decides
+   * what a page neither image of which read costs the scan.
+   */
+  let ocr: OcrResult | null = null;
+  let ocrError: unknown = null;
+  try {
+    ocr = await extractReceipt(buffer);
+  } catch (error) {
+    ocrError = error;
+  }
   // The buffer deliberately does not escape: nothing downstream needs the
   // bytes, and returning them is how they used to stay resident for the whole
   // scan. The provider gate re-downloads the page it actually sends.
-  return { ocr, digest, quality };
+  return { ocr, ocrError, digest, quality };
 }
+
+/** What an unreadable page contributes to the text: nothing, and no confidence to average. */
+const UNREAD_PAGE: OcrResult = { text: "", confidence: 0, lines: [] };
 
 function localEvidence(validated: boolean, arithmetic = false): NormalizedEvidence {
   return {
@@ -288,9 +306,21 @@ function mergeIntoRescuedFields(
     visionModel: gate.dispatched ? providerVersion : null,
     visionRejectReason: null,
     verifier: gate.provider === "gemini" && gate.code === "PROVIDER_OK" ? "accepted" : null,
-    visionWarnings: gate.merge.itemsOwnerReviewRequired ? [{ code: "UNVERIFIED_ITEMS" }] : [],
+    visionWarnings: [
+      ...(gate.merge.itemsOwnerReviewRequired ? [{ code: "UNVERIFIED_ITEMS" as const }] : []),
+      ...(providerItems ? seamRepeatWarnings(gate.merge.seamRepeats) : []),
+    ],
     itemEvidence: providerItems
-      ? receipt.items.map((item) => ({ pageNumber: item.evidence.pageNumber, sourceText: null }))
+      ? receipt.items.map((item, index) => {
+        const flagged = gate.merge.seamRepeats?.flagged.find((repeat) => repeat.itemIndex === index);
+        return {
+          pageNumber: item.evidence.pageNumber,
+          sourceText: null,
+          ...(flagged
+            ? { possibleRepeatOf: { pageNumber: flagged.originalPageNumber, name: flagged.originalName, amount: flagged.amount } }
+            : {}),
+        };
+      })
       : null,
   };
 }
@@ -455,8 +485,10 @@ async function processScan(
   let logProviderGate: ((persisted: boolean) => void) | null = null;
   try {
     const ocrResults: OcrResult[] = [];
-    const originalOcrResults: OcrResult[] = [];
+    const originalOcrResults: (OcrResult | null)[] = [];
     const processedOcrResults: (OcrResult | null)[] = [];
+    /** Pages neither image of which could be read, on the attempt that may not retry. */
+    const unreadPages: number[] = [];
     const ocrSources: ("original" | "processed")[] = [];
     const pageQualities: Awaited<ReturnType<typeof assessImageQuality>>[] = [];
     const selectedEvidence: {
@@ -480,7 +512,32 @@ async function processScan(
     });
     ocrMs = performance.now() - ocrStartedAt;
     for (const { page, original, processed } of pageReads) {
-      const selected = selectOcrCandidate(original.ocr, processed?.ocr ?? null);
+      /*
+       * One page's failed read no longer costs the whole receipt.
+       *
+       * Where one of a page's two images read, that reading is used. Where
+       * neither did, the attempt fails and is retried as before — most such
+       * failures are transient — until the last attempt, which keeps every
+       * page that DID read and names the one that did not, rather than
+       * discarding a long receipt for one bad photograph. The unread page
+       * still goes to the provider gate as evidence, where a model may read
+       * it.
+       */
+      if (!original.ocr && !processed?.ocr) {
+        if (attempt < MAX_PROCESSING_ATTEMPTS) throw original.ocrError ?? processed?.ocrError;
+        unreadPages.push(page.pageNumber);
+      }
+      if (original.ocrError !== null || (processed !== null && processed.ocrError !== null)) {
+        logger.warn(
+          { scanId, pageNumber: page.pageNumber, code: "RECEIPT_PAGE_OCR_FAILED", ...safeErrorDetail(original.ocrError ?? processed?.ocrError) },
+          "receipt page image could not be read",
+        );
+      }
+      const selected = original.ocr
+        ? selectOcrCandidate(original.ocr, processed?.ocr ?? null)
+        : processed?.ocr
+          ? { source: "processed" as const, result: processed.ocr }
+          : { source: "original" as const, result: UNREAD_PAGE };
       const chosenEvidence = selected.source === "processed" && page.processed ? page.processed : page.original;
       const chosen = selected.source === "processed" && processed ? processed : original;
       originalOcrResults.push(original.ocr);
@@ -520,63 +577,23 @@ async function processScan(
     }
 
     /*
-     * One continuous document from here on, not N photographs.
-     *
-     * Every parser below — dates, totals, line items, reconciliation — already
-     * reads a receipt as lines of text with no concept of "photograph
-     * boundary". Concatenating in page order is what lets a total printed on
-     * page 3 reconcile against items spanning pages 1 and 2 without a single
-     * line of any of those functions changing. The alternative, stitching the
-     * IMAGES into one before OCR, was rejected in the plan this implements
-     * (docs/multi-page-receipts-plan.md §7): overlapping photos would then
-     * double-count items, which concatenating plain text cannot do.
+     * One continuous document from here on, not N photographs — see
+     * readLocalItems for why the page texts are joined rather than the IMAGES
+     * stitched (docs/multi-page-receipts-plan.md §7), and how overlap between
+     * sections is settled against the printed total.
      */
-    const combinedText = ocrResults.map((r) => r.text).join("\n");
+    const pageTexts = ocrResults.map((r) => r.text);
+    const combinedText = pageTexts.join("\n");
     const combinedLines = ocrResults.flatMap((r) => r.lines);
     const parsed = parseReceiptFields(combinedText);
+    const localItems = readLocalItems(pageTexts, parsed.amount);
+    const deterministicItems = localItems.items;
+    const seamFreeText = localItems.seamFreeText;
+    const localOverlapResolution = localItems.overlapResolution;
+    const localSeamReport = localItems.seamReport;
 
-    /*
-     * OVERLAP BETWEEN SECTIONS, and why removing it needs permission.
-     *
-     * The camera asks for 15-25% overlap between the sections of a long
-     * receipt so the owner can see where to continue photographing. Those
-     * repeated lines are read twice, and concatenating page text in order
-     * therefore counts a handful of items twice on a receipt captured that
-     * way.
-     *
-     * The obvious fix — find the repeat, drop it — is a heuristic deciding
-     * which money lines survive, so it is settled the same way this codebase
-     * settles any choice between two OCR readings of the same pages: an
-     * OBJECTIVE test, never a preference. This is a choice between two local
-     * deterministic readings and happens before the provider gate. The
-     * objective test here is the receipt's own printed
-     * total. If the plain reading fails to account for it and the
-     * de-overlapped reading does, that is arithmetic agreeing with the paper,
-     * not a judgement that one reading looks tidier.
-     *
-     * Where BOTH readings fail to reconcile there is no evidence the removal
-     * helped, so the plain reading stands and the gap surfaces on the confirm
-     * screen as it always has — the owner sees every line and decides. That
-     * is the financial-safety direction: a duplicate the owner can see and
-     * delete beats a real purchase this deleted quietly.
-     *
-     * `combinedText` — the full, unedited concatenation — is what gets stored
-     * as rawText regardless, so the audit trail never loses lines this chose
-     * not to count.
-     */
-    const plainItems = parseLineItems(combinedText);
-    const seamFreeText = joinPagesWithoutSeams(ocrResults.map((r) => r.text));
-    const plainReconciliation = reconcileItems(combinedText, plainItems, parsed.amount);
-
-    let deterministicItems = plainItems;
-    if (!plainReconciliation.reconciled && seamFreeText !== combinedText) {
-      const seamFreeItems = parseLineItems(seamFreeText);
-      if (reconcileItems(seamFreeText, seamFreeItems, parsed.amount).reconciled) {
-        deterministicItems = seamFreeItems;
-      }
-    }
-
-    const worstPageConfidence = Math.min(...ocrResults.map((r) => overallConfidence(r)));
+    const pageConfidences = ocrResults.map((r) => overallConfidence(r));
+    const worstPageConfidence = Math.min(...pageConfidences);
     const reconciliation = reconcileItems(combinedText, deterministicItems, parsed.amount);
     const currency = parseReceiptDetails(combinedText).currency;
     const providerConfig = getReceiptProviderConfiguration();
@@ -653,7 +670,6 @@ async function processScan(
     const rescued = mergeIntoRescuedFields(parsed, deterministicItems, gate, trigger, providerConfig.providerVersion);
     const vendor = await snapVendorToHistory(input.businessProfileId, combinedText, rescued.vendor);
 
-    const pageTexts = ocrResults.map((r) => r.text);
     const fieldEvidence = buildFieldEvidence(pageTexts, parsed, rescued, vendor);
     const warnings = buildScanWarnings({
       pageQualities,
@@ -661,8 +677,13 @@ async function processScan(
       combinedText,
       seamFreeText,
       parsed,
-      rescued,
+      rescued: rescued.itemsFromVision
+        ? rescued
+        : { ...rescued, visionWarnings: [...rescued.visionWarnings, ...seamRepeatWarnings(localSeamReport)] },
       worstPageConfidence,
+      pageConfidences: pageConfidences.map((confidence, index) =>
+        unreadPages.includes(input.pages[index]!.pageNumber) ? null : confidence),
+      unreadPages,
     });
 
     // Persist versions and safe gate outcomes with the scan for calibration.
@@ -691,6 +712,10 @@ async function processScan(
       // the prior pass's value when this one never read the paper (`providerRead`).
       providerCurrency: gate.merge.providerCurrency,
       ocrCandidateSources: ocrSources,
+      overlapResolverVersion: OVERLAP_RESOLVER_VERSION,
+      overlapResolution: rescued.itemsFromVision
+        ? gate.merge.seamRepeats?.resolution ?? "none"
+        : localOverlapResolution,
     };
     const receiptLikelihood = assessReceiptLikelihood({
       rawText: combinedText,
@@ -719,7 +744,9 @@ async function processScan(
           visionAssisted: rescued.visionAssisted,
           // Null on a vision-assisted read: the figure would describe text
           // tesseract could not make sense of, which is not what it looks like.
-          ocrConfidence: rescued.visionAssisted ? null : worstPageConfidence,
+          // The whole receipt's word mean, not its worst page: each page keeps
+          // its own figure on ReceiptScanPage and its own LOW_CONFIDENCE warning.
+          ocrConfidence: rescued.visionAssisted ? null : documentConfidence(ocrResults),
           // Per field, for calibration. The whole-scan figure above cannot say
           // whether confidence predicts a wrong answer for the VENDOR
           // specifically, because one number per scan says nothing about which
@@ -744,9 +771,10 @@ async function processScan(
           pageNumber: input.pages[index]!.pageNumber,
           data: {
             rawText: result.text,
-            ocrConfidence: overallConfidence(result),
-            originalRawText: originalOcrResults[index]!.text,
-            originalOcrConfidence: overallConfidence(originalOcrResults[index]!),
+            // Null, not zero, for a page that could not be read: never measured.
+            ocrConfidence: unreadPages.includes(input.pages[index]!.pageNumber) ? null : overallConfidence(result),
+            originalRawText: originalOcrResults[index]?.text ?? null,
+            originalOcrConfidence: originalOcrResults[index] ? overallConfidence(originalOcrResults[index]!) : null,
             ocrSource: ocrSources[index]!,
             processedRawText: processedOcrResults[index]?.text ?? null,
             processedOcrConfidence: processedOcrResults[index]

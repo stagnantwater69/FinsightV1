@@ -737,19 +737,15 @@ describe("recovery target — confirmed vs. provisional sales split (§9.6)", ()
   });
 
   it("counts a flagged-duplicate sale as provisional and reports possible_duplicates", async () => {
-    // Both dated the business's current day, not "today and yesterday" —
-    // the two dates only need to land in the SAME month for this test's
-    // assertions, and "yesterday" can fall in the previous month whenever
-    // today happens to be the 1st (see businessDayOffset's own comment).
-    // duplicateStatus is set explicitly below, not inferred from the dates
-    // matching, so there is no need for these two to differ.
-    await addSale(4500, businessDayOffset(ctx.profile.timezone), "Confirmed sale");
-    const flagged = await addSale(1000, businessDayOffset(ctx.profile.timezone), "Flagged sale");
-    await sales.updateSalesRecord(ctx.user.id, flagged.id, { duplicateStatus: "Flagged" });
+    const dayOffset = businessDayOffset(ctx.profile.timezone);
+    await addSale(4500, dayOffset, "Confirmed sale");
+    const canonical = await addSale(1000, dayOffset, "Possible duplicate sale");
+    const flagged = await addSale(1000, dayOffset, "Possible duplicate sale");
+    expect(flagged).toMatchObject({ duplicateStatus: "Flagged", duplicateOfRecordId: canonical.id });
 
     const result = await insights.getRecoveryInsight(ctx.user.id, ctx.profile.id, 14);
-    expect(result.salesThisMonth).toBe(5500);
-    expect(result.confirmedSalesThisMonth).toBe(4500);
+    expect(result.salesThisMonth).toBe(6500);
+    expect(result.confirmedSalesThisMonth).toBe(5500);
     expect(result.provisionalSalesThisMonth).toBe(1000);
     expect(result.dataWarnings).toEqual(["possible_duplicates"]);
   });

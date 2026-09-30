@@ -31,6 +31,7 @@ import { listImportBatches, previewImportBatch } from "../../src/services/csvImp
 import { runCsvSourcePurgeWorkerOnce } from "../../src/services/csvSourcePurge.service";
 import {
   bulkResolveExpenseDuplicates,
+  deleteExpenseRecord,
   searchExpenseRecords,
 } from "../../src/services/expenseRecord.service";
 import { disconnectDb, makeOwnerWithProfile, resetDb, utcDay } from "../setup/testDb";
@@ -139,7 +140,53 @@ describe("bulkResolveExpenseDuplicates", () => {
     const all = await prisma.expenseRecord.findMany({ where: { businessProfileId: ctx.profile.id } });
     expect(all).toHaveLength(3);
     expect(all.every((r) => r.duplicateStatus === "Not a Duplicate")).toBe(true);
+    expect(all.every((r) => r.duplicateOfRecordId === null)).toBe(true);
     expect(all.every((r) => r.reviewStatus === "Reviewed")).toBe(true);
+  });
+
+  it("does not clear a non-duplicate record's independent review state", async () => {
+    const needsReview = await prisma.expenseRecord.create({
+      data: {
+        businessProfileId: ctx.profile.id,
+        categoryId: ctx.categories.Inventory!,
+        date: utcDay(-3),
+        description: "Large expense awaiting review",
+        amount: 50000,
+        source: "MANUAL_ENTRY",
+        duplicateStatus: "Not a Duplicate",
+        reviewStatus: "Needs Review",
+        largeExpenseFlag: true,
+      },
+    });
+
+    expect(await bulkResolveExpenseDuplicates(
+      ctx.user.id,
+      ctx.profile.id,
+      [needsReview.id],
+      "keep",
+    )).toBe(0);
+    expect(await prisma.expenseRecord.findUniqueOrThrow({ where: { id: needsReview.id } }))
+      .toMatchObject({ duplicateStatus: "Not a Duplicate", reviewStatus: "Needs Review" });
+  });
+
+  it("ignores a canonical id and repairs a surviving follower of a discarded intermediate", async () => {
+    const { original, copies } = await makeDuplicateCluster({ copies: 2 });
+    await prisma.expenseRecord.update({
+      where: { id: copies[1]!.id },
+      data: { duplicateOfRecordId: copies[0]!.id },
+    });
+
+    const resolved = await bulkResolveExpenseDuplicates(
+      ctx.user.id,
+      ctx.profile.id,
+      [original.id, copies[0]!.id],
+      "discard",
+    );
+
+    expect(resolved).toBe(1);
+    expect(await prisma.expenseRecord.findUnique({ where: { id: original.id } })).not.toBeNull();
+    expect(await prisma.expenseRecord.findUniqueOrThrow({ where: { id: copies[1]!.id } }))
+      .toMatchObject({ duplicateStatus: "Flagged", duplicateOfRecordId: original.id });
   });
 
   it("skips ids belonging to another owner rather than touching them", async () => {
@@ -178,8 +225,12 @@ describe("bulkResolveExpenseDuplicates", () => {
     expect(await prisma.cSVImportBatch.findUnique({ where: { id: batch.id } })).not.toBeNull();
     expect(deleteCsvFile).not.toHaveBeenCalled();
 
-    // Now nothing is left that came from it.
-    await bulkResolveExpenseDuplicates(ctx.user.id, ctx.profile.id, [original.id], "discard");
+    // A stale grouped-resolution request cannot discard the unflagged source.
+    expect(await bulkResolveExpenseDuplicates(ctx.user.id, ctx.profile.id, [original.id], "discard")).toBe(0);
+    expect(await prisma.cSVImportBatch.findUnique({ where: { id: batch.id } })).not.toBeNull();
+
+    // An explicit record delete can remove that source, and queues the file purge atomically.
+    await deleteExpenseRecord(ctx.user.id, original.id);
     expect(await prisma.cSVImportBatch.findUnique({ where: { id: batch.id } })).toBeNull();
     expect(deleteCsvFile).not.toHaveBeenCalled();
     expect(await runCsvSourcePurgeWorkerOnce()).toBe(true);

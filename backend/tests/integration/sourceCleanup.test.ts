@@ -109,6 +109,40 @@ describe("receipt image cleanup", () => {
     expect(await prisma.receiptScan.findUnique({ where: { id: scan.id } })).toBeNull();
   });
 
+  it("rolls the record deletion back when its receipt purge obligation cannot be queued", async () => {
+    const { scan, records } = await confirmedScanWithRecords(1);
+    await prisma.$executeRawUnsafe(`
+      CREATE FUNCTION fail_receipt_purge_enqueue_for_test() RETURNS trigger
+      LANGUAGE plpgsql AS $$
+      BEGIN
+        RAISE EXCEPTION 'simulated receipt purge enqueue failure';
+      END;
+      $$
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER fail_receipt_purge_enqueue_for_test
+      BEFORE INSERT ON "ReceiptPurgeJob"
+      FOR EACH ROW EXECUTE FUNCTION fail_receipt_purge_enqueue_for_test()
+    `);
+
+    try {
+      await expect(expenses.deleteExpenseRecord(ctx.user.id, records[0]!.id)).rejects.toThrow();
+    } finally {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS fail_receipt_purge_enqueue_for_test ON "ReceiptPurgeJob"`);
+      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS fail_receipt_purge_enqueue_for_test()`);
+    }
+
+    expect(await prisma.expenseRecord.findUnique({ where: { id: records[0]!.id } })).not.toBeNull();
+    expect(await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } }))
+      .toMatchObject({ confirmationStatus: "Confirmed" });
+    expect(await prisma.receiptPurgeJob.count({ where: { receiptScanId: scan.id } })).toBe(0);
+
+    await expect(expenses.deleteExpenseRecord(ctx.user.id, records[0]!.id)).resolves.toBeUndefined();
+    expect(await prisma.expenseRecord.findUnique({ where: { id: records[0]!.id } })).toBeNull();
+    expect(await prisma.receiptPurgeJob.findFirst({ where: { receiptScanId: scan.id } }))
+      .toMatchObject({ status: "PENDING", stage: "STORAGE" });
+  });
+
   /**
    * The case that makes this reference counting rather than a plain cascade:
    * an itemised receipt splits across categories, and deleting one of those
@@ -488,6 +522,21 @@ describe("CSV file cleanup", () => {
     ]);
 
     expect(await prisma.cSVImportBatch.findUnique({ where: { id: batch.id } })).toBeNull();
+    expect(await prisma.cSVSourcePurgeJob.count({ where: { sourceBatchId: batch.id } })).toBe(1);
+    expect(deleteCsvFileMock).not.toHaveBeenCalled();
+  });
+
+  it("schedules one cleanup when the same final imported record is deleted twice concurrently", async () => {
+    const { batch, expenseRecords } = await batchWith(1, 0);
+
+    const outcomes = await Promise.allSettled([
+      expenses.deleteExpenseRecord(ctx.user.id, expenseRecords[0]!.id),
+      expenses.deleteExpenseRecord(ctx.user.id, expenseRecords[0]!.id),
+    ]);
+
+    expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+    const rejected = outcomes.find((outcome) => outcome.status === "rejected");
+    expect(rejected).toMatchObject({ status: "rejected", reason: { status: 404 } });
     expect(await prisma.cSVSourcePurgeJob.count({ where: { sourceBatchId: batch.id } })).toBe(1);
     expect(deleteCsvFileMock).not.toHaveBeenCalled();
   });

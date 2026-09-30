@@ -140,7 +140,14 @@ export function evaluateReceiptProviderCooldown(
   const latest = ordered[0];
   if (!latest?.outcomeCode) return null;
 
-  if (latest.outcomeCode === "AUTH_ERROR" || latest.outcomeCode === "RATE_LIMITED") {
+  const providerDirectedServerRetry = latest.outcomeCode === "PROVIDER_SERVER_ERROR"
+    && latest.providerRetryAt !== null
+    && latest.providerRetryAt !== undefined;
+  if (
+    latest.outcomeCode === "AUTH_ERROR"
+    || latest.outcomeCode === "RATE_LIMITED"
+    || providerDirectedServerRetry
+  ) {
     const durationMs = latest.outcomeCode === "AUTH_ERROR"
       ? RECEIPT_PROVIDER_AUTH_COOLDOWN_MS
       : RECEIPT_PROVIDER_COOLDOWN_MS;
@@ -961,9 +968,11 @@ async function releaseOrConsume(
 ): Promise<void> {
   const providerRetryAt = outcome.outcomeCode === "RATE_LIMITED"
     ? new Date(now.getTime() + Math.max(RECEIPT_PROVIDER_COOLDOWN_MS, outcome.retryAfterMs ?? 0))
-    : outcome.outcomeCode === "AUTH_ERROR"
-      ? new Date(now.getTime() + RECEIPT_PROVIDER_AUTH_COOLDOWN_MS)
-      : null;
+    : outcome.outcomeCode === "PROVIDER_SERVER_ERROR" && typeof outcome.retryAfterMs === "number"
+      ? new Date(now.getTime() + Math.min(outcome.retryAfterMs, RECEIPT_PROVIDER_MAX_RETRY_AFTER_MS))
+      : outcome.outcomeCode === "AUTH_ERROR"
+        ? new Date(now.getTime() + RECEIPT_PROVIDER_AUTH_COOLDOWN_MS)
+        : null;
   await prisma.$transaction(async (tx) => {
     if (outcome.status !== "AMBIGUOUS") {
       const finalUnits = outcome.finalBillableUnits;

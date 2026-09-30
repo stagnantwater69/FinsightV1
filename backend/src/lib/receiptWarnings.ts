@@ -36,6 +36,10 @@ export const WARNING_CODES = [
   "UNREADABLE_FIELD",
   /** Line items an external provider read that do not add up to the total; prefilled for review, never validated. */
   "UNVERIFIED_ITEMS",
+  /** Items printed where two photos overlap were read twice; the repeats were counted once. */
+  "OVERLAP_ITEMS_COUNTED_ONCE",
+  /** Items that may have been read twice where two photos overlap; kept for the owner to decide. */
+  "POSSIBLE_REPEATED_ITEMS",
 ] as const;
 
 export type ReceiptWarningCode = (typeof WARNING_CODES)[number];
@@ -49,6 +53,21 @@ export interface ReceiptWarning {
   pageNumber?: number;
   /** Free-text evidence — the visible source text, the size of a gap. Never required to act on the code. */
   detail?: string;
+}
+
+/**
+ * Codes only the pipeline may raise. The vision model's response schema and
+ * its validation use MODEL_WARNING_CODES, so a model can never claim that an
+ * overlap was resolved.
+ */
+const PIPELINE_ONLY_WARNING_CODES: ReadonlySet<ReceiptWarningCode> = new Set([
+  "OVERLAP_ITEMS_COUNTED_ONCE",
+  "POSSIBLE_REPEATED_ITEMS",
+]);
+export const MODEL_WARNING_CODES = WARNING_CODES.filter((code) => !PIPELINE_ONLY_WARNING_CODES.has(code));
+
+export function isModelWarningCode(value: unknown): value is ReceiptWarningCode {
+  return isReceiptWarningCode(value) && !PIPELINE_ONLY_WARNING_CODES.has(value);
 }
 
 export function isReceiptWarningCode(value: unknown): value is ReceiptWarningCode {
@@ -74,4 +93,6 @@ export const WARNING_GUIDANCE: Record<ReceiptWarningCode, string> = {
   AMBIGUOUS_DATE: "Check the day and month.",
   UNREADABLE_FIELD: "Fill in the missing value from the receipt.",
   UNVERIFIED_ITEMS: "AI read these items but they don't add up to the total. Check each line against the receipt.",
+  OVERLAP_ITEMS_COUNTED_ONCE: "Your photos overlapped. Items shown in both were counted once.",
+  POSSIBLE_REPEATED_ITEMS: "Some items may be counted twice because the photos overlap. Check the marked items.",
 };

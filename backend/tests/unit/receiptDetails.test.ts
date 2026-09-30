@@ -31,7 +31,8 @@ describe("printed receipt details", () => {
     expect(requiresManualCurrencyConversion("TOTAL $10.00")).toBe(true);
     expect(requiresManualCurrencyConversion("TOTAL ¥1200")).toBe(true);
     expect(requiresManualCurrencyConversion("TOTAL ￥1200")).toBe(true);
-    expect(requiresManualCurrencyConversion("TOTAL PHP 500.00\nCash $10.00")).toBe(true);
+    // Dollar amounts on more than one line of a peso receipt: mixed, so refused.
+    expect(requiresManualCurrencyConversion("TOTAL PHP 500.00\nCash $10.00\nChange $2.00")).toBe(true);
     expect(requiresManualCurrencyConversion("TOTAL PHP 500.00")).toBe(false);
   });
 
@@ -96,5 +97,56 @@ describe("provider-reported currency", () => {
     expect(providerReportedCurrency({ providerCurrency: null })).toBeNull();
     expect(providerReportedCurrency(null)).toBeNull();
     expect(providerReportedCurrency("USD")).toBeNull();
+  });
+});
+
+describe("OCR noise on an itemised peso receipt", () => {
+  const PESO_RECEIPT = ["005705486 1 115.25 115.25T", "FEMME BT300 2PLY 128+CTTN", "Total P7967.25", "VAT : P853.60"].join("\n");
+
+  it("does not read a dollar sign on a serial number as a dollar amount", () => {
+    // "#" read as "$" on a register serial line.
+    const text = `Serial $6600441\n${PESO_RECEIPT}`;
+    expect(requiresManualCurrencyConversion(text)).toBe(false);
+    expect(parseReceiptDetails(text).currency).toBe("PHP");
+  });
+
+  it("does not read a dollar sign inside a product description as a dollar amount", () => {
+    expect(requiresManualCurrencyConversion(`SUPER CRUNCH $WEETCORN 55\n${PESO_RECEIPT}`)).toBe(false);
+  });
+
+  it("does not pair a code ending one line with the figures that open the next", () => {
+    const text = `GOLDEN TOWER ODONG CAD\n${PESO_RECEIPT}`;
+    expect(requiresManualCurrencyConversion(text)).toBe(false);
+    expect(parseReceiptDetails(text).currency).toBe("PHP");
+  });
+
+  /*
+   * Measured, on the tesseract reading of the owner's own receipt: a red pen
+   * stroke across the quantity column read as "¥", and the 8 of 80.00 as "£".
+   * One mark on one item line of a receipt printed in pesos is noise.
+   */
+  it("does not read a pen stroke before a quantity as a yen amount", () => {
+    const text = `005652850 ¥ 1 80.00 80.007\n${PESO_RECEIPT}`;
+    expect(requiresManualCurrencyConversion(text)).toBe(false);
+  });
+
+  it("does not read one misread digit as a pound amount on a peso receipt", () => {
+    const text = `005443303 2 £0.00 160.007\n${PESO_RECEIPT}`;
+    expect(requiresManualCurrencyConversion(text)).toBe(false);
+    expect(parseReceiptDetails(text).currency).toBe("PHP");
+  });
+
+  it("reads pesos through the space OCR puts before the decimal point", () => {
+    expect(parseReceiptDetails("Total P7967 .25").currency).toBe("PHP");
+  });
+
+  it("still refuses a peso booking when the foreign amount is corroborated", () => {
+    // On the line stating the total.
+    expect(requiresManualCurrencyConversion("TOTAL $1,234.56")).toBe(true);
+    // On two lines of the receipt.
+    expect(requiresManualCurrencyConversion(`${PESO_RECEIPT}\nCash $10.00\nChange $2.00`)).toBe(true);
+    // Or with nothing on the receipt saying pesos.
+    expect(requiresManualCurrencyConversion("Coffee $3.50\nTOTAL 3.50")).toBe(true);
+    expect(requiresManualCurrencyConversion("Ramen ¥980")).toBe(true);
   });
 });
