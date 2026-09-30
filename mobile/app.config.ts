@@ -94,9 +94,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   userInterfaceStyle: "automatic",
 
   /*
-   * LAUNCH ART. All of it is derived from assets/mascot/finsightlogo.png —
-   * the same owl badge the web app adopted — by scripts run once at authoring
-   * time, not at build time. See the "assets" section of assets/README.md.
+   * Native launch art. These files are still derived from the legacy
+   * `finsightlogo.png`; the web and mobile in-app marks plus the Expo web
+   * favicon use the current transparent `newmascotlogo.png` instead.
    *
    * `icon` is the iOS/store icon: opaque (iOS rejects alpha), the badge at
    * 78% of the canvas so no launcher mask clips the ring.
@@ -162,6 +162,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         "FinSight can read a receipt from a photo you have already taken.",
     },
   },
+  // Regenerated from the current transparent brand mark, unlike the native
+  // icon/adaptive/splash files above, which intentionally remain legacy.
   web: { favicon: "./assets/favicon.png" },
 
   plugins: [

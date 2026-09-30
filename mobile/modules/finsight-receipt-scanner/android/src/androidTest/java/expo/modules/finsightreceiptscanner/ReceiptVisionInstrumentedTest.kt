@@ -72,6 +72,36 @@ class ReceiptVisionInstrumentedTest {
     }
   }
 
+  @Test fun clippedReceiptGuidesPreviewAndProducesVisiblePostCaptureSection() {
+    val partial = Mat(900, 700, CvType.CV_8UC3, Scalar.all(25.0))
+    val plain = Mat(900, 700, CvType.CV_8UC3, Scalar.all(25.0))
+    Imgproc.rectangle(partial, Point(100.0, 0.0), Point(600.0, 190.0), Scalar.all(242.0), -1)
+    Imgproc.rectangle(plain, Point(100.0, 0.0), Point(600.0, 190.0), Scalar.all(242.0), -1)
+    for (y in listOf(42, 92, 142)) {
+      Imgproc.putText(partial, "ITEM ${y * 17}  123.45", Point(125.0, y.toDouble()), Imgproc.FONT_HERSHEY_SIMPLEX, .72, Scalar.all(35.0), 2)
+    }
+    try {
+      val found = ReceiptVision.detect(partial, true)
+      assertNotNull("A textured receipt strip clipped by the frame remains trackable", found)
+      assertTrue(found!!.topClipped)
+      assertFalse(found.bottomClipped)
+      assertFalse(found.captureEligible)
+      assertTrue(found.confidence > 0)
+      assertNull("Geometry alone must not turn a bright surface into a receipt", ReceiptVision.detect(plain, true))
+      val standardGuide = ReceiptVision.detect(partial, false)
+      assertNotNull("Standard preview should guide around the visible receipt strip", standardGuide)
+      assertTrue(standardGuide!!.topClipped)
+      assertFalse("A clipped guide must not trigger Standard auto-capture", standardGuide.captureEligible)
+      assertNull("Standard guidance still requires receipt-like texture", ReceiptVision.detect(plain, false))
+      ReceiptVision.cropCapturedStill(partial).use { cropped ->
+        assertEquals(ReceiptVision.CropOutcome.VISIBLE_SECTION, cropped.outcome)
+        assertNotNull(cropped.corners)
+        assertEquals(0.0, cropped.corners!![0].y, 0.0)
+        assertFalse(cropped.image.empty())
+      }
+    } finally { partial.release(); plain.release() }
+  }
+
   @Test fun findsInsetPaperAndWarpRemovesDarkSurroundings() {
     val image = Mat(900, 700, CvType.CV_8UC3, Scalar.all(25.0))
     Imgproc.rectangle(image, Point(100.0, 70.0), Point(600.0, 830.0), Scalar.all(240.0), -1)
@@ -79,9 +109,114 @@ class ReceiptVisionInstrumentedTest {
     try {
       val found = ReceiptVision.detect(image, false)
       assertNotNull(found)
-      val result = ReceiptVision.warp(image, found!!.corners)
+      assertTrue("A complete inset quadrilateral is eligible for capture", found!!.captureEligible)
+      val result = ReceiptVision.warp(image, found.corners)
       try { assertTrue(Core.mean(result).`val`[0] > 220); assertTrue(result.rows() > result.cols()) }
       finally { result.release() }
+    } finally { image.release() }
+  }
+
+  @Test fun completeCapturedStillUsesPerspectiveCropWithOutwardMargin() {
+    val image = Mat(900, 700, CvType.CV_8UC3, Scalar.all(25.0))
+    Imgproc.rectangle(image, Point(100.0, 70.0), Point(600.0, 830.0), Scalar.all(240.0), -1)
+    val detectedCorners = arrayOf(
+      Point(100.0, 70.0),
+      Point(600.0, 70.0),
+      Point(600.0, 830.0),
+      Point(100.0, 830.0),
+    )
+    val paper = ReceiptVision.Paper(detectedCorners, 200.0, 240.0, .95, false, false, true)
+    try {
+      ReceiptVision.cropCapturedStill(image, detector = { paper }).use { cropped ->
+        assertEquals(ReceiptVision.CropOutcome.PERSPECTIVE, cropped.outcome)
+        val expanded = cropped.corners
+        assertNotNull(expanded)
+        assertTrue(expanded!![0].x < detectedCorners[0].x)
+        assertTrue(expanded[0].y < detectedCorners[0].y)
+        assertTrue(cropped.image.rows() > cropped.image.cols())
+      }
+    } finally { image.release() }
+  }
+
+  @Test fun verticallyClippedCapturedStillsCropOnlyVisiblePixels() {
+    val image = Mat(900, 700, CvType.CV_8UC3, Scalar.all(240.0))
+    val candidates = listOf(
+      ReceiptVision.Paper(
+        arrayOf(Point(100.0, 0.0), Point(600.0, 0.0), Point(600.0, 800.0), Point(100.0, 800.0)),
+        200.0, 240.0, .9, true, false, false,
+      ),
+      ReceiptVision.Paper(
+        arrayOf(Point(100.0, 100.0), Point(600.0, 100.0), Point(600.0, 899.0), Point(100.0, 899.0)),
+        200.0, 240.0, .9, false, true, false,
+      ),
+    )
+    try {
+      candidates.forEach { candidate ->
+        ReceiptVision.cropCapturedStill(image, detector = { candidate }).use { cropped ->
+          assertEquals(ReceiptVision.CropOutcome.VISIBLE_SECTION, cropped.outcome)
+          val corners = cropped.corners
+          assertNotNull(corners)
+          assertTrue(corners!!.all { it.x in 0.0..699.0 && it.y in 0.0..899.0 })
+          if (candidate.topClipped) assertEquals(0.0, corners[0].y, 0.0)
+          if (candidate.bottomClipped) assertEquals(899.0, corners[2].y, 0.0)
+        }
+      }
+    } finally { image.release() }
+  }
+
+  @Test fun capturedStillFallsBackForSideClippedAmbiguousAndMissingDocuments() {
+    val image = Mat(900, 700, CvType.CV_8UC3, Scalar.all(83.0))
+    val sideClipped = ReceiptVision.Paper(
+      arrayOf(Point(0.0, 60.0), Point(600.0, 60.0), Point(600.0, 840.0), Point(0.0, 840.0)),
+      200.0, 240.0, .9, false, false, true,
+    )
+    val ambiguous = ReceiptVision.Paper(
+      arrayOf(Point(100.0, 60.0), Point(600.0, 60.0), Point(600.0, 840.0), Point(100.0, 840.0)),
+      200.0, 240.0, .4, false, false, false,
+    )
+    try {
+      listOf(sideClipped, ambiguous, null).forEach { candidate ->
+        ReceiptVision.cropCapturedStill(image, detector = { candidate }).use { cropped ->
+          assertEquals(ReceiptVision.CropOutcome.ORIGINAL_FALLBACK, cropped.outcome)
+          assertNull(cropped.corners)
+          assertEquals(image.cols(), cropped.image.cols())
+          assertEquals(image.rows(), cropped.image.rows())
+          assertEquals(0.0, Core.norm(image, cropped.image, Core.NORM_INF), 0.0)
+        }
+      }
+    } finally { image.release() }
+  }
+
+  @Test fun capturedStillFallsBackWhenPerspectiveWarpFails() {
+    val image = Mat(900, 700, CvType.CV_8UC3, Scalar.all(83.0))
+    val paper = ReceiptVision.Paper(
+      arrayOf(Point(100.0, 60.0), Point(600.0, 60.0), Point(600.0, 840.0), Point(100.0, 840.0)),
+      200.0, 240.0, .9, false, false, true,
+    )
+    try {
+      ReceiptVision.cropCapturedStill(
+        image,
+        detector = { paper },
+        rectifier = { _, _, _ -> throw IllegalStateException("forced warp failure") },
+      ).use { cropped ->
+        assertEquals(ReceiptVision.CropOutcome.ORIGINAL_FALLBACK, cropped.outcome)
+        assertNull(cropped.corners)
+        assertEquals(0.0, Core.norm(image, cropped.image, Core.NORM_INF), 0.0)
+      }
+    } finally { image.release() }
+  }
+
+  @Test fun capturedStillEnhancementFailureReturnsUnmodifiedPixels() {
+    val image = Mat(900, 700, CvType.CV_8UC3, Scalar.all(83.0))
+    try {
+      ReceiptVision.enhanceCapturedStill(image) {
+        throw IllegalStateException("forced enhancement failure")
+      }.use { enhanced ->
+        assertFalse(enhanced.applied)
+        assertEquals(image.cols(), enhanced.image.cols())
+        assertEquals(image.rows(), enhanced.image.rows())
+        assertEquals(0.0, Core.norm(image, enhanced.image, Core.NORM_INF), 0.0)
+      }
     } finally { image.release() }
   }
 
@@ -244,33 +379,51 @@ class ReceiptVisionInstrumentedTest {
     } finally { image.release(); tiled.release(); whole.release() }
   }
 
-  @Test fun lateralInkDisagreementNeverChangesMosaic() {
+  @Test fun excessiveLateralDriftNeverChangesMosaic() {
     val image = paper(); val top = image.submat(Rect(0, 0, 600, 800)); val next = image.submat(Rect(0, 180, 600, 800)); val shifted = Mat()
     val transform = Mat(2, 3, CvType.CV_64F)
     try {
-      transform.put(0, 0, 1.0, 0.0, 4.0, 0.0, 1.0, 0.0)
+      transform.put(0, 0, 1.0, 0.0, 75.0, 0.0, 1.0, 0.0)
       Imgproc.warpAffine(next, shifted, transform, next.size(), Imgproc.INTER_LINEAR, Core.BORDER_REPLICATE)
       assertNull(ReceiptVision.downwardOffset(top, shifted))
     } finally { image.release(); top.release(); next.release(); shifted.release(); transform.release() }
   }
 
+  @Test fun modestHandheldRotationScaleAndSidewaysDriftAreStabilizedBeforeStitching() {
+    val image = paper(); val previous = image.submat(Rect(0, 0, 600, 800)); val source = image.submat(Rect(0, 180, 600, 800)); val moved = Mat()
+    val transform = Imgproc.getRotationMatrix2D(Point(300.0, 400.0), 1.4, 1.018)
+    try {
+      transform.put(0, 2, transform.get(0, 2)[0] + 10.0)
+      Imgproc.warpAffine(source, moved, transform, source.size(), Imgproc.INTER_LINEAR, Core.BORDER_REPLICATE)
+      val registered = ReceiptVision.registerDownward(previous, moved)
+      assertNotNull("Normal handheld variation should retain verified overlap", registered)
+      registered!!.use {
+        assertEquals(180.0, it.offset.toDouble(), 12.0)
+        assertTrue(it.inlierRatio >= .55)
+        assertTrue(it.meanDifference <= 40.0)
+      }
+    } finally { image.release(); previous.release(); source.release(); moved.release(); transform.release() }
+  }
+
   @Test fun mosaicThumbnailIsBoundedIndependentAndClearedWithSession() {
     val session = LongReceiptSession()
     val frame = Mat(16000, 600, CvType.CV_8UC3, Scalar.all(240.0))
+    val oldRows = frame.submat(Rect(0, 0, 600, 13600))
     try {
+      oldRows.setTo(Scalar.all(20.0))
       assertNull(session.thumbnail())
       assertTrue(session.accept(frame, 1))
       val preview = session.thumbnail()!!
       try {
-        assertTrue(preview.cols() <= 192); assertTrue(preview.rows() <= 960)
-        assertEquals(36, preview.cols()); assertEquals(960, preview.rows())
+        assertEquals(240, preview.cols()); assertEquals(960, preview.rows())
+        assertEquals("The rolling preview keeps the newest accepted rows readable", 240.0, Core.mean(preview).`val`[0], 0.0)
         preview.setTo(Scalar.all(0.0))
         val original = session.result()
-        try { assertEquals(240.0, Core.mean(original).`val`[0], 0.0) }
+        try { assertEquals("Mutating preview pixels must not alter the accepted mosaic", 0.0, Core.norm(frame, original, Core.NORM_INF), 0.0) }
         finally { original.release() }
       } finally { preview.release() }
       session.close(); assertNull(session.thumbnail())
-    } finally { frame.release(); session.close() }
+    } finally { oldRows.release(); frame.release(); session.close() }
   }
 
   @Test fun growingThumbnailUsesAcceptedPixelsAndRejectedMotionDoesNotChangeIt() {
@@ -279,7 +432,7 @@ class ReceiptVisionInstrumentedTest {
     try {
       assertTrue(session.accept(first, 1))
       val initial = session.thumbnail()!!
-      try { assertEquals(192, initial.cols()); assertEquals(256, initial.rows()) }
+      try { assertEquals(240, initial.cols()); assertEquals(320, initial.rows()) }
       finally { initial.release() }
       assertTrue(session.accept(second, 2))
       val grown = session.thumbnail()!!
@@ -299,7 +452,7 @@ class ReceiptVisionInstrumentedTest {
       val overlay = ReceiptScannerOverlay(instrumentation.targetContext)
       overlay.layout(0, 0, 400, 800)
       overlay.frameAspect = .5f
-      overlay.points = listOf(.1f to .1f, .9f to .1f, .9f to .9f, .1f to .9f)
+      overlay.updateDetection(listOf(.1f to .1f, .9f to .1f, .9f to .9f, .1f to .9f), 1000)
       val output = Bitmap.createBitmap(400, 800, Bitmap.Config.ARGB_8888)
       val receipt = Mat(100, 50, CvType.CV_8UC3, Scalar.all(240.0))
       val thumbnail = Bitmap.createBitmap(50, 100, Bitmap.Config.ARGB_8888)
@@ -310,8 +463,16 @@ class ReceiptVisionInstrumentedTest {
         val tinted = output.getPixel(200, 400)
         assertTrue("Detected interior receives a translucent highlight", Color.alpha(tinted) in 1..254)
         assertTrue(Color.green(tinted) > Color.red(tinted))
+        assertTrue("The stitched preview is visible in the right-side rail", Color.alpha(output.getPixel(350, 50)) > 0)
+        assertEquals("The preview no longer covers the top-left camera area", 0, Color.alpha(output.getPixel(15, 15)))
         assertEquals("Outside detection remains untouched", 0, Color.alpha(output.getPixel(395, 790)))
         assertEquals("Overlay must never mutate receipt pixels", 240.0, Core.mean(receipt).`val`[0], 0.0)
+        overlay.updateDetection(emptyList(), 1500)
+        output.eraseColor(Color.TRANSPARENT); overlay.draw(Canvas(output))
+        assertTrue("One missed frame retains the last reliable boundary", Color.alpha(output.getPixel(200, 400)) > 0)
+        overlay.updateDetection(emptyList(), 1701)
+        output.eraseColor(Color.TRANSPARENT); overlay.draw(Canvas(output))
+        assertEquals("A genuinely lost receipt clears the stale boundary", 0, Color.alpha(output.getPixel(200, 400)))
         overlay.clear()
         assertTrue("Reset releases the retained thumbnail", thumbnail.isRecycled)
         output.eraseColor(Color.TRANSPARENT); overlay.draw(Canvas(output))
@@ -339,7 +500,7 @@ class ReceiptVisionInstrumentedTest {
           try {
             Utils.matToBitmap(frame, scene); Utils.matToBitmap(mosaic, thumb)
             overlay.layout(0, 0, 600, 1000); overlay.frameAspect = .6f
-            overlay.points = listOf(.2f to .08f, .8f to .08f, .8f to .92f, .2f to .92f)
+            overlay.updateDetection(listOf(.2f to .08f, .8f to .08f, .8f to .92f, .2f to .92f))
             overlay.setMosaic(thumb)
             val canvas = Canvas(image); canvas.drawColor(Color.rgb(26, 32, 34))
             canvas.drawBitmap(scene, null, RectF(120f, 80f, 480f, 920f), Paint(Paint.FILTER_BITMAP_FLAG))

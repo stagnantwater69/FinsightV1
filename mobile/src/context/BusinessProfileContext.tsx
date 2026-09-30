@@ -14,6 +14,10 @@ interface Value {
   profiles: BusinessProfile[];
   selected: BusinessProfile | null;
   categories: ExpenseCategory[];
+  /** Scoped to the selected business; cached rows remain visible on refresh. */
+  categoriesLoading: boolean;
+  /** A selected-business fetch failure, separate from a successful empty list. */
+  categoriesError: string | null;
   loading: boolean;
   /**
    * Why the list is empty, when it is empty because the request failed rather
@@ -38,8 +42,8 @@ interface Value {
    * responsible for remembering to refresh the shared list.
    *
    * Appends rather than refetching: the created row is what the server just
-   * returned, so a second GET would be a round trip to learn something already
-   * known, and the new category would flicker in a moment late.
+   * returned. A category fetch that was already in flight merges creations
+   * made after it started, so its older snapshot cannot erase the new row.
    */
   createCategory: (input: {
     name: string;
@@ -56,15 +60,27 @@ interface Value {
 
 const Ctx = createContext<Value | undefined>(undefined);
 
+interface CategoryState {
+  rows: ExpenseCategory[];
+  loading: boolean;
+  error: string | null;
+}
+
 export function BusinessProfileProvider({ children }: { children: ReactNode }) {
   const { profile: user, takeBootstrapProfiles } = useAuth();
   const [profiles, setProfiles] = useState<BusinessProfile[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [categoryState, setCategoryState] = useState<{ scope: string; rows: ExpenseCategory[] } | null>(null);
-  const categoryScope = `${user?.id ?? ""}:${selectedId ?? ""}`;
+  const [categoryStates, setCategoryStates] = useState<Record<string, CategoryState>>({});
+  const categoryScope = user && selectedId ? `${user.id}:${selectedId}` : null;
   const latestCategoryScope = useRef(categoryScope);
   latestCategoryScope.current = categoryScope;
-  const categories = categoryState?.scope === categoryScope ? categoryState.rows : [];
+  const categoryRequest = useRef(0);
+  const categoryMutationVersion = useRef(0);
+  const createdCategoryVersions = useRef(new Map<string, Map<number, number>>());
+  const currentCategoryState = categoryScope ? categoryStates[categoryScope] : undefined;
+  const categories = currentCategoryState?.rows ?? [];
+  const categoriesLoading = categoryScope ? (currentCategoryState?.loading ?? true) : false;
+  const categoriesError = currentCategoryState?.error ?? null;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -103,7 +119,10 @@ export function BusinessProfileProvider({ children }: { children: ReactNode }) {
     if (!user) {
       setProfiles([]);
       setSelectedId(null);
-      setCategoryState(null);
+      categoryRequest.current += 1;
+      categoryMutationVersion.current += 1;
+      createdCategoryVersions.current.clear();
+      setCategoryStates({});
       setError(null);
       setLoading(false);
       return;
@@ -115,18 +134,57 @@ export function BusinessProfileProvider({ children }: { children: ReactNode }) {
   }, [user, load, takeBootstrapProfiles]);
 
   const refreshCategories = useCallback(async () => {
-    if (!selectedId) {
-      setCategoryState(null);
-      return;
+    if (!selectedId || !categoryScope) return;
+
+    const request = ++categoryRequest.current;
+    const requestedScope = categoryScope;
+    const mutationsAtStart = categoryMutationVersion.current;
+    setCategoryStates((previous) => ({
+      ...previous,
+      [requestedScope]: {
+        rows: previous[requestedScope]?.rows ?? [],
+        loading: true,
+        error: null,
+      },
+    }));
+
+    try {
+      const rows = await api.get<ExpenseCategory[]>("/records/categories", { businessProfileId: selectedId });
+      if (latestCategoryScope.current !== requestedScope || categoryRequest.current !== request) return;
+      const returnedIds = new Set(rows.map((row) => row.id));
+      const createdVersions = createdCategoryVersions.current.get(requestedScope);
+      for (const id of returnedIds) createdVersions?.delete(id);
+      if (createdVersions?.size === 0) createdCategoryVersions.current.delete(requestedScope);
+      setCategoryStates((previous) => ({
+        ...previous,
+        [requestedScope]: {
+          rows: [
+            ...rows,
+            ...(previous[requestedScope]?.rows ?? []).filter((row) =>
+              !returnedIds.has(row.id) && (createdVersions?.get(row.id) ?? 0) > mutationsAtStart,
+            ),
+          ],
+          loading: false,
+          error: null,
+        },
+      }));
+    } catch (err) {
+      if (latestCategoryScope.current === requestedScope && categoryRequest.current === request) {
+        setCategoryStates((previous) => ({
+          ...previous,
+          [requestedScope]: {
+            rows: previous[requestedScope]?.rows ?? [],
+            loading: false,
+            error: errorMessage(err),
+          },
+        }));
+      }
+      throw err;
     }
-    const rows = await api.get<ExpenseCategory[]>("/records/categories", { businessProfileId: selectedId });
-    if (latestCategoryScope.current === categoryScope) setCategoryState({ scope: categoryScope, rows });
   }, [selectedId, categoryScope]);
 
   useEffect(() => {
-    // Categories failing is not worth blocking the screen over — the pickers
-    // come up empty and the owner can still read their figures — but it must
-    // not surface as an unhandled rejection either.
+    // The scoped failure is already recorded; consume the effect's rejection.
     refreshCategories().catch(() => undefined);
   }, [refreshCategories]);
 
@@ -138,6 +196,8 @@ export function BusinessProfileProvider({ children }: { children: ReactNode }) {
         profiles,
         selected,
         categories,
+        categoriesLoading,
+        categoriesError,
         loading,
         error,
         selectProfile: setSelectedId,
@@ -157,13 +217,24 @@ export function BusinessProfileProvider({ children }: { children: ReactNode }) {
             ...(input.description ? { description: input.description } : {}),
             ...(input.costBehavior ? { costBehavior: input.costBehavior } : {}),
           });
-          if (latestCategoryScope.current !== categoryScope) {
+          if (latestCategoryScope.current !== categoryScope || !categoryScope) {
             throw new Error("Business changed. Choose a category for the current business.");
           }
-          setCategoryState((previous) => ({
-            scope: categoryScope,
-            rows: [...(previous?.scope === categoryScope ? previous.rows : []), created],
-          }));
+          const mutationVersion = ++categoryMutationVersion.current;
+          const createdForScope = createdCategoryVersions.current.get(categoryScope) ?? new Map<number, number>();
+          createdForScope.set(created.id, mutationVersion);
+          createdCategoryVersions.current.set(categoryScope, createdForScope);
+          setCategoryStates((previous) => {
+            const current = previous[categoryScope];
+            return {
+              ...previous,
+              [categoryScope]: {
+                rows: [...(current?.rows.filter((row) => row.id !== created.id) ?? []), created],
+                loading: false,
+                error: null,
+              },
+            };
+          });
           return created;
         },
         createProfile: async (input) => {

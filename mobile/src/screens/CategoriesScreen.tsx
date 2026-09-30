@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Pressable, ScrollView, TextInput, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { errorMessage } from "../lib/api";
@@ -43,7 +43,14 @@ const COST_BEHAVIOR_OPTIONS: { value: ExpenseCostBehavior; label: string }[] = [
 export function CategoriesScreen({ navigation }: { navigation: { navigate: (screen: string, params?: object) => void } }) {
   const t = useTheme();
   const { brand, ink, paper } = t;
-  const { selected, categories, createCategory } = useBusinessProfiles();
+  const {
+    selected,
+    categories,
+    categoriesLoading,
+    categoriesError,
+    createCategory,
+    refreshCategories,
+  } = useBusinessProfiles();
 
   const [keyword, setKeyword] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
@@ -67,6 +74,7 @@ export function CategoriesScreen({ navigation }: { navigation: { navigate: (scre
     () => [...filtered].sort((a, b) => a.name.localeCompare(b.name)),
     [filtered],
   );
+  const categoryListReady = categories.length > 0 || (!categoriesLoading && !categoriesError);
 
   async function handleCreate() {
     const trimmed = name.trim();
@@ -185,72 +193,105 @@ export function CategoriesScreen({ navigation }: { navigation: { navigate: (scre
           </Card>
         )}
 
-        {/*
-          The search box is hidden below a handful of categories. A filter over
-          four items costs a tap and a keyboard to save nothing, and on a phone
-          the space it takes is space the list itself wanted.
-        */}
-        {categories.length > 5 ? (
-          <View style={{ marginTop: space.lg }}>
-            <TextInput
-              value={keyword}
-              onChangeText={setKeyword}
-              placeholder="Search categories…"
-              placeholderTextColor={ink[400]}
-              accessibilityLabel="Search categories"
-              onFocus={() => setSearchFocused(true)}
-              onBlur={() => setSearchFocused(false)}
-              style={{
-                minHeight: TAP,
-                borderWidth: 1,
-                borderColor: searchFocused ? brand[600] : ink[200],
-                borderRadius: radius.md,
-                paddingHorizontal: space.md,
-                paddingVertical: space.sm,
-                fontSize: typeScale.body,
-                color: ink[900],
-                backgroundColor: paper.DEFAULT,
-              }}
-            />
+        {categoriesLoading ? (
+          <View
+            accessible
+            accessibilityRole="progressbar"
+            accessibilityLabel={categories.length > 0 ? "Refreshing categories" : "Loading categories"}
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: space.sm,
+              marginTop: space.lg,
+              paddingVertical: space.md,
+            }}
+          >
+            <ActivityIndicator color={brand[600]} />
+            <T variant="caption">{categories.length > 0 ? "Refreshing categories…" : "Loading categories…"}</T>
           </View>
         ) : null}
 
-        <T variant="caption" style={{ marginTop: space.md, marginBottom: space.sm }}>
-          {keyword.trim()
-            ? `${sorted.length} of ${categories.length} shown`
-            : `${categories.length} categor${categories.length === 1 ? "y" : "ies"}`}
-        </T>
+        {categoriesError ? (
+          <Card style={{ marginTop: space.lg }}>
+            <ErrorNote>
+              {categories.length > 0
+                ? `Couldn't refresh categories. The list below may be out of date. ${categoriesError}`
+                : `Couldn't load categories. ${categoriesError}`}
+            </ErrorNote>
+            <Button
+              title="Try loading again"
+              variant="secondary"
+              onPress={() => void refreshCategories().catch(() => undefined)}
+              style={{ marginTop: space.sm }}
+            />
+          </Card>
+        ) : null}
 
-        {sorted.length === 0 ? (
-          keyword.trim() ? (
-            <EmptyState
-              icon="⌕"
-              title="No categories match that search"
-              body="Try a shorter word, or clear the search box."
-              action={<Button title="Clear search" variant="ghost" onPress={() => setKeyword("")} />}
-            />
-          ) : (
-            <EmptyState
-              title="No categories yet"
-              body="Categories are how FinSight groups your spending — without them every expense looks the same. Start with the three or four you spend on most."
-              action={
-                <Button title="Create your first category" variant="primary" onPress={() => setAdding(true)} />
-              }
-            />
-          )
-        ) : (
-          sorted.map((c) => (
-            <CategoryRow
-              key={c.id}
-              category={c}
-              onOpenRecords={() =>
-                // Same destination as web's "View records": the records list,
-                // already filtered to this category's expenses.
-                navigation.navigate("RecordsList", { type: "expense", categoryId: c.id })
-              }
-            />
-          ))
-        )}
+        {categoryListReady ? (
+          <>
+            {/* A search box costs more space than it saves for five or fewer rows. */}
+            {categories.length > 5 ? (
+              <View style={{ marginTop: space.lg }}>
+                <TextInput
+                  value={keyword}
+                  onChangeText={setKeyword}
+                  placeholder="Search categories…"
+                  placeholderTextColor={ink[400]}
+                  accessibilityLabel="Search categories"
+                  onFocus={() => setSearchFocused(true)}
+                  onBlur={() => setSearchFocused(false)}
+                  style={{
+                    minHeight: TAP,
+                    borderWidth: 1,
+                    borderColor: searchFocused ? brand[600] : ink[200],
+                    borderRadius: radius.md,
+                    paddingHorizontal: space.md,
+                    paddingVertical: space.sm,
+                    fontSize: typeScale.body,
+                    color: ink[900],
+                    backgroundColor: paper.DEFAULT,
+                  }}
+                />
+              </View>
+            ) : null}
+
+            <T variant="caption" style={{ marginTop: space.md, marginBottom: space.sm }}>
+              {keyword.trim()
+                ? `${sorted.length} of ${categories.length} shown`
+                : `${categories.length} categor${categories.length === 1 ? "y" : "ies"}`}
+            </T>
+
+            {sorted.length === 0 ? (
+              keyword.trim() ? (
+                <EmptyState
+                  icon="⌕"
+                  title="No categories match that search"
+                  body="Try a shorter word, or clear the search box."
+                  action={<Button title="Clear search" variant="ghost" onPress={() => setKeyword("")} />}
+                />
+              ) : (
+                <EmptyState
+                  title="No categories yet"
+                  body="Categories are how FinSight groups your spending. Without them, every expense looks the same. Start with the three or four you spend on most."
+                  action={
+                    <Button title="Create your first category" variant="primary" onPress={() => setAdding(true)} />
+                  }
+                />
+              )
+            ) : (
+              sorted.map((c) => (
+                <CategoryRow
+                  key={c.id}
+                  category={c}
+                  onOpenRecords={() =>
+                    navigation.navigate("RecordsList", { type: "expense", categoryId: c.id })
+                  }
+                />
+              ))
+            )}
+          </>
+        ) : null}
       </ScrollView>
     </Screen>
   );

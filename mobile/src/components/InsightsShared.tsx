@@ -4,7 +4,8 @@ import * as haptics from "../lib/haptics";
 import { Card, Money, SegmentedControl, T } from "./ui";
 import { agendaGroupOf, formatDueDate, type AgendaGroupKey } from "../lib/recurringAgenda";
 import { formatMoney } from "../lib/money";
-import { TAP, font, radius, space, typeScale } from "../theme/tokens";
+import { font, radius, space, typeScale } from "../theme/tokens";
+import { TAP_FLOOR } from "./touchTarget";
 import type { Palette } from "../theme/palette";
 import { useTheme } from "../context/ThemeContext";
 import type { RecurringSchedule } from "../lib/types";
@@ -237,7 +238,7 @@ export function SubTabs<Value extends string>({
               justifyContent: "center",
               gap: 6,
               flex: 1,
-              minHeight: TAP,
+              minHeight: TAP_FLOOR,
               paddingHorizontal: space.xs,
               borderBottomWidth: 2,
               borderBottomColor: selected ? brand[600] : "transparent",

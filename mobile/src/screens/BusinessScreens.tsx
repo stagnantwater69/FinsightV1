@@ -450,9 +450,10 @@ export function BusinessProfileFormScreen({ navigation, route }: any) {
 export function ProfileScreen() {
   const t = useTheme();
   const { brand, ink } = t;
-  const { profile, updateProfile, logout, logoutEverywhere, changePassword, setProfileFromServer } = useAuth();
+  const { profile, updateProfile, logout, changePassword, setProfileFromServer } = useAuth();
   const [passwordChanged, setPasswordChanged] = useState(false);
   const [signOutOpen, setSignOutOpen] = useState(false);
+  const [signOutEverywhereOpen, setSignOutEverywhereOpen] = useState(false);
   const [form, setForm] = useState({
     firstName: profile?.firstName ?? "",
     lastName: profile?.lastName ?? "",
@@ -531,7 +532,7 @@ export function ProfileScreen() {
     try {
       await changePassword(pw.current, pw.next);
       /*
-       * This phone STAYS SIGNED IN; every other device is signed out.
+       * This phone STAYS SIGNED IN; every other refresh session is revoked.
        *
        * It used to sign out here, on the belief that Supabase invalidates
        * sessions when the password is rotated. It does not — so the effect was
@@ -651,7 +652,7 @@ export function ProfileScreen() {
           <Card>
             <T variant="title" style={{ marginBottom: 4 }}>Security</T>
             <T variant="caption" style={{ marginBottom: space.md }}>
-              Changing your password signs you out on every device, including this one.
+              Changing your password keeps you signed in on this phone. Other devices must sign in again after their current access expires.
             </T>
             <Field
               label="Current password"
@@ -697,7 +698,7 @@ export function ProfileScreen() {
             */}
             {passwordChanged ? (
               <Callout>
-                Password changed. You're still signed in here, and any other devices have been signed out.
+                Password changed. You're still signed in here. Other devices will need to sign in again after their current access expires.
               </Callout>
             ) : null}
             <Button title="Change password" onPress={submitPassword} loading={busy} style={{ marginTop: space.sm }} />
@@ -722,16 +723,7 @@ export function ProfileScreen() {
               title="Log out on all devices"
               variant="secondary"
               loading={busy}
-              onPress={() =>
-                RNAlert.alert(
-                  "Log out on all devices?",
-                  "Every device signed in to this account — including this one — will be signed out. You'll need your password to get back in.",
-                  [
-                    { text: "Cancel", style: "cancel" },
-                    { text: "Log out everywhere", style: "destructive", onPress: () => void logoutEverywhere() },
-                  ],
-                )
-              }
+              onPress={() => setSignOutEverywhereOpen(true)}
             />
           </Card>
 
@@ -765,6 +757,11 @@ export function ProfileScreen() {
       </KeyboardAvoidingView>
 
       <SignOutSheet visible={signOutOpen} onClose={() => setSignOutOpen(false)} />
+      <SignOutSheet
+        visible={signOutEverywhereOpen}
+        scope="all"
+        onClose={() => setSignOutEverywhereOpen(false)}
+      />
     </Screen>
   );
 }

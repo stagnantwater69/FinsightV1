@@ -67,32 +67,6 @@ async function deleteLocalReceiptCopies(uris: readonly (string | undefined)[]): 
   }
 }
 
-async function clearLocalReceiptCopies(): Promise<number> {
-  try {
-    const fs = await import("expo-file-system");
-    let deleted = 0;
-    for (const folder of RECEIPT_CACHE_FOLDERS) {
-      try {
-        const directory = new fs.Directory(fs.Paths.cache, folder);
-        if (!directory.exists) continue;
-        for (const entry of directory.list()) {
-          try {
-            entry.delete();
-            deleted += 1;
-          } catch {
-            // Keep going; a locked file must not stop the rest of the sweep.
-          }
-        }
-      } catch {
-        // Same reasoning, one folder up.
-      }
-    }
-    return deleted;
-  } catch {
-    return 0;
-  }
-}
-
 /**
  * Loads the Android-only scanner bridge only when cleanup is requested.
  * Expo Go, iOS, and source-only test environments do not install that native
@@ -123,8 +97,42 @@ export async function deleteReceiptScannerFiles(uris: readonly (string | undefin
   return native + local;
 }
 
-/** Account boundary: sign-out, session end, account deletion. */
+/**
+ * Account boundary: sign-out, session end, account deletion.
+ *
+ * Two of the folders it empties are shared (`DocumentPicker` also holds CSV
+ * import copies, `ImagePicker` also holds profile-photo picks), so the sweep
+ * is only defensible when the whole account is leaving the device. The sweep
+ * is declared inside this function so no later caller in this module can
+ * reach a whole-folder wipe: per-page cleanup has `deleteReceiptScannerFiles`.
+ */
 export async function clearReceiptScannerCache(): Promise<number> {
+  async function clearLocalReceiptCopies(): Promise<number> {
+    try {
+      const fs = await import("expo-file-system");
+      let deleted = 0;
+      for (const folder of RECEIPT_CACHE_FOLDERS) {
+        try {
+          const directory = new fs.Directory(fs.Paths.cache, folder);
+          if (!directory.exists) continue;
+          for (const entry of directory.list()) {
+            try {
+              entry.delete();
+              deleted += 1;
+            } catch {
+              // Keep going; a locked file must not stop the rest of the sweep.
+            }
+          }
+        } catch {
+          // Same reasoning, one folder up.
+        }
+      }
+      return deleted;
+    } catch {
+      return 0;
+    }
+  }
+
   const [native, local] = await Promise.all([clearNativeScannerCache(), clearLocalReceiptCopies()]);
   return native + local;
 }

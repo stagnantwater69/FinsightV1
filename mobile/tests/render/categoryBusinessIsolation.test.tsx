@@ -19,6 +19,8 @@ function Probe({ choose, created }: { choose?: (id: number) => void; created?: (
   business = useBusinessProfiles();
   return <>
     <Text>{business.categories.map((category) => category.name).join(", ") || "No active categories"}</Text>
+    <Text>{business.categoriesLoading ? "Categories loading" : "Categories ready"}</Text>
+    <Text>{business.categoriesError ?? "No category error"}</Text>
     {choose ? <CategoryPicker categories={business.categories} value={null} onChange={choose} onCreated={created!} /> : null}
   </>;
 }
@@ -82,6 +84,96 @@ describe("category isolation during business switching", () => {
     expect(choose).not.toHaveBeenCalled();
     expect(created).not.toHaveBeenCalled();
     expect(q.getByLabelText("New category name").props.value).toBe("");
+    expect(business.categories.map((category) => category.id)).toEqual([20]);
+  });
+
+  it("preserves the selected business's rows when a refresh fails, then clears the error on retry", async () => {
+    const q = await render(wrap(<Probe />));
+    await waitFor(() => expect(q.getByText("First business stock")).toBeTruthy());
+
+    get.mockRejectedValueOnce(new Error("network unavailable"));
+    await act(async () => {
+      await expect(business.refreshCategories()).rejects.toThrow("network unavailable");
+    });
+
+    expect(q.getByText("First business stock")).toBeTruthy();
+    expect(q.getByText("network unavailable")).toBeTruthy();
+    expect(q.getByText("Categories ready")).toBeTruthy();
+
+    get.mockResolvedValueOnce([{ id: 12, name: "Updated stock" }]);
+    await act(async () => {
+      await business.refreshCategories();
+    });
+
+    expect(q.getByText("Updated stock")).toBeTruthy();
+    expect(q.getByText("No category error")).toBeTruthy();
+  });
+
+  it("does not let an older refresh erase a category that was just created", async () => {
+    const q = await render(wrap(<Probe />));
+    await waitFor(() => expect(q.getByText("First business stock")).toBeTruthy());
+
+    let finishRefresh!: (value: unknown) => void;
+    get.mockReturnValueOnce(new Promise((resolve) => { finishRefresh = resolve; }));
+    post.mockResolvedValueOnce({ id: 11, name: "First business equipment" });
+
+    let pendingRefresh!: Promise<void>;
+    await act(() => { pendingRefresh = business.refreshCategories(); });
+    await act(async () => {
+      await business.createCategory({ name: "First business equipment" });
+    });
+    expect(q.getByText(/First business stock, First business equipment/)).toBeTruthy();
+
+    await act(async () => {
+      finishRefresh([{ id: 10, name: "First business stock" }]);
+      await pendingRefresh;
+    });
+
+    expect(q.getByText(/First business stock, First business equipment/)).toBeTruthy();
+    expect(business.categories.map((category) => category.id)).toEqual([10, 11]);
+  });
+
+  it("merges a category created before the initial category fetch completes", async () => {
+    let finishInitial!: (value: unknown) => void;
+    const original = get.getMockImplementation()!;
+    get.mockImplementation((path: string, query?: { businessProfileId: number }) =>
+      path === "/records/categories" && query?.businessProfileId === 1
+        ? new Promise((resolve) => { finishInitial = resolve; })
+        : original(path, query),
+    );
+    post.mockResolvedValueOnce({ id: 11, name: "First business equipment" });
+
+    const q = await render(wrap(<Probe />));
+    await waitFor(() => expect(get).toHaveBeenCalledWith("/records/categories", { businessProfileId: 1 }));
+
+    await act(async () => {
+      await business.createCategory({ name: "First business equipment" });
+    });
+    expect(q.getByText("First business equipment")).toBeTruthy();
+
+    await act(() => finishInitial([{ id: 10, name: "First business stock" }]));
+    await waitFor(() => expect(q.getByText(/First business stock, First business equipment/)).toBeTruthy());
+    expect(business.categories.map((category) => category.id)).toEqual([10, 11]);
+  });
+
+  it("does not expose a late category failure from the previous business", async () => {
+    let failFirst!: (error: Error) => void;
+    const original = get.getMockImplementation()!;
+    get.mockImplementation((path: string, query?: { businessProfileId: number }) =>
+      path === "/records/categories" && query?.businessProfileId === 1
+        ? new Promise((_resolve, reject) => { failFirst = reject; })
+        : original(path, query),
+    );
+
+    const q = await render(wrap(<Probe />));
+    await waitFor(() => expect(business.selected?.id).toBe(1));
+    await act(() => business.selectProfile(2));
+    await waitFor(() => expect(q.getByText("Second business rent")).toBeTruthy());
+
+    await act(() => failFirst(new Error("first business offline")));
+
+    expect(q.queryByText("first business offline")).toBeNull();
+    expect(q.getByText("No category error")).toBeTruthy();
     expect(business.categories.map((category) => category.id)).toEqual([20]);
   });
 });

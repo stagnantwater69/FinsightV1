@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { Image, PanResponder, StyleSheet, Text, View } from 'react-native';
+import { Image, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import Svg, { Polygon } from 'react-native-svg';
 import { useTheme } from '../../context/ThemeContext';
 import { font, typeScale } from '../../theme/tokens';
-import { clampToImage, fitImageInBox, fullFrameCorners, type Corners, type Point } from '../../lib/receiptCapture';
+import { clampToImage, defaultCorners, fitImageInBox, fullFrameCorners, type Corners, type Point } from '../../lib/receiptCapture';
 import { cropQuadIssue } from '../../lib/cropQuad';
+import { TAP_FLOOR } from '../touchTarget';
 import { CameraAction } from './CameraAction';
 
 function Handle({ point, scale, offsetX, offsetY, width, height, label, onMove }: {
@@ -37,7 +39,8 @@ export function CropEditor({ uri, width, height, initial, busy, onApply, onCance
   onApply: (corners: Corners) => void; onCancel: () => void; onDetect: () => Promise<Corners | null>;
 }) {
   const t = useTheme();
-  const [corners, setCorners] = useState(initial ?? fullFrameCorners(width, height));
+  const [corners, setCorners] = useState(initial ?? defaultCorners(width, height));
+  const [hasAutomaticCorners, setHasAutomaticCorners] = useState(Boolean(initial));
   const [box, setBox] = useState({ width: 1, height: 1 });
   const [finding, setFinding] = useState(false);
   const mounted = useRef(true);
@@ -59,20 +62,27 @@ export function CropEditor({ uri, width, height, initial, busy, onApply, onCance
         red that does not carry on it. The hint is distinguished by what it
         says and by the disabled Apply action, not by colour alone. */}
     <Text accessibilityLiveRegion="polite" style={[styles.help, { color: t.onCamera }]}>
-      {issue ?? 'Place all four corners on the receipt. Check that every item and the total stay inside.'}
+      {issue ?? (hasAutomaticCorners
+        ? 'Drag the corners onto the receipt edges. Keep every item and the total inside.'
+        : 'No edges were found. Drag each corner onto the receipt, or keep the full photo.')}
     </Text>
     <View style={{ flex: 1, minHeight: 160 }} onLayout={e => setBox(e.nativeEvent.layout)}>
       {box.width > 1 && box.height > 1 ? <Image source={{ uri }} style={{ position: 'absolute', left: ox, top: oy, width: fit.width, height: fit.height }} resizeMode="contain" resizeMethod="scale" /> : null}
       <Svg pointerEvents="none" style={StyleSheet.absoluteFill} width={box.width} height={box.height}>
-        <Polygon points={keys.map(k => `${ox + corners[k].x * fit.scale},${oy + corners[k].y * fit.scale}`).join(' ')} fill="rgba(0,140,120,0.12)" stroke={t.onCamera} strokeWidth={2} />
+        <Polygon points={keys.map(k => `${ox + corners[k].x * fit.scale},${oy + corners[k].y * fit.scale}`).join(' ')} fill="rgba(46,194,172,0.14)" stroke={t.brand[400]} strokeWidth={2} />
       </Svg>
       {!busy && !finding ? keys.map(key => <Handle key={key} label={`${key.replace(/([A-Z])/g, ' $1')} crop corner`} point={corners[key]} scale={fit.scale} offsetX={ox} offsetY={oy} width={width} height={height} onMove={p => setCorners(prev => ({ ...prev, [key]: p }))} />) : null}
     </View>
-    <View style={styles.actions}>
-      <CameraAction label="Reset corners" onPress={() => setCorners(fullFrameCorners(width, height))} disabled={busy || finding} />
-      <CameraAction label={finding ? 'Finding edges…' : 'Find edges'} onPress={() => { setFinding(true); void onDetect().then(result => { if (result && mounted.current) setCorners(result); }).finally(() => { if (mounted.current) setFinding(false); }); }} disabled={busy || finding} />
-      <CameraAction label="Cancel crop" onPress={onCancel} disabled={busy || finding} />
-      <CameraAction label={busy ? 'Correcting…' : 'Apply crop'} onPress={() => { if (!issue) onApply(corners); }} primary disabled={busy || finding || issue !== null} />
+    <Text style={[styles.note, { color: t.onCamera }]}>Applying the crop sends this photo to FinSight to straighten it.</Text>
+    <View style={[styles.actions, { backgroundColor: 'rgba(255,255,255,0.06)' }]}>
+      <CameraAction stacked label="Cancel crop" icon="close-outline" onPress={onCancel} disabled={busy || finding} />
+      <CameraAction stacked label={finding ? 'Finding edges…' : 'Find edges'} icon="scan-outline" onPress={() => { setFinding(true); void onDetect().then(result => { if (result && mounted.current) { setCorners(result); setHasAutomaticCorners(true); } }).finally(() => { if (mounted.current) setFinding(false); }); }} disabled={busy || finding} />
+      <CameraAction stacked label="Full photo" icon="expand-outline" onPress={() => { setCorners(fullFrameCorners(width, height)); setHasAutomaticCorners(false); }} disabled={busy || finding} />
+      <Pressable accessibilityRole="button" accessibilityLabel={busy ? 'Correcting…' : 'Apply crop'} accessibilityState={{ disabled: busy || finding || issue !== null }}
+        disabled={busy || finding || issue !== null} onPress={() => { if (!issue) onApply(corners); }}
+        style={({ pressed }) => [styles.apply, { minWidth: TAP_FLOOR, minHeight: TAP_FLOOR, backgroundColor: pressed ? t.brandFillPressed : t.brandFill, opacity: busy || finding || issue !== null ? 0.45 : 1 }]}>
+        <Ionicons name="checkmark" size={28} color={t.onCamera} />
+      </Pressable>
     </View>
   </View>;
 }
@@ -80,5 +90,7 @@ const styles = StyleSheet.create({
   help: { fontFamily: font.sans, fontSize: typeScale.bodySm, padding: 16, textAlign: 'center' },
   handle: { position: 'absolute', width: 48, height: 48, alignItems: 'center', justifyContent: 'center' },
   dot: { width: 22, height: 22, borderRadius: 11, borderWidth: 3, borderColor: '#ffffff', backgroundColor: '#06675f' },
-  actions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8, padding: 12 },
+  note: { fontFamily: font.sans, fontSize: typeScale.caption, paddingHorizontal: 16, paddingVertical: 6, textAlign: 'center', opacity: 0.85 },
+  actions: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 8 },
+  apply: { minWidth: 72, height: 52, borderRadius: 8, marginLeft: 4, alignItems: 'center', justifyContent: 'center' },
 });

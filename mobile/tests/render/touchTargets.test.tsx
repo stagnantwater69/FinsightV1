@@ -23,6 +23,7 @@ vi.mock('../../src/context/AuthContext', () => ({
 }));
 
 const ui = await import('../../src/components/ui');
+const { SubTabs } = await import('../../src/components/InsightsShared');
 const { TAP_FLOOR } = await import('../../src/components/touchTarget');
 const { ThemeProvider } = await import('../../src/context/ThemeContext');
 
@@ -113,6 +114,28 @@ describe('Rendered touch targets', () => {
     expect(segments).toHaveLength(3);
     for (const segment of segments) {
       expect(tappableHeight(segment)).toBeGreaterThanOrEqual(TAP_FLOOR);
+    }
+  });
+
+  it('gives every insight sub-tab the platform floor', async () => {
+    const queries = await render(
+      withTheme(
+        <SubTabs
+          tabs={[
+            { label: 'Overview', value: 'overview' },
+            { label: 'Findings', value: 'findings', count: 2 },
+          ]}
+          value="overview"
+          onChange={() => {}}
+          accessibilityLabel="Expense insight sections"
+        />,
+      ),
+    );
+
+    const tabs = queries.getAllByRole('tab');
+    expect(tabs).toHaveLength(2);
+    for (const tab of tabs) {
+      expect(tappableHeight(tab)).toBeGreaterThanOrEqual(TAP_FLOOR);
     }
   });
 

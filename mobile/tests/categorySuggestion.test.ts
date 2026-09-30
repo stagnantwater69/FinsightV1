@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { rowsToApplySuggestionTo, suggestedNewCategory } from "../src/lib/categorySuggestion";
+import {
+  categoriesCreatedByScan,
+  categoryReviewNote,
+  rowsToApplySuggestionTo,
+  suggestedNewCategory,
+} from "../src/lib/categorySuggestion";
 
 /**
  * Offering a category the business does not have yet.
@@ -98,5 +103,44 @@ describe("which rows an accepted category is applied to", () => {
   it("matches the proposal case-insensitively", () => {
     const assignments = { 1: null, 2: null, 3: null, 4: null };
     expect(rowsToApplySuggestionTo(items, "PACKAGING", assignments, UNCATEGORISED_ID)).toEqual([1, 2]);
+  });
+});
+
+describe("a category FinSight is unsure of", () => {
+  const unsure = {
+    categoryId: 7,
+    categorisation: { confidence: "low" as const, reason: "Looks like a personal purchase.", newCategory: false },
+  };
+
+  it("shows why while the row still has the category FinSight chose", () => {
+    expect(categoryReviewNote(unsure, 7)).toBe("Looks like a personal purchase.");
+  });
+
+  it("goes quiet once the owner chooses a category themselves", () => {
+    expect(categoryReviewNote(unsure, 9)).toBeNull();
+  });
+
+  it("says nothing about a confident choice, or a scan from before this was recorded", () => {
+    expect(categoryReviewNote({ categoryId: 7, categorisation: { ...unsure.categorisation, confidence: "medium" } }, 7)).toBeNull();
+    expect(categoryReviewNote({ categoryId: 7 }, 7)).toBeNull();
+  });
+});
+
+describe("categories a scan created", () => {
+  const categories = [{ id: 1, name: "Inventory / Stock" }, { id: 2, name: "Personal Care" }, { id: 3, name: "Utilities" }];
+  const row = (categoryId: number, newCategory: boolean) => ({
+    categoryId,
+    categorisation: { confidence: "medium" as const, reason: null, newCategory },
+  });
+
+  it("names each created category once, in the order the rows use them", () => {
+    expect(categoriesCreatedByScan([row(2, true), row(1, true), row(2, true), row(3, false)], categories)).toEqual([
+      "Personal Care",
+      "Inventory / Stock",
+    ]);
+  });
+
+  it("names nothing when every category already existed", () => {
+    expect(categoriesCreatedByScan([row(3, false)], categories)).toEqual([]);
   });
 });

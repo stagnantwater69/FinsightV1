@@ -133,6 +133,11 @@ export interface ExpenseCategory {
    * test double built before this field existed still type-checks.
    */
   costBehavior?: ExpenseCostBehavior;
+  /**
+   * Business or personal spending, read by the server from the category's
+   * name. Optional for the same reason as costBehavior; absent means business.
+   */
+  kind?: "business" | "personal";
 }
 
 export type ReviewStatus = "Reviewed" | "Needs Review";

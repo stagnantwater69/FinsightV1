@@ -155,9 +155,11 @@ export function pagesFromSections(sections: ReceiptSection[]): CapturedPage[] {
       originalMimeType: section.originalMimeType ?? processedMimeType,
       originalWidth: section.originalWidth ?? section.width,
       originalHeight: section.originalHeight ?? section.height,
+      filterSourceUri: section.filterSourceUri,
       captureSource: section.captureSource,
       processingMode: section.processingMode,
       transformVersion: section.transformVersion,
+      cropOutcome: section.cropOutcome,
       cropCorners: section.cropCorners,
       documentConfidence: section.documentConfidence ?? section.edgeConfidence,
       ownerOverrodeLikelihood: section.ownerOverrodeLikelihood,
@@ -187,9 +189,11 @@ export function sectionsFromPages(pages: CapturedPage[]): ReceiptSection[] {
     originalHeight: page.originalHeight ?? page.height,
     processedUri: page.uri,
     processedMimeType: page.mimeType,
+    filterSourceUri: page.filterSourceUri,
     captureSource: page.captureSource,
     processingMode: page.processingMode,
     transformVersion: page.transformVersion,
+    cropOutcome: page.cropOutcome,
     cropCorners: page.cropCorners,
     documentConfidence: page.documentConfidence,
     ownerOverrodeLikelihood: page.ownerOverrodeLikelihood,
@@ -198,4 +202,13 @@ export function sectionsFromPages(pages: CapturedPage[]): ReceiptSection[] {
     height: page.height,
     quality: page.quality,
   }));
+}
+
+export function scannerFileUris(pages: readonly CapturedPage[]): (string | undefined)[] {
+  return pages.flatMap((page) => [
+    page.originalUri,
+    page.uri,
+    page.sourceAssetUri,
+    page.filterSourceUri,
+  ]);
 }

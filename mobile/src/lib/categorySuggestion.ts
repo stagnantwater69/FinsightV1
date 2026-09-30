@@ -1,11 +1,11 @@
 /**
  * When a proposed new category is still worth offering.
  *
- * The classifier can suggest a category the business does not have — the item
+ * A scan can carry a category name the business does not have — the item
  * lands in Uncategorized and the suggestion rides along for the owner to
- * accept or ignore. Nothing is ever created automatically: a category
- * appearing in someone's books that they never asked for is exactly what the
- * classifier's grounding rules exist to prevent.
+ * accept or ignore. (The server's current categoriser creates the standard
+ * categories it needs itself and says so; see categoriesCreatedByScan. This
+ * offer remains for scans that carry a proposal.)
  *
  * Extracted from the screen because the rule has three separate conditions
  * and a case-insensitive match, which is the kind of thing that quietly stops
@@ -63,4 +63,31 @@ export function rowsToApplySuggestionTo<T extends { id: number; suggestedCategor
       return unplaced && item.suggestedCategoryName?.toLowerCase() === name.toLowerCase();
     })
     .map((item) => item.id);
+}
+
+interface CategorisedRow {
+  categoryId: number | null;
+  categorisation?: { confidence: "medium" | "low"; reason: string | null; newCategory: boolean } | null;
+}
+
+/**
+ * Why FinSight is unsure of a row's category, to show under it — until the
+ * owner answers by choosing a category themselves, at which point the doubt
+ * is theirs to have settled and the note goes.
+ */
+export function categoryReviewNote(item: CategorisedRow, currentCategoryId: number | null): string | null {
+  const categorisation = item.categorisation;
+  if (categorisation?.confidence !== "low" || !categorisation.reason) return null;
+  return currentCategoryId === item.categoryId ? categorisation.reason : null;
+}
+
+/** The categories this scan created, by name, once each, in the order the rows use them. */
+export function categoriesCreatedByScan(items: CategorisedRow[], categories: { id: number; name: string }[]): string[] {
+  const names: string[] = [];
+  for (const item of items) {
+    if (!item.categorisation?.newCategory) continue;
+    const name = categories.find((category) => category.id === item.categoryId)?.name;
+    if (name && !names.includes(name)) names.push(name);
+  }
+  return names;
 }

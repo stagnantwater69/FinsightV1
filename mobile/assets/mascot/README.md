@@ -7,20 +7,22 @@ platforms stay in sync and it's obvious at a glance which states are covered whe
 Recommended format: PNG or WebP, transparent background, ~1024x1024 source (web can use
 full-res; export a smaller/compressed copy for the mobile folder).
 
-> **The art in this folder does not meet that spec.** What is actually here, and
-> what still needs doing, is recorded in "What is actually in this folder" below.
-> Read that before wiring a new pose or assuming a file is cut out.
+> **The contextual pose art in this folder does not meet that spec.** The current
+> brand mark does. What is actually here, and what still needs doing, is recorded
+> in "What is actually in this folder" below. Read that before wiring a new pose
+> or assuming a file is cut out.
 
 ## What is actually in this folder
 
-### The background is not transparent, and could not be made so here
+### The contextual backgrounds are not transparent, and could not be made so here
 
-Every pose is **opaque RGB on a near-white plate** (corners measured at 249–255
-on all three channels), not the transparent art this manifest asks for. On a
-Dark-mode screen each one is a bright rectangle. `src/components/MascotState.tsx`
-mitigates that by framing the art on a rounded plate of the same measured colour
-(`mascotPlate`, `#fdfdfd`), with a `plate={false}` escape hatch for whenever real
-cut-out art arrives.
+Every contextual pose is **opaque RGB on a near-white plate** (corners measured
+at 249–255 on all three channels), not the transparent art this manifest asks
+for. On a Dark-mode screen each one is a bright rectangle.
+`src/components/MascotState.tsx` mitigates that by framing the art on a rounded
+plate of the same measured colour (`mascotPlate`, `#fdfdfd`). The current
+`newmascotlogo.png` brand mark is a transparent RGBA cutout, so its state-aware
+default omits that plate.
 
 Removing the background here was **attempted and rejected**, not skipped. A
 corner-seeded flood fill (tolerance: min channel ≥ 235, so the owl's own white
@@ -39,10 +41,11 @@ the results inspected. It fails in three ways that no threshold fixes:
    left hanging. Several poses also use black line-art (`nosalesrecords`' chart
    axes) that has no contrast on a dark surface even when the key is perfect.
 
-**The real fix is a re-export from source** by whoever produced the art: a true
+**The real fix for each contextual pose is a re-export from source**: a true
 alpha channel, no baked contact shadow, and no black-on-white line work that
 depends on the plate for contrast. Nothing in the app can recover that from a
-flattened raster. When it lands, pass `plate={false}` and update this note.
+flattened raster. When one lands, review it and pass `plate={false}` where that
+pose is used.
 
 Two poses have a further export defect worth fixing in the same pass:
 
@@ -69,16 +72,19 @@ the 3x worst case needs 312px. **32.06 MB → 5.86 MB**, and ~6.3 MB → ~1.0 MB
 decoded bitmap.
 
 `tests/mascotAssetBudget.test.ts` pins that: longest edge ≤ 512px, ≤ 400 KB per
-file, and it fails if a pose gains an alpha channel — because that means the
-re-export above has arrived and `plate={false}` should be adopted.
+contextual file, and it allows alpha only for the reviewed brand mark. A
+contextual pose gaining alpha still fails until its rendering is reviewed and
+its plate behavior is changed deliberately.
 
 Not touched, each for a reason:
 
-- **`finsightlogo.png`** (1024x1024, transparent) is the `brandMark` pose *and*
-  the single source every launch icon, adaptive foreground and splash image is
-  derived from — see `assets/README.md`. Shrinking it would degrade all of them.
-  It is exempted by name in the budget test. Giving the mapper its own 512 copy
-  is a sensible follow-up and a change to `MascotState.tsx`.
+- **`newmascotlogo.png`** (1195x1316, transparent RGBA) is the current in-app `brandMark`
+  and the source copied byte-for-byte to `web/public/newmascotlogo.png`. It stays
+  at the supplied resolution so both platforms use the same reviewed artwork,
+  and is exempted by name in the budget test.
+- **`finsightlogo.png`** (1024x1024, transparent) remains the source for the
+  native launch icon, adaptive foreground and splash derivatives documented in
+  `assets/README.md`. It is no longer loaded by `MascotState.tsx`.
 - **The eight unreferenced poses** — `02-authentication/successfullogin.png`,
   `failedlogin.png`, `session expired.png`, `Accountlocked,too many attempts.png`,
   `03-loading-processing/datasyncing.png`, `aigeneratinginsights.png`,
@@ -87,16 +93,16 @@ Not touched, each for a reason:
   and they are the highest-fidelity copies left in the repo of art that may yet
   be wired in. Downscale each one when, and only when, it is referenced.
 
-Folder total: **43.75 MB → 17.55 MB**; bundled art: **~6.4 MB**.
+Folder total: **43.75 MB → 18.25 MB**; bundled art: **~6.6 MB**.
 
 ### Provenance
 
-These are generated illustrations, flattened onto a white plate by the
-generator. The pre-downscale originals are recoverable from git history
-(`git show HEAD:mobile/assets/mascot/…`); there is no other master in the repo
-and none in `web/` — `web/public/mascot/` holds only the logo and three small
-WebP crops. If a full-resolution master matters, get it from whoever ran the
-generator and store it outside the app bundle.
+The contextual poses are generated illustrations flattened onto a white plate.
+Their pre-downscale originals are recoverable from git history
+(`git show HEAD:mobile/assets/mascot/…`). The current brand mark is a transparent
+RGBA master in `newmascotlogo.png`; the web copy must remain byte-identical. If
+another full-resolution master matters, get it from whoever produced the art
+and store it outside the app bundle.
 
 ## 01-onboarding
 - welcome-splash-screen

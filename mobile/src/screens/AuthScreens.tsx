@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, TextInput, View, useWindowDimensions } from "react-native";
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, TextInput, View, useWindowDimensions } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { StatusBar } from "expo-status-bar";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Button, Callout, Checkbox, ErrorNote, Field, Screen, T } from "../components/ui";
-import { Mascot, mascotSource, type MascotState } from "../components/MascotState";
+import { Mascot, type MascotState } from "../components/MascotState";
 import { useAuth } from "../context/AuthContext";
 import * as haptics from "../lib/haptics";
 import { api, errorMessage, getFieldErrors } from "../lib/api";
@@ -88,18 +88,7 @@ function useResendCooldown(seconds = RESEND_COOLDOWN_SECONDS) {
 function BrandMoment({ mascot, showMascot = true }: { mascot: MascotState; showMascot?: boolean }) {
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: space.md }}>
-      {!showMascot ? null : mascot === "brandMark" ? (
-        <Image
-          source={mascotSource("brandMark")}
-          style={{ width: 48, height: 48 }}
-          resizeMode="contain"
-          accessible={false}
-          accessibilityElementsHidden
-          importantForAccessibility="no-hide-descendants"
-        />
-      ) : (
-        <Mascot state={mascot} size={48} plate />
-      )}
+      {showMascot ? <Mascot state={mascot} size={48} /> : null}
       <T variant="title" style={{ flex: 1 }}>FinSight</T>
     </View>
   );
@@ -946,7 +935,8 @@ export function RecoverPasswordScreen({ navigation }: any) {
  * THE TOKENS NEVER REACH OUR SERVER as a password-bearing request either. The
  * new password is set directly against Supabase using a client that persists
  * nothing (see `createRecoveryClient`), so it never touches the keystore. The
- * backend is told only afterwards, and only so it can end every other session —
+ * backend is told only afterwards, and only so it can revoke every other
+ * refresh session —
  * which the phone cannot do for itself and is often the entire reason someone
  * is resetting.
  */
@@ -986,6 +976,7 @@ export function ResetPasswordScreen({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
+  const [refreshRevocationConfirmed, setRefreshRevocationConfirmed] = useState(true);
 
   const codeEmailRef = useRef<TextInput>(null);
   const codeRef = useRef<TextInput>(null);
@@ -1119,33 +1110,27 @@ export function ResetPasswordScreen({
         return;
       }
 
-      /*
-       * Tell the backend, so every other session dies.
-       *
-       * Deliberately not fatal if it fails: the password IS already changed by
-       * this point, and sending the owner back to a form that would now reject
-       * their new password — to fix a session they cannot see — is worse than
-       * the stale session it would be clearing. It is logged server-side either
-       * way.
-       */
-      await api.postWithToken("/auth/reset-password/complete", tokens.accessToken).catch(() => undefined);
+      // The password is already active, so revocation failure is a completed
+      // reset with a security warning rather than a failed password change.
+      let refreshSessionsRevoked = false;
+      try {
+        const result = await api.postWithToken<{ message: string; refreshSessionsRevoked: boolean }>(
+          "/auth/reset-password/complete",
+          tokens.accessToken,
+        );
+        refreshSessionsRevoked = result.refreshSessionsRevoked === true;
+      } catch {
+        // A lost response is also unconfirmed; the recovery step is shown below.
+      }
 
-      /*
-       * AND THE LOCAL SESSION GOES TOO, if there was one.
-       *
-       * The call above revokes every session globally, so anything this phone
-       * still holds is a corpse: keeping it would leave the owner inside the
-       * app on credentials the server has already thrown away, and the next
-       * request would fail as an expired session rather than as the reset it
-       * actually was. This used to live in App.tsx's `finishReset`, which the
-       * deep link no longer reaches.
-       */
+      // End any local signed-in session even when remote cleanup is uncertain.
       if (profile) void logout();
 
       // Spent, and never wanted again.
       setTokens(null);
       setForm({ newPassword: "", confirmPassword: "" });
       haptics.succeeded();
+      setRefreshRevocationConfirmed(refreshSessionsRevoked);
       setDone(true);
     } catch (err) {
       setError(errorMessage(err));
@@ -1158,11 +1143,24 @@ export function ResetPasswordScreen({
 
   if (done) {
     return (
-      <AuthShell title="Password changed" subtitle="You're all set." showMascot={false}>
-        <SuccessPanel
-          icon="shield-checkmark-outline"
-          body="Your password has been changed, and every device that was signed in has been signed out. Log in with your new password to continue."
-        />
+      <AuthShell
+        title="Password changed"
+        subtitle={refreshRevocationConfirmed ? "You're all set." : "One security step remains."}
+        showMascot={false}
+      >
+        {refreshRevocationConfirmed ? (
+          <SuccessPanel
+            icon="shield-checkmark-outline"
+            body="Your password has been changed. Other devices will need to sign in again after their current access expires. Log in with your new password to continue."
+          />
+        ) : (
+          <View accessibilityLiveRegion="polite">
+            <Callout tone="warn">
+              Your new password is active, but FinSight couldn't confirm that other refresh sessions were revoked. Log
+              in, open My account, then use Security &gt; Log out on all devices.
+            </Callout>
+          </View>
+        )}
         <Button title="Log in" variant="primary" onPress={onDone} style={{ marginTop: space.md }} />
       </AuthShell>
     );

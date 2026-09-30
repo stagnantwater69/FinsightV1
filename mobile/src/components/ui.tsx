@@ -531,7 +531,7 @@ export function Checkbox({
  */
 const recentCategoryChoices = new Map<string, number[]>();
 
-export function CategorySelect<Option extends { id: number; name: string }>({
+export function CategorySelect<Option extends { id: number; name: string; kind?: "business" | "personal" }>({
   options,
   value,
   onChange,
@@ -555,6 +555,10 @@ export function CategorySelect<Option extends { id: number; name: string }>({
   const recentScope = options.map((option) => option.id).sort((a, b) => a - b).join(",");
 
   const selected = options.find((o) => o.id === value) ?? null;
+  const personal = selected?.kind === "personal";
+  // Personal categories are marked in words wherever they appear, so a
+  // household purchase is never mistaken for a business cost at a glance.
+  const sheetOptions = options.map((option) => ({ ...option, detail: option.kind === "personal" ? "Personal" : null }));
 
   return (
     <>
@@ -572,6 +576,7 @@ export function CategorySelect<Option extends { id: number; name: string }>({
          */
         accessibilityLabel={
           `${selected ? selected.name : placeholder}` +
+          (personal ? ", personal" : "") +
           (accessibilityContext ? `, category for ${accessibilityContext}` : ", category")
         }
         accessibilityState={{ disabled: !!disabled, expanded: open }}
@@ -603,13 +608,14 @@ export function CategorySelect<Option extends { id: number; name: string }>({
         >
           {selected ? selected.name : placeholder}
         </T>
+        {personal ? <T variant="caption">Personal</T> : null}
         <Ionicons name="chevron-down" size={16} color={t.textMuted} />
       </Pressable>
 
       <OptionSheet
         visible={open}
         title={sheetTitle}
-        options={options}
+        options={sheetOptions}
         value={value}
         onChoose={(id) => {
           const recent = recentCategoryChoices.get(recentScope) ?? [];
@@ -813,7 +819,7 @@ export function SegmentedControl<Value extends string | number>({
  * the row being changed stays visible above it, which is what lets someone
  * check what they are choosing FOR while they choose.
  */
-export function OptionSheet<Option extends { id: number | string; name: string }>({
+export function OptionSheet<Option extends { id: number | string; name: string; detail?: string | null }>({
   visible,
   title,
   options,
@@ -937,6 +943,7 @@ export function OptionSheet<Option extends { id: number | string; name: string }
                   <T style={{ flex: 1, fontSize: typeScale.body, color: isSelected ? t.brandHeading : t.ink[800] }}>
                     {option.name}
                   </T>
+                  {option.detail ? <T variant="caption">{option.detail}</T> : null}
                   {/* A tick as well as the tint — never colour alone. */}
                   {isSelected ? <Ionicons name="checkmark" size={18} color={t.brand[600]} /> : null}
                   </Pressable>

@@ -106,7 +106,9 @@ describe("AuthProvider's reaction", () => {
 
   /** Clearing `profile` IS the navigation — App.tsx renders AuthStack without one. */
   it("drops the local session rather than only recording a reason", () => {
-    expect(AUTH_CONTEXT).toMatch(/setProfile\(null\);\s*\n\s*setPreferences\(null\);\s*\n\s*void supabase\.auth\.signOut\(\);/);
+    expect(AUTH_CONTEXT).toMatch(
+      /setProfile\(null\);\s*\n\s*setPreferences\(null\);\s*\n\s*void supabase\.auth\.signOut\(\{ scope: "local" \}\);/,
+    );
   });
 
   /**

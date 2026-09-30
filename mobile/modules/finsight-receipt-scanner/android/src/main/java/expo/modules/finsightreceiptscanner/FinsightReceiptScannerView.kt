@@ -47,6 +47,7 @@ class FinsightReceiptScannerView(context: Context, appContext: AppContext) : Exp
   private val preview = PreviewView(context).apply { scaleType = PreviewView.ScaleType.FIT_CENTER; implementationMode = PreviewView.ImplementationMode.COMPATIBLE }
   private val outline = ReceiptScannerOverlay(context)
   private val previewPending = AtomicBoolean(false)
+  private val previewDirty = AtomicBoolean(false)
   private var worker: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
   private val generation = AtomicInteger(0)
   private var provider: ProcessCameraProvider? = null
@@ -58,7 +59,9 @@ class FinsightReceiptScannerView(context: Context, appContext: AppContext) : Exp
   private val lifecycleObserver = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) reset() }
   @Volatile private var active = false
   private var torch = false
+  private var requestedZoomRatio = 1f
   @Volatile private var mode = "standard"
+  @Volatile private var autoCapture = true
   private var lastCommand = -1
   // The following state belongs only to worker.
   private var completed = false
@@ -72,6 +75,8 @@ class FinsightReceiptScannerView(context: Context, appContext: AppContext) : Exp
   private var longWidth = 0
   private var lastBottomVisible = false
   private var previewHeight = 0
+  private var detectionMisses = 0
+  private var overlapMisses = 0
   private val session = LongReceiptSession()
   private val endTracker = ReceiptEndTracker()
 
@@ -83,13 +88,30 @@ class FinsightReceiptScannerView(context: Context, appContext: AppContext) : Exp
   }
   override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) { preview.layout(0, 0, right - left, bottom - top); outline.layout(0, 0, right - left, bottom - top) }
   fun setActive(value: Boolean) { if (active == value) return; active = value; if (value && isAttachedToWindow) bind() else stop() }
-  fun setMode(value: String) { val next = if (value == "long") "long" else "standard"; if (mode != next) { mode = next; reset() } }
+  fun setMode(value: String) {
+    val next = when (value) {
+      "long" -> "long"
+      "manual" -> "manual"
+      else -> "standard"
+    }
+    if (mode != next) { mode = next; reset() }
+  }
+  fun setAutoCapture(value: Boolean) { autoCapture = value }
   fun setTorch(value: Boolean) { torch = value; camera?.cameraControl?.enableTorch(value) }
+  fun setZoomRatio(value: Float) {
+    requestedZoomRatio = value.coerceAtLeast(1f)
+    applyZoom()
+  }
+  private fun applyZoom() {
+    val boundCamera = camera ?: return
+    val state = boundCamera.cameraInfo.zoomState.value ?: return
+    boundCamera.cameraControl.setZoomRatio(requestedZoomRatio.coerceIn(state.minZoomRatio, state.maxZoomRatio))
+  }
   override fun onAttachedToWindow() { super.onAttachedToWindow(); if (worker.isShutdown) worker = Executors.newSingleThreadScheduledExecutor(); if (active) bind() }
   override fun onDetachedFromWindow() { stop(); worker.shutdown(); super.onDetachedFromWindow() }
 
   private fun reset() { generation.incrementAndGet(); outline.clear(); if (!worker.isShutdown) worker.execute { clear() } }
-  private fun clear() { completed = false; scanning = false; manualCapture = false; stableSince = 0; lastCorners = null; lastFrameAt = 0; lastFrameCompletedAt = 0; startedAt = 0; session.close(); endTracker.reset(); longWidth = 0; lastBottomVisible = false; previewHeight = 0 }
+  private fun clear() { completed = false; scanning = false; manualCapture = false; stableSince = 0; lastCorners = null; lastFrameAt = 0; lastFrameCompletedAt = 0; startedAt = 0; session.close(); endTracker.reset(); longWidth = 0; lastBottomVisible = false; previewHeight = 0; detectionMisses = 0; overlapMisses = 0; previewDirty.set(false) }
   private fun releaseCameraBindings() {
     analysis?.clearAnalyzer()
     val cases = listOfNotNull(cameraPreview, analysis, imageCapture).toTypedArray()
@@ -107,21 +129,42 @@ class FinsightReceiptScannerView(context: Context, appContext: AppContext) : Exp
   fun command(command: ScannerCommand) {
     if (command.id <= lastCommand) return
     lastCommand = command.id
-    if (command.type == "reset") { reset(); return }
+    if (command.type == "reset") {
+      reset()
+      val token = generation.get()
+      if (!worker.isShutdown) worker.execute {
+        if (token == generation.get() && active) status(token, "ready", if (mode == "long") "Position the top of the receipt" else "Place the receipt section on a contrasting surface")
+      }
+      return
+    }
     if (worker.isShutdown) return
     val token = generation.get(); val currentMode = mode
     worker.execute {
       if (token != generation.get() || !active) return@execute
       when (command.type) {
-        "capture" -> if (currentMode == "standard" && !completed) {
-          manualCapture = true
-          status(token, "detected", "Checking receipt edges and focus…")
-          worker.schedule({
-            if (token == generation.get() && active && mode == "standard" && manualCapture && !completed) {
-              manualCapture = false
-              status(token, "ready", "The camera paused before it could check the receipt. Hold it steady and tap Scan again.")
+        "capture" -> when {
+          (currentMode == "standard" || currentMode == "manual") && !completed -> {
+            // An explicit shutter is an acquisition request, not a document-
+            // detection request. The worker serialises this with automatic capture.
+            completed = true
+            manualCapture = false
+            status(token, "capturing", "Taking the receipt photo…")
+            captureStandard(token, if (currentMode == "manual") "long" else "standard")
+          }
+          currentMode == "long" && scanning && !completed -> {
+            if (manualCapture) {
+              status(token, "capturing", "Still capturing this section…")
+            } else {
+              manualCapture = true
+              status(token, "capturing", "Capturing this section…")
+              worker.schedule({
+                if (token == generation.get() && active && mode == currentMode && manualCapture && !completed) {
+                  manualCapture = false
+                  status(token, "ready", "Could not save this section. Hold it steady and tap the shutter again.")
+                }
+              }, 2500, TimeUnit.MILLISECONDS)
             }
-          }, 2500, TimeUnit.MILLISECONDS)
+          }
         }
         "start" -> {
           clear()
@@ -129,16 +172,18 @@ class FinsightReceiptScannerView(context: Context, appContext: AppContext) : Exp
           scanning = true
           startedAt = SystemClock.elapsedRealtime()
           lastFrameCompletedAt = startedAt
-          scheduleLongWatchdog(token, startedAt)
-          status(token, "scanning", "Show the top edge, then move slowly downward")
+          status(token, "ready", "Show the top edge, then tap the shutter")
         }
         "finish" -> if (scanning) {
-          // At the safe length limit no further frame can be accepted, so the
-          // recency/bottom-edge gate would make the scan unfinishable. The
-          // owner has already been told that result stops at the limit.
-          val ready = session.height > 0 && (session.limitReached ||
-            (SystemClock.elapsedRealtime() - session.lastAcceptedAt <= 1800 && lastBottomVisible))
-          if (ready) finishLong(token) else status(token, "tracking", "Show the bottom edge and hold still before finishing")
+          // An explicit finish saves accepted pixels even if the bottom edge just left view.
+          // Automatic completion still requires steady-bottom evidence in analyze().
+          if (session.height > 0) finishLong(token)
+          else status(token, "tracking", "No receipt captured yet. Show the top edge and move slowly downward.")
+        }
+        "undo" -> if (currentMode == "long" && scanning && session.removeLast(SystemClock.elapsedRealtime())) {
+          previewHeight = 0
+          if (session.height > 0) publishMosaic(token) else post { if (token == generation.get()) outline.setMosaic(null) }
+          status(token, "ready", if (session.count == 0) "Top section removed · show the top edge and tap the shutter" else "Last section removed · align the previous lines and capture again")
         }
       }
     }
@@ -228,7 +273,8 @@ class FinsightReceiptScannerView(context: Context, appContext: AppContext) : Exp
           .build()
         camera = provider!!.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, useCases)
         camera?.cameraControl?.enableTorch(torch)
-        status(token, "ready", "Place the receipt on a contrasting surface")
+        applyZoom()
+        status(token, "ready", if (mode == "long") "Show the top edge, then tap the shutter" else "Place the receipt section on a contrasting surface")
       } catch (e: Exception) {
         // A failed bind must not leave a non-null analyser that makes every
         // later retry return before binding. Clear all three use cases so the
@@ -249,25 +295,49 @@ class FinsightReceiptScannerView(context: Context, appContext: AppContext) : Exp
       val aspect = rgb.cols().toFloat() / rgb.rows()
       post { if (token == generation.get()) outline.frameAspect = aspect }
       val paper = ReceiptVision.detect(rgb, currentMode == "long")
-      if (paper == null) { stableSince = 0; lastCorners = null; lastBottomVisible = false; endTracker.reset(); val requested = manualCapture; manualCapture = false; status(token, "searching", if (requested) "Cannot capture yet: move closer and keep all four edges visible on a contrasting surface, then tap again" else if (currentMode == "standard") "Move closer and keep all four edges visible on a contrasting surface" else "Keep both receipt sides visible against a darker surface"); return }
+      if (paper == null) {
+        stableSince = 0; lastCorners = null; lastBottomVisible = false; endTracker.reset(); detectionMisses++
+        val requested = manualCapture
+        val message = when {
+          currentMode == "standard" || currentMode == "manual" -> "Receipt edges are not clear yet · you can still take the photo"
+          requested -> "Still finding the receipt sides · hold steady and try this section again"
+          session.height == 0 -> "Show the receipt sides and top edge against a darker surface"
+          detectionMisses <= 3 -> "Receipt briefly out of view · move slowly and keep both sides visible"
+          else -> "Receipt out of view · return to the last captured area"
+        }
+        status(token, "searching", message)
+        return
+      }
+      detectionMisses = 0
       val corners = paper.corners.map { mapOf("x" to it.x / rgb.cols(), "y" to it.y / rgb.rows()) }
-      if (paper.sharpness < 32 || paper.brightness < 75) { stableSince = 0; lastCorners = null; lastBottomVisible = false; endTracker.reset(); manualCapture = false; status(token, "quality", if (paper.brightness < 75) "Add light or turn on the flash" else "Hold still while the text comes into focus", corners); return }
-      if (currentMode == "standard") {
+      if (paper.sharpness < 32 || paper.brightness < 75) { stableSince = 0; lastCorners = null; lastBottomVisible = false; endTracker.reset(); status(token, "quality", if (paper.brightness < 75) "Add light or turn on the flash" else "Hold still while the text comes into focus", corners); return }
+      if (currentMode == "standard" || currentMode == "manual") {
+        if (!paper.captureEligible) {
+          stableSince = 0
+          lastCorners = null
+          status(token, "searching", "Visible receipt section found · you can still take the photo", corners)
+          return
+        }
         val previous = lastCorners
         val moving = previous == null || paper.corners.indices.any { ReceiptVision.distance(paper.corners[it], previous[it]) > rgb.cols() * .012 }
         if (moving) stableSince = now
         lastCorners = paper.corners
         val progress = ((now - stableSince) / 1100.0).coerceIn(0.0, 1.0)
         status(token, "detected", "Receipt detected · hold steady", corners, progress)
-        if (manualCapture || progress >= 1) {
-          manualCapture = false
+        if (currentMode == "standard" && autoCapture && progress >= 1) {
           completed = true
-          captureStandard(paper.corners, rgb.cols(), rgb.rows(), token)
+          captureStandard(token, "standard")
         }
       } else if (scanning) {
-        if (now - startedAt > 90000) { failLongScan(token, "Scan timed out. Start again and move steadily from top to bottom."); return }
         val topVisible = paper.corners[0].y > 8 && paper.corners[1].y > 8
-        if (session.height == 0 && !topVisible) { endTracker.reset(); lastBottomVisible = false; status(token, "tracking", "Move back until the top edge is visible", corners); return }
+        if (session.height == 0 && !topVisible) {
+          if (manualCapture) manualCapture = false
+          endTracker.reset(); lastBottomVisible = false; status(token, "tracking", "Move back until the top edge is visible, then tap the shutter", corners); return
+        }
+        if (!manualCapture) {
+          status(token, "ready", if (session.height == 0) "Top edge found · tap the shutter" else "Section aligned · tap the shutter", corners)
+          return
+        }
         val naturalWidth = max(ReceiptVision.distance(paper.corners[0], paper.corners[1]), ReceiptVision.distance(paper.corners[3], paper.corners[2]))
         // A handheld sweep changes the measured paper width by a few pixels every
         // frame. Normalise to the first accepted width so registration stays
@@ -277,24 +347,31 @@ class FinsightReceiptScannerView(context: Context, appContext: AppContext) : Exp
         receipt = frame
         if (longWidth == 0) longWidth = frame.cols()
         val bottomVisible = paper.corners[2].y < rgb.rows() - 9 && paper.corners[3].y < rgb.rows() - 9
+        val previousHeight = session.height
         if (session.accept(frame, now, bottomVisible)) {
+          manualCapture = false
+          overlapMisses = 0
           publishMosaic(token)
           lastBottomVisible = bottomVisible
-          status(token, "scanning", if (lastBottomVisible) "Bottom edge visible · hold still to finish automatically" else "Move slowly downward · keep both sides visible", corners)
-          val previous = lastCorners
-          val steady = previous != null && paper.corners.indices.all { ReceiptVision.distance(paper.corners[it], previous[it]) <= rgb.cols() * .012 }
+          val grew = session.height > previousHeight
+          status(token, "sectionAccepted", when {
+            lastBottomVisible -> "Section ${session.count} saved · tap Finish scan if this is the bottom"
+            grew -> "Section ${session.count} saved · move down and keep a few lines visible"
+            else -> "Section ${session.count} saved · move down before the next capture"
+          }, corners)
           lastCorners = paper.corners
-          if (endTracker.observe(bottomVisible && steady, now)) finishLong(token)
         } else if (session.limitReached) {
+          manualCapture = false
           // Nothing was registered, so the bottom edge remains unconfirmed; the
           // finish gate allows this case explicitly instead.
           lastCorners = paper.corners; lastBottomVisible = false; endTracker.reset()
           status(token, "limit", "Maximum safe scan length reached · tap Finish scan. Anything below this point is not included.", corners)
         } else {
+          manualCapture = false
           // Keep the reference corners current so the next accepted frame is
           // compared with what the camera last actually saw.
-          lastCorners = paper.corners; lastBottomVisible = false; endTracker.reset()
-          status(token, "tracking", "Overlap lost · move back slowly to the last area", corners)
+          lastCorners = paper.corners; lastBottomVisible = false; endTracker.reset(); overlapMisses++
+          status(token, "tracking", if (overlapMisses <= 2) "Could not match this section · hold steady and tap again" else "Overlap lost · move back to the last captured lines", corners)
         }
       } else status(token, "ready", "Start at the top edge of the receipt", corners)
     } catch (e: Exception) { endTracker.reset(); lastBottomVisible = false; manualCapture = false; error(token, e.message ?: "Could not process this frame") }
@@ -319,7 +396,7 @@ class FinsightReceiptScannerView(context: Context, appContext: AppContext) : Exp
     finally { cropped.release(); rgba.release() }
   }
 
-  private fun captureStandard(corners: Array<Point>, analysisWidth: Int, analysisHeight: Int, token: Int) {
+  private fun captureStandard(token: Int, captureMode: String) {
     val capture = imageCapture
     if (capture == null) {
       completed = false
@@ -348,7 +425,7 @@ class FinsightReceiptScannerView(context: Context, appContext: AppContext) : Exp
           if (!resultGate.claim()) { raw.delete(); return }
           callbackTimeout.cancel(false)
           var sampled: SampledStill? = null
-          var rectified: Mat? = null
+          var cropped: ReceiptVision.CapturedCrop? = null
           try {
             check(raw.exists() && raw.length() > 0) { "The full-resolution camera returned an empty photo" }
             check(raw.length() <= 10_000_000) { "The full-resolution photo is larger than 10 MB. Move closer and scan again." }
@@ -356,29 +433,28 @@ class FinsightReceiptScannerView(context: Context, appContext: AppContext) : Exp
             val captured = readSampledStill(raw)
             sampled = captured
             if (token != generation.get() || !active) { raw.delete(); return }
-            val mappedSource = ReceiptVision.mapCornersBetweenFrames(
-              corners,
-              analysisWidth,
-              analysisHeight,
+            status(token, "processing", "Finding the visible receipt edges")
+            val postCaptureCrop = ReceiptVision.cropCapturedStill(captured.rgb)
+            cropped = postCaptureCrop
+            val mappedSource = postCaptureCrop.corners?.map { point ->
+              Point(
+                point.x * captured.originalWidth / captured.rgb.cols(),
+                point.y * captured.originalHeight / captured.rgb.rows(),
+              )
+            }?.toTypedArray()
+            // Preserve the untouched CameraX JPEG as evidence. Cropping and
+            // enhancement are derived only after the saved still is available.
+            saveDerived(
+              raw,
+              postCaptureCrop.image,
+              captureMode,
+              token,
               captured.originalWidth,
               captured.originalHeight,
+              mappedSource,
+              "custom-still-v3",
+              postCaptureCrop.outcome.bridgeValue,
             )
-            val mappedSample = mappedSource.map { point ->
-              Point(
-                point.x * captured.rgb.cols() / captured.originalWidth,
-                point.y * captured.rgb.rows() / captured.originalHeight,
-              )
-            }.toTypedArray()
-            val receiptWidth = max(
-              ReceiptVision.distance(mappedSample[0], mappedSample[1]),
-              ReceiptVision.distance(mappedSample[3], mappedSample[2]),
-            ).roundToInt().coerceIn(1000, 1800)
-            // Preserve the untouched full-resolution JPEG as source evidence,
-            // but keep the simultaneously decoded/warped/enhanced derivative
-            // within a bounded pixel budget on lower-memory phones.
-            val corrected = ReceiptVision.warp(captured.rgb, mappedSample, receiptWidth, maxPixels = 4_000_000L)
-            rectified = corrected
-            saveDerived(raw, corrected, "standard", token, captured.originalWidth, captured.originalHeight, mappedSource)
           } catch (exception: Exception) {
             raw.delete()
             if (token == generation.get()) {
@@ -386,7 +462,7 @@ class FinsightReceiptScannerView(context: Context, appContext: AppContext) : Exp
               error(token, exception.message ?: "Could not prepare the full-resolution receipt photo")
             }
           } finally {
-            rectified?.release()
+            cropped?.close()
             sampled?.rgb?.release()
           }
         }
@@ -494,31 +570,67 @@ class FinsightReceiptScannerView(context: Context, appContext: AppContext) : Exp
     originalWidth: Int,
     originalHeight: Int,
     corners: Array<Point>? = null,
+    transformVersion: String = if (captureMode == "long") "custom-panorama-v1" else "custom-still-v2",
+    cropOutcome: String? = null,
   ) {
+    if (transformVersion == "custom-still-v3") {
+      require(cropOutcome in setOf("perspective", "visible-section", "original-fallback")) {
+        "A custom-still-v3 capture requires a valid crop outcome"
+      }
+      require((cropOutcome == "original-fallback") == (corners == null)) {
+        "Only a custom-still-v3 crop carries document corners"
+      }
+    }
     if (token != generation.get()) { raw.delete(); return }
     status(token, "processing", "Preparing your receipt on this device")
     val processed = File(raw.parentFile, raw.name.replace("-original.jpg", "-scan.jpg"))
+    val filterSource = if (transformVersion == "custom-still-v2" || transformVersion == "custom-still-v3") {
+      File(raw.parentFile, raw.name.replace("-original.jpg", "-rectified.jpg"))
+    } else raw
+    val ownsFilterSource = filterSource != raw
     val resultWidth = processedBase.cols()
     val resultHeight = processedBase.rows()
-    var enhanced: Mat? = null
+    var enhancement: ReceiptVision.CapturedEnhancement? = null
+    var processedOutput = processed
+    var processingMode = "clear-colour"
     try {
-      val corrected = ReceiptVision.enhance(processedBase)
-      enhanced = corrected
-      writeJpeg(corrected, processed)
-      if (token != generation.get()) { raw.delete(); processed.delete(); return }
+      if (ownsFilterSource) writeJpeg(processedBase, filterSource)
+      if (token != generation.get()) {
+        raw.delete(); filterSource.takeIf { ownsFilterSource }?.delete(); return
+      }
+      val prepared = if (transformVersion == "custom-still-v3") {
+        ReceiptVision.enhanceCapturedStill(processedBase)
+      } else {
+        ReceiptVision.CapturedEnhancement(ReceiptVision.enhance(processedBase), true)
+      }
+      enhancement = prepared
+      processingMode = if (prepared.applied) "clear-colour" else "original"
+      try {
+        writeJpeg(prepared.image, processed)
+      } catch (exception: Exception) {
+        if (transformVersion != "custom-still-v3") throw exception
+        processed.delete()
+        processedOutput = filterSource
+        processingMode = "original"
+      }
+      if (token != generation.get()) {
+        raw.delete(); filterSource.takeIf { ownsFilterSource }?.delete(); processed.delete(); return
+      }
       post {
         if (token == generation.get() && active) {
           val result = mutableMapOf<String, Any>(
             "originalUri" to "file://${raw.absolutePath}",
-            "processedUri" to "file://${processed.absolutePath}",
+            "processedUri" to "file://${processedOutput.absolutePath}",
+            "filterSourceUri" to "file://${filterSource.absolutePath}",
             "width" to resultWidth,
             "height" to resultHeight,
             "originalWidth" to originalWidth,
             "originalHeight" to originalHeight,
             "mode" to captureMode,
-            "processingMode" to "clear-colour",
-            "transformVersion" to if (captureMode == "long") "custom-panorama-v1" else "custom-still-v2",
+            "processingMode" to processingMode,
+            "transformVersion" to transformVersion,
           )
+          if (cropOutcome != null) result["cropOutcome"] = cropOutcome
           if (corners != null) {
             result["corners"] = mapOf(
               "topLeft" to mapOf("x" to corners[0].x, "y" to corners[0].y),
@@ -528,10 +640,14 @@ class FinsightReceiptScannerView(context: Context, appContext: AppContext) : Exp
             )
           }
           onCapture(result)
-        } else { raw.delete(); processed.delete() }
+        } else {
+          raw.delete(); filterSource.takeIf { ownsFilterSource }?.delete(); processed.delete()
+        }
       }
-    } catch (e: Exception) { raw.delete(); processed.delete(); throw e }
-    finally { enhanced?.release() }
+    } catch (e: Exception) {
+      raw.delete(); filterSource.takeIf { ownsFilterSource }?.delete(); processed.delete(); throw e
+    }
+    finally { enhancement?.close() }
   }
   private fun writeJpeg(mat: Mat, file: File) {
     val bgr = Mat()
@@ -546,7 +662,9 @@ class FinsightReceiptScannerView(context: Context, appContext: AppContext) : Exp
     }
   }
   private fun publishMosaic(token: Int) {
-    if (session.height == previewHeight || !previewPending.compareAndSet(false, true)) return
+    if (session.height == previewHeight) return
+    if (!previewPending.compareAndSet(false, true)) { previewDirty.set(true); return }
+    previewDirty.set(false)
     var thumbnail: Mat? = null
     var bitmap: Bitmap? = null
     var posted = false
@@ -561,7 +679,12 @@ class FinsightReceiptScannerView(context: Context, appContext: AppContext) : Exp
       // until a later attach, which might never happen after closing the scanner.
       ContextCompat.getMainExecutor(context).execute {
         try { if (token == generation.get() && active && isAttachedToWindow) outline.setMosaic(rendered) else rendered.recycle() }
-        finally { previewPending.set(false) }
+        finally {
+          previewPending.set(false)
+          if (previewDirty.getAndSet(false) && token == generation.get() && active && !worker.isShutdown) {
+            worker.execute { publishMosaic(token) }
+          }
+        }
       }
       posted = true
       bitmap = null
@@ -576,9 +699,10 @@ class FinsightReceiptScannerView(context: Context, appContext: AppContext) : Exp
     if (corners != null) value["corners"] = corners
     if (progress != null) value["progress"] = progress
     if (mode == "long") value["acceptedHeight"] = session.height
+    if (mode == "long") value["acceptedSections"] = session.count
+    camera?.cameraInfo?.zoomState?.value?.let { value["maxZoomRatio"] = it.maxZoomRatio.toDouble() }
     post { if (token == generation.get() && active) {
-      outline.points = corners?.map { Pair(it.getValue("x").toFloat(), it.getValue("y").toFloat()) } ?: emptyList()
-      outline.invalidate()
+      outline.updateDetection(corners?.map { Pair(it.getValue("x").toFloat(), it.getValue("y").toFloat()) } ?: emptyList())
       onStatus(value)
     } }
   }

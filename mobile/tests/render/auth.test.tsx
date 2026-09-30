@@ -120,7 +120,10 @@ beforeEach(() => {
   registerUser.mockReset();
   apiPost.mockReset();
   apiPostWithToken.mockReset();
-  apiPostWithToken.mockResolvedValue({});
+  apiPostWithToken.mockResolvedValue({
+    message: 'Your password has been changed. Log in with it to continue.',
+    refreshSessionsRevoked: true,
+  });
   logout.mockReset();
   verifyOtp.mockReset();
   setSession.mockReset();
@@ -611,7 +614,47 @@ describe('Reset password — the emailed code', () => {
     expect(apiPostWithToken).toHaveBeenCalledWith('/auth/reset-password/complete', 'at-live');
     // The throwaway client is signed out on every path.
     expect(recoverySignOut).toHaveBeenCalledWith({ scope: 'local' });
+    expect(
+      await queries.findByText(
+        'Your password has been changed. Other devices will need to sign in again after their current access expires. Log in with your new password to continue.',
+      ),
+    ).toBeTruthy();
     expect(await queries.findByRole('button', { name: 'Log in' })).toBeTruthy();
+  });
+
+  it('shows a recovery step when the backend could not revoke old sessions', async () => {
+    verifyOtp.mockResolvedValueOnce({ data: { session }, error: null });
+    apiPostWithToken.mockResolvedValueOnce({
+      message: 'Your password has been changed. Log in with it to continue.',
+      refreshSessionsRevoked: false,
+    });
+    const queries = await renderReset();
+    await fireEvent.changeText(queries.getByLabelText('Recovery code'), '75324744');
+    await fireEvent.press(queries.getByRole('button', { name: 'Continue' }));
+    await fireEvent.changeText(await queries.findByLabelText('New password'), 'hunter2hunter2');
+    await fireEvent.changeText(queries.getByLabelText('Confirm new password'), 'hunter2hunter2');
+    await fireEvent.press(queries.getByRole('button', { name: 'Save new password' }));
+
+    expect(
+      await queries.findByText(/password is active, but FinSight couldn't confirm that other refresh sessions were revoked/i),
+    ).toBeTruthy();
+    expect(queries.getByText(/My account.*Security.*Log out on all devices/i)).toBeTruthy();
+    expect(queries.getByRole('button', { name: 'Log in' })).toBeTruthy();
+  });
+
+  it('treats a lost completion response as unconfirmed, not as a failed password change', async () => {
+    verifyOtp.mockResolvedValueOnce({ data: { session }, error: null });
+    apiPostWithToken.mockRejectedValueOnce(new Error('network unavailable'));
+    const queries = await renderReset();
+    await fireEvent.changeText(queries.getByLabelText('Recovery code'), '75324744');
+    await fireEvent.press(queries.getByRole('button', { name: 'Continue' }));
+    await fireEvent.changeText(await queries.findByLabelText('New password'), 'hunter2hunter2');
+    await fireEvent.changeText(queries.getByLabelText('Confirm new password'), 'hunter2hunter2');
+    await fireEvent.press(queries.getByRole('button', { name: 'Save new password' }));
+
+    expect(await queries.findByText(/One security step remains/i)).toBeTruthy();
+    expect(queries.queryByRole('button', { name: 'Save new password' })).toBeNull();
+    expect(queries.getByRole('button', { name: 'Log in' })).toBeTruthy();
   });
 
   /**

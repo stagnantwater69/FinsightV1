@@ -27,7 +27,7 @@ import {
   gapCentavos,
   type ReconciliationPlan,
 } from "../../lib/receiptConfirm";
-import { rowsToApplySuggestionTo, suggestedNewCategory } from "../../lib/categorySuggestion";
+import { categoriesCreatedByScan, categoryReviewNote, rowsToApplySuggestionTo, suggestedNewCategory } from "../../lib/categorySuggestion";
 import { BAND_COPY, confidenceBand, needsAttention, scanConfidenceBand } from "../../lib/confidenceBands";
 import {
   evidenceSummary,
@@ -58,7 +58,13 @@ import { ReviewSection } from "./scanReceipt/ReviewSection";
 import { EvidenceNote } from "./scanReceipt/EvidenceNote";
 import { CategoryChips } from "./scanReceipt/CategoryChips";
 import { GapOption } from "./scanReceipt/GapOption";
-import { pollUntilRead, pagesFromSections, ReceiptReadFailure, sectionsFromPages } from "./scanReceipt/helpers";
+import {
+  pollUntilRead,
+  pagesFromSections,
+  ReceiptReadFailure,
+  scannerFileUris,
+  sectionsFromPages,
+} from "./scanReceipt/helpers";
 import { verifiedReceiptScan, type ExpectedBatchChild } from "./scanReceipt/verifiedScan";
 import { retryAlreadyUnderway, retryLandingUnknown } from "./scanReceipt/retryConflict";
 import {
@@ -81,6 +87,12 @@ import { ReceiptProviderConsent } from "./scanReceipt/ReceiptProviderConsent";
 import { ReceiptEvidenceViewer } from "./scanReceipt/ReceiptEvidenceViewer";
 import { ActiveReceiptQueue, type ReceiptResumeAction } from "./scanReceipt/ActiveReceiptQueue";
 import { seedLocalReceipts, summaryFromScan } from "./scanReceipt/activeReceipts";
+import {
+  applyReceiptCameraHandoff,
+  assertReceiptBatchLimit,
+  maxReceiptsForCamera,
+  type ReceiptCameraIntent,
+} from "./scanReceipt/cameraHandoff";
 import { deleteReceiptScannerFiles } from "../../lib/receiptScannerCache";
 import {
   duplicateCandidatePageFromResponse,
@@ -134,11 +146,6 @@ interface QueuedReceipt {
 
 type ScanRecoveryAction = "review" | "retry" | null;
 type ScanRunMode = "upload" | "review" | "retry";
-type CameraIntent =
-  | { kind: "replace-all" }
-  | { kind: "replace-group"; groupKey: string; groupId: string }
-  | { kind: "append-receipt"; groupId: string };
-
 function storedReceiptPages(result: ReceiptScanResult, pageCount: number): CapturedPage[] {
   const evidence = [...(result.pageEvidence ?? [])].sort((left, right) => left.pageNumber - right.pageNumber);
   const count = Math.max(1, pageCount, evidence.length);
@@ -191,10 +198,6 @@ function stoppedWaitingMessage(accepted: boolean, hasLocalImages: boolean): stri
     : "Nothing changed. The receipt is still listed under Receipts to finish.";
 }
 
-function scannerFileUris(list: readonly CapturedPage[]): (string | undefined)[] {
-  return list.flatMap((page) => [page.originalUri, page.uri, page.sourceAssetUri]);
-}
-
 /**
  * Capture (custom camera or gallery; optional native scanner rollout flag) →
  * approve/reorder sections → upload to the existing backend receipt endpoint
@@ -241,6 +244,8 @@ export function ScanReceiptScreen({ navigation }: any) {
   const [scanStarted, setScanStarted] = useState(false);
   const [uploadIssuePageKeys, setUploadIssuePageKeys] = useState<Record<string, true>>({});
   const [evidencePage, setEvidencePage] = useState<number | null>(null);
+  /** Possible overlap repeats the owner has said are separate purchases. */
+  const [keptRepeatItemIds, setKeptRepeatItemIds] = useState<ReadonlySet<number>>(() => new Set());
   const [activeReceipts, setActiveReceipts] = useState<ReceiptHistoryItem[]>([]);
   const [activeReceiptsCursor, setActiveReceiptsCursor] = useState<string | null>(null);
   const [activeReceiptsLoading, setActiveReceiptsLoading] = useState(true);
@@ -268,8 +273,9 @@ export function ScanReceiptScreen({ navigation }: any) {
    * this screen.
    */
   const [cameraOpen, setCameraOpen] = useState(false);
-  const [cameraIntent, setCameraIntent] = useState<CameraIntent>({ kind: "replace-all" });
+  const [cameraIntent, setCameraIntent] = useState<ReceiptCameraIntent>({ kind: "replace-all" });
   const receiptCameraRef = useRef<ReceiptCameraHandle>(null);
+  const cameraCompletionHandled = useRef(false);
 
   const [categoryId, setCategoryId] = useState<number | null>(null);
   const [date, setDate] = useState(todayISO());
@@ -564,6 +570,9 @@ export function ScanReceiptScreen({ navigation }: any) {
     setUploadIssuePageKeys({});
     setError(null);
 
+    // The downscale below is written to the app's own cache and is read once,
+    // by the upload on the next line; nothing else can reach it afterwards.
+    let analysisCopy: string | null = null;
     try {
       const inspection = await inspectReceiptUpload(nextPages, localFileByteSize);
       if (!operation.current(task)) return;
@@ -588,6 +597,7 @@ export function ScanReceiptScreen({ navigation }: any) {
       // declared as one — a HEIC or PNG capture would otherwise arrive under a
       // content type the server would be right to reject.
       const downscaled = checkUri !== uri;
+      if (downscaled) analysisCopy = checkUri;
       const form = new FormData();
       // React Native's FormData takes this {uri,name,type} shape rather than
       // a Blob — the browser's File API isn't available here.
@@ -602,6 +612,8 @@ export function ScanReceiptScreen({ navigation }: any) {
     } catch {
       if (!operation.current(task)) return;
       setPages((prev) => prev.map((p) => (p.key === key ? { ...p, checkingQuality: false } : p)));
+    } finally {
+      if (analysisCopy) void deleteReceiptScannerFiles([analysisCopy]);
     }
   }
 
@@ -644,6 +656,12 @@ export function ScanReceiptScreen({ navigation }: any) {
     setCategoryId(result.items.length === 1 ? result.items[0]!.categoryId : null);
     setAmount(result.extractedAmount != null ? result.extractedAmount.toFixed(2) : "");
     setItemCategories(Object.fromEntries(result.items.map((item) => [item.id, item.categoryId ?? null])));
+    // The scan may have created categories this screen has never loaded (the
+    // standard ones FinSight adds, or Uncategorized). Without them the rows
+    // filed there would show no category at all.
+    if (result.items.some((item) => item.categoryId != null && !categories.some((category) => category.id === item.categoryId))) {
+      refreshCategories().catch(() => undefined);
+    }
     setAddedItems([]);
     setEditingItem(null);
     setEditingItemErrors({});
@@ -969,7 +987,14 @@ export function ScanReceiptScreen({ navigation }: any) {
   }
 
   async function scanPages(list: CapturedPage[] = pages) {
-    const groups = groupReceiptMembers(list);
+    let groups: CapturedPage[][];
+    try {
+      groups = assertReceiptBatchLimit(list);
+    } catch (err) {
+      haptics.failed();
+      setError(err instanceof Error ? err.message : "Remove a receipt from this batch before scanning.");
+      return;
+    }
     if (groups.length === 0) return;
     setUploadIssuePageKeys({});
     await scanSingleReceipt(groups[0]!, { batchGroups: groups });
@@ -1178,10 +1203,11 @@ export function ScanReceiptScreen({ navigation }: any) {
    * for, offer the gallery instead, and point at Settings once the system has
    * stopped asking — none of which a one-line error on this card could do.
    */
-  function openCamera(intent: CameraIntent) {
+  function openCamera(intent: ReceiptCameraIntent) {
     if (busy || picking || scanStarted) return;
     haptics.committed();
     setError(null);
+    cameraCompletionHandled.current = false;
     setCameraIntent(intent);
     setCameraOpen(true);
   }
@@ -1709,6 +1735,18 @@ export function ScanReceiptScreen({ navigation }: any) {
     const warnings = scan.warnings ?? [];
     const notices: ReviewNotice[] = [];
 
+    /*
+     * FinSight created categories in the owner's books for this receipt. Said
+     * once, by name, so nothing new appears in their category list unexplained.
+     */
+    const created = categoriesCreatedByScan(scan.items, categories);
+    if (created.length > 0) {
+      notices.push({
+        tone: "info",
+        text: `New ${created.length === 1 ? "category" : "categories"} added for this receipt: ${created.join(", ")}.`,
+      });
+    }
+
     if (scan.receiptLikelihood?.outcome === "obvious-non-receipt") {
       notices.push({
         tone: "warn",
@@ -1837,6 +1875,7 @@ export function ScanReceiptScreen({ navigation }: any) {
     : cameraIntent.kind === "replace-group"
       ? pages.filter((page) => receiptGroupKey(page) === cameraIntent.groupKey)
       : [];
+  const cameraMaxReceipts = maxReceiptsForCamera(pages, cameraIntent);
 
   /*
    * The camera takes the WHOLE screen — a Modal, not an early return.
@@ -1880,6 +1919,7 @@ export function ScanReceiptScreen({ navigation }: any) {
         <ReceiptCamera
           ref={receiptCameraRef}
           initialSections={sectionsFromPages(cameraSeedPages)}
+          maxReceipts={cameraMaxReceipts}
           /*
            * Closing the camera — for any reason, including zero pages —
            * reveals the capture card behind it rather than leaving this
@@ -1895,37 +1935,22 @@ export function ScanReceiptScreen({ navigation }: any) {
             setCameraIntent({ kind: "replace-all" });
           }}
           onDone={(sections) => {
+            if (cameraCompletionHandled.current) return;
+            cameraCompletionHandled.current = true;
             const captured = pagesFromSections(sections);
-            if (captured.length > 0) {
-              const capturedGroups = groupReceiptMembers(captured);
-              const normalized = capturedGroups.flatMap((group, index) => {
-                const groupId = index === 0 && cameraIntent.kind !== "replace-all"
-                  ? cameraIntent.groupId
-                  : newReceiptGroupId();
-                return group.map((page) => ({ ...page, receiptGroupId: groupId }));
-              });
-              setPages((current) => {
-                if (cameraIntent.kind === "replace-all") return captured;
-                if (cameraIntent.kind === "append-receipt") return [...current, ...normalized];
-                const next: CapturedPage[] = [];
-                let inserted = false;
-                for (const page of current) {
-                  if (receiptGroupKey(page) === cameraIntent.groupKey) {
-                    if (!inserted) next.push(...normalized);
-                    inserted = true;
-                  } else {
-                    next.push(page);
-                  }
-                }
-                return inserted ? next : current;
-              });
-              const retainedUris = new Set(scannerFileUris(normalized));
-              const replaced = cameraIntent.kind === "replace-all"
-                ? pages
-                : cameraIntent.kind === "replace-group"
-                  ? pages.filter((page) => receiptGroupKey(page) === cameraIntent.groupKey)
-                  : [];
-              void deleteReceiptScannerFiles(scannerFileUris(replaced).filter((uri) => !uri || !retainedUris.has(uri)));
+            let handoff;
+            try {
+              handoff = applyReceiptCameraHandoff(pages, captured, cameraIntent);
+            } catch (err) {
+              cameraCompletionHandled.current = false;
+              throw err;
+            }
+            if (handoff.acceptedPages.length > 0) {
+              setPages(handoff.pages);
+              const retainedUris = new Set(scannerFileUris(handoff.acceptedPages));
+              void deleteReceiptScannerFiles(
+                scannerFileUris(handoff.replacedPages).filter((uri) => !uri || !retainedUris.has(uri)),
+              );
               invalidateUnstartedUpload();
             }
             setUploadIssuePageKeys({});
@@ -1982,7 +2007,9 @@ export function ScanReceiptScreen({ navigation }: any) {
                   ? "Capture or upload a receipt. Review the details before saving."
                   : capturedReceiptGroups.length > 1
                     ? `${capturedReceiptGroups.length} separate receipts are ready. FinSight will upload and review them one at a time.`
-                    : "These sections belong to one receipt. Add another section for a long receipt, or start a separate receipt."}
+                    : pages.length > 1
+                      ? `One long receipt in ${pages.length} parts, top to bottom. FinSight reads the parts together as one receipt.`
+                      : "Your receipt is ready. For a long receipt, open Review photos and use Batch to add the next part."}
               </T>
 
               {pages.length === 0 && !busy ? (
@@ -2064,14 +2091,14 @@ export function ScanReceiptScreen({ navigation }: any) {
                                 <T style={{ fontSize: typeScale.micro, fontFamily: font.sansSemibold, color: ink[700] }}>
                                   {capturedReceiptGroups.length > 1
                                     ? `R${receiptPositionByPage.get(p.key)?.receipt} · P${receiptPositionByPage.get(p.key)?.page}`
-                                    : i + 1}
+                                    : pages.length > 1 ? `Part ${i + 1}` : i + 1}
                                 </T>
                               </View>
                               <Pressable
                                 onPress={() => removePage(p.key)}
                                 disabled={scanStarted}
                                 accessibilityRole="button"
-                                accessibilityLabel={`Remove page ${i + 1}`}
+                                accessibilityLabel={pages.length > 1 && capturedReceiptGroups.length === 1 ? `Remove part ${i + 1}` : `Remove page ${i + 1}`}
                                 // The visible chip stays 22px so it doesn't
                                 // swallow the thumbnail, but hitSlop brings
                                 // the actual tap target up to TAP (44px) —
@@ -2118,7 +2145,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                                 onPress={() => movePage(p.key, -1)}
                                 disabled={scanStarted || !canMoveWithinReceipt(pages, i, -1)}
                                 accessibilityRole="button"
-                                accessibilityLabel={`Move page ${i + 1} earlier`}
+                                accessibilityLabel={pages.length > 1 && capturedReceiptGroups.length === 1 ? `Move part ${i + 1} up` : `Move page ${i + 1} earlier`}
                                 hitSlop={8}
                                 style={{ padding: 4, opacity: scanStarted || !canMoveWithinReceipt(pages, i, -1) ? 0.3 : 1 }}
                               >
@@ -2128,7 +2155,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                                 onPress={() => movePage(p.key, 1)}
                                 disabled={scanStarted || !canMoveWithinReceipt(pages, i, 1)}
                                 accessibilityRole="button"
-                                accessibilityLabel={`Move page ${i + 1} later`}
+                                accessibilityLabel={pages.length > 1 && capturedReceiptGroups.length === 1 ? `Move part ${i + 1} down` : `Move page ${i + 1} later`}
                                 hitSlop={8}
                                 style={{ padding: 4, opacity: scanStarted || !canMoveWithinReceipt(pages, i, 1) ? 0.3 : 1 }}
                               >
@@ -2186,7 +2213,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                                 ? "Review result"
                                 : capturedReceiptGroups.length > 1
                                   ? `Scan ${capturedReceiptGroups.length} separate receipts`
-                                  : pages.length === 1 ? "Scan this receipt" : `Scan these ${pages.length} sections`
+                                  : pages.length === 1 ? "Scan this receipt" : `Scan long receipt (${pages.length} parts)`
                           }
                           variant="primary"
                           onPress={continueReceiptScan}
@@ -2195,12 +2222,11 @@ export function ScanReceiptScreen({ navigation }: any) {
                         {/*
                           Reopens the camera on the session already captured,
                           rather than starting an empty one — see
-                          sectionsFromPages. Hidden at the ceiling because the
-                          server refuses a ninth page, and a button that can
-                          only produce a 400 is worse than no button.
+                          sectionsFromPages. Hidden at the batch ceiling because
+                          the receipt-batch contract refuses a ninth receipt.
                         */}
                         {capturedReceiptGroups.length === 1 ? (
-                          <Button title="Review photos" variant="secondary" onPress={capturePage} disabled={picking || scanStarted} />
+                          <Button title={pages.length > 1 ? "Review or add parts" : "Review photos"} variant="secondary" onPress={capturePage} disabled={picking || scanStarted} />
                         ) : capturedReceiptGroups.map((group, index) => (
                           <Button
                             key={receiptGroupKey(group[0]!)}
@@ -2560,6 +2586,37 @@ export function ScanReceiptScreen({ navigation }: any) {
                       ) : null}
 
                       {/*
+                        A line that may be the overlap between two photos read
+                        twice. FinSight only removes a repeat on its own when
+                        the receipt's total proves it; anything short of that
+                        is the owner's call, made here on the row.
+                      */}
+                      {item.possibleRepeatOf && !keptRepeatItemIds.has(item.id) ? (
+                        <View style={{ marginTop: space.sm, padding: space.sm, borderRadius: radius.md, backgroundColor: statusSurface.warning, gap: space.sm }}>
+                          <T variant="caption" style={{ color: statusText.warning }}>
+                            May be counted twice. Your photos overlap, and page {item.possibleRepeatOf.pageNumber} also shows {item.possibleRepeatOf.name} for PHP {item.possibleRepeatOf.amount.toFixed(2)}.
+                          </T>
+                          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
+                            <Button
+                              title="Remove repeat"
+                              accessibilityLabel={`Remove ${item.name}, it repeats page ${item.possibleRepeatOf.pageNumber}`}
+                              variant="secondary"
+                              loading={removingItemId === item.id}
+                              disabled={editingItem !== null || savingItemId !== null || removingItemId !== null}
+                              onPress={() => void removeScannedItem(item.id)}
+                            />
+                            <Button
+                              title="Keep both"
+                              accessibilityLabel={`Keep ${item.name}, it is a separate purchase`}
+                              variant="ghost"
+                              disabled={removingItemId === item.id}
+                              onPress={() => setKeptRepeatItemIds((current) => new Set(current).add(item.id))}
+                            />
+                          </View>
+                        </View>
+                      ) : null}
+
+                      {/*
                         The server names the line it is least sure of when the
                         items do not add up. Pointing at one row beats asking the
                         owner to re-read all nine.
@@ -2600,6 +2657,15 @@ export function ScanReceiptScreen({ navigation }: any) {
                           label={item.name}
                         />
                       </View>
+                      {/*
+                        Why FinSight is unsure about this line's category, until
+                        the owner answers it by choosing one themselves.
+                      */}
+                      {categoryReviewNote(item, itemCategories[item.id] ?? null) ? (
+                        <T variant="caption" style={{ marginTop: space.xs, color: statusText.warning }}>
+                          {categoryReviewNote(item, itemCategories[item.id] ?? null)}
+                        </T>
+                      ) : null}
 
                       {/*
                         A category FinSight thinks is missing.

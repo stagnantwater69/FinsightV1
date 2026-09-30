@@ -48,7 +48,7 @@ interface AuthValue {
   register: (input: RegisterInput) => Promise<{ message: string }>;
   /** Signs out this phone only. */
   logout: () => Promise<void>;
-  /** Ends every session on every device, including this one. */
+  /** Revokes every refresh session, then clears this phone after confirmation. */
   logoutEverywhere: () => Promise<void>;
   updateProfile: (input: UpdateProfileInput) => Promise<void>;
   /**
@@ -167,7 +167,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       bootstrapProfiles.current = null;
       setProfile(null);
       setPreferences(null);
-      void supabase.auth.signOut();
+      void supabase.auth.signOut({ scope: "local" });
       void clearReceiptScannerCache();
     });
     return () => setSessionEndedHandler(null);
@@ -291,17 +291,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function logoutEverywhere() {
-    try {
-      await api.post("/auth/logout-all");
-    } catch {
-      // Same reasoning as logout(): the local session goes either way.
-    }
-    await clearLocalSession();
+    // Keep this phone signed in until the server confirms global revocation.
+    await api.post("/auth/logout-all");
+    await clearLocalSession(true);
   }
 
-  async function clearLocalSession() {
-    await clearReceiptScannerCache();
-    await supabase.auth.signOut();
+  async function clearLocalSession(bestEffort = false) {
+    if (bestEffort) {
+      // Global revocation is already confirmed; local cleanup cannot undo it.
+      await clearReceiptScannerCache().catch(() => undefined);
+      await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
+    } else {
+      await clearReceiptScannerCache();
+      // Supabase defaults to global sign-out, so device cleanup must override it.
+      await supabase.auth.signOut({ scope: "local" });
+    }
     // Nothing fetched under the old token may survive into the next session.
     bootstrapProfiles.current = null;
     setProfile(null);
@@ -342,7 +346,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   /**
-   * Changes the password and STAYS SIGNED IN. Other devices are signed out.
+   * Changes the password and STAYS SIGNED IN. Other refresh sessions are revoked.
    *
    * This used to sign the phone out, on the stated belief that Supabase
    * invalidates existing sessions when the password is rotated through the
