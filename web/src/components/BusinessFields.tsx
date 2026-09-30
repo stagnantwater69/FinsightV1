@@ -27,6 +27,7 @@ interface GroupProps {
   errors: BusinessFieldErrors;
   update: (key: BusinessTextField, value: string) => void;
   compact?: boolean;
+  autoFocus?: boolean;
 }
 
 export function BusinessBasicsFields({
@@ -34,6 +35,7 @@ export function BusinessBasicsFields({
   errors,
   update,
   compact = false,
+  autoFocus = true,
 }: GroupProps) {
   /*
    * A type that is not on the list can only have come from "Other" — either
@@ -59,7 +61,7 @@ export function BusinessBasicsFields({
           onChange={(e) => update("name", e.target.value)}
           placeholder="e.g. Aling Nena Sari-Sari Store"
           maxLength={FIELD_LIMITS.businessName}
-          autoFocus
+          autoFocus={autoFocus}
         />
       </Field>
 
@@ -109,7 +111,7 @@ export function BusinessBasicsFields({
             onChange={(e) => update("type", e.target.value)}
             placeholder="e.g. Tire shop, laundry, printing"
             maxLength={FIELD_LIMITS.businessType}
-            autoFocus
+            autoFocus={autoFocus}
           />
         </Field>
       ) : null}
@@ -167,8 +169,8 @@ function DailyTargetNote({
         <b className="font-semibold text-ink-700">How these fit together.</b> If
         a normal month costs you <span className="figure">PHP 125,000</span> and
         you're open <span className="figure">25</span> days, FinSight works out
-        a daily target of <span className="figure">PHP 5,000</span> — the number
-        that tells you what today needs to look like.
+        a daily target of <span className="figure">PHP 5,000</span>. That
+        number shows what today needs to look like.
       </InfoNote>
     );
   }
@@ -220,7 +222,7 @@ export function BusinessNumbersFields({
           hint={
             compact
               ? undefined
-              : "Roughly how much cash the business has to work with right now. You'll update this as things change — FinSight doesn't read your bank."
+              : "Roughly how much cash the business has to work with right now. Update this as things change because FinSight doesn't read your bank."
           }
         >
           <MoneyInput
@@ -240,7 +242,7 @@ export function BusinessNumbersFields({
           hint={
             compact
               ? undefined
-              : "What a normal month costs you — rent, stock, wages, utilities. FinSight uses this to work out how much you need to sell."
+              : "What a normal month costs you, including rent, stock, wages, and utilities. FinSight uses this to work out how much you need to sell."
           }
         >
           <MoneyInput
@@ -297,7 +299,7 @@ export function BusinessNumbersFields({
           hint={
             compact
               ? undefined
-              : "Expenses this big get set aside for you to review, so a large or mistaken one doesn't slip past. Suggested from your monthly expenses — change it anytime."
+              : "Expenses this big get set aside for review, so a large or mistaken one doesn't slip past. FinSight suggests an amount from your monthly expenses, and you can change it anytime."
           }
         >
           <MoneyInput

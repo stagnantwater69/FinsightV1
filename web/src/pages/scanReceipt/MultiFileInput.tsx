@@ -6,21 +6,9 @@ import {
   type ReceiptUploadFileIssue,
 } from "./constants";
 import { PickedFileThumb } from "./PickedFileThumb";
+import { IconAlertTriangle, IconUpload } from "../../components/icons";
 
-/**
- * Picks one or several receipt photos.
- *
- * A generalisation of Field.tsx's FileInput to more than one file, kept as
- * its own component rather than added to that one: FileInput's contract
- * (`file: File | null`) is depended on by ImportCsv's single-file picker too,
- * and multi-select is a genuinely different shape, not an option on the same
- * one.
- *
- * Selecting again REPLACES the set, matching the native `<input multiple>`
- * behaviour a second file-dialog invocation already has — there is no
- * incremental "add more" interaction beyond what the OS picker itself offers
- * when the owner selects several files in one dialog.
- */
+/** Picks several receipt pages and keeps earlier choices when more are added. */
 export function MultiFileInput({
   id,
   files,
@@ -37,16 +25,7 @@ export function MultiFileInput({
   const [dragging, setDragging] = useState(false);
   const selectionError = receiptUploadSelectionError([], files);
 
-  /**
-   * ADDS the newly picked photos to what is already selected, rather than
-   * replacing it.
-   *
-   * A native `<input multiple>` hands back a fresh FileList on every
-   * invocation with no memory of a previous one — that is what made this
-   * button silently discard page 1 the moment it was used to add page 2. The
-   * remove (×) on each thumbnail is the deliberate way to drop a photo;
-   * picking again should only ever add to the set it already has.
-   */
+  // A new FileList forgets earlier picks, so merge it to keep every receipt page.
   function take(list: FileList | File[] | null) {
     if (disabled) return;
     if (!list || list.length === 0) return;
@@ -89,17 +68,35 @@ export function MultiFileInput({
           setDragging(false);
           take(e.dataTransfer.files);
         }}
-        className={`flex min-h-tap cursor-pointer flex-wrap items-center justify-center gap-2 rounded-xl border border-dashed px-4 py-5 text-center text-sm transition-colors ${disabled ? "opacity-60" : ""} ${
+        className={`flex cursor-pointer items-center justify-center rounded-xl border-2 border-dashed text-center transition-colors ${
+          files.length > 0
+            ? "min-h-tap flex-col gap-2 px-3 py-3 sm:flex-row sm:gap-3"
+            : "min-h-[11rem] flex-col gap-2 px-5 py-4 sm:min-h-[12rem] sm:py-5"
+        } ${disabled ? "opacity-60" : ""} ${
           dragging
             ? "border-edge-brand bg-tint-brand text-tone-brand"
             : "border-ink-200 bg-paper-100 text-ink-600 hover:border-edge-brand hover:bg-tint-brand"
         }`}
       >
-        <span aria-hidden className="text-base">
-          ⇪
+        <span
+          aria-hidden
+          className={`flex shrink-0 items-center justify-center bg-tint-brand text-tone-brand ring-1 ring-edge-brand ${
+            files.length > 0
+              ? "h-10 w-10 rounded-xl sm:h-12 sm:w-12"
+              : "h-12 w-12 rounded-xl"
+          }`}
+        >
+          <IconUpload className={files.length > 0 ? "h-5 w-5 sm:h-6 sm:w-6" : "h-6 w-6"} />
         </span>
-        <span className="font-medium">{files.length > 0 ? "Add more photos" : "Choose photos"}</span>
-        <span className="text-ink-600">or drag them here</span>
+        <span className="font-display text-base font-semibold text-ink-900">
+          {files.length > 0 ? "Add more photos" : "Drag and drop your receipt here"}
+        </span>
+        <span className={`text-sm text-ink-500 ${files.length > 0 ? "hidden" : ""}`}>or</span>
+        <span className={`inline-flex min-h-tap items-center rounded-lg bg-accent-400 px-4 py-2.5 text-sm font-semibold text-accent-950 shadow-sm ${
+          files.length > 0 ? "sm:ml-auto" : ""
+        }`}>
+          {files.length > 0 ? "Choose more photos" : "Choose photos"}
+        </span>
       </label>
 
       <input
@@ -115,32 +112,38 @@ export function MultiFileInput({
         }}
       />
 
-      {hintText ? <p className="mt-1.5 text-xs text-ink-500">{hintText}</p> : null}
+      {hintText ? <p className="mt-2 text-center text-xs leading-relaxed text-ink-500">{hintText}</p> : null}
 
       {selectionError ? (
         <p id={`${id}-selection-error`} role="alert" className="mt-2 flex items-start gap-1.5 text-xs text-tone-danger">
-          <span aria-hidden className="mt-px shrink-0">
-            ⚠
-          </span>
+          <IconAlertTriangle className="mt-px h-4 w-4 shrink-0" />
           <span className="min-w-0">{selectionError}</span>
         </p>
       ) : null}
 
       {files.length > 0 ? (
-        <ul className="scroll-slim mt-3 flex gap-2 overflow-x-auto pb-1">
-          {files.map((f, i) => (
-            <PickedFileThumb
-              key={`${f.name}-${f.lastModified}-${i}`}
-              file={f}
-              index={i}
-              total={files.length}
-              onRemove={() => removeAt(i)}
-              onMoveUp={() => move(i, -1)}
-              onMoveDown={() => move(i, 1)}
-              invalidReason={invalidFileReason(receiptUploadFileIssue(f))}
-            />
-          ))}
-        </ul>
+        <div className="mt-4 border-t border-paper-200 pt-4">
+          <p className="text-sm font-semibold text-ink-800" aria-live="polite">
+            {files.length} photo{files.length === 1 ? "" : "s"} selected
+          </p>
+          <p className="mt-0.5 text-xs text-ink-500">
+            Remove a photo or change the order before scanning.
+          </p>
+          <ul className="scroll-slim mt-3 flex gap-2 overflow-x-auto pb-1">
+            {files.map((f, i) => (
+              <PickedFileThumb
+                key={`${f.name}-${f.lastModified}-${i}`}
+                file={f}
+                index={i}
+                total={files.length}
+                onRemove={() => removeAt(i)}
+                onMoveUp={() => move(i, -1)}
+                onMoveDown={() => move(i, 1)}
+                invalidReason={invalidFileReason(receiptUploadFileIssue(f))}
+              />
+            ))}
+          </ul>
+        </div>
       ) : null}
     </fieldset>
   );

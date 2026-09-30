@@ -3,7 +3,7 @@ import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { chooseUpload, loginViaUi, mockBackendSession, mockSupabaseAuth } from "./mocks";
 
 async function expectNoHorizontalOverflow(page: Page, state: string) {
-  for (const width of [390, 1024, 1440, 1900]) {
+  for (const width of [200, 390, 1024, 1440, 1900]) {
     await page.setViewportSize({ width, height: 900 });
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
@@ -92,6 +92,7 @@ test("keeps upload and mapping state through Back and confirms only from final r
 
   let previewRequests = 0;
   let fileUploadRequests = 0;
+  const csvFileName = "september-expenses-from-the-main-store-and-all-market-stalls-with-adjustments.csv";
   await page.route("**/records/csv-imports/preview", async (route) => {
     if (route.request().method() !== "POST") return route.fallback();
     previewRequests += 1;
@@ -160,21 +161,22 @@ test("keeps upload and mapping state through Back and confirms only from final r
   expect(sampleDownload.suggestedFilename()).toBe("sample-import.csv");
 
   await chooseUpload(page, "Choose CSV file", {
-    name: "expenses.csv",
+    name: csvFileName,
     mimeType: "text/csv",
     buffer: Buffer.from("Date,Description,Category,Amount\n2026-08-01,Rice sacks,Inventory,850.50\n"),
   });
-  await expect(page.getByText("expenses.csv", { exact: true })).toBeVisible();
+  await expect(page.getByText(csvFileName, { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Remove file" }).click();
-  await expect(page.getByText("expenses.csv", { exact: true })).toBeHidden();
+  await expect(page.getByText(csvFileName, { exact: true })).toBeHidden();
   await expect(page.getByRole("button", { name: "Preview file" })).toBeDisabled();
 
   await chooseUpload(page, "Choose CSV file", {
-    name: "expenses.csv",
+    name: csvFileName,
     mimeType: "text/csv",
     buffer: Buffer.from("Date,Description,Category,Amount\n2026-08-01,Rice sacks,Inventory,850.50\n"),
   });
-  await expect(page.getByText("expenses.csv", { exact: true })).toBeVisible();
+  await expect(page.getByText(csvFileName, { exact: true })).toBeVisible();
+  await expectNoHorizontalOverflow(page, "Selected CSV upload with a long filename");
   await expectSelectedUploadToFitDesktop(page);
   await captureVisualAudit(page, testInfo, "upload", true);
   await page.getByRole("button", { name: "Preview file" }).click();
@@ -192,7 +194,7 @@ test("keeps upload and mapping state through Back and confirms only from final r
 
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Import CSV records" })).toBeVisible();
-  await expect(page.getByText("expenses.csv", { exact: true })).toBeVisible();
+  await expect(page.getByText(csvFileName, { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Continue to column mapping" })).toBeVisible();
   expect(previewRequests).toBe(1);
   expect(confirmRequests).toBe(0);

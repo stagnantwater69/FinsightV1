@@ -1,13 +1,15 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   ArrowUpRight,
   Building2,
+  Camera,
   KeyRound,
   Mail,
   MonitorSmartphone,
   Pencil,
   Settings2,
   ShieldCheck,
+  Trash2,
   UserRound,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
@@ -17,9 +19,13 @@ import { getErrorMessage, getFieldErrors } from "../lib/errors";
 import {
   isValid,
   validateChangePassword,
+  validateProfileDetails,
   MIN_PASSWORD_LENGTH,
+  MAX_NAME_LENGTH,
+  MAX_PHONE_LENGTH,
   type ChangePasswordField,
   type FieldErrors,
+  type ProfileDetailsField,
 } from "../lib/authValidation";
 import { Callout, Card, PageHead } from "../components/ui";
 import { Button, ButtonLink } from "../components/Button";
@@ -36,7 +42,11 @@ import { SkeletonPanel } from "../components/Skeleton";
 export function Profile() {
   const { profile, updateProfile, uploadAvatar, logout, logoutEverywhere } =
     useAuth();
-  const { profiles } = useBusinessProfiles();
+  const {
+    profiles,
+    loading: businessesLoading,
+    error: businessesError,
+  } = useBusinessProfiles();
   const [form, setForm] = useState({
     firstName: profile?.firstName ?? "",
     middleName: profile?.middleName ?? "",
@@ -47,12 +57,17 @@ export function Profile() {
   const [saved, setSaved] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [profileFieldErrors, setProfileFieldErrors] = useState<
+    FieldErrors<ProfileDetailsField>
+  >({});
+  const editButtonRef = useRef<HTMLButtonElement>(null);
+  const profileFormRef = useRef<HTMLFormElement>(null);
 
   if (!profile) {
     return (
       <div>
         <PageHead
-          title="My Profile"
+          title="My profile"
           subtitle="Manage your personal account details and sign-in security."
         />
         <div className="skeleton mb-6 h-24 rounded-2xl" aria-hidden />
@@ -75,6 +90,11 @@ export function Profile() {
   function update<K extends keyof typeof form>(key: K, value: string) {
     setForm((f) => ({ ...f, [key]: value }));
     setSaved(false);
+    setProfileFieldErrors((current) =>
+      current[key as ProfileDetailsField]
+        ? { ...current, [key]: undefined }
+        : current,
+    );
   }
 
   function beginEditing() {
@@ -86,11 +106,13 @@ export function Profile() {
     });
     setError(null);
     setSaved(false);
+    setProfileFieldErrors({});
     setIsEditing(true);
   }
 
   function cancelEditing() {
     setError(null);
+    setProfileFieldErrors({});
     setIsEditing(false);
   }
 
@@ -98,18 +120,41 @@ export function Profile() {
     e.preventDefault();
     setError(null);
     setSaved(false);
+
+    const invalid = validateProfileDetails(form);
+    if (!isValid(invalid)) {
+      setProfileFieldErrors(invalid);
+      requestAnimationFrame(() => {
+        profileFormRef.current
+          ?.querySelector<HTMLElement>('[aria-invalid="true"]')
+          ?.focus();
+      });
+      return;
+    }
+    setProfileFieldErrors({});
+
     setSubmitting(true);
     try {
       await updateProfile({
-        firstName: form.firstName,
-        middleName: form.middleName || null,
-        lastName: form.lastName,
-        phoneNumber: form.phoneNumber || null,
+        firstName: form.firstName.trim(),
+        middleName: form.middleName.trim() || null,
+        lastName: form.lastName.trim(),
+        phoneNumber: form.phoneNumber.trim() || null,
       });
       setSaved(true);
       setIsEditing(false);
+      requestAnimationFrame(() => editButtonRef.current?.focus());
     } catch (err) {
-      setError(getErrorMessage(err));
+      const fromServer = getFieldErrors(err) as FieldErrors<ProfileDetailsField>;
+      setProfileFieldErrors(fromServer);
+      setError(isValid(fromServer) ? getErrorMessage(err) : null);
+      if (!isValid(fromServer)) {
+        requestAnimationFrame(() => {
+          profileFormRef.current
+            ?.querySelector<HTMLElement>('[aria-invalid="true"]')
+            ?.focus();
+        });
+      }
     } finally {
       setSubmitting(false);
     }
@@ -118,41 +163,39 @@ export function Profile() {
   return (
     <div className="w-full">
       <PageHead
-        title="My Profile"
+        title="My profile"
         subtitle="Manage your personal account details and sign-in security."
       />
 
-      <div className="grid items-start gap-6 xl:grid-cols-[minmax(300px,340px)_minmax(0,1fr)] xl:gap-8">
+      <div className="grid items-start gap-6 xl:grid-cols-[minmax(17rem,19rem)_minmax(0,1fr)] xl:gap-6">
         {/* `min-w-0`: as a grid item this defaults to min-width:auto and would
             not shrink below the identity card's min-content width, scrolling
             the page sideways at a 200px viewport (400px at 200% zoom). */}
         <aside className="min-w-0 xl:sticky xl:top-[calc(var(--topbar-h)+1.5rem)]">
-          <Card className="overflow-hidden">
-            <div className="bg-brand-900 px-5 py-5 sm:px-6">
-              <div className="mb-4 flex size-10 items-center justify-center rounded-xl bg-white/10 text-brand-100">
-                <UserRound size={20} aria-hidden />
-              </div>
-              <p className="font-display text-lg font-semibold text-white">
-                Your FinSight account
-              </p>
-              <p className="mt-1 text-sm leading-relaxed text-brand-100">
-                The identity used across your businesses and records.
-              </p>
-            </div>
-
-            <div className="p-5 sm:p-6">
+          <Card className="p-5 sm:p-6">
+            <div className="border-b border-paper-200 pb-6">
               <AvatarUpload
                 photoUrl={profile.avatarUrl}
                 label={fullName}
                 onUpload={uploadAvatar}
+                layout="stacked"
+                shape="circle"
+                size="xl"
+                buttonIcon={<Camera size={16} aria-hidden />}
                 details={
-                  <h2 className="break-words text-xl font-semibold leading-snug text-ink-900">
-                    {fullName}
-                  </h2>
+                  <div>
+                    <h2 className="break-words font-display text-xl font-semibold leading-snug text-ink-900">
+                      {fullName}
+                    </h2>
+                    <p className="mt-1 break-all text-sm text-ink-500">
+                      {profile.email}
+                    </p>
+                  </div>
                 }
               />
+            </div>
 
-              <dl className="mt-6 divide-y divide-paper-200 border-y border-paper-200">
+              <dl className="divide-y divide-paper-200">
                 <div className="flex items-start gap-3 py-4">
                   <Mail
                     aria-hidden
@@ -177,8 +220,11 @@ export function Profile() {
                       Businesses
                     </dt>
                     <dd className="mt-1 text-sm font-medium text-ink-800">
-                      {businessCount} business{" "}
-                      {businessCount === 1 ? "profile" : "profiles"}
+                      {businessesLoading
+                        ? "Loading…"
+                        : businessesError
+                          ? "Unavailable"
+                          : `${businessCount} active business ${businessCount === 1 ? "profile" : "profiles"}`}
                     </dd>
                   </div>
                 </div>
@@ -198,7 +244,6 @@ export function Profile() {
                 </span>
                 <ArrowUpRight size={16} aria-hidden />
               </ButtonLink>
-            </div>
           </Card>
         </aside>
 
@@ -211,7 +256,7 @@ export function Profile() {
                 </span>
                 <div>
                   <h2 className="text-lg font-semibold text-ink-900">
-                    Personal Details
+                    Personal details
                   </h2>
                   <p className="mt-1 text-sm leading-relaxed text-ink-500">
                     {isEditing
@@ -221,6 +266,7 @@ export function Profile() {
                 </div>
               </div>
               <Button
+                ref={editButtonRef}
                 type="button"
                 variant="secondary"
                 size="sm"
@@ -232,46 +278,74 @@ export function Profile() {
             </div>
             {isEditing ? (
               <form
+                ref={profileFormRef}
                 onSubmit={handleSubmit}
                 className="flex flex-1 flex-col gap-5"
+                noValidate
               >
                 <div className="grid gap-5 sm:grid-cols-2">
-                  <Field label="First name" htmlFor="firstName" required>
+                  <Field
+                    label="First name"
+                    htmlFor="firstName"
+                    required
+                    error={profileFieldErrors.firstName}
+                  >
                     <TextInput
                       id="firstName"
                       required
+                      maxLength={MAX_NAME_LENGTH}
                       autoComplete="given-name"
                       value={form.firstName}
                       onChange={(e) => update("firstName", e.target.value)}
                     />
                   </Field>
-                  <Field label="Last name" htmlFor="lastName" required>
+                  <Field
+                    label="Last name"
+                    htmlFor="lastName"
+                    required
+                    error={profileFieldErrors.lastName}
+                  >
                     <TextInput
                       id="lastName"
                       required
+                      maxLength={MAX_NAME_LENGTH}
                       autoComplete="family-name"
                       value={form.lastName}
                       onChange={(e) => update("lastName", e.target.value)}
                     />
                   </Field>
                 </div>
-                <Field label="Middle name" htmlFor="middleName" optional>
-                  <TextInput
-                    id="middleName"
-                    autoComplete="additional-name"
-                    value={form.middleName}
-                    onChange={(e) => update("middleName", e.target.value)}
-                  />
-                </Field>
-                <Field label="Phone number" htmlFor="phoneNumber" optional>
-                  <TextInput
-                    id="phoneNumber"
-                    type="tel"
-                    autoComplete="tel"
-                    value={form.phoneNumber}
-                    onChange={(e) => update("phoneNumber", e.target.value)}
-                  />
-                </Field>
+                <div className="grid gap-5 sm:grid-cols-2">
+                  <Field
+                    label="Middle name"
+                    htmlFor="middleName"
+                    optional
+                    error={profileFieldErrors.middleName}
+                  >
+                    <TextInput
+                      id="middleName"
+                      maxLength={MAX_NAME_LENGTH}
+                      autoComplete="additional-name"
+                      value={form.middleName}
+                      onChange={(e) => update("middleName", e.target.value)}
+                    />
+                  </Field>
+                  <Field
+                    label="Phone number"
+                    htmlFor="phoneNumber"
+                    optional
+                    error={profileFieldErrors.phoneNumber}
+                  >
+                    <TextInput
+                      id="phoneNumber"
+                      type="tel"
+                      maxLength={MAX_PHONE_LENGTH}
+                      autoComplete="tel"
+                      value={form.phoneNumber}
+                      onChange={(e) => update("phoneNumber", e.target.value)}
+                    />
+                  </Field>
+                </div>
                 <div className="rounded-xl bg-paper-100 px-4 py-3">
                   <p className="text-xs font-semibold text-ink-600">
                     Email address
@@ -299,6 +373,9 @@ export function Profile() {
                 {saved ? (
                   <Callout tone="brand">Profile updated.</Callout>
                 ) : null}
+                <span className="sr-only" aria-live="polite">
+                  {saved ? "Profile updated." : ""}
+                </span>
                 <dl
                   className={`grid gap-x-8 sm:grid-cols-2 ${saved ? "mt-5" : ""}`}
                 >
@@ -339,23 +416,31 @@ export function Profile() {
                 </p>
               </div>
             </div>
-            <div className="grid items-stretch gap-6 lg:grid-cols-2">
+            <div className="grid items-stretch gap-5 [grid-template-columns:repeat(auto-fit,minmax(min(22rem,100%),1fr))]">
               <SecurityPanel />
               <SessionsPanel onLogOutEverywhere={logoutEverywhere} />
             </div>
           </section>
 
-          <section aria-labelledby="danger-zone-heading">
-            <div className="mb-4">
-              <h2
-                id="danger-zone-heading"
-                className="text-base font-semibold text-tone-danger"
-              >
-                Danger zone
-              </h2>
-              <p className="mt-1 text-sm leading-relaxed text-ink-500">
-                Actions here permanently affect your account and its data.
-              </p>
+          <section
+            aria-labelledby="danger-zone-heading"
+            className="overflow-hidden rounded-2xl border border-edge-danger bg-tint-danger"
+          >
+            <div className="flex items-start gap-3 p-5 sm:px-6">
+              <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-paper text-tone-danger ring-1 ring-edge-danger">
+                <Trash2 size={19} aria-hidden />
+              </span>
+              <div>
+                <h2
+                  id="danger-zone-heading"
+                  className="text-base font-semibold text-tone-danger"
+                >
+                  Danger zone
+                </h2>
+                <p className="mt-1 text-sm leading-relaxed text-ink-600">
+                  Actions here permanently affect your account and its data.
+                </p>
+              </div>
             </div>
             <DeleteAccountPanel onDeleted={logout} />
           </section>
@@ -407,17 +492,34 @@ function SessionsPanel({
 }) {
   const confirm = useConfirm();
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const requestPending = useRef(false);
 
   async function handleClick() {
+    if (requestPending.current) return;
+    requestPending.current = true;
     const confirmed = await confirm({
       title: "Log out on all devices?",
-      body: "Every device signed in to this account — including this one — will be signed out. You'll need your password to get back in.",
+      body: "This browser will sign out now. Other devices will need your password again after their current access expires.",
       confirmLabel: "Log out everywhere",
       cancelLabel: "Cancel",
     });
-    if (!confirmed) return;
+    if (!confirmed) {
+      requestPending.current = false;
+      return;
+    }
     setSubmitting(true);
-    await onLogOutEverywhere();
+    setError(null);
+    try {
+      await onLogOutEverywhere();
+    } catch {
+      setError(
+        "FinSight couldn't confirm that your other devices' refresh sessions were revoked. You're still signed in here. Check your connection and try again.",
+      );
+    } finally {
+      requestPending.current = false;
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -427,7 +529,9 @@ function SessionsPanel({
           <MonitorSmartphone size={19} aria-hidden />
         </span>
         <div>
-          <h3 className="text-base font-semibold text-ink-900">Devices</h3>
+          <h3 className="text-base font-semibold text-ink-900">
+            Sessions and devices
+          </h3>
           <p className="max-w-[65ch] text-sm leading-relaxed text-ink-500">
             Protect your account when a phone or computer is no longer in your
             control.
@@ -441,13 +545,19 @@ function SessionsPanel({
         </p>
         <p className="mt-1 text-sm leading-relaxed text-ink-600">
           Logging out normally only ends this session. Use the action below to
-          end every session, including this one.
+          stop other devices from renewing their sessions and sign out this browser.
         </p>
       </div>
 
+      {error ? (
+        <div className="mt-5">
+          <FormError>{error}</FormError>
+        </div>
+      ) : null}
+
       <div className="flex shrink-0 justify-end pt-5">
         <Button
-          variant="secondary"
+          variant="primary"
           className="w-full sm:w-auto"
           disabled={submitting}
           onClick={() => void handleClick()}
@@ -505,7 +615,7 @@ function DeleteAccountPanel({ onDeleted }: { onDeleted: () => Promise<void> }) {
   }
 
   return (
-    <Card className="border-edge-danger p-5 sm:p-6">
+    <div className="border-t border-edge-danger bg-paper/75 p-5 sm:px-6">
       <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <h2 className="mb-1 text-base font-semibold text-tone-danger">
@@ -531,7 +641,13 @@ function DeleteAccountPanel({ onDeleted }: { onDeleted: () => Promise<void> }) {
       </div>
 
       {isExpanded ? (
-        <div className="mt-6 border-t border-edge-danger pt-6">
+        <form
+          className="mt-6 border-t border-edge-danger pt-6"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void removeAccount();
+          }}
+        >
           <div className="ml-auto max-w-xl space-y-4">
             {/*
             No client-side rule beyond "type something": the only thing that can
@@ -550,19 +666,18 @@ function DeleteAccountPanel({ onDeleted }: { onDeleted: () => Promise<void> }) {
             {error ? <FormError>{error}</FormError> : null}
             <div className="flex justify-end">
               <Button
-                type="button"
+                type="submit"
                 variant="danger"
                 className="w-full sm:w-auto"
                 disabled={!password || submitting}
-                onClick={removeAccount}
               >
                 {submitting ? "Deleting…" : "Delete my account"}
               </Button>
             </div>
           </div>
-        </div>
+        </form>
       ) : null}
-    </Card>
+    </div>
   );
 }
 
@@ -581,11 +696,34 @@ function SecurityPanel() {
   const [success, setSuccess] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const changePasswordButtonRef = useRef<HTMLButtonElement>(null);
+  const passwordFormRef = useRef<HTMLFormElement>(null);
+  const restoreTriggerFocusRef = useRef(false);
+
+  useEffect(() => {
+    if (isEditing) {
+      passwordFormRef.current
+        ?.querySelector<HTMLInputElement>("#currentPassword")
+        ?.focus();
+      return;
+    }
+
+    if (restoreTriggerFocusRef.current) {
+      restoreTriggerFocusRef.current = false;
+      changePasswordButtonRef.current?.focus();
+    }
+  }, [isEditing]);
+
+  function beginEditing() {
+    setSuccess(false);
+    setIsEditing(true);
+  }
 
   function cancelEditing() {
     setForm(emptyPasswordForm);
     setError(null);
     setFieldErrors({});
+    restoreTriggerFocusRef.current = true;
     setIsEditing(false);
   }
 
@@ -627,6 +765,7 @@ function SecurityPanel() {
       });
       setForm(emptyPasswordForm);
       setSuccess(true);
+      restoreTriggerFocusRef.current = true;
       setIsEditing(false);
     } catch (err) {
       // A wrong current password comes back as a message, not a field error —
@@ -648,7 +787,7 @@ function SecurityPanel() {
             <KeyRound size={19} aria-hidden />
           </span>
           <div>
-            <h3 className="text-base font-semibold text-ink-900">Security</h3>
+            <h3 className="text-base font-semibold text-ink-900">Password</h3>
             <p className="mt-1 text-sm leading-relaxed text-ink-500">
               Change your password securely using your current password.
             </p>
@@ -662,6 +801,9 @@ function SecurityPanel() {
             Password changed. You're still signed in here, and any other devices
             have been signed out.
           </Callout>
+          <span className="sr-only" aria-live="polite">
+            Password changed successfully.
+          </span>
         </div>
       ) : null}
 
@@ -680,9 +822,10 @@ function SecurityPanel() {
       {!isEditing ? (
         <div className="mt-auto flex justify-end pt-5">
           <Button
+            ref={changePasswordButtonRef}
             type="button"
-            variant="secondary"
-            onClick={() => setIsEditing(true)}
+            variant="primary"
+            onClick={beginEditing}
           >
             Change password
           </Button>
@@ -691,6 +834,7 @@ function SecurityPanel() {
 
       {isEditing ? (
         <form
+          ref={passwordFormRef}
           onSubmit={handleSubmit}
           className="mt-6 flex flex-col gap-5 border-t border-paper-200 pt-6"
         >
@@ -752,7 +896,7 @@ function SecurityPanel() {
               disabled={submitting}
               className="w-full sm:w-auto"
             >
-              {submitting ? "Changing…" : "Change Password"}
+              {submitting ? "Changing…" : "Change password"}
             </Button>
           </div>
         </form>

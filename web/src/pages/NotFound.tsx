@@ -40,7 +40,7 @@ export function NotFound() {
       className="relative flex min-h-screen flex-col items-center justify-center bg-paper-50 px-4 py-6 text-center sm:px-6"
     >
       <span className="flex items-center gap-2.5">
-        <img src="/finsight-logo.png" alt="" aria-hidden className="h-10 w-10 rounded-lg object-contain" />
+        <img src="/newmascotlogo.png" alt="" aria-hidden className="h-10 w-10 rounded-lg object-contain" />
         <Wordmark className="text-lg text-tone-brand" />
       </span>
 

@@ -65,7 +65,7 @@ const FieldContext = createContext<FieldContextValue | null>(null);
  * the one place ink-400 is allowed to sit below 4.5:1.
  */
 const CONTROL_BASE =
-  "min-h-tap w-full rounded-lg border border-ink-200 bg-paper px-3 text-sm text-ink-900 placeholder:text-ink-400 disabled:cursor-not-allowed disabled:opacity-60";
+  "min-h-tap min-w-0 w-full rounded-lg border border-ink-200 bg-paper px-3 text-base text-ink-900 placeholder:text-ink-400 disabled:cursor-not-allowed disabled:opacity-60 sm:text-sm";
 
 /** A field in an error state states it with a border too, not colour alone. */
 const CONTROL_INVALID = "border-edge-danger";
@@ -100,6 +100,7 @@ export function Field({
   required = false,
   optional = false,
   labelAction,
+  wrapLabelAction = false,
   fillRow = false,
   className = "",
   children,
@@ -120,6 +121,8 @@ export function Field({
   optional?: boolean;
   /** Trailing control on the label row — e.g. Login's "Forgot password?". */
   labelAction?: ReactNode;
+  /** Lets a long trailing status move below the label at narrow/zoomed widths. */
+  wrapLabelAction?: boolean;
   /**
    * Bottom-aligns the control so side-by-side fields line up.
    *
@@ -150,8 +153,8 @@ export function Field({
       {/* Grid children stretch by default, so `h-full` gives the column the
           row's height and `mt-auto` on the control below pushes it to the
           bottom of it — putting every control in the row on one line. */}
-      <div className={`${fillRow ? "flex h-full flex-col" : ""} ${className}`.trim()}>
-        <div className="flex items-center justify-between gap-3">
+      <div className={`min-w-0 ${fillRow ? "flex h-full flex-col" : ""} ${className}`.trim()}>
+        <div className={`flex items-center justify-between gap-3 ${wrapLabelAction ? "flex-wrap" : ""}`}>
           <label htmlFor={id} className="block text-sm font-medium text-ink-700">
             {label}
             {optional ? <span className="ml-1 font-normal text-ink-500">(optional)</span> : null}
@@ -162,7 +165,7 @@ export function Field({
               </span>
             ) : null}
           </label>
-          {labelAction ? <div className="shrink-0">{labelAction}</div> : null}
+          {labelAction ? <div className={wrapLabelAction ? "min-w-0 max-w-full" : "shrink-0"}>{labelAction}</div> : null}
         </div>
 
         {hint ? (
@@ -256,7 +259,7 @@ export function PasswordInput({
   if (revealed && !hasText) setRevealed(false);
 
   return (
-    <div className="relative">
+    <div className="relative min-w-0">
       <input
         {...rest}
         type={revealed ? "text" : "password"}

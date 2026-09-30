@@ -71,7 +71,7 @@ async function openReview(page: Page) {
   await page.goto("/records/receipts/new");
   await chooseReceiptPhoto(page);
   await page.getByRole("button", { name: /^Scan/ }).click();
-  await expect(page.getByRole("heading", { name: "Check what FinSight read" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Review receipt" })).toBeVisible();
   await expect(page.getByRole("button", { name: /^Remove Rice 5kg/ })).toBeVisible();
 }
 
@@ -85,7 +85,14 @@ test.beforeEach(async ({ page }) => {
   });
   await page.route(/\/records\/receipts\/\d+\/duplicate-candidates(?:\?.*)?$/, async (route) => {
     await route.fulfill({
-      json: { sourceFingerprint: null, candidateSetHash: null, candidates: [], nextCursor: null },
+      json: {
+        sourceFingerprint: null,
+        candidateSetHash: null,
+        candidateCount: 0,
+        candidatesTruncated: false,
+        candidates: [],
+        nextCursor: null,
+      },
     });
   });
   await page.route("**/records/search**", async (route) => {

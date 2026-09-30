@@ -1,10 +1,19 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, useLocation } from "react-router-dom";
+import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ScanReceipt } from "./ScanReceipt";
 import type { ReceiptScanResult } from "./scanReceipt/types";
+
+if (!HTMLDialogElement.prototype.showModal) {
+  HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
+    this.setAttribute("open", "");
+  };
+  HTMLDialogElement.prototype.close = function (this: HTMLDialogElement) {
+    this.removeAttribute("open");
+  };
+}
 
 const mocks = vi.hoisted(() => ({
   post: vi.fn(),
@@ -29,11 +38,32 @@ const receipt: ReceiptScanResult = {
   id: 10, scanRevision: 0, processingStatus: "Complete", extractedDate: "2026-09-01", extractedDescription: "Paper supplies",
   extractedVendor: "Paper shop", extractedAmount: 500, items: [], ocrConfidence: 98,
 };
+const noDuplicateCandidates = {
+  sourceFingerprint: null,
+  candidateSetHash: null,
+  candidateCount: 0,
+  candidatesTruncated: false,
+  candidates: [],
+  nextCursor: null,
+};
+const isDuplicateCandidateUrl = (url: string) => /^\/records\/receipts\/\d+\/duplicate-candidates$/.test(url);
 const photo = (name = "receipt.png", contents = "receipt image") => new File([contents], name, { type: "image/png" });
 function CurrentPath() {
   return <span data-testid="current-path">{useLocation().pathname}</span>;
 }
-function page() { return <MemoryRouter><ScanReceipt /><CurrentPath /></MemoryRouter>; }
+function ProgrammaticNavigation() {
+  const navigate = useNavigate();
+  return <button type="button" onClick={() => navigate("/dashboard")}>Open dashboard</button>;
+}
+function page() {
+  return (
+    <MemoryRouter>
+      <ScanReceipt />
+      <CurrentPath />
+      <ProgrammaticNavigation />
+    </MemoryRouter>
+  );
+}
 
 beforeEach(() => {
   mocks.selected = { id: 1 };
@@ -46,6 +76,8 @@ beforeEach(() => {
   mocks.get.mockImplementation(async (url: string) =>
     url === "/records/receipts"
       ? { data: { items: [], nextCursor: null } }
+      : isDuplicateCandidateUrl(url)
+      ? { data: noDuplicateCandidates }
       : url.startsWith("/records/receipts/provider-consent/")
       ? { data: { available: false, provider: null, consent: null, activeConsents: [] } }
       : { data: receipt },
@@ -75,7 +107,7 @@ describe("receipt upload and review", () => {
     await user.upload(screen.getByLabelText(/Receipt photo/), photo());
     await user.click(screen.getByRole("button", { name: "Scan receipt" }));
 
-    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await screen.findByRole("heading", { name: "Review receipt" });
     expect(screen.getByLabelText(/^Category/)).toHaveValue("");
     expect(mocks.post.mock.calls.some(([url]) => url === "/ai/suggest-category")).toBe(false);
   });
@@ -95,7 +127,7 @@ describe("receipt upload and review", () => {
     await user.upload(screen.getByLabelText(/Receipt photo/), photo());
     await user.click(screen.getByRole("button", { name: "Scan receipt" }));
 
-    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await screen.findByRole("heading", { name: "Review receipt" });
     await waitFor(() => expect(screen.getByLabelText(/^Category/)).toHaveValue("2"));
     expect(mocks.post.mock.calls.some(([url]) => url === "/ai/suggest-category")).toBe(false);
   });
@@ -143,7 +175,7 @@ describe("receipt upload and review", () => {
     const first = mocks.post.mock.calls[0][1] as FormData;
     expect(first.get("idempotencyKey")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Scan receipt" }));
-    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await screen.findByRole("heading", { name: "Review receipt" });
     const uploads = mocks.post.mock.calls.filter(([url]) => url === "/records/receipts");
     expect(uploads).toHaveLength(2);
     expect((uploads[1][1] as FormData).get("idempotencyKey")).toBe(first.get("idempotencyKey"));
@@ -196,7 +228,7 @@ describe("receipt upload and review", () => {
     await user.upload(input, photo("second.png", "second"));
     await user.click(screen.getByRole("button", { name: "Scan 2 receipts" }));
 
-    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await screen.findByRole("heading", { name: "Review receipt" });
     let uploads = mocks.post.mock.calls.filter(([url]) => url === "/records/receipts");
     expect(uploads).toHaveLength(2);
     expect((uploads[0]![1] as FormData).get("receiptBatchId")).toBe("77");
@@ -242,7 +274,7 @@ describe("receipt upload and review", () => {
     await user.upload(screen.getByLabelText(/Receipt photo/), photo("second.png"));
     await user.click(screen.getByRole("button", { name: "Scan 2 receipts" }));
 
-    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await screen.findByRole("heading", { name: "Review receipt" });
     expect(batchKeys).toHaveLength(2);
     expect(batchKeys[1]).not.toBe(batchKeys[0]);
     const uploads = mocks.post.mock.calls.filter(([url]) => url === "/records/receipts");
@@ -296,7 +328,7 @@ describe("receipt upload and review", () => {
     await user.click(await screen.findByRole("button", { name: "Cancel upload" }));
     await user.upload(screen.getByLabelText(/Receipt photo/), photo("b.png", "photo b"));
     await user.click(screen.getByRole("button", { name: "Scan 2 receipts" }));
-    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await screen.findByRole("heading", { name: "Review receipt" });
 
     const uploads = mocks.post.mock.calls
       .filter(([url]) => url === "/records/receipts")
@@ -346,7 +378,7 @@ describe("receipt upload and review", () => {
 
     await user.click(screen.getByRole("button", { name: "Remove page 3" }));
     await user.click(screen.getByRole("button", { name: "Scan 2 receipts" }));
-    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await screen.findByRole("heading", { name: "Review receipt" });
 
     const uploads = mocks.post.mock.calls
       .filter(([url]) => url === "/records/receipts")
@@ -386,6 +418,7 @@ describe("receipt upload and review", () => {
     });
     mocks.get.mockImplementation(async (url: string) => {
       if (url === "/records/receipts") return { data: { items: [], nextCursor: null } };
+      if (isDuplicateCandidateUrl(url)) return { data: noDuplicateCandidates };
       if (url.startsWith("/records/receipts/provider-consent/")) {
         return { data: { available: false, provider: null, consent: null, activeConsents: [] } };
       }
@@ -404,7 +437,7 @@ describe("receipt upload and review", () => {
     await user.click(screen.getByRole("radio", { name: /One long receipt/ }));
     await user.click(screen.getByRole("button", { name: "Scan receipt" }));
 
-    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await screen.findByRole("heading", { name: "Review receipt" });
     expect(screen.getByRole("tablist", { name: "Receipt pages" })).toBeVisible();
     expect(screen.getByRole("img", { name: "Source, receipt page 1 of 2" })).toHaveAttribute("src", "blob:page-1.png");
     const firstPage = screen.getByRole("tab", { name: "View page 1 of 2" });
@@ -448,7 +481,7 @@ describe("receipt upload and review", () => {
     await user.click(screen.getByRole("button", { name: "Scan receipt" }));
     await screen.findByRole("alert", {}, { timeout: 3000 });
     await user.click(screen.getByRole("button", { name: "Scan receipt" }));
-    await screen.findByRole("heading", { name: "Check what FinSight read" }, { timeout: 3000 });
+    await screen.findByRole("heading", { name: "Review receipt" }, { timeout: 3000 });
     expect(mocks.post.mock.calls.filter(([url]) => url === "/records/receipts")).toHaveLength(1);
   });
 
@@ -631,7 +664,7 @@ describe("receipt upload and review", () => {
 
     render(page());
     await user.click(await screen.findByRole("button", { name: "Review result, Paper shop" }));
-    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await screen.findByRole("heading", { name: "Review receipt" });
     expect(await screen.findByRole("img", { name: "Source, receipt page 1 of 1" })).toHaveAttribute(
       "src",
       "https://storage.example.test/source",
@@ -653,7 +686,7 @@ describe("receipt upload and review", () => {
     view.rerender(page());
     expect(signal.aborted).toBe(true);
     await act(async () => { finish({ data: receipt }); });
-    expect(screen.queryByRole("heading", { name: "Check what FinSight read" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Review receipt" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Scan receipt" })).toBeDisabled();
   });
 
@@ -668,7 +701,7 @@ describe("receipt upload and review", () => {
     fireEvent.submit(form);
     expect(mocks.post).toHaveBeenCalledTimes(1);
     await act(async () => { finish({ data: receipt }); });
-    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await screen.findByRole("heading", { name: "Review receipt" });
     await user.selectOptions(screen.getByLabelText(/^Category/), "2");
     await user.clear(screen.getByLabelText(/^Amount/));
     await user.type(screen.getByLabelText(/^Amount/), "520");
@@ -679,6 +712,402 @@ describe("receipt upload and review", () => {
     const saves = mocks.post.mock.calls.filter(([url]) => url.endsWith("/confirm"));
     expect(saves).toHaveLength(1);
     expect(saves[0][1]).toMatchObject({ amount: 520 });
+  });
+
+  it("switches review views by keyboard without losing edits or starting another scan", async () => {
+    const user = userEvent.setup();
+    render(page());
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo());
+    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+    await screen.findByRole("heading", { name: "Review receipt" });
+    await waitFor(() => expect(
+      mocks.get.mock.calls.filter(([url]) => url === "/records/receipts/10/duplicate-candidates"),
+    ).toHaveLength(1));
+
+    fireEvent.change(screen.getByLabelText(/^Date/), { target: { value: "2026-09-02" } });
+    await user.clear(screen.getByLabelText(/^Description/));
+    await user.type(screen.getByLabelText(/^Description/), "Printer paper restock");
+    await user.clear(screen.getByLabelText(/^Vendor/));
+    await user.type(screen.getByLabelText(/^Vendor/), "Paper shop Manila");
+    await user.clear(screen.getByLabelText(/^Amount/));
+    await user.type(screen.getByLabelText(/^Amount/), "520");
+    await user.selectOptions(screen.getByLabelText(/^Category/), "2");
+
+    const modeTabs = within(screen.getByRole("tablist", { name: "Receipt review view" }));
+    const reviewTab = modeTabs.getByRole("tab", { name: "Review" });
+    const resultsTab = modeTabs.getByRole("tab", { name: "Results" });
+    const compactTab = modeTabs.getByRole("tab", { name: "Compact" });
+    expect(reviewTab).toHaveAttribute("aria-selected", "true");
+    reviewTab.focus();
+
+    await user.keyboard("{ArrowRight}");
+    expect(resultsTab).toHaveFocus();
+    expect(resultsTab).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByLabelText(/^Date/)).toHaveValue("2026-09-02");
+    expect(screen.getByLabelText(/^Description/)).toHaveValue("Printer paper restock");
+    expect(screen.getByLabelText(/^Vendor/)).toHaveValue("Paper shop Manila");
+    expect(screen.getByLabelText(/^Amount/)).toHaveValue(520);
+    expect(screen.getByLabelText(/^Category/)).toHaveValue("2");
+
+    await user.keyboard("{End}");
+    expect(compactTab).toHaveFocus();
+    expect(compactTab).toHaveAttribute("aria-selected", "true");
+    const compactSummary = screen.getByRole("heading", { name: "Paper shop Manila" }).closest("section") as HTMLElement;
+    expect(within(compactSummary).getByText("2026-09-02")).toBeVisible();
+    expect(within(compactSummary).getByText("PHP 520.00")).toBeVisible();
+    expect(within(compactSummary).getByText("0 items")).toBeVisible();
+    expect(within(compactSummary).getByText("Supplies")).toBeVisible();
+    expect(document.getElementById("receipt-view-panel")).toHaveAttribute(
+      "aria-labelledby",
+      "receipt-view-tab-compact",
+    );
+
+    await user.keyboard("{Home}");
+    expect(reviewTab).toHaveFocus();
+    expect(reviewTab).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByLabelText(/^Description/)).toHaveValue("Printer paper restock");
+    expect(screen.getByLabelText(/^Amount/)).toHaveValue(520);
+
+    expect(mocks.post.mock.calls.filter(([url]) => url === "/records/receipts")).toHaveLength(1);
+    expect(mocks.get.mock.calls.filter(([url]) => url === "/records/receipts/10/duplicate-candidates")).toHaveLength(1);
+    expect(mocks.post.mock.calls.filter(([url]) => url.endsWith("/confirm"))).toHaveLength(0);
+  });
+
+  it("keeps keyboard focus in the workflow when a clean scan opens and Compact actions change views", async () => {
+    const user = userEvent.setup();
+    render(page());
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo());
+    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+    await screen.findByRole("heading", { name: "Review receipt" });
+
+    const reviewTab = screen.getByRole("tab", { name: "Review" });
+    const resultsTab = screen.getByRole("tab", { name: "Results" });
+    const compactTab = screen.getByRole("tab", { name: "Compact" });
+    await waitFor(() => expect(reviewTab).toHaveFocus());
+
+    await user.click(compactTab);
+    await user.click(screen.getByRole("button", { name: "View receipt" }));
+    expect(reviewTab).toHaveFocus();
+
+    await user.click(compactTab);
+    await user.click(screen.getByRole("button", { name: "Edit details" }));
+    expect(resultsTab).toHaveFocus();
+  });
+
+  it.each([
+    ["Date", "Enter the receipt date before saving."],
+    ["Description", "Describe what this expense was for before saving."],
+    ["Amount", "Enter a receipt amount greater than zero before saving."],
+  ])("runs the shared %s preflight before saving from Compact", async (label, message) => {
+    const user = userEvent.setup();
+    render(page());
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo());
+    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+    await screen.findByRole("heading", { name: "Review receipt" });
+    await user.selectOptions(screen.getByLabelText(/^Category/), "2");
+    await user.clear(screen.getByLabelText(new RegExp(`^${label}`)));
+    await user.click(screen.getByRole("tab", { name: "Compact" }));
+
+    await user.click(screen.getByRole("button", { name: "Confirm & save expense" }));
+
+    expect(screen.getByRole("tab", { name: "Results" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    await waitFor(() => expect(screen.getByLabelText(new RegExp(`^${label}`))).toHaveFocus());
+    expect(mocks.post.mock.calls.filter(([url]) => url.endsWith("/confirm"))).toHaveLength(0);
+  });
+
+  it("keeps split-removal controls at least 44 pixels in both dimensions", async () => {
+    const user = userEvent.setup();
+    render(page());
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo());
+    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+    await screen.findByRole("heading", { name: "Review receipt" });
+
+    await user.click(screen.getByRole("button", { name: /Add another category/ }));
+
+    const removeButtons = screen.getAllByRole("button", { name: /Remove part/ });
+    expect(removeButtons).toHaveLength(2);
+    for (const button of removeButtons) expect(button).toHaveClass("h-11", "w-11");
+  });
+
+  it("keeps duplicate review mandatory in Compact and sends the acknowledged set hash", async () => {
+    const user = userEvent.setup();
+    const candidateSetHash = "f".repeat(64);
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === "/records/receipts") return { data: { items: [], nextCursor: null } };
+      if (url.startsWith("/records/receipts/provider-consent/")) {
+        return { data: { available: false, provider: null, consent: null, activeConsents: [] } };
+      }
+      if (url === "/records/receipts/10/duplicate-candidates") {
+        return { data: {
+          sourceFingerprint: "e".repeat(64),
+          candidateSetHash,
+          candidateCount: 1,
+          candidatesTruncated: false,
+          nextCursor: null,
+          candidates: [{
+            id: 81,
+            target: { kind: "expense", id: 501 },
+            vendor: "Earlier paper shop",
+            date: "2026-09-01T00:00:00.000Z",
+            total: 500,
+            scoreBand: "EXACT",
+            reasons: ["SAME_VENDOR", "SAME_DATE", "SAME_TOTAL"],
+          }],
+        } };
+      }
+      return { data: receipt };
+    });
+    mocks.post.mockImplementation(async (url: string) => (
+      url.endsWith("/confirm") ? { data: [{ id: 502 }] } : { data: receipt }
+    ));
+
+    render(page());
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo());
+    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+    await screen.findByRole("heading", { name: "Review receipt" });
+    await user.selectOptions(screen.getByLabelText(/^Category/), "2");
+    await screen.findByRole("heading", { name: "Possible duplicate receipt" });
+    await user.click(screen.getByRole("tab", { name: "Compact" }));
+
+    const blockedSave = screen.getByRole("button", { name: "Save anyway" });
+    expect(blockedSave).toBeDisabled();
+    fireEvent.submit(blockedSave.closest("form")!);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Review the possible matches and choose whether to save this receipt anyway.",
+    );
+    expect(mocks.post.mock.calls.filter(([url]) => url.endsWith("/confirm"))).toHaveLength(0);
+
+    await user.click(screen.getByRole("checkbox", { name: /I reviewed these matches/ }));
+    expect(blockedSave).toBeEnabled();
+    await user.click(blockedSave);
+
+    await waitFor(() => expect(screen.getByTestId("current-path")).toHaveTextContent("/records"));
+    const saves = mocks.post.mock.calls.filter(([url]) => url === "/records/receipts/10/confirm");
+    expect(saves).toHaveLength(1);
+    expect(saves[0]![1]).toMatchObject({
+      duplicateDecision: { action: "SAVE_ANYWAY", candidateSetHash },
+    });
+  });
+
+  it("reports a failed duplicate check honestly and blocks Compact save until a retry succeeds", async () => {
+    const user = userEvent.setup();
+    let duplicateAttempts = 0;
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === "/records/receipts") return { data: { items: [], nextCursor: null } };
+      if (url.startsWith("/records/receipts/provider-consent/")) {
+        return { data: { available: false, provider: null, consent: null, activeConsents: [] } };
+      }
+      if (url === "/records/receipts/10/duplicate-candidates") {
+        duplicateAttempts += 1;
+        if (duplicateAttempts === 1) throw new Error("Duplicate service unavailable");
+        return {
+          data: noDuplicateCandidates,
+        };
+      }
+      return { data: receipt };
+    });
+    mocks.post.mockImplementation(async (url: string) => (
+      url.endsWith("/confirm") ? { data: [{ id: 502 }] } : { data: receipt }
+    ));
+
+    render(page());
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo());
+    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+    await screen.findByRole("heading", { name: "Review receipt" });
+    await user.selectOptions(screen.getByLabelText(/^Category/), "2");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "FinSight could not check for duplicate receipts. Try again before saving.",
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Compact" }));
+    expect(screen.queryByText("No possible duplicate was found in the current check.")).not.toBeInTheDocument();
+    const blockedSave = screen.getByRole("button", { name: "Confirm & save expense" });
+    expect(blockedSave).toBeDisabled();
+    fireEvent.submit(blockedSave.closest("form")!);
+    expect(mocks.post.mock.calls.filter(([url]) => url.endsWith("/confirm"))).toHaveLength(0);
+
+    await user.click(screen.getByRole("button", { name: "Retry duplicate check" }));
+    expect(await screen.findByText("No possible duplicate was found in the current check.")).toBeVisible();
+    expect(duplicateAttempts).toBe(2);
+    expect(blockedSave).toBeEnabled();
+
+    await user.click(blockedSave);
+    await waitFor(() => expect(screen.getByTestId("current-path")).toHaveTextContent("/records"));
+    expect(mocks.post.mock.calls.filter(([url]) => url.endsWith("/confirm"))).toHaveLength(1);
+  });
+
+  it("does not present a malformed duplicate response as a successful clean check", async () => {
+    const user = userEvent.setup();
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === "/records/receipts") return { data: { items: [], nextCursor: null } };
+      if (url.startsWith("/records/receipts/provider-consent/")) {
+        return { data: { available: false, provider: null, consent: null, activeConsents: [] } };
+      }
+      if (url === "/records/receipts/10/duplicate-candidates") {
+        return { data: { candidates: [], nextCursor: null } };
+      }
+      return { data: receipt };
+    });
+
+    render(page());
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo());
+    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+    await screen.findByRole("heading", { name: "Review receipt" });
+    await user.selectOptions(screen.getByLabelText(/^Category/), "2");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "FinSight could not check for duplicate receipts. Try again before saving.",
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Compact" }));
+    expect(screen.queryByText("No possible duplicate was found in the current check.")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Confirm & save expense" })).toBeDisabled();
+    expect(mocks.post.mock.calls.filter(([url]) => url.endsWith("/confirm"))).toHaveLength(0);
+  });
+
+  it("keeps a separate receipt rotation for each page", async () => {
+    const user = userEvent.setup();
+    render(page());
+    const input = screen.getByLabelText(/Receipt photo/);
+    await user.upload(input, photo("page-1.png", "first page"));
+    await user.upload(input, photo("page-2.png", "second page"));
+    await user.click(screen.getByRole("radio", { name: /One long receipt/ }));
+    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+    await screen.findByRole("heading", { name: "Review receipt" });
+
+    const pages = within(screen.getByRole("tablist", { name: "Receipt pages" }));
+    const firstImage = screen.getByRole("img", { name: "Source, receipt page 1 of 2" });
+    expect(firstImage).toHaveStyle({ transform: "rotate(0deg)" });
+    await user.click(screen.getByRole("button", { name: "Rotate right" }));
+    expect(firstImage).toHaveStyle({ transform: "rotate(90deg)" });
+
+    await user.click(pages.getByRole("tab", { name: "View page 2 of 2" }));
+    const secondImage = screen.getByRole("img", { name: "Source, receipt page 2 of 2" });
+    expect(secondImage).toHaveStyle({ transform: "rotate(0deg)" });
+    await user.click(screen.getByRole("button", { name: "Rotate left" }));
+    expect(secondImage).toHaveStyle({ transform: "rotate(270deg)" });
+
+    await user.click(pages.getByRole("tab", { name: "View page 1 of 2" }));
+    expect(screen.getByRole("img", { name: "Source, receipt page 1 of 2" })).toHaveStyle({
+      transform: "rotate(90deg)",
+    });
+  });
+
+  it("bounds zoom, retains it per page, and exposes scrollable inline and enlarged previews", async () => {
+    const user = userEvent.setup();
+    render(page());
+    const input = screen.getByLabelText(/Receipt photo/);
+    await user.upload(input, photo("page-1.png", "first page"));
+    await user.upload(input, photo("page-2.png", "second page"));
+    await user.click(screen.getByRole("radio", { name: /One long receipt/ }));
+    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+    await screen.findByRole("heading", { name: "Review receipt" });
+
+    const pages = within(screen.getByRole("tablist", { name: "Receipt pages" }));
+    const zoomIn = screen.getByRole("button", { name: "Zoom in" });
+    expect(screen.getByRole("button", { name: /Current zoom 100 percent/ })).toBeEnabled();
+
+    await user.click(zoomIn);
+    await user.click(zoomIn);
+    expect(screen.getByRole("button", { name: /Current zoom 150 percent/ })).toBeVisible();
+    const firstInline = screen.getByRole("region", {
+      name: "Scrollable source, receipt page 1 of 2",
+    });
+    expect(firstInline).toHaveAttribute("tabindex", "0");
+    expect(firstInline).toHaveClass("overflow-auto");
+    expect(firstInline.firstElementChild).toHaveStyle({ width: "150%" });
+
+    await user.click(pages.getByRole("tab", { name: "View page 2 of 2" }));
+    expect(screen.getByRole("button", { name: /Current zoom 100 percent/ })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Zoom out" }));
+    await user.click(screen.getByRole("button", { name: "Zoom out" }));
+    expect(screen.getByRole("button", { name: /Current zoom 50 percent/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Zoom out" })).toBeDisabled();
+
+    await user.click(pages.getByRole("tab", { name: "View page 1 of 2" }));
+    expect(screen.getByRole("button", { name: /Current zoom 150 percent/ })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /Reset receipt zoom to 100 percent/ }));
+    expect(screen.getByRole("button", { name: /Current zoom 100 percent/ })).toBeVisible();
+
+    for (let step = 0; step < 4; step += 1) await user.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(screen.getByRole("button", { name: /Current zoom 200 percent/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Zoom in" })).toBeDisabled();
+    expect(screen.getByRole("region", {
+      name: "Scrollable source, receipt page 1 of 2",
+    }).firstElementChild).toHaveStyle({ width: "200%" });
+
+    await user.click(screen.getByRole("button", { name: "Enlarge source, receipt page 1 of 2" }));
+    const dialog = screen.getByRole("dialog", { name: "Enlarged source, receipt page 1 of 2" });
+    expect(dialog).toBeVisible();
+    const enlarged = within(dialog).getByRole("region", {
+      name: "Scrollable enlarged source, receipt page 1 of 2",
+    });
+    expect(enlarged).toHaveAttribute("tabindex", "0");
+    expect(enlarged).toHaveClass("overflow-auto");
+    expect(enlarged.firstElementChild).toHaveStyle({ width: "200%" });
+  });
+
+  it("warns about edited review fields on internal navigation, browser history, and unload", async () => {
+    const user = userEvent.setup();
+    render(page());
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo());
+    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+    await screen.findByRole("heading", { name: "Review receipt" });
+
+    const cleanUnload = new Event("beforeunload", { cancelable: true }) as BeforeUnloadEvent;
+    window.dispatchEvent(cleanUnload);
+    expect(cleanUnload.defaultPrevented).toBe(false);
+
+    await user.clear(screen.getByLabelText(/^Vendor/));
+    await user.type(screen.getByLabelText(/^Vendor/), "Paper shop Manila");
+
+    const dirtyUnload = new Event("beforeunload", { cancelable: true }) as BeforeUnloadEvent;
+    window.dispatchEvent(dirtyUnload);
+    expect(dirtyUnload.defaultPrevented).toBe(true);
+
+    const confirmNavigation = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const destination = document.createElement("a");
+    destination.href = "/dashboard";
+    destination.textContent = "Dashboard";
+    document.body.append(destination);
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 });
+    destination.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(true);
+    expect(screen.getByTestId("current-path")).toHaveTextContent("/");
+
+    await user.click(screen.getByRole("button", { name: "Open dashboard" }));
+    expect(screen.getByTestId("current-path")).toHaveTextContent("/");
+
+    const restoreHistory = vi.spyOn(window.history, "go").mockImplementation(() => undefined);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    expect(restoreHistory).toHaveBeenCalledWith(1);
+    expect(confirmNavigation).toHaveBeenCalledTimes(3);
+
+    destination.remove();
+    restoreHistory.mockRestore();
+    confirmNavigation.mockRestore();
+  });
+
+  it("does not warn after a successful receipt confirmation navigates away", async () => {
+    const user = userEvent.setup();
+    mocks.post.mockImplementation(async (url: string) => (
+      url.endsWith("/confirm") ? { data: [{ id: 501 }] } : { data: receipt }
+    ));
+    const confirmNavigation = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(page());
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo());
+    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+    await screen.findByRole("heading", { name: "Review receipt" });
+    await user.selectOptions(screen.getByLabelText(/^Category/), "2");
+
+    await user.click(screen.getByRole("button", { name: "Confirm & save expense" }));
+    await waitFor(() => expect(screen.getByTestId("current-path")).toHaveTextContent("/records"));
+
+    const unload = new Event("beforeunload", { cancelable: true }) as BeforeUnloadEvent;
+    window.dispatchEvent(unload);
+    expect(unload.defaultPrevented).toBe(false);
+    expect(confirmNavigation).not.toHaveBeenCalled();
+    confirmNavigation.mockRestore();
   });
 
   it("requires an explicit Save anyway decision for the current duplicate set", async () => {
@@ -723,7 +1152,7 @@ describe("receipt upload and review", () => {
     render(page());
     await user.upload(screen.getByLabelText(/Receipt photo/), photo());
     await user.click(screen.getByRole("button", { name: "Scan receipt" }));
-    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await screen.findByRole("heading", { name: "Review receipt" });
     await user.selectOptions(screen.getByLabelText(/^Category/), "2");
     await user.click(screen.getByRole("button", { name: "Confirm & save expense" }));
 
@@ -777,7 +1206,7 @@ describe("receipt upload and review", () => {
     render(page());
     await user.upload(screen.getByLabelText(/Receipt photo/), photo());
     await user.click(screen.getByRole("button", { name: "Scan receipt" }));
-    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await screen.findByRole("heading", { name: "Review receipt" });
     await user.selectOptions(screen.getByLabelText(/^Category/), "2");
 
     expect(await screen.findByText("Showing 20 of 21 matches. Load the rest before deciding.")).toBeVisible();
@@ -845,7 +1274,7 @@ describe("receipt upload and review", () => {
       render(page());
       await user.upload(screen.getByLabelText(/Receipt photo/), photo());
       await user.click(screen.getByRole("button", { name: "Scan receipt" }));
-      await screen.findByRole("heading", { name: "Check what FinSight read" });
+      await screen.findByRole("heading", { name: "Review receipt" });
       await user.selectOptions(screen.getByLabelText(/^Category/), "2");
       await user.clear(screen.getByLabelText(/^Vendor/));
       await user.type(screen.getByLabelText(/^Vendor/), "Paper Shop Manila");
@@ -948,7 +1377,7 @@ describe("receipt upload and review", () => {
     mocks.get.mockImplementation(async (url: string) => {
       if (url === "/records/receipts") return { data: { items: [], nextCursor: null } };
       if (url === "/records/receipts/10/duplicate-candidates") {
-        return { data: { sourceFingerprint: null, candidateSetHash: null, candidates: [], nextCursor: null } };
+        return { data: noDuplicateCandidates };
       }
       if (url === "/records/receipts/10") {
         return { data: { ...receipt, confirmationStatus: "Confirmed" } };
@@ -959,7 +1388,7 @@ describe("receipt upload and review", () => {
     render(page());
     await user.upload(screen.getByLabelText(/Receipt photo/), photo());
     await user.click(screen.getByRole("button", { name: "Scan receipt" }));
-    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await screen.findByRole("heading", { name: "Review receipt" });
     await user.selectOptions(screen.getByLabelText(/^Category/), "2");
     await user.click(screen.getByRole("button", { name: "Confirm & save expense" }));
 
@@ -993,7 +1422,7 @@ describe("receipt upload and review", () => {
     render(page());
     await user.upload(screen.getByLabelText(/Receipt photo/), photo());
     await user.click(screen.getByRole("button", { name: "Scan receipt" }));
-    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await screen.findByRole("heading", { name: "Review receipt" });
 
     await user.click(screen.getByRole("button", { name: "Edit Printer paper" }));
     await user.clear(screen.getByLabelText("Item name"));
@@ -1032,6 +1461,8 @@ describe("receipt upload and review", () => {
     mocks.get.mockImplementation(async (url: string) =>
       url === "/records/receipts"
         ? { data: { items: [], nextCursor: null } }
+        : isDuplicateCandidateUrl(url)
+        ? { data: noDuplicateCandidates }
         : url.startsWith("/records/receipts/provider-consent/")
         ? { data: { available: false, provider: null, consent: null, activeConsents: [] } }
         : { data: { ...itemised, scanRevision: 4 } });
@@ -1039,7 +1470,7 @@ describe("receipt upload and review", () => {
     render(page());
     await user.upload(screen.getByLabelText(/Receipt photo/), photo());
     await user.click(screen.getByRole("button", { name: "Scan receipt" }));
-    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await screen.findByRole("heading", { name: "Review receipt" });
     await user.click(screen.getByRole("button", { name: "Edit Printer paper" }));
     await user.clear(screen.getByLabelText("Item name"));
     await user.type(screen.getByLabelText("Item name"), "A4 paper draft");
@@ -1080,8 +1511,8 @@ describe("receipt upload and review", () => {
     mocks.get.mockImplementation(async (url: string) =>
       url === "/records/receipts"
         ? { data: { items: [], nextCursor: null } }
-        : url === "/records/receipts/10/duplicate-candidates"
-        ? { data: { sourceFingerprint: null, candidateSetHash: null, candidates: [], nextCursor: null } }
+      : url === "/records/receipts/10/duplicate-candidates"
+        ? { data: noDuplicateCandidates }
         : url.startsWith("/records/receipts/provider-consent/")
         ? { data: { available: false, provider: null, consent: null, activeConsents: [] } }
         : { data: { ...stale, scanRevision: 4 } });
@@ -1089,7 +1520,7 @@ describe("receipt upload and review", () => {
     render(page());
     await user.upload(screen.getByLabelText(/Receipt photo/), photo());
     await user.click(screen.getByRole("button", { name: "Scan receipt" }));
-    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await screen.findByRole("heading", { name: "Review receipt" });
     await user.selectOptions(screen.getByLabelText(/^Category/), "2");
     await user.click(screen.getByRole("button", { name: "Confirm & save expense" }));
 
@@ -1119,18 +1550,18 @@ describe("receipt upload and review", () => {
     render(page());
     await user.upload(screen.getByLabelText(/Receipt photo/), photo());
     await user.click(screen.getByRole("button", { name: "Scan receipt" }));
-    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await screen.findByRole("heading", { name: "Review receipt" });
     await user.click(screen.getByRole("button", { name: "Edit Printer paper" }));
     await user.clear(screen.getByLabelText("Item amount"));
     await user.type(screen.getByLabelText("Item amount"), "260");
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     await user.click(screen.getByRole("button", { name: "Choose another image" }));
-    expect(screen.queryByRole("heading", { name: "Check what FinSight read" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Review receipt" })).toBeNull();
 
     settlePatch({ data: { ...itemised, scanRevision: 4, items: [{ ...itemised.items[0], amount: 260 }, itemised.items[1]] } });
     await waitFor(() => expect(mocks.patch).toHaveBeenCalledTimes(1));
-    expect(screen.queryByRole("heading", { name: "Check what FinSight read" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Review receipt" })).toBeNull();
     expect(screen.getByLabelText(/Receipt photo/)).toBeInTheDocument();
   });
 
@@ -1151,7 +1582,7 @@ describe("receipt upload and review", () => {
     render(page());
     await user.upload(screen.getByLabelText(/Receipt photo/), photo());
     await user.click(screen.getByRole("button", { name: "Scan receipt" }));
-    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await screen.findByRole("heading", { name: "Review receipt" });
     await waitFor(() => expect(screen.getByLabelText(/^Date/)).toHaveFocus());
 
     await user.click(screen.getByRole("button", { name: "Edit Printer paper" }));

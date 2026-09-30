@@ -205,6 +205,43 @@ describe("CSV full-file review", () => {
     expect(previews.filter((post) => post.fields.file !== undefined)).toHaveLength(1);
   });
 
+  it("announces the selected file and keeps focus on each stage when moving forward or starting over", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    const file = new File(["date,description,amount,category\n"], "a-very-long-import-file-name-for-september-expenses.csv", {
+      type: "text/csv",
+    });
+    await user.upload(screen.getByLabelText(/CSV file/i), file);
+    const selectedFileStatus = screen.getByRole("status");
+    expect(selectedFileStatus).toHaveTextContent(`Selected file: ${file.name}`);
+    expect(selectedFileStatus).not.toContainElement(screen.getByRole("button", { name: "Remove file" }));
+
+    await user.click(screen.getByRole("button", { name: "Preview file" }));
+    const mapHeading = await screen.findByRole("heading", { level: 1, name: "Map and review columns" });
+    await waitFor(() => expect(mapHeading.closest('[tabindex="-1"]')).toHaveFocus());
+
+    await continueToReview(user);
+    const reviewHeading = screen.getByRole("heading", { level: 1, name: "Review and import" });
+    await waitFor(() => expect(reviewHeading.closest('[tabindex="-1"]')).toHaveFocus());
+
+    await user.click(screen.getByRole("button", { name: "Back to mapping" }));
+    await user.click(screen.getByRole("button", { name: "Change file" }));
+    const uploadHeading = await screen.findByRole("heading", { level: 1, name: "Import CSV records" });
+    await waitFor(() => expect(uploadHeading.closest('[tabindex="-1"]')).toHaveFocus());
+  });
+
+  it("returns focus to the CSV chooser after removing the selected file", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    const chooser = screen.getByLabelText(/CSV file/i);
+    await user.upload(chooser, new File(["date,description,amount\n"], "march.csv", { type: "text/csv" }));
+    await user.click(screen.getByRole("button", { name: "Remove file" }));
+
+    await waitFor(() => expect(chooser).toHaveFocus());
+  });
+
   it("confirms with the same staged upload and never sends the CSV bytes again", async () => {
     const user = userEvent.setup();
     confirmResponses = [() => ({ status: 201, data: {

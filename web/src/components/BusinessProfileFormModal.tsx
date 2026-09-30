@@ -25,7 +25,10 @@ export function BusinessProfileFormModal({
   profile,
   onSaved,
 }: Props) {
-  const { createProfile, updateProfile, uploadLogo } = useBusinessProfiles();
+  const { profiles, createProfile, updateProfile, uploadLogo } = useBusinessProfiles();
+  const currentProfile = profile
+    ? (profiles.find((candidate) => candidate.id === profile.id) ?? profile)
+    : undefined;
 
   async function handleSubmit(input: BusinessProfileInput) {
     const saved = profile
@@ -42,13 +45,14 @@ export function BusinessProfileFormModal({
       title={profile ? `Edit ${profile.name}` : "Add Business Profile"}
       size="wide"
     >
-      {profile ? (
+      {currentProfile ? (
         <div className="mb-5">
           <AvatarUpload
-            photoUrl={profile.logoUrl}
-            label={profile.name}
+            photoUrl={currentProfile.logoUrl}
+            label={currentProfile.name}
             changeLabel="Change logo"
-            onUpload={(file) => uploadLogo(profile.id, file).then(onSaved)}
+            successMessage="Logo updated"
+            onUpload={(file) => uploadLogo(currentProfile.id, file).then(onSaved)}
           />
         </div>
       ) : null}

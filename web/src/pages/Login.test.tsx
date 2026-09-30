@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { AxiosError, AxiosHeaders } from "axios";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -45,6 +46,17 @@ function renderLogin(options?: { sessionExpired?: boolean }) {
 
 const emailBox = () => screen.getByRole("textbox", { name: /email/i }) as HTMLInputElement;
 const passwordBox = () => screen.getByLabelText(/^password/i) as HTMLInputElement;
+
+function gatewayError(): AxiosError {
+  const config = { headers: new AxiosHeaders() };
+  return new AxiosError("Request failed with status code 502", "ERR_BAD_RESPONSE", config as never, {}, {
+    status: 502,
+    statusText: "Bad Gateway",
+    data: "",
+    headers: {},
+    config: config as never,
+  });
+}
 
 beforeAll(() => {
   // jsdom has focus but no layout/scrolling implementation. The production
@@ -99,10 +111,32 @@ describe("Login", () => {
     expect(passwordBox()).toHaveValue("owner-password");
   });
 
+  it("keeps the form usable after an unstructured gateway failure and allows a retry", async () => {
+    login.mockRejectedValueOnce(gatewayError()).mockResolvedValueOnce(undefined);
+    renderLogin();
+
+    await userEvent.type(emailBox(), "owner@example.com");
+    await userEvent.type(passwordBox(), "owner-password");
+    await userEvent.click(screen.getByRole("button", { name: "Log in" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "FinSight is temporarily unavailable. Please try again in a moment.",
+    );
+    expect(emailBox()).toHaveValue("owner@example.com");
+    expect(passwordBox()).toHaveValue("owner-password");
+
+    const retry = screen.getByRole("button", { name: "Log in" });
+    expect(retry).toBeEnabled();
+    await userEvent.click(retry);
+
+    await waitFor(() => expect(screen.getByTestId("path")).toHaveTextContent("/business-profiles"));
+    expect(login).toHaveBeenCalledTimes(2);
+  });
+
   it("announces an expired session before the form", () => {
     renderLogin({ sessionExpired: true });
 
-    expect(screen.getByRole("status")).toHaveTextContent("Your session expired — please log in again.");
+    expect(screen.getByRole("status")).toHaveTextContent("Your session expired. Please log in again.");
   });
 
   it("disables duplicate submission, then saves the verified address and navigates", async () => {

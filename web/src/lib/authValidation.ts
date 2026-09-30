@@ -47,6 +47,42 @@ export const MIN_PASSWORD_LENGTH = 12;
 export const MAX_NAME_LENGTH = 100;
 export const MAX_PHONE_LENGTH = 20;
 
+export type ProfileDetailsField =
+  | "firstName"
+  | "middleName"
+  | "lastName"
+  | "phoneNumber";
+
+/** Mirrors the optional-name update schema used by PATCH /auth/me. */
+export function validateProfileDetails(input: {
+  firstName: string;
+  middleName?: string;
+  lastName: string;
+  phoneNumber?: string;
+}): FieldErrors<ProfileDetailsField> {
+  const errors: FieldErrors<ProfileDetailsField> = {};
+
+  if (!input.firstName.trim()) errors.firstName = "Enter your first name.";
+  else if (input.firstName.trim().length > MAX_NAME_LENGTH) {
+    errors.firstName = `Keep this under ${MAX_NAME_LENGTH} characters.`;
+  }
+
+  if (!input.lastName.trim()) errors.lastName = "Enter your last name.";
+  else if (input.lastName.trim().length > MAX_NAME_LENGTH) {
+    errors.lastName = `Keep this under ${MAX_NAME_LENGTH} characters.`;
+  }
+
+  if ((input.middleName ?? "").trim().length > MAX_NAME_LENGTH) {
+    errors.middleName = `Keep this under ${MAX_NAME_LENGTH} characters.`;
+  }
+
+  if ((input.phoneNumber ?? "").trim().length > MAX_PHONE_LENGTH) {
+    errors.phoneNumber = `Keep this under ${MAX_PHONE_LENGTH} characters.`;
+  }
+
+  return errors;
+}
+
 /**
  * `MAX_EMAIL_LENGTH` on the server, which exists because `User_Email` is
  * `VARCHAR(150)`.

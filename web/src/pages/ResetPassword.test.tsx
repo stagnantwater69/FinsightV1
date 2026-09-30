@@ -73,7 +73,7 @@ beforeEach(() => {
   setSession.mockResolvedValue({ error: null });
   updateUser.mockResolvedValue({ error: null });
   signOut.mockResolvedValue({ error: null });
-  apiPost.mockResolvedValue({ data: null });
+  apiPost.mockResolvedValue({ data: { message: "Password reset complete", refreshSessionsRevoked: true } });
 });
 
 afterEach(() => {
@@ -173,6 +173,50 @@ describe("arriving with nothing in the URL", () => {
       headers: { Authorization: "Bearer otp-access-token" },
     });
     expect(await screen.findByText(/password changed/i)).toBeTruthy();
+    expect(screen.getByRole("status")).toHaveTextContent(/password has been changed/i);
+    expect(screen.getByText(/other devices will need to sign in again after their current access expires/i)).toBeInTheDocument();
+  });
+
+  it("keeps the password change complete when session revocation is unconfirmed", async () => {
+    verifyOtp.mockResolvedValue(sessionResult());
+    apiPost.mockResolvedValue({
+      data: { message: "Password changed, but session revocation could not be confirmed", refreshSessionsRevoked: false },
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.type(await screen.findByLabelText(/^email/i), EMAIL);
+    await user.type(screen.getByLabelText(/recovery code/i), "75324744");
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.type(await screen.findByLabelText(/^new password/i), NEW_PASSWORD);
+    await user.type(screen.getByLabelText(/confirm new password/i), NEW_PASSWORD);
+    await user.click(screen.getByRole("button", { name: /save new password/i }));
+
+    expect(await screen.findByText(/one security step remains/i)).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(/Log out on all devices/i);
+    expect(screen.getByText(/Profile, go to Security.*Log out on all devices/i)).toBeInTheDocument();
+    expect(screen.queryByText(/other devices will need to sign in again after their current access expires/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^new password/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Log in" })).toBeEnabled();
+  });
+
+  it("shows the same partial-success completion when the revocation request fails", async () => {
+    verifyOtp.mockResolvedValue(sessionResult());
+    apiPost.mockRejectedValue(new Error("Network unavailable"));
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.type(await screen.findByLabelText(/^email/i), EMAIL);
+    await user.type(screen.getByLabelText(/recovery code/i), "75324744");
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    await user.type(await screen.findByLabelText(/^new password/i), NEW_PASSWORD);
+    await user.type(screen.getByLabelText(/confirm new password/i), NEW_PASSWORD);
+    await user.click(screen.getByRole("button", { name: /save new password/i }));
+
+    expect(await screen.findByText(/one security step remains/i)).toBeInTheDocument();
+    expect(screen.getByText(/new password is active/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^new password/i)).not.toBeInTheDocument();
+    expect(updateUser).toHaveBeenCalledOnce();
   });
 });
 

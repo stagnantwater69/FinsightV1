@@ -93,7 +93,7 @@ export const SCAN_POLL_TIMEOUT_MS = 3 * 60 * 1000;
 export const ORIGIN_CHIP: Partial<Record<Origin, { label: string; tone: string }>> = {
   read: { label: "Read from receipt", tone: "bg-tint-info text-tone-info ring-edge-info" },
   derived: { label: "Suggested from the vendor", tone: "bg-tint-info text-tone-info ring-edge-info" },
-  missing: { label: "Not found — please enter", tone: "bg-tint-accent text-tone-accent ring-edge-accent" },
+  missing: { label: "Not found. Please enter", tone: "bg-tint-accent text-tone-accent ring-edge-accent" },
 };
 
 /** Human names for the extracted fields, used wherever one is named in prose. */

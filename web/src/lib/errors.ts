@@ -27,6 +27,10 @@ export function getErrorMessage(err: unknown): string {
     if (!err.response) {
       return "We couldn't reach FinSight. Check your connection and try again.";
     }
+    if (err.response.status >= 500) {
+      return "FinSight is temporarily unavailable. Please try again in a moment.";
+    }
+    return "Something went wrong. Please try again.";
   }
   if (err instanceof Error) return err.message;
   return "Something went wrong. Please try again.";

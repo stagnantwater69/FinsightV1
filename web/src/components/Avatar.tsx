@@ -3,8 +3,14 @@ import { useToast } from "./Toast";
 import { getErrorMessage } from "../lib/errors";
 
 const SIZES = {
-  md: "h-12 w-12 rounded-xl text-base",
-  lg: "h-16 w-16 rounded-2xl text-xl",
+  md: "h-12 w-12 text-base",
+  lg: "h-16 w-16 text-xl",
+  xl: "h-20 w-20 text-2xl",
+} as const;
+
+const SHAPES = {
+  soft: "rounded-2xl",
+  circle: "rounded-full",
 } as const;
 
 /**
@@ -16,11 +22,13 @@ export function Avatar({
   photoUrl,
   label,
   size = "md",
+  shape = "soft",
 }: {
   photoUrl: string | null | undefined;
   /** Used to derive the 1-2 letter monogram shown when there's no photo. */
   label: string;
   size?: keyof typeof SIZES;
+  shape?: keyof typeof SHAPES;
 }) {
   const initials = label
     .trim()
@@ -35,7 +43,7 @@ export function Avatar({
       <img
         src={photoUrl}
         alt=""
-        className={`shrink-0 object-cover ${SIZES[size]}`}
+        className={`shrink-0 object-cover ${SIZES[size]} ${SHAPES[shape]}`}
       />
     );
   }
@@ -43,7 +51,7 @@ export function Avatar({
   return (
     <span
       aria-hidden
-      className={`flex shrink-0 items-center justify-center bg-brand-700 font-display font-extrabold text-white ${SIZES[size]}`}
+      className={`flex shrink-0 items-center justify-center bg-tint-brand font-display font-semibold text-tone-brand ring-1 ring-edge-brand ${SIZES[size]} ${SHAPES[shape]}`}
     >
       {initials || "?"}
     </span>
@@ -61,6 +69,12 @@ export function AvatarUpload({
   onUpload,
   changeLabel = "Change photo",
   details,
+  helpText,
+  buttonIcon,
+  size = "lg",
+  shape = "soft",
+  layout = "row",
+  successMessage = "Photo updated",
 }: {
   photoUrl: string | null | undefined;
   label: string;
@@ -68,6 +82,12 @@ export function AvatarUpload({
   changeLabel?: ReactNode;
   /** Optional identity copy shown beside the avatar and above the upload action. */
   details?: ReactNode;
+  helpText?: ReactNode;
+  buttonIcon?: ReactNode;
+  size?: keyof typeof SIZES;
+  shape?: keyof typeof SHAPES;
+  layout?: "row" | "stacked";
+  successMessage?: string;
 }) {
   const toast = useToast();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -80,7 +100,7 @@ export function AvatarUpload({
     setUploading(true);
     try {
       await onUpload(file);
-      toast("Photo updated");
+      toast(successMessage);
     } catch (err) {
       toast(getErrorMessage(err));
     } finally {
@@ -91,9 +111,15 @@ export function AvatarUpload({
   // Wraps so "Change photo" and the identity details drop under the avatar at
   // a 160px viewport (a 320px phone at 200% zoom) instead of overflowing.
   return (
-    <div className="flex flex-wrap items-center gap-4">
-      <Avatar photoUrl={photoUrl} label={label} size="lg" />
-      <div className="min-w-0">
+    <div
+      className={
+        layout === "stacked"
+          ? "flex min-w-0 flex-col items-center text-center"
+          : "flex min-w-0 flex-wrap items-center gap-4"
+      }
+    >
+      <Avatar photoUrl={photoUrl} label={label} size={size} shape={shape} />
+      <div className={`min-w-0 ${layout === "stacked" ? "mt-4" : ""}`}>
         {details ? <div className="mb-2 min-w-0">{details}</div> : null}
         <input
           ref={inputRef}
@@ -107,10 +133,16 @@ export function AvatarUpload({
           type="button"
           onClick={() => inputRef.current?.click()}
           disabled={uploading}
-          className="tap rounded-lg border border-ink-200 bg-paper px-3 text-sm font-medium text-ink-700 transition-colors hover:bg-paper-100 disabled:cursor-not-allowed disabled:opacity-60"
+          className="tap inline-flex items-center justify-center gap-2 rounded-lg border border-ink-200 bg-paper px-3 text-sm font-medium text-ink-700 transition-colors hover:bg-paper-100 disabled:cursor-not-allowed disabled:opacity-60"
         >
+          {uploading ? null : buttonIcon}
           {uploading ? "Uploading…" : changeLabel}
         </button>
+        {helpText ? (
+          <p className="mt-2 max-w-xs text-xs leading-relaxed text-ink-500">
+            {helpText}
+          </p>
+        ) : null}
       </div>
     </div>
   );

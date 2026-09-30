@@ -152,9 +152,9 @@ describe("where the guided tour panel lives", () => {
     expect(screen.queryByText(ALWAYS_SHOW)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Start Guided Tour" })).not.toBeInTheDocument();
     // The page still owns everything it should.
-    expect(screen.getByRole("heading", { name: "Personal Details" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Security" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Devices" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Personal details" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Account security" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Sessions and devices" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Delete account" })).toBeInTheDocument();
     // And it points at where the preference went, because someone who learned
     // it here will come back here looking for it.

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ArrowRight, Check, MessageSquare, ScanLine } from "lucide-react";
 import { Card, MEASURE, Rise, SectionHead } from "./grid";
 import { CurveDivider, MintGlow } from "./FinancialTrail";
+import { useHorizontalTabKeys } from "../../lib/hooks";
 
 /**
  * "Show, don't tell" — a tabbed switch between the two mockups that carry
@@ -153,6 +154,7 @@ function AiPanel() {
 
 export function ProductShowcase() {
   const [tab, setTab] = useState<TabId>("ocr");
+  const onTabKeys = useHorizontalTabKeys();
 
   return (
     <section
@@ -179,6 +181,8 @@ export function ProductShowcase() {
             <div
               role="tablist"
               aria-label="Product demonstrations"
+              aria-orientation="horizontal"
+              onKeyDown={onTabKeys}
               className="mx-auto mt-7 inline-flex max-w-full flex-wrap justify-center gap-1 rounded-2xl border border-landing-mint-light bg-landing-surface p-1.5 shadow-sm sm:rounded-full"
             >
               {TABS.map((t) => {
@@ -189,9 +193,10 @@ export function ProductShowcase() {
                     key={t.id}
                     type="button"
                     role="tab"
-                    id={`tab-${t.id}`}
+                    id={`product-showcase-tab-${t.id}`}
                     aria-selected={selected}
-                    aria-controls={`panel-${t.id}`}
+                    aria-controls="product-showcase-panel"
+                    tabIndex={selected ? 0 : -1}
                     onClick={() => setTab(t.id)}
                     className={`inline-flex min-h-tap items-center justify-center gap-1.5 rounded-full px-3.5 font-landing-sans text-[13px] font-bold transition duration-150 ease-shell sm:gap-2 sm:px-5 sm:text-sm ${
                       selected
@@ -210,8 +215,9 @@ export function ProductShowcase() {
 
         <div
           role="tabpanel"
-          id={`panel-${tab}`}
-          aria-labelledby={`tab-${tab}`}
+          id="product-showcase-panel"
+          aria-labelledby={`product-showcase-tab-${tab}`}
+          tabIndex={0}
           className="mt-10 animate-fade-up rounded-[28px] border border-landing-mint-light/70 bg-landing-surface p-6 shadow-md sm:p-10"
         >
           {tab === "ocr" ? <OcrPanel /> : <AiPanel />}

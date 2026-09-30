@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { Notifications } from "./Notifications";
@@ -44,6 +44,22 @@ beforeEach(() => {
 });
 
 describe("the notifications archive after a failed load", () => {
+  it("uses ordinary pressed filter buttons instead of tabs without panels", async () => {
+    const user = userEvent.setup();
+    page();
+
+    const filters = screen.getByRole("group", { name: "Filter notifications" });
+    const all = within(filters).getByRole("button", { name: "All" });
+    const unread = within(filters).getByRole("button", { name: "Unread" });
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+    expect(all).toHaveAttribute("aria-pressed", "true");
+    expect(unread).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(unread);
+    expect(all).toHaveAttribute("aria-pressed", "false");
+    expect(unread).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("does not claim the archive is clear when the load failed", () => {
     notificationState.error = "Couldn't load notifications.";
     page();

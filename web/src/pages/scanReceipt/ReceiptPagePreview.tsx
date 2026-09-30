@@ -8,6 +8,81 @@ import type {
   ReceiptPageQuality,
 } from "./types";
 
+const MIN_ZOOM = 50;
+const MAX_ZOOM = 200;
+const ZOOM_STEP = 25;
+
+interface ImageDimensions {
+  width: number;
+  height: number;
+}
+
+function validDimensions(width: number | null | undefined, height: number | null | undefined): ImageDimensions | null {
+  return width && height && width > 0 && height > 0 ? { width, height } : null;
+}
+
+function ReceiptImageCanvas({
+  url,
+  alt,
+  rotation,
+  zoom,
+  imageDimensions,
+  onDimensions,
+  onError,
+}: {
+  url: string;
+  alt: string;
+  rotation: number;
+  zoom: number;
+  imageDimensions: ImageDimensions | null;
+  onDimensions: (width: number, height: number) => void;
+  onError: () => void;
+}) {
+  const measured = imageDimensions ?? { width: 1, height: 1 };
+  const quarterTurn = rotation % 180 !== 0;
+  const aspect = measured.height / measured.width;
+  const canvasWidth = (quarterTurn ? aspect : 1) * zoom;
+  const imageWidth = quarterTurn ? 100 / aspect : 100;
+  const imagePosition = rotation === 90
+    ? { left: "100%", top: "0" }
+    : rotation === 180
+      ? { left: "100%", top: "100%" }
+      : rotation === 270
+        ? { left: "0", top: "100%" }
+        : { left: "0", top: "0" };
+
+  return (
+    <div
+      className="relative shrink-0"
+      style={{
+        width: `${canvasWidth}%`,
+        aspectRatio: quarterTurn
+          ? `${measured.height} / ${measured.width}`
+          : `${measured.width} / ${measured.height}`,
+        marginInline: canvasWidth <= 100 ? "auto" : 0,
+      }}
+    >
+      <img
+        src={url}
+        alt={alt}
+        onLoad={(event) => {
+          const { naturalWidth, naturalHeight } = event.currentTarget;
+          if (naturalWidth > 0 && naturalHeight > 0) onDimensions(naturalWidth, naturalHeight);
+        }}
+        onError={onError}
+        className="absolute h-auto max-w-none object-contain transition-transform duration-200 motion-reduce:transition-none"
+        style={{
+          width: `${imageWidth}%`,
+          left: imagePosition.left,
+          top: imagePosition.top,
+          transformOrigin: "top left",
+          transform: `rotate(${rotation}deg)`,
+        }}
+      />
+    </div>
+  );
+}
+
 interface ReceiptPagePreviewProps {
   scanId: number;
   files: File[];
@@ -59,6 +134,9 @@ export function ReceiptPagePreview({
   const [derivedImages, setDerivedImages] = useState<Record<number, ReceiptPageImage>>({});
   const [derivedLoading, setDerivedLoading] = useState(false);
   const [derivedError, setDerivedError] = useState<string | null>(null);
+  const [rotationByPage, setRotationByPage] = useState<Record<number, number>>({});
+  const [zoomByPage, setZoomByPage] = useState<Record<number, number>>({});
+  const [imageDimensions, setImageDimensions] = useState<Record<string, ImageDimensions>>({});
   const zoomRef = useRef<HTMLDialogElement>(null);
   const pageTabs = useRef<Array<HTMLButtonElement | null>>([]);
   const sourceRequest = useRef(0);
@@ -73,6 +151,9 @@ export function ReceiptPagePreview({
     setSourceErrors({});
     setDerivedImages({});
     setDerivedError(null);
+    setRotationByPage({});
+    setZoomByPage({});
+    setImageDimensions({});
     return () => {
       derivedRequest.current += 1;
       sourceRequest.current += 1;
@@ -97,6 +178,13 @@ export function ReceiptPagePreview({
     : evidence?.source.label ?? "Source";
   const selectedQuality = pageQualities?.[selectedPage];
   const pageLabel = `Page ${selectedPage + 1} of ${pageCount}`;
+  const selectedRotation = rotationByPage[pageNumber] ?? 0;
+  const selectedZoom = zoomByPage[pageNumber] ?? 100;
+  const imageKey = `${pageNumber}:${selectedVariant}`;
+  const metadataDimensions = selectedVariant === "derived"
+    ? validDimensions(derivedImage?.width, derivedImage?.height)
+    : validDimensions(sourceImage?.width ?? evidence?.source.width, sourceImage?.height ?? evidence?.source.height);
+  const selectedDimensions = imageDimensions[imageKey] ?? metadataDimensions;
 
   useEffect(() => {
     if (
@@ -208,8 +296,34 @@ export function ReceiptPagePreview({
     }
   }
 
+  function rotateSelectedPage(delta: -90 | 90) {
+    setRotationByPage((current) => ({
+      ...current,
+      [pageNumber]: (((current[pageNumber] ?? 0) + delta) % 360 + 360) % 360,
+    }));
+  }
+
+  function changeZoom(delta: number) {
+    setZoomByPage((current) => ({
+      ...current,
+      [pageNumber]: Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, (current[pageNumber] ?? 100) + delta)),
+    }));
+  }
+
+  function resetZoom() {
+    setZoomByPage((current) => ({ ...current, [pageNumber]: 100 }));
+  }
+
+  function rememberImageDimensions(width: number, height: number) {
+    setImageDimensions((current) => {
+      const existing = current[imageKey];
+      if (existing?.width === width && existing.height === height) return current;
+      return { ...current, [imageKey]: { width, height } };
+    });
+  }
+
   return (
-    <section aria-label="Receipt page evidence">
+    <section aria-label="Receipt page evidence" className="min-w-0">
       {pageCount > 1 ? (
         <div className="mb-3">
           <div
@@ -275,51 +389,109 @@ export function ReceiptPagePreview({
         </div>
       ) : null}
 
-      <div id="receipt-page-panel" role="tabpanel" aria-label={pageLabel} tabIndex={0}>
-        {evidence?.derived ? (
-          <div className="mb-2 flex flex-wrap gap-2" role="group" aria-label={`Image version for page ${selectedPage + 1}`}>
-            <button
-              type="button"
-              aria-pressed={selectedVariant === "source"}
-              onClick={showSource}
-              className={`tap-inline rounded-lg px-3 py-2 text-xs font-semibold transition ${
-                selectedVariant === "source"
-                  ? "bg-brand-700 text-white"
-                  : "bg-paper-100 text-ink-600 hover:bg-paper-200"
-              }`}
-            >
-              {evidence.source.label}
-            </button>
-            <button
-              type="button"
-              aria-pressed={selectedVariant === "derived"}
-              onClick={showDerived}
-              disabled={derivedLoading}
-              className={`tap-inline rounded-lg px-3 py-2 text-xs font-semibold transition disabled:opacity-60 ${
-                selectedVariant === "derived"
-                  ? "bg-brand-700 text-white"
-                  : "bg-paper-100 text-ink-600 hover:bg-paper-200"
-              }`}
-            >
-              {derivedLoading ? "Loading adjusted copy…" : evidence.derived.label}
-            </button>
-          </div>
-        ) : null}
+      <div id="receipt-page-panel" role="tabpanel" aria-label={pageLabel} tabIndex={0} className="min-w-0">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          {evidence?.derived ? (
+            <div className="flex flex-wrap gap-2" role="group" aria-label={`Image version for page ${selectedPage + 1}`}>
+              <button
+                type="button"
+                aria-pressed={selectedVariant === "source"}
+                onClick={showSource}
+                className={`tap-inline min-h-tap rounded-lg px-3 py-2 text-xs font-semibold transition ${
+                  selectedVariant === "source"
+                    ? "bg-brand-700 text-white"
+                    : "bg-paper-100 text-ink-600 hover:bg-paper-200"
+                }`}
+              >
+                {evidence.source.label}
+              </button>
+              <button
+                type="button"
+                aria-pressed={selectedVariant === "derived"}
+                onClick={showDerived}
+                disabled={derivedLoading}
+                className={`tap-inline min-h-tap rounded-lg px-3 py-2 text-xs font-semibold transition disabled:opacity-60 ${
+                  selectedVariant === "derived"
+                    ? "bg-brand-700 text-white"
+                    : "bg-paper-100 text-ink-600 hover:bg-paper-200"
+                }`}
+              >
+                {derivedLoading ? "Loading adjusted copy…" : evidence.derived.label}
+              </button>
+            </div>
+          ) : <span />}
+          {selectedUrl ? (
+            <div className="flex flex-wrap items-center gap-1" role="group" aria-label={`Controls for ${pageLabel.toLowerCase()}`}>
+              <button
+                type="button"
+                onClick={() => changeZoom(-ZOOM_STEP)}
+                disabled={selectedZoom <= MIN_ZOOM}
+                className="tap-inline min-h-tap rounded-lg px-3 py-2 text-xs font-semibold text-ink-600 transition hover:bg-paper-100 hover:text-ink-900 disabled:opacity-40"
+              >
+                Zoom out
+              </button>
+              <button
+                type="button"
+                onClick={resetZoom}
+                aria-label={`Reset receipt zoom to 100 percent. Current zoom ${selectedZoom} percent.`}
+                className="tap-inline min-h-tap min-w-16 rounded-lg px-2 py-2 text-xs font-semibold tabular-nums text-ink-600 transition hover:bg-paper-100 hover:text-ink-900"
+              >
+                {selectedZoom}%
+              </button>
+              <button
+                type="button"
+                onClick={() => changeZoom(ZOOM_STEP)}
+                disabled={selectedZoom >= MAX_ZOOM}
+                className="tap-inline min-h-tap rounded-lg px-3 py-2 text-xs font-semibold text-ink-600 transition hover:bg-paper-100 hover:text-ink-900 disabled:opacity-40"
+              >
+                Zoom in
+              </button>
+              <button
+                type="button"
+                onClick={() => rotateSelectedPage(-90)}
+                className="tap-inline min-h-tap rounded-lg px-3 py-2 text-xs font-semibold text-ink-600 transition hover:bg-paper-100 hover:text-ink-900"
+              >
+                Rotate left
+              </button>
+              <button
+                type="button"
+                onClick={() => rotateSelectedPage(90)}
+                className="tap-inline min-h-tap rounded-lg px-3 py-2 text-xs font-semibold text-ink-600 transition hover:bg-paper-100 hover:text-ink-900"
+              >
+                Rotate right
+              </button>
+              <button
+                type="button"
+                onClick={() => zoomRef.current?.showModal()}
+                aria-label={`Enlarge ${variantLabel.toLowerCase()}, receipt ${pageLabel.toLowerCase()}`}
+                className="tap-inline min-h-tap rounded-lg px-3 py-2 text-xs font-semibold text-tone-brand transition hover:bg-tint-brand"
+              >
+                Enlarge
+              </button>
+            </div>
+          ) : null}
+          <span className="sr-only" aria-live="polite">
+            {pageLabel} orientation: {selectedRotation} degrees. Zoom: {selectedZoom} percent.
+          </span>
+        </div>
 
         {selectedUrl ? (
-          <button
-            type="button"
-            onClick={() => zoomRef.current?.showModal()}
-            className="block w-full cursor-zoom-in overflow-hidden rounded-xl border border-paper-200 bg-paper-100"
-            aria-label={`Enlarge ${variantLabel.toLowerCase()}, receipt ${pageLabel.toLowerCase()}`}
+          <div
+            role="region"
+            tabIndex={0}
+            aria-label={`Scrollable ${variantLabel.toLowerCase()}, receipt ${pageLabel.toLowerCase()}`}
+            className="scroll-slim max-h-[70vh] min-h-52 w-full touch-auto overflow-auto rounded-xl border border-paper-200 bg-paper-100 p-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
           >
-            <img
-              src={selectedUrl}
+            <ReceiptImageCanvas
+              url={selectedUrl}
               alt={`${variantLabel}, receipt ${pageLabel.toLowerCase()}`}
+              rotation={selectedRotation}
+              zoom={selectedZoom}
+              imageDimensions={selectedDimensions}
+              onDimensions={rememberImageDimensions}
               onError={handleSelectedImageError}
-              className="mx-auto max-h-[70vh] w-full object-contain"
             />
-          </button>
+          </div>
         ) : (
           <div className="flex min-h-52 items-center justify-center rounded-xl border border-paper-200 bg-paper-100 p-4 text-center text-sm text-ink-600">
             {sourceLoadingPage === pageNumber ? (
@@ -364,7 +536,7 @@ export function ReceiptPagePreview({
             {processingNote(evidence, pageProcessing?.[selectedPage])}
           </p>
           {derivedError ? <p className="w-full font-medium text-tone-danger" role="alert">{derivedError}</p> : null}
-          <p className="w-full text-ink-500">Select the photo to enlarge it.</p>
+          <p className="w-full text-ink-500">Use the zoom controls or Enlarge to inspect small print.</p>
         </div>
       </div>
 
@@ -374,22 +546,63 @@ export function ReceiptPagePreview({
           onClick={(event) => {
             if (event.target === event.currentTarget) zoomRef.current?.close();
           }}
-          className="confirm-dialog max-h-[92vh] w-[min(60rem,calc(100vw-2rem))] rounded-2xl border border-paper-200 bg-paper p-2"
+          className="confirm-dialog max-h-[92vh] w-[min(60rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-paper-200 bg-paper p-3"
           aria-label={`Enlarged ${variantLabel.toLowerCase()}, receipt ${pageLabel.toLowerCase()}`}
         >
-          <img
-            src={selectedUrl}
-            alt={`${variantLabel}, receipt ${pageLabel.toLowerCase()}, enlarged`}
-            onError={handleSelectedImageError}
-            className="w-full object-contain"
-          />
-          <button
-            type="button"
-            onClick={() => zoomRef.current?.close()}
-            className="tap-inline mx-auto mt-2 block rounded-lg px-3 py-2 text-sm font-semibold text-tone-brand hover:bg-tint-brand"
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-ink-800">
+              {pageLabel} at {selectedZoom}%
+            </p>
+            <div className="flex items-center gap-1" role="group" aria-label="Enlarged receipt zoom">
+              <button
+                type="button"
+                onClick={() => changeZoom(-ZOOM_STEP)}
+                disabled={selectedZoom <= MIN_ZOOM}
+                className="tap-inline min-h-tap rounded-lg px-3 py-2 text-xs font-semibold text-ink-600 transition hover:bg-paper-100 disabled:opacity-40"
+              >
+                Zoom out
+              </button>
+              <button
+                type="button"
+                onClick={resetZoom}
+                aria-label={`Reset enlarged receipt zoom to 100 percent. Current zoom ${selectedZoom} percent.`}
+                className="tap-inline min-h-tap min-w-16 rounded-lg px-2 py-2 text-xs font-semibold tabular-nums text-ink-600 transition hover:bg-paper-100"
+              >
+                {selectedZoom}%
+              </button>
+              <button
+                type="button"
+                onClick={() => changeZoom(ZOOM_STEP)}
+                disabled={selectedZoom >= MAX_ZOOM}
+                className="tap-inline min-h-tap rounded-lg px-3 py-2 text-xs font-semibold text-ink-600 transition hover:bg-paper-100 disabled:opacity-40"
+              >
+                Zoom in
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => zoomRef.current?.close()}
+              className="tap-inline rounded-lg px-3 py-2 text-sm font-semibold text-tone-brand hover:bg-tint-brand"
+            >
+              Close enlarged page
+            </button>
+          </div>
+          <div
+            role="region"
+            tabIndex={0}
+            aria-label={`Scrollable enlarged ${variantLabel.toLowerCase()}, receipt ${pageLabel.toLowerCase()}`}
+            className="scroll-slim max-h-[calc(92vh-5.5rem)] min-h-52 touch-auto overflow-auto rounded-xl bg-paper-100 p-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
           >
-            Close enlarged page
-          </button>
+            <ReceiptImageCanvas
+              url={selectedUrl}
+              alt={`${variantLabel}, receipt ${pageLabel.toLowerCase()}, enlarged`}
+              rotation={selectedRotation}
+              zoom={selectedZoom}
+              imageDimensions={selectedDimensions}
+              onDimensions={rememberImageDimensions}
+              onError={handleSelectedImageError}
+            />
+          </div>
         </dialog>
       ) : null}
     </section>

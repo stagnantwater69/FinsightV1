@@ -33,6 +33,7 @@ export function ScannedField({
       required={required}
       optional={optional}
       labelAction={<OriginChip origin={origin} />}
+      wrapLabelAction
       hint={
         attention || evidence ? (
           <>

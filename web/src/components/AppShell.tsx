@@ -413,7 +413,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               >
                 <span aria-hidden className="relative flex h-11 w-11 items-center justify-center">
                   <span className="absolute inset-0 flex items-center justify-center rounded-xl opacity-100 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0">
-                    <img src="/finsight-logo.png" alt="" className="h-11 w-11 rounded-xl object-contain" />
+                    <img src="/newmascotlogo.png" alt="" className="h-11 w-11 rounded-xl object-contain" />
                   </span>
                   <span className="absolute inset-0 flex items-center justify-center rounded-xl bg-sidebar-fg/15 text-sidebar-muted opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
                     <IconSidebar className="h-5 w-5" />
@@ -429,7 +429,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               aria-label="FinSight home"
             >
               <img
-                src="/finsight-logo.png"
+                src="/newmascotlogo.png"
                 alt=""
                 aria-hidden
                 className="h-11 w-11 shrink-0 rounded-xl object-contain"
@@ -632,7 +632,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               className="flex shrink-0 items-center lg:hidden"
               aria-label="FinSight home"
             >
-              <img src="/finsight-logo.png" alt="" aria-hidden className="h-10 w-10 rounded-lg object-contain" />
+              <img src="/newmascotlogo.png" alt="" aria-hidden className="h-10 w-10 rounded-lg object-contain" />
             </Link>
 
             {/* ---- global search ----

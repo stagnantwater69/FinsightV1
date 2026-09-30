@@ -1,4 +1,5 @@
 import { SkeletonLine } from "../../components/Skeleton";
+import { IconCheck } from "../../components/icons";
 import { SCAN_STAGES, STAGE_LABELS } from "./constants";
 import type { ScanStage } from "./types";
 
@@ -32,13 +33,13 @@ export function ScanProgress({ stage }: { stage: ScanStage }) {
                       : "bg-paper-200 text-ink-400"
                 }`}
               >
-                {done ? "✓" : i + 1}
+                {done ? <IconCheck className="h-3 w-3" /> : i + 1}
               </span>
               <span className={done ? "text-ink-600" : active ? "font-medium text-ink-800" : "text-ink-600"}>
                 {STAGE_LABELS[s]}
               </span>
               <span className="sr-only">
-                {done ? " — done" : active ? " — in progress" : " — waiting"}
+                {done ? ", done" : active ? ", in progress" : ", waiting"}
               </span>
             </li>
           );

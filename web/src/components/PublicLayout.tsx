@@ -43,7 +43,7 @@ function Brand({ size = "md" }: { size?: "sm" | "md" }) {
   const text = size === "sm" ? "text-base" : "text-lg";
   return (
     <span className="flex items-center gap-2.5">
-      <img src="/finsight-logo.png" alt="" aria-hidden className={`rounded-xl object-contain shadow-sm ${box}`} />
+      <img src="/newmascotlogo.png" alt="" aria-hidden className={`rounded-xl object-contain ${box}`} />
       <Wordmark className={`text-landing-charcoal ${text}`} />
     </span>
   );

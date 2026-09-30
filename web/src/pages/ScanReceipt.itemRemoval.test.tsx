@@ -41,6 +41,14 @@ const base: ReceiptScanResult = {
   extractedDescription: "Paper supplies", extractedVendor: "Paper shop", extractedAmount: 500,
   items: [], ocrConfidence: 98,
 };
+const noDuplicateCandidates = {
+  sourceFingerprint: null,
+  candidateSetHash: null,
+  candidateCount: 0,
+  candidatesTruncated: false,
+  candidates: [],
+  nextCursor: null,
+};
 
 const itemised: ReceiptScanResult = {
   ...base,
@@ -66,7 +74,7 @@ async function openReview(user: ReturnType<typeof userEvent.setup>) {
   render(page());
   await user.upload(screen.getByLabelText(/Receipt photo/), photo());
   await user.click(screen.getByRole("button", { name: "Scan receipt" }));
-  await screen.findByRole("heading", { name: "Check what FinSight read" });
+  await screen.findByRole("heading", { name: "Review receipt" });
 }
 
 beforeEach(() => {
@@ -81,6 +89,8 @@ beforeEach(() => {
   mocks.get.mockImplementation(async (url: string) =>
     url === "/records/receipts"
       ? { data: { items: [], nextCursor: null } }
+      : url === "/records/receipts/10/duplicate-candidates"
+      ? { data: noDuplicateCandidates }
       : url.startsWith("/records/receipts/provider-consent/")
       ? { data: { available: false, provider: null, consent: null, activeConsents: [] } }
       : { data: itemised },
@@ -97,6 +107,30 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe("removing a scanned item", () => {
+  it("keeps every scanned-item removal control at least 44 pixels in both dimensions", async () => {
+    const user = userEvent.setup();
+    await openReview(user);
+
+    for (const item of itemised.items) {
+      expect(screen.getByRole("button", { name: new RegExp(`Remove ${item.name}`) }))
+        .toHaveClass("h-11", "w-11");
+    }
+  });
+
+  it("keeps the owner-added item removal control at least 44 pixels in both dimensions", async () => {
+    const user = userEvent.setup();
+    const itemisedWithGap = { ...itemised, extractedAmount: 550 };
+    mocks.post.mockImplementation(async (url: string) => (
+      url.endsWith("/confirm") ? { data: [{ id: 501 }] } : { data: itemisedWithGap }
+    ));
+    await openReview(user);
+
+    await user.click(screen.getByRole("button", { name: /Add a missing item to the list/ }));
+
+    expect(screen.getByRole("button", { name: "Remove added item 1" }))
+      .toHaveClass("h-11", "w-11");
+  });
+
   it("asks before deleting, and deletes nothing when the owner backs out", async () => {
     const user = userEvent.setup();
     mocks.confirm.mockResolvedValue(false);
@@ -177,5 +211,37 @@ describe("removing a scanned item", () => {
     await user.click(remove);
 
     await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText(/^Amount/)));
+  });
+});
+
+describe("an item that may repeat across overlapping photos", () => {
+  const flagged: ReceiptScanResult = {
+    ...itemised,
+    items: [
+      itemised.items[0]!,
+      { ...itemised.items[1]!, possibleRepeatOf: { pageNumber: 1, name: "Pens", amount: 200 } },
+      { ...itemised.items[2]!, possibleRepeatOf: { pageNumber: 1, name: "Ink", amount: 100 } },
+    ],
+  };
+
+  beforeEach(() => {
+    mocks.post.mockImplementation(async (url: string) => (url.endsWith("/confirm") ? { data: [{ id: 501 }] } : { data: flagged }));
+    mocks.delete.mockResolvedValue({ data: { ...flagged, scanRevision: 4, items: [flagged.items[0]!, flagged.items[1]!] } });
+  });
+
+  it("says which page repeats it and lets the owner keep both or remove the repeat", async () => {
+    const user = userEvent.setup();
+    await openReview(user);
+
+    expect(screen.getByText(/page 1 also shows\s+Ink for PHP 100.00/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Keep Pens, it is a separate purchase" }));
+    expect(screen.queryByRole("button", { name: "Keep Pens, it is a separate purchase" })).toBeNull();
+    expect(mocks.delete).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Remove Ink, it repeats page 1" }));
+    expect(mocks.confirm).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mocks.delete).toHaveBeenCalledTimes(1));
+    expect(mocks.delete.mock.calls[0]![0]).toContain("/records/receipts/10/items/43");
+    await waitFor(() => expect(screen.queryByText("Ink")).toBeNull());
   });
 });

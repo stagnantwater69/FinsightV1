@@ -30,6 +30,14 @@ const receipt: ReceiptScanResult = {
   id: 10, scanRevision: 0, processingStatus: "Complete", extractedDate: "2026-09-01", extractedDescription: "Paper supplies",
   extractedVendor: "Paper shop", extractedAmount: 500, items: [], ocrConfidence: 98,
 };
+const noDuplicateCandidates = {
+  sourceFingerprint: null,
+  candidateSetHash: null,
+  candidateCount: 0,
+  candidatesTruncated: false,
+  candidates: [],
+  nextCursor: null,
+};
 const photo = () => new File(["receipt image"], "receipt.png", { type: "image/png" });
 function page() { return <MemoryRouter><ScanReceipt /></MemoryRouter>; }
 
@@ -81,6 +89,9 @@ beforeEach(() => {
   history = () => ({ items: [], nextCursor: null });
   mocks.get.mockImplementation(async (url: string, config?: { params?: HistoryParams }) => {
     if (url === "/records/receipts") return { data: await history(config!.params!) };
+    if (/\/records\/receipts\/\d+\/duplicate-candidates$/.test(url)) {
+      return { data: noDuplicateCandidates };
+    }
     if (url.startsWith("/records/receipts/provider-consent/")) {
       return { data: { available: false, provider: null, consent: null, activeConsents: [] } };
     }
@@ -219,7 +230,7 @@ describe("abandoned scans enter recovery history (P2-11)", () => {
   async function scanAndAbandon(user: ReturnType<typeof userEvent.setup>) {
     await user.upload(screen.getByLabelText(/Receipt photo/), photo());
     await user.click(screen.getByRole("button", { name: "Scan receipt" }));
-    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await screen.findByRole("heading", { name: "Review receipt" });
     await user.click(screen.getByRole("button", { name: "Choose another image" }));
     await screen.findByRole("heading", { name: "Scan a receipt" });
   }
@@ -416,7 +427,7 @@ describe("round 3: stop waiting, delete races, and focus", () => {
     await screen.findByText("Older shop");
     await user.upload(screen.getByLabelText(/Receipt photo/), photo());
     await user.click(screen.getByRole("button", { name: "Scan receipt" }));
-    await screen.findByRole("heading", { name: "Check what FinSight read" });
+    await screen.findByRole("heading", { name: "Review receipt" });
     await user.click(screen.getByRole("button", { name: "Choose another image" }));
     await screen.findByRole("heading", { name: "Scan a receipt" });
     expect(rowTitles()).toEqual(["Paper shop", "Older shop"]);

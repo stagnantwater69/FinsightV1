@@ -91,7 +91,7 @@ export function Notifications() {
           list that is usually short, and the type is already legible on every
           row — "have I dealt with this?" is the only question worth a filter. */}
       <div
-        role="tablist"
+        role="group"
         aria-label="Filter notifications"
         className="mb-4 flex w-max gap-1 rounded-xl border border-paper-200 bg-paper-100 p-1"
       >
@@ -100,18 +100,17 @@ export function Notifications() {
             { key: "all", label: `All${notifications.length ? ` (${notifications.length})` : ""}` },
             { key: "unread", label: `Unread${unreadCount ? ` (${unreadCount})` : ""}` },
           ] as const
-        ).map((tab) => (
+        ).map((option) => (
           <button
-            key={tab.key}
+            key={option.key}
             type="button"
-            role="tab"
-            aria-selected={filter === tab.key}
-            onClick={() => setFilter(tab.key)}
+            aria-pressed={filter === option.key}
+            onClick={() => setFilter(option.key)}
             className={`flex min-h-tap items-center whitespace-nowrap rounded-lg px-4 text-[13.5px] font-semibold transition ${
-              filter === tab.key ? "bg-paper text-brand-800 shadow-sm" : "text-ink-500 hover:text-brand-800"
+              filter === option.key ? "bg-paper text-brand-800 shadow-sm" : "text-ink-500 hover:text-brand-800"
             }`}
           >
-            {tab.label}
+            {option.label}
           </button>
         ))}
       </div>

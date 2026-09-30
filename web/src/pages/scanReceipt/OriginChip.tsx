@@ -6,10 +6,10 @@ export function OriginChip({ origin }: { origin: Origin }) {
   if (!spec) return null;
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ${spec.tone}`}
+      className={`inline-flex max-w-full items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ${spec.tone}`}
     >
-      <span aria-hidden>{origin === "missing" ? "⚠" : "✦"}</span>
-      {spec.label}
+      <span aria-hidden className="shrink-0">{origin === "missing" ? "⚠" : "✦"}</span>
+      <span className="min-w-0 break-words">{spec.label}</span>
     </span>
   );
 }

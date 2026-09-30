@@ -36,7 +36,10 @@ it.each([
   const onChange = vi.fn();
   render(<ControlledInput onChange={onChange} />);
   await user.upload(document.getElementById("files") as HTMLInputElement, file);
-  expect(screen.getByRole("alert")).toHaveTextContent(message);
+  const alert = screen.getByRole("alert");
+  expect(alert).toHaveTextContent(message);
+  expect(alert.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+  expect(alert).not.toHaveTextContent("⚠");
   expect(screen.getByText(file.name)).toBeVisible();
   expect(screen.getByRole("button", { name: "Remove page 1" })).toBeEnabled();
   expect(onChange).toHaveBeenCalledWith([file]);
@@ -58,6 +61,45 @@ it("suppresses drops while disabled", () => {
   render(<MultiFileInput id="files" files={[file]} onChange={onChange} disabled />);
   fireEvent.drop(screen.getByText("Add more photos").closest("label")!, { dataTransfer: { files: [new File(["new"], "other.png", { type: "image/png" })] } });
   expect(onChange).not.toHaveBeenCalled();
+});
+
+it("uses a compact selected-file picker while keeping every thumbnail action at the tap-target minimum", () => {
+  const files = [
+    new File(["first"], "first.png", { type: "image/png", lastModified: 41 }),
+    new File(["second"], "second.png", { type: "image/png", lastModified: 42 }),
+  ];
+
+  render(<ControlledInput initial={files} />);
+
+  const picker = screen.getByText("Add more photos").closest("label");
+  expect(picker).toHaveClass("min-h-tap", "sm:flex-row");
+  expect(picker).not.toHaveClass("min-h-56");
+  expect(picker).not.toHaveClass("sm:min-h-40");
+
+  for (const name of [
+    "Remove page 1",
+    "Move page 1 earlier",
+    "Move page 1 later",
+    "Remove page 2",
+    "Move page 2 earlier",
+    "Move page 2 later",
+  ]) {
+    const button = screen.getByRole("button", { name });
+    const classNames = new Set(button.className.split(/\s+/));
+    const usesTapUtility = classNames.has("tap");
+    const hasExplicitMinimum = classNames.has("h-11") && classNames.has("w-11");
+    expect(usesTapUtility || hasExplicitMinimum).toBe(true);
+    expect(button.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+  }
+
+  expect(screen.getByRole("group")).not.toHaveTextContent(/[×↑↓]/);
+});
+
+it("hides meaningless reorder actions when one receipt photo is selected", () => {
+  render(<ControlledInput initial={[new File(["first"], "first.png", { type: "image/png" })]} />);
+
+  expect(screen.getByRole("button", { name: "Remove page 1" }).querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+  expect(screen.queryByRole("button", { name: /Move page 1/ })).not.toBeInTheDocument();
 });
 
 it("keeps the prior valid selection when an added photo exceeds a limit", () => {

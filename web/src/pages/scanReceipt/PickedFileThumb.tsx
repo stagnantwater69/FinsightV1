@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { IconArrowLeft, IconArrowRight, IconTrash } from "../../components/icons";
 
 /**
  * One picked photo, shown as a thumbnail with its own object URL.
@@ -60,36 +61,34 @@ export function PickedFileThumb({
         type="button"
         onClick={onRemove}
         aria-label={`Remove page ${index + 1}`}
-        className="tap absolute right-1 top-1 flex h-6 w-6 min-h-0 min-w-0 items-center justify-center rounded-full bg-paper/90 text-xs font-bold text-ink-600 hover:bg-tint-danger hover:text-tone-danger"
+        className="tap group absolute right-0 top-0 flex h-11 w-11 items-center justify-center rounded-full text-sm font-bold text-ink-600 hover:text-tone-danger"
       >
-        ×
+        <span aria-hidden className="flex h-6 w-6 items-center justify-center rounded-full bg-paper/95 shadow-sm group-hover:bg-tint-danger">
+          <IconTrash className="h-3.5 w-3.5" />
+        </span>
       </button>
-      {/*
-        Reorder by button rather than drag-and-drop. Drag reordering on a
-        touch screen needs a library this app does not otherwise depend on,
-        and up/down buttons are fully keyboard- and screen-reader-operable
-        for free — a real constraint, not a corner cut silently.
-      */}
-      <div className="mt-1 flex justify-center gap-1">
-        <button
-          type="button"
-          onClick={onMoveUp}
-          disabled={index === 0}
-          aria-label={`Move page ${index + 1} earlier`}
-          className="tap-inline flex h-6 w-6 min-h-0 min-w-0 items-center justify-center rounded text-xs text-ink-500 hover:bg-paper-100 disabled:opacity-30"
-        >
-          ↑
-        </button>
-        <button
-          type="button"
-          onClick={onMoveDown}
-          disabled={index === total - 1}
-          aria-label={`Move page ${index + 1} later`}
-          className="tap-inline flex h-6 w-6 min-h-0 min-w-0 items-center justify-center rounded text-xs text-ink-500 hover:bg-paper-100 disabled:opacity-30"
-        >
-          ↓
-        </button>
-      </div>
+      {total > 1 ? (
+        <div className="mt-1 flex justify-center gap-1">
+          <button
+            type="button"
+            onClick={onMoveUp}
+            disabled={index === 0}
+            aria-label={`Move page ${index + 1} earlier`}
+            className="tap-inline flex h-11 w-11 items-center justify-center rounded-lg text-ink-500 hover:bg-paper-100 disabled:opacity-30"
+          >
+            <IconArrowLeft className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={onMoveDown}
+            disabled={index === total - 1}
+            aria-label={`Move page ${index + 1} later`}
+            className="tap-inline flex h-11 w-11 items-center justify-center rounded-lg text-ink-500 hover:bg-paper-100 disabled:opacity-30"
+          >
+            <IconArrowRight className="h-4 w-4" />
+          </button>
+        </div>
+      ) : null}
     </li>
   );
 }

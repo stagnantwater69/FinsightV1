@@ -30,7 +30,7 @@ interface AuthContextValue {
    */
   register: (input: RegisterInput) => Promise<{ message: string }>;
   logout: () => Promise<void>;
-  /** Ends every session on every device, not just this browser's. */
+  /** Revokes every refresh session and clears this browser after confirmation. */
   logoutEverywhere: () => Promise<void>;
   updateProfile: (input: UpdateProfileInput) => Promise<void>;
   uploadAvatar: (file: File) => Promise<void>;
@@ -107,7 +107,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (signedInRef.current) setSessionExpired(true);
       setProfile(null);
       setPreferences(null);
-      void supabase.auth.signOut();
+      void supabase.auth.signOut({ scope: "local" });
     });
     return () => setSessionExpiredHandler(null);
   }, []);
@@ -217,15 +217,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Local scope: this browser only. "Log out everywhere" is a separate,
     // deliberate action — see below.
     await api.post("/auth/logout").catch(() => undefined);
-    await supabase.auth.signOut();
+    await supabase.auth.signOut({ scope: "local" });
     setSessionExpired(false);
     setProfile(null);
     setPreferences(null);
   }
 
   async function logoutEverywhere() {
-    await api.post("/auth/logout-all").catch(() => undefined);
-    await supabase.auth.signOut();
+    // Do not clear this browser until the server confirms remote revocation.
+    await api.post("/auth/logout-all");
+    // Remote revocation is authoritative, so local cleanup is best-effort.
+    await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
     setSessionExpired(false);
     setProfile(null);
     setPreferences(null);

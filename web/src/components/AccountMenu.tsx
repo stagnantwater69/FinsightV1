@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useNotifications } from "../context/NotificationContext";
 import { useTourOptional } from "../context/TourContext";
 import { THEMES, THEME_LABELS, useTheme } from "../context/ThemeContext";
-import { useDismiss, useMenuKeys } from "../lib/hooks";
+import { useDismiss } from "../lib/hooks";
 import { STATUS_TEXT_COLORS } from "../lib/chartPalette";
 import {
   IconBell,
@@ -42,15 +42,31 @@ export function AccountMenu() {
   const navigate = useNavigate();
 
   const [open, setOpen] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
+  const logoutPending = useRef(false);
   const { ref, triggerRef } = useDismiss(open, () => setOpen(false));
-  const onMenuKeys = useMenuKeys();
 
   const fullName = [user?.firstName, user?.lastName].filter(Boolean).join(" ") || "Account";
 
   async function handleLogout() {
-    setOpen(false);
-    await logout();
-    navigate("/login");
+    if (logoutPending.current) return;
+    logoutPending.current = true;
+    setLoggingOut(true);
+    setLogoutError(null);
+    try {
+      await logout();
+      setOpen(false);
+      navigate("/login");
+    } catch {
+      setOpen(true);
+      setLogoutError(
+        "FinSight couldn't log out this browser. You're still signed in here. Try again.",
+      );
+    } finally {
+      logoutPending.current = false;
+      setLoggingOut(false);
+    }
   }
 
   const item =
@@ -63,7 +79,7 @@ export function AccountMenu() {
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        aria-haspopup="menu"
+        aria-haspopup="dialog"
         className="tap gap-2 rounded-xl px-1.5 py-1 text-left transition hover:bg-paper-100"
       >
         <span
@@ -88,9 +104,8 @@ export function AccountMenu() {
 
       {open ? (
         <div
-          role="menu"
+          role="dialog"
           aria-label="Account"
-          onKeyDown={onMenuKeys}
           className="absolute right-0 top-full z-50 mt-2 w-64 max-w-[calc(100vw-1.5rem)] animate-pop-down rounded-2xl border border-paper-200 bg-paper p-1.5 shadow-lg"
         >
           {/* Identity header — confirms WHICH account, which matters as soon
@@ -109,15 +124,15 @@ export function AccountMenu() {
           </div>
 
           <div className="pt-1.5">
-            <Link to="/profile" role="menuitem" onClick={() => setOpen(false)} className={item}>
+            <Link to="/profile" onClick={() => setOpen(false)} className={item}>
               <IconProfile aria-hidden className="h-4 w-4 shrink-0 text-ink-400" />
               My profile
             </Link>
-            <Link to="/account-settings" role="menuitem" onClick={() => setOpen(false)} className={item}>
+            <Link to="/account-settings" onClick={() => setOpen(false)} className={item}>
               <IconSettings aria-hidden className="h-4 w-4 shrink-0 text-ink-400" />
               Account settings
             </Link>
-            <Link to="/notifications" role="menuitem" onClick={() => setOpen(false)} className={item}>
+            <Link to="/notifications" onClick={() => setOpen(false)} className={item}>
               <IconBell aria-hidden className="h-4 w-4 shrink-0 text-ink-400" />
               Notifications
               {unreadCount > 0 ? (
@@ -129,7 +144,7 @@ export function AccountMenu() {
                 </span>
               ) : null}
             </Link>
-            <Link to="/business-profiles" role="menuitem" onClick={() => setOpen(false)} className={item}>
+            <Link to="/business-profiles" onClick={() => setOpen(false)} className={item}>
               <IconBusiness aria-hidden className="h-4 w-4 shrink-0 text-ink-400" />
               Business profiles
             </Link>
@@ -175,7 +190,6 @@ export function AccountMenu() {
             {tour ? (
               <button
                 type="button"
-                role="menuitem"
                 disabled={!tour.available}
                 title={tour.available ? undefined : "Add a business first — the tour walks through your dashboard."}
                 onClick={() => {
@@ -193,16 +207,25 @@ export function AccountMenu() {
             ) : null}
             <a
               href="mailto:support@finsight.app?subject=FinSight%20help"
-              role="menuitem"
               onClick={() => setOpen(false)}
               className={item}
             >
               <IconHelp aria-hidden className="h-4 w-4 shrink-0 text-ink-400" />
               Help &amp; support
             </a>
-            <button type="button" role="menuitem" onClick={handleLogout} className={item}>
+            {logoutError ? (
+              <p role="alert" className="mx-2.5 my-1.5 text-xs leading-relaxed text-tone-danger">
+                {logoutError}
+              </p>
+            ) : null}
+            <button
+              type="button"
+              disabled={loggingOut}
+              onClick={() => void handleLogout()}
+              className={`${item} disabled:cursor-not-allowed disabled:opacity-60`}
+            >
               <IconLogout aria-hidden className="h-4 w-4 shrink-0 text-ink-400" />
-              Log out
+              {loggingOut ? "Logging out…" : "Log out"}
             </button>
           </div>
         </div>

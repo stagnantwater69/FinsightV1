@@ -138,14 +138,26 @@ export function CategorySelect({ value, onChange, id, onBlur }: Props) {
       </option>
       {recent.length > 0 ? (
         <optgroup label="Recently used">
-          {recent.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+          {recent.map((category) => <option key={category.id} value={category.id}>{category.name}{category.kind === "personal" ? " (Personal)" : ""}</option>)}
         </optgroup>
       ) : null}
-      {categories.filter((category) => !recentCategoryIds.includes(category.id)).map((c) => (
-        <option key={c.id} value={c.id}>
-          {c.name}
-        </option>
-      ))}
+      {/*
+        Personal categories are grouped under their own heading once a
+        business has any, so a household purchase is never filed as a business
+        cost by a slip of the list. A business with none sees one flat list.
+      */}
+      {(() => {
+        const rest = categories.filter((category) => !recentCategoryIds.includes(category.id));
+        const personal = rest.filter((category) => category.kind === "personal");
+        const option = (c: { id: number; name: string }) => <option key={c.id} value={c.id}>{c.name}</option>;
+        if (personal.length === 0) return rest.map(option);
+        return (
+          <>
+            <optgroup label="Business">{rest.filter((category) => category.kind !== "personal").map(option)}</optgroup>
+            <optgroup label="Personal">{personal.map(option)}</optgroup>
+          </>
+        );
+      })()}
       {/*
         A placeholder for a value this list doesn't contain.
 
@@ -157,7 +169,7 @@ export function CategorySelect({ value, onChange, id, onBlur }: Props) {
         resolved, it has to say so rather than name a different one.
       */}
       {value !== "" && !loading && !categories.some((c) => c.id === value) ? (
-        <option value={value}>Category unavailable — please choose</option>
+        <option value={value}>Category unavailable. Please choose</option>
       ) : null}
       <option value="__new__">+ New category…</option>
     </SelectInput>

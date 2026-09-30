@@ -54,7 +54,16 @@ describe("getErrorMessage", () => {
    * lie. It falls through to the generic message instead.
    */
   it("does not claim unreachability for a server that answered", () => {
-    expect(getErrorMessage(withResponse(500, {}))).not.toMatch(/couldn't reach/i);
+    expect(getErrorMessage(withResponse(500, {}))).toBe(
+      "FinSight is temporarily unavailable. Please try again in a moment.",
+    );
+  });
+
+  it("does not expose gateway or Axios wording when a proxy answers without JSON", () => {
+    const message = getErrorMessage(withResponse(502, ""));
+
+    expect(message).toBe("FinSight is temporarily unavailable. Please try again in a moment.");
+    expect(message).not.toMatch(/request failed|status code|502/i);
   });
 
   it("passes ordinary errors through", () => {

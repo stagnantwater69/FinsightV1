@@ -24,8 +24,13 @@ export function FileSelectStage({
   const heading = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (totalRows !== undefined) heading.current?.focus();
-  }, [totalRows]);
+    heading.current?.focus();
+  }, []);
+
+  function removeSelectedFile() {
+    onSelectFile(null);
+    window.setTimeout(() => document.getElementById("csv-file")?.focus(), 0);
+  }
 
   return (
     <div>
@@ -59,10 +64,13 @@ export function FileSelectStage({
 
           {file ? (
             <div className="mt-4">
+              <p role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+                Selected file: {file.name}
+              </p>
               <CsvFileSummary
                 file={file}
                 totalRows={totalRows}
-                onChange={() => onSelectFile(null)}
+                onChange={removeSelectedFile}
                 disabled={previewing}
                 actionLabel="Remove file"
               />

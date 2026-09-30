@@ -112,6 +112,8 @@ export interface ExpenseCategory {
   createdAt: string;
   /** Optional everywhere — omitted/undefined reads the same as "UNCLASSIFIED". */
   costBehavior?: ExpenseCostBehavior;
+  /** Business or personal spending, read by the server from the name. Absent means business. */
+  kind?: "business" | "personal";
 }
 
 export type ReviewStatus = "Reviewed" | "Needs Review";
