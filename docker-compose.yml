@@ -24,6 +24,10 @@ services:
       - "4000"
     environment:
       RECEIPT_UPLOAD_TEMP_ROOT: /run/finsight/receipt-uploads
+      # Prisma pool per process (see backend/src/config/prisma.ts). The
+      # three services' sum (8 + 3 + 4) should stay within the Supabase pooler's pool size
+      # (Dashboard → Database → Connection pooling).
+      DATABASE_POOL_SIZE: "8"
     # One owner can have one full upload and one retry in flight. 192 MiB
     # holds those two 80 MiB aggregates plus filesystem overhead, then fails
     # closed instead of consuming the host disk. This is container-private
@@ -68,6 +72,7 @@ services:
     env_file: ./backend/.env
     environment:
       WORKER_LANES: receipt
+      DATABASE_POOL_SIZE: "3"
       RECEIPT_WORKER_HEALTH_DIR: /run/finsight/receipt-worker-health
     tmpfs:
       - /run/finsight/receipt-worker-health:rw,noexec,nosuid,nodev,size=1048576,mode=0700,uid=1000,gid=1000
@@ -83,6 +88,7 @@ services:
     env_file: ./backend/.env
     environment:
       WORKER_LANES: csv,analysis,maintenance
+      DATABASE_POOL_SIZE: "4"
       RECEIPT_WORKER_HEALTH_DIR: /run/finsight/jobs-worker-health
     tmpfs:
       - /run/finsight/jobs-worker-health:rw,noexec,nosuid,nodev,size=1048576,mode=0700,uid=1000,gid=1000
