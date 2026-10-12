@@ -112,6 +112,8 @@ export interface ConfirmSharedInput {
   vendor?: string;
   /** The receipt's total, as read and confirmed by the owner. */
   amount: number;
+  includedInAvailableFundsBaseline?: boolean;
+  availableFundsBaselineAt?: string;
 }
 
 /**

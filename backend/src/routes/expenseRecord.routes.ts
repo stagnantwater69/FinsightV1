@@ -1,11 +1,13 @@
 import { Router } from "express";
 import * as expenseRecordController from "../controllers/expenseRecord.controller";
 import { requireAuth } from "../middleware/auth.middleware";
+import { limitAuthenticatedWrites } from "../middleware/rateLimit.middleware";
 import { asyncHandler } from "../lib/asyncHandler";
 
 export const expenseRecordRouter = Router();
 
 expenseRecordRouter.use(requireAuth);
+expenseRecordRouter.use(limitAuthenticatedWrites);
 
 expenseRecordRouter.post("/", asyncHandler(expenseRecordController.create));
 expenseRecordRouter.get("/:id", asyncHandler(expenseRecordController.getOne));

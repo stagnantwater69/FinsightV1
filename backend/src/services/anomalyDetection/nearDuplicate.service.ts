@@ -3,6 +3,11 @@ import { prisma } from "../../config/prisma";
 import { utcAddDays, utcEndOfDay } from "../../lib/dates";
 import { DEFAULT_DETECTION_CONFIG, type DetectionConfig } from "./config";
 import { saveFinding } from "./finding.service";
+import {
+  runAnalysisMutation,
+  type AnalysisMutationGuard,
+  type AnalysisWriteClient,
+} from "./mutationGuard";
 
 export const NEAR_DUPLICATE_VERSION = "near-duplicate-v1";
 export const NEAR_DUPLICATE_REVIEW_THRESHOLD = 0.75;
@@ -98,8 +103,12 @@ export function scoreNearDuplicate(candidate: DuplicateComparable, existing: Dup
   };
 }
 
-async function supersedePreviousFindings(expenseRecordId: number, exceptFingerprint?: string) {
-  await prisma.anomalyFinding.updateMany({
+async function supersedePreviousFindings(
+  db: AnalysisWriteClient,
+  expenseRecordId: number,
+  exceptFingerprint?: string,
+) {
+  await db.anomalyFinding.updateMany({
     where: {
       expenseRecordId,
       type: AnomalyFindingType.POSSIBLE_DUPLICATE,
@@ -119,6 +128,7 @@ async function supersedePreviousFindings(expenseRecordId: number, exceptFingerpr
 export async function detectNearDuplicateForExpense(
   expenseRecordId: number,
   config: DetectionConfig = DEFAULT_DETECTION_CONFIG,
+  mutate: AnalysisMutationGuard = runAnalysisMutation,
 ) {
   if (!config.featureFlags.nearDuplicate) return null;
 
@@ -127,7 +137,7 @@ export async function detectNearDuplicateForExpense(
 
   // The exact matcher has already produced a stronger, deterministic result.
   if (candidate.duplicateStatus === "Flagged") {
-    await supersedePreviousFindings(candidate.id);
+    await mutate((db) => supersedePreviousFindings(db, candidate.id));
     return null;
   }
 
@@ -152,7 +162,7 @@ export async function detectNearDuplicateForExpense(
     .sort((left, right) => right.result.score - left.result.score || left.record.id - right.record.id);
   const best = scored[0];
   if (!best || best.result.score < NEAR_DUPLICATE_REVIEW_THRESHOLD) {
-    await supersedePreviousFindings(candidate.id);
+    await mutate((db) => supersedePreviousFindings(db, candidate.id));
     return null;
   }
 
@@ -164,29 +174,31 @@ export async function detectNearDuplicateForExpense(
   if (best.result.dateDistanceDays <= 1) reasons.push("The transactions were recorded within one day of each other");
   if (best.result.categorySimilarity === 1) reasons.push("Both transactions use the same category");
 
-  const finding = await saveFinding({
-    fingerprint,
-    businessProfileId: candidate.businessProfileId,
-    expenseRecordId: candidate.id,
-    type: AnomalyFindingType.POSSIBLE_DUPLICATE,
-    severity:
-      best.result.score >= NEAR_DUPLICATE_HIGH_THRESHOLD
-        ? AnomalyFindingSeverity.HIGH
-        : AnomalyFindingSeverity.MEDIUM,
-    score: best.result.score,
-    method: "near-duplicate",
-    title: "Possible similar expense",
-    reasons,
-    metadata: {
-      matchedExpenseRecordId: best.record.id,
-      amountSimilarity: best.result.amountSimilarity,
-      vendorSimilarity: best.result.vendorSimilarity,
-      descriptionSimilarity: best.result.descriptionSimilarity,
-      dateSimilarity: best.result.dateSimilarity,
-      dateDistanceDays: best.result.dateDistanceDays,
-    },
-    detectorVersion: NEAR_DUPLICATE_VERSION,
+  return mutate(async (db) => {
+    const finding = await saveFinding({
+      fingerprint,
+      businessProfileId: candidate.businessProfileId,
+      expenseRecordId: candidate.id,
+      type: AnomalyFindingType.POSSIBLE_DUPLICATE,
+      severity:
+        best.result.score >= NEAR_DUPLICATE_HIGH_THRESHOLD
+          ? AnomalyFindingSeverity.HIGH
+          : AnomalyFindingSeverity.MEDIUM,
+      score: best.result.score,
+      method: "near-duplicate",
+      title: "Possible similar expense",
+      reasons,
+      metadata: {
+        matchedExpenseRecordId: best.record.id,
+        amountSimilarity: best.result.amountSimilarity,
+        vendorSimilarity: best.result.vendorSimilarity,
+        descriptionSimilarity: best.result.descriptionSimilarity,
+        dateSimilarity: best.result.dateSimilarity,
+        dateDistanceDays: best.result.dateDistanceDays,
+      },
+      detectorVersion: NEAR_DUPLICATE_VERSION,
+    }, db);
+    await supersedePreviousFindings(db, candidate.id, fingerprint);
+    return finding;
   });
-  await supersedePreviousFindings(candidate.id, fingerprint);
-  return finding;
 }

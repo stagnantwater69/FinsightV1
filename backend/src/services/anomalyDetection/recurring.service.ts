@@ -9,6 +9,11 @@ import { normalizeComparisonText } from "./nearDuplicate.service";
 import { meetsNotificationSeverity } from "./config";
 import { NOTIFICATION_TYPES } from "../notification.service";
 import type { DetectionConfig } from "./config";
+import {
+  runAnalysisMutation,
+  type AnalysisMutationGuard,
+  type AnalysisWriteClient,
+} from "./mutationGuard";
 
 export const RECURRING_VERSION = "recurring-v1";
 const MINIMUM_OBSERVATIONS = 3;
@@ -130,7 +135,12 @@ function relativeDuePhrase(daysUntilDue: number) {
  * exclusion from `notificationMinimumSeverity`: raising or lowering a severity
  * here must not change who gets pushed.
  */
-async function notifyScheduleFinding(userId: number, businessProfileId: number, message: string) {
+async function notifyScheduleFinding(
+  db: AnalysisWriteClient,
+  userId: number,
+  businessProfileId: number,
+  message: string,
+) {
   // The TRANSACTION path dedupes on (businessProfileId, expenseRecordId, type,
   // message). A schedule warning has no expense record — the whole point is
   // that no record exists — so the tuple drops to (businessProfileId, type,
@@ -153,12 +163,12 @@ async function notifyScheduleFinding(userId: number, businessProfileId: number, 
   // that one reminder was not enough is easy; removing it after owners complain
   // about noise is the worse path. So: do not "unify" the notification string
   // with the finding's reason text.
-  const existing = await prisma.notification.findFirst({
+  const existing = await db.notification.findFirst({
     where: { businessProfileId, type: NOTIFICATION_TYPES.RECURRING_SCHEDULE, message },
     select: { id: true },
   });
   if (existing) return;
-  await prisma.notification.create({
+  await db.notification.create({
     data: { userId, businessProfileId, type: NOTIFICATION_TYPES.RECURRING_SCHEDULE, message },
   });
 }
@@ -218,7 +228,13 @@ export function inferRecurringPattern(records: RecurringRecord[]) {
   };
 }
 
-export async function refreshRecurringPatterns(userId: number, businessProfileId: number, config: DetectionConfig, today = utcToday()) {
+export async function refreshRecurringPatterns(
+  userId: number,
+  businessProfileId: number,
+  config: DetectionConfig,
+  today = utcToday(),
+  mutate: AnalysisMutationGuard = runAnalysisMutation,
+) {
   if (!config.featureFlags.recurring) return [];
   await requireOwnedBusinessProfile(userId, businessProfileId);
   const rows = await prisma.expenseRecord.findMany({
@@ -243,39 +259,41 @@ export async function refreshRecurringPatterns(userId: number, businessProfileId
     byIdentity.set(identity, matches);
   }
 
-  const patterns = [];
-  for (const [normalizedKey, records] of groups) {
-    const inferred = inferRecurringPattern(records);
-    if (!inferred) continue;
-    const latest = inferred.sorted.at(-1)!;
-    patterns.push(await prisma.recurringPattern.upsert({
-      where: { businessProfileId_normalizedKey: { businessProfileId, normalizedKey } },
-      create: {
-        businessProfileId, categoryId: latest.categoryId, normalizedKey,
-        vendor: latest.vendor, description: latest.description,
-        intervalDays: inferred.intervalDays,
-        expectedAmount: new Prisma.Decimal(inferred.expectedAmount),
-        amountTolerance: new Prisma.Decimal(inferred.amountTolerance),
-        confidence: new Prisma.Decimal(inferred.confidence),
-        observationCount: records.length,
-        lastOccurrence: inferred.lastOccurrence,
-        nextExpectedDate: inferred.nextExpectedDate,
-      },
-      update: {
-        categoryId: latest.categoryId, vendor: latest.vendor, description: latest.description,
-        intervalDays: inferred.intervalDays,
-        expectedAmount: new Prisma.Decimal(inferred.expectedAmount),
-        amountTolerance: new Prisma.Decimal(inferred.amountTolerance),
-        confidence: new Prisma.Decimal(inferred.confidence),
-        observationCount: records.length,
-        lastOccurrence: inferred.lastOccurrence,
-        nextExpectedDate: inferred.nextExpectedDate,
-      },
-    }));
-  }
+  return mutate(async (db) => {
+    const patterns = [];
+    for (const [normalizedKey, records] of groups) {
+      const inferred = inferRecurringPattern(records);
+      if (!inferred) continue;
+      const latest = inferred.sorted.at(-1)!;
+      patterns.push(await db.recurringPattern.upsert({
+        where: { businessProfileId_normalizedKey: { businessProfileId, normalizedKey } },
+        create: {
+          businessProfileId, categoryId: latest.categoryId, normalizedKey,
+          vendor: latest.vendor, description: latest.description,
+          intervalDays: inferred.intervalDays,
+          expectedAmount: new Prisma.Decimal(inferred.expectedAmount),
+          amountTolerance: new Prisma.Decimal(inferred.amountTolerance),
+          confidence: new Prisma.Decimal(inferred.confidence),
+          observationCount: records.length,
+          lastOccurrence: inferred.lastOccurrence,
+          nextExpectedDate: inferred.nextExpectedDate,
+        },
+        update: {
+          categoryId: latest.categoryId, vendor: latest.vendor, description: latest.description,
+          intervalDays: inferred.intervalDays,
+          expectedAmount: new Prisma.Decimal(inferred.expectedAmount),
+          amountTolerance: new Prisma.Decimal(inferred.amountTolerance),
+          confidence: new Prisma.Decimal(inferred.confidence),
+          observationCount: records.length,
+          lastOccurrence: inferred.lastOccurrence,
+          nextExpectedDate: inferred.nextExpectedDate,
+        },
+      }));
+    }
 
-  await runScheduleWatchdog(userId, businessProfileId, byIdentity, config, today);
-  return patterns;
+    await runScheduleWatchdog(db, userId, businessProfileId, byIdentity, config, today);
+    return patterns;
+  });
 }
 
 /**
@@ -288,13 +306,14 @@ export async function refreshRecurringPatterns(userId: number, businessProfileId
  * owner-owned; the detector reads it and, at most, records progress against it.
  */
 async function runScheduleWatchdog(
+  db: AnalysisWriteClient,
   userId: number,
   businessProfileId: number,
   byIdentity: Map<string, RecurringRecord[]>,
   config: DetectionConfig,
   today: Date,
 ) {
-  const schedules = await prisma.recurringSchedule.findMany({
+  const schedules = await db.recurringSchedule.findMany({
     where: { businessProfileId, isActive: true },
     orderBy: [{ nextDueDate: "asc" }, { id: "asc" }],
   });
@@ -357,7 +376,7 @@ async function runScheduleWatchdog(
       // `isActive` are owner-set. Writing any of them here would silently
       // revert the owner's edit on the next pass — the exact defect the
       // two-table split exists to eliminate. Do not add fields to this update.
-      await prisma.recurringSchedule.update({
+      await db.recurringSchedule.update({
         where: { id: schedule.id },
         data: {
           lastRecordedDate: cycleRecord.date,
@@ -366,7 +385,7 @@ async function runScheduleWatchdog(
         },
       });
       // The payment landed, so neither warning still stands.
-      await prisma.anomalyFinding.updateMany({
+      await db.anomalyFinding.updateMany({
         where: {
           businessProfileId,
           OR: [{ fingerprint: { startsWith: missingPrefix } }, { fingerprint: { startsWith: dueSoonPrefix } }],
@@ -391,16 +410,16 @@ async function runScheduleWatchdog(
           reasons: [`${schedule.label} was expected around ${dueKey}`],
           metadata: { recurringScheduleId: schedule.id, expectedAmount, intervalDays, dueDate: dueKey },
           detectorVersion: RECURRING_VERSION,
-        });
-        await prisma.anomalyFinding.updateMany({
+        }, db);
+        await db.anomalyFinding.updateMany({
           where: { businessProfileId, fingerprint: { startsWith: missingPrefix, not: fingerprint }, status: AnomalyFindingStatus.OPEN },
           data: { status: AnomalyFindingStatus.SUPERSEDED },
         });
         if (meetsNotificationSeverity(AnomalyFindingSeverity.HIGH, config)) {
-          await notifyScheduleFinding(userId, businessProfileId, `${schedule.label} was due ${dueKey} and has not been recorded yet`.slice(0, 255));
+          await notifyScheduleFinding(db, userId, businessProfileId, `${schedule.label} was due ${dueKey} and has not been recorded yet`.slice(0, 255));
         }
       } else {
-        await prisma.anomalyFinding.updateMany({
+        await db.anomalyFinding.updateMany({
           where: { businessProfileId, fingerprint: { startsWith: missingPrefix }, status: AnomalyFindingStatus.OPEN },
           data: { status: AnomalyFindingStatus.SUPERSEDED },
         });
@@ -418,16 +437,16 @@ async function runScheduleWatchdog(
           reasons: [`${schedule.label} is due ${relativeDuePhrase(daysUntilDue)} (${dueKey}) and has not been recorded yet`],
           metadata: { recurringScheduleId: schedule.id, expectedAmount, intervalDays, dueDate: dueKey, daysUntilDue },
           detectorVersion: RECURRING_VERSION,
-        });
-        await prisma.anomalyFinding.updateMany({
+        }, db);
+        await db.anomalyFinding.updateMany({
           where: { businessProfileId, fingerprint: { startsWith: dueSoonPrefix, not: fingerprint }, status: AnomalyFindingStatus.OPEN },
           data: { status: AnomalyFindingStatus.SUPERSEDED },
         });
         if (meetsNotificationSeverity(AnomalyFindingSeverity.HIGH, config)) {
-          await notifyScheduleFinding(userId, businessProfileId, `${schedule.label} is due ${dueKey} and has not been recorded yet`.slice(0, 255));
+          await notifyScheduleFinding(db, userId, businessProfileId, `${schedule.label} is due ${dueKey} and has not been recorded yet`.slice(0, 255));
         }
       } else {
-        await prisma.anomalyFinding.updateMany({
+        await db.anomalyFinding.updateMany({
           where: { businessProfileId, fingerprint: { startsWith: dueSoonPrefix }, status: AnomalyFindingStatus.OPEN },
           data: { status: AnomalyFindingStatus.SUPERSEDED },
         });
@@ -466,7 +485,7 @@ async function runScheduleWatchdog(
         reasons: [`The amount differs by ${Math.round(deviation * 100)}% from the expected recurring amount`],
         metadata: { recurringScheduleId: schedule.id, expectedAmount, actualAmount: latest.amount },
         detectorVersion: RECURRING_VERSION,
-      });
+      }, db);
     }
     if (previous && daysBetween(previous.date, latest.date) < intervalDays * 0.5) {
       await saveFinding({
@@ -477,7 +496,7 @@ async function runScheduleWatchdog(
         reasons: [`This expense appeared ${daysBetween(previous.date, latest.date)} days after the previous one; the usual interval is ${intervalDays} days`],
         metadata: { recurringScheduleId: schedule.id, intervalDays },
         detectorVersion: RECURRING_VERSION,
-      });
+      }, db);
     }
   }
 }

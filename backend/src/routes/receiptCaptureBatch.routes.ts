@@ -2,11 +2,12 @@ import { Router } from "express";
 import * as controller from "../controllers/receiptCaptureBatch.controller";
 import { requireAuth } from "../middleware/auth.middleware";
 import { asyncHandler } from "../lib/asyncHandler";
-import { LIMITS, rateLimit } from "../middleware/rateLimit.middleware";
+import { LIMITS, limitAuthenticatedWrites, rateLimit } from "../middleware/rateLimit.middleware";
 
 export const receiptCaptureBatchRouter = Router();
 
 receiptCaptureBatchRouter.use(requireAuth);
+receiptCaptureBatchRouter.use(limitAuthenticatedWrites);
 receiptCaptureBatchRouter.use((_req, res, next) => {
   res.setHeader("Cache-Control", "no-store");
   next();

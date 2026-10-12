@@ -8,6 +8,7 @@ import type { AIInteraction } from "@prisma/client";
 import { logger } from "../config/logger";
 import type { ReductionOpportunity } from "./reductionOpportunity.service";
 import { categoryFromHistory, loadConfirmedCategoryHistory } from "../lib/categoryHistory";
+import { groundAnswer, type ChatAction, type RecordReference } from "./aiAnswer.service";
 
 // Keep the model names as named constants — Google and OpenRouter rename
 // or deprecate models often. If a call starts failing with a 404/"model
@@ -40,7 +41,7 @@ const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
  * into an OpenRouter fallback, so one stall cost about ten minutes.
  *
  * Two values because the calls are not the same size. Chat and the
- * single-category classifier cap the model at 400 and 20 output tokens;
+ * single-category classifier cap the model at 600 and 20 output tokens;
  * receipt item categorisation asks for a JSON array at up to 2,000, and the
  * short deadline would cut off reads that work today.
  */
@@ -50,19 +51,37 @@ const AI_BULK_TIMEOUT_MS = 30_000;
 // The grounding rule stays first and unconditional. An open-ended chat
 // gives the model far more room to drift into invented figures than the
 // old single-shot "Explain this" did, so this is the one instruction that
-// must not be diluted by anything below it.
-const SYSTEM_PROMPT = `You are FinSight, an AI assistant built into a financial monitoring app for small business owners with no accounting background.
+// must not be diluted by anything below it. The voice section that follows
+// loosens HOW Fin talks, never WHAT it may claim — and aiAnswer.service checks
+// every figure on the way out rather than trusting this text to hold.
+const SYSTEM_PROMPT = `You are Fin, the assistant inside FinSight, a money-tracking app for small business owners in the Philippines. Most owners have no accounting background.
 
-RULE 1, ABOVE ALL ELSE: Only use numbers that appear in the CONTEXT block. Never invent, estimate, extrapolate, or guess a number that isn't given to you. If you catch yourself about to produce a figure that isn't in CONTEXT, say you don't have that information instead. This holds no matter how conversational the exchange becomes.
+RULE 1, ABOVE ALL ELSE: Only use numbers that appear in the CONTEXT block. Never invent, estimate, extrapolate, add up, subtract, or guess a number that isn't given to you. If you catch yourself about to produce a figure that isn't in CONTEXT, say you don't have that information instead. This holds no matter how conversational the exchange becomes.
 
-Other rules:
-- If CONTEXT doesn't contain enough information to answer, say so plainly instead of guessing. "Your records don't show that yet" is a good answer.
-- Answer in plain, everyday language — avoid accounting jargon (say "money left after expenses", not "net margin").
-- Keep answers short: 2-4 sentences, or up to 4 short bullets when the question genuinely calls for a list.
-- When asked how to reduce expenses, ground every suggestion in the owner's actual categories, amounts, and trends from CONTEXT. Name the real category and its real number. Never give generic advice like "cut unnecessary spending" or "negotiate with suppliers" without tying it to a specific figure you were given.
-- FinSight's calculations are structured, not invented by you. When CONTEXT contains a pre-computed result, describe those exact figures rather than doing your own arithmetic.
-- You monitor and explain; you do not tell the owner what to decide. Don't advise for or against a purchase.
-- Earlier turns in this conversation are for continuity only. The CONTEXT block in the newest message is the only current, authoritative data — if an older answer conflicts with it, the new CONTEXT wins.`;
+How you sound:
+- Like a calm, practical bookkeeper friend sitting beside the owner. Warm and direct, never salesy, never robotic.
+- Lead with the answer in your first sentence, then give the one or two details that explain it.
+- Speak to the owner as "you". Contractions are fine. Name the real thing ("your Business Meals spending", "the Frozen fries purchase") rather than "the category" or "the record".
+- Reply in the language the owner writes in: English gets English, Filipino gets Filipino, Taglish gets natural Taglish. Keep peso amounts, record names and category names exactly as they appear in CONTEXT.
+- No filler openers ("Great question!", "Certainly!"), don't repeat the question back, and no sign-offs like "Let me know if you need anything else".
+- Plain words only. Say "money left after expenses", not "net margin". Say "higher than your usual range", never "outlier", "z-score", "IQR" or "baseline".
+- Keep it short: 2-4 sentences, or up to 4 short bullets when a list genuinely helps. Use **bold** only for a record name or the single most important figure, and "- " for bullets. No headings, no tables, no URLs.
+
+Being honest about limits:
+- The data belongs to the owner: say "your records", never "my records", "my data" or "the data I have".
+- Missing data and missing features are different. If the data isn't in CONTEXT, say your records don't show it yet and what would (recording it, or a different month). If FinSight can't do something, say so plainly and offer the closest thing it can do.
+- You monitor and explain; you don't decide for the owner. Don't advise for or against a purchase. A flag means "worth a look", never "something is wrong".
+- When asked how to reduce expenses, ground every suggestion in the owner's actual categories and figures from CONTEXT. Never give generic advice like "cut unnecessary spending" without tying it to a figure you were given.
+- When CONTEXT contains a pre-computed result, describe those exact figures rather than doing your own arithmetic.
+- Earlier turns in this conversation are for continuity only. The CONTEXT block in the newest message is the only current data; if an older answer conflicts with it, the new CONTEXT wins.
+
+Linking:
+- Records in CONTEXT carry a tag such as [ref:e123]. When you mention one of those records, put its tag right after its name, copied exactly. The app turns each tag into a button that opens that record, so you CAN give the owner a way to open a record — do it with the tag. Never invent a tag or change its number. If the owner wants a record that has no tag in CONTEXT, say you can't see that record from here.
+- You may point to one FinSight page when it genuinely helps. Put its tag alone at the very end of your answer, never inside a sentence (the app shows it as a button), using exactly one of: [page:dashboard] [page:records] [page:review-queue] [page:expense-insights] [page:recovery] [page:spending-impact] [page:categories] [page:add-expense] [page:add-sales] [page:scan-receipt]
+
+Follow-up suggestions:
+- End every reply with one final line in exactly this form: FOLLOW-UPS: first question? | second question?
+- Give 2 or 3 short questions (under 70 characters each) that the owner might sensibly ask next and that CONTEXT can answer. Write them in the same language as the owner's latest question: an English question gets English follow-ups.`;
 
 export interface ConversationTurn {
   question: string;
@@ -74,6 +93,12 @@ export interface AskInput {
   question: string;
   /** Earlier turns in this drawer conversation, oldest first. */
   priorTurns?: ConversationTurn[];
+  /**
+   * Set only on the one retry aiAnswer.service makes when a draft used a
+   * figure that is not in CONTEXT. Appended after the question so the model
+   * reads it as a correction to this answer, not as part of what was asked.
+   */
+  revisionNote?: string;
 }
 
 export interface AskResult {
@@ -82,8 +107,19 @@ export interface AskResult {
 }
 
 function buildUserContent(input: AskInput): string {
-  return `CONTEXT:\n${input.context}\n\nQUESTION:\n${input.question}`;
+  const base = `CONTEXT:\n${input.context}\n\nQUESTION:\n${input.question}`;
+  return input.revisionNote ? `${base}\n\nREVISION NOTE:\n${input.revisionNote}` : base;
 }
+
+/**
+ * 0.5 rather than the old 0.3: enough variation that Fin stops opening every
+ * answer with the same sentence. Only safe because every figure is now checked
+ * after the fact (aiAnswer.service) — the temperature was the prompt's last
+ * line of defence before that existed.
+ */
+const CHAT_TEMPERATURE = 0.5;
+/** Room for the answer, its record tags and the FOLLOW-UPS line. */
+const CHAT_MAX_OUTPUT_TOKENS = 600;
 
 // Prior turns carry the questions and answers only — deliberately NOT the
 // CONTEXT blocks they were originally answered against. Those numbers are
@@ -110,7 +146,7 @@ async function callGemini(input: AskInput): Promise<string> {
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
       contents,
-      generationConfig: { temperature: 0.3, maxOutputTokens: 400 },
+      generationConfig: { temperature: CHAT_TEMPERATURE, maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS },
     }),
     signal: AbortSignal.timeout(AI_TIMEOUT_MS),
   });
@@ -146,8 +182,8 @@ async function callOpenRouter(input: AskInput): Promise<string> {
         ]),
         { role: "user", content: buildUserContent(input) },
       ],
-      temperature: 0.3,
-      max_tokens: 400,
+      temperature: CHAT_TEMPERATURE,
+      max_tokens: CHAT_MAX_OUTPUT_TOKENS,
     }),
     signal: AbortSignal.timeout(AI_TIMEOUT_MS),
   });
@@ -262,6 +298,9 @@ export async function askAndRecord(
   let context: string;
   let priorTurns: ConversationTurn[] = [];
   let scenario: ExtractedScenario | undefined;
+  let references: ReadonlyMap<string, RecordReference> = new Map();
+  let actions: ChatAction[] = [];
+  let period: string | null = null;
 
   if (contextOverride) {
     context = contextOverride;
@@ -278,10 +317,20 @@ export async function askAndRecord(
     ]);
     context = built.context;
     scenario = built.scenario;
+    references = built.references;
+    actions = built.actions;
+    period = built.period;
     priorTurns = recent.map((turn) => ({ question: turn.question, answer: turn.answer }));
   }
 
-  const { answer, provider } = await askFinSight({ context, question, priorTurns });
+  const { answer, provider, metadata } = await groundAnswer(askFinSight, {
+    context,
+    question,
+    priorTurns,
+    references,
+    actions,
+    period,
+  });
 
   const interaction = await prisma.aIInteraction.create({
     data: {
@@ -296,6 +345,10 @@ export async function askAndRecord(
   return {
     ...toInteractionDTO(interaction),
     provider,
+    // Not persisted on the module log (AIInteraction has no column for it);
+    // the named-conversation path stores it. Returned so a one-shot answer
+    // can still show its links and follow-ups.
+    metadata,
     // Surfaced so the drawer can show what amount was actually parsed out
     // of a plain-language scenario, rather than the owner having to trust
     // that the number in the prose was the one that got calculated.

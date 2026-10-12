@@ -4,9 +4,19 @@ import { prisma } from "../config/prisma";
 import { env } from "../config/env";
 import { ApiError } from "../middleware/error.middleware";
 import { securityEvent } from "../lib/securityLog";
+import { evictTokenOwner } from "../lib/verifiedTokenCache";
+import { isAuthUnreachable } from "../lib/authUnreachable";
+import { lockDuplicateKey } from "../lib/recordLock";
 import { isDisposableEmail } from "../lib/emailPolicy";
 import { isUsable, statusRefusal, transition } from "./accountLifecycle.service";
-import { uploadUserAvatar } from "./storage.service";
+import {
+  deletePublicImageUrl,
+  deleteSupersededPublicImages,
+  PUBLIC_IMAGE_UPLOAD_TRANSACTION_TIMEOUT_MS,
+  publicImagePathFromUrl,
+  uploadUserAvatar,
+  validatePublicImageUpload,
+} from "./storage.service";
 import { HANDOFF_TTL_SECONDS, hashHandoffCode, newHandoffCode, open as openSealed, seal } from "../lib/authHandoff";
 
 interface RegisterInput {
@@ -183,7 +193,22 @@ function redirectFor(platform: ClientPlatform, path: "auth/confirm" | "auth/rese
 async function verifyPassword(email: string, password: string): Promise<boolean> {
   const client = createPasswordAuthClient();
   try {
-    const { error } = await client.auth.signInWithPassword({ email, password });
+    let error: { status?: number; name?: string } | null;
+    try {
+      ({ error } = await client.auth.signInWithPassword({ email, password }));
+    } catch (failure) {
+      if (isAuthUnreachable(failure as { status?: number; name?: string })) {
+        throw new ApiError(503, "Authentication is unavailable right now. Please try again shortly.", {
+          code: "AUTH_PROVIDER_UNAVAILABLE",
+        });
+      }
+      throw failure;
+    }
+    if (isAuthUnreachable(error)) {
+      throw new ApiError(503, "Authentication is unavailable right now. Please try again shortly.", {
+        code: "AUTH_PROVIDER_UNAVAILABLE",
+      });
+    }
     return !error;
   } finally {
     await client.auth.signOut({ scope: "local" }).catch(() => undefined);
@@ -501,15 +526,13 @@ export async function createSessionHandoff(accessToken: string, refreshToken: st
   const { code, codeHash } = newHandoffCode();
   const expiresAt = new Date(Date.now() + HANDOFF_TTL_SECONDS * 1000);
 
-  /*
-   * Any code this account has outstanding dies here. Handoff is a "continue
-   * over there, now" gesture, so a second press means the first link is stale;
-   * leaving it live would be an extra, invisible way into the account for as
-   * long as its two minutes ran.
-   */
-  await prisma.authHandoff.deleteMany({ where: { userId: user.id } });
-  await prisma.authHandoff.create({
-    data: { codeHash, userId: user.id, refreshTokenCipher: seal(refreshToken), expiresAt },
+  // The per-user lock makes concurrent issuers leave exactly one live code.
+  await prisma.$transaction(async (tx) => {
+    await lockDuplicateKey(tx, user.id, "auth-handoff-issue:v1");
+    await tx.authHandoff.deleteMany({ where: { userId: user.id } });
+    await tx.authHandoff.create({
+      data: { codeHash, userId: user.id, refreshTokenCipher: seal(refreshToken), expiresAt },
+    });
   });
 
   securityEvent("handoff.issued", { userId: user.id, email: user.email });
@@ -517,24 +540,6 @@ export async function createSessionHandoff(accessToken: string, refreshToken: st
   // and the caller is mid-handoff — it must not wait on a housekeeping delete.
   void purgeExpiredHandoffs();
   return { code, expiresInSeconds: HANDOFF_TTL_SECONDS };
-}
-
-/**
- * Did Auth fail to ANSWER, as opposed to answering "no"?
- *
- * The distinction decides whether a handoff code survives a failed redemption,
- * so it fails closed: anything not recognisably a transport failure is treated
- * as a verdict, and the code dies as it always did.
- *
- * supabase-js answers a refused refresh token with a 4xx `AuthApiError`. A
- * connection it could not make becomes `AuthRetryableFetchError` with status
- * 0, and it wraps a 5xx in the same class — the service saying it could not
- * decide either. Those are the two cases where nothing was really spent.
- */
-function isAuthUnreachable(error: { status?: number; name?: string } | null): boolean {
-  if (!error) return false;
-  if (error.name === "AuthRetryableFetchError") return true;
-  return error.status !== undefined && (error.status === 0 || error.status >= 500);
 }
 
 /**
@@ -705,6 +710,10 @@ async function revokeSessions(
   scope: SessionRevocationScope,
   detail: Record<string, unknown> = {},
 ): Promise<boolean> {
+  // Before the call, and whatever its outcome: a revocation must never leave
+  // this process still honouring the token from its verified-token cache.
+  evictTokenOwner(accessToken);
+
   let error: { message?: string } | null;
   try {
     ({ error } = await supabaseAdmin.auth.admin.signOut(accessToken, scope));
@@ -917,8 +926,32 @@ export async function updateProfile(userId: number, input: UpdateProfileInput) {
 }
 
 export async function updateAvatar(userId: number, buffer: Buffer, mimetype: string, originalname: string) {
-  const avatarUrl = await uploadUserAvatar(userId, buffer, mimetype, originalname);
-  const user = await prisma.user.update({ where: { id: userId }, data: { avatarUrl } });
+  const validatedImage = await validatePublicImageUpload(buffer, mimetype);
+  const result = await prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<Array<{ status: AccountStatus; avatarUrl: string | null }>>(Prisma.sql`
+      SELECT "User_Status" AS status, "User_AvatarURL" AS "avatarUrl"
+      FROM "User"
+      WHERE "User_ID" = ${userId}
+      FOR UPDATE
+    `);
+    const existing = rows[0];
+    if (!existing) throw new ApiError(404, "Profile not found");
+    if (!isUsable(existing.status)) {
+      throw new ApiError(403, statusRefusal(existing.status), { code: "ACCOUNT_NOT_ACTIVE" });
+    }
+
+    const avatarUrl = await uploadUserAvatar(userId, buffer, mimetype, originalname, validatedImage);
+    const user = await tx.user.update({ where: { id: userId }, data: { avatarUrl } });
+    return { user, previousUrl: existing.avatarUrl, avatarUrl };
+  }, { timeout: PUBLIC_IMAGE_UPLOAD_TRANSACTION_TIMEOUT_MS });
+
+  const previousPath = result.previousUrl ? publicImagePathFromUrl(result.previousUrl) : null;
+  const currentPath = publicImagePathFromUrl(result.avatarUrl);
+  if (result.previousUrl && previousPath && previousPath !== currentPath) {
+    await deletePublicImageUrl(result.previousUrl);
+  }
+  await deleteSupersededPublicImages(`users/${userId}`);
+  const { user } = result;
   return toProfile(user);
 }
 
@@ -946,15 +979,12 @@ export async function deleteAccount(userId: number, currentPassword: string): Pr
     throw new ApiError(400, "Current password is incorrect");
   }
 
-  const requestedAt = new Date();
   await transition(user, AccountStatus.DELETION_PENDING, {
     reason: "owner requested deletion",
     data: {
-      deletionRequestedAt: requestedAt,
       deletionStage: "REQUESTED",
       deletionAttempts: 0,
       deletionLastError: null,
-      deletionNextAttemptAt: requestedAt,
       deletionLeaseStartedAt: null,
       deletionHeartbeatAt: null,
       deletionWorkerId: null,

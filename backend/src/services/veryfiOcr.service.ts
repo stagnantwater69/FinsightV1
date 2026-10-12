@@ -1,5 +1,7 @@
 import { env } from "../config/env";
 import { logger } from "../config/logger";
+import { moneyAmountSchema } from "../lib/money";
+import { receiptQuantitySchema } from "./receiptProviderContract";
 
 /**
  * Veryfi receipt extraction transport. Production calls originate only from
@@ -56,10 +58,26 @@ export interface VeryfiExtraction {
 function finiteNumber(v: unknown): number | null {
   if (typeof v === "number" && Number.isFinite(v)) return v;
   if (typeof v === "string") {
-    const n = Number(v.replace(/[^0-9.-]/g, ""));
+    const normalized = v
+      .trim()
+      .replace(/^(?:PHP|₱|\$)\s*/i, "")
+      .replace(/,/g, "")
+      .trim();
+    if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(normalized)) return null;
+    const n = Number(normalized);
     return Number.isFinite(n) ? n : null;
   }
   return null;
+}
+
+function finiteMoney(v: unknown): number | null {
+  const value = finiteNumber(v);
+  return value !== null && moneyAmountSchema.safeParse(value).success ? value : null;
+}
+
+function finiteQuantity(v: unknown): number | null {
+  const value = finiteNumber(v);
+  return value !== null && receiptQuantitySchema.safeParse(value).success ? value : null;
 }
 
 function coerceDate(v: unknown): string | null {
@@ -90,16 +108,16 @@ function coerceItems(v: unknown): VeryfiReceiptItem[] {
   for (const entry of v.slice(0, MAX_ITEMS)) {
     if (typeof entry !== "object" || entry === null) continue;
     const r = entry as Record<string, unknown>;
-    const amount = finiteNumber(r.total);
+    const amount = finiteMoney(r.total);
     const name = typeof r.description === "string" ? r.description.trim() : "";
     // No amount or no name cannot be booked or checked against the photo —
     // dropped rather than stored as a mystery, same rule visionOcr.service.ts
     // applies to a model-supplied item.
-    if (!name || amount === null || amount <= 0) continue;
-    const quantity = finiteNumber(r.quantity);
+    if (!name || amount === null) continue;
+    const quantity = finiteQuantity(r.quantity);
     items.push({
       name: name.slice(0, 255),
-      quantity: quantity !== null && quantity > 0 ? quantity : null,
+      quantity,
       amount,
     });
   }
@@ -184,7 +202,7 @@ export async function extractReceiptWithVeryfi(pages: VeryfiPage[]): Promise<Ver
   const vendor = docs.map((d) => coerceVendor(d.vendor)).find((v) => v !== null) ?? null;
   const date = docs.map((d) => coerceDate(d.date)).find((v) => v !== null) ?? null;
   const currency = docs.map((d) => coerceCurrency(d.currency_code)).find((v) => v !== null) ?? null;
-  const amounts = docs.map((d) => finiteNumber(d.total)).filter((v): v is number => v !== null && v > 0);
+  const amounts = docs.map((d) => finiteMoney(d.total)).filter((v): v is number => v !== null);
   const amount = amounts.length > 0 ? amounts[amounts.length - 1]! : null;
   const items = docs.flatMap((d) => coerceItems(d.line_items));
 

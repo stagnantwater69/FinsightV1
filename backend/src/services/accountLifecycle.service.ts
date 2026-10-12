@@ -1,8 +1,11 @@
-import { AccountStatus, type User } from "@prisma/client";
+import { AccountStatus, Prisma, type User } from "@prisma/client";
 import { supabaseAdmin } from "../config/supabase";
 import { prisma } from "../config/prisma";
 import { ApiError } from "../middleware/error.middleware";
 import { securityEvent } from "../lib/securityLog";
+import { PUBLIC_IMAGE_UPLOAD_TRANSACTION_TIMEOUT_MS } from "./storage.service";
+
+const DELETION_TRANSITION_TIMEOUT_MS = PUBLIC_IMAGE_UPLOAD_TRANSACTION_TIMEOUT_MS + 5_000;
 
 /**
  * The account state machine, in one file.
@@ -13,13 +16,13 @@ import { securityEvent } from "../lib/securityLog";
  * moves. Spread across four services those rules drift within a release: one
  * path bans the auth user and another forgets, one logs and another does not,
  * and the account that is "suspended" in the database is still answering API
- * calls. Every transition goes through `transition()` below; nothing else
- * writes `status`.
+ * calls. Interactive transitions use `transition()`; the deletion service has
+ * the only direct status CAS, for expired unverified registrations.
  *
  *                     register()
  *                         |
  *                         v
- *               PENDING_VERIFICATION ---- unconfirmed for 72h ----> (purged)
+ *               PENDING_VERIFICATION -- unconfirmed for 72h --> deletion queue
  *                         |
  *                   email confirmed
  *                         |
@@ -97,8 +100,8 @@ async function restoreSessions(authId: string): Promise<void> {
 interface TransitionOptions {
   /** Recorded on the security event — why this happened, for the audit trail. */
   reason: string;
-  /** Extra columns to write in the same statement as the status change. */
-  data?: Parameters<typeof prisma.user.update>[0]["data"];
+  /** Extra columns to write in the same database transition. */
+  data?: Prisma.UserUpdateManyMutationInput;
 }
 
 /**
@@ -115,10 +118,7 @@ export async function transition(
   to: AccountStatus,
   { reason, data }: TransitionOptions,
 ): Promise<User> {
-  if (user.status === to) {
-    return prisma.user.update({ where: { id: user.id }, data: data ?? {} });
-  }
-  if (!ALLOWED[user.status].includes(to)) {
+  if (user.status !== to && !ALLOWED[user.status].includes(to)) {
     throw new ApiError(409, `An account cannot go from ${user.status} to ${to}.`);
   }
 
@@ -128,10 +128,44 @@ export async function transition(
     securityEvent("sessions.revoked", { userId: user.id, scope: "all", reason });
   }
 
-  const updated = await prisma.user.update({
-    where: { id: user.id },
+  if (to === AccountStatus.DELETION_PENDING) {
+    const updated = await prisma.$transaction(async (tx) => {
+      const changed = await tx.user.updateMany({
+        where: { id: user.id, status: user.status },
+        data: { ...(data ?? {}), status: to },
+      });
+      if (changed.count !== 1) {
+        const current = await tx.user.findUnique({ where: { id: user.id } });
+        if (current?.status === to) return current;
+        throw new ApiError(409, "The account changed state while this request was running. Please try again.");
+      }
+
+      const [clock] = await tx.$queryRaw<Array<{ now: Date }>>(Prisma.sql`
+        SELECT CURRENT_TIMESTAMP AS now
+      `);
+      return tx.user.update({
+        where: { id: user.id },
+        data: {
+          deletionRequestedAt: clock!.now,
+          deletionNextAttemptAt: clock!.now,
+        },
+      });
+    }, { timeout: DELETION_TRANSITION_TIMEOUT_MS });
+
+    securityEvent("account.status_changed", { userId: user.id, from: user.status, to, reason });
+    return updated;
+  }
+
+  const changed = await prisma.user.updateMany({
+    where: { id: user.id, status: user.status },
     data: { ...(data ?? {}), status: to },
   });
+  if (changed.count !== 1) {
+    const current = await prisma.user.findUnique({ where: { id: user.id } });
+    if (current?.status === to) return current;
+    throw new ApiError(409, "The account changed state while this request was running. Please try again.");
+  }
+  const updated = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
 
   if (!revoking && user.status !== AccountStatus.PENDING_VERIFICATION) {
     // Coming back from SUSPENDED or DELETION_PENDING, the ban has to be lifted.

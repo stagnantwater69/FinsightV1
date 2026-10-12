@@ -1,9 +1,10 @@
-import type { ChatMessage, Conversation } from "@prisma/client";
+import { Prisma, type ChatMessage, type Conversation } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { ApiError } from "../middleware/error.middleware";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
-import { buildModuleContext, type InteractionModule } from "./aiContext.service";
+import { buildModuleContext, type ChatFocus, type InteractionModule } from "./aiContext.service";
 import { askFinSight, HISTORY_TURNS_FOR_CONTEXT, truncateAnswer, type ConversationTurn } from "./ai.service";
+import { groundAnswer, type AnswerMetadata } from "./aiAnswer.service";
 import type { ReductionOpportunity } from "./reductionOpportunity.service";
 
 /*
@@ -52,6 +53,9 @@ export interface ChatMessageDTO {
   role: string;
   content: string;
   createdAt: Date;
+  /** Assistant replies only; null on user messages and on replies stored before it existed. */
+  metadata: AnswerMetadata | null;
+  feedback: "up" | "down" | null;
 }
 
 export interface ChatSendResult {
@@ -78,7 +82,26 @@ function toMessageDTO(message: ChatMessage): ChatMessageDTO {
     role: message.role,
     content: message.content,
     createdAt: message.createdAt,
+    metadata: (message.metadata as AnswerMetadata | null) ?? null,
+    feedback: message.feedback === "up" || message.feedback === "down" ? message.feedback : null,
   };
+}
+
+/** A stored focus, read back defensively — it is JSON, so its shape is re-checked. */
+function storedFocus(value: Prisma.JsonValue | null): ChatFocus | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const focus = value as Record<string, unknown>;
+  if (focus.kind === "finding" && Number.isInteger(focus.findingId)) {
+    return { kind: "finding", findingId: focus.findingId as number };
+  }
+  if (
+    focus.kind === "record" &&
+    (focus.recordType === "expense" || focus.recordType === "sales") &&
+    Number.isInteger(focus.recordId)
+  ) {
+    return { kind: "record", recordType: focus.recordType, recordId: focus.recordId as number };
+  }
+  return null;
 }
 
 /**
@@ -188,12 +211,20 @@ async function askInConversation(
   priorTurns: ConversationTurn[],
   contextOverride?: string,
   reductionOpportunity?: ReductionOpportunity,
+  focus?: { value: ChatFocus; strict: boolean } | null,
 ) {
   const profile = await requireOwnedBusinessProfile(userId, businessProfileId);
 
   if (contextOverride) {
-    const { answer, provider } = await askFinSight({ context: contextOverride, question, priorTurns });
-    return { answer, provider, detectedAmount: null as number | null };
+    // An override carries no tagged records, so it can link to nothing — but
+    // its figures are still checked against the text the client sent.
+    const { answer, provider, metadata } = await groundAnswer(askFinSight, {
+      context: contextOverride,
+      question,
+      priorTurns,
+      references: new Map(),
+    });
+    return { answer, provider, metadata, detectedAmount: null as number | null };
   }
 
   // reductionOpportunity only ever renders on the Expense Insights module —
@@ -207,9 +238,21 @@ async function askInConversation(
     originModule,
     question,
     originModule === "Expense Insights" ? reductionOpportunity : undefined,
+    { focus: focus?.value ?? null, strictFocus: focus?.strict ?? false },
   );
-  const { answer, provider } = await askFinSight({ context: built.context, question, priorTurns });
-  return { answer, provider, detectedAmount: built.scenario?.amount ?? null };
+  const { answer, provider, metadata } = await groundAnswer(askFinSight, {
+    context: built.context,
+    question,
+    priorTurns,
+    references: built.references,
+    actions: built.actions,
+    period: built.period,
+  });
+  return { answer, provider, metadata, detectedAmount: built.scenario?.amount ?? null };
+}
+
+function metadataJson(metadata: AnswerMetadata): Prisma.InputJsonValue {
+  return metadata as unknown as Prisma.InputJsonValue;
 }
 
 /**
@@ -228,8 +271,11 @@ export async function createConversationWithFirstMessage(
   title?: string,
   context?: string,
   reductionOpportunity?: ReductionOpportunity,
+  focus?: ChatFocus,
 ): Promise<ChatSendResult> {
-  const { answer, provider, detectedAmount } = await askInConversation(
+  // Strict on creation: a focus that is not this owner's 404s before a
+  // conversation row exists or a model is billed.
+  const { answer, provider, metadata, detectedAmount } = await askInConversation(
     userId,
     businessProfileId,
     originModule,
@@ -237,6 +283,7 @@ export async function createConversationWithFirstMessage(
     [],
     context,
     reductionOpportunity,
+    focus ? { value: focus, strict: true } : null,
   );
 
   const storedTitle = title?.trim() ? title.trim().slice(0, TITLE_MAX_LENGTH) : deriveTitle(question);
@@ -244,13 +291,19 @@ export async function createConversationWithFirstMessage(
 
   const created = await prisma.$transaction(async (tx) => {
     const conversation = await tx.conversation.create({
-      data: { userId, businessProfileId, title: storedTitle, originModule },
+      data: {
+        userId,
+        businessProfileId,
+        title: storedTitle,
+        originModule,
+        ...(focus ? { focus: focus as unknown as Prisma.InputJsonValue } : {}),
+      },
     });
     const userMessage = await tx.chatMessage.create({
       data: { conversationId: conversation.id, role: "user", content: question },
     });
     const assistantMessage = await tx.chatMessage.create({
-      data: { conversationId: conversation.id, role: "assistant", content: storedAnswer },
+      data: { conversationId: conversation.id, role: "assistant", content: storedAnswer, metadata: metadataJson(metadata) },
     });
     return { conversation, userMessage, assistantMessage };
   });
@@ -274,8 +327,19 @@ export async function appendMessage(
   question: string,
   context?: string,
   reductionOpportunity?: ReductionOpportunity,
+  focus?: ChatFocus,
 ): Promise<ChatSendResult> {
   const conversation = await requireOwnedConversation(userId, conversationId);
+  // A new focus (the owner pressed "Explain this flag" on a different card
+  // while this thread was open) replaces the stored one and is held to the
+  // same strict check as creation; the stored one is re-validated leniently,
+  // so a flag resolved mid-conversation just drops out of the context.
+  const activeFocus = focus
+    ? { value: focus, strict: true }
+    : (() => {
+        const stored = storedFocus(conversation.focus);
+        return stored ? { value: stored, strict: false } : null;
+      })();
 
   // Newest first, then reversed: the tail of a long thread is what gets
   // replayed, not its opening.
@@ -286,7 +350,7 @@ export async function appendMessage(
   });
   const priorTurns = toPriorTurns(recent.reverse());
 
-  const { answer, provider, detectedAmount } = await askInConversation(
+  const { answer, provider, metadata, detectedAmount } = await askInConversation(
     userId,
     conversation.businessProfileId,
     conversation.originModule as InteractionModule,
@@ -294,6 +358,7 @@ export async function appendMessage(
     priorTurns,
     context,
     reductionOpportunity,
+    activeFocus,
   );
 
   const storedAnswer = truncateAnswer(answer, MESSAGE_MAX_LENGTH);
@@ -303,13 +368,16 @@ export async function appendMessage(
       data: { conversationId: conversation.id, role: "user", content: question },
     });
     const assistantMessage = await tx.chatMessage.create({
-      data: { conversationId: conversation.id, role: "assistant", content: storedAnswer },
+      data: { conversationId: conversation.id, role: "assistant", content: storedAnswer, metadata: metadataJson(metadata) },
     });
     // lastMessageAt is what orders the sidebar, so it advances with the write
     // rather than being derived at read time from a join.
     const updated = await tx.conversation.update({
       where: { id: conversation.id },
-      data: { lastMessageAt: assistantMessage.createdAt },
+      data: {
+        lastMessageAt: assistantMessage.createdAt,
+        ...(focus ? { focus: focus as unknown as Prisma.InputJsonValue } : {}),
+      },
     });
     return { updated, userMessage, assistantMessage };
   });
@@ -345,4 +413,31 @@ export async function renameConversation(
 export async function deleteConversation(userId: number, id: number): Promise<void> {
   const conversation = await requireOwnedConversation(userId, id);
   await prisma.conversation.delete({ where: { id: conversation.id } });
+}
+
+/**
+ * Thumbs up/down on one assistant reply, or null to take it back.
+ *
+ * Scoped through the conversation's owner: a message id from someone else's
+ * thread 404s exactly like one that does not exist. User messages cannot be
+ * rated — there is nothing of FinSight's in them to judge.
+ */
+export async function setMessageFeedback(
+  userId: number,
+  conversationId: number,
+  messageId: number,
+  feedback: "up" | "down" | null,
+): Promise<ChatMessageDTO> {
+  const conversation = await requireOwnedConversation(userId, conversationId);
+  const message = await prisma.chatMessage.findFirst({
+    where: { id: messageId, conversationId: conversation.id, role: "assistant" },
+  });
+  if (!message) {
+    throw new ApiError(404, "Message not found");
+  }
+  const updated = await prisma.chatMessage.update({
+    where: { id: message.id },
+    data: { feedback, feedbackAt: feedback ? new Date() : null },
+  });
+  return toMessageDTO(updated);
 }

@@ -2,7 +2,7 @@ import { Router, type RequestHandler } from "express";
 import * as csvImportController from "../controllers/csvImport.controller";
 import { requireAuth } from "../middleware/auth.middleware";
 import { uploadCsv } from "../middleware/upload.middleware";
-import { LIMITS, rateLimit } from "../middleware/rateLimit.middleware";
+import { LIMITS, limitAuthenticatedWrites, rateLimit } from "../middleware/rateLimit.middleware";
 import { handleCsvHttpWork, limitCsvHttpWork } from "../middleware/csvHttpWorkLimit.middleware";
 import { asyncHandler } from "../lib/asyncHandler";
 
@@ -16,6 +16,7 @@ const limitInitialStageUpload: RequestHandler = (req, res, next) => {
 };
 
 csvImportRouter.use(requireAuth);
+csvImportRouter.use(limitAuthenticatedWrites);
 csvImportRouter.use((_req, res, next) => {
   res.setHeader("Cache-Control", "no-store");
   res.locals.csvImportRequest = true;

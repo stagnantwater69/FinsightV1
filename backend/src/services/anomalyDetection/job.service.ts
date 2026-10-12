@@ -13,6 +13,7 @@ import { refreshRecurringPatterns } from "./recurring.service";
 import { refreshTrendFindings } from "./trend.service";
 import { detectVelocityForExpense } from "./velocity.service";
 import { NOTIFICATION_TYPES } from "../notification.service";
+import type { AnalysisMutationGuard } from "./mutationGuard";
 
 const WORKER_ID = `analysis-${process.pid}-${randomUUID().slice(0, 8)}`;
 const LEASE_MS = 5 * 60_000;
@@ -50,6 +51,24 @@ async function heartbeatJob(job: ClaimedJob): Promise<void> {
 /** Every terminal write re-checks the lease, so a superseded worker records nothing. */
 function leaseGuard(job: ClaimedJob) {
   return { id: job.id, workerId: WORKER_ID, attemptCount: job.attemptCount };
+}
+
+function leaseMutationGuard(job: ClaimedJob): AnalysisMutationGuard {
+  return (mutation) => prisma.$transaction(async (db) => {
+    const claimed = await db.$queryRaw<{ id: number }[]>(Prisma.sql`
+      SELECT "AnalysisJob_ID" AS id
+      FROM "AnalysisJob"
+      WHERE "AnalysisJob_ID" = ${job.id}
+        AND "AnalysisJob_Status" = 'PROCESSING'
+        AND "AnalysisJob_WorkerID" = ${WORKER_ID}
+        AND "AnalysisJob_AttemptCount" = ${job.attemptCount}
+      FOR UPDATE
+    `);
+    if (claimed.length !== 1) {
+      throw new AnalysisLeaseLostError(`Analysis job ${job.id} lease was reclaimed`);
+    }
+    return mutation(db);
+  }, { maxWait: HEARTBEAT_MS, timeout: LEASE_MS });
 }
 
 // Severity gate moved to ./config so the recurring watchdog, which emits from
@@ -144,41 +163,49 @@ async function claimJob(): Promise<ClaimedJob | null> {
   return rows[0] ?? null;
 }
 
-async function processJob(job: ClaimedJob) {
+async function processJob(job: ClaimedJob, mutate: AnalysisMutationGuard) {
   if (job.kind === AnalysisJobKind.TRANSACTION && job.expenseRecordId) {
     const findings = await Promise.all([
-      detectAmountOutlierForExpense(job.expenseRecordId, RUNTIME_DETECTION_CONFIG),
-      detectNearDuplicateForExpense(job.expenseRecordId, RUNTIME_DETECTION_CONFIG),
-      detectVelocityForExpense(job.expenseRecordId, RUNTIME_DETECTION_CONFIG),
-      detectBehavioralNoveltyForExpense(job.expenseRecordId, RUNTIME_DETECTION_CONFIG),
+      detectAmountOutlierForExpense(job.expenseRecordId, RUNTIME_DETECTION_CONFIG, mutate),
+      detectNearDuplicateForExpense(job.expenseRecordId, RUNTIME_DETECTION_CONFIG, mutate),
+      detectVelocityForExpense(job.expenseRecordId, RUNTIME_DETECTION_CONFIG, mutate),
+      detectBehavioralNoveltyForExpense(job.expenseRecordId, RUNTIME_DETECTION_CONFIG, mutate),
     ]);
     const owner = await prisma.businessProfile.findUnique({ where: { id: job.businessProfileId }, select: { userId: true } });
-    for (const finding of findings.filter((value): value is NonNullable<typeof value> => value !== null)) {
-      if (!owner || !meetsNotificationSeverity(finding.severity, RUNTIME_DETECTION_CONFIG)) continue;
-      const message = `${finding.title}: review this transaction in Expense Insights`.slice(0, 255);
-      const exists = await prisma.notification.findFirst({
-        where: { businessProfileId: job.businessProfileId, expenseRecordId: job.expenseRecordId, type: NOTIFICATION_TYPES.ANOMALY_FINDING, message },
-        select: { id: true },
+    const notifiable = findings
+      .filter((value): value is NonNullable<typeof value> => value !== null)
+      .filter((finding) => meetsNotificationSeverity(finding.severity, RUNTIME_DETECTION_CONFIG));
+    if (owner && notifiable.length > 0) {
+      await mutate(async (db) => {
+        for (const finding of notifiable) {
+          const message = `${finding.title}: review this transaction in Expense Insights`.slice(0, 255);
+          const exists = await db.notification.findFirst({
+            where: { businessProfileId: job.businessProfileId, expenseRecordId: job.expenseRecordId, type: NOTIFICATION_TYPES.ANOMALY_FINDING, message },
+            select: { id: true },
+          });
+          if (!exists) {
+            await db.notification.create({
+              data: { userId: owner.userId, businessProfileId: job.businessProfileId, expenseRecordId: job.expenseRecordId, type: NOTIFICATION_TYPES.ANOMALY_FINDING, message },
+            });
+          }
+        }
       });
-      if (!exists) {
-        await prisma.notification.create({
-          data: { userId: owner.userId, businessProfileId: job.businessProfileId, expenseRecordId: job.expenseRecordId, type: NOTIFICATION_TYPES.ANOMALY_FINDING, message },
-        });
-      }
     }
     return;
   }
   const profile = await prisma.businessProfile.findUnique({ where: { id: job.businessProfileId }, select: { userId: true } });
   if (!profile) return;
-  await refreshOwnedCategoryStatistics(profile.userId, job.businessProfileId);
-  await refreshRecurringPatterns(profile.userId, job.businessProfileId, RUNTIME_DETECTION_CONFIG);
-  await refreshTrendFindings(profile.userId, job.businessProfileId, utcToday(), RUNTIME_DETECTION_CONFIG);
+  const today = utcToday();
+  await refreshOwnedCategoryStatistics(profile.userId, job.businessProfileId, today, RUNTIME_DETECTION_CONFIG, mutate);
+  await refreshRecurringPatterns(profile.userId, job.businessProfileId, RUNTIME_DETECTION_CONFIG, today, mutate);
+  await refreshTrendFindings(profile.userId, job.businessProfileId, today, RUNTIME_DETECTION_CONFIG, mutate);
   // Shadow-only ML pass, last: it reads the same bounded history the refreshers
   // just summarised, writes only SHADOW findings, and fails open — a dead
   // sidecar must not fail the job the deterministic refreshers completed.
   try {
-    await refreshIsolationForestFindings(profile.userId, job.businessProfileId, RUNTIME_DETECTION_CONFIG);
+    await refreshIsolationForestFindings(profile.userId, job.businessProfileId, RUNTIME_DETECTION_CONFIG, mutate);
   } catch (error) {
+    if (error instanceof AnalysisLeaseLostError) throw error;
     logger.warn({ err: error, businessProfileId: job.businessProfileId }, "isolation forest shadow pass failed");
   }
 }
@@ -194,7 +221,7 @@ export async function runAnalysisWorkerOnce() {
   }, HEARTBEAT_MS);
   heartbeatTimer.unref();
   try {
-    await processJob(job);
+    await processJob(job, leaseMutationGuard(job));
     const completed = await prisma.analysisJob.updateMany({
       where: leaseGuard(job),
       data: { status: AnalysisJobStatus.COMPLETE, heartbeatAt: new Date(), workerId: null, lastError: null },
@@ -203,18 +230,22 @@ export async function runAnalysisWorkerOnce() {
       logger.warn({ analysisJobId: job.id }, "analysis job lease was reclaimed before completion; result discarded");
     }
   } catch (error) {
-    const failed = job.attemptCount >= MAX_ATTEMPTS;
-    const delayMinutes = Math.min(2 ** job.attemptCount, 60);
-    // Guarded for the same reason the completion is: rescheduling a job the
-    // reclaiming worker is already running would undo its claim.
-    const recorded = await prisma.analysisJob.updateMany({
-      where: leaseGuard(job),
-      data: { status: failed ? AnalysisJobStatus.FAILED : AnalysisJobStatus.PENDING, nextAttemptAt: new Date(Date.now() + delayMinutes * 60_000), workerId: null, lastError: String(error).slice(0, 1000) },
-    });
-    if (recorded.count !== 1) {
-      logger.warn({ analysisJobId: job.id }, "analysis job lease was reclaimed before its failure could be recorded");
+    if (error instanceof AnalysisLeaseLostError) {
+      logger.warn({ analysisJobId: job.id }, "analysis job lease was reclaimed; stale writes were stopped");
+    } else {
+      const failed = job.attemptCount >= MAX_ATTEMPTS;
+      const delayMinutes = Math.min(2 ** job.attemptCount, 60);
+      // Guarded for the same reason the completion is: rescheduling a job the
+      // reclaiming worker is already running would undo its claim.
+      const recorded = await prisma.analysisJob.updateMany({
+        where: leaseGuard(job),
+        data: { status: failed ? AnalysisJobStatus.FAILED : AnalysisJobStatus.PENDING, nextAttemptAt: new Date(Date.now() + delayMinutes * 60_000), workerId: null, lastError: String(error).slice(0, 1000) },
+      });
+      if (recorded.count !== 1) {
+        logger.warn({ analysisJobId: job.id }, "analysis job lease was reclaimed before its failure could be recorded");
+      }
+      logger.error({ err: error, analysisJobId: job.id }, "analysis job failed");
     }
-    logger.error({ err: error, analysisJobId: job.id }, "analysis job failed");
   } finally {
     clearInterval(heartbeatTimer);
   }

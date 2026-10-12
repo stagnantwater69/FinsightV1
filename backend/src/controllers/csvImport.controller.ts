@@ -38,6 +38,10 @@ const correctionsSchema = z.record(
     description: z.string().max(255).optional(),
     amount: z.string().max(50).optional(),
     category: z.string().max(100).optional(),
+    vendor: z.string().max(150).optional(),
+    includedInAvailableFundsBaseline: z.boolean().optional(),
+    /** The owner removed the row on the review screen. Only `true` means anything. */
+    exclude: z.boolean().optional(),
   }),
 );
 
@@ -55,13 +59,18 @@ function jsonField<T extends z.ZodTypeAny>(name: string, shape: T) {
     .pipe(shape);
 }
 
+const formBoolean = z.preprocess(
+  (value) => value === "true" ? true : value === "false" ? false : value,
+  z.boolean(),
+);
+
 /*
  * EXPORTED for the contract tests, the same reason auth.controller.ts exports
  * its schemas: the clients' `maxLength` attributes are checked against the REAL
  * rule here rather than against a copy of it.
  */
 export const confirmSchema = z.object({
-  businessProfileId: z.coerce.number().int().positive(),
+  businessProfileId: z.coerce.number().int().positive().max(2147483647),
   recordType: z.enum(["expense", "sales", "mixed"]),
   /** How a "mixed" file says which row is which. See lib/recordTypeDetection.ts. */
   mixedStrategy: z.enum(["column", "sign"]).optional(),
@@ -79,6 +88,8 @@ export const confirmSchema = z.object({
    * speaks for itself", and confirm refuses a file that does not.
    */
   dateFormat: z.enum(["iso", "dmy", "mdy"]).optional(),
+  includedInAvailableFundsBaseline: formBoolean.optional(),
+  availableFundsBaselineAt: z.string().datetime().optional(),
 });
 
 const previewSchema = confirmSchema.pick({
@@ -93,18 +104,20 @@ const previewSchema = confirmSchema.pick({
 });
 
 const stageUploadSchema = z.object({
-  businessProfileId: z.coerce.number().int().positive(),
+  businessProfileId: z.coerce.number().int().positive().max(2147483647),
   idempotencyKey: z.string().min(8).max(100),
 });
 
 const stagedReviewSchema = z.object({
   stagedUploadId: z.string().uuid(),
-  businessProfileId: z.coerce.number().int().positive(),
+  businessProfileId: z.coerce.number().int().positive().max(2147483647),
   recordType: z.enum(["expense", "sales", "mixed"]),
   mixedStrategy: z.enum(["column", "sign"]).optional(),
   columnMapping: columnMappingSchema,
   corrections: correctionsSchema.optional(),
   dateFormat: z.enum(["iso", "dmy", "mdy"]).optional(),
+  includedInAvailableFundsBaseline: z.boolean().optional(),
+  availableFundsBaselineAt: z.string().datetime().optional(),
 });
 
 const stagedConfirmSchema = stagedReviewSchema.extend({
@@ -203,7 +216,7 @@ export async function preview(req: Request, res: Response) {
 }
 
 const listBatchesQuerySchema = z.object({
-  businessProfileId: z.coerce.number().int().positive(),
+  businessProfileId: z.coerce.number().int().positive().max(2147483647),
 });
 
 export async function listBatches(req: Request, res: Response) {
@@ -213,7 +226,7 @@ export async function listBatches(req: Request, res: Response) {
 }
 
 const batchParamsSchema = z.object({
-  batchId: z.coerce.number().int().positive(),
+  batchId: z.coerce.number().int().positive().max(2147483647),
 });
 
 export async function previewBatch(req: Request, res: Response) {
@@ -243,6 +256,8 @@ export async function confirm(req: Request, res: Response) {
         columnMapping: input.columnMapping,
         corrections: input.corrections,
         dateFormat: input.dateFormat,
+        includedInAvailableFundsBaseline: input.includedInAvailableFundsBaseline,
+        availableFundsBaselineAt: input.availableFundsBaselineAt,
       },
     );
     setServerTiming(res, staged.timings);
@@ -279,6 +294,8 @@ export async function confirm(req: Request, res: Response) {
     corrections: input.corrections,
     idempotencyKey: input.idempotencyKey ?? fallbackKey,
     dateFormat: input.dateFormat,
+    includedInAvailableFundsBaseline: input.includedInAvailableFundsBaseline,
+    availableFundsBaselineAt: input.availableFundsBaselineAt,
   });
 
   /*

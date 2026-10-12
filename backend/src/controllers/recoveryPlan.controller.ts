@@ -25,7 +25,7 @@ const MONTH_PARAM_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 function parseBusinessProfileId(raw: string): number {
   const id = Number(raw);
-  if (!Number.isInteger(id) || id <= 0) {
+  if (!Number.isInteger(id) || id <= 0 || id > 2147483647) {
     throw new ApiError(400, "Invalid business profile id");
   }
   return id;

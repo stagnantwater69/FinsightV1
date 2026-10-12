@@ -279,6 +279,11 @@ export async function shutdownOcr(): Promise<void> {
  * any better for the extra pixels — it just spends longer. Upscaling is
  * deliberately not done either: enlarging a blurry capture invents no
  * detail, it only makes the blur bigger.
+ *
+ * 1400 was measured and rejected (2026-10-10). On the eight corpus photos
+ * above 2000px it cut mean read time from 1.65s to 1.26s, but turned two
+ * correct totals wrong while fixing one. Revisit only with real PH phone
+ * photos to measure against.
  */
 const MAX_WIDTH = 2000;
 

@@ -1,11 +1,13 @@
 import { Router } from "express";
 import * as salesRecordController from "../controllers/salesRecord.controller";
 import { requireAuth } from "../middleware/auth.middleware";
+import { limitAuthenticatedWrites } from "../middleware/rateLimit.middleware";
 import { asyncHandler } from "../lib/asyncHandler";
 
 export const salesRecordRouter = Router();
 
 salesRecordRouter.use(requireAuth);
+salesRecordRouter.use(limitAuthenticatedWrites);
 
 salesRecordRouter.post("/", asyncHandler(salesRecordController.create));
 salesRecordRouter.get("/:id", asyncHandler(salesRecordController.getOne));

@@ -79,6 +79,9 @@ const emailField = z
  */
 const platformField = z.enum(["web", "mobile"]).default("web");
 
+/** Digits only, so a letter or a symbol never reaches `User_PhoneNumber`. */
+const phoneNumberField = z.string().max(20).regex(/^\d*$/, "Use numbers only.");
+
 export const registerSchema = z.object({
   /*
    * NO DISPOSABLE-DOMAIN REFUSAL HERE, deliberately — it was tried and removed.
@@ -103,7 +106,7 @@ export const registerSchema = z.object({
   firstName: z.string().min(1).max(100),
   middleName: z.string().max(100).optional(),
   lastName: z.string().min(1).max(100),
-  phoneNumber: z.string().max(20).optional(),
+  phoneNumber: phoneNumberField.optional(),
   platform: platformField,
 });
 
@@ -144,7 +147,7 @@ const updateProfileSchema = z.object({
   firstName: z.string().min(1).max(100).optional(),
   middleName: z.string().max(100).nullable().optional(),
   lastName: z.string().min(1).max(100).optional(),
-  phoneNumber: z.string().max(20).nullable().optional(),
+  phoneNumber: phoneNumberField.nullable().optional(),
 });
 
 /**

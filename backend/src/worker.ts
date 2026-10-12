@@ -211,8 +211,8 @@ function startMaintenanceSchedules(): void {
   unverifiedPurgeTimer = setInterval(() => {
     if (shuttingDown) return;
     void purgeUnverifiedRegistrations()
-      .then((purged) => {
-        if (purged > 0) logger.info({ purged }, "purged unverified registrations");
+      .then((queued) => {
+        if (queued > 0) logger.info({ queued }, "queued expired unverified registrations for deletion");
       })
       .catch((error) => logger.error({ err: error }, "unverified registration purge failed"));
   }, 60 * 60_000);

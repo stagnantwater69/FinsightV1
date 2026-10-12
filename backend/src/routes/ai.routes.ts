@@ -1,12 +1,13 @@
 import { Router } from "express";
 import * as aiController from "../controllers/ai.controller";
 import { requireAuth } from "../middleware/auth.middleware";
-import { LIMITS, rateLimit } from "../middleware/rateLimit.middleware";
+import { LIMITS, limitAuthenticatedWrites, rateLimit } from "../middleware/rateLimit.middleware";
 import { asyncHandler } from "../lib/asyncHandler";
 
 export const aiRouter = Router();
 
 aiRouter.use(requireAuth);
+aiRouter.use(limitAuthenticatedWrites);
 
 /*
  * Rate limits on the routes that call a billed model. `history` is a plain
@@ -34,6 +35,7 @@ aiRouter.post(
 aiRouter.post(
   "/suggest-category",
   rateLimit(LIMITS.SUGGEST_CATEGORY),
+  rateLimit(LIMITS.SUGGEST_CATEGORY_HOURLY),
   asyncHandler(aiController.suggestCategory),
 );
 
@@ -44,9 +46,7 @@ aiRouter.post(
  * any of them, and the two send routes carry the SAME limit pair as `/ask`:
  * they call the same billed model through the same code path, so a second,
  * looser budget for the chat page would just be the way around the first.
- * The list/read/rename/delete routes are plain database work and are left
- * unlimited for the same reason `/history` is — limiting them would only make
- * the app feel broken while saving nothing.
+ * Thread metadata writes use the shared authenticated-write guard; reads do not.
  */
 aiRouter.get("/conversations", asyncHandler(aiController.listConversations));
 aiRouter.post(
@@ -58,6 +58,11 @@ aiRouter.post(
 aiRouter.get("/conversations/:id", asyncHandler(aiController.getConversation));
 aiRouter.patch("/conversations/:id", asyncHandler(aiController.renameConversation));
 aiRouter.delete("/conversations/:id", asyncHandler(aiController.deleteConversation));
+// Feedback shares the metadata write guard rather than spending a billed-model allowance.
+aiRouter.put(
+  "/conversations/:id/messages/:messageId/feedback",
+  asyncHandler(aiController.setMessageFeedback),
+);
 aiRouter.post(
   "/conversations/:id/messages",
   rateLimit(LIMITS.ASK_BURST),

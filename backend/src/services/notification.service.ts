@@ -62,7 +62,10 @@ export async function createNotification(
   });
 }
 
-export async function listNotifications(userId: number, businessProfileId?: number) {
+export async function listNotifications(userId: number, businessProfileId?: number, take = NOTIFICATION_LIST_LIMIT) {
+  if (!Number.isInteger(take) || take < 1 || take > NOTIFICATION_LIST_LIMIT) {
+    throw new ApiError(400, "Invalid notification limit");
+  }
   // Verify ownership when a profile is named, so an unowned or nonexistent id
   // both give 404. Filtering on userId alone already prevented any leak — it
   // returned an empty list — but that made this the only resource in the app
@@ -74,7 +77,7 @@ export async function listNotifications(userId: number, businessProfileId?: numb
 
   const notifications = await prisma.notification.findMany({
     where: { userId, businessProfileId },
-    orderBy: { dateCreated: "desc" },
+    orderBy: [{ dateCreated: "desc" }, { id: "desc" }],
     /*
      * A CEILING, not pagination.
      *
@@ -88,7 +91,7 @@ export async function listNotifications(userId: number, businessProfileId?: numb
      * wrong. That is the distinction that decides where these are safe — see
      * the note in docs/DEPLOYMENT-HARDENING-PLAN.md §3.3.
      */
-    take: NOTIFICATION_LIST_LIMIT,
+    take,
   });
   return notifications.map(toDTO);
 }

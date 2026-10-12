@@ -57,7 +57,13 @@ export type SecurityEvent =
   | "account.deletion_stage"
   | "account.deletion_completed"
   | "account.deletion_failed"
-  | "ratelimit.exhausted";
+  | "ratelimit.exhausted"
+  /**
+   * `requireAuth` could not reach Supabase Auth to check a token, and answered
+   * 503 rather than ending the session. A burst means Auth is down, not that
+   * anyone is guessing.
+   */
+  | "auth.verify_failed";
 
 interface SecurityEventDetail {
   /** The FinSight profile id, when one is known. */

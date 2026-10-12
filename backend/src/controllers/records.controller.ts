@@ -2,6 +2,8 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import * as expenseRecordService from "../services/expenseRecord.service";
 import * as salesRecordService from "../services/salesRecord.service";
+import * as recordMonthsService from "../services/recordMonths.service";
+import * as futureDatedRecordsService from "../services/futureDatedRecords.service";
 import {
   DEFAULT_RECORD_SORT,
   RECORD_SORTS,
@@ -11,9 +13,9 @@ import {
 } from "../lib/recordSort";
 
 const searchQuerySchema = z.object({
-  businessProfileId: z.coerce.number().int().positive(),
+  businessProfileId: z.coerce.number().int().positive().max(2147483647),
   type: z.enum(["expense", "sales", "all"]).default("all"),
-  categoryId: z.coerce.number().int().positive().optional(),
+  categoryId: z.coerce.number().int().positive().max(2147483647).optional(),
   dateFrom: z.string().date().optional(),
   dateTo: z.string().date().optional(),
   keyword: z.string().max(255).optional(),
@@ -24,7 +26,7 @@ const searchQuerySchema = z.object({
   // Only meaningful alongside source=CSV_UPLOAD, but not rejected otherwise —
   // a stale query param left over from switching sources should be ignored,
   // not turned into a 400 for the owner.
-  importBatchId: z.coerce.number().int().positive().optional(),
+  importBatchId: z.coerce.number().int().positive().max(2147483647).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   /**
    * Server-side ordering. Omitting it keeps the order this endpoint has always
@@ -55,7 +57,7 @@ const searchQuerySchema = z.object({
  * `{ items, nextCursor }`, which is what the clients should move to.
  */
 const flaggedQuerySchema = z.object({
-  businessProfileId: z.coerce.number().int().positive(),
+  businessProfileId: z.coerce.number().int().positive().max(2147483647),
   limit: z.coerce.number().int().min(1).max(100).optional(),
   cursor: z.string().max(500).optional(),
 });
@@ -75,7 +77,7 @@ const cursorSchema = z.object({
    */
   amount: z.string().max(32).optional(),
   type: z.enum(["expense", "sales"]),
-  id: z.number().int().positive(),
+  id: z.number().int().positive().max(2147483647),
   /** Older cursors predate the parameter and can only have meant the default. */
   sort: z.enum(RECORD_SORTS).default(DEFAULT_RECORD_SORT),
 });
@@ -219,10 +221,10 @@ export async function search(req: Request, res: Response) {
 const MAX_BULK_IDS = 1000;
 
 const resolveDuplicatesSchema = z.object({
-  businessProfileId: z.coerce.number().int().positive(),
+  businessProfileId: z.coerce.number().int().positive().max(2147483647),
   action: z.enum(["keep", "discard"]),
-  expenseIds: z.array(z.number().int().positive()).max(MAX_BULK_IDS).default([]),
-  salesIds: z.array(z.number().int().positive()).max(MAX_BULK_IDS).default([]),
+  expenseIds: z.array(z.number().int().positive().max(2147483647)).max(MAX_BULK_IDS).default([]),
+  salesIds: z.array(z.number().int().positive().max(2147483647)).max(MAX_BULK_IDS).default([]),
 });
 
 export async function resolveDuplicates(req: Request, res: Response) {
@@ -309,7 +311,7 @@ export async function flagged(req: Request, res: Response) {
  * to learn that the profile exists at all.
  */
 export async function flaggedCount(req: Request, res: Response) {
-  const query = z.object({ businessProfileId: z.coerce.number().int().positive() }).parse(req.query);
+  const query = z.object({ businessProfileId: z.coerce.number().int().positive().max(2147483647) }).parse(req.query);
   const userId = req.user!.id;
 
   const [expenses, sales] = await Promise.all([
@@ -318,4 +320,25 @@ export async function flaggedCount(req: Request, res: Response) {
   ]);
 
   res.status(200).json({ expenses, sales, total: expenses + sales });
+}
+
+/**
+ * The months this business has records in, newest first — the period filter's
+ * Month list. Ownership-scoped by the service, so another business's id is a
+ * 404 rather than an empty list that would confirm nothing.
+ */
+export async function months(req: Request, res: Response) {
+  const query = z.object({ businessProfileId: z.coerce.number().int().positive().max(2147483647) }).parse(req.query);
+  const result = await recordMonthsService.listRecordMonths(req.user!.id, query.businessProfileId);
+  res.status(200).json({ months: result });
+}
+
+/**
+ * Records dated after the business's today, for the correction screen.
+ * Ownership-scoped by the service, so another business's id is a 404.
+ */
+export async function futureDated(req: Request, res: Response) {
+  const query = z.object({ businessProfileId: z.coerce.number().int().positive().max(2147483647) }).parse(req.query);
+  const result = await futureDatedRecordsService.listFutureDatedRecords(req.user!.id, query.businessProfileId);
+  res.status(200).json(result);
 }

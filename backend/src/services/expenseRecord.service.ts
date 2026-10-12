@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import type { ExpenseRecord, ExpenseRecordSource, ReceiptScanItem } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { ApiError } from "../middleware/error.middleware";
+import { assertNotFutureDate } from "../lib/transactionDate";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
 import { DEFAULT_RECORD_SORT, recordCursorWhere, recordOrderBy, type RecordCursor, type RecordSort } from "../lib/recordSort";
 import { expenseDuplicateKeysOf, sameExpenseDuplicateIdentity } from "../lib/expenseDuplicateIdentity";
@@ -13,8 +14,13 @@ import { enqueueExpenseAnalyses, enqueueExpenseAnalysis } from "./anomalyDetecti
 import { enqueueCsvSourcePurgesIfOrphaned } from "./csvSourcePurge.service";
 import { enqueueReceiptPurgeIfOrphaned } from "./receiptPurge.service";
 import { lockReceiptCaptureBatchForMutation } from "./receiptCaptureBatch.service";
+import {
+  loadAvailableFundsBaseline,
+  resolveAvailableFundsClassification,
+  type AvailableFundsBaselineInput,
+} from "./availableFundsBaseline.service";
 
-interface CreateInput {
+interface CreateInput extends AvailableFundsBaselineInput {
   businessProfileId: number;
   categoryId: number;
   date: string;
@@ -31,7 +37,7 @@ interface CreateInput {
   allocatedCharges?: number;
 }
 
-interface UpdateInput {
+interface UpdateInput extends AvailableFundsBaselineInput {
   categoryId?: number;
   date?: string;
   description?: string;
@@ -73,6 +79,8 @@ function toDTO(record: ExpenseRecord) {
     reviewStatus: record.reviewStatus,
     duplicateStatus: record.duplicateStatus,
     largeExpenseFlag: record.largeExpenseFlag,
+    includedInAvailableFundsBaseline: record.includedInAvailableFundsBaseline,
+    availableFundsDeltaBaselineAt: record.availableFundsDeltaBaselineAt,
     createdAt: record.createdAt,
   };
 }
@@ -359,31 +367,39 @@ export async function createExpenseRecord(userId: number, input: CreateInput) {
  * `createExpenseRecord` above runs them immediately, which is exactly the
  * previous behaviour for every other caller.
  *
- * `serializeDuplicateCheck` is opt-in rather than always-on: it is what the
- * single-record create needs to survive a double-tap, but receipt confirmation
- * calls this once per category split inside ONE transaction, and taking a
- * lock per split would hold several at a time for no benefit — those splits
- * are already serialised with each other by being in the same transaction.
+ * Every caller takes the profile-wide expense gate so a balance reset cannot
+ * interleave with classification. `serializeDuplicateCheck` adds the narrower
+ * identity lock needed only by independent single-record creates.
  */
 export async function createExpenseRecordWithin(
   userId: number,
   input: CreateInput,
   db: BulkDbClient,
-  options: { serializeDuplicateCheck?: boolean } = {},
+  options: { serializeDuplicateCheck?: boolean; recordGateHeld?: boolean } = {},
 ) {
   // Keep every query on the caller's transaction connection. Using the shared
   // client here can deadlock a small pool when several interactive creates
   // are already holding all available connections.
-  const profile = await requireOwnedBusinessProfile(userId, input.businessProfileId, db);
+  let profile = await requireOwnedBusinessProfile(userId, input.businessProfileId, db);
   await verifyCategoryBelongsToProfile(input.categoryId, input.businessProfileId, db);
 
   const date = new Date(input.date);
   const amount = new Prisma.Decimal(input.amount);
 
-  if (options.serializeDuplicateCheck) {
+  if (!options.recordGateHeld) {
     await lockExpenseDuplicateWriteGate(db, input.businessProfileId);
+  }
+  profile = await requireOwnedBusinessProfile(userId, input.businessProfileId, db);
+  // Every create path (form, Quick add, receipt confirmation) comes through here.
+  assertNotFutureDate(input.date, profile.timezone);
+  if (options.serializeDuplicateCheck) {
     await lockDuplicateKey(db, input.businessProfileId, `expense:${duplicateKeyOf(date, amount, input.description)}`);
   }
+  const classification = resolveAvailableFundsClassification(
+    profile,
+    date,
+    input,
+  );
 
   let duplicate = await findDuplicate(
     input.businessProfileId,
@@ -415,6 +431,7 @@ export async function createExpenseRecordWithin(
       reviewStatus: largeExpenseFlag ? "Needs Review" : "Reviewed",
       duplicateStatus: duplicate ? "Flagged" : "Not a Duplicate",
       duplicateOfRecordId: duplicate?.id,
+      ...classification,
     },
   });
 
@@ -447,7 +464,7 @@ export async function createExpenseRecordWithin(
   return { record: toDTO(record), runSideEffects };
 }
 
-export interface BulkExpenseRow {
+export interface BulkExpenseRow extends AvailableFundsBaselineInput {
   categoryId: number;
   /** YYYY-MM-DD. */
   date: string;
@@ -507,6 +524,7 @@ export async function bulkCreateExpenseRecords(
 
   // Hold the shared receipt/manual/CSV gate from the candidate read through the insert.
   await lockExpenseDuplicateWriteGate(db, businessProfileId);
+  const baseline = await loadAvailableFundsBaseline(db, businessProfileId);
 
   // Only records sharing a date with some row in the file can possibly be a
   // duplicate of one, so the candidate set is bounded by the file's date range
@@ -552,6 +570,7 @@ export async function bulkCreateExpenseRecords(
   for (const [i, row] of rows.entries()) {
     const date = new Date(row.date);
     const amount = new Prisma.Decimal(row.amount);
+    const classification = resolveAvailableFundsClassification(baseline, date, row);
     const keys = expenseDuplicateKeysOf({ date, amount, description: row.description, vendor: row.vendor });
     const existing = keys
       .flatMap((key) => existingByKey.get(key) ?? [])
@@ -592,6 +611,7 @@ export async function bulkCreateExpenseRecords(
       reviewStatus: largeExpenseFlag ? "Needs Review" : "Reviewed",
       duplicateStatus: existingId !== undefined || earlierIndex !== undefined ? "Flagged" : "Not a Duplicate",
       duplicateOfRecordId: existingId ?? null,
+      ...classification,
     });
   }
 
@@ -853,7 +873,6 @@ export async function updateExpenseRecord(userId: number, id: number, input: Upd
     || input.amount !== undefined
     || input.description !== undefined
     || input.vendor !== undefined;
-  const duplicateStateChanged = input.duplicateStatus !== undefined;
   const result = await prisma.$transaction(async (tx) => {
     let existing = await tx.expenseRecord.findFirst({
       where: { id, businessProfile: { userId } },
@@ -861,23 +880,31 @@ export async function updateExpenseRecord(userId: number, id: number, input: Upd
     });
     if (!existing) throw new ApiError(404, "Expense record not found");
 
-    if (valueFieldsChanged || duplicateStateChanged) {
-      await lockExpenseDuplicateWriteGate(tx, existing.businessProfileId);
-      existing = await tx.expenseRecord.findFirst({
-        where: { id, businessProfile: { userId } },
-        include: { businessProfile: true },
-      });
-      if (!existing) throw new ApiError(404, "Expense record not found");
-    }
+    await lockExpenseDuplicateWriteGate(tx, existing.businessProfileId);
+    existing = await tx.expenseRecord.findFirst({
+      where: { id, businessProfile: { userId } },
+      include: { businessProfile: true },
+    });
+    if (!existing) throw new ApiError(404, "Expense record not found");
 
     if (input.categoryId) {
       await verifyCategoryBelongsToProfile(input.categoryId, existing.businessProfileId, tx);
     }
 
+    // Checked only when the date is being set: a review or duplicate decision
+    // on a record that is already future-dated must not fail for a date the
+    // request never touched.
+    if (input.date !== undefined) assertNotFutureDate(input.date, existing.businessProfile.timezone);
     const nextDate = input.date ? new Date(input.date) : existing.date;
     const nextAmount = input.amount !== undefined ? new Prisma.Decimal(input.amount) : existing.amount;
     const nextDescription = input.description ?? existing.description;
     const nextVendor = input.vendor === undefined ? existing.vendor : input.vendor;
+    const classification = resolveAvailableFundsClassification(
+      existing.businessProfile,
+      nextDate,
+      input,
+      existing,
+    );
     let duplicateStatus = input.duplicateStatus ?? existing.duplicateStatus;
     let duplicateOfRecordId = input.duplicateStatus === "Not a Duplicate"
       ? null
@@ -950,6 +977,7 @@ export async function updateExpenseRecord(userId: number, id: number, input: Upd
         reviewStatus,
         duplicateStatus,
         duplicateOfRecordId,
+        ...classification,
       },
     });
     if (directFollowers.length > 0) {

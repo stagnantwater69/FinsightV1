@@ -1,12 +1,15 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 import * as insightsService from "../services/insights.service";
+import * as expenseOverviewService from "../services/expenseOverview.service";
 import { AnomalyFindingFeedback, AnomalyFindingSeverity, AnomalyFindingStatus, AnomalyFindingType, RecurringPatternStatus } from "@prisma/client";
 import * as findingService from "../services/anomalyDetection/finding.service";
 import * as recurringService from "../services/anomalyDetection/recurring.service";
 import * as recurringScheduleService from "../services/recurringSchedule.service";
-import { moneyAmountSchema } from "../lib/money";
+import { moneyAmountSchema, nonnegativeMoneyAmountSchema } from "../lib/money";
+import { MONTH_KEY_PATTERN, periodQueryFields, selectionFromQuery, type PeriodSelection } from "../lib/reportingPeriod";
 import { anomalyEvaluation } from "../services/anomalyDetection/evaluation.service";
+import { plainFindingReasons } from "../lib/findingReasons";
 import {
   getReductionOpportunities,
   simulateReductionOpportunity,
@@ -29,40 +32,99 @@ import {
 const endDateSchema = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, "endDate must be YYYY-MM-DD")
+  .date("endDate is not a real date")
   .transform((value) => new Date(`${value}T00:00:00.000Z`))
-  .refine((d) => !Number.isNaN(d.getTime()), "endDate is not a real date")
   .optional();
 
 const periodQuerySchema = z.object({
-  businessProfileId: z.coerce.number().int().positive(),
+  businessProfileId: z.coerce.number().int().positive().max(2147483647),
   periodDays: z.coerce.number().int().positive().max(366).default(30),
   endDate: endDateSchema,
+  /** This week, a calendar month, or all time. Wins over `periodDays`/`endDate` when sent. */
+  ...periodQueryFields,
 });
 
-// Recovery is month-to-date, so there is no period to select — coverageDays
-// only controls how many recent days the daily-coverage table shows.
+const expenseOverviewQuerySchema = periodQuerySchema.extend({
+  view: z.enum(["dashboard", "detail"]),
+});
+
+/** The period filter's selection when one was sent; the legacy `periodDays` number otherwise. */
+function periodFrom(query: z.infer<typeof periodQuerySchema>): number | PeriodSelection {
+  return query.period ? selectionFromQuery(query) : query.periodDays;
+}
+
+function setExpenseOverviewServerTiming(
+  res: Response,
+  timings: expenseOverviewService.ExpenseOverviewTimings,
+): void {
+  const phases: [string, number][] = [
+    ["total", timings.totalMs],
+    ["ownership", timings.ownershipMs],
+    ["expense-behavior", timings.expenseBehaviorMs],
+    ["reduction-opportunities", timings.reductionOpportunitiesMs],
+  ];
+  res.setHeader(
+    "Server-Timing",
+    phases
+      .filter(([, duration]) => Number.isFinite(duration))
+      .map(([name, duration]) => `${name};dur=${Math.max(0, duration).toFixed(1)}`)
+      .join(", "),
+  );
+}
+
 const recoveryQuerySchema = z.object({
-  businessProfileId: z.coerce.number().int().positive(),
+  businessProfileId: z.coerce.number().int().positive().max(2147483647),
   coverageDays: z.coerce.number().int().positive().max(31).default(14),
+  period: z.enum(["week", "month"]).optional(),
+  month: z.string().regex(MONTH_KEY_PATTERN, "month must be YYYY-MM").optional(),
+}).superRefine((query, ctx) => {
+  if (query.period === "month" && !query.month) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["month"],
+      message: "month is required when period is month",
+    });
+  }
+  if (query.period !== "month" && query.month) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["month"],
+      message: "month is only valid when period is month",
+    });
+  }
 });
 
 const monthEndReviewQuerySchema = z.object({
-  businessProfileId: z.coerce.number().int().positive(),
+  businessProfileId: z.coerce.number().int().positive().max(2147483647),
   month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "month must be YYYY-MM"),
 });
 
 const spendingImpactQuerySchema = z.object({
-  businessProfileId: z.coerce.number().int().positive(),
-  plannedAmount: z.coerce.number().nonnegative(),
+  businessProfileId: z.coerce.number().int().positive().max(2147483647),
+  plannedAmount: z.coerce.number().pipe(nonnegativeMoneyAmountSchema),
   periodDays: z.coerce.number().int().positive().max(366).default(30),
+  ...periodQueryFields,
 });
+
+export async function expenseOverview(req: Request, res: Response) {
+  const query = expenseOverviewQuerySchema.parse(req.query);
+  const { result, timings } = await expenseOverviewService.getExpenseOverview(
+    req.user!.id,
+    query.businessProfileId,
+    periodFrom(query),
+    query.view,
+    query.endDate,
+  );
+  setExpenseOverviewServerTiming(res, timings);
+  res.status(200).json(result);
+}
 
 export async function expenseBehavior(req: Request, res: Response) {
   const query = periodQuerySchema.parse(req.query);
   const result = await insightsService.getExpenseBehavior(
     req.user!.id,
     query.businessProfileId,
-    query.periodDays,
+    periodFrom(query),
     query.endDate,
   );
   res.status(200).json(result);
@@ -73,7 +135,7 @@ export async function reductionOpportunities(req: Request, res: Response) {
   const result = await getReductionOpportunities(
     req.user!.id,
     query.businessProfileId,
-    query.periodDays,
+    periodFrom(query),
     query.endDate,
   );
   res.status(200).json(result);
@@ -83,10 +145,12 @@ export async function reductionOpportunities(req: Request, res: Response) {
 // The client sends only category/period/reduction-kind/value; the server
 // derives every baseline figure from the owner's own records.
 const reductionSimulationBodySchema = z.object({
-  businessProfileId: z.number().int().positive(),
-  categoryId: z.number().int().positive(),
-  periodDays: z.number().int().positive().max(366),
+  businessProfileId: z.number().int().positive().max(2147483647),
+  categoryId: z.number().int().positive().max(2147483647),
+  periodDays: z.number().int().positive().max(366).optional(),
   endDate: endDateSchema,
+  period: z.enum(["week", "month", "all"]).optional(),
+  month: z.string().regex(MONTH_KEY_PATTERN, "month must be YYYY-MM").optional(),
   reduction: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("percent"), value: z.number() }),
     z.object({ kind: z.literal("amount"), value: z.number() }),
@@ -95,7 +159,16 @@ const reductionSimulationBodySchema = z.object({
 
 export async function reductionSimulation(req: Request, res: Response) {
   const body = reductionSimulationBodySchema.parse(req.body);
-  const result = await simulateReductionOpportunity(req.user!.id, body);
+  // One of the two ways of naming a period is required; the service owns the
+  // arithmetic for both.
+  if (!body.period && body.periodDays === undefined) {
+    throw new z.ZodError([{ code: "custom", path: ["periodDays"], message: "periodDays or period is required" }]);
+  }
+  const { period, month, ...rest } = body;
+  const result = await simulateReductionOpportunity(req.user!.id, {
+    ...rest,
+    ...(period ? { period: selectionFromQuery({ period, month }) } : {}),
+  });
   res.status(200).json(result);
 }
 
@@ -103,7 +176,7 @@ export async function reductionSimulation(req: Request, res: Response) {
 // 5). A lightweight "was this useful?" signal on a card that is itself
 // computed-not-persisted; only the feedback row is written.
 const reductionOpportunityFeedbackBodySchema = z.object({
-  businessProfileId: z.number().int().positive(),
+  businessProfileId: z.number().int().positive().max(2147483647),
   opportunityId: z.string().min(1),
   rating: z.enum(["helpful", "not_relevant"]),
 });
@@ -125,7 +198,7 @@ export async function reductionOpportunityFeedback(req: Request, res: Response) 
 // expenses were X" scenario, not a data query, so it takes the single scalar
 // input in a request body rather than as a query-string parameter.
 const recoveryScenarioBodySchema = z.object({
-  businessProfileId: z.number().int().positive(),
+  businessProfileId: z.number().int().positive().max(2147483647),
   assumedExpectedMonthlyExpenses: z.number(),
 });
 
@@ -141,7 +214,17 @@ export async function recoveryScenario(req: Request, res: Response) {
 
 export async function recoveryInsight(req: Request, res: Response) {
   const query = recoveryQuerySchema.parse(req.query);
-  const result = await insightsService.getRecoveryInsight(req.user!.id, query.businessProfileId, query.coverageDays);
+  const period = query.period === "week"
+    ? ({ kind: "week" } as const)
+    : query.period === "month"
+      ? ({ kind: "month", month: query.month! } as const)
+      : undefined;
+  const result = await insightsService.getRecoveryInsight(
+    req.user!.id,
+    query.businessProfileId,
+    query.coverageDays,
+    period,
+  );
   res.status(200).json(result);
 }
 
@@ -157,18 +240,18 @@ export async function spendingImpact(req: Request, res: Response) {
     req.user!.id,
     query.businessProfileId,
     query.plannedAmount,
-    query.periodDays
+    query.period ? selectionFromQuery(query) : query.periodDays
   );
   res.status(200).json(capPercentOfFunds(result));
 }
 
 const findingQuerySchema = z.object({
-  businessProfileId: z.coerce.number().int().positive(),
+  businessProfileId: z.coerce.number().int().positive().max(2147483647),
   type: z.nativeEnum(AnomalyFindingType).optional(),
   status: z.nativeEnum(AnomalyFindingStatus).optional(),
   severity: z.nativeEnum(AnomalyFindingSeverity).optional(),
   take: z.coerce.number().int().positive().max(100).default(50),
-  cursorId: z.coerce.number().int().positive().optional(),
+  cursorId: z.coerce.number().int().positive().max(2147483647).optional(),
 });
 
 const findingReviewSchema = z.object({
@@ -180,25 +263,31 @@ export async function findings(req: Request, res: Response) {
   const query = findingQuerySchema.parse(req.query);
   const items = await findingService.listFindings(req.user!.id, query.businessProfileId, query);
   res.status(200).json({
-    items: items.map((item) => ({ ...item, score: item.score === null ? null : Number(item.score) })),
+    // Reasons are translated out of detector shorthand ("Detected by iqr") on
+    // the way out; the stored rows keep the detector's wording for audit.
+    items: items.map((item) => ({
+      ...item,
+      score: item.score === null ? null : Number(item.score),
+      reasons: plainFindingReasons(item.reasons),
+    })),
     nextCursor: items.length === query.take ? items.at(-1)!.id : null,
   });
 }
 
 export async function findingsSummary(req: Request, res: Response) {
-  const query = z.object({ businessProfileId: z.coerce.number().int().positive() }).parse(req.query);
+  const query = z.object({ businessProfileId: z.coerce.number().int().positive().max(2147483647) }).parse(req.query);
   res.status(200).json(await findingService.findingSummary(req.user!.id, query.businessProfileId));
 }
 
 export async function reviewFinding(req: Request, res: Response) {
-  const id = z.coerce.number().int().positive().parse(req.params.id);
+  const id = z.coerce.number().int().positive().max(2147483647).parse(req.params.id);
   const input = findingReviewSchema.parse(req.body);
   const item = await findingService.reviewFinding(req.user!.id, id, input);
-  res.status(200).json({ ...item, score: item.score === null ? null : Number(item.score) });
+  res.status(200).json({ ...item, score: item.score === null ? null : Number(item.score), reasons: plainFindingReasons(item.reasons) });
 }
 
 export async function recurringPatterns(req: Request, res: Response) {
-  const query = z.object({ businessProfileId: z.coerce.number().int().positive() }).parse(req.query);
+  const query = z.object({ businessProfileId: z.coerce.number().int().positive().max(2147483647) }).parse(req.query);
   const patterns = await recurringService.listRecurringPatterns(req.user!.id, query.businessProfileId);
   res.status(200).json(patterns.map((pattern) => ({
     ...pattern,
@@ -220,7 +309,7 @@ const recurringPatternReviewSchema = z.object({
 });
 
 export async function reviewRecurringPattern(req: Request, res: Response) {
-  const id = z.coerce.number().int().positive().parse(req.params.id);
+  const id = z.coerce.number().int().positive().max(2147483647).parse(req.params.id);
   const input = recurringPatternReviewSchema.parse(req.body);
   const pattern = await recurringService.reviewRecurringPattern(req.user!.id, id, input.status);
   // Coerced for the same reason the list above is: returned raw, the three
@@ -240,8 +329,8 @@ export async function reviewRecurringPattern(req: Request, res: Response) {
  * expenseRecord.controller.ts for the full reasoning.
  */
 export const createRecurringScheduleSchema = z.object({
-  businessProfileId: z.number().int().positive(),
-  categoryId: z.number().int().positive(),
+  businessProfileId: z.number().int().positive().max(2147483647),
+  categoryId: z.number().int().positive().max(2147483647),
   label: z.string().min(1).max(255),
   vendor: z.string().max(150).optional(),
   // Bounded at a year: FinSight watches payments an owner can forget within a
@@ -256,7 +345,7 @@ export const createRecurringScheduleSchema = z.object({
 });
 
 const updateRecurringScheduleSchema = z.object({
-  categoryId: z.number().int().positive().optional(),
+  categoryId: z.number().int().positive().max(2147483647).optional(),
   label: z.string().min(1).max(255).optional(),
   vendor: z.string().max(150).nullable().optional(),
   intervalDays: z.number().int().positive().max(366).optional(),
@@ -267,7 +356,7 @@ const updateRecurringScheduleSchema = z.object({
 });
 
 export async function recurringSchedules(req: Request, res: Response) {
-  const query = z.object({ businessProfileId: z.coerce.number().int().positive() }).parse(req.query);
+  const query = z.object({ businessProfileId: z.coerce.number().int().positive().max(2147483647) }).parse(req.query);
   res.status(200).json(await recurringScheduleService.listRecurringSchedules(req.user!.id, query.businessProfileId));
 }
 
@@ -277,24 +366,24 @@ export async function createRecurringSchedule(req: Request, res: Response) {
 }
 
 export async function updateRecurringSchedule(req: Request, res: Response) {
-  const id = z.coerce.number().int().positive().parse(req.params.id);
+  const id = z.coerce.number().int().positive().max(2147483647).parse(req.params.id);
   const input = updateRecurringScheduleSchema.parse(req.body);
   res.status(200).json(await recurringScheduleService.updateRecurringSchedule(req.user!.id, id, input));
 }
 
 export async function deleteRecurringSchedule(req: Request, res: Response) {
-  const id = z.coerce.number().int().positive().parse(req.params.id);
+  const id = z.coerce.number().int().positive().max(2147483647).parse(req.params.id);
   await recurringScheduleService.deleteRecurringSchedule(req.user!.id, id);
   res.status(204).send();
 }
 
 export async function confirmRecurringPattern(req: Request, res: Response) {
-  const id = z.coerce.number().int().positive().parse(req.params.id);
+  const id = z.coerce.number().int().positive().max(2147483647).parse(req.params.id);
   res.status(201).json(await recurringScheduleService.confirmRecurringPattern(req.user!.id, id));
 }
 
 export async function findingsMetrics(req: Request, res: Response) {
-  const query = z.object({ businessProfileId: z.coerce.number().int().positive() }).parse(req.query);
+  const query = z.object({ businessProfileId: z.coerce.number().int().positive().max(2147483647) }).parse(req.query);
   res.status(200).json(await anomalyEvaluation(req.user!.id, query.businessProfileId));
 }
 

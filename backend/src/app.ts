@@ -20,6 +20,7 @@ import { dashboardRouter } from "./routes/dashboard.routes";
 import { notificationRouter } from "./routes/notification.routes";
 import { insightsRouter } from "./routes/insights.routes";
 import { errorHandler, notFoundHandler } from "./middleware/error.middleware";
+import { requestTiming } from "./lib/requestTiming";
 import { countStalledAccountDeletions } from "./services/accountDeletion.service";
 import { countStalledReceiptPurges } from "./services/receiptPurge.service";
 import { countFailedCsvSourcePurges } from "./services/csvSourcePurge.service";
@@ -70,9 +71,14 @@ app.use(
       callback(null, !origin || allowedOrigins.includes(origin));
     },
     credentials: true,
+    // Cross-origin clients need cooldown headers; DevTools also reads request timings.
+    exposedHeaders: ["Server-Timing", "Retry-After", "RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset"],
   }),
 );
 app.use(express.json());
+// After the body parser: its stream callbacks run outside the request's async
+// context, so spans recorded under it would be dropped.
+app.use(requestTiming);
 
 app.get("/api/v1/health/live", (_req, res) => {
   res.status(200).json({ status: "ok", uptimeSeconds: Math.floor(process.uptime()) });

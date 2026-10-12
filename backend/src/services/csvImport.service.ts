@@ -7,6 +7,8 @@ import { AccountStatus, CsvImportProcessingStatus, Prisma } from "@prisma/client
 import { prisma } from "../config/prisma";
 import { logger } from "../config/logger";
 import { ApiError } from "../middleware/error.middleware";
+import { businessTodayKey, isAfterToday } from "../lib/transactionDate";
+import { utcAddDays, utcDateKey, utcToday } from "../lib/dates";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
 import {
   csvFileReference,
@@ -33,15 +35,22 @@ import {
 import {
   classifyTypeValue,
   columnsWithSignedAmounts,
-  DEFAULT_IMPORT_CATEGORY,
   DETECTION_SAMPLE_ROWS,
   detectTypeColumn,
   parseSignedAmount,
   type RowRecordType,
 } from "../lib/recordTypeDetection";
 import { categoryFromHistory, loadConfirmedCategoryHistory } from "../lib/categoryHistory";
+import { detectColumns, type ExtraField } from "../lib/csvColumnDetection";
+import {
+  createImportCategoriser,
+  type ImportCategoriser,
+  type ImportCategoryDecision,
+} from "../lib/importCategoriser";
 import { expenseDuplicateKeysOf } from "../lib/expenseDuplicateIdentity";
-import { validateCsvUploadBytes } from "../lib/csvUploadValidation";
+import { CSV_MAX_FILE_BYTES, validateCsvUploadBytes } from "../lib/csvUploadValidation";
+import { lockExpenseDuplicateWriteGate, lockSalesDuplicateWriteGate } from "../lib/recordLock";
+import { resolveAvailableFundsClassification } from "./availableFundsBaseline.service";
 
 export interface ColumnMapping {
   date: string;
@@ -85,6 +94,11 @@ export interface PreviewResult {
   headers: string[];
   previewRows: Record<string, string>[];
   totalRows: number;
+  availableFundsBaseline: {
+    baselineAt: string;
+    baselineDate: string;
+    matchingRowCount: number;
+  } | null;
   /**
    * What the file appears to say about sales versus expenses, so the client can
    * OFFER a mixed import rather than making the owner know to ask for one.
@@ -105,8 +119,35 @@ export interface PreviewResult {
   detectedDateFormat: CsvDateFormat;
   dateFormatAmbiguous: boolean;
   suggestedMapping: Partial<ColumnMapping>;
+  /**
+   * The rest of what the importer read from the headings: columns FinSight
+   * recognised but has no field for (shown as not imported, never silently
+   * dropped), and whether the file looks like sales or expenses.
+   */
+  columnDetection?: {
+    unmapped: { header: string; field: ExtraField | null }[];
+    suggestedRecordType: "expense" | "sales" | null;
+  };
+  /** History-only suggestions for rows with no category. Kept for older clients. */
   categorySuggestions?: { row: number; categoryId: number; categoryName: string; source: "history" }[];
   categorySuggestionsTruncated?: boolean;
+  /**
+   * Rows past the preview sample that need the owner's eyes — skipped, possible
+   * duplicates, or with no category — so they can be corrected on the review
+   * screen instead of being fixed in the spreadsheet and uploaded again.
+   */
+  reviewRows?: { row: number; values: Record<string, string> }[];
+  reviewRowsTruncated?: boolean;
+  /** The category each on-screen expense row will be saved under, and why. */
+  rowCategories?: ({ row: number } & ImportCategoryDecision)[];
+  /** Category decisions across the whole file. */
+  categorySummary?: {
+    fromFile: number;
+    suggested: number;
+    uncategorised: number;
+    /** Categories this import would create, with how many rows use each. */
+    newCategories: { name: string; rows: number }[];
+  };
   /** Full-file validation; the error list is bounded to keep previews small. */
   validation?: {
     validRows: number;
@@ -152,7 +193,16 @@ export interface PreviewOptions {
 /** Replacement cell values, keyed by spreadsheet row number as a string. */
 export type RowCorrections = Record<
   string,
-  { date?: string; description?: string; amount?: string; category?: string }
+  {
+    date?: string;
+    description?: string;
+    amount?: string;
+    category?: string;
+    vendor?: string;
+    includedInAvailableFundsBaseline?: boolean;
+    /** The owner removed this row on the review screen; it is not imported. */
+    exclude?: boolean;
+  }
 >;
 
 export interface ConfirmInput {
@@ -176,6 +226,8 @@ export interface ConfirmInput {
   idempotencyKey?: string;
   /** The owner's answer when the file's dates are ambiguous. */
   dateFormat?: ConfirmDateFormat;
+  includedInAvailableFundsBaseline?: boolean;
+  availableFundsBaselineAt?: string;
 }
 
 export type StagedConfirmInput = Omit<ConfirmInput, "businessProfileId" | "buffer" | "originalname" | "idempotencyKey">;
@@ -212,47 +264,25 @@ export interface ConfirmResult {
   duplicateOfBatchId?: number;
 }
 
-/**
- * The most data rows one import may carry.
+/*
+ * THERE IS NO ROW LIMIT. The file size is the limit: CSV_MAX_FILE_BYTES (5 MB),
+ * checked by multer on upload and again in parseCsv for files read back from
+ * Storage.
  *
- * WHY ROWS AND NOT MEGABYTES. The upload is already capped at 5 MB by multer,
- * and that number says almost nothing about how much work the file represents.
- * A CSV is plain text, so its size tracks the CHARACTERS in it, not the records:
+ * There used to be a row cap (5,000, then 30,000, then 100,000), and owners
+ * kept meeting it with ordinary files — a burger stall's three years of
+ * per-sale history is 64,158 rows in 4.8 MB. Rows are what an import costs, but
+ * 5 MB already bounds them: the shortest row an import can use
+ * (`2026-01-01,a,1`) is 15 bytes, so the worst case is ~350,000 rows. Measured
+ * against that file: ~1.4s to parse and ~64 MB of memory, and files above
+ * SYNC_ROW_LIMIT run on the durable worker in CHUNK_SIZE checkpoints with a
+ * renewed lease, so a large file costs worker time, not a request.
  *
- *   `2026-01-05,Load,120`            ~25 bytes  →  5 MB is ~200,000 rows
- *   a row with a full description   ~600 bytes  →  5 MB is ~8,000 rows
- *
- * A twenty-five-fold swing in work for an identical file size — and every row
- * becomes an ExpenseRecord with its own validation, duplicate check, large-
- * expense evaluation and downstream analysis job. Bytes are the wrong unit for
- * the thing that actually costs; rows are the thing that costs.
- *
- * WHERE 30,000 COMES FROM. Measured, against a local Postgres, on the real
- * bulkCreate path rather than on a guess:
- *
- *   30,000 typical rows                       ~5.0s
- *   30,000 with 15% duplicates, 10% flagged   ~4.7s
- *   30,000 rows that ALL repeat one another  ~18.1s  -> now ~5s, see below
- *
- * The writes are bulk (`createManyAndReturn`, `createMany`), so cost is linear
- * at roughly 160µs a row. The one path that was not bulk — relinking rows that
- * duplicate an earlier row of the same file — issued a statement per duplicate
- * and produced that 18s outlier; it is now grouped by target, so the
- * pathological file costs about what an ordinary one does.
- *
- * The earlier cap was 5,000, chosen for a shop recording expenses daily
- * (~365 rows a year). That reasoning undercounted the real case: a business
- * importing per-transaction SALES history can produce 50-100 rows a day, and
- * 5,000 is then under three months. 30,000 is about a year of that, or decades
- * of daily expense logging.
- *
- * It stays a guard against a runaway or mistaken file rather than a quota.
- * Files above SYNC_ROW_LIMIT no longer run inside the request at all — they
- * go to the durable worker — so the cap now bounds the worker's chunked pass,
- * not a response time. If an owner meets this limit the answer is still to
- * split the file, and the message says so.
+ * What still guards the server is structure, not row count: MAX_CSV_TOTAL_CELLS
+ * and MAX_CSV_ESTIMATED_PARSED_BYTES refuse a file of mostly-empty cells — a
+ * 5 MB file of bare commas is over five million of them — while leaving room
+ * for every file with real values in it.
  */
-export const MAX_IMPORT_ROWS = 30_000;
 
 /**
  * The largest import still run inside the HTTP request.
@@ -268,8 +298,9 @@ export const SYNC_ROW_LIMIT = 2_000;
 
 /**
  * Rows committed per worker transaction. Small enough that one chunk's
- * transaction is short-lived (~0.2s measured), large enough that a full
- * 30,000-row file is 30 checkpoints, not 3,000 round trips.
+ * transaction is short-lived (~0.2s measured), large enough that even the
+ * largest 5 MB file is a few hundred checkpoints, not hundreds of thousands of
+ * round trips.
  */
 const CHUNK_SIZE = 1_000;
 
@@ -285,8 +316,15 @@ const STAGE_CHUNK_MAX_INFLATED_BYTES = STAGE_TOTAL_MAX_INFLATED_BYTES;
 const MAX_CSV_COLUMNS = 256;
 const MAX_CSV_HEADER_LENGTH = 255;
 const MAX_CSV_RECORD_SIZE = 256 * 1024;
-const MAX_CSV_TOTAL_CELLS = 1_000_000;
-const MAX_CSV_ESTIMATED_PARSED_BYTES = 32 * 1024 * 1024;
+/*
+ * Sized so every 5 MB file with values in it fits: the widest measured one
+ * (ten columns, seven of them empty) is ~2.4 million cells. Three million
+ * empty cells cost ~50 MB of memory to parse, measured; a 5 MB file of bare
+ * commas, at over five million, is refused.
+ */
+const MAX_CSV_TOTAL_CELLS = 3_000_000;
+/** cells × ESTIMATED_CELL_OVERHEAD_BYTES + the file itself, at MAX_CSV_TOTAL_CELLS, with headroom. */
+const MAX_CSV_ESTIMATED_PARSED_BYTES = 128 * 1024 * 1024;
 const ESTIMATED_CELL_OVERHEAD_BYTES = 32;
 export const CSV_AMBIGUOUS_UPLOAD_TOMBSTONE_GRACE_MS = 5 * 60_000;
 export const CSV_STAGE_OUTSTANDING_LIMIT = 5;
@@ -297,7 +335,7 @@ const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
 
 /** Per-row skip reasons persisted on the batch. Capped so a wholly-broken
- * 30,000-row file cannot turn resultSummary into a megabyte of JSON. */
+ * 5 MB file cannot turn resultSummary into a megabyte of JSON. */
 const SKIPPED_SUMMARY_CAP = 500;
 
 // Cell caps mirror the VARCHAR widths in schema.prisma. Checked at validation
@@ -482,12 +520,16 @@ interface ParsedCsv {
 }
 
 function parseCsv(buffer: Buffer): ParsedCsv {
+  if (buffer.byteLength > CSV_MAX_FILE_BYTES) {
+    throw new ApiError(413, "This file is larger than 5 MB. Split it into smaller files and import them one at a time.", {
+      code: "CSV_FILE_TOO_LARGE",
+    });
+  }
   validateCsvUploadBytes(buffer);
 
   const delimiter = detectDelimiter(buffer);
   let headers: string[] = [];
   let records: Record<string, string>[];
-  let parsedRows = 0;
   let parsedCells = 0;
   let estimatedParsedBytes = 0;
   try {
@@ -518,16 +560,6 @@ function parseCsv(buffer: Buffer): ParsedCsv {
       delimiter,
       max_record_size: MAX_CSV_RECORD_SIZE,
       on_record: (record: Record<string, string>) => {
-        parsedRows += 1;
-        if (parsedRows > MAX_IMPORT_ROWS) {
-          throw new ApiError(
-            400,
-            `This file has at least ${parsedRows.toLocaleString()} rows and the limit is ` +
-              `${MAX_IMPORT_ROWS.toLocaleString()}. ` +
-              "Split it into smaller files — by month or by year — and import them one at a time.",
-            { code: "CSV_ROW_LIMIT_EXCEEDED" },
-          );
-        }
         const values = Object.values(record);
         parsedCells += values.length;
         for (const value of values) {
@@ -559,20 +591,6 @@ function parseCsv(buffer: Buffer): ParsedCsv {
     throw new ApiError(400, "This CSV could not be read. Check its quotes and column counts, then try again.");
   }
 
-  /*
-   * Checked HERE rather than at each call site, so preview and confirm cannot
-   * disagree — an oversized file must be refused on the mapping screen, before
-   * an owner spends time matching columns for an import that was never going to
-   * run.
-   */
-  if (records.length > MAX_IMPORT_ROWS) {
-    throw new ApiError(
-      400,
-      `This file has ${records.length.toLocaleString()} rows and the limit is ${MAX_IMPORT_ROWS.toLocaleString()}. ` +
-        `Split it into smaller files — by month or by year — and import them one at a time.`,
-    );
-  }
-
   return { records, delimiter, headers };
 }
 
@@ -581,6 +599,12 @@ function parseCsv(buffer: Buffer): ParsedCsv {
 // laptop. 50 is still a trivial payload (a few tens of KB) and covers a full
 // screen of scrolling on any display.
 const PREVIEW_ROW_LIMIT = 50;
+
+/** The skip reason for a row the owner removed on the review screen. */
+export const REMOVED_IN_REVIEW = "Removed in review";
+
+/** Rows beyond the preview sample returned for review; bounded so a broken file stays a small response. */
+const REVIEW_ROW_LIMIT = 200;
 
 /**
  * Finds the first date-shaped column and reads its convention.
@@ -603,28 +627,6 @@ function detectDateFormatFromRecords(records: Record<string, string>[]) {
     }
   }
   return { format: "iso" as CsvDateFormat, ambiguous: false };
-}
-
-const HEADER_SYNONYMS: Record<Exclude<keyof ColumnMapping, "recordType">, string[]> = {
-  date: ["date", "txn date", "transaction date", "trans date", "posted", "day", "petsa"],
-  description: ["description", "item", "particulars", "details", "detail", "memo", "notes", "note"],
-  amount: ["amount", "total", "price", "cost", "value", "debit", "halaga", "cash out"],
-  category: ["category", "type", "class", "account", "group", "uri"],
-  vendor: ["vendor", "supplier", "store", "shop", "merchant", "payee", "seller", "from", "tindahan"],
-};
-
-function suggestMapping(headers: string[], typeColumn: string | null): Partial<ColumnMapping> {
-  const suggested: Partial<ColumnMapping> = {};
-  const normalise = (header: string) => header.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
-  for (const field of Object.keys(HEADER_SYNONYMS) as (keyof typeof HEADER_SYNONYMS)[]) {
-    const candidates = field === "category" ? headers.filter((header) => header !== typeColumn) : headers;
-    const synonyms = HEADER_SYNONYMS[field];
-    const match = candidates.find((header) => synonyms.includes(normalise(header)))
-      ?? candidates.find((header) => synonyms.some((synonym) => normalise(header).includes(synonym)));
-    if (match) suggested[field] = match;
-  }
-  if (typeColumn) suggested.recordType = typeColumn;
-  return suggested;
 }
 
 function validateMapping(headers: string[], options: PreviewOptions): void {
@@ -664,9 +666,23 @@ function summarisePreviewDuplicates(outcomes: RowOutcome[], existingKeys: Set<st
   return { possibleDuplicateRows, duplicateRows, duplicateRowsTruncated: possibleDuplicateRows > duplicateRows.length };
 }
 
+/** The business's today, for rejecting rows dated after it. */
+/**
+ * A preview with no business attached (tests, an old batch's preview) cannot
+ * know whose today applies, so it allows the latest calendar day anywhere:
+ * UTC plus one. Every import that writes records passes the business's own day.
+ */
+function latestDateWithoutBusiness(): string {
+  return utcDateKey(utcAddDays(utcToday(), 1));
+}
+
 function prepareParsedCsvPreview(
   parsed: ParsedCsv,
   options?: PreviewOptions,
+  /** Only on upload: a file called "sales-sept.csv" is a hint about its rows. */
+  fileName?: string,
+  /** The business's today; see `latestDateWithoutBusiness` for the fallback. */
+  latestDate: string = latestDateWithoutBusiness(),
 ): { result: PreviewResult; outcomes: RowOutcome[]; records: Record<string, string>[] } {
   const { records, headers } = parsed;
   if (options && records.length > 0) validateMapping(headers, options);
@@ -682,7 +698,7 @@ function prepareParsedCsvPreview(
   let validation: PreviewResult["validation"];
   let outcomes: RowOutcome[] = [];
   if (options && (options.dateFormat || !dateDetection.ambiguous)) {
-    outcomes = validateRows(records, options.columnMapping, options.recordType, options.corrections, options.mixedStrategy, dateFormat);
+    outcomes = validateRows(records, options.columnMapping, options.recordType, options.corrections, options.mixedStrategy, dateFormat, latestDate);
     const skipped = outcomes.filter((row): row is Extract<RowOutcome, { kind: "skip" }> => row.kind === "skip");
     validation = {
       validRows: outcomes.length - skipped.length,
@@ -692,15 +708,18 @@ function prepareParsedCsvPreview(
       ...summarisePreviewDuplicates(outcomes),
     };
   }
+  const detection = detectColumns(headers, sample, { typeColumn, fileName });
   const result: PreviewResult = {
     headers,
     previewRows: records.slice(0, PREVIEW_ROW_LIMIT),
     totalRows: records.length,
+    availableFundsBaseline: null,
     detectedTypeColumn: typeColumn,
     columnsWithNegatives: columnsWithSignedAmounts(sample),
     detectedDateFormat: dateFormat,
     dateFormatAmbiguous: options?.dateFormat ? false : dateDetection.ambiguous,
-    suggestedMapping: suggestMapping(headers, typeColumn),
+    suggestedMapping: { ...detection.mapping, ...(typeColumn ? { recordType: typeColumn } : {}) },
+    columnDetection: { unmapped: detection.unmapped, suggestedRecordType: detection.suggestedRecordType },
     ...(validation ? { validation } : {}),
   };
   return { result, outcomes, records };
@@ -723,7 +742,33 @@ async function previewParsedCsvForProfile(
   parsed: ParsedCsv,
   options?: PreviewOptions,
 ): Promise<PreviewResult> {
-  const { result, outcomes, records } = prepareParsedCsvPreview(parsed, options);
+  const profile = await prisma.businessProfile.findUniqueOrThrow({
+    where: { id: businessProfileId },
+    select: {
+      timezone: true,
+      availableFundsBaselineAt: true,
+      availableFundsBaselineDate: true,
+    },
+  });
+  const { result, outcomes, records } = prepareParsedCsvPreview(
+    parsed,
+    options,
+    undefined,
+    businessTodayKey(profile.timezone),
+  );
+  if (options && outcomes.length > 0) {
+    const baselineDate = utcDateKey(profile.availableFundsBaselineDate);
+    const matchingRowCount = outcomes.filter(
+      (outcome) => outcome.kind !== "skip" && outcome.data.date === baselineDate,
+    ).length;
+    if (matchingRowCount > 0) {
+      result.availableFundsBaseline = {
+        baselineAt: profile.availableFundsBaselineAt.toISOString(),
+        baselineDate,
+        matchingRowCount,
+      };
+    }
+  }
   if (options && options.recordType !== "sales") {
     const history = await loadConfirmedCategoryHistory(businessProfileId);
     const categorySuggestions: NonNullable<PreviewResult["categorySuggestions"]> = [];
@@ -780,7 +825,126 @@ async function previewParsedCsvForProfile(
     }
   }
   Object.assign(result.validation, summarisePreviewDuplicates(outcomes, existingKeys));
+  if (options && options.recordType !== "sales") {
+    Object.assign(
+      result,
+      await categoriseForReview(businessProfileId, records, outcomes, options, result.validation?.duplicateRows ?? []),
+    );
+  }
+  if (options) Object.assign(result, rowsForReview(records, outcomes, result));
   return result;
+}
+
+/**
+ * The category every expense row will get, as the review screen shows it.
+ *
+ * Decided over the WHOLE file in file order, exactly as runImportChunks will,
+ * so the counts are the import's and a new category proposed here is the one
+ * the import creates. Per-row detail is returned only for rows on screen.
+ */
+async function categoriseForReview(
+  businessProfileId: number,
+  records: Record<string, string>[],
+  outcomes: RowOutcome[],
+  options: PreviewOptions,
+  duplicateRows: number[],
+): Promise<Pick<PreviewResult, "categorySummary" | "rowCategories">> {
+  const { categoriser } = await loadImportCategoriser(businessProfileId);
+  const summary = { fromFile: 0, suggested: 0, uncategorised: 0 };
+  const newCategories = new Map<string, number>();
+  const decisions = new Map<number, ImportCategoryDecision>();
+  for (const outcome of outcomes) {
+    if (outcome.kind !== "expense") continue;
+    const decision = categoriser.decide(outcome.data.category, outcome.data.description, outcome.data.vendor);
+    decisions.set(outcome.row, decision);
+    if (decision.name === categoriser.uncategorisedName) summary.uncategorised += 1;
+    else if (decision.source === "file") summary.fromFile += 1;
+    else summary.suggested += 1;
+    if (decision.isNew) newCategories.set(decision.name, (newCategories.get(decision.name) ?? 0) + 1);
+  }
+
+  // Rows that are not importable yet still get the category they WOULD get,
+  // so fixing a date does not also mean choosing a category.
+  const rowCategories: NonNullable<PreviewResult["rowCategories"]> = [];
+  const describe = (row: number) => {
+    if (decisions.has(row)) return decisions.get(row)!;
+    const record = records[row - 2];
+    if (!record) return null;
+    const fix = options.corrections?.[String(row)];
+    const kind = options.recordType === "mixed" ? rowKind(record, options, fix?.amount) : "expense";
+    if (kind !== "expense") return null;
+    const pick = (field: keyof ColumnMapping) => (options.columnMapping[field] ? record[options.columnMapping[field]!] : undefined);
+    return categoriser.decide(fix?.category ?? pick("category"), fix?.description ?? pick("description") ?? "", fix?.vendor ?? pick("vendor"));
+  };
+  const onScreen = new Set<number>();
+  for (let row = 2; row < Math.min(records.length, PREVIEW_ROW_LIMIT) + 2; row += 1) onScreen.add(row);
+  for (const row of reviewRowNumbers(outcomes, decisions, categoriser.uncategorisedName)) onScreen.add(row);
+  for (const row of duplicateRows) onScreen.add(row);
+  for (const row of [...onScreen].sort((a, b) => a - b)) {
+    const decision = describe(row);
+    if (decision) rowCategories.push({ row, ...decision });
+  }
+
+  return {
+    rowCategories,
+    categorySummary: {
+      ...summary,
+      newCategories: [...newCategories].map(([name, rows]) => ({ name, rows })).sort((a, b) => b.rows - a.rows),
+    },
+  };
+}
+
+/** Which kind a mixed-file row is, by the same readers validateRows uses. */
+function rowKind(record: Record<string, string>, options: PreviewOptions, amountFix?: string): RowRecordType | null {
+  if (options.mixedStrategy === "sign") {
+    const amount = parseSignedAmount(amountFix ?? record[options.columnMapping.amount]);
+    return amount === null ? null : amount < 0 ? "expense" : "sales";
+  }
+  return classifyTypeValue(options.columnMapping.recordType ? record[options.columnMapping.recordType] : undefined);
+}
+
+/** Rows past the preview sample that need a look: skipped, left uncategorised. First REVIEW_ROW_LIMIT, in file order. */
+function reviewRowNumbers(
+  outcomes: RowOutcome[],
+  decisions: Map<number, ImportCategoryDecision>,
+  uncategorisedName: string,
+): number[] {
+  const rows: number[] = [];
+  for (const outcome of outcomes) {
+    if (outcome.row < PREVIEW_ROW_LIMIT + 2) continue;
+    const needsLook =
+      (outcome.kind === "skip" && outcome.reason !== REMOVED_IN_REVIEW) ||
+      decisions.get(outcome.row)?.name === uncategorisedName;
+    if (needsLook) rows.push(outcome.row);
+    if (rows.length >= REVIEW_ROW_LIMIT) break;
+  }
+  return rows;
+}
+
+/**
+ * The raw cells of rows past the preview sample that need review — skipped,
+ * possibly duplicated, or uncategorised — so the owner can fix them in place.
+ */
+function rowsForReview(
+  records: Record<string, string>[],
+  outcomes: RowOutcome[],
+  result: PreviewResult,
+): Pick<PreviewResult, "reviewRows" | "reviewRowsTruncated"> {
+  const wanted = new Set<number>();
+  for (const outcome of outcomes) {
+    if (outcome.row < PREVIEW_ROW_LIMIT + 2) continue;
+    if (outcome.kind === "skip" && outcome.reason !== REMOVED_IN_REVIEW) wanted.add(outcome.row);
+  }
+  for (const row of result.validation?.duplicateRows ?? []) if (row >= PREVIEW_ROW_LIMIT + 2) wanted.add(row);
+  const uncategorised = new Set(
+    (result.rowCategories ?? []).filter((entry) => entry.source === "none").map((entry) => entry.row),
+  );
+  for (const row of uncategorised) if (row >= PREVIEW_ROW_LIMIT + 2) wanted.add(row);
+  const rows = [...wanted].sort((a, b) => a - b);
+  return {
+    reviewRows: rows.slice(0, REVIEW_ROW_LIMIT).map((row) => ({ row, values: records[row - 2]! })),
+    reviewRowsTruncated: rows.length > REVIEW_ROW_LIMIT,
+  };
 }
 
 /** Optional ownership-scoped preflight against records already saved. */
@@ -1124,7 +1288,7 @@ export async function stageCsvUpload(
     }
     await assertStageUsable(existing);
     const decoded = await decodeStageChunks(existing);
-    const result = stageResponse(existing, prepareParsedCsvPreview(decoded.parsed).result);
+    const result = stageResponse(existing, prepareParsedCsvPreview(decoded.parsed, undefined, input.originalname).result);
     const timings = {
       totalMs: performance.now() - totalStartedAt,
       chunkLoadMs: performance.now() - replayStartedAt - decoded.decompressMs,
@@ -1145,7 +1309,7 @@ export async function stageCsvUpload(
         "This file has no data rows to import — only a header (or nothing at all). Check that the export included the rows.",
       );
     }
-    const preview = prepareParsedCsvPreview(parsed).result;
+    const preview = prepareParsedCsvPreview(parsed, undefined, input.originalname).result;
     const parseMs = performance.now() - parseStartedAt;
 
     const encodeStartedAt = performance.now();
@@ -1268,7 +1432,7 @@ export async function stageCsvUpload(
           await assertStageUsable(winner);
           const decoded = await decodeStageChunks(winner);
           return {
-            result: stageResponse(winner, prepareParsedCsvPreview(decoded.parsed).result),
+            result: stageResponse(winner, prepareParsedCsvPreview(decoded.parsed, undefined, input.originalname).result),
             timings: {
               totalMs: performance.now() - totalStartedAt,
               parseMs,
@@ -1291,7 +1455,7 @@ export async function stageCsvUpload(
       await assertStageUsable(batch);
       const decoded = await decodeStageChunks(batch);
       return {
-        result: stageResponse(batch, prepareParsedCsvPreview(decoded.parsed).result),
+        result: stageResponse(batch, prepareParsedCsvPreview(decoded.parsed, undefined, input.originalname).result),
         timings: {
           totalMs: performance.now() - totalStartedAt,
           parseMs,
@@ -1570,6 +1734,75 @@ type RowOutcome =
   | { kind: "expense"; row: number; data: ValidRow }
   | { kind: "sales"; row: number; data: ValidRow };
 
+interface CsvAvailableFundsClassification {
+  baselineAt: string;
+  baselineDate: string;
+  defaultIncluded: boolean;
+}
+
+function resolveCsvAvailableFundsClassification(
+  profile: {
+    availableFundsBaselineAt: Date;
+    availableFundsBaselineDate: Date;
+  },
+  outcomes: RowOutcome[],
+  input: Pick<ConfirmInput, "includedInAvailableFundsBaseline" | "availableFundsBaselineAt" | "corrections">,
+): CsvAvailableFundsClassification | null {
+  const baselineDate = utcDateKey(profile.availableFundsBaselineDate);
+  const matchingRows = new Set(
+    outcomes.flatMap((outcome) =>
+      outcome.kind !== "skip" && outcome.data.date === baselineDate ? [outcome.row] : []),
+  );
+
+  for (const [rawRow, correction] of Object.entries(input.corrections ?? {})) {
+    if (
+      correction.includedInAvailableFundsBaseline !== undefined
+      && !matchingRows.has(Number(rawRow))
+    ) {
+      throw new ApiError(
+        400,
+        "A balance classification override must identify an importable transaction on the balance date",
+        { code: "AVAILABLE_FUNDS_BASELINE_CLASSIFICATION_NOT_APPLICABLE" },
+      );
+    }
+  }
+
+  const hasClassification = input.includedInAvailableFundsBaseline !== undefined
+    || input.availableFundsBaselineAt !== undefined;
+  if (matchingRows.size === 0 && !hasClassification) return null;
+
+  const resolved = resolveAvailableFundsClassification(
+    profile,
+    profile.availableFundsBaselineDate,
+    input,
+  );
+  if (matchingRows.size === 0) {
+    throw new ApiError(
+      400,
+      "Available funds baseline classification only applies when the import has transactions on the balance date",
+      { code: "AVAILABLE_FUNDS_BASELINE_CLASSIFICATION_NOT_APPLICABLE" },
+    );
+  }
+  return {
+    baselineAt: resolved.availableFundsDeltaBaselineAt!.toISOString(),
+    baselineDate,
+    defaultIncluded: resolved.includedInAvailableFundsBaseline!,
+  };
+}
+
+async function lockCsvRecordGates(
+  tx: Prisma.TransactionClient,
+  businessProfileId: number,
+  outcomes: RowOutcome[],
+): Promise<void> {
+  if (outcomes.some((outcome) => outcome.kind === "expense")) {
+    await lockExpenseDuplicateWriteGate(tx, businessProfileId);
+  }
+  if (outcomes.some((outcome) => outcome.kind === "sales")) {
+    await lockSalesDuplicateWriteGate(tx, businessProfileId);
+  }
+}
+
 /**
  * Splits the parsed file into rows that can be imported and rows that can't.
  *
@@ -1582,8 +1815,10 @@ function validateRows(
   mapping: ColumnMapping,
   recordType: ImportRecordType,
   corrections: RowCorrections = {},
-  mixedStrategy?: MixedStrategy,
-  dateFormat: CsvDateFormat = "iso",
+  mixedStrategy: MixedStrategy | undefined,
+  dateFormat: CsvDateFormat,
+  /** The business's today (YYYY-MM-DD). A row dated after it is skipped. */
+  latestDate: string,
 ): RowOutcome[] {
   const outcomes: RowOutcome[] = [];
 
@@ -1592,6 +1827,13 @@ function validateRows(
     const rowNumber = i + 2; // header is row 1, data is 1-indexed after it
     const fix = corrections[String(rowNumber)];
     const skip = (reason: string) => outcomes.push({ kind: "skip", row: rowNumber, reason });
+
+    // Removed on the review screen. Still an outcome, in file order, so the
+    // worker's resume-by-ordinal contract holds and the summary can name it.
+    if (fix?.exclude) {
+      skip(REMOVED_IN_REVIEW);
+      continue;
+    }
 
     // A correction stands in for the cell the file held, and is then checked
     // by exactly the same rules below — there is no path here that accepts a
@@ -1622,6 +1864,10 @@ function validateRows(
     const isoDate = rawDate ? parseCsvDate(rawDate, dateFormat) : null;
     if (!rawDate || !isoDate) {
       skip(`Invalid date: "${rawDate ?? ""}"`);
+      continue;
+    }
+    if (isAfterToday(isoDate, latestDate)) {
+      skip(`Future date: "${rawDate}"`);
       continue;
     }
 
@@ -1675,21 +1921,13 @@ function validateRows(
     if (rowType === "expense") {
       const rawCategory = (fix?.category ?? (mapping.category ? row[mapping.category] : undefined))?.trim();
       /*
-       * A missing category skips the row in a single-type import — the owner
-       * mapped a category column and this row has a hole in it, which is worth
-       * telling them about.
-       *
-       * In a MIXED file it falls back instead. Sales rows have no category by
-       * nature, so plenty of combined exports carry no category column at all,
-       * and skipping every expense in the file over a column that was never
-       * going to be there would reject the exact file this feature exists to
-       * accept. The rows land in "Uncategorised" and the result screen says how
-       * many need sorting.
+       * An empty category no longer skips the row. It is left undefined here
+       * and decided when the rows are written (lib/importCategoriser): the
+       * owner's history, then the business-first categoriser, then
+       * Uncategorised, which the result screen counts. Skipping every expense
+       * of a file that simply has no category column rejected the files owners
+       * actually have.
        */
-      if (!rawCategory && recordType !== "mixed") {
-        skip("Missing category");
-        continue;
-      }
       if (rawCategory && rawCategory.length > CELL_LIMITS.category) {
         skip(`Category name is longer than ${CELL_LIMITS.category} characters`);
         continue;
@@ -1697,7 +1935,7 @@ function validateRows(
       // Checked last and never fatal when EMPTY — an empty vendor cell is
       // simply no vendor. An over-long one is still a rejection, not a silent
       // truncation.
-      const rawVendor = (mapping.vendor ? row[mapping.vendor] : undefined)?.trim();
+      const rawVendor = (fix?.vendor ?? (mapping.vendor ? row[mapping.vendor] : undefined))?.trim();
       if (rawVendor && rawVendor.length > CELL_LIMITS.vendor) {
         skip(`Vendor is longer than ${CELL_LIMITS.vendor} characters`);
         continue;
@@ -1709,7 +1947,7 @@ function validateRows(
           date: isoDate,
           description: rawDescription,
           amount: amountNum,
-          category: rawCategory || DEFAULT_IMPORT_CATEGORY,
+          category: rawCategory || undefined,
           vendor: rawVendor || undefined,
         },
       });
@@ -1828,6 +2066,9 @@ interface StoredMappingMeta {
   mixedStrategy?: MixedStrategy;
   dateFormat: CsvDateFormat;
   corrections?: RowCorrections;
+  /** The business's today when the import was confirmed; absent on older batches. */
+  latestDate?: string;
+  availableFundsClassification?: CsvAvailableFundsClassification;
 }
 
 /** Rehydrates what the worker needs from the batch's own row. Written by this
@@ -1845,6 +2086,13 @@ function readMappingMeta(json: Prisma.JsonValue | null): StoredMappingMeta {
     mixedStrategy: (meta.mixedStrategy as MixedStrategy | null | undefined) ?? undefined,
     dateFormat: (meta.dateFormat as CsvDateFormat | undefined) ?? "iso",
     corrections: (meta.corrections as RowCorrections | null | undefined) ?? undefined,
+    latestDate: typeof meta.latestDate === "string" ? meta.latestDate : undefined,
+    availableFundsClassification:
+      meta.availableFundsClassification
+      && typeof meta.availableFundsClassification === "object"
+      && !Array.isArray(meta.availableFundsClassification)
+        ? meta.availableFundsClassification as unknown as CsvAvailableFundsClassification
+        : undefined,
   };
 }
 
@@ -1853,6 +2101,24 @@ type ImportProfile = {
   expectedMonthlyExpenses: Prisma.Decimal;
   largeExpenseThresholdPercent: Prisma.Decimal;
 };
+
+/**
+ * The categoriser for one import, from this business's categories, its
+ * confirmed history and its type. Call only after ownership is established.
+ */
+async function loadImportCategoriser(
+  businessProfileId: number,
+): Promise<{ categoriser: ImportCategoriser; categories: { id: number; name: string }[] }> {
+  const [categories, history, profile] = await Promise.all([
+    prisma.expenseCategory.findMany({ where: { businessProfileId }, select: { id: true, name: true }, orderBy: { id: "asc" } }),
+    loadConfirmedCategoryHistory(businessProfileId),
+    prisma.businessProfile.findUnique({ where: { id: businessProfileId }, select: { type: true } }),
+  ]);
+  return {
+    categoriser: createImportCategoriser({ categories, history, businessType: profile?.type ?? null }),
+    categories,
+  };
+}
 
 /**
  * Inserts the validated rows in bounded, transactional chunks with a
@@ -1875,16 +2141,36 @@ async function runImportChunks(args: {
   startAtRow: number;
   lease: ImportLease;
   seed: { imported: number; skippedCount: number; flagged: number; progress: ProgressSummary };
+  availableFundsClassification?: CsvAvailableFundsClassification;
+  corrections?: RowCorrections;
 }): Promise<void> {
-  const { batchId, userId, profile, outcomes, startAtRow, lease, seed } = args;
+  const {
+    batchId,
+    userId,
+    profile,
+    outcomes,
+    startAtRow,
+    lease,
+    seed,
+    availableFundsClassification,
+    corrections,
+  } = args;
   let imported = seed.imported;
   let skippedCount = seed.skippedCount;
   let flagged = seed.flagged;
   const progress = seed.progress;
   const hasExpenseRows = outcomes.slice(startAtRow).some((outcome) => outcome.kind === "expense");
-  const categoryIds = hasExpenseRows
-    ? await resolveCategoriesWithCache(profile.id, [])
-    : new Map<string, number>();
+  // The same decisions the review screen showed: built from the same inputs,
+  // walked in the same file order. A category the owner typed is `category`
+  // here and always wins; an empty one is suggested. See lib/importCategoriser.
+  // One category read serves both the categoriser and the name-to-id cache.
+  const loaded = hasExpenseRows ? await loadImportCategoriser(profile.id) : null;
+  const categoriser = loaded?.categoriser ?? null;
+  const categoryIds = new Map<string, number>();
+  for (const category of loaded?.categories ?? []) {
+    if (!categoryIds.has(category.name.toLowerCase())) categoryIds.set(category.name.toLowerCase(), category.id);
+  }
+  const categoryOf = (row: ValidRow) => categoriser!.decide(row.category, row.description, row.vendor).name;
 
   for (let at = startAtRow; at < outcomes.length; at += CHUNK_SIZE) {
     const chunk = outcomes.slice(at, at + CHUNK_SIZE);
@@ -1896,8 +2182,9 @@ async function runImportChunks(args: {
     // (skipDuplicates + unique constraint), so a rolled-back chunk leaving a
     // created category behind is harmless — and keeping it out keeps the
     // transaction to exactly the writes the checkpoint vouches for.
+    const expenseCategories = expenseRows.map((o) => categoryOf(o.data));
     if (expenseRows.length > 0) {
-      await resolveCategoriesWithCache(profile.id, expenseRows.map((o) => o.data.category!), categoryIds);
+      await resolveCategoriesWithCache(profile.id, expenseCategories, categoryIds);
     }
 
     const createdExpenseIds: number[] = [];
@@ -1912,12 +2199,20 @@ async function runImportChunks(args: {
             userId,
             profile,
             batchId,
-            expenseRows.map((o) => ({
-              categoryId: categoryIds.get(o.data.category!.toLowerCase())!,
+            expenseRows.map((o, index) => ({
+              categoryId: categoryIds.get(expenseCategories[index]!.toLowerCase())!,
               date: o.data.date,
               description: o.data.description,
               amount: o.data.amount,
               vendor: o.data.vendor,
+              ...(o.data.date === availableFundsClassification?.baselineDate
+                ? {
+                    includedInAvailableFundsBaseline:
+                      corrections?.[String(o.row)]?.includedInAvailableFundsBaseline
+                      ?? availableFundsClassification.defaultIncluded,
+                    availableFundsBaselineAt: availableFundsClassification.baselineAt,
+                  }
+                : {}),
             })),
             tx,
           );
@@ -1931,7 +2226,17 @@ async function runImportChunks(args: {
             userId,
             profile.id,
             batchId,
-            salesRows.map((o) => o.data),
+            salesRows.map((o) => ({
+              ...o.data,
+              ...(o.data.date === availableFundsClassification?.baselineDate
+                ? {
+                    includedInAvailableFundsBaseline:
+                      corrections?.[String(o.row)]?.includedInAvailableFundsBaseline
+                      ?? availableFundsClassification.defaultIncluded,
+                    availableFundsBaselineAt: availableFundsClassification.baselineAt,
+                  }
+                : {}),
+            })),
             tx,
           );
           chunkFlagged += created.filter((r) => r.duplicateStatus === "Flagged").length;
@@ -1943,7 +2248,7 @@ async function runImportChunks(args: {
         progress.importedExpenses += expenseRows.length;
         progress.importedSales += salesRows.length;
         progress.largeExpenseFlagged += chunkLarge;
-        progress.uncategorised += expenseRows.filter((o) => o.data.category === DEFAULT_IMPORT_CATEGORY).length;
+        progress.uncategorised += expenseCategories.filter((name) => name === categoriser?.uncategorisedName).length;
         for (const s of skips) {
           if (progress.skipped.length < SKIPPED_SUMMARY_CAP) progress.skipped.push({ row: s.row, reason: s.reason });
           else progress.skippedTruncated = true;
@@ -2224,6 +2529,17 @@ function stagedConfirmHash(input: StagedConfirmInput): string {
       value.description ?? null,
       value.amount ?? null,
       value.category ?? null,
+      // Appended only when used, so a confirmation made before these fields
+      // existed hashes exactly as it did and its replay still matches.
+      ...(value.vendor !== undefined
+        || value.exclude
+        || value.includedInAvailableFundsBaseline !== undefined
+        ? [
+            value.vendor ?? null,
+            value.exclude === true,
+            value.includedInAvailableFundsBaseline ?? null,
+          ]
+        : []),
     ]);
   const canonical = [
     input.title,
@@ -2239,6 +2555,13 @@ function stagedConfirmHash(input: StagedConfirmInput): string {
       input.columnMapping.recordType ?? null,
     ],
     corrections,
+    ...(input.includedInAvailableFundsBaseline !== undefined
+      || input.availableFundsBaselineAt !== undefined
+      ? [
+          input.includedInAvailableFundsBaseline ?? null,
+          input.availableFundsBaselineAt ?? null,
+        ]
+      : []),
   ];
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
@@ -2330,6 +2653,9 @@ export async function confirmStagedImport(
     }
     dateFormat = detection.format;
   }
+
+  const profile = await requireOwnedBusinessProfile(userId, batch.businessProfileId);
+  const latestDate = businessTodayKey(profile.timezone);
   const outcomes = validateRows(
     records,
     input.columnMapping,
@@ -2337,6 +2663,12 @@ export async function confirmStagedImport(
     input.corrections,
     input.mixedStrategy,
     dateFormat,
+    latestDate,
+  );
+  const availableFundsClassification = resolveCsvAvailableFundsClassification(
+    profile,
+    outcomes,
+    input,
   );
   const duplicateOf = await prisma.cSVImportBatch.findFirst({
     where: {
@@ -2357,8 +2689,10 @@ export async function confirmStagedImport(
     recordType: input.recordType,
     mixedStrategy: input.mixedStrategy ?? null,
     dateFormat,
+    latestDate,
     delimiter: decoded.parsed.delimiter,
     corrections: input.corrections ?? null,
+    availableFundsClassification,
     duplicateOfBatchId: duplicateOf?.id ?? null,
   };
   const claim = await prisma.$transaction(async (tx) => {
@@ -2374,6 +2708,15 @@ export async function confirmStagedImport(
     if (active.length !== 1) {
       throw new ApiError(403, "This account can no longer import files.", { code: "ACCOUNT_NOT_ACTIVE" });
     }
+    await lockCsvRecordGates(tx, batch.businessProfileId, outcomes);
+    const lockedProfile = await tx.businessProfile.findUniqueOrThrow({
+      where: { id: batch.businessProfileId },
+      select: {
+        availableFundsBaselineAt: true,
+        availableFundsBaselineDate: true,
+      },
+    });
+    resolveCsvAvailableFundsClassification(lockedProfile, outcomes, input);
     return tx.cSVImportBatch.updateMany({
       where: {
         id: batch.id,
@@ -2454,7 +2797,6 @@ export async function confirmStagedImport(
 
   const insertStartedAt = performance.now();
   try {
-    const profile = await requireOwnedBusinessProfile(userId, batch.businessProfileId);
     await runImportChunks({
       batchId: batch.id,
       userId,
@@ -2463,6 +2805,8 @@ export async function confirmStagedImport(
       startAtRow: 0,
       lease: { workerId: SYNC_WORKER_ID, attemptCount: 1 },
       seed: { imported: 0, skippedCount: 0, flagged: 0, progress: emptyProgress() },
+      availableFundsClassification: availableFundsClassification ?? undefined,
+      corrections: input.corrections,
     });
   } catch (error) {
     if (!(error instanceof CsvLeaseLostError)) {
@@ -2518,6 +2862,7 @@ export async function confirmStagedImport(
 
 export async function confirmImport(userId: number, input: ConfirmInput): Promise<ConfirmResult> {
   const profile = await requireOwnedBusinessProfile(userId, input.businessProfileId);
+  const latestDate = businessTodayKey(profile.timezone);
 
   // Direct service callers (tests, scripts) may omit the key; they get a
   // fresh import each call, exactly the pre-idempotency behaviour. The HTTP
@@ -2582,6 +2927,21 @@ export async function confirmImport(userId: number, input: ConfirmInput): Promis
     dateFormat = detection.format;
   }
 
+  const outcomes = validateRows(
+    records,
+    input.columnMapping,
+    input.recordType,
+    input.corrections,
+    input.mixedStrategy,
+    dateFormat,
+    latestDate,
+  );
+  const availableFundsClassification = resolveCsvAvailableFundsClassification(
+    profile,
+    outcomes,
+    input,
+  );
+
   // Same bytes already imported? Surfaced, not blocked — see ConfirmResult.
   const duplicateOf = await prisma.cSVImportBatch.findFirst({
     where: {
@@ -2606,8 +2966,10 @@ export async function confirmImport(userId: number, input: ConfirmInput): Promis
     recordType: input.recordType,
     mixedStrategy: input.mixedStrategy ?? null,
     dateFormat,
+    latestDate,
     delimiter,
     corrections: input.corrections ?? null,
+    availableFundsClassification,
     duplicateOfBatchId: duplicateOf?.id ?? null,
   };
   const fileReference = csvFileReference(input.businessProfileId, randomUUID(), input.originalname);
@@ -2652,6 +3014,16 @@ export async function confirmImport(userId: number, input: ConfirmInput): Promis
         assertMatchingLegacyConfirmation(concurrentReplay, fileHash, confirmInputHash);
         return { batch: concurrentReplay, replayed: true };
       }
+
+      await lockCsvRecordGates(tx, input.businessProfileId, outcomes);
+      const lockedProfile = await tx.businessProfile.findUniqueOrThrow({
+        where: { id: input.businessProfileId },
+        select: {
+          availableFundsBaselineAt: true,
+          availableFundsBaselineDate: true,
+        },
+      });
+      resolveCsvAvailableFundsClassification(lockedProfile, outcomes, input);
 
       await assertCsvOutstandingCapacity(tx, userId, input.buffer.byteLength);
       const created = await tx.cSVImportBatch.create({
@@ -2782,16 +3154,6 @@ export async function confirmImport(userId: number, input: ConfirmInput): Promis
     };
   }
 
-  // ---- Synchronous path: same stage functions, inside the request ----
-  const outcomes = validateRows(
-    records,
-    input.columnMapping,
-    input.recordType,
-    input.corrections,
-    input.mixedStrategy,
-    dateFormat,
-  );
-
   try {
     await runImportChunks({
       batchId: batch.id,
@@ -2803,6 +3165,8 @@ export async function confirmImport(userId: number, input: ConfirmInput): Promis
       // the request holds the lease it is about to check itself against.
       lease: { workerId: SYNC_WORKER_ID, attemptCount: 1 },
       seed: { imported: 0, skippedCount: 0, flagged: 0, progress: emptyProgress() },
+      availableFundsClassification: availableFundsClassification ?? undefined,
+      corrections: input.corrections,
     });
   } catch (error) {
     /*
@@ -2908,7 +3272,7 @@ async function processClaimedBatch(batch: ClaimedBatch): Promise<void> {
   try {
     const profile = await prisma.businessProfile.findUnique({
       where: { id: batch.businessProfileId },
-      select: { id: true, userId: true, expectedMonthlyExpenses: true, largeExpenseThresholdPercent: true },
+      select: { id: true, userId: true, expectedMonthlyExpenses: true, largeExpenseThresholdPercent: true, timezone: true },
     });
     if (!profile) {
       throw new ImportStageError("validate", "Business profile no longer exists");
@@ -2957,7 +3321,17 @@ async function processClaimedBatch(batch: ClaimedBatch): Promise<void> {
     const validationStartedAt = performance.now();
     let outcomes: RowOutcome[];
     try {
-      outcomes = validateRows(records, meta.columnMapping, meta.recordType, meta.corrections, meta.mixedStrategy, meta.dateFormat);
+      // The day the owner confirmed against, so a run that starts after
+      // midnight imports exactly the rows the review said it would.
+      outcomes = validateRows(
+        records,
+        meta.columnMapping,
+        meta.recordType,
+        meta.corrections,
+        meta.mixedStrategy,
+        meta.dateFormat,
+        meta.latestDate ?? businessTodayKey(profile.timezone),
+      );
     } catch {
       throw new ImportStageError("validate", "Stored CSV rows could not be validated");
     }
@@ -2979,6 +3353,8 @@ async function processClaimedBatch(batch: ClaimedBatch): Promise<void> {
         flagged: batch.flaggedRows,
         progress: readProgress(batch.resultSummary),
       },
+      availableFundsClassification: meta.availableFundsClassification,
+      corrections: meta.corrections,
     });
 
     await completeBatch(batch.id, profile.userId, batch.businessProfileId, lease);

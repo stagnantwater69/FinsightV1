@@ -3,6 +3,7 @@ import { ZodError } from "zod";
 import { MulterError } from "multer";
 import { Prisma } from "@prisma/client";
 import { logger } from "../config/logger";
+import { refundRateLimitsForError } from "./rateLimit.middleware";
 
 /*
  * Codes for "the database was not reachable", as opposed to "the query was
@@ -135,19 +136,22 @@ export function errorHandler(err: unknown, req: Request, res: Response, next: Ne
         "CSV request rejected by a capacity guard",
       );
     }
-    return res.status(err.status).json({
+    const send = () => res.status(err.status).json({
       error: err.message,
       ...(err.code ? { code: err.code } : {}),
       ...(err.responseDetails ?? {}),
     });
+    const refund = err.code ? refundRateLimitsForError(res, err.code) : null;
+    if (refund) {
+      void refund.then(send);
+      return;
+    }
+    return send();
   }
 
   if (err instanceof MulterError) {
-    if (res.locals.csvImportRequest === true) {
-      const response = multerErrorResponse(err);
-      return res.status(response.status).json({ error: response.error, code: response.code });
-    }
-    return res.status(400).json({ error: err.message });
+    const response = multerErrorResponse(err);
+    return res.status(response.status).json({ error: response.error, code: response.code });
   }
 
   if (isMalformedMultipart(err, req)) {

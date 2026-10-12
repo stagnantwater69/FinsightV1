@@ -12,6 +12,7 @@ import {
 import { loadBoundedCategoryHistory } from "./categoryStatistics.service";
 import { DEFAULT_DETECTION_CONFIG, type DetectionConfig } from "./config";
 import { saveFinding } from "./finding.service";
+import { runAnalysisMutation, type AnalysisMutationGuard } from "./mutationGuard";
 
 export const AMOUNT_OUTLIER_VERSION = "amount-outlier-v1";
 
@@ -51,15 +52,19 @@ async function loadCachedBaseline(
   };
 }
 
-export async function detectAmountOutlierForExpense(expenseRecordId: number, config: DetectionConfig = DEFAULT_DETECTION_CONFIG) {
+export async function detectAmountOutlierForExpense(
+  expenseRecordId: number,
+  config: DetectionConfig = DEFAULT_DETECTION_CONFIG,
+  mutate: AnalysisMutationGuard = runAnalysisMutation,
+) {
   if (!config.featureFlags.amountOutlier) return null;
   const candidate = await prisma.expenseRecord.findUnique({ where: { id: expenseRecordId }, include: { category: true } });
   if (!candidate) return null;
   const fingerprint = `${AMOUNT_OUTLIER_VERSION}:${candidate.id}`;
-  const clear = async () => prisma.anomalyFinding.updateMany({
-    where: { businessProfileId: candidate.businessProfileId, expenseRecordId: candidate.id, method: "z-score-iqr", status: AnomalyFindingStatus.OPEN },
-    data: { status: AnomalyFindingStatus.SUPERSEDED },
-  });
+  const clear = () => mutate((db) => db.anomalyFinding.updateMany({
+      where: { businessProfileId: candidate.businessProfileId, expenseRecordId: candidate.id, method: "z-score-iqr", status: AnomalyFindingStatus.OPEN },
+      data: { status: AnomalyFindingStatus.SUPERSEDED },
+    }));
 
   let baseline = await loadCachedBaseline(candidate, config);
   if (!baseline) {
@@ -76,7 +81,7 @@ export async function detectAmountOutlierForExpense(expenseRecordId: number, con
   };
   if (!isUnusualExpense(Number(candidate.amount), stats, quartiles, thresholds)) { await clear(); return null; }
   const z = zScore(Number(candidate.amount), stats);
-  return saveFinding({
+  return mutate((db) => saveFinding({
     fingerprint, businessProfileId: candidate.businessProfileId, expenseRecordId: candidate.id,
     type: AnomalyFindingType.AMOUNT_OUTLIER,
     severity: Math.abs(z) >= 3 || Math.abs(Number(candidate.amount) - stats.mean) / Math.max(Math.abs(stats.mean), 1) >= 1
@@ -85,5 +90,5 @@ export async function detectAmountOutlierForExpense(expenseRecordId: number, con
     reasons: [`Detected by ${detectionMethod(Number(candidate.amount), stats, quartiles, thresholds)}`, `The category baseline average is ${stats.mean.toFixed(2)}`],
     metadata: { zScore: z, categoryMean: stats.mean, categoryStdDev: stats.stdDev, q1: quartiles.q1, q3: quartiles.q3, historyCount: stats.count },
     detectorVersion: AMOUNT_OUTLIER_VERSION,
-  });
+  }, db));
 }

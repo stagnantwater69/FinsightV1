@@ -12,6 +12,7 @@ import {
   type IsolationForestRecord,
 } from "./isolationForestFeatures";
 import { scoreWithIsolationForest } from "./mlWorkerClient";
+import { runAnalysisMutation, type AnalysisMutationGuard } from "./mutationGuard";
 
 /**
  * Isolation Forest — the secondary, multivariate detector. SHADOW MODE ONLY.
@@ -53,6 +54,7 @@ export async function refreshIsolationForestFindings(
   userId: number,
   businessProfileId: number,
   config: DetectionConfig = DEFAULT_DETECTION_CONFIG,
+  mutate: AnalysisMutationGuard = runAnalysisMutation,
 ) {
   if (!config.featureFlags.isolationForest) return null;
 
@@ -83,55 +85,56 @@ export async function refreshIsolationForestFindings(
     .sort((a, b) => b.normalizedScore - a.normalizedScore)
     .slice(0, budget);
 
-  // Records that fell out of the anomalous band no longer carry an active
-  // shadow opinion; supersede them so evaluation reads the current model view.
   const selectedIds = selected.map((score) => score.id);
-  await prisma.anomalyFinding.updateMany({
-    where: {
-      businessProfileId,
-      method: METHOD,
-      status: { in: [AnomalyFindingStatus.SHADOW, AnomalyFindingStatus.OPEN] },
-      ...(selectedIds.length ? { expenseRecordId: { notIn: selectedIds } } : {}),
-    },
-    data: { status: AnomalyFindingStatus.SUPERSEDED },
-  });
-
   const allFeatureRows = matrix.map((entry) => entry.features);
-  let saved = 0;
-  for (const score of selected) {
-    const features = byId.get(score.id);
-    if (!features) continue;
-    const deviations = topFeatureDeviations(features, allFeatureRows);
-    const reasons = deviations.length
-      ? deviations.map((entry) => entry.label)
-      : ["Several characteristics of this transaction differ from this business's usual pattern"];
-    await saveFinding({
-      fingerprint: `${ISOLATION_FOREST_VERSION}:${score.id}`,
-      businessProfileId,
-      expenseRecordId: score.id,
-      type: AnomalyFindingType.ML_OUTLIER,
-      // Never HIGH: HIGH is the notification threshold, and a shadow detector
-      // must stay below every gate that could reach an owner.
-      severity: score.normalizedScore >= 0.995 ? AnomalyFindingSeverity.MEDIUM : AnomalyFindingSeverity.LOW,
-      score: score.normalizedScore,
-      method: METHOD,
-      title: "Unusual combination of transaction characteristics",
-      reasons,
-      metadata: {
-        modelVersion: response.modelVersion,
-        featureVersion: IF_FEATURE_VERSION,
-        sklearnVersion: response.sklearnVersion,
-        decisionValue: score.decisionValue,
-        normalizedScore: score.normalizedScore,
-        trainingWindowDays: HISTORY_DAYS,
-        trainedRows: response.trainedRows,
-        topDeviations: deviations.map((entry) => `${entry.feature}:${entry.deviation.toFixed(2)}`),
+  const saved = await mutate(async (db) => {
+    await db.anomalyFinding.updateMany({
+      where: {
+        businessProfileId,
+        method: METHOD,
+        status: { in: [AnomalyFindingStatus.SHADOW, AnomalyFindingStatus.OPEN] },
+        ...(selectedIds.length ? { expenseRecordId: { notIn: selectedIds } } : {}),
       },
-      detectorVersion: ISOLATION_FOREST_VERSION,
-      status: AnomalyFindingStatus.SHADOW,
+      data: { status: AnomalyFindingStatus.SUPERSEDED },
     });
-    saved += 1;
-  }
+
+    let savedCount = 0;
+    for (const score of selected) {
+      const features = byId.get(score.id);
+      if (!features) continue;
+      const deviations = topFeatureDeviations(features, allFeatureRows);
+      const reasons = deviations.length
+        ? deviations.map((entry) => entry.label)
+        : ["Several characteristics of this transaction differ from this business's usual pattern"];
+      await saveFinding({
+        fingerprint: `${ISOLATION_FOREST_VERSION}:${score.id}`,
+        businessProfileId,
+        expenseRecordId: score.id,
+        type: AnomalyFindingType.ML_OUTLIER,
+        // Never HIGH: HIGH is the notification threshold, and a shadow detector
+        // must stay below every gate that could reach an owner.
+        severity: score.normalizedScore >= 0.995 ? AnomalyFindingSeverity.MEDIUM : AnomalyFindingSeverity.LOW,
+        score: score.normalizedScore,
+        method: METHOD,
+        title: "Unusual combination of transaction characteristics",
+        reasons,
+        metadata: {
+          modelVersion: response.modelVersion,
+          featureVersion: IF_FEATURE_VERSION,
+          sklearnVersion: response.sklearnVersion,
+          decisionValue: score.decisionValue,
+          normalizedScore: score.normalizedScore,
+          trainingWindowDays: HISTORY_DAYS,
+          trainedRows: response.trainedRows,
+          topDeviations: deviations.map((entry) => `${entry.feature}:${entry.deviation.toFixed(2)}`),
+        },
+        detectorVersion: ISOLATION_FOREST_VERSION,
+        status: AnomalyFindingStatus.SHADOW,
+      }, db);
+      savedCount += 1;
+    }
+    return savedCount;
+  });
 
   logger.info(
     {

@@ -3,6 +3,7 @@ import { prisma } from "../../config/prisma";
 import { utcAddDays, utcEndOfDay } from "../../lib/dates";
 import { DEFAULT_DETECTION_CONFIG, type DetectionConfig } from "./config";
 import { saveFinding } from "./finding.service";
+import { runAnalysisMutation, type AnalysisMutationGuard } from "./mutationGuard";
 import { normalizeComparisonText, textSimilarity } from "./nearDuplicate.service";
 
 export const BEHAVIORAL_NOVELTY_VERSION = "behavioral-novelty-v1";
@@ -37,6 +38,7 @@ export function behavioralSignals(candidate: BehaviorRecord, history: BehaviorRe
 export async function detectBehavioralNoveltyForExpense(
   expenseRecordId: number,
   config: DetectionConfig = DEFAULT_DETECTION_CONFIG,
+  mutate: AnalysisMutationGuard = runAnalysisMutation,
 ) {
   if (!config.featureFlags.behavioralNovelty) return null;
   const candidate = await prisma.expenseRecord.findUnique({ where: { id: expenseRecordId } });
@@ -54,10 +56,10 @@ export async function detectBehavioralNoveltyForExpense(
   const fingerprint = `${BEHAVIORAL_NOVELTY_VERSION}:${candidate.id}`;
   const strongSignals = signals ? Object.entries(signals).filter(([name, value]) => name !== "score" && value >= 0.75) : [];
   if (!signals || signals.score < 0.65 || strongSignals.length < 2) {
-    await prisma.anomalyFinding.updateMany({
+    await mutate((db) => db.anomalyFinding.updateMany({
       where: { businessProfileId: candidate.businessProfileId, expenseRecordId: candidate.id, method: "behavioral-novelty", status: AnomalyFindingStatus.OPEN },
       data: { status: AnomalyFindingStatus.SUPERSEDED },
-    });
+    }));
     return null;
   }
   const labels: Record<string, string> = {
@@ -67,12 +69,12 @@ export async function detectBehavioralNoveltyForExpense(
     timing: "This transaction occurred on an unusual day of the week",
     description: "The description differs from previous transaction descriptions",
   };
-  return saveFinding({
+  return mutate((db) => saveFinding({
     fingerprint, businessProfileId: candidate.businessProfileId, expenseRecordId: candidate.id,
     type: AnomalyFindingType.BEHAVIORAL_NOVELTY,
     severity: signals.score >= 0.8 ? AnomalyFindingSeverity.HIGH : AnomalyFindingSeverity.MEDIUM,
     score: signals.score, method: "behavioral-novelty", title: "Unusual transaction behavior",
     reasons: strongSignals.map(([name]) => labels[name]!), metadata: signals,
     detectorVersion: BEHAVIORAL_NOVELTY_VERSION,
-  });
+  }, db));
 }

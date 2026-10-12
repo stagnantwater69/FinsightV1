@@ -59,3 +59,13 @@ export const moneyAmountSchema = z
   .refine((value) => decimalPlacesOf(value) <= MONEY_SCALE, {
     message: "Amount can have at most 2 decimal places (centavos)",
   });
+
+/** The same database-aligned money domain, with zero allowed for simulations. */
+export const nonnegativeMoneyAmountSchema = z
+  .number({ invalid_type_error: "Amount must be a number" })
+  .finite({ message: "Amount must be a number" })
+  .nonnegative({ message: "Amount must be zero or greater" })
+  .max(MAX_MONEY_AMOUNT, { message: `Amount must be ${MAX_MONEY_AMOUNT.toLocaleString("en-PH")} or less` })
+  .refine((value) => decimalPlacesOf(value) <= MONEY_SCALE, {
+    message: "Amount can have at most 2 decimal places (centavos)",
+  });

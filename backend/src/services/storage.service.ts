@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { supabaseAdmin } from "../config/supabase";
+import sharp from "sharp";
+import { SUPABASE_REQUEST_TIMEOUT_MS, supabaseAdmin } from "../config/supabase";
 import { env } from "../config/env";
 import { ApiError } from "../middleware/error.middleware";
 import { logger } from "../config/logger";
@@ -39,6 +40,15 @@ const AVATAR_BUCKET = "avatars";
  * happening, which is the one moment it is least likely to work.
  */
 const STORAGE_RETRY_DELAY_MS = 250;
+const STORAGE_UPLOAD_ATTEMPTS = 2;
+
+export const PUBLIC_IMAGE_UPLOAD_TRANSACTION_TIMEOUT_MS = 15_000;
+// Deletion waits out both bounded Storage attempts plus the transaction window
+// before its first public-prefix inventory.
+export const PUBLIC_IMAGE_UPLOAD_SETTLE_MS =
+  (SUPABASE_REQUEST_TIMEOUT_MS * STORAGE_UPLOAD_ATTEMPTS)
+  + STORAGE_RETRY_DELAY_MS
+  + PUBLIC_IMAGE_UPLOAD_TRANSACTION_TIMEOUT_MS;
 
 /**
  * Is a second attempt worth the owner's time?
@@ -58,9 +68,16 @@ function isRetryableStorageFailure(error: unknown): boolean {
   return status === 429 || status >= 500;
 }
 
-async function uploadWithRetry(bucket: string, path: string, buffer: Buffer, contentType: string) {
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    const { error } = await supabaseAdmin.storage.from(bucket).upload(path, buffer, { contentType });
+async function uploadWithRetry(
+  bucket: string,
+  path: string,
+  buffer: Buffer,
+  contentType: string,
+  options: { upsert?: boolean } = {},
+) {
+  for (let attempt = 1; attempt <= STORAGE_UPLOAD_ATTEMPTS; attempt++) {
+    const uploadOptions = options.upsert ? { contentType, upsert: true } : { contentType };
+    const { error } = await supabaseAdmin.storage.from(bucket).upload(path, buffer, uploadOptions);
     if (!error) return;
 
     const status = (error as { status?: number }).status;
@@ -68,7 +85,7 @@ async function uploadWithRetry(bucket: string, path: string, buffer: Buffer, con
     const retryable = isRetryableStorageFailure(error);
     logger.error({ bucket, attempt, status, statusCode, retryable }, "Storage upload failed");
 
-    if (attempt === 2 || !retryable) {
+    if (attempt === STORAGE_UPLOAD_ATTEMPTS || !retryable) {
       throw new ApiError(502, "Could not upload file to storage");
     }
     await new Promise((resolve) => setTimeout(resolve, STORAGE_RETRY_DELAY_MS));
@@ -301,15 +318,73 @@ export async function listCsvFilesForProfile(
   return { objects: objects.slice(0, maxObjects), truncated: scanned > maxObjects };
 }
 
-/** Removes an avatar/logo from its persisted public URL, including cache-bust query strings. */
-export async function deletePublicImageUrl(url: string): Promise<boolean> {
+/** Resolves one of this service's public URLs to its bucket-relative object key. */
+export function publicImagePathFromUrl(url: string): string | null {
   const marker = `/storage/v1/object/public/${AVATAR_BUCKET}/`;
   const markerAt = url.indexOf(marker);
-  if (markerAt === -1) return true;
+  if (markerAt === -1) return null;
   const encodedPath = url.slice(markerAt + marker.length).split("?")[0]!;
   try {
-    return removeObject(AVATAR_BUCKET, decodeURIComponent(encodedPath));
+    const path = decodeURIComponent(encodedPath);
+    return /^(?:users|businesses)\/[1-9]\d*(?:\.[^/]+)?$/.test(path) ? path : null;
   } catch {
+    return null;
+  }
+}
+
+/** Deletes one known avatar/logo object key. */
+export async function deletePublicImagePath(path: string): Promise<boolean> {
+  return removeObject(AVATAR_BUCKET, path);
+}
+
+/** Removes an avatar/logo from its persisted public URL, including cache-bust query strings. */
+export async function deletePublicImageUrl(url: string): Promise<boolean> {
+  const path = publicImagePathFromUrl(url);
+  return path ? deletePublicImagePath(path) : true;
+}
+
+/** Lists canonical and legacy-extension objects owned by one user or business. */
+export async function listPublicImagePaths(prefix: string): Promise<string[]> {
+  const match = /^(users|businesses)\/([1-9]\d*)$/.exec(prefix);
+  if (!match) throw new Error("Invalid public-image ownership prefix");
+  const [, folder, stem] = match;
+  const paths: string[] = [];
+  let offset = 0;
+
+  while (true) {
+    const limit = 100;
+    const { data, error } = await supabaseAdmin.storage.from(AVATAR_BUCKET).list(folder!, {
+      limit,
+      offset,
+      search: stem!,
+      sortBy: { column: "name", order: "asc" },
+    });
+    if (error || !data) {
+      const rawStatus = (error as { status?: number; statusCode?: string | number } | null)?.status
+        ?? (error as { statusCode?: string | number } | null)?.statusCode;
+      if (Number(rawStatus) === 404) return [];
+      throw new Error("Could not list public image objects");
+    }
+    for (const object of data) {
+      if (!object.id || object.name.includes("/")) continue;
+      if (object.name === stem || object.name.startsWith(`${stem}.`)) {
+        paths.push(`${folder}/${object.name}`);
+      }
+    }
+    offset += data.length;
+    if (data.length < limit) break;
+  }
+  return paths;
+}
+
+/** Best-effort cleanup for extension-based objects created before canonical keys. */
+export async function deleteSupersededPublicImages(prefix: string, keepPath = prefix): Promise<boolean> {
+  try {
+    const paths = (await listPublicImagePaths(prefix)).filter((path) => path !== keepPath);
+    const removed = await Promise.all(paths.map((path) => deletePublicImagePath(path)));
+    return removed.every(Boolean);
+  } catch (error) {
+    logger.error({ err: error, prefix }, "Could not inventory superseded public images");
     return false;
   }
 }
@@ -415,18 +490,69 @@ export async function uploadCsvFile(businessProfileId: number, buffer: Buffer, o
   return path;
 }
 
-// `upsert: true` because a re-uploaded photo reuses the same path (see the
-// callers below) — old avatars/logos are meant to be replaced, not
-// accumulated forever under a new random name each time.
-async function uploadPublicImage(prefix: string, buffer: Buffer, mimetype: string, originalname: string) {
-  const ext = originalname.includes(".") ? originalname.split(".").pop() : mimetype.split("/")[1];
-  const path = `${prefix}.${ext}`;
-  const { error } = await supabaseAdmin.storage
-    .from(AVATAR_BUCKET)
-    .upload(path, buffer, { contentType: mimetype, upsert: true });
-  if (error) {
-    throw new ApiError(502, "Could not upload image to storage");
+const PUBLIC_IMAGE_FORMATS: Readonly<Record<string, string>> = {
+  "image/jpeg": "jpeg",
+  "image/png": "png",
+  "image/webp": "webp",
+};
+const PUBLIC_IMAGE_MAX_PIXELS = 25_000_000;
+
+export type ValidatedPublicImage = Readonly<{
+  buffer: Buffer;
+  mimetype: string;
+}>;
+
+const validatedPublicImages = new WeakSet<ValidatedPublicImage>();
+
+export async function validatePublicImageUpload(
+  buffer: Buffer,
+  mimetype: string,
+): Promise<ValidatedPublicImage> {
+  const expectedFormat = PUBLIC_IMAGE_FORMATS[mimetype];
+  if (!expectedFormat || buffer.length === 0) {
+    throw new ApiError(400, "Photo must be JPEG, PNG, or WEBP");
   }
+  try {
+    const image = sharp(buffer, { failOn: "error", limitInputPixels: PUBLIC_IMAGE_MAX_PIXELS });
+    const metadata = await image.metadata();
+    if (
+      metadata.format !== expectedFormat ||
+      !metadata.width ||
+      !metadata.height ||
+      (metadata.pages ?? 1) > 1
+    ) {
+      throw new ApiError(400, "The photo type does not match its contents");
+    }
+    await image.resize({ width: 1, height: 1, fit: "inside" }).toBuffer();
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(400, "This photo could not be read. Choose a JPEG, PNG, or WEBP image up to 25 megapixels.");
+  }
+
+  const validated = { buffer, mimetype };
+  validatedPublicImages.add(validated);
+  return validated;
+}
+
+// An extensionless owner key makes every upload an upsert of one object.
+// Deletion inventories the prefix because Storage may commit before the DB URL.
+async function uploadPublicImage(
+  prefix: string,
+  buffer: Buffer,
+  mimetype: string,
+  _originalname: string,
+  validated?: ValidatedPublicImage,
+) {
+  if (
+    !validated
+    || !validatedPublicImages.has(validated)
+    || validated.buffer !== buffer
+    || validated.mimetype !== mimetype
+  ) {
+    await validatePublicImageUpload(buffer, mimetype);
+  }
+  const path = prefix;
+  await uploadWithRetry(AVATAR_BUCKET, path, buffer, mimetype, { upsert: true });
   const { data } = supabaseAdmin.storage.from(AVATAR_BUCKET).getPublicUrl(path);
   // Cache-bust: the path (and therefore the URL) is stable across re-uploads,
   // so without this the browser and CDN would keep serving the old cached
@@ -434,10 +560,22 @@ async function uploadPublicImage(prefix: string, buffer: Buffer, mimetype: strin
   return `${data.publicUrl}?v=${Date.now()}`;
 }
 
-export async function uploadUserAvatar(userId: number, buffer: Buffer, mimetype: string, originalname: string) {
-  return uploadPublicImage(`users/${userId}`, buffer, mimetype, originalname);
+export async function uploadUserAvatar(
+  userId: number,
+  buffer: Buffer,
+  mimetype: string,
+  originalname: string,
+  validated?: ValidatedPublicImage,
+) {
+  return uploadPublicImage(`users/${userId}`, buffer, mimetype, originalname, validated);
 }
 
-export async function uploadBusinessLogo(businessProfileId: number, buffer: Buffer, mimetype: string, originalname: string) {
-  return uploadPublicImage(`businesses/${businessProfileId}`, buffer, mimetype, originalname);
+export async function uploadBusinessLogo(
+  businessProfileId: number,
+  buffer: Buffer,
+  mimetype: string,
+  originalname: string,
+  validated?: ValidatedPublicImage,
+) {
+  return uploadPublicImage(`businesses/${businessProfileId}`, buffer, mimetype, originalname, validated);
 }

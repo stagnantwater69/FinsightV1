@@ -36,7 +36,7 @@ const reductionOpportunityEvidenceSchema = z.object({
 const reductionOpportunitySchema: z.ZodType<ReductionOpportunity> = z.object({
   id: z.string().min(1).max(200),
   type: z.enum(["CATEGORY_PRESSURE", "FREQUENT_PURCHASE_ACCUMULATION", "RECORD_REVIEW_FIRST"]),
-  categoryId: z.number().int().positive(),
+  categoryId: z.number().int().positive().max(2147483647),
   categoryName: z.string().min(1).max(120),
   priority: z.enum(["high", "medium", "low"]),
   confidence: z.enum(["strong", "moderate", "limited"]),
@@ -46,7 +46,7 @@ const reductionOpportunitySchema: z.ZodType<ReductionOpportunity> = z.object({
   // [ADDED] Plan §5.2/§15 Phase 5 — see ReductionOpportunity.costBehavior.
   costBehavior: z.enum(["fixed", "variable", "mixed", "unclassified"]),
   suggestedChecks: z.array(z.string().min(1).max(200)).max(10),
-  relatedRecordIds: z.array(z.number().int().positive()).max(20),
+  relatedRecordIds: z.array(z.number().int().positive().max(2147483647)).max(20),
   limitations: z.array(z.string().min(1).max(300)).max(10),
 });
 
@@ -57,7 +57,7 @@ const reductionOpportunitySchema: z.ZodType<ReductionOpportunity> = z.object({
  * a form quietly truncating what the API would have accepted.
  */
 export const askSchema = z.object({
-  businessProfileId: z.number().int().positive(),
+  businessProfileId: z.number().int().positive().max(2147483647),
   module: z.enum(aiService.INTERACTION_MODULES),
   question: z.string().min(1).max(1000),
   // Omitted by the Ask FinSight drawer on purpose — with no override the
@@ -89,7 +89,7 @@ export async function ask(req: Request, res: Response) {
 }
 
 const suggestCategorySchema = z.object({
-  businessProfileId: z.number().int().positive(),
+  businessProfileId: z.number().int().positive().max(2147483647),
   description: z.string().min(1).max(255),
   vendor: z.string().max(150).optional(),
 });
@@ -112,7 +112,7 @@ export async function suggestCategory(req: Request, res: Response) {
  * this rule rather than a copy of it.
  */
 export const purchaseReviewSchema = z.object({
-  businessProfileId: z.number().int().positive(),
+  businessProfileId: z.number().int().positive().max(2147483647),
   description: z.string().min(3).max(255),
   /*
    * Optional, and deliberately so: an owner may know what they want before
@@ -127,7 +127,7 @@ export const purchaseReviewSchema = z.object({
    * still not part of the impact calculation — see the note on Spending
    * Impact's category field.
    */
-  categoryId: z.number().int().positive().optional(),
+  categoryId: z.number().int().positive().max(2147483647).optional(),
 });
 
 /**
@@ -174,8 +174,22 @@ export async function purchaseReview(req: Request, res: Response) {
  * deliberately the same 1000 as `/ai/ask` so the two entry points cannot
  * disagree about what a sendable question is.
  */
+/*
+ * The flag or record a chat was opened from ("Explain this flag"). Only ids
+ * cross the wire: the server loads the row itself, scoped to the owner's
+ * business profile, and 404s one that is not theirs (see focusLines).
+ */
+const chatFocusSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("finding"), findingId: z.number().int().positive().max(2147483647) }),
+  z.object({
+    kind: z.literal("record"),
+    recordType: z.enum(["expense", "sales"]),
+    recordId: z.number().int().positive().max(2147483647),
+  }),
+]);
+
 export const createConversationSchema = z.object({
-  businessProfileId: z.number().int().positive(),
+  businessProfileId: z.number().int().positive().max(2147483647),
   originModule: z.enum(aiService.INTERACTION_MODULES),
   question: z.string().min(1).max(1000),
   // Optional: derived server-side from `question` when omitted, so the stored
@@ -185,12 +199,18 @@ export const createConversationSchema = z.object({
   context: z.string().max(3000).optional(),
   // Same meaning as `askSchema.reductionOpportunity`.
   reductionOpportunity: reductionOpportunitySchema.optional(),
+  focus: chatFocusSchema.optional(),
 });
 
 export const appendMessageSchema = z.object({
   question: z.string().min(1).max(1000),
   context: z.string().max(3000).optional(),
   reductionOpportunity: reductionOpportunitySchema.optional(),
+  focus: chatFocusSchema.optional(),
+});
+
+export const messageFeedbackSchema = z.object({
+  feedback: z.enum(["up", "down"]).nullable(),
 });
 
 export const renameConversationSchema = z.object({
@@ -198,12 +218,12 @@ export const renameConversationSchema = z.object({
 });
 
 const conversationListQuerySchema = z.object({
-  businessProfileId: z.coerce.number().int().positive(),
+  businessProfileId: z.coerce.number().int().positive().max(2147483647),
   limit: z.coerce.number().int().positive().max(100).default(50),
 });
 
 const conversationIdSchema = z.object({
-  id: z.coerce.number().int().positive(),
+  id: z.coerce.number().int().positive().max(2147483647),
 });
 
 export async function listConversations(req: Request, res: Response) {
@@ -231,7 +251,8 @@ export async function createConversation(req: Request, res: Response) {
     input.question,
     input.title,
     input.context,
-    input.reductionOpportunity
+    input.reductionOpportunity,
+    input.focus
   );
   res.status(201).json(result);
 }
@@ -244,9 +265,22 @@ export async function sendConversationMessage(req: Request, res: Response) {
     id,
     input.question,
     input.context,
-    input.reductionOpportunity
+    input.reductionOpportunity,
+    input.focus
   );
   res.status(201).json(result);
+}
+
+const messageIdParamsSchema = z.object({
+  id: z.coerce.number().int().positive().max(2147483647),
+  messageId: z.coerce.number().int().positive().max(2147483647),
+});
+
+export async function setMessageFeedback(req: Request, res: Response) {
+  const { id, messageId } = messageIdParamsSchema.parse(req.params);
+  const input = messageFeedbackSchema.parse(req.body);
+  const result = await conversationService.setMessageFeedback(req.user!.id, id, messageId, input.feedback);
+  res.status(200).json(result);
 }
 
 export async function renameConversation(req: Request, res: Response) {
@@ -263,7 +297,7 @@ export async function deleteConversation(req: Request, res: Response) {
 }
 
 const historyQuerySchema = z.object({
-  businessProfileId: z.coerce.number().int().positive(),
+  businessProfileId: z.coerce.number().int().positive().max(2147483647),
   module: z.enum(aiService.INTERACTION_MODULES).optional(),
   limit: z.coerce.number().int().positive().max(100).default(30),
 });

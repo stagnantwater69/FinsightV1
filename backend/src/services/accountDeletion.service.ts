@@ -10,7 +10,14 @@ import { supabaseAdmin } from "../config/supabase";
 import { prisma } from "../config/prisma";
 import { logger } from "../config/logger";
 import { securityEvent } from "../lib/securityLog";
-import { deleteCsvFile, deletePublicImageUrl, deleteReceiptImage } from "./storage.service";
+import {
+  deleteCsvFile,
+  deletePublicImagePath,
+  deleteReceiptImage,
+  listPublicImagePaths,
+  PUBLIC_IMAGE_UPLOAD_SETTLE_MS,
+  publicImagePathFromUrl,
+} from "./storage.service";
 import {
   CSV_AMBIGUOUS_UPLOAD_TOMBSTONE_GRACE_MS,
   STAGING_UPLOAD_LEASE_MS,
@@ -73,6 +80,7 @@ type ClaimedDeletion = {
   stage: AccountDeletionStage;
   deletionAttempts: number;
   claimVersion: number;
+  deletionRequestedAt: Date | null;
 };
 
 type StorageDeletionTask = {
@@ -145,9 +153,17 @@ async function loadStoragePlan(userId: number) {
     if (!byKey.has(key)) byKey.set(key, { key, remove });
   };
 
-  add("public", user.avatarUrl, () => deletePublicImageUrl(user.avatarUrl!));
+  const publicPaths = new Set<string>([`users/${userId}`]);
+  const persistedAvatarPath = user.avatarUrl ? publicImagePathFromUrl(user.avatarUrl) : null;
+  if (persistedAvatarPath) publicPaths.add(persistedAvatarPath);
+  for (const path of await listPublicImagePaths(`users/${userId}`)) publicPaths.add(path);
+
   for (const profile of user.businessProfiles) {
-    add("public", profile.logoUrl, () => deletePublicImageUrl(profile.logoUrl!));
+    const prefix = `businesses/${profile.id}`;
+    publicPaths.add(prefix);
+    const persistedLogoPath = profile.logoUrl ? publicImagePathFromUrl(profile.logoUrl) : null;
+    if (persistedLogoPath) publicPaths.add(persistedLogoPath);
+    for (const path of await listPublicImagePaths(prefix)) publicPaths.add(path);
     for (const scan of profile.receiptScans) {
       add("receipt", scan.imageFile, () => deleteReceiptImage(scan.imageFile!));
       for (const page of scan.pages) {
@@ -181,6 +197,9 @@ async function loadStoragePlan(userId: number) {
   }
   for (const job of queuedCsvPurges) {
     add("csv", job.fileReference, () => deleteCsvFile(job.fileReference!));
+  }
+  for (const path of publicPaths) {
+    add("public", path, () => deletePublicImagePath(path));
   }
 
   const now = Date.now();
@@ -276,10 +295,6 @@ async function deleteRelationalDataInTransaction(tx: Prisma.TransactionClient, u
   await tx.user.delete({ where: { id: userId } });
 }
 
-async function deleteRelationalData(userId: number): Promise<void> {
-  await prisma.$transaction((tx) => deleteRelationalDataInTransaction(tx, userId));
-}
-
 async function deleteClaimedRelationalData(job: ClaimedDeletion): Promise<boolean> {
   return prisma.$transaction(async (tx) => {
     const locked = await tx.$queryRaw<{ id: number }[]>(Prisma.sql`
@@ -352,7 +367,8 @@ async function claimDeletion(): Promise<ClaimedDeletion | null> {
       "User_AuthID" AS "authId",
       "User_DeletionStage" AS stage,
       "User_DeletionAttempts" AS "deletionAttempts",
-      "User_DeletionClaimVersion" AS "claimVersion"
+      "User_DeletionClaimVersion" AS "claimVersion",
+      "User_DeletionRequestedAt" AS "deletionRequestedAt"
   `);
   return rows[0] ?? null;
 }
@@ -370,6 +386,29 @@ const releasedLease = () => ({
   deletionLeaseStartedAt: null,
   deletionHeartbeatAt: null,
 });
+
+async function waitForPublicImageUploads(job: ClaimedDeletion): Promise<boolean> {
+  const [clock] = await prisma.$queryRaw<Array<{ now: Date }>>(Prisma.sql`
+    SELECT CURRENT_TIMESTAMP AS now
+  `);
+  const requestedAt = job.deletionRequestedAt ?? clock!.now;
+  const notBefore = new Date(requestedAt.getTime() + PUBLIC_IMAGE_UPLOAD_SETTLE_MS);
+  if (clock!.now.getTime() >= notBefore.getTime()) return false;
+
+  const released = await prisma.user.updateMany({
+    where: leaseGuard(job),
+    data: {
+      deletionRequestedAt: requestedAt,
+      deletionNextAttemptAt: notBefore,
+      deletionStorageManifestHash: null,
+      deletionStorageCheckpoint: 0,
+      ...releasedLease(),
+    },
+  });
+  if (released.count !== 1) throw new AccountDeletionLeaseLostError(job.id);
+  logger.info({ userId: job.id, notBefore }, "account deletion waiting for public image uploads");
+  return true;
+}
 
 async function waitForLiveCsvUpload(job: ClaimedDeletion): Promise<void> {
   const released = await prisma.user.updateMany({
@@ -441,6 +480,8 @@ async function returnToStorageCleanup(job: ClaimedDeletion): Promise<void> {
 }
 
 async function processStorageStage(job: ClaimedDeletion): Promise<void> {
+  if (await waitForPublicImageUploads(job)) return;
+
   const initial = await loadStoragePlan(job.id);
   if (initial.hasLiveCsvUpload) {
     await waitForLiveCsvUpload(job);
@@ -694,64 +735,44 @@ export function countStalledAccountDeletions(): Promise<number> {
   });
 }
 
-/**
- * Releases addresses held by registrations that were never confirmed.
- *
- * Without this, one abandoned sign-up — a typo, a change of mind — holds an
- * email address permanently, and the person it actually belongs to can never
- * register: their address is taken by an account nobody ever proved they owned.
- * The auth user goes too, so Supabase's own uniqueness check is released with
- * ours.
- */
+/** Queues expired registrations by CAS so concurrent confirmation can win. */
 export async function purgeUnverifiedRegistrations(): Promise<number> {
   const cutoff = new Date(Date.now() - UNVERIFIED_TTL_MS);
   const stale = await prisma.user.findMany({
     where: { status: AccountStatus.PENDING_VERIFICATION, createdAt: { lt: cutoff } },
-    select: { id: true, authId: true, email: true },
+    select: { id: true, email: true },
   });
 
-  let purged = 0;
+  let queued = 0;
   for (const user of stale) {
-    const { error } = await supabaseAdmin.auth.admin.deleteUser(user.authId, false);
-    if (error && error.status !== 404) {
-      logger.warn({ userId: user.id, err: error }, "could not remove unverified auth user");
-      continue;
-    }
-    // Same non-cascading receipt rows as the main deletion path — an
-    // unverified registration is not expected to own any, but "not expected
-    // to" is what left them behind there too.
-    try {
-      await deleteRelationalData(user.id);
-    } catch (error) {
-      /*
-       * This failure used to be swallowed and still counted as a purge.
-       *
-       * The auth user has already been deleted by the time we get here, so a
-       * failure leaves the worst of both: Supabase has released the address
-       * but our `User` row still holds it against the unique constraint, and
-       * the person it belongs to gets "that email is taken" from an account
-       * that no longer exists anywhere else. The log said the purge
-       * succeeded, so nothing pointed at the cause.
-       *
-       * The row stays PENDING_VERIFICATION and past the cutoff, so the next
-       * hourly pass retries it; deleting an already-deleted auth user is a
-       * 404, which the branch above tolerates. What must not happen is
-       * claiming it worked.
-       */
-      logger.error(
-        { userId: user.id, err: error },
-        "unverified registration purge left its User row behind; the address is still held",
-      );
-      securityEvent("account.deletion_failed", {
-        userId: user.id,
-        email: user.email,
-        stage: "relational",
-        reason: "unverified expiry: relational delete failed",
-      });
-      continue;
-    }
-    securityEvent("account.deletion_completed", { userId: user.id, email: user.email, reason: "unverified expiry" });
-    purged++;
+    const requestedAt = new Date();
+    const claimed = await prisma.user.updateMany({
+      where: {
+        id: user.id,
+        status: AccountStatus.PENDING_VERIFICATION,
+        createdAt: { lt: cutoff },
+      },
+      data: {
+        status: AccountStatus.DELETION_PENDING,
+        deletionRequestedAt: requestedAt,
+        deletionStage: AccountDeletionStage.REQUESTED,
+        deletionAttempts: 0,
+        deletionLastError: null,
+        deletionNextAttemptAt: requestedAt,
+        deletionLeaseStartedAt: null,
+        deletionHeartbeatAt: null,
+        deletionWorkerId: null,
+        deletionStorageManifestHash: null,
+        deletionStorageCheckpoint: 0,
+      },
+    });
+    if (claimed.count !== 1) continue;
+    securityEvent("account.deletion_requested", {
+      userId: user.id,
+      email: user.email,
+      reason: "unverified expiry",
+    });
+    queued += 1;
   }
-  return purged;
+  return queued;
 }

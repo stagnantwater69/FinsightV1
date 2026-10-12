@@ -1,4 +1,5 @@
 import { resolveSeamRepeats, type SeamRepeat, type SeamResolution } from "../lib/receiptOverlapItems";
+import { moneyAmountSchema } from "../lib/money";
 import { z } from "zod";
 import { RESCUE_DECISION_VERSION, rescueDecisionSchema } from "./receiptRescueDecision";
 
@@ -221,11 +222,24 @@ function nullableFieldSchema<T extends z.ZodTypeAny>(valueSchema: T) {
     });
 }
 
+export const MAX_RECEIPT_QUANTITY = 99_999_999.99;
+export const receiptQuantitySchema = z
+  .number({ invalid_type_error: "Quantity must be a number" })
+  .finite({ message: "Quantity must be a number" })
+  .positive({ message: "Quantity must be greater than zero" })
+  .max(MAX_RECEIPT_QUANTITY, { message: `Quantity must be ${MAX_RECEIPT_QUANTITY.toLocaleString("en-PH")} or less` })
+  .refine((value) => {
+    const text = value.toString();
+    if (text.includes("e") || text.includes("E")) return false;
+    const point = text.indexOf(".");
+    return point === -1 || text.length - point - 1 <= 2;
+  }, { message: "Quantity can have at most 2 decimal places" });
+
 export const normalizedReceiptItemSchema = z
   .object({
     name: z.string().trim().min(1).max(255),
-    quantity: z.number().positive().finite().nullable(),
-    amount: z.number().positive().finite(),
+    quantity: receiptQuantitySchema.nullable(),
+    amount: moneyAmountSchema,
     evidence: normalizedEvidenceSchema,
   })
   .strict();
@@ -239,7 +253,7 @@ export const normalizedReceiptExtractionSchema = z
     date: nullableFieldSchema(realDateSchema),
     vendor: nullableFieldSchema(z.string().trim().min(1).max(150)),
     currency: nullableFieldSchema(z.string().regex(/^[A-Z]{3}$/)),
-    total: nullableFieldSchema(z.number().positive().finite()),
+    total: nullableFieldSchema(moneyAmountSchema),
     items: z.array(normalizedReceiptItemSchema).max(100),
     itemsEvidence: normalizedEvidenceSchema.nullable(),
   })

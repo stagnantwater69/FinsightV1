@@ -1,6 +1,9 @@
 import { TextDecoder } from "node:util";
 import { ApiError } from "../middleware/error.middleware";
 
+/** The only limit on a CSV import's size — there is no row limit. See csvImport.service.ts. */
+export const CSV_MAX_FILE_BYTES = 5 * 1024 * 1024;
+
 const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 
 const BINARY_SIGNATURES = [

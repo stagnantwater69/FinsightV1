@@ -4,6 +4,7 @@ import { prisma } from "../../config/prisma";
 import { ApiError } from "../../middleware/error.middleware";
 import { createExpenseRecordWithin, type BulkDbClient } from "../expenseRecord.service";
 import { allocateProportionally, type ReconciliationMode } from "../../lib/allocation";
+import { assertNotFutureDate } from "../../lib/transactionDate";
 import { recordConfirmationFeedback, snapshotItemCategories } from "../extractionFeedback.service";
 import {
   lockReceiptCaptureBatchForMutation,
@@ -14,6 +15,7 @@ import { resolveConfirmationMode } from "./confirmMode";
 import { toDTO } from "./dto";
 import { CHARGES_DESCRIPTION, type ConfirmInput, type ReceiptSplit } from "./types";
 import { providerReportedCurrency, requiresManualCurrencyConversion } from "../../lib/receiptDetails";
+import { lockExpenseDuplicateWriteGate } from "../../lib/recordLock";
 
 interface ItemUpdateInput {
   name: string;
@@ -179,10 +181,17 @@ export async function deleteScanItem(
   return prisma.$transaction(async (tx) => {
     await claimEditableScan(tx, userId, receiptScanId, expectedScanRevision, 400);
 
-    const item = await tx.receiptScanItem.findFirst({ where: { id: itemId, receiptScanId } });
-    if (!item) throw new ApiError(404, "Item not found on this receipt scan");
-
-    await tx.receiptScanItem.delete({ where: { id: item.id } });
+    // One round trip instead of a read then a delete: `delete` returns the row
+    // the correction below needs. Scoping by receiptScanId means an item id
+    // from another scan matches nothing (P2025) rather than being deleted.
+    const item = await tx.receiptScanItem
+      .delete({ where: { id: itemId, receiptScanId } })
+      .catch((error: unknown) => {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
+          throw new ApiError(404, "Item not found on this receipt scan");
+        }
+        throw error;
+      });
     if (!item.addedByOwner) {
       await tx.receiptFieldCorrection.create({
         data: {
@@ -248,6 +257,13 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
   if (requiresManualCurrencyConversion(scan.rawText, providerReportedCurrency(scan.extractorVersions))) {
     throw new ApiError(400, "This receipt uses a foreign currency. Enter an expense manually with the amount paid in PHP.");
   }
+  // Refused here, before the scan is claimed, so a future date leaves the scan
+  // Pending for the owner to correct. Each insert below checks it again.
+  const owner = await prisma.businessProfile.findUniqueOrThrow({
+    where: { id: scan.businessProfileId },
+    select: { timezone: true },
+  });
+  assertNotFutureDate(input.date, owner.timezone);
 
   /*
    * The splits must account for the whole receipt, exactly.
@@ -350,6 +366,7 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
       ) {
         throw new ApiError(409, "This receipt batch is no longer available");
       }
+      await lockExpenseDuplicateWriteGate(tx, businessProfileId);
       const duplicateGate = await evaluateReceiptDuplicateGate(tx, {
         userId,
         businessProfileId,
@@ -456,8 +473,11 @@ export async function confirmReceipt(userId: number, receiptScanId: number, inpu
             allocatedCharges: split.allocatedCharges,
             source: "RECEIPT_SCAN",
             receiptScanId: scan.id,
+            includedInAvailableFundsBaseline: input.includedInAvailableFundsBaseline,
+            availableFundsBaselineAt: input.availableFundsBaselineAt,
           },
           tx,
+          { recordGateHeld: true },
         );
         created.push(record);
         effects.push(runSideEffects);

@@ -3,14 +3,20 @@ import type { SalesReferenceRecord, SalesRecordSource } from "@prisma/client";
 import { logger } from "../config/logger";
 import { prisma } from "../config/prisma";
 import { ApiError } from "../middleware/error.middleware";
+import { assertNotFutureDate } from "../lib/transactionDate";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
 import { DEFAULT_RECORD_SORT, recordCursorWhere, recordOrderBy, type RecordCursor, type RecordSort } from "../lib/recordSort";
 import { lockSalesDuplicateWriteGate } from "../lib/recordLock";
 import { createNotification, NOTIFICATION_TYPES } from "./notification.service";
 import { duplicateKeyOf, type BulkDbClient, type FlaggedListOptions } from "./expenseRecord.service";
 import { enqueueCsvSourcePurgesIfOrphaned } from "./csvSourcePurge.service";
+import {
+  loadAvailableFundsBaseline,
+  resolveAvailableFundsClassification,
+  type AvailableFundsBaselineInput,
+} from "./availableFundsBaseline.service";
 
-interface CreateInput {
+interface CreateInput extends AvailableFundsBaselineInput {
   businessProfileId: number;
   date: string;
   description: string;
@@ -19,7 +25,7 @@ interface CreateInput {
   importBatchId?: number;
 }
 
-interface UpdateInput {
+interface UpdateInput extends AvailableFundsBaselineInput {
   date?: string;
   description?: string;
   amount?: number;
@@ -53,6 +59,8 @@ function toDTO(record: SalesReferenceRecord) {
     source: record.source,
     reviewStatus: record.reviewStatus,
     duplicateStatus: record.duplicateStatus,
+    includedInAvailableFundsBaseline: record.includedInAvailableFundsBaseline,
+    availableFundsDeltaBaselineAt: record.availableFundsDeltaBaselineAt,
     createdAt: record.createdAt,
   };
 }
@@ -197,6 +205,13 @@ export async function createSalesRecord(userId: number, input: CreateInput) {
 
   const { record, duplicate } = await prisma.$transaction(async (tx) => {
     await lockSalesDuplicateWriteGate(tx, input.businessProfileId);
+    const profile = await requireOwnedBusinessProfile(userId, input.businessProfileId, tx);
+    assertNotFutureDate(input.date, profile.timezone);
+    const classification = resolveAvailableFundsClassification(
+      profile,
+      date,
+      input,
+    );
 
     let existing = await findDuplicate(input.businessProfileId, date, amount, input.description, undefined, tx);
     existing = await ensureValidDuplicateTarget(tx, input.businessProfileId, existing);
@@ -212,6 +227,7 @@ export async function createSalesRecord(userId: number, input: CreateInput) {
         reviewStatus: "Reviewed",
         duplicateStatus: existing ? "Flagged" : "Not a Duplicate",
         duplicateOfRecordId: existing?.id,
+        ...classification,
       },
     });
 
@@ -233,7 +249,7 @@ export async function createSalesRecord(userId: number, input: CreateInput) {
   return toDTO(record);
 }
 
-export interface BulkSalesRow {
+export interface BulkSalesRow extends AvailableFundsBaselineInput {
   /** YYYY-MM-DD. */
   date: string;
   description: string;
@@ -261,6 +277,7 @@ export async function bulkCreateSalesRecords(
 
   await requireOwnedBusinessProfile(userId, businessProfileId, db);
   await lockSalesDuplicateWriteGate(db, businessProfileId);
+  const baseline = await loadAvailableFundsBaseline(db, businessProfileId);
 
   const dates = [...new Set(rows.map((r) => r.date))].map((d) => new Date(d));
   const candidates = await db.salesReferenceRecord.findMany({
@@ -290,6 +307,7 @@ export async function bulkCreateSalesRecords(
   const data = rows.map((row, i) => {
     const date = new Date(row.date);
     const amount = new Prisma.Decimal(row.amount);
+    const classification = resolveAvailableFundsClassification(baseline, date, row);
     const key = duplicateKeyOf(date, amount, row.description);
 
     const existing = existingByKey.get(key);
@@ -320,6 +338,7 @@ export async function bulkCreateSalesRecords(
       reviewStatus: "Reviewed",
       duplicateStatus: existingId !== undefined || earlierIndex !== undefined ? "Flagged" : "Not a Duplicate",
       duplicateOfRecordId: existingId,
+      ...classification,
     };
   });
 
@@ -400,9 +419,22 @@ export async function updateSalesRecord(userId: number, id: number, input: Updat
     });
     if (!existing) throw new ApiError(404, "Sales reference record not found");
 
+    if (input.date !== undefined) {
+      const owner = await tx.businessProfile.findUniqueOrThrow({
+        where: { id: existing.businessProfileId },
+        select: { timezone: true },
+      });
+      assertNotFutureDate(input.date, owner.timezone);
+    }
     const nextDate = input.date ? new Date(input.date) : existing.date;
     const nextAmount = input.amount !== undefined ? new Prisma.Decimal(input.amount) : existing.amount;
     const nextDescription = input.description ?? existing.description;
+    const classification = resolveAvailableFundsClassification(
+      await loadAvailableFundsBaseline(tx, existing.businessProfileId),
+      nextDate,
+      input,
+      existing,
+    );
     const valueFieldsChanged = input.date !== undefined || input.amount !== undefined || input.description !== undefined;
     const previousIdentity = {
       date: existing.date,
@@ -443,6 +475,7 @@ export async function updateSalesRecord(userId: number, id: number, input: Updat
         description: nextDescription,
         amount: nextAmount,
         reviewStatus: input.reviewStatus ?? existing.reviewStatus,
+        ...classification,
         ...(!valueFieldsChanged
           ? {
               duplicateStatus: input.duplicateStatus === "Flagged"

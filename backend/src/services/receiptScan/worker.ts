@@ -231,7 +231,7 @@ function localNormalizedExtraction(
   const itemEvidence = localEvidence(itemsCorroborated, itemsCorroborated);
   const dateValidated = !parsed.dateAmbiguous;
   const totalReconciled = items.length > 0 && reconciled;
-  const totalValidated = items.length === 0 || reconciled;
+  const totalValidated = totalReconciled;
   return {
     schemaVersion: RECEIPT_PROVIDER_CONTRACT_VERSION,
     source: "local-tesseract",
@@ -598,7 +598,10 @@ async function processScan(
     const currency = parseReceiptDetails(combinedText).currency;
     const providerConfig = getReceiptProviderConfiguration();
     const rescueDecision = decideReceiptRescue({
-      validation: parsed.amount !== null && (deterministicItems.length === 0 || reconciliation.reconciled) ? "VALIDATED" : "FAILED",
+      validation:
+        parsed.amount !== null && deterministicItems.length > 0 && reconciliation.reconciled
+          ? "VALIDATED"
+          : "FAILED",
       missingCriticalFields: [
         ...(parsed.date === null ? (["date"] as const) : []),
         ...(parsed.vendor === null ? (["vendor"] as const) : []),
