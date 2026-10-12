@@ -13,11 +13,14 @@ import * as haptics from "../../lib/haptics";
 import { space } from "../../theme/tokens";
 import { FIELD_LIMITS } from "../../lib/fieldLimits";
 import { CategoryPicker, todayISO } from "./shared";
+import { AvailableFundsBaselineChoice, useAvailableFundsBaselineChoice } from "../../components/AvailableFundsBaselineChoice";
 
 export function AddExpenseScreen({ navigation }: any) {
   const { selected, categories, refreshCategories } = useBusinessProfiles();
   const [categoryId, setCategoryId] = useState<number | null>(null);
   const [date, setDate] = useState(todayISO());
+  const baselineChoice = useAvailableFundsBaselineChoice(date);
+  const clearBaselineDecision = baselineChoice.setDecision;
   const [description, setDescription] = useState("");
   const [vendor, setVendor] = useState("");
   const [amount, setAmount] = useState("");
@@ -32,7 +35,8 @@ export function AddExpenseScreen({ navigation }: any) {
     setAmount("");
     setError(null);
     setBusy(false);
-  }, [selected?.id]);
+    clearBaselineDecision(null);
+  }, [selected?.id, clearBaselineDecision]);
   useFocusEffect(useCallback(() => () => { operation.cancel(); setBusy(false); }, [operation]));
   /*
    * The category picker and the date field are pressables, not text inputs —
@@ -48,6 +52,7 @@ export function AddExpenseScreen({ navigation }: any) {
     if (!categoryId) return setError("Choose a category first.");
     const value = Number(amount);
     if (!Number.isFinite(value) || value <= 0) return setError("Enter an amount greater than zero.");
+    if (!baselineChoice.check()) return;
     const task = operation.begin();
     if (!task) return;
     setError(null);
@@ -60,6 +65,7 @@ export function AddExpenseScreen({ navigation }: any) {
         description: description.trim(),
         vendor: vendor.trim() || undefined,
         amount: value,
+        ...baselineChoice.requestFields(),
       });
       if (!operation.current(task)) return;
       haptics.succeeded();
@@ -72,7 +78,9 @@ export function AddExpenseScreen({ navigation }: any) {
       // the screen only navigates away on success — so the message is allowed
       // to say so. It stops short of promising a background retry, because
       // there is no queue behind it. See lib/connectionState.ts.
-      if (operation.current(task)) setError(saveFailureMessage(err, "Save expense"));
+      if (operation.current(task) && !(await baselineChoice.absorb(err))) {
+        setError(saveFailureMessage(err, "Save expense"));
+      }
     } finally {
       if (operation.current(task)) setBusy(false);
       operation.finish(task);
@@ -103,6 +111,7 @@ export function AddExpenseScreen({ navigation }: any) {
             />
             <CategorySuggestionAction businessId={selected.id} description={description} vendor={vendor} categories={categories} value={categoryId} onApply={setCategoryId} />
             <DateField label="Date" value={date} onChange={setDate} />
+            <AvailableFundsBaselineChoice choice={baselineChoice} disabled={busy} />
             {/*
               `submitBehavior="submit"` keeps the keyboard up between fields so
               it does not flicker shut and open on every hop. It is the

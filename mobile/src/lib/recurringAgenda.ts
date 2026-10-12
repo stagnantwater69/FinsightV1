@@ -97,32 +97,7 @@ export function overdueScheduleCount(schedules: readonly RecurringSchedule[]): n
   return schedules.filter((schedule) => schedule.isActive && schedule.dueState === "OVERDUE").length;
 }
 
-/**
- * What the Recurring section may show, given how the schedules read went.
- *
- * NULL IS NOT THE EMPTY LIST, and this is the whole point of the function.
- * `GET /insights/recurring-schedules` sits behind the server's
- * ANOMALY_RECURRING_ENABLED flag, which is off by default and answers 404 while
- * it is — so the ordinary path for this fetch today is failure. Handing the
- * screen an empty array in that case makes it draw "No repeating payments yet",
- * which is a claim about the OWNER'S BUSINESS made on the strength of a request
- * the server refused to answer. It is flatly false for anyone whose schedules
- * exist and were simply not handed over. Null means "hide the agenda", and
- * hidden is the honest rendering of a feature that is not on.
- *
- * THE TEST IS ON `error`, NOT ON THE STATUS CODE. A 500 or a dead connection
- * leaves us knowing exactly as much about the owner's schedules as a 404 does —
- * nothing — so nothing here asks WHY the read failed. Status-sniffing for 404
- * would leave the identical lie in place for every other failure mode. Mirrors
- * web's `loadPanel`, which settles each supplementary panel on the same rule
- * (web/src/pages/ExpenseInsight.tsx).
- *
- * IT ALSO DROPS ANYTHING ALREADY LOADED. `useInsight` keeps the previous
- * payload on a failed refetch, which is right for a screen's main read and
- * wrong here: the flag being switched off mid-session would otherwise leave an
- * agenda on screen that the server no longer stands behind, with rows that
- * 404 the moment one is opened.
- */
+/** What the Recurring section may show after a schedules read. */
 export interface RecurringAvailability {
   /** The agenda to draw, or null to draw no agenda at all. */
   schedules: RecurringSchedule[] | null;
@@ -142,15 +117,46 @@ export interface RecurringAvailability {
    * would act on and we cannot support.
    */
   overdueCount: number;
+  /** A transient failure that needs the standard load or refresh notice. */
+  failure: "initial" | "refresh" | null;
 }
 
 export function recurringAvailability(fetch: {
   data: readonly RecurringSchedule[] | null;
-  error: string | null;
+  error: unknown | null;
 }): RecurringAvailability {
-  if (fetch.error !== null) return { schedules: null, canConfirm: false, overdueCount: 0 };
+  if (fetch.error !== null) {
+    const status =
+      typeof fetch.error === "object" && fetch.error !== null && "status" in fetch.error
+        ? Number((fetch.error as { status: unknown }).status)
+        : null;
+
+    // A 404 is the feature gate, not a stale read. Hide controls that can only
+    // fail; other refresh errors keep previously verified schedules visible.
+    if (status === 404 || fetch.data === null) {
+      return {
+        schedules: null,
+        canConfirm: false,
+        overdueCount: 0,
+        failure: status === 404 ? null : "initial",
+      };
+    }
+
+    const schedules = [...fetch.data];
+    return {
+      schedules,
+      canConfirm: true,
+      overdueCount: overdueScheduleCount(schedules),
+      failure: "refresh",
+    };
+  }
   const schedules = [...(fetch.data ?? [])];
-  return { schedules, canConfirm: true, overdueCount: overdueScheduleCount(schedules) };
+  return {
+    schedules,
+    canConfirm: true,
+    overdueCount: overdueScheduleCount(schedules),
+    failure: null,
+  };
 }
 
 /**

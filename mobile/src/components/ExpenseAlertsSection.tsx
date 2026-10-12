@@ -7,6 +7,8 @@ import { findingCategory, quickActions, type FeedbackAction } from "../lib/findi
 import { TAP, font, radius, space, typeScale } from "../theme/tokens";
 import { useTheme } from "../context/ThemeContext";
 import type { AnomalyFinding, AnomalyFindingPage, ExpenseBehavior } from "../lib/types";
+import { ConnectionNotice, FreshnessStatus } from "./ConnectionNotice";
+import type { LoadNotice } from "../lib/connectionState";
 
 /**
  * The Alerts sub-section of Expense insight — things that want the owner's
@@ -22,17 +24,28 @@ export function ExpenseAlertsSection({
   insufficientHistoryCategories,
   openFindings,
   findingState,
+  findingNotice,
+  refreshFindings,
+  findingsRefreshing,
+  findingsUpdatedAt,
   feedbackError,
   reviewFinding,
   onOtherAnswers,
+  onExplain,
 }: {
   unusualExpenses: ExpenseBehavior["unusualExpenses"];
   insufficientHistoryCategories: ExpenseBehavior["insufficientHistoryCategories"];
   openFindings: number;
   findingState: { data: AnomalyFindingPage | null; loading: boolean; error: string | null };
+  findingNotice: LoadNotice | null;
+  refreshFindings: () => void | Promise<void>;
+  findingsRefreshing: boolean;
+  findingsUpdatedAt: number | null;
   feedbackError: string | null;
   reviewFinding: (id: number, action: FeedbackAction) => void | Promise<void>;
   onOtherAnswers: (finding: AnomalyFinding) => void;
+  /** Opens Ask FinSight about this one flag — the server receives its id, not just a question. */
+  onExplain?: (finding: AnomalyFinding) => void;
 }) {
   const t = useTheme();
   const { brand, ink, paper, statusText } = t;
@@ -44,7 +57,12 @@ export function ExpenseAlertsSection({
     failed to load. A clean month is the outcome an owner wants, and it
     should look like one rather than like a blank.
   */
-  if (openFindings === 0 && unusualExpenses.length === 0) {
+  if (
+    openFindings === 0 &&
+    unusualExpenses.length === 0 &&
+    !findingState.loading &&
+    !findingState.error
+  ) {
     return (
       <Card>
         <View style={{ alignItems: "center", paddingVertical: space.xxl, paddingHorizontal: space.lg }}>
@@ -110,9 +128,22 @@ export function ExpenseAlertsSection({
         <T variant="caption" style={{ marginBottom: space.sm }}>
           Each one is a question, not a verdict — you decide what it was.
         </T>
-        {findingState.error ? <ErrorNote>{findingState.error}</ErrorNote> : null}
+        <ConnectionNotice
+          notice={findingNotice}
+          onRetry={() => void refreshFindings()}
+          busy={findingsRefreshing}
+          style={{ marginBottom: space.sm }}
+        />
+        {findingState.data ? (
+          <FreshnessStatus
+            at={findingsUpdatedAt}
+            now={Date.now()}
+            refreshing={findingsRefreshing}
+            style={{ marginBottom: space.sm }}
+          />
+        ) : null}
         {findingState.loading ? <ActivityIndicator color={brand[600]} /> : null}
-        {!findingState.loading && (findingState.data?.items.length ?? 0) === 0 ? (
+        {!findingState.loading && !findingState.error && (findingState.data?.items.length ?? 0) === 0 ? (
           <T variant="caption">No findings need review.</T>
         ) : null}
         {feedbackError ? <ErrorNote>{feedbackError}</ErrorNote> : null}
@@ -194,16 +225,30 @@ export function ExpenseAlertsSection({
                     </View>
                   ))}
                 </View>
-                <Pressable
-                  onPress={() => onOtherAnswers(finding)}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Other answers for ${finding.title}`}
-                  style={{ minHeight: TAP, justifyContent: "center" }}
-                >
-                  <T variant="caption" style={{ color: brand[700] }}>
-                    Something else…
-                  </T>
-                </Pressable>
+                <View style={{ flexDirection: "row", gap: space.lg }}>
+                  <Pressable
+                    onPress={() => onOtherAnswers(finding)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Other answers for ${finding.title}`}
+                    style={{ minHeight: TAP, justifyContent: "center" }}
+                  >
+                    <T variant="caption" style={{ color: brand[700] }}>
+                      Something else…
+                    </T>
+                  </Pressable>
+                  {onExplain ? (
+                    <Pressable
+                      onPress={() => onExplain(finding)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Explain why FinSight flagged ${finding.title}`}
+                      style={{ minHeight: TAP, justifyContent: "center" }}
+                    >
+                      <T variant="caption" style={{ color: brand[700] }}>
+                        Explain this flag
+                      </T>
+                    </Pressable>
+                  ) : null}
+                </View>
               </View>
             );
           })}

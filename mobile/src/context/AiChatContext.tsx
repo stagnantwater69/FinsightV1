@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode } from "react";
+import { createContext, useContext, useLayoutEffect, useMemo, useRef, useSyncExternalStore, type ReactNode } from "react";
 import { api } from "../lib/api";
 import { createChatStore, type ChatState, type ChatStore, type ChatTransport } from "../lib/chatStore";
 import { useBusinessProfiles } from "./BusinessProfileContext";
@@ -33,11 +33,15 @@ const transport: ChatTransport = {
   // is the one deliberate exception, and it is left `undefined` here on every
   // path that does not queue one — matching `appendMessageSchema` in
   // backend/src/controllers/ai.controller.ts field-for-field.
-  sendMessage: (conversationId, question, reductionOpportunity) =>
+  sendMessage: (conversationId, question, reductionOpportunity, focus) =>
     api.post<ChatSendResponse>(`/ai/conversations/${conversationId}/messages`, {
       question,
       reductionOpportunity,
+      focus,
     }),
+  rateMessage: async (conversationId, messageId, feedback) => {
+    await api.put(`/ai/conversations/${conversationId}/messages/${messageId}/feedback`, { feedback });
+  },
   renameConversation: async (conversationId, title) => {
     await api.patch(`/ai/conversations/${conversationId}`, { title });
   },
@@ -60,8 +64,14 @@ export function AiChatProvider({ children }: { children: ReactNode }) {
    * the open conversation each time one landed.
    */
   const businessProfileId = selected?.id ?? null;
-  useEffect(() => {
+  useLayoutEffect(() => {
     store.setBusinessProfile(businessProfileId);
+    return () => {
+      // The keyed business boundary can unmount while a native Alert still
+      // holds one of this store's callbacks. Deactivate it before that stale
+      // callback can issue a request for the business that just lost focus.
+      store.setBusinessProfile(null);
+    };
   }, [store, businessProfileId]);
 
   return <AiChatContext.Provider value={store}>{children}</AiChatContext.Provider>;

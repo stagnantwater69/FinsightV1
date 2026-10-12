@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { Button, Callout, Card, CategorySelect, Checkbox, ConfirmSheet, ErrorNote, Field, Screen, T } from "../components/ui";
@@ -40,6 +40,9 @@ export function RecurringScheduleScreen({ navigation, route }: any) {
   const { selected, categories } = useBusinessProfiles();
   const scheduleId: number | undefined = route?.params?.scheduleId;
   const editing = typeof scheduleId === "number";
+  const selectedBusinessProfileId = selected?.id ?? null;
+  const selectedBusinessProfileIdRef = useRef(selectedBusinessProfileId);
+  selectedBusinessProfileIdRef.current = selectedBusinessProfileId;
 
   const [label, setLabel] = useState("");
   const [vendor, setVendor] = useState("");
@@ -48,11 +51,39 @@ export function RecurringScheduleScreen({ navigation, route }: any) {
   const [expectedAmount, setExpectedAmount] = useState("");
   const [nextDueDate, setNextDueDate] = useState("");
   const [isActive, setIsActive] = useState(true);
+  const [loadedBusinessProfileId, setLoadedBusinessProfileId] = useState<number | null>(
+    editing ? null : selectedBusinessProfileId,
+  );
 
   const [loading, setLoading] = useState(editing);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const clearDraft = useCallback(() => {
+    setLabel("");
+    setVendor("");
+    setCategoryId(null);
+    setIntervalDays("30");
+    setExpectedAmount("");
+    setNextDueDate("");
+    setIsActive(true);
+  }, []);
+
+  useEffect(() => {
+    if (editing || selectedBusinessProfileId === null) return;
+    if (loadedBusinessProfileId === selectedBusinessProfileId) return;
+    clearDraft();
+    setLoadedBusinessProfileId(selectedBusinessProfileId);
+    setError(null);
+    setBusy(false);
+    setConfirmDelete(false);
+    setLoading(false);
+  }, [clearDraft, editing, loadedBusinessProfileId, selectedBusinessProfileId]);
+
+  useEffect(() => () => {
+    selectedBusinessProfileIdRef.current = null;
+  }, []);
 
   /*
    * The row is read back from the agenda list rather than from a
@@ -65,18 +96,28 @@ export function RecurringScheduleScreen({ navigation, route }: any) {
    */
   useFocusEffect(
     useCallback(() => {
-      if (!editing || !selected) return;
+      if (!editing || selectedBusinessProfileId === null) return;
+      const requestBusinessProfileId = selectedBusinessProfileId;
       let cancelled = false;
+      clearDraft();
       (async () => {
         setLoading(true);
+        setLoadedBusinessProfileId(null);
+        setError(null);
+        setBusy(false);
+        setConfirmDelete(false);
         try {
           const rows = await api.get<RecurringSchedule[]>("/insights/recurring-schedules", {
-            businessProfileId: selected.id,
+            businessProfileId: requestBusinessProfileId,
           });
           if (cancelled) return;
-          const row = rows.find((r) => r.id === scheduleId);
+          const row = rows.find(
+            (candidate) =>
+              candidate.id === scheduleId &&
+              candidate.businessProfileId === requestBusinessProfileId,
+          );
           if (!row) {
-            setError("This repeating payment is no longer on file.");
+            setError("This repeating payment is not available for the selected business.");
             return;
           }
           setLabel(row.label);
@@ -89,6 +130,7 @@ export function RecurringScheduleScreen({ navigation, route }: any) {
           // value that has none. See lib/recurringAgenda.ts.
           setNextDueDate(dueDateISO(row.nextDueDate));
           setIsActive(row.isActive);
+          setLoadedBusinessProfileId(row.businessProfileId);
         } catch (err) {
           if (!cancelled) setError(errorMessage(err));
         } finally {
@@ -98,12 +140,22 @@ export function RecurringScheduleScreen({ navigation, route }: any) {
       return () => {
         cancelled = true;
       };
-    }, [editing, scheduleId, selected]),
+    }, [clearDraft, editing, scheduleId, selectedBusinessProfileId]),
   );
 
   if (!selected) return null;
 
+  const formBelongsToSelectedBusiness = loadedBusinessProfileId === selected.id;
+
   async function submit() {
+    const mutationBusinessProfileId = loadedBusinessProfileId;
+    if (
+      mutationBusinessProfileId === null ||
+      selectedBusinessProfileIdRef.current !== mutationBusinessProfileId
+    ) {
+      setError("This repeating payment is not available for the selected business.");
+      return;
+    }
     const amount = Number(expectedAmount);
     const interval = Number(intervalDays);
 
@@ -133,11 +185,15 @@ export function RecurringScheduleScreen({ navigation, route }: any) {
       };
 
       if (editing) {
-        await api.patch(`/insights/recurring-schedules/${scheduleId}`, body);
+        await api.patch(
+          `/insights/recurring-schedules/${scheduleId}`,
+          body,
+          { cacheScope: { businessProfileId: mutationBusinessProfileId } },
+        );
       } else {
         await api.post("/insights/recurring-schedules", {
           ...body,
-          businessProfileId: selected!.id,
+          businessProfileId: mutationBusinessProfileId,
           // POST's schema takes vendor as optional-absent, not nullable.
           vendor: body.vendor ?? undefined,
         });
@@ -154,9 +210,22 @@ export function RecurringScheduleScreen({ navigation, route }: any) {
 
   async function remove() {
     setConfirmDelete(false);
+    const mutationBusinessProfileId = loadedBusinessProfileId;
+    if (
+      !editing ||
+      mutationBusinessProfileId === null ||
+      selectedBusinessProfileIdRef.current !== mutationBusinessProfileId
+    ) {
+      setError("This repeating payment is not available for the selected business.");
+      return;
+    }
     setBusy(true);
     try {
-      await api.delete(`/insights/recurring-schedules/${scheduleId}`);
+      await api.delete(
+        `/insights/recurring-schedules/${scheduleId}`,
+        undefined,
+        { cacheScope: { businessProfileId: mutationBusinessProfileId } },
+      );
       haptics.succeeded();
       setFlash("Repeating payment removed.");
       navigation.goBack();
@@ -176,8 +245,21 @@ export function RecurringScheduleScreen({ navigation, route }: any) {
       */}
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}>
-          {loading ? (
+          {loading || (!formBelongsToSelectedBusiness && !error) ? (
             <ActivityIndicator color={brand[600]} style={{ marginTop: space.xl }} />
+          ) : !formBelongsToSelectedBusiness ? (
+            <Card>
+              <T variant="title" style={{ marginBottom: space.sm }}>Repeating payment unavailable</T>
+              <ErrorNote>
+                {error ?? "This repeating payment is not available for the selected business."}
+              </ErrorNote>
+              <Button
+                title="Back to repeating payments"
+                variant="primary"
+                onPress={() => navigation.goBack()}
+                style={{ marginTop: space.lg }}
+              />
+            </Card>
           ) : (
             <>
               <Card>
@@ -272,6 +354,7 @@ export function RecurringScheduleScreen({ navigation, route }: any) {
                     title="Remove this payment"
                     variant="danger"
                     onPress={() => setConfirmDelete(true)}
+                    disabled={busy}
                   />
                 </View>
               ) : null}
@@ -281,7 +364,7 @@ export function RecurringScheduleScreen({ navigation, route }: any) {
       </KeyboardAvoidingView>
 
       <ConfirmSheet
-        visible={confirmDelete}
+        visible={confirmDelete && formBelongsToSelectedBusiness}
         title="Remove this repeating payment?"
         body="FinSight will stop watching for it. Your recorded expenses are not affected."
         confirmLabel="Remove"

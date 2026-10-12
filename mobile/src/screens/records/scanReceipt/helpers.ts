@@ -16,6 +16,20 @@ const SCAN_POLL_INTERVAL_MS = 1500;
 const SCAN_POLL_TIMEOUT_MS = 3 * 60 * 1000;
 
 /**
+ * The first polls come sooner than the steady interval. A scan that needs no
+ * provider call is usually done within a few seconds, and a fixed 1.5s wait
+ * left it sitting finished for up to that long before anyone asked.
+ */
+const SCAN_POLL_EARLY_DELAYS_MS = [500, 750, 1000, 1250] as const;
+
+/** The wait before poll number `attempt` (0-based). */
+export function scanPollDelayMs(attempt: number): number {
+  return SCAN_POLL_EARLY_DELAYS_MS[attempt] ?? SCAN_POLL_INTERVAL_MS;
+}
+
+const SCAN_POLL_EARLY_TOTAL_MS = SCAN_POLL_EARLY_DELAYS_MS.reduce((sum, ms) => sum + ms, 0);
+
+/**
  * The ceiling counted in polls rather than in wall-clock milliseconds.
  *
  * A phone suspends timers when the app goes to the background, so a
@@ -25,7 +39,8 @@ const SCAN_POLL_TIMEOUT_MS = 3 * 60 * 1000;
  * mean what it was written to mean — this many unanswered polls — on a device
  * whose clock keeps running when its timers do not.
  */
-export const SCAN_POLL_MAX_ATTEMPTS = Math.ceil(SCAN_POLL_TIMEOUT_MS / SCAN_POLL_INTERVAL_MS);
+export const SCAN_POLL_MAX_ATTEMPTS =
+  SCAN_POLL_EARLY_DELAYS_MS.length + Math.ceil((SCAN_POLL_TIMEOUT_MS - SCAN_POLL_EARLY_TOTAL_MS) / SCAN_POLL_INTERVAL_MS);
 
 /**
  * How many polls in a row may fail before the read is called off.
@@ -83,7 +98,9 @@ export async function pollUntilRead(initial: ReceiptScanResult, signal?: AbortSi
 
   let consecutiveErrors = 0;
   for (let attempt = 0; attempt < SCAN_POLL_MAX_ATTEMPTS; attempt += 1) {
-    await delay(SCAN_POLL_INTERVAL_MS, signal);
+    // After a failed poll, wait the full interval: the error tolerance below
+    // should span the same few seconds of outage it always did.
+    await delay(consecutiveErrors > 0 ? SCAN_POLL_INTERVAL_MS : scanPollDelayMs(attempt), signal);
     checkActive();
     let next: ReceiptScanResult;
     try {

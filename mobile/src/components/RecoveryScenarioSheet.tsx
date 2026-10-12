@@ -135,7 +135,7 @@ export function RecoveryScenarioSheet({
                 Hypothetical recovery target
               </T>
               <T variant="caption" style={{ marginTop: 2 }}>
-                What if expected monthly expenses were different?
+                What if the monthly expense basis were different?
               </T>
             </View>
             <Pressable
@@ -158,13 +158,12 @@ export function RecoveryScenarioSheet({
             keyboardShouldPersistTaps="handled"
           >
             <T variant="caption" style={{ lineHeight: 18 }}>
-              A what-if check — nothing is saved. Your real Recovery Target and your business profile stay exactly as
-              they are; this only asks what the target would look like at a different assumed monthly expense figure.
+              This is a what-if check. Nothing is saved, and your real Recovery Target stays unchanged.
             </T>
 
             <View>
               <T variant="label" style={{ marginBottom: 4 }}>
-                Assumed expected monthly expenses (PHP)
+                Assumed monthly expense basis (PHP)
               </T>
               <TextInput
                 value={rawValue}
@@ -178,7 +177,7 @@ export function RecoveryScenarioSheet({
                 keyboardType="decimal-pad"
                 placeholder={`e.g. ${Math.round(currentExpectedMonthlyExpenses)}`}
                 placeholderTextColor={ink[400]}
-                accessibilityLabel="Assumed expected monthly expenses, in Philippine pesos"
+                accessibilityLabel="Assumed monthly expense basis, in Philippine pesos"
                 style={{
                   minHeight: TAP_FLOOR,
                   borderWidth: 1,
@@ -190,7 +189,7 @@ export function RecoveryScenarioSheet({
                 }}
               />
               <T variant="caption" style={{ marginTop: 4 }}>
-                Your currently configured figure is {formatMoney(currentExpectedMonthlyExpenses)}.
+                Your current monthly basis is {formatMoney(currentExpectedMonthlyExpenses)}.
               </T>
               {valueError ? (
                 <View
@@ -255,16 +254,16 @@ function RecoveryScenarioResult({ result }: { result: RecoveryScenario }) {
       }}
     >
       <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodySm, color: t.textPrimary }}>
-        Hypothetical result — your real target and profile are unchanged
+        Hypothetical result. Your real target and profile are unchanged.
       </T>
 
       <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6, flexWrap: "wrap" }}>
-        <T style={{ fontSize: typeScale.bodySm }}>Assumed expected monthly expenses:</T>
+        <T style={{ fontSize: typeScale.bodySm }}>Assumed monthly expense basis:</T>
         <Money value={result.assumedExpectedMonthlyExpenses} size={typeScale.bodySm} weight="semibold" />
       </View>
 
       <ScenarioRow
-        label="Expected monthly expenses"
+        label="Monthly expense basis"
         current={result.current.expectedMonthlyExpenses}
         hypothetical={result.hypothetical.expectedMonthlyExpenses}
         delta={result.delta?.totalCoverageGoal}
@@ -307,8 +306,7 @@ function RecoveryScenarioResult({ result }: { result: RecoveryScenario }) {
       ) : null}
 
       <T variant="caption" style={{ lineHeight: 17 }}>
-        Not saved anywhere. Changing your actual expected monthly expenses is a separate, explicit edit to your
-        business profile.
+        Not saved anywhere. This does not change your starting estimate, record coverage, or current monthly basis.
       </T>
     </View>
   );

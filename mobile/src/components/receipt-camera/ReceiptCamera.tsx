@@ -519,6 +519,15 @@ function CustomReceiptCamera({ initialSections = [], maxReceipts = MAX_RECEIPTS_
     else void deleteReceiptScannerFiles([uri]);
     return uri;
   }
+  /**
+   * Deletes an analysis-only downscale once its request is over. Nothing keeps
+   * it, so holding it until the session ended left one JPEG per check.
+   */
+  function releaseAnalysisCopy(uri: string | undefined, source: string) {
+    if (!uri || uri === source) return;
+    scannerFileLifecycle.created.delete(uri);
+    void deleteReceiptScannerFiles([uri]);
+  }
   const formFor = (uri: string, mimeType: string) => {
     const extension = mimeType === 'image/png' ? 'png' : mimeType === 'image/webp' ? 'webp' : 'jpg';
     const form = new FormData();
@@ -570,7 +579,10 @@ function CustomReceiptCamera({ initialSections = [], maxReceipts = MAX_RECEIPTS_
         for (const asset of result.assets) {
           if (seen.has(asset.uri)) continue; seen.add(asset.uri);
           if (result.assets.length > 1) throw new Error('Choose one photo to review at a time.');
-          const jpg = await Manipulator.manipulateAsync(asset.uri, [], { compress: CAPTURE_QUALITY, format: Manipulator.SaveFormat.JPEG });
+          // The picker's own cache copy is only the input to this conversion.
+          // `sourceAssetUri` keeps its name as an identity, never reads the file.
+          const jpg = await Manipulator.manipulateAsync(asset.uri, [], { compress: CAPTURE_QUALITY, format: Manipulator.SaveFormat.JPEG })
+            .finally(() => void deleteReceiptScannerFiles([asset.uri]));
           trackCacheCopy(jpg.uri);
           incoming.push({
             ...createReceiptSection(jpg, 'gallery'),
@@ -603,10 +615,15 @@ function CustomReceiptCamera({ initialSections = [], maxReceipts = MAX_RECEIPTS_
   async function checkQuality() {
     if (!selected) return;
     await run(async (isCurrent, signal) => {
-      const uri = trackCacheCopy(await analysisImageUri(selected.processedUri, selected.width, selected.height), selected.processedUri);
-      if (!isCurrent()) return;
-      const quality = await api.upload<SectionQuality>('/records/receipts/quality-check', formFor(uri, uri === selected.processedUri ? selected.processedMimeType ?? 'image/jpeg' : 'image/jpeg'), signal);
-      if (isCurrent()) updateSection({ ...selected, quality });
+      let uri: string | undefined;
+      try {
+        uri = trackCacheCopy(await analysisImageUri(selected.processedUri, selected.width, selected.height), selected.processedUri);
+        if (!isCurrent()) return;
+        const quality = await api.upload<SectionQuality>('/records/receipts/quality-check', formFor(uri, uri === selected.processedUri ? selected.processedMimeType ?? 'image/jpeg' : 'image/jpeg'), signal);
+        if (isCurrent()) updateSection({ ...selected, quality });
+      } finally {
+        releaseAnalysisCopy(uri, selected.processedUri);
+      }
     });
   }
   /**
@@ -694,9 +711,15 @@ function CustomReceiptCamera({ initialSections = [], maxReceipts = MAX_RECEIPTS_
       // untouched original — see applyCrop.
       const width = selected.originalWidth ?? selected.width;
       const height = selected.originalHeight ?? selected.height;
-      const uri = trackCacheCopy(await analysisImageUri(selected.originalUri, width, height), selected.originalUri);
-      if (!isCurrent()) return;
-      const result = await api.upload<{ corners: Corners | null; confidence: number }>('/records/receipts/detect-edges', formFor(uri, uri === selected.originalUri ? selected.originalMimeType ?? 'image/jpeg' : 'image/jpeg'), signal);
+      let uri: string | undefined;
+      let result: { corners: Corners | null; confidence: number };
+      try {
+        uri = trackCacheCopy(await analysisImageUri(selected.originalUri, width, height), selected.originalUri);
+        if (!isCurrent()) return;
+        result = await api.upload<{ corners: Corners | null; confidence: number }>('/records/receipts/detect-edges', formFor(uri, uri === selected.originalUri ? selected.originalMimeType ?? 'image/jpeg' : 'image/jpeg'), signal);
+      } finally {
+        releaseAnalysisCopy(uri, selected.originalUri);
+      }
       if (!isCurrent()) return;
       corners = cornersFromFractions(result.corners, width, height);
       if (!corners) setError('No clear receipt boundary found. Place the corners manually.');

@@ -69,7 +69,12 @@ import {
  * are also what the rail announces to a screen reader, where a row of bars is
  * nothing at all.
  */
-const STEP_NAMES = ["Your business", "Your numbers", "You're ready"] as const;
+const STEP_NAMES = ["Your business", "Starting figures", "You're ready"] as const;
+const STEP_TEST_IDS = [
+  "onboarding-step-business",
+  "onboarding-step-starting-figures",
+  "onboarding-step-ready",
+] as const;
 const TOTAL_STEPS = STEP_NAMES.length;
 
 /** Where the owner can go straight from the end of setup. */
@@ -91,6 +96,7 @@ function StepRail({ step }: { step: number }) {
   const { brand, ink } = t;
   return (
     <View
+      testID={STEP_TEST_IDS[step - 1]}
       style={{ marginBottom: space.lg }}
       accessible
       accessibilityRole="progressbar"
@@ -367,8 +373,8 @@ export function OnboardingScreen({
       ? { title: "Tell us about your business", subtitle: "Two quick questions to get started." }
       : step === 2
         ? {
-            title: "Your numbers",
-            subtitle: "These let FinSight work out your targets. Rough figures are fine.",
+            title: "Starting figures",
+            subtitle: "FinSight keeps these as a baseline, then uses confirmed records.",
           }
         : {
             title: "You're ready",
@@ -503,19 +509,19 @@ export function OnboardingScreen({
                   expense flag — is the difference between a form and a reason.
                 */}
                 <Callout tone="info">
-                  These three figures are what FinSight works your daily sales target from, and what tells it which
-                  expenses are big enough to set aside for review. Rough figures are fine — you can change any of them
-                  later from your business profile.
+                  Enter where the business is starting today. FinSight keeps these values as a reference, then updates
+                  current funds from confirmed records. It uses the monthly estimate only until you confirm a complete
+                  past month.
                 </Callout>
                 <View style={{ height: space.md }} />
 
                 <WhyWeAsk>
-                  The cash the business has to work with right now. It is the starting point for &ldquo;can I afford
-                  this?&rdquo; — FinSight never reads your bank.
+                  The cash the business has to work with right now. Confirmed sales and expenses recorded from today
+                  will update the current figure. FinSight does not read your bank.
                 </WhyWeAsk>
                 <Field
                   ref={fundsRef}
-                  label="Available business funds (PHP)"
+                  label="Starting available funds (PHP)"
                   value={draft.availableFunds}
                   onChangeText={(v) => update("availableFunds", v)}
                   error={fieldErrors.availableFunds}
@@ -528,12 +534,12 @@ export function OnboardingScreen({
                 />
 
                 <WhyWeAsk>
-                  What a normal month costs you — rent, stock, wages, utilities. Divided by your operating days below,
-                  this becomes the daily sales target on your Home screen.
+                  Your best estimate of a normal month, including rent, stock, wages, and utilities. FinSight uses this
+                  only until you confirm a complete past month of expense records.
                 </WhyWeAsk>
                 <Field
                   ref={monthlyRef}
-                  label="Expected monthly expenses (PHP)"
+                  label="Starting monthly expense estimate (PHP)"
                   value={draft.expectedMonthlyExpenses}
                   onChangeText={(v) => update("expectedMonthlyExpenses", v)}
                   error={fieldErrors.expectedMonthlyExpenses}
@@ -570,7 +576,7 @@ export function OnboardingScreen({
                 */}
                 <Field
                   ref={thresholdRef}
-                  label="Flag single expenses over (PHP) — optional"
+                  label="Flag single expenses over (PHP), optional"
                   value={thresholdDisplayValue(draft)}
                   onChangeText={(v) => update("largeExpenseThresholdPesos", v)}
                   error={fieldErrors.largeExpenseThresholdPesos}
@@ -585,7 +591,7 @@ export function OnboardingScreen({
                 />
                 <T variant="caption" style={{ marginTop: -space.sm, marginBottom: space.md }}>
                   Expenses this big get set aside for you to review. Suggested from your monthly
-                  expenses — change it anytime.
+                  estimate. Change it anytime.
                 </T>
 
                 {error ? <ErrorNote>{error}</ErrorNote> : null}
@@ -642,15 +648,15 @@ export function OnboardingScreen({
                   {draft.name.trim() || "Your business"} is set up
                 </T>
                 <T variant="caption" style={{ textAlign: "center", marginTop: 4, marginBottom: space.lg }}>
-                  Here is what FinSight has. All of it is editable later from your business profile.
+                  FinSight saved these starting values. Confirmed records will update the current figures.
                 </T>
 
                 <View style={{ gap: space.sm, marginBottom: space.lg }}>
                   <ReadyLine label="Business" value={draft.type.trim() || "Type not set"} />
-                  <ReadyLine label="Available funds" value={pesos(draft.availableFunds)} />
+                  <ReadyLine label="Starting available funds" value={pesos(draft.availableFunds)} />
                   <ReadyLine
-                    label="Monthly expenses"
-                    value={`${pesos(draft.expectedMonthlyExpenses)} over ${draft.operatingDays || "—"} operating days`}
+                    label="Starting monthly expense estimate"
+                    value={`${pesos(draft.expectedMonthlyExpenses)} over ${draft.operatingDays || "not set"} operating days`}
                   />
                   <ReadyLine label="Large expenses flagged over" value={pesos(thresholdDisplayValue(draft))} />
                 </View>
@@ -692,7 +698,12 @@ export function OnboardingScreen({
                   onPress={() => onDone("import")}
                   style={{ marginTop: space.sm }}
                 />
-                <Button title="Not now — take me to Home" variant="ghost" onPress={() => onDone()} />
+                <Button
+                  title="Not now, take me to Home"
+                  variant="ghost"
+                  testID="onboarding-finish-home"
+                  onPress={() => onDone()}
+                />
               </>
             ) : null}
           </Card>
@@ -714,7 +725,7 @@ export function OnboardingScreen({
       <ConfirmSheet
         visible={confirmingSkip}
         title="Skip setup for now?"
-        body="Without your business details FinSight can't work out your sales target or flag large expenses. Anything you've typed is kept, and you can pick up where you left off from your dashboard."
+        body="Without starting figures FinSight cannot calculate current funds or a monthly target. Anything you've typed is kept, and you can pick up where you left off from your dashboard."
         confirmLabel="Skip for now"
         cancelLabel="Keep setting up"
         onConfirm={() => void skip()}

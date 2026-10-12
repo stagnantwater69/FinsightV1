@@ -1,15 +1,18 @@
 import { useState } from "react";
 import { Pressable, ScrollView, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { Callout, Card, ErrorNote, Money, Screen, ScreenHeader, T } from "../components/ui";
+import { ConnectionNotice, FreshnessStatus } from "../components/ConnectionNotice";
+import { Callout, Card, Money, Screen, ScreenHeader, T } from "../components/ui";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
+import { describeLoadFailure, toLoadFailure } from "../lib/connectionState";
 import { useInsight } from "../lib/useInsight";
 import { formatMoney } from "../lib/money";
+import { monthlyExpenseBasisProvenance } from "../lib/financialPosition";
 import { formatMonthLabel, lastMonthKey, shiftMonthKey } from "../lib/monthEndReview";
 import { font, radius, space, typeScale } from "../theme/tokens";
 import { TAP_FLOOR } from "../components/touchTarget";
 import { useTheme } from "../context/ThemeContext";
-import type { RecoveryMonthEndReview } from "../lib/types";
+import type { BusinessProfile, RecoveryMonthEndReview } from "../lib/types";
 
 /**
  * Month-end review — Recovery Target Improvement Plan §10.9/§11 Phase 7.
@@ -33,10 +36,19 @@ export function MonthEndReviewScreen({ navigation }: any) {
   const { selected } = useBusinessProfiles();
   const [month, setMonth] = useState(() => lastMonthKey());
 
-  const { data, loading, error } = useInsight<RecoveryMonthEndReview>(
+  const reviewState = useInsight<RecoveryMonthEndReview>(
     "/insights/recovery/month-end-review",
     { businessProfileId: selected?.id, month },
     [selected?.id, month],
+  );
+  const { data, loading, refreshing, lastUpdatedAt, load } = reviewState;
+  const notice = describeLoadFailure(
+    reviewState.rawError ? toLoadFailure(reviewState.rawError) : null,
+    {
+      hasData: data !== null,
+      lastUpdatedAt,
+      subject: "these month-end details",
+    },
   );
 
   if (!selected) return null;
@@ -52,10 +64,11 @@ export function MonthEndReviewScreen({ navigation }: any) {
 
         <MonthPicker month={month} onChange={setMonth} />
 
+        <ConnectionNotice notice={notice} onRetry={load} busy={loading || refreshing} />
+        <FreshnessStatus at={lastUpdatedAt} now={Date.now()} refreshing={refreshing} />
+
         {loading && !data ? (
           <T variant="caption">Loading…</T>
-        ) : error && !data ? (
-          <ErrorNote>{error}</ErrorNote>
         ) : data?.status === "not_yet_reviewable" ? (
           <Card>
             <T variant="caption" style={{ lineHeight: 19 }}>
@@ -64,7 +77,7 @@ export function MonthEndReviewScreen({ navigation }: any) {
             </T>
           </Card>
         ) : data?.status === "reviewable" ? (
-          <ReviewContent data={data} navigation={navigation} />
+          <ReviewContent data={data} navigation={navigation} businessProfile={selected} />
         ) : null}
       </ScrollView>
     </Screen>
@@ -110,9 +123,11 @@ function MonthPicker({ month, onChange }: { month: string; onChange: (month: str
 function ReviewContent({
   data,
   navigation,
+  businessProfile,
 }: {
   data: Extract<RecoveryMonthEndReview, { status: "reviewable" }>;
   navigation: any;
+  businessProfile: BusinessProfile;
 }) {
   const t = useTheme();
   const { statusText, paper } = t;
@@ -135,6 +150,18 @@ function ReviewContent({
         >
           {`${formatMoney(Math.abs(data.surplusOrShortfall))} ${surplus ? "surplus" : "shortfall"}`}
         </T>
+        {data.monthlyExpenseBasis ? (
+          <>
+            <View style={{ height: 1, backgroundColor: paper[200], marginVertical: space.md }} />
+            <T variant="label" style={{ marginBottom: 4 }}>
+              Monthly expense basis
+            </T>
+            <Money value={data.monthlyExpenseBasis.amount} size={typeScale.body} weight="semibold" />
+            <T variant="caption" style={{ marginTop: 4, lineHeight: 18 }}>
+              {monthlyExpenseBasisProvenance(data.monthlyExpenseBasis)}
+            </T>
+          </>
+        ) : null}
       </Card>
 
       <Card>
@@ -172,7 +199,7 @@ function ReviewContent({
             </T>
             {data.finalAdjustedDailyTarget === null ? (
               <T variant="caption" style={{ lineHeight: 17 }}>
-                Not available — the month's last open day couldn't produce a meaningful per-day rate.
+                Not available because the month's last open day could not produce a meaningful per-day rate.
               </T>
             ) : (
               <Money value={data.finalAdjustedDailyTarget} size={typeScale.body} weight="semibold" />
@@ -183,8 +210,8 @@ function ReviewContent({
 
       {data.baselineAppearsOffFromPattern ? (
         <Callout tone="info">
-          Your configured expected monthly expenses may not match the sales pattern actually recorded this month.
-          This is just something to be aware of — nothing here changes your setup automatically.
+          Your monthly expense basis may not match the sales pattern recorded this month. This note does not change
+          your starting estimate or record coverage.
         </Callout>
       ) : null}
 
@@ -202,11 +229,10 @@ function ReviewContent({
           </View>
         ))}
         <T variant="caption" style={{ marginTop: space.md, lineHeight: 17 }}>
-          These are just things to think about — nothing here is applied automatically. Change any setting yourself,
-          on your own terms, on the business profile screen.
+          These are questions to consider. Nothing here changes your financial settings or records.
         </T>
         <Pressable
-          onPress={() => navigation.navigate("More", { screen: "BusinessProfileForm" })}
+          onPress={() => navigation.navigate("More", { screen: "BusinessProfileForm", params: { profile: businessProfile } })}
           accessibilityRole="button"
           accessibilityLabel="Edit business profile"
           style={{ marginTop: space.md }}

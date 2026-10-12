@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import * as SecureStore from "expo-secure-store";
-import { Platform } from "react-native";
+import { AppState, Platform } from "react-native";
 import Constants from "expo-constants";
 import { resolveApiBaseUrl } from "./apiBaseUrl";
 
@@ -145,3 +145,17 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     detectSessionInUrl: false,
   },
 });
+
+/*
+ * React Native suspends the auto-refresh timer while the app is in the
+ * background, and supabase-js cannot see that on its own. Without this the
+ * first requests after coming back raced an access token that had expired
+ * while the app was away. Supabase's React Native setup calls for exactly
+ * this pairing. The browser target tracks visibility itself.
+ */
+if (Platform.OS !== "web") {
+  AppState.addEventListener("change", (state) => {
+    if (state === "active") void supabase.auth.startAutoRefresh();
+    else void supabase.auth.stopAutoRefresh();
+  });
+}

@@ -1,6 +1,5 @@
 import { useCallback, useRef, useState } from "react";
 import { Dimensions, Modal, Pressable, RefreshControl, ScrollView, View } from "react-native";
-import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { Button, Callout, Card, EmptyState, ErrorNote, Money, Screen, SetupProgress, T } from "../components/ui";
 import { HomeHeader } from "../components/HomeHeader";
@@ -17,17 +16,14 @@ import { useAuth } from "../context/AuthContext";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useTourHomeStage } from "../context/TourContext";
 import { useTourScrollView, useTourTarget } from "../components/tour/targets";
-import { api } from "../lib/api";
-import { ConnectionNotice, LastUpdated } from "../components/ConnectionNotice";
-import { describeLoadFailure, toLoadFailure, type LoadFailure } from "../lib/connectionState";
-import { selectTopOpportunity } from "../lib/topReductionOpportunity";
-import {
-  ALL_TIME_PERIOD_DAYS,
-  DEFAULT_SUMMARY_PERIOD_DAYS,
-  periodLabel as describePeriod,
-  periodPhrase,
-} from "../lib/dashboardPeriod";
+import { ConnectionNotice, FreshnessStatus } from "../components/ConnectionNotice";
+import { describeLoadFailure, toLoadFailure } from "../lib/connectionState";
+import type { DashboardExpenseOverview } from "../lib/expenseOverview";
+import { ALL_TIME, periodLabel as describePeriod, periodParams, periodPhrase } from "../lib/reportingPeriod";
+import { useInsight } from "../lib/useInsight";
+import { ReportingPeriodScope, useReportingPeriod } from "../context/ReportingPeriodContext";
 import { formatMoney } from "../lib/money";
+import { availableFundsProvenance, monthlyExpenseBasisProvenance } from "../lib/financialPosition";
 import { font, radius, space, typeScale } from "../theme/tokens";
 import { TAP_FLOOR } from "../components/touchTarget";
 import { useTheme } from "../context/ThemeContext";
@@ -35,8 +31,6 @@ import type {
   CashflowGranularity,
   DashboardCashflow,
   DashboardSummary,
-  ReductionOpportunity,
-  ReductionOpportunityResponse,
 } from "../lib/types";
 
 const GRANULARITY_OPTIONS: { label: string; value: CashflowGranularity }[] = [
@@ -273,56 +267,63 @@ function GranularityDropdown({
   );
 }
 
-export function DashboardScreen({ navigation }: any) {
+export function DashboardScreen(props: any) {
+  return (
+    <ReportingPeriodScope>
+      <DashboardContent {...props} />
+    </ReportingPeriodScope>
+  );
+}
+
+function DashboardContent({ navigation }: any) {
   const t = useTheme();
   const { brand } = t;
   const { preferences } = useAuth();
   const { selected, profiles, categories, error: profilesError, refresh: refreshProfiles, selectProfile } =
     useBusinessProfiles();
-  const [summary, setSummary] = useState<DashboardSummary | null>(null);
   /**
-   * Which lookback the figures cover. Owned here because the summary refetch
-   * reads it; the segmented control below is the only thing that sets it, and
-   * it is always on screen, so every window is reachable from every other.
+   * The shared period (This week, a month with records, All time). The
+   * selector below is always on screen, so every choice is reachable from
+   * every other; the same choice holds on Expense Insights and Spending Impact.
    */
-  const [summaryPeriodDays, setSummaryPeriodDays] = useState(DEFAULT_SUMMARY_PERIOD_DAYS);
-  const [cashflow, setCashflow] = useState<DashboardCashflow | null>(null);
+  const { selection, setSelection, ready: periodReady } = useReportingPeriod();
+  const periodKeyValue = JSON.stringify(selection);
   const [cashflowGranularity, setCashflowGranularity] = useState<CashflowGranularity>("daily");
-  /**
-   * The single top-ranked reduction opportunity, for the Dashboard's one
-   * compact link-out card — plan §13.1/§15 Phase 5. Reuses the same endpoint
-   * Expense Insight's full section calls; this screen only ever looks at
-   * `opportunities[0]`, never the whole list (plan §13.1: "do not fetch or
-   * render the complete opportunity list on the Dashboard").
-   */
-  const [topOpportunity, setTopOpportunity] = useState<ReductionOpportunity | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [cashflowLoading, setCashflowLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  /*
-   * The last failed attempt, kept as a descriptor rather than a sentence.
-   *
-   * A string could not answer the two questions the banner asks — did the
-   * request reach FinSight at all, and is there anything on screen to fall
-   * back on — so the words are composed at render time from this plus
-   * `summary`. See lib/connectionState.ts.
-   */
-  const [failure, setFailure] = useState<LoadFailure | null>(null);
-  /**
-   * When the figures on screen arrived, and the clock the caption is measured
-   * against.
-   *
-   * TWO VALUES, NOT ONE. `loadedAt` only moves on a SUCCESSFUL load, which is
-   * what makes it the age of the data rather than the age of the last attempt.
-   * `clock` moves on every attempt, so a refresh that fails still advances
-   * "Updated 2 minutes ago" to "Updated 12 minutes ago" — the caption has to
-   * get older when the refresh does not work, or it is reassuring about the
-   * exact case it exists to expose.
-   */
-  const [loadedAt, setLoadedAt] = useState<number | null>(null);
-  const [clock, setClock] = useState(() => Date.now());
-  const [askOpen, setAskOpen] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
+
+  const summaryState = useInsight<DashboardSummary>(
+    "/dashboard/summary",
+    { businessProfileId: selected?.id, ...periodParams(selection) },
+    [selected?.id, periodKeyValue, periodReady],
+    { enabled: Boolean(selected && periodReady) },
+  );
+  const cashflowState = useInsight<DashboardCashflow>(
+    "/dashboard/cashflow",
+    { businessProfileId: selected?.id, granularity: cashflowGranularity },
+    [selected?.id, cashflowGranularity, showDetails],
+    { enabled: Boolean(selected && showDetails) },
+  );
+  const overviewState = useInsight<DashboardExpenseOverview>(
+    "/insights/expense-overview",
+    { businessProfileId: selected?.id, ...periodParams(selection), view: "dashboard" },
+    [selected?.id, periodKeyValue, periodReady],
+    { enabled: Boolean(selected && periodReady && selection.kind !== "all") },
+  );
+
+  const summary = summaryState.data;
+  const cashflow = cashflowState.data;
+  const topOpportunity =
+    overviewState.data?.topOpportunity.status === "available"
+      ? overviewState.data.topOpportunity.data
+      : null;
+  const loading = summaryState.loading;
+  const cashflowLoading = cashflowState.loading;
+  const [refreshing, setRefreshing] = useState(false);
+  const failure = summaryState.rawError ? toLoadFailure(summaryState.rawError) : null;
+  const overviewFailure = overviewState.rawError ? toLoadFailure(overviewState.rawError) : null;
+  const cashflowFailure = cashflowState.rawError ? toLoadFailure(cashflowState.rawError) : null;
+  const clock = Date.now();
+  const [askOpen, setAskOpen] = useState(false);
 
   /*
    * The product tour's start gate.
@@ -340,88 +341,17 @@ export function DashboardScreen({ navigation }: any) {
   /** Lets the tour scroll this page to whatever the current step is about. */
   const tourScroll = useTourScrollView();
 
-  /*
-   * Split from the cashflow fetch on purpose. They used to be one
-   * Promise.all, which meant toggling the Daily/Monthly dropdown re-fetched
-   * the summary too and dropped the whole screen back to the full skeleton
-   * for a control that only the cashflow card owns.
-   */
-  const loadSummary = useCallback(async () => {
-    if (!selected) return;
-    setClock(Date.now());
-    try {
-      const next = await api.get<DashboardSummary>("/dashboard/summary", {
-        businessProfileId: selected.id,
-        periodDays: summaryPeriodDays,
-      });
-      setSummary(next);
-      setLoadedAt(Date.now());
-      // Cleared only on success. Clearing it up front, as this did, blanked
-      // the explanation for the whole duration of the retry — so a failing
-      // refresh flashed the banner off and back on every pull.
-      setFailure(null);
-    } catch (err) {
-      setFailure(toLoadFailure(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [selected, summaryPeriodDays]);
-
-  const loadCashflow = useCallback(async () => {
-    if (!selected) return;
-    setCashflowLoading(true);
-    try {
-      setCashflow(
-        await api.get<DashboardCashflow>("/dashboard/cashflow", {
-          businessProfileId: selected.id,
-          granularity: cashflowGranularity,
-        })
-      );
-    } catch {
-      // The cashflow card falls back to its own empty state below; a second
-      // error banner next to the page-level one for the summary would say
-      // the same thing twice for what is, from here, a minor degradation.
-    } finally {
-      setCashflowLoading(false);
-    }
-  }, [selected, cashflowGranularity]);
-
-  /**
-   * Plan §13.1's confidence/emptiness gate lives here rather than inside the
-   * card component: `topOpportunity` is null whenever nothing should be
-   * shown, so the render below stays a plain truthiness check exactly like
-   * every other optional Dashboard panel.
-   */
-  const loadTopOpportunity = useCallback(async () => {
-    if (!selected) return;
-    try {
-      const response = await api.get<ReductionOpportunityResponse>("/insights/reduction-opportunities", {
-        businessProfileId: selected.id,
-        periodDays: DEFAULT_SUMMARY_PERIOD_DAYS,
-      });
-      setTopOpportunity(selectTopOpportunity(response));
-    } catch {
-      // Same reasoning as loadCashflow: this is an optional Dashboard panel,
-      // not the page's own data, so a failed fetch just means the card is
-      // absent rather than a page-level error banner.
-      setTopOpportunity(null);
-    }
-  }, [selected]);
-
-  // Refetch on focus so a record added on another tab is reflected when the
-  // user comes back, rather than showing a stale figure. Separate effects so
-  // a granularity change (which only recreates `loadCashflow`) reloads just
-  // the chart, not the whole screen — same reasoning extends to the
-  // opportunity card, which has nothing to do with either of the other two.
-  useFocusEffect(useCallback(() => { loadSummary(); }, [loadSummary]));
-  useFocusEffect(useCallback(() => { loadCashflow(); }, [loadCashflow]));
-  useFocusEffect(useCallback(() => { loadTopOpportunity(); }, [loadTopOpportunity]));
-
+  const refreshSummary = summaryState.load;
+  const refreshCashflow = cashflowState.load;
+  const refreshOverview = overviewState.load;
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([loadSummary(), loadCashflow(), loadTopOpportunity()]);
-    setRefreshing(false);
-  }, [loadSummary, loadCashflow, loadTopOpportunity]);
+    try {
+      await Promise.all([refreshSummary(), refreshCashflow(), refreshOverview()]);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshCashflow, refreshOverview, refreshSummary]);
 
   if (!selected) {
     return (
@@ -488,14 +418,19 @@ export function DashboardScreen({ navigation }: any) {
    * over a 22 Jul-20 Aug window is a figure an owner cannot reconcile against
    * their own August books, and nothing on the card says why.
    */
-  const periodLabel = describePeriod(summaryPeriodDays);
+  const periodLabel = describePeriod(selection);
   const topCategory = summary?.expenseCategoryBreakdown?.length
     ? [...summary.expenseCategoryBreakdown].sort((a, b) => b.total - a.total)[0]
     : null;
   const recoveryStatus = summary?.recoveryStatus;
+  const recoveryNeedsSetup = recoveryStatus
+    ? recoveryStatus.status
+      ? recoveryStatus.status === "needs_setup"
+      : (recoveryStatus.needsSetup ?? recoveryStatus.expectedMonthlyExpenses <= 0)
+    : false;
   const recoveryLabel = !recoveryStatus
     ? "Not available"
-    : recoveryStatus.status === "needs_setup" || recoveryStatus.expectedMonthlyExpenses <= 0
+    : recoveryNeedsSetup
       ? "Not set up"
       : recoveryStatus.status === "covered"
         ? "Target reached"
@@ -513,7 +448,7 @@ export function DashboardScreen({ navigation }: any) {
   const recoveryCoverage = Math.max(0, Math.min(100, recoveryStatus?.monthCoveragePercent ?? 0));
   const openRecoveryAction = () => {
     if (!summary) return;
-    if (summary.recoveryStatus.expectedMonthlyExpenses <= 0 || summary.recoveryStatus.status === "needs_setup") {
+    if (recoveryNeedsSetup) {
       navigation.navigate("More", {
         screen: "BusinessProfileForm",
         params: { profile: selected },
@@ -527,8 +462,8 @@ export function DashboardScreen({ navigation }: any) {
     }
   };
   const recoveryActionLabel =
-    !summary || summary.recoveryStatus.expectedMonthlyExpenses <= 0 || summary.recoveryStatus.status === "needs_setup"
-      ? "Set monthly expenses"
+    !summary || recoveryNeedsSetup
+      ? "Set starting estimate"
       : summary.recoveryStatus.status === "data_incomplete" || summary.recordsNeedingReview > 0
         ? "Review flagged records"
         : summary.recoveryStatus.status === "no_current_month_data"
@@ -545,9 +480,21 @@ export function DashboardScreen({ navigation }: any) {
    */
   const loadNotice = describeLoadFailure(failure, {
     hasData: !!summary,
-    lastUpdatedAt: loadedAt,
+    lastUpdatedAt: summaryState.lastUpdatedAt,
     now: clock,
     subject: "your figures",
+  });
+  const overviewNotice = describeLoadFailure(overviewFailure, {
+    hasData: overviewState.data !== null,
+    lastUpdatedAt: overviewState.lastUpdatedAt,
+    now: clock,
+    subject: "expense opportunities",
+  });
+  const cashflowNotice = describeLoadFailure(cashflowFailure, {
+    hasData: cashflow !== null,
+    lastUpdatedAt: cashflowState.lastUpdatedAt,
+    now: clock,
+    subject: "cashflow details",
   });
 
   return (
@@ -605,7 +552,7 @@ export function DashboardScreen({ navigation }: any) {
           />
         ) : null}
 
-        <PeriodSelector value={summaryPeriodDays} onChange={setSummaryPeriodDays} />
+        <PeriodSelector />
 
         {/*
           One line above the panels rather than a "no data" note inside each of
@@ -617,21 +564,17 @@ export function DashboardScreen({ navigation }: any) {
         {!loading && periodIsEmpty ? (
           <View style={{ marginBottom: space.lg }}>
             <Callout tone="info">
-              No records for {periodPhrase(summaryPeriodDays)}, but this business has{" "}
-              {summary!.lifetime!.recordCount.toLocaleString()} in total
+              No records {periodPhrase(selection)}.
               {summary!.lifetime!.latestRecordDate
-                ? `, the most recent dated ${new Date(
-                    summary!.lifetime!.latestRecordDate,
-                  ).toLocaleDateString(undefined, {
+                ? ` Latest record: ${new Date(summary!.lifetime!.latestRecordDate).toLocaleDateString(undefined, {
                     year: "numeric",
                     month: "short",
                     day: "numeric",
                     // Date-only columns stored at midnight UTC — formatting in
                     // local time shows the previous day west of it.
                     timeZone: "UTC",
-                  })}`
+                  })}.`
                 : ""}
-              . Your history is safe — this screen is only looking at the selected period.
             </Callout>
             {/*
               The fix, not a signpost. Telling the owner their data is in
@@ -641,13 +584,17 @@ export function DashboardScreen({ navigation }: any) {
             <Button
               title="Show all time"
               variant="secondary"
-              onPress={() => setSummaryPeriodDays(ALL_TIME_PERIOD_DAYS)}
+              onPress={() => setSelection(ALL_TIME)}
               style={{ marginTop: space.sm }}
             />
           </View>
         ) : null}
 
-        <ConnectionNotice notice={loadNotice} onRetry={onRefresh} busy={refreshing} />
+        <ConnectionNotice
+          notice={loadNotice ?? overviewNotice ?? cashflowNotice}
+          onRetry={onRefresh}
+          busy={refreshing || summaryState.refreshing || overviewState.refreshing || cashflowState.refreshing}
+        />
 
         {/*
           The age of the figures, stated even when nothing is wrong.
@@ -657,7 +604,13 @@ export function DashboardScreen({ navigation }: any) {
           and this screen refetches on focus, which is exactly the pattern that
           makes an owner stop wondering.
         */}
-        {summary ? <LastUpdated at={loadedAt} now={clock} /> : null}
+        {summary ? (
+          <FreshnessStatus
+            at={summaryState.lastUpdatedAt}
+            now={clock}
+            refreshing={refreshing || summaryState.refreshing}
+          />
+        ) : null}
 
         {loading || (!summary && !failure) ? (
           // Shaped like the dashboard rather than a centred spinner, so the
@@ -707,7 +660,7 @@ export function DashboardScreen({ navigation }: any) {
                 </View>
 
                 <T variant="caption" style={{ marginTop: space.md }}>
-                  Available business funds
+                  Recorded available funds
                 </T>
                 <Money
                   value={summary.overview.availableFunds}
@@ -715,8 +668,13 @@ export function DashboardScreen({ navigation }: any) {
                   weight="semibold"
                   style={{ marginTop: 2 }}
                 />
+                {summary.overview.availableFundsCalculation ? (
+                  <T variant="caption" style={{ marginTop: 4, lineHeight: 18 }}>
+                    {availableFundsProvenance(summary.overview.availableFundsCalculation)}
+                  </T>
+                ) : null}
 
-                {summary.recoveryStatus.expectedMonthlyExpenses > 0 ? (
+                {!recoveryNeedsSetup ? (
                   <View style={{ marginTop: space.xl }}>
                     <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "baseline" }}>
                       <T variant="caption">Monthly expense coverage</T>
@@ -724,6 +682,11 @@ export function DashboardScreen({ navigation }: any) {
                         {recoveryCoverage.toFixed(0)}%
                       </T>
                     </View>
+                    {summary.recoveryStatus.monthlyExpenseBasis ? (
+                      <T variant="caption" style={{ marginTop: 4, lineHeight: 18 }}>
+                        {monthlyExpenseBasisProvenance(summary.recoveryStatus.monthlyExpenseBasis)}
+                      </T>
+                    ) : null}
                     <View
                       accessible
                       accessibilityRole="progressbar"
@@ -759,7 +722,7 @@ export function DashboardScreen({ navigation }: any) {
                   </View>
                 ) : (
                   <T variant="caption" style={{ marginTop: space.lg }}>
-                    Add expected monthly expenses to calculate a daily sales target and recovery pace.
+                    Add a starting monthly expense estimate to calculate a daily sales target and recovery pace.
                   </T>
                 )}
                 <Button

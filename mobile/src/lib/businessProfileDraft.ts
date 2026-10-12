@@ -191,12 +191,12 @@ export function validateNumbers(draft: BusinessProfileDraft): BusinessFieldError
 
   const funds = Number(draft.availableFunds);
   if (draft.availableFunds === "" || !Number.isFinite(funds) || funds < 0) {
-    errors.availableFunds = "Enter the cash the business has to work with. Enter 0 if none.";
+    errors.availableFunds = "Enter the starting funds for this business. Enter 0 if none.";
   }
 
   const expenses = Number(draft.expectedMonthlyExpenses);
   if (draft.expectedMonthlyExpenses === "" || !Number.isFinite(expenses) || expenses < 0) {
-    errors.expectedMonthlyExpenses = "Enter roughly what a normal month costs you.";
+    errors.expectedMonthlyExpenses = "Enter a starting monthly expense estimate. Enter 0 if none.";
   }
 
   const days = Number(draft.operatingDays);

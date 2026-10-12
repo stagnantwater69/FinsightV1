@@ -1,4 +1,9 @@
+import { isAuthRetryableFetchError } from "@supabase/supabase-js";
 import { API_BASE_URL, supabase } from "./supabase";
+import {
+  invalidateServerStateForMutation,
+  type ServerStateMutationScope,
+} from "./serverStateCache";
 
 /**
  * The single HTTP client for the mobile app.
@@ -160,10 +165,69 @@ function codeFrom(body: unknown): string | undefined {
   return typeof code === "string" ? code : undefined;
 }
 
-async function authHeader(): Promise<Record<string, string>> {
-  const { data } = await supabase.auth.getSession();
+/**
+ * The stored session's access token, or none when there is no session.
+ *
+ * THROWS rather than returning nothing when a session IS stored but its
+ * refresh could not reach Supabase — the usual state for a moment after the
+ * app comes back from the background. Sending the request without a token
+ * earned a 401 that signed the owner out and deleted a refresh token that was
+ * still good; failing it as a connection problem leaves them signed in.
+ */
+async function sessionToken(): Promise<string | undefined> {
+  const { data, error } = await supabase.auth.getSession();
   const token = data.session?.access_token;
+  if (!token && error && isAuthRetryableFetchError(error)) {
+    throw networkError(new Error("Could not refresh the session"));
+  }
+  return token;
+}
+
+function bearer(token: string | undefined): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+type SessionRecovery = { kind: "refreshed"; token: string } | { kind: "unreachable" } | { kind: "refused" };
+
+let recovering: Promise<SessionRecovery> | null = null;
+
+/**
+ * What a 401 on a session-backed request should lead to.
+ *
+ * A 401 is not proof the session is over: the access token may have expired
+ * while the app was in the background, or another request may already have
+ * refreshed it. So the stored refresh token gets one chance, and the owner is
+ * signed out only when Supabase REFUSES it — which is also what a revoked
+ * session ("log out everywhere", a password change) produces, so revocation
+ * still ends the session here.
+ *
+ * Shared across concurrent 401s so a screen that loads several things at once
+ * does not spend the refresh token once per request. Mirrors web's api.ts.
+ */
+async function recoverSession(rejectedToken: string): Promise<SessionRecovery> {
+  const { data } = await supabase.auth.getSession();
+  const current = data.session?.access_token;
+  if (current && current !== rejectedToken) return { kind: "refreshed", token: current };
+
+  recovering ??= supabase.auth
+    .refreshSession()
+    .then(
+      ({ data: refreshed, error }): SessionRecovery => {
+        if (refreshed.session) return { kind: "refreshed", token: refreshed.session.access_token };
+        return error && isAuthRetryableFetchError(error) ? { kind: "unreachable" } : { kind: "refused" };
+      },
+      (err: unknown): SessionRecovery =>
+        isAuthRetryableFetchError(err) ? { kind: "unreachable" } : { kind: "refused" },
+    )
+    .finally(() => {
+      recovering = null;
+    });
+  return recovering;
+}
+
+/** A 401 that a refresh might fix: sent with the stored session, not yet retried. */
+function recoverable(status: number, path: string, token: string | undefined, retried: boolean | undefined) {
+  return status === 401 && !isCredentialCheck(path) && token !== undefined && !retried;
 }
 
 function buildUrl(path: string, query?: Record<string, string | number | boolean | undefined>) {
@@ -172,6 +236,58 @@ function buildUrl(path: string, query?: Record<string, string | number | boolean
     if (v !== undefined && v !== "") url.searchParams.set(k, String(v));
   }
   return url.toString();
+}
+
+type ApiQuery = Record<string, string | number | boolean | undefined>;
+
+export interface ApiMutationOptions {
+  cacheScope?: ServerStateMutationScope;
+  signal?: AbortSignal;
+  query?: ApiQuery;
+  headers?: Record<string, string>;
+}
+
+function isAbortSignal(value: unknown): value is AbortSignal {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "aborted" in value &&
+    "addEventListener" in value &&
+    typeof (value as AbortSignal).addEventListener === "function"
+  );
+}
+
+function isMutationOptions(value: unknown): value is ApiMutationOptions {
+  if (!value || typeof value !== "object" || isAbortSignal(value)) return false;
+  return ["cacheScope", "signal", "query", "headers"].some((key) => key in value);
+}
+
+function normalizeMutationOptions(
+  value?: AbortSignal | ApiMutationOptions,
+): ApiMutationOptions {
+  if (!value) return {};
+  return isAbortSignal(value) ? { signal: value } : value;
+}
+
+function retrySeconds(value: unknown): number | null {
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) value = Number(value.trim());
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function rateLimitMessage(header: unknown, responseBody: unknown): string {
+  let seconds = retrySeconds(header);
+  if (seconds === null && typeof header === "string" && /^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(header.trim())) {
+    const deadline = Date.parse(header.trim());
+    if (Number.isFinite(deadline)) seconds = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+  }
+  const body = responseBody as { retryAfterSeconds?: unknown; error?: unknown } | undefined;
+  if (seconds === null && typeof body?.retryAfterSeconds === "number") {
+    seconds = retrySeconds(body.retryAfterSeconds);
+  }
+  if (seconds !== null) return `Too many requests. Try again in ${seconds}s.`;
+  return typeof body?.error === "string" && body.error
+    ? body.error
+    : "Too many requests. Please wait a moment and try again.";
 }
 
 /**
@@ -214,6 +330,9 @@ async function toError(res: Response, path: string): Promise<ApiError> {
   // "the server had a problem with that" and imply the request was at fault.
   if (res.status >= 500 && res.status !== 503) {
     message = "FinSight's server had a problem with that. Please try again in a moment.";
+  }
+  if (res.status === 429) {
+    message = rateLimitMessage(res.headers?.get?.("Retry-After"), responseBody);
   }
   return new ApiError(res.status, message, fieldErrors, code, responseBody);
 }
@@ -270,9 +389,10 @@ function withTimeout(signal: AbortSignal | undefined, ms: number) {
 
 async function request<T>(method: string, path: string, opts: {
   body?: unknown;
-  query?: Record<string, string | number | boolean | undefined>;
+  query?: ApiQuery;
   signal?: AbortSignal;
   headers?: Record<string, string>;
+  cacheScope?: ServerStateMutationScope;
   /**
    * A specific token to authenticate with, instead of the stored session.
    *
@@ -283,7 +403,11 @@ async function request<T>(method: string, path: string, opts: {
    * the token is passed for the one request that needs it and is never stored.
    */
   authToken?: string;
+  /** The stored-session token to send, set only on the one retry after a refresh. */
+  retryToken?: string;
 } = {}): Promise<T> {
+  // A link token is never swapped for the session's, so it is never refreshed.
+  const token = opts.authToken ? undefined : (opts.retryToken ?? (await sessionToken()));
   // The clock covers reading the body too: a connection can stall after the
   // headers arrive, which looks identical to a hang from the screen's side.
   const deadline = withTimeout(opts.signal, JSON_REQUEST_TIMEOUT_MS);
@@ -295,7 +419,7 @@ async function request<T>(method: string, path: string, opts: {
         signal: deadline.signal,
         headers: {
           ...opts.headers,
-          ...(opts.authToken ? { Authorization: `Bearer ${opts.authToken}` } : await authHeader()),
+          ...(opts.authToken ? { Authorization: `Bearer ${opts.authToken}` } : bearer(token)),
           "Content-Type": "application/json",
         },
         body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
@@ -304,8 +428,16 @@ async function request<T>(method: string, path: string, opts: {
       throw deadline.timedOut() ? networkError(new Error("The request timed out")) : networkError(err);
     }
 
+    if (recoverable(res.status, path, token, opts.retryToken !== undefined)) {
+      const recovery = await recoverSession(token!);
+      if (recovery.kind === "refreshed") return request<T>(method, path, { ...opts, retryToken: recovery.token });
+      if (recovery.kind === "unreachable") throw networkError(new Error("Could not refresh the session"));
+    }
     if (!res.ok) throw await toError(res, path);
-    if (res.status === 204) return undefined as T;
+    if (res.status === 204) {
+      invalidateServerStateForMutation(method, path, opts.body, opts.cacheScope);
+      return undefined as T;
+    }
 
     let text: string;
     try {
@@ -313,7 +445,9 @@ async function request<T>(method: string, path: string, opts: {
     } catch (err) {
       throw deadline.timedOut() ? networkError(new Error("The request timed out")) : networkError(err);
     }
-    return (text ? JSON.parse(text) : undefined) as T;
+    const data = (text ? JSON.parse(text) : undefined) as T;
+    invalidateServerStateForMutation(method, path, opts.body, opts.cacheScope, data);
+    return data;
   } finally {
     deadline.release();
   }
@@ -344,11 +478,18 @@ async function request<T>(method: string, path: string, opts: {
  * Only uploads move. Every JSON call above stays on `fetch`, where none of
  * this applies.
  */
-function uploadRequest<T>(path: string, formData: FormData, signal?: AbortSignal): Promise<T> {
+function uploadRequest<T>(
+  path: string,
+  formData: FormData,
+  options: ApiMutationOptions = {},
+  retryToken?: string,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     void (async () => {
-      const headers = await authHeader();
+      const token = retryToken ?? (await sessionToken());
+      const headers = bearer(token);
       const xhr = new XMLHttpRequest();
+      const { signal } = options;
       // Already cancelled before the request could start — the same failure
       // `xhr.onabort` reports, so it must arrive in the same shape. A bare
       // Error here reached callers as something with no `status`, and code
@@ -372,9 +513,28 @@ function uploadRequest<T>(path: string, formData: FormData, signal?: AbortSignal
         const status = xhr.status;
         const text = xhr.responseText;
 
+        // See `request`: one refresh and one retry before a 401 ends the session.
+        if (recoverable(status, path, token, retryToken !== undefined)) {
+          void recoverSession(token!).then((recovery) => {
+            if (recovery.kind === "refreshed") {
+              uploadRequest<T>(path, formData, options, recovery.token).then(resolve, reject);
+            } else if (recovery.kind === "unreachable") {
+              reject(networkError(new Error("Could not refresh the session")));
+            } else {
+              settle(status, text);
+            }
+          });
+          return;
+        }
+        settle(status, text);
+      };
+
+      const settle = (status: number, text: string) => {
         if (status >= 200 && status < 300) {
           try {
-            resolve((text ? JSON.parse(text) : undefined) as T);
+            const data = (text ? JSON.parse(text) : undefined) as T;
+            invalidateServerStateForMutation("POST", path, undefined, options.cacheScope, data);
+            resolve(data);
           } catch {
             reject(new ApiError(status, "FinSight sent back a response that could not be read."));
           }
@@ -410,6 +570,9 @@ function uploadRequest<T>(path: string, formData: FormData, signal?: AbortSignal
         if (status >= 500 && status !== 503) {
           message = "FinSight's server had a problem with that. Please try again in a moment.";
         }
+        if (status === 429) {
+          message = rateLimitMessage(xhr.getResponseHeader?.("Retry-After"), responseBody);
+        }
         reject(new ApiError(status, message, fieldErrors, code, responseBody));
       };
 
@@ -428,7 +591,7 @@ function uploadRequest<T>(path: string, formData: FormData, signal?: AbortSignal
 export const api = {
   get: <T>(
     path: string,
-    query?: Record<string, string | number | boolean | undefined>,
+    query?: ApiQuery,
     signal?: AbortSignal,
   ) => request<T>("GET", path, { query, signal }),
   /*
@@ -437,9 +600,11 @@ export const api = {
    * request it cancelled carried on to completion — the abort stopped the
    * state update, never the call.
    */
-  post: <T>(path: string, body?: unknown, signal?: AbortSignal) => request<T>("POST", path, { body, signal }),
+  post: <T>(path: string, body?: unknown, options?: AbortSignal | ApiMutationOptions) =>
+    request<T>("POST", path, { body, ...normalizeMutationOptions(options) }),
   /** Whole-resource replacement — used by the operating-schedule endpoint, which takes exactly seven entries at once rather than one field at a time (that's what `patch` is for). */
-  put: <T>(path: string, body?: unknown, signal?: AbortSignal) => request<T>("PUT", path, { body, signal }),
+  put: <T>(path: string, body?: unknown, options?: AbortSignal | ApiMutationOptions) =>
+    request<T>("PUT", path, { body, ...normalizeMutationOptions(options) }),
   /** POST authenticated by a one-off token from an auth deep link — see `authToken`. */
   postWithToken: <T>(path: string, authToken: string, body?: unknown) =>
     request<T>("POST", path, { body, authToken }),
@@ -449,12 +614,29 @@ export const api = {
   patch: <T>(
     path: string,
     body?: unknown,
-    query?: Record<string, string | number | boolean | undefined>,
+    queryOrOptions?: ApiQuery | ApiMutationOptions,
     signal?: AbortSignal,
-  ) => request<T>("PATCH", path, { body, query, signal }),
-  delete: <T>(path: string, body?: unknown, headers?: Record<string, string>, signal?: AbortSignal) =>
-    request<T>("DELETE", path, { body, headers, signal }),
-  upload: <T>(path: string, formData: FormData, signal?: AbortSignal) => uploadRequest<T>(path, formData, signal),
+  ) =>
+    request<T>("PATCH", path, {
+      body,
+      ...(isMutationOptions(queryOrOptions)
+        ? { ...queryOrOptions, signal: queryOrOptions.signal ?? signal }
+        : { query: queryOrOptions, signal }),
+    }),
+  delete: <T>(
+    path: string,
+    body?: unknown,
+    headersOrOptions?: Record<string, string> | ApiMutationOptions,
+    signal?: AbortSignal,
+  ) =>
+    request<T>("DELETE", path, {
+      body,
+      ...(isMutationOptions(headersOrOptions)
+        ? { ...headersOrOptions, signal: headersOrOptions.signal ?? signal }
+        : { headers: headersOrOptions, signal }),
+    }),
+  upload: <T>(path: string, formData: FormData, options?: AbortSignal | ApiMutationOptions) =>
+    uploadRequest<T>(path, formData, normalizeMutationOptions(options)),
 };
 
 export function errorMessage(err: unknown): string {

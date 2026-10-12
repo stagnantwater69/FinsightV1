@@ -455,7 +455,7 @@ export function ReductionOpportunitiesSection({
         </Card>
       ) : (
         <View style={{ gap: space.sm }}>
-          {historical ? (
+          {historical && data.period.start ? (
             <Callout tone="info">
               Showing {data.period.start.slice(0, 10)} to {data.period.end.slice(0, 10)} — a historical window, not
               the current period.

@@ -1,6 +1,5 @@
-import { useCallback, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Alert as RNAlert, Pressable, ScrollView, View } from "react-native";
-import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { Button, Card, Disclosure, EmptyState, ErrorNote, Field, Money, Screen, T } from "../components/ui";
 import { DateField } from "../components/DateField";
@@ -11,10 +10,13 @@ import { SkeletonCard } from "../components/Skeleton";
 import { CoverageColumns } from "../components/charts";
 import { AskFinSight } from "../components/AskFinSight";
 import { AskFinSightFab, FAB_CLEARANCE } from "../components/AskFinSightFab";
+import { ConnectionNotice, FreshnessStatus } from "../components/ConnectionNotice";
 import { InsightHeader, Medallion } from "../components/InsightsShared";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useInsight } from "../lib/useInsight";
 import { api, errorMessage } from "../lib/api";
+import { describeLoadFailure, toLoadFailure } from "../lib/connectionState";
+import { monthlyExpenseBasisProvenance } from "../lib/financialPosition";
 import { formatMoney } from "../lib/money";
 import { bufferPercentError, currentMonthKey, ownerTargetAmountError, parsePlanNumber } from "../lib/recoveryPlanForm";
 import { dayStatusTone } from "../lib/recoveryTone";
@@ -44,29 +46,33 @@ export function RecoveryTargetScreen({ navigation }: any) {
     { businessProfileId: selected?.id, coverageDays: 14 },
     [selected?.id]
   );
-
-  /*
-   * §7.5/§10.7 saved plan — fetched alongside, not gating, the main recovery
-   * load above. A separate `useState`/`useFocusEffect` pair rather than a
-   * second `useInsight` call: this must never block the main screen's own
-   * loading/error states, and it renders nothing at all when it fails or
-   * when nothing has been saved for the current month — there is no error
-   * state of its own to show.
-   */
-  const [plan, setPlan] = useState<RecoveryPlan | null>(null);
-  const loadPlan = useCallback(async () => {
-    if (!selected) return;
-    try {
-      const list = await api.get<RecoveryPlan[]>(`/business-profiles/${selected.id}/recovery-plans`, {
-        month: currentMonthKey(),
-      });
-      setPlan(list[0] ?? null);
-    } catch {
-      // Silent by design — see the comment above.
-      setPlan(null);
-    }
-  }, [selected]);
-  useFocusEffect(useCallback(() => { loadPlan(); }, [loadPlan]));
+  const planMonth = currentMonthKey();
+  const planState = useInsight<RecoveryPlan[]>(
+    `/business-profiles/${selected?.id ?? "none"}/recovery-plans`,
+    { month: planMonth },
+    [selected?.id, planMonth],
+    { enabled: Boolean(selected) },
+  );
+  const [planOverride, setPlanOverride] = useState<{
+    businessProfileId: number;
+    plan: RecoveryPlan | null;
+  } | null>(null);
+  useEffect(() => {
+    if (planState.data !== null) setPlanOverride(null);
+  }, [planState.data]);
+  const plan =
+    selected && planOverride?.businessProfileId === selected.id
+      ? planOverride.plan
+      : planState.data?.[0] ?? null;
+  const planNotice = describeLoadFailure(
+    planState.rawError ? toLoadFailure(planState.rawError) : null,
+    {
+      hasData: planState.data !== null,
+      lastUpdatedAt: planState.lastUpdatedAt,
+      subject: "your saved recovery plan",
+    },
+  );
+  const monthlyBasis = data?.monthlyExpenseBasis ?? null;
 
   if (!selected) return null;
 
@@ -110,7 +116,7 @@ export function RecoveryTargetScreen({ navigation }: any) {
         */}
         <View style={{ marginBottom: space.md }}>
           <T variant="caption" numberOfLines={showDefinition ? undefined : 2}>
-            Your Sales Coverage Target compares recorded sales references with your expected monthly expense amount.
+            Your Sales Coverage Target compares recorded sales references with the monthly expense basis shown below.
             It is a planning guide and does not calculate profit, cash flow, or formal break-even.
           </T>
           <Pressable
@@ -263,10 +269,15 @@ export function RecoveryTargetScreen({ navigation }: any) {
               */}
               <Row
                 icon="wallet-outline"
-                label="Expected monthly expenses"
+                label="Monthly expense basis"
                 value={data.expectedMonthlyExpenses}
                 first
               />
+              {monthlyBasis ? (
+                <T variant="caption" style={{ marginTop: -space.xs, marginBottom: space.sm }}>
+                  {monthlyExpenseBasisProvenance(monthlyBasis)}
+                </T>
+              ) : null}
               <Row icon="bar-chart-outline" label="Sales reference so far" value={data.salesThisMonth} />
               {/*
                 §8.2/§10.5 data-quality disclosure — purely additive. The
@@ -336,9 +347,28 @@ export function RecoveryTargetScreen({ navigation }: any) {
               Absent entirely when nothing has been saved for the current
               month, or when the fetch failed — see `loadPlan` above.
             */}
+            {planState.loading && planState.data === null ? (
+              <SkeletonCard style={{ height: 96 }} />
+            ) : null}
+            <ConnectionNotice
+              notice={planNotice}
+              onRetry={() => void planState.load()}
+              busy={planState.refreshing}
+            />
+            {plan ? (
+              <FreshnessStatus
+                at={planState.lastUpdatedAt}
+                now={Date.now()}
+                refreshing={planState.refreshing}
+              />
+            ) : null}
             {plan ? (
               <Card>
-                <SavedPlanCard businessProfileId={selected.id} plan={plan} onChanged={setPlan} />
+                <SavedPlanCard
+                  businessProfileId={selected.id}
+                  plan={plan}
+                  onChanged={(next) => setPlanOverride({ businessProfileId: selected.id, plan: next })}
+                />
               </Card>
             ) : null}
 
@@ -726,6 +756,10 @@ function SavedPlanCard({
   const [bufferFieldError, setBufferFieldError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const activeRef = useRef(true);
+  useEffect(() => () => {
+    activeRef.current = false;
+  }, []);
 
   function startEditing() {
     setAmountRaw(plan.ownerTargetAmount !== null ? String(plan.ownerTargetAmount) : "");
@@ -772,6 +806,10 @@ function SavedPlanCard({
           text: "Remove",
           style: "destructive",
           onPress: async () => {
+            // Native alerts outlive the React subtree that opened them. A
+            // business switch unmounts this card, so a delayed tap must not
+            // delete the plan from the business that is no longer selected.
+            if (!activeRef.current) return;
             try {
               await api.delete(`/business-profiles/${businessProfileId}/recovery-plans/${plan.month}`);
               onChanged(null);

@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert as RNAlert, KeyboardAvoidingView, Platform, ScrollView, TextInput, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { Button, Card, ErrorNote, Field, Screen, T } from "../../components/ui";
@@ -18,10 +18,15 @@ import { RECORD_SOURCE_LABELS, type RecordItem, type RecordSource } from "../../
 import { FIELD_LIMITS } from "../../lib/fieldLimits";
 import { setFlash } from "../../lib/flash";
 import { badges, CategoryPicker } from "./shared";
+import { AvailableFundsBaselineChoice, useAvailableFundsBaselineChoice } from "../../components/AvailableFundsBaselineChoice";
 
 export function EditRecordScreen({ route, navigation }: any) {
   const { selected, categories, refreshCategories } = useBusinessProfiles();
   const record: RecordItem = route.params.record;
+  const selectedBusinessProfileId = selected?.id ?? null;
+  const selectedBusinessProfileIdRef = useRef(selectedBusinessProfileId);
+  selectedBusinessProfileIdRef.current = selectedBusinessProfileId;
+  const recordIsInSelectedBusiness = selectedBusinessProfileId === record.businessProfileId;
   const isExpense = record.type === "expense";
   // The same test the list applies before it offers the swipe, so a record
   // that can be resolved by gesture can be resolved by tap and vice versa.
@@ -29,6 +34,8 @@ export function EditRecordScreen({ route, navigation }: any) {
 
   const [categoryId, setCategoryId] = useState<number | null>(record.categoryId ?? null);
   const [date, setDate] = useState(record.date.slice(0, 10));
+  const baselineChoice = useAvailableFundsBaselineChoice(date);
+  const setBaselineFromRecord = baselineChoice.setFromRecord;
   const [description, setDescription] = useState(record.description);
   const [vendor, setVendor] = useState(record.vendor ?? "");
   const [amount, setAmount] = useState(String(record.amount));
@@ -57,9 +64,40 @@ export function EditRecordScreen({ route, navigation }: any) {
   const [origin, setOrigin] = useState<RecordOrigin | null>(null);
   const [loadingOrigin, setLoadingOrigin] = useState(true);
 
+  useEffect(() => {
+    setBaselineFromRecord(
+      record.includedInAvailableFundsBaseline ?? null,
+      record.availableFundsDeltaBaselineAt,
+    );
+  }, [record.availableFundsDeltaBaselineAt, record.includedInAvailableFundsBaseline, setBaselineFromRecord]);
+
+  useEffect(() => {
+    if (recordIsInSelectedBusiness) return;
+    setCategoryId(null);
+    setDate("");
+    setDescription("");
+    setVendor("");
+    setAmount("");
+    setOrigin(null);
+    setLoadingOrigin(false);
+    setError(null);
+    setBusy(false);
+  }, [recordIsInSelectedBusiness]);
+
+  useEffect(() => () => {
+    selectedBusinessProfileIdRef.current = null;
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
+      if (selectedBusinessProfileId !== record.businessProfileId) {
+        setOrigin(null);
+        setLoadingOrigin(false);
+        return;
+      }
       let cancelled = false;
+      setOrigin(null);
+      setLoadingOrigin(true);
       (async () => {
         try {
           const detail = await api.get<{ origin: RecordOrigin | null }>(
@@ -76,27 +114,62 @@ export function EditRecordScreen({ route, navigation }: any) {
       return () => {
         cancelled = true;
       };
-    }, [record.type, record.id]),
+    }, [record.type, record.id, record.businessProfileId, selectedBusinessProfileId]),
   );
 
   if (!selected) return null;
 
+  if (!recordIsInSelectedBusiness) {
+    return (
+      <Screen>
+        <View style={{ padding: space.lg }}>
+          <Card>
+            <T variant="title" style={{ marginBottom: space.sm }}>Record unavailable</T>
+            <T variant="body">
+              This record belongs to a different business. Return to records to continue with the selected business.
+            </T>
+            <Button
+              title="Back to records"
+              variant="primary"
+              onPress={() => navigation.goBack()}
+              style={{ marginTop: space.lg }}
+            />
+          </Card>
+        </View>
+      </Screen>
+    );
+  }
+
+  function recordCanBeMutated() {
+    return selectedBusinessProfileIdRef.current === record.businessProfileId;
+  }
+
   async function save() {
+    if (!recordCanBeMutated()) return;
     const value = Number(amount);
     if (!description.trim()) return setError("Give this record a description.");
     if (!Number.isFinite(value) || value <= 0) return setError("Enter an amount greater than zero.");
     if (isExpense && !categoryId) return setError("Choose a category first.");
+    if (!baselineChoice.check()) return;
 
     setError(null);
     setBusy(true);
     try {
-      const input = { date, description, amount: value, categoryId, vendor };
+      const input = {
+        date,
+        description,
+        amount: value,
+        categoryId,
+        vendor,
+        ...baselineChoice.requestFields(),
+      };
       await api.patch(
         recordUpdatePath(record.type, record.id),
         // Expense and sales take DIFFERENT fields — a sales record has no
         // category and no vendor server-side. Built in lib/recordUpdate so
         // that distinction is tested rather than remembered.
         isExpense ? buildExpenseUpdatePayload(input) : buildSalesUpdatePayload(input),
+        { cacheScope: { businessProfileId: record.businessProfileId } },
       );
       haptics.succeeded();
       setFlash("Record updated.");
@@ -104,7 +177,7 @@ export function EditRecordScreen({ route, navigation }: any) {
     } catch (err) {
       // Every edit is still in the fields — this screen only leaves on
       // success — so the message says so, and says nothing about saving later.
-      setError(saveFailureMessage(err, "Save changes"));
+      if (!(await baselineChoice.absorb(err))) setError(saveFailureMessage(err, "Save changes"));
     } finally {
       setBusy(false);
     }
@@ -122,6 +195,7 @@ export function EditRecordScreen({ route, navigation }: any) {
    * replacement for the first.
    */
   async function resolve() {
+    if (!recordCanBeMutated()) return;
     setError(null);
     setBusy(true);
     try {
@@ -129,7 +203,7 @@ export function EditRecordScreen({ route, navigation }: any) {
       await api.patch(recordUpdatePath(record.type, record.id), {
         duplicateStatus: "Not a Duplicate",
         reviewStatus: "Reviewed",
-      });
+      }, { cacheScope: { businessProfileId: record.businessProfileId } });
       haptics.succeeded();
       // Word for word what the list says when the swipe does this, so the app
       // does not describe one action two ways.
@@ -160,10 +234,15 @@ export function EditRecordScreen({ route, navigation }: any) {
           text: "Delete",
           style: "destructive",
           onPress: async () => {
+            if (!recordCanBeMutated()) return;
             setBusy(true);
             setError(null);
             try {
-              await api.delete(recordUpdatePath(record.type, record.id));
+              await api.delete(
+                recordUpdatePath(record.type, record.id),
+                undefined,
+                { cacheScope: { businessProfileId: record.businessProfileId } },
+              );
               haptics.committed();
               // A deletion leaves the screen the same way a save does, and the
               // record it removed is gone from the list behind it — so without
@@ -220,6 +299,7 @@ export function EditRecordScreen({ route, navigation }: any) {
                 />
               ) : null}
               <DateField label="Date" value={date} onChange={setDate} />
+              <AvailableFundsBaselineChoice choice={baselineChoice} disabled={busy} />
               <Field
                 label="Description"
                 value={description}

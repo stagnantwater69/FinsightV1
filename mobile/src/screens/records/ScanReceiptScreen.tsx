@@ -43,6 +43,7 @@ import { analysisImageUri } from "../../lib/analysisImage";
 import { setFlash } from "../../lib/flash";
 import { SkeletonBox } from "../../components/Skeleton";
 import { DateField } from "../../components/DateField";
+import { AvailableFundsBaselineChoice, useAvailableFundsBaselineChoice } from "../../components/AvailableFundsBaselineChoice";
 import { Ionicons } from "@expo/vector-icons";
 import * as haptics from "../../lib/haptics";
 import { font, radius, space, typeScale } from "../../theme/tokens";
@@ -279,9 +280,15 @@ export function ScanReceiptScreen({ navigation }: any) {
 
   const [categoryId, setCategoryId] = useState<number | null>(null);
   const [date, setDate] = useState(todayISO());
+  const baselineChoice = useAvailableFundsBaselineChoice(date);
+  const clearBaselineDecision = baselineChoice.setDecision;
   const [description, setDescription] = useState("");
   const [vendor, setVendor] = useState("");
   const [amount, setAmount] = useState("");
+
+  useEffect(() => {
+    clearBaselineDecision(null);
+  }, [scan?.id, clearBaselineDecision]);
 
   /**
    * The owner's category for each extracted line, keyed by item id.
@@ -1358,6 +1365,7 @@ export function ScanReceiptScreen({ navigation }: any) {
       return setError("Choose a category first.");
     }
     if (!date) return setError("Enter the date printed on the receipt.");
+    if (!baselineChoice.check()) return;
     const task = operation.begin();
     if (!task) return;
 
@@ -1388,13 +1396,19 @@ export function ScanReceiptScreen({ navigation }: any) {
         ...details,
         expectedScanRevision: scan!.scanRevision,
         ...(duplicateDecision ? { duplicateDecision } : {}),
+        ...baselineChoice.requestFields(),
       };
 
-      await api.post(`/records/receipts/${scan!.id}/confirm`, payload);
+      await api.post(
+        `/records/receipts/${scan!.id}/confirm`,
+        payload,
+        { cacheScope: { businessProfileId: scan!.businessProfileId } },
+      );
       if (!operation.current(task)) return;
       await finishReceiptConfirmation(task);
     } catch (err) {
       if (!operation.current(task)) return;
+      if (await baselineChoice.absorb(err)) return;
       const duplicate = duplicateReviewFromError(err);
       if (duplicate) {
         duplicateReviewIdentity.current = currentDuplicateIdentity;
@@ -2397,6 +2411,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                 />
               ) : null}
               <DateField label="Date" value={date} onChange={setDate} />
+              <AvailableFundsBaselineChoice choice={baselineChoice} disabled={busy} />
               {/*
                 Where the value above came from. Shown under the field it
                 describes rather than in a panel of its own — the question

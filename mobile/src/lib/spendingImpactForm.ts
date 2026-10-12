@@ -15,6 +15,7 @@
  */
 
 import { FIELD_LIMITS } from "./fieldLimits";
+import { periodPhrase, type PeriodSelection } from "./reportingPeriod";
 import { formatMoney } from "./money";
 import type { ImpactBand, SpendingImpact } from "./types";
 
@@ -97,18 +98,18 @@ export function isImpactStale(
   computedAmount: number | null,
   currentAmount: number | null,
   /**
-   * The comparison window, optional so the two-argument call sites this
-   * started with keep working. Passed as a pair or not at all: a card computed
-   * over the last 7 days does not describe a screen now set to 30, even when
-   * the amount has not moved a peso.
+   * The period, as a key from lib/reportingPeriod (`periodKey`/`windowKey`),
+   * optional so the two-argument call sites keep working. Passed as a pair or
+   * not at all: a card computed for August does not describe a screen now set
+   * to This week, even when the amount has not moved a peso.
    */
-  computedPeriodDays: number | null = null,
-  currentPeriodDays: number | null = null,
+  computedPeriod: string | null = null,
+  currentPeriod: string | null = null,
 ): boolean {
   if (computedAmount === null) return false;
   if (computedAmount !== currentAmount) return true;
-  if (computedPeriodDays === null || currentPeriodDays === null) return false;
-  return computedPeriodDays !== currentPeriodDays;
+  if (computedPeriod === null || currentPeriod === null) return false;
+  return computedPeriod !== currentPeriod;
 }
 
 /**
@@ -122,13 +123,12 @@ export function isImpactStale(
 export type ImpactStaleReason = "amount" | "period" | "both";
 
 export function impactStaleReason(
-  computed: { amount: number | null; periodDays: number | null },
-  current: { amount: number | null; periodDays: number | null },
+  computed: { amount: number | null; period: string | null },
+  current: { amount: number | null; period: string | null },
 ): ImpactStaleReason | null {
   if (computed.amount === null) return null;
   const amountMoved = computed.amount !== current.amount;
-  const periodMoved =
-    computed.periodDays !== null && current.periodDays !== null && computed.periodDays !== current.periodDays;
+  const periodMoved = computed.period !== null && current.period !== null && computed.period !== current.period;
   if (amountMoved && periodMoved) return "both";
   if (amountMoved) return "amount";
   if (periodMoved) return "period";
@@ -219,32 +219,12 @@ export function isCategorySuggestionStale(suggestedFor: string | null, currentIt
 // ------------------------------------------------------------- the scenario
 
 /**
- * The comparison windows, mirroring web's PERIOD_OPTIONS
- * (web/src/pages/SpendingImpact.tsx) day-for-day.
- *
- * The LABELS differ on purpose and only in wording: web renders these in a
- * `<select>` where "Today / This week / This month" reads as a list of
- * choices, and the app renders them in a segmented control three across on a
- * 360dp screen, where the two-word labels wrap. The days are what the server
- * is asked for, and those must not differ — a period the two clients name the
- * same but count differently is the drift this mirrors against.
+ * The period as a clause inside a sentence, for copy and for the AI prompt:
+ * "your expenses this week", "your expenses in September 2026". The period
+ * itself is the shared one (lib/reportingPeriod), the same as web's.
  */
-export const PERIOD_OPTIONS = [
-  { label: "Today", days: 1 },
-  { label: "Week", days: 7 },
-  { label: "Month", days: 30 },
-] as const;
-
-export type PeriodDays = (typeof PERIOD_OPTIONS)[number]["days"];
-
-/** What the screen opens on, and what the endpoint itself defaults to. */
-export const DEFAULT_PERIOD_DAYS: PeriodDays = 30;
-
-/** The window as a clause inside a sentence, for copy and for the AI prompt. */
-export function periodPhrase(days: number): string {
-  if (days === 1) return "today's records";
-  if (days === 7) return "this week's records";
-  return "this month's records";
+export function expensesPhrase(selection: PeriodSelection): string {
+  return selection.kind === "all" ? "all your recorded expenses" : `your expenses ${periodPhrase(selection)}`;
 }
 
 /**
@@ -280,19 +260,17 @@ export interface ScenarioInput {
   amount: string;
   itemDescription: string;
   categoryId: number | null;
-  periodDays: PeriodDays;
 }
 
 /**
- * Reset clears the AMOUNT, THE ITEM AND THE CATEGORY, and keeps the period.
+ * Reset clears the AMOUNT, THE ITEM AND THE CATEGORY, and not the period.
  *
- * The period is a way of looking rather than part of the scenario: an owner
- * comparing against this week is still comparing against this week when they
- * price up a different purchase, and resetting it would make them re-choose it
- * every time. Web resets the same three and leaves its period select alone.
+ * The period is the shared one (context/ReportingPeriodContext), a way of
+ * looking rather than part of the scenario, so Reset has nothing to say about
+ * it. Web resets the same three.
  */
-export function resetScenario(periodDays: PeriodDays): ScenarioInput {
-  return { amount: "", itemDescription: "", categoryId: null, periodDays };
+export function resetScenario(): ScenarioInput {
+  return { amount: "", itemDescription: "", categoryId: null };
 }
 
 // ----------------------------------------------------------------- the gauge
@@ -425,19 +403,13 @@ export function periodEvidence(
  * that sentence has no way to know which of the numbers in front of them to
  * stop trusting.
  */
-export function periodEvidenceNote(evidence: PeriodEvidence, periodDays: number): string | null {
+export function periodEvidenceNote(evidence: PeriodEvidence, selection: PeriodSelection): string | null {
   if (evidence === "normal") return null;
-  const window = periodPhrase(periodDays);
+  const unaffected = "Available funds and the impact band come from your business profile and are unaffected.";
   if (evidence === "none") {
-    return (
-      `No expenses are recorded in ${window}, so the period comparison below is measuring against nothing yet. ` +
-      `Your available funds and the impact band do not depend on it — they come from your business profile.`
-    );
+    return `No expenses recorded ${periodPhrase(selection)}. ${unaffected}`;
   }
-  return (
-    `Very little is recorded in ${window}, so the period comparison rests on almost no history. ` +
-    `Your available funds and the impact band do not depend on it — they come from your business profile.`
-  );
+  return `Very few expenses recorded ${periodPhrase(selection)}. ${unaffected}`;
 }
 
 // ------------------------------------------------------ the prepared question
@@ -464,13 +436,13 @@ export function periodEvidenceNote(evidence: PeriodEvidence, periodDays: number)
 export function scenarioQuestion(scenario: {
   amount: number;
   item: string;
-  periodDays: number;
+  period: PeriodSelection;
   band: ImpactBand;
 }): string {
   const item = scenario.item.trim();
   const money = formatMoney(scenario.amount);
   const band = BAND_SENTENCE[scenario.band];
-  const window = periodPhrase(scenario.periodDays);
+  const window = expensesPhrase(scenario.period);
 
   const withItem = `Why is spending ${money} on ${item} a ${band} for my business, compared with ${window}?`;
   const withoutItem = `Why is spending ${money} a ${band} for my business, compared with ${window}?`;

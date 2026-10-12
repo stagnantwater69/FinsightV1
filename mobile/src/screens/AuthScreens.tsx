@@ -16,6 +16,7 @@ import {
   validateRecoveryCode,
   validateRegister,
   validateResetPassword,
+  digitsOnly,
   MAX_RECOVERY_CODE_LENGTH,
   MIN_PASSWORD_LENGTH,
   type FieldErrors,
@@ -703,7 +704,7 @@ export function RegisterScreen({ navigation }: any) {
         icon="call-outline"
         label="Phone number (optional)"
         value={form.phoneNumber}
-        onChangeText={set("phoneNumber")}
+        onChangeText={(v) => set("phoneNumber")(digitsOnly(v))}
         error={fieldErrors.phoneNumber}
         keyboardType="phone-pad"
         autoComplete="tel"

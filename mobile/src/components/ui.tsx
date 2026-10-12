@@ -150,6 +150,7 @@ export function Button({
   loading,
   style,
   accessibilityLabel = title,
+  testID,
 }: {
   title: string;
   onPress: () => void;
@@ -158,6 +159,7 @@ export function Button({
   loading?: boolean;
   style?: ViewStyle;
   accessibilityLabel?: string;
+  testID?: string;
 }) {
   const t = useTheme();
   const styles = useStyles();
@@ -192,6 +194,7 @@ export function Button({
 
   return (
     <Pressable
+      testID={testID}
       accessibilityRole="button"
       /*
        * THE NAME IS STATED, NOT INFERRED.

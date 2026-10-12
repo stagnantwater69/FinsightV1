@@ -2,10 +2,11 @@ import { useState } from "react";
 import { Pressable, View } from "react-native";
 import { Card, Callout, Field, T } from "../../../components/ui";
 import { Ionicons } from "@expo/vector-icons";
-import { TAP, font, space, typeScale } from "../../../theme/tokens";
+import { TAP, font, radius, space, typeScale } from "../../../theme/tokens";
 import { useTheme } from "../../../context/ThemeContext";
-import type { AnalysedRow, CorrectableField } from "../../../lib/csvImport";
+import type { AnalysedRow, CorrectableField, RowCorrection } from "../../../lib/csvImport";
 import { FIELD_LIMITS } from "../../../lib/fieldLimits";
+import { TAP_FLOOR } from "../../../components/touchTarget";
 import { FIELD_LABELS } from "./constants";
 
 /**
@@ -25,14 +26,20 @@ export function ReviewRowCard({
   row,
   corrected,
   onCorrect,
+  baseline,
 }: {
   row: AnalysedRow;
-  corrected: Partial<Record<CorrectableField, string>>;
+  corrected: RowCorrection;
   onCorrect: (field: CorrectableField, value: string) => void;
+  baseline?: {
+    defaultDecision: boolean;
+    override: boolean | undefined;
+    onChange: (value: boolean | undefined) => void;
+  };
 }) {
   const t = useTheme();
   const { ink, paper, statusText, status } = t;
-  const [open, setOpen] = useState(row.problem !== null);
+  const [open, setOpen] = useState(row.problem !== null || baseline !== undefined);
   const broken = row.problem !== null;
 
   return (
@@ -112,6 +119,44 @@ export function ReviewRowCard({
               This one can't be fixed here — it comes from the {FIELD_LABELS[row.problem.field]} column. Go
               back to the columns, or leave the row to be skipped.
             </Callout>
+          ) : null}
+          {baseline ? (
+            <View style={{ gap: space.sm, marginTop: space.md }}>
+              <T variant="label">Recorded balance</T>
+              <T variant="caption">Use the import answer unless this row happened on the other side of the balance update.</T>
+              {(
+                [
+                  [undefined, `Use import answer (${baseline.defaultDecision ? "included" : "after balance"})`],
+                  [true, "Already included"],
+                  [false, "After the balance"],
+                ] as const
+              ).map(([value, label]) => {
+                const selected = baseline.override === value;
+                return (
+                  <Pressable
+                    key={label}
+                    accessibilityRole="radio"
+                    accessibilityLabel={`${label}, row ${row.rowNumber}`}
+                    accessibilityState={{ checked: selected }}
+                    onPress={() => baseline.onChange(value)}
+                    style={({ pressed }) => ({
+                      minHeight: TAP_FLOOR,
+                      justifyContent: "center",
+                      borderWidth: 1,
+                      borderColor: selected ? t.brandFill : t.border,
+                      backgroundColor: selected ? t.brand[50] : t.surface,
+                      borderRadius: radius.md,
+                      paddingHorizontal: space.md,
+                      opacity: pressed ? 0.85 : 1,
+                    })}
+                  >
+                    <T style={{ fontSize: typeScale.bodySm, fontFamily: font.sansMedium, color: selected ? t.brandHeading : t.textSecondary }}>
+                      {label}
+                    </T>
+                  </Pressable>
+                );
+              })}
+            </View>
           ) : null}
         </View>
       ) : null}

@@ -28,6 +28,7 @@ import { LaunchScreen } from "./src/components/LaunchScreen";
 import { BusinessProfileProvider, useBusinessProfiles } from "./src/context/BusinessProfileContext";
 import { TourProvider, useTourOptional } from "./src/context/TourContext";
 import { AiChatProvider } from "./src/context/AiChatContext";
+import { ReportingPeriodProvider } from "./src/context/ReportingPeriodContext";
 import { useTourTarget } from "./src/components/tour/targets";
 import { QUICK_ADD_STEP_IDS, type TourTargetKey } from "./src/components/tour/steps";
 import {
@@ -86,6 +87,7 @@ import type { Palette } from "./src/theme/palette";
 import { ThemeProvider, useTheme, useThemeControl } from "./src/context/ThemeContext";
 import { recordsTabPressAction, RECORDS_LIST_SCREEN } from "./src/lib/tabSelection";
 import { QuickActionMenu, type RadialAction } from "./src/components/QuickActionMenu";
+import { BusinessNavigationBoundary } from "./src/components/BusinessNavigationBoundary";
 
 /**
  * Used to reach the navigator from the tab bar's camera modal, which sits
@@ -964,7 +966,7 @@ function Root({ fontsReady }: { fontsReady: boolean }) {
 function MainOrOnboarding() {
   const t = useTheme();
   const { profile: user } = useAuth();
-  const { profiles, loading } = useBusinessProfiles();
+  const { profiles, selected, loading } = useBusinessProfiles();
   const [dismissed, setDismissed] = useState<boolean | null>(null);
   /** Latched once the wizard hands over, so finishing it does not re-enter it. */
   const [left, setLeft] = useState(false);
@@ -1067,12 +1069,21 @@ function MainOrOnboarding() {
    * belongs to one business; above the navigator because it must survive every
    * route change under it. Same placement web uses in AuthenticatedLayout.
    */
+  /*
+   * ReportingPeriodProvider above the tabs for the same reason: Home, Expense
+   * Insights and Spending Impact read ONE period, and moving between them must
+   * keep it. Same placement web uses in AuthenticatedLayout.
+   */
   return (
-    <AiChatProvider>
-      <TourProvider>
-        <MainTabs />
-      </TourProvider>
-    </AiChatProvider>
+    <ReportingPeriodProvider>
+      <BusinessNavigationBoundary businessProfileId={selected?.id ?? null}>
+        <AiChatProvider>
+          <TourProvider>
+            <MainTabs />
+          </TourProvider>
+        </AiChatProvider>
+      </BusinessNavigationBoundary>
+    </ReportingPeriodProvider>
   );
 }
 

@@ -1,10 +1,12 @@
 import { ActivityIndicator, View } from "react-native";
+import { ConnectionNotice } from "./ConnectionNotice";
 import { Button, Callout, Card, EmptyState, ErrorNote, T } from "./ui";
 import { Medallion, ScheduleRow } from "./InsightsShared";
 import { groupSchedules } from "../lib/recurringAgenda";
 import { font, radius, space, typeScale } from "../theme/tokens";
 import { useTheme } from "../context/ThemeContext";
 import type { RecurringPattern, RecurringSchedule } from "../lib/types";
+import type { LoadNotice } from "../lib/connectionState";
 
 /**
  * The Recurring sub-section of Expense insight — the payments the owner has
@@ -27,6 +29,9 @@ export function ExpenseRecurringSection({
   schedules,
   candidates,
   canConfirm,
+  scheduleNotice,
+  refreshSchedules,
+  scheduleRefreshing,
   openSchedule,
   confirmPattern,
   dismissPattern,
@@ -40,6 +45,9 @@ export function ExpenseRecurringSection({
   schedules: RecurringSchedule[] | null;
   candidates: RecurringPattern[];
   canConfirm: boolean;
+  scheduleNotice: LoadNotice | null;
+  refreshSchedules: () => void | Promise<void>;
+  scheduleRefreshing: boolean;
   openSchedule: (scheduleId?: number) => void;
   confirmPattern: (id: number) => void | Promise<void>;
   dismissPattern: (id: number) => void | Promise<void>;
@@ -48,17 +56,11 @@ export function ExpenseRecurringSection({
   const { brand, ink, paper } = t;
   return (
     <>
-      {/*
-        NO ERROR NOTE FOR THE SCHEDULES READ. It used to print the
-        server's own "Not found" here, which is the 404 the feature
-        flag returns by design — an owner was being shown the
-        plumbing of a feature that has not shipped. The agenda's
-        absence IS the message; see recurringAvailability.
-
-        `patternActionError` stays: that one is about a button the
-        owner just pressed, and it is still reachable through
-        "Not recurring", which is ungated.
-      */}
+      <ConnectionNotice
+        notice={scheduleNotice}
+        onRetry={() => void refreshSchedules()}
+        busy={scheduleRefreshing}
+      />
       {patternActionError ? <ErrorNote>{patternActionError}</ErrorNote> : null}
       {scheduleState.loading && scheduleState.data === null && schedules !== null ? (
         <ActivityIndicator color={brand[600]} />

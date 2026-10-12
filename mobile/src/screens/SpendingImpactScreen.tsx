@@ -12,7 +12,6 @@ import {
   Field,
   Money,
   Screen,
-  SegmentedControl,
   SelectChip,
   T,
 } from "../components/ui";
@@ -22,18 +21,20 @@ import { InsightHeader } from "../components/InsightsShared";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useAiChat } from "../context/AiChatContext";
 import { api, errorMessage } from "../lib/api";
+import { availableFundsProvenance } from "../lib/financialPosition";
 import * as haptics from "../lib/haptics";
 import { formatMoney } from "../lib/money";
 import { useDebounced } from "../lib/useDebounced";
 import { font, radius, space, typeScale } from "../theme/tokens";
 import { TAP_FLOOR } from "../components/touchTarget";
 import { useTheme } from "../context/ThemeContext";
+import { ReportingPeriodScope, useReportingPeriod } from "../context/ReportingPeriodContext";
+import { PeriodSelector } from "../components/PeriodSelector";
+import { periodKey, periodLabel, periodParams, windowKey } from "../lib/reportingPeriod";
 import {
   BAND_TONE,
-  DEFAULT_PERIOD_DAYS,
   IMPACT_STALE_COPY,
   MAX_ITEM_LENGTH,
-  PERIOD_OPTIONS,
   QUICK_AMOUNTS,
   amountValidationError,
   canRequestReview,
@@ -48,11 +49,10 @@ import {
   percentOfFundsText,
   periodEvidence,
   periodEvidenceNote,
-  periodPhrase,
+  expensesPhrase,
   quickAmountValue,
   resetScenario,
   scenarioQuestion,
-  type PeriodDays,
 } from "../lib/spendingImpactForm";
 import type {
   CategorySuggestion,
@@ -64,13 +64,35 @@ import type {
 
 // ---------------------------------------------------------------- Spending impact
 
-export function SpendingImpactScreen({ navigation }: any) {
+export function SpendingImpactScreen(props: any) {
+  return (
+    <ReportingPeriodScope>
+      <SpendingImpactContent {...props} />
+    </ReportingPeriodScope>
+  );
+}
+
+function SpendingImpactContent({ navigation, route }: any) {
   const t = useTheme();
   const { ACCENT, brand, ink, paper, statusText } = t;
   const { selected, categories } = useBusinessProfiles();
 
   // ---- the base calculation ----
   const [amount, setAmount] = useState("");
+
+  /*
+   * Ask FinSight's "Open this in Spending Impact" arrives with the amount it
+   * parsed from the owner's question. It only fills the box — the owner still
+   * presses Calculate — and the param is cleared once read, so returning to
+   * this screen later does not refill it. An effect rather than the initial
+   * state because the screen may already be mounted in the Insights stack.
+   */
+  const prefillAmount: unknown = route?.params?.plannedAmount;
+  useEffect(() => {
+    if (typeof prefillAmount !== "number" || !Number.isFinite(prefillAmount) || prefillAmount <= 0) return;
+    setAmount(String(prefillAmount));
+    navigation.setParams({ plannedAmount: undefined });
+  }, [prefillAmount, navigation]);
   /**
    * What is wrong with the typed amount, if anything.
    *
@@ -98,14 +120,14 @@ export function SpendingImpactScreen({ navigation }: any) {
   const [amountFocused, setAmountFocused] = useState(false);
 
   /**
-   * The window the recorded-expenses half is compared against.
-   *
-   * The endpoint has always accepted this and the app has always sent 30. It
-   * is part of the SCENARIO, not a display option: the server counts a
-   * different set of records for each one, so a card computed for seven days
-   * does not describe a screen set to thirty (see `impactStaleReason`).
+   * The period the recorded-expenses half is compared against: the shared
+   * one (This week, a month, All time) that Home and Expense Insights use.
+   * The server counts a different set of records for each, so a card computed
+   * for August does not describe a screen set to This week (see
+   * `impactStaleReason`).
    */
-  const [periodDays, setPeriodDays] = useState<PeriodDays>(DEFAULT_PERIOD_DAYS);
+  const { selection } = useReportingPeriod();
+  const currentPeriodKey = periodKey(selection);
 
   // ---- the item, and what FinSight makes of it ----
   const [itemDescription, setItemDescription] = useState("");
@@ -198,7 +220,7 @@ export function SpendingImpactScreen({ navigation }: any) {
       const result = await api.get<SpendingImpact>("/insights/spending-impact", {
         businessProfileId: selected.id,
         plannedAmount: value,
-        periodDays,
+        ...periodParams(selection),
       });
       if (checkSeq.current !== seq) return; // superseded by a request started after this one
       setData(result);
@@ -293,7 +315,7 @@ export function SpendingImpactScreen({ navigation }: any) {
     // Deliberately keyed on the period alone: `data` is in the condition, not
     // in the dependencies, or every landing answer would trigger another call.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [periodDays]);
+  }, [currentPeriodKey]);
 
   /*
    * The category guess.
@@ -384,15 +406,15 @@ export function SpendingImpactScreen({ navigation }: any) {
   const reviewReady = canRequestReview(itemDescription);
   /*
    * The figures on screen were computed for `data.plannedAmount` over
-   * `data.periodDays`; either may since have moved. Same treatment as the
+   * `data.period`; either may since have moved. Same treatment as the
    * review card above, because the dishonesty is the same and this half is
    * the half owners trust — and the banner names WHICH one moved, because
    * "Amount changed" over a card that went stale on a period switch is itself
    * a false statement.
    */
   const staleReason = impactStaleReason(
-    { amount: data?.plannedAmount ?? null, periodDays: data?.periodDays ?? null },
-    { amount: currentAmount, periodDays },
+    { amount: data?.plannedAmount ?? null, period: windowKey(data?.period) },
+    { amount: currentAmount, period: currentPeriodKey },
   );
 
   const suggestionStale = isCategorySuggestionStale(suggestedFor, itemDescription);
@@ -407,17 +429,18 @@ export function SpendingImpactScreen({ navigation }: any) {
   const categoryOptions = [{ id: NO_CATEGORY_ID, name: "No category — compare everything" }, ...categories];
 
   const evidence = data ? periodEvidence(data.periodExpenses.before, data.funds.before) : "normal";
-  const evidenceNote = data ? periodEvidenceNote(evidence, data.periodDays) : null;
+  const evidenceNote = data ? periodEvidenceNote(evidence, selection) : null;
 
   /** The prepared question — shown to the owner, never sent for them. */
   const preparedQuestion = data
     ? scenarioQuestion({
         amount: data.plannedAmount,
         item: reviewedItem ?? itemDescription,
-        periodDays: data.periodDays,
+        period: selection,
         band: data.impactBand,
       })
     : null;
+  const fundsCalculation = data?.availableFundsCalculation ?? null;
 
   function resetAll() {
     haptics.tapped();
@@ -427,7 +450,7 @@ export function SpendingImpactScreen({ navigation }: any) {
     checkSeq.current += 1;
     reviewSeq.current += 1;
     suggestSeq.current += 1;
-    const fresh = resetScenario(periodDays);
+    const fresh = resetScenario();
     setAmount(fresh.amount);
     setItemDescription(fresh.itemDescription);
     setCategoryId(fresh.categoryId);
@@ -604,23 +627,13 @@ export function SpendingImpactScreen({ navigation }: any) {
           </View>
 
           {/*
-            The comparison window. It is part of the scenario rather than a
-            view option — the server counts a different set of records for
-            each one — so changing it re-asks the question (see the effect on
-            `periodDays`) instead of quietly relabelling the old answer.
+            The comparison period, shared with Home and Expense Insights.
+            Changing it re-asks the question (see the effect on the period key)
+            instead of quietly relabelling the old answer.
           */}
           <View style={{ marginTop: space.lg }}>
             <T variant="label" style={{ marginBottom: 6 }}>Compare against</T>
-            <SegmentedControl
-              options={PERIOD_OPTIONS.map((option) => ({ label: option.label, value: option.days }))}
-              value={periodDays}
-              onChange={(days) => setPeriodDays(days as PeriodDays)}
-              accessibilityLabel="Comparison period"
-            />
-            <T variant="caption" style={{ marginTop: 6 }}>
-              Recorded expenses are compared against {periodPhrase(periodDays)}. Your available funds do not change
-              with this.
-            </T>
+            <PeriodSelector />
           </View>
         </Card>
 
@@ -762,7 +775,7 @@ export function SpendingImpactScreen({ navigation }: any) {
                 */}
                 <T variant="caption" style={{ marginTop: 2 }}>
                   For a planned <Money value={data.plannedAmount} bare size={typeScale.caption} weight="medium" />
-                  {" "}against {periodPhrase(data.periodDays)}
+                  {" "}against {expensesPhrase(selection)}
                 </T>
               </View>
               <View
@@ -847,7 +860,7 @@ export function SpendingImpactScreen({ navigation }: any) {
             {data.exceedsFunds ? (
               <View style={{ marginTop: space.md }}>
                 <AlertBanner kind="needs-review" label="Exceeds your funds">
-                  This is more than the available business funds you have on record.
+                  This is more than your recorded available funds.
                 </AlertBanner>
               </View>
             ) : null}
@@ -864,9 +877,9 @@ export function SpendingImpactScreen({ navigation }: any) {
                 summary="Funds and recorded expenses, before and after"
               >
                 <View style={{ paddingTop: space.sm }}>
-                  <BeforeAfter label="Available business funds" before={data.funds.before} after={data.funds.after} />
+                  <BeforeAfter label="Recorded available funds" before={data.funds.before} after={data.funds.after} />
                   <BeforeAfter
-                    label={`Recorded expenses (last ${data.periodDays} ${data.periodDays === 1 ? "day" : "days"})`}
+                    label={`Recorded expenses (${periodLabel(selection)})`}
                     before={data.periodExpenses.before}
                     after={data.periodExpenses.after}
                   />
@@ -911,24 +924,33 @@ export function SpendingImpactScreen({ navigation }: any) {
           </Card>
         )}
 
-        {/*
-          WHOSE FUNDS THESE ARE, AND WHERE THEY CAME FROM.
-          The estimate is arithmetic over one figure the owner typed into a
-          business profile, possibly months ago, and every number above it is
-          only as current as that. Naming the business also matters on a phone
-          holding several: the active one is chosen elsewhere and nothing on
-          this screen said which scenario belonged to whom.
-        */}
         <Card style={{ marginBottom: space.lg }}>
           <T variant="heading" accessibilityRole="header">What this is based on</T>
-          <View style={{ flexDirection: "row", alignItems: "baseline", flexWrap: "wrap", gap: 6, marginTop: space.sm }}>
-            <T style={{ fontSize: typeScale.bodySm }}>{selected.name}'s recorded available funds:</T>
-            <Money value={selected.availableFunds} size={typeScale.bodySm} weight="semibold" />
-          </View>
-          <T variant="caption" style={{ marginTop: 4, lineHeight: 17 }}>
-            Counted from your business profile, not from AI. If that figure is out of date, everything above it is
-            too.
-          </T>
+          {fundsCalculation ? (
+            <>
+              <View style={{ flexDirection: "row", alignItems: "baseline", flexWrap: "wrap", gap: 6, marginTop: space.sm }}>
+                <T style={{ fontSize: typeScale.bodySm }}>{selected.name}'s recorded available funds:</T>
+                <Money value={fundsCalculation.calculatedAmount} size={typeScale.bodySm} weight="semibold" />
+              </View>
+              <T variant="caption" style={{ marginTop: 4, lineHeight: 17 }}>
+                {availableFundsProvenance(fundsCalculation)}
+              </T>
+            </>
+          ) : data ? (
+            <>
+              <View style={{ flexDirection: "row", alignItems: "baseline", flexWrap: "wrap", gap: 6, marginTop: space.sm }}>
+                <T style={{ fontSize: typeScale.bodySm }}>Funds used in this check:</T>
+                <Money value={data.availableFunds} size={typeScale.bodySm} weight="semibold" />
+              </View>
+              <T variant="caption" style={{ marginTop: 4, lineHeight: 17 }}>
+                Source details are not available for this result. Run the check again after FinSight updates.
+              </T>
+            </>
+          ) : (
+            <T variant="caption" style={{ marginTop: space.sm }}>
+              Run a check to see the recorded funds and source used in the result.
+            </T>
+          )}
 
           {/*
             Thin evidence, explained rather than left to look like a result.
@@ -943,7 +965,7 @@ export function SpendingImpactScreen({ navigation }: any) {
 
           <View style={{ marginTop: space.md, alignSelf: "flex-start" }}>
             <Button
-              title="Update your recorded funds"
+              title="Edit starting funds"
               variant="secondary"
               onPress={() => {
                 haptics.tapped();

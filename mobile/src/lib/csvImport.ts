@@ -244,11 +244,9 @@ export function rowProblem(values: RowValues, rules: RowRules): RowProblem | nul
 
   if (rowType === "expense") {
     const category = values.category.trim();
-    // Missing only matters for a single-type import: a mixed file's expense
-    // rows fall back to "Uncategorised" rather than being thrown away.
-    if (!category && rules.recordType !== "mixed") {
-      return { field: "category", reason: "Missing category" };
-    }
+    // An empty category is not a problem: the server gives the row one on
+    // import (the owner's history, then its suggestion, then Uncategorised),
+    // as backend lib/importCategoriser does for every client.
     if (category && category.length > CELL_LIMITS.category) {
       return { field: "category", reason: `Category name is longer than ${CELL_LIMITS.category} characters` };
     }
@@ -285,7 +283,11 @@ export interface AnalysedRow {
   rowType: RowRecordType | null;
 }
 
-export type Corrections = Record<number, Partial<Record<CorrectableField, string>>>;
+export type RowCorrection = Partial<Record<CorrectableField, string>> & {
+  includedInAvailableFundsBaseline?: boolean;
+};
+
+export type Corrections = Record<number, RowCorrection>;
 
 /**
  * Every previewed row read through the mapping and through any correction the
@@ -417,10 +419,10 @@ export function newIdempotencyKey(): string {
  * a correction as far as the server is concerned, and an empty string is a
  * meaningful correction (it clears a cell) so it is NOT dropped.
  */
-export function correctionsPayload(corrections: Corrections): Record<string, Record<string, string>> {
-  const out: Record<string, Record<string, string>> = {};
+export function correctionsPayload(corrections: Corrections): Record<string, Record<string, string | boolean>> {
+  const out: Record<string, Record<string, string | boolean>> = {};
   for (const [rowNumber, fields] of Object.entries(corrections)) {
-    const entries = Object.entries(fields).filter(([, v]) => v !== undefined) as [string, string][];
+    const entries = Object.entries(fields).filter(([, v]) => v !== undefined) as [string, string | boolean][];
     if (entries.length === 0) continue;
     out[rowNumber] = Object.fromEntries(entries);
   }

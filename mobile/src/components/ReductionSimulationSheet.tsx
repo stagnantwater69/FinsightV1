@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { periodLabel, periodParams, type PeriodSelection } from "../lib/reportingPeriod";
 import { Modal, Pressable, ScrollView, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -46,8 +47,7 @@ export function ReductionSimulationSheet({
   visible,
   opportunity,
   businessProfileId,
-  periodDays,
-  endDate,
+  period,
   onClose,
 }: {
   visible: boolean;
@@ -59,8 +59,7 @@ export function ReductionSimulationSheet({
    * category baseline this simulates against matches the evidence figure on
    * the card the owner tapped from.
    */
-  periodDays: number;
-  endDate: string | null;
+  period: PeriodSelection;
   onClose: () => void;
 }) {
   const t = useTheme();
@@ -132,10 +131,9 @@ export function ReductionSimulationSheet({
       const body: Record<string, unknown> = {
         businessProfileId,
         categoryId: opp.categoryId,
-        periodDays,
+        ...periodParams(period),
         reduction,
       };
-      if (endDate) body.endDate = endDate;
       const response = await api.post<ReductionSimulation>("/insights/reduction-simulation", body);
       if (seq.current !== mySeq) return;
       setResult(response);
@@ -278,7 +276,7 @@ export function ReductionSimulationSheet({
 
             {submitError ? <ErrorNote>{submitError}</ErrorNote> : null}
 
-            {result ? <ReductionSimulationResult result={result} /> : null}
+            {result ? <ReductionSimulationResult result={result} periodText={periodLabel(period)} /> : null}
           </ScrollView>
         </View>
       </Pressable>
@@ -292,7 +290,7 @@ export function ReductionSimulationSheet({
  * because the category is what the owner just chose to simulate and the
  * total is the wider context it sits inside.
  */
-function ReductionSimulationResult({ result }: { result: ReductionSimulation }) {
+function ReductionSimulationResult({ result, periodText }: { result: ReductionSimulation; periodText: string }) {
   const t = useTheme();
   return (
     <View
@@ -311,7 +309,7 @@ function ReductionSimulationResult({ result }: { result: ReductionSimulation }) 
         Hypothetical result — nothing was changed or saved
       </T>
 
-      <BeforeAfterRow label={`${result.categoryName} (${result.period.days}-day period)`} before={result.categoryExpenses.before} after={result.categoryExpenses.after} />
+      <BeforeAfterRow label={`${result.categoryName} (${periodText})`} before={result.categoryExpenses.before} after={result.categoryExpenses.after} />
       <BeforeAfterRow label="Total recorded expenses" before={result.totalExpenses.before} after={result.totalExpenses.after} />
 
       <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6, flexWrap: "wrap" }}>
