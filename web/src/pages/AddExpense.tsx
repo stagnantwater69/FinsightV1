@@ -14,8 +14,9 @@ import type { CategorySuggestion, RecordItem } from "../lib/types";
 import { FormPage } from "../components/ui";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
 import { NoBusinessProfile } from "../components/NoBusinessProfile";
-import { todayIso as today } from "../lib/dates";
 import { ResultDetails } from "../components/ResultDetails";
+import { TransactionDateField, useTransactionDate } from "../components/TransactionDateField";
+import { AvailableFundsBaselineChoice, useAvailableFundsBaselineChoice } from "../components/AvailableFundsBaselineChoice";
 
 interface DuplicateExpenseState {
   description: string;
@@ -33,12 +34,13 @@ function AddExpenseForm() {
   const { selected } = useBusinessProfiles();
   const navigate = useNavigate();
   const toast = useToast();
-  // Prefilled by the "Duplicate" action on Records — the date is left at
-  // today() below rather than copied, since a duplicate is almost always
-  // "the same thing, today".
+  // Prefilled by the "Duplicate" action on Records. The date starts at today
+  // rather than being copied, since a duplicate is almost always "the same
+  // thing, today".
   const duplicateFrom = (useLocation().state as { duplicateFrom?: DuplicateExpenseState } | null)?.duplicateFrom;
   const [categoryId, setCategoryId] = useState<number | "">(duplicateFrom?.categoryId ?? "");
-  const [date, setDate] = useState(today());
+  const dateField = useTransactionDate();
+  const baselineChoice = useAvailableFundsBaselineChoice(dateField.date);
   const [description, setDescription] = useState(duplicateFrom?.description ?? "");
   const [vendor, setVendor] = useState(duplicateFrom?.vendor ?? "");
   const [amount, setAmount] = useState<number | "">(duplicateFrom?.amount ?? "");
@@ -89,7 +91,7 @@ function AddExpenseForm() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!categoryId || amount === "" || savePending.current) return;
+    if (!categoryId || amount === "" || savePending.current || !dateField.check() || !baselineChoice.check()) return;
     savePending.current = true;
     setError(null);
     setSubmitting(true);
@@ -97,10 +99,11 @@ function AddExpenseForm() {
       const { data } = await api.post<RecordItem>("/records/expenses", {
         businessProfileId: selected!.id,
         categoryId,
-        date,
+        date: dateField.date,
         description,
         vendor: vendor || undefined,
         amount,
+        ...baselineChoice.requestFields(),
       });
 
       // Only celebrate if this business has never done it before.
@@ -125,7 +128,7 @@ function AddExpenseForm() {
       toast("Expense saved");
       navigate("/records");
     } catch (err) {
-      setError(getErrorMessage(err));
+      if (!dateField.absorb(err) && !(await baselineChoice.absorb(err))) setError(getErrorMessage(err));
     } finally {
       savePending.current = false;
       setSubmitting(false);
@@ -152,9 +155,7 @@ function AddExpenseForm() {
             <strong className="text-ink-800">{firstRecord.description}</strong> —{" "}
             <Money value={firstRecord.amount} />
           </span>
-          <span className="mt-2 block">
-            Keep going for a few days and FinSight can start showing you where your money actually goes.
-          </span>
+
         </Celebration>
         <p className="mt-4 text-center text-sm">
           <Link to="/records" className="tap-inline font-medium text-brand-700 hover:text-brand-800">
@@ -171,9 +172,8 @@ function AddExpenseForm() {
         <Field label="Category" htmlFor="category" required>
           <CategorySelect id="category" value={categoryId} onChange={setCategoryId} />
         </Field>
-        <Field label="Date" htmlFor="date" required>
-          <TextInput type="date" required value={date} onChange={(e) => setDate(e.target.value)} />
-        </Field>
+        <TransactionDateField field={dateField} />
+        <AvailableFundsBaselineChoice choice={baselineChoice} disabled={submitting} />
         <Field label="Description" htmlFor="description" required>
           <TextInput
             required
@@ -216,7 +216,7 @@ function AddExpenseForm() {
           />
         </Field>
         {error ? <FormError>{error}</FormError> : null}
-        <Button type="submit" variant="primary" fullWidth disabled={submitting}>
+        <Button type="submit" variant="primary" fullWidth disabled={submitting || dateField.invalid}>
           {submitting ? "Saving…" : "Save expense"}
         </Button>
       </form>

@@ -4,6 +4,7 @@ import { SelectInput, TextInput } from "./Field";
 import { Button } from "./Button";
 import { useToast } from "./Toast";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
+import { getErrorMessage } from "../lib/errors";
 
 interface Props {
   value: number | "";
@@ -19,7 +20,7 @@ interface Props {
 }
 
 export function CategorySelect({ value, onChange, id, onBlur }: Props) {
-  const { categories, createCategory, loading, recentCategoryIds = [], rememberCategory } = useExpenseCategories();
+  const { categories, createCategory, loading, loadingError, refresh, recentCategoryIds = [], rememberCategory } = useExpenseCategories();
   const toast = useToast();
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
@@ -71,8 +72,8 @@ export function CategorySelect({ value, onChange, id, onBlur }: Props) {
       toast(`Category "${category.name}" created`);
       leaveCreateMode();
       setNewName("");
-    } catch {
-      setError("Couldn't create category. Try again.");
+    } catch (err) {
+      setError(getErrorMessage(err));
     } finally {
       createPending.current = false;
       setSubmitting(false);
@@ -131,7 +132,7 @@ export function CategorySelect({ value, onChange, id, onBlur }: Props) {
         }
         choose(Number(e.target.value));
       }}
-      disabled={loading}
+      disabled={loading || Boolean(loadingError && categories.length === 0)}
     >
       <option value="" disabled>
         {loading ? "Loading categories…" : "Select a category"}
@@ -173,6 +174,14 @@ export function CategorySelect({ value, onChange, id, onBlur }: Props) {
       ) : null}
       <option value="__new__">+ New category…</option>
     </SelectInput>
+    {loadingError ? (
+      <div role="alert" className="mt-2 space-y-2 text-sm text-tone-danger">
+        <p>Couldn't load categories. {loadingError}</p>
+        <Button type="button" size="sm" variant="secondary" disabled={loading} onClick={() => void refresh().catch(() => undefined)}>
+          Retry loading categories
+        </Button>
+      </div>
+    ) : null}
     </div>
   );
 }

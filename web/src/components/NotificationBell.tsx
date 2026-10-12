@@ -193,8 +193,7 @@ export function NotificationBell() {
                 </span>
                 <p className="mt-1.5 text-[13px] font-medium text-ink-700">You're all caught up</p>
                 <p className="mx-auto mt-1 max-w-[15rem] text-[11.5px] leading-snug text-ink-500">
-                  FinSight will flag possible duplicates, unusually large expenses and finished imports
-                  here.
+                  Duplicates, large expenses and finished imports appear here.
                 </p>
               </div>
             ) : (

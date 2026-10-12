@@ -1,5 +1,6 @@
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { isAxiosError } from "axios";
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -19,6 +20,7 @@ import {
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
 import { api } from "../lib/api";
+import { cachedApiGet, peekCachedApiData } from "../lib/serverStateApi";
 import { getErrorMessage } from "../lib/errors";
 import { InsightsTabs } from "../components/AppShell";
 import {
@@ -41,12 +43,25 @@ import { STATUS_INK } from "../lib/chartPalette";
 import { RecurringAgenda } from "../components/RecurringAgenda";
 import { AiCard, Kw, PageHead, Panel, Callout, Pill } from "../components/ui";
 import { ReductionSimulationModal } from "../components/ReductionSimulationModal";
+import { PeriodFilter } from "../components/PeriodFilter";
+import { Pagination } from "../components/Pagination";
+import { ReportingPeriodScope, useReportingPeriod } from "../context/ReportingPeriodContext";
+import {
+  THIS_WEEK,
+  periodLabel as periodCaptionOf,
+  periodParams,
+  periodPhrase,
+  previousLabel as previousLabelOf,
+  formatDayRange,
+  type PeriodSelection,
+} from "../lib/reportingPeriod";
 import type {
   AnomalyFinding,
   AnomalyFindingFeedback,
   AnomalyFindingPage,
   AnomalyFindingStatus,
   ExpenseBehavior as ExpenseInsightData,
+  FinancialPosition,
   FlaggedRecordCounts,
   FlaggedRecordPage,
   RecordItem,
@@ -55,11 +70,8 @@ import type {
   ReductionOpportunity,
   ReductionOpportunityResponse,
 } from "../lib/types";
-
-const PERIOD_OPTIONS = [
-  { label: "This week", days: 7 },
-  { label: "This month", days: 30 },
-];
+import type { DetailExpenseOverview } from "../lib/expenseOverview";
+import { useServerStateRefresh } from "../lib/useServerStateRefresh";
 
 /**
  * Expense Insight.
@@ -75,9 +87,8 @@ const PERIOD_OPTIONS = [
  *   6. When did it leave?                            — Daily spending
  *   7. Anything odd, statistically?                  — Unusual expenses (Z-score)
  *
- * No panel assumes a term the reader might not have. "Exp. of available funds"
- * is written out as a share of the cash they told us they have; "biggest
- * increase" is a peso figure before it is a percentage.
+ * No panel assumes a term the reader might not have. The funds share uses the
+ * server's recorded balance; increases lead with pesos before percentages.
  *
  * Every share percentage on this screen divides by the SAME server-computed
  * `totals.current`. That sounds obvious and is exactly what mixed-denominator
@@ -109,7 +120,7 @@ function flagReasons(
     reasons.push(
       <>
         above your large-expense threshold (
-        {profile.largeExpenseThresholdPercent}% of expected monthly expenses ={" "}
+        {profile.largeExpenseThresholdPercent}% of your starting monthly estimate ={" "}
         <span className="figure">{formatMoney(thresholdAmount)}</span>)
       </>,
     );
@@ -190,15 +201,25 @@ function ChangeFigure({
  * compact index stays ordinary document navigation (real anchors, no hidden
  * state), so it works with keyboard, browser history, and reduced motion.
  */
-function ExpenseSectionNav({ showRecurring }: { showRecurring: boolean }) {
+function ExpenseSectionNav({
+  showOpportunities,
+  showRecurring,
+}: {
+  showOpportunities: boolean;
+  showRecurring: boolean;
+}) {
   const items: SectionNavItem[] = [
     { href: "#expense-overview", label: "Overview", icon: ChartPie },
     { href: "#expense-categories", label: "Categories", icon: Boxes },
-    {
-      href: "#expense-opportunities",
-      label: "Opportunities",
-      icon: Lightbulb,
-    },
+    ...(showOpportunities
+      ? [
+          {
+            href: "#expense-opportunities",
+            label: "Opportunities",
+            icon: Lightbulb,
+          },
+        ]
+      : []),
     { href: "#expense-review", label: "Review", icon: Flag },
     ...(showRecurring
       ? [{ href: "#expense-recurring", label: "Recurring", icon: Repeat }]
@@ -229,6 +250,8 @@ const FLAGGED_PANEL_PAGE_SIZE = 100;
 // UI does not trust that as its only guarantee — a future server bug here
 // would otherwise overwhelm the exact owner this feature is meant to help.
 const MAX_OPPORTUNITIES_SHOWN = 3;
+
+const FINDINGS_PER_PAGE = 3;
 
 const OPPORTUNITY_PRIORITY_LABEL: Record<
   ReductionOpportunity["priority"],
@@ -281,10 +304,8 @@ const OPPORTUNITY_COST_BEHAVIOR_LABEL: Record<
 const OPPORTUNITY_COST_BEHAVIOR_NOTE: Partial<
   Record<ReductionOpportunity["costBehavior"], string>
 > = {
-  fixed:
-    "Classified as a fixed cost — reviewing this usually means checking the contract or the ongoing need for it, not recent usage.",
-  mixed:
-    "Classified as a mixed cost — part of this likely stays flat and part scales with activity. Consider separating the two before deciding what to review.",
+  fixed: "Fixed cost: check the contract or whether it is still needed.",
+  mixed: "Mixed cost: part stays flat, part changes with activity.",
 };
 
 /**
@@ -309,17 +330,17 @@ function evidenceFigures(
   const change =
     e.changeAmount !== null
       ? {
-          label: "Change vs. previous period",
+          label: "Change",
           value: (
             <ChangeFigure change={e.changeAmount} percent={e.changePercent} />
           ),
         }
       : {
-          label: "Previous period",
-          value: <span className="text-ink-500">No prior baseline</span>,
+          label: "Change",
+          value: <span className="text-ink-500">No earlier data</span>,
         };
   const records = {
-    label: "Records this period",
+    label: "Records",
     value: <span className="figure">{e.recordCount}</span>,
   };
   const flagged = {
@@ -351,13 +372,11 @@ const OPPORTUNITY_ASK_QUESTION =
 function OpportunityCard({
   opportunity,
   businessProfileId,
-  periodDays,
-  endDate,
+  period,
 }: {
   opportunity: ReductionOpportunity;
   businessProfileId: number;
-  periodDays: number;
-  endDate: string | null;
+  period: PeriodSelection;
 }) {
   // Its own hook instance rather than a prop threaded down from the page:
   // the card is the thing that knows which opportunity was clicked, and the
@@ -491,10 +510,8 @@ function OpportunityCard({
 
         <details className="group mt-3 border-t border-paper-200 pt-3">
           <summary className="tap-inline cursor-pointer list-none text-xs font-semibold text-ink-500 marker:hidden hover:text-brand-700">
-            <span className="group-open:hidden">Why this was selected +</span>
-            <span className="hidden group-open:inline">
-              Hide supporting details −
-            </span>
+            <span className="group-open:hidden">Details +</span>
+            <span className="hidden group-open:inline">Hide details −</span>
           </summary>
           <div className="mt-3 rounded-xl bg-paper-100 p-3.5">
             <div className="flex flex-wrap gap-2">
@@ -506,9 +523,7 @@ function OpportunityCard({
               ) : null}
             </div>
             <p className="mt-3 text-xs text-ink-600">
-              <span className="font-semibold text-ink-700">
-                Why this appeared:{" "}
-              </span>
+              <span className="font-semibold text-ink-700">Why: </span>
               {opportunity.rationale}
             </p>
             {costBehaviorNote ? (
@@ -550,9 +565,7 @@ function OpportunityCard({
         response, not a default/override pair.
       */}
         <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-paper-200 pt-3">
-          <span className="text-xs text-ink-500">
-            Was this worth reviewing?
-          </span>
+          <span className="text-xs text-ink-500">Useful?</span>
           <button
             type="button"
             aria-pressed={feedbackRating === "helpful"}
@@ -589,7 +602,7 @@ function OpportunityCard({
           </button>
           {feedbackRating ? (
             <span className="text-xs text-ink-500" role="status">
-              Thanks for the feedback.
+              Saved
             </span>
           ) : feedbackError ? (
             <span className="text-xs text-tone-danger" role="alert">
@@ -605,8 +618,7 @@ function OpportunityCard({
         businessProfileId={businessProfileId}
         categoryId={opportunity.categoryId}
         categoryName={opportunity.categoryName}
-        periodDays={periodDays}
-        endDate={endDate}
+        period={period}
         baseline={opportunity.evidence.currentAmount}
       />
     </li>
@@ -616,7 +628,7 @@ function OpportunityCard({
 /**
  * Runs one SUPPLEMENTARY fetch in a way that cannot take the page down with it.
  *
- * This page draws from five endpoints, and it used to await all five in a
+ * This page draws from several endpoints, and it used to await them in a
  * single `Promise.all`. `Promise.all` is all-or-nothing: one rejection
  * discarded the four responses that had already arrived, so a disabled
  * `/insights/recurring-schedules` — an optional panel at the very bottom —
@@ -627,14 +639,14 @@ function OpportunityCard({
  * stays inside its own panel. Status-sniffing would have left the identical
  * defect in place for every other failure mode.
  *
- * The core read (`/insights/expense-behavior`) deliberately does NOT go through
- * this. Without it there is no page to degrade, so its failure is still the
- * page's error.
+ * The composite expense-overview read deliberately does NOT go through this.
+ * Without its behavior panel there is no page to degrade, so that panel's
+ * failure is still the page's error.
  */
 async function loadPanel<T>(
   request: Promise<{ data: T }>,
   apply: (value: T) => void,
-  onUnavailable: () => void,
+  onUnavailable: (error: unknown) => void,
   signal?: AbortSignal,
 ): Promise<void> {
   try {
@@ -643,38 +655,81 @@ async function loadPanel<T>(
     // business profile that is on screen NOW, not the one this was asked for.
     if (signal?.aborted) return;
     apply(value);
-  } catch {
-    if (signal?.aborted) return;
+  } catch (error) {
+    if (signal?.aborted || (error as { name?: string })?.name === "AbortError") return;
     // Swallowed on purpose. The panel's own state now says "unavailable", and
     // an error banner for a secondary panel over a page that rendered fine
     // would be telling the owner their numbers are suspect when they are not.
-    onUnavailable();
+    onUnavailable(error);
   }
 }
 
+type SupplementState = "loading" | "ready" | "stale" | "unavailable";
+
+function failedSupplementState(current: SupplementState): SupplementState {
+  return current === "ready" || current === "stale" ? "stale" : "unavailable";
+}
+
+function combinedSupplementState(states: readonly SupplementState[]): SupplementState {
+  if (states.some((state) => state === "unavailable")) return "unavailable";
+  if (states.some((state) => state === "stale")) return "stale";
+  if (states.some((state) => state === "loading")) return "loading";
+  return "ready";
+}
+
+function SupplementNotice({ state, label }: { state: SupplementState; label: string }) {
+  if (state === "ready" || state === "loading") return null;
+  return (
+    <p role="status" className="mb-3 text-xs text-tone-accent">
+      {state === "stale"
+        ? `Showing recently loaded ${label}; the latest refresh failed.`
+        : `${label[0]!.toUpperCase()}${label.slice(1)} are temporarily unavailable.`}
+    </p>
+  );
+}
+
+function isDefinitiveScheduleUnavailable(error: unknown): boolean {
+  return isAxiosError(error) && error.response?.status === 404;
+}
+
 export function ExpenseInsight() {
-  const { selected } = useBusinessProfiles();
+  return (
+    <ReportingPeriodScope>
+      <ExpenseInsightPage />
+    </ReportingPeriodScope>
+  );
+}
+
+function ExpenseInsightPage() {
+  const { selected, getFinancialPosition } = useBusinessProfiles();
   const { categories } = useExpenseCategories();
-  const [periodDays, setPeriodDays] = useState(30);
-  /**
-   * The day the window ends on, or null for "today".
-   *
-   * Set by the "Most recent month" option, which exists because every window
-   * here is measured back from today and a business whose history was imported
-   * can have its last expense a year ago — putting all of them in a gap, and
-   * making the page report "no expenses recorded" to someone with hundreds.
-   *
-   * It is a real, selectable period rather than an automatic redirect. An
-   * automatic one flips back the instant a single new expense is recorded,
-   * yanking the owner out of the month they were reading and into a window
-   * holding one record; and a page that silently decides what you are looking
-   * at is one you cannot trust the labels on.
-   */
-  const [endDate, setEndDate] = useState<string | null>(null);
+  const {
+    selection: sharedSelection,
+    setSelection,
+    ready: periodReady,
+  } = useReportingPeriod();
+  // Normalize All time from another screen before this page builds a request.
+  const selection: PeriodSelection =
+    sharedSelection.kind === "all" ? THIS_WEEK : sharedSelection;
+  const periodKey = JSON.stringify(selection);
+  const allTime = selection.kind === "all";
+  const expenseScopeKey = JSON.stringify({
+    businessProfileId: selected?.id ?? null,
+    period: selection,
+    periodReady,
+  });
+  const activeExpenseScopeRef = useRef(expenseScopeKey);
+  activeExpenseScopeRef.current = expenseScopeKey;
+
+  useEffect(() => {
+    if (sharedSelection.kind === "all") setSelection(THIS_WEEK);
+  }, [setSelection, sharedSelection]);
   const [data, setData] = useState<ExpenseInsightData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [flaggedExpenses, setFlaggedExpenses] = useState<RecordItem[]>([]);
+  const [flaggedListState, setFlaggedListState] = useState<SupplementState>("loading");
   /**
    * How many flagged expenses exist, as opposed to how many are on screen.
    * `null` means the count request didn't answer, in which case the panel
@@ -682,24 +737,36 @@ export function ExpenseInsight() {
    * number it doesn't have.
    */
   const [flaggedExpenseCount, setFlaggedExpenseCount] = useState<number | null>(null);
+  const [flaggedCountState, setFlaggedCountState] = useState<SupplementState>("loading");
   const [findings, setFindings] = useState<AnomalyFinding[]>([]);
+  const [findingsState, setFindingsState] = useState<SupplementState>("loading");
+  // Three to a page: each finding is a tall card with its own actions, and a
+  // long run of them pushed the rest of the page out of reach.
+  const [findingsPage, setFindingsPage] = useState(1);
+  // Another period or business is a different list; start it from the top.
+  const findingsScopeKey = `${selected?.id ?? ""}:${periodKey}`;
+  const [findingsPageScope, setFindingsPageScope] = useState(findingsScopeKey);
+  if (findingsPageScope !== findingsScopeKey) {
+    setFindingsPageScope(findingsScopeKey);
+    setFindingsPage(1);
+  }
   const [recurringPatterns, setRecurringPatterns] = useState<
     RecurringPattern[]
   >([]);
+  const [patternsState, setPatternsState] = useState<SupplementState>("loading");
   /**
    * Owner-declared schedules — the agenda. Distinct from the patterns above,
    * which are only what the detector suspects.
    *
-   * NULL IS NOT THE EMPTY LIST. Null means the schedules endpoint did not
-   * answer (the feature is switched off server-side, or the request failed),
-   * and the agenda is then hidden outright. Rendering the empty state instead
-   * would tell an owner "nothing scheduled yet" — a claim about their business
-   * that we have no basis for, and one that is flatly false for anyone who has
-   * schedules the server simply would not hand over.
+   * NULL IS NOT THE EMPTY LIST. Null means there is no usable schedules
+   * snapshot, so the agenda is hidden outright. A failed refresh keeps an
+   * existing snapshot and marks it stale instead of turning known payments
+   * into a false empty or unavailable state.
    */
   const [recurringSchedules, setRecurringSchedules] = useState<
     RecurringSchedule[] | null
   >(null);
+  const [schedulesState, setSchedulesState] = useState<SupplementState>("loading");
   /**
    * Reduction opportunities — a self-contained panel with its own error/retry
    * state (plan §10.3), unlike the supplements above that fail silently into
@@ -711,45 +778,287 @@ export function ExpenseInsight() {
     useState<ReductionOpportunityResponse | null>(null);
   const [reductionLoading, setReductionLoading] = useState(true);
   const [reductionError, setReductionError] = useState<string | null>(null);
+  const [financialPosition, setFinancialPosition] =
+    useState<FinancialPosition | null>(null);
+  const [financialPositionProfileId, setFinancialPositionProfileId] =
+    useState<number | null>(null);
+  const [financialPositionLoading, setFinancialPositionLoading] =
+    useState(false);
+  const [financialPositionError, setFinancialPositionError] = useState<
+    string | null
+  >(null);
+  const [financialPositionReload, setFinancialPositionReload] = useState(0);
   // Opens the Ask FinSight drawer over this page. The plain floating trigger
   // goes with no question; the "expand on this" link below hands one through to
   // be typed into the box for them — it is never sent on their behalf.
   const askFinSight = useAskFinSight("Expense Insights");
 
-  /**
-   * Cleared and refetched on every `load()` — same trigger as everything
-   * else on this page (profile switch, period change, endDate change) — so a
-   * business-profile switch cannot leave the previous profile's opportunity
-   * cards on screen. Kept out of `loadPanel`'s silent-unavailable pattern
-   * because this panel needs a user-facing retry, not just a hidden state.
-   */
-  async function loadReductionOpportunities(signal?: AbortSignal) {
-    if (!selected) return;
-    setReductionLoading(true);
-    setReductionError(null);
-    try {
-      const res = await api.get<ReductionOpportunityResponse>(
-        "/insights/reduction-opportunities",
-        {
-          signal,
-          params: {
-            businessProfileId: selected.id,
-            periodDays,
-            ...(endDate ? { endDate } : {}),
-          },
-        },
-      );
-      setReductionOpportunities(res.data);
-    } catch (err) {
-      if (signal?.aborted) return;
+  useEffect(() => {
+    if (!selected) {
+      setFinancialPosition(null);
+      setFinancialPositionProfileId(null);
+      setFinancialPositionLoading(false);
+      setFinancialPositionError(null);
+      return;
+    }
+
+    const businessProfileId = selected.id;
+    const controller = new AbortController();
+    setFinancialPosition(null);
+    setFinancialPositionProfileId(businessProfileId);
+    setFinancialPositionLoading(true);
+    setFinancialPositionError(null);
+
+    void (async () => {
+      try {
+        const next = await getFinancialPosition(
+          businessProfileId,
+          controller.signal,
+        );
+        if (controller.signal.aborted) return;
+        if (!Number.isFinite(next.availableFunds?.calculatedAmount)) {
+          throw new Error("Recorded available funds are unavailable.");
+        }
+        setFinancialPosition(next);
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        setFinancialPositionError(getErrorMessage(err));
+      } finally {
+        if (!controller.signal.aborted) setFinancialPositionLoading(false);
+      }
+    })();
+
+    return () => controller.abort();
+    // The provider recreates this method when its profile list changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    selected?.id,
+    selected?.availableFunds,
+    selected?.availableFundsBaselineAt,
+    financialPositionReload,
+  ]);
+
+  function applyExpenseOverview(overview: DetailExpenseOverview) {
+    setRefreshError(null);
+    if (overview.behavior.status === "available") {
+      setData(overview.behavior.data);
+      setError(null);
+    } else {
+      setData(null);
+      setError("The expense behavior panel is temporarily unavailable.");
+    }
+
+    if (overview.opportunities.status === "available") {
+      setReductionOpportunities(overview.opportunities.data);
+      setReductionError(null);
+    } else {
       setReductionOpportunities(null);
-      setReductionError(getErrorMessage(err));
-    } finally {
-      if (!signal?.aborted) setReductionLoading(false);
+      setReductionError("Please try again.");
     }
   }
 
-  async function load(signal?: AbortSignal) {
+  /** One owned-context computation supplies the two core panels independently. */
+  async function loadExpenseOverview(signal?: AbortSignal, force = false) {
+    const requestScopeKey = expenseScopeKey;
+    if (activeExpenseScopeRef.current !== requestScopeKey) return;
+    if (!selected || !periodReady) return;
+    const params = {
+      businessProfileId: selected.id,
+      ...periodParams(selection),
+      view: "detail" as const,
+    };
+    const scope = {
+      businessProfileId: selected.id,
+      period: selection,
+      tags: ["expense-insight", "financial", "expense-overview"],
+    };
+    const cached = peekCachedApiData<DetailExpenseOverview>(
+      "/insights/expense-overview",
+      { params },
+      scope,
+    );
+
+    if (cached) {
+      applyExpenseOverview(cached.data);
+    } else if (!force) {
+      setData(null);
+      setError(null);
+      setRefreshError(null);
+      setReductionOpportunities(null);
+      setReductionError(null);
+    }
+    setLoading(!cached || cached.stale || force);
+    setReductionLoading(!cached || cached.stale || force);
+
+    try {
+      const { data: overview } = await cachedApiGet<DetailExpenseOverview>(
+        "/insights/expense-overview",
+        { signal, params },
+        scope,
+        { force },
+      );
+      if (activeExpenseScopeRef.current !== requestScopeKey) return;
+      applyExpenseOverview(overview);
+    } catch (err) {
+      if (
+        signal?.aborted ||
+        (err as { name?: string })?.name === "AbortError" ||
+        activeExpenseScopeRef.current !== requestScopeKey
+      ) return;
+      const message = getErrorMessage(err);
+      if (cached?.data.behavior.status === "available" || (force && data)) {
+        setRefreshError(message);
+      } else if (!cached) {
+        setData(null);
+        setError(message);
+        setReductionOpportunities(null);
+        setReductionError(message);
+      }
+    } finally {
+      if (!signal?.aborted && activeExpenseScopeRef.current === requestScopeKey) {
+        setLoading(false);
+        setReductionLoading(false);
+      }
+    }
+  }
+
+  async function loadSupplementPanels(signal?: AbortSignal, force = false) {
+    const requestScopeKey = expenseScopeKey;
+    if (activeExpenseScopeRef.current !== requestScopeKey) return;
+    if (!selected || !periodReady) return;
+    const businessProfileId = selected.id;
+    const flaggedParams = { businessProfileId, limit: FLAGGED_PANEL_PAGE_SIZE };
+    const flaggedScope = {
+      businessProfileId,
+      filters: { flagged: true, type: "all" },
+      pagination: { cursor: null, limit: FLAGGED_PANEL_PAGE_SIZE },
+      tags: ["records", "financial"],
+    };
+    const flaggedCountParams = { businessProfileId };
+    const flaggedCountScope = {
+      businessProfileId,
+      filters: { flagged: true },
+      tags: ["records", "financial"],
+    };
+    const findingsParams = { businessProfileId, status: "OPEN", take: 20 };
+    const findingsScope = {
+      businessProfileId,
+      filters: { status: "OPEN" },
+      pagination: { cursor: null, limit: 20 },
+      tags: ["insights-findings", "financial"],
+    };
+    const applyFlaggedPage = (page: FlaggedRecordPage) =>
+      setFlaggedExpenses(
+        page.items
+          .filter((record) => record.type === "expense")
+          .sort((left, right) => (left.date < right.date ? 1 : -1)),
+      );
+
+    const cachedFlagged = peekCachedApiData<FlaggedRecordPage>(
+      "/records/flagged",
+      { params: flaggedParams },
+      flaggedScope,
+    );
+    const cachedFlaggedCount = peekCachedApiData<FlaggedRecordCounts>(
+      "/records/flagged/count",
+      { params: flaggedCountParams },
+      flaggedCountScope,
+    );
+    const cachedFindings = peekCachedApiData<AnomalyFindingPage>(
+      "/insights/findings",
+      { params: findingsParams },
+      findingsScope,
+    );
+    if (cachedFlagged) {
+      applyFlaggedPage(cachedFlagged.data);
+      setFlaggedListState("ready");
+    } else if (!force) {
+      setFlaggedExpenses([]);
+      setFlaggedListState("loading");
+    }
+    if (cachedFlaggedCount) {
+      setFlaggedExpenseCount(cachedFlaggedCount.data.expenses);
+      setFlaggedCountState("ready");
+    } else if (!force) {
+      setFlaggedExpenseCount(null);
+      setFlaggedCountState("loading");
+    }
+    if (cachedFindings) {
+      setFindings(cachedFindings.data.items);
+      setFindingsState("ready");
+    } else if (!force) {
+      setFindings([]);
+      setFindingsState("loading");
+    }
+
+    // Fired together; each supplement still settles independently.
+    await Promise.all([
+      loadPanel(
+        cachedApiGet<FlaggedRecordPage>(
+          "/records/flagged",
+          { signal, params: flaggedParams },
+          flaggedScope,
+          { force },
+        ),
+        (page) => {
+          if (activeExpenseScopeRef.current === requestScopeKey) {
+            applyFlaggedPage(page);
+            setFlaggedListState("ready");
+          }
+        },
+        () => {
+          if (activeExpenseScopeRef.current === requestScopeKey) {
+            setFlaggedListState(failedSupplementState);
+          }
+        },
+        signal,
+      ),
+      loadPanel(
+        cachedApiGet<FlaggedRecordCounts>(
+          "/records/flagged/count",
+          { signal, params: flaggedCountParams },
+          flaggedCountScope,
+          { force },
+        ),
+        (counts) => {
+          if (activeExpenseScopeRef.current === requestScopeKey) {
+            setFlaggedExpenseCount(counts.expenses);
+            setFlaggedCountState("ready");
+          }
+        },
+        () => {
+          if (activeExpenseScopeRef.current === requestScopeKey) {
+            setFlaggedCountState(failedSupplementState);
+          }
+        },
+        signal,
+      ),
+      loadPanel(
+        cachedApiGet<AnomalyFindingPage>(
+          "/insights/findings",
+          { signal, params: findingsParams },
+          findingsScope,
+          { force },
+        ),
+        (page) => {
+          if (activeExpenseScopeRef.current === requestScopeKey) {
+            setFindings(page.items);
+            setFindingsState("ready");
+          }
+        },
+        () => {
+          if (activeExpenseScopeRef.current === requestScopeKey) {
+            setFindingsState(failedSupplementState);
+          }
+        },
+        signal,
+      ),
+    ]);
+  }
+
+  async function load(signal?: AbortSignal, forceOverview = false) {
+    const requestScopeKey = expenseScopeKey;
+    if (activeExpenseScopeRef.current !== requestScopeKey) return;
     /*
      * No business — an owner who chose "Skip for now". Settles instead of
      * bailing: `loading` starts true and `isInitialLoad` is `loading && !data`,
@@ -758,87 +1067,50 @@ export function ExpenseInsight() {
     if (!selected) {
       setData(null);
       setError(null);
+      setRefreshError(null);
       setLoading(false);
       setReductionOpportunities(null);
       setReductionError(null);
       setReductionLoading(false);
+      setFlaggedExpenses([]);
+      setFlaggedExpenseCount(null);
+      setFindings([]);
+      setRecurringPatterns([]);
+      setRecurringSchedules(null);
+      setFlaggedListState("ready");
+      setFlaggedCountState("ready");
+      setFindingsState("ready");
+      setPatternsState("ready");
+      setSchedulesState("ready");
       return;
     }
-    const businessProfileId = selected.id;
-    setLoading(true);
-    setError(null);
-    // Stale cards from a previous profile/period must not linger while the
-    // new request is in flight — cleared up front rather than only on success.
-    setReductionOpportunities(null);
-    setReductionError(null);
-    setReductionLoading(true);
-
-    // Still fired together, so the page costs one round trip's worth of
-    // latency as before — they are only SETTLED apart.
-    const supplements = Promise.all([
-      loadReductionOpportunities(signal),
-      loadPanel(
-        api.get<FlaggedRecordPage>("/records/flagged", {
-          signal,
-          params: { businessProfileId, limit: FLAGGED_PANEL_PAGE_SIZE },
-        }),
-        (page) =>
-          setFlaggedExpenses(
-            page.items
-              .filter((r) => r.type === "expense")
-              .sort((a, b) => (a.date < b.date ? 1 : -1)),
-          ),
-        () => setFlaggedExpenses([]),
-        signal,
-      ),
-      loadPanel(
-        api.get<FlaggedRecordCounts>("/records/flagged/count", {
-          signal,
-          params: { businessProfileId },
-        }),
-        (counts) => setFlaggedExpenseCount(counts.expenses),
-        () => setFlaggedExpenseCount(null),
-        signal,
-      ),
-      loadPanel(
-        api.get<AnomalyFindingPage>("/insights/findings", {
-          signal,
-          params: { businessProfileId, status: "OPEN", take: 20 },
-        }),
-        (page) => setFindings(page.items),
-        () => setFindings([]),
-        signal,
-      ),
-      loadRecurring(signal),
-    ]);
-
-    try {
-      const behavior = await api.get<ExpenseInsightData>(
-        "/insights/expense-behavior",
-        {
-          signal,
-          params: {
-            businessProfileId,
-            periodDays,
-            ...(endDate ? { endDate } : {}),
-          },
-        },
-      );
-      setData(behavior.data);
-    } catch (err) {
-      // A superseded request is not a failure — and settling it would put the
-      // previous business profile's behaviour under the new one's heading.
-      if (signal?.aborted) return;
-      // The core read. Nothing on this page is readable without it, so this one
-      // failure IS the page's failure.
-      setError(getErrorMessage(err));
-    } finally {
-      if (!signal?.aborted) setLoading(false);
+    // Wait for the period's default so the page loads once, for the right period.
+    if (!periodReady) {
+      setData(null);
+      setError(null);
+      setRefreshError(null);
+      setLoading(true);
+      setReductionOpportunities(null);
+      setReductionError(null);
+      setReductionLoading(true);
+      setFlaggedExpenses([]);
+      setFlaggedExpenseCount(null);
+      setFindings([]);
+      setRecurringPatterns([]);
+      setRecurringSchedules(null);
+      setFlaggedListState("loading");
+      setFlaggedCountState("loading");
+      setFindingsState("loading");
+      setPatternsState("loading");
+      setSchedulesState("loading");
+      return;
     }
 
-    // Awaited so the page is not still writing state after the caller believes
-    // the load is done — `loadPanel` never rejects, so this cannot throw.
-    await supplements;
+    await Promise.all([
+      loadExpenseOverview(signal, forceOverview),
+      loadSupplementPanels(signal, forceOverview),
+      loadRecurring(signal, forceOverview),
+    ]);
   }
 
   async function reviewFinding(
@@ -846,7 +1118,14 @@ export function ExpenseInsight() {
     status: AnomalyFindingStatus,
     feedback: AnomalyFindingFeedback,
   ) {
-    await api.patch(`/insights/findings/${id}/review`, { status, feedback });
+    if (!selected) return;
+    const requestScopeKey = expenseScopeKey;
+    await api.patch(
+      `/insights/findings/${id}/review`,
+      { status, feedback },
+      { serverStateScope: { businessProfileId: selected.id } },
+    );
+    if (activeExpenseScopeRef.current !== requestScopeKey) return;
     setFindings((current) => current.filter((finding) => finding.id !== id));
   }
 
@@ -861,14 +1140,19 @@ export function ExpenseInsight() {
    * description, so nothing is sent in the body.
    */
   async function confirmPattern(id: number) {
+    const requestScopeKey = expenseScopeKey;
     setError(null);
     try {
-      await api.post(`/insights/recurring-patterns/${id}/confirm`);
+      await api.post(`/insights/recurring-patterns/${id}/confirm`, undefined, {
+        serverStateScope: { businessProfileId: selected!.id },
+      });
+      if (activeExpenseScopeRef.current !== requestScopeKey) return;
       // Both lists move: the candidate leaves this panel and a schedule appears
       // in the agenda. Refetched rather than patched in state because the new
       // schedule's `dueState` is server-computed and this page must not guess it.
       await loadRecurring();
     } catch (err) {
+      if (activeExpenseScopeRef.current !== requestScopeKey) return;
       // 409 when the pattern already has a schedule — which happens if the
       // owner has this page open in two tabs. Said out loud rather than left
       // as an unhandled rejection with a button that appears to do nothing.
@@ -877,102 +1161,223 @@ export function ExpenseInsight() {
   }
 
   async function dismissPattern(id: number) {
+    const requestScopeKey = expenseScopeKey;
     setError(null);
     try {
-      await api.patch(`/insights/recurring-patterns/${id}`, {
-        status: "DISMISSED",
-      });
+      await api.patch(
+        `/insights/recurring-patterns/${id}`,
+        { status: "DISMISSED" },
+        { serverStateScope: { businessProfileId: selected!.id } },
+      );
+      if (activeExpenseScopeRef.current !== requestScopeKey) return;
       setRecurringPatterns((current) =>
         current.map((pattern) =>
           pattern.id === id ? { ...pattern, status: "DISMISSED" } : pattern,
         ),
       );
     } catch (err) {
+      if (activeExpenseScopeRef.current !== requestScopeKey) return;
       setError(getErrorMessage(err));
     }
   }
 
-  /**
-   * The two recurring reads, settled independently.
-   *
-   * They are different endpoints with different availability: patterns is
-   * ungated detector output, schedules is behind a server feature flag. Bundled
-   * in a `Promise.all` they failed as one, so a dark schedules endpoint also
-   * emptied the candidates panel that was working perfectly.
-   */
-  async function loadRecurring(signal?: AbortSignal) {
+  async function loadRecurringSchedules(signal?: AbortSignal, force = false) {
+    const requestScopeKey = expenseScopeKey;
+    if (activeExpenseScopeRef.current !== requestScopeKey) return;
     if (!selected) return;
     const businessProfileId = selected.id;
+    const schedulesParams = { businessProfileId };
+    const schedulesScope = {
+      businessProfileId,
+      tags: ["recurring-schedules", "financial"],
+    };
+    const cachedSchedules = peekCachedApiData<RecurringSchedule[]>(
+      "/insights/recurring-schedules",
+      { params: schedulesParams },
+      schedulesScope,
+    );
+    if (cachedSchedules) {
+      setRecurringSchedules(cachedSchedules.data);
+      setSchedulesState("ready");
+    } else if (!force) {
+      setRecurringSchedules(null);
+      setSchedulesState("loading");
+    }
+
+    await loadPanel(
+      cachedApiGet<RecurringSchedule[]>(
+        "/insights/recurring-schedules",
+        { signal, params: schedulesParams },
+        schedulesScope,
+        { force },
+      ),
+      (schedules) => {
+        if (activeExpenseScopeRef.current === requestScopeKey) {
+          setRecurringSchedules(schedules);
+          setSchedulesState("ready");
+        }
+      },
+      (error) => {
+        if (activeExpenseScopeRef.current !== requestScopeKey) return;
+        if (isDefinitiveScheduleUnavailable(error)) {
+          setRecurringSchedules(null);
+          setSchedulesState("unavailable");
+          return;
+        }
+        setSchedulesState(failedSupplementState);
+      },
+      signal,
+    );
+  }
+
+  /**
+   * The two recurring reads settle independently because schedules can be
+   * feature-gated while detector patterns remain available.
+   */
+  async function loadRecurring(signal?: AbortSignal, force = false) {
+    const requestScopeKey = expenseScopeKey;
+    if (activeExpenseScopeRef.current !== requestScopeKey) return;
+    if (!selected) return;
+    const businessProfileId = selected.id;
+    const patternsParams = { businessProfileId };
+    const patternsScope = {
+      businessProfileId,
+      tags: ["recurring-patterns", "financial"],
+    };
+    const cachedPatterns = peekCachedApiData<RecurringPattern[]>(
+      "/insights/recurring-patterns",
+      { params: patternsParams },
+      patternsScope,
+    );
+    if (cachedPatterns) {
+      setRecurringPatterns(cachedPatterns.data);
+      setPatternsState("ready");
+    } else if (!force) {
+      setRecurringPatterns([]);
+      setPatternsState("loading");
+    }
+
     await Promise.all([
       loadPanel(
-        api.get<RecurringPattern[]>("/insights/recurring-patterns", {
-          signal,
-          params: { businessProfileId },
-        }),
-        setRecurringPatterns,
-        () => setRecurringPatterns([]),
+        cachedApiGet<RecurringPattern[]>(
+          "/insights/recurring-patterns",
+          { signal, params: patternsParams },
+          patternsScope,
+          { force },
+        ),
+        (patterns) => {
+          if (activeExpenseScopeRef.current === requestScopeKey) {
+            setRecurringPatterns(patterns);
+            setPatternsState("ready");
+          }
+        },
+        () => {
+          if (activeExpenseScopeRef.current === requestScopeKey) {
+            setPatternsState(failedSupplementState);
+          }
+        },
         signal,
       ),
-      loadPanel(
-        api.get<RecurringSchedule[]>("/insights/recurring-schedules", {
-          signal,
-          params: { businessProfileId },
-        }),
-        setRecurringSchedules,
-        // Null, not []. See the state declaration: hidden, not "none".
-        () => setRecurringSchedules(null),
-        signal,
-      ),
+      loadRecurringSchedules(signal, force),
     ]);
   }
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const controller = new AbortController();
     load(controller.signal);
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id, periodDays, endDate]);
+  }, [selected?.id, periodKey, periodReady]);
+
+  useServerStateRefresh(
+    [{
+      resource: "/insights/expense-overview",
+      businessProfileId: selected?.id ?? null,
+      period: selection,
+      tags: ["expense-insight", "financial", "expense-overview"],
+    }],
+    (signal) => void loadExpenseOverview(signal, true),
+  );
+
+  useServerStateRefresh(
+    [{
+      resource: selected
+        ? `/business-profiles/${selected.id}/financial-position`
+        : "/business-profiles/financial-position",
+      businessProfileId: selected?.id ?? null,
+      tags: ["financial"],
+    }],
+    () => setFinancialPositionReload((version) => version + 1),
+  );
+
+  useServerStateRefresh(
+    [
+      {
+        resource: "/records/flagged",
+        businessProfileId: selected?.id ?? null,
+        tags: ["records", "financial"],
+      },
+      {
+        resource: "/records/flagged/count",
+        businessProfileId: selected?.id ?? null,
+        tags: ["records", "financial"],
+      },
+      {
+        resource: "/insights/findings",
+        businessProfileId: selected?.id ?? null,
+        tags: ["insights-findings", "financial"],
+      },
+    ],
+    (signal) => void loadSupplementPanels(signal, true),
+  );
+
+  useServerStateRefresh(
+    [
+      {
+        resource: "/insights/recurring-patterns",
+        businessProfileId: selected?.id ?? null,
+        tags: ["recurring-patterns", "financial"],
+      },
+      {
+        resource: "/insights/recurring-schedules",
+        businessProfileId: selected?.id ?? null,
+        tags: ["recurring-schedules", "financial"],
+      },
+    ],
+    (signal) => void loadRecurring(signal, true),
+  );
 
   // A refetch with data already on screen is a refresh, not a load — see the
   // note on the skeleton below.
   const isInitialLoad = loading && !data;
   const isRefreshing = loading && !!data;
 
-  /**
-   * The month the owner's records actually end in, when that is somewhere the
-   * ordinary windows cannot reach.
-   *
-   * Null in the normal case — a business recording daily has its latest expense
-   * inside "This month" already, and offering a second button for the same
-   * window under a stranger name would be worse than offering nothing.
-   */
-  const anchorMonth = useMemo(() => {
-    const latest = data?.latestExpenseDate;
-    if (!latest) return null;
-    const latestTime = new Date(latest).getTime();
-    // Reachable by the widest ordinary window (30 days back from today)? Then
-    // there is nothing here the existing options do not already cover.
-    const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
-    if (latestTime >= thirtyDaysAgo) return null;
-    return {
-      endDate: latest.slice(0, 10),
-      label: new Date(latest).toLocaleDateString(undefined, {
-        month: "short",
-        year: "numeric",
-        timeZone: "UTC",
-      }),
-    };
-  }, [data?.latestExpenseDate]);
-
-  /** True while showing a window that ends somewhere other than today. */
-  const isAnchored = endDate !== null;
-
-  const periodLabel = isAnchored
-    ? `in ${anchorMonth?.label ?? "that period"}`
-    : periodDays === 7
-      ? "this week"
-      : "this month";
-  const previousLabel = periodDays === 7 ? "Last week" : "Last month";
+  const periodCaption = periodCaptionOf(selection);
+  const periodText = periodPhrase(selection);
+  /** What changes are measured against: "August 2026", or the same days of it. */
+  const comparedWith = previousLabelOf(data?.period) ?? "Previous period";
+  const currentFinancialPosition =
+    financialPositionProfileId === selected?.id ? financialPosition : null;
+  const recordedAvailableFunds = Number.isFinite(
+    currentFinancialPosition?.availableFunds.calculatedAmount,
+  )
+    ? currentFinancialPosition!.availableFunds.calculatedAmount
+    : null;
+  const currentFinancialPositionError =
+    financialPositionProfileId === selected?.id
+      ? financialPositionError
+      : null;
+  const availableFundsAreLoading =
+    !!selected &&
+    (financialPositionProfileId !== selected.id || financialPositionLoading);
+  const startingFundsFallback =
+    currentFinancialPositionError && Number.isFinite(selected?.availableFunds)
+      ? selected!.availableFunds
+      : null;
+  const availableFundsDenominator =
+    recordedAvailableFunds ?? startingFundsFallback;
+  const usingStartingFundsFallback =
+    recordedAvailableFunds === null && startingFundsFallback !== null;
 
   /**
    * The schedules read doubles as the availability probe for everything that
@@ -985,7 +1390,11 @@ export function ExpenseInsight() {
     (pattern) => pattern.status === "CANDIDATE",
   );
   // With no agenda and no candidates the whole block is an empty container.
-  const showRecurringBlock = recurringSchedules !== null || hasCandidates;
+  const showRecurringBlock =
+    recurringSchedules !== null ||
+    hasCandidates ||
+    patternsState === "stale" ||
+    patternsState === "unavailable";
 
   /*
    * The flags panel counts with the server's number and lists with its own
@@ -996,6 +1405,24 @@ export function ExpenseInsight() {
    */
   const flaggedTotal = flaggedExpenseCount ?? flaggedExpenses.length;
   const shownFlagged = Math.min(flaggedExpenses.length, MAX_FLAGGED_SHOWN);
+  const flaggedState = combinedSupplementState([flaggedListState, flaggedCountState]);
+  const showFlaggedPanel = flaggedState !== "ready" || flaggedTotal > 0;
+  const showFindingsPanel = findingsState !== "ready" || findings.length > 0;
+  // Reviewing the last finding on the last page steps back a page rather than
+  // leaving an empty one.
+  const visibleFindingsPage = Math.min(
+    findingsPage,
+    Math.max(1, Math.ceil(findings.length / FINDINGS_PER_PAGE)),
+  );
+  const reductionHasOpportunities =
+    (reductionOpportunities?.opportunities.length ?? 0) > 0;
+  const showReductionPanel =
+    reductionLoading ||
+    !!reductionError ||
+    !!refreshError ||
+    reductionHasOpportunities;
+  const showUnusualPanel =
+    isRefreshing || !!refreshError || (data?.unusualExpenses.length ?? 0) > 0;
 
   // ---- headline figures, all from one denominator ----
   const summary = useMemo(() => {
@@ -1011,6 +1438,8 @@ export function ExpenseInsight() {
       .sort((a, b) => b.change - a.change);
 
     const periodDelta = total - data.totals.previous;
+    // All time has no earlier period; its fourth figure is the monthly average.
+    const monthsCovered = data.dailyBucket === "month" ? data.dailyTotals.length : 0;
     const periodPercent =
       data.totals.previous > 0
         ? (periodDelta / data.totals.previous) * 100
@@ -1024,16 +1453,16 @@ export function ExpenseInsight() {
       biggestIncrease: risen[0] ?? null,
       periodDelta,
       periodPercent,
-      // What share of the cash the owner says they have is going out. The
-      // single most useful number here for someone with no accounting
-      // background: it turns an abstract total into "this is how much of my
-      // money that is".
+      monthlyAverage: monthsCovered > 0 ? total / monthsCovered : null,
+      // All-time spending cannot be compared meaningfully with today's balance.
       fundsShare:
-        selected && selected.availableFunds > 0
-          ? (total / selected.availableFunds) * 100
+        availableFundsDenominator !== null &&
+        availableFundsDenominator > 0 &&
+        data.dailyBucket !== "month"
+          ? (total / availableFundsDenominator) * 100
           : null,
     };
-  }, [data, selected]);
+  }, [availableFundsDenominator, data]);
 
   /*
    * No `if (!selected) return <NoBusinessProfile />` any more. This page only
@@ -1058,22 +1487,20 @@ export function ExpenseInsight() {
       {summary.top ? (
         <>
           <Kw>{summary.top.categoryName}</Kw> is your highest expense category{" "}
-          {periodLabel}, making up <Kw>{summary.topShare.toFixed(1)}%</Kw> of
-          recorded expenses.{" "}
+          {periodText}: <Kw>{summary.topShare.toFixed(1)}%</Kw> of expenses.{" "}
         </>
       ) : (
-        <>No expenses recorded {periodLabel} yet. </>
+        <>No expenses {periodText}. </>
       )}
-      {summary.biggestIncrease ? (
+      {summary.biggestIncrease && !allTime ? (
         <>
-          <Kw>{summary.biggestIncrease.categoryName}</Kw> rose the most, up{" "}
+          <Kw>{summary.biggestIncrease.categoryName}</Kw> rose the most: up{" "}
           <Kw>
             <span className="figure">
               {formatMoney(summary.biggestIncrease.change)}
             </span>
           </Kw>{" "}
-          compared with {previousLabel.toLowerCase()}, so it may be worth
-          reviewing.
+          vs {comparedWith}.
         </>
       ) : null}
     </>
@@ -1082,67 +1509,18 @@ export function ExpenseInsight() {
   // Names the exact category and figure the card above just named — a much
   // more useful starting point in the drawer than a generic "why did my
   // expenses increase?" that makes the owner retype what's already on screen.
-  const expandQuestion = summary?.biggestIncrease
-    ? `Why did ${summary.biggestIncrease.categoryName} increase by ${formatMoney(summary.biggestIncrease.change)} compared with ${previousLabel.toLowerCase()}?`
+  const expandQuestion = summary?.biggestIncrease && !allTime
+    ? `Why did ${summary.biggestIncrease.categoryName} increase by ${formatMoney(summary.biggestIncrease.change)} compared with ${comparedWith}?`
     : summary?.top
-      ? `Why is ${summary.top.categoryName} my highest expense category ${periodLabel}?`
+      ? `Why is ${summary.top.categoryName} my highest expense category ${periodText}?`
       : undefined;
-
-  const periodPicker = (
-    <div className="flex flex-wrap gap-1 rounded-xl border border-paper-200 bg-paper-100 p-1">
-      {PERIOD_OPTIONS.map((opt) => (
-        <button
-          key={opt.days}
-          type="button"
-          onClick={() => {
-            setPeriodDays(opt.days);
-            setEndDate(null);
-          }}
-          aria-pressed={periodDays === opt.days && endDate === null}
-          className={`tap rounded-lg px-3 text-[13.5px] font-semibold transition ${
-            periodDays === opt.days && endDate === null
-              ? "bg-paper text-brand-800 shadow-sm"
-              : "text-ink-600 hover:text-brand-800"
-          }`}
-        >
-          {opt.label}
-        </button>
-      ))}
-      {/*
-        Offered only when it would show something the other options cannot —
-        i.e. the latest expense is outside the window they cover. A business
-        recording daily never sees this button, because for them it would be a
-        duplicate of "This month" under a stranger name.
-      */}
-      {anchorMonth ? (
-        <button
-          type="button"
-          onClick={() => {
-            setPeriodDays(30);
-            setEndDate(anchorMonth.endDate);
-          }}
-          aria-pressed={endDate === anchorMonth.endDate}
-          className={`tap rounded-lg px-3 text-[13.5px] font-semibold transition ${
-            endDate === anchorMonth.endDate
-              ? "bg-paper text-brand-800 shadow-sm"
-              : "text-ink-600 hover:text-brand-800"
-          }`}
-        >
-          {anchorMonth.label}
-        </button>
-      ) : null}
-    </div>
-  );
 
   return (
     <div>
       <PageHead
         eyebrow="Insights"
         title="Expense insight"
-        subtitle={
-          <>Understand where your money went and what needs attention.</>
-        }
-        actions={periodPicker}
+        actions={<PeriodFilter showAllTime={false} />}
       />
 
       <InsightsTabs />
@@ -1153,16 +1531,14 @@ export function ExpenseInsight() {
           className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-tint-danger px-3.5 py-3 text-sm text-tone-danger ring-1 ring-edge-danger"
         >
           <div className="min-w-0">
-            <p className="font-semibold">
-              Expense insight could not be updated
-            </p>
+            <p className="font-semibold">Expense insight couldn’t load</p>
             <p className="mt-0.5 text-xs opacity-90">{error}</p>
           </div>
           <Button
             type="button"
             size="sm"
             variant="secondary"
-            onClick={() => void load()}
+            onClick={() => void load(undefined, true)}
             disabled={loading}
           >
             {loading ? "Retrying…" : "Retry"}
@@ -1170,15 +1546,35 @@ export function ExpenseInsight() {
         </div>
       ) : null}
 
-      {/* Skeleton ONLY on the very first load.
-          Switching period is a refetch of a page that is already on screen, and
-          swapping it for a skeleton throws away a layout the reader is
-          currently using, jumps the scroll position, and then throws the
-          skeleton away too. Holding the previous render at reduced opacity says
-          "same page, updating" — which is what is actually happening. */}
+      {refreshError ? (
+        <div
+          role="alert"
+          className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-tint-accent px-3.5 py-3 text-sm text-tone-accent ring-1 ring-edge-accent"
+        >
+          <div className="min-w-0">
+            <p className="font-semibold">Expense insight couldn’t refresh</p>
+            <p className="mt-0.5 text-xs opacity-90">
+              Showing recently loaded figures. {refreshError}
+            </p>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={() => void loadExpenseOverview(undefined, true)}
+            disabled={loading}
+          >
+            {loading ? "Retrying…" : "Retry refresh"}
+          </Button>
+        </div>
+      ) : null}
+
+      {/* Skeleton only when this exact business and period have no cached data.
+          A scoped cached result stays in place at reduced opacity while it is
+          refreshed; data from another business or period is never reused. */}
       {isInitialLoad ? (
         <div className="space-y-6" aria-busy="true" aria-live="polite">
-          <span className="sr-only">Loading your expense insight…</span>
+          <span className="sr-only">Loading expense insights…</span>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <SkeletonStatTile />
             <SkeletonStatTile />
@@ -1198,62 +1594,39 @@ export function ExpenseInsight() {
          * step earlier, and only the action that closes it differs.
          */
         <EmptyState
-          title="No expenses to look at yet"
+          title="No expenses yet"
           icon="◔"
           action={
             <ButtonLink to="/onboarding" variant="primary">
-              Finish setting up your business
+              Finish business setup
             </ButtonLink>
           }
         >
-          Expenses belong to a business, so there is nothing here to group,
-          compare or flag yet. Once yours is set up and you record a few, this
-          page shows where your money goes and what changed.
+          Set up your business to record expenses.
         </EmptyState>
       ) : !data || !summary ? null : summary.total === 0 ? (
         /*
-          TWO DIFFERENT EMPTINESSES, and they were getting the same screen.
-
-          "You have never recorded an expense" and "you have hundreds, none of
-          them recent" look identical from inside a 30-day window, and the old
-          state answered both with "Add an expense / Import from a spreadsheet"
-          — which told an owner who had just imported 527 expenses to go and
-          import some expenses. That is not merely unhelpful; it is the app
-          confidently contradicting something the owner just did.
+          TWO DIFFERENT EMPTINESSES. "Never recorded an expense" and "has
+          hundreds, none in this period" must not get the same advice: telling
+          an owner who just imported 527 expenses to import some is the app
+          contradicting what they just did.
         */
-        anchorMonth ? (
+        data.latestExpenseDate ? (
           <EmptyState
-            title={`No expenses ${periodLabel}`}
+            title={`No expenses ${periodText}`}
             icon="◔"
-            action={
-              /* A Button, not a ButtonLink: nothing is being navigated to. The
-                 data is already loaded and this only moves the window — it is
-                 the same control as the period option above. */
-              <Button
-                type="button"
-                variant="primary"
-                onClick={() => {
-                  setPeriodDays(30);
-                  setEndDate(anchorMonth.endDate);
-                }}
-              >
-                Show {anchorMonth.label}
-              </Button>
-            }
           >
-            Your records are here — the most recent one is dated{" "}
-            {new Date(data.latestExpenseDate!).toLocaleDateString(undefined, {
+            Latest expense:{" "}
+            {new Date(data.latestExpenseDate).toLocaleDateString(undefined, {
               year: "numeric",
               month: "long",
               day: "numeric",
               timeZone: "UTC",
             })}
-            . This page reads a window ending today, and there's nothing in the
-            last {periodDays} days.
           </EmptyState>
         ) : (
           <EmptyState
-            title={`No expenses recorded ${periodLabel}`}
+            title="No expenses yet"
             icon="◔"
             action={
               <>
@@ -1261,15 +1634,11 @@ export function ExpenseInsight() {
                   Add an expense
                 </ButtonLink>
                 <ButtonLink to="/records/csv-imports/new" variant="secondary">
-                  Import from a spreadsheet
+                  Import CSV
                 </ButtonLink>
               </>
             }
-          >
-            Once you record a few expenses, this page shows where your money
-            goes, what changed since last period, and anything that looks
-            unusual — in plain language.
-          </EmptyState>
+          />
         )
       ) : (
         <div
@@ -1314,7 +1683,7 @@ export function ExpenseInsight() {
                   strokeWidth={1.8}
                 />
                 <p className="text-xs font-medium text-ink-500">
-                  Share of available funds
+                  Share of recorded available funds
                 </p>
                 <p className="figure mt-2 text-2xl font-bold text-ink-900">
                   {summary.fundsShare === null
@@ -1323,9 +1692,36 @@ export function ExpenseInsight() {
                 </p>
                 <p className="mt-1 text-xs text-ink-500">
                   {summary.fundsShare === null
-                    ? "Add funds in your business profile"
-                    : `${formatMoney(summary.total)} of ${formatMoney(selected.availableFunds)}`}
+                    ? allTime
+                      ? "Shown for a week or a month"
+                      : availableFundsAreLoading
+                        ? "Loading recorded available funds…"
+                        : usingStartingFundsFallback
+                          ? (startingFundsFallback ?? 0) > 0
+                            ? `${formatMoney(summary.total)} of ${formatMoney(startingFundsFallback)} starting funds`
+                            : `Starting funds fallback: ${formatMoney(startingFundsFallback ?? 0)}`
+                          : `Recorded available funds: ${formatMoney(availableFundsDenominator ?? 0)}`
+                    : `${formatMoney(summary.total)} of ${formatMoney(availableFundsDenominator ?? 0)} recorded available funds`}
                 </p>
+                {usingStartingFundsFallback ? (
+                  <div
+                    role="alert"
+                    className="mt-2 text-xs leading-relaxed text-tone-accent"
+                  >
+                    <span title={currentFinancialPositionError ?? undefined}>
+                      Recorded balance couldn’t load. Using starting funds.
+                    </span>{" "}
+                    <button
+                      type="button"
+                      className="tap-inline font-semibold underline underline-offset-2"
+                      onClick={() =>
+                        setFinancialPositionReload((version) => version + 1)
+                      }
+                    >
+                      Retry recorded balance
+                    </button>
+                  </div>
+                ) : null}
               </div>
               <div className="relative min-w-0 border-b border-paper-200 p-5 pl-[4.5rem] sm:border-r xl:border-b-0">
                 <Boxes
@@ -1345,6 +1741,22 @@ export function ExpenseInsight() {
                     : "No spending yet"}
                 </p>
               </div>
+              {allTime ? (
+                <div className="relative min-w-0 p-5 pl-[4.5rem]">
+                  <TrendingUp
+                    aria-hidden
+                    className="absolute left-5 top-5 size-10 rounded-xl bg-paper-100 p-2 text-ink-500 ring-1 ring-paper-200"
+                    strokeWidth={1.8}
+                  />
+                  <p className="text-xs font-medium text-ink-500">Average per month</p>
+                  <p className="figure mt-2 text-xl font-bold text-ink-900">
+                    {summary.monthlyAverage === null ? "—" : formatMoney(summary.monthlyAverage)}
+                  </p>
+                  <p className="mt-1 text-xs text-ink-500">
+                    {data.dailyTotals.length} month{data.dailyTotals.length === 1 ? "" : "s"}
+                  </p>
+                </div>
+              ) : (
               <div className="relative min-w-0 p-5 pl-[4.5rem]">
                 {summary.periodDelta > 0 ? (
                   <ArrowUpRight
@@ -1366,7 +1778,7 @@ export function ExpenseInsight() {
                   />
                 )}
                 <p className="text-xs font-medium text-ink-500">
-                  Total vs {previousLabel.toLowerCase()}
+                  vs {comparedWith}
                 </p>
                 {summary.periodDelta !== 0 ? (
                   <>
@@ -1382,10 +1794,10 @@ export function ExpenseInsight() {
                     </p>
                     <p className="mt-1 text-xs text-ink-500">
                       {summary.periodPercent === null
-                        ? "No previous-period baseline"
+                        ? "No earlier data"
                         : `${Math.abs(summary.periodPercent).toFixed(0)}% ${
                             summary.periodDelta > 0 ? "more" : "less"
-                          } overall`}
+                          }`}
                     </p>
                   </>
                 ) : (
@@ -1393,39 +1805,35 @@ export function ExpenseInsight() {
                     <p className="mt-2 text-xl font-bold text-ink-900">
                       No change
                     </p>
-                    <p className="mt-1 text-xs text-ink-500">
-                      Same total as {previousLabel.toLowerCase()}
-                    </p>
+                    <p className="mt-1 text-xs text-ink-500">Same total</p>
                   </>
                 )}
               </div>
+              )}
             </div>
           </section>
 
-          <ExpenseSectionNav showRecurring={showRecurringBlock} />
+          <ExpenseSectionNav
+            showOpportunities={showReductionPanel}
+            showRecurring={showRecurringBlock}
+          />
 
           {/* A plain-language warning, only when it is actually warranted. The
               KPI above states the number; this says what to do about it. */}
           {summary.fundsShare !== null && summary.fundsShare > 75 ? (
             <Callout tone="warn">
-              Your spending {periodLabel} is{" "}
+              Spending {periodText} is{" "}
               <b className="font-semibold">{summary.fundsShare.toFixed(0)}%</b>{" "}
-              of the funds you have on hand. That doesn't mean anything is wrong
-              — but if sales don't cover it, this is the pace that runs the
-              money down.
+              of your recorded available funds.
             </Callout>
           ) : null}
 
           {/* ================= 2 & 3. WHERE IT WENT / WHAT CHANGED ================= */}
           <div
             id="expense-categories"
-            className="scroll-mt-6 grid gap-5 xl:grid-cols-[0.8fr_1.2fr]"
+            className={`scroll-mt-6 grid gap-5 ${allTime ? "" : "xl:grid-cols-[0.8fr_1.2fr]"}`}
           >
-            <Panel
-              eyebrow="Category share"
-              title="Category distribution"
-              className="min-w-0 xl:order-2"
-            >
+            <Panel title="Category distribution" className="min-w-0 xl:order-2">
               <DonutChart
                 breakdown={data.categoryTrends
                   .filter((t) => t.current > 0)
@@ -1436,17 +1844,16 @@ export function ExpenseInsight() {
               />
             </Panel>
 
-            <Panel
-              eyebrow={`Current vs previous period`}
-              title="Where your money went"
-              className="min-w-0 xl:order-1"
-            >
-              <CategoryComparisonChart
-                trends={data.categoryTrends}
-                currentLabel={periodDays === 7 ? "This week" : "This month"}
-                previousLabel={previousLabel}
-              />
-            </Panel>
+            {/* All time has no earlier period to compare with. */}
+            {!allTime ? (
+              <Panel title="Category comparison" className="min-w-0 xl:order-1">
+                <CategoryComparisonChart
+                  trends={data.categoryTrends}
+                  currentLabel={periodCaption}
+                  previousLabel={comparedWith}
+                />
+              </Panel>
+            ) : null}
           </div>
 
           {/* ===================== 4. THE TABLE ===================== */}
@@ -1454,11 +1861,10 @@ export function ExpenseInsight() {
               palette's contrast check requires: nothing on this page is
               knowable only by colour. */}
           <Panel
-            eyebrow="The numbers"
             title="Category summary"
             action={
               <span className="text-xs text-ink-500">
-                {data.periodStart.slice(0, 10)} → {data.periodEnd.slice(0, 10)}
+                {formatDayRange(data.periodStart.slice(0, 10), data.periodEnd.slice(0, 10))}
               </span>
             }
             bodyClassName="px-0 pb-0"
@@ -1483,17 +1889,18 @@ export function ExpenseInsight() {
                         {summary.total > 0
                           ? ((trend.current / summary.total) * 100).toFixed(1)
                           : "0.0"}
-                        % of this period
+                        %
                       </p>
                     </div>
                     <p className="figure shrink-0 text-sm font-bold text-ink-900">
                       {formatMoney(trend.current)}
                     </p>
                   </div>
+                  {!allTime ? (
                   <dl className="mt-3 grid grid-cols-2 gap-3 border-t border-paper-200 pt-3">
                     <div>
                       <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-500">
-                        {previousLabel}
+                        {comparedWith}
                       </dt>
                       <dd className="figure mt-1 text-sm text-ink-600">
                         {formatMoney(trend.previous)}
@@ -1511,10 +1918,11 @@ export function ExpenseInsight() {
                       </dd>
                     </div>
                   </dl>
+                  ) : null}
                 </li>
               ))}
               <li className="flex items-center justify-between gap-3 border-t border-paper-200 px-1 pt-3 text-sm">
-                <span className="font-semibold text-ink-600">Period total</span>
+                <span className="font-semibold text-ink-600">Total</span>
                 <span className="figure font-bold text-ink-900">
                   {formatMoney(summary.total)}
                 </span>
@@ -1524,8 +1932,8 @@ export function ExpenseInsight() {
             <div className="scroll-slim hidden overflow-x-auto md:block">
               <table className="w-full border-collapse text-left text-sm">
                 <caption className="sr-only">
-                  Expenses by category for {selected.name}, {periodLabel},
-                  compared with the previous period.
+                  Expenses by category for {selected.name}, {periodText}
+                  {allTime ? "" : `, compared with ${comparedWith}`}.
                 </caption>
                 <thead>
                   <tr className="border-y border-paper-200 bg-paper-100/60">
@@ -1539,7 +1947,7 @@ export function ExpenseInsight() {
                       scope="col"
                       className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
                     >
-                      This period
+                      {periodCaption}
                     </th>
                     <th
                       scope="col"
@@ -1547,18 +1955,22 @@ export function ExpenseInsight() {
                     >
                       Share
                     </th>
-                    <th
-                      scope="col"
-                      className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
-                    >
-                      {previousLabel}
-                    </th>
-                    <th
-                      scope="col"
-                      className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
-                    >
-                      Change
-                    </th>
+                    {!allTime ? (
+                      <>
+                        <th
+                          scope="col"
+                          className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
+                        >
+                          {comparedWith}
+                        </th>
+                        <th
+                          scope="col"
+                          className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
+                        >
+                          Change
+                        </th>
+                      </>
+                    ) : null}
                     <th
                       scope="col"
                       className="px-5 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
@@ -1588,15 +2000,19 @@ export function ExpenseInsight() {
                           : "0.0"}
                         %
                       </td>
-                      <td className="figure px-4 py-3 text-right text-ink-500">
-                        {formatMoney(t.previous)}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <ChangeFigure
-                          change={t.change}
-                          percent={t.percentChange}
-                        />
-                      </td>
+                      {!allTime ? (
+                        <>
+                          <td className="figure px-4 py-3 text-right text-ink-500">
+                            {formatMoney(t.previous)}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <ChangeFigure
+                              change={t.change}
+                              percent={t.percentChange}
+                            />
+                          </td>
+                        </>
+                      ) : null}
                       <td className="figure px-5 py-3 text-right text-ink-600">
                         {t.recordCount}
                       </td>
@@ -1617,15 +2033,19 @@ export function ExpenseInsight() {
                     <td className="figure px-4 py-3 text-right text-ink-600">
                       100.0%
                     </td>
-                    <td className="figure px-4 py-3 text-right text-ink-600">
-                      {formatMoney(data.totals.previous)}
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <ChangeFigure
-                        change={summary.periodDelta}
-                        percent={summary.periodPercent}
-                      />
-                    </td>
+                    {!allTime ? (
+                      <>
+                        <td className="figure px-4 py-3 text-right text-ink-600">
+                          {formatMoney(data.totals.previous)}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <ChangeFigure
+                            change={summary.periodDelta}
+                            percent={summary.periodPercent}
+                          />
+                        </td>
+                      </>
+                    ) : null}
                     <td className="figure px-5 py-3 text-right text-ink-600">
                       {data.categoryTrends.reduce(
                         (s, t) => s + t.recordCount,
@@ -1643,198 +2063,169 @@ export function ExpenseInsight() {
               analytical detail below (plan §10.1): understanding the numbers
               naturally leads to "so what should I check first?", and this
               panel is the deterministic answer to that question. */}
-          <div id="expense-opportunities" className="scroll-mt-6">
-            <Panel
-              eyebrow="Actionable review"
-              title="Needs attention"
-              action={
-                reductionOpportunities ? (
-                  <span className="text-xs text-ink-500">
-                    {reductionOpportunities.period.start.slice(0, 10)} →{" "}
-                    {reductionOpportunities.period.end.slice(0, 10)}
-                  </span>
-                ) : null
-              }
-            >
-              <span className="sr-only">Reduction opportunities</span>
-              {reductionLoading &&
-              !reductionOpportunities &&
-              !reductionError ? (
-                <div className="space-y-3" aria-busy="true" aria-live="polite">
-                  <span className="sr-only">
-                    Loading reduction opportunities…
-                  </span>
-                  {[0, 1].map((i) => (
-                    <div
-                      key={i}
-                      className="rounded-xl border border-paper-200 p-4"
-                    >
-                      <SkeletonLine className="w-32" />
-                      <SkeletonLine className="mt-3 w-1/2" />
-                      <SkeletonLine className="mt-2 w-full" />
-                      <SkeletonLine className="mt-2 w-3/4" />
-                    </div>
-                  ))}
-                </div>
-              ) : reductionError ? (
-                <Callout tone="warn">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <span>
-                      Couldn't load reduction opportunities: {reductionError}
-                    </span>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => void loadReductionOpportunities()}
-                    >
-                      Retry
-                    </Button>
-                  </div>
-                </Callout>
-              ) : !reductionOpportunities ? null : reductionOpportunities
-                  .dataQuality.status === "insufficient" ? (
-                <EmptyState compact title="Not enough history yet" icon="◔">
-                  {reductionOpportunities.dataQuality.message ??
-                    "FinSight needs a bit more recorded history before it can suggest anything worth reviewing here."}
-                </EmptyState>
-              ) : reductionOpportunities.opportunities.length === 0 ? (
-                <EmptyState
-                  compact
-                  title="No material opportunities found"
-                  icon="✓"
-                >
-                  Nothing in this period crossed FinSight's review thresholds.
-                  That's a good sign — it does not mean spending is optimal,
-                  only that nothing stood out enough to flag.
-                </EmptyState>
-              ) : (
-                <>
-                  {reductionOpportunities.dataQuality.status === "limited" &&
-                  reductionOpportunities.dataQuality.message ? (
-                    <Callout tone="info">
-                      {reductionOpportunities.dataQuality.message}
-                    </Callout>
-                  ) : null}
-                  <ul
-                    className={`grid gap-3 xl:grid-cols-2 ${reductionOpportunities.dataQuality.status === "limited" ? "mt-3" : ""}`}
+          {showReductionPanel ? (
+            <div id="expense-opportunities" className="scroll-mt-6">
+              <Panel title="Reduction opportunities">
+                {reductionLoading &&
+                !reductionHasOpportunities &&
+                !reductionError ? (
+                  <div
+                    className="space-y-3"
+                    aria-busy="true"
+                    aria-live="polite"
                   >
-                    {reductionOpportunities.opportunities
-                      .slice(0, MAX_OPPORTUNITIES_SHOWN)
-                      .map((o) => (
-                        <OpportunityCard
-                          key={o.id}
-                          opportunity={o}
-                          businessProfileId={selected.id}
-                          periodDays={reductionOpportunities.period.days}
-                          endDate={
-                            isAnchored
-                              ? reductionOpportunities.period.end.slice(0, 10)
-                              : null
-                          }
-                        />
-                      ))}
-                  </ul>
-                </>
-              )}
-
-              {/* Historical-window state (plan §10.3): the response's own period,
-                not the picker's label, so this never disagrees with the dates
-                shown in the panel header above. */}
-              {isAnchored && reductionOpportunities ? (
-                <p className="mt-3 text-xs text-ink-500">
-                  Showing a past period ending{" "}
-                  {new Date(
-                    reductionOpportunities.period.end,
-                  ).toLocaleDateString(undefined, {
-                    year: "numeric",
-                    month: "long",
-                    day: "numeric",
-                    timeZone: "UTC",
-                  })}
-                  , not today.
-                </p>
-              ) : null}
-            </Panel>
-          </div>
+                    <span className="sr-only">
+                      Loading reduction opportunities…
+                    </span>
+                    {[0, 1].map((i) => (
+                      <div
+                        key={i}
+                        className="rounded-xl border border-paper-200 p-4"
+                      >
+                        <SkeletonLine className="w-32" />
+                        <SkeletonLine className="mt-3 w-1/2" />
+                        <SkeletonLine className="mt-2 w-full" />
+                        <SkeletonLine className="mt-2 w-3/4" />
+                      </div>
+                    ))}
+                  </div>
+                ) : reductionError ? (
+                  <Callout tone="warn">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <span>Opportunities couldn’t load. {reductionError}</span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={() =>
+                          void loadExpenseOverview(undefined, true)
+                        }
+                      >
+                        Retry
+                      </Button>
+                    </div>
+                  </Callout>
+                ) : refreshError && !reductionHasOpportunities ? (
+                  <p role="status" className="text-sm text-tone-accent">
+                    Showing recently loaded opportunity data; the latest
+                    refresh failed.
+                  </p>
+                ) : !reductionOpportunities ||
+                  !reductionHasOpportunities ? null : (
+                  <>
+                    {reductionOpportunities.dataQuality.status === "limited" &&
+                    reductionOpportunities.dataQuality.message ? (
+                      <Callout tone="info">
+                        {reductionOpportunities.dataQuality.message}
+                      </Callout>
+                    ) : null}
+                    <ul
+                      className={`grid gap-3 xl:grid-cols-2 ${reductionOpportunities.dataQuality.status === "limited" ? "mt-3" : ""}`}
+                    >
+                      {reductionOpportunities.opportunities
+                        .slice(0, MAX_OPPORTUNITIES_SHOWN)
+                        .map((o) => (
+                          <OpportunityCard
+                            key={o.id}
+                            opportunity={o}
+                            businessProfileId={selected.id}
+                            period={selection}
+                          />
+                        ))}
+                    </ul>
+                  </>
+                )}
+              </Panel>
+            </div>
+          ) : null}
 
           {/* ===================== 5. FLAGS + AI ===================== */}
           <div
             id="expense-review"
-            className="scroll-mt-6 grid gap-5 lg:grid-cols-2"
+            className={`scroll-mt-6 grid gap-5 ${showFlaggedPanel ? "lg:grid-cols-2" : ""}`}
           >
-            <Panel
-              title="Large expense flags"
-              action={
-                flaggedTotal > 0 ? (
-                  <Pill tone="danger">{flaggedTotal} flagged</Pill>
-                ) : (
-                  <Pill tone="ok">All clear</Pill>
-                )
-              }
-            >
-              {flaggedTotal === 0 ? (
-                <EmptyState compact title="Nothing flagged right now" icon="✓">
-                  Expenses land here once they cross your large-expense
-                  threshold or look like a possible duplicate.
-                </EmptyState>
-              ) : (
-                <>
-                  <ul className="space-y-2">
-                    {flaggedExpenses.slice(0, MAX_FLAGGED_SHOWN).map((r) => (
-                      <li
-                        key={r.id}
-                        className="flex items-start gap-2.5 rounded-xl bg-tint-danger px-3.5 py-3 ring-1 ring-edge-danger"
-                      >
-                        <Flag
-                          aria-hidden
-                          className="mt-0.5 size-4 shrink-0 text-tone-danger"
-                          strokeWidth={1.9}
-                        />
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                            <p className="min-w-0 text-sm font-semibold text-tone-danger">
-                              {r.description}
-                            </p>
-                            <p className="figure shrink-0 text-sm font-bold text-tone-danger">
-                              {formatMoney(r.amount)}
-                            </p>
-                          </div>
-                          <p className="mt-1 text-xs text-tone-danger opacity-90">
-                            {categoryName(r.categoryId)} · {r.date.slice(0, 10)}{" "}
-                            · <FlagReason record={r} profile={selected} />
-                          </p>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                  {flaggedTotal > shownFlagged ? (
-                    <Link
-                      to="/records/flagged"
-                      className="tap-inline mt-3 block text-sm font-semibold text-brand-700 hover:text-brand-800"
-                    >
-                      {flaggedTotal - shownFlagged} more — review all flagged
-                      records →
-                    </Link>
-                  ) : null}
-                  <p className="mt-3 text-xs text-ink-500">
-                    A large-expense flag marks records worth a second look. It
-                    does not mean the expense is wrong.
+            {showFlaggedPanel ? (
+              <Panel
+                title="Large expense flags"
+                action={
+                  flaggedState === "stale" ? (
+                    <Pill>Saved data</Pill>
+                  ) : flaggedState === "unavailable" ? (
+                    <Pill>Unavailable</Pill>
+                  ) : flaggedState === "ready" && flaggedTotal > 0 ? (
+                    <Pill tone="danger">{flaggedTotal} flagged</Pill>
+                  ) : null
+                }
+              >
+                <SupplementNotice
+                  state={flaggedState}
+                  label="flagged record details"
+                />
+                {flaggedState === "loading" ? (
+                  <p
+                    aria-live="polite"
+                    className="py-6 text-center text-sm text-ink-500"
+                  >
+                    Loading flagged records…
                   </p>
-                </>
-              )}
-            </Panel>
+                ) : flaggedState === "unavailable" ||
+                  (flaggedState === "stale" && flaggedTotal === 0) ||
+                  flaggedTotal === 0 ? null : (
+                  <>
+                    <ul className="space-y-2">
+                      {flaggedExpenses
+                        .slice(0, MAX_FLAGGED_SHOWN)
+                        .map((r) => (
+                          <li
+                            key={r.id}
+                            className="flex items-start gap-2.5 rounded-xl bg-tint-danger px-3.5 py-3 ring-1 ring-edge-danger"
+                          >
+                            <Flag
+                              aria-hidden
+                              className="mt-0.5 size-4 shrink-0 text-tone-danger"
+                              strokeWidth={1.9}
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                                <p className="min-w-0 text-sm font-semibold text-tone-danger">
+                                  {r.description}
+                                </p>
+                                <p className="figure shrink-0 text-sm font-bold text-tone-danger">
+                                  {formatMoney(r.amount)}
+                                </p>
+                              </div>
+                              <p className="mt-1 text-xs text-tone-danger opacity-90">
+                                {categoryName(r.categoryId)} ·{" "}
+                                {r.date.slice(0, 10)} ·{" "}
+                                <FlagReason record={r} profile={selected} />
+                              </p>
+                            </div>
+                          </li>
+                        ))}
+                    </ul>
+                    {flaggedTotal > shownFlagged ? (
+                      <Link
+                        to="/records/flagged"
+                        className="tap-inline mt-3 block text-sm font-semibold text-brand-700 hover:text-brand-800"
+                      >
+                        Review all {flaggedTotal} flagged
+                      </Link>
+                    ) : null}
+                  </>
+                )}
+              </Panel>
+            ) : null}
 
             <AiCard
-              title="FinSight explanation"
-              subtitle="Scoped to Expense Insights — composed from your records, not AI-written"
+              title="Summary"
+              subtitle="Composed from your records, not AI-written"
               footer={
                 <button
                   type="button"
                   onClick={() => askFinSight(expandQuestion)}
                   className="tap-inline font-semibold text-accent-200 underline-offset-2 hover:underline"
                 >
-                  Ask FinSight to expand on this →
+                  Ask FinSight
                 </button>
               }
             >
@@ -1844,38 +2235,33 @@ export function ExpenseInsight() {
 
           {/* ===================== 6. WHEN IT LEFT ===================== */}
           <Panel
-            eyebrow="Day by day"
             title="Spending over time"
-            action={
-              <span className="text-xs text-ink-500">
-                Last {data.periodDays} days
-              </span>
-            }
+            action={<span className="text-xs text-ink-500">{periodCaption}</span>}
           >
-            <DailySpendChart daily={data.dailyTotals} />
+            <DailySpendChart daily={data.dailyTotals} bucket={data.dailyBucket ?? "day"} />
           </Panel>
 
           {/* ===================== 7. ANYTHING ODD (statistical) ===================== */}
-          <Panel
-            eyebrow="Worth a look"
-            title="Unusual expenses"
-            action={
-              data.unusualExpenses.length > 0 ? (
-                <span className="text-xs text-ink-500">
-                  {data.unusualExpenses.length} flagged
-                </span>
-              ) : null
-            }
-          >
-            {data.unusualExpenses.length === 0 ? (
-              <EmptyState
-                compact
-                title="Nothing looks out of the ordinary"
-                icon="✓"
-              >
-                FinSight compares each expense against what you usually spend in
-                that category. Nothing this period stood out.
-              </EmptyState>
+          {showUnusualPanel ? (
+            <Panel
+              title="Unusual expenses"
+              action={
+                data.unusualExpenses.length > 0 ? (
+                  <span className="text-xs text-ink-500">
+                    {data.unusualExpenses.length} flagged
+                  </span>
+                ) : null
+              }
+            >
+            {isRefreshing && data.unusualExpenses.length === 0 ? (
+              <p aria-live="polite" className="py-6 text-center text-sm text-ink-500">
+                Refreshing unusual expenses…
+              </p>
+            ) : refreshError && data.unusualExpenses.length === 0 ? (
+              <p role="status" className="text-sm text-tone-accent">
+                Showing recently loaded unusual-expense results; the latest
+                refresh failed.
+              </p>
             ) : (
               <ul className="space-y-2">
                 {data.unusualExpenses.map((u) => {
@@ -1923,35 +2309,42 @@ export function ExpenseInsight() {
 
             {data.insufficientHistoryCategories.length > 0 ? (
               <p className="mt-3 text-xs text-ink-500">
-                Not enough history yet to check:{" "}
+                Not enough history to check:{" "}
                 {data.insufficientHistoryCategories
                   .map((c) => c.categoryName)
                   .join(", ")}
-                . FinSight needs a few expenses in a category before it can tell
-                what "normal" looks like.
               </p>
             ) : null}
-          </Panel>
+            </Panel>
+          ) : null}
 
-          <Panel
-            eyebrow="Review queue"
-            title="FinSight findings"
-            action={
-              findings.length > 0 ? (
-                <span className="text-xs text-ink-500">
-                  {findings.length} open
-                </span>
-              ) : null
-            }
-          >
-            {findings.length === 0 ? (
-              <EmptyState compact title="No findings need review" icon="✓">
-                FinSight will place explainable amount, duplicate, frequency,
-                recurring, trend, and behavior findings here.
-              </EmptyState>
-            ) : (
+          {showFindingsPanel ? (
+            <Panel
+              title="Findings to review"
+              action={
+                findingsState === "stale" ? (
+                  <Pill>Saved data</Pill>
+                ) : findingsState === "unavailable" ? (
+                  <Pill>Unavailable</Pill>
+                ) : findingsState === "ready" && findings.length > 0 ? (
+                  <span className="text-xs text-ink-500">
+                    {findings.length} open
+                  </span>
+                ) : null
+              }
+            >
+            <SupplementNotice state={findingsState} label="finding details" />
+            {findingsState === "loading" ? (
+              <p aria-live="polite" className="py-6 text-center text-sm text-ink-500">
+                Loading findings…
+              </p>
+            ) : findingsState === "unavailable" || (findingsState === "stale" && findings.length === 0) ? null
+            : findings.length === 0 ? null : (
+              <>
               <ul className="space-y-3">
-                {findings.map((finding) => (
+                {findings
+                  .slice((visibleFindingsPage - 1) * FINDINGS_PER_PAGE, visibleFindingsPage * FINDINGS_PER_PAGE)
+                  .map((finding) => (
                   <li
                     key={finding.id}
                     className="rounded-xl border border-paper-200 p-3.5"
@@ -2028,8 +2421,21 @@ export function ExpenseInsight() {
                   </li>
                 ))}
               </ul>
+              {findings.length > FINDINGS_PER_PAGE ? (
+                <Pagination
+                  page={visibleFindingsPage}
+                  pageSize={FINDINGS_PER_PAGE}
+                  totalItems={findings.length}
+                  onPageChange={setFindingsPage}
+                  itemNoun="findings"
+                  idPrefix="findings"
+                  className="mt-4 border-t border-paper-200 pt-3"
+                />
+              ) : null}
+              </>
             )}
-          </Panel>
+            </Panel>
+          ) : null}
         </div>
       )}
 
@@ -2046,25 +2452,35 @@ export function ExpenseInsight() {
       */}
       {isInitialLoad || !showRecurringBlock ? null : (
         <div id="expense-recurring" className="mt-6 scroll-mt-6 space-y-6">
-          {/* Hidden outright when the schedules read did not answer — an agenda
-              saying "nothing scheduled yet" to an owner we cannot see the
-              schedules of is a worse lie than showing nothing at all. */}
+          {schedulesState === "stale" ? (
+            <Callout tone="warn">
+              <div>
+                <p role="status">
+                  <b className="font-semibold">Recurring payments couldn’t refresh.</b>{" "}
+                  Showing recently loaded schedules.
+                </p>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="mt-2"
+                  onClick={() => void loadRecurringSchedules(undefined, true)}
+                >
+                  Retry schedules
+                </Button>
+              </div>
+            </Callout>
+          ) : null}
+
+          {/* Hidden when there is no successful snapshot or the server
+              definitively reports that schedules are unavailable. */}
           {recurringSchedules !== null ? (
             <RecurringAgenda schedules={recurringSchedules} />
           ) : null}
 
           {hasCandidates ? (
-            <Panel
-              eyebrow="Suggested by FinSight"
-              title="Does this repeat?"
-              action={
-                <span className="text-xs text-ink-500">
-                  {canWatchPatterns
-                    ? "Not watched until you confirm"
-                    : "Detected from your records"}
-                </span>
-              }
-            >
+            <Panel title="Possible recurring expenses">
+              <SupplementNotice state={patternsState} label="recurring expense suggestions" />
               <ul className="space-y-2">
                 {recurringPatterns
                   .filter((pattern) => pattern.status === "CANDIDATE")
@@ -2121,6 +2537,10 @@ export function ExpenseInsight() {
                     </li>
                   ))}
               </ul>
+            </Panel>
+          ) : patternsState === "stale" || patternsState === "unavailable" ? (
+            <Panel title="Recurring expense suggestions">
+              <SupplementNotice state={patternsState} label="recurring expense suggestions" />
             </Panel>
           ) : null}
         </div>

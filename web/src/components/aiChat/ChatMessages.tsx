@@ -1,6 +1,8 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { SkeletonBubble } from "../Skeleton";
 import { formatMoney } from "../Money";
+import { ChatMarkdown } from "./ChatMarkdown";
+import { AnswerExtras } from "./AnswerExtras";
 import type { ChatMessage, InteractionModule } from "../../lib/types";
 
 /**
@@ -96,6 +98,11 @@ interface Props {
   detectedAmount: number | null;
   error: string | null;
   onStarter: (question: string) => void;
+  /** A follow-up chip under the latest reply was pressed — primes the box like a starter. */
+  onFollowUp?: (question: string) => void;
+  onRate?: (messageId: number, feedback: "up" | "down" | null) => void;
+  /** A link under a reply is leaving for another page. */
+  onNavigate?: () => void;
 }
 
 export function ChatMessages({
@@ -107,6 +114,9 @@ export function ChatMessages({
   detectedAmount,
   error,
   onStarter,
+  onFollowUp = onStarter,
+  onRate = () => undefined,
+  onNavigate = () => undefined,
 }: Props) {
   const copy = MODULE_COPY[originModule];
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -160,11 +170,35 @@ export function ChatMessages({
 
         {loading ? <p className="text-center text-xs text-ink-500">Loading this conversation…</p> : null}
 
-        {messages.map((m) => (
-          <Bubble key={m.id} from={m.role === "user" ? "user" : "ai"}>
-            {m.content}
-          </Bubble>
-        ))}
+        {messages.map((m, index) => {
+          if (m.role === "user") {
+            return (
+              <Bubble key={m.id} from="user">
+                {m.content}
+              </Bubble>
+            );
+          }
+          // The newest reply, while nothing newer is being written, is the
+          // one whose follow-ups and actions are still current.
+          const latest = index === messages.length - 1 && !sending;
+          return (
+            <div key={m.id} className="flex flex-col gap-2">
+              <Bubble from="ai">
+                <ChatMarkdown text={m.content} />
+              </Bubble>
+              {m.metadata ? (
+                <AnswerExtras
+                  metadata={m.metadata}
+                  latest={latest}
+                  feedback={m.feedback ?? null}
+                  onFollowUp={onFollowUp}
+                  onRate={(value) => onRate(m.id, value)}
+                  onNavigate={onNavigate}
+                />
+              ) : null}
+            </div>
+          );
+        })}
 
         {sending ? <SkeletonBubble /> : null}
 
@@ -232,9 +266,9 @@ function Bubble({ from, children }: { from: "ai" | "user"; children: ReactNode }
         draggable={false}
       />
 
-      <p className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-bl-sm border border-paper-200 bg-paper px-3.5 py-2.5 text-sm text-ink-700">
+      <div className="max-w-[85%] rounded-2xl rounded-bl-sm border border-paper-200 bg-paper px-3.5 py-2.5 text-sm text-ink-700">
         {children}
-      </p>
+      </div>
     </div>
   );
 }

@@ -107,7 +107,7 @@ export function Notifications() {
             aria-pressed={filter === option.key}
             onClick={() => setFilter(option.key)}
             className={`flex min-h-tap items-center whitespace-nowrap rounded-lg px-4 text-[13.5px] font-semibold transition ${
-              filter === option.key ? "bg-paper text-brand-800 shadow-sm" : "text-ink-500 hover:text-brand-800"
+              filter === option.key ? "bg-paper text-tone-brand shadow-sm" : "text-ink-500 hover:text-tone-brand"
             }`}
           >
             {option.label}
@@ -142,9 +142,7 @@ export function Notifications() {
           title={filter === "unread" ? "Nothing unread" : "Nothing needs your attention"}
           icon="✓"
         >
-          {filter === "unread"
-            ? "You've read everything FinSight has flagged. Switch to All to look back over them."
-            : "FinSight will flag possible duplicates, unusually large expenses and finished imports here as you record them."}
+          {filter === "unread" ? "Switch to All to see earlier alerts." : "Duplicates, large expenses and finished imports appear here."}
         </EmptyState>
       ) : (
         <div className="space-y-6">

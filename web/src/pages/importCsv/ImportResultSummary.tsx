@@ -47,7 +47,7 @@ export function ImportResultSummary({
       */}
       {clean ? (
         <Celebration title={`${result.imported} record${result.imported === 1 ? "" : "s"} imported`}>
-          All rows in <strong className="text-ink-800">{result.title}</strong> were imported.
+          {result.title}
         </Celebration>
       ) : null}
 
@@ -85,11 +85,11 @@ export function ImportResultSummary({
           <dd className="figure font-medium text-ink-900">{skippedTotal}</dd>
         </div>
         <div className="flex justify-between gap-3">
-          <dt className="text-ink-500">Flagged as possible duplicates</dt>
+          <dt className="text-ink-500">Possible duplicates</dt>
           <dd className="figure font-medium text-ink-900">{result.flagged}</dd>
         </div>
         <div className="flex justify-between gap-3">
-          <dt className="text-ink-500">Flagged as large expenses</dt>
+          <dt className="text-ink-500">Large expenses</dt>
           <dd className="figure font-medium text-ink-900">{result.largeExpenseFlagged ?? 0}</dd>
         </div>
       </dl>
@@ -110,12 +110,12 @@ export function ImportResultSummary({
       {result.duplicateOfBatchId !== undefined ? (
         <div className="mt-4">
           <Callout tone="warn">
-            <b className="font-semibold">This file was imported before.</b> Check for duplicate records.{" "}
+            <b className="font-semibold">This file was imported before.</b>{" "}
             <Link
               to="/records/flagged"
               className="tap-inline font-semibold text-tone-accent underline underline-offset-2"
             >
-              Review the duplicates
+              Review duplicates
             </Link>
           </Callout>
         </div>
@@ -129,12 +129,12 @@ export function ImportResultSummary({
       {hasReviewFlags ? (
         <div className="mt-4">
           <Callout tone="warn">
-            <b className="font-semibold">Some imported records need a second look.</b>{" "}
+            <b className="font-semibold">Some records need review.</b>{" "}
             <Link
               to="/records/flagged"
               className="tap-inline font-semibold text-tone-accent underline underline-offset-2"
             >
-              Review them now
+              Review
             </Link>
           </Callout>
         </div>
@@ -150,13 +150,13 @@ export function ImportResultSummary({
         <div className="mt-4">
           <Callout tone="info">
             <b className="font-semibold">
-              {result.uncategorised} expense{result.uncategorised === 1 ? "" : "s"} saved as "Uncategorised".
+              {result.uncategorised} uncategorised expense{result.uncategorised === 1 ? "" : "s"}.
             </b>{" "}
             <Link
               to="/records"
               className="tap-inline font-semibold text-tone-brand underline underline-offset-2"
             >
-              Sort them now
+              Categorise
             </Link>
           </Callout>
         </div>
@@ -165,7 +165,7 @@ export function ImportResultSummary({
       {skippedTotal > 0 ? (
         <div className="mt-4 rounded-lg bg-tint-danger p-3 text-xs text-tone-danger ring-1 ring-edge-danger">
           <p className="font-medium">
-            {skippedTotal} row{skippedTotal === 1 ? " was" : "s were"} skipped. Correct and import only those rows.
+            {skippedTotal} row{skippedTotal === 1 ? "" : "s"} skipped
           </p>
           <ResultDetails label="Skipped CSV rows">
           <ul className="list-inside list-disc space-y-0.5">

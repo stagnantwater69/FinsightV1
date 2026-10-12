@@ -3,42 +3,39 @@ import { isAxiosError } from "axios";
 import { useLocation } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
+import { ReportingPeriodScope } from "../context/ReportingPeriodContext";
+import { invalidateServerState } from "../lib/serverStateCache";
 import { api } from "../lib/api";
 import { getErrorMessage } from "../lib/errors";
+import { todayIso } from "../lib/dates";
 import { Callout, Card, PageHead } from "../components/ui";
 import { classifyTypeValue, parseSignedAmount, type RowRecordType } from "../lib/recordTypeDetection";
 import { Button } from "../components/Button";
-import { Field, FormError, SelectInput, TextInput } from "../components/Field";
+import { FormError } from "../components/Field";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
 import { randomId } from "../lib/uuid";
 import type { CsvConfirmDateFormat, CsvImportStatus } from "../lib/types";
-import {
-  guessColumn,
-  problemWith,
-  resultFromStatus,
-  STATUS_POLL_INTERVAL_MS,
-} from "./importCsv/csvImportRules";
+import { problemWith, resultFromStatus, STATUS_POLL_INTERVAL_MS } from "./importCsv/csvImportRules";
 import { ImportProgress } from "./importCsv/ImportProgress";
 import { ImportResultSummary } from "./importCsv/ImportResultSummary";
 import { FileSelectStage } from "./importCsv/FileSelectStage";
-import { ColumnMappingFields } from "./importCsv/ColumnMappingTable";
-import { CsvDataPreview } from "./importCsv/CsvDataPreview";
-import {
-  CsvFileSummary,
-  CsvImportBreadcrumbs,
-  CsvImportStepper,
-} from "./importCsv/CsvImportStepper";
+import { DetectedColumns } from "./importCsv/DetectedColumns";
+import { ReviewTable, type ReviewRow } from "./importCsv/ReviewTable";
+import { CsvFileSummary, CsvImportBreadcrumbs, CsvImportStepper } from "./importCsv/CsvImportStepper";
 import type {
+  ColumnChoice,
   ImportRecordType,
   ImportResult,
-  MappedColumn,
   MappedField,
   MixedStrategy,
   PreviewResult,
+  RowCategory,
+  RowCorrection,
   StagedPreviewResult,
 } from "./importCsv/types";
 import { NoBusinessProfile } from "../components/NoBusinessProfile";
-import { ResultDetails } from "../components/ResultDetails";
+import { parseCsvDate } from "../lib/csvDates";
+import { AvailableFundsBaselineChoice, useAvailableFundsBaselineChoice } from "../components/AvailableFundsBaselineChoice";
 
 const STAGED_UPLOAD_UNAVAILABLE = new Set([
   "CSV_STAGE_EXPIRED",
@@ -56,27 +53,57 @@ function isStagedUploadUnavailable(error: unknown): boolean {
   return typeof code === "string" && STAGED_UPLOAD_UNAVAILABLE.has(code);
 }
 
+const NO_COLUMNS: ColumnChoice = { date: "", description: "", amount: "", category: "", vendor: "" };
+
+/** How long the review waits after an edit before re-checking the whole file. */
+const RECHECK_DELAY_MS = 700;
+
+function withoutBaselineOverrides(corrections: Record<number, RowCorrection>): Record<number, RowCorrection> {
+  let changed = false;
+  const next: Record<number, RowCorrection> = {};
+  for (const [rawRow, fields] of Object.entries(corrections)) {
+    const row = Number(rawRow);
+    const nextFields = { ...fields };
+    if (nextFields.includedInAvailableFundsBaseline !== undefined) {
+      delete nextFields.includedInAvailableFundsBaseline;
+      changed = true;
+    }
+    if (Object.keys(nextFields).length > 0) next[row] = nextFields;
+  }
+  return changed ? next : corrections;
+}
+
 export function ImportCsv() {
   const { selected } = useBusinessProfiles();
   const location = useLocation();
-  return <ImportCsvForm key={`${selected?.id ?? "no-profile"}-${location.key}`} />;
+  return (
+    <ReportingPeriodScope>
+      <ImportCsvForm key={`${selected?.id ?? "no-profile"}-${location.key}`} />
+    </ReportingPeriodScope>
+  );
 }
 
+/**
+ * Upload -> Review and edit -> Import.
+ *
+ * There is no mapping step. The server reads the headings on upload and says
+ * which column is which (backend lib/csvColumnDetection); the owner lands on
+ * the review with the rows already read, each expense row already given a
+ * category (lib/importCategoriser), and corrects only what is wrong. Every
+ * edit is re-checked against the whole file on the server before import.
+ */
 function ImportCsvForm() {
   const { selected } = useBusinessProfiles();
-  const { categories } = useExpenseCategories();
+  const { categories, refresh: refreshCategories } = useExpenseCategories();
   /*
-   * Set when the setup wizard's last step sent the owner here. The import
-   * itself is identical either way — this only changes where "done" points, so
-   * that finishing setup lands on the dashboard the wizard promised rather than
-   * dropping a brand-new owner into a records table.
+   * Set when the setup wizard's last step sent the owner here. The import is
+   * identical either way; this only changes where "done" points.
    */
   const fromOnboarding = Boolean((useLocation().state as { fromOnboarding?: boolean } | null)?.fromOnboarding);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [stagedUploadId, setStagedUploadId] = useState<string | null>(null);
-  const [stage, setStage] = useState<"upload" | "map" | "review">("upload");
-  const [previewExpanded, setPreviewExpanded] = useState(false);
+  const [stage, setStage] = useState<"upload" | "review">("upload");
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);
 
@@ -85,53 +112,60 @@ function ImportCsvForm() {
   /** The column naming each row's kind, for the "column" strategy. */
   const [typeCol, setTypeCol] = useState("");
   const [title, setTitle] = useState("");
-  const [dateCol, setDateCol] = useState("");
-  const [descriptionCol, setDescriptionCol] = useState("");
-  const [amountCol, setAmountCol] = useState("");
-  const [categoryCol, setCategoryCol] = useState("");
-  const [vendorCol, setVendorCol] = useState("");
-  const [confirmError, setConfirmError] = useState<string | null>(null);
-  const [confirming, setConfirming] = useState(false);
-  const [checking, setChecking] = useState(false);
-  const [result, setResult] = useState<ImportResult | null>(null);
+  const [columns, setColumns] = useState<ColumnChoice>(NO_COLUMNS);
+  /** The owner's edits, keyed by spreadsheet row number. Sent as `corrections`. */
+  const [corrections, setCorrections] = useState<Record<number, RowCorrection>>({});
   /**
-   * THE THING THAT MAKES A RETRY SAFE.
-   *
-   * Generated ONCE per chosen file and reused for every confirm attempt on
-   * that file, including retries after an error. The server keys the import on
-   * it: a replayed key returns the SAME logical import at whatever stage it
-   * reached, never a second copy of the records (ADR-3). A key regenerated per
-   * attempt would defeat the whole mechanism — an impatient second click, a
-   * proxy retry or a refresh would each look like a brand-new import and
-   * double a month of books, which is the worst outcome this endpoint has.
-   *
-   * Cleared only when a different file is chosen, because at that point it IS
-   * a different import.
-   */
-  const [idempotencyKey, setIdempotencyKey] = useState<string | null>(null);
-  /**
-   * The owner's answer to "are these dates day-first or month-first?".
-   *
-   * Only asked when the preview reports the file ambiguous, and confirm is
-   * blocked until it is answered — the server refuses such a file outright
-   * rather than guessing, and guessing here would silently move every
-   * transaction in the file by up to eleven months.
+   * The owner's answer to "are these dates day-first or month-first?". Asked
+   * only when the file is ambiguous; the server refuses such a file rather
+   * than guess, and a wrong guess moves every row by up to eleven months.
    */
   const [dateFormat, setDateFormat] = useState<CsvConfirmDateFormat | "">("");
+
+  /** The latest full-file check, and the inputs it was for. */
+  const [check, setCheck] = useState<PreviewResult | null>(null);
+  const [checkedKey, setCheckedKey] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [checkError, setCheckError] = useState<string | null>(null);
+  /** Rows past the sample that a check flagged, kept so a fixed row stays on screen. */
+  const [extraRows, setExtraRows] = useState<Map<number, Record<string, string>>>(new Map());
+  const availableFundsBaseline = check
+    ? (check.availableFundsBaseline ?? null)
+    : (preview?.availableFundsBaseline ?? null);
+  const baselineChoice = useAvailableFundsBaselineChoice(
+    availableFundsBaseline?.baselineDate ?? "",
+    availableFundsBaseline
+      ? {
+          availableFundsBaselineAt: availableFundsBaseline.baselineAt,
+          availableFundsBaselineDate: availableFundsBaseline.baselineDate,
+        }
+      : undefined,
+  );
+  const setBaselineDecision = baselineChoice.setDecision;
+  const dateSemanticsKey = `${columns.date}\u0000${dateFormat}`;
+  const previousDateSemantics = useRef(dateSemanticsKey);
+
+  const [confirmError, setConfirmError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [result, setResult] = useState<ImportResult | null>(null);
+  /**
+   * THE THING THAT MAKES A RETRY SAFE. Minted once per chosen file and reused
+   * for every confirm attempt on it: the server keys the import on it, so an
+   * impatient second click, a proxy retry or a refresh returns the SAME import
+   * instead of doubling a month of books. Cleared only for a different file.
+   */
+  const [idempotencyKey, setIdempotencyKey] = useState<string | null>(null);
   /** Live counts while a large import runs on the worker. */
   const [progress, setProgress] = useState<CsvImportStatus | null>(null);
   /** Invalidates an in-flight poll loop when the owner starts over. */
   const pollToken = useRef(0);
+  const checkSeq = useRef(0);
   const requests = useRef(new AbortController());
   const stageHeading = useRef<HTMLDivElement>(null);
   const previewPending = useRef(false);
   const confirmPending = useRef(false);
-  /** Keeps mapping edits when an expired stage has to upload the same file again. */
+  /** Keeps review edits when an expired stage has to upload the same file again. */
   const restaging = useRef(false);
-  const [validation, setValidation] = useState<PreviewResult["validation"]>();
-  const [categorySuggestions, setCategorySuggestions] = useState<NonNullable<PreviewResult["categorySuggestions"]>>([]);
-  const [categorySuggestionsTruncated, setCategorySuggestionsTruncated] = useState(false);
-  const validatedInput = useRef<string | null>(null);
 
   useEffect(() => {
     requests.current = new AbortController();
@@ -140,129 +174,217 @@ function ImportCsvForm() {
       pollToken.current += 1;
     };
   }, []);
-  /** Which fields were guessed rather than chosen, so each can say so. */
-  const [autoMapped, setAutoMapped] = useState<Set<string>>(new Set());
-  /**
-   * Cells the owner has retyped, keyed by spreadsheet row number then field.
-   * Sent to the server as `corrections` and applied there over the file.
-   */
-  const [corrections, setCorrections] = useState<Record<number, Partial<Record<MappedField, string>>>>({});
 
-  /**
-   * What each previewed row resolves to under the current strategy.
-   *
-   * Runs the SAME readers the server will (lib/recordTypeDetection.ts), so the
-   * badge against a row and the record it becomes cannot disagree. `null` is a
-   * row the file does not classify — shown as such rather than defaulted,
-   * because a row silently defaulted to the wrong side is the one failure this
-   * feature must not have.
-   *
-   * Above the `!selected` return because hooks cannot sit behind one, which is
-   * also why the mixed check is spelled out here rather than using `isMixed`.
-   */
-  const previewRowTypes = useMemo(() => {
-    if (!preview || recordType !== "mixed") return null;
-    return preview.previewRows.map((row, index): RowRecordType | null => {
-      if (mixedStrategy === "sign") {
-        const rowNumber = index + 2;
-        const amountValue = corrections[rowNumber]?.Amount ?? (amountCol ? row[amountCol] : "");
-        const amount = parseSignedAmount(amountValue);
-        if (amount === null || amount === 0) return null;
-        return amount < 0 ? "expense" : "sales";
+  useEffect(() => {
+    if (previousDateSemantics.current === dateSemanticsKey) return;
+    previousDateSemantics.current = dateSemanticsKey;
+    setBaselineDecision(null);
+    setCorrections((current) => withoutBaselineOverrides(current));
+    setCheck(null);
+    setCheckedKey(null);
+    setPreview((current) => current ? { ...current, availableFundsBaseline: null } : current);
+  }, [dateSemanticsKey, setBaselineDecision]);
+
+  const isMixed = recordType === "mixed";
+  const usesExpenseFields = recordType !== "sales";
+  const usesSign = isMixed && mixedStrategy === "sign";
+  const requiredColumns = [columns.date, columns.description, columns.amount, ...(isMixed && mixedStrategy === "column" ? [typeCol] : [])];
+  const usedColumns = [
+    ...requiredColumns,
+    ...(usesExpenseFields ? [columns.vendor, columns.category] : []),
+  ].filter(Boolean);
+  const mappingIsValid =
+    requiredColumns.every((column) => column !== "") && new Set(usedColumns).size === usedColumns.length;
+  const dateChoiceNeeded = preview?.dateFormatAmbiguous === true && dateFormat === "";
+
+  const columnMapping = useMemo(
+    () => ({
+      date: columns.date,
+      description: columns.description,
+      amount: columns.amount,
+      ...(usesExpenseFields && columns.category ? { category: columns.category } : {}),
+      ...(usesExpenseFields && columns.vendor ? { vendor: columns.vendor } : {}),
+      ...(isMixed && mixedStrategy === "column" && typeCol ? { recordType: typeCol } : {}),
+    }),
+    [columns, usesExpenseFields, isMixed, mixedStrategy, typeCol],
+  );
+
+  const submittedCorrections = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(corrections)
+          .map(([row, fields]) => [
+            row,
+            Object.fromEntries(
+              Object.entries(fields)
+                .filter(([key, value]) => (
+                  key === "exclude"
+                    ? value === true
+                    : key === "includedInAvailableFundsBaseline"
+                      ? typeof value === "boolean"
+                      : typeof value === "string"
+                ))
+                .map(([key, value]) => [
+                  key === "exclude" || key === "includedInAvailableFundsBaseline" ? key : key.toLowerCase(),
+                  value,
+                ]),
+            ),
+          ])
+          .filter(([, fields]) => Object.keys(fields as object).length > 0),
+      ),
+    [corrections],
+  );
+
+  const reviewPayload = useMemo(
+    () => ({
+      stagedUploadId,
+      businessProfileId: selected?.id,
+      recordType,
+      ...(isMixed ? { mixedStrategy } : {}),
+      columnMapping,
+      ...(Object.keys(submittedCorrections).length > 0 ? { corrections: submittedCorrections } : {}),
+      ...(dateFormat ? { dateFormat } : {}),
+      ...(baselineChoice.required && baselineChoice.decision !== null && availableFundsBaseline
+        ? {
+            includedInAvailableFundsBaseline: baselineChoice.decision,
+            availableFundsBaselineAt: availableFundsBaseline.baselineAt,
+          }
+        : {}),
+    }),
+    [stagedUploadId, selected?.id, recordType, isMixed, mixedStrategy, columnMapping, submittedCorrections, dateFormat, baselineChoice.required, baselineChoice.decision, availableFundsBaseline],
+  );
+  const inputKey = JSON.stringify(reviewPayload);
+  const checkIsCurrent = checkedKey === inputKey;
+  const canCheck = stage === "review" && Boolean(stagedUploadId) && mappingIsValid && !dateChoiceNeeded && (preview?.totalRows ?? 0) > 0;
+
+  /** Runs the server's own import rules over the whole file for these inputs. */
+  async function runCheck(key: string, payload: typeof reviewPayload): Promise<PreviewResult | null> {
+    const seq = ++checkSeq.current;
+    const signal = requests.current.signal;
+    setChecking(true);
+    setCheckError(null);
+    try {
+      const { data } = await api.post<PreviewResult>("/records/csv-imports/preview", payload, { signal });
+      if (seq !== checkSeq.current) return null;
+      const nextBaseline = data.availableFundsBaseline ?? null;
+      const baselineIdentityChanged = (availableFundsBaseline?.baselineAt ?? null) !== (nextBaseline?.baselineAt ?? null)
+        || (availableFundsBaseline?.baselineDate ?? null) !== (nextBaseline?.baselineDate ?? null);
+      if (baselineIdentityChanged) {
+        setBaselineDecision(null);
+        setCorrections((current) => withoutBaselineOverrides(current));
       }
-      return typeCol ? classifyTypeValue(row[typeCol]) : null;
-    });
-  }, [preview, recordType, mixedStrategy, amountCol, typeCol, corrections]);
+      setCheck(data);
+      setCheckedKey(key);
+      if (data.reviewRows?.length) {
+        setExtraRows((previous) => {
+          const next = new Map(previous);
+          for (const entry of data.reviewRows!) next.set(entry.row, entry.values);
+          return next;
+        });
+      }
+      return data;
+    } catch (err) {
+      if (signal.aborted || seq !== checkSeq.current) return null;
+      if (isStagedUploadUnavailable(err)) recoverUnavailableStagedUpload();
+      else if (await baselineChoice.absorb(err)) {
+        setCheck(null);
+        setCheckedKey(null);
+        setCheckError("The recorded balance changed. Review this import again using the latest balance.");
+      }
+      else setCheckError(getErrorMessage(err));
+      return null;
+    } finally {
+      if (seq === checkSeq.current && !signal.aborted) setChecking(false);
+    }
+  }
 
-  const typeSplit = useMemo(() => {
-    if (!previewRowTypes) return null;
-    return {
-      sales: previewRowTypes.filter((t) => t === "sales").length,
-      expenses: previewRowTypes.filter((t) => t === "expense").length,
-      unknown: previewRowTypes.filter((t) => t === null).length,
-    };
-  }, [previewRowTypes]);
+  // Re-check after every change, once the owner pauses. The first check runs
+  // straight away so the review opens with real counts.
+  useEffect(() => {
+    if (!canCheck || checkIsCurrent) return;
+    const payload = reviewPayload;
+    const key = inputKey;
+    const timer = setTimeout(() => void runCheck(key, payload), check ? RECHECK_DELAY_MS : 0);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inputKey, canCheck]);
 
   useEffect(() => {
     setConfirmError(null);
-  }, [recordType, mixedStrategy, typeCol, title, dateCol, descriptionCol, amountCol, categoryCol, vendorCol, corrections, dateFormat, stagedUploadId]);
+  }, [inputKey, title]);
 
   useEffect(() => {
     if (stage !== "upload") stageHeading.current?.focus();
   }, [stage]);
 
+  /** What each row becomes in a mixed file, read the same way the server reads it. */
+  function rowTypeOf(raw: Record<string, string>, rowNumber: number): RowRecordType | null | undefined {
+    if (!isMixed) return undefined;
+    if (mixedStrategy === "sign") {
+      const amount = parseSignedAmount(corrections[rowNumber]?.Amount ?? (columns.amount ? raw[columns.amount] : ""));
+      if (amount === null || amount === 0) return null;
+      return amount < 0 ? "expense" : "sales";
+    }
+    return typeCol ? classifyTypeValue(raw[typeCol]) : null;
+  }
+
+  const rowCategories = useMemo(() => new Map<number, RowCategory>((check?.rowCategories ?? []).map((entry) => [entry.row, entry])), [check]);
+  const duplicateRows = useMemo(() => new Set(check?.validation?.duplicateRows ?? []), [check]);
+
+  // Rows dated after the business's today are refused, here and on the server.
+  const today = todayIso(selected?.timezone);
+  const reviewRows: ReviewRow[] = useMemo(() => {
+    if (!preview) return [];
+    const source = new Map<number, Record<string, string>>();
+    extraRows.forEach((values, row) => source.set(row, values));
+    preview.previewRows.forEach((values, index) => source.set(index + 2, values));
+    const fileValue = (raw: Record<string, string>, column: string) => (column ? (raw[column] ?? "") : "");
+    return [...source.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([rowNumber, raw]) => {
+        const fix = corrections[rowNumber] ?? {};
+        const values: Record<MappedField, string> = {
+          Date: fix.Date ?? fileValue(raw, columns.date),
+          Description: fix.Description ?? fileValue(raw, columns.description),
+          Amount: fix.Amount ?? fileValue(raw, columns.amount),
+          Vendor: fix.Vendor ?? (usesExpenseFields ? fileValue(raw, columns.vendor) : ""),
+          Category: fix.Category ?? "",
+        };
+        return {
+          rowNumber,
+          values,
+          problem: mappingIsValid ? problemWith(values, dateFormat || (preview.detectedDateFormat ?? "iso"), usesSign, today) : null,
+          recordType: rowTypeOf(raw, rowNumber),
+          excluded: fix.exclude === true,
+          duplicate: duplicateRows.has(rowNumber),
+          category: rowCategories.get(rowNumber) ?? null,
+          categoryEdited: fix.Category !== undefined,
+          edited: Object.keys(fix).length > 0,
+          baselineDateMatch: Boolean(
+            availableFundsBaseline
+              && parseCsvDate(values.Date, dateFormat || (preview.detectedDateFormat ?? "iso")) === availableFundsBaseline.baselineDate,
+          ),
+          includedInAvailableFundsBaseline: fix.includedInAvailableFundsBaseline,
+        };
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preview, extraRows, corrections, columns, usesExpenseFields, mappingIsValid, dateFormat, usesSign, today, rowCategories, duplicateRows, isMixed, mixedStrategy, typeCol, availableFundsBaseline]);
+
+  /** The owner's categories, then the ones this import would create, alphabetically. */
+  const categoryOptions = useMemo(() => {
+    const names = new Set<string>(categories.map((category) => category.name));
+    for (const entry of check?.categorySummary?.newCategories ?? []) names.add(entry.name);
+    for (const entry of check?.rowCategories ?? []) names.add(entry.name);
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }, [categories, check]);
+
   if (!selected) return <NoBusinessProfile />;
   const businessProfileId = selected.id;
 
-  /**
-   * One CSV column mapped to two FinSight fields is always a mistake — it would
-   * import the description as the amount, or the date as the category — and
-   * nothing stopped it before.
-   */
-  const isMixed = recordType === "mixed";
-  /** Whether a category may be supplied at all — sales rows never carry one. */
-  const usesCategory = recordType === "expense" || isMixed;
-
-  const requiredMapping: [string, string][] = [
-    ["date", dateCol],
-    ["description", descriptionCol],
-    ["amount", amountCol],
-    ...(isMixed && mixedStrategy === "column" ? ([["recordType", typeCol]] as [string, string][]) : []),
-  ];
-
-  // Vendor is checked for collisions but not for completeness: it is optional
-  // (ExpenseRecord.vendor is nullable), so leaving it unmapped is a valid
-  // choice, while pointing it at a column another field already owns is not.
-  // Category joins it in the optional-but-exclusive set.
-  const allMapping: [string, string][] = [
-    ...requiredMapping,
-    ...(usesCategory ? ([["vendor", vendorCol]] as [string, string][]) : []),
-    ...(usesCategory ? ([["category", categoryCol]] as [string, string][]) : []),
-  ];
-
-  const duplicateColumns = new Set(
-    allMapping
-      .map(([, col]) => col)
-      .filter((col, i, all) => col !== "" && all.indexOf(col) !== i),
-  );
-
-  const mappingIsComplete = requiredMapping.every(([, col]) => col !== "");
-  const mappingIsValid = mappingIsComplete && duplicateColumns.size === 0;
-
-  /**
-   * A file whose dates read both ways cannot be imported until the owner says
-   * which. The server refuses it outright (naming both readings) rather than
-   * picking one, so blocking here is not extra strictness — it is asking the
-   * question at the only moment the answer is cheap.
-   */
-  const dateChoiceNeeded = preview?.dateFormatAmbiguous === true && dateFormat === "";
-  const readyToImport = Boolean(stagedUploadId) && mappingIsValid && !dateChoiceNeeded && (preview?.totalRows ?? 0) > 0 && title.trim() !== "";
-  const inputKey = JSON.stringify([stagedUploadId, recordType, mixedStrategy, dateCol, descriptionCol, amountCol, categoryCol, vendorCol, typeCol, corrections, dateFormat]);
-  const currentValidation = validatedInput.current === inputKey ? validation : undefined;
-  const currentSuggestions = validatedInput.current === inputKey ? categorySuggestions : [];
-
-
-  function duplicateError(col: string): string | null {
-    return col !== "" && duplicateColumns.has(col)
-      ? `"${col}" is already mapped to another field. Each FinSight field needs its own column.`
-      : null;
-  }
-
-  /** Once the owner picks a column themselves, it is no longer a guess. */
-  function clearAuto(field: string) {
-    setAutoMapped((prev) => {
-      if (!prev.has(field)) return prev;
-      const next = new Set(prev);
-      next.delete(field);
-      return next;
-    });
-  }
-
-
-  async function handlePreview(e: FormEvent) {
+  async function handleUpload(e: FormEvent) {
     e.preventDefault();
     if (file && preview && stagedUploadId) {
-      setStage("map");
+      setStage("review");
       return;
     }
     if (!file || !idempotencyKey || previewPending.current) return;
@@ -281,67 +403,54 @@ function ImportCsvForm() {
       });
       signal.throwIfAborted();
       if (typeof data.stagedUploadId !== "string" || data.stagedUploadId.trim() === "") {
-        setPreviewError("FinSight couldn't prepare this upload for review. Try previewing the file again.");
+        setPreviewError("This file couldn't be prepared. Try again.");
         return;
       }
       const preserveDraft = restaging.current;
       restaging.current = false;
       setStagedUploadId(data.stagedUploadId);
       setPreview(data);
-      setStage("map");
-      setPreviewExpanded(false);
-      if (!preserveDraft) setTitle(file.name.replace(/\.csv$/i, ""));
+      setCheck(null);
+      setCheckedKey(null);
+      setExtraRows(new Map());
+      setStage("review");
+      if (preserveDraft) return;
 
-      // Guess the mapping from the headings. Anything not recognised stays
-      // empty and the owner picks it, which is the behaviour that existed for
-      // all four columns before.
-      if (!preserveDraft) {
-        const guessed = {
-          date: data.suggestedMapping?.date ?? guessColumn(data.headers, "date"),
-          description: data.suggestedMapping?.description ?? guessColumn(data.headers, "description"),
-          amount: data.suggestedMapping?.amount ?? guessColumn(data.headers, "amount"),
-          category: data.suggestedMapping?.category ?? guessColumn(data.headers, "category"),
-          vendor: data.suggestedMapping?.vendor ?? guessColumn(data.headers, "vendor"),
-        };
-        setDateCol(guessed.date);
-        setDescriptionCol(guessed.description);
-        setAmountCol(guessed.amount);
-        setCategoryCol(guessed.category);
-        setVendorCol(guessed.vendor);
-        /*
-         * OFFERED, NOT APPLIED SILENTLY — the owner still sees "Import as" and
-         * can change it, and the table below badges every row so the split is
-         * visible before anything is written.
-         *
-         * A detected type column also steals itself back from `category`, whose
-         * synonym list contains "type": a file with a Type column of Sale/Expense
-         * values would otherwise be auto-mapped as if those were category names,
-         * and quietly create categories called "Sale" and "Expense".
-         */
-        const detectedType = data.detectedTypeColumn ?? "";
-        if (detectedType) {
-          setRecordType("mixed");
-          setMixedStrategy("column");
-          setTypeCol(detectedType);
-          if (guessed.category === detectedType) {
-            guessed.category = "";
-            setCategoryCol("");
-          }
-        } else if ((data.columnsWithNegatives ?? []).includes(guessed.amount) && guessed.amount) {
-          setRecordType("mixed");
-          setMixedStrategy("sign");
-          setTypeCol("");
-        } else {
-          setTypeCol("");
-        }
-
-        setAutoMapped(
-          new Set([
-            ...(Object.keys(guessed) as (keyof typeof guessed)[]).filter((k) => guessed[k] !== ""),
-            ...(detectedType ? ["recordType"] : []),
-          ]),
-        );
+      /*
+       * Not asked for on the review screen: the batch is named after the file,
+       * and the import type, split and type column come from detection below.
+       */
+      setTitle((file.name.replace(/\.csv$/i, "").trim() || "CSV import").slice(0, FIELD_LIMITS.importTitle));
+      const detected = data.suggestedMapping ?? {};
+      const next: ColumnChoice = {
+        date: detected.date ?? "",
+        description: detected.description ?? "",
+        amount: detected.amount ?? "",
+        category: detected.category ?? "",
+        vendor: detected.vendor ?? "",
+      };
+      /*
+       * A detected type column (Sale / Expense in words) makes this a mixed
+       * file, and takes itself back from `category`, whose names include
+       * "type": otherwise it would be read as category names and create
+       * categories called "Sale" and "Expense". A column of negative amounts
+       * is the bank-statement convention. Both are shown and changeable.
+       */
+      const detectedType = data.detectedTypeColumn ?? "";
+      if (detectedType) {
+        setRecordType("mixed");
+        setMixedStrategy("column");
+        setTypeCol(detectedType);
+        if (next.category === detectedType) next.category = "";
+      } else if (next.amount && (data.columnsWithNegatives ?? []).includes(next.amount)) {
+        setRecordType("mixed");
+        setMixedStrategy("sign");
+        setTypeCol("");
+      } else {
+        setRecordType(data.columnDetection?.suggestedRecordType ?? "expense");
+        setTypeCol("");
       }
+      setColumns(next);
     } catch (err) {
       if (!signal.aborted) setPreviewError(getErrorMessage(err));
     } finally {
@@ -351,11 +460,9 @@ function ImportCsvForm() {
   }
 
   /**
-   * A chosen file, and the replay token that will identify its import.
-   *
-   * The key is minted HERE — at the moment the import becomes a distinct
-   * thing — rather than at confirm time, which is what makes every confirm
-   * attempt for this file, retries included, the same logical import.
+   * A chosen file, and the replay token that will identify its import — minted
+   * HERE, when the import becomes a distinct thing, so every confirm attempt
+   * for this file (retries included) is the same logical import.
    */
   function handleSelectFile(next: File | null) {
     if (previewPending.current || confirmPending.current) return;
@@ -366,225 +473,177 @@ function ImportCsvForm() {
     }
   }
 
-  /**
-   * Back to the file picker, clearing the mapping with it.
-   *
-   * The mapping used to survive into the next file, whose headers may not
-   * contain any of those column names — leaving the selects showing a blank
-   * value that looked like a choice the owner had made.
-   */
+  /** Back to the file picker, clearing everything read from the old file. */
   function handleChooseDifferentFile() {
     if (confirmPending.current) return;
     const discardedStage = stagedUploadId;
     if (discardedStage) {
-      void api
-        .delete(`/records/csv-imports/stages/${encodeURIComponent(discardedStage)}`)
-        .catch(() => undefined);
+      void api.delete(`/records/csv-imports/stages/${encodeURIComponent(discardedStage)}`).catch(() => undefined);
     }
-    // A different file is a different import, so the replay token goes with
-    // it — reusing one across files would make the server answer with the
-    // FIRST file's import.
+    // A different file is a different import, so the replay token goes with it.
     pollToken.current += 1;
+    checkSeq.current += 1;
     restaging.current = false;
     setStagedUploadId(null);
     setIdempotencyKey(null);
     setDateFormat("");
     setProgress(null);
     setStage("upload");
-    setPreviewExpanded(false);
     setPreview(null);
     setFile(null);
     setTitle("");
-    setDateCol("");
-    setDescriptionCol("");
-    setAmountCol("");
-    setCategoryCol("");
-    setVendorCol("");
+    setColumns(NO_COLUMNS);
     setTypeCol("");
     setRecordType("expense");
     setMixedStrategy("column");
-    setAutoMapped(new Set());
     setCorrections({});
+    setCheck(null);
+    setCheckedKey(null);
+    setChecking(false);
+    setCheckError(null);
+    setExtraRows(new Map());
     setConfirmError(null);
     setPreviewError(null);
-    setValidation(undefined);
-    setCategorySuggestions([]);
-    setCategorySuggestionsTruncated(false);
-    validatedInput.current = null;
   }
 
   function recoverUnavailableStagedUpload() {
     pollToken.current += 1;
+    checkSeq.current += 1;
     restaging.current = Boolean(file);
     setStagedUploadId(null);
     setIdempotencyKey(file ? randomId() : null);
     setStage("upload");
-    setPreviewExpanded(false);
     setPreview(null);
     setProgress(null);
+    setCheck(null);
+    setCheckedKey(null);
+    setChecking(false);
     setConfirmError(null);
     setPreviewError(
-      file
-        ? "This upload is no longer available. Preview the selected CSV file again to continue."
-        : "This upload is no longer available. Choose the CSV file again to continue.",
+      file ? "This upload expired. Upload the file again to continue." : "This upload expired. Choose the file again.",
     );
-    setValidation(undefined);
-    setCategorySuggestions([]);
-    setCategorySuggestionsTruncated(false);
-    validatedInput.current = null;
   }
 
-  async function handleConfirm(e: FormEvent, mode: "review" | "import" = "import") {
+  async function handleImport(e: FormEvent) {
     e.preventDefault();
     if (!file || !stagedUploadId || !idempotencyKey || !mappingIsValid || dateChoiceNeeded || title.trim() === "" || confirmPending.current) return;
+    if (!baselineChoice.check()) return;
     confirmPending.current = true;
     const signal = requests.current.signal;
     setConfirming(true);
     setConfirmError(null);
     try {
-      const columnMapping = {
-        date: dateCol,
-        description: descriptionCol,
-        amount: amountCol,
-        ...(usesCategory && categoryCol ? { category: categoryCol } : {}),
-        ...(usesCategory && vendorCol ? { vendor: vendorCol } : {}),
-        ...(isMixed && mixedStrategy === "column" && typeCol ? { recordType: typeCol } : {}),
-      };
-      const submittedCorrections = Object.fromEntries(
-        Object.entries(corrections).map(([rowNumber, fields]) => [
-          rowNumber,
-          Object.fromEntries(Object.entries(fields).map(([key, value]) => [key.toLowerCase(), value])),
-        ]),
-      );
-      const reviewPayload = {
-        stagedUploadId,
-        businessProfileId,
-        recordType,
-        ...(isMixed ? { mixedStrategy } : {}),
-        columnMapping,
-        ...(Object.keys(submittedCorrections).length > 0 ? { corrections: submittedCorrections } : {}),
-        ...(dateFormat ? { dateFormat } : {}),
-      };
+      // Import exactly what was checked: re-check first if anything changed.
+      let checked = checkIsCurrent ? check : null;
+      if (!checked) checked = await runCheck(inputKey, reviewPayload);
+      signal.throwIfAborted();
+      if (!checked) return;
+      if (checked.dateFormatAmbiguous && !dateFormat) {
+        setConfirmError("Choose the date format first.");
+        return;
+      }
+      if (!checked.validation) {
+        setConfirmError("This file couldn't be checked. Try again.");
+        return;
+      }
+      if (checked.validation.validRows === 0) {
+        setConfirmError("No rows are ready to import.");
+        return;
+      }
 
-      // Validate the entire file using the server's import rules. A changed
-      // mapping or correction needs fresh validation; a second confirm accepts
-      // the displayed skipped-row count without importing the file twice.
-      if (validatedInput.current !== inputKey) {
-        setChecking(true);
-        const { data: checked } = await api.post<PreviewResult>(
-          "/records/csv-imports/preview",
-          reviewPayload,
-          { signal },
-        );
-        signal.throwIfAborted();
-        setChecking(false);
-        if (checked.dateFormatAmbiguous && !dateFormat) {
-          setPreview(checked);
-          setConfirmError("Choose the date format before importing.");
-          return;
-        }
-        setPreview((current) => current ? {
-          ...current,
-          ...(checked.detectedDateFormat ? { detectedDateFormat: checked.detectedDateFormat } : {}),
-          ...(checked.dateFormatAmbiguous !== undefined
-            ? { dateFormatAmbiguous: checked.dateFormatAmbiguous }
-            : {}),
-        } : current);
-        setCategorySuggestions(checked.categorySuggestions ?? []);
-        setCategorySuggestionsTruncated(checked.categorySuggestionsTruncated ?? false);
-        if (!checked.validation) {
-          setValidation(undefined);
-          validatedInput.current = null;
-          setConfirmError("FinSight could not validate this file. Check the mapping and try again.");
-          return;
-        }
-        setValidation(checked.validation);
-        validatedInput.current = inputKey;
-        if (mode === "review") {
-          setStage("review");
-          return;
-        }
-        if (checked.validation.validRows === 0) {
-          setConfirmError("No rows are ready to import. Correct the file or column mapping first.");
-          return;
-        }
-        if (checked.validation.invalidRows > 0 || (checked.validation.possibleDuplicateRows ?? 0) > 0 || (checked.categorySuggestions?.length ?? 0) > 0) {
-          setConfirmError(checked.validation.validRows > 0
-            ? checked.validation.invalidRows > 0
-              ? `${checked.validation.invalidRows} rows will be skipped. Review the details, then press Import again to save the valid rows.`
-              : (checked.validation.possibleDuplicateRows ?? 0) > 0
-                ? `${checked.validation.possibleDuplicateRows} possible duplicates. Review the details, then press Import again if you want to include them.`
-                : "Category suggestions are ready. Apply them or press Import again to keep the current categories."
-            : "No rows are ready to import. Correct the file or column mapping first.");
-          return;
-        }
-      } else if (validation?.validRows === 0) {
-        setConfirmError("No rows are ready to import. Correct the file or column mapping first.");
+      const checkedBaseline = checked.availableFundsBaseline ?? null;
+      if (
+        checkedBaseline
+        && (
+          !availableFundsBaseline
+          || checkedBaseline.baselineAt !== availableFundsBaseline.baselineAt
+          || checkedBaseline.baselineDate !== availableFundsBaseline.baselineDate
+          || baselineChoice.decision === null
+        )
+      ) {
+        setBaselineDecision(null);
+        setConfirmError("The recorded balance changed. Choose again before importing.");
         return;
       }
-      if (mode === "review") {
-        setStage("review");
-        return;
-      }
+
+      const correctionsWithoutBaseline = Object.fromEntries(
+        Object.entries(reviewPayload.corrections ?? {})
+          .map(([row, fields]) => {
+            const nextFields = { ...(fields as Record<string, string | boolean>) };
+            delete nextFields.includedInAvailableFundsBaseline;
+            return [row, nextFields];
+          })
+          .filter(([, fields]) => Object.keys(fields).length > 0),
+      );
+      const confirmPayload = checkedBaseline
+        ? {
+            ...reviewPayload,
+            includedInAvailableFundsBaseline: baselineChoice.decision!,
+            availableFundsBaselineAt: checkedBaseline.baselineAt,
+          }
+        : {
+            ...reviewPayload,
+            includedInAvailableFundsBaseline: undefined,
+            availableFundsBaselineAt: undefined,
+            corrections: Object.keys(correctionsWithoutBaseline).length > 0
+              ? correctionsWithoutBaseline
+              : undefined,
+          };
 
       const response = await api.post<ImportResult>(
         "/records/csv-imports/confirm",
-        {
-          ...reviewPayload,
-          title,
-          // Sent on every attempt, retries included. See the state declaration.
-          idempotencyKey,
-        },
+        { ...confirmPayload, title, idempotencyKey },
         { signal },
       );
       signal.throwIfAborted();
 
       /*
-       * 202 — TOO BIG TO IMPORT INSIDE THE REQUEST.
-       *
-       * The batch exists and the durable worker has it, but no records are
-       * written yet and every count in the body is zero. Rendering that as a
-       * summary would tell the owner their 20,000-row file imported nothing.
-       * So the screen switches to the progress view and follows the status
-       * endpoint until the worker finishes, then renders the same summary
-       * from the real counts.
-       *
-       * Detected on BOTH the status code and processingStatus: the status code
-       * is the contract, and the field is what survives a proxy that rewrites
-       * it.
+       * 202: too big to import inside the request. The worker has it and every
+       * count is still zero, so follow the status endpoint to the real counts
+       * rather than render a summary saying nothing was imported. Detected on
+       * both the status code and processingStatus, which survives a proxy.
        */
       const accepted =
         response.status === 202 ||
         response.data.processingStatus === "PENDING" ||
         response.data.processingStatus === "PROCESSING";
-
       if (accepted) {
         await followImport(response.data.batchId, response.data);
         return;
       }
-
-      setResult(response.data);
+      finish(response.data);
     } catch (err) {
       if (!signal.aborted) {
         if (isStagedUploadUnavailable(err)) recoverUnavailableStagedUpload();
+        else if (await baselineChoice.absorb(err)) {
+          setCheck(null);
+          setCheckedKey(null);
+          setConfirmError("The recorded balance changed. Review this import again using the latest balance.");
+        }
         else setConfirmError(getErrorMessage(err));
       }
     } finally {
       confirmPending.current = false;
-      if (!signal.aborted) { setConfirming(false); setChecking(false); }
+      if (!signal.aborted) setConfirming(false);
+    }
+  }
+
+  /** New categories and new months exist now; the pickers elsewhere should show them. */
+  function finish(summary: ImportResult, publishTerminalLedger = false) {
+    setResult(summary);
+    void refreshCategories().catch(() => undefined);
+    if (publishTerminalLedger && selected) {
+      invalidateServerState({
+        businessProfileId: selected.id,
+        tags: ["financial", "record-months", "notifications"],
+      });
     }
   }
 
   /**
-   * Follows a worker-run import to its end, showing REAL progress.
-   *
-   * processedRows/totalRows is a genuine measurement the server keeps as it
-   * commits each chunk, which is the only reason this screen shows a
-   * determinate bar at all — the receipt reader, which has no such number,
-   * deliberately shows named stages instead.
-   *
-   * `token` guards against the owner starting over mid-import: an abandoned
-   * loop stops writing to state rather than reviving a screen they left.
+   * Follows a worker-run import to its end with REAL progress: processedRows
+   * is the server's own count as each chunk commits. `token` stops an
+   * abandoned loop from reviving a screen the owner left.
    */
   async function followImport(batchId: number, initial: ImportResult) {
     pollToken.current += 1;
@@ -595,44 +654,28 @@ function ImportCsvForm() {
       if (pollToken.current !== token) return;
       let status: CsvImportStatus;
       try {
-        const { data } = await api.get<CsvImportStatus>(
-          `/records/csv-imports/batches/${batchId}/status`,
-          { signal: requests.current.signal },
-        );
+        const { data } = await api.get<CsvImportStatus>(`/records/csv-imports/batches/${batchId}/status`, {
+          signal: requests.current.signal,
+        });
         status = data;
       } catch {
         if (pollToken.current !== token || requests.current.signal.aborted) return;
-        /*
-         * A dropped poll is not a failed import. The worker owns the batch and
-         * carries on; what is lost is this screen's view of it. Saying so, and
-         * naming the batch, is better than either a false failure or a
-         * spinner that never resolves.
-         */
+        // A dropped poll is not a failed import: the worker carries on.
         setProgress(null);
-        setConfirmError(
-          "Couldn't check the import status. It may still be running. Press Import again to check safely.",
-        );
+        setConfirmError("Couldn't check the import status. It may still be running. Press Import again to check safely.");
         return;
       }
 
       if (pollToken.current !== token) return;
       setProgress(status);
 
-      if (status.processingStatus === "COMPLETE") {
-        setResult({
-          ...resultFromStatus(status, initial.title || title),
-          duplicateOfBatchId: initial.duplicateOfBatchId,
-        });
-        return;
-      }
-      if (status.processingStatus === "FAILED") {
-        setProgress(null);
-        // A terminal failure can leave committed chunks. Its replay key is
-        // not resumable; show the saved rows before a new partial-file import.
-        setResult({
-          ...resultFromStatus(status, initial.title || title),
-          duplicateOfBatchId: initial.duplicateOfBatchId,
-        });
+      if (status.processingStatus === "COMPLETE" || status.processingStatus === "FAILED") {
+        if (status.processingStatus === "FAILED") setProgress(null);
+        // A terminal failure can leave committed chunks; the summary shows them.
+        finish(
+          { ...resultFromStatus(status, initial.title || title), duplicateOfBatchId: initial.duplicateOfBatchId },
+          true,
+        );
         return;
       }
 
@@ -644,7 +687,6 @@ function ImportCsvForm() {
     return <ImportResultSummary result={result} fromOnboarding={fromOnboarding} />;
   }
 
-  // ---- stage 1: choose a file -------------------------------------------
   if (stage === "upload" || !preview) {
     return (
       <FileSelectStage
@@ -653,627 +695,241 @@ function ImportCsvForm() {
         previewError={previewError}
         previewing={previewing}
         onSelectFile={handleSelectFile}
-        onSubmit={handlePreview}
+        onSubmit={handleUpload}
       />
     );
   }
 
-  // ---- stage 2: map the columns and check the result ---------------------
-  //
-  // Deliberately NOT inside FormPage, for the reason ScanReceipt's confirm
-  // screen isn't either: FormPage's single form-measure column (max-w-3xl)
-  // exists to keep label/field pairs scannable, and it is exactly the wrong
-  // container for a wide data table. The table is the primary object on this
-  // screen, so the screen is built around the table instead.
-  const columns: MappedColumn[] = [
-    {
-      field: "Date",
-      value: dateCol,
-      onChange: (v) => {
-        setDateCol(v);
-        clearAuto("date");
-      },
-      auto: autoMapped.has("date"),
-    },
-    {
-      field: "Description",
-      value: descriptionCol,
-      onChange: (v) => {
-        setDescriptionCol(v);
-        clearAuto("description");
-      },
-      auto: autoMapped.has("description"),
-    },
-    {
-      field: "Amount",
-      value: amountCol,
-      onChange: (v) => {
-        setAmountCol(v);
-        clearAuto("amount");
-      },
-      auto: autoMapped.has("amount"),
-      align: "right" as const,
-    },
-    ...(usesCategory
-      ? [
-          {
-            field: "Vendor" as const,
-            value: vendorCol,
-            onChange: (v: string) => {
-              setVendorCol(v);
-              clearAuto("vendor");
-            },
-            auto: autoMapped.has("vendor"),
-            optional: true,
-          },
-          {
-            field: "Category" as const,
-            value: categoryCol,
-            onChange: (v: string) => {
-              setCategoryCol(v);
-              clearAuto("category");
-            },
-            auto: autoMapped.has("category"),
-            optional: true,
-          },
-        ]
-      : []),
-  ];
-
-  /**
-   * Every previewed row, read through the mapping and through any correction
-   * the owner has typed, with the first thing wrong with it (if anything).
-   *
-   * Row numbers are the spreadsheet's own — header is row 1 — so the number
-   * shown here is the number to look for in Excel, and is the same key the
-   * server reports skips against.
-   */
-  const analysed = preview.previewRows.map((row, i) => {
-    const rowNumber = i + 2;
-    const values = Object.fromEntries(
-      columns.map((c) => [c.field, corrections[rowNumber]?.[c.field] ?? (c.value ? (row[c.value] ?? "") : "")]),
-    ) as Record<MappedField, string>;
-    return {
-      rowNumber,
-      values,
-      // The owner's stated convention when they were asked for one, otherwise
-      // whatever the server detected from the file itself — the same answer
-      // the import will use, so the two cannot disagree.
-      problem: problemWith(
-        values,
-        recordType === "expense",
-        dateFormat || (preview.detectedDateFormat ?? "iso"),
-        recordType === "mixed" && mixedStrategy === "sign",
-      ),
-      recordType: previewRowTypes?.[i],
-    };
-  });
-  const brokenRows = mappingIsValid ? analysed.filter((r) => r.problem !== null) : [];
-  const fixedCount = Object.keys(corrections).length;
-
-  /**
-   * Category names in the file that this business does not have yet.
-   *
-   * WHY THIS IS WORTH SAYING OUT LOUD: confirmImport CREATES every category
-   * name the file mentions that it cannot match (resolveCategories), silently.
-   * That is the right behaviour — an import must not fail because a category
-   * does not exist yet — but it means one typo becomes a permanent second
-   * category. A file reading "Inventroy" against a business that already has
-   * "Inventory" imports cleanly, and the owner finds the near-duplicate weeks
-   * later in a report that splits their stock spending across two lines.
-   *
-   * Matched case-insensitively because resolveCategories matches that way; a
-   * warning that flags "inventory" as new when the server will match it to
-   * "Inventory" would be a lie about what is going to happen.
-   *
-   * Computed from the rows on screen, not the whole file, which is why the
-   * callout says which rows it looked at whenever the preview is truncated —
-   * a category first appearing at row 300 of a 500-row file is not something
-   * this can see, and implying otherwise would be worse than saying nothing.
-  */
-  const newCategoryNames = (() => {
-    if (!usesCategory || !categoryCol) return [];
-    const existing = new Set(categories.map((c) => c.name.trim().toLowerCase()));
-    const seen = new Map<string, string>();
-    for (const { values, recordType: rowRecordType } of analysed) {
-      if (isMixed && rowRecordType !== "expense") continue;
-      const raw = values.Category?.trim();
-      if (!raw) continue;
-      const key = raw.toLowerCase();
-      // Deduplicated on the same key resolveCategories uses, so a file
-      // spelling it "Inventory" and "inventory" reports one new category
-      // rather than two — which is also what the server will create.
-      if (!existing.has(key) && !seen.has(key)) seen.set(key, raw);
-    }
-    return [...seen.values()];
-  })();
-
-  /** A real date from the file, so the question above is about their data. */
-  const sampleDate = dateCol
-    ? (preview.previewRows.find((row) => (row[dateCol] ?? "").trim() !== "")?.[dateCol] ?? "")
-    : "";
-
-  function correct(rowNumber: number, field: MappedField, value: string) {
-    setCorrections((prev) => ({ ...prev, [rowNumber]: { ...prev[rowNumber], [field]: value } }));
+  function edit(rowNumber: number, field: MappedField, value: string) {
+    setCorrections((previous) => {
+      const current = { ...previous[rowNumber], [field]: value };
+      delete current.includedInAvailableFundsBaseline;
+      return { ...previous, [rowNumber]: current };
+    });
   }
 
-  const validatedRows = currentValidation?.validRows;
-  const rowsToImport = validatedRows ?? Math.max(0, preview.totalRows - brokenRows.length);
-  const importActionLabel = `Import ${rowsToImport.toLocaleString()} of ${preview.totalRows.toLocaleString()} row${preview.totalRows === 1 ? "" : "s"}`;
-  const reviewCanImport = readyToImport && currentValidation?.validRows !== 0;
+  function toggleExclude(rowNumber: number) {
+    setCorrections((previous) => {
+      const current = previous[rowNumber] ?? {};
+      const next = { ...current, exclude: !current.exclude };
+      delete next.includedInAvailableFundsBaseline;
+      return { ...previous, [rowNumber]: next };
+    });
+  }
+
+  function setRowBaselineDecision(rowNumber: number, value: boolean | undefined) {
+    setCorrections((previous) => {
+      const current = { ...(previous[rowNumber] ?? {}) };
+      if (value === undefined) delete current.includedInAvailableFundsBaseline;
+      else current.includedInAvailableFundsBaseline = value;
+      if (Object.keys(current).length === 0) {
+        const next = { ...previous };
+        delete next[rowNumber];
+        return next;
+      }
+      return { ...previous, [rowNumber]: current };
+    });
+  }
+
+  /** A real date from the file, so the date question is about their data. */
+  const sampleDate = columns.date
+    ? (preview.previewRows.find((row) => (row[columns.date] ?? "").trim() !== "")?.[columns.date] ?? "")
+    : "";
+  const validation = check?.validation;
+  const summary = check?.categorySummary;
+  const removedCount = Object.values(corrections).filter((fix) => fix.exclude).length;
+  const readyCount = validation?.validRows ?? null;
+  const canImport = mappingIsValid && !dateChoiceNeeded && title.trim() !== "" && preview.totalRows > 0 && readyCount !== 0;
+  const stale = !checkIsCurrent;
 
   return (
     <div>
       <CsvImportBreadcrumbs />
       <div ref={stageHeading} tabIndex={-1} className="outline-none">
-        <PageHead
-          title={stage === "map" ? "Map and review columns" : "Review and import"}
-          subtitle={
-            stage === "map"
-              ? "Choose which columns from your file match each FinSight field, then inspect a sample of your data."
-              : "Check the full-file validation results and warnings before saving any records."
-          }
-        />
+        <PageHead title="Review import" />
       </div>
 
-      <div className="space-y-6">
-        <CsvImportStepper current={stage === "map" ? 2 : 3} />
+      <div className="space-y-5">
+        <CsvImportStepper current={confirming ? 3 : 2} />
         <CsvFileSummary file={file!} totalRows={preview.totalRows} onChange={handleChooseDifferentFile} disabled={confirming} />
 
-      <form onSubmit={(event) => { void handleConfirm(event, stage === "map" ? "review" : "import"); }}>
-        <fieldset disabled={confirming} className="min-w-0 space-y-5">
-        {stage === "map" ? (
-          <>
-        <Card className="p-5">
-          <h2 className="text-base font-semibold text-ink-900">Import setup</h2>
-          <p className="mt-1 text-xs text-ink-500">Tell FinSight how to read the rows and name this batch.</p>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field
-              label="Import as"
-              htmlFor="csv-record-type"
-              required
-              hint={
-                isMixed
-                  ? "FinSight will sort each row using your file's own values. Check the Type column before importing."
-                  : undefined
-              }
-            >
-              <SelectInput
-                value={recordType}
-                onChange={(e) => setRecordType(e.target.value as ImportRecordType)}
-              >
-                <option value="expense">Expense records</option>
-                <option value="sales">Sales reference records</option>
-                <option value="mixed">Both: my file has sales and expenses</option>
-              </SelectInput>
-            </Field>
-            <Field
-              label="Batch title"
-              htmlFor="csv-title"
-              required
-              hint="What to call this import in your records, so you can find it again."
-            >
-              <TextInput
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                maxLength={FIELD_LIMITS.importTitle}
-                required
-              />
-            </Field>
-          </div>
-
-          {/*
-            Only for a mixed file, and stated as a question about the FILE
-            rather than about FinSight — an owner knows whether their sheet has
-            a "Type" column or uses minus signs; they do not know what a
-            "strategy" is.
-          */}
-          {isMixed ? (
-            <div className="mt-4 grid gap-4 border-t border-paper-200 pt-4 sm:grid-cols-2">
-              <Field
-                label="How does your file say which is which?"
-                htmlFor="csv-mixed-strategy"
-                required
-              >
-                <SelectInput
-                  value={mixedStrategy}
-                  onChange={(e) => setMixedStrategy(e.target.value as MixedStrategy)}
-                >
-                  <option value="column">A column says "sale" or "expense"</option>
-                  <option value="sign">Expenses are negative amounts (−)</option>
-                </SelectInput>
-              </Field>
-
-              {mixedStrategy === "column" ? (
-                <Field
-                  label="Which column?"
-                  htmlFor="csv-type-col"
-                  required
-                  error={duplicateError(typeCol)}
-                  hint={
-                    autoMapped.has("recordType")
-                      ? "Matched automatically from your file. Change it if needed."
-                      : undefined
-                  }
-                >
-                  <SelectInput value={typeCol} onChange={(e) => setTypeCol(e.target.value)}>
-                    <option value="">Choose a column…</option>
-                    {preview.headers.map((h) => (
-                      <option key={h} value={h}>
-                        {h}
-                      </option>
-                    ))}
-                  </SelectInput>
-                </Field>
-              ) : null}
-
-              {/*
-                The count is the check. A file the owner believes is half sales
-                that reads as 50 sales and 0 expenses is a mapping mistake they
-                can see here, in a second, instead of discovering it in their
-                dashboard a week later.
-              */}
-              {typeSplit ? (
-                <div className="sm:col-span-2">
-                  <Callout tone={typeSplit.unknown > 0 ? "warn" : "brand"}>
-                    {preview.totalRows > preview.previewRows.length ? (
-                      <>In the first {preview.previewRows.length} rows: </>
-                    ) : (
-                      <>In this file: </>
-                    )}
-                    <b className="font-semibold">{typeSplit.sales} sales</b> ·{" "}
-                    <b className="font-semibold">{typeSplit.expenses} expenses</b>
-                    {typeSplit.unknown > 0 ? (
+        <form onSubmit={(event) => void handleImport(event)}>
+          <fieldset disabled={confirming} className="min-w-0 space-y-5">
+            {/*
+              "03/04/2026" is 3 April or 4 March and nothing in the file settles
+              it. Asked only for a genuinely ambiguous file; the import waits for
+              the answer rather than guessing.
+            */}
+            {preview.dateFormatAmbiguous ? (
+              <Card className="border-edge-accent p-5">
+                <fieldset>
+                  <legend className="text-sm font-semibold text-ink-900">Date format</legend>
+                  <p className="mt-1 text-xs text-ink-500">
+                    {sampleDate ? (
                       <>
-                        {" "}
-                        · <b className="font-semibold">{typeSplit.unknown} unrecognised</b>. Rows
-                        FinSight can't read a type from are skipped and listed after the import. They
-                        are never guessed.
+                        Dates like <b className="figure font-semibold text-ink-700">{sampleDate}</b> can be read two ways.
                       </>
                     ) : (
-                      <>. Every row below shows which it will become.</>
+                      "These dates can be read two ways."
                     )}
-                  </Callout>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-          {!isMixed ? (
-            <div className="mt-4">
-              <Callout tone="brand">
-                <b className="font-semibold">{preview.totalRows.toLocaleString()} row{preview.totalRows === 1 ? "" : "s"} in this file.</b>{" "}
-                FinSight will read {preview.totalRows === 1 ? "it" : "them"} as {recordType === "expense" ? "expenses" : "sales reference records"}. The full-file check runs next.
-              </Callout>
-            </div>
-          ) : null}
-        </Card>
+                  </p>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    {(
+                      [
+                        { value: "dmy", label: "Day first: 03/04 is 3 April", hint: "Common in the Philippines" },
+                        { value: "mdy", label: "Month first: 03/04 is 4 March", hint: "Common in US exports" },
+                      ] as { value: CsvConfirmDateFormat; label: string; hint: string }[]
+                    ).map((option) => (
+                      <label
+                        key={option.value}
+                        className={`flex min-h-tap cursor-pointer items-start gap-2.5 rounded-xl border p-3 transition-colors ${
+                          dateFormat === option.value ? "border-edge-brand bg-tint-brand" : "border-paper-200 hover:bg-paper-100"
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="csv-date-format"
+                          value={option.value}
+                          checked={dateFormat === option.value}
+                          onChange={() => setDateFormat(option.value)}
+                          className="mt-0.5 h-4 w-4 shrink-0 accent-brand-600"
+                        />
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium text-ink-800">{option.label}</span>
+                          <span className="block text-xs text-ink-600">{option.hint}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+              </Card>
+            ) : null}
 
-        {/*
-          THE DATE QUESTION, ASKED BEFORE ANYTHING IS WRITTEN.
+            <DetectedColumns
+              headers={preview.headers}
+              choice={columns}
+              onChange={(field, header) => setColumns((current) => ({ ...current, [field]: header }))}
+              usesExpenseFields={usesExpenseFields}
+              unmapped={(preview.columnDetection?.unmapped ?? []).filter(
+                (entry) => !Object.values(columns).includes(entry.header) && entry.header !== typeCol,
+              )}
+              typeColumn={isMixed && mixedStrategy === "column" ? typeCol : ""}
+            />
 
-          "03/04/2026" is either the 3rd of April or the 4th of March, and
-          nothing in the file settles it. The server refuses a file whose dates
-          fit both readings rather than guessing — a wrong guess moves every
-          transaction by up to eleven months, silently, and the owner would
-          find out from a report weeks later.
+            {availableFundsBaseline ? (
+              <AvailableFundsBaselineChoice
+                choice={baselineChoice}
+                disabled={confirming}
+                question="Were these rows already included in the recorded balance?"
+                help={`${availableFundsBaseline.matchingRowCount.toLocaleString()} valid row${availableFundsBaseline.matchingRowCount === 1 ? " uses" : "s use"} the same date as the latest balance you recorded. Choose the answer that applies by default, then change any exception in the row table.`}
+              />
+            ) : null}
 
-          Shown only when the preview says the file is genuinely ambiguous. A
-          file with a month spelled out, or with any date past the 12th, is
-          unambiguous and is never asked about.
-        */}
-        {preview.dateFormatAmbiguous ? (
-          <Card className="border-edge-accent p-5">
-            <fieldset>
-              <legend className="text-sm font-semibold text-ink-900">
-                Which way round are your dates?
-              </legend>
-              <p className="mt-1 text-xs leading-relaxed text-ink-500">
-                {sampleDate ? (
+            <Card className="p-5">
+              <dl aria-live="polite" className={`grid grid-cols-2 gap-4 sm:grid-cols-4 ${stale && validation ? "opacity-60" : ""}`}>
+                <Stat label="Rows" value={preview.totalRows.toLocaleString()} />
+                <Stat label="Ready" value={readyCount === null ? "…" : readyCount.toLocaleString()} />
+                <Stat
+                  label="Skipped"
+                  value={validation ? Math.max(0, validation.invalidRows - removedCount).toLocaleString() : "…"}
+                  tone={validation && validation.invalidRows - removedCount > 0 ? "danger" : undefined}
+                />
+                <Stat
+                  label="Possible duplicates"
+                  value={validation ? (validation.possibleDuplicateRows ?? 0).toLocaleString() : "…"}
+                  tone={validation?.possibleDuplicateRows ? "warn" : undefined}
+                />
+                {usesExpenseFields && summary ? (
                   <>
-                    Your file has dates like <b className="figure font-semibold text-ink-700">{sampleDate}</b>,
-                    which could be read either way. FinSight will not guess. Every date in the file is read the
-                    way you choose here.
-                  </>
-                ) : (
-                  <>
-                    The dates in this file could be read either way. FinSight will not guess. Every date is read
-                    the way you choose here.
-                  </>
-                )}
-              </p>
-              <div className="mt-3 space-y-2">
-                {(
-                  [
-                    { value: "dmy", label: "Day first: 03/04 means 3 April", hint: "Usual in the Philippines, the UK and most of Europe." },
-                    { value: "mdy", label: "Month first: 03/04 means 4 March", hint: "Usual in the United States, and in some POS exports." },
-                  ] as { value: CsvConfirmDateFormat; label: string; hint: string }[]
-                ).map((option) => (
-                  <label
-                    key={option.value}
-                    className={`flex min-h-tap cursor-pointer items-start gap-2.5 rounded-xl border p-3 transition-colors ${
-                      dateFormat === option.value
-                        ? "border-edge-brand bg-tint-brand"
-                        : "border-paper-200 hover:bg-paper-100"
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name="csv-date-format"
-                      value={option.value}
-                      checked={dateFormat === option.value}
-                      onChange={() => setDateFormat(option.value)}
-                      className="mt-0.5 h-4 w-4 shrink-0 accent-brand-600"
+                    <Stat label="Categories suggested" value={summary.suggested.toLocaleString()} />
+                    <Stat label="From file" value={summary.fromFile.toLocaleString()} />
+                    <Stat
+                      label="Uncategorised"
+                      value={summary.uncategorised.toLocaleString()}
+                      tone={summary.uncategorised > 0 ? "warn" : undefined}
                     />
-                    <span className="min-w-0">
-                      <span className="block text-sm font-medium text-ink-800">{option.label}</span>
-                      <span className="block text-xs text-ink-500">{option.hint}</span>
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-          </Card>
-        ) : null}
+                    {removedCount > 0 ? <Stat label="Removed" value={removedCount.toLocaleString()} /> : null}
+                  </>
+                ) : null}
+              </dl>
+              {checking ? (
+                <p role="status" className="mt-3 text-xs text-ink-500">
+                  Checking…
+                </p>
+              ) : checkError ? (
+                <p role="alert" className="mt-3 text-xs text-tone-danger">
+                  Couldn’t check the file. {checkError}
+                </p>
+              ) : !mappingIsValid ? (
+                <p className="mt-3 text-xs text-tone-danger">Choose the missing columns to check the rows.</p>
+              ) : dateChoiceNeeded ? (
+                <p className="mt-3 text-xs text-tone-danger">Choose the date format to check the rows.</p>
+              ) : null}
+            </Card>
 
-        <Card className="p-5">
-          <h2 className="text-base font-semibold text-ink-900">Map your columns</h2>
-          <p className="mt-1 text-xs text-ink-500">Each FinSight field below must point to the matching heading in your CSV file.</p>
-          <div className="mt-4">
-            <ColumnMappingFields columns={columns} headers={preview.headers} errorFor={duplicateError} />
-          </div>
-          {usesCategory ? (
-            <p className="mt-3 text-xs text-ink-500">
-              Category and vendor can be left unmapped. Expense rows without a category are checked for saved-category suggestions before import.
-            </p>
-          ) : null}
-        </Card>
-          </>
-        ) : (
-          <Card className="p-5">
-            <h2 className="text-base font-semibold text-ink-900">Import summary</h2>
-            <p className="mt-1 text-xs text-ink-500">These are the current settings and full-file check results.</p>
-            <dl className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div>
-                <dt className="text-xs font-medium text-ink-500">Batch title</dt>
-                <dd className="mt-1 break-words text-sm font-semibold text-ink-900">{title}</dd>
-              </div>
-              <div>
-                <dt className="text-xs font-medium text-ink-500">Import as</dt>
-                <dd className="mt-1 text-sm font-semibold text-ink-900">
-                  {recordType === "expense" ? "Expenses" : recordType === "sales" ? "Sales reference records" : "Sales and expenses"}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-xs font-medium text-ink-500">Rows in file</dt>
-                <dd className="figure mt-1 text-sm font-semibold text-ink-900">{preview.totalRows.toLocaleString()}</dd>
-              </div>
-              <div>
-                <dt className="text-xs font-medium text-ink-500">Ready to import</dt>
-                <dd className="figure mt-1 text-sm font-semibold text-ink-900">
-                  {currentValidation ? currentValidation.validRows.toLocaleString() : "Needs another check"}
-                </dd>
-              </div>
-            </dl>
-          </Card>
-        )}
+            {/*
+              The categories this import would CREATE, named before anything is
+              written: confirming this import is the owner's approval of them
+              (D0-03), and a typo is cheapest to catch here.
+            */}
+            {usesExpenseFields && summary && summary.newCategories.length > 0 ? (
+              <Callout tone="info">
+                <b className="font-semibold">New categories:</b>{" "}
+                {summary.newCategories.map((entry) => `${entry.name} (${entry.rows})`).join(", ")}. Created when you import.
+              </Callout>
+            ) : null}
 
-        <Card className="p-5">
-          <CsvDataPreview
-            rows={analysed}
-            columns={columns}
-            totalRows={preview.totalRows}
-            mappingIsValid={mappingIsValid}
-            mixed={isMixed}
-            expanded={previewExpanded}
-            onExpandedChange={setPreviewExpanded}
-          />
-        </Card>
+            <Card className="p-5">
+              <ReviewTable
+                rows={reviewRows}
+                totalRows={preview.totalRows}
+                showExpenseFields={usesExpenseFields}
+                mixed={isMixed}
+                categoryOptions={categoryOptions}
+                onEdit={edit}
+                onToggleExclude={toggleExclude}
+                baselineDefault={baselineChoice.decision}
+                onBaselineDecision={setRowBaselineDecision}
+              />
+            </Card>
 
-        {/*
-          What this import will ADD, not just what it will bring in.
+            {confirmError ? <FormError>{confirmError}</FormError> : null}
 
-          Creating a category is a side effect the owner never asked for and
-          previously never saw — they asked to import expenses, and got new
-          entries in a list they curate elsewhere. Naming them here makes a
-          typo obvious while the mapping can still be changed, which is the
-          only moment it is cheap to fix.
+            {/* Real progress, or none: a large file reports processedRows as each chunk commits. */}
+            {confirming && !checking ? <ImportProgress progress={progress} totalRows={preview.totalRows} /> : null}
 
-          An observation, never a blocker: a genuinely new category is the
-          normal case for a first import, and most of these will be correct.
-        */}
-        {newCategoryNames.length > 0 ? (
-          <Callout tone="info">
-            <b className="font-semibold">
-              Preview includes {newCategoryNames.length} new categor
-              {newCategoryNames.length === 1 ? "y" : "ies"}.
-            </b>{" "}
-            <ResultDetails label="New CSV categories">
-              <p>{newCategoryNames.join(", ")}</p>
-              <p>Check spelling before importing. Rows outside this preview may add more categories.</p>
-            </ResultDetails>
-          </Callout>
-        ) : null}
-
-        {/*
-          Rows that won't import, put in front of the owner while the import
-          can still include them.
-
-          The skip report already existed, but only afterwards, and it said
-          "Fix them in your spreadsheet and import again" — reopen Excel, find
-          the row, retype the cell, re-upload, re-map. For a file where three
-          dates are formatted oddly that is the whole import done twice. The
-          same three cells are editable here, and the fixes ride along with
-          the import as corrections applied over the file.
-        */}
-        {stage === "map" && brokenRows.length > 0 ? (
-          <Card className="border-edge-accent p-5">
-            <h2 className="text-sm font-semibold text-ink-900">
-              {brokenRows.length} row{brokenRows.length === 1 ? "" : "s"} won't import as{" "}
-              {brokenRows.length === 1 ? "it is" : "they are"}
-            </h2>
-            <p className="mt-1 text-xs leading-relaxed text-ink-500">
-              Fix the highlighted cell to bring the row in, or leave it and it will be skipped. The
-              rest of the file imports either way. Nothing here changes your original file.
-            </p>
-
-            <ul className="mt-3 space-y-2">
-              {brokenRows.map(({ rowNumber, values, problem }) => (
-                <li key={rowNumber} className="rounded-xl bg-paper-100 p-3">
-                  <div className="mb-2 flex items-baseline justify-between gap-3">
-                    <span className="figure text-xs font-semibold text-ink-600">Row {rowNumber}</span>
-                    <p
-                      id={`fix-${rowNumber}-${problem!.field}-why`}
-                      className="text-xs text-tone-danger"
-                    >
-                      {problem!.reason}
-                    </p>
-                  </div>
-                  {/*
-                    The broken cell gets the full width and the keyboard; the
-                    rest are read-only context so the owner can recognise the
-                    row without going back to the spreadsheet. Grid rather than
-                    a nowrap flex row — at five columns the row no longer fits
-                    on one line at any sensible field width.
-                  */}
-                  <div className="grid gap-x-3 gap-y-2 sm:grid-cols-[repeat(auto-fit,minmax(8rem,1fr))]">
-                    {columns.map((c) => {
-                      const isProblem = problem!.field === c.field;
-                      const id = `fix-${rowNumber}-${c.field}`;
-                      return (
-                        <div key={c.field} className={`min-w-0 ${isProblem ? "sm:col-span-2" : ""}`}>
-                          <label htmlFor={id} className="block text-[11px] font-medium text-ink-600">
-                            {c.field}
-                          </label>
-                          {isProblem ? (
-                            <TextInput
-                              id={id}
-                              value={values[c.field]}
-                              onChange={(e) => correct(rowNumber, c.field, e.target.value)}
-                              aria-describedby={`${id}-why`}
-                              aria-invalid
-                              className="!border-edge-danger"
-                            />
-                          ) : (
-                            <p className="truncate pt-1.5 text-sm text-ink-600" title={values[c.field]}>
-                              {values[c.field] || "Empty"}
-                            </p>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </Card>
-        ) : stage === "map" && fixedCount > 0 ? (
-          <Callout tone="brand">
-            Every row is ready to import now.
-          </Callout>
-        ) : null}
-
-        {stage === "review" && !currentValidation ? (
-          <Callout tone="info">Your changes will be checked against the full file again before import.</Callout>
-        ) : null}
-
-        {stage === "review" && currentSuggestions.length > 0 ? (
-          <Callout tone="info">
-            <p className="font-semibold">{currentSuggestions.length} missing categories have suggestions from your saved records.</p>
-            <Button type="button" variant="secondary" disabled={confirming} onClick={() => {
-              setCorrections((previous) => {
-                const next = { ...previous };
-                for (const suggestion of currentSuggestions) {
-                  if (!next[suggestion.row]?.Category?.trim()) {
-                    next[suggestion.row] = { ...next[suggestion.row], Category: suggestion.categoryName };
-                  }
-                }
-                return next;
-              });
-              setConfirmError(null);
-            }}>Apply category suggestions</Button>
-            <ResultDetails label="CSV category suggestions">
-              <ul className="space-y-1">{currentSuggestions.map((suggestion) => (
-                <li key={suggestion.row}>Row {suggestion.row}: {suggestion.categoryName}</li>
-              ))}</ul>
-              {categorySuggestionsTruncated ? <p>More suggestions may be available after these are applied.</p> : null}
-              <p>Only empty categories are filled. Check the results before importing.</p>
-            </ResultDetails>
-          </Callout>
-        ) : null}
-        {stage === "review" && currentValidation && currentValidation.invalidRows === 0 && !currentValidation.possibleDuplicateRows && currentSuggestions.length === 0 ? (
-          <Callout tone="brand">File checked. {currentValidation.validRows} rows are ready to import.</Callout>
-        ) : null}
-        {stage === "review" && currentValidation && (currentValidation.invalidRows > 0 || (currentValidation.possibleDuplicateRows ?? 0) > 0) ? (
-          <Callout tone="warn">
-            <p className="font-semibold">File check: {currentValidation.validRows} valid, {currentValidation.invalidRows} skipped.</p>
-            {currentValidation.possibleDuplicateRows ? <p>{currentValidation.possibleDuplicateRows} possible duplicate{currentValidation.possibleDuplicateRows === 1 ? "" : "s"} will be included and flagged for review.</p> : null}
-            <ResultDetails label="CSV validation details">
-              <ul className="space-y-1">
-                {currentValidation.skipped.map((row) => <li key={row.row}>Row {row.row}: {row.reason}</li>)}
-              </ul>
-              {currentValidation.skippedTruncated ? <p>Showing {currentValidation.skipped.length} of {currentValidation.invalidRows} row errors.</p> : null}
-              {currentValidation.duplicateRows?.length ? <p>Possible duplicate rows: {currentValidation.duplicateRows.join(", ")}.{currentValidation.duplicateRowsTruncated ? " More rows may be affected." : ""}</p> : null}
-              <p>Correct these rows or import only the valid rows. Your original file is unchanged.</p>
-            </ResultDetails>
-          </Callout>
-        ) : null}
-        {confirmError ? <FormError>{confirmError}</FormError> : null}
-
-        {/*
-          REAL PROGRESS, OR NONE.
-
-          A large file leaves the request (202) and runs on the durable worker,
-          which records processedRows as it commits each chunk. That is a
-          genuine measurement, so this is one of the few places in FinSight
-          that draws a determinate bar — and the number beside it is the
-          server's own count, not an animation.
-
-          Before the first status comes back there is nothing to measure, so
-          the same block says what is happening in words instead of drawing an
-          empty bar and calling it 0%.
-        */}
-        {checking ? (
-          <p role="status" aria-busy="true" className="text-sm text-ink-600">Checking every row before import...</p>
-        ) : confirming ? (
-          <ImportProgress progress={progress} totalRows={preview.totalRows} />
-        ) : null}
-
-        <div className="-mx-1 flex flex-col gap-3 border-t border-paper-200 bg-paper/95 px-1 py-4 sm:flex-row sm:items-center sm:justify-between lg:sticky lg:bottom-0 lg:z-20 lg:backdrop-blur">
-          <Button
-            type="button"
-            variant="secondary"
-            disabled={confirming}
-            onClick={() => setStage(stage === "map" ? "upload" : "map")}
-          >
-            {stage === "map" ? "Back" : "Back to mapping"}
-          </Button>
-          <div className="flex flex-col gap-2 sm:items-end">
-            <p className="text-xs text-ink-500">
-              {stage === "map"
-                ? "The next step checks every row. No records are saved yet."
-                : currentValidation
-                  ? `${currentValidation.validRows.toLocaleString()} ready, ${currentValidation.invalidRows.toLocaleString()} skipped.`
-                  : "Your latest changes will be checked before import."}
-            </p>
-            <Button
-              type="submit"
-              variant="primary"
-              disabled={confirming || (stage === "map" ? !readyToImport : !reviewCanImport)}
-              className="w-full sm:w-auto"
-            >
-              {confirming
-                ? checking
-                  ? "Checking file..."
-                  : "Importing..."
-                : stage === "map"
-                  ? "Continue to review"
-                  : importActionLabel}
-            </Button>
-          </div>
-        </div>
-        </fieldset>
-      </form>
+            <div className="-mx-1 flex flex-col gap-3 border-t border-paper-200 bg-paper/95 px-1 py-4 sm:flex-row sm:items-center sm:justify-between lg:sticky lg:bottom-0 lg:z-20 lg:backdrop-blur">
+              <Button type="button" variant="secondary" disabled={confirming} onClick={handleChooseDifferentFile}>
+                Change file
+              </Button>
+              <Button type="submit" variant="primary" disabled={confirming || !canImport} className="w-full sm:w-auto">
+                {confirming
+                  ? checking
+                    ? "Checking…"
+                    : "Importing…"
+                  : readyCount !== null && !stale
+                    ? `Import ${readyCount.toLocaleString()} row${readyCount === 1 ? "" : "s"}`
+                    : "Import"}
+              </Button>
+            </div>
+          </fieldset>
+        </form>
       </div>
+    </div>
+  );
+}
+
+function Stat({ label, value, tone }: { label: string; value: string; tone?: "danger" | "warn" }) {
+  return (
+    <div>
+      <dt className="text-xs font-medium text-ink-500">{label}</dt>
+      <dd
+        className={`figure mt-1 text-lg font-semibold ${
+          tone === "danger" ? "text-tone-danger" : tone === "warn" ? "text-tone-accent" : "text-ink-900"
+        }`}
+      >
+        {value}
+      </dd>
     </div>
   );
 }

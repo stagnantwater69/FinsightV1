@@ -5,9 +5,9 @@ import { IconCheck, IconCsvFile } from "../../components/icons";
 export type CsvImportStep = 1 | 2 | 3;
 
 const STEPS = [
-  { number: 1 as const, label: "Upload file", detail: "Choose your CSV" },
-  { number: 2 as const, label: "Map columns", detail: "Match your data" },
-  { number: 3 as const, label: "Review and import", detail: "Check before saving" },
+  { number: 1 as const, label: "Upload" },
+  { number: 2 as const, label: "Review and edit" },
+  { number: 3 as const, label: "Import" },
 ];
 
 export function CsvImportBreadcrumbs() {
@@ -20,7 +20,7 @@ export function CsvImportBreadcrumbs() {
           </Link>
         </li>
         <li aria-hidden className="text-ink-400">/</li>
-        <li aria-current="page" className="font-medium text-ink-700">Import CSV records</li>
+        <li aria-current="page" className="font-medium text-ink-700">Import CSV</li>
       </ol>
     </nav>
   );
@@ -39,7 +39,7 @@ export function CsvImportStepper({ current }: { current: CsvImportStep }) {
           <li
             key={step.number}
             aria-current={active ? "step" : undefined}
-            className="relative flex min-w-0 flex-1 flex-col items-center text-center sm:flex-row sm:items-start sm:text-left"
+            className="relative flex min-w-0 flex-1 flex-col items-center text-center sm:flex-row sm:text-left"
           >
             <span
               aria-hidden
@@ -51,16 +51,17 @@ export function CsvImportStepper({ current }: { current: CsvImportStep }) {
             >
               {complete ? <IconCheck className="h-4 w-4" /> : step.number}
             </span>
-            <span className="mt-2 min-w-0 px-1 sm:ml-3 sm:mt-0 sm:px-0">
+            <span className="mt-2 min-w-0 px-1 sm:ml-3 sm:mt-0 sm:shrink-0 sm:px-0">
               <span className={`block text-xs font-semibold sm:text-sm ${active ? "text-ink-900" : "text-ink-700"}`}>
                 {step.label}
               </span>
-              <span className="mt-0.5 hidden text-xs text-ink-500 md:block">{step.detail}</span>
             </span>
+            {/* Phone: an absolute line between the circles, above the labels.
+                Wider: a flex line after the label, so it never crosses the text. */}
             {index < STEPS.length - 1 ? (
               <span
                 aria-hidden
-                className={`absolute left-[calc(50%+1.25rem)] right-[calc(-50%+1.25rem)] top-4 h-px sm:left-[calc(2.25rem+0.75rem)] sm:right-3 ${
+                className={`absolute left-[calc(50%+1.25rem)] right-[calc(-50%+1.25rem)] top-4 h-px sm:static sm:mx-3 sm:min-w-[1.5rem] sm:flex-1 ${
                   complete ? "bg-brand-500" : "bg-paper-200"
                 }`}
               />

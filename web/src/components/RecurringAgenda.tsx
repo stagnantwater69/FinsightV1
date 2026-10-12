@@ -179,8 +179,7 @@ export function RecurringAgenda({ schedules }: { schedules: RecurringSchedule[] 
             </ButtonLink>
           }
         >
-          Tell FinSight about a payment that repeats — rent, a salary run, an internet bill — and it
-          will say so when one is late or comes in at an amount you did not expect.
+          Rent, salaries, internet. FinSight tells you when one is late or the amount is off.
         </EmptyState>
       ) : (
         <div className="space-y-5">

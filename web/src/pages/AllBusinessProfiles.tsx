@@ -349,13 +349,13 @@ export function AllBusinessProfiles() {
 
                 <dl className="mt-3 space-y-1.5 border-t border-paper-200 pt-3 text-sm">
                   <div className="flex flex-wrap justify-between gap-x-3 gap-y-0.5">
-                    <dt className="text-ink-500">Available Business Funds</dt>
+                    <dt className="text-ink-500">Starting funds</dt>
                     <dd className="figure font-medium text-ink-900">
                       {formatMoney(p.availableFunds)}
                     </dd>
                   </div>
                   <div className="flex flex-wrap justify-between gap-x-3 gap-y-0.5">
-                    <dt className="text-ink-500">Expected Monthly Expenses</dt>
+                    <dt className="text-ink-500">Starting monthly estimate</dt>
                     <dd className="figure font-medium text-ink-900">
                       {formatMoney(p.expectedMonthlyExpenses)}
                     </dd>
@@ -424,9 +424,9 @@ export function AllBusinessProfiles() {
 
       <div className="mt-6">
         <Callout>
-          Switching the active profile updates the Dashboard, Records, Insights,
-          Available Business Funds, and the context FinSight uses when
-          suggesting categories or explaining results.
+          Switching the active profile changes which business the Dashboard,
+          Records, Insights, and FinSight explanations use. The cards above
+          show starting settings, not record-updated balances.
         </Callout>
       </div>
 

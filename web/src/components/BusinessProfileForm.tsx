@@ -191,14 +191,15 @@ export function BusinessProfileForm({
             <Card className="p-5 sm:p-6">
               <SettingsSectionHeading
                 icon={<BadgeDollarSign size={21} aria-hidden />}
-                title="Planning figures"
-                description="These help FinSight calculate targets, insights, and alerts."
+                title="Starting figures"
+                description="FinSight keeps these starting values separate from figures calculated from your records."
               />
               <div className="mt-5">
                 <BusinessNumbersFields
                   draft={draft}
                   errors={fieldErrors}
                   update={update}
+                  existingProfile={Boolean(initialValues)}
                 />
               </div>
             </Card>
@@ -281,11 +282,11 @@ export function BusinessProfileForm({
       </Section>
 
       <Section
-        title="Your numbers"
+        title="Starting figures"
         description={
           compact
             ? undefined
-            : "These drive your sales target, recovery tracking, and expense flags. Rough figures are fine. You can change them anytime."
+            : "These initialize your recorded funds and monthly target. FinSight uses confirmed records when enough history is available."
         }
       >
         <BusinessNumbersFields
@@ -293,6 +294,7 @@ export function BusinessProfileForm({
           errors={fieldErrors}
           update={update}
           compact={compact}
+          existingProfile={Boolean(initialValues)}
         />
       </Section>
 

@@ -17,6 +17,7 @@ import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { api } from "../lib/api";
 import { getErrorMessage, getFieldErrors } from "../lib/errors";
 import {
+  digitsOnly,
   isValid,
   validateChangePassword,
   validateProfileDetails,
@@ -342,7 +343,7 @@ export function Profile() {
                       maxLength={MAX_PHONE_LENGTH}
                       autoComplete="tel"
                       value={form.phoneNumber}
-                      onChange={(e) => update("phoneNumber", e.target.value)}
+                      onChange={(e) => update("phoneNumber", digitsOnly(e.target.value))}
                     />
                   </Field>
                 </div>

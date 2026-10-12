@@ -64,6 +64,7 @@ export function AskFinSightDrawer() {
     send,
     rename,
     remove,
+    rate,
   } = chat;
 
   /**
@@ -221,6 +222,8 @@ export function AskFinSightDrawer() {
               setInput(question);
               inputRef.current?.focus();
             }}
+            onRate={rate}
+            onNavigate={closeChat}
           />
 
           {historyOpen ? (

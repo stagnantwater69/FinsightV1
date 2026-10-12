@@ -4,6 +4,7 @@ import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { api } from "../lib/api";
 import { getErrorMessage } from "../lib/errors";
 import type {
+  ChatFocus,
   AnomalyFindingPage,
   BusinessProfile,
   FlaggedRecordPage,
@@ -88,8 +89,7 @@ function LargeExpenseReason({ record, profile }: { record: RecordItem; profile: 
   if (!Number.isFinite(threshold) || threshold <= 0) {
     return (
       <>
-        This is large relative to your usual spending. Set your expected monthly expenses in your business
-        profile and FinSight can be specific about the threshold.
+        Large compared with your usual spending. Set a starting monthly estimate to see the exact threshold.
       </>
     );
   }
@@ -97,8 +97,8 @@ function LargeExpenseReason({ record, profile }: { record: RecordItem; profile: 
   return (
     <>
       <Money value={record.amount} /> is at or above your large-expense threshold of{" "}
-      <Money value={threshold} /> — that's {profile.largeExpenseThresholdPercent}% of your{" "}
-      <Money value={profile.expectedMonthlyExpenses} /> expected monthly expenses.{" "}
+      <Money value={threshold} />. That is {profile.largeExpenseThresholdPercent}% of your{" "}
+      <Money value={profile.expectedMonthlyExpenses} /> starting monthly estimate.{" "}
       <Link to="/business-profiles" className="tap-inline font-medium text-brand-700 underline-offset-2 hover:underline">
         Change the threshold
       </Link>{" "}
@@ -167,9 +167,7 @@ function AuditSection({ item }: { item: ReviewItem }) {
           ))}
         </dl>
         <p className="mt-2 text-[11px] leading-relaxed text-ink-500">
-          These are FinSight's own working figures, kept so a flag can be explained after the fact. A
-          flag is never a claim that something is wrong — it is a comparison against this business's own
-          history.
+          A comparison with this business's own history, not a claim that anything is wrong.
         </p>
       </div>
     </div>
@@ -363,7 +361,7 @@ export function FlaggedRecords() {
     if (!record) return;
     const ok = await confirm({
       title: `Discard "${record.description}"?`,
-      body: <>This deletes the record entirely. It won't appear in your history or in any insight.</>,
+      body: <>The record is deleted and leaves every figure.</>,
       confirmLabel: "Discard record",
       tone: "danger",
     });
@@ -371,7 +369,9 @@ export function FlaggedRecords() {
 
     setBusyKey(item.key);
     try {
-      await api.delete(path(record));
+      await api.delete(path(record), {
+        serverStateScope: { businessProfileId: record.businessProfileId },
+      });
       await load();
       toast(`Discarded "${record.description}"`);
     } catch (err) {
@@ -383,13 +383,17 @@ export function FlaggedRecords() {
 
   /** One of the five feedback values, sent against a detector finding. */
   async function handleFeedback(item: ReviewItem, action: FeedbackAction) {
-    if (!item.finding) return;
+    if (!item.finding || !selected) return;
     setBusyKey(item.key);
     try {
-      await api.patch(`/insights/findings/${item.finding.id}/review`, {
-        status: action.status,
-        feedback: action.feedback,
-      });
+      await api.patch(
+        `/insights/findings/${item.finding.id}/review`,
+        {
+          status: action.status,
+          feedback: action.feedback,
+        },
+        { serverStateScope: { businessProfileId: selected.id } },
+      );
       await load();
       toast(action.toast);
     } catch (err) {
@@ -472,8 +476,18 @@ export function FlaggedRecords() {
     }
   }
 
-  function explain(question: string) {
-    askFinSight(question);
+  /*
+   * The card's finding (or, for a legacy flag, its record) travels with the
+   * question by id, so the answer is about THIS card rather than whichever
+   * open finding the model picked from the queue.
+   */
+  function explain(item: ReviewItem) {
+    const focus: ChatFocus | undefined = item.finding
+      ? { kind: "finding", findingId: item.finding.id }
+      : item.record
+        ? { kind: "record", recordType: item.record.type, recordId: item.record.id }
+        : undefined;
+    askFinSight(item.explainQuestion, undefined, focus);
   }
 
   /*
@@ -492,11 +506,7 @@ export function FlaggedRecords() {
       <PageHead
         eyebrow="Records management"
         title="Needs review"
-        subtitle={
-          selected
-            ? `Everything FinSight wants a second look at, for ${selected.name} — duplicates, unusual spending and scan problems in one queue.`
-            : "Everything FinSight wants a second look at — duplicates, unusual spending and scan problems in one queue."
-        }
+        subtitle="Duplicates, unusual spending and unclear scans."
       />
 
       {error ? (
@@ -544,10 +554,7 @@ export function FlaggedRecords() {
           <SkeletonRows rows={4} />
         </Card>
       ) : !selected || nothingAtAll ? (
-        <EmptyState title="Nothing needs review right now" icon="✓">
-          FinSight flags a record when it looks like a duplicate, when it's unusual against your own
-          history, or when a scan came out hard to read. When one turns up, it will be waiting here.
-        </EmptyState>
+        <EmptyState title="Nothing needs review" icon="✓" />
       ) : (
         <div id={queueId} className="space-y-3">
           {visible.groups.map((group) => (
@@ -571,13 +578,13 @@ export function FlaggedRecords() {
               onFeedback={(action) => handleFeedback(item, action)}
               onKeep={(intent) => handleKeep(item, intent)}
               onDiscard={() => handleDiscard(item)}
-              onExplain={() => explain(item.explainQuestion)}
+              onExplain={() => explain(item)}
             />
           ))}
 
           {visible.groups.length === 0 && visible.items.length === 0 ? (
             <EmptyState compact title={`Nothing under "${CATEGORY_LABELS[filter]}"`} icon="✓">
-              Other filters still have items waiting. Choose "All" to see everything.
+              Other filters have items.
             </EmptyState>
           ) : null}
 
@@ -809,8 +816,8 @@ function GroupCard({
         <Alert kind="duplicate">
           {group.batch ? (
             <>
-              Every record here repeats one you already had — which usually means this file was imported
-              twice. Discarding them leaves the records you already had untouched.
+              Each repeats a record you already had, usually from importing the file twice. Discarding
+              these leaves the originals untouched.
             </>
           ) : (
             <>

@@ -10,15 +10,22 @@ import { RecordOriginPanel } from "../components/RecordOriginPanel";
 import { Money } from "../components/Money";
 import { useToast } from "../components/Toast";
 import { Field, FormError, MoneyInput, TextInput } from "../components/Field";
+import { TransactionDateField, useTransactionDate } from "../components/TransactionDateField";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
+import { useBusinessProfiles } from "../context/BusinessProfileContext";
+import { AvailableFundsBaselineChoice, useAvailableFundsBaselineChoice } from "../components/AvailableFundsBaselineChoice";
 
 export function EditExpense() {
+  const { selected } = useBusinessProfiles();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const toast = useToast();
   const [record, setRecord] = useState<RecordDetail | null>(null);
   const [categoryId, setCategoryId] = useState<number | "">("");
-  const [date, setDate] = useState("");
+  const dateField = useTransactionDate("");
+  const baselineChoice = useAvailableFundsBaselineChoice(dateField.date);
+  const setBaselineFromRecord = baselineChoice.setFromRecord;
+  const setLoadedDate = dateField.setDate;
   const [description, setDescription] = useState("");
   const [vendor, setVendor] = useState("");
   const [amount, setAmount] = useState<number | "">("");
@@ -45,10 +52,14 @@ export function EditExpense() {
         if (cancelled) return;
         setRecord(data);
         setCategoryId(data.categoryId ?? "");
-        setDate(data.date.slice(0, 10));
+        setLoadedDate(data.date.slice(0, 10));
         setDescription(data.description);
         setVendor(data.vendor ?? "");
         setAmount(data.amount);
+        setBaselineFromRecord(
+          data.includedInAvailableFundsBaseline ?? null,
+          data.availableFundsDeltaBaselineAt,
+        );
       })
       .catch((err) => {
         if (!cancelled) setLoadError(getErrorMessage(err));
@@ -56,25 +67,31 @@ export function EditExpense() {
     return () => {
       cancelled = true;
     };
-  }, [id, attempt]);
+  }, [id, attempt, setLoadedDate, setBaselineFromRecord]);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    if (!dateField.check() || !baselineChoice.check()) return;
     if (!categoryId || amount === "") return;
     setError(null);
     setSubmitting(true);
     try {
-      await api.patch(`/records/expenses/${id}`, {
-        categoryId,
-        date,
-        description,
-        vendor: vendor || null,
-        amount,
-      });
+      await api.patch(
+        `/records/expenses/${id}`,
+        {
+          categoryId,
+          date: dateField.date,
+          description,
+          vendor: vendor || null,
+          amount,
+          ...baselineChoice.requestFields(),
+        },
+        { serverStateScope: { businessProfileId: selected!.id } },
+      );
       toast("Changes saved");
       navigate("/records");
     } catch (err) {
-      setError(getErrorMessage(err));
+      if (!dateField.absorb(err) && !(await baselineChoice.absorb(err))) setError(getErrorMessage(err));
     } finally {
       setSubmitting(false);
     }
@@ -129,9 +146,8 @@ export function EditExpense() {
         <Field label="Category" htmlFor="category" required>
           <CategorySelect id="category" value={categoryId} onChange={setCategoryId} />
         </Field>
-        <Field label="Date" htmlFor="date" required>
-          <TextInput type="date" required value={date} onChange={(e) => setDate(e.target.value)} />
-        </Field>
+        <TransactionDateField field={dateField} />
+        <AvailableFundsBaselineChoice choice={baselineChoice} disabled={submitting} />
         <Field label="Description" htmlFor="description" required>
           <TextInput required value={description} onChange={(e) => setDescription(e.target.value)}
             maxLength={FIELD_LIMITS.recordDescription}
@@ -158,7 +174,7 @@ export function EditExpense() {
           </Callout>
         ) : null}
         {error ? <FormError>{error}</FormError> : null}
-        <Button type="submit" variant="primary" fullWidth disabled={submitting}>
+        <Button type="submit" variant="primary" fullWidth disabled={submitting || dateField.invalid}>
           {submitting ? "Saving…" : "Save changes"}
         </Button>
       </form>

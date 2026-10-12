@@ -169,7 +169,7 @@ export function AccountMenu() {
                   onClick={() => setTheme(option)}
                   className={`flex-1 rounded-lg px-2 py-1.5 text-[12px] font-semibold transition ${
                     theme === option
-                      ? "bg-paper text-brand-800 shadow-sm"
+                      ? "bg-paper text-tone-brand shadow-sm"
                       : "text-ink-500 hover:text-ink-800"
                   }`}
                 >

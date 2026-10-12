@@ -1,11 +1,13 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../lib/api";
+import { getErrorMessage } from "../lib/errors";
 import { useBusinessProfiles } from "./BusinessProfileContext";
 import type { ExpenseCategory, ExpenseCostBehavior } from "../lib/types";
 
 interface ExpenseCategoryContextValue {
   categories: ExpenseCategory[];
   loading: boolean;
+  loadingError: string | null;
   createCategory: (input: {
     name: string;
     description?: string;
@@ -32,6 +34,7 @@ export function ExpenseCategoryProvider({ children }: { children: ReactNode }) {
   const { selected } = useBusinessProfiles();
   const [categories, setCategories] = useState<ExpenseCategory[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadFailure, setLoadFailure] = useState<{ profileId: number; message: string } | null>(null);
   const [loadedProfileId, setLoadedProfileId] = useState<number | null>(null);
   const [recentByProfile, setRecentByProfile] = useState<Record<number, number[]>>({});
   const requestVersion = useRef(0);
@@ -43,10 +46,12 @@ export function ExpenseCategoryProvider({ children }: { children: ReactNode }) {
     const profileId = selected?.id;
     if (!selected) {
       setCategories([]);
+      setLoadFailure(null);
       setLoading(false);
       return;
     }
     setLoading(true);
+    setLoadFailure(null);
     try {
       const { data } = await api.get<ExpenseCategory[]>("/records/categories", {
         params: { businessProfileId: selected.id },
@@ -54,15 +59,17 @@ export function ExpenseCategoryProvider({ children }: { children: ReactNode }) {
       if (version !== requestVersion.current || activeProfileId.current !== profileId) return;
       setCategories(data);
       setLoadedProfileId(profileId!);
+    } catch (err) {
+      if (version !== requestVersion.current || activeProfileId.current !== profileId) return;
+      setLoadFailure({ profileId: profileId!, message: getErrorMessage(err) });
+      throw err;
     } finally {
       if (version === requestVersion.current) setLoading(false);
     }
   }
 
   useEffect(() => {
-    void refresh().catch(() => {
-      // Keep stale business categories out of the picker when loading fails.
-    });
+    void refresh().catch(() => undefined);
     return () => { requestVersion.current += 1; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id]);
@@ -91,7 +98,9 @@ export function ExpenseCategoryProvider({ children }: { children: ReactNode }) {
 
   return (
     <ExpenseCategoryContext.Provider value={{
-      categories: loadedProfileId === selected?.id ? categories : [], loading, createCategory, updateCategory, refresh,
+      categories: loadedProfileId === selected?.id ? categories : [], loading,
+      loadingError: loadFailure && loadFailure.profileId === selected?.id ? loadFailure.message : null,
+      createCategory, updateCategory, refresh,
       recentCategoryIds: selected ? recentByProfile[selected.id] ?? [] : [],
       rememberCategory: (id) => {
         if (!selected || !categories.some((category) => category.id === id)) return;

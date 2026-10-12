@@ -2,17 +2,14 @@ import { useState, type ComponentType, type SVGProps } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   Bell,
-  BookOpen,
   CalendarDays,
   ChevronRight,
-  LayoutDashboard,
-  ReceiptText,
   Settings,
-  Target,
   Upload,
 } from "lucide-react";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { BusinessProfileForm } from "../components/BusinessProfileForm";
+import { FinancialPositionPanel } from "../components/FinancialPositionPanel";
 import { AvatarUpload } from "../components/Avatar";
 import { ButtonLink } from "../components/Button";
 import { useToast } from "../components/Toast";
@@ -104,6 +101,8 @@ export function BusinessProfileEditor({
         onSubmit={handleSubmit}
         settingsAside={
           <>
+            <FinancialPositionPanel profile={profile} />
+
             <Card className="p-5 sm:p-6">
               <SettingsHeading
                 icon={Settings}
@@ -126,31 +125,6 @@ export function BusinessProfileEditor({
                   action="Manage notifications"
                 />
               </div>
-            </Card>
-
-            <Card className="p-5 sm:p-6">
-              <SettingsHeading
-                icon={BookOpen}
-                title="Where these settings are used"
-                description="These details power key parts of FinSight."
-              />
-              <dl className="mt-5 divide-y divide-paper-200">
-                <UsageRow
-                  Icon={LayoutDashboard}
-                  title="Dashboard"
-                  description="Planning figures shape targets, progress, and key insights."
-                />
-                <UsageRow
-                  Icon={Target}
-                  title="Recovery target"
-                  description="Monthly expenses and operating days set the daily sales target."
-                />
-                <UsageRow
-                  Icon={ReceiptText}
-                  title="Expense flags"
-                  description="The threshold identifies unusually large expenses for review."
-                />
-              </dl>
             </Card>
           </>
         }
@@ -234,30 +208,6 @@ function ManagementLink({
         {action}
         <ChevronRight size={16} aria-hidden />
       </Link>
-    </div>
-  );
-}
-
-function UsageRow({
-  Icon,
-  title,
-  description,
-}: {
-  Icon: LucideIcon;
-  title: string;
-  description: string;
-}) {
-  return (
-    <div className="flex items-start gap-3 py-4 first:pt-0 last:pb-0">
-      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-paper-100 text-tone-brand">
-        <Icon size={19} aria-hidden />
-      </span>
-      <div className="min-w-0">
-        <dt className="text-sm font-semibold text-ink-900">{title}</dt>
-        <dd className="mt-1 max-w-[58ch] text-sm leading-relaxed text-ink-500">
-          {description}
-        </dd>
-      </div>
     </div>
   );
 }

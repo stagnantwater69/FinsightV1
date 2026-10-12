@@ -30,6 +30,11 @@ interface GroupProps {
   autoFocus?: boolean;
 }
 
+interface NumbersGroupProps extends GroupProps {
+  /** Existing profiles reset their funds anchor when the amount changes. */
+  existingProfile?: boolean;
+}
+
 export function BusinessBasicsFields({
   draft,
   errors,
@@ -122,20 +127,8 @@ export function BusinessBasicsFields({
 /**
  * What the two figures above actually produce, using the owner's OWN numbers.
  *
- * This used to be a fixed worked example — "if a month costs you PHP 125,000
- * and you're open 25 days…" — sitting directly beneath the fields where the
- * owner had just typed 500,000 and 26. Two sets of numbers a few pixels apart,
- * one of them theirs and one of them not, is a good way to make someone doubt
- * which they are looking at.
- *
- * Live, it stops being an explanation of the feature and becomes the feature:
- * the daily target is the single number this whole screen exists to produce,
- * and there is no reason to make an owner save and navigate to the dashboard to
- * find out what theirs is.
- *
- * The formula matches computeRecoveryTarget on the server exactly — monthly
- * expenses over operating days — so this cannot quote a target the dashboard
- * will then contradict.
+ * This preview uses the starting estimate. The active Recovery Target can
+ * later use a complete previous month's expense records instead.
  */
 function DailyTargetNote({
   draft,
@@ -153,31 +146,18 @@ function DailyTargetNote({
     days > 0;
 
   if (!ready) {
-    if (compact) {
-      return (
-        <InfoNote>
-          Monthly expenses ÷ operating days becomes your daily sales target.
-        </InfoNote>
-      );
-    }
-    // Falls back to the shared example, which uses the same figures as the
-    // Landing page's live RecoveryMeter demo (DEMO_BASE in pages/Landing.tsx),
-    // so what a visitor was shown before signing up and what they are told here
-    // agree.
     return (
       <InfoNote>
-        <b className="font-semibold text-ink-700">How these fit together.</b> If
-        a normal month costs you <span className="figure">PHP 125,000</span> and
-        you're open <span className="figure">25</span> days, FinSight works out
-        a daily target of <span className="figure">PHP 5,000</span>. That
-        number shows what today needs to look like.
+        Your starting monthly estimate divided by operating days gives the
+        initial daily sales target. After you confirm a complete previous
+        month, FinSight uses those expense records instead.
       </InfoNote>
     );
   }
 
   return (
     <InfoNote>
-      <b className="font-semibold text-ink-700">Daily sales target:</b>{" "}
+      <b className="font-semibold text-ink-700">Starting daily sales target:</b>{" "}
       <span className="figure font-semibold text-ink-900">
         {formatMoney(expenses / days)}
       </span>
@@ -201,20 +181,14 @@ export function BusinessNumbersFields({
   errors,
   update,
   compact = false,
-}: GroupProps) {
+  existingProfile = false,
+}: NumbersGroupProps) {
   return (
     <>
-      {/*
-        These figures drive every downstream insight — the recovery target, the
-        daily target and the large-expense cutoff all derive from them. An owner
-        who misreads one gets wrong numbers everywhere and has no way to tell,
-        so each says plainly what it is asking for and what it affects. Plain
-        language, not accounting language: the target user is a sari-sari store
-        owner, not a bookkeeper.
-      */}
+      {/* These values are starting inputs; records can replace them in active figures. */}
       <div className="grid gap-3 sm:grid-cols-2">
         <Field
-          label="Available business funds"
+          label="Starting available funds"
           fillRow
           htmlFor="availableFunds"
           required
@@ -222,7 +196,9 @@ export function BusinessNumbersFields({
           hint={
             compact
               ? undefined
-              : "Roughly how much cash the business has to work with right now. Update this as things change because FinSight doesn't read your bank."
+              : existingProfile
+                ? "Enter the amount available now. Saving a different amount starts a new balance from the day you save it."
+                : "Enter the amount the business has available now. FinSight uses this as the starting point for confirmed sales and expenses."
           }
         >
           <MoneyInput
@@ -234,7 +210,7 @@ export function BusinessNumbersFields({
           />
         </Field>
         <Field
-          label="Expected monthly expenses"
+          label="Starting monthly expense estimate"
           fillRow
           htmlFor="expectedMonthlyExpenses"
           required
@@ -242,7 +218,7 @@ export function BusinessNumbersFields({
           hint={
             compact
               ? undefined
-              : "What a normal month costs you, including rent, stock, wages, and utilities. FinSight uses this to work out how much you need to sell."
+              : "Enter your best estimate for a normal month. FinSight uses it until the previous month's expense records are confirmed complete."
           }
         >
           <MoneyInput
@@ -299,7 +275,7 @@ export function BusinessNumbersFields({
           hint={
             compact
               ? undefined
-              : "Expenses this big get set aside for review, so a large or mistaken one doesn't slip past. FinSight suggests an amount from your monthly expenses, and you can change it anytime."
+              : "Expenses this big get set aside for review. FinSight suggests an amount from your starting monthly estimate, and you can change it anytime."
           }
         >
           <MoneyInput

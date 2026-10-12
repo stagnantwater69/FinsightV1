@@ -31,23 +31,29 @@ function tickInterval(pointCount: number) {
   return Math.ceil(pointCount / 8) - 1;
 }
 
-function shortDate(iso: string) {
+/** One point per day, or per month when the period is all time. */
+export type SpendBucket = "day" | "month";
+
+function pointLabel(iso: string, bucket: SpendBucket = "day") {
   const d = new Date(`${iso}T00:00:00Z`);
   if (Number.isNaN(d.getTime())) return iso.slice(5);
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+  return bucket === "month"
+    ? d.toLocaleDateString(undefined, { month: "short", year: "numeric", timeZone: "UTC" })
+    : d.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
 }
 
 interface TooltipPayload {
   active?: boolean;
   payload?: { payload: DailyExpenseTotal }[];
+  bucket?: SpendBucket;
 }
 
-function DayTooltip({ active, payload }: TooltipPayload) {
+function DayTooltip({ active, payload, bucket }: TooltipPayload) {
   const row = payload?.[0]?.payload;
   if (!active || !row) return null;
   return (
     <div className="rounded-lg border border-paper-200 bg-paper px-3 py-2 shadow-md">
-      <p className="text-[11.5px] font-semibold text-ink-900">{shortDate(row.date)}</p>
+      <p className="text-[11.5px] font-semibold text-ink-900">{pointLabel(row.date, bucket)}</p>
       <p className="figure mt-0.5 text-[13px] font-bold text-ink-900">{formatMoney(row.total)}</p>
       <p className="mt-0.5 text-[11px] text-ink-500">
         {row.count === 0
@@ -58,8 +64,10 @@ function DayTooltip({ active, payload }: TooltipPayload) {
   );
 }
 
-export function DailySpendChart({ daily }: { daily: DailyExpenseTotal[] }) {
+export function DailySpendChart({ daily, bucket = "day" }: { daily: DailyExpenseTotal[]; bucket?: SpendBucket }) {
   if (daily.length === 0) return null;
+  const unit = bucket === "month" ? "month" : "day";
+  const shortDate = (iso: string) => pointLabel(iso, bucket);
 
   const total = daily.reduce((s, d) => s + d.total, 0);
   const average = total / daily.length;
@@ -71,15 +79,14 @@ export function DailySpendChart({ daily }: { daily: DailyExpenseTotal[] }) {
       {/* The plain-language reading of the chart, above the chart. Someone who
           never looks at the plot still gets the finding. */}
       <p className="mb-4 text-[13px] leading-relaxed text-ink-600">
-        You spent on <b className="font-semibold text-ink-900">{spendingDays}</b> of{" "}
-        <b className="font-semibold text-ink-900">{daily.length}</b> days, averaging{" "}
-        <b className="figure font-semibold text-ink-900">{formatMoney(average)}</b> a day.
+        Spent on <b className="font-semibold text-ink-900">{spendingDays}</b> of{" "}
+        <b className="font-semibold text-ink-900">{daily.length}</b> {unit}s · average{" "}
+        <b className="figure font-semibold text-ink-900">{formatMoney(average)}</b> a {unit}
         {busiest.total > 0 ? (
           <>
-            {" "}
-            Your biggest day was{" "}
-            <b className="font-semibold text-ink-900">{shortDate(busiest.date)}</b> at{" "}
-            <b className="figure font-semibold text-ink-900">{formatMoney(busiest.total)}</b>.
+            {" "}· highest{" "}
+            <b className="font-semibold text-ink-900">{shortDate(busiest.date)}</b>{" "}
+            <b className="figure font-semibold text-ink-900">{formatMoney(busiest.total)}</b>
           </>
         ) : null}
       </p>
@@ -120,7 +127,7 @@ export function DailySpendChart({ daily }: { daily: DailyExpenseTotal[] }) {
             />
 
             <Tooltip
-              content={<DayTooltip />}
+              content={<DayTooltip bucket={bucket} />}
               cursor={{ stroke: "currentColor", strokeOpacity: 0.35, strokeWidth: 1 }}
             />
 
@@ -133,7 +140,7 @@ export function DailySpendChart({ daily }: { daily: DailyExpenseTotal[] }) {
                 strokeDasharray="4 4"
                 strokeWidth={1.5}
                 label={{
-                  value: `usual day · ${formatMoney(average)}`,
+                  value: `usual ${unit} · ${formatMoney(average)}`,
                   position: "insideTopRight",
                   fill: "rgb(var(--sev-warning-ink))",
                   fontSize: 10.5,
@@ -167,15 +174,15 @@ export function DailySpendChart({ daily }: { daily: DailyExpenseTotal[] }) {
           DOM, so assistive tech and Ctrl-F find it either way. */}
       <details className="mt-4 border-t border-paper-200 pt-3">
         <summary className="cursor-pointer list-none text-[12.5px] font-medium text-brand-700 transition hover:text-brand-800">
-          <span className="tap-inline">View the daily figures as a table</span>
+          <span className="tap-inline">Show as table</span>
         </summary>
         <div className="scroll-slim mt-3 max-h-64 overflow-y-auto">
           <table className="w-full border-collapse text-left text-[12.5px]">
-            <caption className="sr-only">Expenses recorded on each day of the period.</caption>
+            <caption className="sr-only">Expenses recorded in each {unit} of the period.</caption>
             <thead className="sticky top-0 bg-paper">
               <tr className="border-b border-paper-200">
                 <th scope="col" className="py-1.5 pr-3 font-semibold text-ink-500">
-                  Day
+                  {bucket === "month" ? "Month" : "Day"}
                 </th>
                 <th scope="col" className="py-1.5 pr-3 text-right font-semibold text-ink-500">
                   Spent

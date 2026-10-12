@@ -83,9 +83,7 @@ export function CategoryBreakdownChart({
 
   if (breakdown.length === 0) {
     return (
-      <EmptyState compact title="No expenses in this period yet" icon="◔">
-        Once you record an expense, this is where you'll see which categories use the most.
-      </EmptyState>
+      <EmptyState compact title="No expenses in this period" icon="◔" />
     );
   }
 

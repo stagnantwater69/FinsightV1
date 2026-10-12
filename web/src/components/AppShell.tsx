@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useTourOptional } from "../context/TourContext";
@@ -12,6 +12,9 @@ import { NotificationBell } from "./NotificationBell";
 import { SetupPrompt } from "./SetupPrompt";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { AccountMenu, initials } from "./AccountMenu";
+import { useFutureDatedRecords } from "../context/FutureDatedRecordsContext";
+import { PrefetchLink as Link } from "./PrefetchLink";
+import { prefetchPrimaryRoutes } from "../lib/routeLoaders";
 import {
   IconBusiness,
   IconCamera,
@@ -260,6 +263,7 @@ function SidebarLink({
 export function AppShell({ children }: { children: ReactNode }) {
   const { profile: user } = useAuth();
   const { selected } = useBusinessProfiles();
+  const futureDated = useFutureDatedRecords();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -292,6 +296,18 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { ref: addRef, triggerRef: addTriggerRef } = useDismiss(addOpen, () => setAddOpen(false));
   const onMenuKeys = useMenuKeys();
   const addTrapRef = useFocusTrap<HTMLDivElement>(addOpen && !tourHoldsAddMenu);
+
+  // Once the first page has had its turn, warm the other tabs' code so
+  // switching to them shows the page (or its skeleton) without a code wait.
+  useEffect(() => {
+    const warm = () => void prefetchPrimaryRoutes();
+    if (typeof window.requestIdleCallback === "function") {
+      const id = window.requestIdleCallback(warm, { timeout: 4000 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const id = window.setTimeout(warm, 1500);
+    return () => window.clearTimeout(id);
+  }, []);
 
   // Close transient chrome on navigation, or a menu lingers over the new page.
   useEffect(() => {
@@ -662,8 +678,10 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </button>
               ) : null}
 
-              {/* ---- quick add ---- */}
-              {selected ? (
+              {/* ---- quick add ----
+                  Hidden while future-dated records are being corrected: new
+                  records wait until the books are back in order. */}
+              {selected && !futureDated.blocked ? (
                 <div ref={addRef} className="relative">
                   <button
                     ref={addTriggerRef}
@@ -845,7 +863,7 @@ export function InsightsTabs() {
               to={link.to}
               aria-current={active ? "page" : undefined}
               className={`flex min-h-tap items-center whitespace-nowrap rounded-lg px-4 text-[13.5px] font-semibold transition ${
-                active ? "bg-paper text-brand-800 shadow-sm" : "text-ink-500 hover:text-brand-800"
+                active ? "bg-paper text-tone-brand shadow-sm" : "text-ink-500 hover:text-tone-brand"
               }`}
             >
               {link.label}

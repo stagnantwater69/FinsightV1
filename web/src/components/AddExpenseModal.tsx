@@ -7,9 +7,11 @@ import { Field, FormError, MoneyInput, TextInput } from "./Field";
 import { CategorySelect } from "./CategorySelect";
 import { Money } from "./Money";
 import { api } from "../lib/api";
-import { getErrorMessage } from "../lib/errors";
+import { getErrorMessage, isFutureDateError } from "../lib/errors";
 import type { RecordDetail } from "../lib/types";
-import { todayIso as today } from "../lib/dates";
+import { FUTURE_DATE_MESSAGE, futureDateError, todayIso } from "../lib/dates";
+import { useBusinessProfiles } from "../context/BusinessProfileContext";
+import { AvailableFundsBaselineChoice, useAvailableFundsBaselineChoice } from "./AvailableFundsBaselineChoice";
 
 interface FieldErrors {
   category?: string;
@@ -27,10 +29,12 @@ function validate(values: {
   date: string;
   description: string;
   amount: number | "";
+  today: string;
 }): FieldErrors {
   const errors: FieldErrors = {};
   if (!values.categoryId) errors.category = "Choose a category for this expense.";
   if (!values.date) errors.date = "Enter the date of this expense.";
+  else errors.date = futureDateError(values.date, values.today) ?? undefined;
   if (!values.description.trim()) errors.description = "Describe what this expense was for.";
   if (values.amount === "" || Number.isNaN(values.amount)) errors.amount = "Enter the amount.";
   else if (values.amount <= 0) errors.amount = "Enter an amount greater than 0.";
@@ -75,9 +79,12 @@ export function AddExpenseModal({
   duplicateFrom?: DuplicateExpenseSeed;
 }) {
   const toast = useToast();
+  const { selected } = useBusinessProfiles();
+  const today = () => todayIso(selected?.timezone);
   const editing = recordId !== undefined;
   const [categoryId, setCategoryId] = useState<number | "">("");
   const [date, setDate] = useState(today());
+  const baselineChoice = useAvailableFundsBaselineChoice(date);
   const [description, setDescription] = useState("");
   const [vendor, setVendor] = useState("");
   const [amount, setAmount] = useState<number | "">("");
@@ -87,6 +94,8 @@ export function AddExpenseModal({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+  // The server's refusal of the date, kept until the date is changed.
+  const [serverDateError, setServerDateError] = useState<string | null>(null);
   // Errors appear on blur only for fields the owner has already left, so the
   // form doesn't turn red under a cursor that is still on the first input.
   const [touched, setTouched] = useState<Partial<Record<keyof FieldErrors, boolean>>>({});
@@ -101,7 +110,9 @@ export function AddExpenseModal({
     setOriginAmount(0);
     setError(null);
     setFieldErrors({});
+    setServerDateError(null);
     setTouched({});
+    baselineChoice.setDecision(null);
   }
 
   // Re-seeds every time the modal opens, from whichever of the three modes
@@ -123,6 +134,10 @@ export function AddExpenseModal({
           setAmount(data.amount);
           setOrigin(data.origin);
           setOriginAmount(data.amount);
+          baselineChoice.setFromRecord(
+            data.includedInAvailableFundsBaseline ?? null,
+            data.availableFundsDeltaBaselineAt,
+          );
         })
         .catch((err) => setError(getErrorMessage(err)))
         .finally(() => setLoading(false));
@@ -135,10 +150,13 @@ export function AddExpenseModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, recordId]);
 
-  const errors = validate({ categoryId, date, description, amount });
+  const errors = validate({ categoryId, date, description, amount, today: today() });
+  // A future date is shown as soon as it is entered, not on blur: the save
+  // button is disabled because of it, and a disabled button needs its reason.
+  const futureDate = futureDateError(date, today());
   const shownErrors: FieldErrors = {
     category: touched.category || fieldErrors.category ? errors.category : undefined,
-    date: touched.date || fieldErrors.date ? errors.date : undefined,
+    date: futureDate ?? serverDateError ?? (touched.date || fieldErrors.date ? errors.date : undefined),
     description: touched.description || fieldErrors.description ? errors.description : undefined,
     amount: touched.amount || fieldErrors.amount ? errors.amount : undefined,
   };
@@ -163,8 +181,10 @@ export function AddExpenseModal({
     if (Object.values(errors).some(Boolean)) {
       setFieldErrors(errors);
       setTouched({ category: true, date: true, description: true, amount: true });
+      if (errors.date) document.getElementById(dateFieldId)?.focus();
       return;
     }
+    if (!baselineChoice.check()) return;
     setFieldErrors({});
     setError(null);
     setSubmitting(true);
@@ -175,9 +195,12 @@ export function AddExpenseModal({
         description,
         vendor: vendor || (editing ? null : undefined),
         amount,
+        ...baselineChoice.requestFields(),
       };
       if (editing && recordId !== undefined) {
-        await api.patch(`/records/expenses/${recordId}`, payload);
+        await api.patch(`/records/expenses/${recordId}`, payload, {
+          serverStateScope: { businessProfileId },
+        });
         toast("Changes saved");
       } else {
         await api.post("/records/expenses", { businessProfileId, ...payload });
@@ -187,7 +210,12 @@ export function AddExpenseModal({
       onSaved();
       onClose();
     } catch (err) {
-      setError(getErrorMessage(err));
+      if (isFutureDateError(err)) {
+        setServerDateError(FUTURE_DATE_MESSAGE);
+        document.getElementById(dateFieldId)?.focus();
+      } else if (!(await baselineChoice.absorb(err))) {
+        setError(getErrorMessage(err));
+      }
     } finally {
       setSubmitting(false);
     }
@@ -211,6 +239,7 @@ export function AddExpenseModal({
   // a second copy of this form alongside Records' own, and a fixed id made
   // every label point at whichever control came first in the document.
   const categoryFieldId = useId();
+  const dateFieldId = useId();
 
   return (
     <Modal open={open} onClose={handleClose} title={editing ? "Edit expense" : "Add expense"}>
@@ -225,14 +254,19 @@ export function AddExpenseModal({
             onBlur={() => markTouched("category")}
           />
         </Field>
-        <Field label="Date" required error={shownErrors.date}>
+        <Field label="Date" htmlFor={dateFieldId} required error={shownErrors.date}>
           <TextInput
             type="date"
             value={date}
-            onChange={(e) => setDate(e.target.value)}
+            max={today()}
+            onChange={(e) => {
+              setDate(e.target.value);
+              setServerDateError(null);
+            }}
             onBlur={() => markTouched("date")}
           />
         </Field>
+        <AvailableFundsBaselineChoice choice={baselineChoice} disabled={submitting || loading} />
         <Field label="Description" required error={shownErrors.description}>
           <TextInput
             value={description}
@@ -280,7 +314,7 @@ export function AddExpenseModal({
           </Callout>
         ) : null}
         {error ? <FormError>{error}</FormError> : null}
-        <Button type="submit" variant="primary" fullWidth disabled={submitting || loading}>
+        <Button type="submit" variant="primary" fullWidth disabled={submitting || loading || futureDate !== null}>
           {submitting ? "Saving…" : editing ? "Save changes" : "Save expense"}
         </Button>
       </form>

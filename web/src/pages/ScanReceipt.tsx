@@ -5,7 +5,8 @@ import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { CategorySelect } from "../components/CategorySelect";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
 import { api } from "../lib/api";
-import { getErrorMessage } from "../lib/errors";
+import { getErrorMessage, isFutureDateError } from "../lib/errors";
+import { FUTURE_DATE_MESSAGE, futureDateError, todayIso } from "../lib/dates";
 /*
  * The payload builder and the plan type both come from lib/receiptConfirm, so
  * this screen and the request it sends cannot disagree about either. "shrink"
@@ -33,7 +34,7 @@ import { ScanProgress } from "./scanReceipt/ScanProgress";
 import { attentionFieldsFor, originOf, provisionalClass } from "./scanReceipt/helpers";
 import {
   FIELD_LABELS,
-  SCAN_POLL_INTERVAL_MS,
+  scanPollDelayMs,
   SCAN_POLL_TIMEOUT_MS,
   receiptUploadSelectionError,
 } from "./scanReceipt/constants";
@@ -62,6 +63,7 @@ import { PrintedReceiptDetails } from "./scanReceipt/PrintedReceiptDetails";
 import { ReceiptProviderConsent } from "./scanReceipt/ReceiptProviderConsent";
 import { ReceiptPagePreview } from "./scanReceipt/ReceiptPagePreview";
 import { useConfirm } from "../components/ConfirmDialog";
+import { AvailableFundsBaselineChoice, useAvailableFundsBaselineChoice } from "../components/AvailableFundsBaselineChoice";
 import {
   IconCamera,
   IconCheck,
@@ -504,6 +506,9 @@ function ScanReceiptForm() {
   const [queueHistory, setQueueHistory] = useState<{ position: number; recordIds: number[] }[]>([]);
 
   const [date, setDate] = useState("");
+  const baselineChoice = useAvailableFundsBaselineChoice(date);
+  // The server's refusal of a future date, kept until the date is edited.
+  const [dateServerError, setDateServerError] = useState<string | null>(null);
   const [description, setDescription] = useState("");
   const [vendor, setVendor] = useState("");
   const [amount, setAmount] = useState<number | "">("");
@@ -977,8 +982,8 @@ function ScanReceiptForm() {
     }
 
     const deadline = Date.now() + SCAN_POLL_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, SCAN_POLL_INTERVAL_MS));
+    for (let attempt = 0; Date.now() < deadline; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, scanPollDelayMs(attempt)));
       signal.throwIfAborted();
       const { data } = await api.get<ReceiptScanResult>(`/records/receipts/${initial.id}`, { signal });
       if (data.processingStatus === "Failed") return data;
@@ -1266,7 +1271,9 @@ function ScanReceiptForm() {
         // Every batch child was accepted before review. Re-queuing local Files
         // here would upload those same stored scans again and strand their
         // original pending reviews. History is the durable continuation path.
-        await refreshActiveReceiptHistory(undefined, target.id);
+        // Not awaited: the scan is already gone from the list, and the refresh
+        // reports its own failure. Waiting on it only held the toast back.
+        void refreshActiveReceiptHistory(undefined, target.id);
         toast(wasBatchChild
           ? "Scan removed. This batch is no longer continuing here; accepted receipts remain in unfinished scans."
           : "Scan removed. Its private files will be deleted in the background.");
@@ -1369,7 +1376,7 @@ function ScanReceiptForm() {
   async function handleConfirm(e: FormEvent) {
     e.preventDefault();
     if (!scan || savePending.current || foreignCurrency) return;
-    const invalidField = !date.trim()
+    const invalidField = !date.trim() || futureDateError(date, todayIso(selected?.timezone))
       ? "date"
       : !description.trim()
         ? "description"
@@ -1381,7 +1388,7 @@ function ScanReceiptForm() {
       setReviewMode("results");
       setConfirmError(
         invalidField === "date"
-          ? "Enter the receipt date before saving."
+          ? date.trim() ? FUTURE_DATE_MESSAGE : "Enter the receipt date before saving."
           : invalidField === "description"
             ? "Describe what this expense was for before saving."
             : "Enter a receipt amount greater than zero before saving.",
@@ -1392,6 +1399,10 @@ function ScanReceiptForm() {
         document.getElementById(field)?.focus();
         validationFocus.current = null;
       }, 0);
+      return;
+    }
+    if (!baselineChoice.check()) {
+      setReviewMode("results");
       return;
     }
     if (!readyToConfirm) {
@@ -1431,31 +1442,34 @@ function ScanReceiptForm() {
       // Two shapes, one endpoint — both built in lib/receiptConfirm, where
       // they are tested against the server's real schema. This request is the
       // one that silently broke against it on mobile.
-      buildReceiptConfirmPayload({
-        expectedScanRevision: scan.scanRevision,
-        ...(candidateSetHash === null
-          ? {}
-          : { duplicateDecision: { action: "SAVE_ANYWAY" as const, candidateSetHash } }),
-        date,
-        description,
-        vendor,
-        amount: Number(amount),
-        isItemised,
-        itemAssignments: items.map((i) => ({ itemId: i.id, categoryId: Number(itemCategories[i.id]) })),
-        additionalItems: addedItems.map((a) => ({
-          name: a.name.trim(),
-          amount: Number(a.amount),
-          categoryId: Number(a.categoryId),
-        })),
-        itemsTotal: itemsTotalCentavos / 100,
-        gapPlan,
-        gapCategoryId: gapCategoryId === "" ? null : gapCategoryId,
-        splits: splits.map((s) => ({
-          categoryId: Number(s.categoryId),
-          amount: Number(isSplit ? s.amount : amount),
-        })),
-      }),
-      { signal },
+      {
+        ...buildReceiptConfirmPayload({
+          expectedScanRevision: scan.scanRevision,
+          ...(candidateSetHash === null
+            ? {}
+            : { duplicateDecision: { action: "SAVE_ANYWAY" as const, candidateSetHash } }),
+          date,
+          description,
+          vendor,
+          amount: Number(amount),
+          isItemised,
+          itemAssignments: items.map((i) => ({ itemId: i.id, categoryId: Number(itemCategories[i.id]) })),
+          additionalItems: addedItems.map((a) => ({
+            name: a.name.trim(),
+            amount: Number(a.amount),
+            categoryId: Number(a.categoryId),
+          })),
+          itemsTotal: itemsTotalCentavos / 100,
+          gapPlan,
+          gapCategoryId: gapCategoryId === "" ? null : gapCategoryId,
+          splits: splits.map((s) => ({
+            categoryId: Number(s.categoryId),
+            amount: Number(isSplit ? s.amount : amount),
+          })),
+        }),
+        ...baselineChoice.requestFields(),
+      },
+      { signal, serverStateScope: { businessProfileId: selected!.id } },
     );
     try {
       let records;
@@ -1472,6 +1486,16 @@ function ScanReceiptForm() {
       const saved = records.data as { id: number }[];
       await finishConfirmedReceipt(saved);
     } catch (err) {
+      if (!signal.aborted && await baselineChoice.absorb(err)) {
+        setReviewMode("results");
+        return;
+      }
+      if (!signal.aborted && isFutureDateError(err)) {
+        setDateServerError(FUTURE_DATE_MESSAGE);
+        setReviewMode("results");
+        window.setTimeout(() => document.getElementById("date")?.focus(), 0);
+        return;
+      }
       if (!signal.aborted && isAxiosError(err) && err.response?.status === 409) {
         const body = err.response.data as Partial<ReceiptDuplicateReview> | undefined;
         if (body?.code === "DUPLICATE_REVIEW_REQUIRED" || body?.code === "DUPLICATE_REVIEW_CHANGED") {
@@ -1515,6 +1539,7 @@ function ScanReceiptForm() {
   /** Clears one review without changing the remaining batch queue. */
   function resetReviewFields() {
     setScan(null);
+    baselineChoice.setDecision(null);
     setPausedScan(null);
     setSplits([{ categoryId: "", amount: "" }]);
     setItemCategories({});
@@ -1761,7 +1786,10 @@ function ScanReceiptForm() {
       : saveRecordCount === 1
         ? "Confirm & save expense"
         : `Confirm & save ${saveRecordCount} expenses`;
+  const receiptToday = todayIso(selected?.timezone);
+  const dateError = futureDateError(date, receiptToday) ?? dateServerError;
   const saveIsBlocked = confirming
+    || dateError !== null
     || !readyToConfirm
     || Boolean(foreignCurrency)
     || duplicateCheckStatus !== "success"
@@ -1973,7 +2001,7 @@ function ScanReceiptForm() {
         <PageHead
           eyebrow="Records"
           title="Scan a receipt"
-          subtitle="Upload clear photos and FinSight will extract the details for you to review."
+          subtitle="Upload photos, then review what FinSight reads."
         />
         <section aria-label="Receipt scan setup" className="mx-auto w-full max-w-5xl 2xl:max-w-6xl">
           <ReceiptWorkflowProgress current="upload" />
@@ -2397,14 +2425,17 @@ function ScanReceiptForm() {
               attention={attentionFields.includes("date")}
               evidence={scan.fieldEvidence?.date}
               origin={originOf(date, scan.extractedDate ? scan.extractedDate.slice(0, 10) : null)}
+              error={dateError}
             >
               <TextInput
                 type="date"
                 required
                 value={date}
+                max={receiptToday}
                 onChange={(e) => {
                   setReviewDirty(true);
                   setDate(e.target.value);
+                  setDateServerError(null);
                   setDuplicateAcknowledged(false);
                 }}
                 className={provisionalClass(
@@ -2412,6 +2443,7 @@ function ScanReceiptForm() {
                 )}
               />
             </ScannedField>
+            <AvailableFundsBaselineChoice choice={baselineChoice} disabled={confirming} />
 
             <ScannedField
               label="Description"
@@ -2993,8 +3025,8 @@ function ScanReceiptForm() {
 
                     <p className="mt-1 text-xs leading-relaxed text-ink-500">
                       {itemGapCentavos > 0
-                        ? "Receipts often add tax or a service charge on top of the item prices, and sometimes a line just doesn't scan."
-                        : "A discount or a voided line usually explains this."}
+                        ? "Usually tax, a service charge, or a line that didn't scan."
+                        : "Usually a discount or a voided line."}
                     </p>
 
                     <div className="mt-2 space-y-1.5">
@@ -3006,7 +3038,7 @@ function ScanReceiptForm() {
                           setGapPlan("proportional");
                         }}
                         label={itemGapCentavos > 0 ? "Tax or a service charge" : "A discount on the whole receipt"}
-                        detail="Split across the categories above, in proportion to what each one came to. Keeps every category's spending accurate."
+                        detail="Split across the categories above, in proportion to each."
                       />
 
                       {canFileGapInOneCategory ? (
@@ -3075,7 +3107,7 @@ function ScanReceiptForm() {
                 label="Category"
                 htmlFor="category"
                 required
-                hint="One receipt can cover more than one kind of spending. Split it if this one does."
+                hint="Split it if it covers more than one kind of spending."
               >
                 <CategorySelect
                   id="category"
@@ -3093,8 +3125,7 @@ function ScanReceiptForm() {
                   </span>
                 </legend>
                 <p className="mt-1 text-xs leading-relaxed text-ink-500">
-                  Every peso on the receipt has to land in a category, so the parts add up to the total
-                  you confirmed above.
+                  The parts must add up to the total above.
                 </p>
 
                 <ul className="mt-2 space-y-2">
@@ -3183,8 +3214,7 @@ function ScanReceiptForm() {
                 <b className="font-semibold">Categories matched from your receipt history.</b>
                 <ResultDetails label="Category suggestion details">
                   <p>
-                    Matches use item names and vendors from receipt records you already confirmed. Change any
-                    category that does not fit; your choices are saved when you confirm.
+                    Matched from receipts you confirmed before. Change any that don’t fit.
                   </p>
                 </ResultDetails>
               </Callout>

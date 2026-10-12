@@ -13,6 +13,7 @@ export function ScannedField({
   optional,
   attention,
   evidence,
+  error,
   children,
 }: {
   label: string;
@@ -24,6 +25,8 @@ export function ScannedField({
   attention?: boolean;
   /** Where this value was read from, when the server could locate it. */
   evidence?: FieldEvidence | null;
+  /** Shown under the control and wired to it, like any Field error. */
+  error?: string | null;
   children: ReactNode;
 }) {
   return (
@@ -32,6 +35,7 @@ export function ScannedField({
       htmlFor={htmlFor}
       required={required}
       optional={optional}
+      error={error}
       labelAction={<OriginChip origin={origin} />}
       wrapLabelAction
       hint={

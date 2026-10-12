@@ -126,7 +126,7 @@ export const TUTORIALS: Tutorial[] = [
   {
     n: 1,
     title: "Setting up your business",
-    body: "Create your account, add a business profile, and set the monthly expenses you expect. That figure is what the recovery target is measured against, so it is worth a moment's thought.",
+    body: "Create your account, add a business profile, and enter starting funds plus a monthly expense estimate. FinSight uses confirmed records to update current funds. Once you confirm a complete past month, its recorded expenses replace the starting estimate as your monthly basis.",
   },
   {
     n: 2,
