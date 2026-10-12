@@ -85,3 +85,24 @@ describe("where the edit is sent", () => {
     expect(recordUpdatePath("sales", 12)).toBe("/records/sales/12");
   });
 });
+
+describe("available-funds baseline contract", () => {
+  const baseline = {
+    includedInAvailableFundsBaseline: false,
+    availableFundsBaselineAt: "2026-07-31T02:15:00.000Z",
+  };
+
+  it("forwards the decision and token together for both record types", () => {
+    expect(buildExpenseUpdatePayload({ ...base, categoryId: 7, ...baseline })).toMatchObject(baseline);
+    expect(buildSalesUpdatePayload({ ...base, ...baseline })).toMatchObject(baseline);
+  });
+
+  it.each([
+    ["expense decision only", () => buildExpenseUpdatePayload({ ...base, categoryId: 7, includedInAvailableFundsBaseline: true })],
+    ["expense token only", () => buildExpenseUpdatePayload({ ...base, categoryId: 7, availableFundsBaselineAt: baseline.availableFundsBaselineAt })],
+    ["sales decision only", () => buildSalesUpdatePayload({ ...base, includedInAvailableFundsBaseline: true })],
+    ["sales token only", () => buildSalesUpdatePayload({ ...base, availableFundsBaselineAt: baseline.availableFundsBaselineAt })],
+  ])("rejects a half-pair for %s", (_name, build) => {
+    expect(build).toThrow(/sent together/i);
+  });
+});

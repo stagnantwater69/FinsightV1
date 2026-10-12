@@ -33,6 +33,8 @@ vi.mock("../../src/services/storage.service", async (importOriginal) => {
     uploadCsvFile: storage.uploadLegacy,
     downloadCsvFile: storage.download,
     deleteCsvFile: storage.remove,
+    listPublicImagePaths: async () => [],
+    deletePublicImagePath: async () => true,
   };
 });
 
@@ -42,6 +44,7 @@ import {
   CsvImportProcessingStatus,
 } from "@prisma/client";
 import { prisma } from "../../src/config/prisma";
+import { CSV_MAX_FILE_BYTES } from "../../src/lib/csvUploadValidation";
 import {
   CSV_AMBIGUOUS_UPLOAD_TOMBSTONE_GRACE_MS,
   CSV_STAGE_CREATION_HOURLY_LIMIT,
@@ -60,6 +63,7 @@ import {
   type StagedConfirmInput,
 } from "../../src/services/csvImport.service";
 import { runAccountDeletionWorkerOnce } from "../../src/services/accountDeletion.service";
+import { PUBLIC_IMAGE_UPLOAD_SETTLE_MS } from "../../src/services/storage.service";
 import { runCsvSourcePurgeWorkerOnce } from "../../src/services/csvSourcePurge.service";
 import {
   disconnectDb,
@@ -137,11 +141,34 @@ beforeEach(async () => {
   storage.remove.mockReset();
   storage.remove.mockResolvedValue(true);
   ctx = await makeOwnerWithProfile({}, ["Inventory"]);
+  await prisma.businessProfile.update({
+    where: { id: ctx.profile.id },
+    data: { availableFundsBaselineDate: new Date("2000-01-01T00:00:00.000Z") },
+  });
 });
 
 afterAll(disconnectDb);
 
 describe("single-upload CSV staging", () => {
+  /*
+   * The database guards staged chunks with its own bound on the chunk index.
+   * When the row cap rose that bound stayed at 30 chunks, so every file over
+   * 30,000 rows passed the parser and then failed the insert with a bare 500.
+   * There is no row cap now, so the largest-row-count 5 MB file must stage.
+   */
+  it("stages the most rows a 5 MB file can hold", async () => {
+    const header = "Date,Description,Amount,Category";
+    const row = `${utcDayString(-1)},a,1,Inventory`;
+    const rows = Math.floor((CSV_MAX_FILE_BYTES - header.length - 1) / (row.length + 1));
+    downloadedCsv = Buffer.from([header, ...Array(rows).fill(row)].join("\n"));
+    expect(downloadedCsv.byteLength).toBeLessThanOrEqual(CSV_MAX_FILE_BYTES);
+
+    const staged = await createStage(downloadedCsv, "largest-file");
+
+    expect(staged.result.totalRows).toBe(rows);
+    expect(await prisma.cSVImportStageChunk.count()).toBe(Math.ceil(rows / 1_000));
+  }, 120_000);
+
   it("uploads and parses once, then reuses the same verified chunks for preview and confirm", async () => {
     const buffer = csvOf(2);
     const first = await createStage(buffer, "single-upload");
@@ -178,6 +205,71 @@ describe("single-upload CSV staging", () => {
     expect(await prisma.cSVImportStageChunk.count()).toBe(0);
     expect(await prisma.expenseRecord.count()).toBe(2);
   });
+
+  it("persists the balance decision and row override for the asynchronous worker", async () => {
+    const baselineAt = new Date("2026-09-15T03:00:00.000Z");
+    await prisma.businessProfile.update({
+      where: { id: ctx.profile.id },
+      data: {
+        availableFundsBaselineAt: baselineAt,
+        availableFundsBaselineDate: new Date("2026-09-15T00:00:00.000Z"),
+      },
+    });
+    const lines = [
+      "Date,Description,Amount,Category",
+      "2026-09-15,Async default,100,Inventory",
+      "2026-09-15,Async override,200,Inventory",
+      ...Array.from(
+        { length: SYNC_ROW_LIMIT - 1 },
+        (_, index) => `2026-09-14,Async ordinary ${index},1,Inventory`,
+      ),
+    ];
+    const staged = await createStage(Buffer.from(lines.join("\n")), "async-baseline-metadata");
+    const accepted = await confirmStagedImport(
+      ctx.user.id,
+      ctx.profile.id,
+      staged.result.stagedUploadId,
+      {
+        ...confirmInput("Async balance classification"),
+        corrections: { "3": { includedInAvailableFundsBaseline: true } },
+        includedInAvailableFundsBaseline: false,
+        availableFundsBaselineAt: baselineAt.toISOString(),
+      },
+    );
+
+    expect(accepted.result.processingStatus).toBe(CsvImportProcessingStatus.PENDING);
+    const pending = await prisma.cSVImportBatch.findUniqueOrThrow({
+      where: { id: accepted.result.batchId },
+    });
+    expect(pending.mappingMeta).toMatchObject({
+      corrections: { "3": { includedInAvailableFundsBaseline: true } },
+      availableFundsClassification: {
+        baselineAt: baselineAt.toISOString(),
+        baselineDate: "2026-09-15",
+        defaultIncluded: false,
+      },
+    });
+
+    expect(await runCsvImportWorkerOnce()).toBe(true);
+    expect(await prisma.cSVImportBatch.findUniqueOrThrow({
+      where: { id: accepted.result.batchId },
+    })).toMatchObject({ processingStatus: CsvImportProcessingStatus.COMPLETE });
+    const classified = await prisma.expenseRecord.findMany({
+      where: {
+        businessProfileId: ctx.profile.id,
+        description: { in: ["Async default", "Async override"] },
+      },
+      orderBy: { description: "asc" },
+    });
+    expect(classified.map((record) => ({
+      description: record.description,
+      included: record.includedInAvailableFundsBaseline,
+      baselineAt: record.availableFundsDeltaBaselineAt?.toISOString(),
+    }))).toEqual([
+      { description: "Async default", included: false, baselineAt: baselineAt.toISOString() },
+      { description: "Async override", included: true, baselineAt: baselineAt.toISOString() },
+    ]);
+  }, 120_000);
 
   it("returns a stable conflict when concurrent uploads reuse a key for different bytes", async () => {
     const firstBuffer = Buffer.from(
@@ -546,7 +638,7 @@ describe("single-upload CSV staging", () => {
 
   it("caps a sub-5 MiB matrix of empty cells before staging", async () => {
     const columnCount = 256;
-    const rowCount = Math.floor(1_000_000 / columnCount) + 1;
+    const rowCount = Math.floor(3_000_000 / columnCount) + 1;
     const headers = Array.from({ length: columnCount }, (_, index) => `h${index}`).join(",");
     const emptyRow = ",".repeat(columnCount - 1);
     const buffer = Buffer.from(`${headers}\n${Array(rowCount).fill(emptyRow).join("\n")}`);
@@ -1077,7 +1169,7 @@ describe("single-upload CSV staging", () => {
         where: { id: ctx.user.id },
         data: {
           status: AccountStatus.DELETION_PENDING,
-          deletionRequestedAt: new Date(),
+          deletionRequestedAt: new Date(Date.now() - PUBLIC_IMAGE_UPLOAD_SETTLE_MS - 1_000),
           deletionStage: AccountDeletionStage.REQUESTED,
           deletionAttempts: 0,
           deletionNextAttemptAt: new Date(),
@@ -1143,7 +1235,7 @@ describe("single-upload CSV staging", () => {
         where: { id: ctx.user.id },
         data: {
           status: AccountStatus.DELETION_PENDING,
-          deletionRequestedAt: new Date(),
+          deletionRequestedAt: new Date(Date.now() - PUBLIC_IMAGE_UPLOAD_SETTLE_MS - 1_000),
           deletionStage: AccountDeletionStage.REQUESTED,
           deletionAttempts: 0,
           deletionNextAttemptAt: new Date(),
@@ -1222,7 +1314,7 @@ describe("single-upload CSV staging", () => {
         where: { id: ctx.user.id },
         data: {
           status: AccountStatus.DELETION_PENDING,
-          deletionRequestedAt: new Date(),
+          deletionRequestedAt: new Date(Date.now() - PUBLIC_IMAGE_UPLOAD_SETTLE_MS - 1_000),
           deletionStage: AccountDeletionStage.REQUESTED,
           deletionAttempts: 0,
           deletionNextAttemptAt: new Date(),
@@ -1294,7 +1386,7 @@ describe("single-upload CSV staging", () => {
         where: { id: ctx.user.id },
         data: {
           status: AccountStatus.DELETION_PENDING,
-          deletionRequestedAt: new Date(),
+          deletionRequestedAt: new Date(Date.now() - PUBLIC_IMAGE_UPLOAD_SETTLE_MS - 1_000),
           deletionStage: AccountDeletionStage.REQUESTED,
           deletionAttempts: 0,
           deletionNextAttemptAt: new Date(),
@@ -1383,7 +1475,7 @@ describe("single-upload CSV staging", () => {
         where: { id: ctx.user.id },
         data: {
           status: AccountStatus.DELETION_PENDING,
-          deletionRequestedAt: new Date(),
+          deletionRequestedAt: new Date(Date.now() - PUBLIC_IMAGE_UPLOAD_SETTLE_MS - 1_000),
           deletionStage: AccountDeletionStage.REQUESTED,
           deletionAttempts: 0,
           deletionNextAttemptAt: new Date(),

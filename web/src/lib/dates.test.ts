@@ -7,7 +7,7 @@
  * defaulted a day early.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { todayIso, toLocalIsoDate } from "./dates";
+import { FUTURE_DATE_MESSAGE, formatCalendarDate, futureDateError, todayIso, toLocalIsoDate } from "./dates";
 
 /*
  * `src` is compiled with `types: ["vite/client"]` and no node types, so
@@ -66,5 +66,36 @@ describe("todayIso under TZ=Asia/Manila", () => {
 
   it("is the date a <input type=\"date\"> default would show", () => {
     expect(todayIso()).not.toBe(new Date().toISOString().slice(0, 10));
+  });
+});
+
+describe("futureDateError", () => {
+  // 16:30 UTC on Sep 30 is 00:30 on Oct 1 in Manila: the server's UTC day and
+  // the business's day disagree until 08:00 local.
+  const JUST_AFTER_MANILA_MIDNIGHT = new Date("2026-09-30T16:30:00.000Z");
+
+  it("accepts yesterday and today and refuses tomorrow", () => {
+    expect(futureDateError("2026-09-16", "2026-09-17")).toBeNull();
+    expect(futureDateError("2026-09-17", "2026-09-17")).toBeNull();
+    expect(futureDateError("2026-09-18", "2026-09-17")).toBe(FUTURE_DATE_MESSAGE);
+  });
+
+  it("leaves an empty date to the required check", () => {
+    expect(futureDateError("", "2026-09-17")).toBeNull();
+  });
+
+  it("measures today in the business's zone near midnight", () => {
+    const manilaToday = toLocalIsoDate(JUST_AFTER_MANILA_MIDNIGHT, "Asia/Manila");
+    expect(manilaToday).toBe("2026-10-01");
+    expect(futureDateError("2026-10-01", manilaToday)).toBeNull();
+    // A business on UTC is still on Sep 30, so Oct 1 is its tomorrow.
+    expect(futureDateError("2026-10-01", toLocalIsoDate(JUST_AFTER_MANILA_MIDNIGHT, "UTC"))).toBe(FUTURE_DATE_MESSAGE);
+    expect(futureDateError("2026-10-02", manilaToday)).toBe(FUTURE_DATE_MESSAGE);
+  });
+});
+
+describe("formatCalendarDate", () => {
+  it("never shifts a stored date by the viewer's zone", () => {
+    expect(formatCalendarDate("2026-10-01")).toMatch(/Oct\w* 1, 2026|1 Oct\w* 2026/);
   });
 });

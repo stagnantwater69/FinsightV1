@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -553,7 +554,16 @@ describe("policy-v1 external evaluator", () => {
     expect(output).not.toContain(paths.firstSourcePath);
     expect(output).not.toContain("private source bytes");
     expect(output).not.toContain("private ground truth values");
-    expect(statSync(paths.outputPath).mode & 0o777).toBe(0o600);
+    if (process.platform === "win32") {
+      // Windows confidentiality uses ACLs rather than POSIX mode bits.
+      const permissions = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+        "$broadSids = @('S-1-1-0', 'S-1-5-11', 'S-1-5-32-545'); $broadAllows = @((Get-Acl -LiteralPath $env:QA_POLICY_REPORT_PATH).Access | Where-Object { $_.AccessControlType -eq 'Allow' -and $broadSids -contains $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value }); Write-Output $broadAllows.Count",
+      ], { env: { ...process.env, QA_POLICY_REPORT_PATH: paths.outputPath }, encoding: "utf8" });
+      expect(permissions.status, permissions.stderr).toBe(0);
+      expect(permissions.stdout.trim()).toBe("0");
+    } else {
+      expect(statSync(paths.outputPath).mode & 0o777).toBe(0o600);
+    }
   });
 
   it("does not turn corpus-floor support into a provider or duplicate promotion approval", () => {
@@ -649,9 +659,9 @@ describe("policy-v1 external evaluator", () => {
 
   it("resolves symlinks before enforcing the outside-repository boundary", () => {
     const paths = makeFixture();
-    const linkPath = join(paths.directory, "manifest-link.csv");
-    symlinkSync(join(REPOSITORY_ROOT, "docs/phase-0/receipt-corpus-intake.example.csv"), linkPath);
-    paths.manifestPath = linkPath;
+    const linkPath = join(paths.directory, "manifest-directory-link");
+    symlinkSync(join(REPOSITORY_ROOT, "docs/phase-0"), linkPath, process.platform === "win32" ? "junction" : "dir");
+    paths.manifestPath = join(linkPath, "receipt-corpus-intake.example.csv");
     expectInputError(() => loadAndValidateInputs(paths), "PRIVATE_PATH_INSIDE_REPOSITORY");
   });
 

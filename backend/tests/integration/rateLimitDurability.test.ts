@@ -2,15 +2,27 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import type { Request, Response } from "express";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../src/config/prisma";
-import { LIMITS, rateLimit, resetRateLimits } from "../../src/middleware/rateLimit.middleware";
+import {
+  LIMITS,
+  rateLimit,
+  refundRateLimitsForError,
+  resetRateLimits,
+  type RateLimitOptions,
+} from "../../src/middleware/rateLimit.middleware";
 import { disconnectDb } from "../setup/testDb";
 
 // NODE_ENV=test normally selects the deterministic in-memory test double.
 // Select the deployed branch explicitly, using only the guarded local test DB.
-function durableLimiter(name: string, limit: number) {
+function durableLimiter(name: string, limit: number): ReturnType<typeof rateLimit>;
+function durableLimiter(options: RateLimitOptions): ReturnType<typeof rateLimit>;
+function durableLimiter(nameOrOptions: string | RateLimitOptions, limit?: number) {
   vi.stubEnv("NODE_ENV", "production");
   try {
-    return rateLimit({ name, limit, windowMs: 60_000 });
+    return rateLimit(
+      typeof nameOrOptions === "string"
+        ? { name: nameOrOptions, limit: limit!, windowMs: 60_000 }
+        : nameOrOptions,
+    );
   } finally {
     vi.unstubAllEnvs();
   }
@@ -22,6 +34,7 @@ async function call(middleware: ReturnType<typeof rateLimit>) {
     statusCode: 0,
     body: undefined as unknown,
     headers: {} as Record<string, string>,
+    locals: {} as Record<string, unknown>,
     setHeader(name: string, value: string) { this.headers[name] = value; },
     status(code: number) { this.statusCode = code; return this; },
     json(body: unknown) { this.body = body; return this; },
@@ -88,5 +101,33 @@ describe("deployed login rate-limit storage", () => {
     expect(recovered.res.statusCode).toBe(429);
     expect(recovered.next).not.toHaveBeenCalled();
     expect((await prisma.apiRateLimit.findMany())[0]!.count).toBe(2);
+  });
+
+  it("refunds a provider outage once from the exact active re-auth window", async () => {
+    const limiter = durableLimiter(LIMITS.AUTH_REAUTH);
+    const first = await call(limiter);
+    await call(limiter);
+
+    expect((await prisma.apiRateLimit.findFirstOrThrow()).count).toBe(2);
+    await refundRateLimitsForError(first.res as unknown as Response, "AUTH_PROVIDER_UNAVAILABLE");
+    expect((await prisma.apiRateLimit.findFirstOrThrow()).count).toBe(1);
+
+    expect(refundRateLimitsForError(first.res as unknown as Response, "AUTH_PROVIDER_UNAVAILABLE")).toBeNull();
+    expect((await prisma.apiRateLimit.findFirstOrThrow()).count).toBe(1);
+  });
+
+  it("does not refund a new window after the registered re-auth window rolls over", async () => {
+    const limiter = durableLimiter(LIMITS.AUTH_REAUTH);
+    const original = await call(limiter);
+    await prisma.apiRateLimit.updateMany({ data: { expiresAt: new Date(Date.now() - 1_000) } });
+
+    await call(limiter);
+    const rolled = await prisma.apiRateLimit.findFirstOrThrow();
+    expect(rolled.count).toBe(1);
+
+    await refundRateLimitsForError(original.res as unknown as Response, "AUTH_PROVIDER_UNAVAILABLE");
+    const afterRefund = await prisma.apiRateLimit.findFirstOrThrow();
+    expect(afterRefund.count).toBe(1);
+    expect(afterRefund.expiresAt.getTime()).toBe(rolled.expiresAt.getTime());
   });
 });

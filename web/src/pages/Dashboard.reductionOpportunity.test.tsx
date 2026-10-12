@@ -4,15 +4,14 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { ThemeProvider } from "../context/ThemeContext";
 import { Dashboard } from "./Dashboard";
-import type { BusinessProfile, DashboardSummary, ReductionOpportunity, ReductionOpportunityResponse, UserPreferences } from "../lib/types";
+import type { BusinessProfile, DashboardSummary, ReductionOpportunity, UserPreferences } from "../lib/types";
+import type { DashboardExpenseOverview } from "../lib/expenseOverview";
 
 /**
  * Dashboard top-opportunity summary card — plan §13.1/§15 Phase 5.
  *
- * A compact link-out only, reusing `GET /insights/reduction-opportunities`
- * (the list is already ranked; the card just reads the first result). Never
- * the full opportunity list, and never shown for limited confidence or an
- * empty/insufficient-history response.
+ * A compact link-out only, using the overview endpoint's ranked projection.
+ * Never the full opportunity list, and never shown for limited confidence.
  */
 
 const profile = {
@@ -81,19 +80,20 @@ function makeOpportunity(overrides: Partial<ReductionOpportunity> = {}): Reducti
   };
 }
 
-function reductionResponse(overrides: Partial<ReductionOpportunityResponse> = {}): ReductionOpportunityResponse {
+function overviewWithTop(topOpportunity: ReductionOpportunity | null): DashboardExpenseOverview {
   return {
-    period: { days: 30, start: "2026-01-01T00:00:00.000Z", end: "2026-01-31T00:00:00.000Z" },
-    dataQuality: { status: "sufficient", currentRecordCount: 10, previousRecordCount: 8, message: null },
-    opportunities: [],
-    detectorVersion: "v1",
-    ...overrides,
+    view: "dashboard",
+    comparison: {
+      status: "available",
+      data: { totals: { current: 12000, previous: 9000 }, categoryTrends: [], period: undefined },
+    },
+    topOpportunity: { status: "available", data: topOpportunity },
   };
 }
 
 let preferences: UserPreferences;
 let selectedProfile: BusinessProfile;
-let reductionHandler: () => unknown;
+let overviewHandler: () => unknown;
 
 vi.mock("../context/AuthContext", () => ({
   useAuth: () => ({ profile: { id: 1, firstName: "Ken" }, preferences }),
@@ -115,7 +115,7 @@ vi.mock("../lib/api", () => ({
   api: {
     get: async (url: string) => {
       if (url === "/dashboard/summary") return { data: summary };
-      if (url === "/insights/reduction-opportunities") return reductionHandler();
+      if (url === "/insights/expense-overview") return overviewHandler();
       throw new Error(`unmocked GET ${url}`);
     },
   },
@@ -147,7 +147,7 @@ beforeAll(() => {
 beforeEach(() => {
   preferences = { showDashboardMascotMessage: false, tourStatus: null, tourStep: null, tourAlwaysShow: false };
   selectedProfile = profile;
-  reductionHandler = () => ({ data: reductionResponse({ opportunities: [makeOpportunity()] }) });
+  overviewHandler = () => ({ data: overviewWithTop(makeOpportunity()) });
 });
 
 describe("Dashboard top reduction opportunity card", () => {
@@ -157,38 +157,38 @@ describe("Dashboard top reduction opportunity card", () => {
     expect(await screen.findByText("Reduction opportunity")).toBeInTheDocument();
     expect(screen.getByText("Office Supplies made up a large share of expenses this period.")).toBeInTheDocument();
     expect(screen.getByText("PHP 7,654")).toBeInTheDocument();
-    const link = screen.getByRole("link", { name: "Review opportunity →" });
+    const link = screen.getByRole("link", { name: "Review opportunity" });
     expect(link).toHaveAttribute("href", "/insights/expense-behavior");
   });
 
   it("does not show the card when confidence is limited", async () => {
-    reductionHandler = () => ({
-      data: reductionResponse({ opportunities: [makeOpportunity({ confidence: "limited" })] }),
+    overviewHandler = () => ({ data: overviewWithTop(makeOpportunity({ confidence: "limited" })) });
+    renderDashboard();
+
+    await waitFor(() => expect(screen.getByText("Available funds")).toBeInTheDocument());
+    expect(screen.queryByText("Reduction opportunity")).not.toBeInTheDocument();
+  });
+
+  it("does not show the card when there is no top opportunity", async () => {
+    overviewHandler = () => ({ data: overviewWithTop(null) });
+    renderDashboard();
+
+    await waitFor(() => expect(screen.getByText("Available funds")).toBeInTheDocument());
+    expect(screen.queryByText("Reduction opportunity")).not.toBeInTheDocument();
+  });
+
+  it("keeps the dashboard usable when only the opportunity panel is unavailable", async () => {
+    overviewHandler = () => ({
+      data: {
+        ...overviewWithTop(null),
+        topOpportunity: { status: "unavailable", data: null },
+      } satisfies DashboardExpenseOverview,
     });
     renderDashboard();
 
-    await waitFor(() => expect(screen.getByText("Available business funds")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Available funds")).toBeInTheDocument());
     expect(screen.queryByText("Reduction opportunity")).not.toBeInTheDocument();
-  });
-
-  it("does not show the card when the opportunities list is empty", async () => {
-    reductionHandler = () => ({ data: reductionResponse({ opportunities: [] }) });
-    renderDashboard();
-
-    await waitFor(() => expect(screen.getByText("Available business funds")).toBeInTheDocument());
-    expect(screen.queryByText("Reduction opportunity")).not.toBeInTheDocument();
-  });
-
-  it("does not show the card when the request fails", async () => {
-    reductionHandler = () => {
-      throw new Error("Request failed with status code 500");
-    };
-    renderDashboard();
-
-    await waitFor(() => expect(screen.getByText("Available business funds")).toBeInTheDocument());
-    expect(screen.queryByText("Reduction opportunity")).not.toBeInTheDocument();
-    // Quiet failure — no page-level error banner over an otherwise-working dashboard.
-    expect(screen.queryByText(/status code 500/)).not.toBeInTheDocument();
+    expect(screen.getByText("Reduction opportunities unavailable.")).toBeInTheDocument();
   });
 
   it("clears a stale card from the previous business profile on switch", async () => {
@@ -196,7 +196,7 @@ describe("Dashboard top reduction opportunity card", () => {
     expect(await screen.findByText("Reduction opportunity")).toBeInTheDocument();
 
     selectedProfile = profileB;
-    reductionHandler = () => ({ data: reductionResponse({ opportunities: [] }) });
+    overviewHandler = () => ({ data: overviewWithTop(null) });
     rerender(
       <MemoryRouter>
         <ThemeProvider>

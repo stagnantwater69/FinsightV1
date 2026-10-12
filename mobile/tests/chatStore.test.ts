@@ -90,6 +90,7 @@ function fakeTransport(over: Partial<ChatTransport> = {}) {
     ),
     renameConversation: vi.fn(async () => undefined),
     deleteConversation: vi.fn(async () => undefined),
+    rateMessage: vi.fn(async () => undefined),
     ...over,
   } satisfies ChatTransport;
 }
@@ -227,6 +228,29 @@ describe("what survives closing the sheet", () => {
     expect(store.getState().messages).toEqual([]);
     expect(store.getState().conversations).toEqual([]);
     expect(store.getState().listLoaded).toBe(false);
+  });
+
+  it("ignores a pre-cleanup list response after the same profile is activated again", async () => {
+    let finishOld!: (items: Conversation[]) => void;
+    const oldRequest = new Promise<Conversation[]>((resolve) => {
+      finishOld = resolve;
+    });
+    const listConversations = vi
+      .fn<ChatTransport["listConversations"]>()
+      .mockReturnValueOnce(oldRequest)
+      .mockResolvedValueOnce([conversation(8, { title: "Current list" })]);
+    const store = ready(fakeTransport({ listConversations }));
+
+    store.ensureList();
+    store.setBusinessProfile(null);
+    store.setBusinessProfile(1);
+    store.ensureList();
+    await Promise.resolve();
+    expect(store.getState().conversations.map((item) => item.title)).toEqual(["Current list"]);
+
+    finishOld([conversation(3, { title: "Stale list" })]);
+    await oldRequest;
+    expect(store.getState().conversations.map((item) => item.title)).toEqual(["Current list"]);
   });
 });
 
@@ -442,5 +466,76 @@ describe("the outage and amount disclosures", () => {
     // And it does not linger over the next answer, which was about something else.
     await store.send("And next month?");
     expect(store.getState().detectedAmount).toBeNull();
+  });
+});
+
+describe("Explain this flag — the focus", () => {
+  it("starts a fresh thread and sends the flag's id with the first question only", async () => {
+    const transport = fakeTransport();
+    const store = ready(transport);
+    await store.send("an earlier, unrelated question");
+    expect(store.getState().activeId).toBe(7);
+
+    store.prepareQuestion("Why was this flagged?", undefined, { kind: "finding", findingId: 51 });
+    // A focused question gets its own thread rather than inheriting the open one.
+    expect(store.getState().activeId).toBeNull();
+    expect(store.getState().messages).toEqual([]);
+
+    await store.send(store.getState().input);
+    expect(transport.createConversation).toHaveBeenLastCalledWith(
+      expect.objectContaining({ question: "Why was this flagged?", focus: { kind: "finding", findingId: 51 } }),
+    );
+
+    // The server holds the focus from here; the client does not resend it.
+    await store.send("Is that normal?");
+    expect(transport.sendMessage).toHaveBeenLastCalledWith(7, "Is that normal?");
+  });
+
+  it("keeps the focus with the question when the send fails, so a retry is still about that flag", async () => {
+    const transport = fakeTransport({
+      createConversation: vi.fn(async () => {
+        throw new Error("offline");
+      }),
+    });
+    const store = ready(transport);
+    store.prepareQuestion("Why was this flagged?", undefined, { kind: "finding", findingId: 51 });
+    await store.send(store.getState().input);
+    expect(store.getState().input).toBe("Why was this flagged?");
+    expect(store.getState().pendingFocus).toEqual({ kind: "finding", findingId: 51 });
+  });
+
+  it("never carries a focus into a plain prepared question", () => {
+    const store = ready(fakeTransport());
+    store.prepareQuestion("Why was this flagged?", undefined, { kind: "finding", findingId: 51 });
+    store.prepareQuestion("Something general");
+    expect(store.getState().pendingFocus).toBeNull();
+  });
+});
+
+describe("rating a reply", () => {
+  it("applies the thumb at once and saves it for the open conversation", async () => {
+    const transport = fakeTransport();
+    const store = ready(transport);
+    await store.send("How am I doing?");
+    const reply = store.getState().messages.at(-1)!;
+
+    await store.rate(reply.id, "up");
+    expect(store.getState().messages.at(-1)!.feedback).toBe("up");
+    expect(transport.rateMessage).toHaveBeenCalledWith(7, reply.id, "up");
+  });
+
+  it("rolls the thumb back and says so when saving fails", async () => {
+    const transport = fakeTransport({
+      rateMessage: vi.fn(async () => {
+        throw new Error("Could not save that.");
+      }),
+    });
+    const store = ready(transport);
+    await store.send("How am I doing?");
+    const reply = store.getState().messages.at(-1)!;
+
+    await store.rate(reply.id, "down");
+    expect(store.getState().messages.at(-1)!.feedback ?? null).toBeNull();
+    expect(store.getState().error).toBe("Could not save that.");
   });
 });

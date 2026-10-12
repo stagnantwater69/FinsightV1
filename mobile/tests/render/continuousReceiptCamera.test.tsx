@@ -535,3 +535,69 @@ describe('native receipt camera UI contract', () => {
     expect(mocks.cleanup).not.toHaveBeenCalled();
   });
 });
+
+/*
+ * What this proves: the camera ASKS for these files to be deleted, at the
+ * right moment. Whether they are gone from a phone's cache still needs
+ * physical-device verification.
+ */
+describe('analysis and gallery copies do not outlive their use', () => {
+  // Wider than ANALYSIS_MAX_WIDTH, so the checks send a downscaled copy.
+  const large = { width: 2000, height: 4000, originalWidth: 2400, originalHeight: 4800 };
+
+  it('deletes the quality-check downscale once the check has answered', async () => {
+    mocks.upload.mockResolvedValue({ score: 0.9, issues: [] });
+    const q = await screen();
+    await acceptNative('qc', large);
+
+    await fireEvent.press(q.getByRole('button', { name: 'More actions' }));
+    await fireEvent.press(q.getByRole('button', { name: 'Check quality' }));
+    await act(async () => {});
+
+    expect(mocks.manipulate).toHaveBeenCalledWith('file:///qc-scan.jpg', [{ resize: expect.anything() }], expect.anything());
+    expect(mocks.cleanup).toHaveBeenCalledWith(['file:///qc-scan.jpg-edited.jpg']);
+    expect(mocks.cleanup.mock.calls.flat(2)).not.toContain('file:///qc-scan.jpg');
+  });
+
+  it('deletes the quality-check downscale when the check fails too', async () => {
+    mocks.upload.mockRejectedValue(new Error('offline'));
+    const q = await screen();
+    await acceptNative('qcfail', large);
+
+    await fireEvent.press(q.getByRole('button', { name: 'More actions' }));
+    await fireEvent.press(q.getByRole('button', { name: 'Check quality' }));
+    await act(async () => {});
+
+    expect(mocks.cleanup).toHaveBeenCalledWith(['file:///qcfail-scan.jpg-edited.jpg']);
+  });
+
+  it('deletes the edge-detection downscale once the edges come back', async () => {
+    mocks.upload.mockResolvedValue({ corners: null, confidence: 0 });
+    const q = await screen();
+    await acceptNative('edges', large);
+
+    await fireEvent.press(q.getByRole('button', { name: 'Crop' }));
+    await fireEvent.press(q.getByRole('button', { name: 'Find edges' }));
+    await act(async () => {});
+
+    expect(mocks.manipulate).toHaveBeenCalledWith('file:///edges-raw.jpg', [{ resize: expect.anything() }], expect.anything());
+    expect(mocks.cleanup).toHaveBeenCalledWith(['file:///edges-raw.jpg-edited.jpg']);
+    expect(mocks.cleanup.mock.calls.flat(2)).not.toContain('file:///edges-raw.jpg');
+  });
+
+  it('deletes the picker copy of a gallery photo once it is converted, and keeps its name as identity', async () => {
+    const done = vi.fn();
+    mocks.gallery.mockResolvedValueOnce({ canceled: false, assets: [{ uri: 'file:///picked.jpg', width: 1000, height: 2000 }] } as any);
+    const q = await screen({ onDone: done });
+
+    await fireEvent.press(q.getByRole('button', { name: 'Gallery' }));
+    await act(async () => {});
+
+    expect(mocks.cleanup).toHaveBeenCalledWith(['file:///picked.jpg']);
+    await fireEvent.press(q.getByRole('button', { name: 'Use this receipt' }));
+    expect(done.mock.calls[0]![0][0]).toMatchObject({
+      sourceAssetUri: 'file:///picked.jpg',
+      originalUri: 'file:///picked.jpg-edited.jpg',
+    });
+  });
+});

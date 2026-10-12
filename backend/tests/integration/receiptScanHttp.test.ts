@@ -18,11 +18,11 @@ vi.mock("../../src/services/storage.service", async (importOriginal) => {
   const { tinyReceiptJpeg } = await import("../helpers/receiptImageFixtures");
   const storedBytes = tinyReceiptJpeg();
   // The real TTL, so the ten-minute assertion is not against a number this mock made up.
-  const { RECEIPT_URL_TTL_SECONDS } = await importOriginal<typeof import("../../src/services/storage.service")>();
+  const actual = await importOriginal<typeof import("../../src/services/storage.service")>();
   return {
+    ...actual,
     uploadReceiptImage: vi.fn(async () => "1/mock-receipt.jpg"),
     uploadCsvFile: vi.fn(async () => "1/mock.csv"),
-    RECEIPT_URL_TTL_SECONDS,
     signedReceiptImageUrl: vi.fn(async () => "https://example.test/signed.jpg"),
     deleteReceiptImage: vi.fn(async () => true),
     inspectReceiptImage: vi.fn(async () => ({ sizeBytes: storedBytes.length, mimetype: "image/jpeg" })),
@@ -233,7 +233,8 @@ describe("POST /api/v1/records/receipts", () => {
         contentType: "image/jpeg",
       });
 
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(413);
+    expect(response.body).toEqual({ error: "Uploaded file is too large", code: "UPLOAD_FILE_TOO_LARGE" });
     expect(uploadReceiptImage).not.toHaveBeenCalled();
     expect(await prisma.receiptScan.count()).toBe(0);
     await expectNoNewReceiptUploadTempDirectories(before);

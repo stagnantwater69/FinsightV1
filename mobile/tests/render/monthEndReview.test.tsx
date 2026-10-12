@@ -1,6 +1,6 @@
 import React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, fireEvent, waitFor } from '@testing-library/react-native';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, render, fireEvent, waitFor } from '@testing-library/react-native';
 
 import * as fixtures from './support/fixtures';
 import type { RecoveryMonthEndReview } from '../../src/lib/types';
@@ -55,11 +55,25 @@ vi.mock('../../src/context/BusinessProfileContext', () => ({
 }));
 
 const { ThemeProvider } = await import('../../src/context/ThemeContext');
+const {
+  beginServerStateSession,
+  clearServerStateCache,
+  invalidateServerState,
+} = await import('../../src/lib/serverStateCache');
 const withTheme = (node: React.ReactNode) => <ThemeProvider initialMode="light">{node}</ThemeProvider>;
 
 const REVIEWABLE: RecoveryMonthEndReview = {
   status: 'reviewable',
   month: '2026-07',
+  monthlyExpenseBasis: {
+    amount: 50_000,
+    source: 'owner_estimate',
+    sourceMonth: null,
+    ownerEstimate: 50_000,
+    recordsCompleteThroughMonth: null,
+    recordsCompleteThroughConfirmedAt: null,
+    eligibleRecordCount: 0,
+  },
   coveragePercent: 92.4,
   surplusOrShortfall: -3800,
   strongestOpenDay: { date: '2026-07-14', sales: 5200 },
@@ -84,11 +98,17 @@ async function renderScreen(navigation: any = { navigate: vi.fn() }) {
 }
 
 beforeEach(() => {
+  clearServerStateCache();
   apiGet.mockReset();
   apiPost.mockReset();
   apiPut.mockReset();
   apiPatch.mockReset();
   apiDelete.mockReset();
+});
+
+afterEach(async () => {
+  await cleanup();
+  clearServerStateCache();
 });
 
 describe('MonthEndReviewScreen — not yet reviewable', () => {
@@ -102,6 +122,35 @@ describe('MonthEndReviewScreen — not yet reviewable', () => {
 });
 
 describe('MonthEndReviewScreen — reviewable', () => {
+  it('keeps the cached review visible and explains a failed refresh', async () => {
+    beginServerStateSession('month-end-refresh');
+    let failRefresh = false;
+    apiGet.mockImplementation((path: string) => {
+      if (path !== '/insights/recovery/month-end-review') {
+        return Promise.reject(new Error(`unexpected path ${path}`));
+      }
+      return failRefresh
+        ? Promise.reject(new Error('Could not refresh this month-end review.'))
+        : Promise.resolve(REVIEWABLE);
+    });
+
+    const queries = await renderScreen();
+    expect(await queries.findByText('Coverage for July 2026')).toBeTruthy();
+    expect(queries.getByText('Updated just now')).toBeTruthy();
+
+    failRefresh = true;
+    invalidateServerState({ pathPrefixes: ['/insights/recovery/month-end-review'] });
+
+    expect(await queries.findByText("Couldn't refresh")).toBeTruthy();
+    expect(queries.getByText('Coverage for July 2026')).toBeTruthy();
+    expect(queries.getByText(/Could not refresh this month-end review/)).toBeTruthy();
+
+    failRefresh = false;
+    fireEvent.press(queries.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(queries.queryByText("Couldn't refresh")).toBeNull());
+    expect(queries.getByText('Coverage for July 2026')).toBeTruthy();
+  });
+
   it('frames a shortfall as a positive peso amount with the word "shortfall", never a negative-looking figure', async () => {
     apiGet.mockResolvedValue(REVIEWABLE);
     const queries = await renderScreen();
@@ -109,6 +158,31 @@ describe('MonthEndReviewScreen — reviewable', () => {
     const text = [line.props.children].flat().join('');
     expect(text).not.toMatch(/-/);
     expect(text).toMatch(/3,800/);
+  });
+
+  it('shows the owner-estimate basis and explains its provenance', async () => {
+    apiGet.mockResolvedValue(REVIEWABLE);
+    const queries = await renderScreen();
+    await queries.findByText('PHP 50,000');
+    expect(queries.getByText(/using your starting estimate/i)).toBeTruthy();
+  });
+
+  it('shows the complete-month basis and source month', async () => {
+    apiGet.mockResolvedValue({
+      ...REVIEWABLE,
+      monthlyExpenseBasis: {
+        amount: 80_000,
+        source: 'previous_complete_month',
+        sourceMonth: '2026-06',
+        ownerEstimate: 50_000,
+        recordsCompleteThroughMonth: '2026-06',
+        recordsCompleteThroughConfirmedAt: '2026-07-01T02:30:00.000Z',
+        eligibleRecordCount: 12,
+      },
+    });
+    const queries = await renderScreen();
+    await queries.findByText('PHP 80,000');
+    expect(queries.getByText(/12 eligible expense records from June 2026/i)).toBeTruthy();
   });
 
   it('frames a surplus with the word "surplus"', async () => {
@@ -176,7 +250,10 @@ describe('MonthEndReviewScreen — reviewable', () => {
     const queries = await renderScreen({ navigate });
     const editLink = await queries.findByText('Edit business profile');
     fireEvent.press(editLink);
-    expect(navigate).toHaveBeenCalledWith('More', { screen: 'BusinessProfileForm' });
+    expect(navigate).toHaveBeenCalledWith('More', {
+      screen: 'BusinessProfileForm',
+      params: { profile: fixtures.businessProfile },
+    });
     expect(apiPut).not.toHaveBeenCalled();
     expect(apiPatch).not.toHaveBeenCalled();
   });

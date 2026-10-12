@@ -5,6 +5,8 @@ import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ScanReceipt } from "./ScanReceipt";
 import type { ReceiptScanResult } from "./scanReceipt/types";
+import { AxiosError } from "axios";
+import { FUTURE_DATE_MESSAGE, todayIso, toLocalIsoDate } from "../lib/dates";
 
 if (!HTMLDialogElement.prototype.showModal) {
   HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
@@ -1620,5 +1622,56 @@ describe("receipt upload and review", () => {
     await user.click(screen.getByRole("button", { name: "Scan receipt" }));
     await screen.findByRole("link", { name: "Enter the PHP amount manually" });
     expect(screen.queryByRole("button", { name: /Confirm & save/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("receipt dates after today", () => {
+  const tomorrow = () => toLocalIsoDate(new Date(Date.now() + 86_400_000));
+  const confirms = () => mocks.post.mock.calls.filter(([url]) => String(url).endsWith("/confirm"));
+
+  async function openReview(user: ReturnType<typeof userEvent.setup>) {
+    render(page());
+    await user.upload(screen.getByLabelText(/Receipt photo/), photo());
+    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
+    await screen.findByRole("heading", { name: "Review receipt" });
+    await user.selectOptions(screen.getByLabelText(/^Category/), "2");
+  }
+
+  it("shows the error on the date field, blocks saving, and sends nothing", async () => {
+    const user = userEvent.setup();
+    await openReview(user);
+    const date = screen.getByLabelText(/^Date/);
+    expect(date).toHaveAttribute("max", todayIso());
+
+    // Typed rather than picked: `max` does not stop a typed date.
+    fireEvent.change(date, { target: { value: tomorrow() } });
+
+    expect(await screen.findByText(FUTURE_DATE_MESSAGE)).toBeInTheDocument();
+    expect(date).toHaveAttribute("aria-invalid", "true");
+    expect(date.getAttribute("aria-describedby")).toContain("date-error");
+    expect(screen.getByRole("button", { name: "Confirm & save expense" })).toBeDisabled();
+    expect(confirms()).toHaveLength(0);
+
+    fireEvent.change(date, { target: { value: todayIso() } });
+    expect(screen.queryByText(FUTURE_DATE_MESSAGE)).not.toBeInTheDocument();
+  });
+
+  it("puts the server's refusal on the date field and moves focus there", async () => {
+    const user = userEvent.setup();
+    mocks.post.mockImplementation(async (url: string) => {
+      if (url.endsWith("/confirm")) {
+        throw new AxiosError("Bad Request", "ERR_BAD_REQUEST", undefined, undefined, {
+          status: 400,
+          data: { error: FUTURE_DATE_MESSAGE, code: "FUTURE_DATE", field: "date" },
+        } as never);
+      }
+      return { data: receipt };
+    });
+    await openReview(user);
+    await user.click(screen.getByRole("button", { name: "Confirm & save expense" }));
+
+    expect(await screen.findByText(FUTURE_DATE_MESSAGE)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText(/^Date/)).toHaveFocus());
+    expect(confirms()).toHaveLength(1);
   });
 });

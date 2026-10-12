@@ -18,10 +18,21 @@ const profile = { id: 1, name: "Sari-sari" } as unknown as BusinessProfile;
 let currentResponse: RecoveryMonthEndReview;
 let getCalls: { url: string; params: Record<string, unknown> }[] = [];
 let failNextCall = false;
+let monthsResponse: string[] | Error = [];
+
+function monthKey(offset: number): string {
+  const now = new Date();
+  const d = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
 
 vi.mock("../lib/api", () => ({
   api: {
     get: async (url: string, config?: { params?: Record<string, unknown> }) => {
+      if (url === "/records/months") {
+        if (monthsResponse instanceof Error) throw monthsResponse;
+        return { data: { months: monthsResponse } };
+      }
       getCalls.push({ url, params: config?.params ?? {} });
       if (url === "/insights/recovery/month-end-review") {
         if (failNextCall) {
@@ -51,6 +62,15 @@ function reviewable(overrides: Partial<Extract<RecoveryMonthEndReview, { status:
   return {
     status: "reviewable" as const,
     month: "2026-06",
+    monthlyExpenseBasis: {
+      amount: 20_000,
+      source: "owner_estimate" as const,
+      sourceMonth: null,
+      ownerEstimate: 20_000,
+      recordsCompleteThroughMonth: null,
+      recordsCompleteThroughConfirmedAt: null,
+      eligibleRecordCount: 0,
+    },
     coveragePercent: 82,
     surplusOrShortfall: -3600,
     strongestOpenDay: { date: "2026-06-14", sales: 4200 },
@@ -73,24 +93,32 @@ beforeEach(() => {
   getCalls = [];
   failNextCall = false;
   currentResponse = reviewable();
+  // The business has records this month, last month, and two older months.
+  monthsResponse = [monthKey(0), monthKey(-1), "2026-05", "2025-11"];
 });
 
 describe("Recovery Target — month-end review (plan §10.9)", () => {
-  it("defaults the month picker to last month", async () => {
+  it("offers only ended months with records, newest first, and opens on the newest", async () => {
     renderPage();
     await waitFor(() => expect(getCalls.length).toBeGreaterThan(0));
-    const now = new Date();
-    const last = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const expected = `${last.getFullYear()}-${String(last.getMonth() + 1).padStart(2, "0")}`;
-    expect(getCalls[0].params.month).toBe(expected);
-    const input = screen.getByLabelText("Month to review") as HTMLInputElement;
-    expect(input.value).toBe(expected);
+    expect(getCalls[0].params.month).toBe(monthKey(-1));
+    const select = screen.getByLabelText("Month to review") as HTMLSelectElement;
+    expect(select.value).toBe(monthKey(-1));
+    // The current month has records but has not ended, so it is not offered.
+    expect([...select.options].map((option) => option.value)).toEqual([monthKey(-1), "2026-05", "2025-11"]);
+  });
+
+  it("falls back to last month when the business has no ended months with records", async () => {
+    monthsResponse = [monthKey(0)];
+    renderPage();
+    await waitFor(() => expect(getCalls.length).toBeGreaterThan(0));
+    expect(getCalls[0].params.month).toBe(monthKey(-1));
   });
 
   it("shows a non-alarming message for a not-yet-reviewable month", async () => {
     currentResponse = { status: "not_yet_reviewable", month: "2026-08" };
     renderPage();
-    expect(await screen.findByText(/hasn't ended yet/i)).toBeInTheDocument();
+    expect(await screen.findByText(/hasn.t ended yet/i)).toBeInTheDocument();
     expect(screen.queryByText(/couldn't load/i)).not.toBeInTheDocument();
   });
 
@@ -107,6 +135,29 @@ describe("Recovery Target — month-end review (plan §10.9)", () => {
     expect(await screen.findByText(/surplus/i)).toBeInTheDocument();
   });
 
+  it("shows the owner-estimate basis and explains its provenance", async () => {
+    renderPage();
+    expect(await screen.findByText("PHP 20,000")).toBeInTheDocument();
+    expect(screen.getByText(/using your starting estimate/i)).toBeInTheDocument();
+  });
+
+  it("shows the complete-month basis and source month", async () => {
+    currentResponse = reviewable({
+      monthlyExpenseBasis: {
+        amount: 80_000,
+        source: "previous_complete_month",
+        sourceMonth: "2026-05",
+        ownerEstimate: 50_000,
+        recordsCompleteThroughMonth: "2026-05",
+        recordsCompleteThroughConfirmedAt: "2026-06-01T02:30:00.000Z",
+        eligibleRecordCount: 14,
+      },
+    });
+    renderPage();
+    expect(await screen.findByText("PHP 80,000")).toBeInTheDocument();
+    expect(screen.getByText(/14 eligible expense records from May 2026/i)).toBeInTheDocument();
+  });
+
   it("shows the missing/provisional day count as a fraction of open days", async () => {
     currentResponse = reviewable({ missingOrProvisionalDayCount: 3, openDayCount: 26 });
     renderPage();
@@ -118,7 +169,7 @@ describe("Recovery Target — month-end review (plan §10.9)", () => {
     currentResponse = reviewable({ finalAdjustedDailyTarget: null });
     renderPage();
     expect(await screen.findByText(/not available/i)).toBeInTheDocument();
-    expect(screen.getByText(/closed day/i)).toBeInTheDocument();
+    expect(screen.getByText(/last day of the month was closed/i)).toBeInTheDocument();
   });
 
   it("shows the final adjusted daily target when present", async () => {
@@ -131,11 +182,11 @@ describe("Recovery Target — month-end review (plan §10.9)", () => {
     currentResponse = reviewable({ baselineAppearsOffFromPattern: false });
     renderPage();
     await screen.findByText(/questions to consider/i);
-    expect(screen.queryByText(/may not closely match/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/may not match/i)).not.toBeInTheDocument();
 
     currentResponse = reviewable({ baselineAppearsOffFromPattern: true });
     fireEvent.change(screen.getByLabelText("Month to review"), { target: { value: "2025-11" } });
-    expect(await screen.findByText(/may not closely match/i)).toBeInTheDocument();
+    expect(await screen.findByText(/may not match/i)).toBeInTheDocument();
   });
 
   it("renders suggested questions as plain read-only text, with no per-question control", async () => {
@@ -145,9 +196,9 @@ describe("Recovery Target — month-end review (plan §10.9)", () => {
       expect(screen.getByText(question)).toBeInTheDocument();
     }
     // No button anywhere on the page that could mutate a setting from a
-    // suggestion — the only interactive control besides the month
-    // picker/submit is the generic "Edit business profile" link.
-    const buttons = screen.getAllByRole("button");
+    // suggestion — the only interactive controls are the month picker and
+    // the generic "Edit business profile" link.
+    const buttons = screen.queryAllByRole("button");
     for (const button of buttons) {
       expect(button.textContent).not.toMatch(/apply|use this|update settings/i);
     }
@@ -184,9 +235,9 @@ describe("Recovery Target — month-end review (plan §10.9)", () => {
   it("surfaces a retryable error state and recovers on Retry", async () => {
     failNextCall = true;
     renderPage();
-    expect(await screen.findByText(/couldn't load this month's review/i)).toBeInTheDocument();
+    expect(await screen.findByText(/review couldn.t load/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /retry/i }));
     await screen.findByText(/questions to consider/i);
-    expect(screen.queryByText(/couldn't load this month's review/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/review couldn.t load/i)).not.toBeInTheDocument();
   });
 });

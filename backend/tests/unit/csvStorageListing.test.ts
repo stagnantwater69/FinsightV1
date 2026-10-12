@@ -4,6 +4,7 @@ const { list } = vi.hoisted(() => ({ list: vi.fn() }));
 
 vi.mock("../../src/config/supabase", () => ({
   supabaseAdmin: { storage: { from: vi.fn(() => ({ list })) } },
+  SUPABASE_REQUEST_TIMEOUT_MS: 60_000,
 }));
 
 import { listCsvFilesForProfile } from "../../src/services/storage.service";

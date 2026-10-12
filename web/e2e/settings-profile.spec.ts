@@ -75,10 +75,13 @@ test("business profile exposes dirty, cancel, and saved states", async ({
     page.getByRole("heading", { name: "Business identity" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Planning figures" }),
+    page.getByRole("heading", { name: "Starting figures" }),
   ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Business tools" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Recorded financial position" }),
   ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Where these settings are used" }),

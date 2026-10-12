@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { Categories } from "./Categories";
@@ -28,6 +28,10 @@ const categories: ExpenseCategory[] = [
 
 const createCategory = vi.fn();
 const updateCategory = vi.fn();
+const refresh = vi.fn();
+let loadingError: string | null = null;
+let categoryRows = categories;
+let loading = false;
 
 vi.mock("../context/BusinessProfileContext", () => ({
   useBusinessProfiles: () => ({ selected: profile }),
@@ -35,11 +39,12 @@ vi.mock("../context/BusinessProfileContext", () => ({
 
 vi.mock("../context/ExpenseCategoryContext", () => ({
   useExpenseCategories: () => ({
-    categories,
-    loading: false,
+    categories: categoryRows,
+    loading,
+    loadingError,
     createCategory,
     updateCategory,
-    refresh: vi.fn(),
+    refresh,
   }),
 }));
 
@@ -52,10 +57,61 @@ function renderPage() {
 }
 
 beforeEach(() => {
+  loadingError = null;
+  categoryRows = categories;
+  loading = false;
+  refresh.mockReset();
+  refresh.mockResolvedValue(undefined);
   createCategory.mockReset();
   createCategory.mockResolvedValue({ ...categories[0], id: 2, name: "New" });
   updateCategory.mockReset();
   updateCategory.mockResolvedValue({ ...categories[0], costBehavior: "VARIABLE" });
+});
+
+describe("category error recovery", () => {
+  it("shows a retryable load failure separately from a successful empty list", async () => {
+    categoryRows = [];
+    loadingError = "Could not load this business's categories";
+    renderPage();
+    expect(screen.getByRole("alert")).toHaveTextContent(loadingError);
+    expect(screen.queryByText(/No categories yet/i)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Retry loading categories" }));
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the creation error separate from the category list's loading error", async () => {
+    loadingError = "Category list unavailable";
+    createCategory.mockRejectedValueOnce(new Error("A category with that name already exists"));
+    renderPage();
+    await userEvent.click(screen.getByRole("button", { name: "+ New category" }));
+    await userEvent.type(screen.getByLabelText(/^Name/), "Rent");
+    await userEvent.click(screen.getByRole("button", { name: "Save category" }));
+    expect(await screen.findByText("A category with that name already exists")).toBeVisible();
+    expect(screen.getByText(/Category list unavailable/)).toBeVisible();
+    expect(screen.getByLabelText(/^Name/)).toHaveValue("Rent");
+  });
+
+  it("reports an inline classification failure and restores the last known choice", async () => {
+    updateCategory.mockRejectedValueOnce(new Error("Classification could not be saved"));
+    renderPage();
+    const select = screen.getAllByLabelText("Cost behavior for Rent")[0];
+    await userEvent.selectOptions(select, "VARIABLE");
+    expect(await screen.findByText("Classification could not be saved")).toBeVisible();
+    expect(select).toHaveValue("UNCLASSIFIED");
+    expect(select).toBeEnabled();
+  });
+
+  it("disables a classification only while saving and announces a successful save", async () => {
+    let finish!: (value: unknown) => void;
+    updateCategory.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    renderPage();
+    const select = screen.getAllByLabelText("Cost behavior for Rent")[0];
+    await userEvent.selectOptions(select, "FIXED");
+    expect(select).toBeDisabled();
+    await act(async () => finish({ ...categories[0], costBehavior: "FIXED" }));
+    await waitFor(() => expect(select).toBeEnabled());
+    expect(screen.getByRole("status")).toHaveTextContent(/saved/i);
+  });
 });
 
 describe("Categories — cost-behavior classification", () => {

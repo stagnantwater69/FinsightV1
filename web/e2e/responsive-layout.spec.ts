@@ -158,13 +158,12 @@ test("the dashboard period switcher wraps rather than widening the page at 200px
       },
     }),
   );
-  await page.route("**/api/v1/insights/expense-behavior**", (route) =>
+  await page.route("**/api/v1/insights/expense-overview**", (route) =>
     route.fulfill({
       json: {
-        periodStart: "2026-07-01", periodEnd: "2026-08-01",
-        previousPeriodStart: "2026-06-01", previousPeriodEnd: "2026-07-01", periodDays: 30,
-        totals: { current: 0, previous: 0 },
-        dailyTotals: [], categoryTrends: [], unusualExpenses: [], insufficientHistoryCategories: [],
+        view: "dashboard",
+        comparison: { status: "available", data: { totals: { current: 0, previous: 0 }, categoryTrends: [] } },
+        topOpportunity: { status: "available", data: null },
       },
     }),
   );

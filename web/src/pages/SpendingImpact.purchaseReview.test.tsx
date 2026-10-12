@@ -49,6 +49,17 @@ const impact: SpendingImpactData = {
   exceedsFunds: false,
   funds: { before: 50000, after: 39000 },
   periodExpenses: { before: 8000, after: 19000 },
+  availableFundsCalculation: {
+    calculatedAmount: 50000,
+    baselineAmount: 50000,
+    baselineAt: "2026-01-01T00:00:00.000Z",
+    baselineDate: "2026-01-01",
+    confirmedSalesAdded: 8000,
+    confirmedExpensesDeducted: 8000,
+    confirmedSalesRecordCount: 2,
+    confirmedExpenseRecordCount: 3,
+    asOfDate: "2026-01-31",
+  },
   availableFunds: 50000,
   resultingFunds: 39000,
 };
@@ -138,6 +149,20 @@ beforeEach(() => {
   };
 });
 
+describe("available funds provenance", () => {
+  it("uses the calculated balance returned with the scenario", async () => {
+    renderPage();
+    await userEvent.type(screen.getByPlaceholderText("11000"), "11000");
+
+    expect(await screen.findByText("Recorded available funds")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Starting PHP 50,000, plus PHP 8,000 sales, less PHP 8,000 expenses/,
+      ),
+    ).toBeInTheDocument();
+  });
+});
+
 describe("reading the description back", () => {
   it("stays out of the way until there is an item to describe", async () => {
     renderPage();
@@ -169,7 +194,7 @@ describe("reading the description back", () => {
     await userEvent.click(screen.getByRole("button", { name: /what am i buying/i }));
 
     expect(await screen.findByText(/Written by AI from what you typed/)).toBeInTheDocument();
-    expect(screen.getByText(/Whether to buy this is your call/)).toBeInTheDocument();
+    expect(screen.getByText("The decision is yours.")).toBeInTheDocument();
   });
 
   it("sends the item and the amount, and no figures about the business", async () => {
@@ -242,7 +267,7 @@ describe("placing the amount against what they have paid before", () => {
 
   it("says these figures were counted, not written", async () => {
     await openReview();
-    expect(screen.getByText(/Counted from your own records — not written by AI/)).toBeInTheDocument();
+    expect(screen.getByText("From your records, not AI")).toBeInTheDocument();
   });
 
   it("shows what to check about the price, from the AI half", async () => {
@@ -312,7 +337,7 @@ describe("placing the amount against what they have paid before", () => {
     };
 
     await openReview();
-    expect(screen.getByText(/nothing of your own to compare it against yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/No similar purchases in the last/i)).toBeInTheDocument();
   });
 });
 
@@ -324,7 +349,9 @@ describe("carrying the card into a conversation", () => {
     await userEvent.click(screen.getByRole("button", { name: /what am i buying/i }));
     await screen.findByText(/A fridge is bought once and kept/);
 
-    await userEvent.click(screen.getByRole("button", { name: /talk this through/i }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Ask FinSight about Display fridge" }),
+    );
 
     await waitFor(() => expect(openChat).toHaveBeenCalled());
     expect(openChat.mock.calls.at(-1)?.[0]).toBe("Spending Impact");
@@ -350,7 +377,9 @@ describe("carrying the card into a conversation", () => {
     await userEvent.type(screen.getByPlaceholderText("e.g. Display fridge"), "Display fridge");
     await userEvent.click(screen.getByRole("button", { name: /what am i buying/i }));
     await screen.findByText(/A fridge is bought once and kept/);
-    await userEvent.click(screen.getByRole("button", { name: /talk this through/i }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Ask FinSight about Display fridge" }),
+    );
 
     expect(posted).not.toContain("/ai/ask");
   });
@@ -405,7 +434,7 @@ describe("when the AI cannot answer", () => {
     await userEvent.type(screen.getByPlaceholderText("11000"), "11000");
     await userEvent.click(screen.getByRole("button", { name: /what am i buying/i }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(/could not describe this item/i);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/describe this item/i);
     expect(screen.getByText(/calculated by FinSight, not by AI/)).toBeInTheDocument();
     // The scenario itself is untouched.
     // Both the band pill and the summary say it, hence findAll.

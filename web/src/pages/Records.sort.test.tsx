@@ -52,6 +52,7 @@ const SERVER_ORDER = [
 
 let searchResponses: { items: RecordItem[]; nextCursor: string | null }[];
 let failNextSearch = false;
+let searchHandler: ((params: Record<string, unknown>) => Promise<{ data: { items: RecordItem[]; nextCursor: string | null } }>) | null;
 const searchCalls: Record<string, unknown>[] = [];
 
 vi.mock("../lib/api", () => ({
@@ -63,6 +64,7 @@ vi.mock("../lib/api", () => ({
           failNextSearch = false;
           throw new Error("Request failed with status code 500");
         }
+        if (searchHandler) return searchHandler(config?.params ?? {});
         return { data: searchResponses.shift() ?? { items: SERVER_ORDER, nextCursor: null } };
       }
       if (url === "/records/flagged/count") return { data: { expenses: 0, sales: 0, total: 0 } };
@@ -109,6 +111,7 @@ beforeEach(() => {
   searchCalls.length = 0;
   searchResponses = [];
   failNextSearch = false;
+  searchHandler = null;
   window.localStorage.clear();
 });
 
@@ -207,7 +210,7 @@ describe("Records sorting", () => {
     // This page renders with no filters applied, so the correct empty state is
     // the onboarding one. (It previously read "No records match these filters"
     // only because `hasFilters` was permanently true — see Records.filters.test.ts.)
-    expect(await screen.findByText(/You haven't added any records yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/No records yet/)).toBeInTheDocument();
     expect(screen.queryByRole("table")).toBeNull();
     expect(screen.queryByRole("button", { name: /Load more records/ })).toBeNull();
   });
@@ -225,5 +228,29 @@ describe("Records sorting", () => {
     // The cursor went with the sort change, so nothing offers to page a list
     // that failed to load.
     expect(screen.queryByRole("button", { name: /Load more records/ })).toBeNull();
+  });
+
+  it("never paints a late response from a superseded type filter", async () => {
+    const user = userEvent.setup();
+    let releaseExpense!: (value: { data: { items: RecordItem[]; nextCursor: null } }) => void;
+    const heldExpense = new Promise<{ data: { items: RecordItem[]; nextCursor: null } }>((resolve) => {
+      releaseExpense = resolve;
+    });
+    const sales = { ...record(9, "Sales-new", 1_200, "2025-01-04"), type: "sales" as const };
+    searchHandler = async (params) => {
+      if (params.type === "expense") return heldExpense;
+      if (params.type === "sales") return { data: { items: [sales], nextCursor: null } };
+      return { data: { items: SERVER_ORDER, nextCursor: null } };
+    };
+
+    renderPage();
+    await screen.findByRole("table");
+    await user.selectOptions(screen.getByLabelText("Type"), "expense");
+    await user.selectOptions(screen.getByLabelText("Type"), "sales");
+
+    expect(await screen.findAllByText("Sales-new")).not.toHaveLength(0);
+    releaseExpense({ data: { items: [record(8, "Expense-old", 800, "2025-01-02")], nextCursor: null } });
+    await waitFor(() => expect(screen.queryByText("Expense-old")).not.toBeInTheDocument());
+    expect(screen.getAllByText("Sales-new").length).toBeGreaterThan(0);
   });
 });

@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { Records } from "./Records";
 import type { BusinessProfile } from "../lib/types";
+import { invalidateServerState } from "../lib/serverStateCache";
 
 /**
  * WHAT THIS FILE GUARDS: the badge is a NUMBER, and must cost a number.
@@ -106,5 +107,35 @@ describe("the flagged badge on Records", () => {
     expect(await screen.findByRole("heading", { name: "Records" })).toBeInTheDocument();
     expect(screen.queryByText(/status code 500/)).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Review flagged/ })).not.toBeInTheDocument();
+  });
+
+  it("refreshes the mounted list after a matching mutation invalidation", async () => {
+    renderPage();
+    expect(await screen.findByRole("link", { name: /Review flagged/ })).toHaveTextContent("4");
+
+    getHandlers["/records/flagged/count"] = ok({ expenses: 6, sales: 1, total: 7 });
+    await act(async () => {
+      invalidateServerState({ businessProfileId: profile.id, resourcePrefix: "/records" });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: /Review flagged/ })).toHaveTextContent("7");
+    });
+    expect(gets.filter((call) => call.url === "/records/search")).toHaveLength(2);
+    expect(gets.filter((call) => call.url === "/records/flagged/count")).toHaveLength(2);
+  });
+
+  it("does not refresh for another business's invalidation", async () => {
+    renderPage();
+    await screen.findByRole("link", { name: /Review flagged/ });
+    const callsBefore = gets.length;
+
+    await act(async () => {
+      invalidateServerState({ businessProfileId: profile.id + 1, resourcePrefix: "/records" });
+      await Promise.resolve();
+    });
+
+    expect(gets).toHaveLength(callsBefore);
   });
 });

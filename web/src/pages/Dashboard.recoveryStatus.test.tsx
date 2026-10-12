@@ -121,13 +121,36 @@ describe("Dashboard recovery-status KPI — status-driven rendering", () => {
     currentSummary = summaryWithStatus("no_current_month_data");
     renderDashboard();
     await waitFor(() => expect(screen.getByText("No sales yet")).toBeInTheDocument());
-    expect(screen.getByText("No sales recorded this month")).toBeInTheDocument();
+    expect(screen.getByText("No sales this month")).toBeInTheDocument();
   });
 
   it("shows 'Target reached' for covered", async () => {
     currentSummary = summaryWithStatus("covered");
     renderDashboard();
     await waitFor(() => expect(screen.getByText("Target reached")).toBeInTheDocument());
+  });
+
+  it("does not treat a complete record-derived zero month as missing setup", async () => {
+    currentSummary = summaryWithStatus("covered");
+    currentSummary.recoveryStatus = {
+      ...currentSummary.recoveryStatus,
+      expectedMonthlyExpenses: 0,
+      monthlyExpenseBasis: {
+        amount: 0,
+        source: "previous_complete_month",
+        sourceMonth: "2025-12",
+        ownerEstimate: 20000,
+        eligibleRecordCount: 0,
+        recordsCompleteThroughMonth: "2025-12",
+        recordsCompleteThroughConfirmedAt: "2026-01-02T00:00:00.000Z",
+      },
+      needsSetup: false,
+    };
+
+    renderDashboard();
+
+    expect(await screen.findByRole("link", { name: "View recovery plan" })).toBeInTheDocument();
+    expect(screen.queryByText(/Add a starting monthly expense estimate/)).not.toBeInTheDocument();
   });
 
   it("shows 'Ahead of pace' for ahead", async () => {

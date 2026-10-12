@@ -5,7 +5,7 @@ vi.mock("../src/lib/supabase", () => ({
   supabase: { auth: { getSession: async () => ({ data: { session: null } }) } },
 }));
 
-const { pollUntilRead, ReceiptReadFailure, SCAN_POLL_MAX_ATTEMPTS } = await import(
+const { pollUntilRead, ReceiptReadFailure, SCAN_POLL_MAX_ATTEMPTS, scanPollDelayMs } = await import(
   "../src/screens/records/scanReceipt/helpers"
 );
 import type { ReceiptScanResult } from "../src/screens/records/scanReceipt/types";
@@ -129,6 +129,45 @@ describe("pollUntilRead survives a transient failure", () => {
   });
 });
 
+describe("the first polls come sooner than the steady interval", () => {
+  const originalFetch = globalThis.fetch;
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); globalThis.fetch = originalFetch; });
+
+  it("sees a scan that finished in the first second without waiting the full interval", async () => {
+    const stub = replies([answer(200, scan({ processingStatus: "Complete" }))]);
+
+    const watched = watch(pollUntilRead(scan()));
+    await vi.advanceTimersByTimeAsync(scanPollDelayMs(0));
+    await watched.done;
+
+    expect(scanPollDelayMs(0)).toBeLessThan(POLL_INTERVAL_MS);
+    expect(stub).toHaveBeenCalledTimes(1);
+    expect((watched.state.value as ReceiptScanResult).processingStatus).toBe("Complete");
+  });
+
+  it("settles on the steady interval once the early polls are spent", () => {
+    expect(scanPollDelayMs(50)).toBe(POLL_INTERVAL_MS);
+  });
+
+  it("waits the full interval after a failed poll, so a brief outage is still tolerated", async () => {
+    const stub = replies([
+      answer(503, { error: "FinSight can't reach its database right now." }),
+      answer(200, scan({ processingStatus: "Complete" })),
+    ]);
+
+    const watched = watch(pollUntilRead(scan()));
+    await vi.advanceTimersByTimeAsync(scanPollDelayMs(0));
+    expect(stub).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS - 1);
+    expect(stub).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await watched.done;
+
+    expect((watched.state.value as ReceiptScanResult).processingStatus).toBe("Complete");
+  });
+});
+
 describe("the poll's ceiling counts polls, not wall-clock time", () => {
   const originalFetch = globalThis.fetch;
   beforeEach(() => { vi.useFakeTimers(); });
@@ -148,14 +187,14 @@ describe("the poll's ceiling counts polls, not wall-clock time", () => {
     ]);
 
     const watched = watch(pollUntilRead(scan()));
-    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+    await vi.advanceTimersByTimeAsync(scanPollDelayMs(0));
     expect(watched.state.settled).toBe(false);
 
     vi.setSystemTime(Date.now() + 4 * 60 * 1000);
-    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+    await vi.advanceTimersByTimeAsync(scanPollDelayMs(1));
     expect(watched.state.settled).toBe(false);
 
-    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+    await vi.advanceTimersByTimeAsync(scanPollDelayMs(2));
     await watched.done;
 
     expect((watched.state.value as ReceiptScanResult).processingStatus).toBe("Complete");

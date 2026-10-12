@@ -81,6 +81,21 @@ vi.mock("../../src/config/supabase", async (importOriginal) => {
       auth: {
         async signInWithPassword({ password }: { email: string; password: string }) {
           supabaseCalls.push({ method: "signInWithPassword", args: [password] });
+          if (supabaseFailures.has("signInWithPasswordThrows")) {
+            throw Object.assign(new Error("fetch failed"), { name: "AuthRetryableFetchError", status: 0 });
+          }
+          if (supabaseFailures.has("signInWithPasswordOutage")) {
+            return {
+              data: { user: null, session: null },
+              error: { name: "AuthRetryableFetchError", status: 0, message: "fetch failed" },
+            };
+          }
+          if (supabaseFailures.has("signInWithPassword5xx")) {
+            return {
+              data: { user: null, session: null },
+              error: { name: "AuthApiError", status: 502, message: "bad gateway" },
+            };
+          }
           return password === "correct-horse-battery"
             ? {
                 data: {
@@ -193,12 +208,22 @@ vi.mock("../../src/lib/securityLog", async (importOriginal) => {
   };
 });
 
-vi.mock("../../src/services/storage.service", () => ({
-  deleteReceiptImage: async (p: string) => (storageDeleted.push(p), !storageFails.value),
-  deleteCsvFile: async (p: string) => (storageDeleted.push(p), !storageFails.value),
-  deletePublicImageUrl: async (p: string) => (storageDeleted.push(p), !storageFails.value),
-  uploadUserAvatar: async () => "https://example.test/avatar.png",
-}));
+vi.mock("../../src/services/storage.service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/services/storage.service")>();
+  return {
+    ...actual,
+    deleteReceiptImage: async (p: string) => (storageDeleted.push(p), !storageFails.value),
+    deleteCsvFile: async (p: string) => (storageDeleted.push(p), !storageFails.value),
+    deletePublicImageUrl: async (p: string) => (storageDeleted.push(p), !storageFails.value),
+    deletePublicImagePath: async (p: string) => (storageDeleted.push(p), !storageFails.value),
+    listPublicImagePaths: async () => [],
+    publicImagePathFromUrl: (url: string) => url,
+    deleteSupersededPublicImages: async () => true,
+    validatePublicImageUpload: async (buffer: Buffer, mimetype: string) => ({ buffer, mimetype }),
+    uploadUserAvatar: async () => "https://example.test/avatar.png",
+    uploadBusinessLogo: async () => "https://example.test/logo.png",
+  };
+});
 
 import request from "supertest";
 import { app } from "../../src/app";
@@ -209,6 +234,7 @@ import {
   runAccountDeletionWorkerOnce,
 } from "../../src/services/accountDeletion.service";
 import { LIMITS, resetRateLimits } from "../../src/middleware/rateLimit.middleware";
+import { PUBLIC_IMAGE_UPLOAD_SETTLE_MS } from "../../src/services/storage.service";
 import { disconnectDb, makeOwnerWithProfile, resetDb } from "../setup/testDb";
 
 let ctx: Awaited<ReturnType<typeof makeOwnerWithProfile>>;
@@ -402,40 +428,101 @@ describe("registration proves the address before the account works", () => {
       data: { createdAt: new Date(Date.now() - 73 * 60 * 60 * 1000) },
     });
     expect(await purgeUnverifiedRegistrations()).toBe(1);
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: pending.id } })).toMatchObject({
+      status: AccountStatus.DELETION_PENDING,
+      deletionStage: AccountDeletionStage.REQUESTED,
+    });
+    await prisma.user.update({
+      where: { id: pending.id },
+      data: {
+        deletionRequestedAt: new Date(Date.now() - PUBLIC_IMAGE_UPLOAD_SETTLE_MS - 1_000),
+        deletionNextAttemptAt: new Date(0),
+      },
+    });
+
+    await runAccountDeletionWorkerOnce();
+    await runAccountDeletionWorkerOnce();
+    await runAccountDeletionWorkerOnce();
     expect(await prisma.user.findUnique({ where: { id: pending.id } })).toBeNull();
   });
 
-  it("does not report a purge it did not manage to finish", async () => {
-    /*
-     * The auth user is deleted first, so a failure in the relational delete
-     * leaves the address released on Supabase's side and still held on ours:
-     * the person it belongs to is told the email is taken by an account that
-     * no longer exists. This used to be swallowed with `.catch(() => undefined)`
-     * and counted as a success, so the log said the opposite of what happened.
-     */
-    await request(app).post("/api/v1/auth/register").send(registration());
-    const pending = await prisma.user.findUniqueOrThrow({ where: { email: "new-owner@shop.ph" } });
+  it("lets confirmation win if it changes the pending row before the purge claim", async () => {
     await prisma.user.update({
-      where: { id: pending.id },
-      data: { createdAt: new Date(Date.now() - 73 * 60 * 60 * 1000) },
+      where: { id: ctx.user.id },
+      data: {
+        status: AccountStatus.PENDING_VERIFICATION,
+        createdAt: new Date(Date.now() - 73 * 60 * 60 * 1000),
+      },
     });
-    loggedEvents.length = 0;
-    const transaction = vi
-      .spyOn(prisma, "$transaction")
-      .mockRejectedValueOnce(new Error("relational delete went away"));
+
+    let enteredClaim!: () => void;
+    let releaseClaim!: () => void;
+    const claimEntered = new Promise<void>((resolve) => { enteredClaim = resolve; });
+    const claimReleased = new Promise<void>((resolve) => { releaseClaim = resolve; });
+    const updateMany = prisma.user.updateMany.bind(prisma.user);
+    const claim = vi.spyOn(prisma.user, "updateMany").mockImplementationOnce(async (args) => {
+      enteredClaim();
+      await claimReleased;
+      return updateMany(args);
+    });
 
     try {
-      expect(await purgeUnverifiedRegistrations()).toBe(0);
+      const purge = purgeUnverifiedRegistrations();
+      await claimEntered;
+      const confirmation = await request(app).post("/api/v1/auth/confirm-email").set(...AUTH);
+      releaseClaim();
+
+      expect(confirmation.status).toBe(200);
+      expect(await purge).toBe(0);
     } finally {
-      transaction.mockRestore();
+      releaseClaim();
+      claim.mockRestore();
     }
 
-    expect(loggedEvents).toContain("account.deletion_failed");
-    expect(loggedEvents).not.toContain("account.deletion_completed");
-    // Still there, still holding the address — and still eligible for the
-    // next hourly pass, which is what makes this recoverable.
-    expect(await prisma.user.findUnique({ where: { id: pending.id } })).not.toBeNull();
-    expect(await purgeUnverifiedRegistrations()).toBe(1);
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: ctx.user.id } })).toMatchObject({
+      status: AccountStatus.ACTIVE,
+    });
+    expect(callsTo("deleteUser")).toHaveLength(0);
+  });
+
+  it("queues resumable deletion if the purge claim wins before confirmation", async () => {
+    await prisma.user.update({
+      where: { id: ctx.user.id },
+      data: {
+        status: AccountStatus.PENDING_VERIFICATION,
+        createdAt: new Date(Date.now() - 73 * 60 * 60 * 1000),
+      },
+    });
+
+    let claimed!: () => void;
+    let releaseClaim!: () => void;
+    const claimCompleted = new Promise<void>((resolve) => { claimed = resolve; });
+    const claimReleased = new Promise<void>((resolve) => { releaseClaim = resolve; });
+    const updateMany = prisma.user.updateMany.bind(prisma.user);
+    const claim = vi.spyOn(prisma.user, "updateMany").mockImplementationOnce(async (args) => {
+      const result = await updateMany(args);
+      claimed();
+      await claimReleased;
+      return result;
+    });
+
+    try {
+      const purge = purgeUnverifiedRegistrations();
+      await claimCompleted;
+      const confirmation = await request(app).post("/api/v1/auth/confirm-email").set(...AUTH);
+      releaseClaim();
+
+      expect(confirmation.status).toBe(403);
+      expect(await purge).toBe(1);
+    } finally {
+      releaseClaim();
+      claim.mockRestore();
+    }
+
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: ctx.user.id } })).toMatchObject({
+      status: AccountStatus.DELETION_PENDING,
+      deletionStage: AccountDeletionStage.REQUESTED,
+    });
   });
 });
 
@@ -477,13 +564,13 @@ describe("only an ACTIVE account may be used", () => {
   it("revokes the Supabase identity as it suspends", async () => {
     await transition(ctx.user, AccountStatus.SUSPENDED, { reason: "test" });
     const ban = callsTo("updateUserById").at(-1);
-    expect((ban?.args[1] as { ban_duration?: string }).ban_duration).toBeTruthy();
+    expect(ban?.args[1]).toMatchObject({ ban_duration: expect.any(String) });
   });
 
   it("lifts the ban when the account is reinstated", async () => {
     const suspended = await transition(ctx.user, AccountStatus.SUSPENDED, { reason: "test" });
     await transition(suspended, AccountStatus.ACTIVE, { reason: "appeal upheld" });
-    expect((callsTo("updateUserById").at(-1)?.args[1] as { ban_duration?: string }).ban_duration).toBe("none");
+    expect(callsTo("updateUserById").at(-1)?.args[1]).toMatchObject({ ban_duration: "none" });
   });
 
   it("refuses a transition the state machine does not allow", async () => {
@@ -539,6 +626,22 @@ describe("changing a password keeps this session and ends the others", () => {
 
     expect(res.status).toBe(400);
     expect(callsTo("signOut")).toHaveLength(0);
+  });
+
+  it("returns a refundable 503 and closes the throwaway session for Auth outages", async () => {
+    for (const failure of ["signInWithPasswordOutage", "signInWithPassword5xx", "signInWithPasswordThrows"]) {
+      supabaseFailures.add(failure);
+      const res = await request(app)
+        .post("/api/v1/auth/change-password")
+        .set(...AUTH)
+        .send({ currentPassword: PASSWORD, newPassword: "a-brand-new-passphrase" });
+      supabaseFailures.delete(failure);
+
+      expect(res.status).toBe(503);
+      expect(res.body.code).toBe("AUTH_PROVIDER_UNAVAILABLE");
+    }
+
+    expect(callsTo("throwawaySignOut")).toHaveLength(3);
   });
 
   /**
@@ -647,10 +750,20 @@ describe("deletion ends access immediately and destroys data in the background",
   });
 
   async function requestDeletion() {
-    return request(app)
+    const response = await request(app)
       .delete("/api/v1/auth/me")
       .set(...AUTH)
       .send({ currentPassword: PASSWORD });
+    if (response.status === 202) {
+      await prisma.user.update({
+        where: { id: ctx.user.id },
+        data: {
+          deletionRequestedAt: new Date(Date.now() - PUBLIC_IMAGE_UPLOAD_SETTLE_MS - 1_000),
+          deletionNextAttemptAt: new Date(0),
+        },
+      });
+    }
+    return response;
   }
 
   it("accepts, revokes access, and destroys nothing synchronously", async () => {
@@ -1110,6 +1223,20 @@ describe("web → mobile session handoff", () => {
 
     const res = await request(app).post("/api/v1/auth/handoff/exchange").send({ code: first.body.code });
     expect(res.status).toBe(400);
+  });
+
+  it("serializes concurrent issuers so only the later code remains live", async () => {
+    const [first, second] = await Promise.all([issue(), issue()]);
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(await prisma.authHandoff.count({ where: { userId: ctx.user.id } })).toBe(1);
+
+    const exchanges = await Promise.all([
+      request(app).post("/api/v1/auth/handoff/exchange").send({ code: first.body.code }),
+      request(app).post("/api/v1/auth/handoff/exchange").send({ code: second.body.code }),
+    ]);
+    expect(exchanges.map((response) => response.status).sort()).toEqual([200, 400]);
   });
 
   it("keeps the code alive when Auth could not be reached, so the owner can just tap again", async () => {

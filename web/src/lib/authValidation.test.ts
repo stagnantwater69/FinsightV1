@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  digitsOnly,
   isPlausibleEmail,
   isValid,
   MAX_NAME_LENGTH,
@@ -157,6 +158,16 @@ describe("validateRegister", () => {
     expect(validateRegister({ ...good, firstName: "a".repeat(MAX_NAME_LENGTH + 1) }).firstName).toBeTruthy();
     expect(validateRegister({ ...good, middleName: "a".repeat(MAX_NAME_LENGTH + 1) }).middleName).toBeTruthy();
     expect(validateRegister({ ...good, phoneNumber: "9".repeat(MAX_PHONE_LENGTH + 1) }).phoneNumber).toBeTruthy();
+  });
+
+  it("accepts digits only in the phone number", () => {
+    expect(validateRegister({ ...good, phoneNumber: "09171234567" }).phoneNumber).toBeUndefined();
+    expect(validateRegister({ ...good, phoneNumber: "0917abc4567" }).phoneNumber).toBe("Use numbers only.");
+    expect(validateRegister({ ...good, phoneNumber: "+63 917 123 4567" }).phoneNumber).toBe("Use numbers only.");
+  });
+
+  it("strips everything but digits from a typed or pasted phone number", () => {
+    expect(digitsOnly("0917-abc 123")).toBe("0917123");
   });
 
   /** Both are `.optional()` server-side, so blank must not be an error. */

@@ -44,6 +44,12 @@ vi.mock('../../src/lib/supabase', () => ({
 vi.mock('../../src/lib/receiptScannerCache', () => ({ clearReceiptScannerCache }));
 
 const { AuthProvider, useAuth } = await import('../../src/context/AuthContext');
+const {
+  clearServerStateCache,
+  fetchServerState,
+  getServerStateCacheStats,
+  peekServerState,
+} = await import('../../src/lib/serverStateCache');
 
 let auth!: ReturnType<typeof useAuth>;
 
@@ -53,6 +59,7 @@ function Probe() {
 }
 
 beforeEach(() => {
+  clearServerStateCache();
   get.mockReset();
   post.mockReset();
   signOut.mockReset();
@@ -64,6 +71,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await cleanup();
+  clearServerStateCache();
 });
 
 async function renderSignedInProvider() {
@@ -80,6 +88,17 @@ describe('AuthProvider logout scopes', () => {
   it('uses Supabase local scope for an ordinary this-phone logout', async () => {
     post.mockRejectedValueOnce(new Error('backend unavailable'));
     const queries = await renderSignedInProvider();
+    await fetchServerState({
+      path: '/dashboard/summary',
+      query: { businessProfileId: 1, month: '2026-08' },
+      fetcher: async () => ({ total: 42 }),
+    });
+    expect(
+      peekServerState('/dashboard/summary', {
+        businessProfileId: 1,
+        month: '2026-08',
+      }),
+    ).not.toBeNull();
 
     await act(async () => {
       await auth.logout();
@@ -88,6 +107,13 @@ describe('AuthProvider logout scopes', () => {
     expect(post).toHaveBeenCalledWith('/auth/logout');
     expect(signOut).toHaveBeenCalledWith({ scope: 'local' });
     expect(queries.getByText('Signed out')).toBeTruthy();
+    expect(getServerStateCacheStats()).toEqual({ entries: 0, inFlight: 0, scoped: false });
+    expect(
+      peekServerState('/dashboard/summary', {
+        businessProfileId: 1,
+        month: '2026-08',
+      }),
+    ).toBeNull();
   });
 
   it('keeps the local session when the server does not confirm global revocation', async () => {

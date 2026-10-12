@@ -16,8 +16,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const analysisJobUpdate = vi.fn();
 const analysisJobUpdateMany = vi.fn(async () => ({ count: 1 }));
 const queryRaw = vi.fn();
+const transactionQueryRaw = vi.fn();
+const transaction = vi.fn();
 const businessProfileFindUnique = vi.fn(async () => ({ userId: 7 }));
 const refreshOwnedCategoryStatistics = vi.fn(async () => []);
+const refreshRecurringPatterns = vi.fn(async () => []);
+const refreshTrendFindings = vi.fn(async () => []);
+const refreshIsolationForestFindings = vi.fn(async () => []);
+const detectAmountOutlierForExpense = vi.fn(async () => null);
+const detectBehavioralNoveltyForExpense = vi.fn(async () => null);
+const detectNearDuplicateForExpense = vi.fn(async () => null);
+const detectVelocityForExpense = vi.fn(async () => null);
+const notificationFindFirst = vi.fn(async () => null);
+const notificationCreate = vi.fn();
 const warn = vi.fn();
 
 vi.mock("../../src/config/prisma", () => ({
@@ -28,6 +39,7 @@ vi.mock("../../src/config/prisma", () => ({
     },
     businessProfile: { findUnique: (...args: unknown[]) => businessProfileFindUnique(...args) },
     $queryRaw: (...args: unknown[]) => queryRaw(...args),
+    $transaction: (...args: unknown[]) => transaction(...args),
   },
 }));
 
@@ -39,25 +51,25 @@ vi.mock("../../src/services/anomalyDetection/categoryStatistics.service", () => 
   refreshOwnedCategoryStatistics: (...args: unknown[]) => refreshOwnedCategoryStatistics(...args),
 }));
 vi.mock("../../src/services/anomalyDetection/recurring.service", () => ({
-  refreshRecurringPatterns: vi.fn(async () => []),
+  refreshRecurringPatterns: (...args: unknown[]) => refreshRecurringPatterns(...args),
 }));
 vi.mock("../../src/services/anomalyDetection/trend.service", () => ({
-  refreshTrendFindings: vi.fn(async () => []),
+  refreshTrendFindings: (...args: unknown[]) => refreshTrendFindings(...args),
 }));
 vi.mock("../../src/services/anomalyDetection/isolationForest.service", () => ({
-  refreshIsolationForestFindings: vi.fn(async () => []),
+  refreshIsolationForestFindings: (...args: unknown[]) => refreshIsolationForestFindings(...args),
 }));
 vi.mock("../../src/services/anomalyDetection/amountOutlier.service", () => ({
-  detectAmountOutlierForExpense: vi.fn(async () => null),
+  detectAmountOutlierForExpense: (...args: unknown[]) => detectAmountOutlierForExpense(...args),
 }));
 vi.mock("../../src/services/anomalyDetection/behavioralNovelty.service", () => ({
-  detectBehavioralNoveltyForExpense: vi.fn(async () => null),
+  detectBehavioralNoveltyForExpense: (...args: unknown[]) => detectBehavioralNoveltyForExpense(...args),
 }));
 vi.mock("../../src/services/anomalyDetection/nearDuplicate.service", () => ({
-  detectNearDuplicateForExpense: vi.fn(async () => null),
+  detectNearDuplicateForExpense: (...args: unknown[]) => detectNearDuplicateForExpense(...args),
 }));
 vi.mock("../../src/services/anomalyDetection/velocity.service", () => ({
-  detectVelocityForExpense: vi.fn(async () => null),
+  detectVelocityForExpense: (...args: unknown[]) => detectVelocityForExpense(...args),
 }));
 
 const { runAnalysisWorkerOnce } = await import("../../src/services/anomalyDetection/job.service");
@@ -77,6 +89,23 @@ beforeEach(() => {
   analysisJobUpdateMany.mockResolvedValue({ count: 1 });
   businessProfileFindUnique.mockResolvedValue({ userId: 7 });
   refreshOwnedCategoryStatistics.mockResolvedValue([]);
+  refreshRecurringPatterns.mockResolvedValue([]);
+  refreshTrendFindings.mockResolvedValue([]);
+  refreshIsolationForestFindings.mockResolvedValue([]);
+  detectAmountOutlierForExpense.mockResolvedValue(null);
+  detectBehavioralNoveltyForExpense.mockResolvedValue(null);
+  detectNearDuplicateForExpense.mockResolvedValue(null);
+  detectVelocityForExpense.mockResolvedValue(null);
+  transactionQueryRaw.mockResolvedValue([{ id: CLAIMED.id }]);
+  notificationFindFirst.mockResolvedValue(null);
+  notificationCreate.mockResolvedValue({ id: 1 });
+  transaction.mockImplementation(async (callback: (db: unknown) => Promise<unknown>) => callback({
+    $queryRaw: (...args: unknown[]) => transactionQueryRaw(...args),
+    notification: {
+      findFirst: (...args: unknown[]) => notificationFindFirst(...args),
+      create: (...args: unknown[]) => notificationCreate(...args),
+    },
+  }));
   queryRaw.mockResolvedValue([CLAIMED]);
 });
 
@@ -139,5 +168,84 @@ describe("analysis job lease", () => {
     );
     expect(failure).toBeDefined();
     expectLeaseGuard((failure![0] as { where: unknown }).where);
+  });
+
+  it("runs every profile mutation behind a locked check of the exact lease", async () => {
+    const writes = [vi.fn(), vi.fn(), vi.fn(), vi.fn()];
+    const profileRefreshers = [
+      [refreshOwnedCategoryStatistics, 4],
+      [refreshRecurringPatterns, 4],
+      [refreshTrendFindings, 4],
+      [refreshIsolationForestFindings, 3],
+    ] as const;
+    profileRefreshers.forEach(([refresh, guardIndex], index) => {
+      const write = writes[index]!;
+      refresh.mockImplementationOnce(async (...args: unknown[]) => {
+        const mutate = args[guardIndex] as (body: (db: unknown) => Promise<unknown>) => Promise<unknown>;
+        await mutate(async () => {
+          write();
+          return [];
+        });
+        return [];
+      });
+    });
+
+    await runAnalysisWorkerOnce();
+
+    expect(transaction).toHaveBeenCalledTimes(4);
+    expect(transactionQueryRaw).toHaveBeenCalledTimes(4);
+    expect(writes.every((write) => write.mock.calls.length === 1)).toBe(true);
+    const leaseSql = transactionQueryRaw.mock.calls[0]![0] as { strings: string[]; values: unknown[] };
+    expect(leaseSql.strings.join(" ")).toContain("AnalysisJob_Status\" = 'PROCESSING'");
+    expect(leaseSql.values).toContain(CLAIMED.id);
+    expect(leaseSql.values).toContain(CLAIMED.attemptCount);
+  });
+
+  it("stops before a detector mutation when the transaction lock says the lease was reclaimed", async () => {
+    const staleWrite = vi.fn();
+    transactionQueryRaw.mockResolvedValueOnce([]);
+    refreshOwnedCategoryStatistics.mockImplementationOnce(async (...args: unknown[]) => {
+      const mutate = args[4] as (body: () => Promise<unknown>) => Promise<unknown>;
+      await mutate(async () => {
+        staleWrite();
+        return [];
+      });
+      return [];
+    });
+
+    await expect(runAnalysisWorkerOnce()).resolves.toBe(true);
+
+    expect(staleWrite).not.toHaveBeenCalled();
+    expect(refreshRecurringPatterns).not.toHaveBeenCalled();
+    expect(notificationCreate).not.toHaveBeenCalled();
+    expect(
+      analysisJobUpdateMany.mock.calls.some(
+        ([args]) => (args as { data: { status?: string } }).data.status === "COMPLETE",
+      ),
+    ).toBe(false);
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it("guards all transaction detectors and their notification write", async () => {
+    queryRaw.mockResolvedValueOnce([{ ...CLAIMED, kind: "TRANSACTION", expenseRecordId: 91 }]);
+    const detectors = [
+      detectAmountOutlierForExpense,
+      detectNearDuplicateForExpense,
+      detectVelocityForExpense,
+      detectBehavioralNoveltyForExpense,
+    ];
+    detectors.forEach((detector, index) => {
+      detector.mockImplementationOnce(async (...args: unknown[]) => {
+        const mutate = args[2] as (body: () => Promise<unknown>) => Promise<unknown>;
+        await mutate(async () => null);
+        return index === 0 ? { title: "Unusual amount", severity: "HIGH" } : null;
+      });
+    });
+
+    await runAnalysisWorkerOnce();
+
+    expect(transaction).toHaveBeenCalledTimes(5);
+    expect(transactionQueryRaw).toHaveBeenCalledTimes(5);
+    expect(notificationCreate).toHaveBeenCalledTimes(1);
   });
 });

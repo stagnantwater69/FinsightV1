@@ -66,9 +66,11 @@ const opportunitySchema = z.object({
 // Mirrors ReductionOpportunityResponse, §8.2 verbatim.
 const responseSchema = z.object({
   period: z.object({
-    days: z.number().int().positive(),
-    start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    days: z.number().int().nonnegative(),
+    start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
     end: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    kind: z.enum(["rolling", "week", "month", "all"]),
+    month: z.string().regex(/^\d{4}-\d{2}$/).nullable(),
   }).strict(),
   dataQuality: z.object({
     status: z.enum(["sufficient", "limited", "insufficient"]),
@@ -101,11 +103,37 @@ async function addExpense(category: string, description: string, amount: number,
   });
 }
 
-async function fetchOpportunities() {
-  const response = await request(app).get(ENDPOINT).set(...AUTH).query({ businessProfileId: ctx.profile.id });
+async function fetchOpportunities(query: Record<string, string> = {}) {
+  const response = await request(app).get(ENDPOINT).set(...AUTH).query({ businessProfileId: ctx.profile.id, ...query });
   expect(response.status).toBe(200);
   return response.body;
 }
+
+describe("period filter selections", () => {
+  it("the legacy rolling query reports its kind and no month", async () => {
+    const body = await fetchOpportunities();
+    expect(responseSchema.safeParse(body).success).toBe(true);
+    expect(body.period).toMatchObject({ kind: "rolling", month: null });
+    expect(body.period.days).toBeGreaterThan(0);
+  });
+
+  it("a month covers that whole calendar month", async () => {
+    const body = await fetchOpportunities({ period: "month", month: "2026-02" });
+    const parsed = responseSchema.safeParse(body);
+    expect(parsed.success, JSON.stringify(parsed.success ? null : parsed.error.issues, null, 2)).toBe(true);
+    expect(body.period).toEqual({ days: 28, start: "2026-02-01", end: "2026-02-28", kind: "month", month: "2026-02" });
+  });
+
+  it("all time has no first day and says why nothing is compared", async () => {
+    await addExpense("Inventory", "Stock", 6000, -2);
+    const body = await fetchOpportunities({ period: "all" });
+    const parsed = responseSchema.safeParse(body);
+    expect(parsed.success, JSON.stringify(parsed.success ? null : parsed.error.issues, null, 2)).toBe(true);
+    expect(body.period).toMatchObject({ days: 0, start: null, kind: "all", month: null });
+    expect(body.dataQuality.status).toBe("insufficient");
+    expect(body.opportunities).toEqual([]);
+  });
+});
 
 describe("zero opportunities", () => {
   it("insufficient history still matches the response schema", async () => {

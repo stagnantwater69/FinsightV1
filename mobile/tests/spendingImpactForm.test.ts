@@ -2,11 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   BAND_SENTENCE,
   BAND_TONE,
-  DEFAULT_PERIOD_DAYS,
   IMPACT_STALE_COPY,
   MAX_AMOUNT,
   MAX_ITEM_LENGTH,
-  PERIOD_OPTIONS,
   QUICK_AMOUNTS,
   amountValidationError,
   canRequestReview,
@@ -22,12 +20,16 @@ import {
   percentOfFundsText,
   periodEvidence,
   periodEvidenceNote,
-  periodPhrase,
+  expensesPhrase,
   quickAmountValue,
   resetScenario,
   scenarioQuestion,
 } from "../src/lib/spendingImpactForm";
 import { FIELD_LIMITS } from "../src/lib/fieldLimits";
+import { periodKey } from "../src/lib/reportingPeriod";
+
+const AUGUST = { kind: "month", month: "2026-08" } as const;
+const WEEK = { kind: "week" } as const;
 
 /**
  * The Spending Impact form's input rules.
@@ -212,22 +214,10 @@ describe("canRequestReview", () => {
  */
 
 describe("comparison period", () => {
-  it("offers exactly the three windows the plan names", () => {
-    expect(PERIOD_OPTIONS.map((o) => o.days)).toEqual([1, 7, 30]);
-  });
-
-  it("opens on the window the endpoint itself defaults to", () => {
-    // /insights/spending-impact defaults periodDays to 30. Opening on anything
-    // else would make the app's first answer differ from the same account's
-    // first answer on web for no reason an owner could see.
-    expect(DEFAULT_PERIOD_DAYS).toBe(30);
-    expect(PERIOD_OPTIONS.some((o) => o.days === DEFAULT_PERIOD_DAYS)).toBe(true);
-  });
-
-  it("names each window in a sentence, so copy never says 'last 1 days'", () => {
-    expect(periodPhrase(1)).toBe("today's records");
-    expect(periodPhrase(7)).toBe("this week's records");
-    expect(periodPhrase(30)).toBe("this month's records");
+  it("names the shared period in a sentence, never as a day count", () => {
+    expect(expensesPhrase(WEEK)).toBe("your expenses this week");
+    expect(expensesPhrase(AUGUST)).toBe("your expenses in August 2026");
+    expect(expensesPhrase({ kind: "all" })).toBe("all your recorded expenses");
   });
 });
 
@@ -242,21 +232,21 @@ describe("isImpactStale with a period", () => {
    * answer about thirty — even though the amount in the field never moved,
    * which is exactly why the amount-only check could not see it.
    */
-  it("goes stale when only the window has changed", () => {
-    expect(isImpactStale(11000, 11000, 7, 30)).toBe(true);
-    expect(isImpactStale(11000, 11000, 30, 30)).toBe(false);
+  it("goes stale when only the period has changed", () => {
+    expect(isImpactStale(11000, 11000, periodKey(WEEK), periodKey(AUGUST))).toBe(true);
+    expect(isImpactStale(11000, 11000, periodKey(AUGUST), periodKey(AUGUST))).toBe(false);
   });
 });
 
 describe("impactStaleReason", () => {
-  const computed = { amount: 11000, periodDays: 30 };
+  const computed = { amount: 11000, period: periodKey(AUGUST) };
 
   it("says nothing while the card still describes the screen", () => {
-    expect(impactStaleReason(computed, { amount: 11000, periodDays: 30 })).toBeNull();
+    expect(impactStaleReason(computed, { amount: 11000, period: periodKey(AUGUST) })).toBeNull();
   });
 
   it("has nothing to report before anything is checked", () => {
-    expect(impactStaleReason({ amount: null, periodDays: null }, { amount: 500, periodDays: 7 })).toBeNull();
+    expect(impactStaleReason({ amount: null, period: null }, { amount: 500, period: periodKey(WEEK) })).toBeNull();
   });
 
   /*
@@ -266,9 +256,9 @@ describe("impactStaleReason", () => {
    * place the screen explains itself.
    */
   it("names which half moved", () => {
-    expect(impactStaleReason(computed, { amount: 200, periodDays: 30 })).toBe("amount");
-    expect(impactStaleReason(computed, { amount: 11000, periodDays: 7 })).toBe("period");
-    expect(impactStaleReason(computed, { amount: 200, periodDays: 7 })).toBe("both");
+    expect(impactStaleReason(computed, { amount: 200, period: periodKey(AUGUST) })).toBe("amount");
+    expect(impactStaleReason(computed, { amount: 11000, period: periodKey(WEEK) })).toBe("period");
+    expect(impactStaleReason(computed, { amount: 200, period: periodKey(WEEK) })).toBe("both");
   });
 
   it("has copy for every reason it can return", () => {
@@ -309,21 +299,18 @@ describe("quick amounts", () => {
 
 describe("scenario reset", () => {
   it("clears the amount, the item and the category", () => {
-    const fresh = resetScenario(7);
+    const fresh = resetScenario();
     expect(fresh.amount).toBe("");
     expect(fresh.itemDescription).toBe("");
     expect(fresh.categoryId).toBeNull();
   });
 
   /*
-   * The period is a way of LOOKING rather than part of the scenario: an owner
-   * comparing against this week is still comparing against this week when
-   * they price up the next purchase, and resetting it would make them
-   * re-choose it every time. Web leaves its period select alone too.
+   * The period is a way of LOOKING rather than part of the scenario: it is
+   * the shared period, which Reset has no say over. Web leaves it alone too.
    */
-  it("keeps the comparison window", () => {
-    expect(resetScenario(1).periodDays).toBe(1);
-    expect(resetScenario(30).periodDays).toBe(30);
+  it("says nothing about the period", () => {
+    expect(Object.keys(resetScenario()).sort()).toEqual(["amount", "categoryId", "itemDescription"]);
   });
 });
 
@@ -462,7 +449,7 @@ describe("thin period evidence", () => {
 
   it("says nothing when the window has real history in it", () => {
     expect(periodEvidence(12_000, 50_000)).toBe("normal");
-    expect(periodEvidenceNote("normal", 30)).toBeNull();
+    expect(periodEvidenceNote("normal", AUGUST)).toBeNull();
   });
 
   /*
@@ -472,27 +459,25 @@ describe("thin period evidence", () => {
    * comes from the business profile, not from the window.
    */
   it("explains what is missing, names the window, and protects the funds half", () => {
-    const none = periodEvidenceNote("none", 1)!;
-    expect(none).toContain("today's records");
-    expect(none).toContain("No expenses are recorded");
-    expect(none).toContain("available funds");
+    const none = periodEvidenceNote("none", AUGUST)!;
+    expect(none).toContain("No expenses recorded in August 2026");
+    expect(none).toContain("Available funds");
 
-    const thin = periodEvidenceNote("thin", 7)!;
-    expect(thin).toContain("this week's records");
-    expect(thin).toContain("almost no history");
-    expect(thin).toContain("available funds");
+    const thin = periodEvidenceNote("thin", WEEK)!;
+    expect(thin).toContain("Very few expenses recorded this week");
+    expect(thin).toContain("Available funds");
   });
 });
 
 describe("the prepared Ask FinSight question", () => {
-  const scenario = { amount: 11000, item: "display fridge", periodDays: 30, band: "High Impact" as const };
+  const scenario = { amount: 11000, item: "display fridge", period: AUGUST, band: "High Impact" as const };
 
   it("carries the amount, the item, the band and the window", () => {
     const question = scenarioQuestion(scenario);
     expect(question).toContain("PHP 11,000");
     expect(question).toContain("display fridge");
     expect(question).toContain("high impact");
-    expect(question).toContain("this month's records");
+    expect(question).toContain("your expenses in August 2026");
     expect(question.endsWith("?")).toBe(true);
   });
 

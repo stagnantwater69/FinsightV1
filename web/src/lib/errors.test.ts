@@ -1,6 +1,6 @@
 import { AxiosError, AxiosHeaders } from "axios";
 import { describe, expect, it } from "vitest";
-import { getErrorMessage } from "./errors";
+import { getErrorMessage, getRetryAfterSeconds } from "./errors";
 import { api } from "./api";
 
 /**
@@ -14,13 +14,13 @@ import { api } from "./api";
  * own diagnosis, and it points the reader at their wifi when their wifi is fine.
  */
 
-function withResponse(status: number, data: unknown): AxiosError {
+function withResponse(status: number, data: unknown, headers: Record<string, string> | AxiosHeaders = {}): AxiosError {
   const config = { headers: new AxiosHeaders() };
   return new AxiosError("Request failed", "ERR_BAD_REQUEST", config as never, {}, {
     status,
     statusText: "",
     data,
-    headers: {},
+    headers,
     config: config as never,
   });
 }
@@ -69,6 +69,44 @@ describe("getErrorMessage", () => {
   it("passes ordinary errors through", () => {
     expect(getErrorMessage(new Error("Boom"))).toBe("Boom");
     expect(getErrorMessage("not an error")).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("rate-limit retry timing", () => {
+  const now = Date.parse("2026-10-12T08:00:00Z");
+
+  it.each([0, 1, 42, 900])("reads %i seconds from Retry-After", (seconds) => {
+    const error = withResponse(429, { error: "Slow down." }, { "retry-after": String(seconds) });
+    expect(getRetryAfterSeconds(error, now)).toBe(seconds);
+    expect(getErrorMessage(error)).toBe(`Too many requests. Try again in ${seconds}s.`);
+  });
+
+  it("reads AxiosHeaders case-insensitively and uses the header before the body", () => {
+    const error = withResponse(429, { retryAfterSeconds: 99 }, new AxiosHeaders({ "Retry-After": "12" }));
+    expect(getRetryAfterSeconds(error, now)).toBe(12);
+  });
+
+  it("rounds HTTP-date delays upward and accepts an already elapsed retry date", () => {
+    expect(getRetryAfterSeconds(withResponse(429, {}, { "retry-after": "Mon, 12 Oct 2026 08:00:03 GMT" }), now + 500)).toBe(3);
+    expect(getRetryAfterSeconds(withResponse(429, {}, { "retry-after": "Mon, 12 Oct 2026 07:59:59 GMT" }), now)).toBe(0);
+  });
+
+  it.each([undefined, "not a delay", "-1", "1.5", "Infinity"])("uses structured retry seconds when the header is %s", (header) => {
+    const error = withResponse(429, { retryAfterSeconds: 8 }, header === undefined ? {} : { "retry-after": header });
+    expect(getRetryAfterSeconds(error, now)).toBe(8);
+    expect(getErrorMessage(error)).toBe("Too many requests. Try again in 8s.");
+  });
+
+  it.each([-1, 1.5, "12", null])("rejects invalid structured retry delay %s", (retryAfterSeconds) => {
+    const error = withResponse(429, { retryAfterSeconds });
+    expect(getRetryAfterSeconds(error, now)).toBeNull();
+    expect(getErrorMessage(error)).toBe("Too many requests. Please wait a moment and try again.");
+  });
+
+  it("keeps headerless server guidance and does not misclassify other errors", () => {
+    expect(getErrorMessage(withResponse(429, { error: "Wait until your import finishes." }))).toBe("Wait until your import finishes.");
+    expect(getErrorMessage(withResponse(400, { error: "Choose a category." }, { "retry-after": "9" }))).toBe("Choose a category.");
+    expect(getRetryAfterSeconds(new Error("Offline"), now)).toBeNull();
   });
 });
 

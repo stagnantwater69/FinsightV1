@@ -52,6 +52,35 @@ describe("anomaly finding persistence", () => {
     expect(await prisma.anomalyFinding.count()).toBe(1);
   });
 
+  it("reopens a detector-superseded finding when the same fingerprint is detected again", async () => {
+    const first = await saveFinding(amountFinding());
+    await prisma.anomalyFinding.update({
+      where: { id: first.id },
+      data: { status: AnomalyFindingStatus.SUPERSEDED },
+    });
+
+    const redetected = await saveFinding({ ...amountFinding(), score: 4.1 });
+
+    expect(redetected.id).toBe(first.id);
+    expect(redetected.status).toBe(AnomalyFindingStatus.OPEN);
+    expect(await prisma.anomalyFinding.count({
+      where: { businessProfileId: alice.profile.id, fingerprint: amountFinding().fingerprint },
+    })).toBe(1);
+  });
+
+  it("does not reopen a finding the owner already reviewed", async () => {
+    const first = await saveFinding(amountFinding());
+    await reviewFinding(alice.user.id, first.id, {
+      status: AnomalyFindingStatus.DISMISSED,
+      feedback: AnomalyFindingFeedback.EXPECTED_TRANSACTION,
+    });
+
+    const redetected = await saveFinding({ ...amountFinding(), score: 4.1 });
+
+    expect(redetected.status).toBe(AnomalyFindingStatus.DISMISSED);
+    expect(redetected.feedback).toBe(AnomalyFindingFeedback.EXPECTED_TRANSACTION);
+  });
+
   it("scopes an identical detector fingerprint to its business", async () => {
     await saveFinding(amountFinding());
     await saveFinding({

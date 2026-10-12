@@ -397,14 +397,7 @@ describe("provider merge against the local read", () => {
     expect(stored.items).toEqual(["Rice"]);
   });
 
-  /*
-   * Rescue routing, not always routing: the provider was called because the
-   * local read failed, so it may only replace a field whose evidence is
-   * genuinely weaker. A total with no items read is unverified, not
-   * contradicted — nothing on the receipt disputes it — so it holds against a
-   * provider total of equal strength.
-   */
-  it("keeps a printed total that no items contradict when the provider is only a rescue", async () => {
+  it("lets validated provider evidence replace a local total with no corroborating items", async () => {
     enableMockedGeminiProvider();
     ocrText.value = "2026-09-01\nTOTAL 100.00";
     adapterExtraction.value = { total: providerField(125) };
@@ -416,8 +409,8 @@ describe("provider merge against the local read", () => {
     expect(adapterExtract.current).toHaveBeenCalledTimes(1);
 
     const stored = await storedFields(scan.id);
-    expect(stored.amount).toBe(100);
-    expect(stored.sources.amount).toBe("ocr");
+    expect(stored.amount).toBe(125);
+    expect(stored.sources.amount).toBe("vision");
   });
 
   it("keeps the parser's DD/MM reading of an ambiguous date when the provider only swaps day and month", async () => {

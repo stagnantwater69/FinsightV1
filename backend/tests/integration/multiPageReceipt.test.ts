@@ -86,6 +86,7 @@ import {
   RECEIPT_UPLOAD_MAX_OBJECT_BYTES,
   runReceiptWorkerOnce,
 } from "../../src/services/receiptScan.service";
+import { asPhotographed, GAISANO_ROWS, GAISANO_TOTAL } from "../helpers/longReceiptFixtures";
 import {
   disconnectDb,
   makeOwnerWithProfile,
@@ -672,5 +673,104 @@ describe("sections photographed with an overlap", () => {
 
     const stored = await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } });
     expect(stored.rawText!.match(/Cooking oil/g)).toHaveLength(2);
+  });
+});
+
+/*
+ * The owner's Gaisano receipt, as TEXT (tests/helpers/longReceiptFixtures.ts:
+ * hand-transcribed, checked against its own printed total and item count),
+ * read through the real worker end to end with OCR and Storage stubbed.
+ */
+describe("a long receipt printed as two-line rows", () => {
+  const UNREADABLE = "__page image the OCR engine cannot read__";
+
+  async function runAttempt(scanId: number, attempt: number) {
+    await prisma.receiptScan.update({ where: { id: scanId }, data: { nextProcessingAttemptAt: new Date(0) } });
+    expect(await runReceiptWorkerOnce()).toBe(true);
+    for (let i = 0; i < 200; i++) {
+      const row = await prisma.receiptScan.findUniqueOrThrow({ where: { id: scanId } });
+      if (row.processingWorkerId === null && row.processingAttemptCount === attempt) return row;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    throw new Error(`attempt ${attempt} did not finish`);
+  }
+
+  it("reads every purchase across three photographs and reconciles to the printed total", async () => {
+    const [page1, page2, page3] = asPhotographed();
+    const scan = await uploadPages([{ text: page1 }, { text: page2 }, { text: page3 }]);
+
+    expect(scan.processingStatus).toBe("Complete");
+    expect(scan.extractedAmount).toBe(GAISANO_TOTAL);
+    expect(scan.requiresManualCurrencyConversion).toBe(false);
+    const items = await prisma.receiptScanItem.findMany({ where: { receiptScanId: scan.id }, orderBy: { lineNumber: "asc" } });
+    expect(items.map((item) => item.name)).toEqual(GAISANO_ROWS.map((row) => row[4]));
+    expect(items.map((item) => Number(item.amount))).toEqual(GAISANO_ROWS.map((row) => Number(row[3])));
+    expect(scan.warnings.map((warning) => warning.code)).not.toContain("UNEXPLAINED_GAP");
+  });
+
+  it("names the one weak page instead of scoring the whole receipt by it", async () => {
+    const [page1, page2, page3] = asPhotographed();
+    const scan = await uploadPages([{ text: page1, confidence: 39 }, { text: page2, confidence: 93 }, { text: page3, confidence: 92 }]);
+
+    expect(scan.warnings.filter((warning) => warning.code === "LOW_CONFIDENCE")).toEqual([
+      expect.objectContaining({ pageNumber: 1, detail: "page 1 confidence 39" }),
+    ]);
+    expect(scan.ocrConfidence).toBeGreaterThan(60);
+    const pages = await prisma.receiptScanPage.findMany({ where: { receiptScanId: scan.id }, orderBy: { pageNumber: "asc" } });
+    expect(pages.map((stored) => stored.ocrConfidence)).toEqual([39, 93, 92]);
+  });
+
+  it("keeps the pages that read when one never does, on the last attempt, and names it", async () => {
+    const spy = vi.spyOn(ocrService, "extractReceipt").mockImplementation(async (buffer: Buffer) => {
+      const next = downloadedOcrResults.get(buffer) ?? { text: "", confidence: 95 };
+      if (next.text === UNREADABLE) throw new Error("OCR worker thread exited (code 1) mid-recognition");
+      return { text: next.text, confidence: next.confidence, lines: [] };
+    });
+    const [page1, , page3] = asPhotographed();
+    const created = await uploadAndScan(ctx.user.id, {
+      businessProfileId: ctx.profile.id,
+      pages: [page("p1", { text: page1 }), page("p2", { text: UNREADABLE }), page("p3", { text: page3 })],
+    });
+
+    // Retried first: most failed reads are transient.
+    const first = await runAttempt(created.id, 1);
+    expect(first.processingStatus).toBe("Processing");
+    expect(first.processingErrorCode).toBe("RECEIPT_PROCESSING_FAILED");
+    await runAttempt(created.id, 2);
+    const last = await runAttempt(created.id, 3);
+    expect(last.processingStatus).toBe("Complete");
+
+    const scan = await getScan(ctx.user.id, created.id);
+    expect(scan.warnings).toContainEqual(expect.objectContaining({ code: "UNREADABLE_FIELD", field: "items", pageNumber: 2 }));
+    const items = await prisma.receiptScanItem.findMany({ where: { receiptScanId: created.id } });
+    // Pages 1 and 3 in full; page 2's rows are missing, not invented.
+    const printed = new Set(GAISANO_ROWS.map((row) => row[4]));
+    expect(items.length).toBeGreaterThanOrEqual(30);
+    expect(items.every((item) => printed.has(item.name) || /^\d+$/.test(item.name))).toBe(true);
+    expect(scan.warnings.map((warning) => warning.code)).toContain("UNEXPLAINED_GAP");
+    const pages = await prisma.receiptScanPage.findMany({ where: { receiptScanId: created.id }, orderBy: { pageNumber: "asc" } });
+    expect(pages[1]).toMatchObject({ rawText: "", ocrConfidence: null, originalRawText: null });
+    spy.mockRestore();
+  });
+
+  it("reads a page from its other image when one of its two images cannot be read", async () => {
+    const spy = vi.spyOn(ocrService, "extractReceipt").mockImplementation(async (buffer: Buffer) => {
+      const next = downloadedOcrResults.get(buffer) ?? { text: "", confidence: 95 };
+      if (next.text === UNREADABLE) throw new Error("OCR recognition exceeded 120000 ms");
+      return { text: next.text, confidence: next.confidence, lines: [] };
+    });
+    const created = await uploadAndScan(ctx.user.id, {
+      businessProfileId: ctx.profile.id,
+      pages: [{
+        ...page("original", { text: UNREADABLE }),
+        processed: page("processed", { text: "ABC STORE\nDate: 2026-07-20\nRice 25kg 1220.00\nTOTAL 1220.00" }),
+      }],
+    });
+    expect(await runReceiptWorkerAndWait(created.id)).toBe("Complete");
+    const scan = await getScan(ctx.user.id, created.id);
+    expect(scan.extractedAmount).toBe(1220);
+    const stored = await prisma.receiptScanPage.findFirstOrThrow({ where: { receiptScanId: created.id } });
+    expect(stored).toMatchObject({ ocrSource: "processed", originalRawText: null });
+    spy.mockRestore();
   });
 });

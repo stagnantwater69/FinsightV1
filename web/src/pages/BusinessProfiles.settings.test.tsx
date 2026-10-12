@@ -1,11 +1,16 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { BusinessProfiles } from "./BusinessProfiles";
 import { BEFORE_BUSINESS_PROFILE_SWITCH } from "../lib/navigationGuards";
-import type { BusinessProfile, BusinessProfileInput } from "../lib/types";
+import type {
+  BusinessProfile,
+  BusinessProfileInput,
+  FinancialPosition,
+} from "../lib/types";
+import { invalidateServerState } from "../lib/serverStateCache";
 
 const selectedProfile: BusinessProfile = {
   id: 41,
@@ -27,7 +32,37 @@ const updateProfile = vi.fn<
 >();
 const uploadLogo = vi.fn<(id: number, file: File) => Promise<BusinessProfile>>();
 const refresh = vi.fn<() => Promise<void>>();
+const getFinancialPosition = vi.fn<
+  (id: number, signal?: AbortSignal) => Promise<FinancialPosition>
+>();
+const setExpenseRecordsCompleteThroughMonth = vi.fn<
+  (id: number, month: string | null) => Promise<FinancialPosition>
+>();
 const toast = vi.fn<(message: string) => void>();
+
+const financialPosition: FinancialPosition = {
+  asOfDate: "2026-10-01",
+  availableFunds: {
+    calculatedAmount: 72_500,
+    baselineAmount: 60_000,
+    baselineAt: "2026-09-01T01:00:00.000Z",
+    baselineDate: "2026-09-01",
+    confirmedSalesAdded: 20_000,
+    confirmedExpensesDeducted: 7_500,
+    confirmedSalesRecordCount: 3,
+    confirmedExpenseRecordCount: 2,
+    asOfDate: "2026-10-01",
+  },
+  monthlyExpenseBasis: {
+    amount: 200_000,
+    source: "owner_estimate",
+    sourceMonth: null,
+    ownerEstimate: 200_000,
+    eligibleRecordCount: 0,
+    recordsCompleteThroughMonth: null,
+    recordsCompleteThroughConfirmedAt: null,
+  },
+};
 
 let businessContext: {
   profiles: BusinessProfile[];
@@ -40,6 +75,8 @@ vi.mock("../context/BusinessProfileContext", () => ({
   useBusinessProfiles: () => ({
     ...businessContext,
     updateProfile,
+    getFinancialPosition,
+    setExpenseRecordsCompleteThroughMonth,
     uploadLogo,
     refresh,
   }),
@@ -73,6 +110,10 @@ beforeEach(() => {
   uploadLogo.mockResolvedValue(selectedProfile);
   refresh.mockReset();
   refresh.mockResolvedValue(undefined);
+  getFinancialPosition.mockReset();
+  getFinancialPosition.mockResolvedValue(financialPosition);
+  setExpenseRecordsCompleteThroughMonth.mockReset();
+  setExpenseRecordsCompleteThroughMonth.mockResolvedValue(financialPosition);
   toast.mockReset();
   vi.restoreAllMocks();
 });
@@ -83,8 +124,8 @@ describe("BusinessProfiles settings", () => {
 
     expect(screen.getByLabelText(/^Business name/)).toHaveValue("Harbor Cafe");
     expect(screen.getByLabelText(/^Business type/)).toHaveValue("Food business");
-    expect(screen.getByLabelText(/^Available business funds/)).toHaveValue(60_000);
-    expect(screen.getByLabelText(/^Expected monthly expenses/)).toHaveValue(200_000);
+    expect(screen.getByLabelText(/^Starting available funds/)).toHaveValue(60_000);
+    expect(screen.getByLabelText(/^Starting monthly expense estimate/)).toHaveValue(200_000);
     expect(screen.getByLabelText(/^Operating days per month/)).toHaveValue(26);
     expect(screen.getByLabelText(/^Flag single expenses over/)).toHaveValue(40_000);
     expect(screen.getByRole("link", { name: /manage schedule/i })).toHaveAttribute(
@@ -105,7 +146,7 @@ describe("BusinessProfiles settings", () => {
     fireEvent.change(screen.getByLabelText(/^Business name/), {
       target: { value: "Harbor Cafe and Bakery" },
     });
-    fireEvent.change(screen.getByLabelText(/^Available business funds/), {
+    fireEvent.change(screen.getByLabelText(/^Starting available funds/), {
       target: { value: "72500" },
     });
 
@@ -124,6 +165,123 @@ describe("BusinessProfiles settings", () => {
     expect(toast).toHaveBeenCalledWith("Business profile updated");
     expect(screen.getByText("Changes saved")).toBeVisible();
     expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+  });
+
+  it("shows the calculated funds and the active monthly-expense source", async () => {
+    renderPage();
+
+    expect(await screen.findByText("Recorded available funds")).toBeVisible();
+    expect(screen.getByText("PHP 72,500")).toBeVisible();
+    expect(
+      screen.getByText(/Using your starting estimate because the previous month is not confirmed complete/),
+    ).toBeVisible();
+    expect(getFinancialPosition).toHaveBeenCalledWith(41, expect.any(AbortSignal));
+  });
+
+  it("refreshes the financial panel only for its business", async () => {
+    const refreshedPosition: FinancialPosition = {
+      ...financialPosition,
+      availableFunds: {
+        ...financialPosition.availableFunds,
+        calculatedAmount: 81_000,
+        confirmedSalesAdded: 28_500,
+      },
+    };
+    getFinancialPosition
+      .mockResolvedValueOnce(financialPosition)
+      .mockResolvedValueOnce(refreshedPosition);
+    renderPage();
+
+    expect(await screen.findByText("PHP 72,500")).toBeVisible();
+    expect(getFinancialPosition).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      invalidateServerState({
+        businessProfileId: 99,
+        tags: ["financial"],
+      });
+    });
+    expect(getFinancialPosition).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      invalidateServerState({
+        businessProfileId: selectedProfile.id,
+        tags: ["financial"],
+      });
+    });
+
+    expect(await screen.findByText("PHP 81,000")).toBeVisible();
+    expect(getFinancialPosition).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses a completeness write response without an invalidation-driven duplicate read", async () => {
+    const user = userEvent.setup();
+    const septemberPosition: FinancialPosition = {
+      ...financialPosition,
+      monthlyExpenseBasis: {
+        ...financialPosition.monthlyExpenseBasis,
+        amount: 154_000,
+        source: "previous_complete_month",
+        sourceMonth: "2026-09",
+        eligibleRecordCount: 18,
+        recordsCompleteThroughMonth: "2026-09",
+        recordsCompleteThroughConfirmedAt: "2026-10-01T03:00:00.000Z",
+      },
+    };
+    setExpenseRecordsCompleteThroughMonth.mockImplementation(async () => {
+      invalidateServerState({
+        businessProfileId: selectedProfile.id,
+        tags: ["financial"],
+      });
+      return septemberPosition;
+    });
+    renderPage();
+
+    fireEvent.change(
+      await screen.findByLabelText("Expense records complete through"),
+      { target: { value: "2026-09" } },
+    );
+    await user.click(screen.getByRole("button", { name: "Save complete month" }));
+
+    expect(
+      await screen.findByText(
+        /From 18 confirmed expense records in September 2026/,
+      ),
+    ).toBeVisible();
+    expect(getFinancialPosition).toHaveBeenCalledTimes(1);
+  });
+
+  it("sets and clears the latest month with complete expense records", async () => {
+    const user = userEvent.setup();
+    const septemberPosition: FinancialPosition = {
+      ...financialPosition,
+      monthlyExpenseBasis: {
+        ...financialPosition.monthlyExpenseBasis,
+        amount: 154_000,
+        source: "previous_complete_month",
+        sourceMonth: "2026-09",
+        eligibleRecordCount: 18,
+        recordsCompleteThroughMonth: "2026-09",
+        recordsCompleteThroughConfirmedAt: "2026-10-01T03:00:00.000Z",
+      },
+    };
+    setExpenseRecordsCompleteThroughMonth.mockResolvedValue(septemberPosition);
+    renderPage();
+
+    const month = await screen.findByLabelText("Expense records complete through");
+    fireEvent.change(month, { target: { value: "2026-09" } });
+    await user.click(screen.getByRole("button", { name: "Save complete month" }));
+
+    await waitFor(() =>
+      expect(setExpenseRecordsCompleteThroughMonth).toHaveBeenCalledWith(41, "2026-09"),
+    );
+    expect(screen.getByText(/From 18 confirmed expense records in September 2026/)).toBeVisible();
+
+    setExpenseRecordsCompleteThroughMonth.mockResolvedValue(financialPosition);
+    await user.click(screen.getByRole("button", { name: "Clear confirmation" }));
+    await waitFor(() =>
+      expect(setExpenseRecordsCompleteThroughMonth).toHaveBeenLastCalledWith(41, null),
+    );
   });
 
   it("marks edits as dirty and Cancel restores the saved values", async () => {

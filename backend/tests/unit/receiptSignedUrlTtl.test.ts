@@ -10,6 +10,7 @@ const { createSignedUrl } = vi.hoisted(() => ({ createSignedUrl: vi.fn() }));
 
 vi.mock("../../src/config/supabase", () => ({
   supabaseAdmin: { storage: { from: vi.fn(() => ({ createSignedUrl })) } },
+  SUPABASE_REQUEST_TIMEOUT_MS: 60_000,
 }));
 vi.mock("../../src/config/logger", () => ({
   logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },

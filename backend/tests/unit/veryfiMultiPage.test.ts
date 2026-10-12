@@ -76,6 +76,26 @@ describe("Veryfi multi-page reads", () => {
     });
   });
 
+  it("drops provider values outside the database money and quantity domains", async () => {
+    vi.stubGlobal("fetch", async () => ok({
+      vendor: { name: "Bounded Store" },
+      date: "2026-09-14 00:00:00",
+      total: 1e12,
+      line_items: [
+        { description: "Excess amount", total: 123.456, quantity: 1 },
+        { description: "Excess quantity", total: 125, quantity: 100_000_000 },
+      ],
+    }));
+
+    const result = await extractReceiptWithVeryfi([page]);
+
+    expect(result?.receipt).toMatchObject({
+      vendor: "Bounded Store",
+      amount: null,
+      items: [{ name: "Excess quantity", amount: 125, quantity: null }],
+    });
+  });
+
   it("keeps reporting a single failed page as an http rejection, not an unreachable provider", async () => {
     vi.stubGlobal("fetch", async () => httpError(401));
 

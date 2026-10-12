@@ -540,7 +540,7 @@ describe("computeRecoveryTarget — timezone/asOfDate passthrough (§9.1/§8.2 P
     const r = computeRecoveryTarget({ ...base, today: utc(2026, 7, 15) });
     expect(r.timezone).toBe("Asia/Manila");
     expect(r.asOfDate).toBe("2026-07-15");
-    expect(r.contractVersion).toBe(1);
+    expect(r.contractVersion).toBe(2);
   });
 
   it("carries through an explicitly supplied timezone unchanged", () => {

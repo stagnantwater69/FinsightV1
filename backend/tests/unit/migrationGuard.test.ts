@@ -361,15 +361,19 @@ describe("assertMigrationsApplied", () => {
     expect(exit).not.toHaveBeenCalled();
   });
 
-  it("warns but still starts when the check itself could not run", async () => {
+  it("refuses to start when the database is unavailable during verification", async () => {
     queryRaw.mockRejectedValue(
       new Prisma.PrismaClientKnownRequestError("Timed out fetching a connection", { code: "P1008", clientVersion: "6.19.3" }),
     );
 
     await assertMigrationsApplied("worker");
 
-    expect(exit).not.toHaveBeenCalled();
-    expect(logger.warn).toHaveBeenCalled();
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.fatal).toHaveBeenCalledWith(
+      expect.objectContaining({ verificationFailure: "database_unavailable" }),
+      expect.stringContaining("REFUSING TO START"),
+    );
   });
 
   it("refuses to start when migration history is reachable but cannot be read", async () => {

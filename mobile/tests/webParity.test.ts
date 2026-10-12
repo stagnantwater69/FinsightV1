@@ -8,11 +8,11 @@ import { TOUR_STEPS } from "../src/components/tour/steps";
 import { shouldStartTour } from "../src/lib/tourGating";
 import {
   BAND_TONE,
-  PERIOD_OPTIONS,
   QUICK_AMOUNTS,
   gaugeGeometry,
   percentOfFundsText,
 } from "../src/lib/spendingImpactForm";
+import * as mobilePeriod from "../src/lib/reportingPeriod";
 
 /**
  * Every page the website has, the app has — or has a written reason not to.
@@ -547,12 +547,7 @@ describe("finding feedback matches web", () => {
 const WEB_SPENDING_IMPACT = join(__dirname, "..", "..", "web", "src", "pages", "SpendingImpact.tsx");
 const MOBILE_SPENDING_IMPACT = join(__dirname, "..", "src", "screens", "SpendingImpactScreen.tsx");
 
-/** Web's `PERIOD_OPTIONS` day figures, read off its source. */
-function webPeriodDays(): number[] {
-  const src = readFileSync(WEB_SPENDING_IMPACT, "utf8");
-  const block = /const PERIOD_OPTIONS\s*=\s*\[([\s\S]*?)\];/.exec(src)?.[1] ?? "";
-  return [...block.matchAll(/days:\s*(\d+)/g)].map((m) => Number(m[1]));
-}
+const WEB_PERIOD = join(__dirname, "..", "..", "web", "src", "lib", "reportingPeriod.ts");
 
 /** Web's `QUICK_AMOUNTS`, likewise. */
 function webQuickAmounts(): number[] {
@@ -582,21 +577,20 @@ describe.skipIf(!existsSync(WEB_SPENDING_IMPACT))("Spending Impact capability pa
   it("finds both implementations at all", () => {
     // Guards the test itself: a page that moved, or constants that were
     // renamed, would make every assertion below pass vacuously.
-    expect(webPeriodDays().length, "web's PERIOD_OPTIONS no longer parses").toBeGreaterThan(1);
     expect(webQuickAmounts().length, "web's QUICK_AMOUNTS no longer parses").toBeGreaterThan(1);
     expect(Object.keys(webBandTones()).length, "web's BAND_TONE no longer parses").toBe(3);
   });
 
   /*
-   * The DAYS must match; the labels deliberately need not. Web renders these
-   * in a <select> where "This week" reads as one of a list; the app renders
-   * them three-across in a segmented control on a 360dp screen, where the
-   * two-word labels wrap. A window the two clients name the same and count
-   * differently is the drift that matters — a window they name differently
-   * and count the same is a layout decision.
+   * Both clients compare against the SHARED period (This week | Month | All
+   * time) rather than a window of their own, so the period on Spending Impact
+   * is always the one on Home and Expense Insights. Wiring, read off source;
+   * what the period means is driven in the block below. Web reads the period
+   * without drawing its own selector: it is picked on the Dashboard.
    */
-  it("offers the same comparison windows web does", () => {
-    expect(PERIOD_OPTIONS.map((o) => o.days)).toEqual(webPeriodDays());
+  it("compares against the shared period on both clients", () => {
+    expect(readFileSync(WEB_SPENDING_IMPACT, "utf8")).toContain("useReportingPeriod()");
+    expect(readFileSync(MOBILE_SPENDING_IMPACT, "utf8")).toContain("<PeriodSelector");
   });
 
   it("offers the same quick amounts", () => {
@@ -676,8 +670,8 @@ describe.skipIf(!existsSync(WEB_SPENDING_IMPACT))("Spending Impact capability pa
   const CAPABILITIES: { capability: string; web: RegExp; mobile: RegExp }[] = [
     {
       capability: "comparison period is selectable and sent to the server",
-      web: /periodDays/,
-      mobile: /periodDays,?\s*\n|periodDays:/,
+      web: /periodParams\(selection\)/,
+      mobile: /periodParams\(selection\)/,
     },
     {
       capability: "quick amount presets",
@@ -716,13 +710,18 @@ describe.skipIf(!existsSync(WEB_SPENDING_IMPACT))("Spending Impact capability pa
       mobile: /ImpactGauge/,
     },
     {
-      capability: "current funds context with a path to edit the business",
-      web: /availableFunds/,
-      mobile: /selected\.availableFunds/,
+      capability: "record-derived current funds context",
+      web: /availableFundsCalculation/,
+      mobile: /availableFundsCalculation/,
+    },
+    {
+      capability: "path to edit starting funds",
+      web: /Edit starting funds/,
+      mobile: /Edit starting funds/,
     },
     {
       capability: "thin-data explanation for an empty comparison window",
-      web: /No expenses are recorded for this period/,
+      web: /No expenses \{periodPhrase\(selection\)\}/,
       mobile: /periodEvidenceNote/,
     },
     {
@@ -770,5 +769,49 @@ describe.skipIf(!existsSync(WEB_SPENDING_IMPACT))("Spending Impact capability pa
     expect(mobile, "Spending Impact must never send a question on the owner's behalf").not.toMatch(
       /chat\.send\(/,
     );
+  });
+});
+
+
+/**
+ * The period filter, run on both clients' modules side by side.
+ *
+ * Same endpoints, same period: the query each client sends and the words it
+ * uses for the result must agree, or an owner checking their phone and their
+ * laptop is told two different things about the same figures. Imported and
+ * driven, like the confidence bands, not read off source.
+ */
+describe.skipIf(!existsSync(WEB_PERIOD))("Period filter parity", () => {
+  const selections = [
+    { kind: "week" },
+    { kind: "month", month: "2026-09" },
+    { kind: "month", month: "2025-12" },
+    { kind: "all" },
+  ] as const;
+  const windows = [
+    { kind: "month", month: "2026-08", start: "2026-08-01", end: "2026-08-31", days: 31, elapsedDays: 31, previous: { start: "2026-07-01", end: "2026-07-31" } },
+    { kind: "month", month: "2026-09", start: "2026-09-01", end: "2026-09-30", days: 30, elapsedDays: 24, previous: { start: "2026-08-01", end: "2026-08-24" } },
+    { kind: "week", month: null, start: "2026-09-28", end: "2026-10-04", days: 7, elapsedDays: 3, previous: { start: "2026-09-21", end: "2026-09-23" } },
+    { kind: "all", month: null, start: null, end: null, days: null, elapsedDays: null, previous: null },
+  ] as const;
+
+  it("asks the server for the same period", async () => {
+    const web = (await import(WEB_PERIOD)) as typeof import("../../web/src/lib/reportingPeriod");
+    for (const selection of selections) {
+      expect(mobilePeriod.periodParams(selection)).toEqual(web.periodParams(selection));
+      expect(mobilePeriod.periodKey(selection)).toBe(web.periodKey(selection));
+    }
+  });
+
+  it("names the period in the same words", async () => {
+    const web = (await import(WEB_PERIOD)) as typeof import("../../web/src/lib/reportingPeriod");
+    for (const selection of selections) {
+      expect(mobilePeriod.periodLabel(selection)).toBe(web.periodLabel(selection));
+      expect(mobilePeriod.periodPhrase(selection)).toBe(web.periodPhrase(selection));
+    }
+    for (const window of windows) {
+      expect(mobilePeriod.previousLabel(window)).toBe(web.previousLabel(window));
+      expect(mobilePeriod.windowKey(window)).toBe(web.windowKey(window));
+    }
   });
 });

@@ -43,16 +43,20 @@ env:
 
 # --- Onboarding -------------------------------------------------------------
 # The wizard names its own position; step 1 of 3 is "Your business".
-- assertVisible: "Your business"
+- assertVisible:
+    id: "onboarding-step-business"
 
 - tapOn: "Continue"
-- assertVisible: "Your numbers"
+- assertVisible:
+    id: "onboarding-step-starting-figures"
 
 - tapOn: "Continue"
-- assertVisible: "You're ready"
+- assertVisible:
+    id: "onboarding-step-ready"
 
 # The honest exit from onboarding: nothing is recorded on the owner's behalf.
-- tapOn: "Not now — take me to Home"
+- tapOn:
+    id: "onboarding-finish-home"
 
 # --- Tabs -------------------------------------------------------------------
 - assertVisible: "Home"

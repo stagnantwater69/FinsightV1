@@ -61,7 +61,11 @@ export const TEST_BUSINESS_PROFILE: BusinessProfile = {
   name: "Ana's Sari-Sari Store",
   type: "Retail",
   availableFunds: 50000,
+  availableFundsBaselineAt: "2026-10-01T00:00:00.000Z",
+  availableFundsBaselineDate: "2026-10-01",
   expectedMonthlyExpenses: 20000,
+  expenseRecordsCompleteThroughMonth: null,
+  expenseRecordsCompleteThroughConfirmedAt: null,
   operatingDays: 26,
   largeExpenseThresholdPercent: 20,
   logoUrl: null,
@@ -176,9 +180,51 @@ export async function mockBackendSession(
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(businessProfiles) });
   });
 
+  await page.route("**/business-profiles/*/financial-position", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const business = businessProfiles[0] ?? TEST_BUSINESS_PROFILE;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        asOfDate: "2026-10-01",
+        availableFunds: {
+          calculatedAmount: business.availableFunds,
+          baselineAmount: business.availableFunds,
+          baselineAt: business.availableFundsBaselineAt ?? business.createdAt,
+          baselineDate: business.availableFundsBaselineDate ?? "2026-10-01",
+          confirmedSalesAdded: 0,
+          confirmedExpensesDeducted: 0,
+          confirmedSalesRecordCount: 0,
+          confirmedExpenseRecordCount: 0,
+          asOfDate: "2026-10-01",
+        },
+        monthlyExpenseBasis: {
+          amount: business.expectedMonthlyExpenses,
+          source: "owner_estimate",
+          sourceMonth: null,
+          ownerEstimate: business.expectedMonthlyExpenses,
+          eligibleRecordCount: 0,
+          recordsCompleteThroughMonth:
+            business.expenseRecordsCompleteThroughMonth ?? null,
+          recordsCompleteThroughConfirmedAt:
+            business.expenseRecordsCompleteThroughConfirmedAt ?? null,
+        },
+      }),
+    });
+  });
+
   await page.route("**/records/categories**", async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(categories) });
+  });
+
+  await page.route("**/records/months**", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ months: [] }) });
+  });
+
+  await page.route("**/records/future-dated**", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ expenses: [], sales: [], total: 0 }) });
   });
 
   await page.route("**/records/receipts/provider-consent/**", async (route) => {
@@ -195,14 +241,35 @@ export async function mockBackendSession(
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([]) });
   });
 
-  // Dashboard companion data is outside these journeys, but must stay mocked
-  // too so the browser suite never needs a running backend.
-  await page.route("**/insights/reduction-opportunities**", async (route) => {
-    await route.fulfill({ json: {
-      period: { days: 30, start: "2026-08-01", end: "2026-08-31" },
+  // Shared overview fixture keeps Dashboard and Expense Insight independent of
+  // a running backend. Individual specs can register a more specific response.
+  await page.route("**/insights/expense-overview**", async (route) => {
+    const view = new URL(route.request().url()).searchParams.get("view");
+    const behavior = {
+      periodStart: "2026-08-01", periodEnd: "2026-08-31",
+      previousPeriodStart: "2026-07-01", previousPeriodEnd: "2026-07-31", periodDays: 31,
+      totals: { current: 0, previous: 0 }, dailyTotals: [], categoryTrends: [],
+      unusualExpenses: [], insufficientHistoryCategories: [],
+    };
+    const opportunities = {
+      period: { days: 31, start: "2026-08-01", end: "2026-08-31" },
       dataQuality: { status: "insufficient", currentRecordCount: 0, previousRecordCount: 0, message: null },
       opportunities: [], detectorVersion: "e2e-fixture",
-    } });
+    };
+    await route.fulfill({ json: view === "detail"
+      ? {
+          view: "detail",
+          behavior: { status: "available", data: behavior },
+          opportunities: { status: "available", data: opportunities },
+        }
+      : {
+          view: "dashboard",
+          comparison: {
+            status: "available",
+            data: { totals: behavior.totals, categoryTrends: behavior.categoryTrends },
+          },
+          topOpportunity: { status: "available", data: null },
+        } });
   });
 }
 

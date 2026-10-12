@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -9,6 +9,23 @@ const runner = join(backendRoot, "tests/load/run-stage.sh");
 const resultRoot = join(backendRoot, "tests/load/results");
 const temporaryPaths: string[] = [];
 const stageNames: string[] = [];
+const bash = process.platform === "win32"
+  ? join(process.env.ProgramFiles ?? "C:/Program Files", "Git/bin/bash.exe")
+  : "bash";
+if (process.platform === "win32" && !existsSync(bash)) throw new Error("Git Bash is required for the load-stage shell tests on Windows.");
+const shellPath = spawnSync(bash, ["-c", 'printf "%s" "$PATH"'], { encoding: "utf8" });
+if (shellPath.status !== 0) throw new Error(`Could not initialize the Bash test harness: ${shellPath.stderr}`);
+
+function bashPath(path: string): string {
+  if (process.platform !== "win32") return path;
+  const converted = spawnSync(bash, ["-c", 'cygpath -u "$1"', "qa-path", path], { encoding: "utf8" });
+  if (converted.status !== 0) throw new Error(`Could not convert a Bash fixture path: ${converted.stderr}`);
+  return converted.stdout.trim();
+}
+
+function runnerArgs(stage: string) {
+  return ["-c", 'printf "%s\\n" "$BASHPID" > "$RUNNER_PID_FILE"; exec bash "$@"', "qa-stage", bashPath(runner), stage, "1", "1s", "1s"];
+}
 
 function executable(path: string, body: string) {
   writeFileSync(path, body, { mode: 0o755 });
@@ -22,6 +39,7 @@ function makeHarness(exitCode: number, delaySeconds = "0.1", longRunning = false
   mkdirSync(bin);
   const samplerPidFile = join(root, "sampler.pid");
   const k6PidFile = join(root, "k6.pid");
+  const runnerPidFile = join(root, "runner.pid");
 
   executable(
     join(bin, "k6"),
@@ -49,14 +67,16 @@ fi
 
   return {
     env: {
-      ...process.env,
-      K6: join(bin, "k6"),
-      PATH: `${bin}:${process.env.PATH ?? ""}`,
-      LOAD_TEST_SAMPLER_PID_FILE: samplerPidFile,
-      K6_PID_FILE: k6PidFile,
+      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toUpperCase() !== "PATH")),
+      K6: bashPath(join(bin, "k6")),
+      PATH: `${bashPath(bin)}:${shellPath.stdout}`,
+      LOAD_TEST_SAMPLER_PID_FILE: bashPath(samplerPidFile),
+      K6_PID_FILE: bashPath(k6PidFile),
+      RUNNER_PID_FILE: bashPath(runnerPidFile),
     },
     samplerPidFile,
     k6PidFile,
+    runnerPidFile,
   };
 }
 
@@ -67,12 +87,7 @@ function uniqueStage(label: string) {
 }
 
 function processExists(pid: number) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
+  return spawnSync(bash, ["-c", 'kill -0 "$1" 2>/dev/null', "qa-pid", String(pid)]).status === 0;
 }
 
 afterEach(() => {
@@ -84,7 +99,7 @@ describe("load stage runner", () => {
   for (const exitCode of [0, 1, 99]) {
     it(`returns k6 exit code ${exitCode} and stops its sampler`, () => {
       const harness = makeHarness(exitCode);
-      const result = spawnSync("bash", [runner, uniqueStage(String(exitCode)), "1", "1s", "1s"], {
+      const result = spawnSync(bash, runnerArgs(uniqueStage(String(exitCode))), {
         cwd: backendRoot,
         env: harness.env,
         encoding: "utf8",
@@ -92,7 +107,7 @@ describe("load stage runner", () => {
       });
 
       expect(result.error).toBeUndefined();
-      expect(result.status).toBe(exitCode);
+      expect(result.status, result.stderr).toBe(exitCode);
       const samplerPid = Number(readFileSync(harness.samplerPidFile, "utf8").trim());
       expect(samplerPid).toBeGreaterThan(0);
       expect(processExists(samplerPid)).toBe(false);
@@ -101,7 +116,7 @@ describe("load stage runner", () => {
 
   it("forwards TERM to k6, stops its sampler, and exits promptly", async () => {
     const harness = makeHarness(0, "30", true);
-    const child = spawn("bash", [runner, uniqueStage("term"), "1", "1s", "1s"], {
+    const child = spawn(bash, runnerArgs(uniqueStage("term")), {
       cwd: backendRoot,
       env: harness.env,
       stdio: "ignore",
@@ -124,22 +139,23 @@ describe("load stage runner", () => {
 
     const samplerPid = Number(readFileSync(harness.samplerPidFile, "utf8").trim());
     const k6Pid = Number(readFileSync(harness.k6PidFile, "utf8").trim());
+    const runnerPid = Number(readFileSync(harness.runnerPidFile, "utf8").trim());
     expect(samplerPid).not.toBe(k6Pid);
     const started = Date.now();
     const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolvePromise) => {
       child.once("exit", (code, signal) => resolvePromise({ code, signal }));
     });
-    child.kill("SIGTERM");
+    expect(spawnSync(bash, ["-c", 'kill -TERM "$1"', "qa-term", String(runnerPid)]).status).toBe(0);
 
     let timeout: ReturnType<typeof setTimeout> | undefined;
     const result = await Promise.race([
       exited,
       new Promise<never>((_resolvePromise, reject) => {
         timeout = setTimeout(() => {
-          for (const pid of [k6Pid, samplerPid, child.pid]) {
+          for (const pid of [k6Pid, samplerPid, runnerPid]) {
             if (pid) {
               try {
-                process.kill(pid, "SIGKILL");
+                spawnSync(bash, ["-c", 'kill -KILL "$1" 2>/dev/null', "qa-kill", String(pid)]);
               } catch {
                 // The process may have exited between the deadline and cleanup.
               }

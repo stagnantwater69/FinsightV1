@@ -1,6 +1,7 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { FlatList, RefreshControl } from 'react-native';
 
 import * as fixtures from './support/fixtures';
 import type { RecordItem } from '../../src/lib/types';
@@ -29,10 +30,23 @@ import type { RecordItem } from '../../src/lib/types';
 const apiGet = vi.fn();
 const apiPost = vi.fn();
 const apiPatch = vi.fn();
+const businessB = { ...fixtures.businessProfile, id: 2, name: 'Second business' };
+let currentBusinessProfile = fixtures.businessProfile;
+const focusEffects = new Set<() => void | (() => void)>();
+const focusCleanups = new Map<() => void | (() => void), void | (() => void)>();
 
 vi.mock('@react-navigation/native', () => ({
   useFocusEffect: (effect: () => void | (() => void)) => {
-    React.useEffect(() => effect(), [effect]);
+    React.useEffect(() => {
+      focusEffects.add(effect);
+      const cleanupEffect = effect();
+      focusCleanups.set(effect, cleanupEffect);
+      return () => {
+        focusEffects.delete(effect);
+        focusCleanups.delete(effect);
+        cleanupEffect?.();
+      };
+    }, [effect]);
   },
 }));
 
@@ -49,8 +63,8 @@ vi.mock('../../src/lib/api', () => ({
 
 vi.mock('../../src/context/BusinessProfileContext', () => ({
   useBusinessProfiles: () => ({
-    profiles: [fixtures.businessProfile],
-    selected: fixtures.businessProfile,
+    profiles: [fixtures.businessProfile, businessB],
+    selected: currentBusinessProfile,
     categories: fixtures.categories,
     loading: false,
     error: null,
@@ -64,6 +78,7 @@ vi.mock('../../src/context/BusinessProfileContext', () => ({
 
 const { FlaggedRecordsScreen } = await import('../../src/screens/records/FlaggedRecordsScreen');
 const { ThemeProvider } = await import('../../src/context/ThemeContext');
+const { invalidateServerState } = await import('../../src/lib/serverStateCache');
 
 function renderScreen() {
   return render(
@@ -73,16 +88,29 @@ function renderScreen() {
   );
 }
 
+function findFiberByType(node: { unstable_fiber?: any } | null, type: unknown) {
+  let root = node?.unstable_fiber;
+  while (root?.return) root = root.return;
+  const pending = root ? [root] : [];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current?.type === type || current?.elementType === type) return current;
+    if (current?.sibling) pending.push(current.sibling);
+    if (current?.child) pending.push(current.child);
+  }
+  return null;
+}
+
 /** A large-expense flag: ungrouped, so one record renders as one card. */
-function record(id: number): RecordItem {
+function record(id: number, businessProfileId = 1, description = `Flagged purchase ${id}`): RecordItem {
   return {
     id,
     type: 'expense',
-    businessProfileId: 1,
+    businessProfileId,
     categoryId: 10,
     duplicateOfRecordId: null,
     date: '2026-08-20',
-    description: `Flagged purchase ${id}`,
+    description,
     amount: 1200,
     source: 'MANUAL_ENTRY',
     reviewStatus: 'Needs Review',
@@ -133,9 +161,12 @@ function routeApi(options: {
 }
 
 beforeEach(() => {
+  focusEffects.clear();
+  focusCleanups.clear();
+  currentBusinessProfile = fixtures.businessProfile;
   apiGet.mockReset();
   apiPost.mockReset();
-  apiPatch.mockReset();
+  apiPatch.mockReset().mockResolvedValue(undefined);
 });
 
 afterEach(cleanup);
@@ -183,6 +214,18 @@ describe('FlaggedRecordsScreen — count endpoint', () => {
 });
 
 describe('FlaggedRecordsScreen — paging past the 200-record cap', () => {
+  it('renders the accumulated queue through a virtualized FlatList', async () => {
+    routeApi({
+      pages: [{ items: [record(1)], nextCursor: null }],
+      count: { expenses: 1, sales: 0, total: 1 },
+    });
+
+    const queries = await renderScreen();
+    await queries.findByText('Flagged purchase 1');
+
+    expect(findFiberByType(queries.root, FlatList)).toBeTruthy();
+  });
+
   it('loads the next page with the cursor and appends it', async () => {
     routeApi({
       pages: [
@@ -263,5 +306,233 @@ describe('FlaggedRecordsScreen — empty and error states', () => {
     // "Nothing needs your attention" over a failed fetch would be a false
     // all-clear about the owner's own books.
     expect(queries.queryByText('Nothing needs your attention')).toBeNull();
+  });
+});
+
+describe('FlaggedRecordsScreen — retained refresh state', () => {
+  it('reuses the in-flight initial batch across a quick blur and refocus', async () => {
+    let finishList!: (page: { items: RecordItem[]; nextCursor: null }) => void;
+    const pendingList = new Promise<{ items: RecordItem[]; nextCursor: null }>((resolve) => {
+      finishList = resolve;
+    });
+    apiGet.mockImplementation((path: string) => {
+      if (path === '/records/flagged') return pendingList;
+      if (path === '/records/flagged/count') return Promise.resolve({ expenses: 1, sales: 0, total: 1 });
+      if (path === '/records/csv-imports/batches') return Promise.resolve([]);
+      return Promise.reject(new Error(`Unexpected path ${path}`));
+    });
+
+    const queries = await renderScreen();
+    await waitFor(() => expect(listCalls()).toHaveLength(1));
+    const focus = [...focusEffects][0]!;
+    await act(async () => {
+      focusCleanups.get(focus)?.();
+      focus();
+    });
+    expect(listCalls()).toHaveLength(1);
+
+    await act(async () => {
+      finishList({ items: [record(1)], nextCursor: null });
+      await pendingList;
+    });
+    expect(await queries.findByText('Flagged purchase 1')).toBeTruthy();
+  });
+
+  it('queues one follow-up when invalidation lands during an active request', async () => {
+    let finishOldList!: (page: { items: RecordItem[]; nextCursor: null }) => void;
+    const oldList = new Promise<{ items: RecordItem[]; nextCursor: null }>((resolve) => {
+      finishOldList = resolve;
+    });
+    let listRequest = 0;
+    apiGet.mockImplementation((path: string) => {
+      if (path === '/records/flagged') {
+        listRequest += 1;
+        return listRequest === 1
+          ? oldList
+          : Promise.resolve({ items: [record(2)], nextCursor: null });
+      }
+      if (path === '/records/flagged/count') return Promise.resolve({ expenses: 1, sales: 0, total: 1 });
+      if (path === '/records/csv-imports/batches') return Promise.resolve([]);
+      return Promise.reject(new Error(`Unexpected path ${path}`));
+    });
+
+    const queries = await renderScreen();
+    await waitFor(() => expect(listCalls()).toHaveLength(1));
+    await act(async () => {
+      invalidateServerState({ businessProfileId: 1, pathPrefixes: ['/records'] });
+      finishOldList({ items: [record(1)], nextCursor: null });
+      await oldList;
+    });
+
+    expect(await queries.findByText('Flagged purchase 2')).toBeTruthy();
+    expect(queries.queryByText('Flagged purchase 1')).toBeNull();
+    expect(listCalls()).toHaveLength(2);
+  });
+
+  it('does not request again on a fresh refocus', async () => {
+    routeApi({
+      pages: [{ items: [record(1)], nextCursor: null }],
+      count: { expenses: 1, sales: 0, total: 1 },
+    });
+    const queries = await renderScreen();
+    expect(await queries.findByText('Flagged purchase 1')).toBeTruthy();
+    expect(listCalls()).toHaveLength(1);
+
+    await act(async () => {
+      for (const focus of [...focusEffects]) focus();
+    });
+
+    expect(listCalls()).toHaveLength(1);
+  });
+
+  it('refreshes immediately after a relevant scoped invalidation', async () => {
+    routeApi({
+      pages: [
+        { items: [record(1)], nextCursor: null },
+        { items: [record(2)], nextCursor: null },
+      ],
+      count: { expenses: 1, sales: 0, total: 1 },
+    });
+    const queries = await renderScreen();
+    expect(await queries.findByText('Flagged purchase 1')).toBeTruthy();
+
+    await act(async () => {
+      invalidateServerState({ businessProfileId: 1, pathPrefixes: ['/records'] });
+    });
+
+    expect(await queries.findByText('Flagged purchase 2')).toBeTruthy();
+    expect(listCalls()).toHaveLength(2);
+  });
+
+  it('refreshes on refocus after the retained rows become stale', async () => {
+    routeApi({
+      pages: [
+        { items: [record(1)], nextCursor: null },
+        { items: [record(2)], nextCursor: null },
+      ],
+      count: { expenses: 1, sales: 0, total: 1 },
+    });
+    const queries = await renderScreen();
+    expect(await queries.findByText('Flagged purchase 1')).toBeTruthy();
+
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_001);
+    await act(async () => {
+      for (const focus of [...focusEffects]) focus();
+    });
+    nowSpy.mockRestore();
+
+    expect(await queries.findByText('Flagged purchase 2')).toBeTruthy();
+    expect(listCalls()).toHaveLength(2);
+  });
+
+  it('always refreshes when the owner pulls, even while the rows are fresh', async () => {
+    routeApi({
+      pages: [
+        { items: [record(1)], nextCursor: null },
+        { items: [record(2)], nextCursor: null },
+      ],
+      count: { expenses: 1, sales: 0, total: 1 },
+    });
+    const queries = await renderScreen();
+    expect(await queries.findByText('Flagged purchase 1')).toBeTruthy();
+
+    const refreshControl = findFiberByType(queries.root, RefreshControl);
+    expect(refreshControl).toBeTruthy();
+    await act(async () => {
+      await refreshControl?.memoizedProps.onRefresh();
+    });
+
+    expect(await queries.findByText('Flagged purchase 2')).toBeTruthy();
+    expect(listCalls()).toHaveLength(2);
+  });
+
+  it('keeps loaded rows visible with freshness and retry when refocus refresh fails', async () => {
+    let failRefresh = false;
+    apiGet.mockImplementation(
+      (path: string) => {
+        if (path === '/records/flagged') {
+          return failRefresh
+            ? Promise.reject(new Error('Could not refresh review queue.'))
+            : Promise.resolve({ items: [record(1)], nextCursor: null });
+        }
+        if (path === '/records/flagged/count') {
+          return Promise.resolve({ expenses: 1, sales: 0, total: 1 });
+        }
+        if (path === '/records/csv-imports/batches') return Promise.resolve([]);
+        return Promise.reject(new Error(`Unexpected path ${path}`));
+      },
+    );
+    const queries = await renderScreen();
+    expect(await queries.findByText('Flagged purchase 1')).toBeTruthy();
+
+    failRefresh = true;
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_001);
+    await act(async () => {
+      for (const focus of [...focusEffects]) focus();
+    });
+    nowSpy.mockRestore();
+
+    expect(await queries.findByText("Couldn't refresh")).toBeTruthy();
+    expect(queries.getByText(/Could not refresh review queue\./)).toBeTruthy();
+    expect(queries.getByText('Flagged purchase 1')).toBeTruthy();
+    expect(queries.getByText('Updated 1 minute ago')).toBeTruthy();
+    expect(queries.getByRole('button', { name: 'Try again' })).toBeTruthy();
+  });
+});
+
+describe('FlaggedRecordsScreen — business ownership', () => {
+  it('keeps a completed business B queue when business A resolves late, and only actions B rows', async () => {
+    let resolveBusinessA: (page: { items: RecordItem[]; nextCursor: null }) => void = () => {};
+    const delayedBusinessA = new Promise<{ items: RecordItem[]; nextCursor: null }>((resolve) => {
+      resolveBusinessA = resolve;
+    });
+    const businessARecord = record(41, 1, 'Business A private purchase');
+    const businessBRecord = record(52, 2, 'Business B purchase');
+
+    apiGet.mockImplementation(
+      (path: string, query?: { businessProfileId?: number }) => {
+        const businessProfileId = query?.businessProfileId;
+        if (path === '/records/flagged') {
+          return businessProfileId === 1
+            ? delayedBusinessA
+            : Promise.resolve({ items: [businessBRecord], nextCursor: null });
+        }
+        if (path === '/records/csv-imports/batches') return Promise.resolve([]);
+        if (path === '/records/flagged/count') {
+          return Promise.resolve({ expenses: 1, sales: 0, total: 1 });
+        }
+        return Promise.reject(new Error(`Unexpected path ${path}`));
+      },
+    );
+
+    const queries = await renderScreen();
+    currentBusinessProfile = businessB;
+    queries.rerender(
+      <ThemeProvider initialMode="light">
+        <FlaggedRecordsScreen />
+      </ThemeProvider>,
+    );
+
+    expect(await queries.findByText('Business B purchase')).toBeTruthy();
+    expect(queries.queryByText('Business A private purchase')).toBeNull();
+
+    await act(async () => {
+      resolveBusinessA({ items: [businessARecord], nextCursor: null });
+      await delayedBusinessA;
+    });
+    await waitFor(() => expect(queries.getByText('Business B purchase')).toBeTruthy());
+    expect(queries.queryByText('Business A private purchase')).toBeNull();
+
+    await fireEvent.press(queries.getByRole('button', { name: 'Looks right — mark reviewed' }));
+    await waitFor(() => expect(apiPatch).toHaveBeenCalledWith(
+      '/records/expenses/52',
+      { duplicateStatus: 'Not a Duplicate', reviewStatus: 'Reviewed' },
+      { cacheScope: { businessProfileId: 2 } },
+    ));
+    expect(apiPatch).not.toHaveBeenCalledWith(
+      '/records/expenses/41',
+      expect.anything(),
+      expect.anything(),
+    );
   });
 });

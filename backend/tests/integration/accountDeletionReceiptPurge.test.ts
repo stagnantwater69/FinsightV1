@@ -32,14 +32,22 @@ vi.mock("../../src/config/supabase", async (importOriginal) => {
   };
 });
 
-vi.mock("../../src/services/storage.service", () => ({
-  deleteReceiptImage: async (p: string) => (storageDeleted.push(p), true),
-  deleteCsvFile: async (p: string) => (storageDeleted.push(p), true),
-  deletePublicImageUrl: async (p: string) => (storageDeleted.push(p), true),
-}));
+vi.mock("../../src/services/storage.service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/services/storage.service")>();
+  return {
+    ...actual,
+    deleteReceiptImage: async (p: string) => (storageDeleted.push(p), true),
+    deleteCsvFile: async (p: string) => (storageDeleted.push(p), true),
+    deletePublicImageUrl: async (p: string) => (storageDeleted.push(p), true),
+    deletePublicImagePath: async (p: string) => (storageDeleted.push(p), true),
+    listPublicImagePaths: async () => [],
+    publicImagePathFromUrl: (url: string) => url,
+  };
+});
 
 import { prisma } from "../../src/config/prisma";
 import { runAccountDeletionWorkerOnce } from "../../src/services/accountDeletion.service";
+import { PUBLIC_IMAGE_UPLOAD_SETTLE_MS } from "../../src/services/storage.service";
 import { disconnectDb, makeOwnerWithProfile, resetDb, utcDay } from "../setup/testDb";
 
 let ctx: Awaited<ReturnType<typeof makeOwnerWithProfile>>;
@@ -78,8 +86,9 @@ async function drainDeletion(userId: number) {
     where: { id: userId },
     data: {
       status: AccountStatus.DELETION_PENDING,
-      deletionRequestedAt: new Date(),
+      deletionRequestedAt: new Date(Date.now() - PUBLIC_IMAGE_UPLOAD_SETTLE_MS - 1_000),
       deletionStage: AccountDeletionStage.REQUESTED,
+      deletionNextAttemptAt: new Date(0),
     },
   });
   // storage → auth → rows.

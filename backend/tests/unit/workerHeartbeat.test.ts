@@ -35,7 +35,7 @@ describe("worker liveness heartbeat", () => {
 
   it("follows the health directory the entrypoint was given, with the same default", async () => {
     expect(workerHeartbeatPath({ RECEIPT_WORKER_HEALTH_DIR: "/run/finsight/worker-health" }))
-      .toBe("/run/finsight/worker-health/heartbeat");
-    expect(workerHeartbeatPath({})).toBe("/tmp/finsight-worker-health/heartbeat");
+      .toBe(join("/run/finsight/worker-health", "heartbeat"));
+    expect(workerHeartbeatPath({})).toBe(join("/tmp/finsight-worker-health", "heartbeat"));
   });
 });

@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { Records } from "./Records";
 import type { BusinessProfile } from "../lib/types";
+import { invalidateServerState } from "../lib/serverStateCache";
 
 /**
  * WHAT THIS FILE GUARDS: a brand-new business gets ONE invitation, not a
@@ -97,7 +99,7 @@ describe("Records when the business has nothing yet", () => {
     renderPage();
 
     // The invitation, with the mascot rather than the `compact` text-only variant.
-    expect(await screen.findByText("You haven't added any records yet")).toBeInTheDocument();
+    expect(await screen.findByText("No records yet")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add your first expense" })).toBeInTheDocument();
 
     // No controls over an empty set.
@@ -110,7 +112,7 @@ describe("Records when the business has nothing yet", () => {
 
   it("offers each way in exactly once", async () => {
     renderPage();
-    await screen.findByText("You haven't added any records yet");
+    await screen.findByText("No records yet");
 
     // One primary. The header's "+ Add expense" and the secondary add-strip
     // both stand down while the empty state is carrying the same actions.
@@ -131,7 +133,7 @@ describe("Records when the business has nothing yet", () => {
     expect(screen.getByLabelText("Search")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "+ Add expense" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "+ Add sales" })).toBeInTheDocument();
-    expect(screen.queryByText("You haven't added any records yet")).not.toBeInTheDocument();
+    expect(screen.queryByText("No records yet")).not.toBeInTheDocument();
   });
 
   it("keeps the toolbar when a filter is what emptied the list", async () => {
@@ -144,6 +146,43 @@ describe("Records when the business has nothing yet", () => {
     // A filter hid the rows, so the owner needs the toolbar to get them back.
     expect(await screen.findByText(/No records match these filters/)).toBeInTheDocument();
     expect(screen.getByLabelText("Search")).toBeInTheDocument();
-    expect(screen.queryByText("You haven't added any records yet")).not.toBeInTheDocument();
+    expect(screen.queryByText("No records yet")).not.toBeInTheDocument();
+  });
+
+  it("shows a retryable load failure instead of claiming the ledger is empty", async () => {
+    const user = userEvent.setup();
+    getHandlers["/records/search"] = () => {
+      throw new Error("Network unavailable");
+    };
+    renderPage();
+
+    expect(await screen.findByText("Records couldn’t load.")).toBeInTheDocument();
+    expect(screen.getByText("Network unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("No records yet")).not.toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+
+    getHandlers["/records/search"] = ok({ items: [], nextCursor: null });
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("No records yet")).toBeInTheDocument();
+    expect(screen.queryByText("Records couldn’t load.")).not.toBeInTheDocument();
+  });
+
+  it("keeps rows visible and identifies a failed mounted refresh as stale", async () => {
+    getHandlers["/records/search"] = ok({ items: [oneRecord], nextCursor: null });
+    renderPage();
+    expect(await screen.findAllByText("Coffee beans")).not.toHaveLength(0);
+
+    getHandlers["/records/search"] = () => {
+      throw new Error("Network unavailable");
+    };
+    await act(async () => {
+      invalidateServerState({ businessProfileId: profile.id, tags: ["financial"] });
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByText("Records couldn’t refresh.")).toBeInTheDocument();
+    expect(screen.getByText(/Showing recently loaded records/)).toBeInTheDocument();
+    expect(screen.getAllByText("Coffee beans")).not.toHaveLength(0);
+    expect(screen.queryByText("No records yet")).not.toBeInTheDocument();
   });
 });

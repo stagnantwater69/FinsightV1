@@ -7,6 +7,8 @@ import {
   exceedsReceiptUploadAggregateLimit,
   receiptUploadBytes,
   receiptUploadSelectionError,
+  SCAN_POLL_INTERVAL_MS,
+  scanPollDelayMs,
   type ReceiptUploadFile,
 } from "./constants";
 
@@ -51,5 +53,15 @@ describe("receipt upload limits", () => {
       /at most 8 photos/,
     );
     expect(receiptUploadSelectionError([], selected)).toBeNull();
+  });
+});
+
+describe("scan poll schedule", () => {
+  it("asks sooner at first, then settles on the steady interval", () => {
+    expect(scanPollDelayMs(0)).toBeLessThan(SCAN_POLL_INTERVAL_MS);
+    const early = [0, 1, 2, 3].map(scanPollDelayMs);
+    expect([...early].sort((a, b) => a - b)).toEqual(early);
+    expect(scanPollDelayMs(4)).toBe(SCAN_POLL_INTERVAL_MS);
+    expect(scanPollDelayMs(100)).toBe(SCAN_POLL_INTERVAL_MS);
   });
 });

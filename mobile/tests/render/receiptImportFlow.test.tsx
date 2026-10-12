@@ -86,6 +86,12 @@ const { ReceiptReadFailure } = await import("../../src/screens/records/scanRecei
 const { takeFlash } = await import("../../src/lib/flash");
 const { ImportCsvScreen } = await import("../../src/screens/records/ImportCsvScreen");
 const { AddExpenseScreen } = await import("../../src/screens/records/AddExpenseScreen");
+const {
+  beginServerStateSession,
+  clearServerStateCache,
+  fetchServerState,
+  peekServerState,
+} = await import("../../src/lib/serverStateCache");
 const navigation = { navigate: vi.fn(), goBack: vi.fn() };
 const wrapInMode = (node: React.ReactNode, mode: "light" | "dark") => <ThemeProvider initialMode={mode}>{node}</ThemeProvider>;
 const wrap = (node: React.ReactNode) => wrapInMode(node, "light");
@@ -1219,7 +1225,11 @@ describe("receipt scan review workflow", () => {
     });
 
     await fireEvent.press(q.getByRole("button", { name: "Save this expense" }));
-    expect(post).toHaveBeenCalledWith("/records/receipts/41/confirm", expect.objectContaining({ expectedScanRevision: 1 }));
+    expect(post).toHaveBeenCalledWith(
+      "/records/receipts/41/confirm",
+      expect.objectContaining({ expectedScanRevision: 1 }),
+      { cacheScope: { businessProfileId: 1 } },
+    );
   });
 
   it("keeps a typed item correction when a stale edit reloads the latest receipt", async () => {
@@ -1355,6 +1365,7 @@ describe("receipt scan review workflow", () => {
     expect(post.mock.calls[0]).toEqual([
       "/records/receipts/41/confirm",
       expect.not.objectContaining({ duplicateDecision: expect.anything() }),
+      { cacheScope: { businessProfileId: 1 } },
     ]);
     expect(post.mock.calls[1]).toEqual([
       "/records/receipts/41/confirm",
@@ -1362,6 +1373,7 @@ describe("receipt scan review workflow", () => {
         expectedScanRevision: 0,
         duplicateDecision: { action: "SAVE_ANYWAY", candidateSetHash: "b".repeat(64) },
       }),
+      { cacheScope: { businessProfileId: 1 } },
     ]);
   });
 
@@ -2005,6 +2017,46 @@ describe("CSV preflight and results", () => {
     expect(q.getByText("Some row details are unavailable here. Check the original file.")).toBeTruthy();
   });
 
+  it("invalidates scoped record and insight caches when an asynchronous import actually completes", async () => {
+    beginServerStateSession("async-csv-complete");
+    const paths = ["/records/months", "/records/search", "/dashboard/summary", "/insights/expense-overview"];
+    await Promise.all(paths.flatMap((path) => [1, 2].map((businessProfileId) => fetchServerState({
+      path,
+      query: { businessProfileId },
+      fetcher: async () => ({ path, businessProfileId }),
+    }))));
+    await Promise.all([1, 2].map((businessProfileId) => fetchServerState({
+      path: `/business-profiles/${businessProfileId}/financial-position`,
+      fetcher: async () => ({ businessProfileId }),
+    })));
+    upload.mockImplementation(async (path: string, form: FormData) => {
+      if (path.endsWith("confirm")) return { batchId: 12, processingStatus: "PENDING", totalRows: 10 };
+      if (form.get("recordType")) {
+        return { validation: { validRows: 10, invalidRows: 0, skipped: [], skippedTruncated: false } };
+      }
+      return preview;
+    });
+    get.mockResolvedValue({
+      processingStatus: "COMPLETE",
+      totalRows: 10,
+      importedRows: 10,
+      skippedRows: 0,
+      flaggedRows: 0,
+      resultSummary: {},
+    });
+
+    const q = await confirmCsv();
+    expect(await q.findByText("Import complete", {}, { timeout: 4000 })).toBeTruthy();
+
+    for (const path of paths) {
+      expect(peekServerState(path, { businessProfileId: 1 })).toBeNull();
+      expect(peekServerState(path, { businessProfileId: 2 })).not.toBeNull();
+    }
+    expect(peekServerState("/business-profiles/1/financial-position")).toBeNull();
+    expect(peekServerState("/business-profiles/2/financial-position")).not.toBeNull();
+    clearServerStateCache();
+  });
+
   it("rejects stale preflight counts when an already-focused field changes during validation", async () => {
     let finishPreview!: (value: unknown) => void;
     let checks = 0;
@@ -2029,6 +2081,19 @@ describe("CSV preflight and results", () => {
   });
 
   it.each(["poll", "replay"])("reports committed rows after terminal failure from %s without offering a full-file retry", async (source) => {
+    const cachedPaths = ["/records/months", "/records/search", "/dashboard/summary", "/insights/expense-overview"];
+    if (source === "poll") {
+      beginServerStateSession("async-csv-failed");
+      await Promise.all(cachedPaths.flatMap((path) => [1, 2].map((businessProfileId) => fetchServerState({
+        path,
+        query: { businessProfileId },
+        fetcher: async () => ({ path, businessProfileId }),
+      }))));
+      await Promise.all([1, 2].map((businessProfileId) => fetchServerState({
+        path: `/business-profiles/${businessProfileId}/financial-position`,
+        fetcher: async () => ({ businessProfileId }),
+      })));
+    }
     upload.mockImplementation(async (path: string, form: FormData) => {
       if (path.endsWith("confirm")) return source === "poll"
         ? { batchId: 12, processingStatus: "PENDING", totalRows: 10 }
@@ -2049,6 +2114,15 @@ describe("CSV preflight and results", () => {
     expect(q.queryByText("Import complete")).toBeNull();
     expect(q.queryByRole("button", { name: "Check progress" })).toBeNull();
     expect(q.queryByText(/Nothing was half-saved/)).toBeNull();
+    if (source === "poll") {
+      for (const path of cachedPaths) {
+        expect(peekServerState(path, { businessProfileId: 1 })).toBeNull();
+        expect(peekServerState(path, { businessProfileId: 2 })).not.toBeNull();
+      }
+      expect(peekServerState("/business-profiles/1/financial-position")).toBeNull();
+      expect(peekServerState("/business-profiles/2/financial-position")).not.toBeNull();
+      clearServerStateCache();
+    }
     await fireEvent.press(q.getByRole("button", { name: "Review saved records" }));
     expect(navigation.navigate).toHaveBeenCalledWith("RecordsList");
     expect(upload.mock.calls.filter(([path]) => path.endsWith("confirm"))).toHaveLength(1);

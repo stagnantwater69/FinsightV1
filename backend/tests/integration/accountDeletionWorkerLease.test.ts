@@ -12,6 +12,10 @@ const storage = vi.hoisted(() => ({
   blocked: false,
   onBlocked: null as (() => void) | null,
   release: null as Promise<void> | null,
+  publicPaths: new Set<string>(),
+  publicListCalls: [] as string[],
+  uploadStarted: null as (() => void) | null,
+  uploadRelease: null as Promise<void> | null,
 }));
 
 async function removeStored(path: string): Promise<boolean> {
@@ -36,19 +40,52 @@ vi.mock("../../src/config/supabase", async (importOriginal) => {
   return {
     ...actual,
     supabaseAdmin: {
-      auth: { admin: { deleteUser: async () => ({ data: {}, error: null }) } },
+      auth: {
+        admin: {
+          deleteUser: async () => ({ data: {}, error: null }),
+          updateUserById: async () => ({ data: {}, error: null }),
+        },
+      },
     },
   };
 });
 
-vi.mock("../../src/services/storage.service", () => ({
-  deleteReceiptImage: removeStored,
-  deleteCsvFile: removeStored,
-  deletePublicImageUrl: removeStored,
-}));
+vi.mock("../../src/services/storage.service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/services/storage.service")>();
+  return {
+    ...actual,
+    deleteReceiptImage: removeStored,
+    deleteCsvFile: removeStored,
+    deletePublicImageUrl: removeStored,
+    deletePublicImagePath: async (path: string) => {
+      const removed = await removeStored(path);
+      if (removed) storage.publicPaths.delete(path);
+      return removed;
+    },
+    listPublicImagePaths: async (prefix: string) => {
+      storage.publicListCalls.push(prefix);
+      return [...storage.publicPaths].filter((path) => path === prefix || path.startsWith(`${prefix}.`));
+    },
+    publicImagePathFromUrl: (url: string) => actual.publicImagePathFromUrl(url),
+    validatePublicImageUpload: async (buffer: Buffer, mimetype: string) => ({ buffer, mimetype }),
+    uploadUserAvatar: async (userId: number) => {
+      storage.uploadStarted?.();
+      if (storage.uploadRelease) await storage.uploadRelease;
+      const path = `users/${userId}`;
+      storage.publicPaths.add(path);
+      return `https://storage.test/storage/v1/object/public/avatars/${path}?v=1`;
+    },
+  };
+});
 
 import { prisma } from "../../src/config/prisma";
+import { transition } from "../../src/services/accountLifecycle.service";
 import { runAccountDeletionWorkerOnce } from "../../src/services/accountDeletion.service";
+import { updateAvatar } from "../../src/services/auth.service";
+import {
+  PUBLIC_IMAGE_UPLOAD_SETTLE_MS,
+  PUBLIC_IMAGE_UPLOAD_TRANSACTION_TIMEOUT_MS,
+} from "../../src/services/storage.service";
 import {
   CSV_AMBIGUOUS_UPLOAD_TOMBSTONE_GRACE_MS,
   STAGING_UPLOAD_LEASE_MS,
@@ -66,11 +103,18 @@ beforeEach(async () => {
   storage.blocked = false;
   storage.onBlocked = null;
   storage.release = null;
+  storage.publicPaths.clear();
+  storage.publicListCalls.length = 0;
+  storage.uploadStarted = null;
+  storage.uploadRelease = null;
 });
 
 afterAll(disconnectDb);
 
-async function markDeletionPending(userId: number, requestedAt = new Date()) {
+async function markDeletionPending(
+  userId: number,
+  requestedAt = new Date(Date.now() - PUBLIC_IMAGE_UPLOAD_SETTLE_MS - 1_000),
+) {
   await prisma.user.update({
     where: { id: userId },
     data: {
@@ -92,6 +136,76 @@ function deferred() {
 }
 
 describe("account deletion worker leases", () => {
+  it("waits out an expired image-upload transaction, then rescans every owned public key", async () => {
+    const owner = await makeOwnerWithProfile({}, ["Inventory"]);
+    const uploadEntered = deferred();
+    const uploadRelease = deferred();
+    storage.uploadStarted = uploadEntered.resolve;
+    storage.uploadRelease = uploadRelease.promise;
+    storage.publicPaths.add(`users/${owner.user.id}.png`);
+
+    const upload = updateAvatar(
+      owner.user.id,
+      Buffer.from("validated by the test seam"),
+      "image/png",
+      "avatar.png",
+    ).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await uploadEntered.promise;
+    const deletion = transition(owner.user, AccountStatus.DELETION_PENDING, {
+      reason: "concurrent deletion test",
+      data: {
+        deletionStage: AccountDeletionStage.REQUESTED,
+        deletionAttempts: 0,
+        deletionNextAttemptAt: new Date(),
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, PUBLIC_IMAGE_UPLOAD_TRANSACTION_TIMEOUT_MS + 250));
+    await expect(deletion).resolves.toMatchObject({ status: AccountStatus.DELETION_PENDING });
+
+    expect(await runAccountDeletionWorkerOnce()).toBe(true);
+    expect(storage.publicListCalls).toHaveLength(0);
+    expect(storage.calls).toHaveLength(0);
+    const waiting = await prisma.user.findUniqueOrThrow({ where: { id: owner.user.id } });
+    expect(waiting.deletionNextAttemptAt.getTime()).toBeGreaterThan(Date.now());
+
+    uploadRelease.resolve();
+    expect(await upload).toBeInstanceOf(Error);
+    expect(storage.publicPaths).toEqual(new Set([`users/${owner.user.id}.png`, `users/${owner.user.id}`]));
+
+    await prisma.user.update({
+      where: { id: owner.user.id },
+      data: {
+        deletionRequestedAt: new Date(Date.now() - PUBLIC_IMAGE_UPLOAD_SETTLE_MS - 1_000),
+        deletionNextAttemptAt: new Date(0),
+      },
+    });
+    expect(await runAccountDeletionWorkerOnce()).toBe(true);
+    expect(storage.publicListCalls.filter((prefix) => prefix === `users/${owner.user.id}`)).toHaveLength(2);
+    expect([...storage.publicPaths].filter((path) => path.startsWith(`users/${owner.user.id}`))).toEqual([]);
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: owner.user.id } })).toMatchObject({
+      deletionStage: AccountDeletionStage.REQUESTED,
+      deletionStorageCheckpoint: 0,
+      deletionWorkerId: null,
+    });
+
+    await prisma.user.update({
+      where: { id: owner.user.id },
+      data: { deletionNextAttemptAt: new Date(0) },
+    });
+    expect(await runAccountDeletionWorkerOnce()).toBe(true);
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: owner.user.id } })).toMatchObject({
+      deletionStage: AccountDeletionStage.STORAGE_CLEARED,
+    });
+
+    await runAccountDeletionWorkerOnce();
+    await runAccountDeletionWorkerOnce();
+    expect(await prisma.user.findUnique({ where: { id: owner.user.id } })).toBeNull();
+  }, 30_000);
+
   it("waits without consuming an attempt while a CSV upload reservation is live", async () => {
     const owner = await makeOwnerWithProfile({}, ["Inventory"]);
     const fileReference = `${owner.profile.id}/staging-live.csv`;
@@ -235,8 +349,11 @@ describe("account deletion worker leases", () => {
 
   it("does not let a second worker pass claim a live lease", async () => {
     const owner = await makeOwnerWithProfile({}, ["Inventory"]);
-    const path = "https://example.test/avatar-live-lease.png";
-    await prisma.user.update({ where: { id: owner.user.id }, data: { avatarUrl: path } });
+    const path = `users/${owner.user.id}`;
+    await prisma.user.update({
+      where: { id: owner.user.id },
+      data: { avatarUrl: `https://storage.test/storage/v1/object/public/avatars/${path}?v=1` },
+    });
     await markDeletionPending(owner.user.id);
 
     const entered = deferred();
@@ -263,8 +380,11 @@ describe("account deletion worker leases", () => {
 
   it("fences an expired attempt after a newer claim finishes the stage", async () => {
     const owner = await makeOwnerWithProfile({}, ["Inventory"]);
-    const path = "https://example.test/avatar-expired-lease.png";
-    await prisma.user.update({ where: { id: owner.user.id }, data: { avatarUrl: path } });
+    const path = `users/${owner.user.id}`;
+    await prisma.user.update({
+      where: { id: owner.user.id },
+      data: { avatarUrl: `https://storage.test/storage/v1/object/public/avatars/${path}?v=1` },
+    });
     await markDeletionPending(owner.user.id);
 
     const entered = deferred();
@@ -297,11 +417,14 @@ describe("account deletion worker leases", () => {
   it("backs off a failed oldest account so the next deletion can run", async () => {
     const oldest = await makeOwnerWithProfile({ name: "Oldest" }, ["Inventory"]);
     const next = await makeOwnerWithProfile({ name: "Next" }, ["Inventory"]);
-    const failedPath = "https://example.test/avatar-fails.png";
-    await prisma.user.update({ where: { id: oldest.user.id }, data: { avatarUrl: failedPath } });
-    const now = Date.now();
-    await markDeletionPending(oldest.user.id, new Date(now - 2_000));
-    await markDeletionPending(next.user.id, new Date(now - 1_000));
+    const failedPath = `users/${oldest.user.id}`;
+    await prisma.user.update({
+      where: { id: oldest.user.id },
+      data: { avatarUrl: `https://storage.test/storage/v1/object/public/avatars/${failedPath}?v=1` },
+    });
+    const readyAt = Date.now() - PUBLIC_IMAGE_UPLOAD_SETTLE_MS - 5_000;
+    await markDeletionPending(oldest.user.id, new Date(readyAt));
+    await markDeletionPending(next.user.id, new Date(readyAt + 1_000));
     storage.failures.add(failedPath);
 
     await expect(runAccountDeletionWorkerOnce()).resolves.toBe(true);
@@ -361,8 +484,11 @@ describe("account deletion worker leases", () => {
       deletionStorageCheckpoint: 0,
       deletionStorageManifestHash: null,
     });
-    for (const path of paths.slice(0, 4)) {
+    for (const path of paths.slice(0, 2)) {
       expect(storage.calls.filter((value) => value === path)).toHaveLength(1);
+    }
+    for (const path of paths.slice(2, 6)) {
+      expect(storage.calls.filter((value) => value === path)).toHaveLength(2);
     }
   });
 

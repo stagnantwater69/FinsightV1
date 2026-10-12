@@ -300,7 +300,7 @@ describe('Register — the success panel', () => {
     );
   };
 
-  it('includes trimmed optional contact details in registration', async () => {
+  it('includes trimmed optional contact details in registration, phone as digits only', async () => {
     const queries = await renderRegister();
     await fill(queries);
     await fireEvent.changeText(queries.getByLabelText('Middle name (optional)'), '  Santos  ');
@@ -308,7 +308,7 @@ describe('Register — the success panel', () => {
     registerUser.mockResolvedValueOnce({ message: 'We sent a confirmation link.' });
     await fireEvent.press(queries.getByRole('button', { name: 'Create account' }));
     expect(registerUser).toHaveBeenCalledWith(expect.objectContaining({
-      middleName: 'Santos', phoneNumber: '+639171234567',
+      middleName: 'Santos', phoneNumber: '639171234567',
     }));
   });
 

@@ -57,16 +57,22 @@ describe("CSV complete-file preflight", () => {
     expect(await prisma.expenseRecord.count()).toBe(1);
   });
 
-  it("suggests confirmed categories only for blank cells and applies them only through corrections", async () => {
+  it("suggests confirmed categories only for blank cells and never creates a category in preview", async () => {
     await record("Rice");
     const buffer = Buffer.from("Date,Description,Amount\n2026-09-01,Rice,100");
     const options = { recordType: "expense" as const, columnMapping: { date: "Date", description: "Description", amount: "Amount" } };
     const result = await previewCsvForProfile(owner.user.id, owner.profile.id, buffer, options);
-    expect(result.validation?.invalidRows).toBe(1);
+    // A blank category no longer skips the row: it is categorised on import,
+    // and the review shows which category that will be.
+    expect(result.validation).toMatchObject({ validRows: 1, invalidRows: 0 });
+    expect(result.rowCategories).toEqual([expect.objectContaining({ row: 2, name: "Inventory", source: "history", isNew: false })]);
     expect(result.categorySuggestions).toEqual([{ row: 2, categoryId: owner.categories.Inventory, categoryName: "Inventory", source: "history" }]);
-    expect((await previewCsvForProfile(owner.user.id, owner.profile.id, buffer, { ...options, corrections: { "2": { category: "Inventory" } } })).validation?.validRows).toBe(1);
+    const corrected = await previewCsvForProfile(owner.user.id, owner.profile.id, buffer, { ...options, corrections: { "2": { category: "Utilities" } } });
+    expect(corrected.categorySuggestions).toEqual([]);
+    expect(corrected.rowCategories).toEqual([expect.objectContaining({ row: 2, name: "Utilities", source: "file" })]);
     const supplied = await previewCsvForProfile(owner.user.id, owner.profile.id, csv(["2026-09-01,Rice,100,New category"]), { ...options, columnMapping: mapping });
     expect(supplied.categorySuggestions).toEqual([]);
+    expect(supplied.rowCategories).toEqual([expect.objectContaining({ row: 2, name: "New category", source: "file", isNew: true })]);
     expect(await prisma.expenseCategory.count()).toBe(2);
   });
 });

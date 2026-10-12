@@ -191,7 +191,7 @@ describe("CSV import over HTTP", () => {
       .set(...AUTH)
       .field("businessProfileId", String(ctx.profile.id))
       .field("idempotencyKey", "pre-multer-limit-overflow")
-      .attach("file", Buffer.alloc(5 * 1024 * 1024 + 1), "oversized.csv");
+      .attach("file", Buffer.from("This is not an image"), { filename: "unsupported.png", contentType: "image/png" });
     expect(rejectedBeforeMulter.status).toBe(429);
     expect(uploadCsvFileAtReferenceMock).toHaveBeenCalledTimes(1);
     expect(await prisma.cSVImportBatch.count()).toBe(1);
@@ -300,95 +300,102 @@ describe("CSV import over HTTP", () => {
     });
     const firstHeld = stageRequest(csvOf(1), { idempotencyKey: "http-gate-held-primary" })
       .then((response) => response);
-    await firstStarted;
+    const heldUploads = [firstHeld];
+    try {
+      await firstStarted;
 
-    expect(CSV_HTTP_WORK_PER_USER_LIMIT).toBe(1);
-    const sameUserBusy = await stageRequest(csvOf(1), { idempotencyKey: "http-gate-same-user" });
-    expect(sameUserBusy.status).toBe(429);
-    expect(sameUserBusy.body.code).toBe("CSV_STAGE_BUSY");
-    expect(uploadCsvFileAtReferenceMock).toHaveBeenCalledTimes(1);
+      expect(CSV_HTTP_WORK_PER_USER_LIMIT).toBe(1);
+      const sameUserBusy = await stageRequest(csvOf(1), { idempotencyKey: "http-gate-same-user" });
+      expect(sameUserBusy.status).toBe(429);
+      expect(sameUserBusy.body.code).toBe("CSV_STAGE_BUSY");
+      expect(uploadCsvFileAtReferenceMock).toHaveBeenCalledTimes(1);
 
-    const secondOwner = await makeOwnerWithProfile({ name: "Second gate owner" }, ["Inventory"]);
-    authUserId.value = secondOwner.user.authId;
-    const secondHeld = stageRequest(csvOf(1), {
-      businessProfileId: String(secondOwner.profile.id),
-      idempotencyKey: "http-gate-held-secondary",
-    }).then((response) => response);
-    await secondStarted;
+      const secondOwner = await makeOwnerWithProfile({ name: "Second gate owner" }, ["Inventory"]);
+      authUserId.value = secondOwner.user.authId;
+      const secondHeld = stageRequest(csvOf(1), {
+        businessProfileId: String(secondOwner.profile.id),
+        idempotencyKey: "http-gate-held-secondary",
+      }).then((response) => response);
+      heldUploads.push(secondHeld);
+      await secondStarted;
 
-    const thirdOwner = await makeOwnerWithProfile({ name: "Third gate owner" }, ["Inventory"]);
-    authUserId.value = thirdOwner.user.authId;
-    const globalBusy = await stageRequest(csvOf(1), {
-      businessProfileId: String(thirdOwner.profile.id),
-      idempotencyKey: "http-gate-global-overflow",
-    });
-    expect(globalBusy.status).toBe(429);
-    expect(globalBusy.body.code).toBe("CSV_STAGE_BUSY");
-    expect(uploadCsvFileAtReferenceMock).toHaveBeenCalledTimes(CSV_HTTP_WORK_CONCURRENCY_LIMIT);
-    authUserId.value = ctx.user.authId;
+      const thirdOwner = await makeOwnerWithProfile({ name: "Third gate owner" }, ["Inventory"]);
+      authUserId.value = thirdOwner.user.authId;
+      const globalBusy = await stageRequest(csvOf(1), {
+        businessProfileId: String(thirdOwner.profile.id),
+        idempotencyKey: "http-gate-global-overflow",
+      });
+      expect(globalBusy.status).toBe(429);
+      expect(globalBusy.body.code).toBe("CSV_STAGE_BUSY");
+      expect(uploadCsvFileAtReferenceMock).toHaveBeenCalledTimes(CSV_HTTP_WORK_CONCURRENCY_LIMIT);
+      authUserId.value = ctx.user.authId;
 
-    uploadedBuffer = workerBuffer;
-    for (let pass = 0; pass < 10; pass += 1) {
-      const batch = await prisma.cSVImportBatch.findUniqueOrThrow({ where: { id: workerBatch.body.batchId } });
-      if (batch.processingStatus === "COMPLETE") break;
-      expect(await runCsvImportWorkerOnce()).toBe(true);
-    }
-    expect(await prisma.cSVImportBatch.findUniqueOrThrow({
-      where: { id: workerBatch.body.batchId },
-    })).toMatchObject({ processingStatus: "COMPLETE" });
-    const statusWhileBusy = await request(app)
-      .get(`${BASE}/batches/${workerBatch.body.batchId}/status`)
-      .set(...AUTH);
-    expect(statusWhileBusy.status).toBe(200);
-    expect(statusWhileBusy.body.processingStatus).toBe("COMPLETE");
+      uploadedBuffer = workerBuffer;
+      for (let pass = 0; pass < 10; pass += 1) {
+        const batch = await prisma.cSVImportBatch.findUniqueOrThrow({ where: { id: workerBatch.body.batchId } });
+        if (batch.processingStatus === "COMPLETE") break;
+        expect(await runCsvImportWorkerOnce()).toBe(true);
+      }
+      expect(await prisma.cSVImportBatch.findUniqueOrThrow({
+        where: { id: workerBatch.body.batchId },
+      })).toMatchObject({ processingStatus: "COMPLETE" });
+      const statusWhileBusy = await request(app)
+        .get(`${BASE}/batches/${workerBatch.body.batchId}/status`)
+        .set(...AUTH);
+      expect(statusWhileBusy.status).toBe(200);
+      expect(statusWhileBusy.body.processingStatus).toBe("COMPLETE");
 
-    const batchesBeforeBusyRequests = await prisma.cSVImportBatch.count();
-    const chunksBeforeBusyRequests = await prisma.cSVImportStageChunk.count();
-    const malformed = Buffer.from(`Date,Description\n${utcDayString(0)},"unterminated`);
-    const busyResponses = [
-      await stageRequest(baselineBuffer, { idempotencyKey: "http-gate-baseline" }),
-      await stagedPreviewRequest(baseline.body.stagedUploadId),
-      await stagedConfirmRequest(baseline.body.stagedUploadId),
-      await request(app)
+      const batchesBeforeBusyRequests = await prisma.cSVImportBatch.count();
+      const chunksBeforeBusyRequests = await prisma.cSVImportStageChunk.count();
+      const malformed = Buffer.from(`Date,Description\n${utcDayString(0)},"unterminated`);
+      const busyResponses = [
+        await stageRequest(baselineBuffer, { idempotencyKey: "http-gate-baseline" }),
+        await stagedPreviewRequest(baseline.body.stagedUploadId),
+        await stagedConfirmRequest(baseline.body.stagedUploadId),
+        await request(app)
+          .post(`${BASE}/preview`)
+          .set(...AUTH)
+          .field("businessProfileId", String(ctx.profile.id))
+          .field("recordType", "expense")
+          .field("columnMapping", MAPPING)
+          .attach("file", malformed, "malformed-preview.csv"),
+        await confirmRequest(malformed, { idempotencyKey: "http-gate-legacy-confirm" }),
+        await request(app)
+          .get(`${BASE}/batches/${workerBatch.body.batchId}/preview`)
+          .set(...AUTH),
+      ];
+      for (const response of busyResponses) {
+        expect(response.status).toBe(429);
+        expect(response.body).toMatchObject({
+          code: "CSV_STAGE_BUSY",
+          retryAfterSeconds: CSV_HTTP_WORK_RETRY_SECONDS,
+        });
+        expect(response.headers["retry-after"]).toBe(String(CSV_HTTP_WORK_RETRY_SECONDS));
+      }
+      expect(uploadCsvFileAtReferenceMock).toHaveBeenCalledTimes(CSV_HTTP_WORK_CONCURRENCY_LIMIT);
+      expect(await prisma.cSVImportBatch.count()).toBe(batchesBeforeBusyRequests);
+      expect(await prisma.cSVImportStageChunk.count()).toBe(chunksBeforeBusyRequests);
+
+      releaseUploads();
+      const completedUploads = await Promise.all([firstHeld, secondHeld]);
+      expect(completedUploads.map((response) => response.status)).toEqual(
+        Array(CSV_HTTP_WORK_CONCURRENCY_LIMIT).fill(200),
+      );
+
+      const parseError = await request(app)
         .post(`${BASE}/preview`)
         .set(...AUTH)
         .field("businessProfileId", String(ctx.profile.id))
         .field("recordType", "expense")
         .field("columnMapping", MAPPING)
-        .attach("file", malformed, "malformed-preview.csv"),
-      await confirmRequest(malformed, { idempotencyKey: "http-gate-legacy-confirm" }),
-      await request(app)
-        .get(`${BASE}/batches/${workerBatch.body.batchId}/preview`)
-        .set(...AUTH),
-    ];
-    for (const response of busyResponses) {
-      expect(response.status).toBe(429);
-      expect(response.body).toMatchObject({
-        code: "CSV_STAGE_BUSY",
-        retryAfterSeconds: CSV_HTTP_WORK_RETRY_SECONDS,
-      });
-      expect(response.headers["retry-after"]).toBe(String(CSV_HTTP_WORK_RETRY_SECONDS));
+        .attach("file", malformed, "malformed-after-release.csv");
+      expect(parseError.status).toBe(400);
+      const afterError = await stagedPreviewRequest(baseline.body.stagedUploadId);
+      expect(afterError.status).toBe(200);
+    } finally {
+      releaseUploads();
+      await Promise.all(heldUploads);
     }
-    expect(uploadCsvFileAtReferenceMock).toHaveBeenCalledTimes(CSV_HTTP_WORK_CONCURRENCY_LIMIT);
-    expect(await prisma.cSVImportBatch.count()).toBe(batchesBeforeBusyRequests);
-    expect(await prisma.cSVImportStageChunk.count()).toBe(chunksBeforeBusyRequests);
-
-    releaseUploads();
-    const completedUploads = await Promise.all([firstHeld, secondHeld]);
-    expect(completedUploads.map((response) => response.status)).toEqual(
-      Array(CSV_HTTP_WORK_CONCURRENCY_LIMIT).fill(200),
-    );
-
-    const parseError = await request(app)
-      .post(`${BASE}/preview`)
-      .set(...AUTH)
-      .field("businessProfileId", String(ctx.profile.id))
-      .field("recordType", "expense")
-      .field("columnMapping", MAPPING)
-      .attach("file", malformed, "malformed-after-release.csv");
-    expect(parseError.status).toBe(400);
-    const afterError = await stagedPreviewRequest(baseline.body.stagedUploadId);
-    expect(afterError.status).toBe(200);
   }, 120_000);
 
   it("rate limits saved-batch preview before the work permit and leaves status polling open", async () => {
@@ -408,30 +415,33 @@ describe("CSV import over HTTP", () => {
     await uploadStarted;
     resetRateLimits();
 
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      const response = await request(app)
+    try {
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const response = await request(app)
+          .get(`${BASE}/batches/${imported.body.batchId}/preview`)
+          .set(...AUTH);
+        expect(response.status).toBe(429);
+        expect(response.body.code).toBe("CSV_STAGE_BUSY");
+        expect(response.headers["ratelimit-limit"]).toBe("20");
+      }
+      const rateLimited = await request(app)
         .get(`${BASE}/batches/${imported.body.batchId}/preview`)
         .set(...AUTH);
-      expect(response.status).toBe(429);
-      expect(response.body.code).toBe("CSV_STAGE_BUSY");
-      expect(response.headers["ratelimit-limit"]).toBe("20");
-    }
-    const rateLimited = await request(app)
-      .get(`${BASE}/batches/${imported.body.batchId}/preview`)
-      .set(...AUTH);
-    expect(rateLimited.status).toBe(429);
-    expect(rateLimited.body).not.toHaveProperty("code");
-    expect(rateLimited.headers["ratelimit-remaining"]).toBe("0");
+      expect(rateLimited.status).toBe(429);
+      expect(rateLimited.body.code).toBe("RATE_LIMITED");
+      expect(rateLimited.body.retryAfterSeconds).toBe(Number(rateLimited.headers["retry-after"]));
+      expect(rateLimited.headers["ratelimit-remaining"]).toBe("0");
 
-    for (let attempt = 0; attempt < 25; attempt += 1) {
-      const status = await request(app)
-        .get(`${BASE}/batches/${imported.body.batchId}/status`)
-        .set(...AUTH);
-      expect(status.status).toBe(200);
+      for (let attempt = 0; attempt < 25; attempt += 1) {
+        const status = await request(app)
+          .get(`${BASE}/batches/${imported.body.batchId}/status`)
+          .set(...AUTH);
+        expect(status.status).toBe(200);
+      }
+    } finally {
+      releaseUpload();
+      expect((await held).status).toBe(200);
     }
-
-    releaseUpload();
-    expect((await held).status).toBe(200);
   }, 60_000);
 
   it("scopes staged preview and confirm to the requested profile, not only the owner", async () => {
@@ -544,7 +554,7 @@ describe("CSV import over HTTP", () => {
     expect(malformed.body.error).not.toContain("broken");
   });
 
-  it("keeps mapped preview suggestions owner-scoped and requires an explicit category correction", async () => {
+  it("keeps preview category suggestions owner-scoped and lets an explicit category win", async () => {
     await prisma.expenseRecord.create({ data: {
       businessProfileId: ctx.profile.id, categoryId: ctx.categories.Inventory!,
       date: new Date("2026-09-01"), description: "Rice", vendor: "Store A", amount: 100, source: "MANUAL_ENTRY",
@@ -559,10 +569,18 @@ describe("CSV import over HTTP", () => {
     };
     const first = await preview(ctx.profile.id);
     expect(first.status).toBe(200);
-    expect(first.body.validation).toMatchObject({ validRows: 0, invalidRows: 1 });
+    // A missing category no longer invalidates the row: the owner's own
+    // earlier choice is shown against it, ready to change before confirming.
+    expect(first.body.validation).toMatchObject({ validRows: 1, invalidRows: 0, possibleDuplicateRows: 1, duplicateRows: [2] });
+    expect(first.body.rowCategories).toEqual([
+      { row: 2, name: "Inventory", source: "history", isNew: false, confidence: "medium" },
+    ]);
+    expect(first.body.categorySummary).toMatchObject({ suggested: 1, fromFile: 0, uncategorised: 0, newCategories: [] });
+    // Older clients still get the history-only list.
     expect(first.body.categorySuggestions).toEqual([{ row: 2, categoryId: ctx.categories.Inventory, categoryName: "Inventory", source: "history" }]);
     const corrected = await preview(ctx.profile.id, JSON.stringify({ "2": { category: "Inventory" } }));
     expect(corrected.body.validation).toMatchObject({ validRows: 1, invalidRows: 0, possibleDuplicateRows: 1, duplicateRows: [2] });
+    expect(corrected.body.rowCategories[0]).toMatchObject({ row: 2, name: "Inventory", source: "file", confidence: "high" });
     expect(corrected.body.categorySuggestions).toEqual([]);
     expect(await prisma.expenseRecord.count()).toBe(1);
     const other = await makeOwnerWithProfile();
@@ -571,6 +589,8 @@ describe("CSV import over HTTP", () => {
     const otherPreview = await preview(other.profile.id);
     expect(otherPreview.status).toBe(200);
     expect(otherPreview.body.categorySuggestions).toEqual([]);
+    // Another owner's history never reaches this owner's suggestions.
+    expect(otherPreview.body.rowCategories[0].source).not.toBe("history");
   });
 
   it("validates preview request mappings and corrections at the HTTP boundary", async () => {

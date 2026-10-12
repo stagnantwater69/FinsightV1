@@ -16,7 +16,7 @@ describe("receipt API and worker process boundary", () => {
         [
           'require("./src/app.ts")',
           "const root = process.cwd()",
-          "const loaded = Object.keys(require.cache).filter((path) => path.startsWith(root)).map((path) => path.slice(root.length + 1)).sort()",
+          "const loaded = Object.keys(require.cache).filter((path) => path.startsWith(root)).map((path) => path.slice(root.length + 1).split(require('node:path').sep).join('/')).sort()",
           "process.stdout.write(JSON.stringify(loaded))",
         ].join(";"),
       ],

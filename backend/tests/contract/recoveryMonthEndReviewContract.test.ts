@@ -39,6 +39,7 @@ import * as sales from "../../src/services/salesRecord.service";
 import * as businessProfile from "../../src/services/businessProfile.service";
 import { disconnectDb, makeOwnerWithProfile, resetDb } from "../setup/testDb";
 import { prisma } from "../../src/config/prisma";
+import { monthlyExpenseBasisSchema } from "./schemas/recoveryTargets.schema";
 
 const openDaySchema = z
   .object({
@@ -58,6 +59,7 @@ const monthEndReviewSchema = z.discriminatedUnion("status", [
     .object({
       status: z.literal("reviewable"),
       month: z.string().regex(/^\d{4}-\d{2}$/),
+      monthlyExpenseBasis: monthlyExpenseBasisSchema,
       coveragePercent: z.number().finite(),
       surplusOrShortfall: z.number().finite(),
       strongestOpenDay: z.union([z.null(), openDaySchema]),

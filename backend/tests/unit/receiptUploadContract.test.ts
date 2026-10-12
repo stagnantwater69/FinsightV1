@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import {
   RECEIPT_UPLOAD_ACCEPTANCE_CONCURRENCY,
   RECEIPT_UPLOAD_ALLOWED_MIME_TYPES,
@@ -20,18 +22,18 @@ describe("receipt upload contract", () => {
   });
 
   it.each([
-    "/",
-    "/tmp",
+    resolve("/"),
+    tmpdir(),
     "relative/finsight-receipt-uploads",
-    "/tmp/other-upload-root",
-    "/tmp/unsafe/../finsight-receipt-uploads",
+    join(tmpdir(), "other-upload-root"),
+    `${join(tmpdir(), "unsafe")}${process.platform === "win32" ? "\\" : "/"}..${process.platform === "win32" ? "\\" : "/"}finsight-receipt-uploads`,
   ])("rejects unsafe temporary upload root %s", (root) => {
     expect(() => validateReceiptUploadTempRoot(root)).toThrowError(/temporary storage is unavailable/i);
   });
 
   it.each([
-    "/tmp/finsight-receipt-uploads",
-    "/run/finsight/receipt-uploads",
+    join(tmpdir(), "finsight-receipt-uploads"),
+    resolve("/run/finsight/receipt-uploads"),
   ])("accepts the dedicated absolute temporary upload root %s", (root) => {
     expect(validateReceiptUploadTempRoot(root)).toBe(root);
   });

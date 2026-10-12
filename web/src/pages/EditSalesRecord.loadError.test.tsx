@@ -29,6 +29,10 @@ vi.mock("../lib/api", () => ({
 }));
 
 vi.mock("../components/Toast", () => ({ useToast: () => () => {} }));
+// The date field reads the business timezone to know what "today" is.
+vi.mock("../context/BusinessProfileContext", () => ({
+  useBusinessProfiles: () => ({ selected: { id: 1, timezone: "Asia/Manila" } }),
+}));
 
 function renderPage() {
   return render(

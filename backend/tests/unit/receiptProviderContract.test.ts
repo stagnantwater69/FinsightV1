@@ -3,10 +3,12 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_EXTERNAL_PROVIDER_UNIT_LIMIT,
+  MAX_RECEIPT_QUANTITY,
   mergeReceiptProviderOutcome,
   parseReceiptProviderRequest,
   validateReceiptProviderOutcome,
 } from "../../src/services/receiptProviderContract";
+import { MAX_MONEY_AMOUNT } from "../../src/lib/money";
 import {
   evidence,
   localExtraction,
@@ -85,6 +87,55 @@ describe("receipt provider request contract", () => {
 });
 
 describe("receipt provider outcome validation and merge", () => {
+  it.each([
+    ["total overflow", (extraction: ReturnType<typeof successfulOutcome>["extraction"]) => ({
+      ...extraction!,
+      total: { ...extraction!.total, value: MAX_MONEY_AMOUNT + 0.01 },
+    })],
+    ["sub-centavo total", (extraction: ReturnType<typeof successfulOutcome>["extraction"]) => ({
+      ...extraction!,
+      total: { ...extraction!.total, value: 0.001 },
+    })],
+    ["item amount overflow", (extraction: ReturnType<typeof successfulOutcome>["extraction"]) => ({
+      ...extraction!,
+      items: [{
+        name: "Rice",
+        quantity: 1,
+        amount: MAX_MONEY_AMOUNT + 0.01,
+        evidence: extraction!.total.evidence!,
+      }],
+      itemsEvidence: extraction!.total.evidence!,
+    })],
+    ["item quantity overflow", (extraction: ReturnType<typeof successfulOutcome>["extraction"]) => ({
+      ...extraction!,
+      items: [{
+        name: "Rice",
+        quantity: MAX_RECEIPT_QUANTITY + 0.01,
+        amount: 125,
+        evidence: extraction!.total.evidence!,
+      }],
+      itemsEvidence: extraction!.total.evidence!,
+    })],
+    ["item quantity with excess scale", (extraction: ReturnType<typeof successfulOutcome>["extraction"]) => ({
+      ...extraction!,
+      items: [{
+        name: "Rice",
+        quantity: 1.001,
+        amount: 125,
+        evidence: extraction!.total.evidence!,
+      }],
+      itemsEvidence: extraction!.total.evidence!,
+    })],
+  ])("rejects %s before a provider outcome can reach persistence", (_label, invalidExtraction) => {
+    const request = providerRequest();
+    const valid = successfulOutcome(request);
+
+    expect(validateReceiptProviderOutcome(request, {
+      ...valid,
+      extraction: invalidExtraction(valid.extraction),
+    })).toEqual({ ok: false, reason: "INVALID_OUTCOME" });
+  });
+
   it.each([
     ["provider", { provider: "veryfi" }, "METADATA_MISMATCH"],
     ["provider version", { providerVersion: "wrong-v1" }, "METADATA_MISMATCH"],
