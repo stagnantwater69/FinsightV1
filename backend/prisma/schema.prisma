@@ -138,6 +138,8 @@
 //      pipeline already ran; they were simply not persisted. Null on
 //      vision-assisted reads and on scans predating the columns, for the same
 //      reason ocrConfidence is.
+//  18. BusinessProfile's funds baseline and expense-history confirmation
+//      separate owner initialization from later record-derived calculations.
 
 generator client {
   provider = "prisma-client-js"
@@ -548,28 +550,38 @@ model AuthHandoff {
 }
 
 model BusinessProfile {
-  id                           Int       @id @default(autoincrement()) @map("BusinessProfile_ID")
-  userId                       Int       @map("User_ID")
-  name                         String    @map("BusinessProfile_Name") @db.VarChar(150)
-  type                         String    @map("BusinessProfile_Type") @db.VarChar(100)
-  availableFunds               Decimal   @map("BusinessProfile_AvailableFunds") @db.Decimal(12, 2)
-  expectedMonthlyExpenses      Decimal   @map("BusinessProfile_ExpectedMonthlyExpenses") @db.Decimal(12, 2)
-  operatingDays                Int       @map("BusinessProfile_OperatingDays")
+  id                                       Int       @id @default(autoincrement()) @map("BusinessProfile_ID")
+  userId                                   Int       @map("User_ID")
+  name                                     String    @map("BusinessProfile_Name") @db.VarChar(150)
+  type                                     String    @map("BusinessProfile_Type") @db.VarChar(100)
+  /// Opening balance that was accurate at `availableFundsBaselineAt`, not a live record-derived balance.
+  availableFunds                           Decimal   @map("BusinessProfile_AvailableFunds") @db.Decimal(12, 2)
+  /// Existing profiles are anchored when the migration runs; new profiles default to their creation time.
+  availableFundsBaselineAt                 DateTime  @default(now()) @map("BusinessProfile_AvailableFundsBaselineAt")
+  /// Business-local cutoff date persisted separately so a later timezone change cannot move it.
+  availableFundsBaselineDate               DateTime  @default(now()) @map("BusinessProfile_AvailableFundsBaselineDate") @db.Date
+  /// Owner-entered fallback retained after complete records become the active monthly-expense source.
+  expectedMonthlyExpenses                  Decimal   @map("BusinessProfile_ExpectedMonthlyExpenses") @db.Decimal(12, 2)
+  /// First day of the latest month through which the owner confirms expense records are complete.
+  expenseRecordsCompleteThroughMonth       DateTime? @map("BusinessProfile_ExpenseRecordsCompleteThroughMonth") @db.Date
+  /// Time of the current completeness confirmation; null whenever no month is confirmed.
+  expenseRecordsCompleteThroughConfirmedAt DateTime? @map("BusinessProfile_ExpenseRecordsCompleteThroughConfirmedAt")
+  operatingDays                            Int       @map("BusinessProfile_OperatingDays")
   // [ADDED] Recovery Target plan §7.1 — IANA timezone identifier (e.g.
   // "Asia/Manila"), never a numeric UTC offset. Validated at the application
   // layer against Node's Intl.supportedValuesOf("timeZone"); the DB layer
   // only enforces length. Defaults every existing and new profile to
   // "Asia/Manila".
-  timezone                     String    @default("Asia/Manila") @map("BusinessProfile_Timezone") @db.VarChar(64)
-  largeExpenseThresholdPercent Decimal   @default(20) @map("BusinessProfile_LargeExpenseThresholdPercent") @db.Decimal(5, 2) // [ADDED] see schema header note
-  logoUrl                      String?   @map("BusinessProfile_LogoURL") @db.VarChar(500) // [ADDED] see schema header note
-  createdAt                    DateTime  @default(now()) @map("BusinessProfile_CreatedAt")
+  timezone                                 String    @default("Asia/Manila") @map("BusinessProfile_Timezone") @db.VarChar(64)
+  largeExpenseThresholdPercent             Decimal   @default(20) @map("BusinessProfile_LargeExpenseThresholdPercent") @db.Decimal(5, 2) // [ADDED] see schema header note
+  logoUrl                                  String?   @map("BusinessProfile_LogoURL") @db.VarChar(500) // [ADDED] see schema header note
+  createdAt                                DateTime  @default(now()) @map("BusinessProfile_CreatedAt")
   // [ADDED] Soft delete. Null = active. Archiving hides a profile from the
   // switcher without touching its records, insights or AI history. A hard
   // delete would cascade and destroy the owner's entire financial history for
   // that business — too destructive to expose as an accidental click in a tool
   // whose whole value is the history it holds.
-  archivedAt                   DateTime? @map("BusinessProfile_ArchivedAt")
+  archivedAt                               DateTime? @map("BusinessProfile_ArchivedAt")
 
   user                              User                               @relation(fields: [userId], references: [id], onDelete: Cascade)
   categories                        ExpenseCategory[]
@@ -636,25 +648,29 @@ model ExpenseCategory {
 }
 
 model ExpenseRecord {
-  id                  Int                 @id @default(autoincrement()) @map("ExpenseRecord_ID")
-  businessProfileId   Int                 @map("BusinessProfile_ID")
-  categoryId          Int                 @map("Category_ID")
-  receiptScanId       Int?                @map("ReceiptScan_ID") // [CHANGED] no longer @unique — see schema header note 9
-  importBatchId       Int?                @map("ImportBatch_ID")
-  duplicateOfRecordId Int?                @map("DuplicateOf_RecordID")
-  date                DateTime            @map("ExpenseRecord_Date") @db.Date
-  description         String              @map("ExpenseRecord_Description") @db.VarChar(255)
-  vendor              String?             @map("ExpenseRecord_Vendor") @db.VarChar(150)
-  amount              Decimal             @map("ExpenseRecord_Amount") @db.Decimal(12, 2)
+  id                               Int                 @id @default(autoincrement()) @map("ExpenseRecord_ID")
+  businessProfileId                Int                 @map("BusinessProfile_ID")
+  categoryId                       Int                 @map("Category_ID")
+  receiptScanId                    Int?                @map("ReceiptScan_ID") // [CHANGED] no longer @unique — see schema header note 9
+  importBatchId                    Int?                @map("ImportBatch_ID")
+  duplicateOfRecordId              Int?                @map("DuplicateOf_RecordID")
+  date                             DateTime            @map("ExpenseRecord_Date") @db.Date
+  description                      String              @map("ExpenseRecord_Description") @db.VarChar(255)
+  vendor                           String?             @map("ExpenseRecord_Vendor") @db.VarChar(150)
+  amount                           Decimal             @map("ExpenseRecord_Amount") @db.Decimal(12, 2)
+  /// Whether this transaction was already reflected in the identified available-funds baseline.
+  /// Null outside a classified baseline day; the paired timestamp prevents stale answers being reused.
+  includedInAvailableFundsBaseline Boolean?            @map("ExpenseRecord_IncludedInAvailableFundsBaseline")
+  availableFundsDeltaBaselineAt    DateTime?           @map("ExpenseRecord_AvailableFundsDeltaBaselineAt")
   /// The part of `amount` that is this record's share of receipt-level tax,
   /// service charge or discount rather than the price of its own items.
   /// See schema header note 13. Signed — negative for a discount.
-  allocatedCharges    Decimal?            @map("ExpenseRecord_AllocatedCharges") @db.Decimal(12, 2)
-  source              ExpenseRecordSource @map("ExpenseRecord_Source")
-  reviewStatus        String              @default("Needs Review") @map("ExpenseRecord_ReviewStatus") @db.VarChar(50)
-  duplicateStatus     String              @default("Not a Duplicate") @map("ExpenseRecord_DuplicateStatus") @db.VarChar(50)
-  largeExpenseFlag    Boolean             @default(false) @map("ExpenseRecord_LargeExpenseFlag")
-  createdAt           DateTime            @default(now()) @map("ExpenseRecord_CreatedAt")
+  allocatedCharges                 Decimal?            @map("ExpenseRecord_AllocatedCharges") @db.Decimal(12, 2)
+  source                           ExpenseRecordSource @map("ExpenseRecord_Source")
+  reviewStatus                     String              @default("Needs Review") @map("ExpenseRecord_ReviewStatus") @db.VarChar(50)
+  duplicateStatus                  String              @default("Not a Duplicate") @map("ExpenseRecord_DuplicateStatus") @db.VarChar(50)
+  largeExpenseFlag                 Boolean             @default(false) @map("ExpenseRecord_LargeExpenseFlag")
+  createdAt                        DateTime            @default(now()) @map("ExpenseRecord_CreatedAt")
 
   businessProfile            BusinessProfile             @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
   category                   ExpenseCategory             @relation(fields: [categoryId], references: [id])
@@ -850,17 +866,21 @@ model AnalysisJob {
 }
 
 model SalesReferenceRecord {
-  id                  Int               @id @default(autoincrement()) @map("SalesReferenceRecord_ID")
-  businessProfileId   Int               @map("BusinessProfile_ID")
-  importBatchId       Int?              @map("ImportBatch_ID")
-  duplicateOfRecordId Int?              @map("DuplicateOf_RecordID")
-  date                DateTime          @map("SalesReferenceRecord_Date") @db.Date
-  description         String            @map("SalesReferenceRecord_Description") @db.VarChar(255)
-  amount              Decimal           @map("SalesReferenceRecord_Amount") @db.Decimal(12, 2)
-  source              SalesRecordSource @map("SalesReferenceRecord_Source")
-  reviewStatus        String            @default("Needs Review") @map("SalesReferenceRecord_ReviewStatus") @db.VarChar(50)
-  duplicateStatus     String            @default("Not a Duplicate") @map("SalesReferenceRecord_DuplicateStatus") @db.VarChar(50)
-  createdAt           DateTime          @default(now()) @map("SalesReferenceRecord_CreatedAt")
+  id                               Int               @id @default(autoincrement()) @map("SalesReferenceRecord_ID")
+  businessProfileId                Int               @map("BusinessProfile_ID")
+  importBatchId                    Int?              @map("ImportBatch_ID")
+  duplicateOfRecordId              Int?              @map("DuplicateOf_RecordID")
+  date                             DateTime          @map("SalesReferenceRecord_Date") @db.Date
+  description                      String            @map("SalesReferenceRecord_Description") @db.VarChar(255)
+  amount                           Decimal           @map("SalesReferenceRecord_Amount") @db.Decimal(12, 2)
+  /// Whether this transaction was already reflected in the identified available-funds baseline.
+  /// Null outside a classified baseline day; the paired timestamp prevents stale answers being reused.
+  includedInAvailableFundsBaseline Boolean?          @map("SalesReferenceRecord_IncludedInAvailableFundsBaseline")
+  availableFundsDeltaBaselineAt    DateTime?         @map("SalesReferenceRecord_AvailableFundsDeltaBaselineAt")
+  source                           SalesRecordSource @map("SalesReferenceRecord_Source")
+  reviewStatus                     String            @default("Needs Review") @map("SalesReferenceRecord_ReviewStatus") @db.VarChar(50)
+  duplicateStatus                  String            @default("Not a Duplicate") @map("SalesReferenceRecord_DuplicateStatus") @db.VarChar(50)
+  createdAt                        DateTime          @default(now()) @map("SalesReferenceRecord_CreatedAt")
 
   businessProfile BusinessProfile        @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
   importBatch     CSVImportBatch?        @relation(fields: [importBatchId], references: [id])
@@ -1410,6 +1430,11 @@ model Conversation {
   // Validated against INTERACTION_MODULES in the service, exactly like
   // AIInteraction.module — VarChar rather than a DB enum for the same reason.
   originModule      String   @map("Conversation_OriginModule") @db.VarChar(50)
+  // [ADDED] The flag or record the chat was opened from ("Explain this flag"),
+  // as { kind, findingId } or { kind, recordType, recordId }. Re-validated
+  // against the owner's business profile on every message — it only says
+  // which owned row to put first in the context, never grants access.
+  focus             Json?    @map("Conversation_Focus")
   createdAt         DateTime @default(now()) @map("Conversation_DateCreated")
   lastMessageAt     DateTime @default(now()) @map("Conversation_LastMessageAt")
 
@@ -1425,13 +1450,21 @@ model Conversation {
 }
 
 model ChatMessage {
-  id             Int      @id @default(autoincrement()) @map("Message_ID")
-  conversationId Int      @map("Conversation_ID")
-  role           String   @map("Message_Role") @db.VarChar(10)
+  id             Int       @id @default(autoincrement()) @map("Message_ID")
+  conversationId Int       @map("Conversation_ID")
+  role           String    @map("Message_Role") @db.VarChar(10)
   // 2000 rather than AIInteraction's 1000: the same truncation guard now has
   // to hold both halves of an exchange in one column.
-  content        String   @map("Message_Content") @db.VarChar(2000)
-  createdAt      DateTime @default(now()) @map("Message_Timestamp")
+  content        String    @map("Message_Content") @db.VarChar(2000)
+  // [ADDED] Assistant messages only: the server-resolved record references,
+  // page links, one-tap actions and follow-up questions shown under the reply
+  // (aiAnswer.service AnswerMetadata). Stored so a reopened conversation shows
+  // the same buttons it showed when the answer arrived.
+  metadata       Json?     @map("Message_Metadata")
+  // [ADDED] The owner's thumbs up/down on an assistant reply: "up", "down" or null.
+  feedback       String?   @map("Message_Feedback") @db.VarChar(10)
+  feedbackAt     DateTime? @map("Message_FeedbackAt")
+  createdAt      DateTime  @default(now()) @map("Message_Timestamp")
 
   // Cascade is what makes deleting a conversation a single statement.
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
