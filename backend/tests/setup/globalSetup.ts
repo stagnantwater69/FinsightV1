@@ -32,6 +32,8 @@ export default async function globalSetup() {
   const db = new PrismaClient({ datasources: { db: { url: directUrl } } });
   try {
     // Plain PostgreSQL test images need the denied client roles before migrations revoke their grants.
+    // The revoke migration also alters default privileges FOR ROLE postgres, which Supabase always has
+    // but an image created with POSTGRES_USER=testuser does not.
     await db.$executeRaw`
       DO $$ BEGIN
         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
@@ -39,6 +41,9 @@ export default async function globalSetup() {
         END IF;
         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
           CREATE ROLE authenticated NOLOGIN;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'postgres') THEN
+          CREATE ROLE postgres NOLOGIN;
         END IF;
       END $$
     `;

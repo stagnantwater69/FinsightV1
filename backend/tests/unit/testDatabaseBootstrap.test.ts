@@ -69,7 +69,8 @@ describe("local test database bootstrap safety", () => {
     const sql = (mocks.execute.mock.calls[0][0] as readonly string[]).join("");
     expect(sql).toContain("CREATE ROLE anon NOLOGIN");
     expect(sql).toContain("CREATE ROLE authenticated NOLOGIN");
-    expect(sql.match(/IF NOT EXISTS/g)).toHaveLength(2);
+    expect(sql).toContain("CREATE ROLE postgres NOLOGIN");
+    expect(sql.match(/IF NOT EXISTS/g)).toHaveLength(3);
     expect(mocks.operations).toEqual(["roles", "disconnect", "migrate"]);
     expect(mocks.migrate).toHaveBeenCalledWith("npx prisma migrate deploy", expect.objectContaining({
       env: expect.objectContaining({ DATABASE_URL: local, DIRECT_URL: local }),
