@@ -146,8 +146,16 @@ test("Expense Insight offers only This week and Month at narrow width", async ({
   );
   await expect.poll(() => overviewRequests.at(-1)).toContain("period=week");
 
-  await page.getByRole("combobox", { name: "Month" }).selectOption("2026-09");
-  await expect(page.getByRole("combobox", { name: "Month" })).toHaveValue("2026-09");
+  for (const width of [320, 375, 600]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.getByRole("combobox", { name: "Month" }).click();
+    await expect.poll(async () => {
+      const popup = await page.getByRole("listbox", { name: "Months with records" }).boundingBox();
+      return Boolean(popup && popup.x >= 0 && popup.x + popup.width <= width);
+    }, { message: `The open month calendar fits a ${width}px viewport` }).toBe(true);
+    await page.getByRole("option", { name: "September 2026", exact: true }).click();
+  }
+  await expect(page.getByRole("combobox", { name: "Month" })).toHaveText(/September|Sep/);
   await expect.poll(() => overviewRequests.at(-1)).toContain(
     "period=month&month=2026-09",
   );

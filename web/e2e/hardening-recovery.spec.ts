@@ -62,7 +62,7 @@ for (const viewport of [{ width: 320, height: 800 }, { width: 1440, height: 900 
         }] });
       });
       await page.goto("/notifications");
-      const markRead = page.getByRole("button", { name: /^Mark read\s*:\s*Synthetic import completed\.$/ });
+      const markRead = page.getByRole("button", { name: /^Mark read\s*[:—]\s*Synthetic import completed\.$/ });
       await expect(markRead).toBeVisible();
       await markRead.click();
       await expect(page.getByRole("alert")).toContainText("Try again in 9s.");

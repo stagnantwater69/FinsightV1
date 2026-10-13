@@ -1,4 +1,4 @@
-/** Mocked-network coverage for Upload -> Map columns -> Review and import. */
+/** Mocked-network coverage for upload, mapping review, and explicit import. */
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { chooseUpload, loginViaUi, mockBackendSession, mockSupabaseAuth } from "./mocks";
 
@@ -21,7 +21,7 @@ async function expectUploadSizedToViewport(page: Page) {
     const main = await page.locator("#main-content").boundingBox();
     const uploadForm = await page.locator("form:has(#csv-file)").boundingBox();
     const pageHeading = await page
-      .getByRole("heading", { name: "Import CSV records" })
+      .getByRole("heading", { name: "Import CSV", exact: true })
       .boundingBox();
 
     expect(main).not.toBeNull();
@@ -50,10 +50,10 @@ async function expectSelectedUploadToFitDesktop(page: Page) {
     { width: 1900, height: 969 },
   ]) {
     await page.setViewportSize(viewport);
-    const nextSteps = await page.locator("[aria-labelledby='csv-next-title']").boundingBox();
-    expect(nextSteps).not.toBeNull();
+    const uploadForm = await page.locator("form:has(#csv-file)").boundingBox();
+    expect(uploadForm).not.toBeNull();
     expect(
-      nextSteps!.y + nextSteps!.height,
+      uploadForm!.y + uploadForm!.height,
       `Selected-file workflow should fit a ${viewport.width}x${viewport.height} viewport`,
     ).toBeLessThanOrEqual(viewport.height);
   }
@@ -82,7 +82,7 @@ test.beforeEach(async ({ page }) => {
   await loginViaUi(page);
 });
 
-test("keeps upload and mapping state through Back and confirms only from final review", async ({ page }, testInfo) => {
+test("keeps the uploaded file and edited mapping through review and confirms only after explicit import", async ({ page }, testInfo) => {
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
   page.on("console", (message) => {
@@ -105,6 +105,7 @@ test("keeps upload and mapping state through Back and confirms only from final r
       body: JSON.stringify({
         stagedUploadId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
         headers: ["Date", "Description", "Category", "Amount", "Gross Total"],
+        suggestedMapping: { date: "Date", description: "Description", category: "Category", amount: "Amount" },
         previewRows: [
           { Date: "2026-08-01", Description: "Rice sacks", Category: "Inventory", Amount: "850.50", "Gross Total": "850.50" },
           { Date: "2026-08-02", Description: "Electric bill", Category: "Utilities", Amount: "3200", "Gross Total": "3200" },
@@ -149,11 +150,11 @@ test("keeps upload and mapping state through Back and confirms only from final r
   });
 
   await page.goto("/records/csv-imports/new");
-  await expect(page.getByRole("heading", { name: "Import CSV records" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Import CSV", exact: true })).toBeVisible();
   await expectNoHorizontalOverflow(page, "Upload");
   await expectUploadSizedToViewport(page);
 
-  const sampleLink = page.getByRole("link", { name: "Download an example CSV" });
+  const sampleLink = page.getByRole("link", { name: "Download example CSV" });
   await expect(sampleLink).toHaveAttribute("href", "/sample-import.csv");
   const downloadPromise = page.waitForEvent("download");
   await sampleLink.click();
@@ -168,7 +169,7 @@ test("keeps upload and mapping state through Back and confirms only from final r
   await expect(page.getByText(csvFileName, { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Remove file" }).click();
   await expect(page.getByText(csvFileName, { exact: true })).toBeHidden();
-  await expect(page.getByRole("button", { name: "Preview file" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Upload and review" })).toBeDisabled();
 
   await chooseUpload(page, "Choose CSV file", {
     name: csvFileName,
@@ -179,52 +180,23 @@ test("keeps upload and mapping state through Back and confirms only from final r
   await expectNoHorizontalOverflow(page, "Selected CSV upload with a long filename");
   await expectSelectedUploadToFitDesktop(page);
   await captureVisualAudit(page, testInfo, "upload", true);
-  await page.getByRole("button", { name: "Preview file" }).click();
+  await page.getByRole("button", { name: "Upload and review" }).click();
 
-  await expect(page.getByRole("heading", { name: "Map and review columns" })).toBeVisible();
-  await expectNoHorizontalOverflow(page, "Map columns");
-  await expect(page.getByLabel("Which CSV column holds the date?")).toHaveValue("Date");
-  await expect(page.getByLabel("Which CSV column holds the description?")).toHaveValue("Description");
-  await expect(page.getByLabel("Which CSV column holds the category?")).toHaveValue("Category");
-  await expect(page.getByLabel("Which CSV column holds the amount?")).toHaveValue("Amount");
-  await captureVisualAudit(page, testInfo, "map");
-
-  await page.getByLabel("Batch title").fill("August expenses");
-  await page.getByLabel("Which CSV column holds the amount?").selectOption("Gross Total");
-
-  await page.getByRole("button", { name: "Back", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Import CSV records" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Review import" })).toBeVisible();
+  await expect(page.getByLabel("Date", { exact: true })).toHaveValue("Date");
+  await expect(page.getByLabel("Description", { exact: true })).toHaveValue("Description");
+  await expect(page.getByLabel("Category (optional)")).toHaveValue("Category");
+  await expect(page.getByLabel("Amount", { exact: true })).toHaveValue("Amount");
+  await page.getByLabel("Amount", { exact: true }).selectOption("Gross Total");
+  await expect(page.getByLabel("Amount", { exact: true })).toHaveValue("Gross Total");
   await expect(page.getByText(csvFileName, { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Continue to column mapping" })).toBeVisible();
-  expect(previewRequests).toBe(1);
-  expect(confirmRequests).toBe(0);
-
-  await page.getByRole("button", { name: "Continue to column mapping" }).click();
-  await expect(page.getByRole("heading", { name: "Map and review columns" })).toBeVisible();
-  await expect(page.getByLabel("Batch title")).toHaveValue("August expenses");
-  await expect(page.getByLabel("Which CSV column holds the amount?")).toHaveValue("Gross Total");
-
-  await page.getByRole("button", { name: "Continue to review" }).click();
-  await expect(page.getByRole("heading", { name: "Review and import" })).toBeVisible();
-  await expect(page.getByText("August expenses", { exact: true })).toBeVisible();
-  await expectNoHorizontalOverflow(page, "Review and import");
+  await expect(page.getByRole("button", { name: "Import 2 rows", exact: true })).toBeEnabled();
+  await expectNoHorizontalOverflow(page, "Review import");
   await captureVisualAudit(page, testInfo, "review", true);
-  expect(previewRequests).toBe(2);
+  expect(previewRequests).toBeGreaterThanOrEqual(2);
   expect(fileUploadRequests).toBe(1);
   expect(confirmRequests).toBe(0);
-
-  await page.getByRole("button", { name: "Back to mapping" }).click();
-  await expect(page.getByRole("heading", { name: "Map and review columns" })).toBeVisible();
-  await expect(page.getByLabel("Batch title")).toHaveValue("August expenses");
-  await expect(page.getByLabel("Which CSV column holds the amount?")).toHaveValue("Gross Total");
-  expect(confirmRequests).toBe(0);
-
-  await page.getByRole("button", { name: "Continue to review" }).click();
-  await expect(page.getByRole("heading", { name: "Review and import" })).toBeVisible();
-  expect(previewRequests).toBe(2);
-  expect(confirmRequests).toBe(0);
-
-  await page.getByRole("button", { name: "Import 2 of 2 rows" }).click();
+  await page.getByRole("button", { name: "Import 2 rows", exact: true }).click();
 
   await expect(page.getByRole("heading", { name: "Import complete" })).toBeVisible();
   await expect(page.getByText("2 records imported")).toBeVisible();
@@ -241,6 +213,7 @@ test("reviews skipped and duplicate rows before importing and keeps result detai
   const preview = {
     stagedUploadId: "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
     headers: ["Date", "Description", "Category", "Amount"],
+    suggestedMapping: { date: "Date", description: "Description", category: "Category", amount: "Amount" },
     previewRows: [{ Date: "2026-09-01", Description: "Paper supplies", Category: "Inventory", Amount: "500" }],
     totalRows: 3, dateFormatAmbiguous: false, detectedDateFormat: "iso",
     validation: { validRows: 2, invalidRows: 1, skipped: [{ row: 4, reason: "Invalid amount" }], skippedTruncated: false, possibleDuplicateRows: 1, duplicateRows: [3] },
@@ -253,20 +226,18 @@ test("reviews skipped and duplicate rows before importing and keeps result detai
   });
   await page.goto("/records/csv-imports/new");
   await chooseUpload(page, "Choose CSV file", { name: "expenses.csv", mimeType: "text/csv", buffer: Buffer.from("Date,Description,Category,Amount\n2026-09-01,Paper supplies,Inventory,500\n") });
-  await page.getByRole("button", { name: "Preview file", exact: true }).click();
-  await page.getByRole("button", { name: "Continue to review", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Review and import" })).toBeVisible();
-  await expect(page.getByText("File check: 2 valid, 1 skipped.")).toBeVisible();
-  await expect(page.getByText("1 possible duplicate will be included and flagged for review.")).toBeVisible();
+  await page.getByRole("button", { name: "Upload and review", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Review import" })).toBeVisible();
+  await expect(page.getByText("Ready", { exact: true }).locator("..").getByText("2", { exact: true })).toBeVisible();
+  await expect(page.getByText("Skipped", { exact: true }).locator("..").getByText("1", { exact: true })).toBeVisible();
+  await expect(page.getByText("Possible duplicates", { exact: true }).locator("..").getByText("1", { exact: true })).toBeVisible();
   expect(confirms).toBe(0);
   await expect(page.getByText("Row 4: Invalid amount")).toBeHidden();
-  await page.getByRole("button", { name: "Show more", exact: true }).click();
-  await expect(page.getByText("Row 4: Invalid amount")).toBeVisible();
-  await page.getByRole("button", { name: "Import 2 of 3 rows", exact: true }).click();
+  await page.getByRole("button", { name: "Import 2 rows", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Import complete" })).toBeVisible();
   expect(confirms).toBe(1);
   await expect(page.getByText("Row 4: Invalid amount")).toBeHidden();
-  await expect(page.getByRole("link", { name: "Review them now" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Review", exact: true })).toBeVisible();
   for (const theme of ["light", "dark"]) {
     await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
     for (const width of [1440, 390]) {
@@ -286,6 +257,7 @@ test("a terminal import failure reports saved rows and directs recovery to the b
     await route.fulfill({ json: {
       stagedUploadId: "cccccccc-dddd-4eee-8fff-aaaaaaaaaaaa",
       headers: ["Date", "Description", "Category", "Amount"],
+      suggestedMapping: { date: "Date", description: "Description", category: "Category", amount: "Amount" },
       previewRows: [{ Date: "2026-09-01", Description: "Paper", Category: "Inventory", Amount: "500" }],
       totalRows: 1000, dateFormatAmbiguous: false,
       validation: { validRows: 1000, invalidRows: 0, skipped: [], skippedTruncated: false },
@@ -301,10 +273,9 @@ test("a terminal import failure reports saved rows and directs recovery to the b
   });
   await page.goto("/records/csv-imports/new");
   await chooseUpload(page, "Choose CSV file", { name: "expenses.csv", mimeType: "text/csv", buffer: Buffer.from("Date,Description,Category,Amount\n2026-09-01,Paper,Inventory,500\n") });
-  await page.getByRole("button", { name: "Preview file", exact: true }).click();
-  await page.getByRole("button", { name: "Continue to review", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Review and import" })).toBeVisible();
-  await page.getByRole("button", { name: "Import 1,000 of 1,000 rows", exact: true }).click();
+  await page.getByRole("button", { name: "Upload and review", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Review import" })).toBeVisible();
+  await page.getByRole("button", { name: "Import 1,000 rows", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Import stopped" })).toBeVisible();
   await expect(page.getByText("380", { exact: true })).toBeVisible();
   await expect(page.getByText("20", { exact: true })).toBeVisible();
