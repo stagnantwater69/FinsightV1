@@ -116,7 +116,7 @@ export function Notifications() {
       </div>
 
       {error ? (
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-tint-danger px-3.5 py-3 text-sm text-tone-danger ring-1 ring-edge-danger">
+        <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-tint-danger px-3.5 py-3 text-sm text-tone-danger ring-1 ring-edge-danger">
           <p>{error}</p>
           <Button variant="secondary" size="sm" onClick={() => void refresh()}>
             Try again

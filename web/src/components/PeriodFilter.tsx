@@ -5,7 +5,7 @@ import { ALL_TIME, THIS_WEEK, monthLabel } from "../lib/reportingPeriod";
 import { IconChevronDown } from "./icons";
 
 // ink-400-ok: an inactive, aria-hidden grid cell (WCAG 1.4.3 exempts inactive components).
-const UNAVAILABLE_MONTH = "flex h-10 items-center justify-center rounded-lg text-[13px] text-ink-400/60";
+const UNAVAILABLE_MONTH = "flex min-h-tap items-center justify-center rounded-lg text-[13px] text-ink-400/60";
 
 const MONTH_NUMBERS = ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"];
 
@@ -83,9 +83,9 @@ export function PeriodFilter({
   };
 
   // Arrows move through the grid as it is drawn: left/right by one month,
-  // up/down by a year, skipping months that cannot be picked.
+  // up/down by a four-column row, skipping months that cannot be picked.
   const onGridKeys = (event: KeyboardEvent<HTMLDivElement>) => {
-    const steps: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -12, ArrowDown: 12 };
+    const steps: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -4, ArrowDown: 4 };
     const items = Array.from(
       event.currentTarget.querySelectorAll<HTMLElement>("[role='option']"),
     );
@@ -120,7 +120,7 @@ export function PeriodFilter({
         : "No months with records yet";
 
   return (
-    <div ref={ref} className={`relative flex w-fit flex-col items-end gap-1 ${className}`}>
+    <div ref={ref} className={`relative flex w-fit min-w-[min(19rem,calc(100vw-2rem))] flex-col items-end gap-1 sm:min-w-0 ${className}`}>
       <div
         role="group"
         aria-label="Period"
@@ -210,7 +210,7 @@ export function PeriodFilter({
                       tabIndex={-1}
                       data-position={yearIndex * 12 + column}
                       onClick={() => choose(month)}
-                      className={`flex h-10 items-center justify-center rounded-lg text-[13px] font-semibold outline-none transition focus-visible:ring-2 focus-visible:ring-brand-500 ${
+                      className={`flex min-h-tap items-center justify-center rounded-lg text-[13px] font-semibold outline-none transition focus-visible:ring-2 focus-visible:ring-brand-500 ${
                         selected
                           ? "bg-brand-600 text-white shadow-sm"
                           : "text-ink-800 hover:bg-tint-brand hover:text-tone-brand focus-visible:bg-tint-brand"
