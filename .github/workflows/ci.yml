@@ -19,7 +19,7 @@ on:
 
 jobs:
   backend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     # The suite truncates between files and needs a real Postgres — the same
     # arrangement backend/package.json's test:db:up creates locally.
@@ -38,8 +38,8 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
 
@@ -188,10 +188,10 @@ jobs:
         continue-on-error: true
 
   web:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
       - run: npm ci --prefix web
@@ -236,7 +236,7 @@ jobs:
       - run: npm audit --omit=dev --audit-level=moderate --prefix web
 
   docker:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Verifies the two things docs/DEPLOYMENT-HARDENING-PLAN.md's own
     # Verification section requires and that, until now, only ran by hand:
     # `docker compose config` parses, and nginx/nginx.conf passes `nginx -t`
@@ -258,7 +258,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # docker-compose.yml points backend's env_file at backend/.env, which is
       # gitignored and never present in CI. `docker compose config` refuses to
       # even parse without it — not because the values are read, only because
@@ -285,7 +285,7 @@ jobs:
       - run: bash backend/docker/verify-api-entrypoint-signal.sh
       - run: bash backend/docker/verify-receipt-worker-readiness.sh
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
       # The runtime image ships no `prisma` CLI on purpose (see the Dockerfile
@@ -504,13 +504,13 @@ jobs:
         run: docker rm -f finsight-backend-smoke || true
 
   ml:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # ml/ is the Python side of the Isolation Forest shadow detector (see
     # ml/README.md). Nothing here previously ran its tests or checked its
     # pinned dependencies actually install together.
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.14"
       - run: pip install -r ml/requirements.txt
@@ -520,10 +520,10 @@ jobs:
       - run: python -m unittest discover -s ml/worker -v
 
   mobile:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
       - run: npm ci --prefix mobile
