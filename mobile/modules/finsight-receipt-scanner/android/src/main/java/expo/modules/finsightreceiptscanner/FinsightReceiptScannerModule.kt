@@ -14,7 +14,7 @@ class ScannerCommand : Record {
 
 class FinsightReceiptScannerModule : Module() {
   private val cacheFileName = Regex(
-    "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}-(original|scan)\\.jpg$",
+    "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}-(original|rectified|scan|filter-(enhanced|grayscale|black-white))\\.jpg$",
   )
 
   private fun receiptCacheDirectory(): File = File(appContext.cacheDirectory, "receipt-scanner")
@@ -43,15 +43,35 @@ class FinsightReceiptScannerModule : Module() {
     ?.count { it.delete() }
     ?: 0
 
+  private fun receiptFilterProcessor(): ReceiptFilterProcessor {
+    val roots = mutableListOf(appContext.cacheDirectory)
+    appContext.reactContext?.let { context ->
+      roots += context.filesDir
+      roots += context.noBackupFilesDir
+      context.externalCacheDir?.let(roots::add)
+      context.getExternalFilesDir(null)?.let(roots::add)
+    }
+    return ReceiptFilterProcessor(appContext.cacheDirectory, roots)
+  }
+
   override fun definition() = ModuleDefinition {
     Name("FinsightReceiptScanner")
+    // 3: the shutter always takes the photo and cropping runs on the saved
+    // still (custom-still-v3). JavaScript refuses to drive an older engine,
+    // which waited for all four edges before honouring the shutter.
+    Constant("captureContract") { 3 }
     AsyncFunction("deleteCachedFiles") { uris: List<String> -> deleteOwnedFiles(uris) }
     AsyncFunction("clearReceiptCache") { clearOwnedCache() }
+    AsyncFunction("applyReceiptFilter") { sourceUri: String, mode: String ->
+      receiptFilterProcessor().apply(sourceUri, mode).asMap()
+    }.runOnQueue(appContext.backgroundCoroutineScope)
     View(FinsightReceiptScannerView::class) {
       Events("onStatus", "onCapture", "onError")
       Prop("active") { view: FinsightReceiptScannerView, value: Boolean -> view.setActive(value) }
       Prop("mode") { view: FinsightReceiptScannerView, value: String -> view.setMode(value) }
+      Prop("autoCapture") { view: FinsightReceiptScannerView, value: Boolean -> view.setAutoCapture(value) }
       Prop("torch") { view: FinsightReceiptScannerView, value: Boolean -> view.setTorch(value) }
+      Prop("zoomRatio") { view: FinsightReceiptScannerView, value: Double -> view.setZoomRatio(value.toFloat()) }
       Prop("command") { view: FinsightReceiptScannerView, value: ScannerCommand -> view.command(value) }
     }
   }

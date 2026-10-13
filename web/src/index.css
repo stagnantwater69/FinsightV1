@@ -906,6 +906,18 @@
   .scroll-slim::-webkit-scrollbar-thumb:hover {
     @apply bg-ink-400/70;
   }
+
+  /* A scroller small enough that its own bar is the loudest thing in it — the
+     chat composer. It still scrolls by wheel, drag and caret; only the bar is
+     gone, so nothing becomes unreachable. Not for a scroller whose content is
+     not otherwise obvious, where the bar is the only sign there is more. */
+  .scroll-none {
+    scrollbar-width: none;
+  }
+
+  .scroll-none::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 /* ---------------------------------------------------------------

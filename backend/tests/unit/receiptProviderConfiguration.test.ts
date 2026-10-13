@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   RECEIPT_PROVIDER_PHASE1_MONTHLY_UNIT_CAP,
+  RECEIPT_PROVIDER_TIMEOUT_MS,
   getReceiptProviderConfiguration,
   publicReceiptProviderDetails,
+  receiptProviderGateTimeoutMs,
 } from "../../src/config/receiptProvider";
 
 function operationalGeminiEnv(): NodeJS.ProcessEnv {
@@ -159,5 +161,38 @@ describe("receipt provider configuration", () => {
       delete incomplete[key];
       expect(getReceiptProviderConfiguration(incomplete).operational, key).toBe(false);
     }
+  });
+});
+
+/*
+ * The gate's budget used to be one provider HTTP call's deadline. Gemini's
+ * adapter makes two of those in series (extract, then a second model verifies
+ * the answer), so a 12s extraction followed by a 9s verification was aborted
+ * as PROVIDER_TIMEOUT at 20s — after both calls had been billed and after the
+ * answer had arrived. The budget has to cover what a healthy adapter can
+ * legitimately spend, or the gate destroys the thing it is protecting.
+ */
+describe("provider gate timeout budget", () => {
+  it("covers both of Gemini's sequential calls, with room around them", () => {
+    const gemini = receiptProviderGateTimeoutMs("gemini");
+
+    expect(gemini).toBeGreaterThan(2 * RECEIPT_PROVIDER_TIMEOUT_MS);
+    expect(gemini).toBe(45_000);
+  });
+
+  it("does not inflate Veryfi, whose per-page calls run concurrently", () => {
+    const veryfi = receiptProviderGateTimeoutMs("veryfi");
+
+    expect(veryfi).toBeGreaterThan(RECEIPT_PROVIDER_TIMEOUT_MS);
+    expect(veryfi).toBeLessThan(receiptProviderGateTimeoutMs("gemini"));
+  });
+
+  it("is what the configuration hands the gate, alongside the per-call deadline", () => {
+    const config = getReceiptProviderConfiguration(operationalGeminiEnv());
+
+    // Both values are needed and they are not the same number: the per-call
+    // one is what the provider is asked for and what the contract records.
+    expect(config.timeoutMs).toBe(RECEIPT_PROVIDER_TIMEOUT_MS);
+    expect(config.gateTimeoutMs).toBe(receiptProviderGateTimeoutMs("gemini"));
   });
 });

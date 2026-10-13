@@ -58,6 +58,7 @@ export async function lockDuplicateKey(db: DbClient, businessProfileId: number, 
 }
 
 const EXPENSE_DUPLICATE_WRITE_GATE = "expense-duplicate-write-gate:v1";
+const SALES_DUPLICATE_WRITE_GATE = "sales-duplicate-write-gate:v1";
 
 /** Acquired before narrower locks so manual, CSV, and receipt duplicate checks cannot race. */
 export function lockExpenseDuplicateWriteGate(
@@ -65,4 +66,12 @@ export function lockExpenseDuplicateWriteGate(
   businessProfileId: number,
 ): Promise<void> {
   return lockDuplicateKey(db, businessProfileId, EXPENSE_DUPLICATE_WRITE_GATE);
+}
+
+/** Acquired before sales duplicate reads so source and target identities move atomically. */
+export function lockSalesDuplicateWriteGate(
+  db: DbClient,
+  businessProfileId: number,
+): Promise<void> {
+  return lockDuplicateKey(db, businessProfileId, SALES_DUPLICATE_WRITE_GATE);
 }

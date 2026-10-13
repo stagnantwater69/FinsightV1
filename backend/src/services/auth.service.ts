@@ -4,9 +4,19 @@ import { prisma } from "../config/prisma";
 import { env } from "../config/env";
 import { ApiError } from "../middleware/error.middleware";
 import { securityEvent } from "../lib/securityLog";
+import { evictTokenOwner } from "../lib/verifiedTokenCache";
+import { isAuthUnreachable } from "../lib/authUnreachable";
+import { lockDuplicateKey } from "../lib/recordLock";
 import { isDisposableEmail } from "../lib/emailPolicy";
 import { isUsable, statusRefusal, transition } from "./accountLifecycle.service";
-import { uploadUserAvatar } from "./storage.service";
+import {
+  deletePublicImageUrl,
+  deleteSupersededPublicImages,
+  PUBLIC_IMAGE_UPLOAD_TRANSACTION_TIMEOUT_MS,
+  publicImagePathFromUrl,
+  uploadUserAvatar,
+  validatePublicImageUpload,
+} from "./storage.service";
 import { HANDOFF_TTL_SECONDS, hashHandoffCode, newHandoffCode, open as openSealed, seal } from "../lib/authHandoff";
 
 interface RegisterInput {
@@ -183,7 +193,22 @@ function redirectFor(platform: ClientPlatform, path: "auth/confirm" | "auth/rese
 async function verifyPassword(email: string, password: string): Promise<boolean> {
   const client = createPasswordAuthClient();
   try {
-    const { error } = await client.auth.signInWithPassword({ email, password });
+    let error: { status?: number; name?: string } | null;
+    try {
+      ({ error } = await client.auth.signInWithPassword({ email, password }));
+    } catch (failure) {
+      if (isAuthUnreachable(failure as { status?: number; name?: string })) {
+        throw new ApiError(503, "Authentication is unavailable right now. Please try again shortly.", {
+          code: "AUTH_PROVIDER_UNAVAILABLE",
+        });
+      }
+      throw failure;
+    }
+    if (isAuthUnreachable(error)) {
+      throw new ApiError(503, "Authentication is unavailable right now. Please try again shortly.", {
+        code: "AUTH_PROVIDER_UNAVAILABLE",
+      });
+    }
     return !error;
   } finally {
     await client.auth.signOut({ scope: "local" }).catch(() => undefined);
@@ -501,15 +526,13 @@ export async function createSessionHandoff(accessToken: string, refreshToken: st
   const { code, codeHash } = newHandoffCode();
   const expiresAt = new Date(Date.now() + HANDOFF_TTL_SECONDS * 1000);
 
-  /*
-   * Any code this account has outstanding dies here. Handoff is a "continue
-   * over there, now" gesture, so a second press means the first link is stale;
-   * leaving it live would be an extra, invisible way into the account for as
-   * long as its two minutes ran.
-   */
-  await prisma.authHandoff.deleteMany({ where: { userId: user.id } });
-  await prisma.authHandoff.create({
-    data: { codeHash, userId: user.id, refreshTokenCipher: seal(refreshToken), expiresAt },
+  // The per-user lock makes concurrent issuers leave exactly one live code.
+  await prisma.$transaction(async (tx) => {
+    await lockDuplicateKey(tx, user.id, "auth-handoff-issue:v1");
+    await tx.authHandoff.deleteMany({ where: { userId: user.id } });
+    await tx.authHandoff.create({
+      data: { codeHash, userId: user.id, refreshTokenCipher: seal(refreshToken), expiresAt },
+    });
   });
 
   securityEvent("handoff.issued", { userId: user.id, email: user.email });
@@ -543,20 +566,49 @@ export async function exchangeSessionHandoff(code: string) {
   if (claimed.count !== 1) throw dead;
 
   const row = await prisma.authHandoff.findUnique({ where: { codeHash } });
-  // Deleted rather than left to expire: it has done its one job, and the
-  // ciphertext it holds is dead weight from here on.
-  if (row) await prisma.authHandoff.delete({ where: { id: row.id } }).catch(() => undefined);
   if (!row) throw dead;
 
+  /*
+   * Deleted rather than left to expire: once it has done its one job the
+   * ciphertext it holds is dead weight. But NOT before the session exists.
+   *
+   * It used to be deleted here, immediately after the claim and before Auth
+   * was called at all. A few seconds of Auth being unreachable therefore
+   * destroyed a code that was still perfectly valid, and the owner — who did
+   * nothing wrong and has a link that has not expired — was told "that link
+   * has expired or has already been used" and had to go back to the browser
+   * and start the handoff again.
+   */
+  const discard = () => prisma.authHandoff.delete({ where: { id: row.id } }).catch(() => undefined);
+
   const refreshToken = openSealed(row.refreshTokenCipher);
-  if (!refreshToken) throw dead;
+  if (!refreshToken) {
+    await discard();
+    throw dead;
+  }
 
   const client = createAnonAuthClient();
   const { data, error } = await client.auth.refreshSession({ refresh_token: refreshToken });
   if (error || !data.session || !data.user) {
     securityEvent("handoff.failed", { userId: row.userId, reason: error?.message ?? "no session" });
+    if (isAuthUnreachable(error)) {
+      /*
+       * Auth never gave a verdict, so neither do we. Releasing the claim lets
+       * the same code be spent once, later, inside the two minutes it already
+       * had — the single-use guarantee is the conditional update above, and a
+       * redemption that produced no session spent nothing. A code that Auth
+       * actually REFUSED is not released: that is an answer, and the row dies
+       * with it.
+       */
+      await prisma.authHandoff
+        .updateMany({ where: { id: row.id, consumedAt: { not: null } }, data: { consumedAt: null } })
+        .catch(() => undefined);
+      throw new ApiError(503, "We could not sign you in. Open the link again in a moment.");
+    }
+    await discard();
     throw dead;
   }
+  await discard();
 
   const user = await prisma.user.findUnique({ where: { id: row.userId } });
   if (!user || user.authId !== data.user.id) throw dead;
@@ -651,9 +703,39 @@ export async function loginUser(input: LoginInput) {
  * signed the owner out of the phone in their pocket, with nothing on screen to
  * say so. "Log out everywhere" is now a separate, deliberate action.
  */
+type SessionRevocationScope = "local" | "global" | "others";
+
+async function revokeSessions(
+  accessToken: string,
+  scope: SessionRevocationScope,
+  detail: Record<string, unknown> = {},
+): Promise<boolean> {
+  // Before the call, and whatever its outcome: a revocation must never leave
+  // this process still honouring the token from its verified-token cache.
+  evictTokenOwner(accessToken);
+
+  let error: { message?: string } | null;
+  try {
+    ({ error } = await supabaseAdmin.auth.admin.signOut(accessToken, scope));
+  } catch {
+    securityEvent("sessions.revoke_failed", { ...detail, scope, failureKind: "request-failed" });
+    return false;
+  }
+
+  if (error) {
+    securityEvent("sessions.revoke_failed", { ...detail, scope, failureKind: "provider-error" });
+    return false;
+  }
+
+  securityEvent("sessions.revoked", { ...detail, scope });
+  return true;
+}
+
 export async function logoutUser(accessToken: string, scope: "local" | "global" = "local") {
-  await supabaseAdmin.auth.admin.signOut(accessToken, scope).catch(() => undefined);
-  securityEvent("sessions.revoked", { scope });
+  const revoked = await revokeSessions(accessToken, scope);
+  if (!revoked && scope === "global") {
+    throw new ApiError(502, "Could not sign out everywhere right now. Please try again.");
+  }
 }
 
 export async function requestPasswordRecovery(email: string, platform: ClientPlatform = "web") {
@@ -741,21 +823,26 @@ export async function completePasswordReset(accessToken: string) {
     securityEvent("register.verified", { userId: user.id, email: user.email });
   }
 
-  await supabaseAdmin.auth.admin.signOut(accessToken, "global").catch(() => undefined);
+  const refreshSessionsRevoked = await revokeSessions(accessToken, "global", {
+    userId: user.id,
+    reason: "password reset",
+  });
   securityEvent("password.changed", { userId: user.id, email: user.email, via: "reset" });
-  securityEvent("sessions.revoked", { userId: user.id, scope: "global", reason: "password reset" });
 
-  return { message: "Your password has been changed. Log in with it to continue." };
+  return {
+    message: "Your password has been changed. Log in with it to continue.",
+    refreshSessionsRevoked,
+  };
 }
 
 /**
  * Changes a password for someone who is already signed in.
  *
  * SESSION POLICY, applied identically here and on both clients: the session
- * doing the changing survives, every other session is revoked. The person who
- * just proved they know the current password should not be thrown back to a
- * login form for having done the right thing; anyone else holding a token
- * should be gone by the time this returns.
+ * doing the changing survives and every other refresh session is revoked. The
+ * person who just proved they know the current password should not be thrown
+ * back to a login form for having done the right thing. Already-issued access
+ * JWTs remain valid until their configured expiry, as Supabase documents.
  *
  * `others` is passed explicitly rather than relied upon as a side effect of the
  * password update. The mobile client used to sign itself out on the belief that
@@ -781,14 +868,20 @@ export async function changePassword(
     throw new ApiError(400, "Current password is incorrect");
   }
 
+  const revoked = await revokeSessions(accessToken, "others", {
+    userId,
+    reason: "password change",
+  });
+  if (!revoked) {
+    throw new ApiError(502, "Could not securely finish changing your password. Please try again.");
+  }
+
   const { error } = await supabaseAdmin.auth.admin.updateUserById(user.authId, { password: newPassword });
   if (error) {
     throw new ApiError(400, error.message);
   }
 
-  await supabaseAdmin.auth.admin.signOut(accessToken, "others").catch(() => undefined);
   securityEvent("password.changed", { userId, email: user.email, via: "profile" });
-  securityEvent("sessions.revoked", { userId, scope: "others", reason: "password changed" });
 }
 
 /**
@@ -833,8 +926,32 @@ export async function updateProfile(userId: number, input: UpdateProfileInput) {
 }
 
 export async function updateAvatar(userId: number, buffer: Buffer, mimetype: string, originalname: string) {
-  const avatarUrl = await uploadUserAvatar(userId, buffer, mimetype, originalname);
-  const user = await prisma.user.update({ where: { id: userId }, data: { avatarUrl } });
+  const validatedImage = await validatePublicImageUpload(buffer, mimetype);
+  const result = await prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<Array<{ status: AccountStatus; avatarUrl: string | null }>>(Prisma.sql`
+      SELECT "User_Status" AS status, "User_AvatarURL" AS "avatarUrl"
+      FROM "User"
+      WHERE "User_ID" = ${userId}
+      FOR UPDATE
+    `);
+    const existing = rows[0];
+    if (!existing) throw new ApiError(404, "Profile not found");
+    if (!isUsable(existing.status)) {
+      throw new ApiError(403, statusRefusal(existing.status), { code: "ACCOUNT_NOT_ACTIVE" });
+    }
+
+    const avatarUrl = await uploadUserAvatar(userId, buffer, mimetype, originalname, validatedImage);
+    const user = await tx.user.update({ where: { id: userId }, data: { avatarUrl } });
+    return { user, previousUrl: existing.avatarUrl, avatarUrl };
+  }, { timeout: PUBLIC_IMAGE_UPLOAD_TRANSACTION_TIMEOUT_MS });
+
+  const previousPath = result.previousUrl ? publicImagePathFromUrl(result.previousUrl) : null;
+  const currentPath = publicImagePathFromUrl(result.avatarUrl);
+  if (result.previousUrl && previousPath && previousPath !== currentPath) {
+    await deletePublicImageUrl(result.previousUrl);
+  }
+  await deleteSupersededPublicImages(`users/${userId}`);
+  const { user } = result;
   return toProfile(user);
 }
 
@@ -864,7 +981,16 @@ export async function deleteAccount(userId: number, currentPassword: string): Pr
 
   await transition(user, AccountStatus.DELETION_PENDING, {
     reason: "owner requested deletion",
-    data: { deletionRequestedAt: new Date(), deletionStage: "REQUESTED", deletionAttempts: 0, deletionLastError: null },
+    data: {
+      deletionStage: "REQUESTED",
+      deletionAttempts: 0,
+      deletionLastError: null,
+      deletionLeaseStartedAt: null,
+      deletionHeartbeatAt: null,
+      deletionWorkerId: null,
+      deletionStorageManifestHash: null,
+      deletionStorageCheckpoint: 0,
+    },
   });
   securityEvent("account.deletion_requested", { userId, email: user.email });
 

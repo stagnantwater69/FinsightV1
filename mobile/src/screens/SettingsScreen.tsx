@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ScrollView, View, useWindowDimensions } from "react-native";
+import { ScrollView, View } from "react-native";
 import { ErrorNote, Screen, SegmentedControl, T } from "../components/ui";
 import { Row, Section } from "../components/SettingsList";
 import { useAuth, errorMessage } from "../context/AuthContext";
@@ -13,7 +13,6 @@ export function SettingsScreen({ navigation }: any) {
   const { preferences, updatePreferences } = useAuth();
   const { mode, preference, setPreference } = useThemeControl();
   const { textSecondary, textMuted } = useTheme();
-  const { width, fontScale } = useWindowDimensions();
   const tour = useTourOptional();
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -53,7 +52,6 @@ export function SettingsScreen({ navigation }: any) {
             </T>
             <SegmentedControl<ThemePreference>
               accessibilityLabel="Appearance"
-              stacked={width < 360 || fontScale > 1.2}
               options={
                 [
                   { label: "Light", value: "light", icon: "sunny-outline" },

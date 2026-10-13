@@ -64,8 +64,8 @@ export function NoBusinessProfile({
             </Button>
           }
         >
-          {error} Your records and figures are untouched — this is only the list
-          of businesses failing to arrive.
+          {error} Your records and figures are untouched. Only the list of
+          businesses failed to arrive.
         </EmptyState>
       </div>
     );

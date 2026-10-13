@@ -1,8 +1,15 @@
 import { useState, type ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useDismiss, useMenuKeys } from "../lib/hooks";
-import { IconBusiness, IconChevronDown, IconPlus, IconSettings } from "./icons";
+import { BEFORE_BUSINESS_PROFILE_SWITCH } from "../lib/navigationGuards";
+import {
+  IconBusiness,
+  IconCheck,
+  IconChevronDown,
+  IconPlus,
+  IconSettings,
+} from "./icons";
 
 function BusinessLogo({
   logoUrl,
@@ -61,6 +68,8 @@ export function BusinessSwitcher({
   collapsed?: boolean;
 }) {
   const { profiles, selected, selectProfile, loading } = useBusinessProfiles();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const { ref, triggerRef } = useDismiss(open, () => setOpen(false));
   const onMenuKeys = useMenuKeys();
@@ -121,7 +130,7 @@ export function BusinessSwitcher({
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-haspopup="menu"
-        title={collapsed ? `${selected.name} — switch business` : undefined}
+        title={collapsed ? `${selected.name}, switch business` : undefined}
         className={`flex min-h-tap w-full items-center rounded-xl border border-sidebar-fg/15 bg-sidebar-fg/10 text-left transition hover:border-sidebar-fg/30 hover:bg-sidebar-fg/15 ${
           collapsed ? "justify-center px-0" : "gap-2.5 px-2.5"
         }`}
@@ -159,7 +168,7 @@ export function BusinessSwitcher({
           </>
         ) : null}
         <span className="sr-only">
-          {selected.name} — active business profile. Switch or manage
+          {selected.name}, active business profile. Switch or manage
           businesses.
         </span>
       </button>
@@ -187,8 +196,25 @@ export function BusinessSwitcher({
                 role="menuitemradio"
                 aria-checked={p.id === selected.id}
                 onClick={() => {
+                  if (p.id === selected.id) {
+                    setOpen(false);
+                    return;
+                  }
+                  const switchEvent = new Event(
+                    BEFORE_BUSINESS_PROFILE_SWITCH,
+                    { cancelable: true },
+                  );
+                  if (!window.dispatchEvent(switchEvent)) return;
                   selectProfile(p.id);
                   setOpen(false);
+                  const scopedRoute = location.pathname.match(
+                    /^\/business-profiles\/\d+\/(edit|operating-schedule|recovery-notifications)$/,
+                  );
+                  if (scopedRoute?.[1] === "edit") {
+                    navigate("/business-profiles");
+                  } else if (scopedRoute?.[1]) {
+                    navigate(`/business-profiles/${p.id}/${scopedRoute[1]}`);
+                  }
                 }}
                 className={`flex min-h-tap w-full items-center gap-2.5 rounded-xl px-2.5 text-left transition ${
                   p.id === selected.id ? "bg-tint-brand" : "hover:bg-paper-100"
@@ -204,9 +230,10 @@ export function BusinessSwitcher({
                   </span>
                 </span>
                 {p.id === selected.id ? (
-                  <span className="shrink-0 text-brand-600" aria-hidden>
-                    ✓
-                  </span>
+                  <IconCheck
+                    className="h-4 w-4 shrink-0 text-brand-600"
+                    aria-hidden
+                  />
                 ) : null}
               </button>
             ))}
@@ -234,7 +261,7 @@ export function BusinessSwitcher({
           </Link>
 
           <Link
-            to="/business-profiles"
+            to="/business-profiles/all"
             role="menuitem"
             onClick={() => setOpen(false)}
             className="flex min-h-tap items-center gap-2.5 rounded-xl px-2.5 transition hover:bg-paper-100"

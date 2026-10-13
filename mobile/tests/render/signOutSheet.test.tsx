@@ -13,10 +13,12 @@ import { cleanup, render, fireEvent, waitFor } from '@testing-library/react-nati
  */
 
 const logout = vi.fn();
+const logoutEverywhere = vi.fn();
 
 vi.mock('../../src/context/AuthContext', () => ({
   useAuth: () => ({
     logout,
+    logoutEverywhere,
     login: vi.fn(),
     register: vi.fn(),
     profile: null,
@@ -28,11 +30,11 @@ vi.mock('../../src/context/AuthContext', () => ({
 const { SignOutSheet } = await import('../../src/components/SignOutSheet');
 const { ThemeProvider } = await import('../../src/context/ThemeContext');
 
-function renderSheet(visible = true) {
+function renderSheet(visible = true, scope: "local" | "all" = "local") {
   const onClose = vi.fn();
   const result = render(
     <ThemeProvider initialMode="light">
-      <SignOutSheet visible={visible} onClose={onClose} />
+      <SignOutSheet visible={visible} onClose={onClose} scope={scope} />
     </ThemeProvider>,
   );
   return { result, onClose };
@@ -40,6 +42,7 @@ function renderSheet(visible = true) {
 
 beforeEach(() => {
   logout.mockReset();
+  logoutEverywhere.mockReset();
 });
 
 // Explicit rather than relying on auto-cleanup: several of these tests leave a
@@ -118,7 +121,7 @@ describe('SignOutSheet', () => {
 
     expect(
       await queries.findByText(
-        "Signing out didn't finish. Nothing was lost — try again.",
+        "Signing out didn't finish. You're still signed in on this phone. Try again.",
       ),
     ).toBeTruthy();
 
@@ -137,12 +140,45 @@ describe('SignOutSheet', () => {
 
     await fireEvent.press(queries.getByRole('button', { name: 'Sign out' }));
     await queries.findByText(
-      "Signing out didn't finish. Nothing was lost — try again.",
+      "Signing out didn't finish. You're still signed in on this phone. Try again.",
     );
 
     logout.mockResolvedValueOnce(undefined);
     await fireEvent.press(queries.getByRole('button', { name: 'Sign out' }));
 
     expect(logout).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps global sign-out open with a recoverable error when revocation is not confirmed', async () => {
+    logoutEverywhere.mockRejectedValueOnce(new Error('network unavailable'));
+
+    const { result } = renderSheet(true, 'all');
+    const queries = await result;
+
+    expect(queries.getByRole('header', { name: 'Sign out on all devices?' })).toBeTruthy();
+    await fireEvent.press(queries.getByRole('button', { name: 'Sign out everywhere' }));
+
+    expect(
+      await queries.findByText(
+        "Signing out on all devices didn't finish. This phone still shows your account, but other devices may already be unable to renew their sessions. Check your connection and try again.",
+      ),
+    ).toBeTruthy();
+    expect(logout).not.toHaveBeenCalled();
+    expect(queries.getByRole('button', { name: 'Sign out everywhere' })).toBeTruthy();
+  });
+
+  it('lets the owner retry global sign-out after a failed attempt', async () => {
+    logoutEverywhere
+      .mockRejectedValueOnce(new Error('network unavailable'))
+      .mockResolvedValueOnce(undefined);
+
+    const { result } = renderSheet(true, 'all');
+    const queries = await result;
+
+    await fireEvent.press(queries.getByRole('button', { name: 'Sign out everywhere' }));
+    await queries.findByText(/other devices may already be unable to renew their sessions/i);
+    await fireEvent.press(queries.getByRole('button', { name: 'Sign out everywhere' }));
+
+    expect(logoutEverywhere).toHaveBeenCalledTimes(2);
   });
 });

@@ -5,6 +5,7 @@ import { useBusinessProfiles } from "./BusinessProfileContext";
 import { useConfirm } from "../components/ConfirmDialog";
 import { useToast } from "../components/Toast";
 import type {
+  ChatFocus,
   ChatMessage,
   ChatSendResponse,
   Conversation,
@@ -71,6 +72,7 @@ interface AiChatValue {
     originModule: InteractionModule,
     initialQuestion?: string,
     reductionOpportunity?: ReductionOpportunity,
+    focus?: ChatFocus,
   ) => void;
   closeChat: () => void;
 
@@ -102,6 +104,8 @@ interface AiChatValue {
   send: (text: string) => void;
   rename: (id: number, title: string) => void;
   remove: (conversation: Conversation) => void;
+  /** Thumbs up/down on one reply; pressing the same thumb again clears it. */
+  rate: (messageId: number, feedback: "up" | "down" | null) => void;
 }
 
 const AiChatContext = createContext<AiChatValue | null>(null);
@@ -149,6 +153,13 @@ export function AiChatProvider({ children }: { children: ReactNode }) {
    * it is armed, it is just a hand-off between two calls.
    */
   const pendingReductionOpportunityRef = useRef<ReductionOpportunity | null>(null);
+  /**
+   * The flag or record "Explain this flag" was pressed on. Same one-shot
+   * hand-off as the reduction opportunity: it rides on the next send only.
+   * The server stores it on the conversation, so later messages in that thread
+   * stay about the same flag without the client resending it.
+   */
+  const pendingFocusRef = useRef<ChatFocus | null>(null);
 
   // --- the composer ---
   const [input, setInput] = useState("");
@@ -161,20 +172,48 @@ export function AiChatProvider({ children }: { children: ReactNode }) {
   // a new object identity on every refresh, and depending on that would clear
   // the open conversation each time one landed.
   const businessProfileId = selected?.id ?? null;
+  const mountedRef = useRef(true);
+  const identityRef = useRef({ businessProfileId });
+  if (identityRef.current.businessProfileId !== businessProfileId) {
+    identityRef.current = { businessProfileId };
+  }
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const isCurrentIdentity = useCallback(
+    (identity: { businessProfileId: number | null }) =>
+      mountedRef.current && identityRef.current === identity,
+    [],
+  );
 
   // A thread belongs to one business, so switching business drops whatever was
   // open along with the list it came from. This is the ONLY thing that resets a
   // conversation without the owner asking — and it is a different business's
   // data, which must never be on screen under the wrong profile.
   useEffect(() => {
+    setOpen(false);
+    setSeedModule("Dashboard");
     setConversations([]);
+    setListLoading(false);
     setListError(null);
     setListLoaded(false);
     setActiveId(null);
     setMessages([]);
+    setMessagesLoading(false);
+    setInput("");
+    setSending(false);
+    setError(null);
+    setUnavailable(false);
+    setDetectedAmount(null);
     wantedRef.current = null;
     cacheRef.current.clear();
     pendingReductionOpportunityRef.current = null;
+    pendingFocusRef.current = null;
   }, [businessProfileId]);
 
   /*
@@ -226,7 +265,12 @@ export function AiChatProvider({ children }: { children: ReactNode }) {
    * box, and that is the whole of it.
    */
   const openChat = useCallback(
-    (originModule: InteractionModule, initialQuestion?: string, reductionOpportunity?: ReductionOpportunity) => {
+    (
+      originModule: InteractionModule,
+      initialQuestion?: string,
+      reductionOpportunity?: ReductionOpportunity,
+      focus?: ChatFocus,
+    ) => {
       setSeedModule(originModule);
       // Only ever pre-fills the box — the same thing clicking a starter chip
       // does. It never sends on the owner's behalf.
@@ -234,6 +278,20 @@ export function AiChatProvider({ children }: { children: ReactNode }) {
       // Armed for whichever message goes out next, from whichever
       // conversation (new or already open) is current when that happens.
       pendingReductionOpportunityRef.current = reductionOpportunity ?? null;
+      pendingFocusRef.current = focus ?? null;
+      // A question about one specific flag belongs in a thread of its own:
+      // continuing whatever was open would answer it with the old thread's
+      // focus and history. Without a focus, opening never disturbs the
+      // open conversation.
+      if (focus) {
+        setActiveId(null);
+        wantedRef.current = null;
+        setMessages([]);
+        setMessagesLoading(false);
+        setError(null);
+        setUnavailable(false);
+        setDetectedAmount(null);
+      }
       setOpen(true);
     },
     [],
@@ -248,12 +306,14 @@ export function AiChatProvider({ children }: { children: ReactNode }) {
     setMessagesLoading(false);
     setInput("");
     pendingReductionOpportunityRef.current = null;
+    pendingFocusRef.current = null;
     clearExchangeState();
   }, [clearExchangeState]);
 
   const selectConversation = useCallback(
     (id: number) => {
       if (id === activeId) return;
+      const identity = identityRef.current;
 
       clearExchangeState();
       setActiveId(id);
@@ -271,24 +331,27 @@ export function AiChatProvider({ children }: { children: ReactNode }) {
       api
         .get<ConversationDetail>(`/ai/conversations/${id}`)
         .then(({ data }) => {
+          if (!isCurrentIdentity(identity)) return;
           cacheRef.current.set(id, data.messages);
           if (wantedRef.current !== id) return;
           setMessages(data.messages);
           setMessagesLoading(false);
         })
         .catch((err) => {
+          if (!isCurrentIdentity(identity)) return;
           if (wantedRef.current !== id) return;
           setError(getErrorMessage(err));
           setMessagesLoading(false);
         });
     },
-    [activeId, clearExchangeState],
+    [activeId, clearExchangeState, isCurrentIdentity],
   );
 
   const send = useCallback(
     async (text: string) => {
       const question = text.trim();
       if (!question || sending || businessProfileId === null) return;
+      const identity = identityRef.current;
 
       const creating = activeId === null;
       const previous = creating ? [] : messages;
@@ -298,6 +361,8 @@ export function AiChatProvider({ children }: { children: ReactNode }) {
       // already navigated away from.
       const reductionOpportunity = pendingReductionOpportunityRef.current;
       pendingReductionOpportunityRef.current = null;
+      const focus = pendingFocusRef.current;
+      pendingFocusRef.current = null;
 
       setInput("");
       setSending(true);
@@ -310,12 +375,16 @@ export function AiChatProvider({ children }: { children: ReactNode }) {
               originModule: seedModule,
               question,
               ...(reductionOpportunity ? { reductionOpportunity } : {}),
+              ...(focus ? { focus } : {}),
             })
           : await api.post<ChatSendResponse>(`/ai/conversations/${activeId}/messages`, {
               businessProfileId,
               question,
               ...(reductionOpportunity ? { reductionOpportunity } : {}),
+              ...(focus ? { focus } : {}),
             });
+
+        if (!isCurrentIdentity(identity)) return;
 
         const next = [...previous, data.userMessage, data.assistantMessage];
         cacheRef.current.set(data.conversation.id, next);
@@ -335,45 +404,51 @@ export function AiChatProvider({ children }: { children: ReactNode }) {
         if (data.provider === "unavailable") setUnavailable(true);
         if (data.detectedAmount !== null) setDetectedAmount(data.detectedAmount);
       } catch (err) {
+        if (!isCurrentIdentity(identity)) return;
         setError(getErrorMessage(err));
         // The question goes back in the box rather than being lost with the
         // failure — retyping it is the last thing someone wants to do after a
         // network error.
         setInput(question);
       } finally {
-        setSending(false);
+        if (isCurrentIdentity(identity)) setSending(false);
       }
     },
-    [activeId, businessProfileId, clearExchangeState, messages, seedModule, sending],
+    [activeId, businessProfileId, clearExchangeState, isCurrentIdentity, messages, seedModule, sending],
   );
 
   const rename = useCallback(
     async (id: number, title: string) => {
+      const identity = identityRef.current;
       const before = conversations;
       setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, title } : c)));
       try {
         await api.patch(`/ai/conversations/${id}`, { title });
+        if (!isCurrentIdentity(identity)) return;
         toast("Conversation renamed");
       } catch (err) {
+        if (!isCurrentIdentity(identity)) return;
         setConversations(before);
         setError(getErrorMessage(err));
       }
     },
-    [conversations, toast],
+    [conversations, isCurrentIdentity, toast],
   );
 
   const remove = useCallback(
     async (conversation: Conversation) => {
+      const identity = identityRef.current;
       const ok = await confirm({
         title: `Delete "${conversation.title}"?`,
         body: "This removes the conversation and every message in it. Your records and figures are not affected.",
         confirmLabel: "Delete conversation",
         tone: "danger",
       });
-      if (!ok) return;
+      if (!ok || !isCurrentIdentity(identity)) return;
 
       try {
         await api.delete(`/ai/conversations/${conversation.id}`);
+        if (!isCurrentIdentity(identity)) return;
         cacheRef.current.delete(conversation.id);
         setConversations((prev) => prev.filter((c) => c.id !== conversation.id));
         if (wantedRef.current === conversation.id) wantedRef.current = null;
@@ -386,10 +461,37 @@ export function AiChatProvider({ children }: { children: ReactNode }) {
         }
         toast("Conversation deleted");
       } catch (err) {
+        if (!isCurrentIdentity(identity)) return;
         setError(getErrorMessage(err));
       }
     },
-    [activeId, clearExchangeState, confirm, toast],
+    [activeId, clearExchangeState, confirm, isCurrentIdentity, toast],
+  );
+
+  const rate = useCallback(
+    async (messageId: number, feedback: "up" | "down" | null) => {
+      if (activeId === null) return;
+      const identity = identityRef.current;
+      const conversationId = activeId;
+      const apply = (list: ChatMessage[], value: "up" | "down" | null) =>
+        list.map((m) => (m.id === messageId ? { ...m, feedback: value } : m));
+      const before = messages.find((m) => m.id === messageId)?.feedback ?? null;
+
+      // Optimistic: a thumb that waits on the network feels broken.
+      setMessages((prev) => apply(prev, feedback));
+      const cached = cacheRef.current.get(conversationId);
+      if (cached) cacheRef.current.set(conversationId, apply(cached, feedback));
+      try {
+        await api.put(`/ai/conversations/${conversationId}/messages/${messageId}/feedback`, { feedback });
+      } catch (err) {
+        if (!isCurrentIdentity(identity)) return;
+        setMessages((prev) => apply(prev, before));
+        const again = cacheRef.current.get(conversationId);
+        if (again) cacheRef.current.set(conversationId, apply(again, before));
+        setError(getErrorMessage(err));
+      }
+    },
+    [activeId, isCurrentIdentity, messages],
   );
 
   const value: AiChatValue = {
@@ -415,6 +517,7 @@ export function AiChatProvider({ children }: { children: ReactNode }) {
     send: (text: string) => void send(text),
     rename: (id: number, title: string) => void rename(id, title),
     remove: (conversation: Conversation) => void remove(conversation),
+    rate: (messageId: number, feedback: "up" | "down" | null) => void rate(messageId, feedback),
   };
 
   return <AiChatContext.Provider value={value}>{children}</AiChatContext.Provider>;

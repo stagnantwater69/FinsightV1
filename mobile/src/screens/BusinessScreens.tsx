@@ -1,11 +1,13 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert as RNAlert, KeyboardAvoidingView, Platform, Pressable, ScrollView, TextInput, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
-import { Button, Callout, Card, EmptyState, ErrorNote, Field, Money, Screen, ScreenHeader, T } from "../components/ui";
+import { Ionicons } from "@expo/vector-icons";
+import { Button, Callout, Card, ConfirmSheet, EmptyState, ErrorNote, Field, Money, Screen, ScreenHeader, T } from "../components/ui";
 import { PhotoUpload } from "../components/PhotoUpload";
 import { SignOutSheet } from "../components/SignOutSheet";
 import { useAuth } from "../context/AuthContext";
 import {
+  digitsOnly,
   isValid,
   validateChangePassword,
   type ChangePasswordField,
@@ -17,8 +19,11 @@ import * as haptics from "../lib/haptics";
 import { font, radius, space, typeScale } from "../theme/tokens";
 import { TAP_FLOOR } from "../components/touchTarget";
 import { useTheme } from "../context/ThemeContext";
-import type { BusinessProfile, Profile } from "../lib/types";
+import type { BusinessProfile, FinancialPosition, Profile } from "../lib/types";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
+import { availableFundsProvenance, latestCompletableMonth, monthlyExpenseBasisProvenance } from "../lib/financialPosition";
+import { formatMonthLabel, shiftMonthKey } from "../lib/monthEndReview";
+import { useInsight } from "../lib/useInsight";
 import {
   EMPTY_DRAFT,
   applyFieldUpdate,
@@ -181,7 +186,7 @@ export function BusinessProfilesScreen({ navigation }: any) {
         <ScreenHeader
           eyebrow={`${profiles.length} ${profiles.length === 1 ? "profile" : "profiles"}`}
           title="Your businesses"
-          subtitle="Switch the active business or keep each profile's operating details up to date."
+          subtitle="Switch the active business or review its starting details and record coverage."
         />
         {error ? <ErrorNote>{error}</ErrorNote> : null}
 
@@ -210,11 +215,19 @@ export function BusinessProfilesScreen({ navigation }: any) {
                   </View>
 
                   <View style={{ marginTop: space.md, gap: 4 }}>
-                    <RowLine label="Available funds" value={p.availableFunds} />
-                    <RowLine label="Expected monthly expenses" value={p.expectedMonthlyExpenses} />
+                    <RowLine label="Starting funds" value={p.availableFunds} />
+                    <RowLine label="Starting monthly estimate" value={p.expectedMonthlyExpenses} />
                     <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
                       <T variant="caption">Operating days / month</T>
                       <T style={{ fontSize: typeScale.label }}>{p.operatingDays}</T>
+                    </View>
+                    <View style={{ flexDirection: "row", justifyContent: "space-between", gap: space.md }}>
+                      <T variant="caption" style={{ flex: 1 }}>Expense records complete through</T>
+                      <T style={{ flexShrink: 1, textAlign: "right", fontSize: typeScale.label }}>
+                        {p.expenseRecordsCompleteThroughMonth
+                          ? formatMonthLabel(p.expenseRecordsCompleteThroughMonth)
+                          : "Not confirmed"}
+                      </T>
                     </View>
                   </View>
 
@@ -249,7 +262,7 @@ function RowLine({ label, value }: { label: string; value: number }) {
 
 export function BusinessProfileFormScreen({ navigation, route }: any) {
   const existing: BusinessProfile | undefined = route.params?.profile;
-  const { createProfile, updateProfile } = useBusinessProfiles();
+  const { createProfile, updateProfile, refresh } = useBusinessProfiles();
   const [form, setForm] = useState<BusinessProfileDraft>(() =>
     existing ? draftFromProfile(existing) : { ...EMPTY_DRAFT, type: "Sari-sari store" },
   );
@@ -357,7 +370,7 @@ export function BusinessProfileFormScreen({ navigation, route }: any) {
             />
             <Field
               ref={fundsRef}
-              label="Available business funds (PHP)"
+              label="Starting available funds (PHP)"
               value={form.availableFunds}
               onChangeText={set("availableFunds")}
               keyboardType="decimal-pad"
@@ -366,11 +379,13 @@ export function BusinessProfileFormScreen({ navigation, route }: any) {
               onSubmitEditing={() => monthlyRef.current?.focus()}
             />
             <T variant="caption" style={{ marginTop: -space.sm, marginBottom: space.md }}>
-              The money you have on hand for the business right now.
+              {existing
+                ? "Changing this amount starts the calculation again from the day you save."
+                : "The cash this business has to work with when tracking starts."}
             </T>
             <Field
               ref={monthlyRef}
-              label="Expected monthly expenses (PHP)"
+              label="Starting monthly expense estimate (PHP)"
               value={form.expectedMonthlyExpenses}
               onChangeText={set("expectedMonthlyExpenses")}
               keyboardType="decimal-pad"
@@ -379,7 +394,7 @@ export function BusinessProfileFormScreen({ navigation, route }: any) {
               onSubmitEditing={() => operatingDaysRef.current?.focus()}
             />
             <T variant="caption" style={{ marginTop: -space.sm, marginBottom: space.md }}>
-              Roughly what a normal month costs you. This drives your daily sales target.
+              Used only until you confirm a complete past month of expense records.
             </T>
             <Field
               ref={operatingDaysRef}
@@ -400,7 +415,7 @@ export function BusinessProfileFormScreen({ navigation, route }: any) {
             */}
             <Field
               ref={thresholdRef}
-              label="Flag single expenses over (PHP) — optional"
+              label="Flag single expenses over (PHP), optional"
               value={thresholdDisplayValue(form)}
               onChangeText={set("largeExpenseThresholdPesos")}
               keyboardType="decimal-pad"
@@ -413,11 +428,18 @@ export function BusinessProfileFormScreen({ navigation, route }: any) {
             />
             <T variant="caption" style={{ marginTop: -space.sm, marginBottom: space.md }}>
               Expenses this big get set aside for you to review, so a large or mistaken one doesn't
-              slip past. Suggested from your monthly expenses — change it anytime.
+              slip past. Suggested from your starting monthly estimate. Change it anytime.
             </T>
             {error ? <ErrorNote>{error}</ErrorNote> : null}
             <Button title={existing ? "Save changes" : "Create business"} variant="primary" onPress={submit} loading={busy} style={{ marginTop: space.md }} />
           </Card>
+
+          {existing ? (
+            <FinancialPositionCard
+              businessProfileId={existing.id}
+              onProfileRefresh={refresh}
+            />
+          ) : null}
 
           {/*
             Only on an existing business, for the same reason the logo upload
@@ -445,14 +467,260 @@ export function BusinessProfileFormScreen({ navigation, route }: any) {
   );
 }
 
+type CompletenessAction = "confirm" | "clear";
+
+/**
+ * Shows the server-owned current figures and lets an owner assert the latest
+ * month whose expense records are complete. The client selects a month only;
+ * it never recomputes either financial amount.
+ */
+function FinancialPositionCard({
+  businessProfileId,
+  onProfileRefresh,
+}: {
+  businessProfileId: number;
+  onProfileRefresh: () => Promise<void>;
+}) {
+  const t = useTheme();
+  const positionState = useInsight<FinancialPosition>(
+    `/business-profiles/${businessProfileId}/financial-position`,
+    {},
+    [businessProfileId],
+  );
+  const [returnedPosition, setReturnedPosition] = useState<{
+    businessProfileId: number;
+    value: FinancialPosition;
+    queryUpdatedAtBeforeSave: number | null;
+  } | null>(null);
+  const position =
+    returnedPosition?.businessProfileId === businessProfileId
+      ? returnedPosition.value
+      : positionState.data;
+  const maxMonth = position ? latestCompletableMonth(position.asOfDate) : "";
+  const completeThrough = position?.monthlyExpenseBasis.recordsCompleteThroughMonth ?? null;
+  const [selectedMonth, setSelectedMonth] = useState("");
+  const [action, setAction] = useState<CompletenessAction | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [savedMessage, setSavedMessage] = useState<string | null>(null);
+  const active = useRef(true);
+
+  useEffect(() => () => {
+    active.current = false;
+  }, []);
+
+  useEffect(() => {
+    if (
+      returnedPosition?.businessProfileId === businessProfileId &&
+      positionState.data &&
+      positionState.lastUpdatedAt !== returnedPosition.queryUpdatedAtBeforeSave
+    ) {
+      setReturnedPosition(null);
+    }
+  }, [businessProfileId, positionState.data, positionState.lastUpdatedAt, returnedPosition]);
+
+  useEffect(() => {
+    if (!position || !maxMonth) return;
+    setSelectedMonth(completeThrough ?? maxMonth);
+  }, [businessProfileId, completeThrough, maxMonth, position]);
+
+  async function saveCompleteness() {
+    if (!action || !position) return;
+    const nextMonth = action === "confirm" ? selectedMonth : null;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const updated = await api.put<FinancialPosition>(
+        `/business-profiles/${businessProfileId}/expense-records-completeness`,
+        { completeThroughMonth: nextMonth },
+        { cacheScope: { businessProfileId } },
+      );
+      if (!active.current) return;
+      setReturnedPosition({
+        businessProfileId,
+        value: updated,
+        queryUpdatedAtBeforeSave: positionState.lastUpdatedAt,
+      });
+      setSavedMessage(
+        nextMonth
+          ? `Expense records confirmed complete through ${formatMonthLabel(nextMonth)}.`
+          : "FinSight is using the starting monthly estimate again.",
+      );
+      setAction(null);
+      haptics.succeeded();
+      void onProfileRefresh().catch(() => undefined);
+    } catch (err) {
+      if (!active.current) return;
+      setSaveError(errorMessage(err));
+      haptics.failed();
+    } finally {
+      if (active.current) setSaving(false);
+    }
+  }
+
+  const previousMonth = selectedMonth ? shiftMonthKey(selectedMonth, -1) : "";
+  const nextMonth = selectedMonth ? shiftMonthKey(selectedMonth, 1) : "";
+  const nextDisabled = !nextMonth || !maxMonth || nextMonth > maxMonth;
+  const selectionChanged = Boolean(selectedMonth && selectedMonth !== completeThrough);
+
+  return (
+    <>
+      <Card style={{ marginTop: space.lg }}>
+        <T variant="title" accessibilityRole="header" style={{ marginBottom: 4 }}>
+          Financial position
+        </T>
+        <T variant="caption" style={{ marginBottom: space.md }}>
+          Current figures calculated from your starting values and confirmed records.
+        </T>
+
+        {positionState.loading && !position ? <T variant="caption">Loading financial position…</T> : null}
+        {positionState.error && !position ? (
+          <View style={{ gap: space.sm }}>
+            <ErrorNote>{positionState.error}</ErrorNote>
+            <Button title="Retry" variant="secondary" onPress={() => void positionState.load()} />
+          </View>
+        ) : null}
+
+        {position ? (
+          <>
+            {positionState.error ? <ErrorNote>Showing the last result. Refresh failed: {positionState.error}</ErrorNote> : null}
+            <T variant="label" style={{ color: t.ink[700] }}>Recorded available funds</T>
+            <Money value={position.availableFunds.calculatedAmount} size={24} weight="semibold" style={{ marginTop: 2 }} />
+            <T variant="caption" style={{ marginTop: 4, lineHeight: 18 }}>
+              {availableFundsProvenance(position.availableFunds)}
+            </T>
+
+            <View style={{ height: 1, backgroundColor: t.border, marginVertical: space.lg }} />
+
+            <T variant="label" style={{ color: t.ink[700] }}>Monthly expense basis</T>
+            <Money value={position.monthlyExpenseBasis.amount} size={20} weight="semibold" style={{ marginTop: 2 }} />
+            <T variant="caption" style={{ marginTop: 4, lineHeight: 18 }}>
+              {monthlyExpenseBasisProvenance(position.monthlyExpenseBasis)}
+            </T>
+
+            <View style={{ height: 1, backgroundColor: t.border, marginVertical: space.lg }} />
+
+            <T variant="heading" accessibilityRole="header" style={{ marginBottom: 4 }}>
+              Expense record coverage
+            </T>
+            <T variant="caption" style={{ marginBottom: space.md, lineHeight: 18 }}>
+              Confirm a month only when every business expense through its end is recorded and reviewed. FinSight will
+              use the latest complete month instead of your starting estimate.
+            </T>
+
+            <T variant="label" style={{ marginBottom: 4, color: t.ink[700] }}>Complete through</T>
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                backgroundColor: t.surfaceMuted,
+                borderRadius: radius.md,
+                paddingHorizontal: space.sm,
+              }}
+            >
+              <Pressable
+                onPress={() => {
+                  haptics.tapped();
+                  setSelectedMonth(previousMonth);
+                  setSavedMessage(null);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={`Choose previous month, ${formatMonthLabel(previousMonth)}`}
+                style={{ minWidth: TAP_FLOOR, minHeight: TAP_FLOOR, alignItems: "center", justifyContent: "center" }}
+              >
+                <Ionicons name="chevron-back" size={20} color={t.textPrimary} />
+              </Pressable>
+              <T style={{ flex: 1, textAlign: "center", fontFamily: font.sansSemibold, fontSize: typeScale.body }}>
+                {formatMonthLabel(selectedMonth)}
+              </T>
+              <Pressable
+                disabled={nextDisabled}
+                onPress={() => {
+                  haptics.tapped();
+                  setSelectedMonth(nextMonth);
+                  setSavedMessage(null);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={nextMonth ? `Choose next month, ${formatMonthLabel(nextMonth)}` : "Choose next month"}
+                accessibilityState={{ disabled: nextDisabled }}
+                style={{
+                  minWidth: TAP_FLOOR,
+                  minHeight: TAP_FLOOR,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  opacity: nextDisabled ? 0.35 : 1,
+                }}
+              >
+                <Ionicons name="chevron-forward" size={20} color={t.textPrimary} />
+              </Pressable>
+            </View>
+
+            {savedMessage ? (
+              <Callout tone="info">
+                {savedMessage}
+              </Callout>
+            ) : null}
+
+            <Button
+              title="Confirm record coverage"
+              variant="primary"
+              onPress={() => {
+                setSaveError(null);
+                setAction("confirm");
+              }}
+              disabled={!selectionChanged || saving}
+              style={{ marginTop: space.md }}
+            />
+            {completeThrough ? (
+              <Button
+                title="Use starting estimate again"
+                variant="ghost"
+                onPress={() => {
+                  setSaveError(null);
+                  setAction("clear");
+                }}
+                disabled={saving}
+                style={{ marginTop: space.sm }}
+              />
+            ) : null}
+          </>
+        ) : null}
+      </Card>
+
+      <ConfirmSheet
+        visible={action !== null}
+        title={action === "clear" ? "Use the starting estimate again?" : `Complete through ${formatMonthLabel(selectedMonth)}?`}
+        body={
+          action === "clear"
+            ? "FinSight will stop using the record-based monthly figure until you confirm a complete past month again. No records will be deleted."
+            : `Confirm only if every business expense through ${formatMonthLabel(selectedMonth)} is in FinSight and reviewed.`
+        }
+        confirmLabel={action === "clear" ? "Use starting estimate" : "Confirm coverage"}
+        cancelLabel="Cancel"
+        busy={saving}
+        error={saveError}
+        onConfirm={() => void saveCompleteness()}
+        onCancel={() => {
+          if (!saving) {
+            setAction(null);
+            setSaveError(null);
+          }
+        }}
+      />
+    </>
+  );
+}
+
 // ---------------------------------------------------------------- Profile / account
 
 export function ProfileScreen() {
   const t = useTheme();
   const { brand, ink } = t;
-  const { profile, updateProfile, logout, logoutEverywhere, changePassword, setProfileFromServer } = useAuth();
+  const { profile, updateProfile, logout, changePassword, setProfileFromServer } = useAuth();
   const [passwordChanged, setPasswordChanged] = useState(false);
   const [signOutOpen, setSignOutOpen] = useState(false);
+  const [signOutEverywhereOpen, setSignOutEverywhereOpen] = useState(false);
   const [form, setForm] = useState({
     firstName: profile?.firstName ?? "",
     lastName: profile?.lastName ?? "",
@@ -531,7 +799,7 @@ export function ProfileScreen() {
     try {
       await changePassword(pw.current, pw.next);
       /*
-       * This phone STAYS SIGNED IN; every other device is signed out.
+       * This phone STAYS SIGNED IN; every other refresh session is revoked.
        *
        * It used to sign out here, on the belief that Supabase invalidates
        * sessions when the password is rotated. It does not — so the effect was
@@ -632,7 +900,7 @@ export function ProfileScreen() {
               ref={phoneRef}
               label="Phone number"
               value={form.phoneNumber}
-              onChangeText={(v) => setForm((f) => ({ ...f, phoneNumber: v }))}
+              onChangeText={(v) => setForm((f) => ({ ...f, phoneNumber: digitsOnly(v) }))}
               keyboardType="phone-pad"
               autoComplete="tel"
               returnKeyType="done"
@@ -651,7 +919,7 @@ export function ProfileScreen() {
           <Card>
             <T variant="title" style={{ marginBottom: 4 }}>Security</T>
             <T variant="caption" style={{ marginBottom: space.md }}>
-              Changing your password signs you out on every device, including this one.
+              Changing your password keeps you signed in on this phone. Other devices must sign in again after their current access expires.
             </T>
             <Field
               label="Current password"
@@ -697,7 +965,7 @@ export function ProfileScreen() {
             */}
             {passwordChanged ? (
               <Callout>
-                Password changed. You're still signed in here, and any other devices have been signed out.
+                Password changed. You're still signed in here. Other devices will need to sign in again after their current access expires.
               </Callout>
             ) : null}
             <Button title="Change password" onPress={submitPassword} loading={busy} style={{ marginTop: space.sm }} />
@@ -722,16 +990,7 @@ export function ProfileScreen() {
               title="Log out on all devices"
               variant="secondary"
               loading={busy}
-              onPress={() =>
-                RNAlert.alert(
-                  "Log out on all devices?",
-                  "Every device signed in to this account — including this one — will be signed out. You'll need your password to get back in.",
-                  [
-                    { text: "Cancel", style: "cancel" },
-                    { text: "Log out everywhere", style: "destructive", onPress: () => void logoutEverywhere() },
-                  ],
-                )
-              }
+              onPress={() => setSignOutEverywhereOpen(true)}
             />
           </Card>
 
@@ -765,6 +1024,11 @@ export function ProfileScreen() {
       </KeyboardAvoidingView>
 
       <SignOutSheet visible={signOutOpen} onClose={() => setSignOutOpen(false)} />
+      <SignOutSheet
+        visible={signOutEverywhereOpen}
+        scope="all"
+        onClose={() => setSignOutEverywhereOpen(false)}
+      />
     </Screen>
   );
 }

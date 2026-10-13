@@ -224,4 +224,38 @@ describe("scanUnusualExpenses cost", () => {
   it("stays correct on the large category, not just fast", () => {
     checkParity(bigCategory(400));
   });
+
+  /*
+   * The exact-recompute fallback has two arms. The dominant-term arm is
+   * bounded by a counting argument — a candidate's own squared deviation has
+   * to exceed an eighth of a total containing it, so at most ~9 per category
+   * qualify. The non-positive arm has no such bound: a category of N
+   * identical amounts has a sum of squared deviations of exactly zero, so
+   * every one of the N falls through it and the scan is quadratic again on
+   * the one input shape most likely to occur at scale (a fixed rent, a
+   * repeated supplier charge, a bulk import of one amount).
+   */
+  it("does not go quadratic on a category of identical amounts", () => {
+    const identical = (size: number) => new Map([[1, records(Array(size).fill(1500))]]);
+
+    const referenceStart = performance.now();
+    referenceScan(identical(500), () => true);
+    const referenceMs = performance.now() - referenceStart;
+
+    const scanStart = performance.now();
+    scanUnusualExpenses(identical(2_000), () => true);
+    const scanMs = performance.now() - scanStart;
+
+    // Same yardstick as the test above: four times the records against the
+    // original loop on a quarter of them. Quadratic is ~16x the reference.
+    expect(scanMs).toBeLessThan(referenceMs);
+  });
+
+  it("reports the same nothing on an identical-amount category, budget or not", () => {
+    // Nothing is unusual when every amount is the same, and that has to hold
+    // past the point where the budget stops recomputing: a non-positive
+    // shifted sum means no measurable spread, so the clamped amortised
+    // variance and an exact recompute both say zero.
+    checkParity(new Map([[1, records(Array(500).fill(1500))]]));
+  });
 });

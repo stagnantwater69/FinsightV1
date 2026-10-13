@@ -1,7 +1,16 @@
 import { prisma } from "../config/prisma";
 import { ApiError } from "../middleware/error.middleware";
-import { uploadBusinessLogo } from "./storage.service";
-import type { BusinessProfile } from "@prisma/client";
+import {
+  deletePublicImageUrl,
+  deleteSupersededPublicImages,
+  PUBLIC_IMAGE_UPLOAD_TRANSACTION_TIMEOUT_MS,
+  publicImagePathFromUrl,
+  uploadBusinessLogo,
+  validatePublicImageUpload,
+} from "./storage.service";
+import { AccountStatus, CsvImportProcessingStatus, Prisma, type BusinessProfile } from "@prisma/client";
+import { resolveBusinessToday, utcStartOfMonth } from "../lib/dates";
+import { lockExpenseDuplicateWriteGate, lockSalesDuplicateWriteGate } from "../lib/recordLock";
 
 interface CreateInput {
   name: string;
@@ -33,13 +42,20 @@ type ProfileWithCount = BusinessProfile & {
   _count: { expenseRecords: number; salesReferenceRecords: number };
 };
 
+type BusinessProfileDb = Prisma.TransactionClient | typeof prisma;
+
 function toDTO(profile: ProfileWithCount) {
   return {
     id: profile.id,
     name: profile.name,
     type: profile.type,
     availableFunds: Number(profile.availableFunds),
+    availableFundsBaselineAt: profile.availableFundsBaselineAt,
+    availableFundsBaselineDate: profile.availableFundsBaselineDate.toISOString().slice(0, 10),
     expectedMonthlyExpenses: Number(profile.expectedMonthlyExpenses),
+    expenseRecordsCompleteThroughMonth:
+      profile.expenseRecordsCompleteThroughMonth?.toISOString().slice(0, 7) ?? null,
+    expenseRecordsCompleteThroughConfirmedAt: profile.expenseRecordsCompleteThroughConfirmedAt,
     operatingDays: profile.operatingDays,
     largeExpenseThresholdPercent: Number(profile.largeExpenseThresholdPercent),
     timezone: profile.timezone,
@@ -53,17 +69,41 @@ function toDTO(profile: ProfileWithCount) {
 
 // Never distinguish "doesn't exist" from "exists but belongs to someone
 // else" in the error — both return 404, so ownership can't be probed.
-async function findOwned(userId: number, id: number): Promise<ProfileWithCount> {
-  const profile = await prisma.businessProfile.findFirst({ where: { id, userId }, include: withRecordCount });
+async function findOwned(
+  userId: number,
+  id: number,
+  db: BusinessProfileDb = prisma,
+): Promise<ProfileWithCount> {
+  const profile = await db.businessProfile.findFirst({ where: { id, userId }, include: withRecordCount });
   if (!profile) {
     throw new ApiError(404, "Business profile not found");
   }
   return profile;
 }
 
+async function findActiveCsvImport(db: BusinessProfileDb, businessProfileId: number) {
+  return db.cSVImportBatch.findFirst({
+    where: {
+      businessProfileId,
+      processingStatus: {
+        in: [CsvImportProcessingStatus.PENDING, CsvImportProcessingStatus.PROCESSING],
+      },
+    },
+    select: { id: true },
+  });
+}
+
 export async function createBusinessProfile(userId: number, input: CreateInput) {
+  const availableFundsBaselineAt = new Date();
+  const timezone = input.timezone ?? "Asia/Manila";
   const profile = await prisma.businessProfile.create({
-    data: { userId, ...input },
+    data: {
+      userId,
+      ...input,
+      timezone,
+      availableFundsBaselineAt,
+      availableFundsBaselineDate: resolveBusinessToday(timezone, availableFundsBaselineAt),
+    },
     include: withRecordCount,
   });
   return toDTO(profile);
@@ -120,9 +160,110 @@ export async function getBusinessProfile(userId: number, id: number) {
 }
 
 export async function updateBusinessProfile(userId: number, id: number, input: UpdateInput) {
-  await findOwned(userId, id);
-  const profile = await prisma.businessProfile.update({ where: { id }, data: input, include: withRecordCount });
-  return toDTO(profile);
+  return prisma.$transaction(async (tx) => {
+    let existing = await findOwned(userId, id, tx);
+    const changesFunds = input.availableFunds !== undefined
+      && !existing.availableFunds.equals(new Prisma.Decimal(input.availableFunds));
+
+    if (!changesFunds) {
+      const profile = await tx.businessProfile.update({ where: { id }, data: input, include: withRecordCount });
+      return toDTO(profile);
+    }
+
+    const activeImport = await findActiveCsvImport(tx, id);
+    if (activeImport) {
+      throw new ApiError(409, "Wait for the active CSV import to finish before updating available funds", {
+        code: "AVAILABLE_FUNDS_IMPORT_IN_PROGRESS",
+      });
+    }
+
+    // The same lock order is used by mixed CSV chunks, preventing an anchor
+    // from landing between an expense write and a sales write.
+    await lockExpenseDuplicateWriteGate(tx, id);
+    await lockSalesDuplicateWriteGate(tx, id);
+
+    existing = await findOwned(userId, id, tx);
+    if (existing.availableFunds.equals(new Prisma.Decimal(input.availableFunds!))) {
+      const profile = await tx.businessProfile.update({ where: { id }, data: input, include: withRecordCount });
+      return toDTO(profile);
+    }
+    const importAfterLock = await findActiveCsvImport(tx, id);
+    if (importAfterLock) {
+      throw new ApiError(409, "Wait for the active CSV import to finish before updating available funds", {
+        code: "AVAILABLE_FUNDS_IMPORT_IN_PROGRESS",
+      });
+    }
+
+    const availableFundsBaselineAt = new Date(Math.max(
+      Date.now(),
+      existing.availableFundsBaselineAt.getTime() + 1,
+    ));
+    const timezone = input.timezone ?? existing.timezone;
+    const profile = await tx.businessProfile.update({
+      where: { id },
+      data: {
+        ...input,
+        availableFundsBaselineAt,
+        availableFundsBaselineDate: resolveBusinessToday(timezone, availableFundsBaselineAt),
+      },
+      include: withRecordCount,
+    });
+    const classification = {
+      includedInAvailableFundsBaseline: true,
+      availableFundsDeltaBaselineAt: availableFundsBaselineAt,
+    } as const;
+    await tx.expenseRecord.updateMany({
+      where: { businessProfileId: id, date: profile.availableFundsBaselineDate },
+      data: classification,
+    });
+    await tx.salesReferenceRecord.updateMany({
+      where: { businessProfileId: id, date: profile.availableFundsBaselineDate },
+      data: classification,
+    });
+    return toDTO(profile);
+  });
+}
+
+function monthKeyToDate(monthKey: string): Date {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(monthKey)) {
+    throw new ApiError(400, "completeThroughMonth must be in YYYY-MM format");
+  }
+  return new Date(`${monthKey}-01T00:00:00.000Z`);
+}
+
+export async function updateExpenseRecordsCompleteness(
+  userId: number,
+  id: number,
+  completeThroughMonth: string | null,
+) {
+  return prisma.$transaction(async (tx) => {
+    const existing = await findOwned(userId, id, tx);
+    const month = completeThroughMonth === null ? null : monthKeyToDate(completeThroughMonth);
+
+    if (month) {
+      const currentMonth = utcStartOfMonth(resolveBusinessToday(existing.timezone));
+      if (month >= currentMonth) {
+        throw new ApiError(400, "Only a completed month can be marked as having complete expense records", {
+          code: "EXPENSE_RECORDS_MONTH_NOT_COMPLETE",
+        });
+      }
+      if (await findActiveCsvImport(tx, id)) {
+        throw new ApiError(409, "Wait for the active CSV import to finish before confirming expense records", {
+          code: "EXPENSE_RECORDS_IMPORT_IN_PROGRESS",
+        });
+      }
+    }
+
+    const profile = await tx.businessProfile.update({
+      where: { id },
+      data: {
+        expenseRecordsCompleteThroughMonth: month,
+        expenseRecordsCompleteThroughConfirmedAt: month ? new Date() : null,
+      },
+      include: withRecordCount,
+    });
+    return toDTO(profile);
+  });
 }
 
 export async function updateBusinessLogo(
@@ -132,8 +273,32 @@ export async function updateBusinessLogo(
   mimetype: string,
   originalname: string,
 ) {
-  await findOwned(userId, id);
-  const logoUrl = await uploadBusinessLogo(id, buffer, mimetype, originalname);
-  const profile = await prisma.businessProfile.update({ where: { id }, data: { logoUrl }, include: withRecordCount });
+  const validatedImage = await validatePublicImageUpload(buffer, mimetype);
+  const result = await prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<Array<{ status: AccountStatus }>>(Prisma.sql`
+      SELECT "User_Status" AS status
+      FROM "User"
+      WHERE "User_ID" = ${userId}
+      FOR UPDATE
+    `);
+    const owner = rows[0];
+    if (!owner) throw new ApiError(404, "Business profile not found");
+    if (owner.status !== AccountStatus.ACTIVE) {
+      throw new ApiError(403, "This account is not active.", { code: "ACCOUNT_NOT_ACTIVE" });
+    }
+
+    const existing = await findOwned(userId, id, tx);
+    const logoUrl = await uploadBusinessLogo(id, buffer, mimetype, originalname, validatedImage);
+    const profile = await tx.businessProfile.update({ where: { id }, data: { logoUrl }, include: withRecordCount });
+    return { profile, previousUrl: existing.logoUrl, logoUrl };
+  }, { timeout: PUBLIC_IMAGE_UPLOAD_TRANSACTION_TIMEOUT_MS });
+
+  const previousPath = result.previousUrl ? publicImagePathFromUrl(result.previousUrl) : null;
+  const currentPath = publicImagePathFromUrl(result.logoUrl);
+  if (result.previousUrl && previousPath && previousPath !== currentPath) {
+    await deletePublicImageUrl(result.previousUrl);
+  }
+  await deleteSupersededPublicImages(`businesses/${id}`);
+  const { profile } = result;
   return toDTO(profile);
 }

@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { api, setSessionExpiredHandler } from "../lib/api";
+import { beginServerStateSession, endServerStateSession } from "../lib/serverStateCache";
 import type { LoginInput, Profile, RegisterInput, UpdateProfileInput, UserPreferences } from "../lib/types";
 
 interface AuthContextValue {
@@ -30,7 +31,7 @@ interface AuthContextValue {
    */
   register: (input: RegisterInput) => Promise<{ message: string }>;
   logout: () => Promise<void>;
-  /** Ends every session on every device, not just this browser's. */
+  /** Revokes every refresh session and clears this browser after confirmation. */
   logoutEverywhere: () => Promise<void>;
   updateProfile: (input: UpdateProfileInput) => Promise<void>;
   uploadAvatar: (file: File) => Promise<void>;
@@ -73,6 +74,11 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+interface AccountSessionGuard {
+  generation: number;
+  userId: number | null;
+}
+
 async function fetchProfile(): Promise<Profile | null> {
   try {
     const { data } = await api.get<Profile>("/auth/me");
@@ -89,6 +95,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // `null` is "not loaded", which is why this is not simply seeded with the
   // defaults — the tour has to be able to tell the two apart.
   const [preferences, setPreferences] = useState<UserPreferences | null>(null);
+  const sessionGenerationRef = useRef(0);
+  const expectedUserIdRef = useRef<number | null>(null);
+  const accountRequestControllersRef = useRef(new Set<AbortController>());
+
+  const replaceExpectedAccount = useCallback((userId: number | null): AccountSessionGuard => {
+    for (const controller of accountRequestControllersRef.current) controller.abort();
+    accountRequestControllersRef.current.clear();
+    const generation = ++sessionGenerationRef.current;
+    expectedUserIdRef.current = userId;
+    return { generation, userId };
+  }, []);
+
+  const captureExpectedAccount = useCallback((): AccountSessionGuard => ({
+    generation: sessionGenerationRef.current,
+    userId: expectedUserIdRef.current,
+  }), []);
+
+  const accountIsCurrent = useCallback((guard: AccountSessionGuard): boolean => (
+    sessionGenerationRef.current === guard.generation && expectedUserIdRef.current === guard.userId
+  ), []);
+
+  const beginAccountRequest = useCallback((): AbortController => {
+    const controller = new AbortController();
+    accountRequestControllersRef.current.add(controller);
+    return controller;
+  }, []);
+
+  const finishAccountRequest = useCallback((controller: AbortController) => {
+    accountRequestControllersRef.current.delete(controller);
+  }, []);
 
   /*
    * Clearing `profile` is what performs the redirect: ProtectedRoute renders
@@ -105,15 +141,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // during the initial profile fetch is just "not logged in", and telling a
       // first-time visitor their session expired would be a lie.
       if (signedInRef.current) setSessionExpired(true);
+      replaceExpectedAccount(null);
+      endServerStateSession();
       setProfile(null);
       setPreferences(null);
-      void supabase.auth.signOut();
+      void supabase.auth.signOut({ scope: "local" });
     });
     return () => setSessionExpiredHandler(null);
-  }, []);
+  }, [replaceExpectedAccount]);
 
   useEffect(() => {
     let active = true;
+    const bootstrapGuard = replaceExpectedAccount(null);
+    endServerStateSession();
 
     /*
      * `loading` MUST end up false on every path, including the failing ones.
@@ -129,18 +169,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     supabase.auth
       .getSession()
       .then(async ({ data }) => {
-        if (!active) return;
+        if (!active || !accountIsCurrent(bootstrapGuard)) return;
         if (data.session) {
           const me = await fetchProfile();
+          if (!active || !accountIsCurrent(bootstrapGuard) || !me) return;
+          replaceExpectedAccount(me.id);
+          beginServerStateSession(me.id);
           setProfile(me);
           // A failed /auth/me leaves `profile` null and the app on the login
           // screen, so there is nothing to hold preferences for.
-          if (me) setPreferences(me.preferences ?? DEFAULT_PREFERENCES);
+          setPreferences(me.preferences ?? DEFAULT_PREFERENCES);
         }
       })
       .catch((err) => {
         console.error("Could not read the stored session:", err);
-        if (active) setProfile(null);
+        if (active && accountIsCurrent(bootstrapGuard)) setProfile(null);
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -148,6 +191,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const { data: subscription } = supabase.auth.onAuthStateChange((event) => {
       if (event === "SIGNED_OUT") {
+        replaceExpectedAccount(null);
+        endServerStateSession();
         setProfile(null);
         setPreferences(null);
       }
@@ -157,7 +202,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       active = false;
       subscription.subscription.unsubscribe();
     };
-  }, []);
+  }, [accountIsCurrent, replaceExpectedAccount]);
 
   /*
    * The shared tail of every sign-in, whatever proved the identity.
@@ -171,11 +216,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     tokens: { accessToken: string; refreshToken: string },
     nextProfile: Profile
   ) {
-    await supabase.auth.setSession({
-      access_token: tokens.accessToken,
-      refresh_token: tokens.refreshToken,
-    });
+    const previousUserId = expectedUserIdRef.current;
+    const installGuard = replaceExpectedAccount(nextProfile.id);
+    endServerStateSession();
+    try {
+      await supabase.auth.setSession({
+        access_token: tokens.accessToken,
+        refresh_token: tokens.refreshToken,
+      });
+    } catch (err) {
+      if (accountIsCurrent(installGuard)) {
+        replaceExpectedAccount(previousUserId);
+        if (previousUserId === null) endServerStateSession();
+        else beginServerStateSession(previousUserId);
+      }
+      throw err;
+    }
+    if (!accountIsCurrent(installGuard)) return;
+    beginServerStateSession(nextProfile.id);
     setSessionExpired(false);
+    setPreferences(null);
     setProfile(nextProfile);
     /*
      * POST /auth/login answers with the identity block only — preferences ride
@@ -187,10 +247,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
      * to get past the login form would be paying for the wrong thing. Callers
      * that must wait check `preferencesLoaded`.
      */
+    const preferencesController = beginAccountRequest();
     void api
-      .get<Profile>("/auth/me")
-      .then(({ data: me }) => setPreferences(me.preferences ?? DEFAULT_PREFERENCES))
-      .catch(() => setPreferences(DEFAULT_PREFERENCES));
+      .get<Profile>("/auth/me", { signal: preferencesController.signal })
+      .then(({ data: me }) => {
+        if (accountIsCurrent(installGuard) && me.id === installGuard.userId) {
+          setPreferences(me.preferences ?? DEFAULT_PREFERENCES);
+        }
+      })
+      .catch(() => {
+        if (accountIsCurrent(installGuard)) setPreferences(DEFAULT_PREFERENCES);
+      })
+      .finally(() => finishAccountRequest(preferencesController));
   }
 
   async function login(input: LoginInput) {
@@ -214,26 +282,54 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function logout() {
+    replaceExpectedAccount(null);
+    endServerStateSession();
     // Local scope: this browser only. "Log out everywhere" is a separate,
     // deliberate action — see below.
     await api.post("/auth/logout").catch(() => undefined);
-    await supabase.auth.signOut();
+    if (expectedUserIdRef.current !== null) return;
+    await supabase.auth.signOut({ scope: "local" });
+    if (expectedUserIdRef.current !== null) return;
     setSessionExpired(false);
     setProfile(null);
     setPreferences(null);
   }
 
   async function logoutEverywhere() {
-    await api.post("/auth/logout-all").catch(() => undefined);
-    await supabase.auth.signOut();
+    const previousUserId = expectedUserIdRef.current;
+    const logoutGuard = replaceExpectedAccount(null);
+    endServerStateSession();
+    // Do not clear this browser until the server confirms remote revocation.
+    try {
+      await api.post("/auth/logout-all");
+    } catch (err) {
+      if (accountIsCurrent(logoutGuard)) {
+        replaceExpectedAccount(previousUserId);
+        if (previousUserId !== null) beginServerStateSession(previousUserId);
+      }
+      throw err;
+    }
+    if (!accountIsCurrent(logoutGuard)) return;
+    // Remote revocation is authoritative, so local cleanup is best-effort.
+    await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
+    if (expectedUserIdRef.current !== null) return;
     setSessionExpired(false);
     setProfile(null);
     setPreferences(null);
   }
 
   async function updateProfile(input: UpdateProfileInput) {
-    const { data } = await api.patch<Profile>("/auth/me", input);
-    setProfile(data);
+    const account = captureExpectedAccount();
+    if (account.userId === null) return;
+    const controller = beginAccountRequest();
+    try {
+      const { data } = await api.patch<Profile>("/auth/me", input, { signal: controller.signal });
+      if (account.userId !== null && accountIsCurrent(account) && data.id === account.userId) {
+        setProfile(data);
+      }
+    } finally {
+      finishAccountRequest(controller);
+    }
   }
 
   /*
@@ -258,26 +354,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   preferencesRef.current = preferences;
 
   const updatePreferences = useCallback(async (patch: Partial<UserPreferences>) => {
+    const account = captureExpectedAccount();
+    if (account.userId === null) return;
+    const controller = beginAccountRequest();
     const previous = preferencesRef.current;
     setPreferences((prev) => ({ ...(prev ?? DEFAULT_PREFERENCES), ...patch }));
     try {
-      const { data } = await api.patch<UserPreferences>("/auth/me/preferences", patch);
+      const { data } = await api.patch<UserPreferences>("/auth/me/preferences", patch, {
+        signal: controller.signal,
+      });
       // The response is the whole preferences object, not the echo of the
       // patch — so this also picks up anything another device changed.
-      setPreferences(data);
+      if (accountIsCurrent(account)) setPreferences(data);
     } catch (err) {
-      setPreferences(previous);
+      if (accountIsCurrent(account)) setPreferences(previous);
       throw err;
+    } finally {
+      finishAccountRequest(controller);
     }
-  }, []);
+  }, [accountIsCurrent, beginAccountRequest, captureExpectedAccount, finishAccountRequest]);
 
   async function uploadAvatar(file: File) {
+    const account = captureExpectedAccount();
+    if (account.userId === null) return;
+    const controller = beginAccountRequest();
     const formData = new FormData();
     formData.append("file", file);
-    const { data } = await api.post<Profile>("/auth/me/avatar", formData, {
-      headers: { "Content-Type": "multipart/form-data" },
-    });
-    setProfile(data);
+    try {
+      const { data } = await api.post<Profile>("/auth/me/avatar", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+        signal: controller.signal,
+      });
+      if (account.userId !== null && accountIsCurrent(account) && data.id === account.userId) {
+        setProfile(data);
+      }
+    } finally {
+      finishAccountRequest(controller);
+    }
   }
 
   return (

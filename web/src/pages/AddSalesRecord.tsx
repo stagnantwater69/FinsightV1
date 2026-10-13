@@ -7,9 +7,10 @@ import { FormPage } from "../components/ui";
 import { Button } from "../components/Button";
 import { useToast } from "../components/Toast";
 import { Field, FormError, MoneyInput, TextInput } from "../components/Field";
+import { TransactionDateField, useTransactionDate } from "../components/TransactionDateField";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
 import { NoBusinessProfile } from "../components/NoBusinessProfile";
-import { todayIso as today } from "../lib/dates";
+import { AvailableFundsBaselineChoice, useAvailableFundsBaselineChoice } from "../components/AvailableFundsBaselineChoice";
 
 interface DuplicateSalesState {
   description: string;
@@ -20,9 +21,10 @@ export function AddSalesRecord() {
   const { selected } = useBusinessProfiles();
   const navigate = useNavigate();
   const toast = useToast();
-  // Prefilled by the "Duplicate" action on Records — date is left at today().
+  // Prefilled by the "Duplicate" action on Records. The date starts at today.
   const duplicateFrom = (useLocation().state as { duplicateFrom?: DuplicateSalesState } | null)?.duplicateFrom;
-  const [date, setDate] = useState(today());
+  const dateField = useTransactionDate();
+  const baselineChoice = useAvailableFundsBaselineChoice(dateField.date);
   const [description, setDescription] = useState(duplicateFrom?.description ?? "Daily sales");
   const [amount, setAmount] = useState<number | "">(duplicateFrom?.amount ?? "");
   const [error, setError] = useState<string | null>(null);
@@ -32,20 +34,22 @@ export function AddSalesRecord() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    if (!dateField.check() || !baselineChoice.check()) return;
     if (amount === "") return;
     setError(null);
     setSubmitting(true);
     try {
       await api.post("/records/sales", {
         businessProfileId: selected!.id,
-        date,
+        date: dateField.date,
         description,
         amount,
+        ...baselineChoice.requestFields(),
       });
       toast("Sales reference saved");
       navigate("/records");
     } catch (err) {
-      setError(getErrorMessage(err));
+      if (!dateField.absorb(err) && !(await baselineChoice.absorb(err))) setError(getErrorMessage(err));
     } finally {
       setSubmitting(false);
     }
@@ -54,9 +58,8 @@ export function AddSalesRecord() {
   return (
     <FormPage eyebrow="Records" title="Add sales reference">
       <form onSubmit={handleSubmit} className="space-y-4">
-        <Field label="Date" htmlFor="date" required>
-          <TextInput type="date" required value={date} onChange={(e) => setDate(e.target.value)} />
-        </Field>
+        <TransactionDateField field={dateField} />
+        <AvailableFundsBaselineChoice choice={baselineChoice} disabled={submitting} />
         <Field label="Description" htmlFor="description" required>
           <TextInput required value={description} onChange={(e) => setDescription(e.target.value)}
             maxLength={FIELD_LIMITS.recordDescription}
@@ -71,7 +74,7 @@ export function AddSalesRecord() {
           />
         </Field>
         {error ? <FormError>{error}</FormError> : null}
-        <Button type="submit" variant="primary" fullWidth disabled={submitting}>
+        <Button type="submit" variant="primary" fullWidth disabled={submitting || dateField.invalid}>
           {submitting ? "Saving…" : "Save sales reference"}
         </Button>
       </form>

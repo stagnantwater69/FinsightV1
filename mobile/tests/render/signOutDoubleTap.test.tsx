@@ -18,10 +18,12 @@ import { render, fireEvent } from '@testing-library/react-native';
  */
 
 const logout = vi.fn();
+const logoutEverywhere = vi.fn();
 
 vi.mock('../../src/context/AuthContext', () => ({
   useAuth: () => ({
     logout,
+    logoutEverywhere,
     login: vi.fn(),
     register: vi.fn(),
     profile: null,
@@ -57,4 +59,5 @@ describe('SignOutSheet — double tap', () => {
     finish();
     await Promise.all([first, second]);
   });
+
 });

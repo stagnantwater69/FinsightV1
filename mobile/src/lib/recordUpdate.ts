@@ -19,12 +19,16 @@ export interface ExpenseUpdatePayload {
   /** null CLEARS a vendor. The server's expense schema takes it as nullable. */
   vendor: string | null;
   amount: number;
+  includedInAvailableFundsBaseline?: boolean;
+  availableFundsBaselineAt?: string;
 }
 
 export interface SalesUpdatePayload {
   date: string;
   description: string;
   amount: number;
+  includedInAvailableFundsBaseline?: boolean;
+  availableFundsBaselineAt?: string;
 }
 
 export interface RecordUpdateInput {
@@ -35,6 +39,20 @@ export interface RecordUpdateInput {
   categoryId?: number | null;
   /** Expense only; ignored for a sales record. */
   vendor?: string;
+  includedInAvailableFundsBaseline?: boolean;
+  availableFundsBaselineAt?: string;
+}
+
+function baselineFields(input: RecordUpdateInput) {
+  const hasDecision = input.includedInAvailableFundsBaseline !== undefined;
+  const hasToken = input.availableFundsBaselineAt !== undefined;
+  if (hasDecision !== hasToken) throw new Error("A recorded-balance decision and its balance token must be sent together");
+  return hasDecision && hasToken
+    ? {
+        includedInAvailableFundsBaseline: input.includedInAvailableFundsBaseline!,
+        availableFundsBaselineAt: input.availableFundsBaselineAt!,
+      }
+    : {};
 }
 
 /** Where the edit is sent. Kept next to the payload so the two cannot disagree. */
@@ -55,6 +73,7 @@ export function buildExpenseUpdatePayload(input: RecordUpdateInput): ExpenseUpda
     // "there is no vendor", and an empty string would store one that is blank.
     vendor: vendor === "" ? null : vendor,
     amount: input.amount,
+    ...baselineFields(input),
   };
 }
 
@@ -63,5 +82,6 @@ export function buildSalesUpdatePayload(input: RecordUpdateInput): SalesUpdatePa
     date: input.date,
     description: input.description.trim(),
     amount: input.amount,
+    ...baselineFields(input),
   };
 }

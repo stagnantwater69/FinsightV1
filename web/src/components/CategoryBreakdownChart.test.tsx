@@ -141,7 +141,7 @@ describe("CategoryBreakdownChart overflow control", () => {
 
   it("shows the empty state, and no toggle, with nothing to chart", () => {
     renderChart({ breakdown: [] });
-    expect(screen.getByText("No expenses in this period yet")).toBeInTheDocument();
+    expect(screen.getByText("No expenses in this period")).toBeInTheDocument();
     expect(screen.queryByRole("button")).toBeNull();
   });
 });

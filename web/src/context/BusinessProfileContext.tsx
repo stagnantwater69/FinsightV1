@@ -2,7 +2,11 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import { api } from "../lib/api";
 import { getErrorMessage } from "../lib/errors";
 import { useAuth } from "./AuthContext";
-import type { BusinessProfile, BusinessProfileInput } from "../lib/types";
+import type {
+  BusinessProfile,
+  BusinessProfileInput,
+  FinancialPosition,
+} from "../lib/types";
 
 interface BusinessProfileContextValue {
   profiles: BusinessProfile[];
@@ -25,6 +29,11 @@ interface BusinessProfileContextValue {
   selectProfile: (id: number) => void;
   createProfile: (input: BusinessProfileInput) => Promise<BusinessProfile>;
   updateProfile: (id: number, input: Partial<BusinessProfileInput>) => Promise<BusinessProfile>;
+  getFinancialPosition: (id: number, signal?: AbortSignal) => Promise<FinancialPosition>;
+  setExpenseRecordsCompleteThroughMonth: (
+    id: number,
+    completeThroughMonth: string | null,
+  ) => Promise<FinancialPosition>;
   uploadLogo: (id: number, file: File) => Promise<BusinessProfile>;
   archiveProfile: (id: number) => Promise<void>;
   restoreProfile: (id: number) => Promise<void>;
@@ -95,6 +104,38 @@ export function BusinessProfileProvider({ children }: { children: ReactNode }) {
     return data;
   }
 
+  async function getFinancialPosition(id: number, signal?: AbortSignal) {
+    const { data } = await api.get<FinancialPosition>(
+      `/business-profiles/${id}/financial-position`,
+      { signal },
+    );
+    return data;
+  }
+
+  async function setExpenseRecordsCompleteThroughMonth(
+    id: number,
+    completeThroughMonth: string | null,
+  ) {
+    const { data } = await api.put<FinancialPosition>(
+      `/business-profiles/${id}/expense-records-completeness`,
+      { completeThroughMonth },
+    );
+    setProfiles((prev) =>
+      prev.map((profile) =>
+        profile.id === id
+          ? {
+              ...profile,
+              expenseRecordsCompleteThroughMonth:
+                data.monthlyExpenseBasis.recordsCompleteThroughMonth,
+              expenseRecordsCompleteThroughConfirmedAt:
+                data.monthlyExpenseBasis.recordsCompleteThroughConfirmedAt,
+            }
+          : profile,
+      ),
+    );
+    return data;
+  }
+
   async function uploadLogo(id: number, file: File) {
     const formData = new FormData();
     formData.append("file", file);
@@ -140,6 +181,8 @@ export function BusinessProfileProvider({ children }: { children: ReactNode }) {
         selectProfile,
         createProfile,
         updateProfile,
+        getFinancialPosition,
+        setExpenseRecordsCompleteThroughMonth,
         uploadLogo,
         archiveProfile,
         restoreProfile,

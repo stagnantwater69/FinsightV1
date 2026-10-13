@@ -4,6 +4,7 @@ import { utcAddDays, utcEndOfDay } from "../../lib/dates";
 import { DEFAULT_DETECTION_CONFIG, type DetectionConfig } from "./config";
 import { saveFinding } from "./finding.service";
 import { normalizeComparisonText } from "./nearDuplicate.service";
+import { runAnalysisMutation, type AnalysisMutationGuard } from "./mutationGuard";
 
 export const VELOCITY_VERSION = "velocity-v1";
 export const VELOCITY_WINDOWS = [1, 7, 30] as const;
@@ -93,6 +94,7 @@ export function evaluateVelocity(
 export async function detectVelocityForExpense(
   expenseRecordId: number,
   config: DetectionConfig = DEFAULT_DETECTION_CONFIG,
+  mutate: AnalysisMutationGuard = runAnalysisMutation,
 ) {
   if (!config.featureFlags.velocity) return null;
   const candidate = await prisma.expenseRecord.findUnique({ where: { id: expenseRecordId } });
@@ -113,7 +115,7 @@ export async function detectVelocityForExpense(
   const fingerprint = `${VELOCITY_VERSION}:${candidate.id}`;
 
   if (signals.length === 0) {
-    await prisma.anomalyFinding.updateMany({
+    await mutate((db) => db.anomalyFinding.updateMany({
       where: {
         businessProfileId: candidate.businessProfileId,
         expenseRecordId: candidate.id,
@@ -121,13 +123,13 @@ export async function detectVelocityForExpense(
         status: AnomalyFindingStatus.OPEN,
       },
       data: { status: AnomalyFindingStatus.SUPERSEDED },
-    });
+    }));
     return null;
   }
 
   const strongest = [...signals].sort((a, b) => b.countRatio - a.countRatio)[0]!;
   const scopeName = strongest.scope === "vendor" ? `vendor ${candidate.vendor}` : "category";
-  return saveFinding({
+  return mutate((db) => saveFinding({
     fingerprint,
     businessProfileId: candidate.businessProfileId,
     expenseRecordId: candidate.id,
@@ -151,5 +153,5 @@ export async function detectVelocityForExpense(
       signalCount: signals.length,
     },
     detectorVersion: VELOCITY_VERSION,
-  });
+  }, db));
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useTourOptional } from "../context/TourContext";
@@ -12,6 +12,9 @@ import { NotificationBell } from "./NotificationBell";
 import { SetupPrompt } from "./SetupPrompt";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { AccountMenu, initials } from "./AccountMenu";
+import { useFutureDatedRecords } from "../context/FutureDatedRecordsContext";
+import { PrefetchLink as Link } from "./PrefetchLink";
+import { prefetchPrimaryRoutes } from "../lib/routeLoaders";
 import {
   IconBusiness,
   IconCamera,
@@ -260,6 +263,7 @@ function SidebarLink({
 export function AppShell({ children }: { children: ReactNode }) {
   const { profile: user } = useAuth();
   const { selected } = useBusinessProfiles();
+  const futureDated = useFutureDatedRecords();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -292,6 +296,18 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { ref: addRef, triggerRef: addTriggerRef } = useDismiss(addOpen, () => setAddOpen(false));
   const onMenuKeys = useMenuKeys();
   const addTrapRef = useFocusTrap<HTMLDivElement>(addOpen && !tourHoldsAddMenu);
+
+  // Once the first page has had its turn, warm the other tabs' code so
+  // switching to them shows the page (or its skeleton) without a code wait.
+  useEffect(() => {
+    const warm = () => void prefetchPrimaryRoutes();
+    if (typeof window.requestIdleCallback === "function") {
+      const id = window.requestIdleCallback(warm, { timeout: 4000 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const id = window.setTimeout(warm, 1500);
+    return () => window.clearTimeout(id);
+  }, []);
 
   // Close transient chrome on navigation, or a menu lingers over the new page.
   useEffect(() => {
@@ -413,7 +429,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               >
                 <span aria-hidden className="relative flex h-11 w-11 items-center justify-center">
                   <span className="absolute inset-0 flex items-center justify-center rounded-xl opacity-100 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0">
-                    <img src="/finsight-logo.png" alt="" className="h-11 w-11 rounded-xl object-contain" />
+                    <img src="/newmascotlogo.png" alt="" className="h-11 w-11 rounded-xl object-contain" />
                   </span>
                   <span className="absolute inset-0 flex items-center justify-center rounded-xl bg-sidebar-fg/15 text-sidebar-muted opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
                     <IconSidebar className="h-5 w-5" />
@@ -429,7 +445,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               aria-label="FinSight home"
             >
               <img
-                src="/finsight-logo.png"
+                src="/newmascotlogo.png"
                 alt=""
                 aria-hidden
                 className="h-11 w-11 shrink-0 rounded-xl object-contain"
@@ -620,14 +636,19 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="flex min-w-0 flex-col">
         {/* ---------------------------- TOPBAR ---------------------------- */}
         <header className="sticky top-0 z-30 border-b border-paper-200 bg-paper/85 backdrop-blur">
-          <div className="shell flex h-[var(--topbar-h)] items-center gap-2">
+          {/* Wraps rather than overflows. At a 200px CSS viewport (400px at
+              200% browser zoom) the mark, search and action cluster cannot
+              share one line, and a fixed height forced the page to scroll
+              sideways instead. `min-h` + `py-1.5` keeps the unwrapped row at
+              exactly the old 56px. */}
+          <div className="shell flex min-h-[var(--topbar-h)] flex-wrap items-center gap-2 py-1.5">
             {/* Mark — the sidebar carries it from lg up, so this is mobile only. */}
             <Link
               to="/dashboard"
               className="flex shrink-0 items-center lg:hidden"
               aria-label="FinSight home"
             >
-              <img src="/finsight-logo.png" alt="" aria-hidden className="h-10 w-10 rounded-lg object-contain" />
+              <img src="/newmascotlogo.png" alt="" aria-hidden className="h-10 w-10 rounded-lg object-contain" />
             </Link>
 
             {/* ---- global search ----
@@ -639,7 +660,10 @@ export function AppShell({ children }: { children: ReactNode }) {
               <GlobalSearch className="hidden min-w-0 flex-1 md:block md:max-w-lg lg:max-w-xl" />
             ) : null}
 
-            <div className="ml-auto flex shrink-0 items-center gap-0.5 sm:gap-1">
+            {/* `shrink-0` stays: the search field is the flex item that should
+                give way first. `max-w-full` + `flex-wrap` only bind once the
+                row itself has wrapped, so nothing moves above ~360px. */}
+            <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-0.5 sm:gap-1">
               {/* Search collapses to an icon below `md`, where a full field
                   would crowd out everything else in the row. */}
               {selected ? (
@@ -654,8 +678,10 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </button>
               ) : null}
 
-              {/* ---- quick add ---- */}
-              {selected ? (
+              {/* ---- quick add ----
+                  Hidden while future-dated records are being corrected: new
+                  records wait until the books are back in order. */}
+              {selected && !futureDated.blocked ? (
                 <div ref={addRef} className="relative">
                   <button
                     ref={addTriggerRef}
@@ -837,7 +863,7 @@ export function InsightsTabs() {
               to={link.to}
               aria-current={active ? "page" : undefined}
               className={`flex min-h-tap items-center whitespace-nowrap rounded-lg px-4 text-[13.5px] font-semibold transition ${
-                active ? "bg-paper text-brand-800 shadow-sm" : "text-ink-500 hover:text-brand-800"
+                active ? "bg-paper text-tone-brand shadow-sm" : "text-ink-500 hover:text-tone-brand"
               }`}
             >
               {link.label}

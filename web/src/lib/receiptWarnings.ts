@@ -25,6 +25,8 @@ export const RECEIPT_WARNING_CODES = [
   "UNREADABLE_FIELD",
   /** Line items an outside provider read that do not add up to the total; prefilled for review, never validated. */
   "UNVERIFIED_ITEMS",
+  "OVERLAP_ITEMS_COUNTED_ONCE",
+  "POSSIBLE_REPEATED_ITEMS",
 ] as const;
 
 export type ReceiptWarningCode = (typeof RECEIPT_WARNING_CODES)[number];
@@ -58,7 +60,10 @@ export interface FieldEvidence {
  * counted twice, not because anything went wrong — an amber warning for
  * following the instructions is how a warning system loses its meaning.
  */
-const INFORMATIONAL: ReadonlySet<string> = new Set<ReceiptWarningCode>(["OVERLAPPING_PAGES"]);
+// OVERLAP_ITEMS_COUNTED_ONCE reports a repeat the receipt's own total
+// confirmed and that was already removed: a record of what happened, not a
+// problem to fix.
+const INFORMATIONAL: ReadonlySet<string> = new Set<ReceiptWarningCode>(["OVERLAPPING_PAGES", "OVERLAP_ITEMS_COUNTED_ONCE"]);
 
 export function warningTone(code: string): "info" | "warn" {
   return INFORMATIONAL.has(code) ? "info" : "warn";
@@ -77,6 +82,8 @@ const WARNING_HEADLINE: Record<ReceiptWarningCode, string> = {
   AMBIGUOUS_DATE: "The printed date could be read two ways",
   UNREADABLE_FIELD: "Part of this receipt couldn't be read",
   UNVERIFIED_ITEMS: "The AI-read items still need checking",
+  OVERLAP_ITEMS_COUNTED_ONCE: "Items in both photos were counted once",
+  POSSIBLE_REPEATED_ITEMS: "Some items may be counted twice",
 };
 
 export function warningHeadline(code: string): string {

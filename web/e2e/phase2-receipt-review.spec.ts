@@ -5,6 +5,21 @@ const ONE_PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   "base64",
 );
+const LONG_RECEIPT_PAGE_SVG = `
+  <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1600" viewBox="0 0 1000 1600">
+    <rect width="1000" height="1600" fill="#fffdf7"/>
+    <rect x="42" y="42" width="916" height="1516" rx="18" fill="none" stroke="#bbafa0" stroke-width="5"/>
+    <text x="250" y="130" text-anchor="middle" font-family="monospace" font-size="30" font-weight="700" fill="#173f37">RECEIPT TEST FIXTURE</text>
+    <text x="500" y="188" text-anchor="middle" font-family="monospace" font-size="30" fill="#4b635d">PAGE 2 OF 2</text>
+    <path d="M110 250H890 M110 360H890 M110 470H890 M110 580H890 M110 690H890 M110 800H890 M110 910H890 M110 1020H890 M110 1130H890" stroke="#8b8175" stroke-width="5" stroke-dasharray="20 16"/>
+    <text x="110" y="315" font-family="monospace" font-size="30" fill="#403b35">ITEM LINES CONTINUE</text>
+    <text x="110" y="425" font-family="monospace" font-size="30" fill="#403b35">SECOND PHOTO IN READING ORDER</text>
+    <rect x="110" y="1210" width="780" height="210" rx="12" fill="#e3f5ed" stroke="#2f7665" stroke-width="5"/>
+    <text x="150" y="1300" font-family="monospace" font-size="36" font-weight="700" fill="#173f37">TOTAL AREA</text>
+    <text x="150" y="1365" font-family="monospace" font-size="28" fill="#4b635d">Zoom and rotate verification</text>
+    <text x="500" y="1500" text-anchor="middle" font-family="monospace" font-size="26" fill="#6f665c">END OF TEST RECEIPT</text>
+  </svg>
+`;
 function receiptFile(name: string) {
   return { name, mimeType: "image/png", buffer: ONE_PIXEL_PNG };
 }
@@ -68,7 +83,14 @@ test.beforeEach(async ({ page }) => {
   await mockReceiptHistory(page);
   await page.route(/\/records\/receipts\/\d+\/duplicate-candidates(?:\?.*)?$/, async (route) => {
     await route.fulfill({
-      json: { sourceFingerprint: null, candidateSetHash: null, candidates: [], nextCursor: null },
+      json: {
+        sourceFingerprint: null,
+        candidateSetHash: null,
+        candidateCount: 0,
+        candidatesTruncated: false,
+        candidates: [],
+        nextCursor: null,
+      },
     });
   });
 });
@@ -132,7 +154,7 @@ test("accepts a durable batch in ordinal order before opening the first review",
   await expect(page.getByText("2 separate receipts", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Scan 2 receipts", exact: true }).click();
 
-  await expect(page.getByRole("heading", { name: "Check what FinSight read" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Review receipt" })).toBeVisible();
   await expect(page.locator("#vendor")).toHaveValue("Batch merchant 1");
   expect(events).toEqual(["batch", "upload-1", "upload-2"]);
   expect(uploads).toEqual([
@@ -230,7 +252,7 @@ test("rediscovers an accepted scan after reload and resumes review from stored e
   await expect(page.getByText("Reloaded merchant", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Review result, Reloaded merchant, receipt 2", exact: true }).click();
 
-  await expect(page.getByRole("heading", { name: "Check what FinSight read" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Review receipt" })).toBeVisible();
   await expect(page.getByRole("img", { name: "Source, receipt page 1 of 1" })).toBeVisible();
   expect(historyRequests).toBeGreaterThanOrEqual(2);
   expect(sourceRequests).toBeGreaterThanOrEqual(1);
@@ -282,7 +304,7 @@ test("reload after the first batch review exposes later receipts that were alrea
   await page.goto("/records/receipts/new");
   await chooseReceiptPhotos(page, ["first-accepted.png", "later-accepted.png"]);
   await page.getByRole("button", { name: "Scan 2 receipts", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Check what FinSight read" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Review receipt" })).toBeVisible();
   expect(uploads).toBe(2);
 
   await page.reload();
@@ -295,7 +317,7 @@ test("reload after the first batch review exposes later receipts that were alrea
   expect(uploads).toBe(2);
 });
 
-test("keeps long-receipt pages separate and loads signed derived evidence for zoom", async ({ page }) => {
+test("keeps long-receipt pages separate and loads signed derived evidence for zoom", async ({ page }, testInfo) => {
   let uploadBody = "";
   let derivedRequests = 0;
   const evidence = [1, 2].map((pageNumber) => ({
@@ -306,6 +328,11 @@ test("keeps long-receipt pages separate and loads signed derived evidence for zo
     source: { variant: "source", label: "Composite source", width: 1200, height: 1800 },
     derived: { variant: "derived", label: "Enhanced grayscale", width: 1000, height: 1600 },
   }));
+
+  await page.unroute("https://storage.example.test/**");
+  await page.route("https://storage.example.test/**", async (route) => {
+    await route.fulfill({ contentType: "image/svg+xml", body: LONG_RECEIPT_PAGE_SVG });
+  });
 
   await page.route(/\/records\/receipts(?:\?.*)?$/, async (route) => {
     if (route.request().method() !== "POST") return route.fallback();
@@ -365,9 +392,52 @@ test("keeps long-receipt pages separate and loads signed derived evidence for zo
   await expect(page.getByRole("button", { name: "Enhanced grayscale", exact: true })).toHaveAttribute("aria-pressed", "true");
   expect(derivedRequests).toBe(1);
 
+  await page.getByRole("button", { name: "Zoom in", exact: true }).click();
+  await expect(page.getByRole("button", { name: /Current zoom 125 percent/ })).toBeVisible();
+  const inlinePreview = page.getByRole("region", {
+    name: "Scrollable enhanced grayscale, receipt page 2 of 2",
+  });
+  await expect(inlinePreview).toHaveAttribute("tabindex", "0");
+  await expect(inlinePreview).toHaveClass(/overflow-auto/);
+  await expect(inlinePreview.locator(":scope > div")).toHaveAttribute("style", /width: 125%;/);
+
+  await page.getByRole("button", { name: "Rotate right", exact: true }).click();
+  await expect(inlinePreview.getByRole("img", {
+    name: "Enhanced grayscale, receipt page 2 of 2",
+  })).toHaveAttribute("style", /rotate\(90deg\)/);
+
+  await pages.getByRole("tab", { name: "View page 1 of 2" }).click();
+  await expect(page.getByRole("button", { name: /Current zoom 100 percent/ })).toBeVisible();
+  await expect(page.getByRole("img", { name: "Composite source, receipt page 1 of 2" }))
+    .toHaveAttribute("style", /rotate\(0deg\)/);
+
+  await pages.getByRole("tab", { name: "View page 2 of 2" }).click();
+  await expect(page.getByRole("button", { name: /Current zoom 125 percent/ })).toBeVisible();
+  await expect(page.getByRole("img", { name: "Composite source, receipt page 2 of 2" }))
+    .toHaveAttribute("style", /rotate\(90deg\)/);
+  await page.getByRole("button", { name: "Enhanced grayscale", exact: true }).click();
+  expect(derivedRequests).toBe(1);
+
   await page.getByRole("button", { name: "Enlarge enhanced grayscale, receipt page 2 of 2" }).click();
   const dialog = page.getByRole("dialog", { name: "Enlarged enhanced grayscale, receipt page 2 of 2" });
   await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("Page 2 of 2 at 125%", { exact: true })).toBeVisible();
+  const enlargedPreview = dialog.getByRole("region", {
+    name: "Scrollable enlarged enhanced grayscale, receipt page 2 of 2",
+  });
+  await expect(enlargedPreview).toHaveAttribute("tabindex", "0");
+  await expect(enlargedPreview).toHaveClass(/overflow-auto/);
+  await expect(enlargedPreview.getByRole("img", {
+    name: "Enhanced grayscale, receipt page 2 of 2, enlarged",
+  })).toHaveAttribute("style", /rotate\(90deg\)/);
+  await enlargedPreview.evaluate((region) => {
+    region.scrollTo({ left: region.scrollWidth, top: 0 });
+  });
+  await expect.poll(() => enlargedPreview.evaluate((region) => region.scrollLeft)).toBeGreaterThan(0);
+  await page.screenshot({
+    path: testInfo.outputPath("receipt-long-page-2-zoom-rotate-enlarged.png"),
+    fullPage: false,
+  });
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
 
@@ -403,7 +473,7 @@ test("retries failed processing from the accepted scan without uploading the ima
   await expect(page.getByRole("heading", { name: "Receipt needs another try" })).toBeVisible();
 
   await page.getByRole("button", { name: "Retry processing", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Check what FinSight read" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Review receipt" })).toBeVisible();
   expect(uploadRequests).toBe(1);
   expect(retryRequests).toBe(1);
 });

@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import { prisma } from "../config/prisma";
+import { logger } from "../config/logger";
 import { requestContext, securityEvent } from "../lib/securityLog";
+import { timeSpan } from "../lib/requestTiming";
 
 /**
  * A burst guard for the endpoints that spend real money.
@@ -82,6 +84,40 @@ export interface RateLimitOptions {
    * about to reject it anyway.
    */
   identify?: (req: Request) => string | undefined;
+  /** Error codes that prove the guarded operation never received a verdict. */
+  refundOnErrorCodes?: readonly string[];
+}
+
+interface RateLimitRefund {
+  errorCodes: readonly string[];
+  refund: () => Promise<void>;
+}
+
+type RefundLocals = Record<string, unknown> & { rateLimitRefunds?: RateLimitRefund[] };
+
+function registerRefund(
+  res: Response,
+  errorCodes: readonly string[] | undefined,
+  refund: () => Promise<void>,
+): void {
+  if (!errorCodes || errorCodes.length === 0) return;
+  const locals = res.locals as RefundLocals;
+  (locals.rateLimitRefunds ??= []).push({ errorCodes, refund });
+}
+
+/** Runs matching one-shot refunds before the error response is committed. */
+export function refundRateLimitsForError(res: Response, errorCode: string): Promise<void> | null {
+  if (!res.locals) return null;
+  const locals = res.locals as RefundLocals;
+  const registered = locals.rateLimitRefunds ?? [];
+  const matching = registered.filter((item) => item.errorCodes.includes(errorCode));
+  if (matching.length === 0) return null;
+  locals.rateLimitRefunds = registered.filter((item) => !matching.includes(item));
+  return Promise.all(
+    matching.map((item) => item.refund().catch((error) => {
+      logger.error({ err: error }, "Could not refund a rate-limit attempt after an unavailable dependency");
+    })),
+  ).then(() => undefined);
 }
 
 /**
@@ -158,7 +194,7 @@ export function humanRetryAfter(seconds: number): string {
   return `${hours} hour${hours === 1 ? "" : "s"}`;
 }
 
-export function rateLimit({ name, limit, windowMs, identify }: RateLimitOptions) {
+export function rateLimit({ name, limit, windowMs, identify, refundOnErrorCodes }: RateLimitOptions) {
   // Unit tests deliberately exercise the deterministic clock-based backend.
   // Deployed processes use Postgres below, making the same limit survive
   // restarts and apply once across every replica.
@@ -168,7 +204,11 @@ export function rateLimit({ name, limit, windowMs, identify }: RateLimitOptions)
       if (identity === undefined) return next();
       const key = `${name}:${identity}`;
       try {
-        const rows = await prisma.$queryRaw<Array<{ count: number; expiresAt: Date }>>`
+        const rows = await timeSpan("ratelimit", () => prisma.$queryRaw<Array<{
+          count: number;
+          expiresAt: Date;
+          windowToken: string;
+        }>>`
           INSERT INTO "ApiRateLimit" (
             "ApiRateLimit_Key", "ApiRateLimit_WindowStart", "ApiRateLimit_Count", "ApiRateLimit_ExpiresAt"
           ) VALUES (
@@ -185,8 +225,11 @@ export function rateLimit({ name, limit, windowMs, identify }: RateLimitOptions)
               WHEN "ApiRateLimit"."ApiRateLimit_ExpiresAt" <= CURRENT_TIMESTAMP
                 THEN CURRENT_TIMESTAMP + (${windowMs} * INTERVAL '1 millisecond')
               ELSE "ApiRateLimit"."ApiRateLimit_ExpiresAt" END
-          RETURNING "ApiRateLimit_Count" AS count, "ApiRateLimit_ExpiresAt" AS "expiresAt"
-        `;
+          RETURNING
+            "ApiRateLimit_Count" AS count,
+            "ApiRateLimit_ExpiresAt" AS "expiresAt",
+            (EXTRACT(EPOCH FROM "ApiRateLimit_ExpiresAt") * 1000)::bigint::text AS "windowToken"
+        `);
         const bucket = rows[0]!;
         const resetSeconds = Math.max(1, Math.ceil((bucket.expiresAt.getTime() - Date.now()) / 1000));
         res.setHeader("RateLimit-Limit", String(limit));
@@ -196,11 +239,28 @@ export function rateLimit({ name, limit, windowMs, identify }: RateLimitOptions)
           res.setHeader("Retry-After", String(resetSeconds));
           securityEvent("ratelimit.exhausted", { ...requestContext(req), limiter: name });
           return res.status(429).json({
+            code: "RATE_LIMITED",
+            retryAfterSeconds: resetSeconds,
             error: `Too many requests in a short time. Please wait about ${humanRetryAfter(
               resetSeconds,
             )} and try again.`,
           });
         }
+        registerRefund(res, refundOnErrorCodes, async () => {
+          const affected = await prisma.$executeRaw`
+            UPDATE "ApiRateLimit"
+            SET "ApiRateLimit_Count" = GREATEST("ApiRateLimit_Count" - 1, 0)
+            WHERE "ApiRateLimit_Key" = ${key}
+              AND (EXTRACT(EPOCH FROM "ApiRateLimit_ExpiresAt") * 1000)::bigint::text = ${bucket.windowToken}
+              AND "ApiRateLimit_Count" > 0
+          `;
+          if (affected !== 1) {
+            logger.info(
+              { limiter: name, affected },
+              "rate-limit refund skipped because the original window is no longer active",
+            );
+          }
+        });
         return next();
       } catch (error) {
         return next(error);
@@ -237,11 +297,18 @@ export function rateLimit({ name, limit, windowMs, identify }: RateLimitOptions)
        * message is "wait a moment and it will work".
        */
       return res.status(429).json({
+        code: "RATE_LIMITED",
+        retryAfterSeconds: resetSeconds,
         error: `Too many requests in a short time. Please wait about ${humanRetryAfter(
           resetSeconds,
         )} and try again.`,
       });
     }
+
+    registerRefund(res, refundOnErrorCodes, async () => {
+      const current = buckets.get(key);
+      if (current === bucket && current.count > 0) current.count -= 1;
+    });
 
     return next();
   };
@@ -267,6 +334,8 @@ export function rateLimit({ name, limit, windowMs, identify }: RateLimitOptions)
  * because someone entering a month of receipts in one sitting still fits.
  */
 export const LIMITS = {
+  // Shared across authenticated writes; allows tour advances and bulk review without an unbounded retry loop.
+  AUTHENTICATED_WRITE: { name: "authenticated-write", limit: 120, windowMs: 60_000 },
   PROVIDER_CONSENT_WRITE: { name: "provider-consent-write", limit: 20, windowMs: 60_000 },
   SCAN_RECEIPT_BURST: { name: "scan-receipt-burst", limit: 15, windowMs: 60_000 },
   SCAN_RECEIPT_HOURLY: { name: "scan-receipt-hourly", limit: 200, windowMs: 60 * 60_000 },
@@ -313,11 +382,14 @@ export const LIMITS = {
    * legitimately confirms ten imports a minute.
    */
   CSV_PREVIEW_BURST: { name: "csv-preview-burst", limit: 20, windowMs: 60_000 },
+  CSV_STAGE_UPLOAD_BURST: { name: "csv-stage-upload-burst", limit: 6, windowMs: 60_000 },
   CSV_CONFIRM_BURST: { name: "csv-confirm-burst", limit: 10, windowMs: 60_000 },
   CSV_CONFIRM_HOURLY: { name: "csv-confirm-hourly", limit: 60, windowMs: 60 * 60_000 },
+  PHOTO_UPLOAD: { name: "photo-upload", limit: 20, windowMs: 60_000 },
   ASK_BURST: { name: "ai-ask-burst", limit: 20, windowMs: 60_000 },
   ASK_HOURLY: { name: "ai-ask-hourly", limit: 200, windowMs: 60 * 60_000 },
   SUGGEST_CATEGORY: { name: "ai-suggest-category", limit: 60, windowMs: 60_000 },
+  SUGGEST_CATEGORY_HOURLY: { name: "ai-suggest-category-hourly", limit: 1_000, windowMs: 60 * 60_000 },
   /*
    * PURCHASE_REVIEW: Spending Impact's "what is this thing, and what should I
    * be asking about it" call. Pressed deliberately, one item at a time, and
@@ -384,7 +456,16 @@ export const LIMITS = {
    * Keyed per user, because that is who is being attacked. Five in fifteen
    * minutes is far more than someone changing their own password needs.
    */
-  AUTH_REAUTH: { name: "auth-reauth", limit: 5, windowMs: 15 * 60_000 },
+  AUTH_REAUTH: {
+    name: "auth-reauth",
+    limit: 5,
+    windowMs: 15 * 60_000,
+    refundOnErrorCodes: ["AUTH_PROVIDER_UNAVAILABLE"],
+  },
+  // Logout intentionally accepts an expired/invalid token so the client can
+  // always clear itself. Its IP gate bounds anonymous provider calls without
+  // turning a dead session into a reason the owner cannot leave the app.
+  AUTH_LOGOUT: { name: "auth-logout", limit: 30, windowMs: 60_000 },
   /*
    * The same reasoning as AUTH_RECOVERY_EMAIL, for the same reason: this is the
    * button someone presses when the confirmation email has not arrived, so the
@@ -409,3 +490,11 @@ export const LIMITS = {
   AUTH_HANDOFF_ISSUE: { name: "auth-handoff-issue", limit: 10, windowMs: 15 * 60_000 },
   AUTH_HANDOFF_EXCHANGE: { name: "auth-handoff-exchange", limit: 10, windowMs: 15 * 60_000 },
 } as const;
+
+const authenticatedWriteLimiter = rateLimit(LIMITS.AUTHENTICATED_WRITE);
+const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+export function limitAuthenticatedWrites(req: Request, res: Response, next: NextFunction) {
+  if (!req.user || !WRITE_METHODS.has(req.method)) return next();
+  return authenticatedWriteLimiter(req, res, next);
+}

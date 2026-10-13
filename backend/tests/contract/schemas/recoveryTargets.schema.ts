@@ -31,6 +31,27 @@ export const statusSchema = z.enum([
 
 export const confidenceSchema = z.enum(["unavailable", "limited", "moderate", "strong"]);
 
+export const monthlyExpenseBasisSchema = z
+  .object({
+    amount: z.number().finite(),
+    source: z.enum(["owner_estimate", "previous_complete_month"]),
+    sourceMonth: z.union([
+      z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+      z.null(),
+    ]),
+    ownerEstimate: z.number().finite(),
+    recordsCompleteThroughMonth: z.union([
+      z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+      z.null(),
+    ]),
+    recordsCompleteThroughConfirmedAt: z.union([
+      z.string().datetime({ offset: true }),
+      z.null(),
+    ]),
+    eligibleRecordCount: z.number().int().nonnegative(),
+  })
+  .strict();
+
 // Mirrors RecoveryCheckpointStatus in analysis.service.ts verbatim (plan
 // §10.4, Phase 4).
 export const recoveryCheckpointStatusSchema = z.enum(["ahead", "on_pace", "behind", "pending"]);
@@ -84,6 +105,7 @@ export const changeSincePreviousDaySchema = z
 export const recoveryTargetsSchema = z
   .object({
     expectedMonthlyExpenses: z.number().finite(),
+    monthlyExpenseBasis: monthlyExpenseBasisSchema,
     operatingDays: z.number().finite(),
     dailyNeededTarget: z.number().finite(),
     salesThisMonth: z.number().finite(),
@@ -104,7 +126,7 @@ export const recoveryTargetsSchema = z
     confidence: confidenceSchema,
     expectedSalesToDate: z.number().finite(),
     paceVarianceAmount: z.number().finite(),
-    contractVersion: z.literal(1),
+    contractVersion: z.literal(2),
     timezone: z.string().min(1),
     asOfDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     operatingScheduleConfigured: z.boolean(),

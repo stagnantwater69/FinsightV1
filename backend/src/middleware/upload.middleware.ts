@@ -10,6 +10,7 @@ import type { StorageEngine } from "multer";
 import { logger } from "../config/logger";
 import { env } from "../config/env";
 import { ApiError } from "./error.middleware";
+import { CSV_MAX_FILE_BYTES } from "../lib/csvUploadValidation";
 import {
   RECEIPT_UPLOAD_ALLOWED_MIME_TYPES,
   RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES,
@@ -19,6 +20,12 @@ import {
 
 const storage = multer.memoryStorage();
 const receiptMimeTypes = new Set<string>(RECEIPT_UPLOAD_ALLOWED_MIME_TYPES);
+
+export const CSV_UPLOAD_MAX_FILE_BYTES = CSV_MAX_FILE_BYTES;
+export const CSV_UPLOAD_MAX_FIELDS = 10;
+export const CSV_UPLOAD_MAX_PARTS = CSV_UPLOAD_MAX_FIELDS + 1;
+export const CSV_UPLOAD_MAX_FIELD_NAME_BYTES = 100;
+export const CSV_UPLOAD_MAX_FIELD_BYTES = 1024 * 1024;
 
 interface ReceiptTemporaryUploadState {
   directory: string;
@@ -183,7 +190,16 @@ export const uploadReceiptEvidence = multer({
 
 export const uploadReceiptImage = multer({
   storage,
-  limits: { fileSize: RECEIPT_UPLOAD_MAX_OBJECT_BYTES },
+  limits: {
+    fileSize: RECEIPT_UPLOAD_MAX_OBJECT_BYTES,
+    files: 1,
+    fields: 1,
+    // Busboy counts the closing boundary when checking its parts limit.
+    parts: 3,
+    fieldNameSize: 100,
+    // Busboy marks equality as truncated, so this accepts at most 2,000 bytes.
+    fieldSize: 2_001,
+  },
   fileFilter: (_req, file, cb) => {
     if (!receiptMimeTypes.has(file.mimetype)) {
       cb(new ApiError(400, "Receipt image must be JPEG, PNG, or WEBP"));
@@ -195,7 +211,14 @@ export const uploadReceiptImage = multer({
 
 export const uploadCsv = multer({
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 },
+  limits: {
+    fileSize: CSV_UPLOAD_MAX_FILE_BYTES,
+    files: 1,
+    fields: CSV_UPLOAD_MAX_FIELDS,
+    parts: CSV_UPLOAD_MAX_PARTS,
+    fieldNameSize: CSV_UPLOAD_MAX_FIELD_NAME_BYTES,
+    fieldSize: CSV_UPLOAD_MAX_FIELD_BYTES,
+  },
   fileFilter: (_req, file, cb) => {
     const allowed = ["text/csv", "application/vnd.ms-excel", "application/csv", "text/plain"];
     if (!allowed.includes(file.mimetype) && !file.originalname.toLowerCase().endsWith(".csv")) {
@@ -208,7 +231,13 @@ export const uploadCsv = multer({
 
 export const uploadPhoto = multer({
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 },
+  limits: {
+    fileSize: 5 * 1024 * 1024,
+    files: 1,
+    fields: 0,
+    parts: 1,
+    fieldNameSize: 100,
+  },
   fileFilter: (_req, file, cb) => {
     const allowed = ["image/jpeg", "image/png", "image/webp"];
     if (!allowed.includes(file.mimetype)) {

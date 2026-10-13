@@ -38,6 +38,9 @@ const { authUserId, supabaseCalls, supabaseFailures, signInConfirmed } = vi.hois
 
 function record(method: string, ...args: unknown[]) {
   supabaseCalls.push({ method, args });
+  if (supabaseFailures.has(`${method}Throws`)) {
+    throw new Error(`${method} request failed`);
+  }
   if (supabaseFailures.has(method)) {
     return { data: { user: null }, error: { message: `${method} failed`, status: 500 } };
   }
@@ -78,6 +81,21 @@ vi.mock("../../src/config/supabase", async (importOriginal) => {
       auth: {
         async signInWithPassword({ password }: { email: string; password: string }) {
           supabaseCalls.push({ method: "signInWithPassword", args: [password] });
+          if (supabaseFailures.has("signInWithPasswordThrows")) {
+            throw Object.assign(new Error("fetch failed"), { name: "AuthRetryableFetchError", status: 0 });
+          }
+          if (supabaseFailures.has("signInWithPasswordOutage")) {
+            return {
+              data: { user: null, session: null },
+              error: { name: "AuthRetryableFetchError", status: 0, message: "fetch failed" },
+            };
+          }
+          if (supabaseFailures.has("signInWithPassword5xx")) {
+            return {
+              data: { user: null, session: null },
+              error: { name: "AuthApiError", status: 502, message: "bad gateway" },
+            };
+          }
           return password === "correct-horse-battery"
             ? {
                 data: {
@@ -126,6 +144,29 @@ vi.mock("../../src/config/supabase", async (importOriginal) => {
          */
         async refreshSession({ refresh_token }: { refresh_token: string }) {
           supabaseCalls.push({ method: "refreshSession", args: [refresh_token] });
+          // Auth unreachable, as supabase-js reports it: a transport failure,
+          // not a verdict about the token. Distinct from the refusal below.
+          if (supabaseFailures.has("refreshSessionOutage")) {
+            return {
+              data: { session: null, user: null },
+              error: { name: "AuthRetryableFetchError", status: 0, message: "fetch failed" },
+            };
+          }
+          /*
+           * A refusal that CARRIES a status. The plain `refreshSession`
+           * failure below has none, so on its own it cannot tell a correct
+           * `status >= 500` test from a wrong `status >= 400` one — both burn
+           * an error with no status. 429 is the shape most likely to be
+           * mistaken for retryable, and supabase-js reports it as an
+           * AuthApiError, not an AuthRetryableFetchError: only 500-504,
+           * 520-530 and an unmade request get that class.
+           */
+          if (supabaseFailures.has("refreshSessionRateLimited")) {
+            return {
+              data: { session: null, user: null },
+              error: { name: "AuthApiError", status: 429, message: "rate limit exceeded" },
+            };
+          }
           if (supabaseFailures.has("refreshSession") || refresh_token !== "valid-refresh-token") {
             return { data: { session: null, user: null }, error: { message: "invalid refresh token" } };
           }
@@ -167,12 +208,22 @@ vi.mock("../../src/lib/securityLog", async (importOriginal) => {
   };
 });
 
-vi.mock("../../src/services/storage.service", () => ({
-  deleteReceiptImage: async (p: string) => (storageDeleted.push(p), !storageFails.value),
-  deleteCsvFile: async (p: string) => (storageDeleted.push(p), !storageFails.value),
-  deletePublicImageUrl: async (p: string) => (storageDeleted.push(p), !storageFails.value),
-  uploadUserAvatar: async () => "https://example.test/avatar.png",
-}));
+vi.mock("../../src/services/storage.service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/services/storage.service")>();
+  return {
+    ...actual,
+    deleteReceiptImage: async (p: string) => (storageDeleted.push(p), !storageFails.value),
+    deleteCsvFile: async (p: string) => (storageDeleted.push(p), !storageFails.value),
+    deletePublicImageUrl: async (p: string) => (storageDeleted.push(p), !storageFails.value),
+    deletePublicImagePath: async (p: string) => (storageDeleted.push(p), !storageFails.value),
+    listPublicImagePaths: async () => [],
+    publicImagePathFromUrl: (url: string) => url,
+    deleteSupersededPublicImages: async () => true,
+    validatePublicImageUpload: async (buffer: Buffer, mimetype: string) => ({ buffer, mimetype }),
+    uploadUserAvatar: async () => "https://example.test/avatar.png",
+    uploadBusinessLogo: async () => "https://example.test/logo.png",
+  };
+});
 
 import request from "supertest";
 import { app } from "../../src/app";
@@ -182,11 +233,13 @@ import {
   purgeUnverifiedRegistrations,
   runAccountDeletionWorkerOnce,
 } from "../../src/services/accountDeletion.service";
-import { resetRateLimits } from "../../src/middleware/rateLimit.middleware";
+import { LIMITS, resetRateLimits } from "../../src/middleware/rateLimit.middleware";
+import { PUBLIC_IMAGE_UPLOAD_SETTLE_MS } from "../../src/services/storage.service";
 import { disconnectDb, makeOwnerWithProfile, resetDb } from "../setup/testDb";
 
 let ctx: Awaited<ReturnType<typeof makeOwnerWithProfile>>;
 const AUTH = ["Authorization", "Bearer valid-token"] as const;
+const LOGOUT_AUTH = ["Authorization", "Bearer header.payload.signature"] as const;
 const PASSWORD = "correct-horse-battery";
 
 /** Registrations that would satisfy every rule, so a test can vary one thing. */
@@ -375,7 +428,101 @@ describe("registration proves the address before the account works", () => {
       data: { createdAt: new Date(Date.now() - 73 * 60 * 60 * 1000) },
     });
     expect(await purgeUnverifiedRegistrations()).toBe(1);
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: pending.id } })).toMatchObject({
+      status: AccountStatus.DELETION_PENDING,
+      deletionStage: AccountDeletionStage.REQUESTED,
+    });
+    await prisma.user.update({
+      where: { id: pending.id },
+      data: {
+        deletionRequestedAt: new Date(Date.now() - PUBLIC_IMAGE_UPLOAD_SETTLE_MS - 1_000),
+        deletionNextAttemptAt: new Date(0),
+      },
+    });
+
+    await runAccountDeletionWorkerOnce();
+    await runAccountDeletionWorkerOnce();
+    await runAccountDeletionWorkerOnce();
     expect(await prisma.user.findUnique({ where: { id: pending.id } })).toBeNull();
+  });
+
+  it("lets confirmation win if it changes the pending row before the purge claim", async () => {
+    await prisma.user.update({
+      where: { id: ctx.user.id },
+      data: {
+        status: AccountStatus.PENDING_VERIFICATION,
+        createdAt: new Date(Date.now() - 73 * 60 * 60 * 1000),
+      },
+    });
+
+    let enteredClaim!: () => void;
+    let releaseClaim!: () => void;
+    const claimEntered = new Promise<void>((resolve) => { enteredClaim = resolve; });
+    const claimReleased = new Promise<void>((resolve) => { releaseClaim = resolve; });
+    const updateMany = prisma.user.updateMany.bind(prisma.user);
+    const claim = vi.spyOn(prisma.user, "updateMany").mockImplementationOnce(async (args) => {
+      enteredClaim();
+      await claimReleased;
+      return updateMany(args);
+    });
+
+    try {
+      const purge = purgeUnverifiedRegistrations();
+      await claimEntered;
+      const confirmation = await request(app).post("/api/v1/auth/confirm-email").set(...AUTH);
+      releaseClaim();
+
+      expect(confirmation.status).toBe(200);
+      expect(await purge).toBe(0);
+    } finally {
+      releaseClaim();
+      claim.mockRestore();
+    }
+
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: ctx.user.id } })).toMatchObject({
+      status: AccountStatus.ACTIVE,
+    });
+    expect(callsTo("deleteUser")).toHaveLength(0);
+  });
+
+  it("queues resumable deletion if the purge claim wins before confirmation", async () => {
+    await prisma.user.update({
+      where: { id: ctx.user.id },
+      data: {
+        status: AccountStatus.PENDING_VERIFICATION,
+        createdAt: new Date(Date.now() - 73 * 60 * 60 * 1000),
+      },
+    });
+
+    let claimed!: () => void;
+    let releaseClaim!: () => void;
+    const claimCompleted = new Promise<void>((resolve) => { claimed = resolve; });
+    const claimReleased = new Promise<void>((resolve) => { releaseClaim = resolve; });
+    const updateMany = prisma.user.updateMany.bind(prisma.user);
+    const claim = vi.spyOn(prisma.user, "updateMany").mockImplementationOnce(async (args) => {
+      const result = await updateMany(args);
+      claimed();
+      await claimReleased;
+      return result;
+    });
+
+    try {
+      const purge = purgeUnverifiedRegistrations();
+      await claimCompleted;
+      const confirmation = await request(app).post("/api/v1/auth/confirm-email").set(...AUTH);
+      releaseClaim();
+
+      expect(confirmation.status).toBe(403);
+      expect(await purge).toBe(1);
+    } finally {
+      releaseClaim();
+      claim.mockRestore();
+    }
+
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: ctx.user.id } })).toMatchObject({
+      status: AccountStatus.DELETION_PENDING,
+      deletionStage: AccountDeletionStage.REQUESTED,
+    });
   });
 });
 
@@ -417,13 +564,13 @@ describe("only an ACTIVE account may be used", () => {
   it("revokes the Supabase identity as it suspends", async () => {
     await transition(ctx.user, AccountStatus.SUSPENDED, { reason: "test" });
     const ban = callsTo("updateUserById").at(-1);
-    expect((ban?.args[1] as { ban_duration?: string }).ban_duration).toBeTruthy();
+    expect(ban?.args[1]).toMatchObject({ ban_duration: expect.any(String) });
   });
 
   it("lifts the ban when the account is reinstated", async () => {
     const suspended = await transition(ctx.user, AccountStatus.SUSPENDED, { reason: "test" });
     await transition(suspended, AccountStatus.ACTIVE, { reason: "appeal upheld" });
-    expect((callsTo("updateUserById").at(-1)?.args[1] as { ban_duration?: string }).ban_duration).toBe("none");
+    expect(callsTo("updateUserById").at(-1)?.args[1]).toMatchObject({ ban_duration: "none" });
   });
 
   it("refuses a transition the state machine does not allow", async () => {
@@ -448,6 +595,27 @@ describe("changing a password keeps this session and ends the others", () => {
 
     expect(res.status).toBe(200);
     expect(callsTo("signOut").map((c) => c.args[1])).toEqual(["others"]);
+    expect(
+      supabaseCalls.filter((call) => call.method === "signOut" || call.method === "updateUserById").map((call) => call.method),
+    ).toEqual(["signOut", "updateUserById"]);
+    expect(loggedEvents).toContain("sessions.revoked");
+    expect(loggedEvents).toContain("password.changed");
+  });
+
+  it("leaves the password unchanged when other sessions cannot be revoked", async () => {
+    supabaseFailures.add("signOut");
+
+    const res = await request(app)
+      .post("/api/v1/auth/change-password")
+      .set(...AUTH)
+      .send({ currentPassword: PASSWORD, newPassword: "a-brand-new-passphrase" });
+
+    expect(res.status).toBe(502);
+    expect(res.body).toEqual({ error: "Could not securely finish changing your password. Please try again." });
+    expect(callsTo("updateUserById")).toHaveLength(0);
+    expect(loggedEvents).toContain("sessions.revoke_failed");
+    expect(loggedEvents).not.toContain("sessions.revoked");
+    expect(loggedEvents).not.toContain("password.changed");
   });
 
   it("refuses on a wrong current password, so a stolen token cannot take the account", async () => {
@@ -458,6 +626,22 @@ describe("changing a password keeps this session and ends the others", () => {
 
     expect(res.status).toBe(400);
     expect(callsTo("signOut")).toHaveLength(0);
+  });
+
+  it("returns a refundable 503 and closes the throwaway session for Auth outages", async () => {
+    for (const failure of ["signInWithPasswordOutage", "signInWithPassword5xx", "signInWithPasswordThrows"]) {
+      supabaseFailures.add(failure);
+      const res = await request(app)
+        .post("/api/v1/auth/change-password")
+        .set(...AUTH)
+        .send({ currentPassword: PASSWORD, newPassword: "a-brand-new-passphrase" });
+      supabaseFailures.delete(failure);
+
+      expect(res.status).toBe(503);
+      expect(res.body.code).toBe("AUTH_PROVIDER_UNAVAILABLE");
+    }
+
+    expect(callsTo("throwawaySignOut")).toHaveLength(3);
   });
 
   /**
@@ -476,13 +660,76 @@ describe("changing a password keeps this session and ends the others", () => {
   });
 
   it("signs out this device only on an ordinary logout", async () => {
-    await request(app).post("/api/v1/auth/logout").set(...AUTH);
+    const res = await request(app).post("/api/v1/auth/logout").set(...LOGOUT_AUTH);
+
+    expect(res.status).toBe(204);
     expect(callsTo("signOut").map((c) => c.args[1])).toEqual(["local"]);
+    expect(loggedEvents).toContain("sessions.revoked");
+    expect(loggedEvents).not.toContain("sessions.revoke_failed");
   });
 
   it("signs out everywhere only when that is what was asked for", async () => {
-    await request(app).post("/api/v1/auth/logout-all").set(...AUTH);
+    const res = await request(app).post("/api/v1/auth/logout-all").set(...AUTH);
+
+    expect(res.status).toBe(204);
     expect(callsTo("signOut").map((c) => c.args[1])).toEqual(["global"]);
+    expect(loggedEvents).toContain("sessions.revoked");
+    expect(loggedEvents).not.toContain("sessions.revoke_failed");
+  });
+
+  it("returns a retryable failure when global revocation is refused upstream", async () => {
+    supabaseFailures.add("signOut");
+
+    const res = await request(app).post("/api/v1/auth/logout-all").set(...AUTH);
+
+    expect(res.status).toBe(502);
+    expect(res.body).toEqual({ error: "Could not sign out everywhere right now. Please try again." });
+    expect(JSON.stringify(res.body)).not.toContain("signOut failed");
+    expect(loggedEvents).toContain("sessions.revoke_failed");
+    expect(loggedEvents).not.toContain("sessions.revoked");
+  });
+
+  it("returns the same safe failure when global revocation throws", async () => {
+    supabaseFailures.add("signOutThrows");
+
+    const res = await request(app).post("/api/v1/auth/logout-all").set(...AUTH);
+
+    expect(res.status).toBe(502);
+    expect(res.body).toEqual({ error: "Could not sign out everywhere right now. Please try again." });
+    expect(JSON.stringify(res.body)).not.toContain("signOut request failed");
+    expect(loggedEvents).toContain("sessions.revoke_failed");
+    expect(loggedEvents).not.toContain("sessions.revoked");
+  });
+
+  it("keeps local logout best-effort when revocation is refused upstream", async () => {
+    supabaseFailures.add("signOut");
+
+    const res = await request(app).post("/api/v1/auth/logout").set(...LOGOUT_AUTH);
+
+    expect(res.status).toBe(204);
+    expect(loggedEvents).toContain("sessions.revoke_failed");
+    expect(loggedEvents).not.toContain("sessions.revoked");
+  });
+
+  it("does not send a malformed bearer token to Supabase", async () => {
+    const res = await request(app)
+      .post("/api/v1/auth/logout")
+      .set("Authorization", "Bearer not-a-jwt");
+
+    expect(res.status).toBe(204);
+    expect(callsTo("signOut")).toHaveLength(0);
+  });
+
+  it("rate limits anonymous logout traffic by IP", async () => {
+    const responses = [];
+    for (let attempt = 0; attempt <= LIMITS.AUTH_LOGOUT.limit; attempt += 1) {
+      responses.push(await request(app).post("/api/v1/auth/logout"));
+    }
+    const res = responses.at(-1)!;
+
+    expect(res.status).toBe(429);
+    expect(res.headers["retry-after"]).toBeDefined();
+    expect(callsTo("signOut")).toHaveLength(0);
   });
 });
 
@@ -503,10 +750,20 @@ describe("deletion ends access immediately and destroys data in the background",
   });
 
   async function requestDeletion() {
-    return request(app)
+    const response = await request(app)
       .delete("/api/v1/auth/me")
       .set(...AUTH)
       .send({ currentPassword: PASSWORD });
+    if (response.status === 202) {
+      await prisma.user.update({
+        where: { id: ctx.user.id },
+        data: {
+          deletionRequestedAt: new Date(Date.now() - PUBLIC_IMAGE_UPLOAD_SETTLE_MS - 1_000),
+          deletionNextAttemptAt: new Date(0),
+        },
+      });
+    }
+    return response;
   }
 
   it("accepts, revokes access, and destroys nothing synchronously", async () => {
@@ -578,6 +835,10 @@ describe("deletion ends access immediately and destroys data in the background",
     expect(user.deletionLastError).toContain("could not be removed");
 
     storageFails.value = false;
+    await prisma.user.update({
+      where: { id: ctx.user.id },
+      data: { deletionNextAttemptAt: new Date(0) },
+    });
     await runAccountDeletionWorkerOnce();
     user = await prisma.user.findUniqueOrThrow({ where: { id: ctx.user.id } });
     expect(user.deletionStage).toBe(AccountDeletionStage.STORAGE_CLEARED);
@@ -592,6 +853,10 @@ describe("deletion ends access immediately and destroys data in the background",
     });
 
     supabaseFailures.clear();
+    await prisma.user.update({
+      where: { id: ctx.user.id },
+      data: { deletionNextAttemptAt: new Date(0) },
+    });
     await runAccountDeletionWorkerOnce();
     await runAccountDeletionWorkerOnce();
     expect(await prisma.user.findUnique({ where: { id: ctx.user.id } })).toBeNull();
@@ -601,7 +866,13 @@ describe("deletion ends access immediately and destroys data in the background",
     await requestDeletion();
     storageFails.value = true;
 
-    for (let i = 0; i < 12; i++) await runAccountDeletionWorkerOnce();
+    for (let i = 0; i < 10; i++) {
+      await prisma.user.update({
+        where: { id: ctx.user.id },
+        data: { deletionNextAttemptAt: new Date(0) },
+      });
+      await runAccountDeletionWorkerOnce();
+    }
 
     const user = await prisma.user.findUniqueOrThrow({ where: { id: ctx.user.id } });
     expect(user.deletionAttempts).toBe(10);
@@ -663,9 +934,32 @@ describe("password recovery", () => {
     expect(res.status).toBe(200);
   });
 
-  it("ends every session once a reset completes", async () => {
-    await request(app).post("/api/v1/auth/reset-password/complete").set(...AUTH);
+  it("revokes every refresh session once a reset completes", async () => {
+    const res = await request(app).post("/api/v1/auth/reset-password/complete").set(...AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      message: "Your password has been changed. Log in with it to continue.",
+      refreshSessionsRevoked: true,
+    });
     expect(callsTo("signOut").map((c) => c.args[1])).toEqual(["global"]);
+    expect(loggedEvents).toContain("sessions.revoked");
+    expect(loggedEvents).not.toContain("sessions.revoke_failed");
+  });
+
+  it("reports reset completion truthfully when old sessions could not be revoked", async () => {
+    supabaseFailures.add("signOut");
+
+    const res = await request(app).post("/api/v1/auth/reset-password/complete").set(...AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      message: "Your password has been changed. Log in with it to continue.",
+      refreshSessionsRevoked: false,
+    });
+    expect(loggedEvents).toContain("password.changed");
+    expect(loggedEvents).toContain("sessions.revoke_failed");
+    expect(loggedEvents).not.toContain("sessions.revoked");
   });
 
   /**
@@ -929,6 +1223,85 @@ describe("web → mobile session handoff", () => {
 
     const res = await request(app).post("/api/v1/auth/handoff/exchange").send({ code: first.body.code });
     expect(res.status).toBe(400);
+  });
+
+  it("serializes concurrent issuers so only the later code remains live", async () => {
+    const [first, second] = await Promise.all([issue(), issue()]);
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(await prisma.authHandoff.count({ where: { userId: ctx.user.id } })).toBe(1);
+
+    const exchanges = await Promise.all([
+      request(app).post("/api/v1/auth/handoff/exchange").send({ code: first.body.code }),
+      request(app).post("/api/v1/auth/handoff/exchange").send({ code: second.body.code }),
+    ]);
+    expect(exchanges.map((response) => response.status).sort()).toEqual([200, 400]);
+  });
+
+  it("keeps the code alive when Auth could not be reached, so the owner can just tap again", async () => {
+    /*
+     * The row used to be deleted straight after the claim, before Auth was
+     * called at all. A few seconds of Auth being unreachable therefore
+     * destroyed a code that had not expired and had bought nothing, and the
+     * owner was told the link had expired with no way to retry but to go back
+     * to the browser and start over.
+     */
+    const { body } = await issue();
+    supabaseFailures.add("refreshSessionOutage");
+
+    const outage = await request(app).post("/api/v1/auth/handoff/exchange").send({ code: body.code });
+
+    expect(outage.status).toBe(503);
+    expect(outage.body.message ?? outage.body.error).not.toMatch(/expired/i);
+    expect(await prisma.authHandoff.count({ where: { userId: ctx.user.id } })).toBe(1);
+
+    supabaseFailures.delete("refreshSessionOutage");
+    const retry = await request(app).post("/api/v1/auth/handoff/exchange").send({ code: body.code });
+
+    expect(retry.status).toBe(200);
+    expect(retry.body.session.access_token).toBe("rotated-access-token");
+    // And once it has actually bought a session, it is gone for good.
+    expect(await prisma.authHandoff.count({ where: { userId: ctx.user.id } })).toBe(0);
+  });
+
+  it("still burns a code that Auth refused outright", async () => {
+    // A verdict, not an outage: the sealed token is dead, so the row is too.
+    const { body } = await issue();
+    supabaseFailures.add("refreshSession");
+
+    const res = await request(app).post("/api/v1/auth/handoff/exchange").send({ code: body.code });
+
+    expect(res.status).toBe(400);
+    expect(await prisma.authHandoff.count({ where: { userId: ctx.user.id } })).toBe(0);
+    supabaseFailures.delete("refreshSession");
+  });
+
+  /*
+   * The release above is the only thing standing between a one-time code and
+   * a retryable one, and it turns on one predicate. Anything Auth ANSWERED —
+   * including the answers that read as temporary — has to burn the code, or a
+   * 4xx becomes a licence to try the same code again inside its two minutes.
+   *
+   * 429 is the case to pin: it is a 4xx that sounds retryable, and widening
+   * the predicate to `status >= 400` is the easiest way to get this wrong.
+   * The test above cannot catch that widening, because its fixture carries no
+   * status at all.
+   */
+  it("burns a code on a 4xx that only sounds retryable", async () => {
+    const { body } = await issue();
+    supabaseFailures.add("refreshSessionRateLimited");
+
+    const refused = await request(app).post("/api/v1/auth/handoff/exchange").send({ code: body.code });
+
+    expect(refused.status).toBe(400);
+    expect(refused.body.message ?? refused.body.error).toMatch(/expired or has already been used/i);
+    expect(await prisma.authHandoff.count({ where: { userId: ctx.user.id } })).toBe(0);
+
+    // And it stays spent once Auth is answering normally again.
+    supabaseFailures.delete("refreshSessionRateLimited");
+    const replay = await request(app).post("/api/v1/auth/handoff/exchange").send({ code: body.code });
+    expect(replay.status).toBe(400);
   });
 
   it("will not hand a session to a suspended account", async () => {

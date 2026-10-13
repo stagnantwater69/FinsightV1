@@ -1,3 +1,5 @@
+import type { PeriodWindow } from "./reportingPeriod";
+
 export interface Profile {
   id: number;
   firstName: string;
@@ -69,10 +71,22 @@ export interface UpdateProfileInput {
 
 export interface BusinessProfile {
   id: number;
+  /** IANA zone the business keeps its calendar in; decides what "today" is. */
+  timezone?: string;
   name: string;
   type: string;
+  /** Owner-entered opening amount. Current recorded funds are calculated from this anchor. */
   availableFunds: number;
+  /** Exact instant when the current opening amount became authoritative. */
+  availableFundsBaselineAt?: string;
+  /** Business-local YYYY-MM-DD cutoff paired with the opening amount. */
+  availableFundsBaselineDate?: string;
+  /** Owner-entered fallback used until the previous month is confirmed complete. */
   expectedMonthlyExpenses: number;
+  /** Latest YYYY-MM whose expense-record coverage the owner confirmed, or null. */
+  expenseRecordsCompleteThroughMonth?: string | null;
+  /** When the current coverage confirmation was saved, or null when cleared. */
+  expenseRecordsCompleteThroughConfirmedAt?: string | null;
   operatingDays: number;
   largeExpenseThresholdPercent: number;
   logoUrl: string | null;
@@ -91,6 +105,36 @@ export interface BusinessProfileInput {
   expectedMonthlyExpenses: number;
   operatingDays: number;
   largeExpenseThresholdPercent: number;
+}
+
+/** Record-derived balance anchored to the owner's starting funds. */
+export interface AvailableFundsCalculation {
+  calculatedAmount: number;
+  baselineAmount: number;
+  baselineAt: string;
+  baselineDate: string;
+  confirmedSalesAdded: number;
+  confirmedExpensesDeducted: number;
+  confirmedSalesRecordCount: number;
+  confirmedExpenseRecordCount: number;
+  asOfDate: string;
+}
+
+/** The amount currently used as the monthly expense basis, with its source. */
+export interface MonthlyExpenseBasis {
+  amount: number;
+  source: "owner_estimate" | "previous_complete_month";
+  sourceMonth: string | null;
+  ownerEstimate: number;
+  eligibleRecordCount: number;
+  recordsCompleteThroughMonth: string | null;
+  recordsCompleteThroughConfirmedAt: string | null;
+}
+
+export interface FinancialPosition {
+  asOfDate: string;
+  availableFunds: AvailableFundsCalculation;
+  monthlyExpenseBasis: MonthlyExpenseBasis;
 }
 
 /**
@@ -112,6 +156,8 @@ export interface ExpenseCategory {
   createdAt: string;
   /** Optional everywhere — omitted/undefined reads the same as "UNCLASSIFIED". */
   costBehavior?: ExpenseCostBehavior;
+  /** Business or personal spending, read by the server from the name. Absent means business. */
+  kind?: "business" | "personal";
 }
 
 export type ReviewStatus = "Reviewed" | "Needs Review";
@@ -140,6 +186,10 @@ export interface RecordItem {
   reviewStatus: ReviewStatus;
   duplicateStatus: DuplicateStatus;
   largeExpenseFlag?: boolean;
+  /** Whether this same-day transaction was already counted in the recorded balance. */
+  includedInAvailableFundsBaseline?: boolean | null;
+  /** The exact balance anchor the classification above belongs to. */
+  availableFundsDeltaBaselineAt?: string | null;
   createdAt: string;
 }
 
@@ -349,12 +399,33 @@ export interface Notification {
   readStatus: boolean;
 }
 
+export interface DashboardFigureChange {
+  previous: number;
+  changeAmount: number;
+  /** Null when the previous period was zero. */
+  changePercent: number | null;
+}
+
+/** The same figures for the window before this one. Absent for All time and older responses. */
+export interface DashboardPeriodComparison {
+  previousStart: string;
+  previousEnd: string;
+  sales: DashboardFigureChange;
+  expenses: DashboardFigureChange;
+  net: DashboardFigureChange;
+}
+
 export interface DashboardSummary {
   periodDays: number;
   periodStart: string;
   periodEnd: string;
+  /** The window the figures cover, as the server resolved it. Absent from older servers. */
+  period?: PeriodWindow;
+  periodComparison?: DashboardPeriodComparison | null;
   overview: {
     availableFunds: number;
+    /** Calculation detail for `availableFunds`; absent only on older responses. */
+    availableFundsCalculation?: AvailableFundsCalculation;
     totalExpenses: number;
     totalSalesReference: number;
   };
@@ -429,8 +500,10 @@ export interface RecoveryTargets {
   expectedSalesToDate?: number;
   /** Recorded sales minus expected-to-date — positive means ahead of pace. */
   paceVarianceAmount?: number;
-  /** Stepping-stone toward the plan's eventual v2 contract — this Phase 1 slice is not yet that full shape. */
-  contractVersion?: 1;
+  /** Contract v2 adds source-aware monthly expense figures; v1 remains readable from cache. */
+  contractVersion?: 1 | 2;
+  /** Active monthly amount and its source. Present on contract v2. */
+  monthlyExpenseBasis?: MonthlyExpenseBasis;
   /** IANA timezone identifier the calculation was anchored to. */
   timezone?: string;
   /** YYYY-MM-DD, business-local calendar day this calculation was anchored to. */
@@ -655,9 +728,13 @@ export interface UnusualExpense {
 export interface ExpenseBehavior {
   periodStart: string;
   periodEnd: string;
-  previousPeriodStart: string;
-  previousPeriodEnd: string;
+  /** Null for all time, which has nothing before it to compare with. */
+  previousPeriodStart: string | null;
+  previousPeriodEnd: string | null;
   periodDays: number;
+  period?: PeriodWindow;
+  /** "month" when `dailyTotals` holds one point per month (all time). */
+  dailyBucket?: "day" | "month";
   /** Period totals, summed server-side so every surface shows the same figure. */
   totals: { current: number; previous: number };
   dailyTotals: DailyExpenseTotal[];
@@ -747,8 +824,11 @@ export interface ReductionOpportunityFeedbackResult {
 export interface ReductionOpportunityResponse {
   period: {
     days: number;
-    start: string;
+    /** Null for all time. */
+    start: string | null;
     end: string;
+    kind?: PeriodWindow["kind"];
+    month?: string | null;
   };
   dataQuality: {
     status: "sufficient" | "limited" | "insufficient";
@@ -774,15 +854,18 @@ export type ReductionSpec = { kind: "percent"; value: number } | { kind: "amount
 export interface ReductionSimulationInput {
   businessProfileId: number;
   categoryId: number;
-  periodDays: number;
+  /** Legacy rolling window. The period filter sends `period`/`month` instead. */
+  periodDays?: number;
   endDate?: string;
+  period?: "week" | "month" | "all";
+  month?: string;
   reduction: ReductionSpec;
 }
 
 export interface ReductionSimulation {
   categoryId: number;
   categoryName: string;
-  period: { days: number; start: string; end: string };
+  period: { days: number; start: string | null; end: string };
   categoryExpenses: { before: number; after: number };
   totalExpenses: { before: number; after: number };
   hypotheticalReduction: number;
@@ -937,6 +1020,57 @@ export interface RecoveryCheckpoint {
   status: RecoveryCheckpointStatus;
 }
 
+/**
+ * Canonical figures for the week or calendar month selected on Recovery
+ * Target. The legacy top-level recovery fields remain available for older
+ * clients, while this block keeps every selected-period label tied to the
+ * server-owned calculation.
+ */
+export interface RecoveryReportingPeriod {
+  kind: "week" | "month";
+  /** YYYY-MM for a month selection; null for a week that can cross months. */
+  month: string | null;
+  /** Business-local YYYY-MM-DD boundaries. */
+  start: string;
+  end: string;
+  asOfDate: string;
+  timezone: string;
+  isCurrent: boolean;
+  isComplete: boolean;
+  targetBasis: "prorated_monthly_expenses" | "monthly_expenses";
+  /** Monthly inputs used by this target. A cross-month week can contain two. */
+  monthlyExpenseBases?: Array<{
+    /** YYYY-MM whose target uses this basis. */
+    targetMonth: string;
+    basis: MonthlyExpenseBasis;
+  }>;
+  target: number;
+  sales: number;
+  confirmedSales: number;
+  provisionalSales: number;
+  remainingTarget: number;
+  coveragePercent: number;
+  dailyTarget: number;
+  adjustedDailyTarget: number | null;
+  operatingDays: number;
+  elapsedOperatingDays: number;
+  remainingOperatingDays: number;
+  operatingScheduleConfigured: boolean;
+  operatingDaysIsApproximated: boolean;
+  expectedSalesToDate: number;
+  paceVarianceAmount: number;
+  status:
+    | "needs_setup"
+    | "no_data"
+    | "ahead"
+    | "on_pace"
+    | "behind"
+    | "covered";
+  confidence: RecoveryConfidence;
+  recordCount: number;
+  dataWarnings: Array<"records_pending_review" | "possible_duplicates">;
+}
+
 export interface RecoveryInsight extends RecoveryTargets {
   monthStart: string;
   today: string;
@@ -945,11 +1079,9 @@ export interface RecoveryInsight extends RecoveryTargets {
   /**
    * True when not one sale is recorded in the month this page reports on.
    *
-   * Recovery is month-to-date and has no period selector, so a business whose
-   * history was imported and stops months ago is shown zero sales against the
-   * full monthly target — reading as "you are catastrophically behind". The
-   * arithmetic is right; what was missing was any statement that the month
-   * simply has nothing in it. Optional for older servers.
+   * For the current month, this lets the page distinguish an empty interval
+   * from a severe shortfall against the full monthly target. Optional for
+   * older servers and not used as the selected-period record count.
    */
   monthHasNoRecords?: boolean;
   /** The most recent sale on file, so an empty month can point at where the data is. */
@@ -958,6 +1090,8 @@ export interface RecoveryInsight extends RecoveryTargets {
   computedAt?: string;
   /** Bounded weekly checkpoints for the current month — plan §10.4, Phase 4. Optional for older servers. */
   weeklyCheckpoints?: RecoveryCheckpoint[];
+  /** Selected week/month figures. Absent only on older servers. */
+  reportingPeriod?: RecoveryReportingPeriod;
 }
 
 /**
@@ -991,6 +1125,8 @@ export type RecoveryMonthEndReview =
       status: "reviewable";
       /** YYYY-MM. */
       month: string;
+      /** The server-owned amount and provenance used for this review's coverage calculation. */
+      monthlyExpenseBasis: MonthlyExpenseBasis;
       /** 0 when no baseline is configured, matching `RecoveryTargets.monthCoveragePercent`'s own guard. */
       coveragePercent: number;
       /** `salesThisMonth - expectedMonthlyExpenses`. Positive = surplus, negative = shortfall. */
@@ -1017,8 +1153,9 @@ export type ImpactBand = "Low Impact" | "Noticeable Impact" | "High Impact";
 
 export interface SpendingImpact {
   periodDays: number;
-  periodStart: string;
+  periodStart: string | null;
   periodEnd: string;
+  period?: PeriodWindow;
   plannedAmount: number;
   thresholdPercent: number;
   thresholdAmount: number;
@@ -1027,6 +1164,8 @@ export interface SpendingImpact {
   exceedsFunds: boolean;
   funds: { before: number; after: number };
   periodExpenses: { before: number; after: number };
+  /** Record-derived source for `availableFunds`; absent on cached v1 responses. */
+  availableFundsCalculation?: AvailableFundsCalculation;
   availableFunds: number;
   resultingFunds: number;
 }
@@ -1140,7 +1279,64 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   createdAt: string;
+  /**
+   * Assistant replies only — what the server resolved alongside the text.
+   * Null on user messages and on replies stored before this existed.
+   */
+  metadata?: ChatAnswerMetadata | null;
+  /** The owner's rating of an assistant reply. */
+  feedback?: "up" | "down" | null;
 }
+
+/** A record an answer mentioned, as the SERVER read it (never the model's wording). */
+export interface ChatRecordReference {
+  kind: "record";
+  recordType: "expense" | "sales";
+  id: number;
+  label: string;
+  amount: number;
+  date: string;
+}
+
+/** Pages Fin may point to. The route each opens is the client's (see lib/chatLinks.ts). */
+export type ChatPageKey =
+  | "dashboard"
+  | "records"
+  | "review-queue"
+  | "expense-insights"
+  | "recovery"
+  | "spending-impact"
+  | "categories"
+  | "add-expense"
+  | "add-sales"
+  | "scan-receipt";
+
+/** A one-tap action the server offered. Nothing runs until the owner presses it. */
+export type ChatAction =
+  | {
+      kind: "review-finding";
+      findingId: number;
+      label: string;
+      status: "CONFIRMED" | "DISMISSED" | "RESOLVED";
+      feedback: "CONFIRMED_UNUSUAL" | "EXPECTED_TRANSACTION" | "DUPLICATE" | "INCORRECT_MATCH" | "NO_LONGER_RELEVANT";
+    }
+  | { kind: "open-spending-impact"; amount: number; label: string };
+
+export interface ChatAnswerMetadata {
+  references: ChatRecordReference[];
+  pages: { key: ChatPageKey; label: string }[];
+  actions: ChatAction[];
+  followUps: string[];
+  /** The period the answer was grounded in, e.g. "January 2022". */
+  period: string | null;
+  /** "trimmed" means part of the answer was removed for using an unverified figure. */
+  amountCheck: "passed" | "revised" | "trimmed";
+}
+
+/** The flag or record a chat was opened from — ids only; the server loads the row. */
+export type ChatFocus =
+  | { kind: "finding"; findingId: number }
+  | { kind: "record"; recordType: "expense" | "sales"; recordId: number };
 
 /** `GET /ai/conversations/:id` — the conversation plus its messages, oldest first. */
 export interface ConversationDetail extends Conversation {
@@ -1167,4 +1363,24 @@ export interface CategorySuggestion {
   categoryId: number;
   categoryName: string;
   source?: "history" | "ai";
+}
+
+/** GET /records/future-dated: records dated after the business's today. */
+export interface FutureDatedRecord {
+  id: number;
+  type: "expense" | "sales";
+  /** YYYY-MM-DD. */
+  date: string;
+  description: string;
+  amount: number;
+  vendor: string | null;
+  categoryName: string | null;
+}
+
+export interface FutureDatedRecords {
+  /** The business's today, YYYY-MM-DD: the latest date a record may have. */
+  today: string;
+  total: number;
+  records: FutureDatedRecord[];
+  truncated: boolean;
 }

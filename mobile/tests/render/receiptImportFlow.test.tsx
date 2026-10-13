@@ -1,7 +1,7 @@
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, waitFor } from "@testing-library/react-native";
-import { Alert, Image } from "react-native";
+import { Alert } from "react-native";
 import * as fixtures from "./support/fixtures";
 import { RECEIPT_UPLOAD_MAX_OBJECT_BYTES } from "../../src/lib/receiptUploadContract";
 
@@ -18,6 +18,8 @@ const localFileByteSize = vi.fn();
 const deleteScannerFiles = vi.fn();
 let selectedBusiness = fixtures.businessProfile;
 let cameraSections: any[] = [];
+let cameraCompletionsPerPress = 1;
+let renderedCameraMaxReceipts: number | undefined;
 vi.mock("../../src/lib/api", () => ({ api: { upload, post, get, put, patch, delete: remove } }));
 vi.mock("expo-image-picker", () => ({ launchImageLibraryAsync: gallery }));
 vi.mock("expo-document-picker", () => ({ getDocumentAsync: document }));
@@ -28,26 +30,45 @@ vi.mock("../../src/components/receipt-camera", async () => {
   const ReactRuntime = await import("react");
   const { Pressable, Text } = await import("react-native");
   return {
-    ReceiptCamera: ({ onDone }: any) => ReactRuntime.createElement(
-      Pressable,
-      {
-        accessibilityRole: "button",
-        accessibilityLabel: "Finish mocked camera with unsupported evidence",
-        onPress: () => onDone(cameraSections.length > 0 ? cameraSections : [{
-          localId: "mocked-unsupported",
-          originalUri: "file:///converted.gif",
-          originalMimeType: "image/gif",
-          processedUri: "file:///converted.gif",
-          processedMimeType: "image/gif",
-          width: 600,
-          height: 1000,
-          quality: null,
-          captureSource: "gallery",
-          processingMode: "original",
-        }]),
-      },
-      ReactRuntime.createElement(Text, null, "Finish mocked camera with unsupported evidence"),
-    ),
+    ReceiptCamera: ({ onDone, maxReceipts }: any) => {
+      renderedCameraMaxReceipts = maxReceipts;
+      const [completionError, setCompletionError] = ReactRuntime.useState<string | null>(null);
+      const sections = () => cameraSections.length > 0 ? cameraSections : [{
+        localId: "mocked-unsupported",
+        originalUri: "file:///converted.gif",
+        originalMimeType: "image/gif",
+        processedUri: "file:///converted.gif",
+        processedMimeType: "image/gif",
+        width: 600,
+        height: 1000,
+        quality: null,
+        captureSource: "gallery",
+        processingMode: "original",
+      }];
+      return ReactRuntime.createElement(
+        ReactRuntime.Fragment,
+        null,
+        ReactRuntime.createElement(
+          Pressable,
+          {
+            accessibilityRole: "button",
+            accessibilityLabel: "Finish mocked camera with unsupported evidence",
+            onPress: () => {
+              try {
+                for (let attempt = 0; attempt < cameraCompletionsPerPress; attempt += 1) onDone(sections());
+                setCompletionError(null);
+              } catch (err) {
+                setCompletionError(err instanceof Error ? err.message : "Camera completion failed");
+              }
+            },
+          },
+          ReactRuntime.createElement(Text, null, "Finish mocked camera with unsupported evidence"),
+        ),
+        completionError
+          ? ReactRuntime.createElement(Text, { accessibilityRole: "alert" }, completionError)
+          : null,
+      );
+    },
   };
 });
 vi.mock("@react-navigation/native", () => ({ useFocusEffect: (effect: () => (() => void)) => React.useEffect(effect, [effect]) }));
@@ -65,10 +86,18 @@ const { ReceiptReadFailure } = await import("../../src/screens/records/scanRecei
 const { takeFlash } = await import("../../src/lib/flash");
 const { ImportCsvScreen } = await import("../../src/screens/records/ImportCsvScreen");
 const { AddExpenseScreen } = await import("../../src/screens/records/AddExpenseScreen");
+const {
+  beginServerStateSession,
+  clearServerStateCache,
+  fetchServerState,
+  peekServerState,
+} = await import("../../src/lib/serverStateCache");
 const navigation = { navigate: vi.fn(), goBack: vi.fn() };
 const wrapInMode = (node: React.ReactNode, mode: "light" | "dark") => <ThemeProvider initialMode={mode}>{node}</ThemeProvider>;
 const wrap = (node: React.ReactNode) => wrapInMode(node, "light");
-const accepted = { id: 41, businessProfileId: 1, receiptBatchId: null, receiptOrdinal: null, scanRevision: 0, processingStatus: "Processing", confirmationStatus: "Pending" };
+// items is [] rather than absent: toDTO always sends the array, empty while
+// the read is still queued.
+const accepted = { id: 41, businessProfileId: 1, receiptBatchId: null, receiptOrdinal: null, scanRevision: 0, processingStatus: "Processing", confirmationStatus: "Pending", items: [] };
 const complete = { id: 41, businessProfileId: 1, receiptBatchId: null, receiptOrdinal: null, scanRevision: 0, processingStatus: "Complete", confirmationStatus: "Pending", extractedDate: "2026-09-01", extractedVendor: "Supplier", extractedDescription: "Coffee beans", extractedAmount: 250, items: [{ id: 5, name: "Coffee beans", amount: 250, categoryId: 10 }], warnings: [], ocrConfidence: 96 };
 const unavailableConsent = { available: false, provider: null, consent: null, activeConsents: [] };
 const providerTerms = {
@@ -115,6 +144,8 @@ beforeEach(() => {
   selectedBusiness = fixtures.businessProfile;
   upload.mockReset(); post.mockReset(); get.mockReset(); put.mockReset(); patch.mockReset(); remove.mockReset(); poll.mockReset(); gallery.mockReset(); document.mockReset(); localFileByteSize.mockReset(); deleteScannerFiles.mockReset(); navigation.navigate.mockReset(); navigation.goBack.mockReset();
   cameraSections = [];
+  cameraCompletionsPerPress = 1;
+  renderedCameraMaxReceipts = undefined;
   gallery.mockResolvedValue({ canceled: false, assets: [{ uri: "file:///receipt.jpg", width: 600, height: 1000, fileName: "receipt.jpg", mimeType: "image/jpeg", fileSize: 2048 }] });
   document.mockResolvedValue({ canceled: false, assets: [{ uri: "file:///records.csv", name: "records.csv", size: 1024, mimeType: "text/csv" }] });
   upload.mockImplementation(async (path: string, form?: FormData) => {
@@ -223,24 +254,6 @@ describe("receipt scan review workflow", () => {
     expect(q.queryByRole("button", { name: "Save this expense" })).toBeNull();
     expect(q.getByRole("button", { name: "Choose a photo from your gallery" })).toBeEnabled();
     expect(navigation.goBack).not.toHaveBeenCalled();
-  });
-
-  it.each(["file:///cache/receipt.PNG", "content://documents/receipt/123"])("uploads a supported Files image from %s", async (uri) => {
-    const size = vi.spyOn(Image, "getSize").mockImplementation(async () => ({ width: 600, height: 1000 }));
-    const append = vi.spyOn(FormData.prototype, "append");
-    document.mockResolvedValue({ canceled: false, assets: [{ uri, name: "receipt.PNG", mimeType: "application/octet-stream", size: 1500 }] });
-    try {
-      const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
-      await fireEvent.press(q.getByRole("button", { name: "Choose a receipt from Files" }));
-      await waitFor(() => expect(q.getByRole("button", { name: "Scan this receipt" })).toBeEnabled());
-      expect(size).toHaveBeenCalledWith(uri);
-      await fireEvent.press(q.getByRole("button", { name: "Scan this receipt" }));
-      await waitFor(() => expect(q.getByRole("button", { name: "Save this expense" })).toBeTruthy());
-      expect(append).toHaveBeenCalledWith("files", { uri, name: "receipt.PNG", type: "image/png" });
-    } finally {
-      size.mockRestore();
-      append.mockRestore();
-    }
   });
 
   it("resumes an accepted scan without uploading it again after polling fails", async () => {
@@ -469,6 +482,64 @@ describe("receipt scan review workflow", () => {
     expect(upload.mock.calls.filter(([path]) => path === "/records/receipts")).toHaveLength(0);
   });
 
+  /*
+   * The server answers 409 RECEIPT_RETRY_IN_PROGRESS when the scan is already
+   * being read: a retry whose response was lost, or one that raced another.
+   * The work is underway, so the screen polls it rather than reporting a
+   * failed retry for a read the server is already doing.
+   */
+  it("resumes polling when the server says the retry is already underway", async () => {
+    const failedSummary = {
+      id: 83,
+      businessProfileId: 1,
+      receiptBatchId: null,
+      receiptOrdinal: null,
+      scanRevision: 0,
+      processingStatus: "Failed" as const,
+      confirmationStatus: "Pending" as const,
+      processingError: "The receipt could not be read.",
+      processingErrorCode: "OCR_FAILED",
+      extractedDate: null,
+      extractedVendor: null,
+      extractedDescription: null,
+      extractedAmount: null,
+      createdAt: "2026-09-13T10:00:00.000Z",
+      pageCount: 1,
+      allowedActions: { retryProcessing: true, reviewResult: false },
+    };
+    const failed = { ...complete, id: 83, processingStatus: "Failed" as const, processingError: failedSummary.processingError };
+    const retried = { ...complete, id: 83, scanRevision: 4 };
+    get.mockImplementation(async (path: string) => {
+      if (path.includes("provider-consent")) return unavailableConsent;
+      if (path === "/records/receipts") return { items: [failedSummary], nextCursor: null };
+      if (path === "/records/receipts/83") return failed;
+      throw new Error(`Unexpected GET ${path}`);
+    });
+    const conflictBody = {
+      error: "This receipt is already being read.",
+      code: "RECEIPT_RETRY_IN_PROGRESS",
+      scanId: 83,
+      processingStatus: "Processing",
+      scanRevision: 4,
+    };
+    post.mockImplementation(async (path: string) => {
+      if (path !== "/records/receipts/83/retry") return {};
+      throw Object.assign(new Error(conflictBody.error), { status: 409, code: conflictBody.code, responseBody: conflictBody });
+    });
+    poll.mockResolvedValue(retried);
+    const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
+
+    await waitFor(() => expect(q.getByRole("button", { name: /^Retry processing for Stored receipt 83/ })).toBeEnabled());
+    await fireEvent.press(q.getByRole("button", { name: /^Retry processing for Stored receipt 83/ }));
+
+    await waitFor(() => expect(q.getByRole("button", { name: "Save this expense" })).toBeEnabled());
+    expect(poll).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 83, processingStatus: "Processing", processingError: null, scanRevision: 4 }),
+      expect.anything(),
+    );
+    expect(q.queryByText(/already being read/)).toBeNull();
+  });
+
   it("retains a discovered receipt's batch binding across a transient poll failure", async () => {
     const batchSummary = {
       id: 84,
@@ -669,6 +740,36 @@ describe("receipt scan review workflow", () => {
     }
   });
 
+  it("presents Batch parts that share a receipt group as one long receipt", async () => {
+    const part = (name: string) => ({
+      localId: name,
+      originalUri: `file:///${name}.jpg`,
+      originalMimeType: "image/jpeg",
+      processedUri: `file:///${name}.jpg`,
+      processedMimeType: "image/jpeg",
+      width: 600,
+      height: 1000,
+      quality: null,
+      captureSource: "manual-camera",
+      captureMode: "standard",
+      processingMode: "original",
+      receiptGroupId: "long-receipt",
+    });
+    cameraSections = [part("top-part"), part("bottom-part")];
+    const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
+    await fireEvent.press(q.getByRole("button", { name: "Scan receipt" }));
+    await fireEvent.press(q.getByRole("button", { name: "Finish mocked camera with unsupported evidence" }));
+
+    expect(q.getByText("One long receipt in 2 parts, top to bottom. FinSight reads the parts together as one receipt.")).toBeTruthy();
+    expect(q.getByText("Part 1")).toBeTruthy();
+    expect(q.getByText("Part 2")).toBeTruthy();
+    expect(q.getByRole("button", { name: "Scan long receipt (2 parts)" })).toBeTruthy();
+    expect(q.getByRole("button", { name: "Review or add parts" })).toBeTruthy();
+    expect(q.getByRole("button", { name: "Move part 2 up" })).toBeTruthy();
+    expect(q.queryByText(/separate receipts/)).toBeNull();
+    expect(q.queryByText(/R1 · P1/)).toBeNull();
+  });
+
   it("accepts every durable batch child before polling or reviewing receipt 1", async () => {
     cameraSections = [{
       localId: "receipt-two",
@@ -727,6 +828,68 @@ describe("receipt scan review workflow", () => {
     await waitFor(() => expect(q.getByRole("button", { name: "Save this expense" })).toBeTruthy());
     receiptUploads = upload.mock.calls.filter(([path]) => path === "/records/receipts");
     expect(receiptUploads).toHaveLength(2);
+  });
+
+  it("accepts one camera completion when the same opening completes twice in one frame", async () => {
+    cameraSections = [{
+      localId: "receipt-two",
+      receiptGroupId: "camera-receipt-two",
+      originalUri: "file:///receipt-two.jpg",
+      originalMimeType: "image/jpeg",
+      processedUri: "file:///receipt-two.jpg",
+      processedMimeType: "image/jpeg",
+      width: 600,
+      height: 1000,
+      quality: null,
+      captureSource: "manual-camera",
+      captureMode: "standard",
+      processingMode: "original",
+    }];
+    cameraCompletionsPerPress = 2;
+    const q = await readyReceipt();
+
+    await fireEvent.press(q.getByRole("button", { name: "Capture a separate receipt" }));
+    await fireEvent.press(q.getByRole("button", { name: "Finish mocked camera with unsupported evidence" }));
+
+    await waitFor(() => expect(q.getByRole("button", { name: "Scan 2 separate receipts" })).toBeEnabled());
+    expect(q.queryByRole("button", { name: "Scan 3 separate receipts" })).toBeNull();
+    expect(q.getAllByRole("button", { name: /^Review receipt \d+ photos$/ })).toHaveLength(2);
+  });
+
+  it("rejects a 7 plus 2 camera handoff, then accepts one receipt without losing the batch", async () => {
+    const cameraSection = (index: number, groupId: string) => ({
+      localId: `receipt-${index}`,
+      receiptGroupId: groupId,
+      originalUri: `file:///receipt-${index}.jpg`,
+      originalMimeType: "image/jpeg",
+      processedUri: `file:///receipt-${index}.jpg`,
+      processedMimeType: "image/jpeg",
+      width: 600,
+      height: 1000,
+      quality: null,
+      captureSource: "manual-camera",
+      captureMode: "standard",
+      processingMode: "original",
+    });
+    const q = await readyReceipt();
+    for (let index = 2; index <= 7; index += 1) {
+      cameraSections = [cameraSection(index, `camera-group-${index}`)];
+      await fireEvent.press(q.getByRole("button", { name: "Capture a separate receipt" }));
+      await fireEvent.press(q.getByRole("button", { name: "Finish mocked camera with unsupported evidence" }));
+      await waitFor(() => expect(q.getByRole("button", { name: `Scan ${index} separate receipts` })).toBeEnabled());
+    }
+
+    cameraSections = [cameraSection(8, "camera-group-8"), cameraSection(9, "camera-group-9")];
+    await fireEvent.press(q.getByRole("button", { name: "Capture a separate receipt" }));
+    expect(renderedCameraMaxReceipts).toBe(1);
+    await fireEvent.press(q.getByRole("button", { name: "Finish mocked camera with unsupported evidence" }));
+    expect(q.getByRole("alert")).toHaveTextContent(/up to 8 receipts/i);
+
+    cameraSections = [cameraSection(8, "camera-group-8")];
+    await fireEvent.press(q.getByRole("button", { name: "Finish mocked camera with unsupported evidence" }));
+    await waitFor(() => expect(q.getByRole("button", { name: "Scan 8 separate receipts" })).toBeEnabled());
+    expect(q.getAllByRole("button", { name: /^Review receipt \d+ photos$/ })).toHaveLength(8);
+    expect(q.queryByRole("button", { name: "Capture a separate receipt" })).toBeNull();
   });
 
   it("starts one batch recovery attempt for one Continue batch upload action", async () => {
@@ -1062,7 +1225,11 @@ describe("receipt scan review workflow", () => {
     });
 
     await fireEvent.press(q.getByRole("button", { name: "Save this expense" }));
-    expect(post).toHaveBeenCalledWith("/records/receipts/41/confirm", expect.objectContaining({ expectedScanRevision: 1 }));
+    expect(post).toHaveBeenCalledWith(
+      "/records/receipts/41/confirm",
+      expect.objectContaining({ expectedScanRevision: 1 }),
+      { cacheScope: { businessProfileId: 1 } },
+    );
   });
 
   it("keeps a typed item correction when a stale edit reloads the latest receipt", async () => {
@@ -1125,6 +1292,37 @@ describe("receipt scan review workflow", () => {
     expect(remove).toHaveBeenLastCalledWith("/records/receipts/41/items/5?expectedScanRevision=3");
   });
 
+  it("lets the owner remove or keep an item that may repeat across overlapping photos", async () => {
+    const flagged = {
+      ...complete,
+      extractedAmount: 440,
+      items: [
+        { id: 5, name: "Bread", amount: 50, categoryId: 10 },
+        { id: 6, name: "Eggs", amount: 120, categoryId: 10 },
+        { id: 7, name: "Eggs", amount: 120, categoryId: 10, possibleRepeatOf: { pageNumber: 1, name: "Eggs", amount: 120 } },
+        { id: 8, name: "Rice", amount: 150, categoryId: 10, possibleRepeatOf: { pageNumber: 1, name: "Rice", amount: 150 } },
+      ],
+      warnings: [{ code: "POSSIBLE_REPEATED_ITEMS", guidance: "Some items may be counted twice because the photos overlap. Check the marked items.", pageNumber: 2 }],
+    };
+    poll.mockResolvedValue(flagged);
+    remove.mockImplementation(async () => ({ ...flagged, scanRevision: 1, items: flagged.items.filter((entry) => entry.id !== 8) }));
+    const q = await readyReceipt();
+    await fireEvent.press(q.getByRole("button", { name: "Scan this receipt" }));
+
+    await waitFor(() => expect(q.getByRole("button", { name: "Keep Eggs, it is a separate purchase" })).toBeTruthy());
+    expect(q.getByText("May be counted twice. Your photos overlap, and page 1 also shows Eggs for PHP 120.00.")).toBeTruthy();
+    expect(q.getByText(/Some items may be counted twice/)).toBeTruthy();
+
+    await fireEvent.press(q.getByRole("button", { name: "Keep Eggs, it is a separate purchase" }));
+    expect(q.queryByRole("button", { name: "Keep Eggs, it is a separate purchase" })).toBeNull();
+    expect(remove).not.toHaveBeenCalled();
+
+    await fireEvent.press(q.getByRole("button", { name: "Remove Rice, it repeats page 1" }));
+    await waitFor(() => expect(q.queryByText("Rice")).toBeNull());
+    expect(remove).toHaveBeenLastCalledWith("/records/receipts/41/items/8?expectedScanRevision=0");
+    expect(q.getAllByText("Eggs")).toHaveLength(2);
+  });
+
   it("shows profile-safe duplicate candidates and saves only after an explicit override", async () => {
     const duplicateBody = {
       error: "Review possible duplicates before saving.",
@@ -1167,6 +1365,7 @@ describe("receipt scan review workflow", () => {
     expect(post.mock.calls[0]).toEqual([
       "/records/receipts/41/confirm",
       expect.not.objectContaining({ duplicateDecision: expect.anything() }),
+      { cacheScope: { businessProfileId: 1 } },
     ]);
     expect(post.mock.calls[1]).toEqual([
       "/records/receipts/41/confirm",
@@ -1174,6 +1373,7 @@ describe("receipt scan review workflow", () => {
         expectedScanRevision: 0,
         duplicateDecision: { action: "SAVE_ANYWAY", candidateSetHash: "b".repeat(64) },
       }),
+      { cacheScope: { businessProfileId: 1 } },
     ]);
   });
 
@@ -1311,14 +1511,6 @@ describe("receipt scan review workflow", () => {
     await fireEvent.press(q.getByRole("button", { name: "Enter expense manually" }));
     expect(navigation.navigate).toHaveBeenCalledWith("AddExpense");
     expect(post).not.toHaveBeenCalled();
-  });
-
-  it("rejects unsupported receipt files before contacting the server", async () => {
-    document.mockResolvedValue({ canceled: false, assets: [{ uri: "file:///receipt.pdf", name: "receipt.pdf", mimeType: "application/pdf", size: 1500 }] });
-    const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
-    await fireEvent.press(q.getByRole("button", { name: "Choose a receipt from Files" }));
-    await waitFor(() => expect(q.getByText(/PDF receipts are not supported/)).toBeTruthy());
-    expect(upload).not.toHaveBeenCalled();
   });
 
   it("keeps mocked oversized gallery evidence available for review or removal and never uploads it", async () => {
@@ -1825,6 +2017,46 @@ describe("CSV preflight and results", () => {
     expect(q.getByText("Some row details are unavailable here. Check the original file.")).toBeTruthy();
   });
 
+  it("invalidates scoped record and insight caches when an asynchronous import actually completes", async () => {
+    beginServerStateSession("async-csv-complete");
+    const paths = ["/records/months", "/records/search", "/dashboard/summary", "/insights/expense-overview"];
+    await Promise.all(paths.flatMap((path) => [1, 2].map((businessProfileId) => fetchServerState({
+      path,
+      query: { businessProfileId },
+      fetcher: async () => ({ path, businessProfileId }),
+    }))));
+    await Promise.all([1, 2].map((businessProfileId) => fetchServerState({
+      path: `/business-profiles/${businessProfileId}/financial-position`,
+      fetcher: async () => ({ businessProfileId }),
+    })));
+    upload.mockImplementation(async (path: string, form: FormData) => {
+      if (path.endsWith("confirm")) return { batchId: 12, processingStatus: "PENDING", totalRows: 10 };
+      if (form.get("recordType")) {
+        return { validation: { validRows: 10, invalidRows: 0, skipped: [], skippedTruncated: false } };
+      }
+      return preview;
+    });
+    get.mockResolvedValue({
+      processingStatus: "COMPLETE",
+      totalRows: 10,
+      importedRows: 10,
+      skippedRows: 0,
+      flaggedRows: 0,
+      resultSummary: {},
+    });
+
+    const q = await confirmCsv();
+    expect(await q.findByText("Import complete", {}, { timeout: 4000 })).toBeTruthy();
+
+    for (const path of paths) {
+      expect(peekServerState(path, { businessProfileId: 1 })).toBeNull();
+      expect(peekServerState(path, { businessProfileId: 2 })).not.toBeNull();
+    }
+    expect(peekServerState("/business-profiles/1/financial-position")).toBeNull();
+    expect(peekServerState("/business-profiles/2/financial-position")).not.toBeNull();
+    clearServerStateCache();
+  });
+
   it("rejects stale preflight counts when an already-focused field changes during validation", async () => {
     let finishPreview!: (value: unknown) => void;
     let checks = 0;
@@ -1849,6 +2081,19 @@ describe("CSV preflight and results", () => {
   });
 
   it.each(["poll", "replay"])("reports committed rows after terminal failure from %s without offering a full-file retry", async (source) => {
+    const cachedPaths = ["/records/months", "/records/search", "/dashboard/summary", "/insights/expense-overview"];
+    if (source === "poll") {
+      beginServerStateSession("async-csv-failed");
+      await Promise.all(cachedPaths.flatMap((path) => [1, 2].map((businessProfileId) => fetchServerState({
+        path,
+        query: { businessProfileId },
+        fetcher: async () => ({ path, businessProfileId }),
+      }))));
+      await Promise.all([1, 2].map((businessProfileId) => fetchServerState({
+        path: `/business-profiles/${businessProfileId}/financial-position`,
+        fetcher: async () => ({ businessProfileId }),
+      })));
+    }
     upload.mockImplementation(async (path: string, form: FormData) => {
       if (path.endsWith("confirm")) return source === "poll"
         ? { batchId: 12, processingStatus: "PENDING", totalRows: 10 }
@@ -1869,6 +2114,15 @@ describe("CSV preflight and results", () => {
     expect(q.queryByText("Import complete")).toBeNull();
     expect(q.queryByRole("button", { name: "Check progress" })).toBeNull();
     expect(q.queryByText(/Nothing was half-saved/)).toBeNull();
+    if (source === "poll") {
+      for (const path of cachedPaths) {
+        expect(peekServerState(path, { businessProfileId: 1 })).toBeNull();
+        expect(peekServerState(path, { businessProfileId: 2 })).not.toBeNull();
+      }
+      expect(peekServerState("/business-profiles/1/financial-position")).toBeNull();
+      expect(peekServerState("/business-profiles/2/financial-position")).not.toBeNull();
+      clearServerStateCache();
+    }
     await fireEvent.press(q.getByRole("button", { name: "Review saved records" }));
     expect(navigation.navigate).toHaveBeenCalledWith("RecordsList");
     expect(upload.mock.calls.filter(([path]) => path.endsWith("confirm"))).toHaveLength(1);

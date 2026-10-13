@@ -1,16 +1,30 @@
 import { createHash, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
+import { promisify } from "node:util";
+import { gunzip, gzip } from "node:zlib";
 import { parse } from "csv-parse/sync";
-import { CsvImportProcessingStatus, Prisma } from "@prisma/client";
+import { AccountStatus, CsvImportProcessingStatus, Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { logger } from "../config/logger";
 import { ApiError } from "../middleware/error.middleware";
+import { businessTodayKey, isAfterToday } from "../lib/transactionDate";
+import { utcAddDays, utcDateKey, utcToday } from "../lib/dates";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
-import { uploadCsvFile, downloadCsvFile, deleteCsvFile } from "./storage.service";
+import {
+  csvFileReference,
+  uploadCsvFileAtReference,
+  downloadCsvFile,
+  deleteCsvFile,
+} from "./storage.service";
 import { bulkCreateExpenseRecords, duplicateKeyOf } from "./expenseRecord.service";
 import { bulkCreateSalesRecords } from "./salesRecord.service";
 import { createNotification, NOTIFICATION_TYPES } from "./notification.service";
 import { enqueueExpenseAnalyses, enqueueProfileRefresh } from "./anomalyDetection/job.service";
+import {
+  enqueueCsvSourcePurgesIfOrphaned,
+  enqueueDetachedCsvSourcePurge,
+  enqueueCsvSourcePurgeForTerminalBatch,
+} from "./csvSourcePurge.service";
 import {
   ambiguousDateExample,
   detectDateFormat,
@@ -21,14 +35,22 @@ import {
 import {
   classifyTypeValue,
   columnsWithSignedAmounts,
-  DEFAULT_IMPORT_CATEGORY,
   DETECTION_SAMPLE_ROWS,
   detectTypeColumn,
   parseSignedAmount,
   type RowRecordType,
 } from "../lib/recordTypeDetection";
 import { categoryFromHistory, loadConfirmedCategoryHistory } from "../lib/categoryHistory";
+import { detectColumns, type ExtraField } from "../lib/csvColumnDetection";
+import {
+  createImportCategoriser,
+  type ImportCategoriser,
+  type ImportCategoryDecision,
+} from "../lib/importCategoriser";
 import { expenseDuplicateKeysOf } from "../lib/expenseDuplicateIdentity";
+import { CSV_MAX_FILE_BYTES, validateCsvUploadBytes } from "../lib/csvUploadValidation";
+import { lockExpenseDuplicateWriteGate, lockSalesDuplicateWriteGate } from "../lib/recordLock";
+import { resolveAvailableFundsClassification } from "./availableFundsBaseline.service";
 
 export interface ColumnMapping {
   date: string;
@@ -72,6 +94,11 @@ export interface PreviewResult {
   headers: string[];
   previewRows: Record<string, string>[];
   totalRows: number;
+  availableFundsBaseline: {
+    baselineAt: string;
+    baselineDate: string;
+    matchingRowCount: number;
+  } | null;
   /**
    * What the file appears to say about sales versus expenses, so the client can
    * OFFER a mixed import rather than making the owner know to ask for one.
@@ -92,8 +119,35 @@ export interface PreviewResult {
   detectedDateFormat: CsvDateFormat;
   dateFormatAmbiguous: boolean;
   suggestedMapping: Partial<ColumnMapping>;
+  /**
+   * The rest of what the importer read from the headings: columns FinSight
+   * recognised but has no field for (shown as not imported, never silently
+   * dropped), and whether the file looks like sales or expenses.
+   */
+  columnDetection?: {
+    unmapped: { header: string; field: ExtraField | null }[];
+    suggestedRecordType: "expense" | "sales" | null;
+  };
+  /** History-only suggestions for rows with no category. Kept for older clients. */
   categorySuggestions?: { row: number; categoryId: number; categoryName: string; source: "history" }[];
   categorySuggestionsTruncated?: boolean;
+  /**
+   * Rows past the preview sample that need the owner's eyes — skipped, possible
+   * duplicates, or with no category — so they can be corrected on the review
+   * screen instead of being fixed in the spreadsheet and uploaded again.
+   */
+  reviewRows?: { row: number; values: Record<string, string> }[];
+  reviewRowsTruncated?: boolean;
+  /** The category each on-screen expense row will be saved under, and why. */
+  rowCategories?: ({ row: number } & ImportCategoryDecision)[];
+  /** Category decisions across the whole file. */
+  categorySummary?: {
+    fromFile: number;
+    suggested: number;
+    uncategorised: number;
+    /** Categories this import would create, with how many rows use each. */
+    newCategories: { name: string; rows: number }[];
+  };
   /** Full-file validation; the error list is bounded to keep previews small. */
   validation?: {
     validRows: number;
@@ -104,6 +158,28 @@ export interface PreviewResult {
     duplicateRows: number[];
     duplicateRowsTruncated: boolean;
   };
+}
+
+export interface StagedPreviewResult extends PreviewResult {
+  stagedUploadId: string;
+  stageExpiresAt: string;
+}
+
+export interface CsvOperationTimings {
+  totalMs: number;
+  parseMs?: number;
+  storageMs?: number;
+  validationMs?: number;
+  chunkEncodeMs?: number;
+  chunkPersistMs?: number;
+  chunkLoadMs?: number;
+  decompressMs?: number;
+  insertMs?: number;
+}
+
+export interface TimedCsvResult<T> {
+  result: T;
+  timings: CsvOperationTimings;
 }
 
 export interface PreviewOptions {
@@ -117,7 +193,16 @@ export interface PreviewOptions {
 /** Replacement cell values, keyed by spreadsheet row number as a string. */
 export type RowCorrections = Record<
   string,
-  { date?: string; description?: string; amount?: string; category?: string }
+  {
+    date?: string;
+    description?: string;
+    amount?: string;
+    category?: string;
+    vendor?: string;
+    includedInAvailableFundsBaseline?: boolean;
+    /** The owner removed this row on the review screen; it is not imported. */
+    exclude?: boolean;
+  }
 >;
 
 export interface ConfirmInput {
@@ -141,7 +226,11 @@ export interface ConfirmInput {
   idempotencyKey?: string;
   /** The owner's answer when the file's dates are ambiguous. */
   dateFormat?: ConfirmDateFormat;
+  includedInAvailableFundsBaseline?: boolean;
+  availableFundsBaselineAt?: string;
 }
+
+export type StagedConfirmInput = Omit<ConfirmInput, "businessProfileId" | "buffer" | "originalname" | "idempotencyKey">;
 
 export interface SkippedRow {
   row: number;
@@ -175,47 +264,25 @@ export interface ConfirmResult {
   duplicateOfBatchId?: number;
 }
 
-/**
- * The most data rows one import may carry.
+/*
+ * THERE IS NO ROW LIMIT. The file size is the limit: CSV_MAX_FILE_BYTES (5 MB),
+ * checked by multer on upload and again in parseCsv for files read back from
+ * Storage.
  *
- * WHY ROWS AND NOT MEGABYTES. The upload is already capped at 5 MB by multer,
- * and that number says almost nothing about how much work the file represents.
- * A CSV is plain text, so its size tracks the CHARACTERS in it, not the records:
+ * There used to be a row cap (5,000, then 30,000, then 100,000), and owners
+ * kept meeting it with ordinary files — a burger stall's three years of
+ * per-sale history is 64,158 rows in 4.8 MB. Rows are what an import costs, but
+ * 5 MB already bounds them: the shortest row an import can use
+ * (`2026-01-01,a,1`) is 15 bytes, so the worst case is ~350,000 rows. Measured
+ * against that file: ~1.4s to parse and ~64 MB of memory, and files above
+ * SYNC_ROW_LIMIT run on the durable worker in CHUNK_SIZE checkpoints with a
+ * renewed lease, so a large file costs worker time, not a request.
  *
- *   `2026-01-05,Load,120`            ~25 bytes  →  5 MB is ~200,000 rows
- *   a row with a full description   ~600 bytes  →  5 MB is ~8,000 rows
- *
- * A twenty-five-fold swing in work for an identical file size — and every row
- * becomes an ExpenseRecord with its own validation, duplicate check, large-
- * expense evaluation and downstream analysis job. Bytes are the wrong unit for
- * the thing that actually costs; rows are the thing that costs.
- *
- * WHERE 30,000 COMES FROM. Measured, against a local Postgres, on the real
- * bulkCreate path rather than on a guess:
- *
- *   30,000 typical rows                       ~5.0s
- *   30,000 with 15% duplicates, 10% flagged   ~4.7s
- *   30,000 rows that ALL repeat one another  ~18.1s  -> now ~5s, see below
- *
- * The writes are bulk (`createManyAndReturn`, `createMany`), so cost is linear
- * at roughly 160µs a row. The one path that was not bulk — relinking rows that
- * duplicate an earlier row of the same file — issued a statement per duplicate
- * and produced that 18s outlier; it is now grouped by target, so the
- * pathological file costs about what an ordinary one does.
- *
- * The earlier cap was 5,000, chosen for a shop recording expenses daily
- * (~365 rows a year). That reasoning undercounted the real case: a business
- * importing per-transaction SALES history can produce 50-100 rows a day, and
- * 5,000 is then under three months. 30,000 is about a year of that, or decades
- * of daily expense logging.
- *
- * It stays a guard against a runaway or mistaken file rather than a quota.
- * Files above SYNC_ROW_LIMIT no longer run inside the request at all — they
- * go to the durable worker — so the cap now bounds the worker's chunked pass,
- * not a response time. If an owner meets this limit the answer is still to
- * split the file, and the message says so.
+ * What still guards the server is structure, not row count: MAX_CSV_TOTAL_CELLS
+ * and MAX_CSV_ESTIMATED_PARSED_BYTES refuse a file of mostly-empty cells — a
+ * 5 MB file of bare commas is over five million of them — while leaving room
+ * for every file with real values in it.
  */
-export const MAX_IMPORT_ROWS = 30_000;
 
 /**
  * The largest import still run inside the HTTP request.
@@ -231,16 +298,44 @@ export const SYNC_ROW_LIMIT = 2_000;
 
 /**
  * Rows committed per worker transaction. Small enough that one chunk's
- * transaction is short-lived (~0.2s measured), large enough that a full
- * 30,000-row file is 30 checkpoints, not 3,000 round trips.
+ * transaction is short-lived (~0.2s measured), large enough that even the
+ * largest 5 MB file is a few hundred checkpoints, not hundreds of thousands of
+ * round trips.
  */
 const CHUNK_SIZE = 1_000;
 
 /** Recorded in mappingMeta so a stored batch says which parser produced it. */
 export const CSV_PARSER_VERSION = "csv-import-v2";
 
+const STAGED_UPLOAD_TTL_MS = 24 * 60 * 60_000;
+export const STAGING_UPLOAD_LEASE_MS = 2 * 60_000;
+const STAGE_CHUNK_ROWS = 1_000;
+const STAGE_CHUNK_ENCODING = "header-matrix-json-gzip-v1";
+const STAGE_TOTAL_MAX_INFLATED_BYTES = 32 * 1024 * 1024;
+const STAGE_CHUNK_MAX_INFLATED_BYTES = STAGE_TOTAL_MAX_INFLATED_BYTES;
+const MAX_CSV_COLUMNS = 256;
+const MAX_CSV_HEADER_LENGTH = 255;
+const MAX_CSV_RECORD_SIZE = 256 * 1024;
+/*
+ * Sized so every 5 MB file with values in it fits: the widest measured one
+ * (ten columns, seven of them empty) is ~2.4 million cells. Three million
+ * empty cells cost ~50 MB of memory to parse, measured; a 5 MB file of bare
+ * commas, at over five million, is refused.
+ */
+const MAX_CSV_TOTAL_CELLS = 3_000_000;
+/** cells × ESTIMATED_CELL_OVERHEAD_BYTES + the file itself, at MAX_CSV_TOTAL_CELLS, with headroom. */
+const MAX_CSV_ESTIMATED_PARSED_BYTES = 128 * 1024 * 1024;
+const ESTIMATED_CELL_OVERHEAD_BYTES = 32;
+export const CSV_AMBIGUOUS_UPLOAD_TOMBSTONE_GRACE_MS = 5 * 60_000;
+export const CSV_STAGE_OUTSTANDING_LIMIT = 5;
+export const CSV_STAGE_OUTSTANDING_BYTES_LIMIT = 25 * 1024 * 1024;
+export const CSV_STAGE_CREATION_HOURLY_LIMIT = 60;
+const CSV_STAGE_CREATION_WINDOW_MS = 60 * 60_000;
+const gzipAsync = promisify(gzip);
+const gunzipAsync = promisify(gunzip);
+
 /** Per-row skip reasons persisted on the batch. Capped so a wholly-broken
- * 30,000-row file cannot turn resultSummary into a megabyte of JSON. */
+ * 5 MB file cannot turn resultSummary into a megabyte of JSON. */
 const SKIPPED_SUMMARY_CAP = 500;
 
 // Cell caps mirror the VARCHAR widths in schema.prisma. Checked at validation
@@ -256,8 +351,50 @@ const MAX_AMOUNT_EXCLUSIVE = 1e10;
 
 const CSV_WORKER_ID = `csv:${hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`;
 const SYNC_WORKER_ID = `csv-sync:${hostname()}:${process.pid}`;
+const STAGE_WORKER_ID = `csv-stage:${hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`;
 const CSV_LEASE_MS = 2 * 60_000;
 const CSV_MAX_ATTEMPTS = 5;
+
+function stageCreationRateKey(userId: number): string {
+  return `csv-stage-create:u${userId}:${randomUUID()}`;
+}
+
+async function assertCsvOutstandingCapacity(
+  tx: Prisma.TransactionClient,
+  userId: number,
+  additionalBytes: number,
+): Promise<void> {
+  const outstanding = await tx.cSVImportBatch.aggregate({
+    where: {
+      processingStatus: {
+        in: [
+          CsvImportProcessingStatus.STAGING,
+          CsvImportProcessingStatus.STAGED,
+          CsvImportProcessingStatus.PENDING,
+          CsvImportProcessingStatus.PROCESSING,
+        ],
+      },
+      businessProfile: { userId },
+    },
+    _count: { _all: true },
+    _sum: { fileSizeBytes: true },
+  });
+  if (outstanding._count._all >= CSV_STAGE_OUTSTANDING_LIMIT) {
+    throw new ApiError(
+      429,
+      `You can keep up to ${CSV_STAGE_OUTSTANDING_LIMIT} CSV imports in progress. Finish or remove one and try again.`,
+      { code: "CSV_STAGE_OUTSTANDING_LIMIT" },
+    );
+  }
+  const outstandingBytes = outstanding._sum.fileSizeBytes ?? 0;
+  if (outstandingBytes + additionalBytes > CSV_STAGE_OUTSTANDING_BYTES_LIMIT) {
+    throw new ApiError(
+      413,
+      "Your in-progress CSV imports have reached the temporary storage limit. Finish or remove one and try again.",
+      { code: "CSV_STAGE_STORAGE_LIMIT" },
+    );
+  }
+}
 
 /** Carries WHICH stage failed up to the retry bookkeeping, so failureStage is
  * a diagnosis ("download", "parse") rather than a catch-all. */
@@ -269,6 +406,76 @@ class ImportStageError extends Error {
     super(message);
     this.name = "ImportStageError";
   }
+}
+
+/** Raised when a checkpoint or heartbeat finds the batch is no longer leased
+ * by this attempt. The attempt must stop touching the row: another worker owns
+ * it, and even a failure written from here would overwrite that worker's
+ * state. Same discipline as ReceiptLeaseLostError in receiptScan/worker.ts. */
+class CsvLeaseLostError extends Error {
+  constructor(batchId: number) {
+    super(`CSV import batch ${batchId} lease was reclaimed`);
+    this.name = "CsvLeaseLostError";
+  }
+}
+
+function stableCsvFailureCode(stage: string, error: unknown): string {
+  if (error instanceof ApiError && error.code) return error.code;
+  if (error instanceof Prisma.PrismaClientKnownRequestError) return error.code;
+  if (error instanceof ImportStageError) return `CSV_${error.stage.toUpperCase()}_FAILED`;
+  const kind = error instanceof Error ? error.name : "UnknownError";
+  return `CSV_${stage.toUpperCase()}_FAILED_${kind}`.replace(/[^A-Z0-9_]/g, "_").slice(0, 100);
+}
+
+function safeCsvFailureSummary(stage: string, error: unknown): string {
+  return `CSV import failed during ${stage} (${stableCsvFailureCode(stage, error)})`.slice(0, 500);
+}
+
+interface ImportLease {
+  workerId: string;
+  attemptCount: number;
+}
+
+/**
+ * Prove this attempt still owns the batch and push the heartbeat forward.
+ *
+ * Called between the worker's long phases (download, parse, validate), none of
+ * which writes anything: a 10 MB file off degraded Storage can outlast
+ * CSV_LEASE_MS before the first chunk checkpoint, and a healthy long download
+ * then reads as an abandoned lease to the next worker tick.
+ */
+/**
+ * The predicate every write by this attempt carries.
+ *
+ * `a2fff99` fixed the path that mattered — a reclaimed lease no longer
+ * replays chunks from row 0 — but the TERMINAL transitions still wrote by id
+ * alone. An attempt that has lost the row can still reach them (the loss is
+ * only detected on the next guarded write), and each of them rewrites status,
+ * workerId and nextAttemptAt: complete would mark the new owner's in-flight
+ * attempt COMPLETE and send the owner a summary notification built from stale
+ * counts; defer would reset it to PENDING mid-chunk. Unreachable today is not
+ * the same as guarded.
+ */
+function ownedByAttempt(batchId: number, lease: ImportLease) {
+  return {
+    id: batchId,
+    processingStatus: CsvImportProcessingStatus.PROCESSING,
+    workerId: lease.workerId,
+    attemptCount: lease.attemptCount,
+  };
+}
+
+async function heartbeatImportBatch(batchId: number, lease: ImportLease): Promise<void> {
+  const beat = await prisma.cSVImportBatch.updateMany({
+    where: {
+      id: batchId,
+      processingStatus: CsvImportProcessingStatus.PROCESSING,
+      workerId: lease.workerId,
+      attemptCount: lease.attemptCount,
+    },
+    data: { heartbeatAt: new Date() },
+  });
+  if (beat.count !== 1) throw new CsvLeaseLostError(batchId);
 }
 
 // ============================================================
@@ -306,28 +513,38 @@ function detectDelimiter(buffer: Buffer): string {
   return best;
 }
 
-function parseCsv(buffer: Buffer): { records: Record<string, string>[]; delimiter: string; headers: string[] } {
-  /*
-   * A NUL byte never appears in a text CSV but appears constantly in the
-   * things owners upload by mistake — .xlsx files renamed to .csv, PDFs,
-   * UTF-16 exports. Refused with a message that says what to do, instead of
-   * letting csv-parse produce one garbage column whose every row "fails
-   * validation".
-   */
-  if (buffer.includes(0)) {
-    throw new ApiError(
-      400,
-      "This file is not a plain-text CSV — it contains binary data. " +
-        "If it came from Excel, use File → Save As → CSV and upload that file instead.",
-    );
+interface ParsedCsv {
+  records: Record<string, string>[];
+  delimiter: string;
+  headers: string[];
+}
+
+function parseCsv(buffer: Buffer): ParsedCsv {
+  if (buffer.byteLength > CSV_MAX_FILE_BYTES) {
+    throw new ApiError(413, "This file is larger than 5 MB. Split it into smaller files and import them one at a time.", {
+      code: "CSV_FILE_TOO_LARGE",
+    });
   }
+  validateCsvUploadBytes(buffer);
 
   const delimiter = detectDelimiter(buffer);
   let headers: string[] = [];
   let records: Record<string, string>[];
+  let parsedCells = 0;
+  let estimatedParsedBytes = 0;
   try {
     records = parse(buffer, {
       columns: (columns: string[]) => {
+        if (columns.length > MAX_CSV_COLUMNS) {
+          throw new ApiError(400, `CSV files can have at most ${MAX_CSV_COLUMNS} columns.`, {
+            code: "CSV_HEADER_LIMIT_EXCEEDED",
+          });
+        }
+        if (columns.some((header) => header.length > MAX_CSV_HEADER_LENGTH)) {
+          throw new ApiError(400, `CSV column headers must be ${MAX_CSV_HEADER_LENGTH} characters or fewer.`, {
+            code: "CSV_HEADER_LIMIT_EXCEEDED",
+          });
+        }
         if (columns.some((header) => !header.trim())) {
           throw new ApiError(400, "Every CSV column needs a header. Name the empty columns and try again.");
         }
@@ -341,25 +558,37 @@ function parseCsv(buffer: Buffer): { records: Record<string, string>[]; delimite
       trim: true,
       bom: true,
       delimiter,
+      max_record_size: MAX_CSV_RECORD_SIZE,
+      on_record: (record: Record<string, string>) => {
+        const values = Object.values(record);
+        parsedCells += values.length;
+        for (const value of values) {
+          estimatedParsedBytes += Buffer.byteLength(value, "utf8") + ESTIMATED_CELL_OVERHEAD_BYTES;
+        }
+        if (
+          parsedCells > MAX_CSV_TOTAL_CELLS ||
+          estimatedParsedBytes > MAX_CSV_ESTIMATED_PARSED_BYTES
+        ) {
+          throw new ApiError(413, "This CSV is too large or complex to process safely. Split it into smaller files.", {
+            code: "CSV_PARSE_LIMIT_EXCEEDED",
+          });
+        }
+        return record;
+      },
     }) as Record<string, string>[];
   } catch (error) {
     if (error instanceof ApiError) throw error;
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error as Error & { code?: unknown }).code === "CSV_MAX_RECORD_SIZE"
+    ) {
+      throw new ApiError(413, "A CSV row is too large to process safely. Split the file and try again.", {
+        code: "CSV_PARSE_LIMIT_EXCEEDED",
+      });
+    }
     // Parser errors can contain raw financial cells. Neither log nor return them.
     throw new ApiError(400, "This CSV could not be read. Check its quotes and column counts, then try again.");
-  }
-
-  /*
-   * Checked HERE rather than at each call site, so preview and confirm cannot
-   * disagree — an oversized file must be refused on the mapping screen, before
-   * an owner spends time matching columns for an import that was never going to
-   * run.
-   */
-  if (records.length > MAX_IMPORT_ROWS) {
-    throw new ApiError(
-      400,
-      `This file has ${records.length.toLocaleString()} rows and the limit is ${MAX_IMPORT_ROWS.toLocaleString()}. ` +
-        `Split it into smaller files — by month or by year — and import them one at a time.`,
-    );
   }
 
   return { records, delimiter, headers };
@@ -370,6 +599,12 @@ function parseCsv(buffer: Buffer): { records: Record<string, string>[]; delimite
 // laptop. 50 is still a trivial payload (a few tens of KB) and covers a full
 // screen of scrolling on any display.
 const PREVIEW_ROW_LIMIT = 50;
+
+/** The skip reason for a row the owner removed on the review screen. */
+export const REMOVED_IN_REVIEW = "Removed in review";
+
+/** Rows beyond the preview sample returned for review; bounded so a broken file stays a small response. */
+const REVIEW_ROW_LIMIT = 200;
 
 /**
  * Finds the first date-shaped column and reads its convention.
@@ -392,28 +627,6 @@ function detectDateFormatFromRecords(records: Record<string, string>[]) {
     }
   }
   return { format: "iso" as CsvDateFormat, ambiguous: false };
-}
-
-const HEADER_SYNONYMS: Record<Exclude<keyof ColumnMapping, "recordType">, string[]> = {
-  date: ["date", "txn date", "transaction date", "trans date", "posted", "day", "petsa"],
-  description: ["description", "item", "particulars", "details", "detail", "memo", "notes", "note"],
-  amount: ["amount", "total", "price", "cost", "value", "debit", "halaga", "cash out"],
-  category: ["category", "type", "class", "account", "group", "uri"],
-  vendor: ["vendor", "supplier", "store", "shop", "merchant", "payee", "seller", "from", "tindahan"],
-};
-
-function suggestMapping(headers: string[], typeColumn: string | null): Partial<ColumnMapping> {
-  const suggested: Partial<ColumnMapping> = {};
-  const normalise = (header: string) => header.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
-  for (const field of Object.keys(HEADER_SYNONYMS) as (keyof typeof HEADER_SYNONYMS)[]) {
-    const candidates = field === "category" ? headers.filter((header) => header !== typeColumn) : headers;
-    const synonyms = HEADER_SYNONYMS[field];
-    const match = candidates.find((header) => synonyms.includes(normalise(header)))
-      ?? candidates.find((header) => synonyms.some((synonym) => normalise(header).includes(synonym)));
-    if (match) suggested[field] = match;
-  }
-  if (typeColumn) suggested.recordType = typeColumn;
-  return suggested;
 }
 
 function validateMapping(headers: string[], options: PreviewOptions): void {
@@ -453,8 +666,25 @@ function summarisePreviewDuplicates(outcomes: RowOutcome[], existingKeys: Set<st
   return { possibleDuplicateRows, duplicateRows, duplicateRowsTruncated: possibleDuplicateRows > duplicateRows.length };
 }
 
-function prepareCsvPreview(buffer: Buffer, options?: PreviewOptions): { result: PreviewResult; outcomes: RowOutcome[]; records: Record<string, string>[] } {
-  const { records, headers } = parseCsv(buffer);
+/** The business's today, for rejecting rows dated after it. */
+/**
+ * A preview with no business attached (tests, an old batch's preview) cannot
+ * know whose today applies, so it allows the latest calendar day anywhere:
+ * UTC plus one. Every import that writes records passes the business's own day.
+ */
+function latestDateWithoutBusiness(): string {
+  return utcDateKey(utcAddDays(utcToday(), 1));
+}
+
+function prepareParsedCsvPreview(
+  parsed: ParsedCsv,
+  options?: PreviewOptions,
+  /** Only on upload: a file called "sales-sept.csv" is a hint about its rows. */
+  fileName?: string,
+  /** The business's today; see `latestDateWithoutBusiness` for the fallback. */
+  latestDate: string = latestDateWithoutBusiness(),
+): { result: PreviewResult; outcomes: RowOutcome[]; records: Record<string, string>[] } {
+  const { records, headers } = parsed;
   if (options && records.length > 0) validateMapping(headers, options);
   // Detection reads further than the preview shows: 50 rows is what fits on a
   // screen, but a type column can easily be uniform for the first 50 rows of a
@@ -468,7 +698,7 @@ function prepareCsvPreview(buffer: Buffer, options?: PreviewOptions): { result: 
   let validation: PreviewResult["validation"];
   let outcomes: RowOutcome[] = [];
   if (options && (options.dateFormat || !dateDetection.ambiguous)) {
-    outcomes = validateRows(records, options.columnMapping, options.recordType, options.corrections, options.mixedStrategy, dateFormat);
+    outcomes = validateRows(records, options.columnMapping, options.recordType, options.corrections, options.mixedStrategy, dateFormat, latestDate);
     const skipped = outcomes.filter((row): row is Extract<RowOutcome, { kind: "skip" }> => row.kind === "skip");
     validation = {
       validRows: outcomes.length - skipped.length,
@@ -478,28 +708,67 @@ function prepareCsvPreview(buffer: Buffer, options?: PreviewOptions): { result: 
       ...summarisePreviewDuplicates(outcomes),
     };
   }
+  const detection = detectColumns(headers, sample, { typeColumn, fileName });
   const result: PreviewResult = {
     headers,
     previewRows: records.slice(0, PREVIEW_ROW_LIMIT),
     totalRows: records.length,
+    availableFundsBaseline: null,
     detectedTypeColumn: typeColumn,
     columnsWithNegatives: columnsWithSignedAmounts(sample),
     detectedDateFormat: dateFormat,
     dateFormatAmbiguous: options?.dateFormat ? false : dateDetection.ambiguous,
-    suggestedMapping: suggestMapping(headers, typeColumn),
+    suggestedMapping: { ...detection.mapping, ...(typeColumn ? { recordType: typeColumn } : {}) },
+    columnDetection: { unmapped: detection.unmapped, suggestedRecordType: detection.suggestedRecordType },
     ...(validation ? { validation } : {}),
   };
   return { result, outcomes, records };
+}
+
+function prepareCsvPreview(
+  buffer: Buffer,
+  options?: PreviewOptions,
+): { result: PreviewResult; outcomes: RowOutcome[]; records: Record<string, string>[]; parsed: ParsedCsv } {
+  const parsed = parseCsv(buffer);
+  return { ...prepareParsedCsvPreview(parsed, options), parsed };
 }
 
 export function previewCsv(buffer: Buffer, options?: PreviewOptions): PreviewResult {
   return prepareCsvPreview(buffer, options).result;
 }
 
-/** Optional ownership-scoped preflight against records already saved. */
-export async function previewCsvForProfile(userId: number, businessProfileId: number, buffer: Buffer, options?: PreviewOptions): Promise<PreviewResult> {
-  await requireOwnedBusinessProfile(userId, businessProfileId);
-  const { result, outcomes, records } = prepareCsvPreview(buffer, options);
+async function previewParsedCsvForProfile(
+  businessProfileId: number,
+  parsed: ParsedCsv,
+  options?: PreviewOptions,
+): Promise<PreviewResult> {
+  const profile = await prisma.businessProfile.findUniqueOrThrow({
+    where: { id: businessProfileId },
+    select: {
+      timezone: true,
+      availableFundsBaselineAt: true,
+      availableFundsBaselineDate: true,
+    },
+  });
+  const { result, outcomes, records } = prepareParsedCsvPreview(
+    parsed,
+    options,
+    undefined,
+    businessTodayKey(profile.timezone),
+  );
+  if (options && outcomes.length > 0) {
+    const baselineDate = utcDateKey(profile.availableFundsBaselineDate);
+    const matchingRowCount = outcomes.filter(
+      (outcome) => outcome.kind !== "skip" && outcome.data.date === baselineDate,
+    ).length;
+    if (matchingRowCount > 0) {
+      result.availableFundsBaseline = {
+        baselineAt: profile.availableFundsBaselineAt.toISOString(),
+        baselineDate,
+        matchingRowCount,
+      };
+    }
+  }
   if (options && options.recordType !== "sales") {
     const history = await loadConfirmedCategoryHistory(businessProfileId);
     const categorySuggestions: NonNullable<PreviewResult["categorySuggestions"]> = [];
@@ -556,7 +825,780 @@ export async function previewCsvForProfile(userId: number, businessProfileId: nu
     }
   }
   Object.assign(result.validation, summarisePreviewDuplicates(outcomes, existingKeys));
+  if (options && options.recordType !== "sales") {
+    Object.assign(
+      result,
+      await categoriseForReview(businessProfileId, records, outcomes, options, result.validation?.duplicateRows ?? []),
+    );
+  }
+  if (options) Object.assign(result, rowsForReview(records, outcomes, result));
   return result;
+}
+
+/**
+ * The category every expense row will get, as the review screen shows it.
+ *
+ * Decided over the WHOLE file in file order, exactly as runImportChunks will,
+ * so the counts are the import's and a new category proposed here is the one
+ * the import creates. Per-row detail is returned only for rows on screen.
+ */
+async function categoriseForReview(
+  businessProfileId: number,
+  records: Record<string, string>[],
+  outcomes: RowOutcome[],
+  options: PreviewOptions,
+  duplicateRows: number[],
+): Promise<Pick<PreviewResult, "categorySummary" | "rowCategories">> {
+  const { categoriser } = await loadImportCategoriser(businessProfileId);
+  const summary = { fromFile: 0, suggested: 0, uncategorised: 0 };
+  const newCategories = new Map<string, number>();
+  const decisions = new Map<number, ImportCategoryDecision>();
+  for (const outcome of outcomes) {
+    if (outcome.kind !== "expense") continue;
+    const decision = categoriser.decide(outcome.data.category, outcome.data.description, outcome.data.vendor);
+    decisions.set(outcome.row, decision);
+    if (decision.name === categoriser.uncategorisedName) summary.uncategorised += 1;
+    else if (decision.source === "file") summary.fromFile += 1;
+    else summary.suggested += 1;
+    if (decision.isNew) newCategories.set(decision.name, (newCategories.get(decision.name) ?? 0) + 1);
+  }
+
+  // Rows that are not importable yet still get the category they WOULD get,
+  // so fixing a date does not also mean choosing a category.
+  const rowCategories: NonNullable<PreviewResult["rowCategories"]> = [];
+  const describe = (row: number) => {
+    if (decisions.has(row)) return decisions.get(row)!;
+    const record = records[row - 2];
+    if (!record) return null;
+    const fix = options.corrections?.[String(row)];
+    const kind = options.recordType === "mixed" ? rowKind(record, options, fix?.amount) : "expense";
+    if (kind !== "expense") return null;
+    const pick = (field: keyof ColumnMapping) => (options.columnMapping[field] ? record[options.columnMapping[field]!] : undefined);
+    return categoriser.decide(fix?.category ?? pick("category"), fix?.description ?? pick("description") ?? "", fix?.vendor ?? pick("vendor"));
+  };
+  const onScreen = new Set<number>();
+  for (let row = 2; row < Math.min(records.length, PREVIEW_ROW_LIMIT) + 2; row += 1) onScreen.add(row);
+  for (const row of reviewRowNumbers(outcomes, decisions, categoriser.uncategorisedName)) onScreen.add(row);
+  for (const row of duplicateRows) onScreen.add(row);
+  for (const row of [...onScreen].sort((a, b) => a - b)) {
+    const decision = describe(row);
+    if (decision) rowCategories.push({ row, ...decision });
+  }
+
+  return {
+    rowCategories,
+    categorySummary: {
+      ...summary,
+      newCategories: [...newCategories].map(([name, rows]) => ({ name, rows })).sort((a, b) => b.rows - a.rows),
+    },
+  };
+}
+
+/** Which kind a mixed-file row is, by the same readers validateRows uses. */
+function rowKind(record: Record<string, string>, options: PreviewOptions, amountFix?: string): RowRecordType | null {
+  if (options.mixedStrategy === "sign") {
+    const amount = parseSignedAmount(amountFix ?? record[options.columnMapping.amount]);
+    return amount === null ? null : amount < 0 ? "expense" : "sales";
+  }
+  return classifyTypeValue(options.columnMapping.recordType ? record[options.columnMapping.recordType] : undefined);
+}
+
+/** Rows past the preview sample that need a look: skipped, left uncategorised. First REVIEW_ROW_LIMIT, in file order. */
+function reviewRowNumbers(
+  outcomes: RowOutcome[],
+  decisions: Map<number, ImportCategoryDecision>,
+  uncategorisedName: string,
+): number[] {
+  const rows: number[] = [];
+  for (const outcome of outcomes) {
+    if (outcome.row < PREVIEW_ROW_LIMIT + 2) continue;
+    const needsLook =
+      (outcome.kind === "skip" && outcome.reason !== REMOVED_IN_REVIEW) ||
+      decisions.get(outcome.row)?.name === uncategorisedName;
+    if (needsLook) rows.push(outcome.row);
+    if (rows.length >= REVIEW_ROW_LIMIT) break;
+  }
+  return rows;
+}
+
+/**
+ * The raw cells of rows past the preview sample that need review — skipped,
+ * possibly duplicated, or uncategorised — so the owner can fix them in place.
+ */
+function rowsForReview(
+  records: Record<string, string>[],
+  outcomes: RowOutcome[],
+  result: PreviewResult,
+): Pick<PreviewResult, "reviewRows" | "reviewRowsTruncated"> {
+  const wanted = new Set<number>();
+  for (const outcome of outcomes) {
+    if (outcome.row < PREVIEW_ROW_LIMIT + 2) continue;
+    if (outcome.kind === "skip" && outcome.reason !== REMOVED_IN_REVIEW) wanted.add(outcome.row);
+  }
+  for (const row of result.validation?.duplicateRows ?? []) if (row >= PREVIEW_ROW_LIMIT + 2) wanted.add(row);
+  const uncategorised = new Set(
+    (result.rowCategories ?? []).filter((entry) => entry.source === "none").map((entry) => entry.row),
+  );
+  for (const row of uncategorised) if (row >= PREVIEW_ROW_LIMIT + 2) wanted.add(row);
+  const rows = [...wanted].sort((a, b) => a - b);
+  return {
+    reviewRows: rows.slice(0, REVIEW_ROW_LIMIT).map((row) => ({ row, values: records[row - 2]! })),
+    reviewRowsTruncated: rows.length > REVIEW_ROW_LIMIT,
+  };
+}
+
+/** Optional ownership-scoped preflight against records already saved. */
+export async function previewCsvForProfile(
+  userId: number,
+  businessProfileId: number,
+  buffer: Buffer,
+  options?: PreviewOptions,
+): Promise<PreviewResult> {
+  await requireOwnedBusinessProfile(userId, businessProfileId);
+  return previewParsedCsvForProfile(businessProfileId, parseCsv(buffer), options);
+}
+
+// ============================================================
+// Single-upload staging
+// ============================================================
+
+interface StageMetadata {
+  encoding: typeof STAGE_CHUNK_ENCODING;
+  parserVersion: string;
+  fileHash: string;
+  delimiter: string;
+  headers: string[];
+}
+
+type StagedBatchWithChunks = Prisma.CSVImportBatchGetPayload<{
+  include: { stageChunks: true };
+}>;
+
+function jsonObject(value: Prisma.JsonValue | null): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function stageMetadataOf(batch: Pick<StagedBatchWithChunks, "mappingMeta" | "fileHash">): StageMetadata {
+  const stage = jsonObject(batch.mappingMeta).stage;
+  if (!stage || typeof stage !== "object" || Array.isArray(stage)) {
+    throw new ApiError(409, "Staged CSV data is unavailable. Choose the file again.", {
+      code: "CSV_STAGE_UNAVAILABLE",
+    });
+  }
+  const raw = stage as Record<string, unknown>;
+  const headers = raw.headers;
+  if (
+    raw.encoding !== STAGE_CHUNK_ENCODING ||
+    raw.parserVersion !== CSV_PARSER_VERSION ||
+    typeof raw.fileHash !== "string" ||
+    raw.fileHash !== batch.fileHash ||
+    typeof raw.delimiter !== "string" ||
+    !Array.isArray(headers) ||
+    headers.length === 0 ||
+    !headers.every((header) => typeof header === "string")
+  ) {
+    throw new ApiError(409, "Staged CSV data is unavailable. Choose the file again.", {
+      code: "CSV_STAGE_UNAVAILABLE",
+    });
+  }
+  return {
+    encoding: STAGE_CHUNK_ENCODING,
+    parserVersion: CSV_PARSER_VERSION,
+    fileHash: raw.fileHash,
+    delimiter: raw.delimiter,
+    headers: headers as string[],
+  };
+}
+
+async function encodeStageChunks(records: Record<string, string>[], headers: string[]) {
+  const chunks: { chunkIndex: number; rowCount: number; payload: Buffer; payloadHash: string }[] = [];
+  let totalInflatedBytes = 0;
+  for (let offset = 0; offset < records.length; offset += STAGE_CHUNK_ROWS) {
+    const matrix = records.slice(offset, offset + STAGE_CHUNK_ROWS).map((record) =>
+      headers.map((header) => record[header] ?? ""),
+    );
+    const rawPayload = Buffer.from(JSON.stringify(matrix), "utf8");
+    totalInflatedBytes += rawPayload.byteLength;
+    if (
+      rawPayload.byteLength > STAGE_CHUNK_MAX_INFLATED_BYTES ||
+      totalInflatedBytes > STAGE_TOTAL_MAX_INFLATED_BYTES
+    ) {
+      throw new ApiError(413, "This CSV is too complex to prepare safely. Split it into smaller files and try again.", {
+        code: "CSV_STAGE_TOO_LARGE",
+      });
+    }
+    const payload = await gzipAsync(rawPayload);
+    chunks.push({
+      chunkIndex: chunks.length,
+      rowCount: matrix.length,
+      payload,
+      payloadHash: createHash("sha256").update(payload).digest("hex"),
+    });
+  }
+  return chunks;
+}
+
+async function decodeStageChunks(batch: StagedBatchWithChunks): Promise<{
+  parsed: ParsedCsv;
+  decompressMs: number;
+}> {
+  const metadata = stageMetadataOf(batch);
+  const totalRows = batch.totalRows;
+  const chunks = [...batch.stageChunks].sort((left, right) => left.chunkIndex - right.chunkIndex);
+  const expectedChunks = totalRows === null ? -1 : Math.ceil(totalRows / STAGE_CHUNK_ROWS);
+  if (totalRows === null || totalRows <= 0 || chunks.length !== expectedChunks) {
+    throw new ApiError(409, "Staged CSV data is unavailable. Choose the file again.", {
+      code: "CSV_STAGE_UNAVAILABLE",
+    });
+  }
+
+  const startedAt = performance.now();
+  const records: Record<string, string>[] = [];
+  let totalInflatedBytes = 0;
+  try {
+    for (let index = 0; index < chunks.length; index += 1) {
+      const chunk = chunks[index]!;
+      if (
+        chunk.chunkIndex !== index ||
+        createHash("sha256").update(chunk.payload).digest("hex") !== chunk.payloadHash
+      ) {
+        throw new Error("stage chunk integrity mismatch");
+      }
+      const inflated = await gunzipAsync(chunk.payload, { maxOutputLength: STAGE_CHUNK_MAX_INFLATED_BYTES });
+      totalInflatedBytes += inflated.byteLength;
+      if (totalInflatedBytes > STAGE_TOTAL_MAX_INFLATED_BYTES) {
+        throw new Error("stage chunk payload exceeds its bound");
+      }
+      const matrix: unknown = JSON.parse(inflated.toString("utf8"));
+      if (!Array.isArray(matrix) || matrix.length !== chunk.rowCount) {
+        throw new Error("stage chunk row count mismatch");
+      }
+      for (const rawRow of matrix) {
+        if (
+          !Array.isArray(rawRow) ||
+          rawRow.length !== metadata.headers.length ||
+          !rawRow.every((cell) => typeof cell === "string")
+        ) {
+          throw new Error("stage chunk row shape mismatch");
+        }
+        const record = Object.fromEntries(
+          metadata.headers.map((header, column) => [header, rawRow[column] as string]),
+        ) as Record<string, string>;
+        records.push(record);
+      }
+    }
+  } catch {
+    throw new ApiError(409, "Staged CSV data is unavailable. Choose the file again.", {
+      code: "CSV_STAGE_UNAVAILABLE",
+    });
+  }
+  if (records.length !== totalRows) {
+    throw new ApiError(409, "Staged CSV data is unavailable. Choose the file again.", {
+      code: "CSV_STAGE_UNAVAILABLE",
+    });
+  }
+  return {
+    parsed: { records, headers: metadata.headers, delimiter: metadata.delimiter },
+    decompressMs: performance.now() - startedAt,
+  };
+}
+
+function scopedStageKey(businessProfileId: number, requestedKey: string): string {
+  return createHash("sha256")
+    .update(`csv-stage-idempotency-v1\0${businessProfileId}\0${requestedKey}`)
+    .digest("hex");
+}
+
+async function compensateCsvUploadAttempt(
+  businessProfileId: number,
+  batchId: number,
+  fileReference: string,
+): Promise<void> {
+  try {
+    await enqueueDetachedCsvSourcePurge(businessProfileId, batchId, fileReference, {
+      notBefore: new Date(Date.now() + CSV_AMBIGUOUS_UPLOAD_TOMBSTONE_GRACE_MS),
+    });
+  } catch (error) {
+    logger.error(
+      { batchId, cleanupStage: "enqueue-tombstone", failureKind: error instanceof Error ? error.name : "unknown" },
+      "CSV upload compensation could not persist its delayed purge",
+    );
+  }
+
+  const deleted = await deleteCsvFile(fileReference).catch((error) => {
+    logger.error(
+      { batchId, cleanupStage: "immediate-delete", failureKind: error instanceof Error ? error.name : "unknown" },
+      "CSV upload compensation immediate delete failed",
+    );
+    return false;
+  });
+  if (!deleted) {
+    logger.warn({ batchId, cleanupStage: "immediate-delete" }, "CSV upload compensation left cleanup to its purge tombstone");
+  }
+}
+
+function stageResponse(
+  batch: Pick<StagedBatchWithChunks, "stageId" | "stageExpiresAt">,
+  result: PreviewResult,
+): StagedPreviewResult {
+  if (!batch.stageId || !batch.stageExpiresAt) {
+    throw new ApiError(409, "Staged CSV data is unavailable. Choose the file again.", {
+      code: "CSV_STAGE_UNAVAILABLE",
+    });
+  }
+  return {
+    ...result,
+    stagedUploadId: batch.stageId,
+    stageExpiresAt: batch.stageExpiresAt.toISOString(),
+  };
+}
+
+async function ownedBatchByStageId(
+  userId: number,
+  businessProfileId: number,
+  stageId: string,
+): Promise<StagedBatchWithChunks> {
+  const batch = await prisma.cSVImportBatch.findFirst({
+    where: { stageId, businessProfileId, businessProfile: { userId } },
+    include: { stageChunks: { orderBy: { chunkIndex: "asc" } } },
+  });
+  if (!batch) {
+    throw new ApiError(404, "Staged CSV upload not found", { code: "CSV_STAGE_NOT_FOUND" });
+  }
+  return batch;
+}
+
+type PurgeStageOutcome = "missing" | "not-stage" | "not-expired" | "upload-active" | "purged";
+
+async function purgeStagedBatch(
+  batchId: number,
+  options: {
+    userId?: number;
+    expiredBefore?: Date;
+    staleStagingBefore?: Date;
+    allowFreshStaging?: boolean;
+  } = {},
+): Promise<PurgeStageOutcome> {
+  return prisma.$transaction(async (tx) => {
+    const ownerFilter = options.userId === undefined
+      ? Prisma.empty
+      : Prisma.sql`AND p."User_ID" = ${options.userId}`;
+    const rows = await tx.$queryRaw<{
+      id: number;
+      processingStatus: CsvImportProcessingStatus;
+      stageExpiresAt: Date | null;
+      createdAt: Date;
+      heartbeatAt: Date | null;
+    }[]>(Prisma.sql`
+      SELECT
+        b."ImportBatch_ID" AS id,
+        b."ImportBatch_ProcessingStatus" AS "processingStatus",
+        b."ImportBatch_StageExpiresAt" AS "stageExpiresAt",
+        b."ImportBatch_CreatedAt" AS "createdAt",
+        b."ImportBatch_HeartbeatAt" AS "heartbeatAt"
+      FROM "CSVImportBatch" b
+      JOIN "BusinessProfile" p ON p."BusinessProfile_ID" = b."BusinessProfile_ID"
+      WHERE b."ImportBatch_ID" = ${batchId}
+      ${ownerFilter}
+      FOR UPDATE OF b
+    `);
+    const batch = rows[0];
+    if (!batch) return "missing";
+    if (
+      batch.processingStatus !== CsvImportProcessingStatus.STAGING &&
+      batch.processingStatus !== CsvImportProcessingStatus.STAGED
+    ) return "not-stage";
+    if (
+      batch.processingStatus === CsvImportProcessingStatus.STAGING &&
+      options.allowFreshStaging !== true &&
+      batch.heartbeatAt !== null &&
+      batch.heartbeatAt.getTime() > Date.now() - STAGING_UPLOAD_LEASE_MS
+    ) return "upload-active";
+    if (options.expiredBefore) {
+      const expired = batch.stageExpiresAt !== null
+        && batch.stageExpiresAt.getTime() <= options.expiredBefore.getTime();
+      const staleUpload = batch.processingStatus === CsvImportProcessingStatus.STAGING
+        && options.staleStagingBefore !== undefined
+        && (batch.heartbeatAt === null || batch.heartbeatAt.getTime() <= options.staleStagingBefore.getTime());
+      if (!expired && !staleUpload) return "not-expired";
+    }
+
+    const purgeOptions = batch.processingStatus === CsvImportProcessingStatus.STAGING
+      ? { notBefore: new Date(Date.now() + CSV_AMBIGUOUS_UPLOAD_TOMBSTONE_GRACE_MS) }
+      : {};
+    await enqueueCsvSourcePurgesIfOrphaned(tx, [batch.id], purgeOptions);
+    return "purged";
+  });
+}
+
+async function assertStageUsable(batch: StagedBatchWithChunks): Promise<void> {
+  if (batch.stageExpiresAt && batch.stageExpiresAt.getTime() <= Date.now()) {
+    await purgeStagedBatch(batch.id, { expiredBefore: new Date(), allowFreshStaging: true });
+    throw new ApiError(410, "This staged CSV upload has expired. Choose the file again.", {
+      code: "CSV_STAGE_EXPIRED",
+    });
+  }
+  if (batch.processingStatus === CsvImportProcessingStatus.STAGING) {
+    const staleBefore = Date.now() - STAGING_UPLOAD_LEASE_MS;
+    if (!batch.heartbeatAt || batch.heartbeatAt.getTime() <= staleBefore) {
+      await purgeStagedBatch(batch.id, {
+        staleStagingBefore: new Date(staleBefore),
+      });
+      throw new ApiError(410, "This staged CSV upload did not finish. Choose the file again.", {
+        code: "CSV_STAGE_STALE",
+      });
+    }
+    throw new ApiError(409, "This CSV upload is still being prepared. Try again shortly.", {
+      code: "CSV_STAGE_UPLOADING",
+    });
+  }
+  if (batch.processingStatus !== CsvImportProcessingStatus.STAGED) {
+    throw new ApiError(409, "This staged CSV upload has already been confirmed.", {
+      code: "CSV_STAGE_ALREADY_CONFIRMED",
+    });
+  }
+}
+
+export async function stageCsvUpload(
+  userId: number,
+  input: {
+    businessProfileId: number;
+    buffer: Buffer;
+    originalname: string;
+    idempotencyKey: string;
+  },
+): Promise<TimedCsvResult<StagedPreviewResult>> {
+  const totalStartedAt = performance.now();
+  await requireOwnedBusinessProfile(userId, input.businessProfileId);
+  const fileHash = createHash("sha256").update(input.buffer).digest("hex");
+  const idempotencyKey = scopedStageKey(input.businessProfileId, input.idempotencyKey);
+
+  const replayStartedAt = performance.now();
+  const existing = await prisma.cSVImportBatch.findFirst({
+    where: { businessProfileId: input.businessProfileId, idempotencyKey },
+    include: { stageChunks: { orderBy: { chunkIndex: "asc" } } },
+  });
+  if (existing) {
+    if (existing.fileHash !== fileHash || existing.fileSizeBytes !== input.buffer.byteLength) {
+      throw new ApiError(409, "This upload key was already used for a different CSV file.", {
+        code: "CSV_STAGE_KEY_CONFLICT",
+      });
+    }
+    await assertStageUsable(existing);
+    const decoded = await decodeStageChunks(existing);
+    const result = stageResponse(existing, prepareParsedCsvPreview(decoded.parsed, undefined, input.originalname).result);
+    const timings = {
+      totalMs: performance.now() - totalStartedAt,
+      chunkLoadMs: performance.now() - replayStartedAt - decoded.decompressMs,
+      decompressMs: decoded.decompressMs,
+    };
+    logger.info(
+      { batchId: existing.id, rows: existing.totalRows, bytes: existing.fileSizeBytes, replayed: true, ...roundedTimings(timings) },
+      "CSV upload stage ready",
+    );
+    return { result, timings };
+  }
+
+    const parseStartedAt = performance.now();
+    const parsed = parseCsv(input.buffer);
+    if (parsed.records.length === 0) {
+      throw new ApiError(
+        400,
+        "This file has no data rows to import — only a header (or nothing at all). Check that the export included the rows.",
+      );
+    }
+    const preview = prepareParsedCsvPreview(parsed, undefined, input.originalname).result;
+    const parseMs = performance.now() - parseStartedAt;
+
+    const encodeStartedAt = performance.now();
+    const chunks = await encodeStageChunks(parsed.records, parsed.headers);
+    const chunkEncodeMs = performance.now() - encodeStartedAt;
+    const stageId = randomUUID();
+    const fileReference = csvFileReference(input.businessProfileId, stageId, input.originalname);
+    const now = new Date();
+    const stageExpiresAt = new Date(now.getTime() + STAGED_UPLOAD_TTL_MS);
+    const stageMetadata: StageMetadata = {
+      encoding: STAGE_CHUNK_ENCODING,
+      parserVersion: CSV_PARSER_VERSION,
+      fileHash,
+      delimiter: parsed.delimiter,
+      headers: parsed.headers,
+    };
+
+    const persistStartedAt = performance.now();
+    let reservation: { batch: StagedBatchWithChunks; replayed: boolean };
+    try {
+      reservation = await prisma.$transaction(async (tx) => {
+        const active = await tx.$queryRaw<{ id: number }[]>(Prisma.sql`
+          SELECT u."User_ID" AS id
+          FROM "User" u
+          JOIN "BusinessProfile" p ON p."User_ID" = u."User_ID"
+          WHERE u."User_ID" = ${userId}
+            AND p."BusinessProfile_ID" = ${input.businessProfileId}
+            AND u."User_Status" = ${AccountStatus.ACTIVE}::"AccountStatus"
+          FOR UPDATE OF u
+        `);
+        if (active.length !== 1) {
+          throw new ApiError(403, "This account can no longer upload files.", { code: "ACCOUNT_NOT_ACTIVE" });
+        }
+
+        const concurrentReplay = await tx.cSVImportBatch.findFirst({
+          where: { businessProfileId: input.businessProfileId, idempotencyKey },
+          include: { stageChunks: { orderBy: { chunkIndex: "asc" } } },
+        });
+        if (concurrentReplay) return { batch: concurrentReplay, replayed: true };
+
+        await assertCsvOutstandingCapacity(tx, userId, input.buffer.byteLength);
+
+        const creationCutoff = new Date(now.getTime() - CSV_STAGE_CREATION_WINDOW_MS);
+        const recentCreations = await tx.apiRateLimit.findMany({
+          where: {
+            key: { startsWith: `csv-stage-create:u${userId}:` },
+            windowStart: { gt: creationCutoff },
+            expiresAt: { gt: now },
+          },
+          orderBy: { expiresAt: "asc" },
+          take: CSV_STAGE_CREATION_HOURLY_LIMIT,
+          select: { expiresAt: true },
+        });
+        if (recentCreations.length >= CSV_STAGE_CREATION_HOURLY_LIMIT) {
+          const retryAfterSeconds = Math.max(
+            1,
+            Math.ceil((recentCreations[0]!.expiresAt.getTime() - now.getTime()) / 1_000),
+          );
+          throw new ApiError(429, "Too many new CSV uploads were started recently. Try again later.", {
+            code: "CSV_STAGE_HOURLY_LIMIT",
+            responseDetails: { retryAfterSeconds },
+          });
+        }
+
+        await tx.apiRateLimit.create({
+          data: {
+            key: stageCreationRateKey(userId),
+            windowStart: now,
+            count: 1,
+            expiresAt: new Date(now.getTime() + CSV_STAGE_CREATION_WINDOW_MS),
+          },
+        });
+        const created = await tx.cSVImportBatch.create({
+          data: {
+            businessProfileId: input.businessProfileId,
+            title: "CSV import",
+            uploadDate: now,
+            status: "Needs Review",
+            processingStatus: CsvImportProcessingStatus.STAGING,
+            idempotencyKey,
+            fileHash,
+            fileSizeBytes: input.buffer.byteLength,
+            fileReference,
+            totalRows: parsed.records.length,
+            stageId,
+            stageExpiresAt,
+            heartbeatAt: now,
+            workerId: STAGE_WORKER_ID,
+            mappingMeta: {
+              parserVersion: CSV_PARSER_VERSION,
+              stage: stageMetadata,
+            } as unknown as Prisma.InputJsonObject,
+            stageChunks: {
+              createMany: {
+                data: chunks.map((chunk) => ({
+                  chunkIndex: chunk.chunkIndex,
+                  rowCount: chunk.rowCount,
+                  payload: Uint8Array.from(chunk.payload),
+                  payloadHash: chunk.payloadHash,
+                })),
+              },
+            },
+          },
+          include: { stageChunks: { orderBy: { chunkIndex: "asc" } } },
+        });
+        return { batch: created, replayed: false };
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        const winner = await prisma.cSVImportBatch.findFirst({
+          where: { businessProfileId: input.businessProfileId, idempotencyKey },
+          include: { stageChunks: { orderBy: { chunkIndex: "asc" } } },
+        });
+        if (winner) {
+          if (winner.fileHash !== fileHash || winner.fileSizeBytes !== input.buffer.byteLength) {
+            throw new ApiError(409, "This upload key was already used for a different CSV file.", {
+              code: "CSV_STAGE_KEY_CONFLICT",
+            });
+          }
+          await assertStageUsable(winner);
+          const decoded = await decodeStageChunks(winner);
+          return {
+            result: stageResponse(winner, prepareParsedCsvPreview(decoded.parsed, undefined, input.originalname).result),
+            timings: {
+              totalMs: performance.now() - totalStartedAt,
+              parseMs,
+              chunkLoadMs: performance.now() - persistStartedAt - decoded.decompressMs,
+              decompressMs: decoded.decompressMs,
+            },
+          };
+        }
+      }
+      throw error;
+    }
+
+    const batch = reservation.batch;
+    if (reservation.replayed) {
+      if (batch.fileHash !== fileHash || batch.fileSizeBytes !== input.buffer.byteLength) {
+        throw new ApiError(409, "This upload key was already used for a different CSV file.", {
+          code: "CSV_STAGE_KEY_CONFLICT",
+        });
+      }
+      await assertStageUsable(batch);
+      const decoded = await decodeStageChunks(batch);
+      return {
+        result: stageResponse(batch, prepareParsedCsvPreview(decoded.parsed, undefined, input.originalname).result),
+        timings: {
+          totalMs: performance.now() - totalStartedAt,
+          parseMs,
+          chunkLoadMs: performance.now() - persistStartedAt - decoded.decompressMs,
+          decompressMs: decoded.decompressMs,
+        },
+      };
+    }
+    const chunkPersistMs = performance.now() - persistStartedAt;
+
+    const storageStartedAt = performance.now();
+    let stageLeaseLost = false;
+    const heartbeatTimer = setInterval(() => {
+      void prisma.cSVImportBatch.updateMany({
+        where: {
+          id: batch.id,
+          stageId,
+          processingStatus: CsvImportProcessingStatus.STAGING,
+          workerId: STAGE_WORKER_ID,
+        },
+        data: { heartbeatAt: new Date() },
+      }).then((updated) => {
+        if (updated.count !== 1) stageLeaseLost = true;
+      }).catch(() => undefined);
+    }, Math.floor(STAGING_UPLOAD_LEASE_MS / 3));
+    heartbeatTimer.unref();
+    try {
+      await uploadCsvFileAtReference(input.businessProfileId, fileReference, input.buffer);
+      if (stageLeaseLost) {
+        throw new ApiError(409, "This staged CSV upload is no longer available.", {
+          code: "CSV_STAGE_NOT_FOUND",
+        });
+      }
+      const stagedAt = new Date();
+      const staged = await prisma.$transaction(async (tx) => {
+        const active = await tx.$queryRaw<{ id: number }[]>(Prisma.sql`
+          SELECT u."User_ID" AS id
+          FROM "User" u
+          JOIN "BusinessProfile" p ON p."User_ID" = u."User_ID"
+          WHERE u."User_ID" = ${userId}
+            AND p."BusinessProfile_ID" = ${input.businessProfileId}
+            AND u."User_Status" = ${AccountStatus.ACTIVE}::"AccountStatus"
+          FOR UPDATE OF u
+        `);
+        if (active.length !== 1) return { count: 0 };
+        return tx.cSVImportBatch.updateMany({
+          where: {
+            id: batch.id,
+            stageId,
+            processingStatus: CsvImportProcessingStatus.STAGING,
+            workerId: STAGE_WORKER_ID,
+          },
+          data: {
+            processingStatus: CsvImportProcessingStatus.STAGED,
+            stagedAt,
+            heartbeatAt: null,
+            workerId: null,
+          },
+        });
+      });
+      if (staged.count !== 1) {
+        throw new ApiError(409, "This staged CSV upload is no longer available.", {
+          code: "CSV_STAGE_NOT_FOUND",
+        });
+      }
+      batch.processingStatus = CsvImportProcessingStatus.STAGED;
+      batch.stagedAt = stagedAt;
+    } catch (error) {
+      await purgeStagedBatch(batch.id, { allowFreshStaging: true }).catch((cleanupError) => {
+        logger.error({ batchId: batch.id, failureKind: cleanupError instanceof Error ? cleanupError.name : "unknown" }, "CSV stage cleanup failed");
+      });
+      await compensateCsvUploadAttempt(input.businessProfileId, batch.id, fileReference);
+      throw error;
+    } finally {
+      clearInterval(heartbeatTimer);
+    }
+    const storageMs = performance.now() - storageStartedAt;
+    const timings = {
+      totalMs: performance.now() - totalStartedAt,
+      parseMs,
+      chunkEncodeMs,
+      chunkPersistMs,
+      storageMs,
+    };
+    logger.info(
+      { batchId: batch.id, rows: parsed.records.length, bytes: input.buffer.byteLength, replayed: false, ...roundedTimings(timings) },
+      "CSV upload stage ready",
+    );
+    return { result: stageResponse(batch, preview), timings };
+}
+
+export async function previewStagedCsv(
+  userId: number,
+  businessProfileId: number,
+  stageId: string,
+  options: PreviewOptions,
+): Promise<TimedCsvResult<StagedPreviewResult>> {
+  const totalStartedAt = performance.now();
+  const loadStartedAt = performance.now();
+  const batch = await ownedBatchByStageId(userId, businessProfileId, stageId);
+  await assertStageUsable(batch);
+  const queryMs = performance.now() - loadStartedAt;
+  const decoded = await decodeStageChunks(batch);
+  const validationStartedAt = performance.now();
+  const preview = await previewParsedCsvForProfile(batch.businessProfileId, decoded.parsed, options);
+  const validationMs = performance.now() - validationStartedAt;
+  const timings = {
+    totalMs: performance.now() - totalStartedAt,
+    chunkLoadMs: queryMs,
+    decompressMs: decoded.decompressMs,
+    validationMs,
+  };
+  logger.info(
+    { batchId: batch.id, rows: batch.totalRows, ...roundedTimings(timings) },
+    "CSV staged preview validated",
+  );
+  return { result: stageResponse(batch, preview), timings };
+}
+
+export async function deleteStagedCsvUpload(userId: number, stageId: string): Promise<void> {
+  const batch = await prisma.cSVImportBatch.findFirst({
+    where: { stageId, businessProfile: { userId } },
+    select: { id: true },
+  });
+  if (!batch) return;
+  const outcome = await purgeStagedBatch(batch.id, { userId });
+  if (outcome === "missing") return;
+  if (outcome === "upload-active") {
+    throw new ApiError(409, "This CSV upload is still being prepared. Try again shortly.", {
+      code: "CSV_STAGE_UPLOADING",
+    });
+  }
+  if (outcome !== "purged") {
+    throw new ApiError(409, "This staged CSV upload has already been confirmed.", {
+      code: "CSV_STAGE_ALREADY_CONFIRMED",
+    });
+  }
+}
+
+function roundedTimings(timings: CsvOperationTimings): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(timings).map(([key, value]) => [key, Math.round(value ?? 0)]),
+  );
 }
 
 export interface ImportBatchSummary {
@@ -576,7 +1618,10 @@ export async function listImportBatches(userId: number, businessProfileId: numbe
   await requireOwnedBusinessProfile(userId, businessProfileId);
 
   return prisma.cSVImportBatch.findMany({
-    where: { businessProfileId },
+    where: {
+      businessProfileId,
+      processingStatus: { notIn: [CsvImportProcessingStatus.STAGING, CsvImportProcessingStatus.STAGED] },
+    },
     select: { id: true, title: true, uploadDate: true, status: true },
     orderBy: { uploadDate: "desc" },
   });
@@ -601,7 +1646,11 @@ export async function listImportBatches(userId: number, businessProfileId: numbe
  */
 export async function previewImportBatch(userId: number, batchId: number): Promise<PreviewResult | null> {
   const batch = await prisma.cSVImportBatch.findFirst({
-    where: { id: batchId, businessProfile: { userId } },
+    where: {
+      id: batchId,
+      businessProfile: { userId },
+      processingStatus: { notIn: [CsvImportProcessingStatus.STAGING, CsvImportProcessingStatus.STAGED] },
+    },
     select: { fileReference: true },
   });
   if (!batch?.fileReference) return null;
@@ -625,7 +1674,11 @@ export async function previewImportBatch(userId: number, batchId: number): Promi
  */
 export async function getImportBatchStatus(userId: number, batchId: number) {
   const batch = await prisma.cSVImportBatch.findFirst({
-    where: { id: batchId, businessProfile: { userId } },
+    where: {
+      id: batchId,
+      businessProfile: { userId },
+      processingStatus: { notIn: [CsvImportProcessingStatus.STAGING, CsvImportProcessingStatus.STAGED] },
+    },
     select: {
       id: true,
       status: true,
@@ -681,6 +1734,75 @@ type RowOutcome =
   | { kind: "expense"; row: number; data: ValidRow }
   | { kind: "sales"; row: number; data: ValidRow };
 
+interface CsvAvailableFundsClassification {
+  baselineAt: string;
+  baselineDate: string;
+  defaultIncluded: boolean;
+}
+
+function resolveCsvAvailableFundsClassification(
+  profile: {
+    availableFundsBaselineAt: Date;
+    availableFundsBaselineDate: Date;
+  },
+  outcomes: RowOutcome[],
+  input: Pick<ConfirmInput, "includedInAvailableFundsBaseline" | "availableFundsBaselineAt" | "corrections">,
+): CsvAvailableFundsClassification | null {
+  const baselineDate = utcDateKey(profile.availableFundsBaselineDate);
+  const matchingRows = new Set(
+    outcomes.flatMap((outcome) =>
+      outcome.kind !== "skip" && outcome.data.date === baselineDate ? [outcome.row] : []),
+  );
+
+  for (const [rawRow, correction] of Object.entries(input.corrections ?? {})) {
+    if (
+      correction.includedInAvailableFundsBaseline !== undefined
+      && !matchingRows.has(Number(rawRow))
+    ) {
+      throw new ApiError(
+        400,
+        "A balance classification override must identify an importable transaction on the balance date",
+        { code: "AVAILABLE_FUNDS_BASELINE_CLASSIFICATION_NOT_APPLICABLE" },
+      );
+    }
+  }
+
+  const hasClassification = input.includedInAvailableFundsBaseline !== undefined
+    || input.availableFundsBaselineAt !== undefined;
+  if (matchingRows.size === 0 && !hasClassification) return null;
+
+  const resolved = resolveAvailableFundsClassification(
+    profile,
+    profile.availableFundsBaselineDate,
+    input,
+  );
+  if (matchingRows.size === 0) {
+    throw new ApiError(
+      400,
+      "Available funds baseline classification only applies when the import has transactions on the balance date",
+      { code: "AVAILABLE_FUNDS_BASELINE_CLASSIFICATION_NOT_APPLICABLE" },
+    );
+  }
+  return {
+    baselineAt: resolved.availableFundsDeltaBaselineAt!.toISOString(),
+    baselineDate,
+    defaultIncluded: resolved.includedInAvailableFundsBaseline!,
+  };
+}
+
+async function lockCsvRecordGates(
+  tx: Prisma.TransactionClient,
+  businessProfileId: number,
+  outcomes: RowOutcome[],
+): Promise<void> {
+  if (outcomes.some((outcome) => outcome.kind === "expense")) {
+    await lockExpenseDuplicateWriteGate(tx, businessProfileId);
+  }
+  if (outcomes.some((outcome) => outcome.kind === "sales")) {
+    await lockSalesDuplicateWriteGate(tx, businessProfileId);
+  }
+}
+
 /**
  * Splits the parsed file into rows that can be imported and rows that can't.
  *
@@ -693,8 +1815,10 @@ function validateRows(
   mapping: ColumnMapping,
   recordType: ImportRecordType,
   corrections: RowCorrections = {},
-  mixedStrategy?: MixedStrategy,
-  dateFormat: CsvDateFormat = "iso",
+  mixedStrategy: MixedStrategy | undefined,
+  dateFormat: CsvDateFormat,
+  /** The business's today (YYYY-MM-DD). A row dated after it is skipped. */
+  latestDate: string,
 ): RowOutcome[] {
   const outcomes: RowOutcome[] = [];
 
@@ -703,6 +1827,13 @@ function validateRows(
     const rowNumber = i + 2; // header is row 1, data is 1-indexed after it
     const fix = corrections[String(rowNumber)];
     const skip = (reason: string) => outcomes.push({ kind: "skip", row: rowNumber, reason });
+
+    // Removed on the review screen. Still an outcome, in file order, so the
+    // worker's resume-by-ordinal contract holds and the summary can name it.
+    if (fix?.exclude) {
+      skip(REMOVED_IN_REVIEW);
+      continue;
+    }
 
     // A correction stands in for the cell the file held, and is then checked
     // by exactly the same rules below — there is no path here that accepts a
@@ -733,6 +1864,10 @@ function validateRows(
     const isoDate = rawDate ? parseCsvDate(rawDate, dateFormat) : null;
     if (!rawDate || !isoDate) {
       skip(`Invalid date: "${rawDate ?? ""}"`);
+      continue;
+    }
+    if (isAfterToday(isoDate, latestDate)) {
+      skip(`Future date: "${rawDate}"`);
       continue;
     }
 
@@ -786,21 +1921,13 @@ function validateRows(
     if (rowType === "expense") {
       const rawCategory = (fix?.category ?? (mapping.category ? row[mapping.category] : undefined))?.trim();
       /*
-       * A missing category skips the row in a single-type import — the owner
-       * mapped a category column and this row has a hole in it, which is worth
-       * telling them about.
-       *
-       * In a MIXED file it falls back instead. Sales rows have no category by
-       * nature, so plenty of combined exports carry no category column at all,
-       * and skipping every expense in the file over a column that was never
-       * going to be there would reject the exact file this feature exists to
-       * accept. The rows land in "Uncategorised" and the result screen says how
-       * many need sorting.
+       * An empty category no longer skips the row. It is left undefined here
+       * and decided when the rows are written (lib/importCategoriser): the
+       * owner's history, then the business-first categoriser, then
+       * Uncategorised, which the result screen counts. Skipping every expense
+       * of a file that simply has no category column rejected the files owners
+       * actually have.
        */
-      if (!rawCategory && recordType !== "mixed") {
-        skip("Missing category");
-        continue;
-      }
       if (rawCategory && rawCategory.length > CELL_LIMITS.category) {
         skip(`Category name is longer than ${CELL_LIMITS.category} characters`);
         continue;
@@ -808,7 +1935,7 @@ function validateRows(
       // Checked last and never fatal when EMPTY — an empty vendor cell is
       // simply no vendor. An over-long one is still a rejection, not a silent
       // truncation.
-      const rawVendor = (mapping.vendor ? row[mapping.vendor] : undefined)?.trim();
+      const rawVendor = (fix?.vendor ?? (mapping.vendor ? row[mapping.vendor] : undefined))?.trim();
       if (rawVendor && rawVendor.length > CELL_LIMITS.vendor) {
         skip(`Vendor is longer than ${CELL_LIMITS.vendor} characters`);
         continue;
@@ -820,7 +1947,7 @@ function validateRows(
           date: isoDate,
           description: rawDescription,
           amount: amountNum,
-          category: rawCategory || DEFAULT_IMPORT_CATEGORY,
+          category: rawCategory || undefined,
           vendor: rawVendor || undefined,
         },
       });
@@ -853,9 +1980,15 @@ function validateRows(
  *
  * Exported for the concurrency test; production callers are this module only.
  */
-export async function resolveCategories(businessProfileId: number, names: string[]) {
-  const existing = await prisma.expenseCategory.findMany({ where: { businessProfileId } });
-  const byName = new Map(existing.map((c) => [c.name.toLowerCase(), c.id]));
+async function resolveCategoriesWithCache(
+  businessProfileId: number,
+  names: string[],
+  categoryIds?: Map<string, number>,
+) {
+  const byName = categoryIds ?? new Map<string, number>(
+    (await prisma.expenseCategory.findMany({ where: { businessProfileId } }))
+      .map((category) => [category.name.toLowerCase(), category.id] as const),
+  );
 
   const missing = new Map<string, string>();
   for (const name of names) {
@@ -888,6 +2021,10 @@ export async function resolveCategories(businessProfileId: number, names: string
   }
 
   return byName;
+}
+
+export function resolveCategories(businessProfileId: number, names: string[]) {
+  return resolveCategoriesWithCache(businessProfileId, names);
 }
 
 // ============================================================
@@ -929,6 +2066,9 @@ interface StoredMappingMeta {
   mixedStrategy?: MixedStrategy;
   dateFormat: CsvDateFormat;
   corrections?: RowCorrections;
+  /** The business's today when the import was confirmed; absent on older batches. */
+  latestDate?: string;
+  availableFundsClassification?: CsvAvailableFundsClassification;
 }
 
 /** Rehydrates what the worker needs from the batch's own row. Written by this
@@ -946,6 +2086,13 @@ function readMappingMeta(json: Prisma.JsonValue | null): StoredMappingMeta {
     mixedStrategy: (meta.mixedStrategy as MixedStrategy | null | undefined) ?? undefined,
     dateFormat: (meta.dateFormat as CsvDateFormat | undefined) ?? "iso",
     corrections: (meta.corrections as RowCorrections | null | undefined) ?? undefined,
+    latestDate: typeof meta.latestDate === "string" ? meta.latestDate : undefined,
+    availableFundsClassification:
+      meta.availableFundsClassification
+      && typeof meta.availableFundsClassification === "object"
+      && !Array.isArray(meta.availableFundsClassification)
+        ? meta.availableFundsClassification as unknown as CsvAvailableFundsClassification
+        : undefined,
   };
 }
 
@@ -954,6 +2101,24 @@ type ImportProfile = {
   expectedMonthlyExpenses: Prisma.Decimal;
   largeExpenseThresholdPercent: Prisma.Decimal;
 };
+
+/**
+ * The categoriser for one import, from this business's categories, its
+ * confirmed history and its type. Call only after ownership is established.
+ */
+async function loadImportCategoriser(
+  businessProfileId: number,
+): Promise<{ categoriser: ImportCategoriser; categories: { id: number; name: string }[] }> {
+  const [categories, history, profile] = await Promise.all([
+    prisma.expenseCategory.findMany({ where: { businessProfileId }, select: { id: true, name: true }, orderBy: { id: "asc" } }),
+    loadConfirmedCategoryHistory(businessProfileId),
+    prisma.businessProfile.findUnique({ where: { id: businessProfileId }, select: { type: true } }),
+  ]);
+  return {
+    categoriser: createImportCategoriser({ categories, history, businessType: profile?.type ?? null }),
+    categories,
+  };
+}
 
 /**
  * Inserts the validated rows in bounded, transactional chunks with a
@@ -974,13 +2139,38 @@ async function runImportChunks(args: {
   profile: ImportProfile;
   outcomes: RowOutcome[];
   startAtRow: number;
+  lease: ImportLease;
   seed: { imported: number; skippedCount: number; flagged: number; progress: ProgressSummary };
+  availableFundsClassification?: CsvAvailableFundsClassification;
+  corrections?: RowCorrections;
 }): Promise<void> {
-  const { batchId, userId, profile, outcomes, startAtRow, seed } = args;
+  const {
+    batchId,
+    userId,
+    profile,
+    outcomes,
+    startAtRow,
+    lease,
+    seed,
+    availableFundsClassification,
+    corrections,
+  } = args;
   let imported = seed.imported;
   let skippedCount = seed.skippedCount;
   let flagged = seed.flagged;
   const progress = seed.progress;
+  const hasExpenseRows = outcomes.slice(startAtRow).some((outcome) => outcome.kind === "expense");
+  // The same decisions the review screen showed: built from the same inputs,
+  // walked in the same file order. A category the owner typed is `category`
+  // here and always wins; an empty one is suggested. See lib/importCategoriser.
+  // One category read serves both the categoriser and the name-to-id cache.
+  const loaded = hasExpenseRows ? await loadImportCategoriser(profile.id) : null;
+  const categoriser = loaded?.categoriser ?? null;
+  const categoryIds = new Map<string, number>();
+  for (const category of loaded?.categories ?? []) {
+    if (!categoryIds.has(category.name.toLowerCase())) categoryIds.set(category.name.toLowerCase(), category.id);
+  }
+  const categoryOf = (row: ValidRow) => categoriser!.decide(row.category, row.description, row.vendor).name;
 
   for (let at = startAtRow; at < outcomes.length; at += CHUNK_SIZE) {
     const chunk = outcomes.slice(at, at + CHUNK_SIZE);
@@ -992,10 +2182,10 @@ async function runImportChunks(args: {
     // (skipDuplicates + unique constraint), so a rolled-back chunk leaving a
     // created category behind is harmless — and keeping it out keeps the
     // transaction to exactly the writes the checkpoint vouches for.
-    const categoryIds =
-      expenseRows.length > 0
-        ? await resolveCategories(profile.id, expenseRows.map((o) => o.data.category!))
-        : new Map<string, number>();
+    const expenseCategories = expenseRows.map((o) => categoryOf(o.data));
+    if (expenseRows.length > 0) {
+      await resolveCategoriesWithCache(profile.id, expenseCategories, categoryIds);
+    }
 
     const createdExpenseIds: number[] = [];
 
@@ -1009,12 +2199,20 @@ async function runImportChunks(args: {
             userId,
             profile,
             batchId,
-            expenseRows.map((o) => ({
-              categoryId: categoryIds.get(o.data.category!.toLowerCase())!,
+            expenseRows.map((o, index) => ({
+              categoryId: categoryIds.get(expenseCategories[index]!.toLowerCase())!,
               date: o.data.date,
               description: o.data.description,
               amount: o.data.amount,
               vendor: o.data.vendor,
+              ...(o.data.date === availableFundsClassification?.baselineDate
+                ? {
+                    includedInAvailableFundsBaseline:
+                      corrections?.[String(o.row)]?.includedInAvailableFundsBaseline
+                      ?? availableFundsClassification.defaultIncluded,
+                    availableFundsBaselineAt: availableFundsClassification.baselineAt,
+                  }
+                : {}),
             })),
             tx,
           );
@@ -1028,7 +2226,17 @@ async function runImportChunks(args: {
             userId,
             profile.id,
             batchId,
-            salesRows.map((o) => o.data),
+            salesRows.map((o) => ({
+              ...o.data,
+              ...(o.data.date === availableFundsClassification?.baselineDate
+                ? {
+                    includedInAvailableFundsBaseline:
+                      corrections?.[String(o.row)]?.includedInAvailableFundsBaseline
+                      ?? availableFundsClassification.defaultIncluded,
+                    availableFundsBaselineAt: availableFundsClassification.baselineAt,
+                  }
+                : {}),
+            })),
             tx,
           );
           chunkFlagged += created.filter((r) => r.duplicateStatus === "Flagged").length;
@@ -1040,7 +2248,7 @@ async function runImportChunks(args: {
         progress.importedExpenses += expenseRows.length;
         progress.importedSales += salesRows.length;
         progress.largeExpenseFlagged += chunkLarge;
-        progress.uncategorised += expenseRows.filter((o) => o.data.category === DEFAULT_IMPORT_CATEGORY).length;
+        progress.uncategorised += expenseCategories.filter((name) => name === categoriser?.uncategorisedName).length;
         for (const s of skips) {
           if (progress.skipped.length < SKIPPED_SUMMARY_CAP) progress.skipped.push({ row: s.row, reason: s.reason });
           else progress.skippedTruncated = true;
@@ -1049,8 +2257,21 @@ async function runImportChunks(args: {
         // Absolute figures rather than increments: this statement may be
         // retried by a reclaimed lease, and "set to what has committed" is
         // idempotent where "add what I think I did" is not.
-        await tx.cSVImportBatch.update({
-          where: { id: batchId },
+        //
+        // Conditional on the lease, and inside the chunk's own transaction, so
+        // it is the inserts above that are gated: if another worker has
+        // claimed this batch — which it may legitimately have done after a
+        // long download — the row count is 0, the throw rolls this chunk's
+        // expenses and sales back, and the loop stops. Without the predicate
+        // both workers resume from the same checkpoint and every row lands
+        // twice.
+        const checkpoint = await tx.cSVImportBatch.updateMany({
+          where: {
+            id: batchId,
+            processingStatus: CsvImportProcessingStatus.PROCESSING,
+            workerId: lease.workerId,
+            attemptCount: lease.attemptCount,
+          },
           data: {
             processedRows: at + chunk.length,
             importedRows: imported,
@@ -1060,6 +2281,7 @@ async function runImportChunks(args: {
             resultSummary: progress as unknown as Prisma.InputJsonObject,
           },
         });
+        if (checkpoint.count !== 1) throw new CsvLeaseLostError(batchId);
       },
       { timeout: 60_000, maxWait: 10_000 },
     );
@@ -1069,7 +2291,10 @@ async function runImportChunks(args: {
     // enqueueDailyProfileAnalyses re-creates jobs for records that have none.
     if (createdExpenseIds.length > 0) {
       await enqueueExpenseAnalyses(profile.id, createdExpenseIds).catch((error) => {
-        logger.error({ err: error, batchId }, "failed to enqueue imported expense analysis");
+        logger.error(
+          { batchId, failureKind: error instanceof Error ? error.name : "unknown" },
+          "failed to enqueue imported expense analysis",
+        );
       });
     }
   }
@@ -1080,7 +2305,7 @@ async function runImportChunks(args: {
  * old code did after its inserts — the owner-facing status, the one summary
  * notification, and the coalesced profile-refresh analysis job.
  */
-async function completeBatch(batchId: number, userId: number, businessProfileId: number) {
+async function completeBatch(batchId: number, userId: number, businessProfileId: number, lease: ImportLease) {
   const batch = await prisma.cSVImportBatch.findUniqueOrThrow({ where: { id: batchId } });
   const progress = readProgress(batch.resultSummary);
 
@@ -1090,17 +2315,31 @@ async function completeBatch(batchId: number, userId: number, businessProfileId:
   const needsReview = batch.skippedRows > 0 || batch.flaggedRows > 0 || progress.largeExpenseFlagged > 0;
   const status = needsReview ? "Needs Review" : "Completed";
 
-  const updated = await prisma.cSVImportBatch.update({
-    where: { id: batchId },
-    data: {
-      status,
-      processingStatus: CsvImportProcessingStatus.COMPLETE,
-      completedAt: new Date(),
-      workerId: null,
-      failureStage: null,
-      lastError: null,
-    },
+  const updated = await prisma.$transaction(async (tx) => {
+    const result = await tx.cSVImportBatch.updateMany({
+      where: ownedByAttempt(batchId, lease),
+      data: {
+        status,
+        processingStatus: CsvImportProcessingStatus.COMPLETE,
+        completedAt: new Date(),
+        workerId: null,
+        failureStage: null,
+        lastError: null,
+      },
+    });
+    if (result.count === 1) {
+      await tx.cSVImportStageChunk.deleteMany({ where: { importBatchId: batchId } });
+    }
+    return result;
   });
+
+  if (updated.count !== 1) {
+    // Another attempt owns the row and will finish it, notification and
+    // refresh included. Report what is actually there rather than what this
+    // attempt believed.
+    logger.warn({ batchId }, "csv import completion skipped: the lease was reclaimed");
+    return prisma.cSVImportBatch.findUniqueOrThrow({ where: { id: batchId } });
+  }
 
   if (needsReview) {
     const parts = [`${batch.skippedRows} row(s) skipped`, `${batch.flaggedRows} flagged as possible duplicates`];
@@ -1118,57 +2357,87 @@ async function completeBatch(batchId: number, userId: number, businessProfileId:
   // One refresh per profile per day no matter how many imports land — the
   // per-record TRANSACTION jobs are already enqueued per chunk.
   await enqueueProfileRefresh(businessProfileId).catch((error) => {
-    logger.error({ err: error, batchId }, "failed to enqueue profile refresh after import");
+    logger.error(
+      { batchId, failureKind: error instanceof Error ? error.name : "unknown" },
+      "failed to enqueue profile refresh after import",
+    );
   });
 
-  return updated;
+  return prisma.cSVImportBatch.findUniqueOrThrow({ where: { id: batchId } });
 }
 
 /**
  * Terminal failure: mark FAILED with the stage that broke, and compensate the
  * storage upload. The delete is best-effort — an orphaned object is a cost, a
  * throw here would mask the error that actually mattered.
+ *
+ * The status is claimed BEFORE the file is deleted, and only under this
+ * attempt's lease. Deleting first would let an attempt that has already lost
+ * the row destroy the stored file the new owner is about to download.
  */
-async function failBatch(batchId: number, stage: string, error: unknown): Promise<void> {
-  const batch = await prisma.cSVImportBatch.findUnique({
-    where: { id: batchId },
-    select: { fileReference: true },
+async function failBatch(
+  batchId: number,
+  stage: string,
+  error: unknown,
+  lease: ImportLease,
+  options: { deferSourcePurge?: boolean } = {},
+): Promise<void> {
+  const failed = await prisma.$transaction(async (tx) => {
+    const result = await tx.cSVImportBatch.updateMany({
+      where: ownedByAttempt(batchId, lease),
+      data: {
+        processingStatus: CsvImportProcessingStatus.FAILED,
+        failureStage: stage,
+        lastError: safeCsvFailureSummary(stage, error),
+        workerId: null,
+      },
+    });
+    if (result.count === 1) {
+      await tx.cSVImportStageChunk.deleteMany({ where: { importBatchId: batchId } });
+      await enqueueCsvSourcePurgeForTerminalBatch(
+        tx,
+        batchId,
+        options.deferSourcePurge
+          ? { notBefore: new Date(Date.now() + CSV_AMBIGUOUS_UPLOAD_TOMBSTONE_GRACE_MS) }
+          : {},
+      );
+    }
+    return result;
   });
-  let fileReference = batch?.fileReference ?? null;
-  if (fileReference) {
-    const gone = await deleteCsvFile(fileReference).catch(() => false);
-    if (gone) fileReference = null;
+  if (failed.count !== 1) {
+    logger.warn({ batchId, stage }, "csv import failure not recorded: the lease was reclaimed");
+    return;
   }
-  await prisma.cSVImportBatch.update({
-    where: { id: batchId },
-    data: {
-      processingStatus: CsvImportProcessingStatus.FAILED,
-      failureStage: stage,
-      lastError: String(error).slice(0, 1000),
-      workerId: null,
-      fileReference,
-    },
-  });
+
 }
 
 /** Retryable failure: back off and hand the batch to the worker; terminal
  * once the attempt budget is spent. Mirrors the analysis worker's schedule. */
-async function deferBatch(batchId: number, stage: string, error: unknown, attemptCount: number): Promise<void> {
+async function deferBatch(
+  batchId: number,
+  stage: string,
+  error: unknown,
+  attemptCount: number,
+  lease: ImportLease,
+): Promise<void> {
   if (attemptCount >= CSV_MAX_ATTEMPTS) {
-    await failBatch(batchId, stage, error);
+    await failBatch(batchId, stage, error, lease);
     return;
   }
   const delayMinutes = Math.min(2 ** attemptCount, 60);
-  await prisma.cSVImportBatch.update({
-    where: { id: batchId },
+  const deferred = await prisma.cSVImportBatch.updateMany({
+    where: ownedByAttempt(batchId, lease),
     data: {
       processingStatus: CsvImportProcessingStatus.PENDING,
       failureStage: stage,
-      lastError: String(error).slice(0, 1000),
+      lastError: safeCsvFailureSummary(stage, error),
       nextAttemptAt: new Date(Date.now() + delayMinutes * 60_000),
       workerId: null,
     },
   });
+  if (deferred.count !== 1) {
+    logger.warn({ batchId, stage }, "csv import deferral skipped: the lease was reclaimed");
+  }
 }
 
 /** The response a replayed idempotency key gets: the SAME logical import at
@@ -1184,10 +2453,13 @@ function replayResponse(
     skippedRows: number;
     flaggedRows: number;
     resultSummary: Prisma.JsonValue | null;
+    mappingMeta?: Prisma.JsonValue | null;
   },
   duplicateOfBatchId?: number,
 ): ConfirmResult {
   const progress = readProgress(batch.resultSummary);
+  const storedDuplicate = jsonObject(batch.mappingMeta ?? null).duplicateOfBatchId;
+  const duplicateId = duplicateOfBatchId ?? (typeof storedDuplicate === "number" ? storedDuplicate : undefined);
   return {
     batchId: batch.id,
     title: batch.title,
@@ -1203,7 +2475,7 @@ function replayResponse(
     importedExpenses: progress.importedExpenses,
     importedSales: progress.importedSales,
     uncategorised: progress.uncategorised,
-    ...(duplicateOfBatchId !== undefined ? { duplicateOfBatchId } : {}),
+    ...(duplicateId !== undefined ? { duplicateOfBatchId: duplicateId } : {}),
   };
 }
 
@@ -1211,31 +2483,415 @@ function replayResponse(
 // Confirm
 // ============================================================
 
+/**
+ * The key actually stored, which is the owner's key hashed WITH their profile.
+ *
+ * `CSVImportBatch.idempotencyKey` is globally unique, and the raw key used to
+ * go into it verbatim. A client that sent something non-random — "import-1",
+ * a date, a filename — therefore claimed that string for the whole
+ * installation: every other business sending the same string got a 409 for an
+ * import that was not theirs and could never be replayed, permanently. No data
+ * crossed, but the key was theirs to hold forever.
+ *
+ * Hashing with the profile id is the same construction receiptScan/queue.ts
+ * already uses for the upload key, so the two paths do not disagree about what
+ * scoping an idempotency key means.
+ */
+function scopedImportKey(businessProfileId: number, requestedKey: string): string {
+  return createHash("sha256").update(`csv-import-idempotency-v1\0${businessProfileId}\0${requestedKey}`).digest("hex");
+}
+
+/**
+ * The batch a replay should observe.
+ *
+ * Two lookups because keys stored before scoping are raw. A legacy row is only
+ * honoured for the profile that created it; one belonging to somebody else is
+ * ignored rather than answered with a 409, which is the block this fixes.
+ * Legacy rows age out, and nothing writes an unscoped key any more.
+ */
+async function findReplayableBatch(businessProfileId: number, scopedKey: string, requestedKey: string) {
+  const candidates = await prisma.cSVImportBatch.findMany({
+    where: { idempotencyKey: { in: [scopedKey, requestedKey] } },
+  });
+  return (
+    candidates.find((batch) => batch.idempotencyKey === scopedKey) ??
+    candidates.find((batch) => batch.businessProfileId === businessProfileId) ??
+    null
+  );
+}
+
+function stagedConfirmHash(input: StagedConfirmInput): string {
+  const corrections = Object.entries(input.corrections ?? {})
+    .sort(([left], [right]) => Number(left) - Number(right))
+    .map(([row, value]) => [
+      row,
+      value.date ?? null,
+      value.description ?? null,
+      value.amount ?? null,
+      value.category ?? null,
+      // Appended only when used, so a confirmation made before these fields
+      // existed hashes exactly as it did and its replay still matches.
+      ...(value.vendor !== undefined
+        || value.exclude
+        || value.includedInAvailableFundsBaseline !== undefined
+        ? [
+            value.vendor ?? null,
+            value.exclude === true,
+            value.includedInAvailableFundsBaseline ?? null,
+          ]
+        : []),
+    ]);
+  const canonical = [
+    input.title,
+    input.recordType,
+    input.mixedStrategy ?? null,
+    input.dateFormat ?? null,
+    [
+      input.columnMapping.date,
+      input.columnMapping.description,
+      input.columnMapping.amount,
+      input.columnMapping.category ?? null,
+      input.columnMapping.vendor ?? null,
+      input.columnMapping.recordType ?? null,
+    ],
+    corrections,
+    ...(input.includedInAvailableFundsBaseline !== undefined
+      || input.availableFundsBaselineAt !== undefined
+      ? [
+          input.includedInAvailableFundsBaseline ?? null,
+          input.availableFundsBaselineAt ?? null,
+        ]
+      : []),
+  ];
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
+}
+
+function legacyConfirmHash(fileHash: string, input: ConfirmInput): string {
+  return createHash("sha256")
+    .update("csv-import-confirm-v1\0")
+    .update(fileHash)
+    .update("\0")
+    .update(stagedConfirmHash(input))
+    .digest("hex");
+}
+
+function assertMatchingLegacyConfirmation(
+  batch: { fileHash: string | null; confirmInputHash: string | null },
+  fileHash: string,
+  confirmInputHash: string,
+): void {
+  if (
+    batch.fileHash !== fileHash ||
+    (batch.confirmInputHash !== null && batch.confirmInputHash !== confirmInputHash)
+  ) {
+    throw new ApiError(409, "This import key was already used with different CSV data or import details.", {
+      code: "CSV_IMPORT_KEY_CONFLICT",
+    });
+  }
+}
+
+function assertMatchingStagedConfirmation(
+  batch: Pick<StagedBatchWithChunks, "confirmInputHash">,
+  confirmInputHash: string,
+): void {
+  if (batch.confirmInputHash !== confirmInputHash) {
+    throw new ApiError(409, "This staged CSV was already confirmed with different details.", {
+      code: "CSV_STAGE_CONFIRM_CONFLICT",
+    });
+  }
+}
+
+export async function confirmStagedImport(
+  userId: number,
+  businessProfileId: number,
+  stageId: string,
+  input: StagedConfirmInput,
+): Promise<TimedCsvResult<ConfirmResult>> {
+  const totalStartedAt = performance.now();
+  const confirmInputHash = stagedConfirmHash(input);
+  const loadStartedAt = performance.now();
+  const batch = await ownedBatchByStageId(userId, businessProfileId, stageId);
+  const chunkLoadMs = performance.now() - loadStartedAt;
+
+  if (
+    batch.processingStatus !== CsvImportProcessingStatus.STAGING &&
+    batch.processingStatus !== CsvImportProcessingStatus.STAGED
+  ) {
+    assertMatchingStagedConfirmation(batch, confirmInputHash);
+    const timings = { totalMs: performance.now() - totalStartedAt, chunkLoadMs };
+    return { result: replayResponse(batch), timings };
+  }
+
+  await assertStageUsable(batch);
+  const decoded = await decodeStageChunks(batch);
+  const records = decoded.parsed.records;
+  if (records.length === 0) {
+    throw new ApiError(400, "This file has no data rows to import.");
+  }
+
+  const validationStartedAt = performance.now();
+  validateMapping(decoded.parsed.headers, input);
+  const rawDateSamples = records
+    .map((record, index) => (
+      input.corrections?.[String(index + 2)]?.date ?? record[input.columnMapping.date] ?? ""
+    ).trim())
+    .filter(Boolean);
+  let dateFormat: CsvDateFormat;
+  if (input.dateFormat) {
+    dateFormat = input.dateFormat;
+  } else {
+    const detection = detectDateFormat(rawDateSamples);
+    if (detection.ambiguous) {
+      const example = ambiguousDateExample(rawDateSamples);
+      throw new ApiError(
+        422,
+        example
+          ? `The dates in this file are ambiguous: "${example.raw}" could mean ${example.dmyIso} (day first) or ` +
+              `${example.mdyIso} (month first). Re-submit with dateFormat set to "dmy" or "mdy".`
+          : "The dates in this file mix day-first and month-first conventions. Re-submit with dateFormat set to \"dmy\" or \"mdy\".",
+      );
+    }
+    dateFormat = detection.format;
+  }
+
+  const profile = await requireOwnedBusinessProfile(userId, batch.businessProfileId);
+  const latestDate = businessTodayKey(profile.timezone);
+  const outcomes = validateRows(
+    records,
+    input.columnMapping,
+    input.recordType,
+    input.corrections,
+    input.mixedStrategy,
+    dateFormat,
+    latestDate,
+  );
+  const availableFundsClassification = resolveCsvAvailableFundsClassification(
+    profile,
+    outcomes,
+    input,
+  );
+  const duplicateOf = await prisma.cSVImportBatch.findFirst({
+    where: {
+      businessProfileId: batch.businessProfileId,
+      fileHash: batch.fileHash,
+      processingStatus: CsvImportProcessingStatus.COMPLETE,
+    },
+    orderBy: { id: "desc" },
+    select: { id: true },
+  });
+  const validationMs = performance.now() - validationStartedAt;
+  const isAsync = records.length > SYNC_ROW_LIMIT;
+  const confirmedAt = new Date();
+  const mappingMeta = {
+    ...jsonObject(batch.mappingMeta),
+    parserVersion: CSV_PARSER_VERSION,
+    columnMapping: input.columnMapping,
+    recordType: input.recordType,
+    mixedStrategy: input.mixedStrategy ?? null,
+    dateFormat,
+    latestDate,
+    delimiter: decoded.parsed.delimiter,
+    corrections: input.corrections ?? null,
+    availableFundsClassification,
+    duplicateOfBatchId: duplicateOf?.id ?? null,
+  };
+  const claim = await prisma.$transaction(async (tx) => {
+    const active = await tx.$queryRaw<{ id: number }[]>(Prisma.sql`
+      SELECT u."User_ID" AS id
+      FROM "User" u
+      JOIN "BusinessProfile" p ON p."User_ID" = u."User_ID"
+      WHERE u."User_ID" = ${userId}
+        AND p."BusinessProfile_ID" = ${batch.businessProfileId}
+        AND u."User_Status" = ${AccountStatus.ACTIVE}::"AccountStatus"
+      FOR UPDATE OF u
+    `);
+    if (active.length !== 1) {
+      throw new ApiError(403, "This account can no longer import files.", { code: "ACCOUNT_NOT_ACTIVE" });
+    }
+    await lockCsvRecordGates(tx, batch.businessProfileId, outcomes);
+    const lockedProfile = await tx.businessProfile.findUniqueOrThrow({
+      where: { id: batch.businessProfileId },
+      select: {
+        availableFundsBaselineAt: true,
+        availableFundsBaselineDate: true,
+      },
+    });
+    resolveCsvAvailableFundsClassification(lockedProfile, outcomes, input);
+    return tx.cSVImportBatch.updateMany({
+      where: {
+        id: batch.id,
+        stageId,
+        processingStatus: CsvImportProcessingStatus.STAGED,
+        stageExpiresAt: { gt: confirmedAt },
+      },
+      data: {
+        title: input.title,
+        processingStatus: isAsync
+          ? CsvImportProcessingStatus.PENDING
+          : CsvImportProcessingStatus.PROCESSING,
+        mappingMeta: mappingMeta as unknown as Prisma.InputJsonObject,
+        confirmInputHash,
+        confirmedAt,
+        attemptCount: isAsync ? 0 : 1,
+        startedAt: isAsync ? null : confirmedAt,
+        heartbeatAt: isAsync ? null : confirmedAt,
+        workerId: isAsync ? null : SYNC_WORKER_ID,
+        nextAttemptAt: confirmedAt,
+      },
+    });
+  });
+
+  if (claim.count !== 1) {
+    const current = await prisma.cSVImportBatch.findFirst({
+      where: { stageId, businessProfileId, businessProfile: { userId } },
+    });
+    if (!current) {
+      throw new ApiError(404, "Staged CSV upload not found", { code: "CSV_STAGE_NOT_FOUND" });
+    }
+    if (current.processingStatus === CsvImportProcessingStatus.STAGED) {
+      throw new ApiError(410, "This staged CSV upload has expired. Choose the file again.", {
+        code: "CSV_STAGE_EXPIRED",
+      });
+    }
+    assertMatchingStagedConfirmation(current as StagedBatchWithChunks, confirmInputHash);
+    const timings = {
+      totalMs: performance.now() - totalStartedAt,
+      chunkLoadMs,
+      decompressMs: decoded.decompressMs,
+      validationMs,
+    };
+    return { result: replayResponse(current), timings };
+  }
+
+  if (isAsync) {
+    const result: ConfirmResult = {
+      batchId: batch.id,
+      title: input.title,
+      status: batch.status,
+      processingStatus: CsvImportProcessingStatus.PENDING,
+      totalRows: records.length,
+      imported: 0,
+      skipped: [],
+      skippedCount: 0,
+      skippedTruncated: false,
+      flagged: 0,
+      largeExpenseFlagged: 0,
+      importedExpenses: 0,
+      importedSales: 0,
+      uncategorised: 0,
+      ...(duplicateOf ? { duplicateOfBatchId: duplicateOf.id } : {}),
+    };
+    const timings = {
+      totalMs: performance.now() - totalStartedAt,
+      parseMs: 0,
+      chunkLoadMs,
+      decompressMs: decoded.decompressMs,
+      validationMs,
+    };
+    logger.info(
+      { batchId: batch.id, rows: records.length, mode: "async", ...roundedTimings(timings) },
+      "CSV staged import accepted",
+    );
+    return { result, timings };
+  }
+
+  const insertStartedAt = performance.now();
+  try {
+    await runImportChunks({
+      batchId: batch.id,
+      userId,
+      profile,
+      outcomes,
+      startAtRow: 0,
+      lease: { workerId: SYNC_WORKER_ID, attemptCount: 1 },
+      seed: { imported: 0, skippedCount: 0, flagged: 0, progress: emptyProgress() },
+      availableFundsClassification: availableFundsClassification ?? undefined,
+      corrections: input.corrections,
+    });
+  } catch (error) {
+    if (!(error instanceof CsvLeaseLostError)) {
+      await deferBatch(batch.id, "insert", error, 1, { workerId: SYNC_WORKER_ID, attemptCount: 1 });
+    }
+    throw error;
+  }
+  const completed = await completeBatch(batch.id, userId, batch.businessProfileId, {
+    workerId: SYNC_WORKER_ID,
+    attemptCount: 1,
+  });
+  const insertMs = performance.now() - insertStartedAt;
+  const progress = readProgress(completed.resultSummary);
+  const result: ConfirmResult = {
+    batchId: completed.id,
+    title: completed.title,
+    status: completed.status,
+    processingStatus: completed.processingStatus,
+    totalRows: records.length,
+    imported: completed.importedRows,
+    skipped: outcomes
+      .filter((outcome): outcome is Extract<RowOutcome, { kind: "skip" }> => outcome.kind === "skip")
+      .map((outcome) => ({ row: outcome.row, reason: outcome.reason })),
+    skippedCount: completed.skippedRows,
+    skippedTruncated: false,
+    flagged: completed.flaggedRows,
+    largeExpenseFlagged: progress.largeExpenseFlagged,
+    importedExpenses: progress.importedExpenses,
+    importedSales: progress.importedSales,
+    uncategorised: progress.uncategorised,
+    ...(duplicateOf ? { duplicateOfBatchId: duplicateOf.id } : {}),
+  };
+  const timings = {
+    totalMs: performance.now() - totalStartedAt,
+    parseMs: 0,
+    chunkLoadMs,
+    decompressMs: decoded.decompressMs,
+    validationMs,
+    insertMs,
+  };
+  logger.info(
+    {
+      batchId: batch.id,
+      rows: records.length,
+      mode: "sync",
+      rowsPerSecond: insertMs > 0 ? Math.round((records.length / insertMs) * 1000) : records.length,
+      ...roundedTimings(timings),
+    },
+    "CSV staged import completed",
+  );
+  return { result, timings };
+}
+
 export async function confirmImport(userId: number, input: ConfirmInput): Promise<ConfirmResult> {
   const profile = await requireOwnedBusinessProfile(userId, input.businessProfileId);
+  const latestDate = businessTodayKey(profile.timezone);
 
   // Direct service callers (tests, scripts) may omit the key; they get a
   // fresh import each call, exactly the pre-idempotency behaviour. The HTTP
   // layer always sends one — its own or the deprecation shim's.
-  const idempotencyKey = input.idempotencyKey ?? `service-${randomUUID()}`;
+  const requestedKey = input.idempotencyKey ?? `service-${randomUUID()}`;
+  const idempotencyKey = scopedImportKey(input.businessProfileId, requestedKey);
+  const fileHash = createHash("sha256").update(input.buffer).digest("hex");
+  const confirmInputHash = legacyConfirmHash(fileHash, input);
 
   /*
    * REPLAY CHECK FIRST — before parsing, before storage, before anything that
    * costs. A retried confirm (timeout, refresh, double-click) must observe
    * the import it already started, never start a second one.
    */
-  const existing = await prisma.cSVImportBatch.findUnique({ where: { idempotencyKey } });
+  const existing = await findReplayableBatch(input.businessProfileId, idempotencyKey, requestedKey);
   if (existing) {
     if (existing.businessProfileId !== input.businessProfileId) {
-      // A key is scoped to the import it named. Reusing it against a
-      // different profile is a client bug (or a probe); replaying the other
-      // profile's counts here would leak them.
-      throw new ApiError(409, "This idempotency key was already used by a different import");
+      // Unreachable now that the stored key carries the profile — a match
+      // means a SHA-256 collision, not a reused key. Kept because replaying
+      // another profile's counts would be a leak, and this is the one line
+      // between that and a hash assumption.
+      throw new ApiError(409, "This idempotency key was already used by a different import", {
+        code: "CSV_IMPORT_KEY_CONFLICT",
+      });
     }
+    assertMatchingLegacyConfirmation(existing, fileHash, confirmInputHash);
     return replayResponse(existing);
   }
 
-  const fileHash = createHash("sha256").update(input.buffer).digest("hex");
   const { records, delimiter, headers } = parseCsv(input.buffer);
 
   if (records.length === 0) {
@@ -1271,6 +2927,21 @@ export async function confirmImport(userId: number, input: ConfirmInput): Promis
     dateFormat = detection.format;
   }
 
+  const outcomes = validateRows(
+    records,
+    input.columnMapping,
+    input.recordType,
+    input.corrections,
+    input.mixedStrategy,
+    dateFormat,
+    latestDate,
+  );
+  const availableFundsClassification = resolveCsvAvailableFundsClassification(
+    profile,
+    outcomes,
+    input,
+  );
+
   // Same bytes already imported? Surfaced, not blocked — see ConfirmResult.
   const duplicateOf = await prisma.cSVImportBatch.findFirst({
     where: {
@@ -1295,9 +2966,13 @@ export async function confirmImport(userId: number, input: ConfirmInput): Promis
     recordType: input.recordType,
     mixedStrategy: input.mixedStrategy ?? null,
     dateFormat,
+    latestDate,
     delimiter,
     corrections: input.corrections ?? null,
+    availableFundsClassification,
+    duplicateOfBatchId: duplicateOf?.id ?? null,
   };
+  const fileReference = csvFileReference(input.businessProfileId, randomUUID(), input.originalname);
 
   /*
    * BATCH ROW BEFORE STORAGE UPLOAD — the reverse of the old order, which
@@ -1311,25 +2986,67 @@ export async function confirmImport(userId: number, input: ConfirmInput): Promis
    * batch whose file is still in flight. The async path releases the lease —
    * flips to PENDING — only once the file is safely in storage.
    */
-  let batch;
+  let reservation: { batch: Prisma.CSVImportBatchGetPayload<Record<string, never>>; replayed: boolean };
   try {
-    batch = await prisma.cSVImportBatch.create({
-      data: {
-        businessProfileId: input.businessProfileId,
-        title: input.title,
-        uploadDate: new Date(),
-        status: "Needs Review",
-        processingStatus: CsvImportProcessingStatus.PROCESSING,
-        idempotencyKey,
-        fileHash,
-        fileSizeBytes: input.buffer.length,
-        totalRows: records.length,
-        mappingMeta: mappingMeta as unknown as Prisma.InputJsonObject,
-        attemptCount: isAsync ? 0 : 1,
-        startedAt: new Date(),
-        heartbeatAt: new Date(),
-        workerId: SYNC_WORKER_ID,
-      },
+    reservation = await prisma.$transaction(async (tx) => {
+      const active = await tx.$queryRaw<{ id: number }[]>(Prisma.sql`
+        SELECT u."User_ID" AS id
+        FROM "User" u
+        JOIN "BusinessProfile" p ON p."User_ID" = u."User_ID"
+        WHERE u."User_ID" = ${userId}
+          AND p."BusinessProfile_ID" = ${input.businessProfileId}
+          AND u."User_Status" = ${AccountStatus.ACTIVE}::"AccountStatus"
+        FOR UPDATE OF u
+      `);
+      if (active.length !== 1) {
+        throw new ApiError(403, "This account can no longer import files.", { code: "ACCOUNT_NOT_ACTIVE" });
+      }
+
+      const replayCandidates = await tx.cSVImportBatch.findMany({
+        where: {
+          businessProfileId: input.businessProfileId,
+          idempotencyKey: { in: [idempotencyKey, requestedKey] },
+        },
+      });
+      const concurrentReplay = replayCandidates.find((candidate) => candidate.idempotencyKey === idempotencyKey)
+        ?? replayCandidates[0];
+      if (concurrentReplay) {
+        assertMatchingLegacyConfirmation(concurrentReplay, fileHash, confirmInputHash);
+        return { batch: concurrentReplay, replayed: true };
+      }
+
+      await lockCsvRecordGates(tx, input.businessProfileId, outcomes);
+      const lockedProfile = await tx.businessProfile.findUniqueOrThrow({
+        where: { id: input.businessProfileId },
+        select: {
+          availableFundsBaselineAt: true,
+          availableFundsBaselineDate: true,
+        },
+      });
+      resolveCsvAvailableFundsClassification(lockedProfile, outcomes, input);
+
+      await assertCsvOutstandingCapacity(tx, userId, input.buffer.byteLength);
+      const created = await tx.cSVImportBatch.create({
+        data: {
+          businessProfileId: input.businessProfileId,
+          title: input.title,
+          uploadDate: new Date(),
+          status: "Needs Review",
+          processingStatus: CsvImportProcessingStatus.PROCESSING,
+          idempotencyKey,
+          fileHash,
+          confirmInputHash,
+          fileSizeBytes: input.buffer.length,
+          fileReference,
+          totalRows: records.length,
+          mappingMeta: mappingMeta as unknown as Prisma.InputJsonObject,
+          attemptCount: isAsync ? 0 : 1,
+          startedAt: new Date(),
+          heartbeatAt: new Date(),
+          workerId: SYNC_WORKER_ID,
+        },
+      });
+      return { batch: created, replayed: false };
     });
   } catch (error) {
     // Two concurrent confirms with the same key: exactly one insert wins the
@@ -1337,28 +3054,87 @@ export async function confirmImport(userId: number, input: ConfirmInput): Promis
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       const winner = await prisma.cSVImportBatch.findUnique({ where: { idempotencyKey } });
       if (winner && winner.businessProfileId === input.businessProfileId) {
-        return replayResponse(winner, duplicateOf?.id);
+        assertMatchingLegacyConfirmation(winner, fileHash, confirmInputHash);
+        return replayResponse(winner);
       }
     }
     throw error;
   }
+  if (reservation.replayed) return replayResponse(reservation.batch);
+  const batch = reservation.batch;
 
+  let uploadLeaseLost = false;
+  const uploadHeartbeat = setInterval(() => {
+    void prisma.cSVImportBatch.updateMany({
+      where: {
+        id: batch.id,
+        processingStatus: CsvImportProcessingStatus.PROCESSING,
+        workerId: SYNC_WORKER_ID,
+        attemptCount: batch.attemptCount,
+      },
+      data: { heartbeatAt: new Date() },
+    }).then((updated) => {
+      if (updated.count !== 1) uploadLeaseLost = true;
+    }).catch(() => undefined);
+  }, Math.floor(CSV_LEASE_MS / 3));
+  uploadHeartbeat.unref();
   try {
-    const fileReference = await uploadCsvFile(input.businessProfileId, input.buffer, input.originalname);
-    await prisma.cSVImportBatch.update({ where: { id: batch.id }, data: { fileReference } });
+    await uploadCsvFileAtReference(input.businessProfileId, fileReference, input.buffer);
+    const finalized = uploadLeaseLost
+      ? { count: 0 }
+      : await prisma.$transaction(async (tx) => {
+          const active = await tx.$queryRaw<{ id: number }[]>(Prisma.sql`
+            SELECT u."User_ID" AS id
+            FROM "User" u
+            JOIN "BusinessProfile" p ON p."User_ID" = u."User_ID"
+            WHERE u."User_ID" = ${userId}
+              AND p."BusinessProfile_ID" = ${input.businessProfileId}
+              AND u."User_Status" = ${AccountStatus.ACTIVE}::"AccountStatus"
+            FOR UPDATE OF u
+          `);
+          if (active.length !== 1) return { count: 0 };
+          return tx.cSVImportBatch.updateMany({
+            where: {
+              id: batch.id,
+              processingStatus: CsvImportProcessingStatus.PROCESSING,
+              workerId: SYNC_WORKER_ID,
+              attemptCount: batch.attemptCount,
+            },
+            data: isAsync
+              ? {
+                  processingStatus: CsvImportProcessingStatus.PENDING,
+                  workerId: null,
+                  heartbeatAt: null,
+                  nextAttemptAt: new Date(),
+                }
+              : { heartbeatAt: new Date() },
+          });
+        });
+    if (finalized.count !== 1) {
+      const lost = new ApiError(409, "This CSV import is no longer available.", {
+        code: "CSV_IMPORT_RESERVATION_LOST",
+      });
+      throw lost;
+    }
   } catch (error) {
     // Terminal, not retryable: the bytes lived only in this request, so
     // there is nothing for a later attempt to download.
-    await failBatch(batch.id, "upload", error);
+    await failBatch(batch.id, "upload", error, {
+      workerId: SYNC_WORKER_ID,
+      attemptCount: batch.attemptCount,
+    }, { deferSourcePurge: true }).catch((cleanupError) => {
+      logger.error(
+        { batchId: batch.id, cleanupStage: "persist-terminal-purge", failureKind: cleanupError instanceof Error ? cleanupError.name : "unknown" },
+        "CSV upload failure could not persist terminal cleanup",
+      );
+    });
+    await compensateCsvUploadAttempt(input.businessProfileId, batch.id, fileReference);
     throw error;
+  } finally {
+    clearInterval(uploadHeartbeat);
   }
 
   if (isAsync) {
-    // Release the request's lease; the worker owns it from here.
-    await prisma.cSVImportBatch.update({
-      where: { id: batch.id },
-      data: { processingStatus: CsvImportProcessingStatus.PENDING, workerId: null, nextAttemptAt: new Date() },
-    });
     return {
       batchId: batch.id,
       title: batch.title,
@@ -1378,16 +3154,6 @@ export async function confirmImport(userId: number, input: ConfirmInput): Promis
     };
   }
 
-  // ---- Synchronous path: same stage functions, inside the request ----
-  const outcomes = validateRows(
-    records,
-    input.columnMapping,
-    input.recordType,
-    input.corrections,
-    input.mixedStrategy,
-    dateFormat,
-  );
-
   try {
     await runImportChunks({
       batchId: batch.id,
@@ -1395,7 +3161,12 @@ export async function confirmImport(userId: number, input: ConfirmInput): Promis
       profile,
       outcomes,
       startAtRow: 0,
+      // The batch row was created with this worker id and attemptCount 1, so
+      // the request holds the lease it is about to check itself against.
+      lease: { workerId: SYNC_WORKER_ID, attemptCount: 1 },
       seed: { imported: 0, skippedCount: 0, flagged: 0, progress: emptyProgress() },
+      availableFundsClassification: availableFundsClassification ?? undefined,
+      corrections: input.corrections,
     });
   } catch (error) {
     /*
@@ -1403,12 +3174,21 @@ export async function confirmImport(userId: number, input: ConfirmInput): Promis
      * how far the committed chunks got, so the durable worker can finish what
      * the request could not. The owner sees an error now and a completed
      * import shortly — never a silent half-import.
+     *
+     * Unless the worker has already taken the batch over (a request slow
+     * enough for its heartbeat to go stale): then the row belongs to that
+     * attempt and this one must not rewrite its status.
      */
-    await deferBatch(batch.id, "insert", error, 1);
+    if (!(error instanceof CsvLeaseLostError)) {
+      await deferBatch(batch.id, "insert", error, 1, { workerId: SYNC_WORKER_ID, attemptCount: 1 });
+    }
     throw error;
   }
 
-  const completed = await completeBatch(batch.id, userId, input.businessProfileId);
+  const completed = await completeBatch(batch.id, userId, input.businessProfileId, {
+    workerId: SYNC_WORKER_ID,
+    attemptCount: 1,
+  });
   const progress = readProgress(completed.resultSummary);
 
   return {
@@ -1446,6 +3226,7 @@ async function claimImportBatch() {
   const now = new Date();
   const staleBefore = new Date(now.getTime() - CSV_LEASE_MS);
   const eligible: Prisma.CSVImportBatchWhereInput = {
+    businessProfile: { user: { status: AccountStatus.ACTIVE } },
     OR: [
       { processingStatus: CsvImportProcessingStatus.PENDING, nextAttemptAt: { lte: now } },
       {
@@ -1478,54 +3259,148 @@ async function claimImportBatch() {
 type ClaimedBatch = NonNullable<Awaited<ReturnType<typeof claimImportBatch>>>;
 
 async function processClaimedBatch(batch: ClaimedBatch): Promise<void> {
-  const profile = await prisma.businessProfile.findUnique({
-    where: { id: batch.businessProfileId },
-    select: { id: true, userId: true, expectedMonthlyExpenses: true, largeExpenseThresholdPercent: true },
-  });
-  if (!profile) {
-    // Cascade deletes normally take the batch with the profile; this is the
-    // window where they raced.
-    throw new ImportStageError("validate", "Business profile no longer exists");
-  }
-  if (!batch.fileReference) {
-    throw new ImportStageError("download", "No stored file to import — the upload never completed");
-  }
-  const buffer = await downloadCsvFile(batch.fileReference);
-  if (!buffer) {
-    throw new ImportStageError("download", `Could not download "${batch.fileReference}" from storage`);
-  }
-
-  const meta = readMappingMeta(batch.mappingMeta);
-
-  let records: Record<string, string>[];
+  const totalStartedAt = performance.now();
+  const queueWaitMs = Math.max(0, Date.now() - batch.nextAttemptAt.getTime());
+  const lease: ImportLease = { workerId: CSV_WORKER_ID, attemptCount: batch.attemptCount };
+  let storageMs = 0;
+  let parseMs = 0;
+  let chunkLoadMs = 0;
+  let decompressMs = 0;
+  let validationMs = 0;
+  let insertMs = 0;
+  let stage = "restore";
   try {
-    ({ records } = parseCsv(buffer));
+    const profile = await prisma.businessProfile.findUnique({
+      where: { id: batch.businessProfileId },
+      select: { id: true, userId: true, expectedMonthlyExpenses: true, largeExpenseThresholdPercent: true, timezone: true },
+    });
+    if (!profile) {
+      throw new ImportStageError("validate", "Business profile no longer exists");
+    }
+    const meta = readMappingMeta(batch.mappingMeta);
+    let records: Record<string, string>[];
+
+    if (batch.stageId) {
+      const chunkLoadStartedAt = performance.now();
+      const staged = await prisma.cSVImportBatch.findUnique({
+        where: { id: batch.id },
+        include: { stageChunks: { orderBy: { chunkIndex: "asc" } } },
+      });
+      chunkLoadMs = performance.now() - chunkLoadStartedAt;
+      if (!staged) throw new CsvLeaseLostError(batch.id);
+      try {
+        const decoded = await decodeStageChunks(staged);
+        records = decoded.parsed.records;
+        decompressMs = decoded.decompressMs;
+      } catch {
+        throw new ImportStageError("restore", "Staged CSV data failed its integrity check");
+      }
+    } else {
+      if (!batch.fileReference) {
+        throw new ImportStageError("download", "No stored file is available for this import");
+      }
+      stage = "download";
+      const storageStartedAt = performance.now();
+      const buffer = await downloadCsvFile(batch.fileReference);
+      storageMs = performance.now() - storageStartedAt;
+      if (!buffer) throw new ImportStageError("download", "Stored CSV data could not be downloaded");
+      await heartbeatImportBatch(batch.id, lease);
+
+      stage = "parse";
+      const parseStartedAt = performance.now();
+      try {
+        ({ records } = parseCsv(buffer));
+      } catch {
+        throw new ImportStageError("parse", "Stored CSV data could not be parsed");
+      }
+      parseMs = performance.now() - parseStartedAt;
+    }
+    await heartbeatImportBatch(batch.id, lease);
+
+    stage = "validate";
+    const validationStartedAt = performance.now();
+    let outcomes: RowOutcome[];
+    try {
+      // The day the owner confirmed against, so a run that starts after
+      // midnight imports exactly the rows the review said it would.
+      outcomes = validateRows(
+        records,
+        meta.columnMapping,
+        meta.recordType,
+        meta.corrections,
+        meta.mixedStrategy,
+        meta.dateFormat,
+        meta.latestDate ?? businessTodayKey(profile.timezone),
+      );
+    } catch {
+      throw new ImportStageError("validate", "Stored CSV rows could not be validated");
+    }
+    validationMs = performance.now() - validationStartedAt;
+    await heartbeatImportBatch(batch.id, lease);
+
+    stage = "insert";
+    const insertStartedAt = performance.now();
+    await runImportChunks({
+      batchId: batch.id,
+      userId: profile.userId,
+      profile,
+      outcomes,
+      startAtRow: batch.processedRows,
+      lease,
+      seed: {
+        imported: batch.importedRows,
+        skippedCount: batch.skippedRows,
+        flagged: batch.flaggedRows,
+        progress: readProgress(batch.resultSummary),
+      },
+      availableFundsClassification: meta.availableFundsClassification,
+      corrections: meta.corrections,
+    });
+
+    await completeBatch(batch.id, profile.userId, batch.businessProfileId, lease);
+    insertMs = performance.now() - insertStartedAt;
+    const totalMs = performance.now() - totalStartedAt;
+    const rowsProcessed = Math.max(0, outcomes.length - batch.processedRows);
+    logger.info(
+      {
+        batchId: batch.id,
+        attempt: batch.attemptCount,
+        outcome: "complete",
+        rows: outcomes.length,
+        rowsProcessed,
+        rowsPerSecond: insertMs > 0 ? Math.round((rowsProcessed / insertMs) * 1000) : rowsProcessed,
+        queueWaitMs: Math.round(queueWaitMs),
+        storageMs: Math.round(storageMs),
+        parseMs: Math.round(parseMs),
+        chunkLoadMs: Math.round(chunkLoadMs),
+        decompressMs: Math.round(decompressMs),
+        validationMs: Math.round(validationMs),
+        insertMs: Math.round(insertMs),
+        totalMs: Math.round(totalMs),
+      },
+      "CSV import worker attempt",
+    );
   } catch (error) {
-    throw new ImportStageError("parse", String(error));
+    const failureStage = error instanceof ImportStageError ? error.stage : stage;
+    logger.info(
+      {
+        batchId: batch.id,
+        attempt: batch.attemptCount,
+        outcome: error instanceof CsvLeaseLostError ? "lease-lost" : "failed",
+        failureStage,
+        queueWaitMs: Math.round(queueWaitMs),
+        storageMs: Math.round(storageMs),
+        parseMs: Math.round(parseMs),
+        chunkLoadMs: Math.round(chunkLoadMs),
+        decompressMs: Math.round(decompressMs),
+        validationMs: Math.round(validationMs),
+        insertMs: Math.round(insertMs),
+        totalMs: Math.round(performance.now() - totalStartedAt),
+      },
+      "CSV import worker attempt",
+    );
+    throw error;
   }
-
-  let outcomes: RowOutcome[];
-  try {
-    outcomes = validateRows(records, meta.columnMapping, meta.recordType, meta.corrections, meta.mixedStrategy, meta.dateFormat);
-  } catch (error) {
-    throw new ImportStageError("validate", String(error));
-  }
-
-  await runImportChunks({
-    batchId: batch.id,
-    userId: profile.userId,
-    profile,
-    outcomes,
-    startAtRow: batch.processedRows,
-    seed: {
-      imported: batch.importedRows,
-      skippedCount: batch.skippedRows,
-      flagged: batch.flaggedRows,
-      progress: readProgress(batch.resultSummary),
-    },
-  });
-
-  await completeBatch(batch.id, profile.userId, batch.businessProfileId);
 }
 
 /** Runs at most one durable import attempt; the server scheduler calls this
@@ -1536,9 +3411,26 @@ export async function runCsvImportWorkerOnce(): Promise<boolean> {
   try {
     await processClaimedBatch(batch);
   } catch (error) {
+    // A newer attempt owns the row now; deferring it here would reset the
+    // status, workerId and nextAttemptAt out from under that worker.
+    if (error instanceof CsvLeaseLostError) {
+      logger.warn({ batchId: batch.id }, "csv import lease reclaimed mid-attempt");
+      return true;
+    }
     const stage = error instanceof ImportStageError ? error.stage : "insert";
-    logger.error({ err: error, batchId: batch.id, stage }, "csv import attempt failed");
-    await deferBatch(batch.id, stage, error, batch.attemptCount);
+    logger.error(
+      {
+        batchId: batch.id,
+        stage,
+        failureKind: error instanceof Error ? error.name : "unknown",
+        failureCode: stableCsvFailureCode(stage, error),
+      },
+      "csv import attempt failed",
+    );
+    await deferBatch(batch.id, stage, error, batch.attemptCount, {
+      workerId: CSV_WORKER_ID,
+      attemptCount: batch.attemptCount,
+    });
   }
   return true;
 }
@@ -1551,20 +3443,106 @@ export async function runCsvImportWorkerOnce(): Promise<boolean> {
  * unique idempotency key stops pinning a zombie.
  */
 export async function sweepStalledCsvImports(): Promise<number> {
-  const cutoff = new Date(Date.now() - 24 * 60 * 60_000);
-  const { count } = await prisma.cSVImportBatch.updateMany({
-    where: {
-      processingStatus: { in: [CsvImportProcessingStatus.PENDING, CsvImportProcessingStatus.PROCESSING] },
-      createdAt: { lt: cutoff },
-      attemptCount: { gte: CSV_MAX_ATTEMPTS },
-    },
-    data: {
-      processingStatus: CsvImportProcessingStatus.FAILED,
-      failureStage: "stalled",
-      lastError: "Import did not finish within 24 hours and its retries were exhausted",
-      workerId: null,
-    },
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - 24 * 60 * 60_000);
+  const staleBefore = new Date(now.getTime() - CSV_LEASE_MS);
+  const count = await prisma.$transaction(async (tx) => {
+    const candidates = await tx.$queryRaw<{
+      id: number;
+      processingStatus: CsvImportProcessingStatus;
+      stageId: string | null;
+    }[]>(Prisma.sql`
+      SELECT
+        "ImportBatch_ID" AS id,
+        "ImportBatch_ProcessingStatus" AS "processingStatus",
+        "ImportBatch_StageID" AS "stageId"
+      FROM "CSVImportBatch"
+      WHERE "ImportBatch_CreatedAt" < ${cutoff}
+        AND "ImportBatch_AttemptCount" >= ${CSV_MAX_ATTEMPTS}
+        AND (
+          (
+            "ImportBatch_ProcessingStatus" = ${CsvImportProcessingStatus.PENDING}::"CsvImportProcessingStatus"
+            AND "ImportBatch_NextAttemptAt" <= CURRENT_TIMESTAMP
+          )
+          OR (
+            "ImportBatch_ProcessingStatus" = ${CsvImportProcessingStatus.PROCESSING}::"CsvImportProcessingStatus"
+            AND (
+              "ImportBatch_HeartbeatAt" IS NULL
+              OR "ImportBatch_HeartbeatAt" <= ${staleBefore}
+            )
+          )
+        )
+      ORDER BY "ImportBatch_ID"
+      FOR UPDATE SKIP LOCKED
+      LIMIT 100
+    `);
+    const ids = candidates.map((candidate) => candidate.id);
+    if (ids.length === 0) return 0;
+    const failed = await tx.cSVImportBatch.updateMany({
+      where: { id: { in: ids } },
+      data: {
+        processingStatus: CsvImportProcessingStatus.FAILED,
+        failureStage: "stalled",
+        lastError: "Import did not finish within 24 hours and its retries were exhausted",
+        workerId: null,
+        heartbeatAt: null,
+      },
+    });
+    await tx.cSVImportStageChunk.deleteMany({ where: { importBatchId: { in: ids } } });
+    for (const candidate of candidates) {
+      const wasLegacyUploadReservation = candidate.stageId === null
+        && candidate.processingStatus === CsvImportProcessingStatus.PROCESSING;
+      await enqueueCsvSourcePurgeForTerminalBatch(
+        tx,
+        candidate.id,
+        wasLegacyUploadReservation
+          ? { notBefore: new Date(now.getTime() + CSV_AMBIGUOUS_UPLOAD_TOMBSTONE_GRACE_MS) }
+          : {},
+      );
+    }
+    return failed.count;
   });
   if (count > 0) logger.warn({ count }, "swept stalled csv imports to FAILED");
   return count;
+}
+
+/**
+ * Removes abandoned upload reservations and review stages in bounded passes.
+ * The purge helper re-locks every row before deleting it, so a stage confirmed
+ * or heartbeated after this candidate read is preserved.
+ */
+export async function sweepExpiredCsvStages(): Promise<number> {
+  const now = new Date();
+  const staleStagingBefore = new Date(now.getTime() - STAGING_UPLOAD_LEASE_MS);
+  const candidates = await prisma.cSVImportBatch.findMany({
+    where: {
+      OR: [
+        {
+          processingStatus: CsvImportProcessingStatus.STAGED,
+          stageExpiresAt: { lte: now },
+        },
+        {
+          processingStatus: CsvImportProcessingStatus.STAGING,
+          OR: [
+            { heartbeatAt: null },
+            { heartbeatAt: { lte: staleStagingBefore } },
+          ],
+        },
+      ],
+    },
+    select: { id: true },
+    orderBy: [{ stageExpiresAt: "asc" }, { id: "asc" }],
+    take: 100,
+  });
+
+  let purged = 0;
+  for (const candidate of candidates) {
+    const outcome = await purgeStagedBatch(candidate.id, {
+      expiredBefore: now,
+      staleStagingBefore,
+    });
+    if (outcome === "purged") purged += 1;
+  }
+  if (purged > 0) logger.info({ purged }, "swept expired CSV upload stages");
+  return purged;
 }

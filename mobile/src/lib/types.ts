@@ -1,3 +1,5 @@
+import type { PeriodWindow } from "./reportingPeriod";
+
 /**
  * API response types.
  *
@@ -86,8 +88,18 @@ export interface BusinessProfile {
   id: number;
   name: string;
   type: string;
+  /** Owner-entered opening amount. Current recorded funds are returned by FinancialPosition. */
   availableFunds: number;
+  /** Owner-entered fallback used until a complete past month is confirmed. */
   expectedMonthlyExpenses: number;
+  /** Exact instant when the current available-funds baseline took effect. */
+  availableFundsBaselineAt: string;
+  /** Business-local calendar date for that same baseline. */
+  availableFundsBaselineDate: string;
+  /** Latest past month the owner has confirmed complete, as YYYY-MM. */
+  expenseRecordsCompleteThroughMonth: string | null;
+  /** When the completeness assertion was last confirmed. */
+  expenseRecordsCompleteThroughConfirmedAt: string | null;
   operatingDays: number;
   largeExpenseThresholdPercent: number;
   /** A public URL for the business logo, or null if none was uploaded. */
@@ -107,6 +119,35 @@ export interface BusinessProfileInput {
   expectedMonthlyExpenses: number;
   operatingDays: number;
   largeExpenseThresholdPercent: number;
+}
+
+export interface AvailableFundsCalculation {
+  calculatedAmount: number;
+  baselineAmount: number;
+  baselineAt: string;
+  baselineDate: string;
+  confirmedSalesAdded: number;
+  confirmedSalesRecordCount: number;
+  confirmedExpensesDeducted: number;
+  confirmedExpenseRecordCount: number;
+  asOfDate: string;
+}
+
+export interface MonthlyExpenseBasis {
+  amount: number;
+  source: "owner_estimate" | "previous_complete_month";
+  sourceMonth: string | null;
+  ownerEstimate: number;
+  recordsCompleteThroughMonth: string | null;
+  recordsCompleteThroughConfirmedAt: string | null;
+  eligibleRecordCount: number;
+}
+
+/** Server-owned financial position derived from starting values and confirmed records. */
+export interface FinancialPosition {
+  asOfDate: string;
+  availableFunds: AvailableFundsCalculation;
+  monthlyExpenseBasis: MonthlyExpenseBasis;
 }
 
 /**
@@ -133,6 +174,11 @@ export interface ExpenseCategory {
    * test double built before this field existed still type-checks.
    */
   costBehavior?: ExpenseCostBehavior;
+  /**
+   * Business or personal spending, read by the server from the category's
+   * name. Optional for the same reason as costBehavior; absent means business.
+   */
+  kind?: "business" | "personal";
 }
 
 export type ReviewStatus = "Reviewed" | "Needs Review";
@@ -161,6 +207,10 @@ export interface RecordItem {
   reviewStatus: ReviewStatus;
   duplicateStatus: DuplicateStatus;
   largeExpenseFlag?: boolean;
+  /** Whether this same-day transaction was already counted in the recorded balance. */
+  includedInAvailableFundsBaseline?: boolean | null;
+  /** The exact balance anchor the classification above belongs to. */
+  availableFundsDeltaBaselineAt?: string | null;
   createdAt: string;
 }
 
@@ -351,18 +401,40 @@ export interface RecordFilters {
 export interface Notification {
   id: number;
   businessProfileId: number;
+  /** The expense this alert is about, or null for business-wide alerts. */
+  expenseRecordId: number | null;
   message: string;
   type: string;
   dateCreated: string;
   readStatus: boolean;
 }
 
+export interface DashboardFigureChange {
+  previous: number;
+  changeAmount: number;
+  /** Null when the previous period was zero. */
+  changePercent: number | null;
+}
+
+/** The same figures for the window before this one. Absent for All time and older responses. */
+export interface DashboardPeriodComparison {
+  previousStart: string;
+  previousEnd: string;
+  sales: DashboardFigureChange;
+  expenses: DashboardFigureChange;
+  net: DashboardFigureChange;
+}
+
 export interface DashboardSummary {
   periodDays: number;
   periodStart: string;
   periodEnd: string;
+  period?: PeriodWindow;
+  periodComparison?: DashboardPeriodComparison | null;
   overview: {
     availableFunds: number;
+    /** Provenance for `availableFunds`. Optional while cached responses roll forward. */
+    availableFundsCalculation?: AvailableFundsCalculation;
     totalExpenses: number;
     totalSalesReference: number;
   };
@@ -449,7 +521,9 @@ export interface RecoveryTargets {
   /** Recorded sales minus expected-to-date — positive means ahead of pace. */
   paceVarianceAmount?: number;
   /** Stepping-stone toward the plan's eventual v2 contract — this Phase 1 slice is not yet that full shape. */
-  contractVersion?: 1;
+  contractVersion?: 1 | 2;
+  /** Present in contract v2; explains the resolved expectedMonthlyExpenses alias. */
+  monthlyExpenseBasis?: MonthlyExpenseBasis;
   /** IANA timezone identifier the calculation was anchored to. */
   timezone?: string;
   /** YYYY-MM-DD, business-local calendar day this calculation was anchored to. */
@@ -574,8 +648,12 @@ export interface DailyExpenseTotal {
 export interface ExpenseBehavior {
   periodStart: string;
   periodEnd: string;
-  previousPeriodStart: string;
-  previousPeriodEnd: string;
+  /** Null for all time, which has nothing before it to compare with. */
+  previousPeriodStart: string | null;
+  previousPeriodEnd: string | null;
+  period?: PeriodWindow;
+  /** "month" when `dailyTotals` holds one point per month (all time). */
+  dailyBucket?: "day" | "month";
   /**
    * Daily totals across the period. The endpoint has always returned these —
    * mobile's copy of the type simply never declared them, so the data arrived
@@ -678,8 +756,11 @@ export interface ReductionOpportunityFeedbackResult {
 export interface ReductionOpportunityResponse {
   period: {
     days: number;
-    start: string;
+    /** Null for all time. */
+    start: string | null;
     end: string;
+    kind?: PeriodWindow["kind"];
+    month?: string | null;
   };
   dataQuality: {
     status: "sufficient" | "limited" | "insufficient";
@@ -838,6 +919,38 @@ export interface DailyCoverageRow {
   isOperatingDay?: boolean;
 }
 
+export interface RecoveryReportingPeriod {
+  kind: "week" | "month";
+  month: string | null;
+  start: string;
+  end: string;
+  asOfDate: string;
+  timezone: string;
+  isCurrent: boolean;
+  isComplete: boolean;
+  targetBasis: "prorated_monthly_expenses" | "monthly_expenses";
+  monthlyExpenseBases: Array<{ targetMonth: string; basis: MonthlyExpenseBasis }>;
+  target: number;
+  sales: number;
+  confirmedSales: number;
+  provisionalSales: number;
+  remainingTarget: number;
+  coveragePercent: number;
+  dailyTarget: number;
+  adjustedDailyTarget: number | null;
+  operatingDays: number;
+  elapsedOperatingDays: number;
+  remainingOperatingDays: number;
+  operatingScheduleConfigured: boolean;
+  operatingDaysIsApproximated: boolean;
+  expectedSalesToDate: number;
+  paceVarianceAmount: number;
+  status: "needs_setup" | "no_data" | "ahead" | "on_pace" | "behind" | "covered";
+  confidence: RecoveryConfidence;
+  recordCount: number;
+  dataWarnings: Array<"records_pending_review" | "possible_duplicates">;
+}
+
 export interface RecoveryInsight extends RecoveryTargets {
   monthStart: string;
   today: string;
@@ -861,6 +974,8 @@ export interface RecoveryInsight extends RecoveryTargets {
    * Optional for older servers.
    */
   weeklyCheckpoints?: RecoveryCheckpoint[];
+  /** Present on newer servers when Recovery is requested for a week or month. */
+  reportingPeriod?: RecoveryReportingPeriod;
 }
 
 /**
@@ -999,6 +1114,8 @@ export type RecoveryMonthEndReview =
       status: "reviewable";
       /** "YYYY-MM". */
       month: string;
+      /** The server-owned amount and provenance used for this review's coverage calculation. */
+      monthlyExpenseBasis: MonthlyExpenseBasis;
       coveragePercent: number;
       /** Positive = surplus, negative = shortfall. */
       surplusOrShortfall: number;
@@ -1022,8 +1139,9 @@ export type ImpactBand = "Low Impact" | "Noticeable Impact" | "High Impact";
 
 export interface SpendingImpact {
   periodDays: number;
-  periodStart: string;
+  periodStart: string | null;
   periodEnd: string;
+  period?: PeriodWindow;
   plannedAmount: number;
   thresholdPercent: number;
   thresholdAmount: number;
@@ -1033,6 +1151,8 @@ export interface SpendingImpact {
   funds: { before: number; after: number };
   periodExpenses: { before: number; after: number };
   availableFunds: number;
+  /** Present on newer responses; explains the resolved availableFunds alias. */
+  availableFundsCalculation?: AvailableFundsCalculation;
   resultingFunds: number;
 }
 
@@ -1132,7 +1252,64 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   createdAt: string;
+  /**
+   * Assistant replies only — what the server resolved alongside the text.
+   * Null on user messages and on replies stored before this existed.
+   */
+  metadata?: ChatAnswerMetadata | null;
+  /** The owner's rating of an assistant reply. */
+  feedback?: "up" | "down" | null;
 }
+
+/** A record an answer mentioned, as the SERVER read it (never the model's wording). */
+export interface ChatRecordReference {
+  kind: "record";
+  recordType: "expense" | "sales";
+  id: number;
+  label: string;
+  amount: number;
+  date: string;
+}
+
+/** Pages Fin may point to. The screen each opens is the client's (see lib/chatLinks.ts). */
+export type ChatPageKey =
+  | "dashboard"
+  | "records"
+  | "review-queue"
+  | "expense-insights"
+  | "recovery"
+  | "spending-impact"
+  | "categories"
+  | "add-expense"
+  | "add-sales"
+  | "scan-receipt";
+
+/** A one-tap action the server offered. Nothing runs until the owner presses it. */
+export type ChatAction =
+  | {
+      kind: "review-finding";
+      findingId: number;
+      label: string;
+      status: "CONFIRMED" | "DISMISSED" | "RESOLVED";
+      feedback: "CONFIRMED_UNUSUAL" | "EXPECTED_TRANSACTION" | "DUPLICATE" | "INCORRECT_MATCH" | "NO_LONGER_RELEVANT";
+    }
+  | { kind: "open-spending-impact"; amount: number; label: string };
+
+export interface ChatAnswerMetadata {
+  references: ChatRecordReference[];
+  pages: { key: ChatPageKey; label: string }[];
+  actions: ChatAction[];
+  followUps: string[];
+  /** The period the answer was grounded in, e.g. "January 2022". */
+  period: string | null;
+  /** "trimmed" means part of the answer was removed for using an unverified figure. */
+  amountCheck: "passed" | "revised" | "trimmed";
+}
+
+/** The flag or record a chat was opened from — ids only; the server loads the row. */
+export type ChatFocus =
+  | { kind: "finding"; findingId: number }
+  | { kind: "record"; recordType: "expense" | "sales"; recordId: number };
 
 /** `GET /ai/conversations/:id` — the conversation plus its messages, oldest first. */
 export interface ConversationDetail extends Conversation {
@@ -1158,4 +1335,21 @@ export interface ChatSendResponse {
 export interface CategorySuggestion {
   categoryId: number;
   categoryName: string;
+}
+
+export interface FutureDatedRecord {
+  id: number;
+  type: "expense" | "sales";
+  date: string;
+  description: string;
+  amount: number;
+  vendor: string | null;
+  categoryName: string | null;
+}
+
+export interface FutureDatedRecords {
+  today: string;
+  total: number;
+  records: FutureDatedRecord[];
+  truncated: boolean;
 }

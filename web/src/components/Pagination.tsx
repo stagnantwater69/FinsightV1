@@ -64,17 +64,22 @@ export function Pagination({
   onPageSizeChange,
   itemNoun = "records",
   idPrefix = "pagination",
+  className = "border-t border-paper-200 px-4 py-3",
 }: {
   /** 1-indexed. */
   page: number;
-  pageSize: PageSize;
+  /** A PAGE_SIZES step when the owner can change it; any size when they can't. */
+  pageSize: number;
   totalItems: number;
   onPageChange: (page: number) => void;
-  onPageSizeChange: (size: PageSize) => void;
+  /** Omit for a fixed page size: the Rows selector is then not drawn. */
+  onPageSizeChange?: (size: PageSize) => void;
   /** Pluralised noun for the count line — "records", "categories", … */
   itemNoun?: string;
   /** Distinguishes the page-size <select> when two tables share a screen. */
   idPrefix?: string;
+  /** Edge and padding; a table footer by default. */
+  className?: string;
 }) {
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
   const clamped = Math.min(Math.max(page, 1), totalPages);
@@ -86,7 +91,7 @@ export function Pagination({
   const sizeId = `${idPrefix}-size`;
 
   return (
-    <div className="flex flex-col gap-3 border-t border-paper-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+    <div className={`flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between ${className}`}>
       {/* ---- count + page size ---- */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <p className="text-sm text-ink-500" aria-live="polite">
@@ -104,6 +109,7 @@ export function Pagination({
           )}
         </p>
 
+        {onPageSizeChange ? (
         <div className="flex items-center gap-2">
           <label htmlFor={sizeId} className="whitespace-nowrap text-sm text-ink-500">
             Rows
@@ -121,6 +127,7 @@ export function Pagination({
             ))}
           </SelectInput>
         </div>
+        ) : null}
       </div>
 
       {/* ---- page controls ----

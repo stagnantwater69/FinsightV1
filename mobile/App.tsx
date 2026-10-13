@@ -28,6 +28,7 @@ import { LaunchScreen } from "./src/components/LaunchScreen";
 import { BusinessProfileProvider, useBusinessProfiles } from "./src/context/BusinessProfileContext";
 import { TourProvider, useTourOptional } from "./src/context/TourContext";
 import { AiChatProvider } from "./src/context/AiChatContext";
+import { ReportingPeriodProvider } from "./src/context/ReportingPeriodContext";
 import { useTourTarget } from "./src/components/tour/targets";
 import { QUICK_ADD_STEP_IDS, type TourTargetKey } from "./src/components/tour/steps";
 import {
@@ -86,6 +87,7 @@ import type { Palette } from "./src/theme/palette";
 import { ThemeProvider, useTheme, useThemeControl } from "./src/context/ThemeContext";
 import { recordsTabPressAction, RECORDS_LIST_SCREEN } from "./src/lib/tabSelection";
 import { QuickActionMenu, type RadialAction } from "./src/components/QuickActionMenu";
+import { BusinessNavigationBoundary } from "./src/components/BusinessNavigationBoundary";
 
 /**
  * Used to reach the navigator from the tab bar's camera modal, which sits
@@ -171,6 +173,34 @@ function DashboardStack() {
   );
 }
 
+/*
+ * A back arrow that is drawn even when the stack has nothing under the
+ * current route, for screens that can be reached as a stack's first route.
+ */
+function goBackOr(navigation: { canGoBack(): boolean; goBack(): void; navigate(name: string): void }, fallback: string) {
+  if (navigation.canGoBack()) navigation.goBack();
+  else navigation.navigate(fallback);
+}
+
+function HeaderBackButton({ tintColor, onPress }: { tintColor?: string; onPress: () => void }) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Back"
+      onPress={onPress}
+      style={({ pressed }) => ({
+        width: 48,
+        height: 48,
+        alignItems: "center",
+        justifyContent: "center",
+        opacity: pressed ? 0.6 : 1,
+      })}
+    >
+      <Ionicons name="arrow-back" size={24} color={tintColor} />
+    </Pressable>
+  );
+}
+
 function RecordsStack() {
   const screenOptions = useScreenOptions();
   return (
@@ -193,7 +223,24 @@ function RecordsStack() {
         to nothing and a saved record could not be corrected on mobile at all.
       */}
       <Stack.Screen name="EditRecord" component={EditRecordScreen} options={{ title: "Edit record" }} />
-      <Stack.Screen name="ScanReceipt" component={ScanReceiptScreen} options={{ title: "Scan receipt" }} />
+      {/*
+        Quick-add opens this as the FIRST route on the Records stack when the
+        owner hasn't visited Records yet, and the native header only draws a
+        back arrow when there is a route under it — so the screen had no way
+        out but the hardware button. Always draw one; with nothing to pop it
+        lands on the Records list.
+      */}
+      <Stack.Screen
+        name="ScanReceipt"
+        component={ScanReceiptScreen}
+        options={({ navigation }) => ({
+          title: "Scan receipt",
+          headerBackVisible: false,
+          headerLeft: ({ tintColor }) => (
+            <HeaderBackButton tintColor={tintColor} onPress={() => goBackOr(navigation, "RecordsList")} />
+          ),
+        })}
+      />
       <Stack.Screen name="ImportCsv" component={ImportCsvScreen} options={{ title: "Import CSV" }} />
       <Stack.Screen name="FlaggedRecords" component={FlaggedRecordsScreen} options={{ title: "Review" }} />
       {/*
@@ -269,23 +316,7 @@ function MoreStack() {
           headerTitleStyle: { ...screenOptions.headerTitleStyle, fontSize: typeScale.title },
           headerBackVisible: false,
           headerLeft: ({ tintColor }) => (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Back"
-              onPress={() => {
-                if (navigation.canGoBack()) navigation.goBack();
-                else navigation.navigate("MoreHome");
-              }}
-              style={({ pressed }) => ({
-                width: 48,
-                height: 48,
-                alignItems: "center",
-                justifyContent: "center",
-                opacity: pressed ? 0.6 : 1,
-              })}
-            >
-              <Ionicons name="arrow-back" size={24} color={tintColor} />
-            </Pressable>
+            <HeaderBackButton tintColor={tintColor} onPress={() => goBackOr(navigation, "MoreHome")} />
           ),
         })}
       />
@@ -935,7 +966,7 @@ function Root({ fontsReady }: { fontsReady: boolean }) {
 function MainOrOnboarding() {
   const t = useTheme();
   const { profile: user } = useAuth();
-  const { profiles, loading } = useBusinessProfiles();
+  const { profiles, selected, loading } = useBusinessProfiles();
   const [dismissed, setDismissed] = useState<boolean | null>(null);
   /** Latched once the wizard hands over, so finishing it does not re-enter it. */
   const [left, setLeft] = useState(false);
@@ -1038,12 +1069,21 @@ function MainOrOnboarding() {
    * belongs to one business; above the navigator because it must survive every
    * route change under it. Same placement web uses in AuthenticatedLayout.
    */
+  /*
+   * ReportingPeriodProvider above the tabs for the same reason: Home, Expense
+   * Insights and Spending Impact read ONE period, and moving between them must
+   * keep it. Same placement web uses in AuthenticatedLayout.
+   */
   return (
-    <AiChatProvider>
-      <TourProvider>
-        <MainTabs />
-      </TourProvider>
-    </AiChatProvider>
+    <ReportingPeriodProvider>
+      <BusinessNavigationBoundary businessProfileId={selected?.id ?? null}>
+        <AiChatProvider>
+          <TourProvider>
+            <MainTabs />
+          </TourProvider>
+        </AiChatProvider>
+      </BusinessNavigationBoundary>
+    </ReportingPeriodProvider>
   );
 }
 

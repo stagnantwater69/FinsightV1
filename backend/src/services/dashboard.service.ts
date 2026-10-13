@@ -1,8 +1,17 @@
 import { prisma } from "../config/prisma";
-import { requireOwnedBusinessProfile } from "../lib/ownership";
+import type { Prisma } from "@prisma/client";
 import { listNotifications } from "./notification.service";
 import { loadRecoveryTargets } from "./insights.service";
-import { resolveBusinessToday, utcAddDays, utcDateKey, utcEndOfDay, utcMonthKey, utcToday } from "../lib/dates";
+import { resolveBusinessToday, utcAddDays, utcDateKey, utcEndOfDay, utcMonthKey } from "../lib/dates";
+import {
+  describeWindow,
+  resolveReportingWindow,
+  selectionFromQuery,
+  windowDateFilter,
+  type PeriodSelection,
+} from "../lib/reportingPeriod";
+import { requireOwnedBusinessContext } from "./ownedBusinessContext.service";
+import { calculateAvailableFundsForOwnedBusiness } from "./financialPosition.service";
 
 /**
  * The period selector's "All time" setting.
@@ -21,27 +30,29 @@ export const ALL_TIME_PERIOD = 0;
  * than a scan — a business with 30,000 imported records must not pay for a full
  * read to answer "is there anything here".
  */
-async function activitySpan(businessProfileId: number) {
+async function activitySpan(businessProfileId: number, today: Date) {
+  // Up to the business's today: a future-dated record is not activity yet.
+  const where = { businessProfileId, date: { lte: utcEndOfDay(today) } };
   const [expenseCount, salesCount, firstExpense, firstSale, latestExpense, latestSale] = await Promise.all([
-    prisma.expenseRecord.count({ where: { businessProfileId } }),
-    prisma.salesReferenceRecord.count({ where: { businessProfileId } }),
+    prisma.expenseRecord.count({ where }),
+    prisma.salesReferenceRecord.count({ where }),
     prisma.expenseRecord.findFirst({
-      where: { businessProfileId },
+      where,
       orderBy: { date: "asc" },
       select: { date: true },
     }),
     prisma.salesReferenceRecord.findFirst({
-      where: { businessProfileId },
+      where,
       orderBy: { date: "asc" },
       select: { date: true },
     }),
     prisma.expenseRecord.findFirst({
-      where: { businessProfileId },
+      where,
       orderBy: { date: "desc" },
       select: { date: true },
     }),
     prisma.salesReferenceRecord.findFirst({
-      where: { businessProfileId },
+      where,
       orderBy: { date: "desc" },
       select: { date: true },
     }),
@@ -57,27 +68,49 @@ async function activitySpan(businessProfileId: number) {
   };
 }
 
-export async function getDashboardSummary(userId: number, businessProfileId: number, periodDays: number) {
-  const profile = await requireOwnedBusinessProfile(userId, businessProfileId);
-
-  const today = utcToday();
-  const allTime = periodDays === ALL_TIME_PERIOD;
-  const startDate = allTime ? null : utcAddDays(today, -(periodDays - 1));
+export async function getDashboardSummary(
+  userId: number,
+  businessProfileId: number,
+  /**
+   * The period the figures cover. A plain number is the legacy rolling
+   * `periodDays` window (0 = all time), which the mobile client and the AI
+   * context still send; the web period filter sends a selection.
+   */
+  period: number | PeriodSelection,
+) {
+  const context = await requireOwnedBusinessContext(userId, businessProfileId);
+  const { profile } = context;
 
   /*
-   * Upper bound is the END of today, not its midnight: a record dated today
-   * is stored at 00:00:00.000Z, and an `lte: midnight` bound was excluding
-   * every record dated today on any server not running in UTC.
+   * "Today" is the business's own calendar day, not the server's.
    *
-   * On "All time" the filter is dropped entirely rather than widened. A
-   * far-past `gte` would work today and silently start truncating history once
-   * a business had more of it than the constant assumed; and the upper bound
-   * would exclude future-dated records, which a spreadsheet can legitimately
-   * contain and which an owner would then never find.
+   * Record dates are date-only values stored at UTC midnight, so the boundary
+   * helpers below stay UTC — what this fixes is which calendar day counts as
+   * today. A Manila business (UTC+8) turns over eight hours before UTC does:
+   * between 00:00 and 08:00 local, utcToday() still reported yesterday, and an
+   * expense the owner had just entered for today fell outside both the period
+   * window and the upper bound. They saw their own morning's spending missing
+   * from every figure on the page.
+   *
+   * Recovery Target already resolved it this way (plan §9.1); the rest of the
+   * dashboard now agrees with it instead of disagreeing for eight hours a day.
    */
-  const dateFilter = allTime ? undefined : { gte: startDate!, lte: utcEndOfDay(today) };
+  const today = resolveBusinessToday(profile.timezone);
+  const selection = typeof period === "number" ? selectionFromQuery({ periodDays: period }) : period;
+  const window = resolveReportingWindow(selection, today);
+  const allTime = window.kind === "all";
+  const periodDays = selection.kind === "rolling" ? selection.days : allTime ? ALL_TIME_PERIOD : window.days!;
 
-  const [expenseTotals, salesAgg, reviewCounts, alerts, recoveryStatus, lifetime] = await Promise.all([
+  /*
+   * On "All time" there is no lower bound: a far-past `gte` would work today
+   * and silently start truncating history once a business had more of it than
+   * a constant assumed. Every window, all time included, stops at the end of
+   * the business's today, so a future-dated record (invalid, and flagged for
+   * correction) is in no total. See lib/reportingPeriod.ts.
+   */
+  const dateFilter = windowDateFilter(window, today);
+
+  const [expenseTotals, salesAgg, reviewCounts, alerts, recoveryStatus, lifetime, availableFundsCalculation] = await Promise.all([
     /*
      * GROUPED IN POSTGRES, not read into memory and reduced here.
      *
@@ -104,18 +137,17 @@ export async function getDashboardSummary(userId: number, businessProfileId: num
         where: { businessProfileId, OR: [{ reviewStatus: "Needs Review" }, { duplicateStatus: "Flagged" }] },
       }),
     ]),
-    listNotifications(userId, businessProfileId),
+    listNotifications(userId, businessProfileId, 10),
     // Recovery is deliberately NOT scoped to the dashboard's period
     // selector — it's a month-to-date tracker, so it reads the same
     // whether the user is looking at Today, This week, or This month.
     //
-    // Its own "today" is resolved in the business's local timezone rather
-    // than reusing the dashboard's UTC `today` above — see
-    // RECOVERY-TARGET-IMPROVEMENT-PLAN.md §9.1 and getRecoveryInsight's own
-    // resolution in insights.service.ts, which this must agree with so the
-    // Dashboard and the Recovery Target screen never disagree right at the
-    // UTC boundary.
-    loadRecoveryTargets(profile, resolveBusinessToday(profile.timezone)),
+    // Shares the dashboard's `today` above, which is now resolved in the
+    // business's own timezone — see RECOVERY-TARGET-IMPROVEMENT-PLAN.md §9.1
+    // and getRecoveryInsight's matching resolution in insights.service.ts,
+    // which this must agree with so the Dashboard and the Recovery Target
+    // screen never disagree right at a day boundary.
+    loadRecoveryTargets(profile, today),
     /*
      * WHAT THIS BUSINESS HAS EVER RECORDED, deliberately outside the period.
      *
@@ -132,7 +164,8 @@ export async function getDashboardSummary(userId: number, businessProfileId: num
      * `latestRecordDate` is what turns the second one from a dead end into a
      * direction: it can say WHERE the data actually is.
      */
-    activitySpan(businessProfileId),
+    activitySpan(businessProfileId, today),
+    calculateAvailableFundsForOwnedBusiness(context, today),
   ]);
 
   const totalExpenses = expenseTotals.reduce((sum, g) => sum + Number(g._sum.amount ?? 0), 0);
@@ -170,10 +203,13 @@ export async function getDashboardSummary(userId: number, businessProfileId: num
      * "Aug 2023 – today" is telling the truth about what the figures cover.
      * Null only when there is nothing to span.
      */
-    periodStart: allTime ? lifetime.earliestRecordDate : startDate,
-    periodEnd: today,
+    periodStart: allTime ? lifetime.earliestRecordDate : window.start,
+    periodEnd: allTime ? today : window.end,
+    /** The resolved window, as date keys — what the period filter labels itself from. */
+    period: describeWindow(window),
     overview: {
-      availableFunds: Number(profile.availableFunds),
+      availableFunds: availableFundsCalculation.calculatedAmount,
+      availableFundsCalculation,
       totalExpenses,
       totalSalesReference,
     },
@@ -206,61 +242,63 @@ const CASHFLOW_MONTHS = 6;
  *
  * Zero-filled: a bucket with no records still gets a row, so the chart's
  * line has one point per day/month rather than a gap that reads as missing
- * data. Grouped by `utcDateKey`/`utcMonthKey`, the same helpers
- * `getDashboardSummary`'s documented UTC bug fix relies on — a record dated
- * today must land in today's bucket regardless of the server's local
- * timezone.
+ * data. Postgres groups stored date-only values before they reach the API;
+ * the business's local day still determines which records enter the window.
  */
 export async function getDashboardCashflow(
   userId: number,
   businessProfileId: number,
   granularity: CashflowGranularity = "daily",
 ): Promise<{ granularity: CashflowGranularity; points: CashflowPoint[] }> {
-  await requireOwnedBusinessProfile(userId, businessProfileId);
+  const { profile } = await requireOwnedBusinessContext(userId, businessProfileId);
 
-  const today = utcToday();
+  // Same business-local "today" as the summary above: the chart's last bucket
+  // has to be the day the owner is living in, or their morning's records land
+  // outside the window entirely between local midnight and 08:00.
+  const today = resolveBusinessToday(profile.timezone);
 
-  if (granularity === "monthly") {
-    const startMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - (CASHFLOW_MONTHS - 1), 1));
-    const dateFilter = { gte: startMonth, lte: utcEndOfDay(today) };
+  const monthly = granularity === "monthly";
+  const startDate = monthly
+    ? new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - (CASHFLOW_MONTHS - 1), 1))
+    : utcAddDays(today, -(CASHFLOW_DAYS - 1));
+  const endDate = utcEndOfDay(today);
+  const bucket = monthly ? "month" : "day";
+  const dateFormat = monthly ? "YYYY-MM" : "YYYY-MM-DD";
+  const totals = await prisma.$queryRaw<Array<{ date: string; sales: Prisma.Decimal; expenses: Prisma.Decimal }>>`
+    SELECT to_char(bucket, ${dateFormat}) AS date, SUM(sales) AS sales, SUM(expenses) AS expenses
+    FROM (
+      SELECT date_trunc(${bucket}, "SalesReferenceRecord_Date"::timestamp) AS bucket,
+        SUM("SalesReferenceRecord_Amount") AS sales, 0::numeric AS expenses
+      FROM "SalesReferenceRecord"
+      WHERE "BusinessProfile_ID" = ${profile.id}
+        AND "SalesReferenceRecord_Date" >= ${startDate}
+        AND "SalesReferenceRecord_Date" <= ${endDate}
+      GROUP BY 1
+      UNION ALL
+      SELECT date_trunc(${bucket}, "ExpenseRecord_Date"::timestamp) AS bucket,
+        0::numeric AS sales, SUM("ExpenseRecord_Amount") AS expenses
+      FROM "ExpenseRecord"
+      WHERE "BusinessProfile_ID" = ${profile.id}
+        AND "ExpenseRecord_Date" >= ${startDate}
+        AND "ExpenseRecord_Date" <= ${endDate}
+      GROUP BY 1
+    ) AS cashflow
+    GROUP BY bucket
+    ORDER BY bucket
+  `;
 
-    const [expenseRecords, salesRecords] = await Promise.all([
-      prisma.expenseRecord.findMany({ where: { businessProfileId, date: dateFilter }, select: { date: true, amount: true } }),
-      prisma.salesReferenceRecord.findMany({
-        where: { businessProfileId, date: dateFilter },
-        select: { date: true, amount: true },
-      }),
-    ]);
-
-    const byMonth = new Map<string, CashflowPoint>();
-    for (let i = 0; i < CASHFLOW_MONTHS; i++) {
-      const key = utcMonthKey(new Date(Date.UTC(startMonth.getUTCFullYear(), startMonth.getUTCMonth() + i, 1)));
-      byMonth.set(key, { date: key, sales: 0, expenses: 0 });
-    }
-    for (const r of expenseRecords) byMonth.get(utcMonthKey(r.date))!.expenses += Number(r.amount);
-    for (const r of salesRecords) byMonth.get(utcMonthKey(r.date))!.sales += Number(r.amount);
-
-    return { granularity, points: [...byMonth.values()] };
+  const points = new Map<string, CashflowPoint>();
+  const count = monthly ? CASHFLOW_MONTHS : CASHFLOW_DAYS;
+  for (let index = 0; index < count; index += 1) {
+    const key = monthly
+      ? utcMonthKey(new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth() + index, 1)))
+      : utcDateKey(utcAddDays(startDate, index));
+    points.set(key, { date: key, sales: 0, expenses: 0 });
   }
-
-  const startDate = utcAddDays(today, -(CASHFLOW_DAYS - 1));
-  const dateFilter = { gte: startDate, lte: utcEndOfDay(today) };
-
-  const [expenseRecords, salesRecords] = await Promise.all([
-    prisma.expenseRecord.findMany({ where: { businessProfileId, date: dateFilter }, select: { date: true, amount: true } }),
-    prisma.salesReferenceRecord.findMany({
-      where: { businessProfileId, date: dateFilter },
-      select: { date: true, amount: true },
-    }),
-  ]);
-
-  const byDay = new Map<string, CashflowPoint>();
-  for (let i = 0; i < CASHFLOW_DAYS; i++) {
-    const key = utcDateKey(utcAddDays(startDate, i));
-    byDay.set(key, { date: key, sales: 0, expenses: 0 });
+  for (const total of totals) {
+    const point = points.get(total.date)!;
+    point.sales = Number(total.sales);
+    point.expenses = Number(total.expenses);
   }
-  for (const r of expenseRecords) byDay.get(utcDateKey(r.date))!.expenses += Number(r.amount);
-  for (const r of salesRecords) byDay.get(utcDateKey(r.date))!.sales += Number(r.amount);
-
-  return { granularity, points: [...byDay.values()] };
+  return { granularity, points: [...points.values()] };
 }

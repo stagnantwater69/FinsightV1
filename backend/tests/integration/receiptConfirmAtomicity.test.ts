@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -62,6 +63,8 @@ vi.mock("../../src/config/supabase", async (importOriginal) => {
 import request from "supertest";
 import { app } from "../../src/app";
 import { prisma } from "../../src/config/prisma";
+import { bulkResolveExpenseDuplicates, deleteExpenseRecord } from "../../src/services/expenseRecord.service";
+import { requestReceiptScanDeletion } from "../../src/services/receiptPurge.service";
 import { confirmReceipt } from "../../src/services/receiptScan.service";
 import { disconnectDb, makeOwnerWithProfile, resetDb } from "../setup/testDb";
 
@@ -103,20 +106,130 @@ async function makeReadScan(
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+async function waitForBlockedQuery(
+  fragment: string,
+  timeoutMs = 3_000,
+): Promise<{ pid: number; blockingPids: number[] }> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const rows = await prisma.$queryRaw<Array<{ pid: number; blockingPids: number[] }>>`
+      SELECT pid, pg_blocking_pids(pid) AS "blockingPids"
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND pid <> pg_backend_pid()
+        AND wait_event_type = 'Lock'
+        AND query LIKE ${`%${fragment}%`}
+    `;
+    const blocked = rows.find((row) => row.blockingPids.length > 0);
+    if (blocked) return blocked;
+    await sleep(10);
+  }
+  throw new Error(`no PostgreSQL lock wait observed for ${fragment}`);
+}
+
+async function within<T>(promise: Promise<T>, timeoutMs = 5_000): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(`operation exceeded ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+function holdConfirmationAtFirstRecord() {
+  let release: (() => void) | undefined;
+  let entered: (() => void) | undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const reached = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  createHook.before = async (call) => {
+    if (call !== 1) return;
+    entered!();
+    await held;
+  };
+  return { reached, release: () => release!() };
+}
+
+type PausedTransactionQuery = {
+  acquired: Promise<number>;
+  resume(): void;
+  restore(): void;
+};
+
+function rawQueryText(value: unknown): string {
+  if (Array.isArray(value)) return value.join("");
+  if (value && typeof value === "object" && "strings" in value) {
+    const strings = (value as { strings?: unknown }).strings;
+    if (Array.isArray(strings)) return strings.join("");
+  }
+  return "";
+}
+
+function pauseAfterTransactionQuery(
+  property: "$executeRaw" | "$queryRaw",
+  fragment: string,
+): PausedTransactionQuery {
+  let acquired!: (pid: number) => void;
+  let resume!: () => void;
+  const acquiredPromise = new Promise<number>((resolve) => { acquired = resolve; });
+  const resumePromise = new Promise<void>((resolve) => { resume = resolve; });
+  const originalTransaction = prisma.$transaction.bind(prisma);
+  let paused = false;
+  const spy = vi.spyOn(prisma, "$transaction").mockImplementation((async (...args: unknown[]) => {
+    const operation = args[0];
+    if (typeof operation !== "function") {
+      return (originalTransaction as (...transactionArgs: unknown[]) => Promise<unknown>)(...args);
+    }
+    return (originalTransaction as (...transactionArgs: unknown[]) => Promise<unknown>)(
+      async (tx: Prisma.TransactionClient) => {
+        const proxied = new Proxy(tx, {
+          get(target, key) {
+            const value = Reflect.get(target, key, target);
+            if (key !== property || typeof value !== "function") {
+              return typeof value === "function" ? value.bind(target) : value;
+            }
+            return async (...queryArgs: unknown[]) => {
+              const result = await (value as (...rawArgs: unknown[]) => Promise<unknown>).apply(target, queryArgs);
+              if (!paused && rawQueryText(queryArgs[0]).includes(fragment)) {
+                paused = true;
+                const pids = await target.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+                acquired(pids[0]?.pid ?? -1);
+                await resumePromise;
+              }
+              return result;
+            };
+          },
+        });
+        return (operation as (client: Prisma.TransactionClient) => Promise<unknown>)(proxied);
+      },
+      args[1],
+    );
+  }) as typeof prisma.$transaction);
+  return { acquired: acquiredPromise, resume, restore: () => spy.mockRestore() };
+}
+
+function confirmPendingScan(scanId: number) {
+  return confirmReceipt(ctx.user.id, scanId, {
+    date: "2026-07-20",
+    description: "Fresh confirmed purchase",
+    amount: 620,
+    splits: [{ categoryId: ctx.categories.Inventory!, amount: 620 }],
+  });
+}
+
 describe("two confirms of the same receipt at once", () => {
   it("books the receipt once and answers the loser 409 instead of writing a second set of records", async () => {
     const scan = await makeReadScan();
-
-    // Holds the FIRST confirm inside its transaction, after it has claimed the
-    // scan and before it has committed — the exact window the second request
-    // used to walk straight through.
-    let releaseWinner: (() => void) | null = null;
-    const winnerHeld = new Promise<void>((resolve) => {
-      releaseWinner = resolve;
-    });
-    createHook.before = async (call) => {
-      if (call === 1) await winnerHeld;
-    };
+    const barrier = holdConfirmationAtFirstRecord();
+    const pending: Promise<unknown>[] = [];
 
     const confirm = () =>
       request(app)
@@ -132,25 +245,30 @@ describe("two confirms of the same receipt at once", () => {
         // needs both in flight at the same time.
         .then((response) => response);
 
-    const winner = confirm();
-    await sleep(200); // the winner reaches the hook, holding its claim
-    const loser = confirm();
-    await sleep(200); // the loser reaches the claim and waits on the row
-    releaseWinner!();
+    try {
+      const winner = confirm();
+      pending.push(winner);
+      await within(barrier.reached);
+      const loser = confirm();
+      pending.push(loser);
+      await waitForBlockedQuery("pg_advisory_xact_lock");
+      barrier.release();
 
-    const [first, second] = await Promise.all([winner, loser]);
+      const [first, second] = await within(Promise.all([winner, loser]));
+      expect(first.status).toBe(201);
+      expect(second.status).toBe(409);
+      expect(second.body.error).toMatch(/already being confirmed/i);
 
-    expect(first.status).toBe(201);
-    expect(second.status).toBe(409);
-    expect(second.body.error).toMatch(/already being confirmed/i);
-
-    // The point of the whole exercise: ONE set of books.
-    const records = await prisma.expenseRecord.findMany({ where: { receiptScanId: scan.id } });
-    expect(records).toHaveLength(1);
-    expect(Number(records[0]!.amount)).toBe(1220);
-    expect(await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).toMatchObject({
-      confirmationStatus: "Confirmed",
-    });
+      const records = await prisma.expenseRecord.findMany({ where: { receiptScanId: scan.id } });
+      expect(records).toHaveLength(1);
+      expect(Number(records[0]!.amount)).toBe(1220);
+      expect(await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).toMatchObject({
+        confirmationStatus: "Confirmed",
+      });
+    } finally {
+      barrier.release();
+      await Promise.allSettled(pending);
+    }
   });
 
   it("still answers a plainly repeated confirm with the 400 that names it", async () => {
@@ -229,6 +347,206 @@ describe("a confirm that fails part-way through", () => {
     const records = await prisma.expenseRecord.findMany({ where: { receiptScanId: scan.id } });
     expect(records).toHaveLength(2);
     expect(records.reduce((sum, record) => sum + Number(record.amount), 0)).toBe(1220);
+  });
+});
+
+describe("confirmation racing expense deletion", () => {
+  async function legacyReceiptExpense(scanId: number, flagged = false) {
+    const duplicateRoot = flagged
+      ? await prisma.expenseRecord.create({
+          data: {
+            businessProfileId: ctx.profile.id,
+            categoryId: ctx.categories.Inventory!,
+            date: new Date("2026-07-19T00:00:00.000Z"),
+            description: "Legacy duplicate",
+            amount: 500,
+            source: "MANUAL_ENTRY",
+            reviewStatus: "Reviewed",
+          },
+        })
+      : null;
+    return prisma.expenseRecord.create({
+      data: {
+        businessProfileId: ctx.profile.id,
+        categoryId: ctx.categories.Inventory!,
+        receiptScanId: scanId,
+        duplicateOfRecordId: duplicateRoot?.id,
+        date: new Date("2026-07-19T00:00:00.000Z"),
+        description: flagged ? "Legacy duplicate" : "Legacy partial confirmation",
+        amount: 500,
+        source: "RECEIPT_SCAN",
+        reviewStatus: flagged ? "Needs Review" : "Reviewed",
+        duplicateStatus: flagged ? "Flagged" : "Not a Duplicate",
+      },
+    });
+  }
+
+  async function expectConfirmedReplacement(scanId: number, deletedId: number) {
+    expect(await prisma.expenseRecord.findUnique({ where: { id: deletedId } })).toBeNull();
+    expect(await prisma.expenseRecord.findMany({ where: { receiptScanId: scanId } })).toHaveLength(1);
+    expect(await prisma.receiptScan.findUniqueOrThrow({ where: { id: scanId } })).toMatchObject({
+      confirmationStatus: "Confirmed",
+    });
+    expect(await prisma.receiptPurgeJob.count({ where: { receiptScanId: scanId } })).toBe(0);
+  }
+
+  it("finishes a single-record delete without deadlock or orphaning the newly confirmed record", async () => {
+    const scan = await makeReadScan();
+    const legacy = await legacyReceiptExpense(scan.id);
+    const barrier = holdConfirmationAtFirstRecord();
+    let confirming: ReturnType<typeof confirmPendingScan> | undefined;
+    let deleting: ReturnType<typeof deleteExpenseRecord> | undefined;
+
+    try {
+      confirming = confirmPendingScan(scan.id);
+      await within(barrier.reached);
+      deleting = deleteExpenseRecord(ctx.user.id, legacy.id);
+      await waitForBlockedQuery("pg_advisory_xact_lock");
+      barrier.release();
+      const [confirmed] = await within(Promise.all([confirming, deleting]));
+
+      expect(confirmed).toHaveLength(1);
+      await expectConfirmedReplacement(scan.id, legacy.id);
+    } finally {
+      barrier.release();
+      await Promise.allSettled([confirming, deleting].filter(Boolean) as Promise<unknown>[]);
+    }
+  });
+
+  it("finishes a bulk discard without deadlock or queuing cleanup for the newly confirmed record", async () => {
+    const scan = await makeReadScan();
+    const legacy = await legacyReceiptExpense(scan.id, true);
+    const barrier = holdConfirmationAtFirstRecord();
+    let confirming: ReturnType<typeof confirmPendingScan> | undefined;
+    let deleting: ReturnType<typeof bulkResolveExpenseDuplicates> | undefined;
+
+    try {
+      confirming = confirmPendingScan(scan.id);
+      await within(barrier.reached);
+      deleting = bulkResolveExpenseDuplicates(ctx.user.id, ctx.profile.id, [legacy.id], "discard");
+      await waitForBlockedQuery("pg_advisory_xact_lock");
+      barrier.release();
+      const [confirmed, deletedCount] = await within(Promise.all([confirming, deleting]));
+
+      expect(confirmed).toHaveLength(1);
+      expect(deletedCount).toBe(1);
+      await expectConfirmedReplacement(scan.id, legacy.id);
+    } finally {
+      barrier.release();
+      await Promise.allSettled([confirming, deleting].filter(Boolean) as Promise<unknown>[]);
+    }
+  });
+
+  it("lets a single-record delete finish before a waiting confirmation", async () => {
+    const scan = await makeReadScan();
+    const legacy = await legacyReceiptExpense(scan.id);
+    let pause: PausedTransactionQuery | undefined;
+    let confirming: ReturnType<typeof confirmPendingScan> | undefined;
+    let deleting: ReturnType<typeof deleteExpenseRecord> | undefined;
+
+    try {
+      pause = pauseAfterTransactionQuery("$executeRaw", "pg_advisory_xact_lock");
+      deleting = deleteExpenseRecord(ctx.user.id, legacy.id);
+      const deletionPid = await within(pause.acquired);
+      confirming = confirmPendingScan(scan.id);
+      const wait = await waitForBlockedQuery("pg_advisory_xact_lock");
+      expect(wait.blockingPids).toContain(deletionPid);
+
+      pause.resume();
+      const [, confirmed] = await within(Promise.all([deleting, confirming]));
+      expect(confirmed).toHaveLength(1);
+      await expectConfirmedReplacement(scan.id, legacy.id);
+    } finally {
+      pause?.resume();
+      await Promise.allSettled([confirming, deleting].filter(Boolean) as Promise<unknown>[]);
+      pause?.restore();
+    }
+  });
+
+  it("lets a bulk discard finish before a waiting confirmation", async () => {
+    const scan = await makeReadScan();
+    const legacy = await legacyReceiptExpense(scan.id, true);
+    let pause: PausedTransactionQuery | undefined;
+    let confirming: ReturnType<typeof confirmPendingScan> | undefined;
+    let deleting: ReturnType<typeof bulkResolveExpenseDuplicates> | undefined;
+
+    try {
+      pause = pauseAfterTransactionQuery("$executeRaw", "pg_advisory_xact_lock");
+      deleting = bulkResolveExpenseDuplicates(ctx.user.id, ctx.profile.id, [legacy.id], "discard");
+      const deletionPid = await within(pause.acquired);
+      confirming = confirmPendingScan(scan.id);
+      const wait = await waitForBlockedQuery("pg_advisory_xact_lock");
+      expect(wait.blockingPids).toContain(deletionPid);
+
+      pause.resume();
+      const [deletedCount, confirmed] = await within(Promise.all([deleting, confirming]));
+      expect(deletedCount).toBe(1);
+      expect(confirmed).toHaveLength(1);
+      await expectConfirmedReplacement(scan.id, legacy.id);
+    } finally {
+      pause?.resume();
+      await Promise.allSettled([confirming, deleting].filter(Boolean) as Promise<unknown>[]);
+      pause?.restore();
+    }
+  });
+
+  it("lets direct scan deletion win when confirmation is waiting on its receipt lock", async () => {
+    const scan = await makeReadScan();
+    let pause: PausedTransactionQuery | undefined;
+    let confirming: ReturnType<typeof confirmPendingScan> | undefined;
+    let deleting: ReturnType<typeof requestReceiptScanDeletion> | undefined;
+
+    try {
+      pause = pauseAfterTransactionQuery("$queryRaw", 'profile."User_ID"');
+      deleting = requestReceiptScanDeletion(ctx.user.id, scan.id, "confirmation-race-delete-first");
+      const deletionPid = await within(pause.acquired);
+      confirming = confirmPendingScan(scan.id);
+      const wait = await waitForBlockedQuery('UPDATE "public"."ReceiptScan"');
+      expect(wait.blockingPids).toContain(deletionPid);
+
+      pause.resume();
+      const [deletionResult, confirmationResult] = await within(Promise.allSettled([deleting, confirming]));
+      expect(deletionResult).toMatchObject({ status: "fulfilled", value: { mode: "DELETE_SCAN", status: "PENDING" } });
+      expect(confirmationResult).toMatchObject({ status: "rejected", reason: { status: 409 } });
+      expect(await prisma.expenseRecord.count({ where: { receiptScanId: scan.id } })).toBe(0);
+      expect(await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).toMatchObject({
+        confirmationStatus: "Deletion Pending",
+        evidenceDeletionRequestedAt: expect.any(Date),
+      });
+      expect(await prisma.receiptPurgeJob.count({ where: { receiptScanId: scan.id } })).toBe(1);
+    } finally {
+      pause?.resume();
+      await Promise.allSettled([confirming, deleting].filter(Boolean) as Promise<unknown>[]);
+      pause?.restore();
+    }
+  });
+
+  it("lets confirmation win while direct scan deletion waits on its receipt lock", async () => {
+    const scan = await makeReadScan();
+    const barrier = holdConfirmationAtFirstRecord();
+    let confirming: ReturnType<typeof confirmPendingScan> | undefined;
+    let deleting: ReturnType<typeof requestReceiptScanDeletion> | undefined;
+
+    try {
+      confirming = confirmPendingScan(scan.id);
+      await within(barrier.reached);
+      deleting = requestReceiptScanDeletion(ctx.user.id, scan.id, "confirmation-race-confirm-first");
+      await waitForBlockedQuery("FOR UPDATE OF scan");
+
+      barrier.release();
+      const [confirmationResult, deletionResult] = await within(Promise.allSettled([confirming, deleting]));
+      expect(confirmationResult).toMatchObject({ status: "fulfilled" });
+      expect(deletionResult).toMatchObject({ status: "rejected", reason: { status: 409 } });
+      expect(await prisma.expenseRecord.count({ where: { receiptScanId: scan.id } })).toBe(1);
+      expect(await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).toMatchObject({
+        confirmationStatus: "Confirmed",
+        evidenceDeletionRequestedAt: null,
+      });
+      expect(await prisma.receiptPurgeJob.count({ where: { receiptScanId: scan.id } })).toBe(0);
+    } finally {
+      barrier.release();
+      await Promise.allSettled([confirming, deleting].filter(Boolean) as Promise<unknown>[]);
+    }
   });
 });
 
@@ -344,32 +662,33 @@ describe("owner-added lines on a rejected or failed confirm", () => {
       additionalItems: [softdrinks()],
     };
 
-    let releaseWinner: (() => void) | null = null;
-    const winnerHeld = new Promise<void>((resolve) => {
-      releaseWinner = resolve;
-    });
-    createHook.before = async (call) => {
-      if (call === 1) await winnerHeld;
-    };
+    const barrier = holdConfirmationAtFirstRecord();
+    const pending: Promise<unknown>[] = [];
 
-    const winner = confirm(scan.id, body).then((r) => r);
-    await sleep(200);
-    const loser = confirm(scan.id, body).then((r) => r);
-    await sleep(200);
-    releaseWinner!();
-    const [first, second] = await Promise.all([winner, loser]);
+    try {
+      const winner = confirm(scan.id, body).then((response) => response);
+      pending.push(winner);
+      await within(barrier.reached);
+      const loser = confirm(scan.id, body).then((response) => response);
+      pending.push(loser);
+      await waitForBlockedQuery("pg_advisory_xact_lock");
+      barrier.release();
+      const [first, second] = await within(Promise.all([winner, loser]));
 
-    expect(first.status).toBe(201);
-    expect(second.status).toBe(409);
-
-    expect(await prisma.expenseRecord.findMany({ where: { receiptScanId: scan.id } })).toHaveLength(1);
-    const items = await prisma.receiptScanItem.findMany({ where: { receiptScanId: scan.id } });
-    expect(items).toHaveLength(2);
-    expect(items.filter((i) => i.addedByOwner)).toHaveLength(1);
-    expect(items.every((i) => i.expenseRecordId !== null)).toBe(true);
-    expect(await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).toMatchObject({
-      confirmationStatus: "Confirmed",
-    });
+      expect(first.status).toBe(201);
+      expect(second.status).toBe(409);
+      expect(await prisma.expenseRecord.findMany({ where: { receiptScanId: scan.id } })).toHaveLength(1);
+      const items = await prisma.receiptScanItem.findMany({ where: { receiptScanId: scan.id } });
+      expect(items).toHaveLength(2);
+      expect(items.filter((i) => i.addedByOwner)).toHaveLength(1);
+      expect(items.every((i) => i.expenseRecordId !== null)).toBe(true);
+      expect(await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).toMatchObject({
+        confirmationStatus: "Confirmed",
+      });
+    } finally {
+      barrier.release();
+      await Promise.allSettled(pending);
+    }
   });
 });
 

@@ -1,5 +1,5 @@
 import { prisma } from "../config/prisma";
-import type { BusinessProfile } from "@prisma/client";
+import type { BusinessProfile, Prisma } from "@prisma/client";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
 import { ApiError } from "../middleware/error.middleware";
 import {
@@ -21,7 +21,9 @@ import {
   PROJECTION_STALENESS_CALENDAR_DAYS,
   type RecoveryChangeSincePreviousDay,
   type RecoveryCheckpoint,
+  type RecoveryConfidence,
   type RecoveryProjection,
+  recoveryPaceTolerance,
   type RecoveryTargets,
 } from "./analysis.service";
 
@@ -29,11 +31,11 @@ import {
 // UTC midnight, so local-time boundaries drop or double-count the edge days.
 // See lib/dates.ts.
 //
-// Recovery Target's "today", specifically, is resolved in the business's own
-// IANA timezone instead (resolveBusinessToday) — see the comment on
-// loadRecoveryTargets below and RECOVERY-TARGET-IMPROVEMENT-PLAN.md §9.1. It
-// still produces a UTC-midnight-encoded Date, so it plugs into these same
-// date-only boundary helpers unchanged.
+// Which calendar day counts as "today" is a separate question, and the answer
+// is the business's own IANA timezone (resolveBusinessToday), not the server's
+// clock — see RECOVERY-TARGET-IMPROVEMENT-PLAN.md §9.1. It still produces a
+// UTC-midnight-encoded Date, so it plugs into these same date-only boundary
+// helpers unchanged.
 import {
   resolveBusinessToday,
   utcAddDays,
@@ -43,10 +45,20 @@ import {
   utcEndOfDay,
   utcMonthKey,
   utcStartOfMonth,
-  utcToday,
 } from "../lib/dates";
-import { loadBoundedCategoryHistory } from "./anomalyDetection/categoryStatistics.service";
+import {
+  describeWindow,
+  resolveReportingWindow,
+  windowDateFilter,
+  type PeriodSelection,
+} from "../lib/reportingPeriod";
+import {
+  loadBoundedCategoryHistory,
+  loadBoundedCategoryHistoryForCategories,
+  loadCategoryHistoryCoverage,
+} from "./anomalyDetection/categoryStatistics.service";
 import { DEFAULT_DETECTION_CONFIG } from "./anomalyDetection/config";
+import { MAXIMUM_WINDOW_RECORDS } from "./anomalyDetection/trend.service";
 import {
   deriveOperatingCounts,
   resolveExactOperatingCounts,
@@ -54,6 +66,16 @@ import {
   type ExactOperatingCounts,
 } from "./operatingCalendar.service";
 import { evaluateRecoveryNotifications } from "./recoveryNotification.service";
+import {
+  calculateAvailableFundsForOwnedBusiness,
+  resolveMonthlyExpenseBasisForOwnedBusiness,
+  type MonthlyExpenseBasis,
+} from "./financialPosition.service";
+import {
+  requireOwnedBusinessContext,
+  type OwnedBusinessContext,
+} from "./ownedBusinessContext.service";
+import { nonnegativeMoneyAmountSchema } from "../lib/money";
 
 /** Narrows an `ExactOperatingCounts` down to the subset `computeRecoveryTarget` accepts. */
 function toRecoveryTargetCalendarInput(exact: ExactOperatingCounts | null) {
@@ -66,6 +88,11 @@ function toRecoveryTargetCalendarInput(exact: ExactOperatingCounts | null) {
     : undefined;
 }
 
+/** Existing profile-taking exports receive profiles that their callers already ownership-checked. */
+function ownedContextForProfile(profile: BusinessProfile): OwnedBusinessContext {
+  return { userId: profile.userId, profile } as OwnedBusinessContext;
+}
+
 // ============================================================
 // Recovery targets — the single fetch+compute path
 // ============================================================
@@ -75,10 +102,12 @@ function toRecoveryTargetCalendarInput(exact: ExactOperatingCounts | null) {
 // caller needs another figure, add it here.
 //
 // `today` is a caller-supplied date-only boundary, not computed here — see
-// each caller for how it's resolved. `getRecoveryInsight` and
-// `simulateRecoveryScenario` (below, in this file) resolve it in the
-// business's own local timezone via `resolveBusinessToday`; `dashboard.service.ts`
-// currently still passes `utcToday()`, which is out of scope for this task.
+// each caller for how it's resolved. Every caller now resolves it in the
+// business's own local timezone via `resolveBusinessToday`: `getRecoveryInsight`
+// and `simulateRecoveryScenario` below, `aiContext.service.ts`, and
+// `dashboard.service.ts` (which used to pass `utcToday()`, so the Dashboard
+// and the Recovery Target screen disagreed for the eight hours a day between
+// Manila midnight and UTC midnight).
 // `precomputedExactCalendar` is an optional third argument, additive to the
 // original two-argument signature every existing caller (dashboard.service.ts,
 // aiContext.service.ts) already uses unchanged. Pass it when a caller has
@@ -106,14 +135,17 @@ async function loadSalesEligibilityForRange(businessProfileId: number, rangeStar
     by: ["reviewStatus", "duplicateStatus"],
     where: { businessProfileId, date: { gte: rangeStart, lte: rangeEnd } },
     _sum: { amount: true },
+    _count: { _all: true },
   });
 
   let salesThisMonth = 0;
   let confirmedSalesThisMonth = 0;
   let pendingReviewSalesThisMonth = 0;
   let possibleDuplicateSalesThisMonth = 0;
+  let recordCount = 0;
   for (const group of groups) {
     const amount = Number(group._sum.amount ?? 0);
+    recordCount += group._count?._all ?? 0;
     salesThisMonth += amount;
     // Confirmed per §9.6: reviewStatus "Reviewed" AND duplicateStatus "Not a
     // Duplicate" — the same convention dashboard.service.ts's
@@ -127,18 +159,29 @@ async function loadSalesEligibilityForRange(businessProfileId: number, rangeStar
     }
   }
 
-  return { salesThisMonth, confirmedSalesThisMonth, pendingReviewSalesThisMonth, possibleDuplicateSalesThisMonth };
+  return {
+    salesThisMonth,
+    confirmedSalesThisMonth,
+    pendingReviewSalesThisMonth,
+    possibleDuplicateSalesThisMonth,
+    recordCount,
+  };
 }
 
-export async function loadRecoveryTargets(
+async function loadRecoveryTargetSnapshot(
   profile: BusinessProfile,
   today: Date,
   precomputedExactCalendar?: ExactOperatingCounts | null,
-): Promise<RecoveryTargets> {
+  precomputedMonthlyExpenseBasis?: MonthlyExpenseBasis,
+): Promise<{
+  targets: RecoveryTargets;
+  eligibility: Awaited<ReturnType<typeof loadSalesEligibilityForRange>>;
+}> {
   const monthStart = utcStartOfMonth(today);
   const endOfToday = utcEndOfDay(today);
 
-  const [monthEligibility, todayAgg, exactCalendar] = await Promise.all([
+  const context = ownedContextForProfile(profile);
+  const [monthEligibility, todayAgg, exactCalendar, monthlyExpenseBasis] = await Promise.all([
     loadSalesEligibilityForRange(profile.id, monthStart, endOfToday),
     prisma.salesReferenceRecord.aggregate({
       where: { businessProfileId: profile.id, date: { gte: today, lte: endOfToday } },
@@ -147,10 +190,14 @@ export async function loadRecoveryTargets(
     precomputedExactCalendar !== undefined
       ? Promise.resolve(precomputedExactCalendar)
       : resolveExactOperatingCounts(profile.id, today),
+    precomputedMonthlyExpenseBasis
+      ? Promise.resolve(precomputedMonthlyExpenseBasis)
+      : resolveMonthlyExpenseBasisForOwnedBusiness(context, monthStart),
   ]);
 
-  return computeRecoveryTarget({
-    expectedMonthlyExpenses: Number(profile.expectedMonthlyExpenses),
+  const targets = computeRecoveryTarget({
+    expectedMonthlyExpenses: monthlyExpenseBasis.amount,
+    monthlyExpenseBasis,
     operatingDays: profile.operatingDays,
     salesThisMonth: monthEligibility.salesThisMonth,
     salesToday: Number(todayAgg._sum.amount ?? 0),
@@ -163,6 +210,15 @@ export async function loadRecoveryTargets(
       possibleDuplicateSalesThisMonth: monthEligibility.possibleDuplicateSalesThisMonth,
     },
   });
+  return { targets, eligibility: monthEligibility };
+}
+
+export async function loadRecoveryTargets(
+  profile: BusinessProfile,
+  today: Date,
+  precomputedExactCalendar?: ExactOperatingCounts | null,
+): Promise<RecoveryTargets> {
+  return (await loadRecoveryTargetSnapshot(profile, today, precomputedExactCalendar)).targets;
 }
 
 // ============================================================
@@ -204,10 +260,22 @@ export async function computeRecoveryProjection(
   exactCalendar: ExactOperatingCounts | null,
   confirmedSalesThisMonth: number,
   remainingOperatingDays: number,
-): Promise<RecoveryProjection> {
+  precomputedMonthlyExpenseBasis?: MonthlyExpenseBasis,
+): Promise<RecoveryProjection & {
+  /** @deprecated Use `monthlyExpenseBasis.amount`. */
+  expectedMonthlyExpenses: number;
+  monthlyExpenseBasis: MonthlyExpenseBasis;
+}> {
   const monthStart = utcStartOfMonth(today);
   const yesterday = utcAddDays(today, -1);
-  const expectedMonthlyExpenses = Number(profile.expectedMonthlyExpenses);
+  const monthlyExpenseBasis = precomputedMonthlyExpenseBasis
+    ?? await resolveMonthlyExpenseBasisForOwnedBusiness(ownedContextForProfile(profile), monthStart);
+  const expectedMonthlyExpenses = monthlyExpenseBasis.amount;
+  const withExpenseBasis = (projection: RecoveryProjection) => ({
+    ...projection,
+    expectedMonthlyExpenses,
+    monthlyExpenseBasis,
+  });
 
   // Today is the 1st of the (business-local) month — no completed day exists
   // within this month yet to build a lookback average from. Short-circuits
@@ -215,7 +283,7 @@ export async function computeRecoveryProjection(
   // reach the same "insufficient_data" conclusion, but querying a range that
   // starts after it ends is worth avoiding outright.
   if (yesterday < monthStart) {
-    return deriveRecoveryProjection({
+    return withExpenseBasis(deriveRecoveryProjection({
       lookbackOperatingDaysAvailable: 0,
       lookbackConfirmedSalesSum: 0,
       lookbackProvisionalSalesSum: 0,
@@ -223,7 +291,7 @@ export async function computeRecoveryProjection(
       confirmedSalesThisMonth,
       remainingOperatingDays,
       expectedMonthlyExpenses,
-    });
+    }));
   }
 
   // Completed open days from the 1st of the month through yesterday — exact
@@ -246,7 +314,7 @@ export async function computeRecoveryProjection(
     }),
   ]);
 
-  return deriveRecoveryProjection({
+  return withExpenseBasis(deriveRecoveryProjection({
     lookbackOperatingDaysAvailable,
     lookbackConfirmedSalesSum: lookbackEligibility.confirmedSalesThisMonth,
     lookbackProvisionalSalesSum: lookbackEligibility.salesThisMonth - lookbackEligibility.confirmedSalesThisMonth,
@@ -254,7 +322,7 @@ export async function computeRecoveryProjection(
     confirmedSalesThisMonth,
     remainingOperatingDays,
     expectedMonthlyExpenses,
-  });
+  }));
 }
 
 // ============================================================
@@ -293,6 +361,8 @@ export type RecoveryMonthEndReview =
       status: "reviewable";
       /** YYYY-MM. */
       month: string;
+      /** Expense amount and source used as this month's coverage target. */
+      monthlyExpenseBasis: MonthlyExpenseBasis;
       /** Final `salesThisMonth / expectedMonthlyExpenses * 100`, 0 when no baseline is configured (matches `computeRecoveryTarget`'s own `monthCoveragePercent` guard). */
       coveragePercent: number;
       /** `salesThisMonth - expectedMonthlyExpenses`. Positive = surplus over the coverage goal, negative = shortfall under it — the mirror-image sign of `RecoveryTargets.remainingTarget` (which is floored at 0 and only ever expresses a shortfall). */
@@ -366,9 +436,8 @@ export async function computeMonthEndReview(
 
   const monthEnd = utcAddDays(monthStart, utcDaysInMonth(monthStart) - 1);
   const endOfMonth = utcEndOfDay(monthEnd);
-  const expectedMonthlyExpenses = Number(profile.expectedMonthlyExpenses);
 
-  const [calendar, dailyGroups] = await Promise.all([
+  const [calendar, dailyGroups, monthlyExpenseBasis] = await Promise.all([
     resolveOperatingCalendar(businessProfileId, monthStart, monthEnd),
     // One bounded groupBy over the whole month (plan §15.1: no per-day
     // queries), grouped finely enough (by date AND review/duplicate state)
@@ -379,7 +448,9 @@ export async function computeMonthEndReview(
       where: { businessProfileId, date: { gte: monthStart, lte: endOfMonth } },
       _sum: { amount: true },
     }),
+    resolveMonthlyExpenseBasisForOwnedBusiness(ownedContextForProfile(profile), monthStart),
   ]);
+  const expectedMonthlyExpenses = monthlyExpenseBasis.amount;
 
   // Per-day confirmed/total split, keyed by date — same confirmed convention
   // as `loadSalesEligibilityForRange` above (reviewStatus "Reviewed" AND
@@ -425,6 +496,7 @@ export async function computeMonthEndReview(
   if (!calendar || (remainingOnLastDay !== null && remainingOnLastDay > 0)) {
     const finalTargets = computeRecoveryTarget({
       expectedMonthlyExpenses,
+      monthlyExpenseBasis,
       operatingDays: profile.operatingDays,
       salesThisMonth,
       salesToday: dailyTotals.get(monthEndKey)?.total ?? 0,
@@ -466,6 +538,8 @@ export async function computeMonthEndReview(
   const suggestedQuestionsForNextMonth = deriveSuggestedQuestionsForNextMonth({
     baselineAppearsOffFromPattern,
     expectedMonthlyExpenses,
+    monthlyExpenseBasisSource: monthlyExpenseBasis.source,
+    monthlyExpenseBasisSourceMonth: monthlyExpenseBasis.sourceMonth,
     coveragePercent,
     missingOrProvisionalDayCount,
     openDayCount: openDaySales.length,
@@ -478,6 +552,7 @@ export async function computeMonthEndReview(
   return {
     status: "reviewable",
     month,
+    monthlyExpenseBasis,
     coveragePercent,
     surplusOrShortfall,
     strongestOpenDay,
@@ -513,20 +588,16 @@ export async function getMonthEndReview(
 // ============================================================
 // Recovery Target — hypothetical scenario (§13.2 / §15 Phase 5)
 //
-// Independently verified (see task context this was built against): the real
-// Recovery Target — `loadRecoveryTargets` above — never reads `ExpenseRecord`
-// at all, so an expense reduction has no path to affect it. §13.2's ONLY
-// valid hypothetical is an explicit, owner-supplied change to
-// `expectedMonthlyExpenses` — never one derived automatically from a
-// reduction-opportunity simulation. This function takes that assumption as
-// an explicit parameter; it is never inferred.
+// The current branch uses the same resolved monthly expense basis as the live
+// target. The hypothetical branch remains an explicit owner-supplied amount;
+// it is never inferred from a reduction-opportunity simulation.
 //
 // READ-ONLY. This performs the exact same two `salesReferenceRecord`
 // aggregate reads `loadRecoveryTargets` performs (duplicated here only so
 // both the real and hypothetical figures can be computed from one profile
 // fetch/one pair of reads) and then calls `computeRecoveryTarget` — the
 // existing pure formula, completely unmodified and un-duplicated — twice:
-// once with the real `expectedMonthlyExpenses`, once with the assumed one.
+// once with the resolved current basis, once with the assumed amount.
 // Nothing here writes to `BusinessProfile` or anywhere else; see
 // tests/integration/recoveryScenario.test.ts for the no-write assertion.
 // ============================================================
@@ -574,7 +645,7 @@ export interface RecoveryScenarioDelta {
 export interface RecoveryScenario {
   /** The explicit hypothetical the owner supplied — never derived automatically. */
   assumedExpectedMonthlyExpenses: number;
-  /** Unchanged passthrough of the real, currently-configured target. */
+  /** Unchanged passthrough of the currently resolved target. */
   current: RecoveryTargets;
   /** What the target would be if `expectedMonthlyExpenses` were the assumed value. Not saved anywhere. */
   hypothetical: RecoveryTargets;
@@ -600,7 +671,7 @@ export async function simulateRecoveryScenario(
   // Same reads `loadRecoveryTargets` performs — see the comment above for why
   // they are duplicated rather than shared, and why that duplication is
   // reads-only and does not touch the formula itself.
-  const [monthAgg, todayAgg, exactCalendar] = await Promise.all([
+  const [monthAgg, todayAgg, exactCalendar, monthlyExpenseBasis] = await Promise.all([
     prisma.salesReferenceRecord.aggregate({
       where: { businessProfileId: profile.id, date: { gte: monthStart, lte: endOfToday } },
       _sum: { amount: true },
@@ -610,6 +681,7 @@ export async function simulateRecoveryScenario(
       _sum: { amount: true },
     }),
     resolveExactOperatingCounts(profile.id, today),
+    resolveMonthlyExpenseBasisForOwnedBusiness(ownedContextForProfile(profile), monthStart),
   ]);
 
   // NOTE (plan §9.6, Phase 3): `recordEligibility` is deliberately omitted
@@ -627,8 +699,25 @@ export async function simulateRecoveryScenario(
     exactOperatingCalendar: toRecoveryTargetCalendarInput(exactCalendar),
   };
 
-  const current = computeRecoveryTarget({ ...sharedInput, expectedMonthlyExpenses: Number(profile.expectedMonthlyExpenses) });
-  const hypothetical = computeRecoveryTarget({ ...sharedInput, expectedMonthlyExpenses: assumedExpectedMonthlyExpenses });
+  const current = computeRecoveryTarget({
+    ...sharedInput,
+    expectedMonthlyExpenses: monthlyExpenseBasis.amount,
+    monthlyExpenseBasis,
+  });
+  const hypotheticalBasis: MonthlyExpenseBasis = {
+    amount: assumedExpectedMonthlyExpenses,
+    source: "owner_estimate",
+    sourceMonth: null,
+    ownerEstimate: assumedExpectedMonthlyExpenses,
+    recordsCompleteThroughMonth: null,
+    recordsCompleteThroughConfirmedAt: null,
+    eligibleRecordCount: 0,
+  };
+  const hypothetical = computeRecoveryTarget({
+    ...sharedInput,
+    expectedMonthlyExpenses: assumedExpectedMonthlyExpenses,
+    monthlyExpenseBasis: hypotheticalBasis,
+  });
 
   return {
     assumedExpectedMonthlyExpenses,
@@ -663,60 +752,260 @@ export async function simulateRecoveryScenario(
  * instead of leaving the owner to guess that a control exists and which value
  * to give it.
  */
-async function latestExpenseDate(businessProfileId: number): Promise<Date | null> {
+async function latestExpenseDate(businessProfileId: number, latest: Date): Promise<Date | null> {
   const row = await prisma.expenseRecord.findFirst({
-    where: { businessProfileId },
+    // Up to the business's today: a future-dated record is not the latest expense.
+    where: { businessProfileId, date: { lte: utcEndOfDay(latest) } },
     orderBy: { date: "desc" },
     select: { date: true },
   });
   return row?.date ?? null;
 }
 
-export async function getExpenseBehavior(
-  userId: number,
-  businessProfileId: number,
-  periodDays: number,
+/**
+ * Spending over the window as a chart series, one point per day, or per month
+ * when the window is all time.
+ *
+ * Every day in range is emitted, including the ones with no spending: dropping
+ * empty days would silently compress the x-axis and turn a quiet fortnight
+ * into a flat line that looks like steady spending.
+ *
+ * A week or month still in progress stops at today (or at the last record, if
+ * one is dated later). Plotting the rest of September as zero-spend days
+ * would pull the chart's "usual day" line down with days that have not
+ * happened. A legacy rolling window keeps its full length, as it always has.
+ *
+ * All time is bucketed by calendar month, from the first month with an expense
+ * to the last: three years of daily points is a solid bar, not a chart.
+ */
+export function spendSeries(
+  window: ReturnType<typeof resolveReportingWindow>,
+  today: Date,
+  byDay: { date: Date; _sum: { amount: Prisma.Decimal | number | null }; _count: number }[],
+): { dailyTotals: { date: string; total: number; count: number }[]; dailyBucket: "day" | "month" } {
+  if (!window.start || !window.end) {
+    if (byDay.length === 0) return { dailyTotals: [], dailyBucket: "month" };
+    const times = byDay.map((group) => group.date.getTime());
+    const first = utcStartOfMonth(new Date(Math.min(...times)));
+    const last = utcStartOfMonth(new Date(Math.max(...times)));
+    const monthly = new Map<string, { total: number; count: number }>();
+    for (let d = first; d <= last; d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1))) {
+      monthly.set(utcMonthKey(d), { total: 0, count: 0 });
+    }
+    for (const group of byDay) {
+      const entry = monthly.get(utcMonthKey(group.date));
+      if (entry) {
+        entry.total += Number(group._sum.amount ?? 0);
+        entry.count += group._count;
+      }
+    }
+    return {
+      dailyTotals: [...monthly.entries()].map(([month, v]) => ({ date: `${month}-01`, total: v.total, count: v.count })),
+      dailyBucket: "month",
+    };
+  }
+
+  let seriesEnd = window.end;
+  if (window.kind !== "rolling" && today < window.end) {
+    const latestRecord = byDay.reduce<Date | null>((latest, group) => (!latest || group.date > latest ? group.date : latest), null);
+    const lastShown = latestRecord && latestRecord > today ? latestRecord : today;
+    seriesEnd = lastShown < window.start ? window.start : lastShown;
+  }
+
+  const dailyMap = new Map<string, { total: number; count: number }>();
+  for (let d = window.start; d <= seriesEnd; d = utcAddDays(d, 1)) {
+    dailyMap.set(utcDateKey(d), { total: 0, count: 0 });
+  }
+  for (const group of byDay) {
+    const entry = dailyMap.get(utcDateKey(group.date));
+    if (entry) {
+      entry.total = Number(group._sum.amount ?? 0);
+      entry.count = group._count;
+    }
+  }
+  return {
+    dailyTotals: [...dailyMap.entries()].map(([date, v]) => ({ date, total: v.total, count: v.count })),
+    dailyBucket: "day",
+  };
+}
+
+export async function getExpenseBehaviorForOwnedBusiness(
+  context: OwnedBusinessContext,
   /**
-   * The day the window ENDS on. Defaults to today, which is every existing
-   * caller's behaviour.
-   *
-   * Deliberately an end date rather than a start date: the period is described
-   * to the owner as "the last N days", so the anchor is the recent end and the
-   * length stays the thing they chose. It is also the primitive a custom date
-   * range would need, so this is not throwaway.
+   * The period to read. A number is the legacy rolling window of that many
+   * days, which the mobile client and the AI context still ask for; the web
+   * period filter sends a selection (this week, a calendar month, all time).
+   * See lib/reportingPeriod.ts for what each one covers.
+   */
+  period: number | PeriodSelection,
+  /**
+   * The day a legacy rolling window ENDS on. Defaults to today, which is every
+   * existing caller's behaviour. Ignored when `period` is a selection.
    */
   endDate?: Date,
+  options: { maximumAnalysisCategories?: number } = {},
 ) {
-  await requireOwnedBusinessProfile(userId, businessProfileId);
+  const { profile } = context;
+  const businessProfileId = profile.id;
 
-  const today = endDate ?? utcToday();
-  const periodStart = utcAddDays(today, -(periodDays - 1));
-  const previousPeriodEnd = utcAddDays(periodStart, -1);
-  const previousPeriodStart = utcAddDays(previousPeriodEnd, -(periodDays - 1));
+  // The business's own calendar day, not the server's: between local midnight
+  // and 08:00 in Manila, a UTC "today" put the owner's newest expense outside
+  // both the current window and the previous one, so a morning's spending
+  // showed up in neither the period total nor the comparison against it.
+  const businessToday = resolveBusinessToday(profile.timezone);
+  const selection: PeriodSelection =
+    typeof period === "number" ? { kind: "rolling", days: period, ...(endDate ? { endDate } : {}) } : period;
+  const window = resolveReportingWindow(selection, businessToday);
+  // Where the unusual-expense baseline is anchored: the end of a finished
+  // period, otherwise today. A past month is judged against what was normal
+  // then, not against spending that came after it.
+  const today = window.end && window.end < businessToday ? window.end : businessToday;
+  const periodDays = window.days ?? 0;
 
-  const [currentRecords, previousRecords, categories] = await Promise.all([
+  const dateFilter = windowDateFilter(window, businessToday);
+  const currentWindow = { businessProfileId, ...(dateFilter ? { date: dateFilter } : {}) };
+  const previousWindow = window.previous
+    ? { businessProfileId, date: windowDateFilter(window.previous, businessToday) }
+    : null;
+  const maximumAnalysisCategories = options.maximumAnalysisCategories === undefined
+    ? null
+    : Math.max(1, Math.floor(options.maximumAnalysisCategories));
+  const cappedCurrentByCategory = maximumAnalysisCategories === null
+    ? null
+    : await prisma.expenseRecord.groupBy({
+        by: ["categoryId"],
+        where: currentWindow,
+        _sum: { amount: true },
+        _count: true,
+        orderBy: [{ _sum: { amount: "desc" } }, { categoryId: "asc" }],
+        take: maximumAnalysisCategories,
+      });
+  let selectedAnalysisCategoryIds: number[] | null = cappedCurrentByCategory
+    ? cappedCurrentByCategory.map((group) => group.categoryId)
+    : null;
+  if (
+    selectedAnalysisCategoryIds !== null
+    && maximumAnalysisCategories !== null
+    && selectedAnalysisCategoryIds.length < maximumAnalysisCategories
+    && previousWindow
+  ) {
+    const remaining = maximumAnalysisCategories - selectedAnalysisCategoryIds.length;
+    const previousOnly = await prisma.expenseRecord.groupBy({
+      by: ["categoryId"],
+      where: {
+        ...previousWindow,
+        ...(selectedAnalysisCategoryIds.length > 0
+          ? { categoryId: { notIn: selectedAnalysisCategoryIds } }
+          : {}),
+      },
+      _sum: { amount: true },
+      orderBy: [{ _sum: { amount: "desc" } }, { categoryId: "asc" }],
+      take: remaining,
+    });
+    selectedAnalysisCategoryIds = [
+      ...selectedAnalysisCategoryIds,
+      ...previousOnly.map((group) => group.categoryId),
+    ];
+  }
+  const selectedCategoryFilter = selectedAnalysisCategoryIds
+    ? { categoryId: { in: selectedAnalysisCategoryIds } }
+    : {};
+  const selectedCurrentWindow = { ...currentWindow, ...selectedCategoryFilter };
+  const selectedPreviousWindow = previousWindow
+    ? { ...previousWindow, ...selectedCategoryFilter }
+    : null;
+  const coverageCurrentWindow = {
+    ...(dateFilter.gte ? { start: dateFilter.gte } : {}),
+    end: dateFilter.lte,
+  };
+  const coveragePreviousWindow = previousWindow
+    ? {
+        ...(previousWindow.date.gte ? { start: previousWindow.date.gte } : {}),
+        end: previousWindow.date.lte,
+      }
+    : undefined;
+
+  // Capped AI calls restrict category detail queries to the selected ids.
+  // Separate aggregates keep the period totals exact across every category.
+  const [
+    currentRecords,
+    currentByCategory,
+    currentByDay,
+    previousByCategory,
+    categories,
+    boundedCategoryHistory,
+    categoryHistoryCoverage,
+    currentTotal,
+    previousTotal,
+    latestExpense,
+  ] = await Promise.all([
     prisma.expenseRecord.findMany({
       // Explicit projection, not the whole row. A 366-day window on a busy
       // account is thousands of records, and every column this does not name
       // is bytes over the wire and a Decimal/Date object built for nothing.
-      // These five are exactly what the aggregation, the daily series and the
-      // unusual-expense output below read.
-      where: { businessProfileId, date: { gte: periodStart, lte: utcEndOfDay(today) } },
+      // These five are exactly what the unusual-expense scan and its output read.
+      where: selectedCurrentWindow,
       select: { id: true, categoryId: true, amount: true, date: true, description: true },
+      // Bounded on the trend detector's ceiling, newest first: past it, an
+      // account loses the oldest end of the window, not what was just entered.
+      orderBy: [{ date: "desc" }, { id: "desc" }],
+      take: MAXIMUM_WINDOW_RECORDS,
     }),
-    prisma.expenseRecord.findMany({
-      where: { businessProfileId, date: { gte: previousPeriodStart, lte: previousPeriodEnd } },
-      select: { categoryId: true, amount: true },
+    cappedCurrentByCategory
+      ?? prisma.expenseRecord.groupBy({
+        by: ["categoryId"],
+        where: currentWindow,
+        _sum: { amount: true },
+        _count: true,
+      }),
+    // Record dates are date-only values stored at UTC midnight, so the column
+    // itself is the daily bucket — no truncation or raw SQL needed.
+    prisma.expenseRecord.groupBy({ by: ["date"], where: currentWindow, _sum: { amount: true }, _count: true }),
+    // All time has nothing before it to compare with.
+    selectedPreviousWindow
+      ? prisma.expenseRecord.groupBy({
+          by: ["categoryId"],
+          where: selectedPreviousWindow,
+          _sum: { amount: true },
+        })
+      : Promise.resolve([] as { categoryId: number; _sum: { amount: Prisma.Decimal | null } }[]),
+    prisma.expenseCategory.findMany({
+      where: {
+        businessProfileId,
+        ...(selectedAnalysisCategoryIds ? { id: { in: selectedAnalysisCategoryIds } } : {}),
+      },
     }),
-    prisma.expenseCategory.findMany({ where: { businessProfileId } }),
+    selectedAnalysisCategoryIds
+      ? loadBoundedCategoryHistoryForCategories(
+          businessProfileId,
+          today,
+          selectedAnalysisCategoryIds,
+          DEFAULT_DETECTION_CONFIG.baselineDays,
+          DEFAULT_DETECTION_CONFIG.maximumCategoryRecords,
+        )
+      : loadBoundedCategoryHistory(
+          businessProfileId,
+          today,
+          DEFAULT_DETECTION_CONFIG.baselineDays,
+          DEFAULT_DETECTION_CONFIG.maximumCategoryRecords,
+        ),
+    selectedAnalysisCategoryIds
+      ? loadCategoryHistoryCoverage(
+          businessProfileId,
+          today,
+          DEFAULT_DETECTION_CONFIG.baselineDays,
+          coverageCurrentWindow,
+          coveragePreviousWindow,
+        )
+      : Promise.resolve(null),
+    selectedAnalysisCategoryIds
+      ? prisma.expenseRecord.aggregate({ where: currentWindow, _sum: { amount: true } })
+      : Promise.resolve(null),
+    selectedAnalysisCategoryIds && previousWindow
+      ? prisma.expenseRecord.aggregate({ where: previousWindow, _sum: { amount: true } })
+      : Promise.resolve(null),
+    latestExpenseDate(businessProfileId, businessToday),
   ]);
-
-  const boundedCategoryHistory = await loadBoundedCategoryHistory(
-    businessProfileId,
-    today,
-    DEFAULT_DETECTION_CONFIG.baselineDays,
-    DEFAULT_DETECTION_CONFIG.maximumCategoryRecords,
-  );
 
   const categoryName = new Map(categories.map((c) => [c.id, c.name]));
   // [ADDED] Plan §5.2/§15 Phase 5 — owner-controlled cost-behavior classification.
@@ -725,17 +1014,12 @@ export async function getExpenseBehavior(
   // existing enum-to-API convention (e.g. `direction`/`detectedBy` below).
   const categoryCostBehavior = new Map(categories.map((c) => [c.id, c.costBehavior]));
 
-  const currentTotals = new Map<number, number>();
+  const currentTotals = new Map(currentByCategory.map((g) => [g.categoryId, Number(g._sum.amount ?? 0)]));
   // How many expenses make up each category's total. A category can be large
   // because of one big purchase or because of forty small ones, and those are
   // completely different problems — the count is what tells them apart.
-  const currentCounts = new Map<number, number>();
-  for (const r of currentRecords) {
-    currentTotals.set(r.categoryId, (currentTotals.get(r.categoryId) ?? 0) + Number(r.amount));
-    currentCounts.set(r.categoryId, (currentCounts.get(r.categoryId) ?? 0) + 1);
-  }
-  const previousTotals = new Map<number, number>();
-  for (const r of previousRecords) previousTotals.set(r.categoryId, (previousTotals.get(r.categoryId) ?? 0) + Number(r.amount));
+  const currentCounts = new Map(currentByCategory.map((g) => [g.categoryId, g._count]));
+  const previousTotals = new Map(previousByCategory.map((g) => [g.categoryId, Number(g._sum.amount ?? 0)]));
 
   const categoryIds = new Set([...currentTotals.keys(), ...previousTotals.keys()]);
   const categoryTrends = [...categoryIds]
@@ -779,8 +1063,12 @@ export async function getExpenseBehavior(
   // expenses this period" reads the same number. The share percentages on the
   // client all divide by `totals.current`, which is what keeps the donut and
   // the summary table from disagreeing.
-  const totalCurrent = [...currentTotals.values()].reduce((s, v) => s + v, 0);
-  const totalPrevious = [...previousTotals.values()].reduce((s, v) => s + v, 0);
+  const totalCurrent = selectedAnalysisCategoryIds
+    ? Number(currentTotal?._sum.amount ?? 0)
+    : [...currentTotals.values()].reduce((s, v) => s + v, 0);
+  const totalPrevious = selectedAnalysisCategoryIds
+    ? Number(previousTotal?._sum.amount ?? 0)
+    : [...previousTotals.values()].reduce((s, v) => s + v, 0);
 
   // ============================================================
   // Daily spend series
@@ -790,23 +1078,7 @@ export async function getExpenseBehavior(
   // with no spending: dropping empty days would silently compress the x-axis
   // and turn a quiet fortnight into a flat line that looks like steady
   // spending.
-  const dailyMap = new Map<string, { total: number; count: number }>();
-  for (let i = 0; i < periodDays; i++) {
-    dailyMap.set(utcDateKey(utcAddDays(periodStart, i)), { total: 0, count: 0 });
-  }
-  for (const r of currentRecords) {
-    const key = utcDateKey(r.date);
-    const entry = dailyMap.get(key);
-    if (entry) {
-      entry.total += Number(r.amount);
-      entry.count += 1;
-    }
-  }
-  const dailyTotals = [...dailyMap.entries()].map(([date, v]) => ({
-    date,
-    total: v.total,
-    count: v.count,
-  }));
+  const { dailyTotals, dailyBucket } = spendSeries(window, businessToday, currentByDay);
 
   // Unusual-expense detection: leave-one-out Z-score/IQR against a bounded
   // rolling baseline. Years-old prices no longer distort today's normal, and
@@ -814,14 +1086,34 @@ export async function getExpenseBehavior(
   // Current-period candidates are merged even when they sit just outside the
   // baseline (the API permits a 366-day view), so a visible row is never
   // silently omitted from eligibility checks.
+  //
+  // THE MERGE CARRIES THE SAME PER-CATEGORY CEILING THE BASELINE DOES.
+  // `loadBoundedCategoryHistory` caps each category in SQL; the merge used to
+  // add the selected period on top without a limit, so a category with 20,000
+  // records in the window handed all 20,000 to a leave-one-out scan on a
+  // synchronous path an authenticated GET holds. `maximumCategoryRecords` is
+  // the ceiling every sibling detector applies. Newest first, so what it can
+  // drop is the oldest end of the window, not spending just entered.
+  const maximumPerCategory = DEFAULT_DETECTION_CONFIG.maximumCategoryRecords;
   const recordsByCategory = new Map<number, Map<number, { id: number; amount: number }>>();
+  for (const categoryId of selectedAnalysisCategoryIds ?? []) {
+    recordsByCategory.set(categoryId, new Map());
+  }
   for (const r of boundedCategoryHistory) {
     const records = recordsByCategory.get(r.categoryId) ?? new Map();
     records.set(r.id, { id: r.id, amount: Number(r.amount) });
     recordsByCategory.set(r.categoryId, records);
   }
-  for (const r of currentRecords) {
+  const currentNewestFirst = [...currentRecords].sort(
+    (a, b) => b.date.getTime() - a.date.getTime() || b.id - a.id,
+  );
+  const selectedAnalysisCategories = selectedAnalysisCategoryIds
+    ? new Set(selectedAnalysisCategoryIds)
+    : null;
+  for (const r of currentNewestFirst) {
+    if (selectedAnalysisCategories && !selectedAnalysisCategories.has(r.categoryId)) continue;
     const records = recordsByCategory.get(r.categoryId) ?? new Map();
+    if (!records.has(r.id) && records.size >= maximumPerCategory) continue;
     records.set(r.id, { id: r.id, amount: Number(r.amount) });
     recordsByCategory.set(r.categoryId, records);
   }
@@ -869,28 +1161,62 @@ export async function getExpenseBehavior(
     categoryName: categoryName.get(entry.categoryId) ?? "Unknown",
     historyCount: entry.historyCount,
   }));
+  const analysisCoverage = categoryHistoryCoverage
+    ? {
+        eligibleCategoryCount: categoryHistoryCoverage.eligibleCategoryCount,
+        analyzedCategoryCount: selectedAnalysisCategoryIds?.length ?? byCategory.size,
+        omittedCategoryCount: Math.max(
+          0,
+          categoryHistoryCoverage.eligibleCategoryCount - (selectedAnalysisCategoryIds?.length ?? byCategory.size),
+        ),
+        insufficientHistoryCategoryCount: Math.max(
+          categoryHistoryCoverage.insufficientHistoryCategoryCount,
+          insufficientHistoryCategories.length,
+        ),
+      }
+    : null;
 
   unusualExpenses.sort((a, b) => Math.abs(b.zScore) - Math.abs(a.zScore));
 
+  const recordDays = currentByDay.map((group) => group.date.getTime());
   return {
-    periodStart,
-    periodEnd: today,
-    previousPeriodStart,
-    previousPeriodEnd,
+    // All time spans what the business actually has, not an invented range.
+    periodStart: window.start ?? (recordDays.length ? new Date(Math.min(...recordDays)) : businessToday),
+    periodEnd: window.end ?? (recordDays.length ? new Date(Math.max(...recordDays)) : businessToday),
+    previousPeriodStart: window.previous?.start ?? null,
+    previousPeriodEnd: window.previous?.end ?? null,
     periodDays,
+    /** The resolved window, as date keys. */
+    period: describeWindow(window),
     totals: { current: totalCurrent, previous: totalPrevious },
     dailyTotals,
+    /** "month" when the series is too long to read one point per day (all time). */
+    dailyBucket,
     categoryTrends,
     unusualExpenses,
     insufficientHistoryCategories,
+    ...(analysisCoverage ? { analysisCoverage } : {}),
     /**
      * Where this business's expenses actually are, independent of the window
      * above — so an empty period can tell the owner the difference between
      * "you have never recorded an expense" and "you have plenty, just none
      * lately", which are opposite situations that looked identical.
      */
-    latestExpenseDate: await latestExpenseDate(businessProfileId),
+    latestExpenseDate: latestExpense,
   };
+}
+
+export type ExpenseBehaviorResult = Awaited<ReturnType<typeof getExpenseBehaviorForOwnedBusiness>>;
+
+export async function getExpenseBehavior(
+  userId: number,
+  businessProfileId: number,
+  period: number | PeriodSelection,
+  endDate?: Date,
+  options: { maximumAnalysisCategories?: number } = {},
+): Promise<ExpenseBehaviorResult> {
+  const context = await requireOwnedBusinessContext(userId, businessProfileId);
+  return getExpenseBehaviorForOwnedBusiness(context, period, endDate, options);
 }
 
 // ============================================================
@@ -905,6 +1231,267 @@ export async function getExpenseBehavior(
  * This override is applied here, after calling `dayStatus()`, not inside it.
  */
 export type RecoveryDayCoverageStatus = ReturnType<typeof dayStatus> | "closed";
+
+export type RecoveryReportingSelection =
+  | { kind: "week" }
+  | { kind: "month"; month: string };
+
+export type RecoveryReportingPeriodStatus =
+  | "needs_setup"
+  | "no_data"
+  | "ahead"
+  | "on_pace"
+  | "behind"
+  | "covered";
+
+export interface RecoveryReportingPeriod {
+  kind: RecoveryReportingSelection["kind"];
+  month: string | null;
+  start: string;
+  end: string;
+  asOfDate: string;
+  timezone: string;
+  /** True when the selected interval contains the business-local current day. */
+  isCurrent: boolean;
+  /** True only after the selected interval has ended, never while its final day is still in progress. */
+  isComplete: boolean;
+  targetBasis: "prorated_monthly_expenses" | "monthly_expenses";
+  /** One entry per calendar month touched by the selected interval. */
+  monthlyExpenseBases: Array<{ targetMonth: string; basis: MonthlyExpenseBasis }>;
+  target: number;
+  sales: number;
+  confirmedSales: number;
+  provisionalSales: number;
+  remainingTarget: number;
+  coveragePercent: number;
+  dailyTarget: number;
+  /** Null when the interval has ended or has no remaining target-bearing days. */
+  adjustedDailyTarget: number | null;
+  operatingDays: number;
+  elapsedOperatingDays: number;
+  remainingOperatingDays: number;
+  operatingScheduleConfigured: boolean;
+  operatingDaysIsApproximated: boolean;
+  expectedSalesToDate: number;
+  paceVarianceAmount: number;
+  status: RecoveryReportingPeriodStatus;
+  confidence: RecoveryConfidence;
+  recordCount: number;
+  dataWarnings: RecoveryTargets["dataWarnings"];
+}
+
+interface ResolvedRecoveryReportingPeriod {
+  summary: RecoveryReportingPeriod;
+  isOperatingDay: Map<string, boolean>;
+  targetByDate: Map<string, number>;
+}
+
+function recoveryDataWarnings(
+  eligibility: Awaited<ReturnType<typeof loadSalesEligibilityForRange>>,
+): RecoveryTargets["dataWarnings"] {
+  const warnings: RecoveryTargets["dataWarnings"] = [];
+  if (eligibility.salesThisMonth - eligibility.confirmedSalesThisMonth <= AMOUNT_EPSILON) return warnings;
+  if (eligibility.pendingReviewSalesThisMonth > AMOUNT_EPSILON) warnings.push("records_pending_review");
+  if (eligibility.possibleDuplicateSalesThisMonth > AMOUNT_EPSILON) warnings.push("possible_duplicates");
+  if (warnings.length === 0) warnings.push("records_pending_review");
+  return warnings;
+}
+
+/** A week sums each date's share of the monthly expense baseline, including each month's own rate at a boundary. */
+async function resolveRecoveryReportingPeriod(
+  profile: BusinessProfile,
+  businessToday: Date,
+  selection: RecoveryReportingSelection,
+  targets: RecoveryTargets,
+  targetExactCalendar: ExactOperatingCounts | null,
+  precomputedEligibility?: Awaited<ReturnType<typeof loadSalesEligibilityForRange>>,
+): Promise<ResolvedRecoveryReportingPeriod> {
+  const window = resolveReportingWindow(selection, businessToday);
+  const start = window.start!;
+  const end = window.end!;
+
+  if (start > businessToday) {
+    throw new ApiError(400, "Recovery Target does not support future months");
+  }
+
+  const asOf = end < businessToday ? end : businessToday;
+  const isCurrent = start <= businessToday && businessToday <= end;
+  const isComplete = end < businessToday;
+  const configured = targetExactCalendar !== null;
+  const isOperatingDay = new Map<string, boolean>();
+  const targetByDate = new Map<string, number>();
+  const operatingDayWeight = new Map<string, number>();
+
+  const monthKeys = new Set<string>();
+  for (let d = new Date(start); d <= end; d = utcAddDays(d, 1)) monthKeys.add(utcMonthKey(d));
+
+  const monthlyExpenseBasisByMonth = new Map<string, MonthlyExpenseBasis>();
+  const targetsMonth = utcMonthKey(new Date(`${targets.asOfDate}T00:00:00.000Z`));
+  await Promise.all(
+    [...monthKeys].map(async (monthKey) => {
+      if (monthKey === targetsMonth) {
+        monthlyExpenseBasisByMonth.set(monthKey, targets.monthlyExpenseBasis);
+        return;
+      }
+      const monthStart = new Date(`${monthKey}-01T00:00:00.000Z`);
+      const basis = await resolveMonthlyExpenseBasisForOwnedBusiness(ownedContextForProfile(profile), monthStart);
+      monthlyExpenseBasisByMonth.set(monthKey, basis);
+    }),
+  );
+
+  const monthlyCalendars = new Map<string, Map<string, boolean>>();
+  if (configured) {
+    await Promise.all(
+      [...monthKeys].map(async (monthKey) => {
+        const monthStart = new Date(`${monthKey}-01T00:00:00.000Z`);
+        const monthEnd = utcAddDays(monthStart, utcDaysInMonth(monthStart) - 1);
+        if (utcMonthKey(targets.asOfDate ? new Date(`${targets.asOfDate}T00:00:00.000Z`) : asOf) === monthKey) {
+          monthlyCalendars.set(monthKey, targetExactCalendar!.calendar);
+          return;
+        }
+        const calendar = await resolveOperatingCalendar(profile.id, monthStart, monthEnd);
+        if (calendar) monthlyCalendars.set(monthKey, calendar);
+      }),
+    );
+  }
+
+  for (let d = new Date(start); d <= end; d = utcAddDays(d, 1)) {
+    const key = utcDateKey(d);
+    const basis = monthlyExpenseBasisByMonth.get(utcMonthKey(d));
+    if (!basis) throw new Error(`Missing monthly expense basis for ${utcMonthKey(d)}`);
+    if (!configured) {
+      // Spread an undated monthly operating-day count across calendar dates.
+      // This preserves the monthly target without inventing closed weekdays.
+      const daysInMonth = utcDaysInMonth(d);
+      isOperatingDay.set(key, true);
+      operatingDayWeight.set(key, profile.operatingDays > 0 ? profile.operatingDays / daysInMonth : 0);
+      targetByDate.set(key, basis.amount / daysInMonth);
+      continue;
+    }
+
+    const calendar = monthlyCalendars.get(utcMonthKey(d));
+    const open = calendar?.get(key) ?? false;
+    isOperatingDay.set(key, open);
+    operatingDayWeight.set(key, open ? 1 : 0);
+    if (!open) {
+      targetByDate.set(key, 0);
+      continue;
+    }
+    let openDaysInMonth = 0;
+    for (const value of calendar?.values() ?? []) if (value) openDaysInMonth++;
+    targetByDate.set(
+      key,
+      openDaysInMonth > 0 ? basis.amount / openDaysInMonth : 0,
+    );
+  }
+
+  const eligibility = precomputedEligibility
+    ?? await loadSalesEligibilityForRange(profile.id, start, utcEndOfDay(asOf));
+  const sales = eligibility.salesThisMonth;
+  const confirmedSales = eligibility.confirmedSalesThisMonth;
+  const provisionalSales = sales - confirmedSales;
+
+  let target = 0;
+  let expectedSalesToDate = 0;
+  let operatingDays = 0;
+  let elapsedOperatingDays = 0;
+  let remainingOperatingDays = 0;
+  const asOfKey = utcDateKey(asOf);
+  for (let d = new Date(start); d <= end; d = utcAddDays(d, 1)) {
+    const key = utcDateKey(d);
+    const weight = operatingDayWeight.get(key) ?? 0;
+    const dayTarget = targetByDate.get(key) ?? 0;
+    target += dayTarget;
+    operatingDays += weight;
+    if (key <= asOfKey) {
+      elapsedOperatingDays += weight;
+      expectedSalesToDate += dayTarget;
+    }
+    if (!isComplete && key >= asOfKey) remainingOperatingDays += weight;
+  }
+  // Avoid floating-point accumulation making a whole calendar month read as
+  // 30,999.999999999996 instead of the configured 31,000.
+  if (selection.kind === "month") {
+    target = monthlyExpenseBasisByMonth.get(selection.month)?.amount ?? target;
+    if (isComplete) expectedSalesToDate = target;
+  }
+  const dailyTarget = operatingDays > 0 ? target / operatingDays : 0;
+
+  const remainingTarget = Math.max(0, target - sales);
+  const coveragePercent = target > 0 ? (sales / target) * 100 : 0;
+  const paceVarianceAmount = sales - expectedSalesToDate;
+  const adjustedDailyTarget = !isComplete && remainingOperatingDays > 0
+    ? remainingTarget / remainingOperatingDays
+    : null;
+
+  let status: RecoveryReportingPeriodStatus;
+  let confidence: RecoveryConfidence;
+  const hasMissingBasis = [...monthlyExpenseBasisByMonth.values()].some(
+    (basis) => basis.source === "owner_estimate" && basis.amount <= 0,
+  );
+  if (hasMissingBasis) {
+    status = "needs_setup";
+    confidence = "unavailable";
+  } else if (target < AMOUNT_EPSILON) {
+    status = "covered";
+    confidence = "moderate";
+  } else if (eligibility.recordCount === 0) {
+    status = "no_data";
+    confidence = "limited";
+  } else if (remainingTarget < AMOUNT_EPSILON) {
+    status = "covered";
+    confidence = "moderate";
+  } else if (isComplete) {
+    status = "behind";
+    confidence = "moderate";
+  } else {
+    const tolerance = recoveryPaceTolerance(dailyTarget);
+    status = paceVarianceAmount > tolerance
+      ? "ahead"
+      : paceVarianceAmount < -tolerance
+        ? "behind"
+        : "on_pace";
+    confidence = "moderate";
+  }
+
+  return {
+    summary: {
+      kind: selection.kind,
+      month: selection.kind === "month" ? selection.month : null,
+      start: utcDateKey(start),
+      end: utcDateKey(end),
+      asOfDate: utcDateKey(asOf),
+      timezone: profile.timezone,
+      isCurrent,
+      isComplete,
+      targetBasis: selection.kind === "month" ? "monthly_expenses" : "prorated_monthly_expenses",
+      monthlyExpenseBases: [...monthlyExpenseBasisByMonth.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([targetMonth, basis]) => ({ targetMonth, basis })),
+      target,
+      sales,
+      confirmedSales,
+      provisionalSales,
+      remainingTarget,
+      coveragePercent,
+      dailyTarget,
+      adjustedDailyTarget,
+      operatingDays,
+      elapsedOperatingDays,
+      remainingOperatingDays,
+      operatingScheduleConfigured: configured,
+      operatingDaysIsApproximated: !configured,
+      expectedSalesToDate,
+      paceVarianceAmount,
+      status,
+      confidence,
+      recordCount: eligibility.recordCount,
+      dataWarnings: recoveryDataWarnings(eligibility),
+    },
+    isOperatingDay,
+    targetByDate,
+  };
+}
 
 /**
  * Weekly Recovery Target checkpoints for the CURRENT month (plan §10.4,
@@ -955,23 +1542,52 @@ export async function computeWeeklyCheckpoints(
   });
 }
 
-export async function getRecoveryInsight(userId: number, businessProfileId: number, coverageDays: number) {
-  const profile = await requireOwnedBusinessProfile(userId, businessProfileId);
+export async function getRecoveryInsight(
+  userId: number,
+  businessProfileId: number,
+  coverageDays: number,
+  period?: RecoveryReportingSelection,
+) {
+  const context = await requireOwnedBusinessContext(userId, businessProfileId);
+  const { profile } = context;
 
-  const today = resolveBusinessToday(profile.timezone);
-  const exactCalendar = await resolveExactOperatingCounts(businessProfileId, today);
-  const targets = await loadRecoveryTargets(profile, today, exactCalendar);
+  const businessToday = resolveBusinessToday(profile.timezone);
+  const selection: RecoveryReportingSelection = period ?? {
+    kind: "month",
+    month: utcMonthKey(businessToday),
+  };
+  const selectedWindow = resolveReportingWindow(selection, businessToday);
+  const selectedStart = selectedWindow.start!;
+  const selectedEnd = selectedWindow.end!;
+  if (selectedStart > businessToday) {
+    throw new ApiError(400, "Recovery Target does not support future months");
+  }
 
-  // Daily coverage table — "recent days" per the mockup. Scoped to the
-  // current month, since a day before the 1st belongs to a different
-  // month's target and would be misleading in this table.
-  const monthStart = utcStartOfMonth(today);
-  const daysElapsedThisMonth = utcDayOfMonth(today);
-  const coverageStart = utcAddDays(today, -(Math.min(coverageDays, daysElapsedThisMonth) - 1));
-  const endOfToday = utcEndOfDay(today);
+  // Legacy top-level fields stay monthly; `reportingPeriod` owns selected-week names and math.
+  // A completed month is anchored to its final day.
+  const targetAsOf = selection.kind === "month" && selectedEnd < businessToday
+    ? selectedEnd
+    : businessToday;
+  const exactCalendar = await resolveExactOperatingCounts(businessProfileId, targetAsOf);
+  const targetSnapshot = await loadRecoveryTargetSnapshot(profile, targetAsOf, exactCalendar);
+  const targets = targetSnapshot.targets;
+  const resolvedPeriod = await resolveRecoveryReportingPeriod(
+    profile,
+    businessToday,
+    selection,
+    targets,
+    exactCalendar,
+    selection.kind === "month" ? targetSnapshot.eligibility : undefined,
+  );
+
+  const monthStart = utcStartOfMonth(targetAsOf);
+  const periodAsOf = new Date(`${resolvedPeriod.summary.asOfDate}T00:00:00.000Z`);
+  const boundedCoverageStart = utcAddDays(periodAsOf, -(coverageDays - 1));
+  const coverageStart = boundedCoverageStart > selectedStart ? boundedCoverageStart : selectedStart;
+  const coverageEnd = utcEndOfDay(periodAsOf);
 
   const coverageRecords = await prisma.salesReferenceRecord.findMany({
-    where: { businessProfileId, date: { gte: coverageStart, lte: endOfToday } },
+    where: { businessProfileId, date: { gte: coverageStart, lte: coverageEnd } },
     select: { date: true, amount: true },
   });
 
@@ -992,100 +1608,81 @@ export async function getRecoveryInsight(userId: number, businessProfileId: numb
     gap: number | null;
     status: RecoveryDayCoverageStatus;
   }[] = [];
-  for (let d = new Date(coverageStart); d <= today; d = utcAddDays(d, 1)) {
+  for (let d = new Date(coverageStart); d <= periodAsOf; d = utcAddDays(d, 1)) {
     const key = utcDateKey(d);
     const sales = salesByDay.get(key) ?? 0;
-    // No schedule configured => every day is a potential target day, exactly
-    // as before Phase 2. A configured schedule with no entry for this
-    // specific date (shouldn't happen — resolveOperatingCalendar covers the
-    // whole month) defensively also reads as closed, never open.
-    const isOperatingDay = exactCalendar ? (exactCalendar.calendar.get(key) ?? false) : true;
+    const isOperatingDay = period
+      ? (resolvedPeriod.isOperatingDay.get(key) ?? false)
+      : exactCalendar
+        ? (exactCalendar.calendar.get(key) ?? false)
+        : true;
     if (!isOperatingDay) {
-      // §8.3: closed days have target=null, gap=null, status="closed" — they
-      // must not reduce pace or create a missed-target warning.
       dailyCoverage.push({ date: key, isOperatingDay: false, neededTarget: null, sales, gap: null, status: "closed" });
       continue;
     }
+    const neededTarget = period
+      ? (resolvedPeriod.targetByDate.get(key) ?? resolvedPeriod.summary.dailyTarget)
+      : targets.dailyNeededTarget;
     dailyCoverage.push({
       date: key,
       isOperatingDay: true,
-      neededTarget: targets.dailyNeededTarget,
+      neededTarget,
       sales,
-      gap: sales - targets.dailyNeededTarget,
-      status: dayStatus(sales, targets.dailyNeededTarget),
+      gap: sales - neededTarget,
+      status: dayStatus(sales, neededTarget),
     });
   }
 
-  /*
-   * WHETHER THIS BUSINESS HAS TRADED AT ALL LATELY.
-   *
-   * Recovery is month-to-date by design and has no period to select, so for a
-   * business whose records were imported and stop a year ago it reports zero
-   * sales against the full monthly target — "you are catastrophically behind".
-   * That is worse than an empty screen: it is a confident, wrong claim about
-   * someone's business, and nothing on the page says the month simply has no
-   * records in it.
-   *
-   * These two let the client say so. Deliberately NOT a change to the targets
-   * themselves — the arithmetic is right, it is the framing that was missing.
-   */
-  const [latestSale, monthRecordCount] = await Promise.all([
-    prisma.salesReferenceRecord.findFirst({
-      where: { businessProfileId },
-      orderBy: { date: "desc" },
-      select: { date: true },
-    }),
-    // Independent of `coverageDays` and of `dailyCoverage`'s displayed window —
-    // a sale recorded on day 1 of a 20-day-old month must not read as "no
-    // sales this month" just because it falls outside the last N days shown.
-    prisma.salesReferenceRecord.count({
-      where: { businessProfileId, date: { gte: monthStart, lte: endOfToday } },
-    }),
-  ]);
+  const latestSale = await prisma.salesReferenceRecord.findFirst({
+    where: { businessProfileId, date: { lte: utcEndOfDay(businessToday) } },
+    orderBy: { date: "desc" },
+    select: { date: true },
+  });
 
-  const monthHasNoRecords = monthRecordCount === 0;
+  const monthHasNoRecords = targetSnapshot.eligibility.recordCount === 0;
   // §9.7 precedence step 2, folded on top of the pure per-snapshot status —
   // see applyMonthDataStatus's doc comment for why this can't be decided
   // inside computeRecoveryTarget itself.
   const { status, confidence } = applyMonthDataStatus(targets, monthHasNoRecords);
 
-  const changeSincePreviousDay = computeRecoveryChangeSincePreviousDay(profile, today, targets, exactCalendar);
-  const weeklyCheckpoints = await computeWeeklyCheckpoints(businessProfileId, profile, today, targets.dailyNeededTarget, exactCalendar);
+  const currentMonthSelected = selection.kind === "month" && selection.month === utcMonthKey(businessToday);
+  const changeSincePreviousDay = currentMonthSelected
+    ? computeRecoveryChangeSincePreviousDay(profile, targetAsOf, targets, exactCalendar)
+    : null;
+  const weeklyCheckpoints = selection.kind === "month"
+    ? await computeWeeklyCheckpoints(
+        businessProfileId,
+        profile,
+        targetAsOf,
+        targets.dailyNeededTarget,
+        exactCalendar,
+      )
+    : [];
 
-  /*
-   * Recovery Target notifications (plan §10.8/§11 Phase 6) — a side effect,
-   * not part of this response's shape/values. Runs on EVERY load of this
-   * screen/the Dashboard (there is no scheduler), which is why
-   * `evaluateRecoveryNotifications` is itself idempotent (durable
-   * cooldown/dedup state) and never throws — a failure here must not take
-   * down the Recovery Target page itself.
-   *
-   * The "last three completed operating days" come straight out of
-   * `dailyCoverage` above rather than a second query — see
-   * `decideBehindThreeDaysTrigger`'s doc comment for why fewer than three
-   * available rows (e.g. a short coverage window, or early in the month)
-   * simply means that trigger can't fire on THIS evaluation.
-   */
-  const todayKey = targets.asOfDate;
-  const lastThreeCompletedOperatingDayStatuses = dailyCoverage
-    .filter((row) => row.isOperatingDay && row.date !== todayKey)
-    .map((row) => row.status as DayStatus)
-    .slice(-3);
-  // Pass the FINAL, `no_current_month_data`-corrected status (`status`
-  // above), not `targets.status` — that field is the pure per-snapshot value
-  // `computeRecoveryTarget` produced before `applyMonthDataStatus` folds in
-  // the full-month record count, and BEHIND_THREE_DAYS/COVERAGE_REACHED must
-  // key off the same status the client actually sees.
-  await evaluateRecoveryNotifications({ profile, targets: { ...targets, status }, lastThreeCompletedOperatingDayStatuses });
+  // Only current-month reads evaluate alerts; filtered and historical reads stay side-effect free.
+  // The evaluator is idempotent because Dashboard and Recovery can both call it.
+  if (currentMonthSelected) {
+    const todayKey = targets.asOfDate;
+    const lastThreeCompletedOperatingDayStatuses = dailyCoverage
+      .filter((row) => row.isOperatingDay && row.date !== todayKey)
+      .map((row) => row.status as DayStatus)
+      .slice(-3);
+    await evaluateRecoveryNotifications({
+      profile,
+      targets: { ...targets, status },
+      lastThreeCompletedOperatingDayStatuses,
+    });
+  }
 
   return {
     ...targets,
     status,
     confidence,
     monthStart,
-    today,
+    today: targetAsOf,
     coverageDays: dailyCoverage.length,
     dailyCoverage,
+    reportingPeriod: resolvedPeriod.summary,
     /** True when not one sale is recorded in the month this page is reporting on. */
     monthHasNoRecords,
     /** The most recent sale on file, so an empty month can point at where the data is. */
@@ -1094,7 +1691,7 @@ export async function getRecoveryInsight(userId: number, businessProfileId: numb
     computedAt: new Date().toISOString(),
     /** "Why your target changed" (plan §8.2/§10.3, Phase 3) — see helper doc comment. */
     changeSincePreviousDay,
-    /** Weekly Recovery Target checkpoints for the current month (plan §10.4, Phase 4) — see `computeWeeklyCheckpoints`. */
+    /** Weekly checkpoints for the selected month; omitted as an empty list for a week view. */
     weeklyCheckpoints,
   };
 }
@@ -1115,14 +1712,8 @@ export async function getRecoveryInsight(userId: number, businessProfileId: numb
  *     = `deriveOperatingCounts` re-run over the SAME calendar Map already
  *     resolved for today, just anchored to yesterday's date key instead of
  *     hitting the DB again.
- *   - yesterday's `expectedMonthlyExpenses`/`operatingDays` = today's profile
- *     values. Past-dated schedule/expense changes are not reconstructed —
- *     plan §8.2 explicitly scopes that out ("read as of NOW... don't
- *     overthink historical-schedule-versioning"). This means an owner who
- *     edited `expectedMonthlyExpenses` TODAY is exactly the `baseline_changed`
- *     case the delta is meant to surface, at the cost of not being able to
- *     tell that apart from a schedule edit — see `classifyRecoveryChangeReason`'s
- *     doc comment for why both collapse into `data_changed`.
+ *   - yesterday reuses today's resolved expense basis and schedule. There is
+ *     no historical snapshot that could reconstruct a same-day edit or import.
  *
  * Returns `null` on the 1st of the (business-local) month — there is no
  * "yesterday" within the same month to compare against, and comparing across
@@ -1146,7 +1737,8 @@ function computeRecoveryChangeSincePreviousDay(
     : undefined;
 
   const yesterdayTargets = computeRecoveryTarget({
-    expectedMonthlyExpenses: Number(profile.expectedMonthlyExpenses),
+    expectedMonthlyExpenses: targets.expectedMonthlyExpenses,
+    monthlyExpenseBasis: targets.monthlyExpenseBasis,
     operatingDays: profile.operatingDays,
     salesThisMonth: yesterdaySalesThisMonth,
     // Not used by any field this comparison reads (adjustedDailyTarget,
@@ -1169,23 +1761,40 @@ export async function simulateSpendingImpact(
   userId: number,
   businessProfileId: number,
   plannedAmount: number,
-  periodDays = 30
+  /** A legacy rolling `periodDays`, or a period filter selection. */
+  period: number | PeriodSelection = 30
 ) {
-  const profile = await requireOwnedBusinessProfile(userId, businessProfileId);
+  const parsedAmount = nonnegativeMoneyAmountSchema.safeParse(plannedAmount);
+  if (!parsedAmount.success) {
+    throw new ApiError(400, parsedAmount.error.issues[0]?.message ?? "Planned amount is invalid");
+  }
 
-  const today = utcToday();
-  const periodStart = utcAddDays(today, -(periodDays - 1));
-  const endOfToday = utcEndOfDay(today);
+  const context = await requireOwnedBusinessContext(userId, businessProfileId);
+  const { profile } = context;
 
-  const expenseAgg = await prisma.expenseRecord.aggregate({
-    where: { businessProfileId, date: { gte: periodStart, lte: endOfToday } },
-    _sum: { amount: true },
-  });
+  // Business-local "today" — see getExpenseBehavior above. The recent-spending
+  // baseline this compares a planned purchase against must not silently drop
+  // the day the owner is standing in.
+  const today = resolveBusinessToday(profile.timezone);
+  const selection: PeriodSelection = typeof period === "number" ? { kind: "rolling", days: period } : period;
+  const window = resolveReportingWindow(selection, today);
+  const dates = windowDateFilter(window, today);
+  const periodDays = window.days ?? 0;
+  const periodStart = window.start;
 
-  const availableFunds = Number(profile.availableFunds);
+  const [expenseAgg, availableFundsCalculation] = await Promise.all([
+    prisma.expenseRecord.aggregate({
+      where: { businessProfileId, ...(dates ? { date: dates } : {}) },
+      _sum: { amount: true },
+    }),
+    calculateAvailableFundsForOwnedBusiness(context, today),
+  ]);
+
+  const availableFunds = availableFundsCalculation.calculatedAmount;
+  const spendableFunds = Math.max(0, availableFunds);
   const resultingFunds = availableFunds - plannedAmount;
   const percentOfFunds = availableFunds > 0 ? (plannedAmount / availableFunds) * 100 : plannedAmount > 0 ? Infinity : 0;
-  const exceedsFunds = plannedAmount > availableFunds;
+  const exceedsFunds = plannedAmount > spendableFunds;
 
   // Threshold base differs by context, deliberately: Records flags a large
   // expense against Expected Monthly Expenses (is this big for my cost
@@ -1200,10 +1809,11 @@ export async function simulateSpendingImpact(
   return {
     periodDays,
     periodStart,
-    periodEnd: today,
+    periodEnd: window.end ?? today,
+    period: describeWindow(window),
     plannedAmount,
     thresholdPercent,
-    thresholdAmount: availableFunds * (thresholdPercent / 100),
+    thresholdAmount: spendableFunds * (thresholdPercent / 100),
     // Infinity is possible here (zero funds, nonzero spend); the
     // controller caps it, since JSON has no Infinity.
     percentOfFunds,
@@ -1212,6 +1822,7 @@ export async function simulateSpendingImpact(
       : ("High Impact" as const),
     exceedsFunds,
     funds: { before: availableFunds, after: resultingFunds },
+    availableFundsCalculation,
     periodExpenses: { before: currentPeriodExpenses, after: updatedPeriodExpenses },
     // Retained for the existing callers that read these flat names.
     availableFunds,
@@ -1301,6 +1912,65 @@ export function significantWords(description: string): string[] {
 }
 
 /**
+ * The term handed to SQL for a search word.
+ *
+ * A plural and its singular are the same purchase — an owner who typed
+ * "chairs" means the record that says "chair". The prefilter searches the
+ * shorter form so both come back, and `describesSameItem` below decides
+ * which of them actually count.
+ */
+export function searchTerm(word: string): string {
+  return word.endsWith("s") && word.length > 4 ? word.slice(0, -1) : word;
+}
+
+const WORD_SPLIT = /[^a-z0-9]+/;
+
+/** `chair` and `chairs`, `box` and `boxes` — the same thing, typed differently. */
+function sameWord(a: string, b: string): boolean {
+  return a === b || a + "s" === b || b + "s" === a || a + "es" === b || b + "es" === a;
+}
+
+/**
+ * Does this record describe the item the owner asked about?
+ *
+ * THIS EXISTS BECAUSE `contains` IS A SUBSTRING MATCH, AND A SUBSTRING MATCH
+ * LIES. An owner pricing a "house" was shown a snack receipt, because one of
+ * its lines read "Piattos Roadhouse BBQ" and "Roadhouse" contains "house".
+ * The same trap catches "oven" in "proven", "rice" in "price", "cart" in
+ * "cartons" and "pack" in "backpack" — all of them ordinary words in an
+ * ordinary ledger.
+ *
+ * That kind of wrong answer is worse here than anywhere else in FinSight: the
+ * card presents this half as counted from the owner's own records rather than
+ * written by AI, which is exactly the label that tells them to trust it.
+ *
+ * So the SQL `contains` stays as a cheap prefilter, and every candidate is
+ * re-checked here against whole words before it is allowed to count.
+ */
+export function describesSameItem(description: string, words: string[]): boolean {
+  if (words.length === 0) return false;
+  const tokens = description.toLowerCase().split(WORD_SPLIT).filter(Boolean);
+  return words.every((word) => tokens.some((token) => sameWord(token, word)));
+}
+
+/**
+ * A description holding a whole basket rather than one purchase.
+ *
+ * A confirmed receipt scan writes every line it read into one record: "Piattos
+ * Roadhouse BBQ (40g) - Bag, Mr. Chips Nacho Cheese (24g) - Bag, Presto Creams
+ * Peanut Butter (30g) - Pack of 10, ...". The amount on that record is the
+ * whole shop, so quoting it as what the owner paid "last time you bought
+ * something like this" overstates the item's price by however many other
+ * things were in the basket — even when the word match is genuine.
+ *
+ * Four or more comma-separated parts is the signal. Three or fewer is the
+ * ordinary way anyone writes one thing down: "Rice, 25kg sack, premium".
+ */
+export function looksLikeBasket(description: string): boolean {
+  return description.split(",").filter((part) => part.trim().length > 0).length >= 4;
+}
+
+/**
  * Where the planned amount sits against what this owner usually pays.
  *
  * The bands are deliberately wide. Prices move, sizes differ, and a 15%
@@ -1330,9 +2000,12 @@ export async function buildPurchasePriceContext(
   plannedAmount: number | null,
   categoryId: number | null,
 ): Promise<PurchasePriceContext> {
-  await requireOwnedBusinessProfile(userId, businessProfileId);
+  const profile = await requireOwnedBusinessProfile(userId, businessProfileId);
 
-  const since = utcAddDays(utcToday(), -PRICE_HISTORY_DAYS);
+  const businessToday = resolveBusinessToday(profile.timezone);
+  const since = utcAddDays(businessToday, -PRICE_HISTORY_DAYS);
+  // Price history is what was actually paid, so it stops at today.
+  const historyDates = { gte: since, lte: utcEndOfDay(businessToday) };
   const words = significantWords(description);
 
   /*
@@ -1340,26 +2013,35 @@ export async function buildPurchasePriceContext(
    * check above has already tied to this user. A description search that
    * reached across profiles would be a data leak wearing a helpful face.
    */
-  const [similarRecords, categoryRecords] = await Promise.all([
+  const [candidateRecords, categoryRecords] = await Promise.all([
     words.length
       ? prisma.expenseRecord.findMany({
           where: {
             businessProfileId,
-            date: { gte: since },
+            date: historyDates,
             // AND, not OR: "display fridge" should find the fridge, not every
             // record with the word "display" in it.
+            //
+            // This is only the PREFILTER. `contains` is a substring match, so
+            // it also returns "Roadhouse" for "house"; describesSameItem below
+            // is what decides. Searching the singular stem keeps a plural and
+            // its singular in the same result set for it to judge.
             AND: words.map((word) => ({
-              description: { contains: word, mode: "insensitive" as const },
+              description: { contains: searchTerm(word), mode: "insensitive" as const },
             })),
           },
           select: { description: true, amount: true, date: true, category: { select: { name: true } } },
           orderBy: { date: "desc" },
-          take: 3,
+          // Deliberately more than the three that are shown: most of what the
+          // substring prefilter returns is about to be thrown away, and taking
+          // three here would mean three false matches crowding out the real
+          // one further down the list.
+          take: 30,
         })
       : Promise.resolve([]),
     categoryId
       ? prisma.expenseRecord.findMany({
-          where: { businessProfileId, categoryId, date: { gte: since } },
+          where: { businessProfileId, categoryId, date: historyDates },
           select: { amount: true },
           // Bounded: a busy category can hold thousands, and a median over the
           // most recent 200 is the same answer for a fraction of the read.
@@ -1375,6 +2057,17 @@ export async function buildPurchasePriceContext(
         select: { id: true, name: true },
       })
     : null;
+
+  /*
+   * What survives both checks, newest first, capped at the three the card
+   * shows. An empty list here is the honest outcome when the only records
+   * mentioning the word were mentioning a different thing: the card falls
+   * back to the category spread, and says it has no matching purchase rather
+   * than offering one it cannot stand behind.
+   */
+  const similarRecords = candidateRecords
+    .filter((r) => describesSameItem(r.description, words) && !looksLikeBasket(r.description))
+    .slice(0, 3);
 
   const amounts = categoryRecords.map((r) => Number(r.amount)).sort((a, b) => a - b);
   const typicalAmount = median(amounts);

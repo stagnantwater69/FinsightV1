@@ -129,6 +129,7 @@ export interface Corners {
 
 export type CaptureSource = "manual-camera" | "native-document-scanner" | "gallery";
 export type ReceiptProcessingMode = "original" | "manual-crop" | "native-selected" | "clear-colour" | "grayscale" | "black-white";
+export type ReceiptCropOutcome = "perspective" | "visible-section" | "original-fallback";
 
 export type ReceiptLikelihoodOutcome = "likely-receipt" | "uncertain" | "obvious-non-receipt";
 
@@ -152,6 +153,8 @@ export interface ReceiptSection {
   /** What will actually be uploaded: cropped and rotated, or the original. */
   processedUri: string;
   processedMimeType?: string;
+  /** Local immutable rectified-color base used to regenerate review filters. */
+  filterSourceUri?: string;
   /**
    * How this section entered the session.
    *
@@ -162,6 +165,8 @@ export interface ReceiptSection {
   captureSource?: CaptureSource;
   processingMode?: ReceiptProcessingMode;
   transformVersion?: string;
+  /** Native still-processing result; retained locally for review and diagnostics. */
+  cropOutcome?: ReceiptCropOutcome;
   width: number;
   height: number;
   originalWidth?: number;

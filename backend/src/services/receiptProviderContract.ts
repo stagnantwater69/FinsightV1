@@ -1,7 +1,10 @@
+import { resolveSeamRepeats, type SeamRepeat, type SeamResolution } from "../lib/receiptOverlapItems";
+import { moneyAmountSchema } from "../lib/money";
 import { z } from "zod";
 import { RESCUE_DECISION_VERSION, rescueDecisionSchema } from "./receiptRescueDecision";
 
 export const RECEIPT_PROVIDER_CONTRACT_VERSION = "receipt-provider-contract-v1" as const;
+export const RECEIPT_PROVIDER_MAX_RETRY_AFTER_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_EXTERNAL_PROVIDER_UNIT_LIMIT = 0 as const;
 
 export const receiptProviderSchema = z.enum(["gemini", "veryfi", "azure-document-intelligence"]);
@@ -219,11 +222,24 @@ function nullableFieldSchema<T extends z.ZodTypeAny>(valueSchema: T) {
     });
 }
 
+export const MAX_RECEIPT_QUANTITY = 99_999_999.99;
+export const receiptQuantitySchema = z
+  .number({ invalid_type_error: "Quantity must be a number" })
+  .finite({ message: "Quantity must be a number" })
+  .positive({ message: "Quantity must be greater than zero" })
+  .max(MAX_RECEIPT_QUANTITY, { message: `Quantity must be ${MAX_RECEIPT_QUANTITY.toLocaleString("en-PH")} or less` })
+  .refine((value) => {
+    const text = value.toString();
+    if (text.includes("e") || text.includes("E")) return false;
+    const point = text.indexOf(".");
+    return point === -1 || text.length - point - 1 <= 2;
+  }, { message: "Quantity can have at most 2 decimal places" });
+
 export const normalizedReceiptItemSchema = z
   .object({
     name: z.string().trim().min(1).max(255),
-    quantity: z.number().positive().finite().nullable(),
-    amount: z.number().positive().finite(),
+    quantity: receiptQuantitySchema.nullable(),
+    amount: moneyAmountSchema,
     evidence: normalizedEvidenceSchema,
   })
   .strict();
@@ -237,7 +253,7 @@ export const normalizedReceiptExtractionSchema = z
     date: nullableFieldSchema(realDateSchema),
     vendor: nullableFieldSchema(z.string().trim().min(1).max(150)),
     currency: nullableFieldSchema(z.string().regex(/^[A-Z]{3}$/)),
-    total: nullableFieldSchema(z.number().positive().finite()),
+    total: nullableFieldSchema(moneyAmountSchema),
     items: z.array(normalizedReceiptItemSchema).max(100),
     itemsEvidence: normalizedEvidenceSchema.nullable(),
   })
@@ -271,12 +287,24 @@ const outcomeMetadataShape = {
   dispatchReference: referenceSchema,
   providerRequestIdHash: sha256Schema.nullable(),
   latencyMs: z.number().int().nonnegative().max(300_000),
+  retryAfterMs: z.number().int().nonnegative().max(RECEIPT_PROVIDER_MAX_RETRY_AFTER_MS).nullable().optional(),
+  stageTimings: z
+    .object({
+      extractionMs: z.number().int().nonnegative().max(300_000),
+      verificationMs: z.number().int().nonnegative().max(300_000),
+    })
+    .strict()
+    .optional(),
 } as const;
 
 export const providerOutcomeCodeSchema = z.enum([
   "OK",
+  "AUTH_ERROR",
+  "RATE_LIMITED",
+  "PROVIDER_SERVER_ERROR",
   "HTTP_ERROR",
   "TRANSPORT_ERROR",
+  "REQUEST_CANCELLED",
   "INVALID_RESULT",
   "TIMEOUT_BEFORE_SUBMISSION",
   "TIMEOUT_AFTER_SUBMISSION",
@@ -298,7 +326,14 @@ export const receiptProviderOutcomeSchema = z.discriminatedUnion("status", [
       ...outcomeMetadataShape,
       status: z.literal("FAILED"),
       timeoutOutcome: z.literal("NOT_TIMED_OUT"),
-      outcomeCode: z.enum(["HTTP_ERROR", "TRANSPORT_ERROR", "INVALID_RESULT"]),
+      outcomeCode: z.enum([
+        "AUTH_ERROR",
+        "RATE_LIMITED",
+        "PROVIDER_SERVER_ERROR",
+        "HTTP_ERROR",
+        "TRANSPORT_ERROR",
+        "INVALID_RESULT",
+      ]),
       finalBillableUnits: z.number().int().nonnegative(),
       extraction: z.null(),
     })
@@ -318,13 +353,20 @@ export const receiptProviderOutcomeSchema = z.discriminatedUnion("status", [
       ...outcomeMetadataShape,
       status: z.literal("AMBIGUOUS"),
       timeoutOutcome: z.literal("AFTER_SUBMISSION_UNKNOWN"),
-      outcomeCode: z.literal("TIMEOUT_AFTER_SUBMISSION"),
+      outcomeCode: z.enum(["TIMEOUT_AFTER_SUBMISSION", "TRANSPORT_ERROR", "REQUEST_CANCELLED"]),
       finalBillableUnits: z.null(),
       extraction: z.null(),
     })
     .strict(),
 ]);
 export type ReceiptProviderOutcome = z.infer<typeof receiptProviderOutcomeSchema>;
+
+export function isRetryableProviderOutcomeCode(code: string | null): boolean {
+  return code === "RATE_LIMITED"
+    || code === "PROVIDER_SERVER_ERROR"
+    || code === "TRANSPORT_ERROR"
+    || code === "TIMEOUT_AFTER_SUBMISSION";
+}
 
 export type ProviderOutcomeRejectReason =
   | "INVALID_OUTCOME"
@@ -381,9 +423,13 @@ function mergeField<T>(
   local: { value: T | null; evidence: NormalizedEvidence | null },
   external: { value: T | null; evidence: NormalizedEvidence | null },
   equal: (left: T, right: T) => boolean,
+  providerFirst: boolean,
 ): { field: typeof local; changed: boolean } {
   if (external.value === null || external.evidence === null) return { field: local, changed: false };
   if (local.value !== null && equal(local.value, external.value)) return { field: local, changed: false };
+  if (providerFirst) {
+    return evidenceStrength(external.evidence) >= 1 ? { field: external, changed: true } : { field: local, changed: false };
+  }
   if (evidenceStrength(external.evidence) < 2 || evidenceStrength(external.evidence) <= evidenceStrength(local.evidence)) {
     return { field: local, changed: false };
   }
@@ -401,6 +447,17 @@ export type ProviderMergeResult = {
    * as validated; the worker turns this into a scan warning.
    */
   itemsOwnerReviewRequired: boolean;
+  /**
+   * Items the provider read twice because two photographs overlap, when its
+   * items were applied. Absent when there was nothing to report.
+   */
+  seamRepeats?: ProviderSeamRepeats;
+  /**
+   * The currency the provider reported, whether or not the merge adopted it.
+   * Unvalidated provider evidence never displaces the printed local reading,
+   * but a non-PHP answer is still grounds to send the owner to manual entry.
+   */
+  providerCurrency: string | null;
 };
 
 function markedForOwnerReview(evidence: NormalizedEvidence): NormalizedEvidence {
@@ -414,14 +471,106 @@ function markedForOwnerReview(evidence: NormalizedEvidence): NormalizedEvidence 
   };
 }
 
+export interface ProviderSeamRepeat {
+  name: string;
+  quantity: number | null;
+  amount: number;
+  /** Page of the later copy. */
+  pageNumber: number;
+  /** Page of the earlier copy it repeats. */
+  originalPageNumber: number;
+}
+
+export interface ProviderSeamRepeats {
+  resolution: SeamResolution;
+  /** Dropped before merging; reported so the owner can see what was counted once. */
+  removed: ProviderSeamRepeat[];
+  /** Kept but possibly repeated. `itemIndex` indexes the merged `items`. */
+  flagged: (ProviderSeamRepeat & { itemIndex: number; originalName: string })[];
+}
+
 /**
- * Keeps the local value on invalid, weaker, equal, or unvalidated external
- * evidence, with one exception for line items: when the provider was asked
- * for every receipt (always routing) or the local read found no items at all,
- * provider items that do not add up to the total are still prefilled, marked
- * UNVALIDATED / OWNER_REVIEW_REQUIRED. Dropping them left the owner typing a
- * list the provider had already read. A local list that reconciled is never
- * replaced this way.
+ * Drops provider items that are the overlap between two photographs read
+ * twice, under the rules in lib/receiptOverlapItems.ts. The provider's own
+ * answer is left untouched in the dispatch record; this only decides which of
+ * its lines the merge offers. The test is exact: the remaining lines must sum
+ * to the provider's total, the same arithmetic the adapter validates with.
+ */
+function withoutSeamRepeats(external: NormalizedReceiptExtraction): {
+  extraction: NormalizedReceiptExtraction;
+  report: ProviderSeamRepeats | null;
+} {
+  const total = external.total.value;
+  const candidates = external.items.map((item, index) => ({
+    name: item.name,
+    quantity: item.quantity,
+    amount: item.amount,
+    pageNumber: item.evidence.pageNumber,
+    index,
+  }));
+  const outcome = resolveSeamRepeats(candidates, (list) =>
+    total === null ? null : list.length > 0 && list.reduce((sum, item) => sum + Math.round(item.amount * 100), 0) === Math.round(total * 100));
+  if (outcome.resolution === "none" || outcome.resolution === "kept-reconciled") {
+    return { extraction: external, report: null };
+  }
+  const describe = (repeat: SeamRepeat): ProviderSeamRepeat => {
+    const later = external.items[repeat.repeatIndex]!;
+    return {
+      name: later.name,
+      quantity: later.quantity,
+      amount: later.amount,
+      pageNumber: repeat.pageNumber,
+      originalPageNumber: repeat.originalPageNumber,
+    };
+  };
+  const keptPosition = new Map(outcome.keptInputIndexes.map((inputIndex, position) => [inputIndex, position]));
+  const report: ProviderSeamRepeats = {
+    resolution: outcome.resolution,
+    removed: outcome.removed.map(describe),
+    flagged: outcome.flagged.map((repeat) => ({
+      ...describe(repeat),
+      itemIndex: keptPosition.get(repeat.repeatIndex)!,
+      originalName: external.items[repeat.originalIndex]!.name,
+    })),
+  };
+  if (outcome.removed.length === 0) return { extraction: external, report };
+  const items = outcome.keptInputIndexes.map((index) => external.items[index]!);
+  // Removal that makes the lines add up is arithmetic agreeing with the
+  // paper, which is exactly what validates a collection at the adapter.
+  const itemsEvidence = outcome.resolution === "removed-reconciled" && external.itemsEvidence !== null
+    ? {
+      ...external.itemsEvidence,
+      confidenceBand: "MEDIUM" as const,
+      validationState: "VALIDATED" as const,
+      validationCodes: [
+        "ARITHMETIC_VALID" as const,
+        ...external.itemsEvidence.validationCodes.filter((code) => code === "FORMAT_VALID" || code === "REGION_UNAVAILABLE"),
+      ],
+    }
+    : external.itemsEvidence;
+  return { extraction: { ...external, items, itemsEvidence }, report };
+}
+
+/**
+ * Which reading wins depends on why the provider was asked.
+ *
+ * RESCUE (the default): the provider was called because the local read
+ * failed, and only a stronger validated provider field replaces a local one.
+ * The local value stays on invalid, weaker, equal, or unvalidated external
+ * evidence.
+ *
+ * ALWAYS routing: the operator chose the provider as the primary reader, so
+ * its validated answer replaces the local one wherever it answered at all and
+ * the local read is the fallback for what it left null. Items follow the
+ * rule the pre-contract rescue used: the provider's list wins when it adds up
+ * to the total or the local read found no items; a provider list that does
+ * not add up never displaces a local list that does.
+ *
+ * In either mode, provider items that do not add up to the total are still
+ * prefilled for owner review (UNVALIDATED / OWNER_REVIEW_REQUIRED) when the
+ * provider was asked for every receipt or the local read found no items at
+ * all. Dropping them left the owner typing a list the provider had already
+ * read.
  */
 export function mergeReceiptProviderOutcome(
   localInput: NormalizedReceiptExtraction,
@@ -437,6 +586,7 @@ export function mergeReceiptProviderOutcome(
       providerResultAccepted: false,
       reason: validation.reason,
       itemsOwnerReviewRequired: false,
+      providerCurrency: null,
     };
   }
   if (validation.outcome.status !== "SUCCEEDED") {
@@ -446,20 +596,29 @@ export function mergeReceiptProviderOutcome(
       providerResultAccepted: true,
       reason: "NOT_SUCCESSFUL",
       itemsOwnerReviewRequired: false,
+      providerCurrency: null,
     };
   }
 
-  const external = validation.outcome.extraction;
-  const date = mergeField(local.date, external.date, (left, right) => left === right);
-  const vendor = mergeField(local.vendor, external.vendor, (left, right) => left.trim().toLowerCase() === right.trim().toLowerCase());
-  const currency = mergeField(local.currency, external.currency, (left, right) => left === right);
-  const total = mergeField(local.total, external.total, sameMoney);
+  const seam = withoutSeamRepeats(validation.outcome.extraction);
+  const external = seam.extraction;
+  const alwaysRouted = request.rescueDecision.reasons.includes("PROVIDER_ROUTING_ALWAYS");
+  const date = mergeField(local.date, external.date, (left, right) => left === right, alwaysRouted);
+  const vendor = mergeField(
+    local.vendor,
+    external.vendor,
+    (left, right) => left.trim().toLowerCase() === right.trim().toLowerCase(),
+    alwaysRouted,
+  );
+  const currency = mergeField(local.currency, external.currency, (left, right) => left === right, alwaysRouted);
+  const total = mergeField(local.total, external.total, sameMoney, alwaysRouted);
 
   const externalItemsStrength = evidenceStrength(external.itemsEvidence);
   const localItemsStrength = evidenceStrength(local.itemsEvidence);
   const replaceItems =
-    external.items.length > 0 && externalItemsStrength >= 2 && externalItemsStrength > localItemsStrength;
-  const alwaysRouted = request.rescueDecision.reasons.includes("PROVIDER_ROUTING_ALWAYS");
+    external.items.length > 0
+    && ((externalItemsStrength >= 2 && externalItemsStrength > localItemsStrength)
+      || (alwaysRouted && externalItemsStrength >= 2));
   const prefillUnreconciledItems =
     !replaceItems &&
     external.items.length > 0 &&
@@ -481,6 +640,7 @@ export function mergeReceiptProviderOutcome(
       providerResultAccepted: true,
       reason: "NO_SAFER_FIELDS",
       itemsOwnerReviewRequired: false,
+      providerCurrency: external.currency.value,
     };
   }
 
@@ -512,5 +672,7 @@ export function mergeReceiptProviderOutcome(
     providerResultAccepted: true,
     reason: "MERGED",
     itemsOwnerReviewRequired: prefillUnreconciledItems,
+    providerCurrency: external.currency.value,
+    ...(seam.report && (replaceItems || prefillUnreconciledItems) ? { seamRepeats: seam.report } : {}),
   };
 }

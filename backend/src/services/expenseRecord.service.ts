@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import type { ExpenseRecord, ExpenseRecordSource, ReceiptScanItem } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { ApiError } from "../middleware/error.middleware";
-import { cleanUpImportBatchIfOrphaned, cleanUpReceiptScanIfOrphaned } from "../lib/sourceCleanup";
+import { assertNotFutureDate } from "../lib/transactionDate";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
 import { DEFAULT_RECORD_SORT, recordCursorWhere, recordOrderBy, type RecordCursor, type RecordSort } from "../lib/recordSort";
 import { expenseDuplicateKeysOf, sameExpenseDuplicateIdentity } from "../lib/expenseDuplicateIdentity";
@@ -11,8 +11,16 @@ import { createNotification, NOTIFICATION_TYPES } from "./notification.service";
 import { signedReceiptImageUrl, signedCsvFileUrl } from "./storage.service";
 import { logger } from "../config/logger";
 import { enqueueExpenseAnalyses, enqueueExpenseAnalysis } from "./anomalyDetection/job.service";
+import { enqueueCsvSourcePurgesIfOrphaned } from "./csvSourcePurge.service";
+import { enqueueReceiptPurgeIfOrphaned } from "./receiptPurge.service";
+import { lockReceiptCaptureBatchForMutation } from "./receiptCaptureBatch.service";
+import {
+  loadAvailableFundsBaseline,
+  resolveAvailableFundsClassification,
+  type AvailableFundsBaselineInput,
+} from "./availableFundsBaseline.service";
 
-interface CreateInput {
+interface CreateInput extends AvailableFundsBaselineInput {
   businessProfileId: number;
   categoryId: number;
   date: string;
@@ -29,7 +37,7 @@ interface CreateInput {
   allocatedCharges?: number;
 }
 
-interface UpdateInput {
+interface UpdateInput extends AvailableFundsBaselineInput {
   categoryId?: number;
   date?: string;
   description?: string;
@@ -71,14 +79,29 @@ function toDTO(record: ExpenseRecord) {
     reviewStatus: record.reviewStatus,
     duplicateStatus: record.duplicateStatus,
     largeExpenseFlag: record.largeExpenseFlag,
+    includedInAvailableFundsBaseline: record.includedInAvailableFundsBaseline,
+    availableFundsDeltaBaselineAt: record.availableFundsDeltaBaselineAt,
     createdAt: record.createdAt,
   };
 }
 
 async function queueAnalysis(businessProfileId: number, expenseRecordId: number) {
-  await enqueueExpenseAnalysis(businessProfileId, expenseRecordId).catch((error) => {
-    logger.error({ err: error, expenseRecordId }, "failed to enqueue expense analysis");
-  });
+  await enqueueExpenseAnalysis(businessProfileId, expenseRecordId);
+}
+
+function canonicalExpenseCandidate(records: ExpenseRecord[]): ExpenseRecord | undefined {
+  return records.find((record) =>
+    record.duplicateStatus === "Not a Duplicate" && record.duplicateOfRecordId === null)
+    ?? records.find((record) => record.duplicateStatus === "Not a Duplicate")
+    ?? records.find((record) => record.duplicateOfRecordId === null)
+    ?? records[0];
+}
+
+function canonicalExpenseRank(record: Pick<ExpenseRecord, "duplicateStatus" | "duplicateOfRecordId">): number {
+  if (record.duplicateStatus === "Not a Duplicate" && record.duplicateOfRecordId === null) return 0;
+  if (record.duplicateStatus === "Not a Duplicate") return 1;
+  if (record.duplicateOfRecordId === null) return 2;
+  return 3;
 }
 
 /**
@@ -94,8 +117,16 @@ async function runSideEffect(
 ): Promise<void> {
   try {
     await run();
-  } catch (err) {
-    logger.error({ err, ...ids, effect, code: "EXPENSE_RECORD_SIDE_EFFECT_FAILED" }, "expense record side effect failed");
+  } catch {
+    logger.error(
+      {
+        ...ids,
+        effect,
+        failureKind: effect === "notification" ? "notification-write-failed" : "analysis-enqueue-failed",
+        code: "EXPENSE_RECORD_SIDE_EFFECT_FAILED",
+      },
+      "expense record side effect failed",
+    );
   }
 }
 
@@ -105,7 +136,7 @@ async function findDuplicate(
   amount: Prisma.Decimal,
   description: string,
   vendor?: string | null,
-  excludeId?: number,
+  excludeIds?: number | number[],
   // Defaults to the shared client, so every existing caller is unchanged. A
   // caller inside an interactive transaction must pass its own client, or the
   // records it has already written in that transaction would be invisible here
@@ -121,17 +152,140 @@ async function findDuplicate(
       businessProfileId,
       date,
       amount,
-      ...(excludeId ? { id: { not: excludeId } } : {}),
+      ...(excludeIds
+        ? { id: { notIn: Array.isArray(excludeIds) ? excludeIds : [excludeIds] } }
+        : {}),
       ...(excludeReceiptScanId
         ? { OR: [{ receiptScanId: null }, { receiptScanId: { not: excludeReceiptScanId } }] }
         : {}),
     },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
-  return candidates.find((candidate) => sameExpenseDuplicateIdentity(
+  const matches = candidates.filter((candidate) => sameExpenseDuplicateIdentity(
     { date, amount, description, vendor },
     candidate,
   ));
+  return canonicalExpenseCandidate(matches);
+}
+
+async function ensureExpenseDuplicateRoot(
+  db: BulkDbClient,
+  businessProfileId: number,
+  candidate: ExpenseRecord | undefined,
+): Promise<ExpenseRecord | undefined> {
+  if (!candidate) return undefined;
+  if (candidate.duplicateStatus === "Not a Duplicate" && candidate.duplicateOfRecordId === null) {
+    return candidate;
+  }
+  await db.expenseRecord.updateMany({
+    where: { id: candidate.id, businessProfileId },
+    data: { duplicateStatus: "Not a Duplicate", duplicateOfRecordId: null },
+  });
+  return { ...candidate, duplicateStatus: "Not a Duplicate", duplicateOfRecordId: null };
+}
+
+async function ensureValidExpenseDuplicateTarget(
+  db: BulkDbClient,
+  businessProfileId: number,
+  candidate: ExpenseRecord | undefined,
+): Promise<ExpenseRecord | undefined> {
+  if (!candidate) return undefined;
+  const validRoot = candidate.duplicateStatus === "Not a Duplicate" && candidate.duplicateOfRecordId === null;
+  const validFollower = candidate.duplicateStatus === "Flagged" && candidate.duplicateOfRecordId !== null;
+  return validRoot || validFollower
+    ? candidate
+    : ensureExpenseDuplicateRoot(db, businessProfileId, candidate);
+}
+
+async function expenseDescendantIds(
+  tx: Prisma.TransactionClient,
+  businessProfileId: number,
+  rootIds: number[],
+): Promise<Set<number>> {
+  if (rootIds.length === 0) return new Set();
+  const descendants = await tx.$queryRaw<Array<{ id: number }>>`
+    WITH RECURSIVE descendants(id) AS (
+      SELECT "ExpenseRecord_ID"
+      FROM "ExpenseRecord"
+      WHERE "BusinessProfile_ID" = ${businessProfileId}
+        AND "ExpenseRecord_ID" IN (${Prisma.join(rootIds)})
+      UNION
+      SELECT child."ExpenseRecord_ID"
+      FROM "ExpenseRecord" child
+      JOIN descendants parent ON child."DuplicateOf_RecordID" = parent.id
+      WHERE child."BusinessProfile_ID" = ${businessProfileId}
+    )
+    SELECT id FROM descendants
+  `;
+  return new Set([...rootIds, ...descendants.map((record) => record.id)]);
+}
+
+/*
+ * Expense matches are not equivalence classes: A can match B by vendor and B
+ * can match C by description while A does not match C. Duplicate links may
+ * therefore form an acyclic chain. Each edge must be a direct match between
+ * different receipts, and the chain must end at an unflagged record. Repairs
+ * touch only followers of the changed edge so unrelated valid links remain.
+ */
+async function repairExpenseFollowers(
+  tx: Prisma.TransactionClient,
+  businessProfileId: number,
+  followers: ExpenseRecord[],
+): Promise<void> {
+  for (const stale of followers) {
+    const follower = await tx.expenseRecord.findFirst({
+      where: { id: stale.id, businessProfileId },
+    });
+    if (!follower) continue;
+    if (follower.duplicateStatus === "Not a Duplicate") {
+      if (follower.duplicateOfRecordId !== null) {
+        await tx.expenseRecord.update({
+          where: { id: follower.id },
+          data: { duplicateOfRecordId: null },
+        });
+      }
+      continue;
+    }
+
+    const excludedIds = await expenseDescendantIds(tx, businessProfileId, [follower.id]);
+    if (follower.duplicateOfRecordId !== null && !excludedIds.has(follower.duplicateOfRecordId)) {
+      const currentTarget = await tx.expenseRecord.findFirst({
+        where: { id: follower.duplicateOfRecordId, businessProfileId },
+      });
+      if (
+        currentTarget
+        && sameExpenseDuplicateIdentity(follower, currentTarget)
+        && (follower.receiptScanId === null || follower.receiptScanId !== currentTarget.receiptScanId)
+      ) {
+        continue;
+      }
+    }
+
+    const candidates = await tx.expenseRecord.findMany({
+      where: {
+        businessProfileId,
+        id: { notIn: [...excludedIds] },
+        date: follower.date,
+        amount: follower.amount,
+        duplicateStatus: "Not a Duplicate",
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+    const directRoots = candidates.filter((candidate) =>
+      sameExpenseDuplicateIdentity(follower, candidate)
+      && (follower.receiptScanId === null || follower.receiptScanId !== candidate.receiptScanId));
+    const root = directRoots.find((candidate) => candidate.duplicateOfRecordId === null)
+      ?? directRoots[0];
+    if (root) {
+      await ensureExpenseDuplicateRoot(tx, businessProfileId, root);
+      await tx.expenseRecord.update({
+        where: { id: follower.id },
+        data: { duplicateStatus: "Flagged", duplicateOfRecordId: root.id },
+      });
+    } else {
+      await ensureExpenseDuplicateRoot(tx, businessProfileId, follower);
+    }
+  }
 }
 
 // ============================================================
@@ -213,33 +367,41 @@ export async function createExpenseRecord(userId: number, input: CreateInput) {
  * `createExpenseRecord` above runs them immediately, which is exactly the
  * previous behaviour for every other caller.
  *
- * `serializeDuplicateCheck` is opt-in rather than always-on: it is what the
- * single-record create needs to survive a double-tap, but receipt confirmation
- * calls this once per category split inside ONE transaction, and taking a
- * lock per split would hold several at a time for no benefit — those splits
- * are already serialised with each other by being in the same transaction.
+ * Every caller takes the profile-wide expense gate so a balance reset cannot
+ * interleave with classification. `serializeDuplicateCheck` adds the narrower
+ * identity lock needed only by independent single-record creates.
  */
 export async function createExpenseRecordWithin(
   userId: number,
   input: CreateInput,
   db: BulkDbClient,
-  options: { serializeDuplicateCheck?: boolean } = {},
+  options: { serializeDuplicateCheck?: boolean; recordGateHeld?: boolean } = {},
 ) {
   // Keep every query on the caller's transaction connection. Using the shared
   // client here can deadlock a small pool when several interactive creates
   // are already holding all available connections.
-  const profile = await requireOwnedBusinessProfile(userId, input.businessProfileId, db);
+  let profile = await requireOwnedBusinessProfile(userId, input.businessProfileId, db);
   await verifyCategoryBelongsToProfile(input.categoryId, input.businessProfileId, db);
 
   const date = new Date(input.date);
   const amount = new Prisma.Decimal(input.amount);
 
-  if (options.serializeDuplicateCheck) {
+  if (!options.recordGateHeld) {
     await lockExpenseDuplicateWriteGate(db, input.businessProfileId);
+  }
+  profile = await requireOwnedBusinessProfile(userId, input.businessProfileId, db);
+  // Every create path (form, Quick add, receipt confirmation) comes through here.
+  assertNotFutureDate(input.date, profile.timezone);
+  if (options.serializeDuplicateCheck) {
     await lockDuplicateKey(db, input.businessProfileId, `expense:${duplicateKeyOf(date, amount, input.description)}`);
   }
+  const classification = resolveAvailableFundsClassification(
+    profile,
+    date,
+    input,
+  );
 
-  const duplicate = await findDuplicate(
+  let duplicate = await findDuplicate(
     input.businessProfileId,
     date,
     amount,
@@ -249,6 +411,7 @@ export async function createExpenseRecordWithin(
     db,
     input.receiptScanId,
   );
+  duplicate = await ensureValidExpenseDuplicateTarget(db, input.businessProfileId, duplicate);
   const largeExpenseFlag = input.amount >= largeExpenseThresholdFor(profile);
 
   const record = await db.expenseRecord.create({
@@ -268,6 +431,7 @@ export async function createExpenseRecordWithin(
       reviewStatus: largeExpenseFlag ? "Needs Review" : "Reviewed",
       duplicateStatus: duplicate ? "Flagged" : "Not a Duplicate",
       duplicateOfRecordId: duplicate?.id,
+      ...classification,
     },
   });
 
@@ -300,7 +464,7 @@ export async function createExpenseRecordWithin(
   return { record: toDTO(record), runSideEffects };
 }
 
-export interface BulkExpenseRow {
+export interface BulkExpenseRow extends AvailableFundsBaselineInput {
   categoryId: number;
   /** YYYY-MM-DD. */
   date: string;
@@ -347,14 +511,20 @@ export async function bulkCreateExpenseRecords(
   importBatchId: number,
   rows: BulkExpenseRow[],
   db: BulkDbClient = prisma,
-) {
+): Promise<ReturnType<typeof toDTO>[]> {
   if (rows.length === 0) return [];
+  if (db === prisma) {
+    await requireOwnedBusinessProfile(userId, profile.id);
+    return prisma.$transaction((tx) =>
+      bulkCreateExpenseRecords(userId, profile, importBatchId, rows, tx));
+  }
 
   const businessProfileId = profile.id;
   const threshold = largeExpenseThresholdFor(profile);
 
   // Hold the shared receipt/manual/CSV gate from the candidate read through the insert.
   await lockExpenseDuplicateWriteGate(db, businessProfileId);
+  const baseline = await loadAvailableFundsBaseline(db, businessProfileId);
 
   // Only records sharing a date with some row in the file can possibly be a
   // duplicate of one, so the candidate set is bounded by the file's date range
@@ -365,15 +535,26 @@ export async function bulkCreateExpenseRecords(
     // findDuplicate takes the OLDEST match; id breaks createdAt ties, which a
     // previous bulk import can now produce since its rows share a timestamp.
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    select: { id: true, date: true, amount: true, description: true, vendor: true },
+    select: {
+      id: true,
+      date: true,
+      amount: true,
+      description: true,
+      vendor: true,
+      duplicateStatus: true,
+      duplicateOfRecordId: true,
+    },
   });
 
-  const existingIdByKey = new Map<string, number>();
+  const existingByKey = new Map<string, (typeof candidates)[number]>();
   const candidateRankById = new Map<number, number>();
   for (const [rank, candidate] of candidates.entries()) {
     candidateRankById.set(candidate.id, rank);
     for (const key of expenseDuplicateKeysOf(candidate)) {
-      if (!existingIdByKey.has(key)) existingIdByKey.set(key, candidate.id);
+      const current = existingByKey.get(key);
+      if (!current || canonicalExpenseRank(candidate) < canonicalExpenseRank(current)) {
+        existingByKey.set(key, candidate);
+      }
     }
   }
 
@@ -383,14 +564,29 @@ export async function bulkCreateExpenseRecords(
   // link is recorded by row index and resolved below.
   const firstIndexByKey = new Map<string, number>();
   const duplicatesEarlierRow = new Map<number, number>();
+  const repairedCandidateIds = new Set<number>();
+  const data: Prisma.ExpenseRecordCreateManyInput[] = [];
 
-  const data = rows.map((row, i) => {
+  for (const [i, row] of rows.entries()) {
     const date = new Date(row.date);
     const amount = new Prisma.Decimal(row.amount);
+    const classification = resolveAvailableFundsClassification(baseline, date, row);
     const keys = expenseDuplicateKeysOf({ date, amount, description: row.description, vendor: row.vendor });
-    const existingId = keys
-      .flatMap((key) => existingIdByKey.get(key) ?? [])
-      .sort((left, right) => candidateRankById.get(left)! - candidateRankById.get(right)!)[0];
+    const existing = keys
+      .flatMap((key) => existingByKey.get(key) ?? [])
+      .sort((left, right) =>
+        canonicalExpenseRank(left) - canonicalExpenseRank(right)
+        || candidateRankById.get(left.id)! - candidateRankById.get(right.id)!)[0];
+    if (existing) {
+      const validRoot = existing.duplicateStatus === "Not a Duplicate" && existing.duplicateOfRecordId === null;
+      const validFollower = existing.duplicateStatus === "Flagged" && existing.duplicateOfRecordId !== null;
+      if (!validRoot && !validFollower) {
+        existing.duplicateStatus = "Not a Duplicate";
+        existing.duplicateOfRecordId = null;
+        repairedCandidateIds.add(existing.id);
+      }
+    }
+    const existingId = existing?.id;
     const earlierIndex = keys
       .flatMap((key) => firstIndexByKey.get(key) ?? [])
       .sort((left, right) => left - right)[0];
@@ -402,7 +598,7 @@ export async function bulkCreateExpenseRecords(
     }
 
     const largeExpenseFlag = row.amount >= threshold;
-    return {
+    data.push({
       businessProfileId,
       categoryId: row.categoryId,
       date,
@@ -414,9 +610,17 @@ export async function bulkCreateExpenseRecords(
       largeExpenseFlag,
       reviewStatus: largeExpenseFlag ? "Needs Review" : "Reviewed",
       duplicateStatus: existingId !== undefined || earlierIndex !== undefined ? "Flagged" : "Not a Duplicate",
-      duplicateOfRecordId: existingId,
-    };
-  });
+      duplicateOfRecordId: existingId ?? null,
+      ...classification,
+    });
+  }
+
+  if (repairedCandidateIds.size > 0) {
+    await db.expenseRecord.updateMany({
+      where: { id: { in: [...repairedCandidateIds] }, businessProfileId },
+      data: { duplicateStatus: "Not a Duplicate", duplicateOfRecordId: null },
+    });
+  }
 
   // Postgres returns INSERT ... RETURNING rows in insertion order, so
   // created[i] is data[i]. The length check is cheap insurance on an
@@ -442,6 +646,7 @@ export async function bulkCreateExpenseRecords(
     const rowsByTarget = new Map<number, number[]>();
     for (const [rowIndex, earlierIndex] of duplicatesEarlierRow) {
       const targetId = created[earlierIndex]!.id;
+      created[rowIndex]!.duplicateOfRecordId = targetId;
       const bucket = rowsByTarget.get(targetId);
       if (bucket) bucket.push(created[rowIndex]!.id);
       else rowsByTarget.set(targetId, [created[rowIndex]!.id]);
@@ -675,44 +880,89 @@ export async function updateExpenseRecord(userId: number, id: number, input: Upd
     });
     if (!existing) throw new ApiError(404, "Expense record not found");
 
-    if (valueFieldsChanged) {
-      await lockExpenseDuplicateWriteGate(tx, existing.businessProfileId);
-      existing = await tx.expenseRecord.findFirst({
-        where: { id, businessProfile: { userId } },
-        include: { businessProfile: true },
-      });
-      if (!existing) throw new ApiError(404, "Expense record not found");
-    }
+    await lockExpenseDuplicateWriteGate(tx, existing.businessProfileId);
+    existing = await tx.expenseRecord.findFirst({
+      where: { id, businessProfile: { userId } },
+      include: { businessProfile: true },
+    });
+    if (!existing) throw new ApiError(404, "Expense record not found");
 
     if (input.categoryId) {
       await verifyCategoryBelongsToProfile(input.categoryId, existing.businessProfileId, tx);
     }
 
+    // Checked only when the date is being set: a review or duplicate decision
+    // on a record that is already future-dated must not fail for a date the
+    // request never touched.
+    if (input.date !== undefined) assertNotFutureDate(input.date, existing.businessProfile.timezone);
     const nextDate = input.date ? new Date(input.date) : existing.date;
     const nextAmount = input.amount !== undefined ? new Prisma.Decimal(input.amount) : existing.amount;
     const nextDescription = input.description ?? existing.description;
     const nextVendor = input.vendor === undefined ? existing.vendor : input.vendor;
+    const classification = resolveAvailableFundsClassification(
+      existing.businessProfile,
+      nextDate,
+      input,
+      existing,
+    );
     let duplicateStatus = input.duplicateStatus ?? existing.duplicateStatus;
-    let duplicateOfRecordId = existing.duplicateOfRecordId;
+    let duplicateOfRecordId = input.duplicateStatus === "Not a Duplicate"
+      ? null
+      : existing.duplicateOfRecordId;
     let largeExpenseFlag = existing.largeExpenseFlag;
     let reviewStatus = input.reviewStatus ?? existing.reviewStatus;
+    const repairsFollowers = valueFieldsChanged || input.duplicateStatus === "Flagged";
+    const directFollowers = repairsFollowers
+      ? await tx.expenseRecord.findMany({
+          where: { businessProfileId: existing.businessProfileId, duplicateOfRecordId: existing.id },
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        })
+      : [];
+    const excludedTargetIds = repairsFollowers
+      ? [...await expenseDescendantIds(tx, existing.businessProfileId, [existing.id])]
+      : [existing.id];
+    let targetOriginal: ExpenseRecord | undefined;
 
     if (valueFieldsChanged) {
-      const duplicate = await findDuplicate(
+      targetOriginal = await findDuplicate(
         existing.businessProfileId,
         nextDate,
         nextAmount,
         nextDescription,
         nextVendor,
-        existing.id,
+        excludedTargetIds,
         tx,
+        existing.receiptScanId ?? undefined,
       );
-      duplicateStatus = duplicate ? "Flagged" : "Not a Duplicate";
-      duplicateOfRecordId = duplicate?.id ?? null;
+      targetOriginal = await ensureValidExpenseDuplicateTarget(
+        tx,
+        existing.businessProfileId,
+        targetOriginal,
+      );
+      duplicateStatus = targetOriginal ? "Flagged" : "Not a Duplicate";
+      duplicateOfRecordId = targetOriginal?.id ?? null;
       largeExpenseFlag = Number(nextAmount) >= largeExpenseThresholdFor(existing.businessProfile);
       if (input.reviewStatus === undefined) {
         reviewStatus = largeExpenseFlag ? "Needs Review" : "Reviewed";
       }
+    } else if (input.duplicateStatus === "Flagged") {
+      targetOriginal = await findDuplicate(
+        existing.businessProfileId,
+        existing.date,
+        existing.amount,
+        existing.description,
+        existing.vendor,
+        excludedTargetIds,
+        tx,
+        existing.receiptScanId ?? undefined,
+      );
+      targetOriginal = await ensureValidExpenseDuplicateTarget(
+        tx,
+        existing.businessProfileId,
+        targetOriginal,
+      );
+      duplicateStatus = targetOriginal ? "Flagged" : "Not a Duplicate";
+      duplicateOfRecordId = targetOriginal?.id ?? null;
     }
 
     const record = await tx.expenseRecord.update({
@@ -727,9 +977,21 @@ export async function updateExpenseRecord(userId: number, id: number, input: Upd
         reviewStatus,
         duplicateStatus,
         duplicateOfRecordId,
+        ...classification,
       },
     });
-    return { existing, record, nextDate, nextAmount, nextDescription, duplicateStatus, largeExpenseFlag };
+    if (directFollowers.length > 0) {
+      await repairExpenseFollowers(tx, existing.businessProfileId, directFollowers);
+    }
+    return {
+      existing,
+      record,
+      nextDate,
+      nextAmount,
+      nextDescription,
+      duplicateStatus: record.duplicateStatus,
+      largeExpenseFlag,
+    };
   });
   const { existing, record, nextDate, nextAmount, nextDescription, duplicateStatus, largeExpenseFlag } = result;
 
@@ -768,23 +1030,34 @@ export async function updateExpenseRecord(userId: number, id: number, input: Upd
 }
 
 export async function deleteExpenseRecord(userId: number, id: number) {
-  const existing = await prisma.expenseRecord.findFirst({ where: { id, businessProfile: { userId } } });
-  if (!existing) {
-    throw new ApiError(404, "Expense record not found");
-  }
-  await prisma.expenseRecord.delete({ where: { id } });
+  await prisma.$transaction(async (tx) => {
+    let record = await tx.expenseRecord.findFirst({
+      where: { id, businessProfile: { userId } },
+      include: { receiptScan: { select: { captureBatchId: true } } },
+    });
+    if (!record) throw new ApiError(404, "Expense record not found");
 
-  /*
-   * The uploaded file this record came from goes too, once this was the last
-   * record that came from it. Read the ids off `existing` BEFORE the delete —
-   * afterwards there is no row left to read them from.
-   *
-   * After the delete rather than in a transaction with it: these touch object
-   * storage, which cannot take part in a database transaction, and a storage
-   * failure must not roll back a deletion the owner asked for.
-   */
-  await cleanUpReceiptScanIfOrphaned(existing.receiptScanId);
-  await cleanUpImportBatchIfOrphaned(existing.importBatchId);
+    const captureBatchId = record.receiptScan?.captureBatchId;
+    if (captureBatchId !== null && captureBatchId !== undefined) {
+      await lockReceiptCaptureBatchForMutation(tx, captureBatchId);
+    }
+    await lockExpenseDuplicateWriteGate(tx, record.businessProfileId);
+    record = await tx.expenseRecord.findFirst({
+      where: { id, businessProfile: { userId } },
+      include: { receiptScan: { select: { captureBatchId: true } } },
+    });
+    if (!record) throw new ApiError(404, "Expense record not found");
+
+    const directFollowers = await tx.expenseRecord.findMany({
+      where: { businessProfileId: record.businessProfileId, duplicateOfRecordId: record.id },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+    const deleted = await tx.expenseRecord.deleteMany({ where: { id, businessProfile: { userId } } });
+    if (deleted.count !== 1) throw new ApiError(404, "Expense record not found");
+    await repairExpenseFollowers(tx, record.businessProfileId, directFollowers);
+    await enqueueCsvSourcePurgesIfOrphaned(tx, [record.importBatchId]);
+    await enqueueReceiptPurgeIfOrphaned(record.receiptScanId, tx);
+  });
 }
 
 /**
@@ -819,35 +1092,62 @@ export async function bulkResolveExpenseDuplicates(
   if (ids.length === 0) return 0;
   await requireOwnedBusinessProfile(userId, businessProfileId);
 
-  const owned = await prisma.expenseRecord.findMany({
-    where: { id: { in: ids }, businessProfileId },
-    select: { id: true, receiptScanId: true, importBatchId: true },
-  });
-  if (owned.length === 0) return 0;
-  const ownedIds = owned.map((r) => r.id);
-
   if (action === "keep") {
-    const { count } = await prisma.expenseRecord.updateMany({
-      where: { id: { in: ownedIds } },
-      data: { duplicateStatus: "Not a Duplicate", reviewStatus: "Reviewed" },
+    return prisma.$transaction(async (tx) => {
+      await lockExpenseDuplicateWriteGate(tx, businessProfileId);
+      const { count } = await tx.expenseRecord.updateMany({
+        where: { id: { in: ids }, businessProfileId, duplicateStatus: "Flagged" },
+        data: {
+          duplicateStatus: "Not a Duplicate",
+          duplicateOfRecordId: null,
+          reviewStatus: "Reviewed",
+        },
+      });
+      return count;
     });
-    return count;
   }
 
-  await prisma.expenseRecord.deleteMany({ where: { id: { in: ownedIds } } });
+  const owned = await prisma.$transaction(async (tx) => {
+    const requested = await tx.expenseRecord.findMany({
+      where: { id: { in: ids }, businessProfileId },
+      include: { receiptScan: { select: { captureBatchId: true } } },
+    });
+    const captureBatchIds = [...new Set(requested
+      .map((record) => record.receiptScan?.captureBatchId)
+      .filter((batchId): batchId is number => batchId !== null && batchId !== undefined))]
+      .sort((left, right) => left - right);
+    for (const captureBatchId of captureBatchIds) {
+      await lockReceiptCaptureBatchForMutation(tx, captureBatchId);
+    }
+    await lockExpenseDuplicateWriteGate(tx, businessProfileId);
 
-  /*
-   * The same source cleanup deleteExpenseRecord performs, but run once per
-   * distinct source rather than once per record — deleting 300 rows of one
-   * import should check that import once, not 300 times. Ids are read off the
-   * rows fetched above, since after deleteMany there is nothing left to read.
-   */
-  const scanIds = [...new Set(owned.map((r) => r.receiptScanId).filter((v): v is number => v !== null))];
-  const batchIds = [...new Set(owned.map((r) => r.importBatchId).filter((v): v is number => v !== null))];
-  for (const scanId of scanIds) await cleanUpReceiptScanIfOrphaned(scanId);
-  for (const batchId of batchIds) await cleanUpImportBatchIfOrphaned(batchId);
+    const records = await tx.expenseRecord.findMany({
+      where: { id: { in: ids }, businessProfileId, duplicateStatus: "Flagged" },
+    });
+    if (records.length === 0) return records;
+    const recordIds = records.map((record) => record.id);
+    const affectedFollowers = await tx.expenseRecord.findMany({
+      where: {
+        businessProfileId,
+        duplicateOfRecordId: { in: recordIds },
+        id: { notIn: recordIds },
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+    await tx.expenseRecord.deleteMany({
+      where: { id: { in: recordIds }, businessProfileId, duplicateStatus: "Flagged" },
+    });
 
-  return ownedIds.length;
+    await repairExpenseFollowers(tx, businessProfileId, affectedFollowers);
+    await enqueueCsvSourcePurgesIfOrphaned(tx, records.map((record) => record.importBatchId));
+    const scanIds = [...new Set(records
+      .map((record) => record.receiptScanId)
+      .filter((scanId): scanId is number => scanId !== null))]
+      .sort((left, right) => left - right);
+    for (const scanId of scanIds) await enqueueReceiptPurgeIfOrphaned(scanId, tx);
+    return records;
+  });
+  return owned.length;
 }
 
 export async function searchExpenseRecords(userId: number, filters: SearchFilters) {

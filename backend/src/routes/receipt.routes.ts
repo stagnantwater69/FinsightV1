@@ -6,7 +6,7 @@ import {
   uploadReceiptEvidence,
   uploadReceiptImage,
 } from "../middleware/upload.middleware";
-import { LIMITS, rateLimit } from "../middleware/rateLimit.middleware";
+import { LIMITS, limitAuthenticatedWrites, rateLimit } from "../middleware/rateLimit.middleware";
 import { asyncHandler } from "../lib/asyncHandler";
 import { RECEIPT_UPLOAD_MAX_LOGICAL_PAGES } from "../lib/receiptUploadContract";
 import * as receiptProviderConsentController from "../controllers/receiptProviderConsent.controller";
@@ -14,6 +14,7 @@ import * as receiptProviderConsentController from "../controllers/receiptProvide
 export const receiptRouter = Router();
 
 receiptRouter.use(requireAuth);
+receiptRouter.use(limitAuthenticatedWrites);
 receiptRouter.use((_req, res, next) => {
   res.setHeader("Cache-Control", "no-store");
   next();
@@ -106,7 +107,12 @@ receiptRouter.get(
   asyncHandler(receiptScanController.duplicateCandidates),
 );
 receiptRouter.get("/:id", asyncHandler(receiptScanController.show));
-receiptRouter.post("/:id/retry", rateLimit(LIMITS.SCAN_RECEIPT_BURST), asyncHandler(receiptScanController.retry));
+receiptRouter.post(
+  "/:id/retry",
+  rateLimit(LIMITS.SCAN_RECEIPT_BURST),
+  rateLimit(LIMITS.SCAN_RECEIPT_HOURLY),
+  asyncHandler(receiptScanController.retry),
+);
 receiptRouter.patch("/:id/items/:itemId", asyncHandler(receiptScanController.updateItem));
 receiptRouter.delete("/:id/items/:itemId", asyncHandler(receiptScanController.deleteItem));
 receiptRouter.post(

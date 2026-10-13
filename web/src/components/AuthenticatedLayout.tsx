@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { Outlet } from "react-router-dom";
 import { ProtectedRoute } from "./ProtectedRoute";
 import { BusinessProfileProvider } from "../context/BusinessProfileContext";
@@ -5,9 +6,14 @@ import { ExpenseCategoryProvider } from "../context/ExpenseCategoryContext";
 import { NotificationProvider } from "../context/NotificationContext";
 import { TourProvider } from "../context/TourContext";
 import { AiChatProvider } from "../context/AiChatContext";
+import { ReportingPeriodProvider } from "../context/ReportingPeriodContext";
+import { FutureDatedRecordsProvider } from "../context/FutureDatedRecordsContext";
+import { FutureDateGate } from "./FutureDateGate";
 import { AppShell } from "./AppShell";
 import { AskFinSightDrawer } from "./AskFinSightDrawer";
 import { RequireBusinessProfile } from "./RequireBusinessProfile";
+import { RouteContentFallback } from "./RouteContentFallback";
+import { BusinessOwnedBoundary } from "./BusinessOwnedBoundary";
 
 /**
  * Provider order matters here: notifications are scoped to the selected
@@ -20,6 +26,8 @@ import { RequireBusinessProfile } from "./RequireBusinessProfile";
  * every route change beneath it. Ask FinSight losing its thread on navigation
  * is the exact bug this placement exists to prevent; moving it inside a page
  * or inside RequireBusinessProfile would reintroduce it.
+ * BusinessOwnedBoundary remounts this business-owned subtree only when the
+ * selected business changes. Route changes keep it intact.
  *
  * RequireBusinessProfile sits inside the profile provider because it decides on
  * the profile list, and inside AppShell so the redirect it may issue happens
@@ -30,21 +38,35 @@ export function AuthenticatedLayout() {
     <ProtectedRoute>
       <BusinessProfileProvider>
         <ExpenseCategoryProvider>
-          <NotificationProvider>
-            {/* TourProvider wraps AppShell so the shell can hold its Quick-add
-                menu open for the tour steps that highlight items inside it. */}
-            <TourProvider>
-              <AiChatProvider>
-                <AppShell>
-                  <RequireBusinessProfile />
-                </AppShell>
-                {/* One instance for the whole authenticated app, not one per
-                    page: the drawer portals to <body> anyway, and four copies
-                    would be four open flags racing each other. */}
-                <AskFinSightDrawer />
-              </AiChatProvider>
-            </TourProvider>
-          </NotificationProvider>
+          <BusinessOwnedBoundary>
+            <NotificationProvider>
+              {/* One period for every date-dependent screen, so moving from the
+                  Dashboard to Expense Insights keeps the month being read. */}
+              <ReportingPeriodProvider>
+                {/* TourProvider wraps AppShell so the shell can hold its Quick-add
+                    menu open for the tour steps that highlight items inside it. */}
+                <TourProvider>
+                  <AiChatProvider>
+                    {/* Records dated after today lock the record and insight
+                        pages behind a correction screen until they are fixed. */}
+                    <FutureDatedRecordsProvider>
+                      <AppShell>
+                        <FutureDateGate>
+                          <Suspense fallback={<RouteContentFallback />}>
+                            <RequireBusinessProfile />
+                          </Suspense>
+                        </FutureDateGate>
+                      </AppShell>
+                    </FutureDatedRecordsProvider>
+                    {/* One instance for the whole authenticated app, not one per
+                        page: the drawer portals to <body> anyway, and four copies
+                        would be four open flags racing each other. */}
+                    <AskFinSightDrawer />
+                  </AiChatProvider>
+                </TourProvider>
+              </ReportingPeriodProvider>
+            </NotificationProvider>
+          </BusinessOwnedBoundary>
         </ExpenseCategoryProvider>
       </BusinessProfileProvider>
     </ProtectedRoute>

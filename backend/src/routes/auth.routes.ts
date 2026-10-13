@@ -3,7 +3,7 @@ import * as authController from "../controllers/auth.controller";
 import { requireAuth } from "../middleware/auth.middleware";
 import { uploadPhoto } from "../middleware/upload.middleware";
 import { asyncHandler } from "../lib/asyncHandler";
-import { LIMITS, rateLimit } from "../middleware/rateLimit.middleware";
+import { LIMITS, limitAuthenticatedWrites, rateLimit } from "../middleware/rateLimit.middleware";
 
 export const authRouter = Router();
 
@@ -55,8 +55,8 @@ authRouter.post(
   rateLimit(LIMITS.AUTH_LOGIN_EMAIL),
   asyncHandler(authController.login),
 );
-authRouter.post("/logout", asyncHandler(authController.logout));
-authRouter.post("/logout-all", requireAuth, asyncHandler(authController.logoutEverywhere));
+authRouter.post("/logout", rateLimit(LIMITS.AUTH_LOGOUT), asyncHandler(authController.logout));
+authRouter.post("/logout-all", requireAuth, limitAuthenticatedWrites, asyncHandler(authController.logoutEverywhere));
 
 authRouter.post(
   "/recover-password",
@@ -82,8 +82,14 @@ authRouter.post(
 authRouter.delete("/me", requireAuth, rateLimit(LIMITS.AUTH_REAUTH), asyncHandler(authController.deleteAccount));
 
 authRouter.get("/me", requireAuth, asyncHandler(authController.getMe));
-authRouter.patch("/me", requireAuth, asyncHandler(authController.updateMe));
-authRouter.post("/me/avatar", requireAuth, uploadPhoto.single("file"), asyncHandler(authController.uploadAvatar));
+authRouter.patch("/me", requireAuth, limitAuthenticatedWrites, asyncHandler(authController.updateMe));
+authRouter.post(
+  "/me/avatar",
+  requireAuth,
+  rateLimit(LIMITS.PHOTO_UPLOAD),
+  uploadPhoto.single("file"),
+  asyncHandler(authController.uploadAvatar),
+);
 
 /*
  * Preferences get their own path rather than widening PATCH /me, because they
@@ -93,14 +99,7 @@ authRouter.post("/me/avatar", requireAuth, uploadPhoto.single("file"), asyncHand
  * GET /me, which both clients already call on sign-in — a second fetch for
  * four small values would only slow the first paint down.
  *
- * DELIBERATELY UNLIMITED, like GET/PATCH /me above it. Every existing entry in
- * LIMITS is sized for a specific cost — an OCR pass, a billed model call, a
- * password oracle, a 5MB parse — and none of them describes a one-row UPDATE
- * behind requireAuth. Borrowing AUTH_REAUTH's 5-per-15-minutes, the only near
- * miss, would break the normal case outright: an eleven-step tour saves its
- * progress on every advance. A spammed toggle costs one indexed write by an
- * authenticated owner against their own row, which is the exposure PATCH /me
- * already carries. If this ever needs a bucket it wants its own budget, sized
- * from tour advances plus toggle presses — not one of these inherited.
+ * The shared write allowance covers tour advances and toggles without using
+ * the much smaller password-verification budget.
  */
-authRouter.patch("/me/preferences", requireAuth, asyncHandler(authController.updateMyPreferences));
+authRouter.patch("/me/preferences", requireAuth, limitAuthenticatedWrites, asyncHandler(authController.updateMyPreferences));

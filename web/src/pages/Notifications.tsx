@@ -39,7 +39,7 @@ function dayLabel(iso: string) {
 
 export function Notifications() {
   const { selected } = useBusinessProfiles();
-  const { notifications, unreadCount, loading, error, markRead, markAllRead } = useNotifications();
+  const { notifications, unreadCount, loading, error, markRead, markAllRead, refresh } = useNotifications();
   const [filter, setFilter] = useState<FilterKey>("all");
 
   const visible = useMemo(
@@ -91,7 +91,7 @@ export function Notifications() {
           list that is usually short, and the type is already legible on every
           row — "have I dealt with this?" is the only question worth a filter. */}
       <div
-        role="tablist"
+        role="group"
         aria-label="Filter notifications"
         className="mb-4 flex w-max gap-1 rounded-xl border border-paper-200 bg-paper-100 p-1"
       >
@@ -100,26 +100,28 @@ export function Notifications() {
             { key: "all", label: `All${notifications.length ? ` (${notifications.length})` : ""}` },
             { key: "unread", label: `Unread${unreadCount ? ` (${unreadCount})` : ""}` },
           ] as const
-        ).map((tab) => (
+        ).map((option) => (
           <button
-            key={tab.key}
+            key={option.key}
             type="button"
-            role="tab"
-            aria-selected={filter === tab.key}
-            onClick={() => setFilter(tab.key)}
+            aria-pressed={filter === option.key}
+            onClick={() => setFilter(option.key)}
             className={`flex min-h-tap items-center whitespace-nowrap rounded-lg px-4 text-[13.5px] font-semibold transition ${
-              filter === tab.key ? "bg-paper text-brand-800 shadow-sm" : "text-ink-500 hover:text-brand-800"
+              filter === option.key ? "bg-paper text-tone-brand shadow-sm" : "text-ink-500 hover:text-tone-brand"
             }`}
           >
-            {tab.label}
+            {option.label}
           </button>
         ))}
       </div>
 
       {error ? (
-        <p className="mb-4 rounded-xl bg-tint-danger px-3.5 py-3 text-sm text-tone-danger ring-1 ring-edge-danger">
-          {error}
-        </p>
+        <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-tint-danger px-3.5 py-3 text-sm text-tone-danger ring-1 ring-edge-danger">
+          <p>{error}</p>
+          <Button variant="secondary" size="sm" onClick={() => void refresh()}>
+            Try again
+          </Button>
+        </div>
       ) : null}
 
       {loading ? (
@@ -129,14 +131,18 @@ export function Notifications() {
             <div key={i} className="skeleton h-[4.5rem] rounded-xl" aria-hidden />
           ))}
         </div>
-      ) : visible.length === 0 ? (
+      ) : visible.length === 0 && !error ? (
+        /*
+         * NOT shown when the load failed. "Nothing needs your attention" is a
+         * claim about the server's list, and a request that never answered
+         * gives no grounds for it — under the error banner it read as an
+         * all-clear the app could not possibly have verified.
+         */
         <EmptyState
           title={filter === "unread" ? "Nothing unread" : "Nothing needs your attention"}
           icon="✓"
         >
-          {filter === "unread"
-            ? "You've read everything FinSight has flagged. Switch to All to look back over them."
-            : "FinSight will flag possible duplicates, unusually large expenses and finished imports here as you record them."}
+          {filter === "unread" ? "Switch to All to see earlier alerts." : "Duplicates, large expenses and finished imports appear here."}
         </EmptyState>
       ) : (
         <div className="space-y-6">

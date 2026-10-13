@@ -183,8 +183,8 @@ export function Onboarding() {
       ? { title: "Tell us about your business", subtitle: "Two quick questions to get started." }
       : step === 2
         ? {
-            title: "Your numbers",
-            subtitle: "These let FinSight work out your targets. Rough figures are fine — you can change them anytime.",
+            title: "Your starting figures",
+            subtitle: "Enter today's available funds and your best monthly expense estimate. Confirmed records update the balance, and a complete previous month can replace the estimate.",
           }
         : {
             title: "Import your past records",

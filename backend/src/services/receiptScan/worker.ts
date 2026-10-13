@@ -9,8 +9,8 @@ import {
 } from "../storage.service";
 import {
   confidenceForValue,
+  documentConfidence,
   extractReceipt,
-  joinPagesWithoutSeams,
   locateItemLines,
   overallConfidence,
   parseLineItems,
@@ -29,12 +29,14 @@ import {
   buildFieldEvidence,
   buildScanWarnings,
   determineRescueTrigger,
+  seamRepeatWarnings,
   snapVendorToHistory,
 } from "./extraction";
-import type { ReceiptCaptureMetadata, RescuedFields } from "./types";
+import type { ReceiptCaptureMetadata, ReceiptItemEvidenceInput, RescuedFields } from "./types";
 import { selectOcrCandidate } from "./ocrCandidateSelection";
+import { readReceiptPagesWithinOcrBudget } from "./ocrPageScheduling";
 import { assessReceiptLikelihood } from "../../lib/receiptLikelihood";
-import { parseReceiptDetails } from "../../lib/receiptDetails";
+import { parseReceiptDetails, providerReportedCurrency } from "../../lib/receiptDetails";
 import { validateReceiptUpload } from "../../lib/receiptUploadValidation";
 import {
   RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES,
@@ -47,6 +49,8 @@ import {
   type NormalizedEvidence,
   type NormalizedReceiptExtraction,
 } from "../receiptProviderContract";
+import { OVERLAP_RESOLVER_VERSION } from "../../lib/receiptOverlapItems";
+import { readLocalItems } from "./localItems";
 import {
   dispatchReceiptProviderRescue,
   RECEIPT_PROCESSING_LEASE_MS,
@@ -131,13 +135,20 @@ export interface ReceiptItemProcessingOutput {
   vendor: string | null;
   extractedByVision: boolean;
   amountConfidences: (number | null)[];
-  itemEvidence: ({ pageNumber: number | null; sourceText: string | null } | null)[];
+  itemEvidence: (ReceiptItemEvidenceInput | null)[];
 }
 
 export interface ReceiptProcessingOutput {
   scan: Prisma.ReceiptScanUpdateManyMutationInput;
   pages: ReceiptPageProcessingOutput[];
   items: ReceiptItemProcessingOutput;
+  /**
+   * Whether the provider actually read the paper on this pass. False carries an
+   * earlier pass's currency forward, so a re-scan that never reached the
+   * provider cannot clear a refusal a pass that did reach it had earned. A pass
+   * that did read replaces it, null included: that is a re-reading, not silence.
+   */
+  providerRead: boolean;
 }
 
 function sha256(buffer: Buffer): string {
@@ -149,9 +160,27 @@ async function readStoredCandidate(evidence: StoredEvidence, withQuality: boolea
   await validateReceiptUpload({ buffer, mimetype: evidence.info.mimetype });
   const digest = sha256(buffer);
   const quality = withQuality ? await assessImageQuality(buffer) : null;
-  const ocr = await extractReceipt(buffer);
-  return { ocr, digest, quality };
+  /*
+   * The download and validation above stay fatal: without the evidence there
+   * is nothing to read. A failure of the READ is the page's, not the
+   * receipt's — the page's other image may still read, and the caller decides
+   * what a page neither image of which read costs the scan.
+   */
+  let ocr: OcrResult | null = null;
+  let ocrError: unknown = null;
+  try {
+    ocr = await extractReceipt(buffer);
+  } catch (error) {
+    ocrError = error;
+  }
+  // The buffer deliberately does not escape: nothing downstream needs the
+  // bytes, and returning them is how they used to stay resident for the whole
+  // scan. The provider gate re-downloads the page it actually sends.
+  return { ocr, ocrError, digest, quality };
 }
+
+/** What an unreadable page contributes to the text: nothing, and no confidence to average. */
+const UNREAD_PAGE: OcrResult = { text: "", confidence: 0, lines: [] };
 
 function localEvidence(validated: boolean, arithmetic = false): NormalizedEvidence {
   return {
@@ -171,21 +200,46 @@ function localEvidence(validated: boolean, arithmetic = false): NormalizedEviden
   };
 }
 
+/*
+ * What the local read can honestly claim for each field, in the vocabulary
+ * the provider merge compares on. The merge keeps a VALIDATED local value over
+ * a provider value of equal strength, so anything marked validated here is
+ * out of the provider's reach — and the rescue decision above reports an
+ * ambiguous date and an unreconciled total as conflicts to be resolved. The
+ * two must agree: a field only counts as validated when something on the
+ * receipt corroborated it.
+ *
+ *   - date: validated unless the parser flagged it locale-ambiguous.
+ *   - vendor: never validated; it is the parser's guess at a header line and
+ *     nothing on the receipt checks it.
+ *   - total: contradicted only when items WERE read and do not add up to it;
+ *     no items at all leaves it unverified, not disproved. This is the same
+ *     predicate the rescue decision uses for `validation`, and the two must
+ *     not disagree about the same receipt.
+ *   - currency: a symbol or code printed on the receipt; validated as read.
+ */
 function localNormalizedExtraction(
   parsed: ReturnType<typeof parseReceiptFields>,
   items: ReturnType<typeof parseLineItems>,
   currency: string | null,
   reconciled: boolean,
 ): NormalizedReceiptExtraction {
-  const itemEvidence = localEvidence(reconciled, reconciled);
+  // reconcileItems reports `reconciled: true` for "not-comparable" — no total
+  // to check against. That is the absence of arithmetic, not passing it, so
+  // items may not claim ARITHMETIC_VALID on a receipt with no printed total.
+  const itemsCorroborated = items.length > 0 && parsed.amount !== null && reconciled;
+  const itemEvidence = localEvidence(itemsCorroborated, itemsCorroborated);
+  const dateValidated = !parsed.dateAmbiguous;
+  const totalReconciled = items.length > 0 && reconciled;
+  const totalValidated = totalReconciled;
   return {
     schemaVersion: RECEIPT_PROVIDER_CONTRACT_VERSION,
     source: "local-tesseract",
     sourceVersion: PARSER_VERSION,
-    date: { value: parsed.date, evidence: parsed.date ? localEvidence(true) : null },
-    vendor: { value: parsed.vendor, evidence: parsed.vendor ? localEvidence(true) : null },
+    date: { value: parsed.date, evidence: parsed.date ? localEvidence(dateValidated) : null },
+    vendor: { value: parsed.vendor, evidence: parsed.vendor ? localEvidence(false) : null },
     currency: { value: currency, evidence: currency ? localEvidence(true) : null },
-    total: { value: parsed.amount, evidence: parsed.amount ? localEvidence(true, reconciled) : null },
+    total: { value: parsed.amount, evidence: parsed.amount ? localEvidence(totalValidated, totalReconciled) : null },
     items: items.map((item) => ({
       name: item.name,
       quantity: item.quantity,
@@ -194,6 +248,13 @@ function localNormalizedExtraction(
     })),
     itemsEvidence: items.length > 0 ? itemEvidence : null,
   };
+}
+
+/** True when two ISO dates are the same year with day and month exchanged. */
+function isDayMonthSwap(left: string, right: string): boolean {
+  const [ly, lm, ld] = left.split("-");
+  const [ry, rm, rd] = right.split("-");
+  return ly === ry && lm === rd && ld === rm && lm !== ld;
 }
 
 function mergeIntoRescuedFields(
@@ -212,14 +273,31 @@ function mergeIntoRescuedFields(
     amount: item.amount,
   }));
   const providerItems = applied.has("items");
+  /*
+   * A locale-ambiguous local date ("03/09/2026") is offered to the provider
+   * as unvalidated, so its answer normally replaces it. The one answer that
+   * settles nothing is the same digits read the other way round: measured
+   * across repeat runs the model resolves that case inconsistently, whereas
+   * the parser applies the DD/MM convention every time. Then the parser's
+   * reading stands and stays flagged for the owner; a provider date that is
+   * not the swap is a different reading of the paper and wins as any other
+   * field does.
+   */
+  const providerDateIsSwap =
+    applied.has("date")
+    && parsed.dateAmbiguous
+    && parsed.date !== null
+    && receipt.date.value !== null
+    && isDayMonthSwap(parsed.date, receipt.date.value);
+  const dateApplied = applied.has("date") && !providerDateIsSwap;
   return {
-    date: receipt.date.value,
+    date: dateApplied ? receipt.date.value : parsed.date,
     vendor: receipt.vendor.value,
     description: receipt.vendor.value ? `Purchase from ${receipt.vendor.value}` : "Receipt purchase",
     amount: receipt.total.value,
     items: providerItems ? items : localItems,
-    dateAmbiguous: applied.has("date") ? false : parsed.dateAmbiguous,
-    dateSourceText: applied.has("date") ? null : parsed.dateSourceText,
+    dateAmbiguous: dateApplied ? false : parsed.dateAmbiguous,
+    dateSourceText: dateApplied ? null : parsed.dateSourceText,
     visionAssisted: applied.size > 0,
     itemsFromVision: providerItems,
     visionTrigger: trigger,
@@ -228,11 +306,36 @@ function mergeIntoRescuedFields(
     visionModel: gate.dispatched ? providerVersion : null,
     visionRejectReason: null,
     verifier: gate.provider === "gemini" && gate.code === "PROVIDER_OK" ? "accepted" : null,
-    visionWarnings: gate.merge.itemsOwnerReviewRequired ? [{ code: "UNVERIFIED_ITEMS" }] : [],
+    visionWarnings: [
+      ...(gate.merge.itemsOwnerReviewRequired ? [{ code: "UNVERIFIED_ITEMS" as const }] : []),
+      ...(providerItems ? seamRepeatWarnings(gate.merge.seamRepeats) : []),
+    ],
     itemEvidence: providerItems
-      ? receipt.items.map((item) => ({ pageNumber: item.evidence.pageNumber, sourceText: null }))
+      ? receipt.items.map((item, index) => {
+        const flagged = gate.merge.seamRepeats?.flagged.find((repeat) => repeat.itemIndex === index);
+        return {
+          pageNumber: item.evidence.pageNumber,
+          sourceText: null,
+          ...(flagged
+            ? { possibleRepeatOf: { pageNumber: flagged.originalPageNumber, name: flagged.originalName, amount: flagged.amount } }
+            : {}),
+        };
+      })
       : null,
   };
+}
+
+/**
+ * Puts a carried-forward currency back into the versions blob this pass built.
+ * An absent blob is left absent: the column would otherwise be overwritten
+ * with a fragment, losing the very record being preserved.
+ */
+function withProviderCurrency(
+  versions: Prisma.ReceiptScanUpdateManyMutationInput["extractorVersions"],
+  currency: string,
+): Prisma.InputJsonValue | undefined {
+  if (typeof versions !== "object" || versions === null || Array.isArray(versions)) return undefined;
+  return { ...(versions as Record<string, unknown>), providerCurrency: currency } as Prisma.InputJsonValue;
 }
 
 /** Commit every derived receipt value only while this attempt still owns the lease. */
@@ -254,9 +357,12 @@ export async function persistReceiptProcessingOutput(
         processingWorkerId: lease.workerId,
         processingAttemptCount: lease.attempt,
       },
-      select: { captureBatchId: true },
+      select: { captureBatchId: true, extractorVersions: true },
     });
     if (!batchLink) throw new ReceiptLeaseLostError(`Receipt scan ${scanId} lease was reclaimed`);
+    // Read under the same lease predicate as the write below, so the value
+    // carried forward is the one this attempt is still entitled to overwrite.
+    const carriedCurrency = output.providerRead ? null : providerReportedCurrency(batchLink.extractorVersions);
     if (
       batchLink.captureBatchId !== null
       && !(await lockReceiptCaptureBatchForMutation(tx, batchLink.captureBatchId))
@@ -279,7 +385,9 @@ export async function persistReceiptProcessingOutput(
       },
       data: {
         ...output.scan,
+        ...(carriedCurrency === null ? {} : { extractorVersions: withProviderCurrency(output.scan.extractorVersions, carriedCurrency) }),
         processingStatus: "Processing",
+        processingCompletedAt: null,
         processingWorkerId: lease.workerId,
         processingAttemptCount: lease.attempt,
         processingHeartbeatAt: new Date(),
@@ -307,6 +415,7 @@ export async function persistReceiptProcessingOutput(
       tx,
     );
 
+    const completedAt = new Date();
     const completed = await tx.receiptScan.updateMany({
       where: {
         id: scanId,
@@ -320,12 +429,13 @@ export async function persistReceiptProcessingOutput(
       },
       data: {
         processingStatus: "Complete",
+        processingCompletedAt: completedAt,
         processingError: null,
         processingWorkerId: null,
         processingHeartbeatAt: null,
         // Completion starts the abandoned-scan clock: seven days of owner
         // silence from here and the sweep purges it.
-        lastActivityAt: new Date(),
+        lastActivityAt: completedAt,
       },
     });
     if (completed.count !== 1) throw new ReceiptLeaseLostError(`Receipt scan ${scanId} lease was reclaimed`);
@@ -375,8 +485,10 @@ async function processScan(
   let logProviderGate: ((persisted: boolean) => void) | null = null;
   try {
     const ocrResults: OcrResult[] = [];
-    const originalOcrResults: OcrResult[] = [];
+    const originalOcrResults: (OcrResult | null)[] = [];
     const processedOcrResults: (OcrResult | null)[] = [];
+    /** Pages neither image of which could be read, on the attempt that may not retry. */
+    const unreadPages: number[] = [];
     const ocrSources: ("original" | "processed")[] = [];
     const pageQualities: Awaited<ReturnType<typeof assessImageQuality>>[] = [];
     const selectedEvidence: {
@@ -390,18 +502,44 @@ async function processScan(
     let ocrMs = 0;
     let providerMs = 0;
     let persistMs = 0;
-    for (const page of input.pages) {
-      // Both variants read at once; the OCR pool keeps two workers warm for this pair.
-      // Selection only sees the finished results, so the pick is order-independent.
-      const readStartedAt = performance.now();
+    const ocrStartedAt = performance.now();
+    const pageReads = await readReceiptPagesWithinOcrBudget(input.pages, async (page) => {
       const [original, processed] = await Promise.all([
         readStoredCandidate(page.original, true),
         page.processed ? readStoredCandidate(page.processed, false) : Promise.resolve(null),
       ]);
-      ocrMs += performance.now() - readStartedAt;
-      const selected = selectOcrCandidate(original.ocr, processed?.ocr ?? null);
+      return { page, original, processed };
+    });
+    ocrMs = performance.now() - ocrStartedAt;
+    for (const { page, original, processed } of pageReads) {
+      /*
+       * One page's failed read no longer costs the whole receipt.
+       *
+       * Where one of a page's two images read, that reading is used. Where
+       * neither did, the attempt fails and is retried as before — most such
+       * failures are transient — until the last attempt, which keeps every
+       * page that DID read and names the one that did not, rather than
+       * discarding a long receipt for one bad photograph. The unread page
+       * still goes to the provider gate as evidence, where a model may read
+       * it.
+       */
+      if (!original.ocr && !processed?.ocr) {
+        if (attempt < MAX_PROCESSING_ATTEMPTS) throw original.ocrError ?? processed?.ocrError;
+        unreadPages.push(page.pageNumber);
+      }
+      if (original.ocrError !== null || (processed !== null && processed.ocrError !== null)) {
+        logger.warn(
+          { scanId, pageNumber: page.pageNumber, code: "RECEIPT_PAGE_OCR_FAILED", ...safeErrorDetail(original.ocrError ?? processed?.ocrError) },
+          "receipt page image could not be read",
+        );
+      }
+      const selected = original.ocr
+        ? selectOcrCandidate(original.ocr, processed?.ocr ?? null)
+        : processed?.ocr
+          ? { source: "processed" as const, result: processed.ocr }
+          : { source: "original" as const, result: UNREAD_PAGE };
       const chosenEvidence = selected.source === "processed" && page.processed ? page.processed : page.original;
-      const chosenDigest = selected.source === "processed" && processed ? processed.digest : original.digest;
+      const chosen = selected.source === "processed" && processed ? processed : original;
       originalOcrResults.push(original.ocr);
       processedOcrResults.push(processed?.ocr ?? null);
       ocrResults.push(selected.result);
@@ -411,75 +549,59 @@ async function processScan(
         pageNumber: page.pageNumber,
         dataClass: selected.source === "processed" ? "DERIVED_RECEIPT_IMAGE" : "RECEIPT_IMAGE",
         mediaType: chosenEvidence.info.mimetype,
-        inputSha256: chosenDigest,
-        loadBytes: () => downloadReceiptImageBounded(chosenEvidence.path, RECEIPT_UPLOAD_MAX_OBJECT_BYTES, chosenEvidence.info),
+        inputSha256: chosen.digest,
+        /*
+         * RE-DOWNLOADED ON DEMAND, not held from the read above.
+         *
+         * Closing over the decoded buffer kept every page's bytes alive for
+         * the whole scan — through parsing, reconciliation, the provider
+         * decision and persistence — and kept them even on the majority of
+         * scans where the gate decides not to call a provider at all. At the
+         * 10 MiB per-object ceiling and 8 pages that is 80 MiB of resident
+         * heap per concurrent scan, bought for nothing.
+         *
+         * The peak at dispatch is unchanged: the gate loads every page before
+         * it calls the adapter either way. What changes is that the bytes are
+         * collectable the moment this page's OCR is done.
+         *
+         * This also makes the gate's re-hash against `inputSha256` a real
+         * check rather than the tautology it was when the same buffer was
+         * handed straight back: a re-read that does not match the digest this
+         * scan was parsed from refuses the dispatch, which is the behaviour
+         * that guard exists for.
+         */
+        loadBytes: () =>
+          downloadReceiptImageBounded(chosenEvidence.path, RECEIPT_UPLOAD_MAX_OBJECT_BYTES, chosenEvidence.info),
       });
       await heartbeatScan(scanId, attempt);
     }
 
     /*
-     * One continuous document from here on, not N photographs.
-     *
-     * Every parser below — dates, totals, line items, reconciliation — already
-     * reads a receipt as lines of text with no concept of "photograph
-     * boundary". Concatenating in page order is what lets a total printed on
-     * page 3 reconcile against items spanning pages 1 and 2 without a single
-     * line of any of those functions changing. The alternative, stitching the
-     * IMAGES into one before OCR, was rejected in the plan this implements
-     * (docs/multi-page-receipts-plan.md §7): overlapping photos would then
-     * double-count items, which concatenating plain text cannot do.
+     * One continuous document from here on, not N photographs — see
+     * readLocalItems for why the page texts are joined rather than the IMAGES
+     * stitched (docs/multi-page-receipts-plan.md §7), and how overlap between
+     * sections is settled against the printed total.
      */
-    const combinedText = ocrResults.map((r) => r.text).join("\n");
+    const pageTexts = ocrResults.map((r) => r.text);
+    const combinedText = pageTexts.join("\n");
     const combinedLines = ocrResults.flatMap((r) => r.lines);
     const parsed = parseReceiptFields(combinedText);
+    const localItems = readLocalItems(pageTexts, parsed.amount);
+    const deterministicItems = localItems.items;
+    const seamFreeText = localItems.seamFreeText;
+    const localOverlapResolution = localItems.overlapResolution;
+    const localSeamReport = localItems.seamReport;
 
-    /*
-     * OVERLAP BETWEEN SECTIONS, and why removing it needs permission.
-     *
-     * The camera asks for 15-25% overlap between the sections of a long
-     * receipt so the owner can see where to continue photographing. Those
-     * repeated lines are read twice, and concatenating page text in order
-     * therefore counts a handful of items twice on a receipt captured that
-     * way.
-     *
-     * The obvious fix — find the repeat, drop it — is a heuristic deciding
-     * which money lines survive, so it is settled the same way this codebase
-     * settles any choice between two OCR readings of the same pages: an
-     * OBJECTIVE test, never a preference. This is a choice between two local
-     * deterministic readings and happens before the provider gate. The
-     * objective test here is the receipt's own printed
-     * total. If the plain reading fails to account for it and the
-     * de-overlapped reading does, that is arithmetic agreeing with the paper,
-     * not a judgement that one reading looks tidier.
-     *
-     * Where BOTH readings fail to reconcile there is no evidence the removal
-     * helped, so the plain reading stands and the gap surfaces on the confirm
-     * screen as it always has — the owner sees every line and decides. That
-     * is the financial-safety direction: a duplicate the owner can see and
-     * delete beats a real purchase this deleted quietly.
-     *
-     * `combinedText` — the full, unedited concatenation — is what gets stored
-     * as rawText regardless, so the audit trail never loses lines this chose
-     * not to count.
-     */
-    const plainItems = parseLineItems(combinedText);
-    const seamFreeText = joinPagesWithoutSeams(ocrResults.map((r) => r.text));
-    const plainReconciliation = reconcileItems(combinedText, plainItems, parsed.amount);
-
-    let deterministicItems = plainItems;
-    if (!plainReconciliation.reconciled && seamFreeText !== combinedText) {
-      const seamFreeItems = parseLineItems(seamFreeText);
-      if (reconcileItems(seamFreeText, seamFreeItems, parsed.amount).reconciled) {
-        deterministicItems = seamFreeItems;
-      }
-    }
-
-    const worstPageConfidence = Math.min(...ocrResults.map((r) => overallConfidence(r)));
+    const pageConfidences = ocrResults.map((r) => overallConfidence(r));
+    const worstPageConfidence = Math.min(...pageConfidences);
     const reconciliation = reconcileItems(combinedText, deterministicItems, parsed.amount);
     const currency = parseReceiptDetails(combinedText).currency;
     const providerConfig = getReceiptProviderConfiguration();
     const rescueDecision = decideReceiptRescue({
-      validation: parsed.amount !== null && (deterministicItems.length === 0 || reconciliation.reconciled) ? "VALIDATED" : "FAILED",
+      validation:
+        parsed.amount !== null && deterministicItems.length > 0 && reconciliation.reconciled
+          ? "VALIDATED"
+          : "FAILED",
       missingCriticalFields: [
         ...(parsed.date === null ? (["date"] as const) : []),
         ...(parsed.vendor === null ? (["vendor"] as const) : []),
@@ -540,6 +662,7 @@ async function processScan(
           persisted,
           ocrMs: Math.round(ocrMs),
           providerMs: Math.round(providerMs),
+          providerTelemetry: gate.telemetry ?? null,
           persistMs: Math.round(persistMs),
           totalMs: Math.round(performance.now() - claimedAt),
         },
@@ -550,7 +673,6 @@ async function processScan(
     const rescued = mergeIntoRescuedFields(parsed, deterministicItems, gate, trigger, providerConfig.providerVersion);
     const vendor = await snapVendorToHistory(input.businessProfileId, combinedText, rescued.vendor);
 
-    const pageTexts = ocrResults.map((r) => r.text);
     const fieldEvidence = buildFieldEvidence(pageTexts, parsed, rescued, vendor);
     const warnings = buildScanWarnings({
       pageQualities,
@@ -558,8 +680,13 @@ async function processScan(
       combinedText,
       seamFreeText,
       parsed,
-      rescued,
+      rescued: rescued.itemsFromVision
+        ? rescued
+        : { ...rescued, visionWarnings: [...rescued.visionWarnings, ...seamRepeatWarnings(localSeamReport)] },
       worstPageConfidence,
+      pageConfidences: pageConfidences.map((confidence, index) =>
+        unreadPages.includes(input.pages[index]!.pageNumber) ? null : confidence),
+      unreadPages,
     });
 
     // Persist versions and safe gate outcomes with the scan for calibration.
@@ -575,11 +702,23 @@ async function processScan(
       visionRejectReason: rescued.visionRejectReason,
       verifier: rescued.verifier,
       providerGateCode: gate.code,
+      providerOutcomeCode: gate.telemetry?.outcomeCode ?? null,
+      providerCooldown: gate.telemetry?.cooldown ?? null,
+      providerStageTimings: gate.telemetry?.providerStages ?? null,
+      providerGateTimings: gate.telemetry?.gateStages ?? null,
       providerDispatchStatus: gate.dispatchStatus,
       rescueDecisionVersion: RESCUE_DECISION_VERSION,
       rescueReasonCodes: rescueDecision.reasons,
       providerContractVersion: RECEIPT_PROVIDER_CONTRACT_VERSION,
+      // Read back at confirm time by requiresManualCurrencyConversion: the merge
+      // cannot adopt it, but it still has to block a peso booking. Superseded by
+      // the prior pass's value when this one never read the paper (`providerRead`).
+      providerCurrency: gate.merge.providerCurrency,
       ocrCandidateSources: ocrSources,
+      overlapResolverVersion: OVERLAP_RESOLVER_VERSION,
+      overlapResolution: rescued.itemsFromVision
+        ? gate.merge.seamRepeats?.resolution ?? "none"
+        : localOverlapResolution,
     };
     const receiptLikelihood = assessReceiptLikelihood({
       rawText: combinedText,
@@ -608,7 +747,9 @@ async function processScan(
           visionAssisted: rescued.visionAssisted,
           // Null on a vision-assisted read: the figure would describe text
           // tesseract could not make sense of, which is not what it looks like.
-          ocrConfidence: rescued.visionAssisted ? null : worstPageConfidence,
+          // The whole receipt's word mean, not its worst page: each page keeps
+          // its own figure on ReceiptScanPage and its own LOW_CONFIDENCE warning.
+          ocrConfidence: rescued.visionAssisted ? null : documentConfidence(ocrResults),
           // Per field, for calibration. The whole-scan figure above cannot say
           // whether confidence predicts a wrong answer for the VENDOR
           // specifically, because one number per scan says nothing about which
@@ -633,9 +774,10 @@ async function processScan(
           pageNumber: input.pages[index]!.pageNumber,
           data: {
             rawText: result.text,
-            ocrConfidence: overallConfidence(result),
-            originalRawText: originalOcrResults[index]!.text,
-            originalOcrConfidence: overallConfidence(originalOcrResults[index]!),
+            // Null, not zero, for a page that could not be read: never measured.
+            ocrConfidence: unreadPages.includes(input.pages[index]!.pageNumber) ? null : overallConfidence(result),
+            originalRawText: originalOcrResults[index]?.text ?? null,
+            originalOcrConfidence: originalOcrResults[index] ? overallConfidence(originalOcrResults[index]!) : null,
             ocrSource: ocrSources[index]!,
             processedRawText: processedOcrResults[index]?.text ?? null,
             processedOcrConfidence: processedOcrResults[index]
@@ -657,6 +799,10 @@ async function processScan(
           // located in the page text. Unverifiable items remain evidence-less.
           itemEvidence,
         },
+        // A skipped, failed, cancelled or timed-out dispatch produced no
+        // reading of the paper, so it may not overwrite what an earlier pass
+        // read. Only SUCCEEDED means the provider answered and was accepted.
+        providerRead: gate.dispatchStatus === "SUCCEEDED",
       },
     );
     persistMs = performance.now() - persistStartedAt;
@@ -688,6 +834,7 @@ async function recordProcessingFailure(scanId: number, attempt: number, failure:
     ) {
       return;
     }
+    const transitionAt = new Date();
     const updated = await tx.receiptScan.updateMany({
       where: {
         id: scanId,
@@ -699,14 +846,15 @@ async function recordProcessingFailure(scanId: number, attempt: number, failure:
       },
       data: {
         processingStatus: retryable ? "Processing" : "Failed",
+        processingCompletedAt: retryable ? null : transitionAt,
         processingWorkerId: null,
         processingHeartbeatAt: null,
         nextProcessingAttemptAt: new Date(
-          Date.now() + RETRY_DELAYS_MS[Math.min(attempt - 1, RETRY_DELAYS_MS.length - 1)]!,
+          transitionAt.getTime() + RETRY_DELAYS_MS[Math.min(attempt - 1, RETRY_DELAYS_MS.length - 1)]!,
         ),
         processingError: failure.publicMessage,
         processingErrorCode: failure.code,
-        lastActivityAt: new Date(),
+        lastActivityAt: transitionAt,
       },
     });
     if (updated.count === 1 && batchLink?.captureBatchId !== null && batchLink?.captureBatchId !== undefined) {
@@ -826,6 +974,7 @@ async function claimScan(): Promise<{ id: number; attempt: number } | null> {
     data: {
       processingWorkerId: RECEIPT_WORKER_ID,
       processingStartedAt: now,
+      processingCompletedAt: null,
       processingHeartbeatAt: now,
       processingAttemptCount: { increment: 1 },
       lastActivityAt: now,
@@ -864,21 +1013,31 @@ export async function runReceiptWorkerOnce(): Promise<boolean> {
  * becomes Failed here, where the owner can retry it or delete it.
  */
 async function failExhaustedScans(): Promise<number> {
-  const staleBefore = new Date(Date.now() - RECEIPT_PROCESSING_LEASE_MS);
+  const completedAt = new Date();
+  const staleBefore = new Date(completedAt.getTime() - RECEIPT_PROCESSING_LEASE_MS);
   const failed = await prisma.receiptScan.updateMany({
     where: {
       processingStatus: "Processing",
       confirmationStatus: "Pending",
       processingAttemptCount: { gte: MAX_PROCESSING_ATTEMPTS },
+      // The same purge predicates claimScan and storedInput carry. Without
+      // them this transition was the one write in the pipeline that could
+      // touch a scan already scheduled for deletion: it would set a fresh
+      // lastActivityAt and an owner-facing error on a row the purge worker is
+      // about to remove, resurrecting it into the owner's list of failed
+      // scans — and, if the purge lost its race, leaving it there.
+      evidenceDeletionRequestedAt: null,
+      purgeJobs: { none: { mode: ReceiptPurgeMode.DELETE_SCAN } },
       OR: [{ processingWorkerId: null }, { processingHeartbeatAt: null }, { processingHeartbeatAt: { lt: staleBefore } }],
     },
     data: {
       processingStatus: "Failed",
+      processingCompletedAt: completedAt,
       processingWorkerId: null,
       processingHeartbeatAt: null,
       processingError: "The receipt could not be read. Try again or enter the values manually.",
       processingErrorCode: "RECEIPT_PROCESSING_FAILED",
-      lastActivityAt: new Date(),
+      lastActivityAt: completedAt,
     },
   });
   if (failed.count > 0) logger.warn({ count: failed.count }, "receipt scans failed after exhausting processing attempts");

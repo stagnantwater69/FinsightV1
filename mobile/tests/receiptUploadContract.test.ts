@@ -9,7 +9,11 @@ import {
   RECEIPT_UPLOAD_MAX_OBJECT_BYTES,
   type ReceiptUploadPageReference,
 } from "../src/lib/receiptUploadContract";
-import { pagesFromSections, sectionsFromPages } from "../src/screens/records/scanReceipt/helpers";
+import {
+  pagesFromSections,
+  scannerFileUris,
+  sectionsFromPages,
+} from "../src/screens/records/scanReceipt/helpers";
 import type { CapturedPage } from "../src/screens/records/scanReceipt/types";
 
 vi.mock("../src/lib/api", () => ({ api: {} }));
@@ -91,6 +95,39 @@ describe("receipt upload byte contract", () => {
     expect(objects.map(({ variant, uri, mediaType }) => ({ variant, uri, mediaType }))).toEqual([
       { variant: "processed", uri: "file:///processed.jpg", mediaType: "image/jpeg" },
       { variant: "original", uri: "file:///original.png", mediaType: "image/png" },
+    ]);
+  });
+
+  it("round-trips the local filter base for cleanup without uploading it as a page", () => {
+    const selected: CapturedPage = {
+      key: "filtered-page",
+      uri: "file:///black-white.jpg",
+      fileName: "black-white.jpg",
+      mimeType: "image/jpeg",
+      originalUri: "file:///camera-original.jpg",
+      originalMimeType: "image/jpeg",
+      sourceAssetUri: "asset-library://receipt",
+      filterSourceUri: "file:///rectified-filter-base.jpg",
+      cropOutcome: "visible-section",
+      quality: null,
+      checkingQuality: false,
+      width: 900,
+      height: 1600,
+    };
+
+    const [roundTripped] = pagesFromSections(sectionsFromPages([selected]));
+
+    expect(roundTripped?.filterSourceUri).toBe("file:///rectified-filter-base.jpg");
+    expect(roundTripped?.cropOutcome).toBe("visible-section");
+    expect(scannerFileUris([roundTripped!])).toEqual([
+      "file:///camera-original.jpg",
+      "file:///black-white.jpg",
+      "asset-library://receipt",
+      "file:///rectified-filter-base.jpg",
+    ]);
+    expect(receiptMultipartObjects([roundTripped!])).toEqual([
+      { pageKey: "filtered-page", pageNumber: 1, variant: "processed", uri: "file:///black-white.jpg", mediaType: "image/jpeg" },
+      { pageKey: "filtered-page", pageNumber: 1, variant: "original", uri: "file:///camera-original.jpg", mediaType: "image/jpeg" },
     ]);
   });
 

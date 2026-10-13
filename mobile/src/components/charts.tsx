@@ -103,9 +103,27 @@ export function CategoryBreakdown({
 
   return (
     <ChartFrame title={title} subtitle={subtitle}>
+      {/*
+        SUMMARY, AND WHY IT CARRIES `accessible`. A View is only surfaced to
+        VoiceOver/TalkBack when it sets `accessible` — React Native maps that
+        prop straight onto isAccessibilityElement, which is false otherwise.
+        Six charts in this file carried their whole spoken summary on a plain
+        View, so the sentence below was written, kept up to date, and read to
+        nobody. Nothing inside a chart body is interactive, so collapsing it
+        into one element costs no control; the summary has to say everything
+        the bars do, which is why the figures are in it rather than only on
+        screen.
+      */}
       <View
+        accessible
+        accessibilityRole="image"
         accessibilityLabel={`Spending by category. ${rows
-          .map((r) => `${r.categoryName}, ${formatMoney(r.total)}`)
+          .map(
+            (r) =>
+              `${r.categoryName}, ${formatMoney(r.total)}, ${
+                grandTotal > 0 ? ((r.total / grandTotal) * 100).toFixed(0) : "0"
+              } percent`,
+          )
           .join(". ")}`}
       >
         {rows.map((row, i) => {
@@ -327,7 +345,20 @@ export function SpendTrend({
 
   return (
     <ChartFrame title={title} subtitle={subtitle}>
+      {/*
+        SUMMARY, AND WHY IT CARRIES `accessible`. A View is only surfaced to
+        VoiceOver/TalkBack when it sets `accessible` — React Native maps that
+        prop straight onto isAccessibilityElement, which is false otherwise.
+        Six charts in this file carried their whole spoken summary on a plain
+        View, so the sentence below was written, kept up to date, and read to
+        nobody. Nothing inside a chart body is interactive, so collapsing it
+        into one element costs no control; the summary has to say everything
+        the bars do, which is why the figures are in it rather than only on
+        screen.
+      */}
       <View
+        accessible
+        accessibilityRole="image"
         accessibilityLabel={`Running total over ${series.length} days, reaching ${formatMoney(
           running,
         )}. The busiest single day was ${formatMoney(peak.daily)} on ${peak.date.slice(0, 10)}.`}
@@ -543,8 +574,21 @@ export function CashflowChart({
   return (
     <View>
       {header}
+      {/*
+        SUMMARY, AND WHY IT CARRIES `accessible`. A View is only surfaced to
+        VoiceOver/TalkBack when it sets `accessible` — React Native maps that
+        prop straight onto isAccessibilityElement, which is false otherwise.
+        Six charts in this file carried their whole spoken summary on a plain
+        View, so the sentence below was written, kept up to date, and read to
+        nobody. Nothing inside a chart body is interactive, so collapsing it
+        into one element costs no control; the summary has to say everything
+        the bars do, which is why the figures are in it rather than only on
+        screen.
+      */}
       <View
         style={{ marginTop: space.md }}
+        accessible
+        accessibilityRole="image"
         accessibilityLabel={`Cashflow over ${data.length} ${
           granularity === "monthly" ? "months" : "days"
         }. Total money in ${formatMoney(totalSales)}, total money out ${formatMoney(totalExpenses)}.`}
@@ -665,7 +709,20 @@ export function CategoryChange({
 
   return (
     <ChartFrame title={title} subtitle={subtitle}>
+      {/*
+        SUMMARY, AND WHY IT CARRIES `accessible`. A View is only surfaced to
+        VoiceOver/TalkBack when it sets `accessible` — React Native maps that
+        prop straight onto isAccessibilityElement, which is false otherwise.
+        Six charts in this file carried their whole spoken summary on a plain
+        View, so the sentence below was written, kept up to date, and read to
+        nobody. Nothing inside a chart body is interactive, so collapsing it
+        into one element costs no control; the summary has to say everything
+        the bars do, which is why the figures are in it rather than only on
+        screen.
+      */}
       <View
+        accessible
+        accessibilityRole="image"
         accessibilityLabel={rows
           .map((r) => `${r.categoryName} ${r.direction} ${Math.abs(r.percentChange).toFixed(0)} percent`)
           .join(". ")}
@@ -783,7 +840,20 @@ export function CoverageColumns({
         <T variant="caption" style={{ fontSize: typeScale.axis }}>Target: {formatMoney(target)}</T>
       </View>
 
+      {/*
+        SUMMARY, AND WHY IT CARRIES `accessible`. A View is only surfaced to
+        VoiceOver/TalkBack when it sets `accessible` — React Native maps that
+        prop straight onto isAccessibilityElement, which is false otherwise.
+        Six charts in this file carried their whole spoken summary on a plain
+        View, so the sentence below was written, kept up to date, and read to
+        nobody. Nothing inside a chart body is interactive, so collapsing it
+        into one element costs no control; the summary has to say everything
+        the bars do, which is why the figures are in it rather than only on
+        screen.
+      */}
       <View
+        accessible
+        accessibilityRole="image"
         accessibilityLabel={`Daily sales against a target of ${formatMoney(target)}. ${met} of ${
           rows.length
         } days met it.`}
@@ -931,10 +1001,23 @@ export function DonutChart({
 
   return (
     <ChartFrame title={title} subtitle={subtitle}>
+      {/*
+        SUMMARY, AND WHY IT CARRIES `accessible`. A View is only surfaced to
+        VoiceOver/TalkBack when it sets `accessible` — React Native maps that
+        prop straight onto isAccessibilityElement, which is false otherwise.
+        Six charts in this file carried their whole spoken summary on a plain
+        View, so the sentence below was written, kept up to date, and read to
+        nobody. Nothing inside a chart body is interactive, so collapsing it
+        into one element costs no control; the summary has to say everything
+        the bars do, which is why the figures are in it rather than only on
+        screen.
+      */}
       <View
         style={{ flexDirection: "row", alignItems: "center", gap: space.lg }}
-        accessibilityLabel={`Share of spending. ${slices
-          .map((s) => `${s.name}, ${((s.total / total) * 100).toFixed(0)} percent`)
+        accessible
+        accessibilityRole="image"
+        accessibilityLabel={`Share of spending, ${formatMoney(total)} in total. ${slices
+          .map((s) => `${s.name}, ${formatMoney(s.total)}, ${((s.total / total) * 100).toFixed(0)} percent`)
           .join(". ")}`}
       >
         <View style={{ width: SIZE, height: SIZE }}>

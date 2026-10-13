@@ -96,7 +96,7 @@ export function Login() {
     >
       {sessionExpired ? (
         <div className="mb-4" role="status">
-          <Callout tone="warn">Your session expired — please log in again.</Callout>
+          <Callout tone="warn">Your session expired. Please log in again.</Callout>
         </div>
       ) : null}
       <form ref={formRef} onSubmit={handleSubmit} className="space-y-4" noValidate>
@@ -116,6 +116,7 @@ export function Login() {
           htmlFor="password"
           required
           error={fieldErrors.password}
+          wrapLabelAction
           labelAction={
             <Link
               to="/recover-password"

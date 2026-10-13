@@ -21,7 +21,7 @@ const grantSchema = z
 
 function businessProfileId(req: Request): number {
   const id = Number(req.params.businessProfileId);
-  if (!Number.isSafeInteger(id) || id <= 0) throw new ApiError(400, "Invalid business profile id");
+  if (!Number.isSafeInteger(id) || id <= 0 || id > 2147483647) throw new ApiError(400, "Invalid business profile id");
   return id;
 }
 

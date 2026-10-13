@@ -11,7 +11,7 @@ import { expect, test } from "@playwright/test";
 import { loginViaUi, mockBackendSession, mockSupabaseAuth, skipTour, TEST_BUSINESS_PROFILE } from "./mocks";
 import type { DashboardSummary, ExpenseBehavior } from "../src/lib/types";
 
-function summaryFor(periodDays: number): DashboardSummary {
+function summaryFor(period: "week" | "month" | "all"): DashboardSummary {
   // Distinct, easy-to-tell-apart totals per window so the assertions prove
   // the UI actually re-rendered with the new response rather than reusing
   // stale numbers.
@@ -21,7 +21,8 @@ function summaryFor(periodDays: number): DashboardSummary {
     30: { expenses: 18000, sales: 42000 },
     0: { expenses: 210000, sales: 480000 },
   };
-  const { expenses, sales } = byPeriod[periodDays] ?? byPeriod[30];
+  const periodDays = period === "week" ? 7 : period === "all" ? 0 : 30;
+  const { expenses, sales } = byPeriod[periodDays];
   return {
     periodDays,
     periodStart: "2026-07-01",
@@ -77,15 +78,22 @@ test.beforeEach(async ({ page }) => {
 
   await page.route("**/dashboard/summary**", async (route) => {
     const url = new URL(route.request().url());
-    const periodDays = Number(url.searchParams.get("periodDays") ?? "30");
+    const period = (url.searchParams.get("period") ?? "week") as "week" | "month" | "all";
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(summaryFor(periodDays)),
+      body: JSON.stringify(summaryFor(period)),
     });
   });
-  await page.route("**/insights/expense-behavior**", async (route) => {
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(EMPTY_BEHAVIOR) });
+  await page.route("**/insights/expense-overview**", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      view: "dashboard",
+      comparison: {
+        status: "available",
+        data: { totals: EMPTY_BEHAVIOR.totals, categoryTrends: EMPTY_BEHAVIOR.categoryTrends },
+      },
+      topOpportunity: { status: "available", data: null },
+    }) });
   });
 });
 
@@ -93,19 +101,15 @@ test("switching the dashboard period recalculates the displayed totals", async (
   await page.goto("/dashboard");
   await expect(page.getByRole("heading", { name: "Dashboard", exact: true })).toBeVisible();
 
-  // Defaults to "30 days" — a rolling lookback ending today, which is what
-  // the button now says (it used to say "This month"). Money renders as whole
-  // pesos with a "PHP " prefix — see formatMoney in components/Money.tsx.
-  await expect(page.getByText("PHP 18,000").first()).toBeVisible();
-  await expect(page.getByText("PHP 42,000").first()).toBeVisible();
-
-  await page.getByRole("button", { name: "Today" }).click();
-  await expect(page.getByText("PHP 500").first()).toBeVisible();
-  await expect(page.getByText("PHP 1,200").first()).toBeVisible();
-  await expect(page.getByRole("button", { name: "Today" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByText("PHP 4,500").first()).toBeVisible();
+  await expect(page.getByText("PHP 9,800").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "This week" })).toHaveAttribute("aria-pressed", "true");
 
   await page.getByRole("button", { name: "All time" }).click();
   await expect(page.getByText("PHP 210,000").first()).toBeVisible();
   await expect(page.getByText("PHP 480,000").first()).toBeVisible();
   await expect(page.getByRole("button", { name: "All time" })).toHaveAttribute("aria-pressed", "true");
+
+  await page.getByRole("button", { name: "This week" }).click();
+  await expect(page.getByText("PHP 4,500").first()).toBeVisible();
 });

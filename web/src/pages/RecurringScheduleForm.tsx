@@ -281,15 +281,19 @@ export function EditRecurringSchedule() {
     setError(null);
     setSubmitting(true);
     try {
-      await api.patch(`/insights/recurring-schedules/${id}`, {
-        categoryId: values.categoryId,
-        label: values.label.trim(),
-        vendor: values.vendor.trim() || null,
-        intervalDays: values.intervalDays,
-        expectedAmount: values.expectedAmount,
-        nextDueDate: values.nextDueDate,
-        isActive: values.isActive,
-      });
+      await api.patch(
+        `/insights/recurring-schedules/${id}`,
+        {
+          categoryId: values.categoryId,
+          label: values.label.trim(),
+          vendor: values.vendor.trim() || null,
+          intervalDays: values.intervalDays,
+          expectedAmount: values.expectedAmount,
+          nextDueDate: values.nextDueDate,
+          isActive: values.isActive,
+        },
+        { serverStateScope: { businessProfileId: selected!.id } },
+      );
       toast("Changes saved");
       navigate("/insights/expense-behavior");
     } catch (err) {
@@ -311,10 +315,12 @@ export function EditRecurringSchedule() {
       ),
       confirmLabel: "Delete schedule",
     });
-    if (!ok) return;
+    if (!ok || !profileId) return;
     setError(null);
     try {
-      await api.delete(`/insights/recurring-schedules/${id}`);
+      await api.delete(`/insights/recurring-schedules/${id}`, {
+        serverStateScope: { businessProfileId: profileId },
+      });
       toast("Recurring payment deleted");
       navigate("/insights/expense-behavior");
     } catch (err) {

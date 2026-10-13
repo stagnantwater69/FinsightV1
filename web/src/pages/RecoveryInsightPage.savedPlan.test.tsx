@@ -1,10 +1,15 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { RecoveryInsightPage } from "./RecoveryInsightPage";
 import type { BusinessProfile, RecoveryInsight, RecoveryPlan, RecoveryScenario } from "../lib/types";
+import {
+  SERVER_STATE_STALE_TIME_MS,
+  beginServerStateSession,
+  endServerStateSession,
+} from "../lib/serverStateCache";
 
 /**
  * Saved Recovery Plan — plan §7.5/§10.7/§11 Phase 6.
@@ -86,14 +91,27 @@ function scenarioResult(): RecoveryScenario {
 }
 
 let getPlanResponse: RecoveryPlan[];
+let getPlanError: Error | null;
+let getPlanCalls: number;
+let getRecoveryError: Error | null;
+let getRecoveryCalls: number;
 let putCalls: { url: string; body: unknown }[];
 let deleteCalls: string[];
 
 vi.mock("../lib/api", () => ({
   api: {
     get: async (url: string) => {
-      if (url === "/insights/recovery") return { data: recovery };
-      if (url.startsWith("/business-profiles/1/recovery-plans")) return { data: getPlanResponse };
+      if (url === "/records/months") return { data: { months: ["2026-01"] } };
+      if (url === "/insights/recovery") {
+        getRecoveryCalls += 1;
+        if (getRecoveryError) throw getRecoveryError;
+        return { data: recovery };
+      }
+      if (url.startsWith("/business-profiles/1/recovery-plans")) {
+        getPlanCalls += 1;
+        if (getPlanError) throw getPlanError;
+        return { data: getPlanResponse };
+      }
       throw new Error(`unmocked GET ${url}`);
     },
     post: async (url: string) => {
@@ -141,10 +159,20 @@ function renderPage() {
 }
 
 beforeEach(() => {
+  beginServerStateSession("saved-plan-test-user");
   putCalls = [];
   deleteCalls = [];
   toastCalls.length = 0;
   getPlanResponse = [];
+  getPlanError = null;
+  getPlanCalls = 0;
+  getRecoveryError = null;
+  getRecoveryCalls = 0;
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  endServerStateSession();
 });
 
 describe("Recovery Target — saved plan (plan §7.5/§10.7)", () => {
@@ -159,7 +187,7 @@ describe("Recovery Target — saved plan (plan §7.5/§10.7)", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Try a scenario" }));
     expect(screen.queryByText(/Save this as a plan/)).not.toBeInTheDocument();
 
-    const input = screen.getByLabelText(/Assumed expected monthly expenses/);
+    const input = screen.getByLabelText(/Assumed monthly expense basis/);
     await userEvent.clear(input);
     await userEvent.type(input, "15000");
     await userEvent.click(screen.getByRole("button", { name: "See hypothetical target" }));
@@ -170,7 +198,7 @@ describe("Recovery Target — saved plan (plan §7.5/§10.7)", () => {
   it("saves the scenario's assumed value as this month's plan and shows the non-mutation confirmation", async () => {
     renderPage();
     await userEvent.click(await screen.findByRole("button", { name: "Try a scenario" }));
-    const input = screen.getByLabelText(/Assumed expected monthly expenses/);
+    const input = screen.getByLabelText(/Assumed monthly expense basis/);
     await userEvent.clear(input);
     await userEvent.type(input, "15000");
     await userEvent.click(screen.getByRole("button", { name: "See hypothetical target" }));
@@ -183,7 +211,7 @@ describe("Recovery Target — saved plan (plan §7.5/§10.7)", () => {
     expect((putCalls[0]!.body as { ownerTargetAmount: number }).ownerTargetAmount).toBe(15000);
 
     expect(
-      await screen.findByText(/Saved for reference — this doesn't change your business profile or recorded sales\./),
+      await screen.findByText("Saved. Your profile and sales are unchanged."),
     ).toBeInTheDocument();
   });
 
@@ -194,7 +222,7 @@ describe("Recovery Target — saved plan (plan §7.5/§10.7)", () => {
     expect(screen.getAllByText(/PHP\s*769/).length).toBeGreaterThan(0);
 
     await userEvent.click(screen.getByRole("button", { name: "Try a scenario" }));
-    const input = screen.getByLabelText(/Assumed expected monthly expenses/);
+    const input = screen.getByLabelText(/Assumed monthly expense basis/);
     await userEvent.clear(input);
     await userEvent.type(input, "15000");
     await userEvent.click(screen.getByRole("button", { name: "See hypothetical target" }));
@@ -243,5 +271,59 @@ describe("Recovery Target — saved plan (plan §7.5/§10.7)", () => {
     await waitFor(() => expect(deleteCalls).toHaveLength(1));
     expect(deleteCalls[0]).toMatch(/^\/business-profiles\/1\/recovery-plans\/\d{4}-\d{2}$/);
     await waitFor(() => expect(screen.queryByText(/This month's saved plan/)).not.toBeInTheDocument());
+  });
+
+  it("reuses fresh route data, then keeps stale recovery and plan snapshots visible on failure", async () => {
+    getPlanResponse = [
+      {
+        month: "2026-01",
+        bufferPercent: 10,
+        deadline: "2026-01-31",
+        ownerTargetAmount: 18000,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ];
+    const first = renderPage();
+    expect(await screen.findByText(/This month's saved plan/)).toBeInTheDocument();
+    expect(getPlanCalls).toBe(1);
+    expect(getRecoveryCalls).toBe(1);
+    first.unmount();
+
+    const warm = renderPage();
+    expect(await screen.findByText(/This month's saved plan/)).toBeInTheDocument();
+    expect(getPlanCalls).toBe(1);
+    expect(getRecoveryCalls).toBe(1);
+    warm.unmount();
+
+    const later = Date.now() + SERVER_STATE_STALE_TIME_MS + 1;
+    vi.spyOn(Date, "now").mockReturnValue(later);
+    getPlanError = new Error("Network unavailable");
+    getRecoveryError = new Error("Network unavailable");
+    renderPage();
+
+    expect(await screen.findByText(/This month's saved plan/)).toBeInTheDocument();
+    expect(await screen.findByText("Showing the last loaded saved plan.")).toBeInTheDocument();
+    expect(await screen.findByText("Showing the last successful result.")).toBeInTheDocument();
+    expect(screen.getByText(/last checked at/i)).toBeInTheDocument();
+    expect(getPlanCalls).toBe(2);
+    expect(getRecoveryCalls).toBe(2);
+
+    getPlanError = null;
+    getRecoveryError = null;
+    getPlanResponse = [{
+      ...getPlanResponse[0]!,
+      ownerTargetAmount: 19000,
+      updatedAt: "2026-01-02T00:00:00.000Z",
+    }];
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(getRecoveryCalls).toBe(3));
+    await waitFor(() => expect(screen.queryByText("Showing the last successful result.")).not.toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("button", { name: "Retry saved plan" }));
+
+    await waitFor(() => expect(getPlanCalls).toBe(3));
+    await waitFor(() => expect(screen.queryByText("Showing the last loaded saved plan.")).not.toBeInTheDocument());
+    expect(screen.getByText(/19,000/)).toBeInTheDocument();
   });
 });

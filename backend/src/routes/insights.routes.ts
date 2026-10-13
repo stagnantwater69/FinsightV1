@@ -1,13 +1,14 @@
 import { Router } from "express";
 import * as insightsController from "../controllers/insights.controller";
 import { requireAuth } from "../middleware/auth.middleware";
-import { rateLimit } from "../middleware/rateLimit.middleware";
+import { limitAuthenticatedWrites, rateLimit } from "../middleware/rateLimit.middleware";
 import { asyncHandler } from "../lib/asyncHandler";
 import { assertRecurringSchedulesEnabled } from "../services/recurringSchedule.service";
 
 export const insightsRouter = Router();
 
 insightsRouter.use(requireAuth);
+insightsRouter.use(limitAuthenticatedWrites);
 
 /*
  * Recurring schedules are dark until ANOMALY_RECURRING_ENABLED is on.
@@ -31,30 +32,23 @@ insightsRouter.use("/recurring-schedules", (_req, _res, next) => {
   next();
 });
 
-/*
- * The only read endpoint here with a limiter, because it is the only one whose
- * cost scales with the account's own history: it loads the selected window
- * (up to 366 days) plus a bounded per-category baseline and runs the
- * leave-one-out outlier scan over both, synchronously. That scan is no longer
- * quadratic, but "cheaper" is not "free" and the Dashboard calls this on every
- * mount — a client stuck in a remount loop could otherwise pin a core for as
- * long as it liked, on a route that was previously mounted with `requireAuth`
- * and nothing else.
- *
- * Sized so a person cannot reach it: 60 a minute is one every second, where
- * the page issues one per mount and one per period change. Keyed per user by
- * the default identity, and durable (Postgres-backed) like every other limiter
- * in the product.
- *
- * NOTE FOR backend-api: the options live here rather than in `LIMITS` only
- * because this change was scoped not to touch rateLimit.middleware.ts. Moving
- * this constant next to its siblings is a welcome follow-up; the name is
- * already namespaced so the bucket will not move when it does.
- */
+// Both routes run the bounded category-history scan. Sharing one durable
+// per-user bucket prevents migration-time dual requests from doubling the allowance.
+const expenseAnalyticsReadLimit = rateLimit({
+  name: "insights-expense-behavior",
+  limit: 60,
+  windowMs: 60_000,
+});
+
 insightsRouter.get(
   "/expense-behavior",
-  rateLimit({ name: "insights-expense-behavior", limit: 60, windowMs: 60_000 }),
+  expenseAnalyticsReadLimit,
   asyncHandler(insightsController.expenseBehavior),
+);
+insightsRouter.get(
+  "/expense-overview",
+  expenseAnalyticsReadLimit,
+  asyncHandler(insightsController.expenseOverview),
 );
 insightsRouter.get("/reduction-opportunities", asyncHandler(insightsController.reductionOpportunities));
 insightsRouter.post("/reduction-simulation", asyncHandler(insightsController.reductionSimulation));

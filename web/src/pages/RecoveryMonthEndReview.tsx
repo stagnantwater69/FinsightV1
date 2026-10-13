@@ -7,11 +7,16 @@ import { getErrorMessage } from "../lib/errors";
 import { InsightsTabs } from "../components/AppShell";
 import { Button, ButtonLink } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
-import { Field, TextInput } from "../components/Field";
+import { Field, SelectInput } from "../components/Field";
+import { ReportingPeriodScope, useReportingPeriod } from "../context/ReportingPeriodContext";
+import { monthLabel } from "../lib/reportingPeriod";
 import { Callout, Card, PageHead, Panel } from "../components/ui";
 import { formatMoney } from "../components/Money";
 import { SkeletonPanel } from "../components/Skeleton";
-import type { RecoveryMonthEndReview as RecoveryMonthEndReviewData } from "../lib/types";
+import type {
+  MonthlyExpenseBasis,
+  RecoveryMonthEndReview as RecoveryMonthEndReviewData,
+} from "../lib/types";
 
 /**
  * Plan §10.9/§11 Phase 7 — a read-only, deterministic recap of one
@@ -31,10 +36,12 @@ function lastMonthKey(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
-function formatMonthLabel(monthKey: string): string {
-  const [year, month] = monthKey.split("-").map(Number);
-  return new Date(year, month - 1, 1).toLocaleDateString(undefined, { year: "numeric", month: "long" });
+function currentMonthKey(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 }
+
+const formatMonthLabel = monthLabel;
 
 function formatDayLabel(dateKey: string): string {
   // UTC-midnight-encoded date-only string, like every other date in this app.
@@ -52,9 +59,39 @@ function surplusOrShortfallText(amount: number): string {
   return `${formatMoney(Math.abs(amount))} ${label}`;
 }
 
+function monthlyExpenseBasisProvenance(basis: MonthlyExpenseBasis): string {
+  if (basis.source === "previous_complete_month") {
+    const recordLabel = basis.eligibleRecordCount === 1 ? "record" : "records";
+    return basis.sourceMonth
+      ? `Using ${basis.eligibleRecordCount} eligible expense ${recordLabel} from ${formatMonthLabel(basis.sourceMonth)}.`
+      : `Using ${basis.eligibleRecordCount} eligible expense ${recordLabel} from the latest month confirmed complete.`;
+  }
+  return "Using your starting estimate until you confirm a complete past month of expense records.";
+}
+
 export function RecoveryMonthEndReviewPage() {
+  return (
+    <ReportingPeriodScope>
+      <MonthEndReview />
+    </ReportingPeriodScope>
+  );
+}
+
+function MonthEndReview() {
   const { selected } = useBusinessProfiles();
-  const [month, setMonth] = useState(lastMonthKey());
+  /*
+   * The same month list as the period filter: months this business has
+   * records in. Only ENDED ones are offered, newest first, because a review
+   * is of a closed month. With none (or no answer), last month is offered on
+   * its own, which is what this page always defaulted to.
+   */
+  const { months, monthsState } = useReportingPeriod();
+  const thisMonth = currentMonthKey();
+  const endedMonths = months.filter((key) => key < thisMonth);
+  const options = endedMonths.length > 0 ? endedMonths : [lastMonthKey()];
+  const [chosen, setChosen] = useState<string | null>(null);
+  const month = chosen && options.includes(chosen) ? chosen : options[0]!;
+  const monthsReady = monthsState !== "loading";
   const [data, setData] = useState<RecoveryMonthEndReviewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -72,6 +109,7 @@ export function RecoveryMonthEndReviewPage() {
       setLoading(false);
       return;
     }
+    if (!monthsReady) return;
     const thisRequestId = ++requestId.current;
     setLoading(true);
     setError(null);
@@ -92,7 +130,7 @@ export function RecoveryMonthEndReviewPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id, month]);
+  }, [selected?.id, month, monthsReady]);
 
   /*
    * No `if (!selected) return <NoBusinessProfile />` any more — this page only
@@ -106,41 +144,32 @@ export function RecoveryMonthEndReviewPage() {
       <PageHead
         eyebrow="Insights"
         title="Month-end review"
-        subtitle={
-          <>
-            A recap of one already-ended month, for reflecting on what changed — not a place to apply
-            anything automatically.
-          </>
-        }
+        subtitle="Recap of an ended month. Nothing is changed automatically."
       />
 
       <InsightsTabs />
 
       <Card className="mb-5 p-4">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            load();
-          }}
-          className="flex flex-wrap items-end gap-3"
-        >
+        <div className="max-w-xs">
           <Field label="Month to review" htmlFor="month-end-review-month">
-            <TextInput
+            <SelectInput
               id="month-end-review-month"
-              type="month"
               value={month}
-              onChange={(e) => setMonth(e.target.value)}
-            />
+              onChange={(e) => setChosen(e.target.value)}
+            >
+              {options.map((key) => (
+                <option key={key} value={key}>
+                  {formatMonthLabel(key)}
+                </option>
+              ))}
+            </SelectInput>
           </Field>
-          <Button type="submit" variant="secondary" size="sm">
-            {loading ? "Loading…" : "Review this month"}
-          </Button>
-        </form>
+        </div>
       </Card>
 
       {error ? (
         <Callout tone="warn">
-          <b className="font-semibold">Couldn't load this month's review.</b> {error}
+          <b className="font-semibold">Review couldn’t load.</b> {error}
           <div className="mt-2">
             <Button type="button" variant="secondary" size="sm" onClick={load}>
               Retry
@@ -160,29 +189,35 @@ export function RecoveryMonthEndReviewPage() {
           icon="◔"
           action={
             <ButtonLink to="/onboarding" variant="primary">
-              Finish setting up your business
+              Finish business setup
             </ButtonLink>
           }
-        >
-          A month-end review looks back over the sales and expenses recorded
-          for a business. Add yours, and the first review is ready once a month
-          has ended.
-        </EmptyState>
+        />
       ) : data?.status === "not_yet_reviewable" ? (
         <Callout tone="info">
-          <b className="font-semibold">{formatMonthLabel(data.month)} hasn't ended yet.</b> Once this month
-          closes on your business's own local calendar, come back here and its review will be ready.
+          <b className="font-semibold">{formatMonthLabel(data.month)} hasn’t ended yet.</b> Its review is
+          ready once the month closes.
         </Callout>
       ) : data?.status === "reviewable" ? (
         <div className="space-y-5">
           <Panel title={formatMonthLabel(data.month)} eyebrow="Month-end review">
             <p className="text-sm text-ink-700">
-              You covered{" "}
-              <span className="figure font-semibold">{Math.round(data.coveragePercent)}%</span> of your
-              expected expenses that month — a{" "}
-              <span className="figure font-semibold">{surplusOrShortfallText(data.surplusOrShortfall)}</span>{" "}
-              against your coverage goal.
+              Covered{" "}
+              <span className="figure font-semibold">{Math.round(data.coveragePercent)}%</span> of the monthly
+              expense basis:{" "}
+              <span className="figure font-semibold">{surplusOrShortfallText(data.surplusOrShortfall)}</span>.
             </p>
+            {data.monthlyExpenseBasis ? (
+              <div className="mt-4 border-t border-paper-200 pt-4">
+                <p className="text-xs font-semibold text-ink-500">Monthly expense basis</p>
+                <p className="figure mt-1 text-lg font-semibold text-ink-900">
+                  {formatMoney(data.monthlyExpenseBasis.amount)}
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-ink-500">
+                  {monthlyExpenseBasisProvenance(data.monthlyExpenseBasis)}
+                </p>
+              </div>
+            ) : null}
           </Panel>
 
           <Panel title="Strongest and weakest open days">
@@ -192,7 +227,7 @@ export function RecoveryMonthEndReviewPage() {
                 {data.strongestOpenDay ? (
                   <p className="text-sm text-ink-900">
                     <span className="font-semibold">{formatDayLabel(data.strongestOpenDay.date)}</span>{" "}
-                    — <span className="figure">{formatMoney(data.strongestOpenDay.sales)}</span>
+                    · <span className="figure">{formatMoney(data.strongestOpenDay.sales)}</span>
                   </p>
                 ) : (
                   <p className="text-sm text-ink-500">No open days recorded that month.</p>
@@ -203,7 +238,7 @@ export function RecoveryMonthEndReviewPage() {
                 {data.weakestOpenDay ? (
                   <p className="text-sm text-ink-900">
                     <span className="font-semibold">{formatDayLabel(data.weakestOpenDay.date)}</span>{" "}
-                    — <span className="figure">{formatMoney(data.weakestOpenDay.sales)}</span>
+                    · <span className="figure">{formatMoney(data.weakestOpenDay.sales)}</span>
                   </p>
                 ) : (
                   <p className="text-sm text-ink-500">No open days recorded that month.</p>
@@ -215,8 +250,8 @@ export function RecoveryMonthEndReviewPage() {
           <Panel title="Missing or provisional days">
             <p className="text-sm text-ink-700">
               <span className="figure font-semibold">{data.missingOrProvisionalDayCount}</span> of{" "}
-              <span className="figure font-semibold">{data.openDayCount}</span> open days that month were
-              either missing sales references or still needed review.
+              <span className="figure font-semibold">{data.openDayCount}</span> open days had missing or
+              unreviewed sales.
             </p>
           </Panel>
 
@@ -240,7 +275,7 @@ export function RecoveryMonthEndReviewPage() {
                   </dd>
                 ) : (
                   <dd className="mt-0.5 text-sm text-ink-500">
-                    Not available — the month's last day was a closed day, so no per-day rate applies.
+                    Not available: the last day of the month was closed.
                   </dd>
                 )}
               </div>
@@ -249,8 +284,7 @@ export function RecoveryMonthEndReviewPage() {
 
           {data.baselineAppearsOffFromPattern ? (
             <Callout tone="info">
-              Your configured expected monthly expenses may not closely match the sales pattern recorded
-              this month. This is just an observation — nothing about your settings has changed.
+              Expected monthly expenses may not match this month’s sales pattern. Your settings are unchanged.
             </Callout>
           ) : null}
 
@@ -262,11 +296,10 @@ export function RecoveryMonthEndReviewPage() {
                 ))}
               </ol>
             ) : (
-              <p className="text-sm text-ink-500">No questions to consider for next month.</p>
+              <p className="text-sm text-ink-500">None this month.</p>
             )}
             <p className="mt-3 text-xs text-ink-500">
-              These are prompts to think about — nothing here changes your settings automatically. Want to
-              make a change yourself?{" "}
+              Nothing here changes your settings.{" "}
               <Link
                 to={`/business-profiles/${selected.id}/edit`}
                 className="tap-inline inline-flex items-center gap-1.5 font-semibold text-brand-700 underline underline-offset-2"

@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
 import { api } from "../lib/api";
+import { cachedApiGet, peekCachedApiData } from "../lib/serverStateApi";
 import { getErrorMessage } from "../lib/errors";
 import { Money } from "../components/Money";
 import { Button, ButtonLink } from "../components/Button";
@@ -22,6 +23,8 @@ import { SelectInput, TextInput } from "../components/Field";
 import { useConfirm } from "../components/ConfirmDialog";
 import { useDebounced } from "../lib/hooks";
 import { useToast } from "../components/Toast";
+import { useServerStateRefresh } from "../lib/useServerStateRefresh";
+import { availableFundsBaselineRequest, needsAvailableFundsBaselineDecision } from "../lib/availableFundsBaseline";
 import { AddExpenseModal, type DuplicateExpenseSeed } from "../components/AddExpenseModal";
 import { AddSalesModal, type DuplicateSalesSeed } from "../components/AddSalesModal";
 import { DuplicateReviewModal } from "../components/DuplicateReviewModal";
@@ -194,10 +197,21 @@ export function Records() {
    * the query now (`sort=amount_desc`), so the answer is the whole ledger's.
    */
   const [sort, setSort] = useState<SortState>(DEFAULT_SORT);
+  const recordsScopeKey = JSON.stringify({
+    businessProfileId: selected?.id ?? null,
+    filters: appliedFilters,
+    sort: toRecordSort(sort),
+  });
+  const activeRecordsScopeRef = useRef(recordsScopeKey);
+  activeRecordsScopeRef.current = recordsScopeKey;
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorKind, setErrorKind] = useState<"load" | "refresh" | "load-more" | null>(null);
+  const [hasRecordsSnapshot, setHasRecordsSnapshot] = useState(false);
+  const recordsSnapshotScopeRef = useRef<string | null>(null);
   const [flaggedCount, setFlaggedCount] = useState(0);
   // Only loaded once the owner has actually chosen "CSV Upload" as the
   // source — fetching every business profile's whole import history on every
@@ -238,7 +252,14 @@ export function Records() {
     },
   );
 
-  async function loadRecords(signal?: AbortSignal, cursor?: string) {
+  async function loadRecords(signal?: AbortSignal, cursor?: string, force = false) {
+    const requestScopeKey = recordsScopeKey;
+    if (activeRecordsScopeRef.current !== requestScopeKey) return;
+    const hadSnapshot = recordsSnapshotScopeRef.current === requestScopeKey;
+    const markSnapshot = (value: boolean) => {
+      recordsSnapshotScopeRef.current = value ? requestScopeKey : null;
+      setHasRecordsSnapshot(value);
+    };
     /*
      * No business — an owner who chose "Skip for now". This has to SETTLE
      * rather than bail: `loading` starts true, and returning silently left the
@@ -249,41 +270,83 @@ export function Records() {
       setRecords([]);
       setNextCursor(null);
       setError(null);
+      setErrorKind(null);
       setLoading(false);
       setLoadingMore(false);
+      markSnapshot(true);
       return;
     }
-    if (cursor) setLoadingMore(true);
-    else setLoading(true);
+    const params = {
+      businessProfileId: selected.id,
+      type: appliedFilters.type,
+      categoryId: appliedFilters.categoryId || undefined,
+      dateFrom: appliedFilters.dateFrom || undefined,
+      dateTo: appliedFilters.dateTo || undefined,
+      keyword: appliedFilters.keyword || undefined,
+      source: appliedFilters.source || undefined,
+      importBatchId: appliedFilters.importBatchId || undefined,
+      limit: 100,
+      sort: toRecordSort(sort),
+      cursor,
+    };
+    const scope = {
+      businessProfileId: selected.id,
+      filters: appliedFilters,
+      sort: toRecordSort(sort),
+      pagination: { cursor: cursor ?? null, limit: 100 },
+      tags: ["records", "financial"],
+    };
+    const cached = cursor
+      ? null
+      : peekCachedApiData<{ items: RecordItem[]; nextCursor: string | null }>(
+          "/records/search",
+          { params },
+          scope,
+        );
+
+    if (cursor) {
+      setLoadingMore(true);
+    } else {
+      setLoading(!cached && !force);
+      setRefreshing(force || Boolean(cached?.stale));
+      if (cached) {
+        setRecords(cached.data.items);
+        setNextCursor(cached.data.nextCursor);
+        markSnapshot(true);
+      } else if (!force) {
+        setRecords([]);
+        setNextCursor(null);
+        markSnapshot(false);
+      }
+    }
     setError(null);
+    setErrorKind(null);
     try {
-      const { data } = await api.get<{ items: RecordItem[]; nextCursor: string | null }>("/records/search", {
-        signal,
-        params: {
-          businessProfileId: selected.id,
-          type: appliedFilters.type,
-          categoryId: appliedFilters.categoryId || undefined,
-          dateFrom: appliedFilters.dateFrom || undefined,
-          dateTo: appliedFilters.dateTo || undefined,
-          keyword: appliedFilters.keyword || undefined,
-          source: appliedFilters.source || undefined,
-          importBatchId: appliedFilters.importBatchId || undefined,
-          limit: 100,
-          sort: toRecordSort(sort),
-          cursor,
-        },
-      });
+      const { data } = await cachedApiGet<{ items: RecordItem[]; nextCursor: string | null }>(
+        "/records/search",
+        { signal, params },
+        scope,
+        { force },
+      );
+      if (activeRecordsScopeRef.current !== requestScopeKey) return;
       setRecords((current) => (cursor ? [...current, ...data.items] : data.items));
       setNextCursor(data.nextCursor);
+      if (!cursor) markSnapshot(true);
     } catch (err) {
       // A superseded request is not a failure — reporting it would flash an
       // error every time the filters change faster than the network.
-      if (signal?.aborted) return;
+      if (
+        signal?.aborted ||
+        (err as { name?: string })?.name === "AbortError" ||
+        activeRecordsScopeRef.current !== requestScopeKey
+      ) return;
       setError(getErrorMessage(err));
+      setErrorKind(cursor ? "load-more" : hadSnapshot || Boolean(cached) || force ? "refresh" : "load");
     } finally {
-      if (!signal?.aborted) {
+      if (!signal?.aborted && activeRecordsScopeRef.current === requestScopeKey) {
         setLoading(false);
         setLoadingMore(false);
+        setRefreshing(false);
       }
     }
   }
@@ -296,13 +359,30 @@ export function Records() {
    * spreadsheet, downloaded and thrown away on every filter change purely to
    * render one integer. `/records/flagged/count` is two COUNTs.
    */
-  async function loadFlaggedCount(signal?: AbortSignal) {
-    if (!selected) return;
+  async function loadFlaggedCount(signal?: AbortSignal, force = false) {
+    const requestScopeKey = recordsScopeKey;
+    if (activeRecordsScopeRef.current !== requestScopeKey) return;
+    if (!selected) {
+      setFlaggedCount(0);
+      return;
+    }
+    const params = { businessProfileId: selected.id };
+    const scope = { businessProfileId: selected.id, tags: ["records", "financial"] };
+    const cached = peekCachedApiData<FlaggedRecordCounts>(
+      "/records/flagged/count",
+      { params },
+      scope,
+    );
+    if (cached) setFlaggedCount(cached.data.total);
+    else if (!force) setFlaggedCount(0);
     try {
-      const { data } = await api.get<FlaggedRecordCounts>("/records/flagged/count", {
-        signal,
-        params: { businessProfileId: selected.id },
-      });
+      const { data } = await cachedApiGet<FlaggedRecordCounts>(
+        "/records/flagged/count",
+        { signal, params },
+        scope,
+        { force },
+      );
+      if (activeRecordsScopeRef.current !== requestScopeKey) return;
       setFlaggedCount(data.total);
     } catch {
       // The badge is decoration; a failure here must not take out the page.
@@ -312,7 +392,7 @@ export function Records() {
   // Depends on the individual filter values rather than the `filters` object,
   // whose identity changes on every keystroke — that identity was the reason a
   // single character re-issued both requests.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const controller = new AbortController();
     loadRecords(controller.signal);
     loadFlaggedCount(controller.signal);
@@ -331,6 +411,29 @@ export function Records() {
     sort.key,
     sort.direction,
   ]);
+
+  useServerStateRefresh(
+    [
+      {
+        resource: "/records/search",
+        businessProfileId: selected?.id ?? null,
+        filters: appliedFilters,
+        sort: toRecordSort(sort),
+        pagination: { cursor: null, limit: 100 },
+        tags: ["records", "financial"],
+      },
+      {
+        resource: "/records/flagged/count",
+        businessProfileId: selected?.id ?? null,
+        filters: { flagged: true },
+        tags: ["records", "financial"],
+      },
+    ],
+    (signal) => {
+      void loadRecords(signal, undefined, true);
+      void loadFlaggedCount(signal, true);
+    },
+  );
 
   /**
    * Changing the sort restarts the list from page 1.
@@ -404,18 +507,18 @@ export function Records() {
    * reloaded from the server afterwards rather than patched back in memory.
    */
   async function handleDelete(record: RecordItem) {
+    const requestScopeKey = recordsScopeKey;
     const ok = await confirm({
       title: `Delete "${record.description}"?`,
       body: (
         <>
-          This removes the record from your history. You'll get a moment to undo it, but after that it's
-          gone.
+          It is removed from your history. You can undo for a few seconds.
         </>
       ),
       confirmLabel: "Delete record",
       tone: "danger",
     });
-    if (!ok) return;
+    if (!ok || activeRecordsScopeRef.current !== requestScopeKey) return;
 
     const path = record.type === "expense" ? `/records/expenses/${record.id}` : `/records/sales/${record.id}`;
     const key = `${record.type}-${record.id}`;
@@ -424,10 +527,14 @@ export function Records() {
     setRecords((rows) => rows.filter((r) => `${r.type}-${r.id}` !== key));
 
     try {
-      await api.delete(path);
+      await api.delete(path, {
+        serverStateScope: { businessProfileId: record.businessProfileId },
+      });
+      if (activeRecordsScopeRef.current !== requestScopeKey) return;
       loadFlaggedCount();
       toast("Record deleted", { actionLabel: "Undo", onAction: () => restoreRecord(record) });
     } catch (err) {
+      if (activeRecordsScopeRef.current !== requestScopeKey) return;
       // Put the row back: the server still has it, so leaving it hidden would
       // be lying about the state of their records.
       setRecords(previous);
@@ -436,27 +543,47 @@ export function Records() {
   }
 
   async function restoreRecord(record: RecordItem) {
+    const requestScopeKey = recordsScopeKey;
     try {
+      const recordDate = record.date.slice(0, 10);
+      let baselineFields = {};
+      if (needsAvailableFundsBaselineDecision(selected, recordDate)) {
+        if (
+          record.includedInAvailableFundsBaseline == null
+          || record.availableFundsDeltaBaselineAt !== selected?.availableFundsBaselineAt
+        ) {
+          throw new Error("The recorded balance changed. Add this record again so you can choose how it relates to the latest balance.");
+        }
+        baselineFields = availableFundsBaselineRequest(
+          selected,
+          recordDate,
+          record.includedInAvailableFundsBaseline,
+        );
+      }
       if (record.type === "expense") {
         await api.post("/records/expenses", {
           businessProfileId: record.businessProfileId,
           categoryId: record.categoryId,
-          date: record.date.slice(0, 10),
+          date: recordDate,
           description: record.description,
           vendor: record.vendor || undefined,
           amount: record.amount,
+          ...baselineFields,
         });
       } else {
         await api.post("/records/sales", {
           businessProfileId: record.businessProfileId,
-          date: record.date.slice(0, 10),
+          date: recordDate,
           description: record.description,
           amount: record.amount,
+          ...baselineFields,
         });
       }
+      if (activeRecordsScopeRef.current !== requestScopeKey) return;
       await Promise.all([loadRecords(), loadFlaggedCount()]);
       toast("Record restored");
     } catch (err) {
+      if (activeRecordsScopeRef.current !== requestScopeKey) return;
       setError(getErrorMessage(err));
     }
   }
@@ -491,7 +618,14 @@ export function Records() {
    * showing — otherwise "add an expense" appears three times in two different
    * colours on a screen whose only job is to get the first record in.
    */
-  const isPristine = !loading && !error && records.length === 0 && !hasFilters;
+  const isPristine =
+    hasRecordsSnapshot &&
+    !loading &&
+    !refreshing &&
+    !error &&
+    records.length === 0 &&
+    !hasFilters;
+  const recordsUnavailable = Boolean(error && records.length === 0);
   const advancedCount = activeAdvancedCount(filters);
 
   async function handleEdit(r: RecordItem) {
@@ -512,7 +646,7 @@ export function Records() {
   async function handleDuplicate(r: RecordItem) {
     const ok = await confirm({
       title: `Duplicate "${r.description}"?`,
-      body: <>This opens a new draft record pre-filled with the same details. You can review it before saving.</>,
+      body: <>Opens a pre-filled copy to review before saving.</>,
       confirmLabel: "Duplicate record",
       tone: "brand",
     });
@@ -835,7 +969,7 @@ export function Records() {
       <PageHead
         eyebrow="Records management"
         title="Records"
-        subtitle="Store, organise, and review every expense and sales reference record."
+        subtitle={selected ? selected.name : undefined}
         actions={
           <>
             {flaggedCount > 0 ? (
@@ -858,6 +992,12 @@ export function Records() {
           </>
         }
       />
+
+      {refreshing ? (
+        <p role="status" aria-live="polite" className="sr-only">
+          Refreshing records…
+        </p>
+      ) : null}
 
       {/* The less-used create paths. Scrolls horizontally on phones rather
           than wrapping into rows that push the table off-screen.
@@ -883,9 +1023,47 @@ export function Records() {
       )}
 
       {error ? (
-        <p className="mb-4 rounded-xl bg-tint-danger px-3.5 py-3 text-sm text-tone-danger ring-1 ring-edge-danger">
-          {error}
-        </p>
+        <div
+          role="alert"
+          className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-tint-danger px-3.5 py-3 text-sm text-tone-danger ring-1 ring-edge-danger"
+        >
+          <div className="min-w-0">
+            <p className="font-semibold">
+              {errorKind === "refresh"
+                ? "Records couldn’t refresh."
+                : errorKind === "load-more"
+                  ? "More records couldn’t load."
+                  : "Records couldn’t load."}
+            </p>
+            <p className="mt-0.5 text-xs opacity-90">
+              {errorKind === "refresh"
+                ? "Showing recently loaded records. "
+                : errorKind === "load-more"
+                  ? "The records already shown are still available. "
+                  : ""}
+              {error}
+            </p>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            disabled={loading || refreshing || loadingMore}
+            onClick={() => {
+              if (errorKind === "load-more" && nextCursor) {
+                void loadRecords(undefined, nextCursor);
+              } else {
+                void loadRecords(undefined, undefined, errorKind === "refresh");
+              }
+            }}
+          >
+            {errorKind === "refresh"
+              ? "Retry refresh"
+              : errorKind === "load-more"
+                ? "Load more again"
+                : "Try again"}
+          </Button>
+        </div>
       ) : null}
 
       {isPristine ? (
@@ -909,7 +1087,7 @@ export function Records() {
          */
         <EmptyState
           image="/mascot/01-onboarding/emptydashboard.webp"
-          title={selected ? "You haven't added any records yet" : "Nothing to record against yet"}
+          title={selected ? "No records yet" : "Nothing to record yet"}
           action={
             /*
              * With no business, every one of these leads somewhere a record
@@ -930,21 +1108,19 @@ export function Records() {
               </>
             ) : (
               <ButtonLink to="/onboarding" variant="primary">
-                Finish setting up your business
+                Finish business setup
               </ButtonLink>
             )
           }
         >
-          {selected
-            ? "Start with what you spent today — even one entry is enough for FinSight to begin showing you something."
-            : "A record has to belong to a business. Add yours and this page starts filling in with everything you spend and take."}
+          {selected ? "Add an expense, scan a receipt, or import a CSV." : "Set up your business to add records."}
         </EmptyState>
-      ) : (
+      ) : recordsUnavailable ? null : (
         <DataTable
           rows={records}
           columns={columns}
           getRowKey={(r) => `${r.type}-${r.id}`}
-          loading={loading}
+          loading={loading || (refreshing && records.length === 0)}
           caption={
             selected
               ? `Expense and sales reference records for ${selected.name}`
@@ -960,13 +1136,11 @@ export function Records() {
           }
           empty={
             hasFilters ? (
-              <EmptyState compact title="No records match these filters" icon="⌕">
-                Try widening the date range or clearing the search box.
-              </EmptyState>
+              <EmptyState compact title="No records match these filters" icon="⌕" />
             ) : (
               <EmptyState
                 compact
-                title="You haven't added any records yet"
+                title="No records yet"
                 action={
                   selected ? (
                     <>
@@ -974,19 +1148,16 @@ export function Records() {
                         Add your first expense
                       </Button>
                       <ButtonLink to="/records/receipts/new" variant="secondary">
-                        Or scan a receipt
+                        Scan a receipt
                       </ButtonLink>
                     </>
                   ) : (
                     <ButtonLink to="/onboarding" variant="primary">
-                      Finish setting up your business
+                      Finish business setup
                     </ButtonLink>
                   )
                 }
-              >
-                Start with what you spent today — even one entry is enough for FinSight to begin showing
-                you something.
-              </EmptyState>
+              />
             )
           }
           mobileRow={(r) => {
@@ -1024,7 +1195,10 @@ export function Records() {
                   <span className="text-xs text-ink-500">
                     {RECORD_SOURCE_LABELS[r.source as RecordSource] ?? r.source}
                   </span>
-                  <div className="flex gap-1">
+                  {/* Wraps: three labelled actions are wider than a 200px
+                      viewport (400px at 200% zoom) and were scrolling the page
+                      sideways rather than stacking. */}
+                  <div className="flex flex-wrap justify-end gap-1">
                     {r.duplicateStatus === "Flagged" ? (
                       <button
                         type="button"

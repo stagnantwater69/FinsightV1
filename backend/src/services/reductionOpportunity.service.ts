@@ -2,8 +2,16 @@ import { AnomalyFindingStatus, AnomalyFindingType, ReductionOpportunityFeedbackR
 import { prisma } from "../config/prisma";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
 import { ApiError } from "../middleware/error.middleware";
-import { utcAddDays, utcDateKey, utcEndOfDay, utcToday } from "../lib/dates";
-import { getExpenseBehavior } from "./insights.service";
+import { resolveBusinessToday, utcDateKey, utcToday } from "../lib/dates";
+import { resolveReportingWindow, windowDateFilter, type PeriodSelection } from "../lib/reportingPeriod";
+import {
+  getExpenseBehaviorForOwnedBusiness,
+  type ExpenseBehaviorResult,
+} from "./insights.service";
+import {
+  requireOwnedBusinessContext,
+  type OwnedBusinessContext,
+} from "./ownedBusinessContext.service";
 
 /**
  * Expense Reduction Opportunities — deterministic detection engine.
@@ -13,12 +21,8 @@ import { getExpenseBehavior } from "./insights.service";
  * record mutation, no reimplementation of the statistical anomaly detectors
  * already owned by `anomalyDetection/*`.
  *
- * ARCHITECTURE. `getReductionOpportunities` is the only DB-touching export —
- * it fetches the bounded inputs (one `getExpenseBehavior` call, one bounded
- * current-period record read, one previous-period count, one bounded
- * duplicate-finding read) and hands them to `computeReductionOpportunities`,
- * a pure function. Keeping the rules pure is what makes them unit-testable
- * without a database — see tests/unit/reductionOpportunity.test.ts.
+ * `getReductionOpportunities` owns endpoint authorization. Its owned-context
+ * helper lets a page coordinator reuse one expense-behavior calculation.
  */
 
 // ============================================================
@@ -63,9 +67,15 @@ export interface ReductionOpportunity {
 
 export interface ReductionOpportunityResponse {
   period: {
+    /** Calendar days covered; 0 for all time. */
     days: number;
-    start: string;
+    /** Null for all time, which has no first day. */
+    start: string | null;
     end: string;
+    /** The period filter choice; "rolling" for the legacy `periodDays` query. */
+    kind: PeriodSelection["kind"];
+    /** YYYY-MM for a month, otherwise null. */
+    month: string | null;
   };
   dataQuality: {
     status: "sufficient" | "limited" | "insufficient";
@@ -530,31 +540,72 @@ export function computeReductionOpportunities(
 // DB-touching entry point
 // ============================================================
 
-export async function getReductionOpportunities(
-  userId: number,
-  businessProfileId: number,
-  periodDays: number,
-  endDate?: Date,
-  config: ReductionOpportunityConfig = DEFAULT_REDUCTION_OPPORTUNITY_CONFIG,
+export interface OwnedReductionOpportunityOptions {
+  endDate?: Date;
+  config?: ReductionOpportunityConfig;
+  behavior?: ExpenseBehaviorResult | Promise<ExpenseBehaviorResult>;
+}
+
+export async function getReductionOpportunitiesForOwnedBusiness(
+  context: OwnedBusinessContext,
+  period: number | PeriodSelection,
+  options: OwnedReductionOpportunityOptions = {},
 ): Promise<ReductionOpportunityResponse> {
-  const profile = await requireOwnedBusinessProfile(userId, businessProfileId);
+  const { profile } = context;
+  const businessProfileId = profile.id;
+  const { endDate, config = DEFAULT_REDUCTION_OPPORTUNITY_CONFIG } = options;
 
-  const today = endDate ?? utcToday();
-  const periodStart = utcAddDays(today, -(periodDays - 1));
-  const previousPeriodEnd = utcAddDays(periodStart, -1);
-  const previousPeriodStart = utcAddDays(previousPeriodEnd, -(periodDays - 1));
-  const endOfToday = utcEndOfDay(today);
+  const legacy = typeof period === "number";
+  const selection: PeriodSelection = legacy ? { kind: "rolling", days: period, ...(endDate ? { endDate } : {}) } : period;
+  // The legacy window has always ended on the server's UTC day; the period
+  // filter uses the business's own day, like every other period-aware figure.
+  const today = legacy ? utcToday() : resolveBusinessToday(profile.timezone);
+  const window = resolveReportingWindow(selection, today);
+  const periodEnd = window.end ?? today;
+  const describedPeriod: ReductionOpportunityResponse["period"] = {
+    days: window.days ?? 0,
+    start: window.start ? utcDateKey(window.start) : null,
+    end: utcDateKey(periodEnd),
+    kind: window.kind,
+    month: window.month,
+  };
 
+  /*
+   * ALL TIME HAS NO "BEFORE". Every rule here compares a period with the one
+   * preceding it and sizes materiality against a MONTH of expected expenses;
+   * run over years of history, every category clears every threshold and the
+   * cards say nothing. Said plainly instead of computed.
+   */
+  if (!window.start || !window.previous) {
+    return {
+      period: describedPeriod,
+      dataQuality: {
+        status: "insufficient",
+        currentRecordCount: 0,
+        previousRecordCount: 0,
+        message: "Choose a week or a month to compare spending.",
+      },
+      opportunities: [],
+      detectorVersion: REDUCTION_OPPORTUNITY_DETECTOR_VERSION,
+    };
+  }
+
+  // Capped at the business's own today even on the legacy UTC window.
+  const latest = resolveBusinessToday(profile.timezone);
+  const currentDates = windowDateFilter(window, latest);
+  const previousDates = windowDateFilter(window.previous, latest);
+
+  const behaviorPromise = options.behavior === undefined
+    ? getExpenseBehaviorForOwnedBusiness(context, period, endDate)
+    : Promise.resolve(options.behavior);
   const [behavior, currentRecords, previousRecordCount, duplicateFindings] = await Promise.all([
-    // Reused, not reimplemented: category totals/trends/counts and the
-    // existing unusual-expense detector both come from here (§9.3/§3.3).
-    getExpenseBehavior(userId, businessProfileId, periodDays, endDate),
+    behaviorPromise,
     prisma.expenseRecord.findMany({
-      where: { businessProfileId, date: { gte: periodStart, lte: endOfToday } },
+      where: { businessProfileId, date: currentDates },
       select: { id: true, categoryId: true, amount: true },
     }),
     prisma.expenseRecord.count({
-      where: { businessProfileId, date: { gte: previousPeriodStart, lte: previousPeriodEnd } },
+      where: { businessProfileId, date: previousDates },
     }),
     // Existing near-duplicate findings, not a new detector (§6.1.C/§9.3).
     // SHADOW findings are excluded implicitly — this only asks for OPEN.
@@ -563,7 +614,7 @@ export async function getReductionOpportunities(
         businessProfileId,
         type: AnomalyFindingType.POSSIBLE_DUPLICATE,
         status: AnomalyFindingStatus.OPEN,
-        expenseRecord: { date: { gte: periodStart, lte: endOfToday } },
+        expenseRecord: { date: currentDates },
       },
       select: { expenseRecordId: true, expenseRecord: { select: { categoryId: true, amount: true } } },
     }),
@@ -616,16 +667,12 @@ export async function getReductionOpportunities(
             unusualExpenses: unusualExpenseInputs,
             duplicateFindings: duplicateFindingInputs,
           },
-          utcDateKey(today),
+          utcDateKey(periodEnd),
           config,
         );
 
   return {
-    period: {
-      days: periodDays,
-      start: utcDateKey(periodStart),
-      end: utcDateKey(today),
-    },
+    period: describedPeriod,
     dataQuality: {
       status: dataQualityStatus,
       currentRecordCount,
@@ -635,6 +682,18 @@ export async function getReductionOpportunities(
     opportunities,
     detectorVersion: REDUCTION_OPPORTUNITY_DETECTOR_VERSION,
   };
+}
+
+export async function getReductionOpportunities(
+  userId: number,
+  businessProfileId: number,
+  /** A legacy rolling `periodDays`, or a period filter selection. */
+  period: number | PeriodSelection,
+  endDate?: Date,
+  config: ReductionOpportunityConfig = DEFAULT_REDUCTION_OPPORTUNITY_CONFIG,
+): Promise<ReductionOpportunityResponse> {
+  const context = await requireOwnedBusinessContext(userId, businessProfileId);
+  return getReductionOpportunitiesForOwnedBusiness(context, period, { endDate, config });
 }
 
 // ============================================================
@@ -661,15 +720,18 @@ export type ReductionSpec = { kind: "percent"; value: number } | { kind: "amount
 export interface ReductionSimulationInput {
   businessProfileId: number;
   categoryId: number;
-  periodDays: number;
+  /** Legacy rolling window. Ignored when `period` is sent. */
+  periodDays?: number;
   endDate?: Date;
+  /** The period filter's selection, matching the opportunities it came from. */
+  period?: PeriodSelection;
   reduction: ReductionSpec;
 }
 
 export interface ReductionSimulation {
   categoryId: number;
   categoryName: string;
-  period: { days: number; start: string; end: string };
+  period: { days: number; start: string | null; end: string };
   categoryExpenses: { before: number; after: number };
   totalExpenses: { before: number; after: number };
   hypotheticalReduction: number;
@@ -745,7 +807,7 @@ export function computeReductionSimulation(
  * tests/integration/reductionSimulation.test.ts for the no-write assertions.
  */
 export async function simulateReductionOpportunity(userId: number, input: ReductionSimulationInput): Promise<ReductionSimulation> {
-  await requireOwnedBusinessProfile(userId, input.businessProfileId);
+  const profile = await requireOwnedBusinessProfile(userId, input.businessProfileId);
 
   // Same ownership pattern as expenseRecord.service's `verifyCategoryBelongsToProfile`:
   // a foreign or nonexistent category id both fail this lookup identically.
@@ -756,17 +818,23 @@ export async function simulateReductionOpportunity(userId: number, input: Reduct
     throw new ApiError(400, "Category does not belong to this business profile");
   }
 
-  const today = input.endDate ?? utcToday();
-  const periodStart = utcAddDays(today, -(input.periodDays - 1));
-  const endOfToday = utcEndOfDay(today);
+  const selection: PeriodSelection = input.period ?? {
+    kind: "rolling",
+    days: input.periodDays ?? DEFAULT_REDUCTION_OPPORTUNITY_CONFIG.periodDays,
+    ...(input.endDate ? { endDate: input.endDate } : {}),
+  };
+  const today = input.period ? resolveBusinessToday(profile.timezone) : utcToday();
+  const window = resolveReportingWindow(selection, today);
+  const dates = windowDateFilter(window, resolveBusinessToday(profile.timezone));
+  const periodEnd = window.end ?? today;
 
   const [categoryAgg, totalAgg] = await Promise.all([
     prisma.expenseRecord.aggregate({
-      where: { businessProfileId: input.businessProfileId, categoryId: input.categoryId, date: { gte: periodStart, lte: endOfToday } },
+      where: { businessProfileId: input.businessProfileId, categoryId: input.categoryId, ...(dates ? { date: dates } : {}) },
       _sum: { amount: true },
     }),
     prisma.expenseRecord.aggregate({
-      where: { businessProfileId: input.businessProfileId, date: { gte: periodStart, lte: endOfToday } },
+      where: { businessProfileId: input.businessProfileId, ...(dates ? { date: dates } : {}) },
       _sum: { amount: true },
     }),
   ]);
@@ -780,9 +848,9 @@ export async function simulateReductionOpportunity(userId: number, input: Reduct
     categoryId: input.categoryId,
     categoryName: category.name,
     period: {
-      days: input.periodDays,
-      start: utcDateKey(periodStart),
-      end: utcDateKey(today),
+      days: window.days ?? 0,
+      start: window.start ? utcDateKey(window.start) : null,
+      end: utcDateKey(periodEnd),
     },
     ...computed,
   };

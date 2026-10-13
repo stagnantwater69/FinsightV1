@@ -94,8 +94,15 @@ test("the tour auto-starts over the dashboard without looping the app into the e
   await page.route("**/api/**/dashboard/summary**", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(SUMMARY) }),
   );
-  await page.route("**/api/**/insights/expense-behavior**", (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(EMPTY_BEHAVIOR) }),
+  await page.route("**/api/**/insights/expense-overview**", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      view: "dashboard",
+      comparison: {
+        status: "available",
+        data: { totals: EMPTY_BEHAVIOR.totals, categoryTrends: EMPTY_BEHAVIOR.categoryTrends },
+      },
+      topOpportunity: { status: "available", data: null },
+    }) }),
   );
 
   await page.goto("/dashboard");

@@ -49,6 +49,10 @@ function schedule(over: Partial<RecurringSchedule> = {}): RecurringSchedule {
   };
 }
 
+function requestError(status: number, message: string) {
+  return Object.assign(new Error(message), { status });
+}
+
 describe("recurring agenda grouping", () => {
   it("puts an overdue schedule in the Overdue group", () => {
     const groups = groupSchedules([schedule({ id: 7, dueState: "OVERDUE" })]);
@@ -121,64 +125,43 @@ describe("the section badge", () => {
 });
 
 /**
- * WHAT THE RECURRING SECTION MAY SHOW WHEN THE SERVER WILL NOT ANSWER.
- *
- * `GET /insights/recurring-schedules` is behind the backend's
- * ANOMALY_RECURRING_ENABLED flag, which defaults OFF and answers 404 while it
- * is — so a failed read is this endpoint's ORDINARY behaviour today, not an
- * edge case. The screen previously turned that into `data ?? []`, which drew
- * two wrong things at once: the server's bare "Not found" in an error note, and
- * the "No repeating payments yet" empty state, which tells an owner FinSight
- * looked and found nothing about THEIR business. It looked at nothing.
- *
- * These pin the three consequences the screen leans on, all of which can be
- * checked without a render harness: the agenda is hidden rather than emptied,
- * the badge counts nothing, and Confirm is off because the endpoint behind it
- * is behind the same gate.
+ * A 404 disables the feature, an initial transient failure stays fail-closed,
+ * and a transient refresh keeps the last verified agenda on screen.
  */
-describe("the recurring section when the schedules endpoint will not answer", () => {
-  it("hides the agenda rather than reporting an empty one", () => {
-    // Null, not []. [] is the screen's cue to say "no repeating payments yet",
-    // which is a claim about the owner's business we have no basis for.
-    const view = recurringAvailability({ data: null, error: "Not found" });
-    expect(view.schedules).toBeNull();
-  });
-
-  it("shows no badge, since it counted overdue schedules it never received", () => {
-    expect(recurringAvailability({ data: null, error: "Not found" }).overdueCount).toBe(0);
-  });
-
-  it("withholds Confirm, whose endpoint sits behind the same server gate", () => {
-    // POST /insights/recurring-patterns/:id/confirm creates a schedule, so it
-    // 404s exactly when the read does. Leaving the button would be a control
-    // that can only fail.
-    expect(recurringAvailability({ data: null, error: "Not found" }).canConfirm).toBe(false);
-  });
-
-  it("hides the agenda for ANY failure, not only the feature flag's 404", () => {
-    // Nothing here asks WHY the read failed. A 500 or a dead connection leaves
-    // us knowing exactly as much about the owner's schedules as a 404 does, and
-    // sniffing for one status would leave the same lie in place for the rest.
-    for (const error of [
-      "FinSight's server had a problem with that. Please try again in a moment.",
-      "Couldn't reach FinSight. Check your internet connection",
-      "Your session has expired. Please log in again.",
-    ]) {
-      expect(recurringAvailability({ data: null, error }).schedules).toBeNull();
-    }
-  });
-
-  it("drops schedules already on screen when a later read fails", () => {
-    // useInsight keeps the previous payload on a failed refetch. Right for a
-    // screen's main read, wrong here: the flag being switched off mid-session
-    // would leave an agenda up whose rows all 404 when opened.
+describe("recurring schedule availability failures", () => {
+  it("hides an initially unavailable agenda rather than reporting an empty one", () => {
     const view = recurringAvailability({
-      data: [schedule({ id: 1, dueState: "OVERDUE" })],
-      error: "Not found",
+      data: null,
+      error: requestError(503, "Schedules are temporarily unavailable."),
     });
     expect(view.schedules).toBeNull();
     expect(view.overdueCount).toBe(0);
     expect(view.canConfirm).toBe(false);
+    expect(view.failure).toBe("initial");
+  });
+
+  it("treats a 404 as definitive feature unavailability even with cached rows", () => {
+    const view = recurringAvailability({
+      data: [schedule({ id: 1, dueState: "OVERDUE" })],
+      error: requestError(404, "Not found"),
+    });
+    expect(view).toEqual({
+      schedules: null,
+      canConfirm: false,
+      overdueCount: 0,
+      failure: null,
+    });
+  });
+
+  it("retains cached rows after a transient refresh failure", () => {
+    const view = recurringAvailability({
+      data: [schedule({ id: 1, dueState: "OVERDUE" })],
+      error: requestError(503, "Schedules are temporarily unavailable."),
+    });
+    expect(view.schedules?.map((item) => item.id)).toEqual([1]);
+    expect(view.overdueCount).toBe(1);
+    expect(view.canConfirm).toBe(true);
+    expect(view.failure).toBe("refresh");
   });
 });
 
@@ -194,6 +177,7 @@ describe("the recurring section when the schedules endpoint answers", () => {
     expect(view.schedules?.map((s) => s.id)).toEqual([1, 2]);
     expect(view.overdueCount).toBe(1);
     expect(view.canConfirm).toBe(true);
+    expect(view.failure).toBeNull();
   });
 
   it("distinguishes a genuinely empty agenda from an unread one", () => {
@@ -203,13 +187,19 @@ describe("the recurring section when the schedules endpoint answers", () => {
     const view = recurringAvailability({ data: [], error: null });
     expect(view.schedules).toEqual([]);
     expect(view.canConfirm).toBe(true);
+    expect(view.failure).toBeNull();
   });
 
   it("treats a read still in flight as available, so the tab does not flicker away", () => {
     // Before the first response there is no error yet. Reporting unavailable
     // here would pull the Recurring tab off screen and put it back a moment
     // later on every visit.
-    expect(recurringAvailability({ data: null, error: null }).schedules).toEqual([]);
+    expect(recurringAvailability({ data: null, error: null })).toEqual({
+      schedules: [],
+      canConfirm: true,
+      overdueCount: 0,
+      failure: null,
+    });
   });
 });
 

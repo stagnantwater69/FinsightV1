@@ -181,8 +181,29 @@ export interface ScannedItem {
   amountConfidence?: number | null;
   /** Which page and printed line this item was read from, and by what. */
   evidence?: FieldEvidence | null;
+  /**
+   * The earlier line this one may repeat, where two photos of a long receipt
+   * overlap and the receipt's total could not settle it. Null when nothing is
+   * in doubt. The owner keeps both or removes this one.
+   */
+  possibleRepeatOf?: { pageNumber: number; name: string; amount: number } | null;
   /** Values the owner has corrected after OCR completed. */
   ownerEditedFields?: ("name" | "amount")[];
+  /**
+   * How FinSight chose the category, for the review screen: a "low" choice is
+   * one the owner should look at, with the reason to show. Null on older scans.
+   */
+  categorisation?: ItemCategorisation | null;
+}
+
+/** Mirrors ItemCategorisation in backend/src/services/receiptScan/categorisation.ts. */
+export interface ItemCategorisation {
+  confidence: "medium" | "low";
+  source: "history" | "item" | "shop" | "none";
+  kind: "business" | "personal" | null;
+  reason: string | null;
+  /** The category was created by this scan. */
+  newCategory: boolean;
 }
 
 export type ReceiptCaptureBatchStatus =

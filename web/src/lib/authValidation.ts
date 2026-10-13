@@ -43,9 +43,57 @@ export type FieldErrors<Field extends string> = Partial<Record<Field, string>>;
  */
 export const MIN_PASSWORD_LENGTH = 12;
 
-/** `z.string().max(100)` on names, `.max(20)` on the phone number. */
+/** `z.string().max(100)` on names, `.max(20)` and digits only on the phone number. */
 export const MAX_NAME_LENGTH = 100;
 export const MAX_PHONE_LENGTH = 20;
+
+/** The server's `/^\d*$/` on phoneNumber: digits only. */
+export function phoneNumberError(value: string | undefined): string | undefined {
+  const phone = (value ?? "").trim();
+  if (!/^\d*$/.test(phone)) return "Use numbers only.";
+  if (phone.length > MAX_PHONE_LENGTH) return `Keep this under ${MAX_PHONE_LENGTH} characters.`;
+  return undefined;
+}
+
+/** For a phone input's change handler: keeps only the digits typed or pasted. */
+export function digitsOnly(value: string): string {
+  return value.replace(/\D/g, "");
+}
+
+export type ProfileDetailsField =
+  | "firstName"
+  | "middleName"
+  | "lastName"
+  | "phoneNumber";
+
+/** Mirrors the optional-name update schema used by PATCH /auth/me. */
+export function validateProfileDetails(input: {
+  firstName: string;
+  middleName?: string;
+  lastName: string;
+  phoneNumber?: string;
+}): FieldErrors<ProfileDetailsField> {
+  const errors: FieldErrors<ProfileDetailsField> = {};
+
+  if (!input.firstName.trim()) errors.firstName = "Enter your first name.";
+  else if (input.firstName.trim().length > MAX_NAME_LENGTH) {
+    errors.firstName = `Keep this under ${MAX_NAME_LENGTH} characters.`;
+  }
+
+  if (!input.lastName.trim()) errors.lastName = "Enter your last name.";
+  else if (input.lastName.trim().length > MAX_NAME_LENGTH) {
+    errors.lastName = `Keep this under ${MAX_NAME_LENGTH} characters.`;
+  }
+
+  if ((input.middleName ?? "").trim().length > MAX_NAME_LENGTH) {
+    errors.middleName = `Keep this under ${MAX_NAME_LENGTH} characters.`;
+  }
+
+  const phone = phoneNumberError(input.phoneNumber);
+  if (phone) errors.phoneNumber = phone;
+
+  return errors;
+}
 
 /**
  * `MAX_EMAIL_LENGTH` on the server, which exists because `User_Email` is
@@ -171,9 +219,8 @@ export function validateRegister(input: {
     errors.confirmPassword = "These do not match.";
   }
 
-  if ((input.phoneNumber ?? "").trim().length > MAX_PHONE_LENGTH) {
-    errors.phoneNumber = `Keep this under ${MAX_PHONE_LENGTH} characters.`;
-  }
+  const phone = phoneNumberError(input.phoneNumber);
+  if (phone) errors.phoneNumber = phone;
 
   return errors;
 }

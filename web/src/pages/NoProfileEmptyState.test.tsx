@@ -131,7 +131,7 @@ describe("Categories with no business", () => {
     // without a business profile — the dead end this replaced.
     expect(screen.queryByRole("button", { name: /create your first category/i })).not.toBeInTheDocument();
     expect(
-      screen.getByRole("link", { name: /finish setting up your business/i }),
+      screen.getByRole("link", { name: /finish business setup/i }),
     ).toHaveAttribute("href", "/onboarding");
   });
 });

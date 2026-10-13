@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import {
   ArrowRight,
   CircleDollarSign,
@@ -21,6 +21,8 @@ import { getErrorMessage } from "../lib/errors";
 import { InsightsTabs } from "../components/AppShell";
 import { ButtonLink } from "../components/Button";
 import { AskFinSightButton, useAskFinSight } from "../components/AskFinSightButton";
+import { ReportingPeriodScope, useReportingPeriod } from "../context/ReportingPeriodContext";
+import { periodLabel, periodParams, periodPhrase } from "../lib/reportingPeriod";
 import type {
   CategorySuggestion,
   ImpactBand,
@@ -30,16 +32,10 @@ import type {
   PurchaseReview,
   SpendingImpact as SpendingImpactData,
 } from "../lib/types";
-import { AiCard, Callout, InfoNote, Kw, PageHead, Pill, type PillTone } from "../components/ui";
+import { Callout, InfoNote, PageHead, Pill, type PillTone } from "../components/ui";
 import { Field, MoneyInput, SelectInput, TextInput } from "../components/Field";
 import { Money, formatMoney } from "../components/Money";
 import { discussionPrompt } from "../lib/purchaseConversation";
-
-const PERIOD_OPTIONS = [
-  { label: "Today", days: 1 },
-  { label: "This week", days: 7 },
-  { label: "This month", days: 30 },
-];
 
 // The impact band as a themed Pill rather than a white-on-solid chip painted
 // with an inline style. The band glyphs stay: severity must survive greyscale
@@ -73,7 +69,6 @@ function ImpactGauge({ data }: { data: SpendingImpactData }) {
       <div className="mb-2 flex items-end justify-between gap-4">
         <div>
           <p className="text-sm font-semibold text-ink-900">Share of available funds</p>
-          <p className="text-xs text-ink-500">The marker moves as you change the amount.</p>
         </div>
         <strong className="figure text-xl text-ink-900">{percentText(data)}</strong>
       </div>
@@ -113,8 +108,7 @@ function ImpactGauge({ data }: { data: SpendingImpactData }) {
           <span className="text-right text-tone-danger">High</span>
         </div>
         <p className="mt-2 text-xs leading-relaxed text-ink-500">
-          Your configured high-impact point is {data.thresholdPercent}% (
-          <Money value={data.thresholdAmount} />). This is an awareness signal, not purchasing advice.
+          High impact from {data.thresholdPercent}% (<Money value={data.thresholdAmount} />)
         </p>
       </div>
     </div>
@@ -220,18 +214,14 @@ function PriceContextPanel({
             paragraphs above this panel were written by a model; these numbers
             were not, and the difference is the whole reason the panel exists.
           */}
-          <p className="mt-0.5 text-xs text-ink-600">
-            Counted from your own records — not written by AI
-          </p>
+          <p className="mt-0.5 text-xs text-ink-600">From your records, not AI</p>
         </div>
         {badge ? <Pill tone={badge.tone}>{badge.label}</Pill> : null}
       </div>
 
       {!hasHistory ? (
         <p className="mt-3 text-sm leading-relaxed text-ink-700">
-          Nothing in your last {Math.round(price.windowDays / 30)} months looks like this purchase, so
-          FinSight has nothing of your own to compare it against yet. The checks above are the ones to
-          take to the seller.
+          No similar purchases in the last {Math.round(price.windowDays / 30)} months.
         </p>
       ) : (
         <>
@@ -335,9 +325,7 @@ function PurchaseReviewCard({
               calculated; this paragraph is not, and an owner is entitled to
               know which is which before weighing it.
             */}
-            <p className="mt-0.5 text-xs text-ink-500">
-              Written by AI from what you typed — your figures above are calculated, not written
-            </p>
+            <p className="mt-0.5 text-xs text-ink-500">Written by AI from what you typed</p>
           </div>
         </div>
         <Pill tone={PURCHASE_KIND_TONE[review.kind]}>{PURCHASE_KIND_LABEL[review.kind]}</Pill>
@@ -357,7 +345,7 @@ function PurchaseReviewCard({
             What it costs to keep
           </p>
           <p className="mt-1.5 text-sm leading-relaxed text-ink-700">
-            {review.ongoingCosts ?? "Nothing ongoing that FinSight can name from this description."}
+            {review.ongoingCosts ?? "None identified."}
           </p>
         </div>
       </div>
@@ -387,7 +375,7 @@ function PurchaseReviewCard({
       ) : null}
 
       <div className="mt-5">
-        <p className="text-sm font-semibold text-ink-900">Before you decide, answer these yourself</p>
+        <p className="text-sm font-semibold text-ink-900">Questions to consider</p>
         <ul className="mt-2.5 space-y-2">
           {review.questions.map((question) => (
             <li key={question} className="flex gap-2.5 text-sm leading-relaxed text-ink-700">
@@ -412,10 +400,11 @@ function PurchaseReviewCard({
         <button
           type="button"
           onClick={onDiscuss}
+          aria-label={`Ask FinSight about ${item}`}
           className="inline-flex min-h-tap items-center gap-2 rounded-xl bg-brand-800 px-4 text-sm font-semibold text-brand-50 shadow-sm transition-colors hover:bg-brand-900"
         >
           <MessageCircle aria-hidden size={16} />
-          Talk this through with FinSight
+          Ask FinSight
         </button>
         {stale ? (
           <button
@@ -429,20 +418,35 @@ function PurchaseReviewCard({
         ) : null}
       </div>
 
-      <p className="mt-3 text-[11.5px] leading-relaxed text-ink-500">
-        FinSight describes and asks. Whether to buy this is your call — it does not know your
-        suppliers, your season, or what broke last week.
-      </p>
+      <p className="mt-3 text-[11.5px] leading-relaxed text-ink-500">The decision is yours.</p>
     </div>
   );
 }
 
 export function SpendingImpact() {
+  return (
+    <ReportingPeriodScope>
+      <SpendingImpactPage />
+    </ReportingPeriodScope>
+  );
+}
+
+function SpendingImpactPage() {
   const { selected } = useBusinessProfiles();
   const { categories } = useExpenseCategories();
-  const [plannedAmount, setPlannedAmount] = useState<number | "">("");
+  // Ask FinSight's "Open this in Spending Impact" arrives with the amount it
+  // parsed from the owner's question. It only fills the box; the owner still
+  // presses Calculate.
+  const location = useLocation();
+  const [plannedAmount, setPlannedAmount] = useState<number | "">(() => {
+    const prefill = (location.state as { plannedAmount?: unknown } | null)?.plannedAmount;
+    return typeof prefill === "number" && Number.isFinite(prefill) && prefill > 0 ? prefill : "";
+  });
   const [description, setDescription] = useState("");
-  const [periodDays, setPeriodDays] = useState(30);
+  // The shared period (This week, a month, All time): what "recent spending"
+  // means for the before/after expense line.
+  const { selection, ready: periodReady } = useReportingPeriod();
+  const periodKey = JSON.stringify(selection);
   const [data, setData] = useState<SpendingImpactData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isCalculating, setIsCalculating] = useState(false);
@@ -492,7 +496,7 @@ export function SpendingImpact() {
     setIsCalculating(true);
     try {
       const { data } = await api.get<SpendingImpactData>("/insights/spending-impact", {
-        params: { businessProfileId: selected.id, plannedAmount: amount, periodDays },
+        params: { businessProfileId: selected.id, plannedAmount: amount, ...periodParams(selection) },
       });
       setData(data);
       setError(null);
@@ -539,9 +543,7 @@ export function SpendingImpact() {
         // on. Named rather than left as an empty space where a card was
         // expected — and the page's own figures are untouched either way.
         setReviewError(
-          data.priceContext
-            ? "FinSight could not describe this item right now — the AI is unreachable. Your own figures are unaffected: they are calculated by FinSight, not written by AI."
-            : "FinSight could not describe this item right now. Your figures above are calculated by FinSight, not by AI, so they are unaffected.",
+          "Couldn’t describe this item: the AI is unreachable. Your figures are calculated by FinSight, not by AI, so they are unaffected.",
         );
       }
     } catch (err) {
@@ -556,10 +558,11 @@ export function SpendingImpact() {
       setData(null);
       return;
     }
+    if (!periodReady) return;
     const timeout = setTimeout(() => fetchImpact(plannedAmount), 200);
     return () => clearTimeout(timeout);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, plannedAmount, periodDays]);
+  }, [selected, plannedAmount, periodKey, periodReady]);
 
   // Suggests a category from the description text, against this business's
   // OWN categories only (see suggestCategoryForDescription on the backend —
@@ -596,11 +599,26 @@ export function SpendingImpact() {
    * no request is fired.
    */
 
-  // Falls back to the floor when there are no owner-entered funds to scale
-  // from, which is exactly what a business with none would get anyway.
+  const fundsCalculation = data?.availableFundsCalculation;
+  const displayedAvailableFunds =
+    fundsCalculation?.calculatedAmount ??
+    data?.funds.before ??
+    selected?.availableFunds ??
+    0;
+  const availableFundsLabel = fundsCalculation
+    ? "Recorded available funds"
+    : data
+      ? "Available funds"
+      : "Starting available funds";
+  const availableFundsProvenance = fundsCalculation
+    ? `Starting ${formatMoney(fundsCalculation.baselineAmount)}, plus ${formatMoney(fundsCalculation.confirmedSalesAdded)} sales, less ${formatMoney(fundsCalculation.confirmedExpensesDeducted)} expenses.`
+    : null;
+
+  // Before the first simulation, the stored starting amount is the only v1
+  // value available for sizing the control. The response replaces it.
   const sliderMaximum = Math.max(
     50000,
-    Math.ceil(((selected?.availableFunds ?? 0) * 1.25) / 1000) * 1000,
+    Math.ceil((displayedAvailableFunds * 1.25) / 1000) * 1000,
   );
 
   // Names the exact scenario the card above just described — the planned
@@ -614,12 +632,7 @@ export function SpendingImpact() {
       <PageHead
         eyebrow="Insights"
         title="Spending impact"
-        subtitle={
-          <>
-            Spending-Impact Assessment — answers "What may happen if I spend this amount?" This is a
-            what-if check; nothing is saved.
-          </>
-        }
+        subtitle="What-if check. Nothing is saved."
       />
 
       <InsightsTabs />
@@ -633,11 +646,8 @@ export function SpendingImpact() {
               </span>
               <div>
                 <h2 className="font-display text-xl font-bold tracking-[-0.02em] text-ink-900">
-                  Build your spending scenario
+                  Spending scenario
                 </h2>
-                <p className="mt-1 text-sm leading-relaxed text-ink-500">
-                  Change the amount and watch the impact update. Nothing here is saved.
-                </p>
               </div>
             </div>
 
@@ -678,17 +688,17 @@ export function SpendingImpact() {
               </button>
               <p className="text-xs leading-relaxed text-ink-500">
                 {!selected
-                  ? "FinSight compares an item against your own records, so this needs your business set up first."
+                  ? "Set up your business first."
                   : description.trim().length < 3
-                    ? "Name the item above and FinSight will describe it."
-                    : "FinSight describes the item and what to ask — it won't tell you whether to buy it."}
+                    ? "Name the item first."
+                    : "Describes the item. Doesn't decide for you."}
               </p>
             </div>
 
             <div className="mt-5">
               <div className="flex items-center justify-between gap-3">
                 <label htmlFor="amount-slider" className="text-xs font-semibold text-ink-700">
-                  Explore a different amount
+                  Adjust amount
                 </label>
                 <span className="figure text-xs font-medium text-ink-500">Up to {formatMoney(sliderMaximum)}</span>
               </div>
@@ -733,44 +743,42 @@ export function SpendingImpact() {
               </div>
             </div>
 
-            <details className="mt-6 border-t border-paper-200 pt-4">
-              <summary className="cursor-pointer text-sm font-semibold text-ink-700 marker:text-brand-600">
-                Scenario details
-              </summary>
-              <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                <Field label="Compare against" htmlFor="periodDays">
-                  <SelectInput value={periodDays} onChange={(e) => setPeriodDays(Number(e.target.value))}>
-                    {PERIOD_OPTIONS.map((o) => (
-                      <option key={o.days} value={o.days}>{o.label}</option>
-                    ))}
-                  </SelectInput>
-                </Field>
-                <Field
-                  label="Reference category"
-                  htmlFor="category"
-                  optional
-                  labelAction={suggesting ? <span className="text-xs text-ink-500">Suggesting…</span> : null}
+            <div className="mt-6 border-t border-paper-200 pt-4 sm:max-w-xs">
+              <Field
+                label="Reference category"
+                htmlFor="category"
+                optional
+                labelAction={suggesting ? <span className="text-xs text-ink-500">Suggesting…</span> : null}
+              >
+                <SelectInput
+                  value={categoryId}
+                  onChange={(e) => {
+                    setCategoryTouched(true);
+                    setCategoryId(e.target.value === "" ? "" : Number(e.target.value));
+                  }}
                 >
-                  <SelectInput
-                    value={categoryId}
-                    onChange={(e) => {
-                      setCategoryTouched(true);
-                      setCategoryId(e.target.value === "" ? "" : Number(e.target.value));
-                    }}
-                  >
-                    <option value="">— No category —</option>
-                    {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                  </SelectInput>
-                </Field>
-              </div>
-            </details>
+                  <option value="">No category</option>
+                  {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </SelectInput>
+              </Field>
+            </div>
 
             <div className="mt-5 flex flex-wrap items-center justify-between gap-2 text-xs text-ink-500">
               {selected ? (
                 <>
-                  <span>Using {selected.name}'s available funds: <b className="figure text-ink-700">{formatMoney(selected.availableFunds)}</b></span>
+                  <span className="min-w-0">
+                    <span>{availableFundsLabel}</span>:{" "}
+                    <b className="figure text-ink-700">
+                      {formatMoney(displayedAvailableFunds)}
+                    </b>
+                    {availableFundsProvenance ? (
+                      <span className="mt-1 block leading-relaxed text-ink-500">
+                        {availableFundsProvenance}
+                      </span>
+                    ) : null}
+                  </span>
                   <Link to={`/business-profiles/${selected.id}/edit`} className="font-semibold text-brand-700 hover:text-brand-800">
-                    Update funds
+                    Edit starting funds
                   </Link>
                 </>
               ) : (
@@ -779,7 +787,7 @@ export function SpendingImpact() {
                       be calculated — the link goes where that gets fixed
                       rather than to a business-profile edit page that does
                       not exist yet. */}
-                  <span>No available-funds figure yet — this needs your business.</span>
+                  <span>Set up your business to add available funds.</span>
                   <Link to="/onboarding" className="font-semibold text-brand-700 hover:text-brand-800">
                     Finish setup
                   </Link>
@@ -797,15 +805,12 @@ export function SpendingImpact() {
                 <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-paper text-tone-brand shadow-sm">
                   <CircleDollarSign aria-hidden size={30} />
                 </span>
-                <h2 className="mt-5 font-display text-xl font-bold text-ink-900">See the money move before you spend it</h2>
-                <p className="mt-2 max-w-sm text-sm leading-relaxed text-ink-600">
-                  {selected
-                    ? "Enter an amount or choose a quick scenario. FinSight will show what changes without recording an expense."
-                    : "This works out a planned spend against your available funds and your own spending history — so it needs your business set up before it can show you anything."}
-                </p>
+                <h2 className="mt-5 font-display text-xl font-bold text-ink-900">
+                  {selected ? "Enter a planned amount" : "Set up your business first"}
+                </h2>
                 {!selected ? (
                   <ButtonLink to="/onboarding" variant="primary" className="mt-5">
-                    Finish setting up your business
+                    Finish business setup
                   </ButtonLink>
                 ) : null}
               </div>
@@ -813,12 +818,12 @@ export function SpendingImpact() {
               <div className={`transition-opacity duration-200 ${isCalculating ? "opacity-60" : "opacity-100"}`}>
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <p className="text-sm font-medium text-ink-600">After this {description ? "purchase" : "spending"}, you may have</p>
+                    <p className="text-sm font-medium text-ink-600">Funds after</p>
                     <p className={`figure mt-1 break-words text-4xl font-semibold tracking-[-0.03em] sm:text-5xl ${data.funds.after < 0 ? "text-tone-danger" : "text-ink-900"}`}>
                       {formatMoney(data.funds.after)}
                     </p>
                     <p className="mt-2 flex items-center gap-1.5 text-sm text-ink-600">
-                      <TrendingDown aria-hidden size={16} /> {formatMoney(data.plannedAmount)} less than your current funds
+                      <TrendingDown aria-hidden size={16} /> {formatMoney(data.plannedAmount)} less
                     </p>
                   </div>
                   <Pill tone={BAND_TONE[data.impactBand]}>
@@ -828,7 +833,7 @@ export function SpendingImpact() {
                 </div>
 
                 {data.exceedsFunds ? (
-                  <div className="mt-5"><Callout tone="warn"><b>This scenario exceeds your available funds.</b> The remaining amount would be below zero.</Callout></div>
+                  <div className="mt-5"><Callout tone="warn"><b>Exceeds your available funds.</b></Callout></div>
                 ) : null}
 
                 <div className="mt-6 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 rounded-2xl bg-paper p-4 shadow-sm">
@@ -848,20 +853,21 @@ export function SpendingImpact() {
                 <div className="mt-5 grid gap-3 sm:grid-cols-2">
                   <div className="flex gap-3 rounded-xl bg-paper p-3.5 ring-1 ring-paper-200">
                     <WalletCards aria-hidden className="mt-0.5 shrink-0 text-tone-brand" size={18} />
-                    <div><p className="text-xs text-ink-500">Expenses this period</p><p className="figure mt-1 text-sm font-semibold text-ink-900">{formatMoney(data.periodExpenses.before)} <span className="mx-1 text-ink-500">→</span> {formatMoney(data.periodExpenses.after)}</p></div>
+                    <div><p className="text-xs text-ink-500">Expenses · {periodLabel(selection)}</p><p className="figure mt-1 text-sm font-semibold text-ink-900">{formatMoney(data.periodExpenses.before)} <span className="mx-1 text-ink-500">→</span> {formatMoney(data.periodExpenses.after)}</p></div>
                   </div>
                   <button
                     type="button"
                     onClick={() => askFinSight(expandQuestion)}
+                    aria-label="Ask FinSight about this scenario"
                     className="flex min-h-tap items-center justify-between gap-3 rounded-xl bg-brand-800 p-3.5 text-left text-brand-50 shadow-sm transition-colors hover:bg-brand-900"
                   >
-                    <span><span className="block text-xs text-brand-200">Need more context?</span><span className="mt-1 block text-sm font-semibold">Ask FinSight about this</span></span>
+                    <span className="text-sm font-semibold">Ask FinSight</span>
                     <Sparkles aria-hidden size={18} />
                   </button>
                 </div>
 
                 {data.periodExpenses.before === 0 ? (
-                  <div className="mt-4"><InfoNote>No expenses are recorded for this period yet, so the period comparison becomes more useful after you add records.</InfoNote></div>
+                  <div className="mt-4"><InfoNote>No expenses {periodPhrase(selection)}.</InfoNote></div>
                 ) : null}
               </div>
             )}
@@ -928,18 +934,6 @@ export function SpendingImpact() {
         <p role="alert" className="mt-4 rounded-xl bg-tint-danger p-3 text-sm text-tone-danger">
           {reviewError}
         </p>
-      ) : null}
-
-      {data ? (
-        <div className="mt-5">
-          <AiCard
-            title="What this scenario means"
-            subtitle="Built from your figures and FinSight's structured calculation"
-            footer="This simulation supports spending awareness and does not tell you whether to proceed with the purchase."
-          >
-            Spending <Kw><span className="figure">{formatMoney(data.plannedAmount)}</span></Kw>{description ? ` on ${description}` : ""} would move available funds from <Kw><span className="figure">{formatMoney(data.funds.before)}</span></Kw> to <Kw><span className="figure">{formatMoney(data.funds.after)}</span></Kw>. That uses <Kw>{percentText(data)}</Kw> of available funds and falls in your <Kw>{data.impactBand}</Kw> range.
-          </AiCard>
-        </div>
       ) : null}
 
       <AskFinSightButton originModule="Spending Impact" />

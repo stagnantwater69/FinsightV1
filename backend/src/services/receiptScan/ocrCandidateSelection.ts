@@ -1,6 +1,6 @@
 import {
   overallConfidence,
-  parseLineItems,
+  parseLocatedLineItems,
   parseReceiptFields,
   reconcileItems,
   type OcrResult,
@@ -19,15 +19,24 @@ export interface RankedOcrCandidate {
 
 export function rankOcrCandidate(source: OcrCandidateSource, result: OcrResult): RankedOcrCandidate {
   const parsed = parseReceiptFields(result.text);
-  const items = parseLineItems(result.text);
+  const items = parseLocatedLineItems(result.text);
   const reconciled = reconcileItems(result.text, items, parsed.amount).reconciled;
   const fieldCount = [parsed.date, parsed.vendor, parsed.amount].filter((value) => value != null).length;
   const confidence = overallConfidence(result);
   const moneyLines = result.text.split(/\r?\n/).filter((line) => /\d+[.,]\d{2}\b/.test(line)).length;
+  /*
+   * Past the first eight, only two-line rows keep counting. Each one is a
+   * printed quantity x unit price that made its printed total, so on a long
+   * page the reading with more of them objectively read more of the receipt;
+   * capped, two readings of a twenty-row page scored the same. Single-line
+   * receipts have none and score exactly as before.
+   */
+  const twoLineRows = items.filter((item) => item.twoLineRow).length;
   const score =
     (reconciled ? 40 : 0) +
     fieldCount * 15 +
     Math.min(items.length, 8) * 2 +
+    Math.max(0, twoLineRows - 8) * 2 +
     Math.min(moneyLines, 8) +
     Math.round(confidence / 10);
   return { source, result, score, reconciled, fieldCount, itemCount: items.length };

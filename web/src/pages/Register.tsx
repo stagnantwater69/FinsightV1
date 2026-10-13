@@ -7,7 +7,7 @@ import { Button } from "../components/Button";
 import { Field, FormError, TextInput, PasswordInput } from "../components/Field";
 import { api } from "../lib/api";
 import { getErrorMessage, getFieldErrors } from "../lib/errors";
-import { isValid, validateRegister, MIN_PASSWORD_LENGTH, type FieldErrors, type RegisterField } from "../lib/authValidation";
+import { digitsOnly, isValid, validateRegister, MIN_PASSWORD_LENGTH, type FieldErrors, type RegisterField } from "../lib/authValidation";
 import { focusFirstInvalidField } from "../lib/formFocus";
 
 export function Register() {
@@ -74,7 +74,7 @@ export function Register() {
         firstName: form.firstName,
         middleName: form.middleName || undefined,
         lastName: form.lastName,
-        phoneNumber: form.phoneNumber || undefined,
+        phoneNumber: form.phoneNumber.trim() || undefined,
       });
       setAcknowledgement(message);
     } catch (err) {
@@ -227,7 +227,7 @@ export function Register() {
             type="tel"
             autoComplete="tel"
             value={form.phoneNumber}
-            onChange={(e) => update("phoneNumber", e.target.value)}
+            onChange={(e) => update("phoneNumber", digitsOnly(e.target.value))}
           />
         </Field>
         <Field

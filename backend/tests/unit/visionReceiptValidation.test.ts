@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { validateVisionReceipt, type VisionReceipt } from "../../src/services/visionOcr.service";
+import {
+  validateVisionReceipt,
+  validateVisionVerifierVerdict,
+  type VisionReceipt,
+} from "../../src/services/visionOcr.service";
 
 /**
  * The boundary between a model's answer and the owner's books.
@@ -158,6 +162,15 @@ describe("per-item evidence — page number and source text", () => {
     expect(withItems([{ name: "Rice", amount: 50, pageNumber: "two" }]).items[0]!.pageNumber).toBeNull();
   });
 
+  it("drops a page number beyond the number of images actually submitted", () => {
+    const result = validateVisionReceipt(JSON.stringify({
+      total: 50,
+      items: [{ name: "Rice", amount: 50, pageNumber: 3 }],
+    }), 2);
+
+    expect(result).toMatchObject({ ok: true, receipt: { items: [{ pageNumber: null }] } });
+  });
+
   it("treats missing or blank source text as not stated", () => {
     expect(withItems([{ name: "Rice", amount: 50 }]).items[0]!.sourceText).toBeNull();
     expect(withItems([{ name: "Rice", amount: 50, sourceText: "  " }]).items[0]!.sourceText).toBeNull();
@@ -188,6 +201,7 @@ describe("dates — an impossible one fails the whole upload at Prisma", () => {
 
   it("rejects a non-calendar date", () => {
     expect(withDate("2026-13-45").date).toBeNull();
+    expect(withDate("2026-02-30").date).toBeNull();
   });
 
   it("rejects a date in the wrong shape", () => {
@@ -219,11 +233,29 @@ describe("vendor and total", () => {
     expect(accept('{"total":-5}').amount).toBeNull();
   });
 
+  it.each([1.001, 10_000_000_000])("drops a total that cannot fit the database money column: %s", (amount) => {
+    expect(accept(JSON.stringify({ total: amount })).amount).toBeNull();
+  });
+
+  it.each([1.001, 10_000_000_000])("drops an item price that cannot fit the database money column: %s", (amount) => {
+    expect(accept(JSON.stringify({ total: 1, items: [{ name: "Rice", amount }] })).items).toEqual([]);
+  });
+
   it("returns an empty reading rather than a refusal when the model found nothing", () => {
     // Distinct from a malformed answer: the model replied properly and said
     // it could not read anything, which the caller treats as "no rescue".
     const out = accept('{"date":null,"vendor":null,"total":null,"items":[]}');
     expect(out.amount).toBeNull();
     expect(out.items).toEqual([]);
+  });
+});
+
+describe("verifier verdict validation", () => {
+  it("rejects an accepted verdict that also rejects fields", () => {
+    expect(validateVisionVerifierVerdict('{"accept":true,"rejectedFields":["amount"]}')).toBeNull();
+  });
+
+  it("rejects a rejection that names no fields", () => {
+    expect(validateVisionVerifierVerdict('{"accept":false,"rejectedFields":[]}')).toBeNull();
   });
 });

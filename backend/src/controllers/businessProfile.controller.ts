@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
 import * as businessProfileService from "../services/businessProfile.service";
+import * as financialPositionService from "../services/financialPosition.service";
 import { ApiError } from "../middleware/error.middleware";
 
 /*
@@ -33,7 +34,7 @@ const updateSchema = createSchema.partial();
 
 function parseId(raw: string): number {
   const id = Number(raw);
-  if (!Number.isInteger(id) || id <= 0) {
+  if (!Number.isInteger(id) || id <= 0 || id > 2147483647) {
     throw new ApiError(400, "Invalid business profile id");
   }
   return id;
@@ -71,6 +72,27 @@ export async function update(req: Request, res: Response) {
   const input = updateSchema.parse(req.body);
   const profile = await businessProfileService.updateBusinessProfile(req.user!.id, id, input);
   res.status(200).json(profile);
+}
+
+export async function financialPosition(req: Request, res: Response) {
+  const id = parseId(req.params.id!);
+  const position = await financialPositionService.getFinancialPosition(req.user!.id, id);
+  res.status(200).json(position);
+}
+
+export const expenseRecordsCompletenessSchema = z.object({
+  completeThroughMonth: z
+    .string()
+    .regex(/^\d{4}-(0[1-9]|1[0-2])$/, "completeThroughMonth must be in YYYY-MM format")
+    .nullable(),
+}).strict();
+
+export async function putExpenseRecordsCompleteness(req: Request, res: Response) {
+  const id = parseId(req.params.id!);
+  const { completeThroughMonth } = expenseRecordsCompletenessSchema.parse(req.body);
+  await businessProfileService.updateExpenseRecordsCompleteness(req.user!.id, id, completeThroughMonth);
+  const position = await financialPositionService.getFinancialPosition(req.user!.id, id);
+  res.status(200).json(position);
 }
 
 export async function archive(req: Request, res: Response) {

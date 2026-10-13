@@ -2,6 +2,7 @@ import { Prisma, type AnomalyFindingSeverity, type AnomalyFindingStatus, type An
 import { ApiError } from "../../middleware/error.middleware";
 import { prisma } from "../../config/prisma";
 import type { DetectionFinding, FindingReview } from "./types";
+import type { AnalysisWriteClient } from "./mutationGuard";
 
 function json(value: unknown): Prisma.InputJsonValue {
   return value as Prisma.InputJsonValue;
@@ -11,7 +12,7 @@ function json(value: unknown): Prisma.InputJsonValue {
  * Upsert makes detector retries idempotent. A stable fingerprint represents
  * one detector's opinion about one record or analysis window.
  */
-export async function saveFinding(finding: DetectionFinding) {
+async function persistFinding(db: AnalysisWriteClient, finding: DetectionFinding) {
   const data = {
     businessProfileId: finding.businessProfileId,
     expenseRecordId: finding.expenseRecordId,
@@ -29,7 +30,7 @@ export async function saveFinding(finding: DetectionFinding) {
     ...(finding.status ? { status: finding.status } : {}),
   };
 
-  return prisma.anomalyFinding.upsert({
+  const saved = await db.anomalyFinding.upsert({
     where: {
       businessProfileId_fingerprint: {
         businessProfileId: finding.businessProfileId,
@@ -39,6 +40,21 @@ export async function saveFinding(finding: DetectionFinding) {
     create: { ...data, fingerprint: finding.fingerprint },
     update: data,
   });
+
+  if (finding.status !== undefined || saved.status !== "SUPERSEDED") return saved;
+  const reopened = await db.anomalyFinding.updateMany({
+    where: { id: saved.id, status: "SUPERSEDED" },
+    data: { status: "OPEN", feedback: null, reviewedAt: null },
+  });
+  if (reopened.count === 1) {
+    return { ...saved, status: "OPEN" as const, feedback: null, reviewedAt: null };
+  }
+  return db.anomalyFinding.findUniqueOrThrow({ where: { id: saved.id } });
+}
+
+export async function saveFinding(finding: DetectionFinding, db?: AnalysisWriteClient) {
+  if (db) return persistFinding(db, finding);
+  return prisma.$transaction((transaction) => persistFinding(transaction, finding));
 }
 
 export async function listFindings(

@@ -1,4 +1,5 @@
 import type {
+  ChatFocus,
   ChatMessage,
   ChatSendResponse,
   Conversation,
@@ -83,12 +84,17 @@ export interface ChatTransport {
      * rebuilds the rest of the context fresh.
      */
     reductionOpportunity?: ReductionOpportunity;
+    /** The flag or record "Explain this flag" was pressed on — ids only. */
+    focus?: ChatFocus;
   }): Promise<ChatSendResponse>;
   sendMessage(
     conversationId: number,
     question: string,
     reductionOpportunity?: ReductionOpportunity,
+    focus?: ChatFocus,
   ): Promise<ChatSendResponse>;
+  /** Thumbs up/down on one assistant reply; null clears it. */
+  rateMessage(conversationId: number, messageId: number, feedback: "up" | "down" | null): Promise<void>;
   renameConversation(conversationId: number, title: string): Promise<void>;
   deleteConversation(conversationId: number): Promise<void>;
 }
@@ -119,6 +125,12 @@ export interface ChatState {
    * can.
    */
   pendingReductionOpportunity: ReductionOpportunity | null;
+  /**
+   * The flag or record the next send is about. Same one-shot lifetime as the
+   * reduction opportunity; the server stores it on the conversation, so later
+   * messages in that thread stay about it without the client resending it.
+   */
+  pendingFocus: ChatFocus | null;
   sending: boolean;
   error: string | null;
   unavailable: boolean;
@@ -136,6 +148,7 @@ const EMPTY: ChatState = {
   messagesLoading: false,
   input: "",
   pendingReductionOpportunity: null,
+  pendingFocus: null,
   sending: false,
   error: null,
   unavailable: false,
@@ -172,7 +185,7 @@ export interface ChatStore {
    * a window where the two could be set in the wrong order, or where a caller
    * sets one and forgets the other.
    */
-  prepareQuestion(question: string, reductionOpportunity?: ReductionOpportunity): void;
+  prepareQuestion(question: string, reductionOpportunity?: ReductionOpportunity, focus?: ChatFocus): void;
 
   /** Fetch the history list once per business profile. Safe to call on every open. */
   ensureList(): void;
@@ -182,11 +195,14 @@ export interface ChatStore {
   send(text: string): Promise<void>;
   rename(id: number, title: string): Promise<void>;
   remove(id: number): Promise<void>;
+  /** Thumbs on one reply of the open conversation. Optimistic; rolled back on failure. */
+  rate(messageId: number, feedback: "up" | "down" | null): Promise<void>;
 }
 
 export function createChatStore(transport: ChatTransport): ChatStore {
   let state: ChatState = EMPTY;
   let businessProfileId: number | null = null;
+  let businessGeneration = 0;
   const listeners = new Set<() => void>();
 
   /**
@@ -204,7 +220,7 @@ export function createChatStore(transport: ChatTransport): ChatStore {
   }
 
   function clearExchangeState(): Partial<ChatState> {
-    return { error: null, unavailable: false, detectedAmount: null, pendingReductionOpportunity: null };
+    return { error: null, unavailable: false, detectedAmount: null, pendingReductionOpportunity: null, pendingFocus: null };
   }
 
   return {
@@ -223,6 +239,7 @@ export function createChatStore(transport: ChatTransport): ChatStore {
     setBusinessProfile(id) {
       if (id === businessProfileId) return;
       businessProfileId = id;
+      businessGeneration += 1;
       cache.clear();
       wanted = null;
       set({
@@ -233,22 +250,44 @@ export function createChatStore(transport: ChatTransport): ChatStore {
         activeId: null,
         messages: [],
         messagesLoading: false,
+        input: "",
+        sending: false,
+        seedModule: "Dashboard",
         ...clearExchangeState(),
       });
     },
 
     setSeedModule(module) {
+      if (businessProfileId === null) return;
       // Seeds the NEXT new conversation only. An existing thread keeps the
       // origin it was created with, whichever screen it is reopened from.
       if (module !== state.seedModule) set({ seedModule: module });
     },
 
     setInput(value) {
+      if (businessProfileId === null) return;
       if (value !== state.input) set({ input: value });
     },
 
-    prepareQuestion(question, reductionOpportunity) {
-      set({ input: question, pendingReductionOpportunity: reductionOpportunity ?? null });
+    prepareQuestion(question, reductionOpportunity, focus) {
+      if (businessProfileId === null) return;
+      if (focus) {
+        // A question about one specific flag gets a thread of its own:
+        // continuing whatever was open would answer it with that thread's
+        // history and focus.
+        wanted = null;
+        set({
+          activeId: null,
+          messages: [],
+          messagesLoading: false,
+          ...clearExchangeState(),
+          input: question,
+          pendingReductionOpportunity: reductionOpportunity ?? null,
+          pendingFocus: focus,
+        });
+        return;
+      }
+      set({ input: question, pendingReductionOpportunity: reductionOpportunity ?? null, pendingFocus: null });
     },
 
     /*
@@ -259,20 +298,22 @@ export function createChatStore(transport: ChatTransport): ChatStore {
     ensureList() {
       if (businessProfileId === null || state.listLoaded || state.listLoading) return;
       const forProfile = businessProfileId;
+      const generation = businessGeneration;
       set({ listLoading: true, listError: null });
       void transport
         .listConversations(forProfile)
         .then((conversations) => {
-          if (businessProfileId !== forProfile) return;
+          if (businessProfileId !== forProfile || businessGeneration !== generation) return;
           set({ conversations, listLoaded: true, listLoading: false });
         })
         .catch((err: unknown) => {
-          if (businessProfileId !== forProfile) return;
+          if (businessProfileId !== forProfile || businessGeneration !== generation) return;
           set({ listError: messageOf(err), listLoading: false });
         });
     },
 
     newChat() {
+      if (businessProfileId === null) return;
       wanted = null;
       set({
         activeId: null,
@@ -284,6 +325,9 @@ export function createChatStore(transport: ChatTransport): ChatStore {
     },
 
     async selectConversation(id) {
+      if (businessProfileId === null) return;
+      const forProfile = businessProfileId;
+      const generation = businessGeneration;
       if (id === state.activeId) return;
       wanted = id;
 
@@ -296,11 +340,16 @@ export function createChatStore(transport: ChatTransport): ChatStore {
       set({ activeId: id, messages: [], messagesLoading: true, ...clearExchangeState() });
       try {
         const detail = await transport.getConversation(id);
+        if (businessProfileId !== forProfile || businessGeneration !== generation) return;
         cache.set(id, detail.messages);
         if (wanted !== id) return;
         set({ messages: detail.messages, messagesLoading: false });
       } catch (err) {
-        if (wanted !== id) return;
+        if (
+          wanted !== id ||
+          businessProfileId !== forProfile ||
+          businessGeneration !== generation
+        ) return;
         set({ error: messageOf(err), messagesLoading: false });
       }
     },
@@ -310,25 +359,33 @@ export function createChatStore(transport: ChatTransport): ChatStore {
       if (!question || state.sending || businessProfileId === null) return;
 
       const creating = state.activeId === null;
+      const forProfile = businessProfileId;
+      const generation = businessGeneration;
       const previous = creating ? [] : state.messages;
       const conversationId = state.activeId;
       // Read before `clearExchangeState()` wipes it below — queued for this
       // send only, so it must not survive to ground a later, unrelated one.
       const reductionOpportunity = state.pendingReductionOpportunity ?? undefined;
+      const focus = state.pendingFocus ?? undefined;
 
       set({ input: "", sending: true, ...clearExchangeState() });
 
       try {
         const data = creating
           ? await transport.createConversation({
-              businessProfileId,
+              businessProfileId: forProfile,
               originModule: state.seedModule,
               question,
               reductionOpportunity,
+              ...(focus ? { focus } : {}),
             })
-          : reductionOpportunity
-            ? await transport.sendMessage(conversationId as number, question, reductionOpportunity)
-            : await transport.sendMessage(conversationId as number, question);
+          : focus
+            ? await transport.sendMessage(conversationId as number, question, reductionOpportunity, focus)
+            : reductionOpportunity
+              ? await transport.sendMessage(conversationId as number, question, reductionOpportunity)
+              : await transport.sendMessage(conversationId as number, question);
+
+        if (businessProfileId !== forProfile || businessGeneration !== generation) return;
 
         const next = [...previous, data.userMessage, data.assistantMessage];
         cache.set(data.conversation.id, next);
@@ -350,6 +407,7 @@ export function createChatStore(transport: ChatTransport): ChatStore {
           detectedAmount: data.detectedAmount,
         });
       } catch (err) {
+        if (businessProfileId !== forProfile || businessGeneration !== generation) return;
         // The question goes back in the box rather than being lost with the
         // failure — retyping it is the last thing anyone wants after a network
         // error on a phone. Its opportunity goes back with it, so pressing
@@ -359,12 +417,16 @@ export function createChatStore(transport: ChatTransport): ChatStore {
           error: messageOf(err),
           input: question,
           pendingReductionOpportunity: reductionOpportunity ?? null,
+          pendingFocus: focus ?? null,
           sending: false,
         });
       }
     },
 
     async rename(id, title) {
+      if (businessProfileId === null) return;
+      const forProfile = businessProfileId;
+      const generation = businessGeneration;
       const next = title.trim().slice(0, CONVERSATION_TITLE_MAX);
       // An empty title is not an edit, it is a slip — the row would become
       // blank space. Silently keep what was there.
@@ -375,17 +437,23 @@ export function createChatStore(transport: ChatTransport): ChatStore {
       try {
         await transport.renameConversation(id, next);
       } catch (err) {
+        if (businessProfileId !== forProfile || businessGeneration !== generation) return;
         set({ conversations: before, error: messageOf(err) });
       }
     },
 
     async remove(id) {
+      if (businessProfileId === null) return;
+      const forProfile = businessProfileId;
+      const generation = businessGeneration;
       try {
         await transport.deleteConversation(id);
       } catch (err) {
+        if (businessProfileId !== forProfile || businessGeneration !== generation) return;
         set({ error: messageOf(err) });
         return;
       }
+      if (businessProfileId !== forProfile || businessGeneration !== generation) return;
       cache.delete(id);
       if (wanted === id) wanted = null;
       const conversations = state.conversations.filter((c) => c.id !== id);
@@ -396,6 +464,28 @@ export function createChatStore(transport: ChatTransport): ChatStore {
           ? { conversations, activeId: null, messages: [], ...clearExchangeState() }
           : { conversations },
       );
+    },
+
+    async rate(messageId, feedback) {
+      if (businessProfileId === null || state.activeId === null) return;
+      const forProfile = businessProfileId;
+      const generation = businessGeneration;
+      const conversationId = state.activeId;
+      const before = state.messages.find((m) => m.id === messageId)?.feedback ?? null;
+      const apply = (list: ChatMessage[], value: "up" | "down" | null) =>
+        list.map((m) => (m.id === messageId ? { ...m, feedback: value } : m));
+
+      const next = apply(state.messages, feedback);
+      cache.set(conversationId, next);
+      set({ messages: next });
+      try {
+        await transport.rateMessage(conversationId, messageId, feedback);
+      } catch (err) {
+        if (businessProfileId !== forProfile || businessGeneration !== generation) return;
+        const restored = apply(cache.get(conversationId) ?? state.messages, before);
+        cache.set(conversationId, restored);
+        set({ ...(state.activeId === conversationId ? { messages: restored } : {}), error: messageOf(err) });
+      }
     },
   };
 }

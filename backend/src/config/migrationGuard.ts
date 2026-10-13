@@ -1034,7 +1034,7 @@ export async function checkMigrationDrift(migrationsDir: string = MIGRATIONS_DIR
 }
 
 /**
- * Boot gate for `server.ts` and `worker.ts`. Exits the process on drift.
+ * Boot gate for `server.ts` and `worker.ts`. Exits unless the schema is proven current.
  *
  * Deliberately NOT wired into `app.ts`: the tests build the Express app
  * directly, and an integration suite running against its own throwaway
@@ -1045,14 +1045,6 @@ export async function assertMigrationsApplied(
   migrationsDir: string = MIGRATIONS_DIR,
 ): Promise<void> {
   const drift = await checkMigrationDrift(migrationsDir);
-
-  if (drift.status === "unknown" && drift.verificationFailure === "database_unavailable") {
-    logger.warn(
-      { processName, verificationFailure: drift.verificationFailure, reason: drift.reason },
-      "could not verify database migrations at startup; continuing",
-    );
-    return;
-  }
 
   if (drift.status === "ok") {
     logger.info({ processName }, "database migrations verified");

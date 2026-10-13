@@ -311,31 +311,41 @@ describe('Spending Impact — when the AI is unreachable', () => {
   });
 });
 
+/**
+ * The comparison period is the shared one (This week | Month | All time),
+ * the same selector Home and Expense Insights show.
+ */
 describe('Spending Impact — the period control', () => {
   it('reports which comparison period is selected', async () => {
     const queries = await renderScreen();
 
-    const thirtyDays = queries.getByRole('button', { name: 'Month' });
-    expect(thirtyDays.props.accessibilityState.selected).toBe(true);
-
-    const today = queries.getByRole('button', { name: 'Today' });
-    expect(today.props.accessibilityState.selected).toBe(false);
+    // No months with records in this fixture, so it opens on This week.
+    await waitFor(() =>
+      expect(queries.getByRole('radio', { name: 'This week' }).props.accessibilityState.checked).toBe(true),
+    );
+    expect(queries.getByRole('radio', { name: 'All time' }).props.accessibilityState.checked).toBe(false);
   });
 
   it('moves the selected state when a different period is chosen', async () => {
     const queries = await renderScreen();
+    await waitFor(() => expect(queries.getByRole('radio', { name: 'This week' })).toBeTruthy());
 
-    await fireEvent.press(queries.getByRole('button', { name: 'Today' }));
+    await fireEvent.press(queries.getByRole('radio', { name: 'All time' }));
 
     await waitFor(() => {
-      expect(
-        queries.getByRole('button', { name: 'Today' }).props.accessibilityState
-          .selected,
-      ).toBe(true);
-      expect(
-        queries.getByRole('button', { name: 'Month' }).props
-          .accessibilityState.selected,
-      ).toBe(false);
+      expect(queries.getByRole('radio', { name: 'All time' }).props.accessibilityState.checked).toBe(true);
+      expect(queries.getByRole('radio', { name: 'This week' }).props.accessibilityState.checked).toBe(false);
     });
+  });
+
+  it('asks for the chosen period when checking', async () => {
+    const queries = await renderScreen();
+    await waitFor(() => expect(queries.getByRole('radio', { name: 'All time' })).toBeTruthy());
+    await fireEvent.press(queries.getByRole('radio', { name: 'All time' }));
+    await check(queries, '11000');
+    expect(apiGet).toHaveBeenCalledWith(
+      '/insights/spending-impact',
+      expect.objectContaining({ plannedAmount: 11000, period: 'all' }),
+    );
   });
 });

@@ -32,21 +32,19 @@ const COMPONENTS = join(SRC, "components");
 const MAX_EDGE = 512;
 /** Per-file ceiling. The heaviest pose today is ~316 KB; this is headroom, not a target. */
 const MAX_BYTES = 400 * 1024;
-/** Everything the two tables pull in, together. Today's total is ~6.4 MB. */
+/** Everything the two tables pull in, together. Today's total is ~6.6 MB. */
 const MAX_TOTAL_BYTES = 9 * 1024 * 1024;
+
+const TRANSPARENT_BRAND_MARK = "assets/mascot/newmascotlogo.png";
 
 /**
  * Deliberately outside the budget, with a reason.
  *
- * `finsightlogo.png` is not just the `brandMark` pose — `assets/README.md`
- * records it as the single source the launch icons, the adaptive foreground
- * and the splash art are all derived from, and those derivatives are cut at
- * 1024 and kept unquantised on purpose. Shrinking it here would quietly
- * degrade every native resource in the app. Giving the mapper its own smaller
- * copy is a reasonable follow-up; it is a change to `MascotState.tsx`, not to
- * this file's threshold.
+ * `newmascotlogo.png` is the reviewed, full-resolution cross-platform master.
+ * Web and mobile intentionally use the same source bytes, so an optimized
+ * in-app derivative must be introduced as a separate reviewed asset.
  */
-const EXEMPT = new Set(["assets/mascot/finsightlogo.png"]);
+const BUDGET_EXEMPT = new Set([TRANSPARENT_BRAND_MARK]);
 
 /**
  * Every `require("…/assets/mascot/…png")` in the two files allowed to hold one.
@@ -85,7 +83,7 @@ function pngSize(abs: string): { width: number; height: number } {
   return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
 }
 
-const budgeted = referencedAssets().filter((rel) => !EXEMPT.has(rel));
+const budgeted = referencedAssets().filter((rel) => !BUDGET_EXEMPT.has(rel));
 
 describe("the mascot art budget", () => {
   it("finds the referenced art at all", () => {
@@ -122,15 +120,8 @@ describe("the mascot art budget", () => {
     ).toBeLessThanOrEqual(MAX_TOTAL_BYTES);
   });
 
-  /**
-   * The plate mitigation in `MascotState.tsx` assumes the art is opaque, so a
-   * pose that suddenly carries alpha is not a bug — it is the re-export this
-   * folder is waiting for, and it means `plate={false}` becomes available for
-   * that pose. Failing here is how that news reaches somebody instead of
-   * shipping as a pose framed on a plate it no longer needs.
-   */
-  it("notices if a pose is re-exported with a real alpha channel", () => {
-    const withAlpha = budgeted.filter((rel) => {
+  it("allows alpha only for the transparent brand mark", () => {
+    const withAlpha = referencedAssets().filter((rel) => {
       const buf = readFileSync(join(ROOT, rel));
       // IHDR colour type is the byte after the 8-bit depth, at offset 25.
       // 4 = greyscale+alpha, 6 = truecolour+alpha.
@@ -139,9 +130,9 @@ describe("the mascot art budget", () => {
     });
     expect(
       withAlpha,
-      "A pose now has an alpha channel. If it is genuinely cut out, pass plate={false} where it is used, " +
-        "update assets/mascot/README.md, and move it into this test's allowance.",
-    ).toEqual([]);
+      "Only the reviewed brand mark may carry alpha. A contextual pose with alpha needs visual review, " +
+        "plate behavior updated where it is used, and an explicit allowance here.",
+    ).toEqual([TRANSPARENT_BRAND_MARK]);
   });
 
   /**
@@ -149,6 +140,6 @@ describe("the mascot art budget", () => {
    * pointing at the badge this row is dead and should be deleted with it.
    */
   it("still uses the one asset it exempts", () => {
-    expect(referencedAssets()).toContain("assets/mascot/finsightlogo.png");
+    expect(referencedAssets()).toContain(TRANSPARENT_BRAND_MARK);
   });
 });

@@ -40,7 +40,8 @@ import {
  * THE CODE NEVER REACHES OUR SERVER. It is exchanged with Supabase directly for
  * a session (`verifyOtp`), on a client that persists nothing (see
  * `createRecoveryClient`), and the new password is set against that. Our
- * backend is told only afterwards, and only so it can end every OTHER session —
+ * backend is told only afterwards, and only so it can revoke every OTHER
+ * refresh session —
  * which the browser cannot do for itself, and is often the entire reason
  * somebody is resetting.
  */
@@ -58,7 +59,7 @@ export function ResetPassword() {
   const [fieldErrors, setFieldErrors] = useState<FieldErrors<ResetPasswordField>>({});
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [done, setDone] = useState(false);
+  const [completion, setCompletion] = useState<"complete" | "revocation-unconfirmed" | null>(null);
 
   // The code path. Held apart from the password form's state because the two
   // are never on screen together, and sharing one `error` would let a failed
@@ -193,22 +194,20 @@ export function ResetPassword() {
         return;
       }
 
-      /*
-       * Tell the backend, so every other session dies.
-       *
-       * Deliberately not fatal if it fails: the password IS already changed at
-       * this point, and sending the owner back to a form that would now reject
-       * their new password — to fix a session they cannot see — would be worse
-       * than the stale session it is trying to clear. It is logged server-side
-       * either way.
-       */
-      await api
-        .post("/auth/reset-password/complete", null, {
-          headers: { Authorization: `Bearer ${tokens.accessToken}` },
-        })
-        .catch(() => undefined);
-
-      setDone(true);
+      // The password is already active; revocation failure is a completion
+      // state, never a reason to submit the password mutation again.
+      try {
+        const { data } = await api.post<{ message: string; refreshSessionsRevoked: boolean }>(
+          "/auth/reset-password/complete",
+          null,
+          {
+            headers: { Authorization: `Bearer ${tokens.accessToken}` },
+          },
+        );
+        setCompletion(data.refreshSessionsRevoked ? "complete" : "revocation-unconfirmed");
+      } catch {
+        setCompletion("revocation-unconfirmed");
+      }
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -225,7 +224,7 @@ export function ResetPassword() {
    * to type a code, and the only difference is whether we owe an explanation
    * for why the last one did not work.
    */
-  if (!tokens && !done) {
+  if (!tokens && !completion) {
     return (
       <AuthLayout
         title="Enter your recovery code"
@@ -292,18 +291,42 @@ export function ResetPassword() {
     );
   }
 
-  if (done) {
+  if (completion === "complete") {
     return (
       <AuthLayout
         title="Password changed"
         subtitle="You're all set."
         heroTitle="Done."
-        heroBody="Your new password is active, and anything that was signed in to your account has been signed out."
+        heroBody="Your new password is active, and existing sessions cannot be renewed."
       >
-        <p className="text-center text-sm text-ink-600">
-          Your password has been changed and every device that was signed in has been signed out. Log in with your new
-          password to continue.
-        </p>
+        <div role="status" aria-live="polite" aria-atomic="true">
+          <p className="text-center text-sm text-ink-600">
+            Your password has been changed. Other devices will need to sign in again after their current access expires.
+            Log in with your new password to continue.
+          </p>
+        </div>
+        <div className="mt-6">
+          <Button variant="primary" fullWidth onClick={() => navigate("/login")}>
+            Log in
+          </Button>
+        </div>
+      </AuthLayout>
+    );
+  }
+
+  if (completion === "revocation-unconfirmed") {
+    return (
+      <AuthLayout
+        title="Password changed"
+        subtitle="One security step remains."
+        heroTitle="Your new password is active."
+        heroBody="FinSight couldn't confirm that other refresh sessions were revoked."
+      >
+        <div role="alert" aria-live="assertive" aria-atomic="true">
+          <p className="text-center text-sm text-ink-600">
+            Log in with your new password, open Profile, go to Security, and choose “Log out on all devices.”
+          </p>
+        </div>
         <div className="mt-6">
           <Button variant="primary" fullWidth onClick={() => navigate("/login")}>
             Log in

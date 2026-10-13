@@ -2,8 +2,22 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "../../src/config/prisma";
 import * as expenses from "../../src/services/expenseRecord.service";
 import * as sales from "../../src/services/salesRecord.service";
-import { buildModuleContext, INTERACTION_MODULES } from "../../src/services/aiContext.service";
-import { disconnectDb, makeOwnerWithProfile, resetDb, utcDayString } from "../setup/testDb";
+import {
+  buildModuleContext,
+  INTERACTION_MODULES,
+  MAX_AI_ANALYSIS_CATEGORIES,
+  MAX_AI_CONTEXT_BYTES,
+  MAX_AI_INSUFFICIENT_HISTORY_CATEGORIES,
+} from "../../src/services/aiContext.service";
+import { getExpenseBehavior } from "../../src/services/insights.service";
+import {
+  businessDayOffset,
+  disconnectDb,
+  makeOwnerWithProfile,
+  resetDb,
+  utcDay,
+  utcDayString,
+} from "../setup/testDb";
 
 /**
  * Guards the module-scoping contract of the Ask FinSight context.
@@ -135,6 +149,57 @@ describe("the other modules stay narrow", () => {
     expect(context).not.toContain(REVIEW_SECTION);
     expect(context).not.toContain(DASHBOARD_SECTION);
     expect(scenario?.amount).toBe(20000);
+  });
+});
+
+describe("bounded category context", () => {
+  it("keeps 40 sparse categories bounded while reporting the exact omitted count", async () => {
+    await prisma.expenseRecord.deleteMany({ where: { businessProfileId: ctx.profile.id } });
+    const names = Array.from(
+      { length: 40 },
+      (_, index) => `Sparse ${String(index + 1).padStart(2, "0")} ${"owner-controlled ".repeat(4)}`.slice(0, 100),
+    );
+    await prisma.expenseCategory.createMany({
+      data: names.map((name) => ({ businessProfileId: ctx.profile.id, name })),
+    });
+    const categories = await prisma.expenseCategory.findMany({
+      where: { businessProfileId: ctx.profile.id, name: { startsWith: "Sparse " } },
+      orderBy: { name: "asc" },
+    });
+    const date = utcDay(businessDayOffset(ctx.profile.timezone));
+    await prisma.expenseRecord.createMany({
+      data: categories.map((category, index) => ({
+        businessProfileId: ctx.profile.id,
+        categoryId: category.id,
+        date,
+        description: `Sparse category expense ${index + 1}`,
+        amount: index + 1,
+        source: "MANUAL_ENTRY",
+      })),
+    });
+
+    const behavior = await getExpenseBehavior(ctx.user.id, ctx.profile.id, 30, undefined, {
+      maximumAnalysisCategories: MAX_AI_ANALYSIS_CATEGORIES,
+    });
+    expect(behavior.totals.current).toBe(820);
+    expect(behavior.categoryTrends).toHaveLength(MAX_AI_ANALYSIS_CATEGORIES);
+    expect(behavior.categoryTrends.map((trend) => trend.current)).toEqual(
+      Array.from({ length: MAX_AI_ANALYSIS_CATEGORIES }, (_, index) => 40 - index),
+    );
+    expect(behavior.analysisCoverage).toEqual({
+      eligibleCategoryCount: 40,
+      analyzedCategoryCount: MAX_AI_ANALYSIS_CATEGORIES,
+      omittedCategoryCount: 15,
+      insufficientHistoryCategoryCount: 40,
+    });
+
+    const profile = await prisma.businessProfile.findUniqueOrThrow({ where: { id: ctx.profile.id } });
+    const { context } = await buildModuleContext(ctx.user.id, profile, "Expense Insights", "How is spending?");
+    expect(Buffer.byteLength(context, "utf8")).toBeLessThanOrEqual(MAX_AI_CONTEXT_BYTES);
+    expect(context).toContain("Total recorded expenses this period: PHP 820.00");
+    expect(context).toContain(
+      `${40 - MAX_AI_INSUFFICIENT_HISTORY_CATEGORIES} additional categories were omitted.`,
+    );
   });
 });
 

@@ -8,6 +8,8 @@ const { authByToken, storage } = vi.hoisted(() => ({
     sequence: 0,
     uploadReceiptImage: vi.fn(),
     deleteReceiptImage: vi.fn(),
+    deletePublicImagePath: vi.fn(),
+    listPublicImagePaths: vi.fn(),
     inspectReceiptImage: vi.fn(),
     downloadReceiptImageBounded: vi.fn(),
     signedReceiptImageUrl: vi.fn(),
@@ -40,6 +42,8 @@ vi.mock("../../src/services/storage.service", async (importOriginal) => {
     ...actual,
     uploadReceiptImage: storage.uploadReceiptImage,
     deleteReceiptImage: storage.deleteReceiptImage,
+    deletePublicImagePath: storage.deletePublicImagePath,
+    listPublicImagePaths: storage.listPublicImagePaths,
     inspectReceiptImage: storage.inspectReceiptImage,
     downloadReceiptImageBounded: storage.downloadReceiptImageBounded,
     signedReceiptImageUrl: storage.signedReceiptImageUrl,
@@ -55,6 +59,7 @@ import { cleanUpReceiptScanIfOrphaned } from "../../src/lib/sourceCleanup";
 import { lockDuplicateKey } from "../../src/lib/recordLock";
 import { resetRateLimits } from "../../src/middleware/rateLimit.middleware";
 import { runAccountDeletionWorkerOnce } from "../../src/services/accountDeletion.service";
+import { PUBLIC_IMAGE_UPLOAD_SETTLE_MS } from "../../src/services/storage.service";
 import {
   createReceiptCaptureBatch,
   getReceiptCaptureBatch,
@@ -106,6 +111,8 @@ beforeEach(async () => {
     `${businessProfileId}/phase2-${++storage.sequence}.jpg`
   ));
   storage.deleteReceiptImage.mockReset().mockResolvedValue(true);
+  storage.deletePublicImagePath.mockReset().mockResolvedValue(true);
+  storage.listPublicImagePaths.mockReset().mockResolvedValue([]);
   storage.inspectReceiptImage.mockReset().mockResolvedValue({ sizeBytes: 128, mimetype: "image/jpeg" });
   storage.downloadReceiptImageBounded.mockReset().mockResolvedValue(Buffer.from("unused"));
   storage.signedReceiptImageUrl.mockReset().mockResolvedValue("https://example.test/receipt.jpg");
@@ -843,6 +850,7 @@ describe("Phase 2 worker and whole-scan retry", () => {
           amountConfidences: [],
           itemEvidence: [],
         },
+        providerRead: true,
       },
     )));
 
@@ -925,6 +933,7 @@ describe("Phase 2 worker and whole-scan retry", () => {
           amountConfidences: [],
           itemEvidence: [],
         },
+        providerRead: true,
       },
     );
 
@@ -999,6 +1008,25 @@ describe("Phase 2 worker and whole-scan retry", () => {
     ]);
     expect([first.status, second.status].sort()).toEqual([202, 409]);
 
+    /*
+     * The loser of that race, and the client whose 202 was lost on the way
+     * back, get the same 409 — and used to have no way to tell it apart from
+     * "this scan cannot be retried at all". Both clients therefore treated a
+     * retry outcome as ambiguous. The code and the state say which it is.
+     */
+    const conflict = [first, second].find((response) => response.status === 409)!;
+    expect(conflict.body).toMatchObject({
+      code: "RECEIPT_RETRY_IN_PROGRESS",
+      scanId: failed.id,
+      processingStatus: "Processing",
+    });
+    expect(typeof conflict.body.scanRevision).toBe("number");
+
+    // A later retry of the same scan, still reading, answers the same way.
+    const again = await request(app).post(`${RECEIPTS}/${failed.id}/retry`).set(...auth("owner-token"));
+    expect(again.status).toBe(409);
+    expect(again.body.code).toBe("RECEIPT_RETRY_IN_PROGRESS");
+
     const stored = await prisma.receiptScan.findUniqueOrThrow({
       where: { id: failed.id },
       include: { pages: true },
@@ -1036,7 +1064,7 @@ describe("Phase 2 worker and whole-scan retry", () => {
       where: { id: owner.user.id },
       data: {
         status: AccountStatus.DELETION_PENDING,
-        deletionRequestedAt: new Date(),
+        deletionRequestedAt: new Date(Date.now() - PUBLIC_IMAGE_UPLOAD_SETTLE_MS - 1_000),
         deletionStage: AccountDeletionStage.REQUESTED,
       },
     });

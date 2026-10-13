@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, expect, it } from 'vitest';
-import { View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import {
   render,
   isHiddenFromAccessibility,
@@ -46,6 +46,26 @@ describe('Mascot', () => {
       if (typeof node === 'string') continue;
       expect(isHiddenFromAccessibility(node)).toBe(true);
     }
+  });
+
+  it('keeps the plate on contextual poses by default', async () => {
+    const queries = await render(withTheme(<Mascot state="login" />));
+    const style = StyleSheet.flatten(queries.root!.props.style) as {
+      backgroundColor?: string;
+      overflow?: string;
+    };
+    expect(style.backgroundColor).toBe('#fdfdfd');
+    expect(style.overflow).toBe('hidden');
+  });
+
+  it('removes the plate from the transparent brand mark by default', async () => {
+    const queries = await render(withTheme(<Mascot state="brandMark" />));
+    const style = StyleSheet.flatten(queries.root!.props.style) as {
+      backgroundColor?: string;
+      overflow?: string;
+    };
+    expect(style.backgroundColor).toBeUndefined();
+    expect(style.overflow).toBeUndefined();
   });
 
   it('becomes a labelled image only when it is given a label', async () => {

@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { prisma } from "../../src/config/prisma";
 import * as sales from "../../src/services/salesRecord.service";
 import * as insights from "../../src/services/insights.service";
 import { disconnectDb, makeOwnerWithProfile, resetDb } from "../setup/testDb";
@@ -81,7 +82,18 @@ describe("Los Angeles is still 'yesterday' while the UTC calendar has already ro
   });
 
   it("does not yet count a sale dated the UTC-calendar day, since LA has not turned over to it", async () => {
-    await addSaleOn("2026-07-26", 4500, "UTC-only day, not LA's yet");
+    // That day is LA's tomorrow, so a new sale dated on it is refused outright.
+    await expect(addSaleOn("2026-07-26", 4500, "UTC-only day, not LA's yet")).rejects.toMatchObject({ code: "FUTURE_DATE" });
+    // One saved before the rule existed still does not count as today's.
+    await prisma.salesReferenceRecord.create({
+      data: {
+        businessProfileId: ctx.profile.id,
+        date: new Date("2026-07-26T00:00:00.000Z"),
+        description: "UTC-only day, not LA's yet",
+        amount: 4500,
+        source: "MANUAL_ENTRY",
+      },
+    });
     const result = await insights.getRecoveryInsight(ctx.user.id, ctx.profile.id, 14);
     expect(result.todaysSales).toBe(0);
   });

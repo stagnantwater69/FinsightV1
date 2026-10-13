@@ -3,6 +3,7 @@ import { api, errorMessage, setSessionEndedHandler, type SessionEndReason } from
 import { supabase } from "../lib/supabase";
 import { commitPreferences, DEFAULT_PREFERENCES } from "../lib/preferences";
 import { clearReceiptScannerCache } from "../lib/receiptScannerCache";
+import { beginServerStateSession, clearServerStateCache } from "../lib/serverStateCache";
 import type {
   BusinessProfile,
   LoginInput,
@@ -48,7 +49,7 @@ interface AuthValue {
   register: (input: RegisterInput) => Promise<{ message: string }>;
   /** Signs out this phone only. */
   logout: () => Promise<void>;
-  /** Ends every session on every device, including this one. */
+  /** Revokes every refresh session, then clears this phone after confirmation. */
   logoutEverywhere: () => Promise<void>;
   updateProfile: (input: UpdateProfileInput) => Promise<void>;
   /**
@@ -107,6 +108,11 @@ interface AuthValue {
 
 const AuthContext = createContext<AuthValue | undefined>(undefined);
 
+interface AccountSessionGuard {
+  generation: number;
+  userId: number | null;
+}
+
 // A stale LAN address must not make a stored session hold the launch screen
 // until Android's TCP stack eventually gives up. This only bounds the cold-
 // start identity check; ordinary requests keep their endpoint-appropriate
@@ -134,6 +140,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [preferences, setPreferences] = useState<UserPreferences | null>(null);
   const [sessionEnded, setSessionEnded] = useState<SessionEndReason | null>(null);
   const bootstrapProfiles = useRef<Promise<BusinessProfile[]> | null>(null);
+  const sessionGenerationRef = useRef(0);
+  const expectedUserIdRef = useRef<number | null>(null);
+  const accountRequestControllersRef = useRef(new Set<AbortController>());
+
+  const replaceExpectedAccount = useCallback((userId: number | null): AccountSessionGuard => {
+    for (const controller of accountRequestControllersRef.current) controller.abort();
+    accountRequestControllersRef.current.clear();
+    const generation = ++sessionGenerationRef.current;
+    expectedUserIdRef.current = userId;
+    return { generation, userId };
+  }, []);
+
+  const captureExpectedAccount = useCallback((): AccountSessionGuard => ({
+    generation: sessionGenerationRef.current,
+    userId: expectedUserIdRef.current,
+  }), []);
+
+  const accountIsCurrent = useCallback((guard: AccountSessionGuard): boolean => (
+    sessionGenerationRef.current === guard.generation && expectedUserIdRef.current === guard.userId
+  ), []);
+
+  const beginAccountRequest = useCallback((): AbortController => {
+    const controller = new AbortController();
+    accountRequestControllersRef.current.add(controller);
+    return controller;
+  }, []);
+
+  const finishAccountRequest = useCallback((controller: AbortController) => {
+    accountRequestControllersRef.current.delete(controller);
+  }, []);
 
   /*
    * Whether there was a session to lose, read at the moment the transport
@@ -164,14 +200,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setSessionEndedHandler((reason) => {
       if (signedInRef.current) setSessionEnded(reason);
+      replaceExpectedAccount(null);
       bootstrapProfiles.current = null;
+      clearServerStateCache();
       setProfile(null);
       setPreferences(null);
-      void supabase.auth.signOut();
+      void supabase.auth.signOut({ scope: "local" });
       void clearReceiptScannerCache();
     });
     return () => setSessionEndedHandler(null);
-  }, []);
+  }, [replaceExpectedAccount]);
 
   const takeBootstrapProfiles = useCallback(() => {
     const pending = bootstrapProfiles.current;
@@ -181,6 +219,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true;
+    const bootstrapGuard = replaceExpectedAccount(null);
+    clearServerStateCache();
 
     // Restoring from the keystore is async and can be slow on a cold start, so
     // the splash/loading state is held until it resolves rather than briefly
@@ -188,7 +228,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     (async () => {
       try {
         const { data } = await supabase.auth.getSession();
-        if (!active || !data.session) return;
+        if (!active || !accountIsCurrent(bootstrapGuard) || !data.session) return;
 
         // Issued here and deliberately NOT awaited. The gate below waits on
         // /auth/me alone, so the two requests overlap and the shell appears
@@ -201,13 +241,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         profiles.catch(() => undefined);
 
         const me = await fetchProfile();
-        if (!active || !me) return;
+        if (!active || !accountIsCurrent(bootstrapGuard) || !me) return;
 
         // Handed over only once /auth/me has said who the token belongs to.
         // If it failed, `me` is null, the app shows Login, and the list is
         // discarded unread — there is no state in which business data is
         // shown to someone the app could not identify.
+        replaceExpectedAccount(me.id);
         bootstrapProfiles.current = profiles;
+        beginServerStateSession(me.id);
         setProfile(me);
         // Preferences ride on /auth/me, so the cold start pays nothing extra
         // for them.
@@ -219,7 +261,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const { data: sub } = supabase.auth.onAuthStateChange((event) => {
       if (event === "SIGNED_OUT") {
+        replaceExpectedAccount(null);
         bootstrapProfiles.current = null;
+        clearServerStateCache();
         setProfile(null);
         setPreferences(null);
         void clearReceiptScannerCache();
@@ -231,15 +275,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       bootstrapProfiles.current = null;
       sub.subscription.unsubscribe();
     };
-  }, []);
+  }, [accountIsCurrent, replaceExpectedAccount]);
 
   async function adoptSession(session: { access_token: string; refresh_token: string }, p: Profile) {
+    const previousUserId = expectedUserIdRef.current;
+    const installGuard = replaceExpectedAccount(p.id);
+    bootstrapProfiles.current = null;
+    clearServerStateCache();
     // The backend returns the session; hand it to supabase-js so it persists it
     // to the keystore and takes over refreshing.
-    await supabase.auth.setSession({
-      access_token: session.access_token,
-      refresh_token: session.refresh_token,
-    });
+    try {
+      await supabase.auth.setSession({
+        access_token: session.access_token,
+        refresh_token: session.refresh_token,
+      });
+    } catch (err) {
+      if (accountIsCurrent(installGuard)) {
+        replaceExpectedAccount(previousUserId);
+        if (previousUserId !== null) beginServerStateSession(previousUserId);
+      }
+      throw err;
+    }
+    if (!accountIsCurrent(installGuard)) return;
+    beginServerStateSession(p.id);
+    setPreferences(null);
     setProfile(p);
     // The banner on the login screen has done its job the moment a sign-in
     // succeeds; leaving it set would show it again on the next sign-out.
@@ -254,10 +313,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
      * to get past the login form would be paying for the wrong thing. The one
      * caller that must wait checks `preferencesLoaded`.
      */
+    const preferencesController = beginAccountRequest();
     void api
-      .get<Profile>("/auth/me")
-      .then((me) => setPreferences(me.preferences ?? DEFAULT_PREFERENCES))
-      .catch(() => setPreferences(DEFAULT_PREFERENCES));
+      .get<Profile>("/auth/me", undefined, preferencesController.signal)
+      .then((me) => {
+        if (accountIsCurrent(installGuard) && me.id === installGuard.userId) {
+          setPreferences(me.preferences ?? DEFAULT_PREFERENCES);
+        }
+      })
+      .catch(() => {
+        if (accountIsCurrent(installGuard)) setPreferences(DEFAULT_PREFERENCES);
+      })
+      .finally(() => finishAccountRequest(preferencesController));
   }
 
   async function login(input: LoginInput) {
@@ -281,29 +348,55 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    * intentions can be told apart and the destructive one has to be chosen.
    */
   async function logout() {
+    replaceExpectedAccount(null);
+    bootstrapProfiles.current = null;
+    clearServerStateCache();
     try {
       await api.post("/auth/logout");
     } catch {
       // A failed server-side logout must not strand the user in a signed-in
       // shell — clear the local session regardless.
     }
+    if (expectedUserIdRef.current !== null) return;
     await clearLocalSession();
   }
 
   async function logoutEverywhere() {
+    const previousUserId = expectedUserIdRef.current;
+    const logoutGuard = replaceExpectedAccount(null);
+    bootstrapProfiles.current = null;
+    clearServerStateCache();
+    // Keep this phone signed in until the server confirms global revocation.
     try {
       await api.post("/auth/logout-all");
-    } catch {
-      // Same reasoning as logout(): the local session goes either way.
+    } catch (err) {
+      if (accountIsCurrent(logoutGuard)) {
+        replaceExpectedAccount(previousUserId);
+        if (previousUserId !== null) beginServerStateSession(previousUserId);
+      }
+      throw err;
     }
-    await clearLocalSession();
+    if (!accountIsCurrent(logoutGuard)) return;
+    await clearLocalSession(true);
   }
 
-  async function clearLocalSession() {
-    await clearReceiptScannerCache();
-    await supabase.auth.signOut();
+  async function clearLocalSession(bestEffort = false) {
+    if (expectedUserIdRef.current !== null) return;
+    if (bestEffort) {
+      // Global revocation is already confirmed; local cleanup cannot undo it.
+      await clearReceiptScannerCache().catch(() => undefined);
+      if (expectedUserIdRef.current !== null) return;
+      await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
+    } else {
+      await clearReceiptScannerCache();
+      if (expectedUserIdRef.current !== null) return;
+      // Supabase defaults to global sign-out, so device cleanup must override it.
+      await supabase.auth.signOut({ scope: "local" });
+    }
+    if (expectedUserIdRef.current !== null) return;
     // Nothing fetched under the old token may survive into the next session.
     bootstrapProfiles.current = null;
+    clearServerStateCache();
     setProfile(null);
     setPreferences(null);
     // Cleared LAST, and deliberately. Logging out with an already-dead token
@@ -314,7 +407,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function updateProfile(input: UpdateProfileInput) {
-    setProfile(await api.patch<Profile>("/auth/me", input));
+    const account = captureExpectedAccount();
+    if (account.userId === null) return;
+    const controller = beginAccountRequest();
+    try {
+      const updated = await api.patch<Profile>("/auth/me", input, { signal: controller.signal });
+      if (account.userId !== null && accountIsCurrent(account) && updated.id === account.userId) {
+        setProfile(updated);
+      }
+    } finally {
+      finishAccountRequest(controller);
+    }
   }
 
   /*
@@ -331,18 +434,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   preferencesRef.current = preferences;
 
   const updatePreferences = useCallback(async (patch: Partial<UserPreferences>) => {
-    await commitPreferences({
-      current: preferencesRef.current,
-      patch,
-      apply: setPreferences,
-      // The response is the whole preferences object rather than an echo of
-      // the patch, so this also picks up anything another device changed.
-      send: (body) => api.patch<UserPreferences>("/auth/me/preferences", body),
-    });
-  }, []);
+    const account = captureExpectedAccount();
+    if (account.userId === null) return;
+    const controller = beginAccountRequest();
+    try {
+      await commitPreferences({
+        current: preferencesRef.current,
+        patch,
+        apply: (next) => {
+          if (accountIsCurrent(account)) setPreferences(next);
+        },
+        // The response is the whole preferences object rather than an echo of
+        // the patch, so this also picks up anything another device changed.
+        send: (body) => api.patch<UserPreferences>("/auth/me/preferences", body, {
+          signal: controller.signal,
+        }),
+      });
+    } finally {
+      finishAccountRequest(controller);
+    }
+  }, [accountIsCurrent, beginAccountRequest, captureExpectedAccount, finishAccountRequest]);
+
+  const setProfileFromServer = useCallback((updated: Profile) => {
+    const account = captureExpectedAccount();
+    if (account.userId !== null && accountIsCurrent(account) && updated.id === account.userId) {
+      setProfile(updated);
+    }
+  }, [accountIsCurrent, captureExpectedAccount]);
 
   /**
-   * Changes the password and STAYS SIGNED IN. Other devices are signed out.
+   * Changes the password and STAYS SIGNED IN. Other refresh sessions are revoked.
    *
    * This used to sign the phone out, on the stated belief that Supabase
    * invalidates existing sessions when the password is rotated through the
@@ -370,7 +491,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         logoutEverywhere,
         updateProfile,
         changePassword,
-        setProfileFromServer: setProfile,
+        setProfileFromServer,
         takeBootstrapProfiles,
         preferences: preferences ?? DEFAULT_PREFERENCES,
         preferencesLoaded: preferences !== null,

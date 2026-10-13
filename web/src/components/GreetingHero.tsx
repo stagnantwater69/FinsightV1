@@ -242,7 +242,10 @@ export function GreetingHero({ summary }: { summary: DashboardSummary | null }) 
         tucking under the mascot: the art's alpha box is a centred square with
         no transparent margin to slide beneath, so any overlap clips it.
       */}
-      <div className="mt-4 flex items-center gap-3">
+      {/* Wraps below ~200px (a 320px phone at 200% zoom), where Fin and the
+          panel cannot share a line: the panel's own padding alone exceeds
+          what is left beside the art. The row is unchanged above that. */}
+      <div className="mt-4 flex flex-wrap items-center gap-3">
         <FinFlipbook label="Fin, FinSight's mascot" />
 
         <div className={`min-w-0 flex-1 rounded-2xl px-4 py-3 ring-1 ${tone}`}>

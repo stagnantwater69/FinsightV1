@@ -28,9 +28,11 @@ vi.mock("../../src/services/ocr.service", async (importOriginal) => {
   };
 });
 
-const { adapterExtract, adapterMode } = vi.hoisted(() => ({
+const { adapterExtract, adapterMode, adapterExtraction } = vi.hoisted(() => ({
   adapterExtract: { current: vi.fn() },
   adapterMode: { value: "succeed" as "succeed" | "throw" },
+  /** Field overrides applied to the provider's normalized extraction. */
+  adapterExtraction: { value: {} as Record<string, unknown> },
 }));
 
 vi.mock("../../src/services/receiptScan/providerAdapters", async (importOriginal) => {
@@ -43,7 +45,8 @@ vi.mock("../../src/services/receiptScan/providerAdapters", async (importOriginal
       providerVersion: "gemini-3.5-flash-lite",
       extract: adapterExtract.current.mockImplementation(async (request) => {
         if (adapterMode.value === "throw") throw new Error("mocked provider outage");
-        return successfulOutcome(request);
+        const outcome = successfulOutcome(request);
+        return { ...outcome, extraction: { ...outcome.extraction, ...adapterExtraction.value } };
       }),
     }),
   };
@@ -61,6 +64,7 @@ import {
   type ReceiptProviderDispatchInput,
 } from "../../src/services/receiptProviderDispatch.service";
 import { runReceiptWorkerOnce } from "../../src/services/receiptScan/worker";
+import { downloadReceiptImageBounded } from "../../src/services/storage.service";
 import {
   MOCK_PROVIDER_BYTES,
   MOCK_PROVIDER_SHA256,
@@ -173,11 +177,25 @@ async function extractorVersions(scanId: number) {
   };
 }
 
+async function storedFields(scanId: number) {
+  const scan = await prisma.receiptScan.findUniqueOrThrow({ where: { id: scanId }, include: { items: true } });
+  const evidence = (scan.fieldEvidence ?? {}) as Record<string, { source: string }>;
+  return {
+    items: scan.items.map((item) => item.name),
+    vendor: scan.extractedVendor,
+    date: scan.extractedDate?.toISOString().slice(0, 10) ?? null,
+    amount: scan.extractedAmount === null ? null : Number(scan.extractedAmount),
+    sources: Object.fromEntries(Object.entries(evidence).map(([field, entry]) => [field, entry.source])),
+    warnings: ((scan.warnings ?? []) as { code: string; field?: string }[]).map((w) => `${w.code}:${w.field ?? ""}`),
+  };
+}
+
 beforeEach(async () => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   adapterExtract.current = vi.fn();
   adapterMode.value = "succeed";
+  adapterExtraction.value = {};
   ocrText.value = "LOCAL STORE\n2026-09-01\nRice 100.00\nTOTAL PHP 100.00";
   enableMockedGeminiProvider();
   await resetDb();
@@ -281,6 +299,129 @@ describe("RECEIPT_PROVIDER_ROUTING", () => {
       finalBillableUnits: 2,
     });
     expect(await prisma.externalProviderBudget.findMany({ orderBy: { id: "asc" } })).toEqual(budgetsAfterFirst);
+  });
+});
+
+/*
+ * Which reading wins under always routing: the provider's, wherever it
+ * answered; the local read fills what it left null. The one exception is a
+ * locale-ambiguous date the provider merely read the other way round.
+ */
+describe("page bytes are not held for the whole scan", () => {
+  /*
+   * The gate's page evidence used to close over the buffer the OCR read had
+   * already decoded. That kept every page's bytes resident from the read all
+   * the way through parsing and persistence — including on the majority of
+   * scans where no provider is called at all. At the 10 MiB object ceiling and
+   * 8 pages that is 80 MiB per concurrent scan held for nothing.
+   *
+   * The observable consequence of the fix is that the page the gate actually
+   * sends is re-downloaded at dispatch, instead of arriving free from a
+   * closure. Counting the downloads is what distinguishes the two.
+   */
+  it("re-downloads the page it dispatches rather than carrying it from the read", async () => {
+    enableMockedGeminiProvider({ RECEIPT_PROVIDER_ROUTING: "always" });
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    await queuedScan(owner.profile.id, "lazy-bytes-dispatched");
+    vi.mocked(downloadReceiptImageBounded).mockClear();
+
+    expect(await runReceiptWorkerOnce()).toBe(true);
+
+    expect(adapterExtract.current).toHaveBeenCalledTimes(1);
+    // One download for the OCR read of the single page, one for the dispatch.
+    expect(downloadReceiptImageBounded).toHaveBeenCalledTimes(2);
+  });
+
+  it("downloads nothing extra when the gate decides not to call a provider", async () => {
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    await queuedScan(owner.profile.id, "lazy-bytes-skipped");
+    vi.mocked(downloadReceiptImageBounded).mockClear();
+
+    expect(await runReceiptWorkerOnce()).toBe(true);
+
+    expect(adapterExtract.current).not.toHaveBeenCalled();
+    expect(downloadReceiptImageBounded).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("provider merge against the local read", () => {
+  const providerField = (value: string | number) => ({
+    value,
+    evidence: {
+      source: "gemini",
+      sourceVersion: "gemini-3.5-flash-lite",
+      pageNumber: null,
+      regionStatus: "UNAVAILABLE",
+      region: null,
+      confidenceBand: "MEDIUM",
+      calibrationState: "UNCALIBRATED",
+      validationState: "VALIDATED",
+      validationCodes: ["FORMAT_VALID", "REGION_UNAVAILABLE", "OWNER_REVIEW_REQUIRED"],
+    },
+  });
+
+  async function readWithProvider(suffix: string) {
+    enableMockedGeminiProvider({ RECEIPT_PROVIDER_ROUTING: "always" });
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const scan = await queuedScan(owner.profile.id, suffix);
+    expect(await runReceiptWorkerOnce()).toBe(true);
+    expect(adapterExtract.current).toHaveBeenCalledTimes(1);
+    expect((await extractorVersions(scan.id)).versions.providerGateCode).toBe("PROVIDER_OK");
+    return storedFields(scan.id);
+  }
+
+  it("replaces a misread vendor, an ambiguous date and an unreconciled total with the provider's reading", async () => {
+    // A garbage header, "03/09/2026" (both parts <= 12), and an item that does not reach the total.
+    ocrText.value = "bn eee ippines, Inc. i\n03/09/2026\nRice 60.00\nTOTAL PHP 100.00";
+    adapterExtraction.value = { date: providerField("2026-09-14"), total: providerField(125) };
+
+    const stored = await readWithProvider("merge-corrects");
+
+    expect(stored).toMatchObject({ vendor: "Provider Store", date: "2026-09-14", amount: 125 });
+    expect(stored.sources).toEqual({ vendor: "vision", date: "vision", amount: "vision" });
+    expect(stored.warnings).not.toContain("AMBIGUOUS_DATE:date");
+  });
+
+  it("reads the provider first even over a clean local read, and keeps the local items it did not replace", async () => {
+    // A loyalty-card expiry the parser mistakes for the date, plus items that reconcile locally.
+    ocrText.value = "LOCAL STORE\nCard Expiry : 12/30/2056\nRice 100.00\nTOTAL PHP 100.00";
+    adapterExtraction.value = { date: providerField("2026-09-01"), total: providerField(100) };
+
+    const stored = await readWithProvider("merge-provider-first");
+
+    expect(stored).toMatchObject({ vendor: "Provider Store", date: "2026-09-01", amount: 100 });
+    expect(stored.sources).toMatchObject({ vendor: "vision", date: "vision", amount: "ocr" });
+    expect(stored.items).toEqual(["Rice"]);
+  });
+
+  it("lets validated provider evidence replace a local total with no corroborating items", async () => {
+    enableMockedGeminiProvider();
+    ocrText.value = "2026-09-01\nTOTAL 100.00";
+    adapterExtraction.value = { total: providerField(125) };
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const scan = await queuedScan(owner.profile.id, "rescue-total-holds");
+
+    expect(await runReceiptWorkerOnce()).toBe(true);
+    expect(adapterExtract.current).toHaveBeenCalledTimes(1);
+
+    const stored = await storedFields(scan.id);
+    expect(stored.amount).toBe(125);
+    expect(stored.sources.amount).toBe("vision");
+  });
+
+  it("keeps the parser's DD/MM reading of an ambiguous date when the provider only swaps day and month", async () => {
+    ocrText.value = "LOCAL STORE\n03/09/2026\nRice 100.00\nTOTAL PHP 100.00";
+    adapterExtraction.value = { date: providerField("2026-03-09") };
+
+    const stored = await readWithProvider("merge-date-swap");
+
+    expect(stored.date).toBe("2026-09-03");
+    expect(stored.sources.date).toBe("ocr");
+    expect(stored.warnings).toContain("AMBIGUOUS_DATE:date");
   });
 });
 

@@ -9,7 +9,7 @@ import {
 import { ApiError } from "../middleware/error.middleware";
 
 const createBatchSchema = z.object({
-  businessProfileId: z.number().int().positive(),
+  businessProfileId: z.number().int().positive().max(2147483647),
   clientBatchKey: z.string().trim().min(8).max(100),
   expectedReceiptCount: z.number().int()
     .min(RECEIPT_CAPTURE_BATCH_MIN_RECEIPTS)

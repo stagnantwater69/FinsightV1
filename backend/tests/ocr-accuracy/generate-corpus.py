@@ -40,6 +40,11 @@ if not CHROME:
 REAL_RECEIPTS = [
     {
         "id": "real-01-ph-pos-photo",
+        "provenance": {
+            "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+            "consentRecorded": False,
+            "sourceAttributionRecorded": False,
+        },
         "source": "/home/ken/Downloads/receipt.jpeg",
         "conditions": "Real phone photo, PH POS thermal receipt, on wooden table, slight crumple, store name cropped out of frame",
         # The store's own name is NOT in the photo — the top of the receipt is
@@ -57,6 +62,11 @@ REAL_RECEIPTS = [
     },
     {
         "id": "real-03-ph-sales-invoice",
+        "provenance": {
+            "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+            "consentRecorded": False,
+            "sourceAttributionRecorded": False,
+        },
         "source": "/home/ken/Downloads/q.jpeg",
         "conditions": "Real phone photo, PH thermal SALES INVOICE, 8 items with a quantity column and per-item unit prices wrapped onto a second line, a discount line, and two emoji stickers overlaid on one item row by whoever shared it",
         "known_ambiguous": True,
@@ -84,6 +94,11 @@ REAL_RECEIPTS = [
     },
     {
         "id": "real-02-clean-digital",
+        "provenance": {
+            "label": "EXISTING_REAL_UNKNOWN_CONSENT",
+            "consentRecorded": False,
+            "sourceAttributionRecorded": False,
+        },
         "source": "/home/ken/Downloads/ItemizedBarcode.jpg",
         "conditions": "Clean digitally-generated receipt, high contrast, US layout, vendor at top, no TOTAL keyword (uses AMT/BALANCE)",
         "expected": {

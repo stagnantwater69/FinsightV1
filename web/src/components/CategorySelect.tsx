@@ -1,9 +1,10 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
 import { SelectInput, TextInput } from "./Field";
 import { Button } from "./Button";
 import { useToast } from "./Toast";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
+import { getErrorMessage } from "../lib/errors";
 
 interface Props {
   value: number | "";
@@ -19,24 +20,18 @@ interface Props {
 }
 
 export function CategorySelect({ value, onChange, id, onBlur }: Props) {
-  const { categories, createCategory, loading, recentCategoryIds = [], rememberCategory } = useExpenseCategories();
+  const { categories, createCategory, loading, loadingError, refresh, recentCategoryIds = [], rememberCategory } = useExpenseCategories();
   const toast = useToast();
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [searching, setSearching] = useState(false);
-  const [query, setQuery] = useState("");
-  const searchId = useId();
   const createPending = useRef(false);
-  const visible = categories.filter((category) => category.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
-  const recent = recentCategoryIds.map((recentId) => visible.find((category) => category.id === recentId)).filter((category) => category !== undefined);
+  const recent = recentCategoryIds.map((recentId) => categories.find((category) => category.id === recentId)).filter((category) => category !== undefined);
 
   function choose(categoryId: number) {
     rememberCategory?.(categoryId);
     onChange(categoryId);
-    setQuery("");
-    setSearching(false);
   }
 
   /**
@@ -77,8 +72,8 @@ export function CategorySelect({ value, onChange, id, onBlur }: Props) {
       toast(`Category "${category.name}" created`);
       leaveCreateMode();
       setNewName("");
-    } catch {
-      setError("Couldn't create category. Try again.");
+    } catch (err) {
+      setError(getErrorMessage(err));
     } finally {
       createPending.current = false;
       setSubmitting(false);
@@ -86,28 +81,30 @@ export function CategorySelect({ value, onChange, id, onBlur }: Props) {
   }
 
   if (creating) {
+    // The input takes the whole width and the buttons sit under it: this
+    // form also renders inside a narrow table cell (receipt items), where
+    // input and two buttons on one line left the input a few characters wide.
     return (
       <div className="space-y-2">
-        <div className="flex flex-wrap gap-2">
-          <TextInput
-            id={id}
-            autoFocus
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            placeholder="New category name"
-            aria-label="New category name"
-            maxLength={FIELD_LIMITS.categoryName}
-            disabled={submitting}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") { event.preventDefault(); void handleCreate(); }
-              if (event.key === "Escape" && !submitting) { event.preventDefault(); leaveCreateMode(); }
-            }}
-            className="min-w-0 flex-1"
-          />
-          <Button type="button" onClick={handleCreate} disabled={submitting || !newName.trim()}>
+        <TextInput
+          id={id}
+          autoFocus
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          placeholder="New category name"
+          aria-label="New category name"
+          maxLength={FIELD_LIMITS.categoryName}
+          disabled={submitting}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") { event.preventDefault(); void handleCreate(); }
+            if (event.key === "Escape" && !submitting) { event.preventDefault(); leaveCreateMode(); }
+          }}
+        />
+        <div className="flex gap-2">
+          <Button type="button" size="sm" onClick={handleCreate} disabled={submitting || !newName.trim()}>
             Add
           </Button>
-          <Button type="button" variant="secondary" onClick={leaveCreateMode} disabled={submitting}>
+          <Button type="button" size="sm" variant="secondary" onClick={leaveCreateMode} disabled={submitting}>
             Cancel
           </Button>
         </div>
@@ -122,22 +119,6 @@ export function CategorySelect({ value, onChange, id, onBlur }: Props) {
 
   return (
     <div className="min-w-0">
-    {searching ? (
-      <TextInput
-        id={searchId}
-        type="search"
-        aria-label="Search categories"
-        placeholder="Search categories"
-        value={query}
-        autoFocus
-        onChange={(event) => setQuery(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Escape") { setSearching(false); setQuery(""); selectRef.current?.focus(); }
-          if (event.key === "Enter") { event.preventDefault(); selectRef.current?.focus(); }
-        }}
-        className="mb-2"
-      />
-    ) : null}
     <SelectInput
       ref={selectRef}
       id={id}
@@ -151,24 +132,33 @@ export function CategorySelect({ value, onChange, id, onBlur }: Props) {
         }
         choose(Number(e.target.value));
       }}
-      disabled={loading}
+      disabled={loading || Boolean(loadingError && categories.length === 0)}
     >
       <option value="" disabled>
         {loading ? "Loading categories…" : "Select a category"}
       </option>
       {recent.length > 0 ? (
         <optgroup label="Recently used">
-          {recent.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+          {recent.map((category) => <option key={category.id} value={category.id}>{category.name}{category.kind === "personal" ? " (Personal)" : ""}</option>)}
         </optgroup>
       ) : null}
-      {value !== "" && categories.some((category) => category.id === value) && !visible.some((category) => category.id === value) ? (
-        <option value={value}>{categories.find((category) => category.id === value)!.name} (selected)</option>
-      ) : null}
-      {visible.filter((category) => !recentCategoryIds.includes(category.id)).map((c) => (
-        <option key={c.id} value={c.id}>
-          {c.name}
-        </option>
-      ))}
+      {/*
+        Personal categories are grouped under their own heading once a
+        business has any, so a household purchase is never filed as a business
+        cost by a slip of the list. A business with none sees one flat list.
+      */}
+      {(() => {
+        const rest = categories.filter((category) => !recentCategoryIds.includes(category.id));
+        const personal = rest.filter((category) => category.kind === "personal");
+        const option = (c: { id: number; name: string }) => <option key={c.id} value={c.id}>{c.name}</option>;
+        if (personal.length === 0) return rest.map(option);
+        return (
+          <>
+            <optgroup label="Business">{rest.filter((category) => category.kind !== "personal").map(option)}</optgroup>
+            <optgroup label="Personal">{personal.map(option)}</optgroup>
+          </>
+        );
+      })()}
       {/*
         A placeholder for a value this list doesn't contain.
 
@@ -180,23 +170,18 @@ export function CategorySelect({ value, onChange, id, onBlur }: Props) {
         resolved, it has to say so rather than name a different one.
       */}
       {value !== "" && !loading && !categories.some((c) => c.id === value) ? (
-        <option value={value}>Category unavailable — please choose</option>
+        <option value={value}>Category unavailable. Please choose</option>
       ) : null}
       <option value="__new__">+ New category…</option>
     </SelectInput>
-    {categories.length > 0 ? (
-      <button
-        type="button"
-        className="inline-flex min-h-tap items-center text-xs font-medium text-tone-brand hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-600"
-        aria-expanded={searching}
-        aria-controls={searching ? searchId : undefined}
-        disabled={loading}
-        onClick={() => { setSearching((previous) => !previous); setQuery(""); }}
-      >
-        {searching ? "Close category search" : "Search categories"}
-      </button>
+    {loadingError ? (
+      <div role="alert" className="mt-2 space-y-2 text-sm text-tone-danger">
+        <p>Couldn't load categories. {loadingError}</p>
+        <Button type="button" size="sm" variant="secondary" disabled={loading} onClick={() => void refresh().catch(() => undefined)}>
+          Retry loading categories
+        </Button>
+      </div>
     ) : null}
-    {searching && visible.length === 0 ? <p role="status" className="text-xs text-ink-500">No matching categories. Try another name or create a category.</p> : null}
     </div>
   );
 }

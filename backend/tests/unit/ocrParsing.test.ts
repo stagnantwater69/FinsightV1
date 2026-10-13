@@ -131,8 +131,26 @@ describe("amount parsing", () => {
     expect(receipt(["MY STORE", "TOTAL 1,234,567.00"]).amount).toBe(1234567);
   });
 
+  it("reads decimal commas without mistaking their thousands dots", () => {
+    expect(receipt(["LOJA", "TOTAL 4,15"]).amount).toBe(4.15);
+    expect(receipt(["LOJA", "TOTAL EUR 1.234,56"]).amount).toBe(1234.56);
+  });
+
+  it("does not parse dates or longer decimals as money", () => {
+    expect(receipt(["LOJA", "Date 2019.10.30", "Reference 1234.567"])).toMatchObject({ amount: null });
+  });
+
+  it("tolerates OCR whitespace around the decimal separator", () => {
+    expect(receipt(["MY STORE", "TOTAL = 47 .09"]).amount).toBe(47.09);
+    expect(receipt(["LOJA", "TOTAL = 47 , 09"]).amount).toBe(47.09);
+  });
+
   it("falls back to the largest money-shaped number when there is no TOTAL line", () => {
     expect(receipt(["MY STORE", "Amount Due 3400.00", "Item 1200.00"]).amount).toBe(3400);
+  });
+
+  it("does not let bare cash or change lines win the amount fallback", () => {
+    expect(receipt(["SUB TOTAL 10.00", "GRAND TOTAL 1000", "CASH 20.00", "CHANGE 10.00"]).amount).toBe(10);
   });
 
   it("handles a small amount", () => {
@@ -167,6 +185,23 @@ describe("amount parsing", () => {
       receipt(["Item 1 19.00", "TakeOut Total (incl GST) 19.00", "TOTAL INCLUDES 6% GST 1.08"]).amount,
     ).toBe(19);
     expect(receipt(["Item 1 25.15", "Total 25.15", "(Total Included GST @ 6% : 1.42)"]).amount).toBe(25.15);
+  });
+
+  it("excludes a spaced Sub Total and reads the final total", () => {
+    expect(receipt(["Sub Total: 38.95", "Tax: 3.21", "TOTAL: 42.16"]).amount).toBe(42.16);
+  });
+
+  it("uses the amount after TOTAL when another amount precedes it on the line", () => {
+    expect(receipt(["Liquid amount 2,90 TOTAL: 4,15"]).amount).toBe(4.15);
+  });
+
+  it("uses a strict quantity-summary row when the total label is unreadable", () => {
+    expect(receipt(["Bty 8 25.15", "unreadable due 29.15"]).amount).toBe(25.15);
+    expect(receipt(["Qty 8 products 25.15", "other 29.15"]).amount).toBe(29.15);
+  });
+
+  it("does not treat a taxable-base incidence summary as the amount due", () => {
+    expect(receipt(["Item 6,00", "TOTAL INCIDENCIAS: 1,12"]).amount).toBe(6);
   });
 
   // REGRESSION (real-38-super-seven-dot-noise-duplicate-lines, real image
@@ -302,6 +337,26 @@ describe("choosing the vendor among several header lines", () => {
 
   it("still finds a plain vendor with no keyword at all", () => {
     expect(receipt(["ALING NENA", "Date: 2026-07-20", "TOTAL 100.00"]).vendor).toBe("ALING NENA");
+  });
+
+  it("does not choose check-splitting or address lines over the vendor", () => {
+    expect(receipt(["BOA", "Separate checks: 1-of-3", "TOTAL 47.09"]).vendor).toBe("BOA");
+    expect(receipt(["YAUATCHA", "Restaurant", "2 International Market Place", "TOTAL 88.62"]).vendor).toBe("YAUATCHA");
+    expect(receipt(["HEDLEYS", "WEST HOLLYWOOD CA 90069", "TOTAL 41.45"]).vendor).toBe("HEDLEYS");
+  });
+
+  it("keeps a real short vendor behind noisy service metadata without boosting generic acronyms", () => {
+    expect(receipt(["BOA", "O05 1a TABLE 308 #Pa AL", "BAR L Svr 13 1354", "TOTAL 47.09"]).vendor).toBe("BOA");
+    expect(receipt(["SALE", "ALING NENA", "TOTAL 100.00"]).vendor).toBe("ALING NENA");
+  });
+
+  it("keeps legitimate category-only, service-word, and numeric-leading vendor names", () => {
+    expect(receipt(["Market", "TOTAL 10.00"]).vendor).toBe("Market");
+    expect(receipt(["Cafe", "TOTAL 10.00"]).vendor).toBe("Cafe");
+    expect(receipt(["Party City #1234", "TOTAL 10.00"]).vendor).toBe("Party City #1234");
+    expect(receipt(["Server Products 2026", "TOTAL 10.00"]).vendor).toBe("Server Products 2026");
+    expect(receipt(["99 Ranch Market", "TOTAL 10.00"]).vendor).toBe("99 Ranch Market");
+    expect(receipt(["24 Chicken", "TOTAL 10.00"]).vendor).toBe("24 Chicken");
   });
 
   // REGRESSION (real-33-mcdonalds-my-combo-submenu, real image corpus). A

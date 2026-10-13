@@ -1,17 +1,19 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AppState,
   Alert as RNAlert,
+  FlatList,
   Pressable,
   RefreshControl,
-  ScrollView,
   TextInput,
   View,
+  type ListRenderItem,
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { Button, Callout, Card, EmptyState, ErrorNote, Screen, ScreenHeader, SegmentedControl, SelectChip, T } from "../../components/ui";
 import { useBusinessProfiles } from "../../context/BusinessProfileContext";
 import { api } from "../../lib/api";
-import { ConnectionNotice, LastUpdated } from "../../components/ConnectionNotice";
+import { ConnectionNotice, FreshnessStatus } from "../../components/ConnectionNotice";
 import {
   describeActionFailure,
   describeLoadFailure,
@@ -30,6 +32,14 @@ import { useTheme } from "../../context/ThemeContext";
 import { RECORD_SOURCE_LABELS, type RecordItem, type RecordSource } from "../../lib/types";
 import { RecordCard } from "./RecordCard";
 import { type ImportBatchSummary } from "./shared";
+import {
+  createServerStateIdentity,
+  fetchServerState,
+  isServerStateAffected,
+  peekServerState,
+  subscribeToServerState,
+} from "../../lib/serverStateCache";
+
 
 /**
  * The record-type filter. Module scope so the array is not rebuilt on every
@@ -45,10 +55,21 @@ const RECORD_TYPES = [
   { label: "Sales", value: "sales" },
 ] as const;
 
+interface RecordPage {
+  items: RecordItem[];
+  nextCursor: string | null;
+}
+
+type RecordSearchQuery = Record<string, string | number | boolean | undefined>;
+
+const isCompleteDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
+
 export function RecordsScreen({ navigation, route }: any) {
   const t = useTheme();
   const { brand, ink } = t;
   const { selected, categories } = useBusinessProfiles();
+  const selectedBusinessProfileIdRef = useRef<number | null>(selected?.id ?? null);
+  selectedBusinessProfileIdRef.current = selected?.id ?? null;
   const [records, setRecords] = useState<RecordItem[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   // The search endpoint is cursor-based, so keep the cursor that opened each
@@ -81,6 +102,8 @@ export function RecordsScreen({ navigation, route }: any) {
   const [rangeLabel, setRangeLabel] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [revalidating, setRevalidating] = useState(false);
+  const [loadedIdentity, setLoadedIdentity] = useState<string | null>(null);
   /**
    * A failed DELETE or RESOLVE, as a finished sentence.
    *
@@ -92,6 +115,7 @@ export function RecordsScreen({ navigation, route }: any) {
   const [error, setError] = useState<string | null>(null);
   /** A failed search, kept as a descriptor. See lib/connectionState.ts. */
   const [loadFailure, setLoadFailure] = useState<LoadFailure | null>(null);
+  const [loadFailureIdentity, setLoadFailureIdentity] = useState<string | null>(null);
   /** When the rows on screen arrived, and the clock the caption is read against. */
   const [loadedAt, setLoadedAt] = useState<number | null>(null);
   const [clock, setClock] = useState(() => Date.now());
@@ -109,40 +133,66 @@ export function RecordsScreen({ navigation, route }: any) {
    * colour changes, width does not, so the card below it never shifts.
    */
   const [keywordFocused, setKeywordFocused] = useState(false);
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<FlatList<RecordItem>>(null);
+  const requestVersion = useRef(0);
+  const focused = useRef(false);
+  const loadedIdentityRef = useRef<string | null>(null);
+  loadedIdentityRef.current = loadedIdentity;
+
+  useEffect(() => () => {
+    selectedBusinessProfileIdRef.current = null;
+  }, []);
 
   // Typing "groceries" used to fire nine requests, each racing the last.
   const searchTerm = useDebounced(keyword);
-  /** Only send a date once it is actually a date, or the server answers 400. */
-  const isCompleteDate = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
+
+  const buildQuery = useCallback(
+    (cursor?: string): RecordSearchQuery => ({
+      businessProfileId: selected?.id,
+      type,
+      keyword: searchTerm || undefined,
+      categoryId: categoryId ?? undefined,
+      source: source ?? undefined,
+      importBatchId: source === "CSV_UPLOAD" && importBatchId ? importBatchId : undefined,
+      dateFrom: isCompleteDate(dateFrom) ? dateFrom : undefined,
+      dateTo: isCompleteDate(dateTo) ? dateTo : undefined,
+      limit: 50,
+      cursor,
+    }),
+    [selected?.id, type, searchTerm, categoryId, source, importBatchId, dateFrom, dateTo],
+  );
+
+  const currentCursor = pageCursors[pageIndex];
+  const currentQuery = useMemo(() => buildQuery(currentCursor), [buildQuery, currentCursor]);
+  const currentIdentity = useMemo(
+    () => createServerStateIdentity("/records/search", currentQuery),
+    [currentQuery],
+  );
+  const cachedCurrent = loadedIdentity === currentIdentity
+    ? null
+    : peekServerState<RecordPage>("/records/search", currentQuery);
+  const currentPage = loadedIdentity === currentIdentity
+    ? { items: records, nextCursor }
+    : cachedCurrent?.data ?? null;
+  const visibleRecords = currentPage?.items ?? [];
+  const visibleRecordsRef = useRef<RecordItem[]>(visibleRecords);
+  visibleRecordsRef.current = visibleRecords;
+  const visibleNextCursor = currentPage?.nextCursor ?? null;
+  const visibleLoadedAt = loadedIdentity === currentIdentity ? loadedAt : cachedCurrent?.updatedAt ?? null;
+  const visibleLoadFailure = loadFailureIdentity === currentIdentity ? loadFailure : null;
+  const switchingQuery = !currentPage && loadedIdentity !== currentIdentity;
 
   const load = useCallback(
-    async (isRefresh = false, cursor?: string, targetPage = 0, isPagination = false) => {
-      if (!selected) return;
-      if (isRefresh) {
-        setRefreshing(true);
-      } else if (isPagination) {
-        setLoadingMore(true);
-      } else {
-        setLoading(true);
-      }
-      setError(null);
-      setClock(Date.now());
-      try {
-        const page = await api.get<{ items: RecordItem[]; nextCursor: string | null }>("/records/search", {
-            businessProfileId: selected.id,
-            type,
-            keyword: searchTerm || undefined,
-            categoryId: categoryId ?? undefined,
-            source: source ?? undefined,
-            // Sent only alongside its source, so a batch chosen and then left
-            // behind by a source change cannot silently keep scoping results.
-            importBatchId: source === "CSV_UPLOAD" && importBatchId ? importBatchId : undefined,
-            dateFrom: isCompleteDate(dateFrom) ? dateFrom : undefined,
-            dateTo: isCompleteDate(dateTo) ? dateTo : undefined,
-            limit: 50,
-            cursor,
-          });
+    async (isRefresh = false, cursor?: string, targetPage = 0, isPagination = false): Promise<boolean> => {
+      if (!selected) return false;
+
+      const query = buildQuery(cursor);
+      const identity = createServerStateIdentity("/records/search", query);
+      const cached = peekServerState<RecordPage>("/records/search", query);
+      const request = ++requestVersion.current;
+      const hasVisiblePage = loadedIdentityRef.current === identity || cached !== null;
+
+      const applyPage = (page: RecordPage, updatedAt: number) => {
         setRecords(page.items);
         setNextCursor(page.nextCursor);
         setPageIndex(targetPage);
@@ -152,21 +202,59 @@ export function RecordsScreen({ navigation, route }: any) {
           visited[targetPage] = cursor;
           return visited;
         });
-        setLoadedAt(Date.now());
+        setLoadedIdentity(identity);
+        setLoadedAt(updatedAt);
         setLoadFailure(null);
-        return true;
-      } catch (err) {
-        // Not cleared before the request: a failing pull-to-refresh used to
-        // blink its own explanation away for the length of each attempt.
-        setLoadFailure(toLoadFailure(err));
-        return false;
-      } finally {
+        setLoadFailureIdentity(null);
+      };
+
+      if (cached) applyPage(cached.data, cached.updatedAt);
+      setError(null);
+      setClock(Date.now());
+
+      if (!isRefresh && cached && !cached.stale) {
         setLoading(false);
         setRefreshing(false);
+        setRevalidating(false);
         setLoadingMore(false);
+        return true;
+      }
+
+      if (isRefresh) {
+        setRefreshing(true);
+      } else if (isPagination) {
+        setLoadingMore(true);
+      } else if (hasVisiblePage) {
+        setRevalidating(true);
+      } else {
+        setLoading(true);
+      }
+
+      try {
+        const result = await fetchServerState<RecordPage>({
+          path: "/records/search",
+          query,
+          fetcher: () => api.get<RecordPage>("/records/search", query),
+          force: isRefresh,
+        });
+        if (request !== requestVersion.current) return false;
+        applyPage(result.data, result.updatedAt);
+        return true;
+      } catch (err) {
+        if (request !== requestVersion.current) return false;
+        setLoadFailure(toLoadFailure(err));
+        setLoadFailureIdentity(identity);
+        return false;
+      } finally {
+        if (request === requestVersion.current) {
+          setLoading(false);
+          setRefreshing(false);
+          setRevalidating(false);
+          setLoadingMore(false);
+        }
       }
     },
-    [selected, type, searchTerm, categoryId, source, importBatchId, dateFrom, dateTo]
+    [selected, buildQuery],
   );
 
   /*
@@ -218,7 +306,56 @@ export function RecordsScreen({ navigation, route }: any) {
     setRangeLabel(null);
   }
 
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  useFocusEffect(
+    useCallback(() => {
+      focused.current = true;
+      void load();
+      return () => {
+        focused.current = false;
+        requestVersion.current += 1;
+      };
+    }, [load]),
+  );
+
+  useEffect(() => {
+    let previousState = AppState.currentState;
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      const returningToForeground =
+        /inactive|background/.test(previousState) && nextState === "active";
+      previousState = nextState;
+      if (!returningToForeground || !focused.current) return;
+
+      const cached = peekServerState<RecordPage>("/records/search", currentQuery);
+      if (!cached || cached.stale) void load(false, currentCursor, pageIndex);
+    });
+    return () => subscription.remove();
+  }, [currentCursor, currentQuery, load, pageIndex]);
+
+  useEffect(
+    () =>
+      subscribeToServerState((event) => {
+        if (event.type === "clear") {
+          requestVersion.current += 1;
+          setRecords([]);
+          setNextCursor(null);
+          setPageIndex(0);
+          setPageCursors([undefined]);
+          setLoadedIdentity(null);
+          setLoadedAt(null);
+          setLoadFailure(null);
+          setLoadFailureIdentity(null);
+          setLoading(true);
+          return;
+        }
+        if (
+          focused.current &&
+          isServerStateAffected("/records/search", currentQuery, event)
+        ) {
+          void load(false, currentCursor, pageIndex);
+        }
+      }),
+    [currentCursor, currentQuery, load, pageIndex],
+  );
 
   /*
    * A filter handed in by another screen — today, "show me this category's
@@ -286,7 +423,7 @@ export function RecordsScreen({ navigation, route }: any) {
    * evidence for figures on every other screen, and a mis-swipe while
    * scrolling must not be able to destroy one.
    */
-  function confirmDelete(record: RecordItem) {
+  const confirmDelete = useCallback((record: RecordItem) => {
     RNAlert.alert(
       "Delete this record?",
       `"${record.description}" will be removed. This cannot be undone.`,
@@ -296,13 +433,18 @@ export function RecordsScreen({ navigation, route }: any) {
           text: "Delete",
           style: "destructive",
           onPress: async () => {
+            if (selectedBusinessProfileIdRef.current !== record.businessProfileId) return;
             // Optimistic: the row leaves immediately and comes back if the
             // server refuses, rather than the owner watching a spinner over a
             // row they have already decided about.
-            const previous = records;
+            const previous = visibleRecordsRef.current;
             setRecords((rows) => rows.filter((x) => !(x.type === record.type && x.id === record.id)));
             try {
-              await api.delete(recordUpdatePath(record.type, record.id));
+              await api.delete(
+                recordUpdatePath(record.type, record.id),
+                undefined,
+                { cacheScope: { businessProfileId: record.businessProfileId } },
+              );
               haptics.committed();
             } catch (err) {
               setRecords(previous);
@@ -313,11 +455,12 @@ export function RecordsScreen({ navigation, route }: any) {
         },
       ],
     );
-  }
+  }, []);
 
   /** Clears a flag from the list, without a trip to the review screen. */
-  async function resolve(record: RecordItem) {
-    const previous = records;
+  const resolve = useCallback(async (record: RecordItem) => {
+    if (selectedBusinessProfileIdRef.current !== record.businessProfileId) return;
+    const previous = visibleRecordsRef.current;
     setRecords((rows) =>
       rows.map((x) =>
         x.type === record.type && x.id === record.id
@@ -329,7 +472,7 @@ export function RecordsScreen({ navigation, route }: any) {
       await api.patch(recordUpdatePath(record.type, record.id), {
         duplicateStatus: "Not a Duplicate",
         reviewStatus: "Reviewed",
-      });
+      }, { cacheScope: { businessProfileId: record.businessProfileId } });
       haptics.succeeded();
       // This one stays on the list, so it needs no hand-off — the same Callout,
       // set directly.
@@ -339,7 +482,24 @@ export function RecordsScreen({ navigation, route }: any) {
       setError(describeActionFailure(toLoadFailure(err), "The record's flags are unchanged."));
       haptics.failed();
     }
-  }
+  }, []);
+
+  const categoryNames = useMemo(
+    () => new Map(categories.map((category) => [category.id, category.name])),
+    [categories],
+  );
+  const renderRecord = useCallback<ListRenderItem<RecordItem>>(
+    ({ item }) => (
+      <RecordCard
+        r={item}
+        categoryName={categoryNames.get(item.categoryId ?? -1) ?? "—"}
+        onPress={() => navigation.navigate("EditRecord", { record: item })}
+        onDelete={() => confirmDelete(item)}
+        onResolve={() => resolve(item)}
+      />
+    ),
+    [categoryNames, confirmDelete, navigation, resolve],
+  );
 
   if (!selected) {
     return (
@@ -351,8 +511,6 @@ export function RecordsScreen({ navigation, route }: any) {
     );
   }
 
-  const categoryName = (id?: number) => categories.find((c) => c.id === id)?.name ?? "—";
-
   /*
    * `hasData` is `records.length > 0`, NOT "a load has succeeded before".
    *
@@ -361,31 +519,39 @@ export function RecordsScreen({ navigation, route }: any) {
    * screen to describe as stale, so the notice must be the one that explains a
    * blank list rather than the one that ages the figures on it.
    */
-  const loadNotice = describeLoadFailure(loadFailure, {
-    hasData: records.length > 0,
-    lastUpdatedAt: loadedAt,
+  const loadNotice = describeLoadFailure(visibleLoadFailure, {
+    hasData: visibleRecords.length > 0,
+    lastUpdatedAt: visibleLoadedAt,
     now: clock,
     subject: "your records",
   });
 
   async function changePage(targetPage: number, cursor?: string) {
     const loaded = await load(false, cursor, targetPage, true);
-    if (loaded) scrollRef.current?.scrollTo({ y: 0, animated: true });
+    if (loaded) scrollRef.current?.scrollToOffset({ offset: 0, animated: true });
   }
 
   return (
     <Screen safeTop>
-      <ScrollView
+      <FlatList<RecordItem>
         ref={scrollRef}
+        data={visibleRecords}
+        renderItem={renderRecord}
+        keyExtractor={(item) => `${item.type}-${item.id}`}
+        initialNumToRender={8}
+        maxToRenderPerBatch={8}
+        windowSize={7}
+        keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ padding: space.lg, paddingTop: space.md, paddingBottom: space.xxl * 2 }}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
-            onRefresh={() => load(true, pageCursors[pageIndex], pageIndex)}
+            onRefresh={() => load(true, currentCursor, pageIndex)}
             tintColor={brand[600]}
           />
         }
-      >
+        ListHeaderComponent={
+          <>
         <ScreenHeader title="Records" />
 
         {notice ? (
@@ -471,9 +637,9 @@ export function RecordsScreen({ navigation, route }: any) {
             <T variant="caption" style={{ color: activeFilters > 0 ? brand[700] : ink[500] }}>
               {activeFilters > 0
                 ? `${activeFilters} active`
-                : loading
-                  ? ""
-                  : `Page ${pageIndex + 1} · ${records.length} record${records.length === 1 ? "" : "s"}`}
+                  : loading || switchingQuery
+                    ? ""
+                    : `Page ${pageIndex + 1} · ${visibleRecords.length} record${visibleRecords.length === 1 ? "" : "s"}`}
             </T>
           </View>
 
@@ -617,20 +783,27 @@ export function RecordsScreen({ navigation, route }: any) {
 
         <ConnectionNotice
           notice={loadNotice}
-          onRetry={() => load(true, pageCursors[pageIndex], pageIndex)}
-          busy={refreshing}
+          onRetry={() => load(true, currentCursor, pageIndex)}
+          busy={refreshing || revalidating}
           style={{ marginBottom: space.md }}
         />
 
         {/* The list is laid out by each card's own margin rather than a gap on
             the container, so this carries its own. */}
-        {records.length > 0 ? (
-          <LastUpdated at={loadedAt} now={clock} style={{ marginBottom: space.sm }} />
+        {visibleRecords.length > 0 ? (
+          <FreshnessStatus
+            at={visibleLoadedAt}
+            now={clock}
+            refreshing={refreshing || revalidating}
+            style={{ marginBottom: space.sm }}
+          />
         ) : null}
-
-        {loading ? (
+          </>
+        }
+        ListEmptyComponent={
+          loading || switchingQuery ? (
           <SkeletonList />
-        ) : records.length === 0 && loadFailure ? (
+        ) : visibleLoadFailure ? (
           /*
             THE BUG THIS BRANCH FIXES. A search that failed left `records`
             empty, which fell through to the empty state below — so an owner
@@ -641,7 +814,7 @@ export function RecordsScreen({ navigation, route }: any) {
             offers the retry, so this branch draws nothing more.
           */
           null
-        ) : records.length === 0 ? (
+        ) : (
           <EmptyState
             title={keyword ? "No records match that search" : "You haven't added any records yet"}
             body={
@@ -651,19 +824,10 @@ export function RecordsScreen({ navigation, route }: any) {
             }
             action={!keyword ? <Button title="Add your first expense" variant="primary" onPress={() => navigation.navigate("AddExpense")} /> : undefined}
           />
-        ) : (
-          <>
-            {records.map((r) => (
-              <RecordCard
-                key={`${r.type}-${r.id}`}
-                r={r}
-                categoryName={categoryName(r.categoryId)}
-                onPress={() => navigation.navigate("EditRecord", { record: r })}
-                onDelete={() => confirmDelete(r)}
-                onResolve={() => resolve(r)}
-              />
-            ))}
-            {pageIndex > 0 || nextCursor ? (
+        )
+        }
+        ListFooterComponent={
+          visibleRecords.length > 0 && (pageIndex > 0 || visibleNextCursor) ? (
               <Card style={{ marginTop: space.xs }}>
                 <T
                   variant="caption"
@@ -686,16 +850,15 @@ export function RecordsScreen({ navigation, route }: any) {
                       title={loadingMore ? "Loading…" : "Next"}
                       variant="secondary"
                       loading={loadingMore}
-                      disabled={!nextCursor || loadingMore}
-                      onPress={() => changePage(pageIndex + 1, nextCursor ?? undefined)}
+                      disabled={!visibleNextCursor || loadingMore}
+                      onPress={() => changePage(pageIndex + 1, visibleNextCursor ?? undefined)}
                     />
                   </View>
                 </View>
               </Card>
-            ) : null}
-          </>
-        )}
-      </ScrollView>
+          ) : null
+        }
+      />
 
     </Screen>
   );

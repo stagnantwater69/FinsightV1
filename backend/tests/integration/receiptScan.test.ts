@@ -126,6 +126,20 @@ const RECEIPT_TEXT = [
   "Thank you!",
 ].join("\n");
 
+/**
+ * The same receipt with lines no vocabulary can place, for the tests about
+ * what happens when neither history nor the local categoriser has an answer.
+ */
+const UNPLACEABLE_TEXT = [
+  "ABC SARI-SARI STORE",
+  "123 Apas Road, Cebu City",
+  "Date: 2026-07-20",
+  "ZX-9 GIZMO KIT       1220.00",
+  "QWV UNIT              180.00",
+  "TOTAL             1400.00",
+  "Thank you!",
+].join("\n");
+
 beforeEach(async () => {
   await resetDb();
   ctx = await makeOwnerWithProfile({ expectedMonthlyExpenses: 60000, largeExpenseThresholdPercent: 25 });
@@ -252,7 +266,8 @@ describe("automatic itemisation at scan time", () => {
    * ones — the owner sees plainly that there is something left to decide.
    */
   it("falls back to a standing Uncategorized category for unplaced items", async () => {
-    await establishCategoryChoices([{ name: "Rice 25kg", categoryId: ctx.categories.Inventory! }]);
+    await establishCategoryChoices([{ name: "ZX-9 GIZMO KIT", categoryId: ctx.categories.Inventory! }]);
+    extractTextMock.mockResolvedValue(UNPLACEABLE_TEXT);
     const scan = await upload();
 
     const uncategorised = await prisma.expenseCategory.findFirstOrThrow({
@@ -274,6 +289,7 @@ describe("automatic itemisation at scan time", () => {
   });
 
   it("reuses an existing Uncategorized rather than making a second one", async () => {
+    extractTextMock.mockResolvedValue(UNPLACEABLE_TEXT);
     await upload(); // creates it
     await upload(); // must not create another
     expect(
@@ -282,6 +298,7 @@ describe("automatic itemisation at scan time", () => {
   });
 
   it("never calls the legacy model after creating Uncategorized", async () => {
+    extractTextMock.mockResolvedValue(UNPLACEABLE_TEXT);
     await upload(); // creates Uncategorized
     categoriseMock.mockClear();
     await upload();
@@ -339,6 +356,7 @@ describe("provider category proposals disabled for receipt data", () => {
 
   it("files the unplaced item in Uncategorized without a provider proposal", async () => {
     categoriseMock.mockResolvedValue([{ index: 0, match: null, suggestNew: "Packaging" }]);
+    extractTextMock.mockResolvedValue(UNPLACEABLE_TEXT);
     const scan = await upload();
     const uncategorised = await prisma.expenseCategory.findFirstOrThrow({
       where: { businessProfileId: ctx.profile.id, name: "Uncategorized" },
@@ -773,6 +791,7 @@ describe("local confirmed-category history", () => {
    * a decision a human actually made.
    */
   it("ignores categories from scans the owner has not confirmed yet", async () => {
+    extractTextMock.mockResolvedValue(UNPLACEABLE_TEXT);
     const first = await upload(); // left Pending
     const uncategorised = await prisma.expenseCategory.findFirstOrThrow({
       where: { businessProfileId: ctx.profile.id, name: "Uncategorized" },
@@ -786,6 +805,7 @@ describe("local confirmed-category history", () => {
 
   /** "It went in Uncategorized" is the absence of a decision, not one. */
   it("does not replay items left in Uncategorized", async () => {
+    extractTextMock.mockResolvedValue(UNPLACEABLE_TEXT);
     const first = await upload(); // no matches, so both land in Uncategorized
     const uncategorised = await prisma.expenseCategory.findFirstOrThrow({
       where: { businessProfileId: ctx.profile.id, name: "Uncategorized" },
@@ -805,6 +825,7 @@ describe("local confirmed-category history", () => {
 
   /** One business's habits must never leak into another's suggestions. */
   it("never replays another business's choices", async () => {
+    extractTextMock.mockResolvedValue(UNPLACEABLE_TEXT);
     const first = await upload();
     await confirmReceipt(ctx.user.id, first.id, {
       date: "2026-07-20",

@@ -225,12 +225,42 @@ describe("receipt provider gate and consent-by-policy log hygiene", () => {
       "provider",
       "providerItemCount",
       "providerMs",
+      "providerTelemetry",
       "reasons",
       "rescueRequested",
       "scanId",
       "totalMs",
     ]);
     expect(gate![0]).toMatchObject({ scanId: scan.id, code: "PROVIDER_OK", dispatched: true, provider: "gemini", persisted: true });
+
+    const providerTelemetry = (gate![0] as Record<string, unknown>).providerTelemetry as Record<string, unknown>;
+    expect(Object.keys(providerTelemetry).sort()).toEqual([
+      "cooldown",
+      "gateStages",
+      "outcomeCode",
+      "providerStages",
+      "retryAfterMs",
+    ]);
+    expect(providerTelemetry).toMatchObject({
+      cooldown: null,
+      outcomeCode: "OK",
+      providerStages: null,
+      retryAfterMs: null,
+    });
+    const gateStages = providerTelemetry.gateStages as Record<string, unknown>;
+    expect(Object.keys(gateStages).sort()).toEqual([
+      "cooldownLookupMs",
+      "evidenceLoadMs",
+      "providerMs",
+      "reservationMs",
+      "settlementMs",
+      "submissionMs",
+      "totalMs",
+    ]);
+    expect(Object.values(gateStages).every((value) => (
+      typeof value === "number" && Number.isFinite(value) && value >= 0
+    ))).toBe(true);
+    expect(JSON.stringify(providerTelemetry)).not.toMatch(PRIVATE_PATTERN);
 
     const policy = calls.find(([, message]) => message === "receipt provider consent granted by policy");
     expect(policy, "the consent-by-policy line must be emitted").toBeDefined();

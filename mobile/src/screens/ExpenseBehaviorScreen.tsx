@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import { Pressable, ScrollView, View } from "react-native";
+import { Pressable, RefreshControl, ScrollView, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as haptics from "../lib/haptics";
 import { useFocusEffect } from "@react-navigation/native";
-import { Callout, Card, DropdownPill, ErrorNote, Money, OptionSheet, Screen, T } from "../components/ui";
+import { Button, Callout, Card, ErrorNote, Money, OptionSheet, Screen, T } from "../components/ui";
 import { CategoryChange, CategoryComparison, SpendTrend } from "../components/charts";
 import { AskFinSight } from "../components/AskFinSight";
 import { AskFinSightFab, FAB_CLEARANCE } from "../components/AskFinSightFab";
@@ -25,12 +25,24 @@ import { useInsight } from "../lib/useInsight";
 import { font, space, typeScale } from "../theme/tokens";
 import { TAP_FLOOR } from "../components/touchTarget";
 import { useTheme } from "../context/ThemeContext";
+import { ReportingPeriodScope, useReportingPeriod } from "../context/ReportingPeriodContext";
+import { PeriodSelector } from "../components/PeriodSelector";
+import { ConnectionNotice, FreshnessStatus } from "../components/ConnectionNotice";
+import { describeLoadFailure, toLoadFailure } from "../lib/connectionState";
+import type { DetailExpenseOverview } from "../lib/expenseOverview";
+import {
+  ALL_TIME,
+  formatDayRange,
+  periodLabel as describePeriod,
+  periodParams,
+  periodPhrase,
+  previousLabel as describePrevious,
+} from "../lib/reportingPeriod";
 import type {
   AnomalyFinding,
   AnomalyFindingPage,
   ExpenseBehavior,
   ReductionOpportunity,
-  ReductionOpportunityResponse,
   RecurringPattern,
   RecurringSchedule,
 } from "../lib/types";
@@ -38,22 +50,20 @@ import type {
 /** Keeps a one-line content row from collapsing. See its use — not a target. */
 const CONTENT_ROW_MIN = 32;
 
+const EMPTY_EXPENSE_BEHAVIOR: ExpenseBehavior = {
+  periodStart: "",
+  periodEnd: "",
+  previousPeriodStart: null,
+  previousPeriodEnd: null,
+  dailyTotals: [],
+  totals: { current: 0, previous: 0 },
+  categoryTrends: [],
+  unusualExpenses: [],
+  insufficientHistoryCategories: [],
+};
+
 
 // ---------------------------------------------------------------- Expense insight
-
-const PERIODS = [
-  { label: "This week", value: 7 },
-  { label: "This month", value: 30 },
-];
-
-/**
- * The "most recent month with records" option's value.
- *
- * Negative because DropdownPill keys options by value and every real period is
- * a positive day count — this can never collide with one. It is not a length;
- * it means "anchor the 30-day window to the last expense instead of to today".
- */
-const ANCHOR_PERIOD = -1;
 
 /**
  * How many category rows "What changed" shows before offering the rest.
@@ -90,21 +100,40 @@ function ExpenseInsightSkeleton() {
   );
 }
 
-export function ExpenseBehaviorScreen({ navigation }: any) {
+export function ExpenseBehaviorScreen(props: any) {
+  return (
+    <ReportingPeriodScope>
+      <ExpenseBehaviorGate {...props} />
+    </ReportingPeriodScope>
+  );
+}
+
+/**
+ * Waits for the period's default (the newest month with records) so the
+ * screen loads once, for the right period, instead of once for a placeholder.
+ */
+function ExpenseBehaviorGate(props: any) {
+  const { ready } = useReportingPeriod();
+  if (ready) return <ExpenseBehaviorContent {...props} />;
+  return (
+    <Screen safeTop>
+      <ExpenseInsightSkeleton />
+    </Screen>
+  );
+}
+
+function ExpenseBehaviorContent({ navigation }: any) {
   const t = useTheme();
   const { brand, ink, paper, statusText } = t;
   const { selected } = useBusinessProfiles();
-  const [periodDays, setPeriodDays] = useState(30);
   /**
-   * The day the window ends on, or null for today.
-   *
-   * Every window here is measured back from today, so a business whose history
-   * was imported can have its last expense a year ago — putting all of them in
-   * a gap and making this screen report "nothing recorded" to an owner with
-   * hundreds of records. Selecting the anchor option moves the window to where
-   * the data actually is, and says which month that was.
+   * The shared period: This week, a month with records, or All time. The
+   * Month list replaces the "most recent month" option this screen used to
+   * grow when every record predated the rolling window.
    */
-  const [endDate, setEndDate] = useState<string | null>(null);
+  const { selection, setSelection } = useReportingPeriod();
+  const periodKeyValue = JSON.stringify(selection);
+  const allTime = selection.kind === "all";
   const [askOpen, setAskOpen] = useState(false);
   const chat = useAiChat();
   /**
@@ -126,31 +155,95 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
    */
   const [section, setSection] = useState<"overview" | "alerts" | "recurring">("overview");
   const [showAllTrends, setShowAllTrends] = useState(false);
-  const { data, loading, error } = useInsight<ExpenseBehavior>(
-    "/insights/expense-behavior",
-    { businessProfileId: selected?.id, periodDays, ...(endDate ? { endDate } : {}) },
-    [selected?.id, periodDays, endDate]
+  const overviewState = useInsight<DetailExpenseOverview>(
+    "/insights/expense-overview",
+    { businessProfileId: selected?.id, ...periodParams(selection), view: "detail" },
+    [selected?.id, periodKeyValue],
+    { enabled: Boolean(selected) },
   );
-  const reductionState = useInsight<ReductionOpportunityResponse>(
-    "/insights/reduction-opportunities",
-    { businessProfileId: selected?.id, periodDays, ...(endDate ? { endDate } : {}) },
-    [selected?.id, periodDays, endDate]
-  );
+  const behaviorPanel = overviewState.data?.behavior;
+  const behaviorData = behaviorPanel?.status === "available" ? behaviorPanel.data : null;
+  const data = behaviorData ?? EMPTY_EXPENSE_BEHAVIOR;
+  const loading = overviewState.loading && overviewState.data === null;
+  const error = behaviorPanel?.status === "unavailable"
+    ? "Expense analysis is unavailable right now."
+    : null;
+  const opportunityPanel = overviewState.data?.opportunities;
+  const reductionState = {
+    data: opportunityPanel?.status === "available" ? opportunityPanel.data : null,
+    loading,
+    error:
+      opportunityPanel?.status === "unavailable"
+        ? "Reduction opportunities are unavailable right now."
+        : overviewState.data === null
+          ? overviewState.error
+          : null,
+    load: overviewState.load,
+  };
   const findingState = useInsight<AnomalyFindingPage>(
     "/insights/findings",
     { businessProfileId: selected?.id, status: "OPEN", take: 20 },
-    [selected?.id]
+    [selected?.id],
+    { enabled: Boolean(selected) },
   );
   const patternState = useInsight<RecurringPattern[]>(
-    "/insights/recurring-patterns", { businessProfileId: selected?.id }, [selected?.id]
+    "/insights/recurring-patterns",
+    { businessProfileId: selected?.id },
+    [selected?.id],
+    { enabled: Boolean(selected) },
   );
   /*
    * The owner's own declared schedules — what the Recurring tab is actually
    * about. The patterns above are only the candidates FinSight offers.
    */
   const scheduleState = useInsight<RecurringSchedule[]>(
-    "/insights/recurring-schedules", { businessProfileId: selected?.id }, [selected?.id]
+    "/insights/recurring-schedules",
+    { businessProfileId: selected?.id },
+    [selected?.id],
+    { enabled: Boolean(selected) },
   );
+  const overviewNotice = describeLoadFailure(
+    overviewState.rawError ? toLoadFailure(overviewState.rawError) : null,
+    {
+      hasData: overviewState.data !== null,
+      lastUpdatedAt: overviewState.lastUpdatedAt,
+      subject: "expense insights",
+    },
+  );
+  const patternNotice = describeLoadFailure(
+    patternState.rawError ? toLoadFailure(patternState.rawError) : null,
+    {
+      hasData: patternState.data !== null,
+      lastUpdatedAt: patternState.lastUpdatedAt,
+      subject: "recurring suggestions",
+    },
+  );
+  const findingNotice = describeLoadFailure(
+    findingState.rawError ? toLoadFailure(findingState.rawError) : null,
+    {
+      hasData: findingState.data !== null,
+      lastUpdatedAt: findingState.lastUpdatedAt,
+      subject: "the findings to review",
+    },
+  );
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshOverview = overviewState.load;
+  const refreshFindings = findingState.load;
+  const refreshPatterns = patternState.load;
+  const refreshSchedules = scheduleState.load;
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([
+        refreshOverview(),
+        refreshFindings(),
+        refreshPatterns(),
+        refreshSchedules(),
+      ]);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshFindings, refreshOverview, refreshPatterns, refreshSchedules]);
   /**
    * Why a confirm or dismiss failed.
    *
@@ -194,32 +287,7 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
     return () => clearTimeout(timer);
   }, [notice]);
 
-  /**
-   * The month this business's expenses actually end in, when the ordinary
-   * windows cannot reach it.
-   *
-   * Null for a business recording daily — its latest expense is already inside
-   * "This month", so a second option covering the same window under a stranger
-   * name would be worse than none.
-   */
-  const anchorMonth = (() => {
-    const latest = data?.latestExpenseDate;
-    if (!latest) return null;
-    const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
-    if (new Date(latest).getTime() >= thirtyDaysAgo) return null;
-    return {
-      endDate: latest.slice(0, 10),
-      label: new Date(latest).toLocaleDateString(undefined, {
-        month: "short",
-        year: "numeric",
-        timeZone: "UTC",
-      }),
-    };
-  })();
-
-  const periodOptions = anchorMonth
-    ? [...PERIODS, { label: anchorMonth.label, value: ANCHOR_PERIOD }]
-    : PERIODS;
+  const comparedWith = describePrevious(data?.period) ?? "the period before";
 
   /**
    * Records what the owner actually said about a finding.
@@ -238,7 +306,7 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
       await api.patch(`/insights/findings/${id}/review`, {
         status: action.status,
         feedback: action.feedback,
-      });
+      }, { cacheScope: { businessProfileId: selected!.id } });
       haptics.succeeded();
       // Echoes what they said rather than "Saved" — the list is about to lose
       // the card, and a confirmation that does not name the answer leaves them
@@ -265,7 +333,11 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
   async function confirmPattern(id: number) {
     setPatternActionError(null);
     try {
-      await api.post(`/insights/recurring-patterns/${id}/confirm`);
+      await api.post(
+        `/insights/recurring-patterns/${id}/confirm`,
+        undefined,
+        { cacheScope: { businessProfileId: selected!.id } },
+      );
       haptics.succeeded();
       await Promise.all([patternState.load(), scheduleState.load()]);
     } catch (err) {
@@ -277,7 +349,11 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
   async function dismissPattern(id: number) {
     setPatternActionError(null);
     try {
-      await api.patch(`/insights/recurring-patterns/${id}`, { status: "DISMISSED" });
+      await api.patch(
+        `/insights/recurring-patterns/${id}`,
+        { status: "DISMISSED" },
+        { cacheScope: { businessProfileId: selected!.id } },
+      );
       await patternState.load();
     } catch (err) {
       setPatternActionError(errorMessage(err));
@@ -335,8 +411,8 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
    * "Simulate reduction" on a reduction-opportunity card — plan §12.4.
    *
    * Just opens the sheet on the selected opportunity; the sheet itself owns
-   * the form, the request and the result. `periodDays`/`endDate` are handed
-   * down as they stand right now, which is the same window the opportunity
+   * the form, the request and the result. The period is handed down as it
+   * stands right now, which is the same period the opportunity
    * list was fetched for — the category baseline the sheet simulates against
    * is then the same one the card's own evidence figure describes.
    */
@@ -365,14 +441,21 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
   const openFindings = findingState.data?.items.length ?? 0;
   const candidates = patternState.data?.filter((pattern) => pattern.status === "CANDIDATE") ?? [];
   /*
-   * `schedules` IS NULLABLE HERE, and every use of it below has to say what it
-   * does when the agenda could not be read — see recurringAvailability. The
-   * short version: the schedules endpoint is dark unless the server's
-   * ANOMALY_RECURRING_ENABLED flag is on, so a 404 is its ordinary answer
-   * today, and the agenda, its add buttons, its empty state and its badge all
-   * come off rather than any of them being drawn from nothing.
+   * A 404 removes the gated agenda and its controls. A transient refresh keeps
+   * the last verified rows and pairs them with a retry notice.
    */
-  const { schedules, canConfirm, overdueCount } = recurringAvailability(scheduleState);
+  const recurring = recurringAvailability({
+    data: scheduleState.data,
+    error: scheduleState.rawError,
+  });
+  const { schedules, canConfirm, overdueCount } = recurring;
+  const scheduleNotice = recurring.failure
+    ? describeLoadFailure(toLoadFailure(scheduleState.rawError), {
+        hasData: recurring.failure === "refresh",
+        lastUpdatedAt: scheduleState.lastUpdatedAt,
+        subject: "your repeating payments",
+      })
+    : null;
 
   /*
    * The period-on-period change, or null when there is nothing to compare
@@ -424,6 +507,13 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
         // The FAB floats over this list, so the scroll has to end far enough
         // up that it can never cover the last card.
         contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl + FAB_CLEARANCE }}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={refresh}
+            tintColor={brand[600]}
+          />
+        }
       >
         <InsightHeader navigation={navigation} active="ExpenseBehavior" title="Expense insight" />
 
@@ -447,28 +537,59 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
         */}
         {activeSection === "overview" ? (
           <View style={{ marginBottom: space.lg }}>
-            <DropdownPill
-              options={periodOptions}
-              value={endDate ? ANCHOR_PERIOD : periodDays}
-              onChange={(value) => {
-                if (value === ANCHOR_PERIOD) {
-                  setPeriodDays(30);
-                  setEndDate(anchorMonth!.endDate);
-                } else {
-                  setPeriodDays(value);
-                  setEndDate(null);
-                }
-              }}
-              icon="calendar-outline"
-              sheetTitle="Show which period"
-              accessibilityLabel="Period"
-            />
+            <PeriodSelector />
           </View>
         ) : null}
 
-        {error ? <ErrorNote>{error}</ErrorNote> : null}
-        {loading || !data ? (
+        {activeSection !== "recurring" ? (
+          <ConnectionNotice
+            notice={overviewNotice}
+            onRetry={() => void refreshOverview()}
+            busy={overviewState.refreshing}
+            style={{ marginBottom: space.md }}
+          />
+        ) : (
+          <ConnectionNotice
+            notice={patternNotice}
+            onRetry={() => void refreshPatterns()}
+            busy={patternState.refreshing}
+            style={{ marginBottom: space.md }}
+          />
+        )}
+
+        {activeSection === "overview" && behaviorData ? (
+          <FreshnessStatus
+            at={overviewState.lastUpdatedAt}
+            now={Date.now()}
+            refreshing={refreshing || overviewState.refreshing}
+            style={{ marginBottom: space.md }}
+          />
+        ) : null}
+
+        {activeSection === "overview" && error ? <ErrorNote>{error}</ErrorNote> : null}
+        {activeSection === "overview" && loading ? (
           <ExpenseInsightSkeleton />
+        ) : activeSection === "overview" && !behaviorData ? (
+          <View style={{ gap: space.lg }}>
+            <View style={{ alignSelf: "flex-start" }}>
+              <Button
+                title={refreshing ? "Trying again…" : "Try again"}
+                variant="secondary"
+                loading={refreshing}
+                onPress={() => void refresh()}
+              />
+            </View>
+            {overviewState.data ? (
+              <ReductionOpportunitiesSection
+                state={reductionState}
+                businessProfileId={selected.id}
+                onViewRecords={openCategoryRecords}
+                onAskAboutThis={askAboutOpportunity}
+                onSimulate={simulateOpportunity}
+                historical={false}
+              />
+            ) : null}
+          </View>
         ) : (
           <View style={{ gap: space.lg }}>
             {/*
@@ -487,17 +608,20 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
                 Said here, with the month named, and with the option that fixes
                 it one tap away in the period picker above.
               */}
-              {data.totals.current === 0 && anchorMonth ? (
+              {data.totals.current === 0 && data.latestExpenseDate ? (
                 <Callout tone="info">
-                  No expenses in this window — your records are here, the most recent is{" "}
-                  {new Date(data.latestExpenseDate!).toLocaleDateString(undefined, {
+                  No expenses {periodPhrase(selection)}. Latest expense:{" "}
+                  {new Date(data.latestExpenseDate).toLocaleDateString(undefined, {
                     year: "numeric",
                     month: "long",
                     day: "numeric",
                     timeZone: "UTC",
                   })}
-                  . Choose "{anchorMonth.label}" in the period picker above to see it.
+                  .
                 </Callout>
+              ) : null}
+              {data.totals.current === 0 && data.latestExpenseDate && !allTime ? (
+                <Button title="Show all time" variant="secondary" onPress={() => setSelection(ALL_TIME)} />
               ) : null}
               <Card>
                 {/*
@@ -527,10 +651,9 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
                   wrong — a month with more stock bought is a month with more
                   to sell.
                 */}
-                {periodDelta === null ? (
+                {allTime ? null : periodDelta === null ? (
                   <T variant="caption" style={{ marginTop: 4 }}>
-                    Nothing was recorded in the {periodDays === 7 ? "week" : "month"} before this one, so
-                    there is nothing to compare against yet.
+                    Nothing recorded in {comparedWith} to compare with.
                   </T>
                 ) : (
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 5, marginTop: 6, flexWrap: "wrap" }}>
@@ -561,7 +684,7 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
                       </T>
                     </View>
                     <T variant="caption" style={{ flexShrink: 1 }}>
-                      {periodDelta >= 0 ? "more" : "less"} than the {periodDays === 7 ? "week" : "month"} before
+                      {periodDelta >= 0 ? "more" : "less"} than {comparedWith}
                       {" ("}
                       {/* Money in prose still wears the mono figure face — the one hard typographic rule this app has for currency. */}
                       <T variant="caption" style={{ fontFamily: font.mono }}>
@@ -578,7 +701,7 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
                     title="Spending so far"
                     // The axis ticks are bare numbers so they cannot overflow
                     // their gutter, which means the unit has to be said here.
-                    subtitle={`Running total in PHP · ${data.periodStart.slice(5, 10)} to ${data.periodEnd.slice(5, 10)}`}
+                    subtitle={`Running total in PHP · ${formatDayRange(data.periodStart.slice(0, 10), data.periodEnd.slice(0, 10))}`}
                   />
                 </View>
               </Card>
@@ -595,7 +718,7 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
                 onViewRecords={openCategoryRecords}
                 onAskAboutThis={askAboutOpportunity}
                 onSimulate={simulateOpportunity}
-                historical={endDate !== null}
+                historical={false}
               />
 
               <Card>
@@ -606,9 +729,9 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
                     previous: t.previous,
                     percentChange: t.percentChange,
                   }))}
-                  subtitle={`${data.previousPeriodStart.slice(5, 10)}–${data.previousPeriodEnd.slice(5, 10)} vs ${data.periodStart.slice(5, 10)}–${data.periodEnd.slice(5, 10)}`}
-                  previousLabel="Last period"
-                  currentLabel="This period"
+                  subtitle={`${describePeriod(selection)} vs ${comparedWith}`}
+                  previousLabel={comparedWith}
+                  currentLabel={describePeriod(selection)}
                 />
               </Card>
 
@@ -751,9 +874,23 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
                 insufficientHistoryCategories={data.insufficientHistoryCategories}
                 openFindings={openFindings}
                 findingState={findingState}
+                findingNotice={findingNotice}
+                refreshFindings={findingState.load}
+                findingsRefreshing={findingState.refreshing}
+                findingsUpdatedAt={findingState.lastUpdatedAt}
                 feedbackError={feedbackError}
                 reviewFinding={reviewFinding}
                 onOtherAnswers={setFeedbackFor}
+                onExplain={(finding) => {
+                  // The flag's id travels with the question, so the answer is
+                  // about this card rather than whichever open flag the model
+                  // picked. A focused question starts its own thread.
+                  chat.prepareQuestion(`Why did FinSight flag "${finding.title}"? Explain the comparison behind it.`, undefined, {
+                    kind: "finding",
+                    findingId: finding.id,
+                  });
+                  setAskOpen(true);
+                }}
               />
             ) : null}
 
@@ -775,6 +912,9 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
                 schedules={schedules}
                 candidates={candidates}
                 canConfirm={canConfirm}
+                scheduleNotice={scheduleNotice}
+                refreshSchedules={scheduleState.load}
+                scheduleRefreshing={scheduleState.refreshing}
                 openSchedule={openSchedule}
                 confirmPattern={confirmPattern}
                 dismissPattern={dismissPattern}
@@ -799,8 +939,7 @@ export function ExpenseBehaviorScreen({ navigation }: any) {
         visible={simulateFor !== null}
         opportunity={simulateFor}
         businessProfileId={selected.id}
-        periodDays={periodDays}
-        endDate={endDate}
+        period={selection}
         onClose={() => setSimulateFor(null)}
       />
 

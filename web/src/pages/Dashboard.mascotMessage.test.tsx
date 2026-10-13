@@ -134,7 +134,7 @@ describe("the Dashboard daily mascot message preference", () => {
     // Wait for the page itself to have loaded before concluding anything is
     // missing — an assertion that passes because the fetch had not resolved
     // yet would pass with the gate removed too.
-    await waitFor(() => expect(screen.getByText("Available business funds")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Available funds")).toBeInTheDocument());
     expect(greeting()).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /Good (morning|afternoon|evening), Ken!/ })).not.toBeInTheDocument();
   });
@@ -142,7 +142,7 @@ describe("the Dashboard daily mascot message preference", () => {
   it("leaves the Ask FinSight trigger alone — it is not a daily message", async () => {
     preferences = { ...preferences, showDashboardMascotMessage: false };
     renderDashboard();
-    await waitFor(() => expect(screen.getByText("Available business funds")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Available funds")).toBeInTheDocument());
 
     const fab = screen.getByRole("button", { name: "Ask FinSight" });
     expect(fab).toBeInTheDocument();
@@ -155,7 +155,7 @@ describe("the Dashboard daily mascot message preference", () => {
     // the same marker as a fallback.
     preferences = { ...preferences, showDashboardMascotMessage: false };
     const { container } = renderDashboard();
-    await waitFor(() => expect(screen.getByText("Available business funds")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Available funds")).toBeInTheDocument());
     expect(container.querySelectorAll('[data-tour="dashboard-summary"]').length).toBeGreaterThan(0);
   });
 });

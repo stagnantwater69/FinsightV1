@@ -118,7 +118,7 @@ export function RecoveryMeter({
       )}
       {needsSetupNow ? (
         <T variant="caption" style={{ marginBottom: space.sm }}>
-          Add your expected monthly expenses to calculate your target.
+          Add a starting monthly expense estimate to calculate your target.
         </T>
       ) : null}
 

@@ -10,6 +10,7 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ErrorNote, T } from "./ui";
 import * as haptics from "../lib/haptics";
 import { CONVERSATION_TITLE_MAX } from "../lib/chatStore";
@@ -69,6 +70,9 @@ export function ChatHistoryPanel({
    * exact moment the JS thread is busy.
    */
   const reduceMotion = useReducedMotion();
+  // The composer is hidden while this list is up, so the list clears the
+  // home indicator itself.
+  const insets = useSafeAreaInsets();
   const enter = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     if (reduceMotion) {
@@ -104,7 +108,7 @@ export function ChatHistoryPanel({
         sections={sections}
         keyExtractor={(item) => String(item.id)}
         keyboardShouldPersistTaps="handled"
-        contentContainerStyle={{ padding: space.md, paddingBottom: space.xxl }}
+        contentContainerStyle={{ padding: space.md, paddingBottom: space.xxl + insets.bottom }}
         renderSectionHeader={({ section }) => (
           <T
             variant="caption"

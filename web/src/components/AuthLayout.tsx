@@ -89,9 +89,9 @@ function PanelArt() {
 
 function Brand() {
   return (
-    <span className="flex items-center gap-2.5">
-      <img src="/finsight-logo.png" alt="" aria-hidden className="h-10 w-10 rounded-lg object-contain" />
-      <Wordmark className="text-lg text-tone-brand" />
+    <span className="flex min-w-0 items-center gap-2 min-[240px]:gap-2.5">
+      <img src="/newmascotlogo.png" alt="" aria-hidden className="h-8 w-8 shrink-0 rounded-lg object-contain min-[240px]:h-10 min-[240px]:w-10" />
+      <Wordmark className="min-w-0 text-[15px] text-tone-brand min-[240px]:text-lg" />
     </span>
   );
 }

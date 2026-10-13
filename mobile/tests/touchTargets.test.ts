@@ -217,6 +217,12 @@ describe("touch targets", () => {
     expect(block("button")).toContain("minHeight: TAP_FLOOR");
   });
 
+  it("uses the platform floor for insight sub-tabs", () => {
+    const source = readFileSync(join(ROOT, "src", "components", "InsightsShared.tsx"), "utf8");
+    expect(source).toContain('import { TAP_FLOOR } from "./touchTarget";');
+    expect(source).toMatch(/export function SubTabs[\s\S]*?minHeight:\s*TAP_FLOOR/);
+  });
+
   it("states a target on every Pressable in the shared primitives and camera chrome", () => {
     const bare: string[] = [];
     for (const { name, src } of sourceFiles()) {

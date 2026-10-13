@@ -4,12 +4,12 @@ import * as notificationService from "../services/notification.service";
 import { ApiError } from "../middleware/error.middleware";
 
 const listQuerySchema = z.object({
-  businessProfileId: z.coerce.number().int().positive().optional(),
+  businessProfileId: z.coerce.number().int().positive().max(2147483647).optional(),
 });
 
 function parseId(raw: string): number {
   const id = Number(raw);
-  if (!Number.isInteger(id) || id <= 0) {
+  if (!Number.isInteger(id) || id <= 0 || id > 2147483647) {
     throw new ApiError(400, "Invalid notification id");
   }
   return id;

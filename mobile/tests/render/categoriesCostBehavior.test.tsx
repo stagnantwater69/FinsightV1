@@ -15,17 +15,23 @@ import * as fixtures from './support/fixtures';
  */
 
 const createCategory = vi.fn();
+const refreshCategories = vi.fn();
+let categories = [...fixtures.categories];
+let categoriesLoading = false;
+let categoriesError: string | null = null;
 
 vi.mock('../../src/context/BusinessProfileContext', () => ({
   useBusinessProfiles: () => ({
     profiles: [fixtures.businessProfile],
     selected: fixtures.businessProfile,
-    categories: [],
+    categories,
+    categoriesLoading,
+    categoriesError,
     loading: false,
     error: null,
     selectProfile: vi.fn(),
     refresh: vi.fn(),
-    refreshCategories: vi.fn(),
+    refreshCategories,
     createCategory,
   }),
   BusinessProfileProvider: ({ children }: { children: React.ReactNode }) => children,
@@ -45,6 +51,11 @@ async function renderScreen() {
 
 beforeEach(() => {
   createCategory.mockReset();
+  refreshCategories.mockReset();
+  refreshCategories.mockResolvedValue(undefined);
+  categories = [];
+  categoriesLoading = false;
+  categoriesError = null;
   createCategory.mockResolvedValue({ id: 99, businessProfileId: 1, name: 'Rent', description: null, createdAt: '2026-01-01', costBehavior: 'FIXED' });
 });
 
@@ -96,5 +107,48 @@ describe('Category create form — cost-behavior classification', () => {
 
     await fireEvent.press(fixedChip);
     expect(fixedChip.props.accessibilityState?.selected).toBe(false);
+  });
+});
+
+describe('Category list request states', () => {
+  it('shows loading separately from a genuine empty list', async () => {
+    categoriesLoading = true;
+
+    const queries = await renderScreen();
+
+    expect(queries.getByText('Loading categories…')).toBeTruthy();
+    expect(queries.queryByText('No categories yet')).toBeNull();
+  });
+
+  it('shows a recoverable load error instead of the empty state', async () => {
+    categoriesError = 'Network unavailable.';
+
+    const queries = await renderScreen();
+
+    expect(queries.getByText("Couldn't load categories. Network unavailable.")).toBeTruthy();
+    expect(queries.queryByText('No categories yet')).toBeNull();
+    await fireEvent.press(queries.getByRole('button', { name: 'Try loading again' }));
+    expect(refreshCategories).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps safe stale rows visible when a refresh fails', async () => {
+    categories = [fixtures.categories[0]!];
+    categoriesError = 'Request timed out.';
+
+    const queries = await renderScreen();
+
+    expect(queries.getByText('Stock')).toBeTruthy();
+    expect(
+      queries.getByText("Couldn't refresh categories. The list below may be out of date. Request timed out."),
+    ).toBeTruthy();
+    expect(queries.queryByText('No categories yet')).toBeNull();
+  });
+
+  it('uses the empty state only after a successful empty response', async () => {
+    const queries = await renderScreen();
+
+    expect(queries.getByText('No categories yet')).toBeTruthy();
+    expect(queries.queryByText('Loading categories…')).toBeNull();
+    expect(queries.queryByRole('button', { name: 'Try loading again' })).toBeNull();
   });
 });

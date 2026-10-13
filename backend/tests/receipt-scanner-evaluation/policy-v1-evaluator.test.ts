@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -10,6 +11,7 @@ import { EvaluationInputError, EvaluationPaths, loadAndValidateInputs } from "./
 import { runPolicyV1Cli } from "./run-policy-v1-evaluation";
 
 const REPOSITORY_ROOT = resolve(__dirname, "../../..");
+const REPORT_GENERATED_AT_UTC = "2026-09-13T02:00:00.000Z";
 const temporaryDirectories: string[] = [];
 
 function sha256(path: string): string {
@@ -515,7 +517,7 @@ describe("policy-v1 external evaluator", () => {
   it("validates a sealed external corpus and writes only aggregate evidence", () => {
     const paths = makeFixture();
     const input = loadAndValidateInputs(paths);
-    const report = buildPolicyV1Report(input, "2026-09-13T02:00:00.000Z");
+    const report = buildPolicyV1Report(input, REPORT_GENERATED_AT_UTC);
     writePolicyV1Report(report, paths.outputPath);
 
     expect(report.decision.capstoneCorpusStatus).toBe("PASS");
@@ -552,7 +554,16 @@ describe("policy-v1 external evaluator", () => {
     expect(output).not.toContain(paths.firstSourcePath);
     expect(output).not.toContain("private source bytes");
     expect(output).not.toContain("private ground truth values");
-    expect(statSync(paths.outputPath).mode & 0o777).toBe(0o600);
+    if (process.platform === "win32") {
+      // Windows confidentiality uses ACLs rather than POSIX mode bits.
+      const permissions = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+        "$broadSids = @('S-1-1-0', 'S-1-5-11', 'S-1-5-32-545'); $broadAllows = @((Get-Acl -LiteralPath $env:QA_POLICY_REPORT_PATH).Access | Where-Object { $_.AccessControlType -eq 'Allow' -and $broadSids -contains $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value }); Write-Output $broadAllows.Count",
+      ], { env: { ...process.env, QA_POLICY_REPORT_PATH: paths.outputPath }, encoding: "utf8" });
+      expect(permissions.status, permissions.stderr).toBe(0);
+      expect(permissions.stdout.trim()).toBe("0");
+    } else {
+      expect(statSync(paths.outputPath).mode & 0o777).toBe(0o600);
+    }
   });
 
   it("does not turn corpus-floor support into a provider or duplicate promotion approval", () => {
@@ -570,7 +581,7 @@ describe("policy-v1 external evaluator", () => {
     while (input.counts.nonDuplicatePairIds.size < 200) {
       input.counts.nonDuplicatePairIds.add(`aggregate-nonduplicate-${input.counts.nonDuplicatePairIds.size}`);
     }
-    const report = buildPolicyV1Report(input);
+    const report = buildPolicyV1Report(input, REPORT_GENERATED_AT_UTC);
     expect(report.decision.providerPromotionCorpusStatus).toBe("PASS");
     expect(report.decision.providerPromotionStatus).toBe("INCOMPLETE");
     expect(report.decision.providerPromotionBlockers).toContain("cloud_provider_evidence_contract");
@@ -582,10 +593,10 @@ describe("policy-v1 external evaluator", () => {
   it("keeps seeded bootstrap intervals invariant to scored-result array permutations", () => {
     const paths = makeFixture();
     const input = loadAndValidateInputs(paths);
-    const first = buildPolicyV1Report(input, "2026-09-13T02:00:00.000Z");
+    const first = buildPolicyV1Report(input, REPORT_GENERATED_AT_UTC);
     input.results.captures?.reverse();
     input.results.receipts?.reverse();
-    const reordered = buildPolicyV1Report(input, "2026-09-13T02:00:00.000Z");
+    const reordered = buildPolicyV1Report(input, REPORT_GENERATED_AT_UTC);
     expect(reordered.metrics.map((metric) => [metric.id, metric.scope, metric.confidenceInterval])).toEqual(
       first.metrics.map((metric) => [metric.id, metric.scope, metric.confidenceInterval]),
     );
@@ -648,9 +659,9 @@ describe("policy-v1 external evaluator", () => {
 
   it("resolves symlinks before enforcing the outside-repository boundary", () => {
     const paths = makeFixture();
-    const linkPath = join(paths.directory, "manifest-link.csv");
-    symlinkSync(join(REPOSITORY_ROOT, "docs/phase-0/receipt-corpus-intake.example.csv"), linkPath);
-    paths.manifestPath = linkPath;
+    const linkPath = join(paths.directory, "manifest-directory-link");
+    symlinkSync(join(REPOSITORY_ROOT, "docs/phase-0"), linkPath, process.platform === "win32" ? "junction" : "dir");
+    paths.manifestPath = join(linkPath, "receipt-corpus-intake.example.csv");
     expectInputError(() => loadAndValidateInputs(paths), "PRIVATE_PATH_INSIDE_REPOSITORY");
   });
 
@@ -696,7 +707,7 @@ describe("policy-v1 external evaluator", () => {
     setRunPurpose(paths, "LOCAL_ENGINEERING");
     writeFileSync(paths.manifestPath, readFileSync(paths.manifestPath, "utf8").replace(/template-[1-5]/g, "template-1"));
     updateSeal(paths, { manifest_sha256: sha256(paths.manifestPath) });
-    const report = buildPolicyV1Report(loadAndValidateInputs(paths));
+    const report = buildPolicyV1Report(loadAndValidateInputs(paths), REPORT_GENERATED_AT_UTC);
     expect(report.corpus.gates.find((gate) => gate.id === "maximum_vendor_template_share")).toMatchObject({ gateStatus: "FAIL" });
     expect(report.decision.capstoneCorpusStatus).toBe("FAIL");
     expect(report.decision.blockers).not.toContain("duplicate_promotion_duplicate_pairs");
@@ -732,7 +743,7 @@ describe("policy-v1 external evaluator", () => {
       delete results.captures;
       delete results.receipts;
     });
-    const report = buildPolicyV1Report(loadAndValidateInputs(paths));
+    const report = buildPolicyV1Report(loadAndValidateInputs(paths), REPORT_GENERATED_AT_UTC);
     expect(report.metrics.find((metric) => metric.id === "provider_result_timeout_rate")).toMatchObject({
       status: "NOT_MEASURED",
       scope: "ELIGIBLE_CONSENTED_OWNER_RECEIPTS",
@@ -894,7 +905,7 @@ describe("policy-v1 external evaluator", () => {
       total.confidence_band = "HIGH";
       total.routed_to_review = false;
     });
-    const report = buildPolicyV1Report(loadAndValidateInputs(paths));
+    const report = buildPolicyV1Report(loadAndValidateInputs(paths), REPORT_GENERATED_AT_UTC);
     expect(report.metrics.find((metric) => metric.id === "handwritten_financial_fields_high_confidence_rate")).toMatchObject({
       numerator: 1,
       denominator: 20,
@@ -949,7 +960,7 @@ describe("policy-v1 external evaluator", () => {
       (receipt.processed_composite as Record<string, unknown>).processed_correct_fields = 0;
       (receipt.processed_composite as Record<string, unknown>).regressed_fields = 5;
     });
-    const report = buildPolicyV1Report(loadAndValidateInputs(paths));
+    const report = buildPolicyV1Report(loadAndValidateInputs(paths), REPORT_GENERATED_AT_UTC);
     expect(report.metrics.find((metric) => metric.id === "provider_result_timeout_rate")).toMatchObject({
       numerator: 1,
       denominator: 30,
@@ -978,7 +989,7 @@ describe("policy-v1 external evaluator", () => {
       capture.live_guidance_latency_ms = 999_999;
       (capture.corner_errors as Array<Record<string, unknown>>)[0]!.normalized_corner_error = 0.99;
     });
-    const report = buildPolicyV1Report(loadAndValidateInputs(paths));
+    const report = buildPolicyV1Report(loadAndValidateInputs(paths), REPORT_GENERATED_AT_UTC);
     expect(report.metrics.find((metric) => metric.id === "field_exact_match.total" && metric.scope === "ELIGIBLE_CONSENTED_OWNER_RECEIPTS")).toMatchObject({
       numerator: 30,
       denominator: 30,
@@ -1016,7 +1027,7 @@ describe("policy-v1 external evaluator", () => {
       (first.corner_errors as unknown[]).push({ sample_id: "sample-primary-extra", normalized_corner_error: 0.99 });
       results.captures = captures.filter((capture) => capture.capture_attempt_id !== "capture-extra");
     });
-    const report = buildPolicyV1Report(loadAndValidateInputs(paths));
+    const report = buildPolicyV1Report(loadAndValidateInputs(paths), REPORT_GENERATED_AT_UTC);
     for (const metricId of [
       "document_detection_precision",
       "document_detection_recall",
@@ -1099,7 +1110,7 @@ describe("policy-v1 external evaluator", () => {
       (first.corner_errors as unknown[]).push({ sample_id: "sample-primary-002", normalized_corner_error: 0.02 });
       results.captures = captures.filter((capture) => capture.capture_attempt_id !== "capture-002");
     });
-    const report = buildPolicyV1Report(loadAndValidateInputs(paths));
+    const report = buildPolicyV1Report(loadAndValidateInputs(paths), REPORT_GENERATED_AT_UTC);
     expect(report.metrics.find((metric) => metric.id === "median_normalized_corner_error")).toMatchObject({
       denominator: 30,
       confidenceInterval: { resamplingUnit: "DISTINCT_RECEIPT_ID" },
@@ -1190,7 +1201,7 @@ describe("policy-v1 external evaluator", () => {
     const input = loadAndValidateInputs(paths);
     for (const privatePath of [paths.firstSourcePath, paths.sealPath]) {
       (input.results.run as Record<string, unknown>).extractor_version_sha256 = privatePath;
-      expect(() => buildPolicyV1Report(input)).toThrow(/private identifier or path/);
+      expect(() => buildPolicyV1Report(input, REPORT_GENERATED_AT_UTC)).toThrow(/private identifier or path/);
     }
   });
 
@@ -1243,7 +1254,7 @@ describe("policy-v1 external evaluator", () => {
       total.value_state = "MISSING";
       delete total.absolute_error_minor;
     });
-    const report = buildPolicyV1Report(loadAndValidateInputs(paths));
+    const report = buildPolicyV1Report(loadAndValidateInputs(paths), REPORT_GENERATED_AT_UTC);
     expect(report.metrics.find((metric) => metric.id === "field_exact_match.total" && metric.scope === "ELIGIBLE_CONSENTED_OWNER_RECEIPTS")).toMatchObject({
       numerator: 29,
       denominator: 30,

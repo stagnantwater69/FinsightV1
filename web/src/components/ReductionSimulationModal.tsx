@@ -1,4 +1,5 @@
 import { useEffect, useId, useState, type FormEvent } from "react";
+import { periodParams, type PeriodSelection } from "../lib/reportingPeriod";
 import { Modal } from "./Modal";
 import { Button } from "./Button";
 import { Callout } from "./ui";
@@ -37,9 +38,8 @@ interface FieldErrors {
  * Mirrors the server's own rules in reductionOpportunity.service.ts
  * (`computeReductionSimulation`) so a bad value is caught before the round
  * trip, not just after it. `baseline` is the category's period total — the
- * card's own `evidence.currentAmount`, which was computed from the same
- * `periodDays`/`endDate` this modal submits, so it is the same number the
- * server will derive.
+ * card's own `evidence.currentAmount`, which was computed for the same
+ * period this modal submits, so it is the same number the server will derive.
  */
 function validate(kind: Kind, rawValue: string, baseline: number): FieldErrors {
   if (rawValue.trim() === "") return { value: "Enter a value." };
@@ -64,8 +64,7 @@ export function ReductionSimulationModal({
   businessProfileId,
   categoryId,
   categoryName,
-  periodDays,
-  endDate,
+  period,
   /** The category's period total already on screen — see `validate` above. */
   baseline,
 }: {
@@ -74,8 +73,8 @@ export function ReductionSimulationModal({
   businessProfileId: number;
   categoryId: number;
   categoryName: string;
-  periodDays: number;
-  endDate: string | null;
+  /** The period filter's selection the opportunity was computed for. */
+  period: PeriodSelection;
   baseline: number;
 }) {
   const [kind, setKind] = useState<Kind>("percent");
@@ -122,8 +121,7 @@ export function ReductionSimulationModal({
       const payload: ReductionSimulationInput = {
         businessProfileId,
         categoryId,
-        periodDays,
-        ...(endDate ? { endDate } : {}),
+        ...periodParams(period),
         reduction: { kind, value: Number(rawValue) },
       };
       const res = await api.post<ReductionSimulation>("/insights/reduction-simulation", payload);
@@ -193,7 +191,7 @@ export function ReductionSimulationModal({
 
           {result.assumptions.length > 0 ? (
             <div>
-              <p className="text-xs font-semibold text-ink-700">Assumptions behind this figure</p>
+              <p className="text-xs font-semibold text-ink-700">Assumptions</p>
               <ul className="mt-1 list-disc space-y-1 pl-5 text-xs text-ink-500">
                 {result.assumptions.map((a) => (
                   <li key={a}>{a}</li>
@@ -214,8 +212,7 @@ export function ReductionSimulationModal({
       ) : (
         <form onSubmit={handleSubmit} className="space-y-4" noValidate>
           <p className="text-sm text-ink-600">
-            See what {categoryName}'s recorded expenses would look like if this period's total were
-            hypothetically lower — for review, not a plan you're committing to.
+            What if {categoryName} spending were lower? Nothing is saved.
           </p>
 
           <div className="flex gap-2" role="radiogroup" aria-label="Reduction type">

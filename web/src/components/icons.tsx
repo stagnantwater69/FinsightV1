@@ -131,11 +131,29 @@ export function IconCamera(p: IconProps) {
   );
 }
 
+export function IconCrop(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M6 2v14a2 2 0 0 0 2 2h14" />
+      <path d="M2 6h14a2 2 0 0 1 2 2v14" />
+    </Svg>
+  );
+}
+
 export function IconUpload(p: IconProps) {
   return (
     <Svg {...p}>
       <path d="M12 15V3M8 7l4-4 4 4" />
       <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+    </Svg>
+  );
+}
+
+export function IconCsvFile(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M6 2.5h8l4 4V21.5H6z" />
+      <path d="M14 2.5v4h4M8.5 11h7M8.5 14.5h7M8.5 18h4.5" />
     </Svg>
   );
 }
@@ -183,6 +201,15 @@ export function IconCheck(p: IconProps) {
   );
 }
 
+export function IconAlertTriangle(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M12 3L2.8 20h18.4z" />
+      <path d="M12 9v5M12 17.5h.01" strokeWidth={2.2} />
+    </Svg>
+  );
+}
+
 export function IconSparkle(p: IconProps) {
   return (
     <Svg {...p}>
@@ -195,6 +222,14 @@ export function IconArrowRight(p: IconProps) {
   return (
     <Svg {...p}>
       <path d="M5 12h14M13 6l6 6-6 6" strokeWidth={2} />
+    </Svg>
+  );
+}
+
+export function IconArrowUp(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M12 19V5M6 11l6-6 6 6" strokeWidth={2} />
     </Svg>
   );
 }

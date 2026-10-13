@@ -1,8 +1,9 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { Money } from "./Money";
 import { api } from "../lib/api";
 import { getErrorMessage } from "../lib/errors";
 import type { CsvBatchPreview, RecordOrigin } from "../lib/types";
+import { useHorizontalTabKeys } from "../lib/hooks";
 
 /**
  * Where a saved record came from.
@@ -50,13 +51,22 @@ function TabStrip({
   tabs,
   active,
   onSelect,
+  panelId,
 }: {
   tabs: { id: string; label: string }[];
   active: string;
   onSelect: (id: string) => void;
+  panelId: string;
 }) {
+  const onTabKeys = useHorizontalTabKeys();
+
   return (
-    <div role="tablist" className="mt-3 flex gap-1 border-b border-paper-200">
+    <div
+      role="tablist"
+      aria-orientation="horizontal"
+      onKeyDown={onTabKeys}
+      className="mt-3 flex gap-1 border-b border-paper-200"
+    >
       {tabs.map((tab) => {
         const selected = tab.id === active;
         return (
@@ -64,7 +74,10 @@ function TabStrip({
             key={tab.id}
             type="button"
             role="tab"
+            id={`${panelId}-${tab.id}-tab`}
             aria-selected={selected}
+            aria-controls={panelId}
+            tabIndex={selected ? 0 : -1}
             onClick={() => onSelect(tab.id)}
             className={`tap-inline -mb-px border-b-2 px-3 py-2 text-xs font-medium transition ${
               selected
@@ -84,6 +97,7 @@ function CsvOrigin({ origin }: { origin: Extract<RecordOrigin, { kind: "csv_impo
   // Same two-view split as the receipt panel, so a source panel behaves the
   // same way whichever kind of source it is describing.
   const [tab, setTab] = useState<"details" | "file">("details");
+  const panelId = useId();
 
   return (
     <section className="rounded-2xl border border-paper-200 bg-paper-50 p-4">
@@ -105,12 +119,19 @@ function CsvOrigin({ origin }: { origin: Extract<RecordOrigin, { kind: "csv_impo
         ]}
         active={tab}
         onSelect={(id) => setTab(id as "details" | "file")}
+        panelId={panelId}
       />
 
-      {tab === "file" ? (
-        <CsvFilePreview batchId={origin.batchId} />
-      ) : (
-      <dl className="mt-3 grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2">
+      <div
+        id={panelId}
+        role="tabpanel"
+        aria-labelledby={`${panelId}-${tab}-tab`}
+        tabIndex={0}
+      >
+        {tab === "file" ? (
+          <CsvFilePreview batchId={origin.batchId} />
+        ) : (
+          <dl className="mt-3 grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2">
         <Detail label="Import" value={origin.title} />
         <Detail label="Uploaded" value={new Date(origin.uploadDate).toLocaleDateString()} />
         <Detail label="Status" value={origin.status} />
@@ -149,8 +170,9 @@ function CsvOrigin({ origin }: { origin: Extract<RecordOrigin, { kind: "csv_impo
             )}
           </dd>
         </div>
-      </dl>
-      )}
+          </dl>
+        )}
+      </div>
     </section>
   );
 }
@@ -168,6 +190,7 @@ function ReceiptOrigin({
    * breakdown looks wrong.
    */
   const [tab, setTab] = useState<"items" | "photo">("items");
+  const panelId = useId();
 
   const chargesCentavos =
     Math.round(recordAmount * 100) - Math.round(origin.itemsSubtotal * 100);
@@ -193,13 +216,20 @@ function ReceiptOrigin({
           ]}
           active={tab}
           onSelect={(id) => setTab(id as "items" | "photo")}
+          panelId={panelId}
         />
       ) : null}
 
-      {tab === "photo" && origin.imageUrl ? (
-        <ReceiptImage url={origin.imageUrl} />
-      ) : (
-      <>
+      <div
+        id={panelId}
+        role={origin.imageUrl ? "tabpanel" : undefined}
+        aria-labelledby={origin.imageUrl ? `${panelId}-${tab}-tab` : undefined}
+        tabIndex={origin.imageUrl ? 0 : undefined}
+      >
+        {tab === "photo" && origin.imageUrl ? (
+          <ReceiptImage url={origin.imageUrl} />
+        ) : (
+          <>
       {origin.items.length > 0 ? (
         <>
           <p className="mt-2 text-xs leading-relaxed text-ink-500">
@@ -331,8 +361,9 @@ function ReceiptOrigin({
           </ul>
         </div>
       ) : null}
-      </>
-      )}
+          </>
+        )}
+      </div>
     </section>
   );
 }

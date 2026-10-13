@@ -1,5 +1,27 @@
 import { isAxiosError } from "axios";
 
+function retrySeconds(value: unknown): number | null {
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) value = Number(value.trim());
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+/** Header timing takes precedence; the body also works when CORS hides the header. */
+export function getRetryAfterSeconds(err: unknown, now = Date.now()): number | null {
+  if (!isAxiosError(err) || err.response?.status !== 429) return null;
+  const headers = err.response.headers;
+  const header = typeof headers?.get === "function"
+    ? headers.get("Retry-After")
+    : Object.entries(headers ?? {}).find(([name]) => name.toLowerCase() === "retry-after")?.[1];
+  const seconds = retrySeconds(header);
+  if (seconds !== null) return seconds;
+  if (typeof header === "string" && /^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(header.trim())) {
+    const deadline = Date.parse(header.trim());
+    if (Number.isFinite(deadline)) return Math.max(0, Math.ceil((deadline - now) / 1000));
+  }
+  const data = err.response.data as { retryAfterSeconds?: unknown } | undefined;
+  return typeof data?.retryAfterSeconds === "number" ? retrySeconds(data.retryAfterSeconds) : null;
+}
+
 /**
  * What went wrong, in words the person reading it can act on.
  *
@@ -23,10 +45,21 @@ import { isAxiosError } from "axios";
 export function getErrorMessage(err: unknown): string {
   if (isAxiosError(err)) {
     const data = err.response?.data as { error?: string } | undefined;
+    if (err.response?.status === 429) {
+      const seconds = getRetryAfterSeconds(err);
+      if (seconds !== null) return `Too many requests. Try again in ${seconds}s.`;
+      return typeof data?.error === "string" && data.error
+        ? data.error
+        : "Too many requests. Please wait a moment and try again.";
+    }
     if (data?.error) return data.error;
     if (!err.response) {
       return "We couldn't reach FinSight. Check your connection and try again.";
     }
+    if (err.response.status >= 500) {
+      return "FinSight is temporarily unavailable. Please try again in a moment.";
+    }
+    return "Something went wrong. Please try again.";
   }
   if (err instanceof Error) return err.message;
   return "Something went wrong. Please try again.";
@@ -59,4 +92,11 @@ export function getFieldErrors(err: unknown): Record<string, string> {
     if (typeof first === "string" && first) out[field] = first;
   }
   return out;
+}
+
+/** The API refused a transaction date for being after the business's today. */
+export function isFutureDateError(err: unknown): boolean {
+  if (!isAxiosError(err)) return false;
+  const data = err.response?.data as { code?: string } | undefined;
+  return data?.code === "FUTURE_DATE";
 }

@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "finsight-local-ocr-thresholds-v1",
+  "profile": {
+    "includedProvenance": [
+      "SYNTHETIC_GENERATED",
+      "SYNTHETIC_DERIVED"
+    ],
+    "minimumSamples": 28,
+    "maximumFailureRate": 0,
+    "minimumAccuracy": {
+      "vendor": 1,
+      "date": 1,
+      "total": 1,
+      "items": 0.96
+    },
+    "maximumItemFalsePositiveRate": 0,
+    "maximumLatencyMs": {
+      "p50": 7000,
+      "p95": 15000
+    }
+  }
+}

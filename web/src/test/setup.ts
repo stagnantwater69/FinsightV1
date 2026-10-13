@@ -16,7 +16,12 @@ import "@testing-library/jest-dom/vitest";
  * implementation — `toBeVisible()` and `toHaveAccessibleName()` say what a
  * user experiences, where the equivalent hand-rolled checks on class names
  * and DOM structure would pass while the thing was invisible or unreachable.
+ *
+ * Session storage is cleared too: the period filter remembers the owner's
+ * choice for the visit, and one test choosing "All time" must not decide
+ * which period the next test opens on.
  */
 afterEach(() => {
   cleanup();
+  if (typeof window !== "undefined") window.sessionStorage.clear();
 });

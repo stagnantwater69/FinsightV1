@@ -2,6 +2,7 @@ import "dotenv/config";
 import { tmpdir } from "node:os";
 import { isAbsolute, normalize, resolve } from "node:path";
 import { z } from "zod";
+import { workerLanesSchema } from "./workerLanes";
 
 const DEFAULT_TESSERACT_LANG_PATH = resolve(__dirname, "../..");
 const DEFAULT_RECEIPT_UPLOAD_TEMP_ROOT = resolve(tmpdir(), "finsight-receipt-uploads");
@@ -13,6 +14,7 @@ const envSchema = z.object({
   SUPABASE_ANON_KEY: z.string().min(1),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   SUPABASE_STORAGE_BUCKET: z.string().default("receipts"),
+  CSV_SOURCE_RETENTION_DAYS: z.coerce.number().int().min(30).max(365).default(90),
   PORT: z.coerce.number().default(4000),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   CORS_ORIGIN: z.string().default("http://localhost:5173"),
@@ -90,6 +92,29 @@ const envSchema = z.object({
   ANOMALY_ISOLATION_FOREST_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
   /** The Python scoring sidecar (ml/worker/server.py). Local-only by default. */
   ML_WORKER_URL: z.string().url().default("http://127.0.0.1:8321"),
+  WORKER_LANES: workerLanesSchema,
+  /**
+   * How long the worker sleeps after a pass that claimed nothing.
+   *
+   * The default trades idle database load for pickup latency: an upload waits
+   * at most one interval to be claimed, and a pass that claimed something is
+   * followed immediately, so this only governs an idle replica. At 1s that is
+   * roughly half a million queries a day per idle replica — cheap on one
+   * local Postgres, not cheap across several replicas on a metered hosted
+   * one. An operator who needs to back it off should not need a rebuild.
+   *
+   * Clamped rather than rejected, and unparseable/empty/zero falls back to the
+   * default: this is a tuning knob, and refusing to boot the queue consumers
+   * over a mistyped poll interval would cost more than the mistype does. The
+   * floor keeps a typo like `1` from turning the loop into a busy spin; the
+   * ceiling keeps an upload from waiting minutes to be claimed.
+   */
+  RECEIPT_WORKER_IDLE_POLL_MS: z
+    .preprocess((raw) => {
+      const value = Number(raw);
+      return Number.isFinite(value) && value > 0 ? value : 1_000;
+    }, z.number())
+    .transform((value) => Math.min(60_000, Math.max(250, Math.round(value)))),
 });
 
 const parsed = envSchema.safeParse(process.env);

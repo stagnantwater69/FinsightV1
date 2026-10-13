@@ -123,8 +123,9 @@ describe("provisional-sales data-warning note", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-01T10:00:00.000Z"));
     await addSale(4500, 0, "Confirmed sale");
-    const flagged = await addSale(1000, 0, "Flagged sale");
-    await sales.updateSalesRecord(ctx.user.id, flagged.id, { duplicateStatus: "Flagged" });
+    const canonical = await addSale(1000, 0, "Possible duplicate sale");
+    const flagged = await addSale(1000, 0, "Possible duplicate sale");
+    expect(flagged).toMatchObject({ duplicateStatus: "Flagged", duplicateOfRecordId: canonical.id });
 
     const section = await recoverySectionFor();
     expect(section).toContain(

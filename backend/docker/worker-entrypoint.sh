@@ -11,11 +11,11 @@ if [ "$#" -eq 0 ]; then
 fi
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-preflight=/usr/local/bin/finsight-tesseract-preflight
-if [ ! -x "$preflight" ] && [ -x "$script_dir/tesseract-entrypoint.sh" ]; then
-  preflight="$script_dir/tesseract-entrypoint.sh"
-fi
-[ -x "$preflight" ] || fail TESSERACT_PREFLIGHT_MISSING
+worker_lanes=$(printf '%s' "${WORKER_LANES:-all}" | tr -d '[:space:]')
+needs_ocr=0
+case ",$worker_lanes," in
+  ,all,|*,receipt,*) needs_ocr=1 ;;
+esac
 
 health_dir=${RECEIPT_WORKER_HEALTH_DIR:-/tmp/finsight-worker-health}
 case "$health_dir" in
@@ -26,7 +26,7 @@ case "$health_dir" in
   /|*/../*|*/..|*/./*|*//*|*/.|*/|*[!A-Za-z0-9_./-]*) fail HEALTH_DIRECTORY_INVALID ;;
 esac
 case "$health_dir" in
-  /tmp/finsight-worker-health|/tmp/*/finsight/worker-health|/run/finsight/worker-health) ;;
+  /tmp/finsight-worker-health|/tmp/*/finsight/worker-health|/run/finsight/worker-health|/run/finsight/receipt-worker-health|/run/finsight/jobs-worker-health) ;;
   *) fail HEALTH_DIRECTORY_INVALID ;;
 esac
 if [ -L "$health_dir" ] || { [ -e "$health_dir" ] && [ ! -d "$health_dir" ]; }; then
@@ -56,7 +56,14 @@ if [ -L "$pid_file" ] || [ -L "$heartbeat_file" ]; then
 fi
 rm -f -- "$pid_file" "$heartbeat_file"
 
-"$preflight" --check-only || fail LANGUAGE_DATA_UNAVAILABLE
+if [ "$needs_ocr" -eq 1 ]; then
+  preflight=/usr/local/bin/finsight-tesseract-preflight
+  if [ ! -x "$preflight" ] && [ -x "$script_dir/tesseract-entrypoint.sh" ]; then
+    preflight="$script_dir/tesseract-entrypoint.sh"
+  fi
+  [ -x "$preflight" ] || fail TESSERACT_PREFLIGHT_MISSING
+  "$preflight" --check-only || fail LANGUAGE_DATA_UNAVAILABLE
+fi
 
 "$@" &
 worker_pid=$!
@@ -64,10 +71,22 @@ printf '%s\n' "$worker_pid" > "$pid_file"
 : > "$heartbeat_file"
 chmod 600 -- "$pid_file" "$heartbeat_file"
 
+# A BRIDGE, not the heartbeat itself.
+#
+# dist/worker.js writes this file from a timer of its own (see
+# src/lib/workerHeartbeat.ts), which is what makes the probe's mtime mean "the
+# event loop is still turning" rather than "a pid exists" — the latter kept a
+# wedged worker reporting healthy indefinitely. Until the worker's first write
+# lands, keep the file fresh so a slow boot (Prisma connect, migration guard,
+# against only a 5s start period) is not read as a stall, then stand down so
+# the two never both claim to be the heartbeat.
 heartbeat() {
   while kill -0 "$worker_pid" 2>/dev/null; do
+    if [ "$(head -c 4 -- "$heartbeat_file" 2>/dev/null)" = node ]; then
+      return
+    fi
     touch -- "$heartbeat_file" || exit 1
-    sleep 10
+    sleep 2
   done
 }
 

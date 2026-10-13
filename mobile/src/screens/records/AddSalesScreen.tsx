@@ -10,10 +10,12 @@ import * as haptics from "../../lib/haptics";
 import { space } from "../../theme/tokens";
 import { FIELD_LIMITS } from "../../lib/fieldLimits";
 import { todayISO } from "./shared";
+import { AvailableFundsBaselineChoice, useAvailableFundsBaselineChoice } from "../../components/AvailableFundsBaselineChoice";
 
 export function AddSalesScreen({ navigation }: any) {
   const { selected } = useBusinessProfiles();
   const [date, setDate] = useState(todayISO());
+  const baselineChoice = useAvailableFundsBaselineChoice(date);
   const [description, setDescription] = useState("Daily sales");
   const [amount, setAmount] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -26,6 +28,7 @@ export function AddSalesScreen({ navigation }: any) {
   async function submit() {
     const value = Number(amount);
     if (!Number.isFinite(value) || value <= 0) return setError("Enter an amount greater than zero.");
+    if (!baselineChoice.check()) return;
     setError(null);
     setBusy(true);
     try {
@@ -34,6 +37,7 @@ export function AddSalesScreen({ navigation }: any) {
         date,
         description: description.trim(),
         amount: value,
+        ...baselineChoice.requestFields(),
       });
       haptics.succeeded();
       setFlash("Sales record saved.");
@@ -41,7 +45,7 @@ export function AddSalesScreen({ navigation }: any) {
     } catch (err) {
       // See the same catch in AddExpenseScreen: the typed figures survive, and
       // the wording says that without implying a later sync.
-      setError(saveFailureMessage(err, "Save sales record"));
+      if (!(await baselineChoice.absorb(err))) setError(saveFailureMessage(err, "Save sales record"));
     } finally {
       setBusy(false);
     }
@@ -61,6 +65,7 @@ export function AddSalesScreen({ navigation }: any) {
               A sales figure you record for monitoring — not a receipt for a customer.
             </T>
             <DateField label="Date" value={date} onChange={setDate} />
+            <AvailableFundsBaselineChoice choice={baselineChoice} disabled={busy} />
             <Field
               label="Description"
               value={description}

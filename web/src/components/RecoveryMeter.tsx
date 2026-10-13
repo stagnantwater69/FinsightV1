@@ -238,7 +238,7 @@ export function RecoveryMeter({
       </div>
       {monthState.tone === "setup" ? (
         <p className="mb-2 text-xs text-ink-500">
-          Add your expected monthly expenses to calculate your target.
+          Add a starting monthly expense estimate to calculate your target.
         </p>
       ) : null}
 
@@ -250,7 +250,7 @@ export function RecoveryMeter({
         )}
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-label="Month-to-date coverage of expected monthly expenses"
+        aria-label="Month-to-date coverage of monthly expense basis"
       >
         <div
           className="h-full rounded-full transition-[width] duration-700 ease-out"
@@ -259,7 +259,7 @@ export function RecoveryMeter({
       </div>
       <p className="mt-1.5 text-xs text-ink-500">
         <Money value={salesThisMonth} /> of{" "}
-        <Money value={expectedMonthlyExpenses} /> needed this month (
+        <Money value={expectedMonthlyExpenses} /> monthly target (
         {monthCoveragePercent.toFixed(0)}%)
       </p>
 

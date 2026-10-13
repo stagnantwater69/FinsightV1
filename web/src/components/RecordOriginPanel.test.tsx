@@ -146,6 +146,38 @@ describe("RecordOriginPanel — scanned receipt", () => {
     expect(screen.queryByText("Americano")).not.toBeInTheDocument();
   });
 
+  it("uses roving focus and arrow, Home, and End keys to activate each view", async () => {
+    const user = userEvent.setup();
+    render(<RecordOriginPanel origin={receiptOrigin} recordAmount={8.17} />);
+
+    const items = screen.getByRole("tab", { name: /items/i });
+    const photo = screen.getByRole("tab", { name: /receipt photo/i });
+    const panel = screen.getByRole("tabpanel");
+    expect(items).toHaveAttribute("tabindex", "0");
+    expect(photo).toHaveAttribute("tabindex", "-1");
+    expect(items).toHaveAttribute("aria-controls", panel.id);
+    expect(panel).toHaveAttribute("aria-labelledby", items.id);
+
+    items.focus();
+    await user.keyboard("{ArrowRight}");
+    expect(photo).toHaveFocus();
+    expect(photo).toHaveAttribute("aria-selected", "true");
+    expect(panel).toHaveAttribute("aria-labelledby", photo.id);
+
+    await user.keyboard("{Home}");
+    expect(items).toHaveFocus();
+    expect(items).toHaveAttribute("aria-selected", "true");
+
+    await user.keyboard("{ArrowLeft}");
+    expect(photo).toHaveFocus();
+    expect(photo).toHaveAttribute("aria-selected", "true");
+
+    await user.keyboard("{Home}");
+    await user.keyboard("{End}");
+    expect(photo).toHaveFocus();
+    expect(photo).toHaveAttribute("aria-selected", "true");
+  });
+
   it("offers no photo tab when the image link could not be minted", () => {
     render(<RecordOriginPanel origin={{ ...receiptOrigin, imageUrl: null }} recordAmount={8.17} />);
 

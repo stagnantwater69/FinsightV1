@@ -13,8 +13,15 @@ describe('cold-start session restoration', () => {
     expect(authContext).toContain('clearTimeout(timeout)');
   });
 
+  /*
+   * The caller's signal now reaches fetch through the request timeout's
+   * controller rather than directly. The behaviour that matters — an aborted
+   * caller signal ending the request — is exercised in
+   * tests/apiRequestTimeout.test.ts.
+   */
   it('passes the bootstrap abort signal to fetch', () => {
     expect(api).toMatch(/async function request<[\s\S]*?signal\?: AbortSignal;/);
-    expect(api).toContain('signal: opts.signal');
+    expect(api).toContain('withTimeout(opts.signal, JSON_REQUEST_TIMEOUT_MS)');
+    expect(api).toContain('signal: deadline.signal');
   });
 });

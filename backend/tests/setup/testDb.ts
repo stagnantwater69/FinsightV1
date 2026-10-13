@@ -23,6 +23,8 @@ const TABLES = [
   "ChatMessage",
   "Conversation",
   "Notification",
+  "CSVSourcePurgeJob",
+  "CSVImportStageChunk",
   "CSVImportBatch",
   "ReceiptScan",
   "ReceiptCaptureBatch",
@@ -114,6 +116,8 @@ export interface ProfileOverrides {
   largeExpenseThresholdPercent?: number;
   /** IANA timezone identifier. Omitted means the schema default ("Asia/Manila"). */
   timezone?: string;
+  /** The business type chosen at onboarding. Omitted means "Sari-Sari Store". */
+  type?: string;
 }
 
 export async function makeProfile(userId: number, overrides: ProfileOverrides = {}) {
@@ -121,8 +125,11 @@ export async function makeProfile(userId: number, overrides: ProfileOverrides = 
     data: {
       userId,
       name: overrides.name ?? "Test Store",
-      type: "Sari-Sari Store",
+      type: overrides.type ?? "Sari-Sari Store",
       availableFunds: new Prisma.Decimal(overrides.availableFunds ?? 48500),
+      // Generic fixtures stay off the active balance date; baseline tests set their own anchor.
+      availableFundsBaselineAt: new Date("2000-01-01T00:00:00.000Z"),
+      availableFundsBaselineDate: new Date("2000-01-01T00:00:00.000Z"),
       expectedMonthlyExpenses: new Prisma.Decimal(overrides.expectedMonthlyExpenses ?? 125000),
       operatingDays: overrides.operatingDays ?? 25,
       largeExpenseThresholdPercent: new Prisma.Decimal(overrides.largeExpenseThresholdPercent ?? 25),
@@ -189,4 +196,14 @@ export function businessDayOffset(timezone: string, daysAgo = 0): number {
   const businessDay = resolveBusinessToday(timezone);
   businessDay.setUTCDate(businessDay.getUTCDate() - daysAgo);
   return Math.round((businessDay.getTime() - utcDay(0).getTime()) / 86_400_000);
+}
+
+/**
+ * "YYYY-MM-DD" for a day offset from the BUSINESS's current calendar day.
+ * Use it wherever the service under test resolves "today" with
+ * `resolveBusinessToday`: a UTC-anchored date lands on the wrong day for
+ * roughly 16:00-23:59 UTC.
+ */
+export function businessDayString(timezone: string, offsetDays = 0): string {
+  return utcDayString(businessDayOffset(timezone) + offsetDays);
 }

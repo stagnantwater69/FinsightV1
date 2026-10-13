@@ -121,3 +121,24 @@ export function LastUpdated({ at, now, style }: { at: number | null | undefined;
     </View>
   );
 }
+
+export function FreshnessStatus({
+  at,
+  now,
+  refreshing,
+  style,
+}: {
+  at: number | null | undefined;
+  now: number;
+  refreshing: boolean;
+  style?: ViewStyle;
+}) {
+  const line = lastUpdatedLine(at, now);
+  if (!line && !refreshing) return null;
+  return (
+    <View style={[{ flexDirection: "row", justifyContent: "space-between", gap: space.sm }, style]}>
+      {line ? <T variant="caption">{line}</T> : <View />}
+      {refreshing ? <T variant="caption" accessibilityLiveRegion="polite">Refreshing…</T> : null}
+    </View>
+  );
+}

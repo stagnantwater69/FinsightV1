@@ -1,23 +1,28 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { ExpenseInsight } from "./ExpenseInsight";
 import type {
+  AnomalyFinding,
   BusinessProfile,
   ExpenseBehavior,
+  FinancialPosition,
+  RecordItem,
   ReductionOpportunity,
   ReductionOpportunityResponse,
   ReductionSimulation,
   RecurringPattern,
   RecurringSchedule,
 } from "../lib/types";
+import type { DetailExpenseOverview } from "../lib/expenseOverview";
+import { invalidateServerState } from "../lib/serverStateCache";
 
 /**
  * THE REGRESSION THIS FILE EXISTS FOR.
  *
- * `load()` once awaited five endpoints in one `Promise.all`. `Promise.all`
+ * `load()` once awaited its core and supporting endpoints in one `Promise.all`. `Promise.all`
  * rejects the moment ANY member rejects and discards the responses that already
  * arrived — so when `/insights/recurring-schedules` went dark behind its server
  * feature flag (404 by design, so an unshipped feature is not advertised), the
@@ -25,10 +30,8 @@ import type {
  * table, no flags. An optional panel at the bottom of the page destroyed
  * everything above it.
  *
- * The tests below are written against BEHAVIOUR, not against status codes: each
- * failing endpoint is a plain rejection, exactly what a transient network drop
- * or a 500 also looks like from the client. If someone re-bundles the fetches,
- * the first test here fails.
+ * The schedules tests cover both transient request failures and a definitive
+ * 404 from the feature gate. Other supplemental panels remain status-agnostic.
  */
 
 const behavior: ExpenseBehavior = {
@@ -106,6 +109,42 @@ const profileB = {
 /** Mutable so a test can simulate switching business profiles mid-render. */
 let selectedProfile: BusinessProfile = profile;
 
+function financialPosition(
+  calculatedAmount = profile.availableFunds,
+): FinancialPosition {
+  const confirmedSalesAdded = Math.max(
+    0,
+    calculatedAmount - profile.availableFunds,
+  );
+  const confirmedExpensesDeducted = Math.max(
+    0,
+    profile.availableFunds - calculatedAmount,
+  );
+  return {
+    asOfDate: "2026-10-01",
+    availableFunds: {
+      calculatedAmount,
+      baselineAmount: profile.availableFunds,
+      baselineAt: "2026-08-01T00:00:00.000Z",
+      baselineDate: "2026-08-01",
+      confirmedSalesAdded,
+      confirmedExpensesDeducted,
+      confirmedSalesRecordCount: confirmedSalesAdded > 0 ? 1 : 0,
+      confirmedExpenseRecordCount: confirmedExpensesDeducted > 0 ? 1 : 0,
+      asOfDate: "2026-10-01",
+    },
+    monthlyExpenseBasis: {
+      amount: 20_000,
+      source: "owner_estimate",
+      sourceMonth: null,
+      ownerEstimate: 20_000,
+      eligibleRecordCount: 0,
+      recordsCompleteThroughMonth: null,
+      recordsCompleteThroughConfirmedAt: null,
+    },
+  };
+}
+
 // Deliberately a DIFFERENT category name/amount from the `behavior` fixture's
 // "Inventory" — the KPI row and category table already print "Inventory" and
 // "PHP 12,000" from `behavior`, and a card that happened to repeat both would
@@ -165,7 +204,10 @@ function reductionResponse(
 
 /** Per-URL responses. A handler that throws stands for ANY failure — 404 from
  *  the feature gate, 500, or the request never leaving the device. */
-let handlers: Record<string, () => unknown>;
+type GetConfig = { params?: Record<string, unknown>; signal?: AbortSignal };
+let handlers: Record<string, (config?: GetConfig) => unknown>;
+/** Every GET, with its query, so the period sent can be asserted. */
+let getCalls: { url: string; params: Record<string, unknown> }[] = [];
 
 function ok<T>(data: T) {
   return () => ({ data });
@@ -177,6 +219,48 @@ function failing() {
   };
 }
 
+function notFound() {
+  return () => {
+    throw Object.assign(new Error("Request failed with status code 404"), {
+      isAxiosError: true,
+      response: { status: 404, data: { error: "Not found" } },
+    });
+  };
+}
+
+function detailOverview(
+  behaviorPanel: DetailExpenseOverview["behavior"] = {
+    status: "available",
+    data: behavior,
+  },
+  opportunitiesPanel: DetailExpenseOverview["opportunities"] = {
+    status: "available",
+    data: reductionResponse({ opportunities: [] }),
+  },
+): DetailExpenseOverview {
+  return {
+    view: "detail",
+    behavior: behaviorPanel,
+    opportunities: opportunitiesPanel,
+  };
+}
+
+function setOverview(
+  nextBehavior: ExpenseBehavior = behavior,
+  nextOpportunities: ReductionOpportunityResponse = reductionResponse({ opportunities: [] }),
+) {
+  handlers["/insights/expense-overview"] = ok(
+    detailOverview(
+      { status: "available", data: nextBehavior },
+      { status: "available", data: nextOpportunities },
+    ),
+  );
+}
+
+function setOpportunities(next: ReductionOpportunityResponse) {
+  setOverview(behavior, next);
+}
+
 /**
  * POST payloads captured by URL, for the reduction-simulation tests below —
  * asserting on what the CLIENT sent, not just what it rendered afterwards.
@@ -186,10 +270,11 @@ let postHandlers: Record<string, (body: unknown) => unknown>;
 
 vi.mock("../lib/api", () => ({
   api: {
-    get: async (url: string) => {
+    get: async (url: string, config?: { params?: Record<string, unknown> }) => {
+      getCalls.push({ url, params: config?.params ?? {} });
       const handler = handlers[url];
       if (!handler) throw new Error(`unmocked GET ${url}`);
-      return handler();
+      return handler(config);
     },
     post: async (url: string, body: unknown) => {
       postCalls.push({ url, body });
@@ -201,8 +286,12 @@ vi.mock("../lib/api", () => ({
   },
 }));
 
+const getFinancialPosition = vi.fn();
 vi.mock("../context/BusinessProfileContext", () => ({
-  useBusinessProfiles: () => ({ selected: selectedProfile }),
+  useBusinessProfiles: () => ({
+    selected: selectedProfile,
+    getFinancialPosition,
+  }),
 }));
 
 vi.mock("../context/ExpenseCategoryContext", () => ({
@@ -242,23 +331,104 @@ function renderPage() {
 
 beforeEach(() => {
   selectedProfile = profile;
+  getFinancialPosition.mockReset();
+  getFinancialPosition.mockResolvedValue(financialPosition());
   openChat.mockClear();
   postCalls = [];
   postHandlers = {};
+  getCalls = [];
   handlers = {
-    "/insights/expense-behavior": ok(behavior),
+    "/records/months": ok({ months: ["2026-09", "2026-08"] }),
+    "/insights/expense-overview": ok(detailOverview()),
     "/records/flagged": ok({ items: [], nextCursor: null }),
     "/records/flagged/count": ok({ expenses: 0, sales: 0, total: 0 }),
     "/insights/findings": ok({ items: [], nextCursor: null }),
     "/insights/recurring-patterns": ok([candidate]),
     "/insights/recurring-schedules": ok([schedule]),
-    "/insights/reduction-opportunities": ok(
-      reductionResponse({ opportunities: [] }),
-    ),
   };
 });
 
 describe("ExpenseInsight resilience", () => {
+  it("uses record-derived available funds for the expense-share figure", async () => {
+    getFinancialPosition.mockResolvedValue(financialPosition(24_000));
+    renderPage();
+
+    const label = await screen.findByText(
+      "Share of recorded available funds",
+    );
+    const tile = label.parentElement;
+    expect(tile).not.toBeNull();
+    expect(within(tile!).getByText("50%")).toBeInTheDocument();
+    expect(
+      within(tile!).getByText(
+        "PHP 12,000 of PHP 24,000 recorded available funds",
+      ),
+    ).toBeInTheDocument();
+    expect(getFinancialPosition).toHaveBeenCalledWith(
+      profile.id,
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("refreshes recorded funds only for a matching business invalidation", async () => {
+    getFinancialPosition
+      .mockResolvedValueOnce(financialPosition(24_000))
+      .mockResolvedValueOnce(financialPosition(30_000));
+    renderPage();
+
+    expect(
+      await screen.findByText(
+        "PHP 12,000 of PHP 24,000 recorded available funds",
+      ),
+    ).toBeInTheDocument();
+    expect(getFinancialPosition).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      invalidateServerState({
+        businessProfileId: profileB.id,
+        tags: ["financial"],
+      });
+    });
+    expect(getFinancialPosition).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      invalidateServerState({
+        businessProfileId: profile.id,
+        tags: ["financial"],
+      });
+    });
+
+    expect(
+      await screen.findByText(
+        "PHP 12,000 of PHP 30,000 recorded available funds",
+      ),
+    ).toBeInTheDocument();
+    expect(getFinancialPosition).toHaveBeenCalledTimes(2);
+  });
+
+  it("labels the starting-funds fallback when recorded funds cannot load", async () => {
+    getFinancialPosition.mockRejectedValue(
+      new Error("Recorded balance is temporarily unavailable."),
+    );
+    renderPage();
+
+    const warning = await screen.findByRole("alert");
+    expect(warning).toHaveTextContent(
+      "Recorded balance couldn’t load. Using starting funds.",
+    );
+    expect(
+      screen.getByRole("button", { name: "Retry recorded balance" }),
+    ).toBeInTheDocument();
+
+    const tile = screen.getByText("Share of recorded available funds")
+      .parentElement;
+    expect(tile).not.toBeNull();
+    expect(within(tile!).getByText("24%")).toBeInTheDocument();
+    expect(
+      within(tile!).getByText("PHP 12,000 of PHP 50,000 recorded available funds"),
+    ).toBeInTheDocument();
+  });
+
   it("still renders its core content when the schedules request fails", async () => {
     handlers["/insights/recurring-schedules"] = failing();
     renderPage();
@@ -270,10 +440,12 @@ describe("ExpenseInsight resilience", () => {
     // And no page-level error: one dark optional endpoint is not a reason to
     // tell an owner their figures failed to load.
     expect(screen.queryByText(/status code 404/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Payments you asked FinSight to watch")).not.toBeInTheDocument();
+    expect(screen.queryByText("Nothing scheduled yet")).not.toBeInTheDocument();
   });
 
   it("hides the recurring agenda entirely rather than claiming nothing is scheduled", async () => {
-    handlers["/insights/recurring-schedules"] = failing();
+    handlers["/insights/recurring-schedules"] = notFound();
     renderPage();
     await screen.findByText("Total expenses");
 
@@ -286,12 +458,12 @@ describe("ExpenseInsight resilience", () => {
   });
 
   it("keeps the candidates panel working when only the schedules request fails", async () => {
-    handlers["/insights/recurring-schedules"] = failing();
+    handlers["/insights/recurring-schedules"] = notFound();
     renderPage();
 
     // /insights/recurring-patterns is ungated and answered; the two must not
     // fail together.
-    expect(await screen.findByText("Does this repeat?")).toBeInTheDocument();
+    expect(await screen.findByText("Possible recurring expenses")).toBeInTheDocument();
     expect(screen.getByText("Warehouse rent")).toBeInTheDocument();
     // Confirming creates a schedule and is behind the same gate, so the button
     // is not offered rather than offered-and-broken.
@@ -323,22 +495,145 @@ describe("ExpenseInsight resilience", () => {
     renderPage();
 
     expect(await screen.findByText("Total expenses")).toBeInTheDocument();
-    expect(screen.getByText("No findings need review")).toBeInTheDocument();
+    expect(screen.getByText("Finding details are temporarily unavailable.")).toBeInTheDocument();
+    expect(screen.queryByText("No findings to review")).not.toBeInTheDocument();
   });
 
-  it("surfaces a recoverable error when the CORE read fails", async () => {
-    // The one failure that genuinely leaves nothing to show.
-    handlers["/insights/expense-behavior"] = failing();
+  it("keeps last-known supplemental data and labels a failed mounted refresh", async () => {
+    const flagged = {
+      id: 41,
+      type: "expense",
+      businessProfileId: profile.id,
+      date: "2026-01-20T00:00:00.000Z",
+      description: "Emergency freezer repair",
+      amount: 8_500,
+      categoryId: 1,
+      categoryName: "Inventory",
+      largeExpenseFlag: true,
+      reviewStatus: "Needs Review",
+      duplicateStatus: "Not Checked",
+      source: "MANUAL_ENTRY",
+    } as unknown as RecordItem;
+    const finding = {
+      id: 52,
+      expenseRecordId: flagged.id,
+      type: "AMOUNT_OUTLIER",
+      severity: "HIGH",
+      score: 3.2,
+      title: "Repair cost is higher than usual",
+      reasons: ["Higher than recent repairs"],
+      status: "OPEN",
+      detectedAt: "2026-01-20T00:00:00.000Z",
+    } as AnomalyFinding;
+    handlers["/records/flagged"] = ok({ items: [flagged], nextCursor: null });
+    handlers["/records/flagged/count"] = ok({ expenses: 1, sales: 0, total: 1 });
+    handlers["/insights/findings"] = ok({ items: [finding], nextCursor: null });
+    renderPage();
+
+    expect(await screen.findByText("Emergency freezer repair")).toBeInTheDocument();
+    expect(await screen.findByText("Repair cost is higher than usual")).toBeInTheDocument();
+    expect(await screen.findAllByText("Warehouse rent")).not.toHaveLength(0);
+
+    handlers["/records/flagged"] = failing();
+    handlers["/records/flagged/count"] = failing();
+    handlers["/insights/findings"] = failing();
+    handlers["/insights/recurring-patterns"] = failing();
+    await act(async () => {
+      invalidateServerState({ businessProfileId: profile.id, tags: ["financial"] });
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByText(/Showing recently loaded flagged record details/)).toBeInTheDocument();
+    expect(screen.getByText(/Showing recently loaded finding details/)).toBeInTheDocument();
+    expect(screen.getByText(/Showing recently loaded recurring expense suggestions/)).toBeInTheDocument();
+    expect(screen.getByText("Emergency freezer repair")).toBeInTheDocument();
+    expect(screen.getByText("Repair cost is higher than usual")).toBeInTheDocument();
+    expect(screen.getAllByText("Warehouse rent")).not.toHaveLength(0);
+    expect(screen.queryByText("Nothing flagged")).not.toBeInTheDocument();
+    expect(screen.queryByText("No findings to review")).not.toBeInTheDocument();
+  });
+
+  it("keeps cached schedules visible after a transient refresh failure and retries", async () => {
+    renderPage();
+    expect(await screen.findByText("Payments you asked FinSight to watch")).toBeInTheDocument();
+
+    handlers["/insights/recurring-schedules"] = failing();
+    await act(async () => {
+      invalidateServerState({
+        businessProfileId: profile.id,
+        resourcePrefix: "/insights/recurring-schedules",
+      });
+      await Promise.resolve();
+    });
+
+    expect(
+      await screen.findByText("Recurring payments couldn’t refresh."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Showing recently loaded schedules.")).toBeInTheDocument();
+    expect(screen.getByText("Payments you asked FinSight to watch")).toBeInTheDocument();
+
+    handlers["/insights/recurring-schedules"] = ok([
+      { ...schedule, label: "Warehouse rent revised" },
+    ]);
+    await userEvent.click(screen.getByRole("button", { name: "Retry schedules" }));
+
+    expect(await screen.findAllByText("Warehouse rent revised")).not.toHaveLength(0);
+    await waitFor(() => {
+      expect(screen.queryByText("Recurring payments couldn’t refresh.")).not.toBeInTheDocument();
+    });
+  });
+
+  it("drops cached schedules when a mounted refresh confirms the feature is unavailable", async () => {
+    renderPage();
+    expect(await screen.findByText("Payments you asked FinSight to watch")).toBeInTheDocument();
+
+    handlers["/insights/recurring-schedules"] = notFound();
+    await act(async () => {
+      invalidateServerState({
+        businessProfileId: profile.id,
+        resourcePrefix: "/insights/recurring-schedules",
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("Payments you asked FinSight to watch")).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText("Recurring payments couldn’t refresh.")).not.toBeInTheDocument();
+    expect(screen.getByText("Possible recurring expenses")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Watch this/ })).not.toBeInTheDocument();
+  });
+
+  it("surfaces a recoverable error when the overview request fails", async () => {
+    handlers["/insights/expense-overview"] = failing();
     renderPage();
 
     expect(await screen.findByText(/status code 404/)).toBeInTheDocument();
     expect(screen.queryByText("Total expenses")).not.toBeInTheDocument();
 
-    handlers["/insights/expense-behavior"] = ok(behavior);
+    handlers["/insights/expense-overview"] = ok(detailOverview());
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 
     expect(await screen.findByText("Total expenses")).toBeInTheDocument();
     expect(screen.queryByText(/status code 404/)).not.toBeInTheDocument();
+  });
+
+  it("reports only the unavailable behavior panel and recovers on retry", async () => {
+    handlers["/insights/expense-overview"] = ok(
+      detailOverview(
+        { status: "unavailable", data: null },
+        { status: "available", data: reductionResponse() },
+      ),
+    );
+    renderPage();
+
+    expect(await screen.findByText("Expense insight couldn’t load")).toBeInTheDocument();
+    expect(screen.getByText("The expense behavior panel is temporarily unavailable.")).toBeInTheDocument();
+    expect(screen.queryByText(/Opportunities couldn’t load/)).not.toBeInTheDocument();
+
+    handlers["/insights/expense-overview"] = ok(detailOverview());
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Total expenses")).toBeInTheDocument();
   });
 
   it("provides direct navigation through the long insight page", async () => {
@@ -357,14 +652,231 @@ describe("ExpenseInsight resilience", () => {
       "href",
       "#expense-categories",
     );
-    expect(screen.getByRole("link", { name: "Opportunities" })).toHaveAttribute(
-      "href",
-      "#expense-opportunities",
-    );
+    expect(
+      screen.queryByRole("link", { name: "Opportunities" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Review" })).toHaveAttribute(
       "href",
       "#expense-review",
     );
+  });
+
+  it("omits resolved empty passive panels and lets Summary use the full review row", async () => {
+    renderPage();
+    await screen.findByText("Total expenses");
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("heading", { name: "Reduction opportunities" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("heading", { name: "Large expense flags" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("heading", { name: "Unusual expenses" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("heading", { name: "Findings to review" }),
+      ).not.toBeInTheDocument();
+    });
+
+    expect(screen.getByText("Summary")).toBeInTheDocument();
+    expect(document.getElementById("expense-review")).not.toHaveClass(
+      "lg:grid-cols-2",
+    );
+  });
+
+  it("keeps populated passive panels and the two-column flags-and-summary layout", async () => {
+    const flagged = {
+      id: 61,
+      type: "expense",
+      businessProfileId: profile.id,
+      date: "2026-01-21T00:00:00.000Z",
+      description: "Replacement compressor",
+      amount: 9_000,
+      categoryId: 1,
+      categoryName: "Inventory",
+      largeExpenseFlag: true,
+      reviewStatus: "Needs Review",
+      duplicateStatus: "Not Checked",
+      source: "MANUAL_ENTRY",
+    } as unknown as RecordItem;
+    const finding = {
+      id: 62,
+      expenseRecordId: flagged.id,
+      type: "AMOUNT_OUTLIER",
+      severity: "HIGH",
+      score: 3.4,
+      title: "Compressor cost is higher than usual",
+      reasons: ["Higher than recent equipment expenses"],
+      status: "OPEN",
+      detectedAt: "2026-01-21T00:00:00.000Z",
+    } as AnomalyFinding;
+    setOverview({
+      ...behavior,
+      unusualExpenses: [
+        {
+          id: 63,
+          description: "Rush inventory delivery",
+          amount: 6_000,
+          date: "2026-01-22T00:00:00.000Z",
+          categoryId: 1,
+          categoryName: "Inventory",
+          zScore: 3.1,
+          categoryMean: 1_500,
+          categoryStdDev: 900,
+        },
+      ],
+    });
+    handlers["/records/flagged"] = ok({ items: [flagged], nextCursor: null });
+    handlers["/records/flagged/count"] = ok({
+      expenses: 1,
+      sales: 0,
+      total: 1,
+    });
+    handlers["/insights/findings"] = ok({
+      items: [finding],
+      nextCursor: null,
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("Replacement compressor")).toBeInTheDocument();
+    expect(screen.getByText("Rush inventory delivery")).toBeInTheDocument();
+    expect(
+      screen.getByText("Compressor cost is higher than usual"),
+    ).toBeInTheDocument();
+    expect(document.getElementById("expense-review")).toHaveClass(
+      "lg:grid-cols-2",
+    );
+  });
+
+  it("pages findings three at a time once there are more than three", async () => {
+    const user = userEvent.setup();
+    const findingsList = Array.from({ length: 7 }, (_, i) => ({
+      id: 100 + i,
+      expenseRecordId: 200 + i,
+      type: "AMOUNT_OUTLIER",
+      severity: "MEDIUM",
+      score: 2,
+      title: `Finding number ${i + 1}`,
+      reasons: ["Higher than usual"],
+      status: "OPEN",
+      detectedAt: "2026-01-20T00:00:00.000Z",
+    })) as AnomalyFinding[];
+    handlers["/insights/findings"] = ok({ items: findingsList, nextCursor: null });
+    renderPage();
+
+    expect(await screen.findByText("Finding number 1")).toBeInTheDocument();
+    expect(screen.getByText("Finding number 3")).toBeInTheDocument();
+    expect(screen.queryByText("Finding number 4")).not.toBeInTheDocument();
+    expect(
+      screen.getByText((_, el) => el?.tagName === "P" && el.textContent === "Showing 1–3 of 7 findings"),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText("Rows")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Next page" }));
+    expect(screen.getByText("Finding number 4")).toBeInTheDocument();
+    expect(screen.queryByText("Finding number 1")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Last page" }));
+    expect(screen.getByText("Finding number 7")).toBeInTheDocument();
+    expect(screen.queryByText("Finding number 6")).not.toBeInTheDocument();
+  });
+
+  it("does not page three or fewer findings", async () => {
+    const findingsList = Array.from({ length: 3 }, (_, i) => ({
+      id: 100 + i,
+      expenseRecordId: 200 + i,
+      type: "AMOUNT_OUTLIER",
+      severity: "MEDIUM",
+      score: 2,
+      title: `Finding number ${i + 1}`,
+      reasons: ["Higher than usual"],
+      status: "OPEN",
+      detectedAt: "2026-01-20T00:00:00.000Z",
+    })) as AnomalyFinding[];
+    handlers["/insights/findings"] = ok({ items: findingsList, nextCursor: null });
+    renderPage();
+
+    expect(await screen.findByText("Finding number 3")).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Pagination" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/findings$/)).not.toBeInTheDocument();
+  });
+
+  it("restores empty supplemental panels when a refresh fails", async () => {
+    renderPage();
+    await screen.findByText("Total expenses");
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("heading", { name: "Large expense flags" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("heading", { name: "Findings to review" }),
+      ).not.toBeInTheDocument();
+    });
+
+    handlers["/records/flagged"] = failing();
+    handlers["/records/flagged/count"] = failing();
+    handlers["/insights/findings"] = failing();
+    await act(async () => {
+      invalidateServerState({
+        businessProfileId: profile.id,
+        tags: ["records", "insights-findings"],
+      });
+      await Promise.resolve();
+    });
+
+    expect(
+      await screen.findByText(/Showing recently loaded flagged record details/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Showing recently loaded finding details/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Large expense flags" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Findings to review" }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps empty overview supplements visible while their refresh is stale", async () => {
+    renderPage();
+    await screen.findByText("Total expenses");
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("heading", { name: "Reduction opportunities" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("heading", { name: "Unusual expenses" }),
+      ).not.toBeInTheDocument();
+    });
+
+    handlers["/insights/expense-overview"] = failing();
+    await act(async () => {
+      invalidateServerState({
+        businessProfileId: profile.id,
+        resourcePrefix: "/insights/expense-overview",
+      });
+      await Promise.resolve();
+    });
+
+    expect(
+      await screen.findByText("Expense insight couldn’t refresh"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Reduction opportunities" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Unusual expenses" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/recently loaded opportunity data/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/recently loaded unusual-expense results/),
+    ).toBeInTheDocument();
   });
 });
 
@@ -378,28 +890,31 @@ describe("ExpenseInsight reduction opportunities", () => {
     // assertion on a busy full-suite run. Holding the request pending proves
     // the state deterministically and makes the test independent of CPU load.
     let resolveOpportunities!: (value: unknown) => void;
-    handlers["/insights/reduction-opportunities"] = () =>
+    handlers["/insights/expense-overview"] = () =>
       new Promise((resolve) => {
         resolveOpportunities = resolve;
       });
     renderPage();
 
     expect(
-      await screen.findByText("Loading reduction opportunities…"),
+      await screen.findByText("Loading expense insights…"),
     ).toBeInTheDocument();
 
     resolveOpportunities({
-      data: reductionResponse({
-        opportunities: [
-          makeOpportunity({
-            id: "opp-1",
-            categoryName: "Office Supplies",
+      data: detailOverview(
+        { status: "available", data: behavior },
+        {
+          status: "available",
+          data: reductionResponse({
+            opportunities: [
+              makeOpportunity({ id: "opp-1", categoryName: "Office Supplies" }),
+              makeOpportunity({ id: "opp-2", categoryName: "Utilities" }),
+              makeOpportunity({ id: "opp-3", categoryName: "Transport" }),
+              makeOpportunity({ id: "opp-4", categoryName: "Marketing" }),
+            ],
           }),
-          makeOpportunity({ id: "opp-2", categoryName: "Utilities" }),
-          makeOpportunity({ id: "opp-3", categoryName: "Transport" }),
-          makeOpportunity({ id: "opp-4", categoryName: "Marketing" }),
-        ],
-      }),
+        },
+      ),
     });
 
     expect(await screen.findByText("Office Supplies")).toBeInTheDocument();
@@ -411,7 +926,7 @@ describe("ExpenseInsight reduction opportunities", () => {
   });
 
   it("labels priority and confidence with visible text, not colour alone", async () => {
-    handlers["/insights/reduction-opportunities"] = ok(
+    setOpportunities(
       reductionResponse({
         opportunities: [
           makeOpportunity({ priority: "high", confidence: "limited" }),
@@ -425,7 +940,7 @@ describe("ExpenseInsight reduction opportunities", () => {
   });
 
   it("renders evidence figures through the shared money formatter", async () => {
-    handlers["/insights/reduction-opportunities"] = ok(
+    setOpportunities(
       reductionResponse({
         opportunities: [
           makeOpportunity({
@@ -451,7 +966,7 @@ describe("ExpenseInsight reduction opportunities", () => {
   });
 
   it("links 'View related records' to the records list filtered by the opportunity's category", async () => {
-    handlers["/insights/reduction-opportunities"] = ok(
+    setOpportunities(
       reductionResponse({
         opportunities: [
           makeOpportunity({ categoryId: 5, categoryName: "Office Supplies" }),
@@ -477,7 +992,7 @@ describe("ExpenseInsight reduction opportunities", () => {
       categoryId: 10,
       categoryName: "Utilities",
     });
-    handlers["/insights/reduction-opportunities"] = ok(
+    setOpportunities(
       reductionResponse({ opportunities: [opportunity, other] }),
     );
     renderPage();
@@ -498,19 +1013,22 @@ describe("ExpenseInsight reduction opportunities", () => {
     expect(openChat.mock.calls[0][2].id).toBe("opp-7");
   });
 
-  it("shows a 'no material opportunities found' state when the list is empty but history is sufficient", async () => {
-    handlers["/insights/reduction-opportunities"] = ok(
+  it("omits the panel when the list is empty and history is sufficient", async () => {
+    setOpportunities(
       reductionResponse({ opportunities: [] }),
     );
     renderPage();
 
-    expect(
-      await screen.findByText("No material opportunities found"),
-    ).toBeInTheDocument();
+    await screen.findByText("Total expenses");
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("heading", { name: "Reduction opportunities" }),
+      ).not.toBeInTheDocument();
+    });
   });
 
-  it("shows the insufficient-history message from dataQuality instead of any cards", async () => {
-    handlers["/insights/reduction-opportunities"] = ok(
+  it("omits the panel when dataQuality says history is insufficient", async () => {
+    setOpportunities(
       reductionResponse({
         opportunities: [],
         dataQuality: {
@@ -524,40 +1042,71 @@ describe("ExpenseInsight reduction opportunities", () => {
     );
     renderPage();
 
+    await screen.findByText("Total expenses");
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("heading", { name: "Reduction opportunities" }),
+      ).not.toBeInTheDocument();
+    });
     expect(
-      await screen.findByText(
+      screen.queryByText(
         "Record a few more expenses before FinSight can suggest anything here.",
       ),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByText("No material opportunities found"),
     ).not.toBeInTheDocument();
   });
 
-  it("shows an API error with a retry action, and recovers on retry", async () => {
-    handlers["/insights/reduction-opportunities"] = failing();
+  it("keeps a populated limited-data panel and its limitation message", async () => {
+    setOpportunities(
+      reductionResponse({
+        opportunities: [makeOpportunity()],
+        dataQuality: {
+          status: "limited",
+          currentRecordCount: 3,
+          previousRecordCount: 1,
+          message: "Suggestions are based on limited history.",
+        },
+      }),
+    );
     renderPage();
 
     expect(
-      await screen.findByText(/Couldn't load reduction opportunities/),
+      await screen.findByRole("heading", { name: "Reduction opportunities" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Suggestions are based on limited history."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Opportunities" }),
+    ).toHaveAttribute("href", "#expense-opportunities");
+  });
+
+  it("shows an API error with a retry action, and recovers on retry", async () => {
+    handlers["/insights/expense-overview"] = ok(
+      detailOverview(
+        { status: "available", data: behavior },
+        { status: "unavailable", data: null },
+      ),
+    );
+    renderPage();
+
+    expect(
+      await screen.findByText(/Opportunities couldn’t load/),
     ).toBeInTheDocument();
     const retry = screen.getByRole("button", { name: "Retry" });
 
-    handlers["/insights/reduction-opportunities"] = ok(
-      reductionResponse({
-        opportunities: [makeOpportunity({ categoryName: "Office Supplies" })],
-      }),
+    setOpportunities(
+      reductionResponse({ opportunities: [makeOpportunity({ categoryName: "Office Supplies" })] }),
     );
     await userEvent.click(retry);
 
     expect(await screen.findByText("Office Supplies")).toBeInTheDocument();
     expect(
-      screen.queryByText(/Couldn't load reduction opportunities/),
+      screen.queryByText(/Opportunities couldn’t load/),
     ).not.toBeInTheDocument();
   });
 
   it("clears stale cards from the previous business profile on switch", async () => {
-    handlers["/insights/reduction-opportunities"] = ok(
+    setOpportunities(
       reductionResponse({
         opportunities: [makeOpportunity({ categoryName: "Office Supplies" })],
       }),
@@ -567,12 +1116,11 @@ describe("ExpenseInsight reduction opportunities", () => {
 
     // Switch profile: the page stays populated (a different category, so the
     // rest of the page keeps rendering normally), but the new profile's
-    // reduction-opportunities request is left unmocked. The ONLY reason
+    // overview response has no opportunity. The ONLY reason
     // "Office Supplies" could still be on screen afterwards is a stale card
     // that was never cleared when the switch happened.
     selectedProfile = profileB;
-    delete handlers["/insights/reduction-opportunities"];
-    handlers["/insights/expense-behavior"] = ok({
+    setOverview({
       ...behavior,
       categoryTrends: [
         {
@@ -587,7 +1135,7 @@ describe("ExpenseInsight reduction opportunities", () => {
         },
       ],
       totals: { current: 4000, previous: 3000 },
-    });
+    }, reductionResponse({ opportunities: [] }));
 
     rerender(
       <MemoryRouter>
@@ -610,7 +1158,7 @@ describe("ExpenseInsight reduction opportunities", () => {
  */
 describe("ExpenseInsight reduction opportunities — cost behavior", () => {
   it("shows no cost-behavior badge or note for an unclassified category", async () => {
-    handlers["/insights/reduction-opportunities"] = ok(
+    setOpportunities(
       reductionResponse({
         opportunities: [makeOpportunity({ costBehavior: "unclassified" })],
       }),
@@ -624,7 +1172,7 @@ describe("ExpenseInsight reduction opportunities — cost behavior", () => {
   });
 
   it("badges a fixed-cost category and adds a distinguishing caution note", async () => {
-    handlers["/insights/reduction-opportunities"] = ok(
+    setOpportunities(
       reductionResponse({
         opportunities: [makeOpportunity({ costBehavior: "fixed" })],
       }),
@@ -632,11 +1180,11 @@ describe("ExpenseInsight reduction opportunities — cost behavior", () => {
     renderPage();
 
     expect(await screen.findByText("Fixed cost")).toBeInTheDocument();
-    expect(screen.getByText(/Classified as a fixed cost/)).toBeInTheDocument();
+    expect(screen.getByText(/Fixed cost: check the contract/)).toBeInTheDocument();
   });
 
   it("badges a mixed-cost category and adds its own distinguishing caution note", async () => {
-    handlers["/insights/reduction-opportunities"] = ok(
+    setOpportunities(
       reductionResponse({
         opportunities: [makeOpportunity({ costBehavior: "mixed" })],
       }),
@@ -644,11 +1192,11 @@ describe("ExpenseInsight reduction opportunities — cost behavior", () => {
     renderPage();
 
     expect(await screen.findByText("Mixed cost")).toBeInTheDocument();
-    expect(screen.getByText(/Classified as a mixed cost/)).toBeInTheDocument();
+    expect(screen.getByText(/Mixed cost: part stays flat/)).toBeInTheDocument();
   });
 
   it("badges a variable-cost category with no extra caution note", async () => {
-    handlers["/insights/reduction-opportunities"] = ok(
+    setOpportunities(
       reductionResponse({
         opportunities: [makeOpportunity({ costBehavior: "variable" })],
       }),
@@ -665,7 +1213,7 @@ describe("ExpenseInsight reduction opportunities — cost behavior", () => {
  */
 describe("ExpenseInsight reduction opportunities — feedback", () => {
   beforeEach(() => {
-    handlers["/insights/reduction-opportunities"] = ok(
+    setOpportunities(
       reductionResponse({
         opportunities: [
           makeOpportunity({ id: "opp-1", categoryName: "Office Supplies" }),
@@ -688,7 +1236,7 @@ describe("ExpenseInsight reduction opportunities — feedback", () => {
     await userEvent.click(helpful);
 
     expect(
-      await screen.findByText("Thanks for the feedback."),
+      await screen.findByText("Saved"),
     ).toBeInTheDocument();
     expect(helpful).toHaveAttribute("aria-pressed", "true");
 
@@ -716,7 +1264,7 @@ describe("ExpenseInsight reduction opportunities — feedback", () => {
     const notRelevant = screen.getByRole("button", { name: /Not relevant/ });
 
     await userEvent.click(helpful);
-    await screen.findByText("Thanks for the feedback.");
+    await screen.findByText("Saved");
     expect(helpful).toHaveAttribute("aria-pressed", "true");
 
     // Changing the answer must not be blocked or treated as an error — the
@@ -785,7 +1333,7 @@ function openSimulationDialog(): HTMLElement {
 
 describe("ExpenseInsight simulate reduction", () => {
   beforeEach(() => {
-    handlers["/insights/reduction-opportunities"] = ok(
+    setOpportunities(
       reductionResponse({
         opportunities: [
           makeOpportunity({
@@ -865,12 +1413,16 @@ describe("ExpenseInsight simulate reduction", () => {
     const call = postCalls.find(
       (c) => c.url === "/insights/reduction-simulation",
     );
+    // The simulation asks about the same period the cards were computed for:
+    // the newest month with records, which the page opens on.
     expect(call?.body).toMatchObject({
       businessProfileId: profile.id,
       categoryId: 3,
-      periodDays: 30,
+      period: "month",
+      month: "2026-09",
       reduction: { kind: "percent", value: 15 },
     });
+    expect(call?.body).not.toHaveProperty("periodDays");
   });
 
   it("submits a valid peso-amount reduction", async () => {
@@ -1007,5 +1559,140 @@ describe("ExpenseInsight simulate reduction", () => {
       name: "Simulate reduction — Office Supplies",
     });
     expect(dialog.textContent).not.toMatch(/available funds/i);
+  });
+});
+
+describe("ExpenseInsight period filter", () => {
+  it("opens on the newest month with one scoped overview request", async () => {
+    renderPage();
+    await screen.findByText("Total spent");
+    const periodCalls = getCalls.filter((call) => call.url === "/insights/expense-overview");
+    expect(periodCalls).toHaveLength(1);
+    expect(periodCalls[0]?.params).toMatchObject({
+      businessProfileId: profile.id,
+      period: "month",
+      month: "2026-09",
+      view: "detail",
+    });
+    expect(periodCalls[0]?.params).not.toHaveProperty("periodDays");
+    expect(getCalls.some((call) => call.url === "/insights/expense-behavior")).toBe(false);
+    expect(getCalls.some((call) => call.url === "/insights/reduction-opportunities")).toBe(false);
+    expect(screen.getByRole("combobox", { name: "Month" })).toHaveTextContent("September 2026");
+  });
+
+  it("offers This week and Month without an All time entry point", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText("Total spent");
+    expect(screen.getByRole("button", { name: "This week" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Month" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "All time" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "This week" }));
+    await waitFor(() => {
+      expect(getCalls.filter((call) => call.url === "/insights/expense-overview").at(-1)!.params).toMatchObject({
+        period: "week",
+        view: "detail",
+      });
+    });
+  });
+
+  it("normalizes an inherited All time choice before requesting data", async () => {
+    window.sessionStorage.setItem(
+      "finsight.reportingPeriod.1",
+      JSON.stringify({ kind: "all" }),
+    );
+
+    renderPage();
+    await screen.findByText("Total spent");
+
+    const periodCalls = getCalls.filter((call) => call.url === "/insights/expense-overview");
+    expect(periodCalls).toHaveLength(1);
+    expect(periodCalls[0]?.params).toMatchObject({
+      period: "week",
+      view: "detail",
+    });
+    expect(screen.getByRole("button", { name: "This week" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.queryByRole("button", { name: "All time" })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(JSON.parse(window.sessionStorage.getItem("finsight.reportingPeriod.1")!)).toEqual({
+        kind: "week",
+      });
+    });
+  });
+
+  it("does not offer All time from the no-expenses state", async () => {
+    setOverview({
+      ...behavior,
+      totals: { current: 0, previous: 0 },
+      dailyTotals: [],
+      categoryTrends: [],
+      latestExpenseDate: "2026-08-15T00:00:00.000Z",
+    });
+
+    renderPage();
+    expect(await screen.findByText("No expenses in September 2026")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Show all time" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "All time" })).not.toBeInTheDocument();
+  });
+
+  it("still loads a selected month after switching away from This week", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText("Total spent");
+
+    await user.click(screen.getByRole("button", { name: "This week" }));
+    await waitFor(() => {
+      expect(getCalls.filter((call) => call.url === "/insights/expense-overview").at(-1)!.params).toMatchObject({
+        period: "week",
+      });
+    });
+    await user.click(screen.getByRole("combobox", { name: "Month" }));
+    await user.click(screen.getByRole("option", { name: "August 2026" }));
+    await waitFor(() => {
+      expect(getCalls.filter((call) => call.url === "/insights/expense-overview").at(-1)!.params).toMatchObject({
+        period: "month",
+        month: "2026-08",
+        view: "detail",
+      });
+    });
+  });
+
+  it("never paints a late month response after switching to This week", async () => {
+    const user = userEvent.setup();
+    let releaseMonth!: (value: unknown) => void;
+    const monthRequest = new Promise((resolve) => {
+      releaseMonth = resolve;
+    });
+    const weekBehavior: ExpenseBehavior = {
+      ...behavior,
+      categoryTrends: [{
+        ...behavior.categoryTrends[0],
+        categoryName: "This-week travel",
+        current: 2_000,
+        previous: 1_000,
+      }],
+    };
+    handlers["/insights/expense-overview"] = (config) =>
+      config?.params?.period === "week"
+        ? { data: detailOverview(
+            { status: "available", data: weekBehavior },
+            { status: "available", data: reductionResponse({ opportunities: [] }) },
+          ) }
+        : monthRequest;
+
+    renderPage();
+    await user.click(screen.getByRole("button", { name: "This week" }));
+    expect(await screen.findAllByText("This-week travel")).not.toHaveLength(0);
+
+    await act(async () => {
+      releaseMonth({ data: detailOverview() });
+      await monthRequest;
+    });
+    expect(screen.queryByText("Inventory")).not.toBeInTheDocument();
+    expect(screen.getAllByText("This-week travel").length).toBeGreaterThan(0);
   });
 });

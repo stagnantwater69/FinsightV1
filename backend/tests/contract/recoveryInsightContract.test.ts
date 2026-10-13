@@ -8,10 +8,10 @@ import { z } from "zod";
  * `asOfDate`) drifts, and independently guards against NaN/Infinity leaking
  * into any numeric field across representative fixture scenarios.
  *
- * Also pins the Phase 3 fields (`dataWarnings`, `setupIssues`,
- * `changeSincePreviousDay`) to their full shape rather than letting
- * `.passthrough()` wave them through unchecked — see the fixtures below for
- * scenarios that drive `dataWarnings`/`setupIssues` non-empty and
+ * Also pins the selected reporting period and the Phase 3 fields
+ * (`dataWarnings`, `setupIssues`, `changeSincePreviousDay`) to their full shape
+ * rather than letting `.passthrough()` wave them through unchecked. The
+ * fixtures below drive `dataWarnings`/`setupIssues` non-empty and
  * `changeSincePreviousDay` non-null through the real endpoint.
  */
 
@@ -42,18 +42,74 @@ import {
   changeReasonSchema,
   changeSincePreviousDaySchema,
   confidenceSchema,
+  monthlyExpenseBasisSchema,
   recoveryCheckpointSchema,
   statusSchema,
 } from "./schemas/recoveryTargets.schema";
+
+const recoveryReportingPeriodFields = {
+  start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  end: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  asOfDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  timezone: z.string().min(1),
+  isCurrent: z.boolean(),
+  isComplete: z.boolean(),
+  targetBasis: z.enum(["prorated_monthly_expenses", "monthly_expenses"]),
+  monthlyExpenseBases: z.array(
+    z
+      .object({
+        targetMonth: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+        basis: monthlyExpenseBasisSchema,
+      })
+      .strict(),
+  ),
+  target: z.number().finite(),
+  sales: z.number().finite(),
+  confirmedSales: z.number().finite(),
+  provisionalSales: z.number().finite(),
+  remainingTarget: z.number().finite(),
+  coveragePercent: z.number().finite(),
+  dailyTarget: z.number().finite(),
+  adjustedDailyTarget: z.union([z.number().finite(), z.null()]),
+  operatingDays: z.number().finite(),
+  elapsedOperatingDays: z.number().finite(),
+  remainingOperatingDays: z.number().finite(),
+  operatingScheduleConfigured: z.boolean(),
+  operatingDaysIsApproximated: z.boolean(),
+  expectedSalesToDate: z.number().finite(),
+  paceVarianceAmount: z.number().finite(),
+  status: z.enum(["needs_setup", "no_data", "ahead", "on_pace", "behind", "covered"]),
+  confidence: confidenceSchema,
+  recordCount: z.number().finite(),
+  dataWarnings: z.array(z.enum(["records_pending_review", "possible_duplicates"])),
+};
+
+const recoveryReportingPeriodSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("week"),
+      month: z.null(),
+      ...recoveryReportingPeriodFields,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("month"),
+      month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+      ...recoveryReportingPeriodFields,
+    })
+    .strict(),
+]);
 
 const recoveryInsightSchema = z
   .object({
     status: statusSchema,
     confidence: confidenceSchema,
-    contractVersion: z.literal(1),
+    contractVersion: z.literal(2),
     timezone: z.string().min(1),
     asOfDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     expectedMonthlyExpenses: z.number().finite(),
+    monthlyExpenseBasis: monthlyExpenseBasisSchema,
     operatingDays: z.number().finite(),
     dailyNeededTarget: z.number().finite(),
     salesThisMonth: z.number().finite(),
@@ -82,6 +138,7 @@ const recoveryInsightSchema = z
     changeSincePreviousDay: z.union([z.null(), changeSincePreviousDaySchema]),
     // ---- Phase 4 (plan §10.4) — full shape, not passthrough ----
     weeklyCheckpoints: z.array(recoveryCheckpointSchema),
+    reportingPeriod: recoveryReportingPeriodSchema,
   })
   .passthrough();
 
@@ -114,7 +171,7 @@ describe("zero sales, zero expenses (a brand-new profile)", () => {
     assertContract(body);
     expect(body.status).toBe("needs_setup");
     expect(body.confidence).toBe("unavailable");
-    expect(body.contractVersion).toBe(1);
+    expect(body.contractVersion).toBe(2);
   });
 });
 
@@ -239,18 +296,19 @@ describe("Phase 3 — dataWarnings, setupIssues, changeSincePreviousDay", () => 
         description: "Confirmed sale",
         amount: 4500,
       });
+      const canonical = await sales.createSalesRecord(ctx.user.id, {
+        businessProfileId: ctx.profile.id,
+        date: utcDayString(0),
+        description: "Possible duplicate sale",
+        amount: 1000,
+      });
       const flagged = await sales.createSalesRecord(ctx.user.id, {
         businessProfileId: ctx.profile.id,
         date: utcDayString(0),
-        description: "Flagged sale",
+        description: "Possible duplicate sale",
         amount: 1000,
       });
-      // createSalesRecord always leaves a fresh record reviewStatus="Reviewed"
-      // — flip duplicateStatus directly (mirrors the existing convention in
-      // tests/integration/aiContextRecoveryPhase3.test.ts) rather than relying
-      // on the automatic same-day/same-amount/same-description duplicate
-      // detector, which this description/amount pair wouldn't trip anyway.
-      await sales.updateSalesRecord(ctx.user.id, flagged.id, { duplicateStatus: "Flagged" });
+      expect(flagged).toMatchObject({ duplicateStatus: "Flagged", duplicateOfRecordId: canonical.id });
 
       const body = await fetchRecovery();
       assertContract(body);
@@ -489,4 +547,3 @@ describe("Phase 4 — weeklyCheckpoints", () => {
     });
   });
 });
-

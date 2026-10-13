@@ -37,6 +37,7 @@ function notification(overrides: Partial<Notification> = {}): Notification {
   return {
     id: 1,
     businessProfileId: 1,
+    expenseRecordId: null,
     message: "A notification",
     type: "duplicate",
     dateCreated: "2026-08-01",

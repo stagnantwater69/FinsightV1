@@ -146,10 +146,8 @@ describe("row rules mirror the server's validateRows", () => {
       field: "amount",
       reason: 'Invalid amount: "10.005" has more than two decimal places',
     });
-    expect(rowProblem(values({ category: "" }), RULES)).toEqual({
-      field: "category",
-      reason: "Missing category",
-    });
+    // An empty category is filled in by the server on import, not skipped.
+    expect(rowProblem(values({ category: "" }), RULES)).toBeNull();
   });
 
   it("enforces the same cell limits the columns behind them have", () => {

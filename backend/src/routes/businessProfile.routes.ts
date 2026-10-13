@@ -6,16 +6,28 @@ import * as recoveryPlanController from "../controllers/recoveryPlan.controller"
 import { requireAuth } from "../middleware/auth.middleware";
 import { uploadPhoto } from "../middleware/upload.middleware";
 import { asyncHandler } from "../lib/asyncHandler";
+import { LIMITS, limitAuthenticatedWrites, rateLimit } from "../middleware/rateLimit.middleware";
 
 export const businessProfileRouter = Router();
 
 businessProfileRouter.use(requireAuth);
+businessProfileRouter.use(limitAuthenticatedWrites);
 
 businessProfileRouter.post("/", asyncHandler(businessProfileController.create));
 businessProfileRouter.get("/", asyncHandler(businessProfileController.list));
+businessProfileRouter.get("/:id/financial-position", asyncHandler(businessProfileController.financialPosition));
+businessProfileRouter.put(
+  "/:id/expense-records-completeness",
+  asyncHandler(businessProfileController.putExpenseRecordsCompleteness),
+);
 businessProfileRouter.get("/:id", asyncHandler(businessProfileController.getOne));
 businessProfileRouter.patch("/:id", asyncHandler(businessProfileController.update));
-businessProfileRouter.post("/:id/logo", uploadPhoto.single("file"), asyncHandler(businessProfileController.uploadLogo));
+businessProfileRouter.post(
+  "/:id/logo",
+  rateLimit(LIMITS.PHOTO_UPLOAD),
+  uploadPhoto.single("file"),
+  asyncHandler(businessProfileController.uploadLogo),
+);
 // Soft delete only — there is deliberately no DELETE route. See
 // archiveBusinessProfile for why.
 businessProfileRouter.post("/:id/archive", asyncHandler(businessProfileController.archive));

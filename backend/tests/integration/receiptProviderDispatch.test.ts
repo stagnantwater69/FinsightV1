@@ -9,6 +9,7 @@ import {
 import {
   dispatchReceiptProviderRescue,
   reconcileStaleReceiptProviderDispatches,
+  RECEIPT_PROVIDER_COOLDOWN_MS,
   RECEIPT_PROVIDER_DISPATCH_STALE_MS,
   RECEIPT_PROCESSING_LEASE_MS,
   type ReceiptProviderDispatchInput,
@@ -174,6 +175,30 @@ function adapter(
   };
 }
 
+function failedOutcome(
+  request: ReceiptProviderRequest,
+  outcomeCode: "AUTH_ERROR" | "RATE_LIMITED" | "PROVIDER_SERVER_ERROR" | "TRANSPORT_ERROR",
+  retryAfterMs: number | null = null,
+): ReceiptProviderOutcome {
+  return {
+    contractVersion: request.contractVersion,
+    provider: request.provider,
+    providerVersion: request.providerVersion,
+    providerRegion: request.providerRegion,
+    dispatchReference: request.reservation.dispatchReference,
+    providerRequestIdHash: null,
+    latencyMs: 25,
+    retryAfterMs: outcomeCode === "RATE_LIMITED" || outcomeCode === "PROVIDER_SERVER_ERROR"
+      ? retryAfterMs
+      : null,
+    status: "FAILED",
+    timeoutOutcome: "NOT_TIMED_OUT",
+    outcomeCode,
+    finalBillableUnits: outcomeCode === "TRANSPORT_ERROR" ? 1 : 0,
+    extraction: null,
+  };
+}
+
 async function scanFor(businessProfileId: number, suffix: string) {
   const now = new Date();
   return prisma.receiptScan.create({
@@ -300,6 +325,107 @@ afterAll(async () => {
 });
 
 describe("mocked receipt provider dispatch gate", () => {
+  it("shares an authentication cooldown through persisted dispatch history", async () => {
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const firstScan = await scanFor(owner.profile.id, "auth-cooldown-first");
+    const failingAdapter = adapter(async (request) => failedOutcome(request, "AUTH_ERROR"));
+
+    const first = await dispatchReceiptProviderRescue(dispatchInput(owner.profile.id, firstScan.id), {
+      adapter: failingAdapter,
+      configuration: getReceiptProviderConfiguration(),
+    });
+    expect(first).toMatchObject({
+      code: "PROVIDER_RESULT_REJECTED",
+      dispatched: true,
+      telemetry: { outcomeCode: "AUTH_ERROR" },
+    });
+
+    const secondScan = await scanFor(owner.profile.id, "auth-cooldown-second");
+    const healthyAdapter = adapter();
+    const second = await dispatchReceiptProviderRescue(dispatchInput(owner.profile.id, secondScan.id), {
+      adapter: healthyAdapter,
+      configuration: getReceiptProviderConfiguration(),
+    });
+
+    expect(second).toMatchObject({
+      code: "PROVIDER_COOLDOWN_ACTIVE",
+      dispatched: false,
+      provider: "gemini",
+      telemetry: {
+        cooldown: { reasonCode: "AUTH_ERROR", failureCount: 1 },
+      },
+    });
+    expect(healthyAdapter.extract).not.toHaveBeenCalled();
+    expect(await prisma.externalProviderDispatch.count()).toBe(1);
+  });
+
+  it("opens after three persisted transient failures and not before", async () => {
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const failingAdapter = adapter(async (request) => failedOutcome(request, "PROVIDER_SERVER_ERROR"));
+
+    for (let index = 0; index < 3; index += 1) {
+      const scan = await scanFor(owner.profile.id, `server-failure-${index}`);
+      const result = await dispatchReceiptProviderRescue(dispatchInput(owner.profile.id, scan.id), {
+        adapter: failingAdapter,
+        configuration: getReceiptProviderConfiguration(),
+      });
+      expect(result.dispatched).toBe(true);
+    }
+
+    const fourthScan = await scanFor(owner.profile.id, "server-cooldown");
+    const healthyAdapter = adapter();
+    const fourth = await dispatchReceiptProviderRescue(dispatchInput(owner.profile.id, fourthScan.id), {
+      adapter: healthyAdapter,
+      configuration: getReceiptProviderConfiguration(),
+    });
+
+    expect(fourth).toMatchObject({
+      code: "PROVIDER_COOLDOWN_ACTIVE",
+      dispatched: false,
+      telemetry: {
+        cooldown: { reasonCode: "PROVIDER_SERVER_ERROR", failureCount: 3 },
+      },
+    });
+    expect(healthyAdapter.extract).not.toHaveBeenCalled();
+    expect(await prisma.externalProviderDispatch.count()).toBe(3);
+  });
+
+  it.each([
+    ["RATE_LIMITED", "rate-limit", "RATE_LIMITED"],
+    ["PROVIDER_SERVER_ERROR", "server-503", "PROVIDER_SERVER_ERROR"],
+  ] as const)("honors a persisted %s Retry-After across dispatch calls", async (outcomeCode, suffix, reasonCode) => {
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const firstScan = await scanFor(owner.profile.id, `${suffix}-first`);
+    const retryingAdapter = adapter(async (request) => failedOutcome(request, outcomeCode, 5 * 60 * 1000));
+
+    await dispatchReceiptProviderRescue(dispatchInput(owner.profile.id, firstScan.id), {
+      adapter: retryingAdapter,
+      configuration: getReceiptProviderConfiguration(),
+    });
+
+    const stored = await prisma.externalProviderDispatch.findFirstOrThrow();
+    expect(stored.outcomeCode).toBe(outcomeCode);
+    expect(stored.providerRetryAt).toEqual(new Date(stored.completedAt!.getTime() + 5 * 60 * 1000));
+
+    const secondScan = await scanFor(owner.profile.id, `${suffix}-second`);
+    const healthyAdapter = adapter();
+    const result = await dispatchReceiptProviderRescue(dispatchInput(owner.profile.id, secondScan.id), {
+      adapter: healthyAdapter,
+      configuration: getReceiptProviderConfiguration(),
+      now: () => new Date(stored.completedAt!.getTime() + RECEIPT_PROVIDER_COOLDOWN_MS + 1),
+    });
+
+    expect(result).toMatchObject({
+      code: "PROVIDER_COOLDOWN_ACTIVE",
+      dispatched: false,
+      telemetry: { cooldown: { reasonCode, failureCount: 1 } },
+    });
+    expect(healthyAdapter.extract).not.toHaveBeenCalled();
+  });
+
   it("performs zero dispatches when credentials exist but the server gate is incomplete", async () => {
     vi.unstubAllEnvs();
     vi.stubEnv("RECEIPT_PROVIDER", "gemini");
@@ -1218,7 +1344,8 @@ describe("mocked receipt provider dispatch gate", () => {
       configuration: getReceiptProviderConfiguration(),
     });
     await started;
-    await vi.advanceTimersByTimeAsync(20_000);
+    // The gate's whole budget, not one call's — see receiptProviderGateTimeoutMs.
+    await vi.advanceTimersByTimeAsync(getReceiptProviderConfiguration().gateTimeoutMs);
     const result = await pending;
     vi.useRealTimers();
 
@@ -1238,6 +1365,41 @@ describe("mocked receipt provider dispatch gate", () => {
       expect(budget.reservedUnits).toBe(2);
       expect(budget.usedUnits).toBe(0);
     }
+  });
+
+  it("lets a two-call Gemini extraction finish instead of aborting it at one call's deadline", async () => {
+    /*
+     * The Gemini adapter extracts, then sends the answer back for a second
+     * model to verify — two 20s deadlines in series. The gate's budget used to
+     * equal one of them, so a 12s extraction plus a 9s verification was killed
+     * as PROVIDER_TIMEOUT at 20s: both calls billed, the answer discarded, and
+     * the owner dropped back to the local read for no reason.
+     */
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const scan = await scanFor(owner.profile.id, "two-phase-adapter");
+
+    let extractStarted!: () => void;
+    const started = new Promise<void>((resolve) => { extractStarted = resolve; });
+    const mockedAdapter = adapter(async (request) => {
+      extractStarted();
+      await new Promise((resolve) => setTimeout(resolve, 12_000)); // extraction
+      await new Promise((resolve) => setTimeout(resolve, 9_000)); // verification
+      return successfulOutcome(request);
+    });
+
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    const pending = dispatchReceiptProviderRescue(dispatchInput(owner.profile.id, scan.id), {
+      adapter: mockedAdapter,
+      configuration: getReceiptProviderConfiguration(),
+    });
+    await started;
+    await vi.advanceTimersByTimeAsync(21_000);
+    const result = await pending;
+    vi.useRealTimers();
+
+    expect(result).toMatchObject({ code: "PROVIDER_OK", dispatched: true, dispatchStatus: "SUCCEEDED" });
+    expect(await prisma.externalProviderDispatch.findFirst()).toMatchObject({ status: "SUCCEEDED" });
   });
 
   it("marks finalization ambiguous and preserves reservations when accounting cannot settle", async () => {

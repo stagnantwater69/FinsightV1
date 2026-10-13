@@ -21,9 +21,11 @@ import {
   validateReceiptUpload,
 } from "../lib/receiptUploadValidation";
 import {
+  RECEIPT_UPLOAD_ACCEPTANCE_CONCURRENCY,
   RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES,
   RECEIPT_UPLOAD_MAX_LOGICAL_PAGES,
 } from "../lib/receiptUploadContract";
+import { mapWithConcurrency } from "../lib/boundedConcurrency";
 import { cleanupReceiptUploadTemporaryFiles } from "../middleware/upload.middleware";
 import {
   requestConfirmedReceiptEvidenceDeletion,
@@ -34,10 +36,10 @@ import { RECEIPT_CAPTURE_BATCH_MAX_RECEIPTS } from "../services/receiptCaptureBa
 
 const uploadSchema = z
   .object({
-    businessProfileId: z.coerce.number().int().positive(),
+    businessProfileId: z.coerce.number().int().positive().max(2147483647),
     captureMetadata: z.string().max(50_000).optional(),
     idempotencyKey: z.string().min(8).max(100).optional(),
-    receiptBatchId: z.coerce.number().int().positive().optional(),
+    receiptBatchId: z.coerce.number().int().positive().max(2147483647).optional(),
     // A position in a batch, so bounded by the batch size, not by pages per scan.
     receiptOrdinal: z.coerce.number().int().min(1).max(RECEIPT_CAPTURE_BATCH_MAX_RECEIPTS).optional(),
   })
@@ -166,6 +168,8 @@ const confirmSharedShape = {
   description: z.string().min(1).max(255),
   vendor: z.string().max(150).optional(),
   amount: moneyAmountSchema,
+  includedInAvailableFundsBaseline: z.boolean().optional(),
+  availableFundsBaselineAt: z.string().datetime().optional(),
   duplicateDecision: z.object({
     action: z.literal("SAVE_ANYWAY"),
     candidateSetHash: z.string().regex(/^[0-9a-f]{64}$/),
@@ -176,7 +180,7 @@ const confirmSharedShape = {
 // whose refusal names the problem for the owner.
 const splitsSchema = z.array(
   z.object({
-    categoryId: z.number().int().positive(),
+    categoryId: z.number().int().positive().max(2147483647),
     amount: moneyAmountSchema,
     description: z.string().min(1).max(255).optional(),
   }).strict(),
@@ -184,8 +188,8 @@ const splitsSchema = z.array(
 
 const itemAssignmentsSchema = z.array(
   z.object({
-    itemId: z.number().int().positive(),
-    categoryId: z.number().int().positive(),
+    itemId: z.number().int().positive().max(2147483647),
+    categoryId: z.number().int().positive().max(2147483647),
   }).strict(),
 );
 
@@ -195,7 +199,7 @@ const additionalItemsSchema = z.array(
   z.object({
     name: z.string().min(1).max(255),
     amount: moneyAmountSchema,
-    categoryId: z.number().int().positive(),
+    categoryId: z.number().int().positive().max(2147483647),
   }).strict(),
 );
 
@@ -204,7 +208,7 @@ const additionalItemsSchema = z.array(
 // category it needs, and the other modes cannot smuggle one in.
 const reconciliationSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("proportional") }).strict(),
-  z.object({ mode: z.literal("category"), categoryId: z.number().int().positive() }).strict(),
+  z.object({ mode: z.literal("category"), categoryId: z.number().int().positive().max(2147483647) }).strict(),
   z.object({ mode: z.literal("none") }).strict(),
 ]);
 
@@ -247,7 +251,7 @@ export const itemUpdateSchema = z.object({
 }).strict();
 
 const receiptHistorySchema = z.object({
-  businessProfileId: z.coerce.number().int().positive(),
+  businessProfileId: z.coerce.number().int().positive().max(2147483647),
   status: z.enum(RECEIPT_HISTORY_STATUSES).default("active"),
   cursor: z.string().min(1).max(500).optional(),
   take: z.coerce.number().int().min(1).max(50).default(20),
@@ -310,18 +314,22 @@ export async function upload(req: Request, res: Response) {
 
     const metadata = parseCaptureMetadata(captureMetadata, files.length);
     const uploadedFiles = [...files, ...originals];
-    const actualSizes = new Map<Express.Multer.File, number>();
-    let aggregateBytes = 0;
-    for (const file of uploadedFiles) {
-      const size = await receiptUploadByteLength(file);
-      actualSizes.set(file, size);
-      aggregateBytes += size;
-    }
+    const measuredSizes = await mapWithConcurrency(
+      uploadedFiles,
+      RECEIPT_UPLOAD_ACCEPTANCE_CONCURRENCY,
+      receiptUploadByteLength,
+    );
+    const aggregateBytes = measuredSizes.reduce((total, size) => total + size, 0);
     if (aggregateBytes > RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES) {
       throw new ApiError(413, "Receipt upload files must total 80 MiB or less");
     }
-    const imageInfo = new Map<Express.Multer.File, ReceiptUploadImageInfo>();
-    for (const file of uploadedFiles) imageInfo.set(file, await inspectReceiptUpload(file));
+    const inspectedImages = await mapWithConcurrency(
+      uploadedFiles,
+      RECEIPT_UPLOAD_ACCEPTANCE_CONCURRENCY,
+      inspectReceiptUpload,
+    );
+    const actualSizes = new Map(uploadedFiles.map((file, index) => [file, measuredSizes[index]!]));
+    const imageInfo = new Map(uploadedFiles.map((file, index) => [file, inspectedImages[index]!]));
 
     const queueFile = (file: Express.Multer.File): ReceiptUploadFile => file.path
       ? {

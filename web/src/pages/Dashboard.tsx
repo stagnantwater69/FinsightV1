@@ -1,9 +1,10 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
-import { api } from "../lib/api";
+import { ReportingPeriodScope, useReportingPeriod } from "../context/ReportingPeriodContext";
+import { cachedApiGet, peekCachedApiData } from "../lib/serverStateApi";
 import { getErrorMessage } from "../lib/errors";
 import { CategoryBreakdownChart } from "../components/CategoryBreakdownChart";
 import { CategoryComparisonChart } from "../components/CategoryComparisonChart";
@@ -15,18 +16,24 @@ import { GreetingHero } from "../components/GreetingHero";
 import { ButtonLink } from "../components/Button";
 import { formatMoney } from "../components/Money";
 import { DonutChart } from "../components/DonutChart";
+import { PeriodFilter } from "../components/PeriodFilter";
 import { Callout, KpiCard, Panel, PageHead, Pill } from "../components/ui";
 import { IconArrowRight, IconCheck, IconExpense, IconInsights, IconSales } from "../components/icons";
-import type { DashboardSummary, ExpenseBehavior, ReductionOpportunity, ReductionOpportunityResponse } from "../lib/types";
-import {
-  ALL_TIME_PERIOD_DAYS,
-  DEFAULT_SUMMARY_PERIOD_DAYS,
-  PERIOD_OPTIONS,
-  periodLabel,
-  periodPhrase,
-} from "../lib/dashboardPeriod";
+import type { DashboardSummary, ReductionOpportunity } from "../lib/types";
+import type { DashboardExpenseComparison, DashboardExpenseOverview } from "../lib/expenseOverview";
+import { ALL_TIME, periodLabel, periodParams, periodPhrase, previousLabel } from "../lib/reportingPeriod";
+import { useServerStateRefresh } from "../lib/useServerStateRefresh";
+import { formatCalendarDate } from "../lib/dates";
 
 export function Dashboard() {
+  return (
+    <ReportingPeriodScope>
+      <DashboardPage />
+    </ReportingPeriodScope>
+  );
+}
+
+function DashboardPage() {
   const { selected } = useBusinessProfiles();
   // The ONE mascot this preference governs — Fin's daily line below. Every
   // other appearance (Ask FinSight, the tour, empty states, onboarding) is a
@@ -34,35 +41,37 @@ export function Dashboard() {
   // and stays put.
   const { preferences } = useAuth();
   const { categories } = useExpenseCategories();
-  const [periodDays, setPeriodDays] = useState<number>(DEFAULT_SUMMARY_PERIOD_DAYS);
+  const { selection, setSelection, ready: periodReady } = useReportingPeriod();
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [comparison, setComparison] = useState<ExpenseBehavior | null>(null);
+  const [comparison, setComparison] = useState<DashboardExpenseComparison | null>(null);
   const [comparisonState, setComparisonState] = useState<"loading" | "ready" | "error">("loading");
   const [opportunityState, setOpportunityState] = useState<"loading" | "ready" | "error">("loading");
+  const [overviewRefreshError, setOverviewRefreshError] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
-  /**
-   * The single top-priority reduction opportunity — plan §13.1/§15 Phase 5.
-   * Reuses the existing `GET /insights/reduction-opportunities` endpoint (the
-   * list is already ranked; this just takes the first result) rather than a
-   * new backend endpoint. Deliberately NOT the full opportunity list — that
-   * stays owned by Expense Insights (§5.1). Null covers all three "don't show
-   * this card" cases the plan requires: no opportunities, insufficient
-   * history (which returns an empty list anyway), and limited confidence.
-   */
+  /** The selected period's top eligible opportunity from the overview projection. */
   const [topOpportunity, setTopOpportunity] = useState<ReductionOpportunity | null>(null);
-  // Opens the Ask FinSight drawer over this page. The plain floating trigger
-  // goes with no question; the "expand on this" link below hands one through to
-  // be typed into the box for them — it is never sent on their behalf.
   const askFinSight = useAskFinSight("Dashboard");
+  const periodKey = JSON.stringify(selection);
+  const allTime = selection.kind === "all";
+  const dashboardScopeKey = JSON.stringify({
+    businessProfileId: selected?.id ?? null,
+    period: selection,
+    periodReady,
+  });
+  const activeDashboardScopeRef = useRef(dashboardScopeKey);
+  activeDashboardScopeRef.current = dashboardScopeKey;
+  const isInitialLoad = loading && !summary;
+  const isRefreshing = loading && !!summary;
 
-  async function load() {
+  async function load(signal?: AbortSignal, force = false) {
+    const requestScopeKey = dashboardScopeKey;
+    if (activeDashboardScopeRef.current !== requestScopeKey) return;
     /*
      * No business — an owner who chose "Skip for now". This must SETTLE, not
      * just return: `loading` starts true, so bailing out silently left the
-     * page under its skeleton forever. "Loaded, and empty" is the honest
-     * state, and it is the one the empty state below renders.
+     * page under its skeleton forever.
      */
     if (!selected) {
       setSummary(null);
@@ -70,142 +79,211 @@ export function Dashboard() {
       setLoading(false);
       return;
     }
-    setLoading(true);
+    // Wait for the period's default (the newest month with records) so the
+    // page loads once, for the right period.
+    if (!periodReady) {
+      setSummary(null);
+      setError(null);
+      setLoading(true);
+      return;
+    }
+    const params = { businessProfileId: selected.id, ...periodParams(selection) };
+    const scope = {
+      businessProfileId: selected.id,
+      period: selection,
+      tags: ["dashboard", "financial"],
+    };
+    const cached = peekCachedApiData<DashboardSummary>(
+      "/dashboard/summary",
+      { params },
+      scope,
+    );
+
+    setLoading(!cached || cached.stale || force);
     setError(null);
-    setSummary(null);
+    if (cached) setSummary(cached.data);
+    else if (!force) setSummary(null);
     try {
-      const { data } = await api.get<DashboardSummary>("/dashboard/summary", {
-        params: { businessProfileId: selected.id, periodDays },
-      });
+      const { data } = await cachedApiGet<DashboardSummary>(
+        "/dashboard/summary",
+        { signal, params },
+        scope,
+        { force },
+      );
+      if (activeDashboardScopeRef.current !== requestScopeKey) return;
+      setError(null);
       setSummary(data);
     } catch (err) {
+      // A superseded request is not a failure: switching business mid-flight
+      // must not settle the OLD business's figures under the new heading.
+      if (
+        signal?.aborted ||
+        (err as { name?: string })?.name === "AbortError" ||
+        activeDashboardScopeRef.current !== requestScopeKey
+      ) return;
       setError(getErrorMessage(err));
     } finally {
-      setLoading(false);
+      if (!signal?.aborted && activeDashboardScopeRef.current === requestScopeKey) setLoading(false);
     }
   }
 
-  useEffect(() => {
-    load();
+  useLayoutEffect(() => {
+    const controller = new AbortController();
+    load(controller.signal);
+    return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id, periodDays]);
+  }, [selected?.id, periodKey, periodReady]);
 
-  // This vs last month, independent of the KPI row's own period toggle above
-  // — "Today" or "7 days" would make a month-over-month comparison
-  // meaningless, so this always asks for the fixed 30-day window regardless
-  // of what periodDays is currently set to.
-  function loadComparison() {
-    if (!selected) return;
-    let cancelled = false;
-    setComparisonState("loading");
-    api
-      .get<ExpenseBehavior>("/insights/expense-behavior", {
-        params: { businessProfileId: selected.id, periodDays: 30 },
-      })
-      .then(({ data }) => {
-        if (!cancelled) {
-          setComparison(data);
-          setComparisonState("ready");
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setComparisonState("error");
-      });
-    return () => { cancelled = true; };
+  function applyExpenseOverview(overview: DashboardExpenseOverview) {
+    if (overview.comparison.status === "available") {
+      setComparison(overview.comparison.data);
+      setComparisonState("ready");
+    } else {
+      setComparison(null);
+      setComparisonState("error");
+    }
+
+    if (overview.topOpportunity.status === "available") {
+      const top = overview.topOpportunity.data;
+      setTopOpportunity(top && top.confidence !== "limited" ? top : null);
+      setOpportunityState("ready");
+    } else {
+      setTopOpportunity(null);
+      setOpportunityState("error");
+    }
   }
 
-  useEffect(() => {
-    return loadComparison();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id]);
+  /** One shared server computation supplies both optional dashboard panels. */
+  async function loadExpenseOverview(signal?: AbortSignal, force = false) {
+    const requestScopeKey = dashboardScopeKey;
+    if (activeDashboardScopeRef.current !== requestScopeKey) return;
+    if (!selected || !periodReady || allTime) {
+      setComparison(null);
+      setTopOpportunity(null);
+      setComparisonState("ready");
+      setOpportunityState("ready");
+      setOverviewRefreshError(null);
+      return;
+    }
+    if (!force) setOverviewRefreshError(null);
 
-  function loadOpportunity() {
-    setTopOpportunity(null);
-    setOpportunityState("loading");
-    if (!selected) return;
-    let cancelled = false;
-    api
-      .get<ReductionOpportunityResponse>("/insights/reduction-opportunities", {
-        params: { businessProfileId: selected.id, periodDays: 30 },
-      })
-      .then(({ data }) => {
-        if (cancelled) return;
-        const top = data.opportunities[0];
-        // Plan §13.1: never show the card for limited confidence, or when
-        // the list is empty (which insufficient-history responses already
-        // are — no separate dataQuality check is needed here).
-        setTopOpportunity(top && top.confidence !== "limited" ? top : null);
-        setOpportunityState("ready");
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setTopOpportunity(null);
-          setOpportunityState("error");
-        }
-      });
-    return () => { cancelled = true; };
+    const params = {
+      businessProfileId: selected.id,
+      ...periodParams(selection),
+      view: "dashboard" as const,
+    };
+    const scope = {
+      businessProfileId: selected.id,
+      period: selection,
+      tags: ["dashboard", "financial", "expense-overview"],
+    };
+    const cached = peekCachedApiData<DashboardExpenseOverview>(
+      "/insights/expense-overview",
+      { params },
+      scope,
+    );
+
+    if (cached) {
+      applyExpenseOverview(cached.data);
+    } else if (!force) {
+      setComparison(null);
+      setTopOpportunity(null);
+      setComparisonState("loading");
+      setOpportunityState("loading");
+    }
+
+    try {
+      const { data } = await cachedApiGet<DashboardExpenseOverview>(
+        "/insights/expense-overview",
+        { signal, params },
+        scope,
+        { force },
+      );
+      if (activeDashboardScopeRef.current !== requestScopeKey) return;
+      setOverviewRefreshError(null);
+      applyExpenseOverview(data);
+    } catch (err) {
+      if (
+        signal?.aborted ||
+        (err as { name?: string })?.name === "AbortError" ||
+        activeDashboardScopeRef.current !== requestScopeKey
+      ) return;
+      const hadUsableData = cached
+        ? cached.data.comparison.status === "available" || cached.data.topOpportunity.status === "available"
+        : force && (comparisonState === "ready" || opportunityState === "ready");
+      if (hadUsableData) {
+        setOverviewRefreshError(getErrorMessage(err));
+        return;
+      }
+      setComparison(null);
+      setTopOpportunity(null);
+      setComparisonState("error");
+      setOpportunityState("error");
+    }
   }
 
-  useEffect(() => {
-    return loadOpportunity();
+  useLayoutEffect(() => {
+    const controller = new AbortController();
+    void loadExpenseOverview(controller.signal);
+    return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id]);
+  }, [selected?.id, periodKey, periodReady]);
+
+  useServerStateRefresh(
+    [{
+      resource: "/dashboard/summary",
+      businessProfileId: selected?.id ?? null,
+      period: selection,
+      tags: ["dashboard", "financial"],
+    }],
+    (signal) => void load(signal, true),
+  );
+
+  useServerStateRefresh(
+    [{
+      resource: "/insights/expense-overview",
+      businessProfileId: selected?.id ?? null,
+      period: selection,
+      tags: ["dashboard", "financial", "expense-overview"],
+    }],
+    (signal) => void loadExpenseOverview(signal, true),
+  );
 
   /*
-   * NO BUSINESS DOES NOT MEAN NO PAGE.
-   *
-   * This used to `return null` (a blank screen, the original bug) and then
-   * `return <NoBusinessProfile />` — a card that replaced the whole dashboard.
-   * That card was the entire app for someone who chose "Skip for now": every
-   * door showed it, so the skip skipped to nothing.
-   *
-   * So the dashboard renders its own chrome instead — heading, period picker,
-   * setup checklist — sitting in its own empty state, with no figures because
-   * there genuinely are none. Nothing below may assume `selected`: the fetches
-   * above already no-op, and the reads of `selected.id`/`.name` are guarded
-   * individually rather than by one early return. The persistent invitation to
-   * finish setup is in the shell (see components/SetupPrompt).
+   * NO BUSINESS DOES NOT MEAN NO PAGE. The dashboard renders its own chrome —
+   * heading, period filter, setup checklist — around its own empty state.
+   * Nothing below may assume `selected`.
    */
 
   /*
    * "Has this business ever recorded anything" — NOT "did it record anything
-   * in the selected period".
-   *
-   * These were the same expression, read off the period-scoped overview, and
-   * the difference is not academic: an owner who imported two years of history
-   * saw "Record your first expense or sale" still unticked, because none of
-   * their 21,097 records fell inside the last 30 days. The checklist told them
-   * the import had failed. It had not.
-   *
-   * Falls back to the period figures when an older server sends no `lifetime`,
-   * which is the previous behaviour rather than a blank.
+   * in the selected period". An owner who imported two years of history must
+   * not see "Record your first expense or sale" unticked because none of it
+   * falls in this week. Falls back to the period figures for an older server.
    */
   const hasAnyRecords = summary?.lifetime
     ? summary.lifetime.recordCount > 0
     : !!summary && (summary.overview.totalExpenses > 0 || summary.overview.totalSalesReference > 0);
 
-  /**
-   * Records exist, just none of them in this window.
-   *
-   * Worth calling out precisely because everything else on the page is
-   * correctly empty: an owner cannot tell "no activity lately" from "my import
-   * did not work", and silence gets read as the second one.
-   */
+  /** Records exist, just none in this period — said, so it never reads as a failed import. */
   const periodIsEmpty =
     !!summary &&
     hasAnyRecords &&
     summary.overview.totalExpenses === 0 &&
     summary.overview.totalSalesReference === 0;
   const latestRecordDate = summary?.lifetime?.latestRecordDate ?? null;
+  const fundsCalculation = summary?.overview.availableFundsCalculation;
+  const fundsProvenance = fundsCalculation
+    ? `Starting ${formatMoney(fundsCalculation.baselineAmount)}; ${fundsCalculation.confirmedSalesRecordCount} confirmed ${fundsCalculation.confirmedSalesRecordCount === 1 ? "sale" : "sales"} and ${fundsCalculation.confirmedExpenseRecordCount} confirmed ${fundsCalculation.confirmedExpenseRecordCount === 1 ? "expense" : "expenses"} since ${formatCalendarDate(fundsCalculation.baselineDate)}.`
+    : "From your business profile";
+  const recoveryNeedsSetup =
+    !summary ||
+    summary.recoveryStatus.status === "needs_setup" ||
+    (!summary.recoveryStatus.status &&
+      (summary.recoveryStatus.needsSetup ??
+        summary.recoveryStatus.expectedMonthlyExpenses <= 0));
 
-  // ---- values the KPI row and the summary card read -----------------------
-  // All derived from `summary`, which the server computed. Nothing here
-  // recalculates a financial figure; it only picks and phrases.
-
-  // Named by its LENGTH, not by a calendar name: the server's window is a
-  // rolling lookback ending today, so "This month" on the 20th captioned
-  // 22 Jul-20 Aug as August. Same wording as mobile — see lib/dashboardPeriod.
-  const periodCaption = periodLabel(periodDays);
+  const periodCaption = periodLabel(selection);
 
   const topCategory = summary?.expenseCategoryBreakdown?.length
     ? [...summary.expenseCategoryBreakdown].sort((a, b) => b.total - a.total)[0]
@@ -214,15 +292,10 @@ export function Dashboard() {
   /**
    * Recovery reduced to a KPI-sized verdict.
    *
-   * Prefers the server's explicit `status` (plan §8.1) once present — it is
-   * authoritative and strictly finer-grained than the old boolean pair (e.g.
-   * it can tell "no sales yet this month" apart from "behind pace", which
-   * `onTrack`/`needsSetup` alone cannot). Falls back to the boolean-derived
-   * verdict for a cached/older response that hasn't sent `status` yet.
-   *
-   * The "not set up" case is distinct from "behind": an owner who never
-   * entered expected monthly expenses is not failing a target, they simply
-   * have not set one, and telling them they are "behind" would be wrong.
+   * Prefers the server's explicit `status` (plan §8.1), which can tell "no
+   * sales yet this month" from "behind pace"; falls back to the boolean pair
+   * for an older response. An explicit status keeps a valid record-derived
+   * zero from being mistaken for missing setup.
    */
   const recovery: { label: string; meta: ReactNode; tone: "brand" | "accent" | "danger" | "info" } = !summary
     ? { label: "—", meta: "", tone: "info" }
@@ -231,9 +304,9 @@ export function Dashboard() {
           const r = summary.recoveryStatus;
           switch (r.status) {
             case "needs_setup":
-              return { label: "Not set up", meta: "Add expected monthly expenses", tone: "info" as const };
+              return { label: "Not set up", meta: "Add a starting monthly estimate", tone: "info" as const };
             case "no_current_month_data":
-              return { label: "No sales yet", meta: "No sales recorded this month", tone: "info" as const };
+              return { label: "No sales yet", meta: "No sales this month", tone: "info" as const };
             case "data_incomplete":
               return { label: "Data incomplete", meta: "Some records need review", tone: "info" as const };
             case "covered":
@@ -267,8 +340,8 @@ export function Dashboard() {
               };
           }
         })()
-      : summary.recoveryStatus.expectedMonthlyExpenses <= 0
-        ? { label: "Not set up", meta: "Add expected monthly expenses", tone: "info" }
+      : recoveryNeedsSetup
+        ? { label: "Not set up", meta: "Add a starting monthly estimate", tone: "info" }
         : summary.recoveryStatus.onTrack
           ? {
               label: "On track",
@@ -285,36 +358,19 @@ export function Dashboard() {
               tone: "danger",
             };
 
-  /**
-   * The window as it reads inside the question handed to Ask FinSight.
-   *
-   * A third form, because this one is typed into the box as the owner's own
-   * words and has to survive being read back: "across all records" rather than
-   * the caption's title case, and "over the last 7 days" rather than the bare
-   * phrase, which would produce "...my largest expense category the last 7
-   * days?" (QA register FUN-008 is what pins the all-time wording here).
-   */
-  const questionPeriod =
-    periodDays === ALL_TIME_PERIOD_DAYS
-      ? "across all records"
-      : periodDays === 1
-        ? "today"
-        : `over ${periodPhrase(periodDays)}`;
-
-  // Names whichever specific thing the card above actually flagged — the
-  // records needing review if there are any (the most actionable item),
+  // Names the specific thing on screen — the records needing review if any,
   // otherwise the top category — rather than a generic "summarise this".
   const expandQuestion = summary
     ? summary.recordsNeedingReview > 0
       ? `What should I do about the ${summary.recordsNeedingReview} record${summary.recordsNeedingReview === 1 ? "" : "s"} that need${summary.recordsNeedingReview === 1 ? "s" : ""} review?`
       : topCategory
-        ? `Why is ${topCategory.categoryName} my largest expense category ${questionPeriod}?`
+        ? `Why is ${topCategory.categoryName} my largest expense category ${periodPhrase(selection)}?`
         : undefined
     : undefined;
 
-  const recoveryAction = !summary || summary.recoveryStatus.expectedMonthlyExpenses <= 0
+  const recoveryAction = recoveryNeedsSetup
     ? selected
-      ? { to: `/business-profiles/${selected.id}/edit`, label: "Set monthly expenses" }
+      ? { to: `/business-profiles/${selected.id}/edit`, label: "Set starting estimate" }
       : { to: "/onboarding", label: "Finish setup" }
     : summary.recoveryStatus.status === "data_incomplete" || summary.recordsNeedingReview > 0
       ? { to: "/records/flagged", label: "Review flagged records" }
@@ -322,117 +378,63 @@ export function Dashboard() {
         ? { to: "/records/sales/new", label: "Add a sales record" }
         : { to: "/insights/recovery", label: "View recovery plan" };
 
+  const comparisonTrends = comparison?.categoryTrends.filter((t) => t.current > 0 || t.previous > 0) ?? [];
+  const comparedWith = previousLabel(comparison?.period);
+  const changePercent =
+    comparison && comparison.totals.previous > 0
+      ? ((comparison.totals.current - comparison.totals.previous) / comparison.totals.previous) * 100
+      : null;
+
   return (
     <div>
       <PageHead
         title="Dashboard"
-        subtitle={
-          selected ? (
-            <>
-              Overview for <b className="font-semibold text-ink-700">{selected.name}</b>
-            </>
-          ) : (
-            // No business to name yet. The subtitle still has to say what this
-            // page is for, rather than reading "Overview for" and stopping.
-            "Your figures appear here once your business is set up."
-          )
-        }
-        actions={
-          <>
-            <div className="flex gap-1 rounded-xl border border-paper-200 bg-paper-100 p-1">
-              {PERIOD_OPTIONS.map((opt) => (
-                <button
-                  key={opt.days}
-                  type="button"
-                  onClick={() => setPeriodDays(opt.days)}
-                  aria-pressed={periodDays === opt.days}
-                  className={`tap rounded-lg px-3 text-[13.5px] font-semibold transition ${
-                    periodDays === opt.days
-                      ? "bg-paper text-brand-800 shadow-sm"
-                      : "text-ink-600 hover:text-brand-800"
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </>
-        }
+        subtitle={selected ? <b className="font-semibold text-ink-700">{selected.name}</b> : "Set up your business to see figures."}
+        actions={<PeriodFilter />}
       />
 
-      {/*
-        Fin opens the page, above the checklist and the figures alike: it names
-        the reader and says the one thing that most wants acting on, which is
-        the question someone arriving at a dashboard is actually asking. It
-        renders during loading too — `summary` is null then, and the panel holds
-        its shape with skeleton lines rather than appearing a beat late.
-      */}
+      {isRefreshing ? (
+        <p role="status" aria-live="polite" className="sr-only">
+          Refreshing dashboard…
+        </p>
+      ) : null}
+
       {/* data-tour="dashboard-summary" is the product tour's "dashboard
-          overview" spotlight — the greeting panel is the page's summary
-          sentence and the first thing the tour should point at. The KPI row
-          below carries the same marker as a fallback, so an owner who has
-          turned the daily message off still gets that step pointed at
-          something rather than having it silently skipped (TourOverlay
-          resolves the first VISIBLE match, which is this one when it is
-          here). */}
-      {/* `selected &&` because GreetingHero holds its shape with skeleton
-          lines while `summary` is null — correct while a fetch is in flight,
-          but with no business there is no fetch, so those lines would never
-          resolve. A permanent skeleton is the eternal-loading state this page
-          must not settle into. */}
+          overview" spotlight. The recovery panel below carries the same marker
+          as a fallback for an owner who turned the daily message off. The
+          `selected &&` guard: with no business there is no fetch, so the
+          greeting's skeleton lines would never resolve. */}
       {selected && preferences.showDashboardMascotMessage ? (
         <div data-tour="dashboard-summary">
-          <GreetingHero summary={loading ? null : summary} />
+          <GreetingHero summary={isInitialLoad ? null : summary} />
         </div>
       ) : null}
 
-      {/* Invisible marker for the tour's auto-start gate: present only once
-          the dashboard fetch has settled, so the tour never opens over a
-          skeleton. Zero-size, aria-hidden — costs nothing. */}
+      {/* Zero-size marker for the tour's auto-start gate: present only once the
+          dashboard fetch has settled, so the tour never opens over a skeleton. */}
       {!loading ? <span data-tour="dashboard-loaded" aria-hidden className="hidden" /> : null}
 
-      {/* Goal-Gradient: a brand-new business sees how close it is to a first
-          insight, rather than three unrelated empty panels. */}
       {!loading && (summary || !selected) ? (
         <SetupProgress
           steps={[
-            // Unticked, with a route, for the owner who skipped the wizard —
-            // the checklist is the one thing on this page that still means
-            // something when there is nothing recorded.
             { label: "Set up your business profile", done: !!selected, href: "/onboarding" },
-            // Both of these need a business to belong to, so with none they
-            // are shown as plain steps rather than links — sending someone to
-            // a form that cannot save is the dead end this change removes.
             { label: "Add an expense category", done: categories.length > 0, href: selected ? "/categories" : undefined },
             { label: "Record your first expense or sale", done: hasAnyRecords, href: selected ? "/records/expenses/new" : undefined },
           ]}
         />
       ) : null}
 
-      {/*
-        Above the panels, because it explains all of them at once.
-
-        Placed here rather than inside each empty chart for the reason the
-        panels are grouped at all: three separate "no data" messages describe a
-        symptom three times, while one line at the top gives the cause and a way
-        out. The date is the whole value of it — "no records in this period" is
-        just as opaque as the empty charts; "your most recent record is 31 Jul
-        2025" tells the owner their import landed and where to look.
-      */}
+      {/* One line above the panels explains all of them: the records exist,
+          just not in this period, and where they are. */}
       {!loading && periodIsEmpty ? (
         <div className="mb-6">
           <Callout tone="info">
-            <b className="font-semibold">
-              No records for {periodPhrase(periodDays)}, but this business has{" "}
-              {summary!.lifetime!.recordCount.toLocaleString()} in total.
-            </b>{" "}
+            <b className="font-semibold">No records {periodPhrase(selection)}.</b>{" "}
             {latestRecordDate ? (
               <>
-                The most recent one is dated{" "}
+                Latest record:{" "}
                 <span className="figure font-semibold text-ink-700">
-                  {/* UTC, like every other date rendering here: these are
-                      date-only columns stored at midnight UTC, and formatting
-                      them in local time shows the previous day west of it. */}
+                  {/* UTC: date-only columns stored at midnight UTC. */}
                   {new Date(latestRecordDate).toLocaleDateString(undefined, {
                     year: "numeric",
                     month: "short",
@@ -440,21 +442,15 @@ export function Dashboard() {
                     timeZone: "UTC",
                   })}
                 </span>
-                . Your imported history is safe — this page is only looking at the period selected
-                above.{" "}
+                .{" "}
               </>
             ) : null}
-            {/*
-              The fix, not a signpost to somewhere else. Sending the owner to
-              Records answered "is my data there?" but left the dashboard —
-              the page with the actual insights — permanently blank for them.
-            */}
             <button
               type="button"
-              onClick={() => setPeriodDays(0)}
+              onClick={() => setSelection(ALL_TIME)}
               className="tap-inline font-semibold text-brand-700 underline underline-offset-2"
             >
-              Show all time →
+              Show all time
             </button>
           </Callout>
         </div>
@@ -463,81 +459,77 @@ export function Dashboard() {
       {error ? (
         <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-tint-danger p-4 text-sm text-tone-danger ring-1 ring-edge-danger">
           <div>
-            <b className="font-semibold">Your dashboard couldn’t load.</b>
+            <b className="font-semibold">
+              {summary ? "Dashboard couldn’t refresh." : "Dashboard couldn’t load."}
+            </b>
             <p className="mt-0.5">{error}</p>
           </div>
-          <button type="button" onClick={load} className="tap rounded-lg bg-paper px-3 py-2 font-semibold text-ink-800 shadow-sm">
+          <button type="button" onClick={() => void load(undefined, true)} className="tap rounded-lg bg-paper px-3 py-2 font-semibold text-ink-800 shadow-sm">
             Try again
           </button>
         </div>
       ) : null}
 
-      {/* Doherty: the dashboard commits to its shape immediately on load and on
-          every period / business switch, so the change feels instant even while
-          the request is in flight. */}
-      {loading ? (
+      {overviewRefreshError ? (
+        <div className="mb-4">
+          <Callout tone="warn">
+            <b className="font-semibold">Dashboard details couldn’t refresh.</b>{" "}
+            Showing recently loaded comparison and opportunity data. {overviewRefreshError}
+          </Callout>
+        </div>
+      ) : null}
+
+      {/* Doherty: the dashboard commits to its shape on load and on every
+          period or business switch, so the change feels instant. */}
+      {isInitialLoad ? (
         <SkeletonDashboard />
       ) : !selected ? (
-        /*
-         * The genuinely-empty dashboard. Same illustration and shape as the
-         * "nothing recorded yet" state at the foot of a real dashboard,
-         * because it is the same situation one step earlier — the difference
-         * is only which action closes it.
-         */
         <EmptyState
           image="/mascot/01-onboarding/emptydashboard.webp"
           title="Nothing to show yet"
           action={
             <ButtonLink to="/onboarding" variant="primary">
-              Finish setting up your business
+              Finish business setup
             </ButtonLink>
           }
         >
-          FinSight needs your business name and a few figures before it can work out your sales
-          target, track your recovery or flag large expenses. Anything you already typed was kept.
+          Add your business details to see your figures.
         </EmptyState>
       ) : !summary ? null
       : (
-        // 8px scale throughout: 24px between the major bands, 20px inside a
-        // band. Consistent vertical rhythm is what stops a dashboard reading
-        // as a pile of unrelated cards.
-        <div className="space-y-6">
+        <div
+          className={`space-y-6 transition-opacity duration-200 ${isRefreshing ? "opacity-60" : ""}`}
+          aria-busy={isRefreshing}
+        >
           {/*
-            Serial Position Effect — the order here is deliberate.
-
-            FIRST: Available business funds. The single figure owners check most
-            often ("how much do I actually have?"), so it takes the primacy slot.
-
-            MIDDLE: expenses and sales. Important context, but they are read as a
-            pair and are the least likely to be recalled individually — which is
-            what the weak middle position is for.
-
-            LAST: Recovery status, in its own full-width band. It is the
-            actionable "so what" of the whole screen, and recency makes it the
-            thing an owner leaves with.
+            Serial position: available funds first (the figure owners check
+            most), expenses and sales as a pair in the middle, and the recovery
+            verdict as the "so what" an owner leaves with.
           */}
           <Panel
-            title="Your recovery position"
+            title="Recovery position"
             className="overflow-hidden border-brand-200 bg-tint-brand"
             action={<Pill tone={recovery.tone === "danger" ? "danger" : recovery.tone === "brand" ? "ok" : "info"}>{recovery.label}</Pill>}
           >
             <div data-tour="dashboard-summary" className="grid items-center gap-5 lg:grid-cols-[0.72fr_1.28fr]">
               <div>
-                <p className="text-xs font-semibold text-ink-500">Available business funds</p>
+                <p className="text-xs font-semibold text-ink-500">Available funds</p>
                 <p className="figure mt-1 font-display text-3xl font-bold tracking-[-0.02em] text-ink-900">
                   {formatMoney(summary.overview.availableFunds)}
                 </p>
-                <p className="mt-1 text-xs text-ink-500">Owner-entered reference · update it in your business profile</p>
+                <p className="mt-1 max-w-[48ch] text-xs leading-relaxed text-ink-500">
+                  {fundsProvenance}
+                </p>
                 {recovery.meta ? <p className="mt-2 text-sm font-medium text-ink-700">{recovery.meta}</p> : null}
                 <ButtonLink to={recoveryAction.to} variant="primary" className="mt-4">
                   {recoveryAction.label}
                 </ButtonLink>
               </div>
               <div className="border-t border-paper-200 pt-5 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
-                {summary.recoveryStatus.expectedMonthlyExpenses > 0 ? (
+                {!recoveryNeedsSetup ? (
                   <RecoveryMeter recoveryStatus={summary.recoveryStatus} />
                 ) : (
-                  <p className="text-sm text-ink-600">Add expected monthly expenses to calculate a daily sales target and recovery pace.</p>
+                  <p className="text-sm text-ink-600">Add a starting monthly expense estimate to get a daily sales target.</p>
                 )}
               </div>
             </div>
@@ -552,7 +544,7 @@ export function Dashboard() {
               tone="accent"
             />
             <KpiCard
-              label="Total sales reference"
+              label="Total sales"
               value={<span className="figure">{formatMoney(summary.overview.totalSalesReference)}</span>}
               meta={periodCaption}
               glyph={<IconSales className="h-5 w-5" />}
@@ -561,59 +553,46 @@ export function Dashboard() {
             <KpiCard
               label="Records to review"
               value={<span className="figure">{summary.recordsNeedingReview}</span>}
-              meta={summary.recordsNeedingReview ? "Needs your attention" : "Everything is clear"}
+              meta={
+                summary.recordsNeedingReview ? (
+                  <Link to="/records/flagged" className="tap-inline font-semibold text-brand-700 hover:text-brand-800">
+                    Open review queue
+                  </Link>
+                ) : (
+                  "All clear"
+                )
+              }
               glyph={summary.recordsNeedingReview ? <IconInsights className="h-5 w-5" /> : <IconCheck className="h-5 w-5" />}
               tone={summary.recordsNeedingReview ? "danger" : "brand"}
             />
           </div>
 
           {/*
-            The mockup puts an "AI Summary" card here. This is the same
-            surface, but the sentence below is composed from the figures
-            already on this page — it is NOT AI-written, so it does not claim
-            to be. Real AI lives one click away in Ask FinSight, where the
-            answer is grounded and the disclaimer travels with it.
+            Composed from the figures on this page, NOT AI-written, so it does
+            not claim to be. Real AI is one click away in Ask FinSight.
           */}
-          <div className="grid gap-5 lg:grid-cols-[1.6fr_1fr] xl:grid-cols-[2fr_1fr]">
-            <Panel title={`${periodCaption} at a glance`}>
-              <p className="text-sm leading-relaxed text-ink-600">
+          <Panel title="Largest expense category">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm text-ink-600">
                 {topCategory ? (
-                  <>Your largest expense category is <b className="font-semibold text-ink-800">{topCategory.categoryName}</b> at <span className="figure font-semibold text-ink-800">{formatMoney(topCategory.total)}</span>.</>
+                  <>
+                    <b className="font-semibold text-ink-800">{topCategory.categoryName}</b>{" "}
+                    <span className="figure font-semibold text-ink-800">{formatMoney(topCategory.total)}</span>
+                  </>
                 ) : (
-                  <>No expenses are recorded for this period yet.</>
+                  <>No expenses {periodPhrase(selection)}.</>
                 )}
               </p>
-              <button type="button" onClick={() => askFinSight(expandQuestion)} className="tap-inline mt-3 min-h-tap text-sm font-semibold text-brand-700 hover:text-brand-800">
-                Ask FinSight for more context →
+              <button
+                type="button"
+                onClick={() => askFinSight(expandQuestion)}
+                aria-label="Ask FinSight about these figures"
+                className="tap-inline min-h-tap text-sm font-semibold text-brand-700 hover:text-brand-800"
+              >
+                Ask FinSight
               </button>
-            </Panel>
-            <Panel
-              title="Things to review"
-              action={
-                summary.recordsNeedingReview > 0 ? (
-                  <Pill tone="warn">
-                    {summary.recordsNeedingReview} item{summary.recordsNeedingReview === 1 ? "" : "s"}
-                  </Pill>
-                ) : (
-                  <Pill tone="ok">All clear</Pill>
-                )
-              }
-            >
-              {summary.recordsNeedingReview === 0 ? (
-                <p className="text-sm text-ink-500">
-                  Nothing needs a second look right now. Flagged records show up here.
-                </p>
-              ) : (
-                <Link
-                  to="/records/flagged"
-                  className="flex min-h-tap items-center gap-2 rounded-xl border border-paper-200 px-3.5 text-sm font-semibold text-tone-brand transition hover:border-brand-300 hover:bg-tint-brand"
-                >
-                  Open your review queue
-                  <IconArrowRight className="ml-auto h-4 w-4" />
-                </Link>
-              )}
-            </Panel>
-          </div>
+            </div>
+          </Panel>
 
           <div className="lg:hidden">
             <button
@@ -622,24 +601,20 @@ export function Dashboard() {
               onClick={() => setShowDetails((value) => !value)}
               className="tap flex min-h-tap w-full items-center justify-between rounded-xl border border-paper-200 bg-paper px-4 text-sm font-semibold text-ink-700 shadow-sm"
             >
-              {showDetails ? "Hide detailed charts" : "View detailed charts"}
+              {showDetails ? "Hide charts" : "Show charts"}
               <IconArrowRight className={`h-4 w-4 transition-transform ${showDetails ? "rotate-90" : ""}`} />
             </button>
           </div>
 
-          <div className={`${showDetails ? "grid" : "hidden"} gap-5 lg:grid lg:grid-cols-2`}>
+          <div className={`${showDetails ? "grid" : "hidden"} gap-5 lg:grid ${allTime ? "" : "lg:grid-cols-2"}`}>
             <Panel title="Expense distribution" className="min-w-0">
               {summary.expenseCategoryBreakdown.length === 0 ? (
-                <EmptyState compact title="No expenses in this period yet" icon="◔">
-                  Once you record an expense, this is where you'll see which categories use the most.
-                </EmptyState>
+                <EmptyState compact title={`No expenses ${periodPhrase(selection)}`} icon="◔" />
               ) : (
                 <>
                   <DonutChart breakdown={summary.expenseCategoryBreakdown} />
-                  {/* The bar view stays below the donut. A donut is good at
-                      "what share", poor at "how much bigger" — the bars answer
-                      the second question, and give a non-circular reading for
-                      anyone the donut fails. */}
+                  {/* Bars below the donut: a donut answers "what share", the
+                      bars answer "how much bigger". */}
                   <div className="mt-5 border-t border-paper-200 pt-4">
                     <CategoryBreakdownChart breakdown={summary.expenseCategoryBreakdown} />
                   </div>
@@ -647,63 +622,47 @@ export function Dashboard() {
               )}
             </Panel>
 
-            <Panel
-              title="Expense comparison"
-              className="min-w-0"
-              action={
-                comparison && comparison.totals.previous > 0 ? (
-                  <Pill tone={comparison.totals.current > comparison.totals.previous ? "warn" : "ok"}>
-                    <span aria-hidden>
-                      {comparison.totals.current > comparison.totals.previous
-                        ? "▲"
-                        : comparison.totals.current < comparison.totals.previous
-                          ? "▼"
-                          : "—"}
-                    </span>
-                    {Math.abs(
-                      ((comparison.totals.current - comparison.totals.previous) / comparison.totals.previous) * 100,
-                    ).toFixed(0)}
-                    % vs last month
-                  </Pill>
-                ) : null
-              }
-            >
-              {comparisonState === "loading" ? (
-                <div aria-live="polite" className="py-8 text-center text-sm text-ink-500">Loading comparison…</div>
-              ) : comparisonState === "error" ? (
-                <EmptyState
-                  compact
-                  title="Expense comparison couldn’t load"
-                  action={
-                    <button type="button" onClick={loadComparison} className="tap rounded-lg border border-paper-200 bg-paper px-3 py-2 text-sm font-semibold text-brand-700">
-                      Try again
-                    </button>
-                  }
-                >
-                  Your dashboard data is safe. Try loading this comparison again.
-                </EmptyState>
-              ) : !comparison || comparison.categoryTrends.filter((t) => t.current > 0 || t.previous > 0).length === 0 ? (
-                <EmptyState compact title="Not enough history yet" icon="◔">
-                  Once you've recorded expenses in two consecutive months, this compares them side by side,
-                  category by category.
-                </EmptyState>
-              ) : (
-                <CategoryComparisonChart
-                  trends={comparison.categoryTrends}
-                  currentLabel="This month"
-                  previousLabel="Last month"
-                />
-              )}
-            </Panel>
+            {/* All time has nothing before it to compare with. */}
+            {!allTime ? (
+              <Panel
+                title="Expense comparison"
+                className="min-w-0"
+                action={
+                  changePercent !== null && comparedWith ? (
+                    <Pill tone={changePercent > 0 ? "warn" : "ok"}>
+                      <span aria-hidden>{changePercent > 0 ? "▲" : changePercent < 0 ? "▼" : "="}</span>
+                      {Math.abs(changePercent).toFixed(0)}% vs {comparedWith}
+                    </Pill>
+                  ) : null
+                }
+              >
+                {comparisonState === "loading" ? (
+                  <div aria-live="polite" className="py-8 text-center text-sm text-ink-500">Loading comparison…</div>
+                ) : comparisonState === "error" ? (
+                  <EmptyState
+                    compact
+                    title="Comparison couldn’t load"
+                    action={
+                      <button type="button" onClick={() => void loadExpenseOverview(undefined, true)} className="tap rounded-lg border border-paper-200 bg-paper px-3 py-2 text-sm font-semibold text-brand-700">
+                        Try again
+                      </button>
+                    }
+                  />
+                ) : comparisonTrends.length === 0 ? (
+                  <EmptyState compact title="Nothing to compare yet" icon="◔" />
+                ) : (
+                  <CategoryComparisonChart
+                    trends={comparison!.categoryTrends}
+                    currentLabel={periodCaption}
+                    previousLabel={comparedWith ?? "Before"}
+                  />
+                )}
+              </Panel>
+            ) : null}
           </div>
 
-          {/*
-            Top reduction opportunity — plan §13.1/§15 Phase 5. A compact
-            link-out, not the full opportunity list (that stays owned by
-            Expense Insights, §5.1). Hidden entirely rather than shown empty
-            when there's nothing worth a glance — see the `topOpportunity`
-            state comment above for exactly which cases that covers.
-          */}
+          {/* The top reduction opportunity only: the full list stays on Expense
+              Insights (§5.1). Hidden rather than shown empty. */}
           {topOpportunity ? (
             <Panel
               title="Reduction opportunity"
@@ -711,7 +670,7 @@ export function Dashboard() {
             >
               <p className="text-sm text-ink-700">{topOpportunity.observation}</p>
               <p className="mt-2 text-xs text-ink-500">
-                Current spend this period:{" "}
+                Spent {periodPhrase(selection)}:{" "}
                 <span className="figure font-semibold text-ink-800">
                   {formatMoney(topOpportunity.evidence.currentAmount)}
                 </span>
@@ -721,16 +680,15 @@ export function Dashboard() {
                   to="/insights/expense-behavior"
                   className="tap-inline text-sm font-semibold text-brand-700 hover:text-brand-800"
                 >
-                  Review opportunity →
+                  Review opportunity
                 </Link>
               </div>
             </Panel>
           ) : opportunityState === "error" ? (
             <Callout tone="info">
-              <b className="font-semibold">Reduction opportunities are temporarily unavailable.</b>{" "}
-              The rest of your dashboard is current.{" "}
-              <button type="button" onClick={loadOpportunity} className="tap-inline min-h-tap font-semibold text-brand-700 underline underline-offset-2">
-                Try this insight again
+              <b className="font-semibold">Reduction opportunities unavailable.</b>{" "}
+              <button type="button" onClick={() => void loadExpenseOverview(undefined, true)} className="tap-inline min-h-tap font-semibold text-brand-700 underline underline-offset-2">
+                Try again
               </button>
             </Callout>
           ) : null}
@@ -738,15 +696,14 @@ export function Dashboard() {
           {!hasAnyRecords ? (
             <EmptyState
               image="/mascot/01-onboarding/emptydashboard.webp"
-              title="Nothing recorded in this period yet"
+              title="No records yet"
               action={
                 <ButtonLink to="/records/expenses/new" variant="primary">
                   Add your first expense
                 </ButtonLink>
               }
             >
-              Your dashboard fills in as soon as you record something. Even a single day of expenses gives
-              FinSight enough to work with.
+              Record an expense or import a CSV to see your figures.
             </EmptyState>
           ) : null}
         </div>

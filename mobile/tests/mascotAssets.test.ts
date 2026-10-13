@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
+import { inflateSync } from "zlib";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -22,7 +23,41 @@ import { describe, expect, it } from "vitest";
 
 const ROOT = join(__dirname, "..");
 const COMPONENT = join(ROOT, "src", "components", "MascotState.tsx");
+const BRAND_MARK = join(ROOT, "assets", "mascot", "newmascotlogo.png");
+const WEB_BRAND_MARK = join(ROOT, "..", "web", "public", "newmascotlogo.png");
 const source = readFileSync(COMPONENT, "utf8");
+
+function transparentRgbaPng(abs: string) {
+  const png = readFileSync(abs);
+  expect(png.subarray(0, 8).toString("hex"), `${abs} is not a PNG`).toBe("89504e470d0a1a0a");
+  expect(png.subarray(12, 16).toString("ascii"), `${abs} has no leading IHDR`).toBe("IHDR");
+
+  const width = png.readUInt32BE(16);
+  const height = png.readUInt32BE(20);
+  const bitDepth = png.readUInt8(24);
+  const colourType = png.readUInt8(25);
+  const interlace = png.readUInt8(28);
+  const idat: Buffer[] = [];
+
+  for (let offset = 8; offset < png.length; ) {
+    const length = png.readUInt32BE(offset);
+    const type = png.subarray(offset + 4, offset + 8).toString("ascii");
+    if (type === "IDAT") idat.push(png.subarray(offset + 8, offset + 8 + length));
+    offset += length + 12;
+  }
+
+  expect(bitDepth, `${abs} must use 8-bit channels`).toBe(8);
+  expect(colourType, `${abs} must be RGBA, not an opaque RGB export`).toBe(6);
+  expect(interlace, `${abs} must remain non-interlaced for this check`).toBe(0);
+  expect(idat.length, `${abs} has no image data`).toBeGreaterThan(0);
+
+  const pixels = inflateSync(Buffer.concat(idat));
+  expect(pixels.length, `${abs} has an unexpected decoded size`).toBe((width * 4 + 1) * height);
+
+  // The first byte is row zero's filter. At the first pixel every PNG filter
+  // predicts from zero, so byte four is the reconstructed top-left alpha.
+  expect(pixels.readUInt8(4), `${abs} still has an opaque background corner`).toBe(0);
+}
 
 /** The table body, so a `require` in a comment or the fallback cannot smuggle in. */
 function tableBody(): string {
@@ -74,6 +109,11 @@ describe("the mascot state map", () => {
     for (const [state, rel] of mapping()) byPath.set(rel, [...(byPath.get(rel) ?? []), state]);
     const shared = [...byPath.entries()].filter(([, states]) => states.length > 1);
     expect(shared.map(([rel, states]) => `${rel}: ${states.join(", ")}`)).toEqual([]);
+  });
+
+  it("uses the same transparent RGBA brand mark on web and mobile", () => {
+    expect(Buffer.compare(readFileSync(BRAND_MARK), readFileSync(WEB_BRAND_MARK))).toBe(0);
+    transparentRgbaPng(BRAND_MARK);
   });
 
   /**
@@ -133,14 +173,13 @@ describe("how the mapper renders", () => {
   });
 
   /**
-   * The art is opaque RGB on a near-white plate, so it needs a frame of the
-   * same colour or Dark mode gets a white rectangle. Pinned from BOTH ends:
-   * the component must ask for the plate, and the plate must be the palette's
-   * fixed `mascotPlate` rather than a literal that can drift from the art.
+   * Contextual art is opaque RGB on a near-white plate, while the brand mark is
+   * a transparent cutout. Pin both the state-aware decision and the contextual
+   * plate colour so Dark mode cannot regress in either direction.
    */
-  it("frames the art on the fixed mascot plate", () => {
+  it("frames contextual art but not the transparent brand mark by default", () => {
     expect(source).toContain("t.mascotPlate");
-    expect(source).toContain("plate = true");
+    expect(source).toContain('plate ?? (state !== "brandMark")');
     const palette = readFileSync(join(ROOT, "src", "theme", "palette.ts"), "utf8");
     expect(palette).toContain('const MASCOT_PLATE = "#fdfdfd"');
   });

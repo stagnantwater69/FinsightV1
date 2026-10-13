@@ -214,9 +214,15 @@ export function AiCard({
         <div className="mb-4 flex items-center gap-3">
           <span
             aria-hidden
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-tint-brand text-base text-tone-brand ring-1 ring-edge-brand"
+            className="flex h-10 w-12 shrink-0 items-center justify-center"
           >
-            ✦
+            <img
+              src="/mascot/fin-explanation.webp"
+              alt=""
+              width={512}
+              height={410}
+              className="h-10 w-12 object-contain"
+            />
           </span>
           <div className="min-w-0">
             <b className="block font-display text-base font-bold tracking-[-0.01em] text-white">{title}</b>

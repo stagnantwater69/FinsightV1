@@ -61,7 +61,7 @@ test("adding an expense posts the form and celebrates the business's first recor
   await expect(page.getByRole("heading", { name: "Add expense" })).toBeVisible();
 
   await page.locator("#category").selectOption({ label: TEST_CATEGORIES[0].name });
-  await page.locator("#date").fill("2026-08-15");
+  await page.getByRole("textbox", { name: "Date (required)", exact: true }).fill("2026-08-15");
   await page.locator("#description").fill("Rice sacks");
   await page.locator("#vendor").fill("Metro Market");
   await page.locator("#amount").fill("850.50");

@@ -216,8 +216,12 @@ Recorded so a future review does not have to re-check them from zero:
   or `requireOwnedBusinessProfile` (`backend/src/lib/ownership.ts`), and return
   **404 rather than 403** on a mismatch, so record existence cannot be probed.
   Covered by `backend/tests/integration/ownershipIsolation.test.ts`.
-- **SQL injection.** Prisma exclusively — no `$queryRaw` / `$executeRaw`
-  anywhere in `backend/src`.
+- **SQL injection.** Ordinary data access uses Prisma's query builder. The
+  backend also uses bounded raw SQL for advisory locks, atomic queue claims,
+  migration checks, and catalog inspection. Every raw query uses Prisma's
+  tagged `$queryRaw` / `$executeRaw` templates or `Prisma.sql`, which bind
+  interpolated values as parameters. There are no `$queryRawUnsafe` or
+  `$executeRawUnsafe` calls in `backend/src`.
 - **Input validation.** zod on every user-facing controller, several with
   `.strict()` so unknown keys are rejected rather than silently dropped.
 - **Error responses.** `backend/src/middleware/error.middleware.ts` returns a
@@ -227,13 +231,28 @@ Recorded so a future review does not have to re-check them from zero:
   untracked; API keys are used only in request headers and never logged.
 - **Upload limits.** `backend/src/middleware/upload.middleware.ts` restricts
   MIME type and size per upload kind.
-- **Backend dependencies.** `npm audit --production` in `backend/` reports zero
-  vulnerabilities.
+- **Backend dependencies.** The current lockfile resolves Express 4.22.3 and
+  `qs` 6.16.0. `npm audit --omit=dev` still reports three high findings in the
+  Prisma CLI chain (`prisma` through `@prisma/config` to `deepmerge-ts`). The
+  deployed image does not ship that CLI chain: its dependency stage removes
+  `prisma`, and CI asserts that `prisma`, `@prisma/config`, and `deepmerge-ts`
+  are absent while the generated Prisma client and query engine remain. Treat
+  the audit output as a development-tool finding, not as a zero-vulnerability
+  result or proof that the runtime image is free of all risk.
 
 ---
 
 ## Known limitations (not vulnerabilities, but load-bearing to know)
 
+- **Global sign-out revokes refresh sessions, not already-issued access
+  tokens.** Supabase documents that access JWTs remain valid until their
+  configured expiry even after global sign-out. FinSight now reports provider
+  revocation failures truthfully and clears the initiating client only after a
+  confirmed global response, but another device can retain API access for the
+  remainder of its current JWT lifetime. Before real-user release, verify and
+  record an acceptably short Auth JWT expiry or add a server-side session
+  version/revocation check for immediate invalidation. See Supabase's
+  [sign-out guide](https://supabase.com/docs/guides/auth/signout).
 - **Rate limiting is durable (resolved).** An earlier version of this list said
   the limiter was in-memory and single-process. It is not: every deployed
   process (`NODE_ENV` other than `test`) counts in the `ApiRateLimit` Postgres
@@ -255,6 +274,11 @@ Recorded so a future review does not have to re-check them from zero:
   the soft-hide path for a single profile. Verifying the hosted Auth/Storage
   purge and backup retention end-to-end is still a manual item (QA audit
   20260912-0802 §8).
-- **`mobile/` dependency advisories.** `npm audit` reports issues concentrated in
-  Expo build tooling (`@expo/config-plugins` and friends), largely build-time
-  rather than runtime. Worth clearing during an Expo SDK upgrade.
+- **`mobile/` dependency advisories.** As of 27 September 2026,
+  `npm audit --omit=dev` reports 18 findings: 3 high and 15 moderate. The high
+  findings are in Expo/Metro build paths (`@xmldom/xmldom`, `image-size`, and
+  `js-yaml`); the moderate set also includes React Navigation's runtime
+  `query-string` / `decode-uri-component` chain. npm's proposed remediations
+  cross package majors or downgrade Expo, so they require a tested SDK and
+  navigation upgrade rather than `npm audit fix --force`. CI blocks any
+  critical finding and continues to report the accepted high/moderate debt.

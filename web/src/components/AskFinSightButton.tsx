@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useAiChat } from "../context/AiChatContext";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
-import type { InteractionModule, ReductionOpportunity } from "../lib/types";
+import type { ChatFocus, InteractionModule, ReductionOpportunity } from "../lib/types";
 
 /**
  * What a page hands Ask FinSight when it opens the drawer.
@@ -45,8 +45,11 @@ export interface AskFinSightNavState {
 export function useAskFinSight(originModule: InteractionModule) {
   const { openChat } = useAiChat();
   return useCallback(
-    (initialQuestion?: string, reductionOpportunity?: ReductionOpportunity) => {
-      openChat(originModule, initialQuestion, reductionOpportunity);
+    (initialQuestion?: string, reductionOpportunity?: ReductionOpportunity, focus?: ChatFocus) => {
+      // The focus is only passed when there is one, so every existing caller
+      // still opens the drawer exactly as before.
+      if (focus) openChat(originModule, initialQuestion, reductionOpportunity, focus);
+      else openChat(originModule, initialQuestion, reductionOpportunity);
     },
     [openChat, originModule],
   );

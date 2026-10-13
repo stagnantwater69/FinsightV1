@@ -42,6 +42,7 @@ export type SecurityEvent =
   | "recovery.delivery_failed"
   | "password.changed"
   | "sessions.revoked"
+  | "sessions.revoke_failed"
   /**
    * The web → mobile session handoff. `issued` is a browser asking for a code,
    * `redeemed` is the app spending one, `failed` is a code that could not be
@@ -56,7 +57,13 @@ export type SecurityEvent =
   | "account.deletion_stage"
   | "account.deletion_completed"
   | "account.deletion_failed"
-  | "ratelimit.exhausted";
+  | "ratelimit.exhausted"
+  /**
+   * `requireAuth` could not reach Supabase Auth to check a token, and answered
+   * 503 rather than ending the session. A burst means Auth is down, not that
+   * anyone is guessing.
+   */
+  | "auth.verify_failed";
 
 interface SecurityEventDetail {
   /** The FinSight profile id, when one is known. */
@@ -80,7 +87,7 @@ interface SecurityEventDetail {
  */
 export function securityEvent(event: SecurityEvent, detail: SecurityEventDetail = {}): void {
   const failure =
-    event.endsWith(".failed") ||
+    event.endsWith("failed") ||
     event.endsWith(".rejected") ||
     event.endsWith(".exhausted") ||
     event.endsWith(".refused_status") ||

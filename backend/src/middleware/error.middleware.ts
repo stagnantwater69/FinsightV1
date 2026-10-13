@@ -3,6 +3,7 @@ import { ZodError } from "zod";
 import { MulterError } from "multer";
 import { Prisma } from "@prisma/client";
 import { logger } from "../config/logger";
+import { refundRateLimitsForError } from "./rateLimit.middleware";
 
 /*
  * Codes for "the database was not reachable", as opposed to "the query was
@@ -35,6 +36,13 @@ const HANDLED_MULTIPART_PARSER_MESSAGES = new Set([
   "Unexpected end of form",
 ]);
 
+const CSV_CAPACITY_REJECTION_CODES = new Set([
+  "CSV_STAGE_BUSY",
+  "CSV_STAGE_OUTSTANDING_LIMIT",
+  "CSV_STAGE_STORAGE_LIMIT",
+  "CSV_STAGE_HOURLY_LIMIT",
+]);
+
 function bodyParserType(err: unknown): "entity.parse.failed" | "entity.too.large" | undefined {
   if (typeof err !== "object" || err === null) return undefined;
   const { type } = err as BodyParserError;
@@ -54,6 +62,31 @@ function isMalformedMultipart(err: unknown, req: Request): boolean {
     err instanceof Error &&
     HANDLED_MULTIPART_PARSER_MESSAGES.has(err.message)
   );
+}
+
+function multerErrorResponse(err: MulterError): {
+  status: 400 | 413;
+  error: string;
+  code: string;
+} {
+  switch (err.code) {
+    case "LIMIT_FILE_SIZE":
+      return { status: 413, error: "Uploaded file is too large", code: "UPLOAD_FILE_TOO_LARGE" };
+    case "LIMIT_FIELD_VALUE":
+      return { status: 413, error: "A form field is too large", code: "UPLOAD_FIELD_TOO_LARGE" };
+    case "LIMIT_FILE_COUNT":
+      return { status: 400, error: "Upload contains too many files", code: "UPLOAD_TOO_MANY_FILES" };
+    case "LIMIT_FIELD_COUNT":
+      return { status: 400, error: "Upload contains too many form fields", code: "UPLOAD_TOO_MANY_FIELDS" };
+    case "LIMIT_PART_COUNT":
+      return { status: 400, error: "Upload contains too many parts", code: "UPLOAD_TOO_MANY_PARTS" };
+    case "LIMIT_FIELD_KEY":
+      return { status: 400, error: "A form field name is too long", code: "UPLOAD_FIELD_NAME_TOO_LONG" };
+    case "LIMIT_UNEXPECTED_FILE":
+      return { status: 400, error: "Upload contains an unexpected file field", code: "UPLOAD_UNEXPECTED_FILE" };
+    default:
+      return { status: 400, error: "Invalid multipart upload", code: "UPLOAD_INVALID" };
+  }
 }
 
 export class ApiError extends Error {
@@ -90,15 +123,35 @@ export function errorHandler(err: unknown, req: Request, res: Response, next: Ne
   }
 
   if (err instanceof ApiError) {
-    return res.status(err.status).json({
+    if (err.code && CSV_CAPACITY_REJECTION_CODES.has(err.code)) {
+      logger.warn(
+        {
+          operationalEvent: "csv.request.rejected",
+          code: err.code,
+          status: err.status,
+          requestId: requestIdOf(req),
+          method: req.method,
+          path: req.path,
+        },
+        "CSV request rejected by a capacity guard",
+      );
+    }
+    const send = () => res.status(err.status).json({
       error: err.message,
       ...(err.code ? { code: err.code } : {}),
       ...(err.responseDetails ?? {}),
     });
+    const refund = err.code ? refundRateLimitsForError(res, err.code) : null;
+    if (refund) {
+      void refund.then(send);
+      return;
+    }
+    return send();
   }
 
   if (err instanceof MulterError) {
-    return res.status(400).json({ error: err.message });
+    const response = multerErrorResponse(err);
+    return res.status(response.status).json({ error: response.error, code: response.code });
   }
 
   if (isMalformedMultipart(err, req)) {

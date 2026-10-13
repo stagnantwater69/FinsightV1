@@ -197,6 +197,10 @@ function ReceiptPhoto({ url }: { url: string }) {
         <Image
           source={{ uri: url }}
           resizeMode="contain"
+          // Without `accessible` an Image is not an accessibility element and
+          // this label is never read; see PhotoUpload for the same fix.
+          accessible
+          accessibilityRole="image"
           accessibilityLabel="The scanned receipt this record came from"
           style={{
             width: "100%",

@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useId, useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
@@ -41,34 +41,43 @@ const COST_BEHAVIOR_LABEL: Record<ExpenseCostBehavior, string> = {
 function CostBehaviorSelect({ category }: { category: ExpenseCategory }) {
   const { updateCategory } = useExpenseCategories();
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const errorId = useId();
 
   return (
-    <SelectInput
-      aria-label={`Cost behavior for ${category.name}`}
-      value={category.costBehavior ?? "UNCLASSIFIED"}
-      disabled={saving}
-      onChange={async (e) => {
-        const value = e.target.value as ExpenseCostBehavior;
-        setSaving(true);
-        try {
-          await updateCategory(category.id, { costBehavior: value });
-        } catch {
-          // Left as a no-op error: the select just reverts to the category's
-          // last-known value on the next render, which is enough feedback for
-          // a low-stakes, easily-retried classification field — the same
-          // reasoning a required-field save would not get away with.
-        } finally {
-          setSaving(false);
-        }
-      }}
-      className="min-h-0 py-1.5 text-xs"
-    >
-      {COST_BEHAVIOR_OPTIONS.map((opt) => (
-        <option key={opt.value} value={opt.value}>
-          {opt.label}
-        </option>
-      ))}
-    </SelectInput>
+    <div className="space-y-1">
+      <SelectInput
+        aria-label={`Cost behavior for ${category.name}`}
+        value={category.costBehavior ?? "UNCLASSIFIED"}
+        disabled={saving}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? errorId : undefined}
+        onChange={async (e) => {
+          const value = e.target.value as ExpenseCostBehavior;
+          setSaving(true);
+          setError(null);
+          setSaved(false);
+          try {
+            await updateCategory(category.id, { costBehavior: value });
+            setSaved(true);
+          } catch (err) {
+            setError(getErrorMessage(err));
+          } finally {
+            setSaving(false);
+          }
+        }}
+        className="min-h-0 py-1.5 text-xs"
+      >
+        {COST_BEHAVIOR_OPTIONS.map((opt) => (
+          <option key={opt.value} value={opt.value}>
+            {opt.label}
+          </option>
+        ))}
+      </SelectInput>
+      {error ? <p id={errorId} role="alert" className="text-xs text-tone-danger">{error}</p> : null}
+      {saved ? <p role="status" className="text-xs text-tone-brand">Cost behavior saved.</p> : null}
+    </div>
   );
 }
 
@@ -87,7 +96,7 @@ function CostBehaviorSelect({ category }: { category: ExpenseCategory }) {
  */
 export function Categories() {
   const { selected } = useBusinessProfiles();
-  const { categories, loading, createCategory } = useExpenseCategories();
+  const { categories, loading, loadingError, refresh, createCategory } = useExpenseCategories();
 
   const [keyword, setKeyword] = useState("");
   const [name, setName] = useState("");
@@ -221,7 +230,7 @@ export function Categories() {
       <PageHead
         eyebrow="Management"
         title="Expense categories"
-        subtitle="How your spending is grouped. Every insight in FinSight is built on these."
+        subtitle="How your expenses are grouped."
         actions={
           /* createCategory throws without a business profile, so the button
              that calls it is not offered without one. */
@@ -230,7 +239,7 @@ export function Categories() {
               Finish setup
             </ButtonLink>
           ) : !adding ? (
-            <Button variant="brand" size="sm" onClick={() => setAdding(true)}>
+            <Button variant="brand" size="sm" disabled={loading || Boolean(loadingError && categories.length === 0)} onClick={() => setAdding(true)}>
               + New category
             </Button>
           ) : null
@@ -262,7 +271,7 @@ export function Categories() {
               label="Cost behavior"
               htmlFor="cat-cost-behavior"
               optional
-              hint="How this category tends to move — fixed costs stay roughly flat, variable costs scale with activity, mixed costs have both. Leave it not set if you're unsure; it doesn't block anything."
+              hint="Fixed stays flat, variable follows activity, mixed is both."
               className="sm:col-span-2"
             >
               <SelectInput
@@ -304,6 +313,16 @@ export function Categories() {
         </Card>
       ) : null}
 
+      {loadingError ? (
+        <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-tint-danger p-3 text-sm text-tone-danger ring-1 ring-edge-danger">
+          <p>Couldn't load categories. {loadingError}</p>
+          <Button type="button" variant="secondary" size="sm" disabled={loading} onClick={() => void refresh().catch(() => undefined)}>
+            Retry loading categories
+          </Button>
+        </div>
+      ) : null}
+
+      {!loadingError || categories.length > 0 ? (
       <DataTable
         rows={filtered}
         columns={columns}
@@ -315,7 +334,7 @@ export function Categories() {
         initialSort={{ key: "name", direction: "asc" }}
         toolbar={toolbar}
         empty={
-          keyword ? (
+          loadingError ? null : keyword ? (
             <EmptyState compact title="No categories match that search" icon="⌕">
               Try a shorter word, or clear the search box.
             </EmptyState>
@@ -330,14 +349,12 @@ export function Categories() {
                   </Button>
                 ) : (
                   <ButtonLink to="/onboarding" variant="primary">
-                    Finish setting up your business
+                    Finish business setup
                   </ButtonLink>
                 )
               }
             >
-              {selected
-                ? "Categories are how FinSight groups your spending — without them every expense looks the same. Start with the three or four you spend on most."
-                : "Categories belong to a business, so there are none to show yet. Add yours and you can start grouping your spending here."}
+              {selected ? "Start with the three or four you spend on most." : "Set up your business to add categories."}
             </EmptyState>
           )
         }
@@ -362,6 +379,7 @@ export function Categories() {
           </div>
         )}
       />
+      ) : null}
     </div>
   );
 }

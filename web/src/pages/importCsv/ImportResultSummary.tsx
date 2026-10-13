@@ -18,20 +18,23 @@ export function ImportResultSummary({
   result: ImportResult;
   fromOnboarding: boolean;
 }) {
-  const flaggedTotal = result.flagged + (result.largeExpenseFlagged ?? 0);
+  const hasReviewFlags = result.flagged > 0 || (result.largeExpenseFlagged ?? 0) > 0;
   // The COUNT, not the length of the list: a worker-run import caps the list
   // of skipped rows it persists, so `skipped.length` under-reports a large
   // file and "0 skipped" over a file that skipped 400 rows would be a lie.
   const skippedTotal = result.skippedCount ?? result.skipped.length;
   const failed = result.processingStatus === "FAILED";
-  const clean = !failed && skippedTotal === 0 && flaggedTotal === 0 && result.duplicateOfBatchId === undefined;
+  const hasSavedRecords = result.imported > 0;
+  const clean = !failed && skippedTotal === 0 && !hasReviewFlags && result.duplicateOfBatchId === undefined;
 
   return (
     <FormPage eyebrow="Records" title={failed ? "Import stopped" : "Import complete"}>
       {failed ? (
         <div className="mb-4">
           <Callout tone="warn">
-            Review the saved records, then import only the remaining rows.
+            {hasSavedRecords
+              ? "Review the saved records, then import only the remaining rows."
+              : "No records were saved. Check the source file, then import it again."}
           </Callout>
         </div>
       ) : null}
@@ -44,7 +47,7 @@ export function ImportResultSummary({
       */}
       {clean ? (
         <Celebration title={`${result.imported} record${result.imported === 1 ? "" : "s"} imported`}>
-          All rows in <strong className="text-ink-800">{result.title}</strong> were imported.
+          {result.title}
         </Celebration>
       ) : null}
 
@@ -68,11 +71,11 @@ export function ImportResultSummary({
         result.importedSales > 0 ? (
           <>
             <div className="flex justify-between gap-3 pl-4">
-              <dt className="text-ink-500">— as expenses</dt>
+              <dt className="pl-2 text-ink-500">Expenses</dt>
               <dd className="figure font-medium text-ink-900">{result.importedExpenses}</dd>
             </div>
             <div className="flex justify-between gap-3 pl-4">
-              <dt className="text-ink-500">— as sales</dt>
+              <dt className="pl-2 text-ink-500">Sales</dt>
               <dd className="figure font-medium text-ink-900">{result.importedSales}</dd>
             </div>
           </>
@@ -82,11 +85,11 @@ export function ImportResultSummary({
           <dd className="figure font-medium text-ink-900">{skippedTotal}</dd>
         </div>
         <div className="flex justify-between gap-3">
-          <dt className="text-ink-500">Flagged as possible duplicates</dt>
+          <dt className="text-ink-500">Possible duplicates</dt>
           <dd className="figure font-medium text-ink-900">{result.flagged}</dd>
         </div>
         <div className="flex justify-between gap-3">
-          <dt className="text-ink-500">Flagged as large expenses</dt>
+          <dt className="text-ink-500">Large expenses</dt>
           <dd className="figure font-medium text-ink-900">{result.largeExpenseFlagged ?? 0}</dd>
         </div>
       </dl>
@@ -107,12 +110,12 @@ export function ImportResultSummary({
       {result.duplicateOfBatchId !== undefined ? (
         <div className="mt-4">
           <Callout tone="warn">
-            <b className="font-semibold">This file was imported before.</b> Check for duplicate records.{" "}
+            <b className="font-semibold">This file was imported before.</b>{" "}
             <Link
               to="/records/flagged"
               className="tap-inline font-semibold text-tone-accent underline underline-offset-2"
             >
-              Review the duplicates →
+              Review duplicates
             </Link>
           </Callout>
         </div>
@@ -123,17 +126,15 @@ export function ImportResultSummary({
         review, with no way to reach them, is worse than no count — it tells
         the owner there is a problem and then leaves them to find it.
       */}
-      {flaggedTotal > 0 ? (
+      {hasReviewFlags ? (
         <div className="mt-4">
           <Callout tone="warn">
-            <b className="font-semibold">
-              {flaggedTotal} record{flaggedTotal === 1 ? " needs" : "s need"} a second look.
-            </b>{" "}
+            <b className="font-semibold">Some records need review.</b>{" "}
             <Link
               to="/records/flagged"
               className="tap-inline font-semibold text-tone-accent underline underline-offset-2"
             >
-              Review them now →
+              Review
             </Link>
           </Callout>
         </div>
@@ -149,13 +150,13 @@ export function ImportResultSummary({
         <div className="mt-4">
           <Callout tone="info">
             <b className="font-semibold">
-              {result.uncategorised} expense{result.uncategorised === 1 ? "" : "s"} saved as "Uncategorised".
+              {result.uncategorised} uncategorised expense{result.uncategorised === 1 ? "" : "s"}.
             </b>{" "}
             <Link
               to="/records"
               className="tap-inline font-semibold text-tone-brand underline underline-offset-2"
             >
-              Sort them now →
+              Categorise
             </Link>
           </Callout>
         </div>
@@ -164,7 +165,7 @@ export function ImportResultSummary({
       {skippedTotal > 0 ? (
         <div className="mt-4 rounded-lg bg-tint-danger p-3 text-xs text-tone-danger ring-1 ring-edge-danger">
           <p className="font-medium">
-            {skippedTotal} row{skippedTotal === 1 ? " was" : "s were"} skipped. Correct and import only those rows.
+            {skippedTotal} row{skippedTotal === 1 ? "" : "s"} skipped
           </p>
           <ResultDetails label="Skipped CSV rows">
           <ul className="list-inside list-disc space-y-0.5">
@@ -191,7 +192,7 @@ export function ImportResultSummary({
           <ButtonLink to="/dashboard" variant={clean ? "primary" : "brand"}>
             Go to my dashboard
           </ButtonLink>
-        ) : (
+        ) : !failed || hasSavedRecords ? (
           /*
            * Straight to THIS import's records, not to all of them.
            *
@@ -208,11 +209,11 @@ export function ImportResultSummary({
           >
             {failed ? "Review saved records" : `See these ${result.imported} records`}
           </ButtonLink>
-        )}
+        ) : null}
         <ButtonLink
           to="/records/csv-imports/new"
           state={fromOnboarding ? { fromOnboarding: true } : undefined}
-          variant="secondary"
+          variant={failed && !hasSavedRecords ? "primary" : "secondary"}
         >
           Import another file
         </ButtonLink>

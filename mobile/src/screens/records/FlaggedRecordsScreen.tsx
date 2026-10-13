@@ -1,5 +1,5 @@
-import { useCallback, useState } from "react";
-import { ActivityIndicator, Alert as RNAlert, ScrollView, View } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ActivityIndicator, Alert as RNAlert, AppState, FlatList, RefreshControl, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { Button, Callout, Card, EmptyState, ErrorNote, Money, Screen, T } from "../../components/ui";
 import { useBusinessProfiles } from "../../context/BusinessProfileContext";
@@ -12,6 +12,11 @@ import {
   type LoadFailure,
 } from "../../lib/connectionState";
 import { setFlash } from "../../lib/flash";
+import {
+  SERVER_STATE_STALE_MS,
+  isServerStateAffected,
+  subscribeToServerState,
+} from "../../lib/serverStateCache";
 import * as haptics from "../../lib/haptics";
 import { font, space } from "../../theme/tokens";
 import { useTheme } from "../../context/ThemeContext";
@@ -39,6 +44,11 @@ interface DuplicateGroup {
   batch: ImportBatchSummary | null;
   records: RecordItem[];
 }
+
+type ReviewListItem =
+  | { key: string; kind: "heading"; label: string; spaced: boolean }
+  | { key: string; kind: "group"; group: DuplicateGroup }
+  | { key: string; kind: "record"; record: RecordItem };
 
 /**
  * HOW THIS SCREEN GROUPS DUPLICATES, AND WHY IT GROUPS THEM AT ALL
@@ -101,7 +111,18 @@ export function FlaggedRecordsScreen() {
   const t = useTheme();
   const { brand, ink } = t;
   const { selected, categories } = useBusinessProfiles();
+  const selectedBusinessProfileId = selected?.id ?? null;
+  const selectedBusinessProfileIdRef = useRef(selectedBusinessProfileId);
+  selectedBusinessProfileIdRef.current = selectedBusinessProfileId;
+  const requestVersionRef = useRef(0);
+  const focusedRef = useRef(false);
+  const dirtyRef = useRef(true);
+  const loadedAtRef = useRef<number | null>(null);
+  const loadingBusinessProfileIdRef = useRef<number | null>(null);
+  const invalidationGenerationRef = useRef(0);
+  const loadedBusinessProfileIdRef = useRef<number | null>(null);
   const [records, setRecords] = useState<RecordItem[]>([]);
+  const [loadedBusinessProfileId, setLoadedBusinessProfileId] = useState<number | null>(null);
   /** The cursor for the page after what is on screen; null once there is none. */
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -116,6 +137,7 @@ export function FlaggedRecordsScreen() {
   const [flaggedTotal, setFlaggedTotal] = useState<number | null>(null);
   const [batches, setBatches] = useState<ImportBatchSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   /** A failed resolve — reassures about the record, not about the list's age. */
   const [error, setError] = useState<string | null>(null);
@@ -126,9 +148,43 @@ export function FlaggedRecordsScreen() {
   const [loadedAt, setLoadedAt] = useState<number | null>(null);
   const [clock, setClock] = useState(() => Date.now());
 
+  useEffect(() => () => {
+    selectedBusinessProfileIdRef.current = null;
+    loadedBusinessProfileIdRef.current = null;
+    requestVersionRef.current += 1;
+    loadingBusinessProfileIdRef.current = null;
+  }, []);
+
   const load = useCallback(async () => {
-    if (!selected) return;
-    setLoading(true);
+    if (
+      selectedBusinessProfileId === null ||
+      selectedBusinessProfileIdRef.current !== selectedBusinessProfileId
+    ) return;
+    const requestBusinessProfileId = selectedBusinessProfileId;
+    if (loadingBusinessProfileIdRef.current === requestBusinessProfileId) return;
+    loadingBusinessProfileIdRef.current = requestBusinessProfileId;
+    const requestVersion = ++requestVersionRef.current;
+    const invalidationGeneration = invalidationGenerationRef.current;
+    const retainingCurrentData = loadedBusinessProfileIdRef.current === requestBusinessProfileId;
+    if (!retainingCurrentData) {
+      loadedBusinessProfileIdRef.current = null;
+      setLoadedBusinessProfileId(null);
+      setRecords([]);
+      setNextCursor(null);
+      setFlaggedTotal(null);
+      setBatches([]);
+      setLoadedAt(null);
+      loadedAtRef.current = null;
+      setLoadFailure(null);
+      setError(null);
+      setMoreError(null);
+      setBusyKey(null);
+      setLoadingMore(false);
+      setLoading(true);
+      setRefreshing(false);
+    } else {
+      setRefreshing(true);
+    }
     setClock(Date.now());
     try {
       // Together rather than in sequence: the batch list only supplies names
@@ -136,11 +192,13 @@ export function FlaggedRecordsScreen() {
       // would delay the screen for no reason.
       const [page, importBatches, count] = await Promise.all([
         api.get<FlaggedRecordPage>("/records/flagged", {
-          businessProfileId: selected.id,
+          businessProfileId: requestBusinessProfileId,
           limit: PAGE_SIZE,
         }),
         api
-          .get<ImportBatchSummary[]>("/records/csv-imports/batches", { businessProfileId: selected.id })
+          .get<ImportBatchSummary[]>("/records/csv-imports/batches", {
+            businessProfileId: requestBusinessProfileId,
+          })
           // A group that cannot name its import still works — it just says
           // "an import" instead of the file's title.
           .catch(() => [] as ImportBatchSummary[]),
@@ -148,21 +206,65 @@ export function FlaggedRecordsScreen() {
         // headline number, and an error banner over a list that loaded fine
         // would be the bigger problem.
         api
-          .get<FlaggedRecordCounts>("/records/flagged/count", { businessProfileId: selected.id })
+          .get<FlaggedRecordCounts>("/records/flagged/count", {
+            businessProfileId: requestBusinessProfileId,
+          })
           .catch(() => null),
       ]);
+      if (
+        requestVersionRef.current !== requestVersion ||
+        selectedBusinessProfileIdRef.current !== requestBusinessProfileId ||
+        invalidationGenerationRef.current !== invalidationGeneration
+      ) return;
       setRecords(page.items);
       setNextCursor(page.nextCursor);
       setFlaggedTotal(count ? count.total : null);
       setBatches(importBatches);
-      setLoadedAt(Date.now());
+      const completedAt = Date.now();
+      setLoadedAt(completedAt);
+      loadedAtRef.current = completedAt;
+      dirtyRef.current = false;
       setLoadFailure(null);
+      loadedBusinessProfileIdRef.current = requestBusinessProfileId;
+      setLoadedBusinessProfileId(requestBusinessProfileId);
     } catch (err) {
+      if (
+        requestVersionRef.current !== requestVersion ||
+        selectedBusinessProfileIdRef.current !== requestBusinessProfileId ||
+        invalidationGenerationRef.current !== invalidationGeneration
+      ) return;
+      if (!retainingCurrentData) {
+        setRecords([]);
+        setNextCursor(null);
+        setFlaggedTotal(null);
+        setBatches([]);
+        setLoadedAt(null);
+        loadedAtRef.current = null;
+      }
+      dirtyRef.current = true;
       setLoadFailure(toLoadFailure(err));
+      loadedBusinessProfileIdRef.current = requestBusinessProfileId;
+      setLoadedBusinessProfileId(requestBusinessProfileId);
     } finally {
-      setLoading(false);
+      if (loadingBusinessProfileIdRef.current === requestBusinessProfileId) {
+        loadingBusinessProfileIdRef.current = null;
+      }
+      if (
+        requestVersionRef.current === requestVersion &&
+        selectedBusinessProfileIdRef.current === requestBusinessProfileId
+      ) {
+        setLoading(false);
+        setRefreshing(false);
+      }
+      if (
+        invalidationGenerationRef.current !== invalidationGeneration &&
+        selectedBusinessProfileIdRef.current === requestBusinessProfileId &&
+        focusedRef.current
+      ) {
+        void load();
+      }
     }
-  }, [selected]);
+  }, [selectedBusinessProfileId]);
 
   /**
    * The next page, appended rather than replacing what is on screen.
@@ -175,32 +277,114 @@ export function FlaggedRecordsScreen() {
    * listed are untouched and still resolvable.
    */
   const loadMore = useCallback(async () => {
-    if (!selected || !nextCursor || loadingMore) return;
+    if (
+      selectedBusinessProfileId === null ||
+      loadedBusinessProfileId !== selectedBusinessProfileId ||
+      selectedBusinessProfileIdRef.current !== selectedBusinessProfileId ||
+      !nextCursor ||
+      loadingMore
+    ) return;
+    const requestBusinessProfileId = selectedBusinessProfileId;
+    const requestVersion = requestVersionRef.current;
     setLoadingMore(true);
     setMoreError(null);
     try {
       const page = await api.get<FlaggedRecordPage>("/records/flagged", {
-        businessProfileId: selected.id,
+        businessProfileId: requestBusinessProfileId,
         limit: PAGE_SIZE,
         cursor: nextCursor,
       });
+      if (
+        requestVersionRef.current !== requestVersion ||
+        selectedBusinessProfileIdRef.current !== requestBusinessProfileId ||
+        loadedBusinessProfileIdRef.current !== requestBusinessProfileId
+      ) return;
       setRecords((current) => {
         const seen = new Set(current.map(recordKey));
         return [...current, ...page.items.filter((r) => !seen.has(recordKey(r)))];
       });
       setNextCursor(page.nextCursor);
     } catch (err) {
+      if (
+        requestVersionRef.current !== requestVersion ||
+        selectedBusinessProfileIdRef.current !== requestBusinessProfileId
+      ) return;
       setMoreError(describeActionFailure(toLoadFailure(err), "The records already listed are still here."));
     } finally {
-      setLoadingMore(false);
+      if (
+        requestVersionRef.current === requestVersion &&
+        selectedBusinessProfileIdRef.current === requestBusinessProfileId
+      ) setLoadingMore(false);
     }
-  }, [selected, nextCursor, loadingMore]);
+  }, [loadedBusinessProfileId, loadingMore, nextCursor, selectedBusinessProfileId]);
 
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  const needsRefresh = useCallback(() => (
+    dirtyRef.current ||
+    loadedBusinessProfileIdRef.current !== selectedBusinessProfileId ||
+    loadedAtRef.current === null ||
+    Date.now() - loadedAtRef.current >= SERVER_STATE_STALE_MS
+  ), [selectedBusinessProfileId]);
+
+  useFocusEffect(useCallback(() => {
+    focusedRef.current = true;
+    if (needsRefresh()) void load();
+    return () => {
+      focusedRef.current = false;
+    };
+  }, [load, needsRefresh]));
+
+  useEffect(() => subscribeToServerState((event) => {
+    if (event.type === "clear") {
+      dirtyRef.current = true;
+      loadedAtRef.current = null;
+      requestVersionRef.current += 1;
+      loadedBusinessProfileIdRef.current = null;
+      setLoadedBusinessProfileId(null);
+      setRecords([]);
+      setNextCursor(null);
+      setFlaggedTotal(null);
+      setBatches([]);
+      setLoadedAt(null);
+      setLoadFailure(null);
+      return;
+    }
+    if (
+      selectedBusinessProfileId !== null &&
+      isServerStateAffected(
+        "/records/flagged",
+        { businessProfileId: selectedBusinessProfileId },
+        event,
+      )
+    ) {
+      dirtyRef.current = true;
+      invalidationGenerationRef.current += 1;
+      if (focusedRef.current) void load();
+    }
+  }), [load, selectedBusinessProfileId]);
+
+  useEffect(() => {
+    let previousState = AppState.currentState;
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      const returningToForeground =
+        /inactive|background/.test(previousState) && nextState === "active";
+      previousState = nextState;
+      if (returningToForeground && focusedRef.current && needsRefresh()) void load();
+    });
+    return () => subscription.remove();
+  }, [load, needsRefresh]);
 
   async function resolve(r: RecordItem) {
+    if (
+      selectedBusinessProfileIdRef.current !== r.businessProfileId ||
+      loadedBusinessProfileIdRef.current !== r.businessProfileId
+    ) return;
     const path = r.type === "expense" ? `/records/expenses/${r.id}` : `/records/sales/${r.id}`;
-    await api.patch(path, { duplicateStatus: "Not a Duplicate", reviewStatus: "Reviewed" });
+    await api.patch(
+      path,
+      { duplicateStatus: "Not a Duplicate", reviewStatus: "Reviewed" },
+      { cacheScope: { businessProfileId: r.businessProfileId } },
+    );
+    if (selectedBusinessProfileIdRef.current !== r.businessProfileId) return;
     await load();
   }
 
@@ -213,18 +397,24 @@ export function FlaggedRecordsScreen() {
    * someone can press and one they abandon.
    */
   async function resolveGroup(group: DuplicateGroup, action: "keep" | "discard") {
-    if (!selected) return;
     const count = group.records.length;
 
     const run = async () => {
+      const activeBusinessProfileId = selectedBusinessProfileIdRef.current;
+      if (
+        activeBusinessProfileId === null ||
+        loadedBusinessProfileIdRef.current !== activeBusinessProfileId ||
+        group.records.some((record) => record.businessProfileId !== activeBusinessProfileId)
+      ) return;
       setBusyKey(group.key);
       try {
         const res = await api.post<{ resolved: number }>("/records/duplicates/resolve", {
-          businessProfileId: selected.id,
+          businessProfileId: activeBusinessProfileId,
           action,
           expenseIds: group.records.filter((r) => r.type === "expense").map((r) => r.id),
           salesIds: group.records.filter((r) => r.type === "sales").map((r) => r.id),
         });
+        if (selectedBusinessProfileIdRef.current !== activeBusinessProfileId) return;
         if (action === "discard") {
           haptics.warned();
         } else {
@@ -240,10 +430,11 @@ export function FlaggedRecordsScreen() {
         );
         await load();
       } catch (err) {
+        if (selectedBusinessProfileIdRef.current !== activeBusinessProfileId) return;
         haptics.failed();
         setError(describeActionFailure(toLoadFailure(err), "These records are still waiting for review."));
       } finally {
-        setBusyKey(null);
+        if (selectedBusinessProfileIdRef.current === activeBusinessProfileId) setBusyKey(null);
       }
     };
 
@@ -266,9 +457,38 @@ export function FlaggedRecordsScreen() {
 
   if (!selected) return null;
 
-  const duplicates = records.filter((r) => r.duplicateStatus === "Flagged");
-  const others = records.filter((r) => r.duplicateStatus !== "Flagged");
-  const { byImport, byMatch } = groupDuplicates(duplicates, batches);
+  const loadedForSelectedBusiness = loadedBusinessProfileId === selected.id;
+  const visibleRecords = loadedForSelectedBusiness ? records : [];
+  const visibleBatches = loadedForSelectedBusiness ? batches : [];
+  const visibleFlaggedTotal = loadedForSelectedBusiness ? flaggedTotal : null;
+  const visibleLoadFailure = loadedForSelectedBusiness ? loadFailure : null;
+  const visibleError = loadedForSelectedBusiness ? error : null;
+  const visibleMoreError = loadedForSelectedBusiness ? moreError : null;
+  const visibleLoadedAt = loadedForSelectedBusiness ? loadedAt : null;
+  const visibleLoading = (loading && !loadedForSelectedBusiness) || !loadedForSelectedBusiness;
+  const duplicates = visibleRecords.filter((r) => r.duplicateStatus === "Flagged");
+  const others = visibleRecords.filter((r) => r.duplicateStatus !== "Flagged");
+  const { byImport, byMatch } = groupDuplicates(duplicates, visibleBatches);
+  const listItems: ReviewListItem[] = [
+    ...(byImport.length > 0
+      ? [
+          { key: "heading-import", kind: "heading" as const, label: "Duplicates from an imported file", spaced: false },
+          ...byImport.map((group) => ({ key: group.key, kind: "group" as const, group })),
+        ]
+      : []),
+    ...(byMatch.length > 0
+      ? [
+          { key: "heading-match", kind: "heading" as const, label: "Possible duplicates", spaced: true },
+          ...byMatch.map((group) => ({ key: group.key, kind: "group" as const, group })),
+        ]
+      : []),
+    ...(others.length > 0
+      ? [
+          { key: "heading-other", kind: "heading" as const, label: "Other records to check", spaced: true },
+          ...others.map((record) => ({ key: `record-${recordKey(record)}`, kind: "record" as const, record })),
+        ]
+      : []),
+  ];
 
   const renderGroup = (group: DuplicateGroup) => {
     const count = group.records.length;
@@ -324,97 +544,103 @@ export function FlaggedRecordsScreen() {
 
   return (
     <Screen>
-      <ScrollView contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}>
-        <T variant="title" style={{ marginBottom: flaggedTotal === null ? space.md : space.xs }}>Records to review</T>
+      <FlatList
+        data={listItems}
+        keyExtractor={(item) => item.key}
+        contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}
+        initialNumToRender={12}
+        windowSize={7}
+        refreshControl={(
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => void load()}
+            tintColor={brand[600]}
+          />
+        )}
+        ListHeaderComponent={(
+          <>
+        <T variant="title" style={{ marginBottom: visibleFlaggedTotal === null ? space.md : space.xs }}>Records to review</T>
         {/*
           The headline count comes from /records/flagged/count, not from
           records.length — one page is not the whole queue, and saying "3"
           while 400 wait behind a cursor would be a wrong number about the
           owner's own books.
         */}
-        {flaggedTotal !== null && flaggedTotal > 0 ? (
+        {visibleFlaggedTotal !== null && visibleFlaggedTotal > 0 ? (
           <T variant="caption" accessibilityLiveRegion="polite" style={{ marginBottom: space.md, color: ink[500] }}>
-            {flaggedTotal} record{flaggedTotal === 1 ? "" : "s"} flagged
-            {records.length < flaggedTotal ? ` · showing ${records.length}` : ""}
+            {visibleFlaggedTotal} record{visibleFlaggedTotal === 1 ? "" : "s"} flagged
+            {visibleRecords.length < visibleFlaggedTotal ? ` · showing ${visibleRecords.length}` : ""}
           </T>
         ) : null}
-        {error ? <ErrorNote>{error}</ErrorNote> : null}
+        {visibleError ? <ErrorNote>{visibleError}</ErrorNote> : null}
 
         <ConnectionNotice
-          notice={describeLoadFailure(loadFailure, {
-            hasData: records.length > 0,
-            lastUpdatedAt: loadedAt,
+          notice={describeLoadFailure(visibleLoadFailure, {
+            hasData: visibleRecords.length > 0,
+            lastUpdatedAt: visibleLoadedAt,
             now: clock,
             subject: "the records to review",
           })}
           onRetry={load}
-          busy={loading}
+          busy={visibleLoading || refreshing}
           style={{ marginBottom: space.md }}
         />
 
-        {records.length > 0 ? (
-          <LastUpdated at={loadedAt} now={clock} style={{ marginBottom: space.sm }} />
+        {visibleRecords.length > 0 ? (
+          <LastUpdated at={visibleLoadedAt} now={clock} style={{ marginBottom: space.sm }} />
         ) : null}
-
-        {loading ? (
+          </>
+        )}
+        ListEmptyComponent={visibleLoading ? (
           <ActivityIndicator color={brand[600]} />
-        ) : records.length === 0 && loadFailure ? (
+        ) : visibleRecords.length === 0 && visibleLoadFailure ? (
           /*
             Same reason as Notifications: "Nothing needs your attention" over a
             failed fetch is an all-clear this screen has no grounds to give.
           */
           null
-        ) : records.length === 0 ? (
+        ) : visibleRecords.length === 0 ? (
           <EmptyState
             title="Nothing needs your attention"
             icon="✓"
             body="FinSight flags possible duplicates and unusually large expenses here as you record them."
           />
-        ) : (
-          <>
-            {byImport.length > 0 ? (
-              <>
-                <T variant="label" style={{ marginBottom: space.sm }}>Duplicates from an imported file</T>
-                {byImport.map(renderGroup)}
-              </>
-            ) : null}
-
-            {byMatch.length > 0 ? (
-              <>
-                <T variant="label" style={{ marginTop: space.md, marginBottom: space.sm }}>Possible duplicates</T>
-                {byMatch.map(renderGroup)}
-              </>
-            ) : null}
-
-            {others.length > 0 ? (
-              <>
-                <T variant="label" style={{ marginTop: space.md, marginBottom: space.sm }}>Other records to check</T>
-                {others.map((r) => (
-                  <Card key={`${r.type}-${r.id}`} style={{ marginBottom: space.sm }}>
-                    <View style={{ flexDirection: "row", justifyContent: "space-between", gap: space.md }}>
-                      <View style={{ flex: 1 }}>
-                        <T style={{ fontFamily: font.sansMedium }}>{r.description}</T>
-                        <T variant="caption">{r.date.slice(0, 10)} · {categories.find((c) => c.id === r.categoryId)?.name ?? r.type}</T>
-                      </View>
-                      <Money value={r.amount} size={15} weight="semibold" />
-                    </View>
-                    {badges(r)}
-                    <Button title="Looks right — mark reviewed" variant="secondary" onPress={() => resolve(r)} style={{ marginTop: space.md }} />
-                  </Card>
-                ))}
-              </>
-            ) : null}
-
-            {nextCursor ? (
+        ) : null}
+        renderItem={({ item }) => {
+          if (item.kind === "heading") {
+            return (
+              <T variant="label" style={{ marginTop: item.spaced ? space.md : 0, marginBottom: space.sm }}>
+                {item.label}
+              </T>
+            );
+          }
+          if (item.kind === "group") return renderGroup(item.group);
+          const r = item.record;
+          return (
+            <Card style={{ marginBottom: space.sm }}>
+              <View style={{ flexDirection: "row", justifyContent: "space-between", gap: space.md }}>
+                <View style={{ flex: 1 }}>
+                  <T style={{ fontFamily: font.sansMedium }}>{r.description}</T>
+                  <T variant="caption">{r.date.slice(0, 10)} · {categories.find((c) => c.id === r.categoryId)?.name ?? r.type}</T>
+                </View>
+                <Money value={r.amount} size={15} weight="semibold" />
+              </View>
+              {badges(r)}
+              <Button title="Looks right — mark reviewed" variant="secondary" onPress={() => resolve(r)} style={{ marginTop: space.md }} />
+            </Card>
+          );
+        }}
+        ListFooterComponent={visibleRecords.length > 0 ? (
+          nextCursor ? (
               <Card style={{ marginTop: space.xs }}>
-                {moreError ? <ErrorNote>{moreError}</ErrorNote> : null}
+                {visibleMoreError ? <ErrorNote>{visibleMoreError}</ErrorNote> : null}
                 <T
                   variant="caption"
                   accessibilityLiveRegion="polite"
                   style={{ textAlign: "center", color: ink[500], marginBottom: space.sm }}
                 >
-                  Showing {records.length}
-                  {flaggedTotal !== null ? ` of ${flaggedTotal}` : ""}
+                  Showing {visibleRecords.length}
+                  {visibleFlaggedTotal !== null ? ` of ${visibleFlaggedTotal}` : ""}
                 </T>
                 <Button
                   title={loadingMore ? "Loading…" : "Load more"}
@@ -428,10 +654,9 @@ export function FlaggedRecordsScreen() {
               <T variant="caption" style={{ textAlign: "center", color: ink[500], marginTop: space.md }}>
                 That's everything waiting for review.
               </T>
-            )}
-          </>
-        )}
-      </ScrollView>
+            )
+        ) : null}
+      />
     </Screen>
   );
 }

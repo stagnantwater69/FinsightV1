@@ -39,8 +39,18 @@ export const FIELD_LIMITS = {
   recurringScheduleLabel: 255,
   /** CSV import batch title — VARCHAR(150). */
   importTitle: 150,
-  /** The Ask FinSight question. Not a column — it is a cost ceiling on the model call. */
-  aiQuestion: 500,
+  /**
+   * The Ask FinSight question. Not a column, and barely a cost ceiling: the
+   * question is a rounding error beside the six replayed turns and the
+   * financial context that go out with it, and the answer is capped at 400
+   * tokens however long the question was.
+   *
+   * What the figure is really sized against is `ChatMessage.content`, which is
+   * VARCHAR(2000) — past that an owner's own question would come back clipped
+   * in their history. 1000 leaves half the column spare, and is about as much
+   * as the composer can show before it starts scrolling its own start away.
+   */
+  aiQuestion: 1000,
   /**
    * Spending Impact's "What are you planning to buy?" box —
    * `purchaseReviewSchema.description` is `z.string().min(3).max(255)`. Not a

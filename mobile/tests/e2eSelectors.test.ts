@@ -94,7 +94,10 @@ describe("Maestro smoke path selectors", () => {
     // splash -> login -> onboarding -> tabs -> Spending Impact -> logout
     expect(flow).toMatch(/launchApp/);
     expect(flow).toContain("Log in");
-    expect(flow).toContain("Your business");
+    expect(flow).toContain("onboarding-step-business");
+    expect(flow).toContain("onboarding-step-starting-figures");
+    expect(flow).toContain("onboarding-step-ready");
+    expect(flow).toContain("onboarding-finish-home");
     expect(flow).toContain("Insights");
     expect(flow).toContain("Spending impact");
     expect(flow).toContain("Sign out of FinSight?");

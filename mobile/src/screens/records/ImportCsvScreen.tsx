@@ -29,8 +29,9 @@ import {
   type MappedField,
   type MixedStrategy,
   type RowRules,
+  type RowCorrection,
 } from "../../lib/csvImport";
-import { DATE_FORMAT_LABELS, type ChosenDateFormat, type CsvDateFormat } from "../../lib/csvDates";
+import { DATE_FORMAT_LABELS, parseCsvDate, type ChosenDateFormat, type CsvDateFormat } from "../../lib/csvDates";
 import { SkeletonList } from "../../components/Skeleton";
 import { TAP, radius, space, typeScale } from "../../theme/tokens";
 import { useTheme } from "../../context/ThemeContext";
@@ -41,6 +42,8 @@ import { FIELD_LABELS, IMPORT_POLL_INTERVAL_MS, IMPORT_POLL_TIMEOUT_MS } from ".
 import { ResultDetails } from "../../components/ResultDetails";
 import { csvFileError } from "../../lib/importFiles";
 import { useImportOperation } from "../../lib/useImportOperation";
+import { invalidateRecordDerivedServerState } from "../../lib/serverStateCache";
+import { AvailableFundsBaselineChoice, useAvailableFundsBaselineChoice } from "../../components/AvailableFundsBaselineChoice";
 
 interface ImportValidation {
   validRows: number;
@@ -52,6 +55,25 @@ interface ImportValidation {
   duplicateRowsTruncated?: boolean;
 }
 interface ImportCategorySuggestion { row: number; categoryId: number; categoryName: string; source: "history" }
+interface AvailableFundsBaselineSummary {
+  baselineAt: string;
+  baselineDate: string;
+  matchingRowCount: number;
+}
+
+function withoutBaselineOverrides(corrections: Corrections): Corrections {
+  let changed = false;
+  const next: Corrections = {};
+  for (const [rawRow, fields] of Object.entries(corrections)) {
+    const nextFields = { ...fields };
+    if (nextFields.includedInAvailableFundsBaseline !== undefined) {
+      delete nextFields.includedInAvailableFundsBaseline;
+      changed = true;
+    }
+    if (Object.keys(nextFields).length > 0) next[Number(rawRow)] = nextFields;
+  }
+  return changed ? next : corrections;
+}
 
 /**
  * Importing a spreadsheet, in the three steps the website has always had:
@@ -119,11 +141,45 @@ export function ImportCsvScreen({ navigation }: any) {
   const [validation, setValidation] = useState<ImportValidation | null>(null);
   const [categorySuggestions, setCategorySuggestions] = useState<ImportCategorySuggestion[]>([]);
   const [categorySuggestionsTruncated, setCategorySuggestionsTruncated] = useState(false);
+  const [availableFundsBaseline, setAvailableFundsBaseline] = useState<AvailableFundsBaselineSummary | null>(null);
+  const baselineChoice = useAvailableFundsBaselineChoice(
+    availableFundsBaseline?.baselineDate ?? "",
+    availableFundsBaseline
+      ? {
+          availableFundsBaselineAt: availableFundsBaseline.baselineAt,
+          availableFundsBaselineDate: availableFundsBaseline.baselineDate,
+        }
+      : undefined,
+  );
+  const setBaselineDecision = baselineChoice.setDecision;
+  const dateSemanticsKey = `${mapping.date}\u0000${dateFormat ?? detectedFormat}`;
+  const previousDateSemantics = useRef(dateSemanticsKey);
   const operation = useImportOperation(selected?.id);
-  const reviewSignature = JSON.stringify({ file: file?.uri, mapping, recordType, mixedStrategy, dateFormat, detectedFormat, dateAmbiguous, corrections, title });
+  const reviewSignature = JSON.stringify({
+    file: file?.uri,
+    mapping,
+    recordType,
+    mixedStrategy,
+    dateFormat,
+    detectedFormat,
+    dateAmbiguous,
+    corrections,
+    title,
+    includedInAvailableFundsBaseline: baselineChoice.decision,
+    availableFundsBaselineAt: availableFundsBaseline?.baselineAt,
+  });
   const latestReviewSignature = useRef(reviewSignature);
   latestReviewSignature.current = reviewSignature;
   useEffect(() => { reset(); setBusy(false); }, [selected?.id]);
+  useEffect(() => {
+    if (previousDateSemantics.current === dateSemanticsKey) return;
+    previousDateSemantics.current = dateSemanticsKey;
+    setBaselineDecision(null);
+    setCorrections((current) => withoutBaselineOverrides(current));
+    setAvailableFundsBaseline(null);
+    setValidation(null);
+    setConfirmOpen(false);
+  }, [dateSemanticsKey, setBaselineDecision]);
   useFocusEffect(useCallback(() => () => { operation.cancel(); setBusy(false); }, [operation]));
 
   const dateRules: RowRules = useMemo(
@@ -203,6 +259,8 @@ export function ImportCsvScreen({ navigation }: any) {
     setValidation(null);
     setCategorySuggestions([]);
     setCategorySuggestionsTruncated(false);
+    setAvailableFundsBaseline(null);
+    baselineChoice.setDecision(null);
     setConfirmOpen(false);
   }
 
@@ -280,6 +338,7 @@ export function ImportCsvScreen({ navigation }: any) {
       if (!operation.current(task)) return;
       setBatchStatus(status);
       if (status.processingStatus === "COMPLETE") {
+        invalidateRecordDerivedServerState(task.businessId);
         const summary = status.resultSummary ?? {};
         setResult({
           batchId,
@@ -298,6 +357,9 @@ export function ImportCsvScreen({ navigation }: any) {
         return;
       }
       if (status.processingStatus === "FAILED") {
+        // A batch can fail after committing one or more chunks. Refresh every
+        // read those committed rows affect before reporting the partial result.
+        invalidateRecordDerivedServerState(task.businessId);
         setError("Review saved records before importing the remaining rows.");
         return;
       }
@@ -309,6 +371,7 @@ export function ImportCsvScreen({ navigation }: any) {
 
   async function confirm() {
     if (!file || !idempotencyKey) return;
+    if (availableFundsBaseline && !baselineChoice.check()) return;
     const task = operation.begin();
     if (!task) return;
     setConfirmOpen(false);
@@ -329,8 +392,16 @@ export function ImportCsvScreen({ navigation }: any) {
       // Sent only when the file cannot say for itself — otherwise confirm
       // refuses the file, which is the server asking this exact question.
       if (dateAmbiguous && dateFormat) form.append("dateFormat", dateFormat);
+      if (baselineChoice.required && baselineChoice.decision !== null) {
+        const baseline = baselineChoice.requestFields();
+        form.append("includedInAvailableFundsBaseline", String(baseline.includedInAvailableFundsBaseline));
+        form.append("availableFundsBaselineAt", baseline.availableFundsBaselineAt);
+      }
 
-      const confirmed = await api.upload<any>("/records/csv-imports/confirm", form, task.controller.signal);
+      const confirmed = await api.upload<any>("/records/csv-imports/confirm", form, {
+        signal: task.controller.signal,
+        cacheScope: { businessProfileId: selected!.id },
+      });
       if (!operation.current(task)) return;
       if (confirmed.processingStatus === "PENDING" || confirmed.processingStatus === "PROCESSING") {
         // 202: the batch exists and the worker has it, but no records are
@@ -345,6 +416,12 @@ export function ImportCsvScreen({ navigation }: any) {
       }
     } catch (err) {
       if (!operation.current(task)) return;
+      if (await baselineChoice.absorb(err)) {
+        setValidation(null);
+        setAvailableFundsBaseline(null);
+        setError("The recorded balance changed. Review this import again using the latest balance.");
+        return;
+      }
       /*
         THE MAPPING AND THE CORRECTIONS SURVIVE, and the message says so.
 
@@ -368,6 +445,7 @@ export function ImportCsvScreen({ navigation }: any) {
 
   async function checkAllRows(openConfirmation = false) {
     if (!file || !mappingCheck.ready || needsDateAnswer) return;
+    if (openConfirmation && availableFundsBaseline && !baselineChoice.check()) return;
     const task = operation.begin();
     if (!task) return;
     setBusy(true);
@@ -380,7 +458,18 @@ export function ImportCsvScreen({ navigation }: any) {
       form.append("corrections", JSON.stringify(correctionsPayload(corrections)));
       if (recordType === "mixed") form.append("mixedStrategy", mixedStrategy);
       if (dateFormat) form.append("dateFormat", dateFormat);
-      const preview = await api.upload<{ validation?: ImportValidation; dateFormatAmbiguous?: boolean; categorySuggestions?: ImportCategorySuggestion[]; categorySuggestionsTruncated?: boolean }>("/records/csv-imports/preview", form, task.controller.signal);
+      if (baselineChoice.required && baselineChoice.decision !== null) {
+        const baseline = baselineChoice.requestFields();
+        form.append("includedInAvailableFundsBaseline", String(baseline.includedInAvailableFundsBaseline));
+        form.append("availableFundsBaselineAt", baseline.availableFundsBaselineAt);
+      }
+      const preview = await api.upload<{
+        validation?: ImportValidation;
+        dateFormatAmbiguous?: boolean;
+        categorySuggestions?: ImportCategorySuggestion[];
+        categorySuggestionsTruncated?: boolean;
+        availableFundsBaseline?: AvailableFundsBaselineSummary | null;
+      }>("/records/csv-imports/preview", form, task.controller.signal);
       if (!operation.current(task)) return;
       if (latestReviewSignature.current !== reviewSignature) {
         setValidation(null);
@@ -393,14 +482,44 @@ export function ImportCsvScreen({ navigation }: any) {
         setError("Check the column mapping and date format, then try again.");
         return;
       }
+      const nextBaseline = preview.availableFundsBaseline ?? null;
+      const baselineIdentityChanged = Boolean(
+        nextBaseline
+        && (
+          !availableFundsBaseline
+          || nextBaseline.baselineAt !== availableFundsBaseline.baselineAt
+          || nextBaseline.baselineDate !== availableFundsBaseline.baselineDate
+        ),
+      );
+      if (baselineIdentityChanged || !nextBaseline) {
+        baselineChoice.setDecision(null);
+        setCorrections((previous) => withoutBaselineOverrides(previous));
+      }
+
       setValidation(preview.validation);
       setCategorySuggestions(preview.categorySuggestions ?? []);
       setCategorySuggestionsTruncated(preview.categorySuggestionsTruncated === true);
+      setAvailableFundsBaseline(nextBaseline);
       setReviewOrder(problemsFirst(analysed).map((row) => row.rowNumber));
       setStep("review");
-      if (openConfirmation && preview.validation.validRows > 0) setConfirmOpen(true);
+      if (baselineIdentityChanged && availableFundsBaseline) {
+        setError("The recorded balance changed. Choose again before importing.");
+      }
+      if (
+        openConfirmation
+        && preview.validation.validRows > 0
+        && (!nextBaseline || (!baselineIdentityChanged && baselineChoice.decision !== null))
+      ) setConfirmOpen(true);
     } catch (err) {
-      if (operation.current(task)) setError(describeActionFailure(toLoadFailure(err), "Your mapping and row changes are still here."));
+      if (operation.current(task)) {
+        if (await baselineChoice.absorb(err)) {
+          setValidation(null);
+          setAvailableFundsBaseline(null);
+          setError("The recorded balance changed. Review this import again using the latest balance.");
+        } else {
+          setError(describeActionFailure(toLoadFailure(err), "Your mapping and row changes are still here."));
+        }
+      }
     } finally {
       if (operation.current(task)) setBusy(false);
       operation.finish(task);
@@ -410,7 +529,26 @@ export function ImportCsvScreen({ navigation }: any) {
   function correct(rowNumber: number, field: CorrectableField, value: string) {
     setValidation(null);
     setCategorySuggestions((previous) => previous.filter((suggestion) => suggestion.row !== rowNumber));
-    setCorrections((prev) => ({ ...prev, [rowNumber]: { ...prev[rowNumber], [field]: value } }));
+    setCorrections((previous) => {
+      const current: RowCorrection = { ...previous[rowNumber], [field]: value };
+      delete current.includedInAvailableFundsBaseline;
+      return { ...previous, [rowNumber]: current };
+    });
+  }
+
+  function correctBaseline(rowNumber: number, value: boolean | undefined) {
+    setValidation(null);
+    setCorrections((previous) => {
+      const current: RowCorrection = { ...(previous[rowNumber] ?? {}) };
+      if (value === undefined) delete current.includedInAvailableFundsBaseline;
+      else current.includedInAvailableFundsBaseline = value;
+      if (Object.keys(current).length === 0) {
+        const next = { ...previous };
+        delete next[rowNumber];
+        return next;
+      }
+      return { ...previous, [rowNumber]: current };
+    });
   }
 
   // ---- What is on screen right now -------------------------------------
@@ -638,6 +776,17 @@ export function ImportCsvScreen({ navigation }: any) {
                 ) : null}
               </Card>
 
+              {availableFundsBaseline ? (
+                <Card>
+                  <AvailableFundsBaselineChoice
+                    choice={baselineChoice}
+                    disabled={busy}
+                    question="Were these rows already included in the recorded balance?"
+                    help={`${availableFundsBaseline.matchingRowCount} valid row${availableFundsBaseline.matchingRowCount === 1 ? " uses" : "s use"} the same date as the latest balance you recorded. Choose the answer that applies by default. Open a matching row to change an exception.`}
+                  />
+                </Card>
+              ) : null}
+
               {typeSplit ? (
                 <Callout tone={typeSplit.unknown > 0 ? "warn" : "info"}>
                   In these rows: {typeSplit.sales} sales · {typeSplit.expenses} expenses
@@ -685,6 +834,18 @@ export function ImportCsvScreen({ navigation }: any) {
               row={item}
               onCorrect={(field, value) => correct(item.rowNumber, field, value)}
               corrected={corrections[item.rowNumber] ?? {}}
+              baseline={
+                availableFundsBaseline
+                && baselineChoice.decision !== null
+                && item.problem === null
+                && parseCsvDate(item.values.date, dateRules.dateFormat) === availableFundsBaseline.baselineDate
+                  ? {
+                      defaultDecision: baselineChoice.decision,
+                      override: corrections[item.rowNumber]?.includedInAvailableFundsBaseline,
+                      onChange: (value) => correctBaseline(item.rowNumber, value),
+                    }
+                  : undefined
+              }
             />
           )}
           ListFooterComponent={

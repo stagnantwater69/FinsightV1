@@ -143,7 +143,7 @@ describe("Recovery Target — terminology and freshness (plan §6/§8.1)", () =>
     renderPage();
     expect(
       screen.getByText(
-        /Your Sales Coverage Target compares recorded sales references with your expected monthly/,
+        /Your Sales Coverage Target compares recorded sales references with your active monthly expense basis/,
       ),
     ).toBeInTheDocument();
   });
@@ -158,6 +158,30 @@ describe("Recovery Target — terminology and freshness (plan §6/§8.1)", () =>
     expect(
       await screen.findByText(/As of Jan 20, 2026, Asia\/Manila time/),
     ).toBeInTheDocument();
+  });
+
+  it("shows when the monthly basis comes from a complete previous month", async () => {
+    currentRecovery = {
+      ...recovery,
+      contractVersion: 2,
+      monthlyExpenseBasis: {
+        amount: 20000,
+        source: "previous_complete_month",
+        sourceMonth: "2025-12",
+        ownerEstimate: 18000,
+        eligibleRecordCount: 7,
+        recordsCompleteThroughMonth: "2025-12",
+        recordsCompleteThroughConfirmedAt: "2026-01-02T00:00:00.000Z",
+      },
+    };
+
+    renderPage();
+
+    expect(
+      await screen.findAllByText(
+        /From 7 confirmed expense records in December 2025/,
+      ),
+    ).not.toHaveLength(0);
   });
 
   it('falls back to the plain "Today" label when asOfDate/timezone are missing', async () => {
@@ -175,6 +199,25 @@ describe("Recovery Target — terminology and freshness (plan §6/§8.1)", () =>
     expect(
       await screen.findByText("No sales recorded yet this month"),
     ).toBeInTheDocument();
+  });
+
+  it("does not render a standalone empty card when the month has no records", async () => {
+    currentRecovery = {
+      ...recovery,
+      status: "no_current_month_data",
+      monthHasNoRecords: true,
+      latestSaleDate: "2026-09-09",
+    };
+    renderPage();
+
+    expect(
+      await screen.findByText("No sales recorded yet this month"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", {
+        name: "Nothing to measure yet this month",
+      }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders the covered treatment with its own copy", async () => {
@@ -227,7 +270,7 @@ describe("Recovery Target — terminology and freshness (plan §6/§8.1)", () =>
     renderPage();
 
     const progress = await screen.findByRole("progressbar", {
-      name: "Month-to-date coverage of expected monthly expenses",
+      name: "Month-to-date coverage of monthly expense basis",
     });
     expect(progress).toHaveAttribute("aria-valuenow", "100");
   });
@@ -243,7 +286,7 @@ describe("Recovery Target — hypothetical scenario", () => {
       0,
     );
     expect(
-      screen.queryByText("Hypothetical — not saved."),
+      screen.queryByText("Hypothetical. Not saved."),
     ).not.toBeInTheDocument();
   });
 
@@ -253,7 +296,7 @@ describe("Recovery Target — hypothetical scenario", () => {
       await screen.findByRole("button", { name: "Try a scenario" }),
     );
 
-    const input = screen.getByLabelText(/Assumed expected monthly expenses/);
+    const input = screen.getByLabelText(/Assumed monthly expense basis/);
     await userEvent.clear(input);
     await userEvent.type(input, "15000");
     await userEvent.click(
@@ -261,7 +304,7 @@ describe("Recovery Target — hypothetical scenario", () => {
     );
 
     expect(
-      await screen.findByText("Hypothetical — not saved."),
+      await screen.findByText("Hypothetical. Not saved."),
     ).toBeInTheDocument();
     // The assumed value is shown alongside the result — also repeated in the
     // new current-vs-hypothetical comparison row, so more than one match is expected.
@@ -280,14 +323,14 @@ describe("Recovery Target — hypothetical scenario", () => {
       await screen.findByRole("button", { name: "Try a scenario" }),
     );
 
-    const input = screen.getByLabelText(/Assumed expected monthly expenses/);
+    const input = screen.getByLabelText(/Assumed monthly expense basis/);
     await userEvent.clear(input);
     await userEvent.type(input, "15000");
     await userEvent.click(
       screen.getByRole("button", { name: "See hypothetical target" }),
     );
 
-    await screen.findByText("Hypothetical — not saved.");
+    await screen.findByText("Hypothetical. Not saved.");
 
     expect(postCalls).toHaveLength(1);
     expect(postCalls[0]).toEqual({
@@ -308,7 +351,7 @@ describe("Recovery Target — hypothetical scenario", () => {
       await screen.findByRole("button", { name: "Try a scenario" }),
     );
 
-    const input = screen.getByLabelText(/Assumed expected monthly expenses/);
+    const input = screen.getByLabelText(/Assumed monthly expense basis/);
     // fireEvent rather than userEvent.type: a number input strips a bare "-"
     // keystroke-by-keystroke under userEvent's simulated typing, so it never
     // reaches a negative value the way a real browser's autofill/paste would.
@@ -339,7 +382,7 @@ describe("Recovery Target — hypothetical scenario", () => {
     );
 
     const input = screen.getByLabelText(
-      /Assumed expected monthly expenses/,
+      /Assumed monthly expense basis/,
     ) as HTMLInputElement;
     const form = input.closest("form")!;
 
@@ -368,7 +411,7 @@ describe("Recovery Target — hypothetical scenario", () => {
     });
 
     expect(
-      await screen.findByText("Hypothetical — not saved."),
+      await screen.findByText("Hypothetical. Not saved."),
     ).toBeInTheDocument();
     // Only the one request that was actually sent (10000) is reflected —
     // the blocked re-submit attempt (20000) never overwrote it.
@@ -386,7 +429,7 @@ describe("Recovery Target — hypothetical scenario", () => {
     );
 
     const input = screen.getByLabelText(
-      /Assumed expected monthly expenses/,
+      /Assumed monthly expense basis/,
     ) as HTMLInputElement;
 
     await userEvent.clear(input);
@@ -394,7 +437,7 @@ describe("Recovery Target — hypothetical scenario", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "See hypothetical target" }),
     );
-    await screen.findByText("Hypothetical — not saved.");
+    await screen.findByText("Hypothetical. Not saved.");
     expect(screen.getAllByText("PHP 10,000").length).toBeGreaterThan(0);
 
     postHandler = () => ({
@@ -722,13 +765,13 @@ describe("Recovery Target — scenario deltas (plan §10.7, Phase 4)", () => {
     await userEvent.click(
       await screen.findByRole("button", { name: "Try a scenario" }),
     );
-    const input = screen.getByLabelText(/Assumed expected monthly expenses/);
+    const input = screen.getByLabelText(/Assumed monthly expense basis/);
     await userEvent.clear(input);
     await userEvent.type(input, value);
     await userEvent.click(
       screen.getByRole("button", { name: "See hypothetical target" }),
     );
-    await screen.findByText("Hypothetical — not saved.");
+    await screen.findByText("Hypothetical. Not saved.");
   }
 
   it("shows peso and percentage deltas for expected monthly expenses, remaining target, and adjusted daily target", async () => {

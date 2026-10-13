@@ -1,4 +1,4 @@
-import { api } from "../../../lib/api";
+import { api, ApiError } from "../../../lib/api";
 import type { ReceiptSection } from "../../../lib/receiptCapture";
 import type { CapturedPage, ReceiptScanResult } from "./types";
 
@@ -14,6 +14,64 @@ import type { CapturedPage, ReceiptScanResult } from "./types";
  */
 const SCAN_POLL_INTERVAL_MS = 1500;
 const SCAN_POLL_TIMEOUT_MS = 3 * 60 * 1000;
+
+/**
+ * The first polls come sooner than the steady interval. A scan that needs no
+ * provider call is usually done within a few seconds, and a fixed 1.5s wait
+ * left it sitting finished for up to that long before anyone asked.
+ */
+const SCAN_POLL_EARLY_DELAYS_MS = [500, 750, 1000, 1250] as const;
+
+/** The wait before poll number `attempt` (0-based). */
+export function scanPollDelayMs(attempt: number): number {
+  return SCAN_POLL_EARLY_DELAYS_MS[attempt] ?? SCAN_POLL_INTERVAL_MS;
+}
+
+const SCAN_POLL_EARLY_TOTAL_MS = SCAN_POLL_EARLY_DELAYS_MS.reduce((sum, ms) => sum + ms, 0);
+
+/**
+ * The ceiling counted in polls rather than in wall-clock milliseconds.
+ *
+ * A phone suspends timers when the app goes to the background, so a
+ * `Date.now()` deadline expires while nothing is being polled: three minutes
+ * in someone's pocket used to surface as "taking longer than expected" for a
+ * scan the server had already finished. Counting attempts makes the ceiling
+ * mean what it was written to mean — this many unanswered polls — on a device
+ * whose clock keeps running when its timers do not.
+ */
+export const SCAN_POLL_MAX_ATTEMPTS =
+  SCAN_POLL_EARLY_DELAYS_MS.length + Math.ceil((SCAN_POLL_TIMEOUT_MS - SCAN_POLL_EARLY_TOTAL_MS) / SCAN_POLL_INTERVAL_MS);
+
+/**
+ * How many polls in a row may fail before the read is called off.
+ *
+ * A single 500, or one request dropped as the phone hands over between cells,
+ * used to report a scan as failed that the server finishes seconds later —
+ * with the owner's photographs already uploaded and the work already done.
+ * Only a transport-level or server-side failure is retried; a 401, 403 or 404
+ * is an answer, not a blip, and repeating it would sign someone out three
+ * times over.
+ */
+export const SCAN_POLL_MAX_CONSECUTIVE_ERRORS = 3;
+
+function isTransientPollError(err: unknown): boolean {
+  if (!(err instanceof ApiError)) return false;
+  return err.status === 0 || err.status === 408 || err.status === 429 || err.status >= 500;
+}
+
+/** Waits `ms`, or resolves as soon as `signal` aborts, leaving no timer behind. */
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    if (signal?.aborted) finish();
+    else signal?.addEventListener("abort", finish, { once: true });
+  });
+}
 
 /**
  * Waits for a scan the server has accepted but not yet finished reading.
@@ -38,11 +96,24 @@ export async function pollUntilRead(initial: ReceiptScanResult, signal?: AbortSi
     return initial;
   }
 
-  const deadline = Date.now() + SCAN_POLL_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, SCAN_POLL_INTERVAL_MS));
+  let consecutiveErrors = 0;
+  for (let attempt = 0; attempt < SCAN_POLL_MAX_ATTEMPTS; attempt += 1) {
+    // After a failed poll, wait the full interval: the error tolerance below
+    // should span the same few seconds of outage it always did.
+    await delay(consecutiveErrors > 0 ? SCAN_POLL_INTERVAL_MS : scanPollDelayMs(attempt), signal);
     checkActive();
-    const next = await api.get<ReceiptScanResult>(`/records/receipts/${initial.id}`, undefined, signal);
+    let next: ReceiptScanResult;
+    try {
+      next = await api.get<ReceiptScanResult>(`/records/receipts/${initial.id}`, undefined, signal);
+    } catch (err) {
+      // An abort arrives here as a network failure; it ends the poll rather
+      // than spending a retry on a screen nobody is looking at.
+      checkActive();
+      consecutiveErrors += 1;
+      if (!isTransientPollError(err) || consecutiveErrors >= SCAN_POLL_MAX_CONSECUTIVE_ERRORS) throw err;
+      continue;
+    }
+    consecutiveErrors = 0;
     checkActive();
     if (next.processingStatus === "Failed") {
       throw new ReceiptReadFailure(
@@ -101,9 +172,11 @@ export function pagesFromSections(sections: ReceiptSection[]): CapturedPage[] {
       originalMimeType: section.originalMimeType ?? processedMimeType,
       originalWidth: section.originalWidth ?? section.width,
       originalHeight: section.originalHeight ?? section.height,
+      filterSourceUri: section.filterSourceUri,
       captureSource: section.captureSource,
       processingMode: section.processingMode,
       transformVersion: section.transformVersion,
+      cropOutcome: section.cropOutcome,
       cropCorners: section.cropCorners,
       documentConfidence: section.documentConfidence ?? section.edgeConfidence,
       ownerOverrodeLikelihood: section.ownerOverrodeLikelihood,
@@ -133,9 +206,11 @@ export function sectionsFromPages(pages: CapturedPage[]): ReceiptSection[] {
     originalHeight: page.originalHeight ?? page.height,
     processedUri: page.uri,
     processedMimeType: page.mimeType,
+    filterSourceUri: page.filterSourceUri,
     captureSource: page.captureSource,
     processingMode: page.processingMode,
     transformVersion: page.transformVersion,
+    cropOutcome: page.cropOutcome,
     cropCorners: page.cropCorners,
     documentConfidence: page.documentConfidence,
     ownerOverrodeLikelihood: page.ownerOverrodeLikelihood,
@@ -144,4 +219,13 @@ export function sectionsFromPages(pages: CapturedPage[]): ReceiptSection[] {
     height: page.height,
     quality: page.quality,
   }));
+}
+
+export function scannerFileUris(pages: readonly CapturedPage[]): (string | undefined)[] {
+  return pages.flatMap((page) => [
+    page.originalUri,
+    page.uri,
+    page.sourceAssetUri,
+    page.filterSourceUri,
+  ]);
 }

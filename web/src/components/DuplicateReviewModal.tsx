@@ -118,7 +118,7 @@ export function DuplicateReviewModal({
     if (!record) return;
     const ok = await confirm({
       title: `Discard "${record.description}"?`,
-      body: <>This deletes the record entirely. It won't appear in your history or in any insight.</>,
+      body: <>The record is deleted and leaves every figure.</>,
       confirmLabel: "Discard record",
       tone: "danger",
     });
@@ -127,7 +127,9 @@ export function DuplicateReviewModal({
     setBusy(true);
     setError(null);
     try {
-      await api.delete(pathFor(record.type, record.id));
+      await api.delete(pathFor(record.type, record.id), {
+        serverStateScope: { businessProfileId: record.businessProfileId },
+      });
       toast(`Discarded "${record.description}"`);
       onResolved();
       onClose();
@@ -153,10 +155,7 @@ export function DuplicateReviewModal({
             {other ? (
               <>It has the same date, amount and description as a record you already had.</>
             ) : (
-              <>
-                Another record in this business has the same date, the same amount and the same
-                description.
-              </>
+              <>Another record has the same date, amount and description.</>
             )}
           </Alert>
 

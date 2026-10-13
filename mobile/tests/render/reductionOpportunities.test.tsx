@@ -4,7 +4,8 @@ import { cleanup, render, waitFor, fireEvent } from '@testing-library/react-nati
 
 import * as fixtures from './support/fixtures';
 import { REDUCTION_OPPORTUNITY_QUESTION } from '../../src/lib/reductionOpportunityAsk';
-import type { ReductionOpportunity, ReductionOpportunityResponse, ReductionSimulation } from '../../src/lib/types';
+import type { DetailExpenseOverview } from '../../src/lib/expenseOverview';
+import type { AnomalyFinding, RecurringPattern, RecurringSchedule, ReductionOpportunity, ReductionOpportunityResponse, ReductionSimulation } from '../../src/lib/types';
 
 /**
  * Rendered coverage for the "Reduction opportunities" section on Expense
@@ -13,8 +14,8 @@ import type { ReductionOpportunity, ReductionOpportunityResponse, ReductionSimul
  * Mirrors render/spendingImpact.test.tsx's mocking shape: the business
  * profile and Ask FinSight surfaces are stubbed so a query for one card or
  * progressbar stays unambiguous, and `api.get` is routed by path since this
- * screen fetches five endpoints at once (expense-behavior, reduction
- * opportunities, findings, recurring patterns, recurring schedules).
+ * screen loads the shared expense-overview envelope alongside the independent
+ * findings, recurring-pattern, recurring-schedule, and available-month reads.
  *
  * Camera/permission/lifecycle behaviour is out of scope everywhere in this
  * app and is not touched by this feature.
@@ -22,6 +23,7 @@ import type { ReductionOpportunity, ReductionOpportunityResponse, ReductionSimul
 
 const apiGet = vi.fn();
 const apiPost = vi.fn();
+const apiPatch = vi.fn();
 let currentBusinessProfile = fixtures.businessProfile;
 
 /*
@@ -43,7 +45,7 @@ vi.mock('../../src/lib/api', () => ({
   api: {
     get: (...args: unknown[]) => apiGet(...args),
     post: (...args: unknown[]) => apiPost(...args),
-    patch: vi.fn(),
+    patch: (...args: unknown[]) => apiPatch(...args),
     delete: vi.fn(),
   },
   errorMessage: (err: unknown) =>
@@ -106,8 +108,37 @@ const { ExpenseBehaviorScreen } = await import(
   '../../src/screens/ExpenseBehaviorScreen'
 );
 const { ThemeProvider } = await import('../../src/context/ThemeContext');
+const {
+  beginServerStateSession,
+  clearServerStateCache,
+  invalidateServerState,
+} = await import('../../src/lib/serverStateCache');
 
 const navigation = { navigate: vi.fn(), goBack: vi.fn(), setOptions: vi.fn() };
+
+const recurringFeatureDisabled = () => Object.assign(new Error('Not found'), { status: 404 });
+
+function recurringSchedule(overrides: Partial<RecurringSchedule> = {}): RecurringSchedule {
+  return {
+    id: 31,
+    businessProfileId: fixtures.businessProfile.id,
+    categoryId: 10,
+    categoryName: 'Utilities',
+    label: 'Shop rent',
+    vendor: null,
+    intervalDays: 30,
+    expectedAmount: 12000,
+    amountTolerance: 0.15,
+    nextDueDate: '2026-09-05T00:00:00.000Z',
+    lastRecordedDate: null,
+    isActive: true,
+    sourcePatternId: null,
+    dueState: 'SCHEDULED',
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
 
 function renderScreen() {
   return render(
@@ -177,29 +208,44 @@ function reductionResponse(
   };
 }
 
+function detailOverview(
+  reduction: ReductionOpportunityResponse,
+  behavior = expenseBehavior,
+): DetailExpenseOverview {
+  return {
+    view: 'detail',
+    behavior: { status: 'available', data: behavior },
+    opportunities: { status: 'available', data: reduction },
+  };
+}
+
 /** Routes `api.get` by path, the way this screen actually calls it. */
 function mockApi({
   reduction,
   behavior = expenseBehavior,
 }: {
-  reduction: ReductionOpportunityResponse | Promise<never> | (() => Promise<ReductionOpportunityResponse>);
+  reduction: ReductionOpportunityResponse | (() => Promise<ReductionOpportunityResponse>);
   behavior?: typeof expenseBehavior;
 }) {
   apiGet.mockImplementation((path: string) => {
-    if (path === '/insights/expense-behavior') return Promise.resolve(behavior);
-    if (path === '/insights/reduction-opportunities') {
-      return typeof reduction === 'function' ? (reduction as any)() : Promise.resolve(reduction);
+    // The business has records in August, so the shared period opens there.
+    if (path === '/records/months') return Promise.resolve({ months: ['2026-08'] });
+    if (path === '/insights/expense-overview') {
+      const result = typeof reduction === 'function' ? reduction() : Promise.resolve(reduction);
+      return result.then((data) => detailOverview(data, behavior));
     }
     if (path === '/insights/findings') return Promise.resolve(emptyPage);
     if (path === '/insights/recurring-patterns') return Promise.resolve([]);
-    if (path === '/insights/recurring-schedules') return Promise.reject(new Error('not enabled'));
+    if (path === '/insights/recurring-schedules') return Promise.reject(recurringFeatureDisabled());
     return Promise.reject(new Error(`unexpected path ${path}`));
   });
 }
 
 beforeEach(() => {
+  clearServerStateCache();
   apiGet.mockReset();
   apiPost.mockReset();
+  apiPatch.mockReset().mockResolvedValue(undefined);
   prepareQuestion.mockReset();
   lastAskFinSightProps = null;
   currentBusinessProfile = fixtures.businessProfile;
@@ -211,6 +257,201 @@ beforeEach(() => {
 // reasoning as tests/render/signOutSheet.test.tsx.
 afterEach(async () => {
   await cleanup();
+  clearServerStateCache();
+});
+
+describe('Expense insight cached refresh failures', () => {
+  it('keeps the cached overview visible and names a failed refresh on Overview and Alerts', async () => {
+    beginServerStateSession('expense-overview-refresh');
+    let failOverview = false;
+    apiGet.mockImplementation((path: string) => {
+      if (path === '/records/months') return Promise.resolve({ months: ['2026-08'] });
+      if (path === '/insights/expense-overview') {
+        return failOverview
+          ? Promise.reject(new Error('Could not refresh expense insights.'))
+          : Promise.resolve(detailOverview(reductionResponse()));
+      }
+      if (path === '/insights/findings') return Promise.resolve(emptyPage);
+      if (path === '/insights/recurring-patterns') return Promise.resolve([]);
+      if (path === '/insights/recurring-schedules') return Promise.reject(recurringFeatureDisabled());
+      return Promise.reject(new Error(`unexpected path ${path}`));
+    });
+    const queries = await renderScreen();
+
+    expect(await queries.findByText('Stock')).toBeTruthy();
+    failOverview = true;
+    invalidateServerState({ pathPrefixes: ['/insights/expense-overview'] });
+
+    expect(await queries.findByText("Couldn't refresh")).toBeTruthy();
+    expect(queries.getByText('Stock')).toBeTruthy();
+    expect(queries.queryByLabelText('Loading expense insight')).toBeNull();
+
+    await fireEvent.press(queries.getByRole('tab', { name: 'Alerts' }));
+    expect(queries.getByText("Couldn't refresh")).toBeTruthy();
+  });
+
+  it('keeps cached recurring suggestions visible and names their failed refresh', async () => {
+    beginServerStateSession('recurring-pattern-refresh');
+    const candidate: RecurringPattern = {
+      id: 7,
+      description: 'Power bill',
+      vendor: 'Electric cooperative',
+      intervalDays: 30,
+      expectedAmount: 1800,
+      confidence: 0.9,
+      nextExpectedDate: '2026-09-15',
+      status: 'CANDIDATE',
+      category: { name: 'Utilities' },
+    };
+    let failPatterns = false;
+    apiGet.mockImplementation((path: string) => {
+      if (path === '/records/months') return Promise.resolve({ months: ['2026-08'] });
+      if (path === '/insights/expense-overview') return Promise.resolve(detailOverview(reductionResponse()));
+      if (path === '/insights/findings') return Promise.resolve(emptyPage);
+      if (path === '/insights/recurring-patterns') {
+        return failPatterns
+          ? Promise.reject(new Error('Could not refresh recurring suggestions.'))
+          : Promise.resolve([candidate]);
+      }
+      if (path === '/insights/recurring-schedules') return Promise.reject(recurringFeatureDisabled());
+      return Promise.reject(new Error(`unexpected path ${path}`));
+    });
+    const queries = await renderScreen();
+
+    await queries.findByRole('tab', { name: 'Recurring' });
+    await fireEvent.press(queries.getByRole('tab', { name: 'Recurring' }));
+    expect(await queries.findByText('Power bill')).toBeTruthy();
+
+    failPatterns = true;
+    invalidateServerState({ pathPrefixes: ['/insights/recurring-patterns'] });
+
+    expect(await queries.findByText("Couldn't refresh")).toBeTruthy();
+    expect(queries.getByText('Power bill')).toBeTruthy();
+  });
+
+  it('keeps the cached recurring agenda visible with a retry after a transient refresh failure', async () => {
+    beginServerStateSession('recurring-schedule-refresh');
+    let failSchedules = false;
+    apiGet.mockImplementation((path: string) => {
+      if (path === '/records/months') return Promise.resolve({ months: ['2026-08'] });
+      if (path === '/insights/expense-overview') return Promise.resolve(detailOverview(reductionResponse()));
+      if (path === '/insights/findings') return Promise.resolve(emptyPage);
+      if (path === '/insights/recurring-patterns') return Promise.resolve([]);
+      if (path === '/insights/recurring-schedules') {
+        return failSchedules
+          ? Promise.reject(Object.assign(new Error('Could not refresh repeating payments.'), { status: 503 }))
+          : Promise.resolve([recurringSchedule()]);
+      }
+      return Promise.reject(new Error(`unexpected path ${path}`));
+    });
+    const queries = await renderScreen();
+
+    await fireEvent.press(await queries.findByRole('tab', { name: 'Recurring' }));
+    expect(await queries.findByText('Shop rent')).toBeTruthy();
+
+    failSchedules = true;
+    invalidateServerState({ pathPrefixes: ['/insights/recurring-schedules'] });
+
+    expect(await queries.findByText("Couldn't refresh")).toBeTruthy();
+    expect(queries.getByText('Shop rent')).toBeTruthy();
+
+    failSchedules = false;
+    await fireEvent.press(queries.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(queries.queryByText("Couldn't refresh")).toBeNull());
+    expect(queries.getByText('Shop rent')).toBeTruthy();
+  });
+
+  it('does not report a clean Alerts state when an empty cached findings refresh fails', async () => {
+    beginServerStateSession('finding-refresh');
+    let failFindings = false;
+    apiGet.mockImplementation((path: string) => {
+      if (path === '/records/months') return Promise.resolve({ months: ['2026-08'] });
+      if (path === '/insights/expense-overview') return Promise.resolve(detailOverview(reductionResponse()));
+      if (path === '/insights/findings') {
+        return failFindings
+          ? Promise.reject(new Error('Could not refresh findings.'))
+          : Promise.resolve(emptyPage);
+      }
+      if (path === '/insights/recurring-patterns') return Promise.resolve([]);
+      if (path === '/insights/recurring-schedules') return Promise.reject(recurringFeatureDisabled());
+      return Promise.reject(new Error(`unexpected path ${path}`));
+    });
+    const queries = await renderScreen();
+
+    await queries.findByRole('tab', { name: 'Alerts' });
+    await fireEvent.press(queries.getByRole('tab', { name: 'Alerts' }));
+    expect(await queries.findByText('Nothing needs a look')).toBeTruthy();
+
+    failFindings = true;
+    invalidateServerState({ pathPrefixes: ['/insights/findings'] });
+
+    expect(await queries.findByText("Couldn't refresh")).toBeTruthy();
+    expect(queries.getByText(/Could not refresh findings\./)).toBeTruthy();
+    expect(queries.getByText('Updated just now')).toBeTruthy();
+    expect(queries.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(queries.queryByText('Nothing needs a look')).toBeNull();
+    expect(queries.queryByText('No findings need review.')).toBeNull();
+
+    failFindings = false;
+    await fireEvent.press(queries.getByRole('button', { name: 'Try again' }));
+    expect(await queries.findByText('Nothing needs a look')).toBeTruthy();
+  });
+
+  it('does not render a false findings empty state when the first findings load fails', async () => {
+    beginServerStateSession('finding-initial-failure');
+    apiGet.mockImplementation((path: string) => {
+      if (path === '/records/months') return Promise.resolve({ months: ['2026-08'] });
+      if (path === '/insights/expense-overview') return Promise.resolve(detailOverview(reductionResponse()));
+      if (path === '/insights/findings') return Promise.reject(new Error('Could not load findings.'));
+      if (path === '/insights/recurring-patterns') return Promise.resolve([]);
+      if (path === '/insights/recurring-schedules') return Promise.reject(recurringFeatureDisabled());
+      return Promise.reject(new Error(`unexpected path ${path}`));
+    });
+    const queries = await renderScreen();
+
+    await fireEvent.press(await queries.findByRole('tab', { name: 'Alerts' }));
+
+    expect(await queries.findByText("Couldn't load this")).toBeTruthy();
+    expect(queries.getByText(/Could not load findings\./)).toBeTruthy();
+    expect(queries.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(queries.queryByText('No findings need review.')).toBeNull();
+    expect(queries.queryByText('Nothing needs a look')).toBeNull();
+  });
+});
+
+describe('Expense insight mutation cache scope', () => {
+  it('keeps finding review scope local to the selected business and off the request body', async () => {
+    const finding: AnomalyFinding = {
+      id: 77,
+      expenseRecordId: 101,
+      type: 'POSSIBLE_DUPLICATE',
+      severity: 'MEDIUM',
+      score: 0.8,
+      title: 'Possible duplicate purchase',
+      reasons: ['Same amount and date'],
+      status: 'OPEN',
+      detectedAt: '2026-08-20T02:00:00.000Z',
+      feedback: null,
+    };
+    apiGet.mockImplementation((path: string) => {
+      if (path === '/records/months') return Promise.resolve({ months: ['2026-08'] });
+      if (path === '/insights/expense-overview') return Promise.resolve(detailOverview(reductionResponse()));
+      if (path === '/insights/findings') return Promise.resolve({ items: [finding], nextCursor: null });
+      if (path === '/insights/recurring-patterns') return Promise.resolve([]);
+      if (path === '/insights/recurring-schedules') return Promise.reject(recurringFeatureDisabled());
+      return Promise.reject(new Error(`unexpected path ${path}`));
+    });
+    const queries = await renderScreen();
+
+    await fireEvent.press(await queries.findByRole('tab', { name: /Alerts/ }));
+    await fireEvent.press(await queries.findByRole('button', { name: 'It is a duplicate' }));
+
+    await waitFor(() => expect(apiPatch).toHaveBeenCalledWith(
+      '/insights/findings/77/review',
+      { status: 'CONFIRMED', feedback: 'DUPLICATE' },
+      { cacheScope: { businessProfileId: currentBusinessProfile.id } },
+    ));
+  });
 });
 
 describe('Reduction opportunities — loading', () => {
@@ -226,13 +467,13 @@ describe('Reduction opportunities — loading', () => {
     const queries = await renderScreen();
 
     expect(
-      await queries.findByLabelText('Loading reduction opportunities'),
+      await queries.findByLabelText('Loading expense insight'),
     ).toBeTruthy();
 
     resolve(reductionResponse());
     await waitFor(() =>
       expect(
-        queries.queryByLabelText('Loading reduction opportunities'),
+        queries.queryByLabelText('Loading expense insight'),
       ).toBeNull(),
     );
   });
@@ -244,6 +485,12 @@ describe('Reduction opportunities — populated', () => {
     const queries = await renderScreen();
 
     expect(await queries.findByText('Reduction opportunities')).toBeTruthy();
+    expect(apiGet).toHaveBeenCalledWith(
+      '/insights/expense-overview',
+      expect.objectContaining({ businessProfileId: currentBusinessProfile.id, view: 'detail' }),
+    );
+    expect(apiGet).not.toHaveBeenCalledWith('/insights/expense-behavior', expect.anything());
+    expect(apiGet).not.toHaveBeenCalledWith('/insights/reduction-opportunities', expect.anything());
     expect(await queries.findByText('High priority')).toBeTruthy();
     expect(queries.getByText('Strong confidence')).toBeTruthy();
     expect(queries.getByText('Stock')).toBeTruthy();
@@ -472,35 +719,66 @@ describe('Reduction opportunities — insufficient history', () => {
   });
 });
 
-describe('Reduction opportunities — API error', () => {
-  it('shows the error with a retry that refetches', async () => {
+describe('Reduction opportunities — independently unavailable panels', () => {
+  it('shows an unavailable opportunity panel with a retry that refetches the overview', async () => {
     apiGet.mockImplementation((path: string) => {
-      if (path === '/insights/reduction-opportunities') {
-        return Promise.reject(new Error('Could not load reduction opportunities.'));
+      if (path === '/records/months') return Promise.resolve({ months: ['2026-08'] });
+      if (path === '/insights/expense-overview') {
+        return Promise.resolve({
+          view: 'detail',
+          behavior: { status: 'available', data: expenseBehavior },
+          opportunities: { status: 'unavailable', data: null },
+        } satisfies DetailExpenseOverview);
       }
-      if (path === '/insights/expense-behavior') return Promise.resolve(expenseBehavior);
       if (path === '/insights/findings') return Promise.resolve(emptyPage);
       if (path === '/insights/recurring-patterns') return Promise.resolve([]);
-      if (path === '/insights/recurring-schedules') return Promise.reject(new Error('not enabled'));
+      if (path === '/insights/recurring-schedules') return Promise.reject(recurringFeatureDisabled());
       return Promise.reject(new Error(`unexpected path ${path}`));
     });
     const queries = await renderScreen();
 
     expect(
-      await queries.findByText('Could not load reduction opportunities.'),
+      await queries.findByText('Reduction opportunities are unavailable right now.'),
     ).toBeTruthy();
 
     apiGet.mockImplementation((path: string) => {
-      if (path === '/insights/reduction-opportunities') return Promise.resolve(reductionResponse());
-      if (path === '/insights/expense-behavior') return Promise.resolve(expenseBehavior);
+      if (path === '/records/months') return Promise.resolve({ months: ['2026-08'] });
+      if (path === '/insights/expense-overview') {
+        return Promise.resolve(detailOverview(reductionResponse()));
+      }
       if (path === '/insights/findings') return Promise.resolve(emptyPage);
       if (path === '/insights/recurring-patterns') return Promise.resolve([]);
-      if (path === '/insights/recurring-schedules') return Promise.reject(new Error('not enabled'));
+      if (path === '/insights/recurring-schedules') return Promise.reject(recurringFeatureDisabled());
       return Promise.reject(new Error(`unexpected path ${path}`));
     });
     await fireEvent.press(queries.getByRole('button', { name: 'Try again' }));
 
     expect(await queries.findByText('High priority')).toBeTruthy();
+  });
+
+  it('keeps available opportunities usable when expense behavior is unavailable', async () => {
+    apiGet.mockImplementation((path: string) => {
+      if (path === '/records/months') return Promise.resolve({ months: ['2026-08'] });
+      if (path === '/insights/expense-overview') {
+        return Promise.resolve({
+          view: 'detail',
+          behavior: { status: 'unavailable', data: null },
+          opportunities: { status: 'available', data: reductionResponse() },
+        } satisfies DetailExpenseOverview);
+      }
+      if (path === '/insights/findings') return Promise.resolve(emptyPage);
+      if (path === '/insights/recurring-patterns') return Promise.resolve([]);
+      if (path === '/insights/recurring-schedules') return Promise.reject(recurringFeatureDisabled());
+      return Promise.reject(new Error(`unexpected path ${path}`));
+    });
+
+    const queries = await renderScreen();
+
+    expect(await queries.findByText('Expense analysis is unavailable right now.')).toBeTruthy();
+    expect(await queries.findByText('High priority')).toBeTruthy();
+    expect(
+      queries.getByRole('button', { name: 'View related records for Stock' }),
+    ).toBeTruthy();
   });
 });
 
@@ -510,7 +788,7 @@ describe('Reduction opportunities — historical window', () => {
    * driving DropdownPill/OptionSheet to reach the anchor-month option would
    * make this test about that control's mechanics rather than about what the
    * section does with `historical`, which is the actual contract being
-   * proven here — the screen already wires `historical={endDate !== null}`
+   * proven here — the screen names its period in the shared selector
    * and that wiring is a one-line fact, not one worth a second harness pass.
    */
   it('labels the period as historical, using the response\'s own period, when the window is not "now"', async () => {
@@ -627,7 +905,8 @@ describe('Reduction opportunities — Simulate reduction', () => {
     expect(apiPost).toHaveBeenCalledWith('/insights/reduction-simulation', {
       businessProfileId: currentBusinessProfile.id,
       categoryId: 10,
-      periodDays: 30,
+      period: 'month',
+      month: '2026-08',
       reduction: { kind: 'percent', value: 15 },
     });
 
@@ -645,14 +924,15 @@ describe('Reduction opportunities — Simulate reduction', () => {
     const queries = await openSheetOnStock();
 
     await queries.findByText('Simulate a reduction');
-    await fireEvent.press(queries.getByRole('button', { name: 'Peso amount' }));
+    await fireEvent.press(queries.getByRole('button', { name: 'Reduce by, Peso amount' }));
     await fireEvent.changeText(queries.getByLabelText('Reduction amount, in Philippine pesos'), '1000');
     await fireEvent.press(queries.getByRole('button', { name: 'Simulate' }));
 
     expect(apiPost).toHaveBeenCalledWith('/insights/reduction-simulation', {
       businessProfileId: currentBusinessProfile.id,
       categoryId: 10,
-      periodDays: 30,
+      period: 'month',
+      month: '2026-08',
       reduction: { kind: 'amount', value: 1000 },
     });
     expect(await queries.findByText('Hypothetical result — nothing was changed or saved')).toBeTruthy();
@@ -673,7 +953,7 @@ describe('Reduction opportunities — Simulate reduction', () => {
     const queries = await openSheetOnStock();
     await queries.findByText('Simulate a reduction');
 
-    await fireEvent.press(queries.getByRole('button', { name: 'Peso amount' }));
+    await fireEvent.press(queries.getByRole('button', { name: 'Reduce by, Peso amount' }));
     // The Stock card's own evidence total is 8400.
     await fireEvent.changeText(queries.getByLabelText('Reduction amount, in Philippine pesos'), '9000');
     await fireEvent.press(queries.getByRole('button', { name: 'Simulate' }));

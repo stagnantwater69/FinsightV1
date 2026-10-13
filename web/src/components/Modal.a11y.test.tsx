@@ -31,6 +31,10 @@ vi.mock("../context/ExpenseCategoryContext", () => ({
   }),
 }));
 vi.mock("./Toast", () => ({ useToast: () => vi.fn() }));
+// The record forms read the business timezone to know what "today" is.
+vi.mock("../context/BusinessProfileContext", () => ({
+  useBusinessProfiles: () => ({ selected: { id: 1, timezone: "Asia/Manila" } }),
+}));
 
 // jsdom does not implement <dialog>'s showModal()/close() (see Modal.tsx);
 // toggling the `open` attribute is all Modal.tsx's own effect relies on.

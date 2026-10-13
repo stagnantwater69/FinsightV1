@@ -1,9 +1,10 @@
 import { execSync } from "node:child_process";
+import { PrismaClient } from "@prisma/client";
 
 // Runs once before the whole suite. Applies the real migration history to the
 // throwaway test database, so the schema under test is exactly the schema that
 // ships — not a `db push` approximation of it.
-export default function globalSetup() {
+export default async function globalSetup() {
   const url = process.env.DATABASE_URL;
 
   if (!url) {
@@ -28,6 +29,23 @@ export default function globalSetup() {
     );
   }
 
+  const db = new PrismaClient({ datasources: { db: { url: directUrl } } });
+  try {
+    // Plain PostgreSQL test images need the denied client roles before migrations revoke their grants.
+    await db.$executeRaw`
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+          CREATE ROLE anon NOLOGIN;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+          CREATE ROLE authenticated NOLOGIN;
+        END IF;
+      END $$
+    `;
+  } finally {
+    await db.$disconnect();
+  }
+
   execSync("npx prisma migrate deploy", {
     stdio: "inherit",
     env: { ...process.env, DATABASE_URL: url, DIRECT_URL: directUrl },
@@ -35,9 +53,15 @@ export default function globalSetup() {
 }
 
 export function assertLocalTestDatabase(name: string, url: string): void {
-  const isLocal = /@(localhost|127\.0\.0\.1|host\.docker\.internal)[:/]/.test(url);
-  const namedTest = /finsight_test/.test(url);
-  if (!isLocal || !namedTest) {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Refusing to run tests: ${name} is not a valid local test database URL.`);
+  }
+  const isLocal = new Set(["localhost", "127.0.0.1", "host.docker.internal"]).has(parsed.hostname);
+  const namedTest = parsed.pathname === "/finsight_test";
+  if (!isLocal || !namedTest || !["postgres:", "postgresql:"].includes(parsed.protocol)) {
     throw new Error(
       `Refusing to run tests against ${redact(url)}\n` +
         `The test suite truncates all tables. ${name} must point at a local database named finsight_test.\n` +

@@ -211,3 +211,31 @@ export function useMenuKeys(itemSelector = "[role='menuitem']") {
     [itemSelector],
   );
 }
+
+/** Adds WAI-ARIA horizontal tab keys and activates through the existing click path. */
+export function useHorizontalTabKeys(itemSelector = "[role='tab']") {
+  return useCallback(
+    (event: React.KeyboardEvent<HTMLElement>) => {
+      const keys = ["ArrowRight", "ArrowLeft", "Home", "End"];
+      if (!keys.includes(event.key)) return;
+
+      const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(itemSelector)).filter(
+        (tab) => !tab.hasAttribute("disabled") && tab.getAttribute("aria-disabled") !== "true",
+      );
+      if (tabs.length === 0) return;
+
+      event.preventDefault();
+      const current = tabs.indexOf(document.activeElement as HTMLElement);
+      let next = current;
+
+      if (event.key === "ArrowRight") next = current < 0 ? 0 : (current + 1) % tabs.length;
+      else if (event.key === "ArrowLeft") next = current < 0 ? tabs.length - 1 : (current - 1 + tabs.length) % tabs.length;
+      else if (event.key === "Home") next = 0;
+      else next = tabs.length - 1;
+
+      tabs[next]?.focus();
+      tabs[next]?.click();
+    },
+    [itemSelector],
+  );
+}

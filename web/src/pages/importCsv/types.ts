@@ -20,8 +20,24 @@ export interface PreviewResult {
    */
   dateFormatAmbiguous?: boolean;
   suggestedMapping?: Partial<Record<"date" | "description" | "amount" | "category" | "vendor" | "recordType", string>>;
+  /** Headings FinSight recognised but has no field for, and whether the file looks like sales or expenses. */
+  columnDetection?: {
+    unmapped: { header: string; field: ExtraField | null }[];
+    suggestedRecordType: "expense" | "sales" | null;
+  };
   categorySuggestions?: { row: number; categoryId: number; categoryName: string; source: "history" }[];
   categorySuggestionsTruncated?: boolean;
+  /** Rows past the 50-row sample that need review (skipped, duplicate, uncategorised). */
+  reviewRows?: { row: number; values: Record<string, string> }[];
+  reviewRowsTruncated?: boolean;
+  /** The category each on-screen expense row will be saved under. */
+  rowCategories?: RowCategory[];
+  categorySummary?: {
+    fromFile: number;
+    suggested: number;
+    uncategorised: number;
+    newCategories: { name: string; rows: number }[];
+  };
   validation?: {
     validRows: number;
     invalidRows: number;
@@ -31,6 +47,22 @@ export interface PreviewResult {
     duplicateRows?: number[];
     duplicateRowsTruncated?: boolean;
   };
+  /** Same-day rows that need an explicit relationship to the current balance anchor. */
+  availableFundsBaseline?: {
+    baselineAt: string;
+    baselineDate: string;
+    matchingRowCount: number;
+  } | null;
+}
+
+/**
+ * The first preview also creates the private, owner-scoped upload that every
+ * later check and confirm reuses. Keeping this separate from PreviewResult
+ * makes the upload boundary explicit: validation responses do not need to
+ * mint or echo another handle.
+ */
+export interface StagedPreviewResult extends PreviewResult {
+  stagedUploadId: string;
 }
 
 export interface ImportResult {
@@ -64,33 +96,32 @@ export type ImportRecordType = "expense" | "sales" | "mixed";
 /** How a mixed file says which row is which. */
 export type MixedStrategy = "column" | "sign";
 
-/**
- * The server's row rules, mirrored so a bad row can be shown and fixed
- * BEFORE the import runs rather than reported after it.
- *
- * This is a deliberate second copy of csvImport.service's validateRows, for
- * the same reason the receipt split editor re-checks its own arithmetic: the
- * server is still the authority and re-runs every one of these checks on the
- * corrected value, so the worst a drift here can do is show the owner a
- * problem that turns out not to be one (or miss one, which the server then
- * reports exactly as it does today). It can never let a bad row through.
- * The checks and their order — description, then date, then amount, then
- * category — match the server's so the reported reason is the same one.
- */
+/** A recognised heading FinSight has no field for. */
+export type ExtraField = "paymentMethod" | "notes" | "reference" | "quantity" | "customer" | "unitPrice";
+
+/** Where a row's category came from — see backend lib/importCategoriser. */
+export type RowCategorySource = "file" | "history" | "suggested" | "none";
+
+export interface RowCategory {
+  row: number;
+  name: string;
+  source: RowCategorySource;
+  /** Not a category of this business yet; confirming the import creates it. */
+  isNew: boolean;
+  confidence: "high" | "medium" | "low";
+}
+
+/** Result of checking one row on the client, before the server re-checks it. */
 export type RowProblem = { field: MappedField; reason: string } | null;
 
 /** FinSight's own field names — the things a CSV column can become. */
 export type MappedField = "Date" | "Description" | "Category" | "Vendor" | "Amount";
 
-export interface MappedColumn {
-  /** FinSight's own field name — the thing this column becomes on import. */
-  field: MappedField;
-  /** The CSV header currently feeding it, or "" when unmapped. */
-  value: string;
-  onChange: (v: string) => void;
-  /** True while this is still FinSight's guess rather than the owner's choice. */
-  auto: boolean;
-  align?: "right";
-  /** Leaving it unmapped is a valid choice — currently Vendor alone. */
-  optional?: boolean;
-}
+/** The owner's edits to one row, keyed by spreadsheet row number. */
+export type RowCorrection = Partial<Record<MappedField, string>> & {
+  exclude?: boolean;
+  includedInAvailableFundsBaseline?: boolean;
+};
+
+/** Which CSV heading feeds each FinSight field; "" when none does. */
+export type ColumnChoice = Record<"date" | "description" | "amount" | "category" | "vendor", string>;

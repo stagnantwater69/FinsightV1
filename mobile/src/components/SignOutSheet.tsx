@@ -4,8 +4,7 @@ import { useAuth } from "../context/AuthContext";
 import * as haptics from "../lib/haptics";
 
 /**
- * THE sign-out confirmation — every "sign out of this phone" in the app goes
- * through this one sheet.
+ * One confirmation path for local and account-wide sign-out.
  *
  * WHY IT EXISTS AS A COMPONENT. More had a confirmed sign-out; the account
  * screen had a bare `onPress={logout}` that ended the session on the tap,
@@ -21,16 +20,22 @@ import * as haptics from "../lib/haptics";
  * to: history died with the tree. If that gating ever changes, this comment
  * is the contract that broke.
  *
- * FAILURE IS SHOWN, NOT SWALLOWED. `logout()` itself already treats a failed
- * server call as non-fatal (the local session goes regardless), so the only
- * way to land in the catch below is the local teardown itself failing — rare,
- * but the one case where the owner believes they are signed out and are not.
- * The sheet stays open and says so rather than closing over a live session.
+ * Local cleanup failures and unconfirmed global revocation both leave the
+ * sheet open with an accurate retry path.
  */
-export function SignOutSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
-  const { logout } = useAuth();
+export function SignOutSheet({
+  visible,
+  onClose,
+  scope = "local",
+}: {
+  visible: boolean;
+  onClose: () => void;
+  scope?: "local" | "all";
+}) {
+  const { logout, logoutEverywhere } = useAuth();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const everywhere = scope === "all";
   /**
    * The re-entrancy guard, and it has to be a ref rather than the `busy`
    * state beside it.
@@ -53,23 +58,31 @@ export function SignOutSheet({ visible, onClose }: { visible: boolean; onClose: 
     setBusy(true);
     setError(null);
     try {
-      await logout();
+      await (everywhere ? logoutEverywhere() : logout());
       // On success the signed-in tree — this sheet included — unmounts as
       // profile clears; nothing else to do.
     } catch {
       haptics.failed();
       running.current = false;
       setBusy(false);
-      setError("Signing out didn't finish. Nothing was lost — try again.");
+      setError(
+        everywhere
+          ? "Signing out on all devices didn't finish. This phone still shows your account, but other devices may already be unable to renew their sessions. Check your connection and try again."
+          : "Signing out didn't finish. You're still signed in on this phone. Try again.",
+      );
     }
   }
 
   return (
     <ConfirmSheet
       visible={visible}
-      title="Sign out of FinSight?"
-      body="You'll need to sign in again to access your business data."
-      confirmLabel="Sign out"
+      title={everywhere ? "Sign out on all devices?" : "Sign out of FinSight?"}
+      body={
+        everywhere
+          ? "This phone will sign out now. Other devices will need your password again after their current access expires."
+          : "You'll need to sign in again to access your business data."
+      }
+      confirmLabel={everywhere ? "Sign out everywhere" : "Sign out"}
       busy={busy}
       error={error}
       onConfirm={() => void confirm()}

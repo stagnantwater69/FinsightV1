@@ -1,7 +1,7 @@
 import React from 'react';
 import { Alert } from 'react-native';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, fireEvent, waitFor } from '@testing-library/react-native';
+import { act, render, fireEvent, waitFor } from '@testing-library/react-native';
 
 import * as fixtures from './support/fixtures';
 import type { RecoveryInsight, RecoveryScenario } from '../../src/lib/types';
@@ -21,10 +21,18 @@ const apiPost = vi.fn();
 const apiPatch = vi.fn();
 const apiPut = vi.fn();
 const apiDelete = vi.fn();
+const focusEffects = new Set<() => void | (() => void)>();
 
 vi.mock('@react-navigation/native', () => ({
   useFocusEffect: (effect: () => void | (() => void)) => {
-    React.useEffect(() => effect(), [effect]);
+    React.useEffect(() => {
+      focusEffects.add(effect);
+      const cleanup = effect();
+      return () => {
+        focusEffects.delete(effect);
+        cleanup?.();
+      };
+    }, [effect]);
   },
 }));
 
@@ -147,6 +155,7 @@ async function renderScreen() {
 }
 
 beforeEach(() => {
+  focusEffects.clear();
   apiGet.mockReset();
   apiPost.mockReset();
   apiPatch.mockReset();
@@ -159,7 +168,7 @@ describe('Recovery Target — hypothetical scenario', () => {
     const queries = await renderScreen();
     expect(await queries.findByText('See a hypothetical scenario')).toBeTruthy();
     // The real, unchanged figure is on screen before any scenario is entered.
-    expect(queries.queryByText('Hypothetical result — your real target and profile are unchanged')).toBeNull();
+    expect(queries.queryByText('Hypothetical result. Your real target and profile are unchanged.')).toBeNull();
   });
 
   it('shows current and hypothetical distinctly, labelled as not saved, with the assumed figure', async () => {
@@ -170,7 +179,7 @@ describe('Recovery Target — hypothetical scenario', () => {
     await queries.findByText('Hypothetical recovery target');
 
     await fireEvent.changeText(
-      queries.getByLabelText('Assumed expected monthly expenses, in Philippine pesos'),
+      queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
       '20000',
     );
     await fireEvent.press(queries.getByRole('button', { name: 'See hypothetical target' }));
@@ -181,11 +190,11 @@ describe('Recovery Target — hypothetical scenario', () => {
     });
 
     expect(
-      await queries.findByText('Hypothetical result — your real target and profile are unchanged'),
+      await queries.findByText('Hypothetical result. Your real target and profile are unchanged.'),
     ).toBeTruthy();
     expect(queries.getAllByText('Current (unchanged)').length).toBeGreaterThan(0);
     expect(queries.getAllByText('Hypothetical (not saved)').length).toBeGreaterThan(0);
-    expect(queries.getByText('Assumed expected monthly expenses:')).toBeTruthy();
+    expect(queries.getByText('Assumed monthly expense basis:')).toBeTruthy();
   });
 
   it('never calls a profile-update endpoint from this sheet', async () => {
@@ -194,12 +203,12 @@ describe('Recovery Target — hypothetical scenario', () => {
 
     await fireEvent.press(await queries.findByRole('button', { name: 'See a hypothetical scenario' }));
     await fireEvent.changeText(
-      queries.getByLabelText('Assumed expected monthly expenses, in Philippine pesos'),
+      queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
       '20000',
     );
     await fireEvent.press(queries.getByRole('button', { name: 'See hypothetical target' }));
 
-    await queries.findByText('Hypothetical result — your real target and profile are unchanged');
+    await queries.findByText('Hypothetical result. Your real target and profile are unchanged.');
 
     // Only the read-only scenario endpoint was ever called — nothing patched.
     expect(apiPost).toHaveBeenCalledTimes(1);
@@ -212,7 +221,7 @@ describe('Recovery Target — hypothetical scenario', () => {
 
     await fireEvent.press(await queries.findByRole('button', { name: 'See a hypothetical scenario' }));
     await fireEvent.changeText(
-      queries.getByLabelText('Assumed expected monthly expenses, in Philippine pesos'),
+      queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
       '-5',
     );
     await fireEvent.press(queries.getByRole('button', { name: 'See hypothetical target' }));
@@ -227,14 +236,14 @@ describe('Recovery Target — hypothetical scenario', () => {
 
     await fireEvent.press(await queries.findByRole('button', { name: 'See a hypothetical scenario' }));
     await fireEvent.changeText(
-      queries.getByLabelText('Assumed expected monthly expenses, in Philippine pesos'),
+      queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
       '20000',
     );
     await fireEvent.press(queries.getByRole('button', { name: 'See hypothetical target' }));
-    await queries.findByText('Hypothetical result — your real target and profile are unchanged');
+    await queries.findByText('Hypothetical result. Your real target and profile are unchanged.');
 
-    // Expected monthly expenses: 30000 -> 20000, delta -10000, -33.3%.
-    expect(queries.getAllByText('Expected monthly expenses').length).toBeGreaterThan(0);
+    // Monthly expense basis: 30000 -> 20000, delta -10000, -33.3%.
+    expect(queries.getAllByText('Monthly expense basis').length).toBeGreaterThan(0);
     expect(await queries.findByText(/−PHP 10,000\.00 \(-33\.3%\)/)).toBeTruthy();
 
     // "Estimated transactions per day" is always the explicit unavailable note, never a number.
@@ -261,11 +270,11 @@ describe('Recovery Target — hypothetical scenario', () => {
 
     await fireEvent.press(await queries.findByRole('button', { name: 'See a hypothetical scenario' }));
     await fireEvent.changeText(
-      queries.getByLabelText('Assumed expected monthly expenses, in Philippine pesos'),
+      queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
       '20000',
     );
     await fireEvent.press(queries.getByRole('button', { name: 'See hypothetical target' }));
-    await queries.findByText('Hypothetical result — your real target and profile are unchanged');
+    await queries.findByText('Hypothetical result. Your real target and profile are unchanged.');
 
     expect(await queries.findByText(/\+PHP 20,000\.00/)).toBeTruthy();
     expect(queries.queryByText(/Infinity/)).toBeNull();
@@ -289,11 +298,11 @@ describe('Recovery Target — hypothetical scenario', () => {
 
     await fireEvent.press(await queries.findByRole('button', { name: 'See a hypothetical scenario' }));
     await fireEvent.changeText(
-      queries.getByLabelText('Assumed expected monthly expenses, in Philippine pesos'),
+      queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
       '20000',
     );
     await fireEvent.press(queries.getByRole('button', { name: 'See hypothetical target' }));
-    await queries.findByText('Hypothetical result — your real target and profile are unchanged');
+    await queries.findByText('Hypothetical result. Your real target and profile are unchanged.');
 
     // Peso delta is shown, but no meaningless four-to-five-digit percentage
     // off a near-zero (< PHP 1) baseline — distinct from the exact-zero case above.
@@ -338,11 +347,11 @@ describe('Recovery Target — "Save this as a plan"', () => {
 
     await fireEvent.press(await queries.findByRole('button', { name: 'See a hypothetical scenario' }));
     await fireEvent.changeText(
-      queries.getByLabelText('Assumed expected monthly expenses, in Philippine pesos'),
+      queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
       '20000',
     );
     await fireEvent.press(queries.getByRole('button', { name: 'See hypothetical target' }));
-    await queries.findByText('Hypothetical result — your real target and profile are unchanged');
+    await queries.findByText('Hypothetical result. Your real target and profile are unchanged.');
 
     // The real, unchanged figures from the scenario result are on screen
     // before any plan is saved...
@@ -386,11 +395,11 @@ describe('Recovery Target — "Save this as a plan"', () => {
 
     await fireEvent.press(await queries.findByRole('button', { name: 'See a hypothetical scenario' }));
     await fireEvent.changeText(
-      queries.getByLabelText('Assumed expected monthly expenses, in Philippine pesos'),
+      queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
       '20000',
     );
     await fireEvent.press(queries.getByRole('button', { name: 'See hypothetical target' }));
-    await queries.findByText('Hypothetical result — your real target and profile are unchanged');
+    await queries.findByText('Hypothetical result. Your real target and profile are unchanged.');
 
     await fireEvent.press(queries.getByRole('button', { name: 'Save this as a plan' }));
     await fireEvent.changeText(queries.getByLabelText('Deadline (optional)'), '2026-08-31');
@@ -408,11 +417,11 @@ describe('Recovery Target — "Save this as a plan"', () => {
 
     await fireEvent.press(await queries.findByRole('button', { name: 'See a hypothetical scenario' }));
     await fireEvent.changeText(
-      queries.getByLabelText('Assumed expected monthly expenses, in Philippine pesos'),
+      queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
       '20000',
     );
     await fireEvent.press(queries.getByRole('button', { name: 'See hypothetical target' }));
-    await queries.findByText('Hypothetical result — your real target and profile are unchanged');
+    await queries.findByText('Hypothetical result. Your real target and profile are unchanged.');
 
     await fireEvent.press(queries.getByRole('button', { name: 'Save this as a plan' }));
     await fireEvent.changeText(queries.getByLabelText('Buffer percent (optional)'), '150');
@@ -456,7 +465,7 @@ describe('RecoveryTargetScreen — "This month\'s saved plan"', () => {
     expect(queries.queryByText("This month's saved plan")).toBeNull();
   });
 
-  it('renders nothing when the fetch fails, without blocking the main recovery figures', async () => {
+  it('shows an honest retry when the first plan fetch fails without blocking the main recovery figures', async () => {
     apiGet.mockImplementation((path: string) => {
       if (path === '/insights/recovery') return Promise.resolve(recoveryInsight);
       if (path.endsWith('/recovery-plans')) return Promise.reject(new Error('boom'));
@@ -471,6 +480,38 @@ describe('RecoveryTargetScreen — "This month\'s saved plan"', () => {
     );
     expect(await queries.findByText('See a hypothetical scenario')).toBeTruthy();
     expect(queries.queryByText("This month's saved plan")).toBeNull();
+    expect(await queries.findByText("Couldn't load this")).toBeTruthy();
+    expect(queries.getByRole('button', { name: 'Try again' })).toBeTruthy();
+  });
+
+  it('retains a saved plan with freshness and retry when a refocus refresh fails', async () => {
+    let failPlan = false;
+    apiGet.mockImplementation((path: string) => {
+      if (path === '/insights/recovery') return Promise.resolve(recoveryInsight);
+      if (path.endsWith('/recovery-plans')) {
+        return failPlan ? Promise.reject(new Error('Could not refresh saved plan.')) : Promise.resolve([savedPlan]);
+      }
+      return Promise.reject(new Error(`unexpected path ${path}`));
+    });
+    const { RecoveryTargetScreen } = await import('../../src/screens/RecoveryTargetScreen');
+    const { ThemeProvider } = await import('../../src/context/ThemeContext');
+    const queries = await render(
+      <ThemeProvider initialMode="light">
+        <RecoveryTargetScreen navigation={navigation} />
+      </ThemeProvider>,
+    );
+    expect(await queries.findByText("This month's saved plan")).toBeTruthy();
+
+    failPlan = true;
+    await act(async () => {
+      for (const focus of [...focusEffects]) focus();
+    });
+
+    expect(await queries.findByText("Couldn't refresh")).toBeTruthy();
+    expect(queries.getByText(/Could not refresh saved plan\./)).toBeTruthy();
+    expect(queries.getByText("This month's saved plan")).toBeTruthy();
+    expect(queries.getByText('Updated just now')).toBeTruthy();
+    expect(queries.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 
   it('shows the saved amount, deadline and buffer, clearly separate from the real target figures', async () => {
@@ -496,6 +537,24 @@ describe('RecoveryTargetScreen — "This month\'s saved plan"', () => {
       `/business-profiles/${fixtures.businessProfile.id}/recovery-plans/2026-08`,
     ));
     await waitFor(() => expect(queries.queryByText("This month's saved plan")).toBeNull());
+  });
+
+  it('ignores a saved-plan delete alert after its business subtree unmounts', async () => {
+    let delayedRemove: (() => void | Promise<void>) | undefined;
+    const alert = vi.spyOn(Alert, 'alert').mockImplementation((_title, _message, buttons) => {
+      delayedRemove = buttons?.find((button) => button.style === 'destructive')?.onPress;
+    });
+    const queries = await renderScreenWithPlan(savedPlan);
+    await queries.findByText("This month's saved plan");
+    await fireEvent.press(queries.getByRole('button', { name: 'Delete' }));
+
+    await queries.unmount();
+    await act(async () => {
+      await delayedRemove?.();
+    });
+
+    expect(apiDelete).not.toHaveBeenCalled();
+    alert.mockRestore();
   });
 
   it('edits the saved plan via PUT and shows the updated figures', async () => {

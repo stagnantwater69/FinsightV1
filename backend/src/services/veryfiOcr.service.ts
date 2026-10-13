@@ -1,5 +1,7 @@
 import { env } from "../config/env";
 import { logger } from "../config/logger";
+import { moneyAmountSchema } from "../lib/money";
+import { receiptQuantitySchema } from "./receiptProviderContract";
 
 /**
  * Veryfi receipt extraction transport. Production calls originate only from
@@ -30,6 +32,8 @@ export interface VeryfiReceiptItem {
 export interface VeryfiReceipt {
   date: string | null;
   vendor: string | null;
+  /** ISO 4217 code as Veryfi read it, never a conversion. */
+  currency: string | null;
   amount: number | null;
   items: VeryfiReceiptItem[];
 }
@@ -54,10 +58,26 @@ export interface VeryfiExtraction {
 function finiteNumber(v: unknown): number | null {
   if (typeof v === "number" && Number.isFinite(v)) return v;
   if (typeof v === "string") {
-    const n = Number(v.replace(/[^0-9.-]/g, ""));
+    const normalized = v
+      .trim()
+      .replace(/^(?:PHP|₱|\$)\s*/i, "")
+      .replace(/,/g, "")
+      .trim();
+    if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(normalized)) return null;
+    const n = Number(normalized);
     return Number.isFinite(n) ? n : null;
   }
   return null;
+}
+
+function finiteMoney(v: unknown): number | null {
+  const value = finiteNumber(v);
+  return value !== null && moneyAmountSchema.safeParse(value).success ? value : null;
+}
+
+function finiteQuantity(v: unknown): number | null {
+  const value = finiteNumber(v);
+  return value !== null && receiptQuantitySchema.safeParse(value).success ? value : null;
 }
 
 function coerceDate(v: unknown): string | null {
@@ -76,22 +96,28 @@ function coerceVendor(v: unknown): string | null {
   return null;
 }
 
+function coerceCurrency(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const code = v.trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(code) ? code : null;
+}
+
 function coerceItems(v: unknown): VeryfiReceiptItem[] {
   if (!Array.isArray(v)) return [];
   const items: VeryfiReceiptItem[] = [];
   for (const entry of v.slice(0, MAX_ITEMS)) {
     if (typeof entry !== "object" || entry === null) continue;
     const r = entry as Record<string, unknown>;
-    const amount = finiteNumber(r.total);
+    const amount = finiteMoney(r.total);
     const name = typeof r.description === "string" ? r.description.trim() : "";
     // No amount or no name cannot be booked or checked against the photo —
     // dropped rather than stored as a mystery, same rule visionOcr.service.ts
     // applies to a model-supplied item.
-    if (!name || amount === null || amount <= 0) continue;
-    const quantity = finiteNumber(r.quantity);
+    if (!name || amount === null) continue;
+    const quantity = finiteQuantity(r.quantity);
     items.push({
       name: name.slice(0, 255),
-      quantity: quantity !== null && quantity > 0 ? quantity : null,
+      quantity,
       amount,
     });
   }
@@ -133,16 +159,21 @@ async function readOnePage(page: VeryfiPage): Promise<{ ok: true; doc: Record<st
  * Veryfi's document endpoint reads one image per call, unlike Gemini's
  * single multi-part request for every page — so a multi-page receipt costs
  * one Veryfi request PER PAGE. Pages are merged the same way the deterministic
- * parser's own multi-page combination already works: vendor and date from the
- * first page that supplies one, amount from the LAST page that supplies one
+ * parser's own multi-page combination already works: vendor, date and currency
+ * from the first page that supplies one, amount from the LAST page that supplies one
  * (the total is conventionally on the final page), and items concatenated
  * across every page in order.
  *
  * A network-level failure (thrown, not an HTTP error response) on ANY page
  * makes the whole call return null — an unreachable provider, not a partial
- * read. An HTTP error response on a page still counts as that page having
- * been reached; if every page comes back that way there is nothing to merge
- * and this returns a `"http"` rejection instead of null.
+ * read.
+ *
+ * AN HTTP ERROR ON ANY PAGE REJECTS THE WHOLE READING. "Amount from the last
+ * page that supplies one" is the grand total only while every page was read:
+ * lose page 3 of 3 and the last survivor is page 2's running subtotal, which
+ * looks exactly like a valid total and, under `always` routing, replaces the
+ * local reading. A partial read cannot be told from a complete one after the
+ * fact, so `"http"` sends the scan back to the local reading instead.
  */
 export async function extractReceiptWithVeryfi(pages: VeryfiPage[]): Promise<VeryfiExtraction | null> {
   if (!env.VERYFI_CLIENT_ID || !env.VERYFI_USERNAME || !env.VERYFI_API_KEY) return null;
@@ -160,16 +191,23 @@ export async function extractReceiptWithVeryfi(pages: VeryfiPage[]): Promise<Ver
     return null;
   }
 
-  if (docs.length === 0) return { receipt: null, rejectReason: "http" };
+  if (docs.length !== pages.length) {
+    logger.error(
+      { provider: "veryfi", operation: "receipt-extraction", pages: pages.length, pagesRead: docs.length },
+      "Veryfi read fewer pages than were sent; rejecting the whole reading",
+    );
+    return { receipt: null, rejectReason: "http" };
+  }
 
   const vendor = docs.map((d) => coerceVendor(d.vendor)).find((v) => v !== null) ?? null;
   const date = docs.map((d) => coerceDate(d.date)).find((v) => v !== null) ?? null;
-  const amounts = docs.map((d) => finiteNumber(d.total)).filter((v): v is number => v !== null && v > 0);
+  const currency = docs.map((d) => coerceCurrency(d.currency_code)).find((v) => v !== null) ?? null;
+  const amounts = docs.map((d) => finiteMoney(d.total)).filter((v): v is number => v !== null);
   const amount = amounts.length > 0 ? amounts[amounts.length - 1]! : null;
   const items = docs.flatMap((d) => coerceItems(d.line_items));
 
   if (vendor === null && date === null && amount === null && items.length === 0) {
     return { receipt: null, rejectReason: "empty" };
   }
-  return { receipt: { vendor, date, amount, items }, rejectReason: null };
+  return { receipt: { vendor, date, currency, amount, items }, rejectReason: null };
 }

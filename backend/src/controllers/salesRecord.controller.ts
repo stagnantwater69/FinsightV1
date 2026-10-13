@@ -5,10 +5,12 @@ import { moneyAmountSchema } from "../lib/money";
 import { ApiError } from "../middleware/error.middleware";
 
 const createSchema = z.object({
-  businessProfileId: z.number().int().positive(),
+  businessProfileId: z.number().int().positive().max(2147483647),
   date: z.string().date(),
   description: z.string().min(1).max(255),
   amount: moneyAmountSchema,
+  includedInAvailableFundsBaseline: z.boolean().optional(),
+  availableFundsBaselineAt: z.string().datetime().optional(),
 });
 
 const updateSchema = z.object({
@@ -17,11 +19,13 @@ const updateSchema = z.object({
   amount: moneyAmountSchema.optional(),
   reviewStatus: z.enum(["Reviewed", "Needs Review"]).optional(),
   duplicateStatus: z.enum(["Not a Duplicate", "Flagged"]).optional(),
+  includedInAvailableFundsBaseline: z.boolean().optional(),
+  availableFundsBaselineAt: z.string().datetime().optional(),
 });
 
 function parseId(raw: string): number {
   const id = Number(raw);
-  if (!Number.isInteger(id) || id <= 0) {
+  if (!Number.isInteger(id) || id <= 0 || id > 2147483647) {
     throw new ApiError(400, "Invalid record id");
   }
   return id;

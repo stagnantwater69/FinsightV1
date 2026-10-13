@@ -1,12 +1,13 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { prisma } from "../../src/config/prisma";
 import * as expenses from "../../src/services/expenseRecord.service";
 import * as sales from "../../src/services/salesRecord.service";
 import * as insights from "../../src/services/insights.service";
 import * as businessProfile from "../../src/services/businessProfile.service";
 import { ALL_TIME_PERIOD, getDashboardCashflow, getDashboardSummary } from "../../src/services/dashboard.service";
 import { Z_SCORE_THRESHOLD } from "../../src/services/analysis.service";
-import { resolveBusinessToday, utcDateKey } from "../../src/lib/dates";
-import { businessDayOffset, disconnectDb, makeOwnerWithProfile, resetDb, utcDayString } from "../setup/testDb";
+import { resolveBusinessToday } from "../../src/lib/dates";
+import { businessDayString, disconnectDb, makeOwnerWithProfile, resetDb } from "../setup/testDb";
 
 // Dashboard and Insights computed from real rows in a real database. This is
 // where the UTC date-boundary regression lives: records dated TODAY were being
@@ -25,20 +26,46 @@ beforeEach(async () => {
 
 afterAll(disconnectDb);
 
+/**
+ * Every date here is relative to the business's own calendar day, because
+ * that is how the dashboard and insights resolve "today". A UTC-anchored date
+ * put "today's" records on yesterday for roughly 16:00-23:59 UTC.
+ */
+function day(offset = 0): string {
+  return businessDayString(ctx.profile.timezone, offset);
+}
+
 async function addExpense(category: string, description: string, amount: number, dayOffset: number) {
   return expenses.createExpenseRecord(ctx.user.id, {
     businessProfileId: ctx.profile.id,
     categoryId: ctx.categories[category]!,
-    date: utcDayString(dayOffset),
+    date: day(dayOffset),
     description,
     amount,
+  });
+}
+
+/**
+ * A future-dated expense written straight to the table, the way records saved
+ * before the future-date rule look. The services refuse to create one now.
+ */
+async function legacyExpense(category: string, description: string, amount: number, dayOffset: number) {
+  return prisma.expenseRecord.create({
+    data: {
+      businessProfileId: ctx.profile.id,
+      categoryId: ctx.categories[category]!,
+      date: new Date(`${day(dayOffset)}T00:00:00.000Z`),
+      description,
+      amount,
+      source: "MANUAL_ENTRY",
+    },
   });
 }
 
 async function addSale(amount: number, dayOffset: number, description = "Daily sales") {
   return sales.createSalesRecord(ctx.user.id, {
     businessProfileId: ctx.profile.id,
-    date: utcDayString(dayOffset),
+    date: day(dayOffset),
     description,
     amount,
   });
@@ -64,20 +91,7 @@ describe("REGRESSION: records dated today must be included", () => {
   });
 
   it("counts today's sale in the recovery tracker's month-to-date figures", async () => {
-    // getRecoveryInsight resolves "today" in the business's own local
-    // timezone (Asia/Manila, this fixture profile's default), not the
-    // server's raw UTC day — the two disagree for roughly a third of every
-    // day (whenever Manila has already turned over to the next calendar
-    // date but UTC hasn't). `addSale`/`utcDayString` build a UTC-anchored
-    // date, so this test has to date its sale the same business-local way
-    // the function under test resolves "today", or it goes stale exactly at
-    // that boundary.
-    await sales.createSalesRecord(ctx.user.id, {
-      businessProfileId: ctx.profile.id,
-      date: utcDateKey(resolveBusinessToday("Asia/Manila")),
-      description: "Daily sales",
-      amount: 4500,
-    });
+    await addSale(4500, 0);
     const recovery = await insights.getRecoveryInsight(ctx.user.id, ctx.profile.id, 14);
     expect(recovery.todaysSales).toBe(4500);
     expect(recovery.salesThisMonth).toBeGreaterThanOrEqual(4500);
@@ -90,8 +104,9 @@ describe("REGRESSION: records dated today must be included", () => {
     expect(inventory?.current).toBe(2000);
   });
 
-  it("excludes a record dated tomorrow", async () => {
-    await addExpense("Inventory", "Future dated", 777, 1);
+  it("refuses a record dated tomorrow, and leaves out one saved before that rule", async () => {
+    await expect(addExpense("Inventory", "Future dated", 777, 1)).rejects.toMatchObject({ code: "FUTURE_DATE" });
+    await legacyExpense("Inventory", "Future dated", 777, 1);
     const summary = await getDashboardSummary(ctx.user.id, ctx.profile.id, 30);
     expect(summary.overview.totalExpenses).toBe(0);
   });
@@ -296,12 +311,12 @@ describe("spending impact against real rows", () => {
     await addExpense("Inventory", "Existing spend", 10000, -1);
 
     const impact = await insights.simulateSpendingImpact(ctx.user.id, ctx.profile.id, 11000, 30);
-    expect(impact.funds.before).toBe(48500);
-    expect(impact.funds.after).toBe(37500);
+    expect(impact.funds.before).toBe(38500);
+    expect(impact.funds.after).toBe(27500);
     expect(impact.periodExpenses.before).toBe(10000);
     expect(impact.periodExpenses.after).toBe(21000);
-    expect(impact.percentOfFunds).toBeCloseTo(22.68, 2);
-    expect(impact.impactBand).toBe("Noticeable Impact");
+    expect(impact.percentOfFunds).toBeCloseTo(28.57, 2);
+    expect(impact.impactBand).toBe("High Impact");
     expect(impact.exceedsFunds).toBe(false);
   });
 
@@ -453,7 +468,7 @@ describe("lifetime totals are reported outside the period", () => {
     const summary = await getDashboardSummary(ctx.user.id, ctx.profile.id, 30);
 
     expect(summary.lifetime.latestRecordDate).not.toBeNull();
-    expect(summary.lifetime.latestRecordDate!.toISOString().slice(0, 10)).toBe(utcDayString(-350));
+    expect(summary.lifetime.latestRecordDate!.toISOString().slice(0, 10)).toBe(day(-350));
   });
 
   it("takes the later of the two record types", async () => {
@@ -461,7 +476,7 @@ describe("lifetime totals are reported outside the period", () => {
     await addSale(900, -200);
 
     const summary = await getDashboardSummary(ctx.user.id, ctx.profile.id, 1);
-    expect(summary.lifetime.latestRecordDate!.toISOString().slice(0, 10)).toBe(utcDayString(-100));
+    expect(summary.lifetime.latestRecordDate!.toISOString().slice(0, 10)).toBe(day(-100));
   });
 
   it("says nothing at all for a business that has genuinely never recorded", async () => {
@@ -476,7 +491,7 @@ describe("lifetime totals are reported outside the period", () => {
     await expenses.createExpenseRecord(other.user.id, {
       businessProfileId: other.profile.id,
       categoryId: other.categories.Inventory!,
-      date: utcDayString(-300),
+      date: day(-300),
       description: "Someone else's record",
       amount: 999,
     });
@@ -525,18 +540,19 @@ describe("the all-time period", () => {
   });
 
   /**
-   * A spreadsheet can legitimately carry a future date, and an owner who
-   * imported one must be able to find it. This is why "all time" drops the
-   * filter rather than widening the lower bound and keeping `lte: today`.
+   * A future-dated record is invalid: the owner is asked to correct it (see
+   * lib/transactionDate.ts), and until then it counts in no period, all time
+   * included. All time keeps no lower bound but stops at today.
    */
-  it("includes future-dated records, which the bounded periods exclude", async () => {
-    await addExpense("Inventory", "Dated ahead", 300, 5);
+  it("leaves future-dated records out of every period, all time included", async () => {
+    await addExpense("Inventory", "Last week", 120, -7);
+    await legacyExpense("Inventory", "Dated ahead", 300, 5);
 
     const month = await getDashboardSummary(ctx.user.id, ctx.profile.id, 30);
-    expect(month.overview.totalExpenses).toBe(0);
+    expect(month.overview.totalExpenses).toBe(120);
 
     const allTime = await getDashboardSummary(ctx.user.id, ctx.profile.id, ALL_TIME_PERIOD);
-    expect(allTime.overview.totalExpenses).toBe(300);
+    expect(allTime.overview.totalExpenses).toBe(120);
   });
 
   it("reports the span it actually covers, so the page can say so", async () => {
@@ -544,7 +560,7 @@ describe("the all-time period", () => {
     await addSale(200, -10);
 
     const s = await getDashboardSummary(ctx.user.id, ctx.profile.id, ALL_TIME_PERIOD);
-    expect(s.periodStart?.toISOString().slice(0, 10)).toBe(utcDayString(-500));
+    expect(s.periodStart?.toISOString().slice(0, 10)).toBe(day(-500));
   });
 
   it("stays scoped to the one business profile", async () => {
@@ -552,7 +568,7 @@ describe("the all-time period", () => {
     await expenses.createExpenseRecord(other.user.id, {
       businessProfileId: other.profile.id,
       categoryId: other.categories.Inventory!,
-      date: utcDayString(-700),
+      date: day(-700),
       description: "Someone else's history",
       amount: 9999,
     });
@@ -595,10 +611,10 @@ describe("insight windows can be anchored to a past date", () => {
       ctx.user.id,
       ctx.profile.id,
       30,
-      new Date(`${utcDayString(-700)}T00:00:00.000Z`),
+      new Date(`${day(-700)}T00:00:00.000Z`),
     );
     expect(anchored.totals.current).toBe(1200);
-    expect(anchored.periodEnd.toISOString().slice(0, 10)).toBe(utcDayString(-700));
+    expect(anchored.periodEnd.toISOString().slice(0, 10)).toBe(day(-700));
   });
 
   /** The comparison is the point of the page, so it has to move with the window. */
@@ -610,7 +626,7 @@ describe("insight windows can be anchored to a past date", () => {
       ctx.user.id,
       ctx.profile.id,
       30,
-      new Date(`${utcDayString(-400)}T00:00:00.000Z`),
+      new Date(`${day(-400)}T00:00:00.000Z`),
     );
     expect(anchored.totals.current).toBe(1000);
     expect(anchored.totals.previous).toBe(600);
@@ -620,7 +636,7 @@ describe("insight windows can be anchored to a past date", () => {
     await addExpense("Inventory", "Recent", 300, -1);
     const result = await insights.getExpenseBehavior(ctx.user.id, ctx.profile.id, 30);
     expect(result.totals.current).toBe(300);
-    expect(result.periodEnd.toISOString().slice(0, 10)).toBe(utcDayString(0));
+    expect(result.periodEnd.toISOString().slice(0, 10)).toBe(day(0));
   });
 
   /**
@@ -633,7 +649,7 @@ describe("insight windows can be anchored to a past date", () => {
 
     const result = await insights.getExpenseBehavior(ctx.user.id, ctx.profile.id, 30);
     expect(result.totals.current).toBe(0);
-    expect(result.latestExpenseDate?.toISOString().slice(0, 10)).toBe(utcDayString(-700));
+    expect(result.latestExpenseDate?.toISOString().slice(0, 10)).toBe(day(-700));
   });
 
   it("reports no latest expense for a business that has never recorded one", async () => {
@@ -655,7 +671,7 @@ describe("recovery reports an empty month rather than implying a missed target",
 
     const result = await insights.getRecoveryInsight(ctx.user.id, ctx.profile.id, 31);
     expect(result.monthHasNoRecords).toBe(true);
-    expect(result.latestSaleDate?.toISOString().slice(0, 10)).toBe(utcDayString(-400));
+    expect(result.latestSaleDate?.toISOString().slice(0, 10)).toBe(day(-400));
     // The targets themselves are untouched — it is the framing that was added.
     expect(result.salesThisMonth).toBe(0);
   });
@@ -663,7 +679,7 @@ describe("recovery reports an empty month rather than implying a missed target",
   it("does not flag a month that has sales in it", async () => {
     // "This month" is the business's own current month — see
     // businessDayOffset's own comment.
-    await addSale(5000, businessDayOffset(ctx.profile.timezone));
+    await addSale(5000, 0);
     const result = await insights.getRecoveryInsight(ctx.user.id, ctx.profile.id, 31);
     expect(result.monthHasNoRecords).toBe(false);
   });
@@ -683,7 +699,7 @@ describe("recovery reports an empty month rather than implying a missed target",
     // disagrees with it for roughly a third of every day.
     const businessToday = resolveBusinessToday(ctx.profile.timezone);
     const daysSinceTheFirst = businessToday.getUTCDate() - 1;
-    await addSale(5000, businessDayOffset(ctx.profile.timezone, daysSinceTheFirst));
+    await addSale(5000, -daysSinceTheFirst);
 
     const result = await insights.getRecoveryInsight(ctx.user.id, ctx.profile.id, 14);
     expect(result.monthHasNoRecords).toBe(false);
@@ -715,7 +731,7 @@ describe("recovery target — confirmed vs. provisional sales split (§9.6)", ()
   it("treats a plain reviewed, non-duplicate sale as fully confirmed", async () => {
     // "Today" here has to be the business's own current day — see
     // businessDayOffset's own comment.
-    await addSale(4500, businessDayOffset(ctx.profile.timezone));
+    await addSale(4500, 0);
     const result = await insights.getRecoveryInsight(ctx.user.id, ctx.profile.id, 14);
     expect(result.confirmedSalesThisMonth).toBe(4500);
     expect(result.provisionalSalesThisMonth).toBe(0);
@@ -723,8 +739,8 @@ describe("recovery target — confirmed vs. provisional sales split (§9.6)", ()
   });
 
   it("counts a needs-review sale as provisional but still includes it in salesThisMonth", async () => {
-    const confirmed = await addSale(4500, businessDayOffset(ctx.profile.timezone), "Confirmed sale");
-    const needsReview = await addSale(1000, businessDayOffset(ctx.profile.timezone), "Needs review sale");
+    const confirmed = await addSale(4500, 0, "Confirmed sale");
+    const needsReview = await addSale(1000, 0, "Needs review sale");
     await sales.updateSalesRecord(ctx.user.id, needsReview.id, { reviewStatus: "Needs Review" });
 
     const result = await insights.getRecoveryInsight(ctx.user.id, ctx.profile.id, 14);
@@ -737,19 +753,15 @@ describe("recovery target — confirmed vs. provisional sales split (§9.6)", ()
   });
 
   it("counts a flagged-duplicate sale as provisional and reports possible_duplicates", async () => {
-    // Both dated the business's current day, not "today and yesterday" —
-    // the two dates only need to land in the SAME month for this test's
-    // assertions, and "yesterday" can fall in the previous month whenever
-    // today happens to be the 1st (see businessDayOffset's own comment).
-    // duplicateStatus is set explicitly below, not inferred from the dates
-    // matching, so there is no need for these two to differ.
-    await addSale(4500, businessDayOffset(ctx.profile.timezone), "Confirmed sale");
-    const flagged = await addSale(1000, businessDayOffset(ctx.profile.timezone), "Flagged sale");
-    await sales.updateSalesRecord(ctx.user.id, flagged.id, { duplicateStatus: "Flagged" });
+    const dayOffset = 0;
+    await addSale(4500, dayOffset, "Confirmed sale");
+    const canonical = await addSale(1000, dayOffset, "Possible duplicate sale");
+    const flagged = await addSale(1000, dayOffset, "Possible duplicate sale");
+    expect(flagged).toMatchObject({ duplicateStatus: "Flagged", duplicateOfRecordId: canonical.id });
 
     const result = await insights.getRecoveryInsight(ctx.user.id, ctx.profile.id, 14);
-    expect(result.salesThisMonth).toBe(5500);
-    expect(result.confirmedSalesThisMonth).toBe(4500);
+    expect(result.salesThisMonth).toBe(6500);
+    expect(result.confirmedSalesThisMonth).toBe(5500);
     expect(result.provisionalSalesThisMonth).toBe(1000);
     expect(result.dataWarnings).toEqual(["possible_duplicates"]);
   });

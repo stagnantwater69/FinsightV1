@@ -1,4 +1,5 @@
 import { parseCsvDate } from "../../lib/csvDates";
+import { parseSignedAmount } from "../../lib/recordTypeDetection";
 import type { CsvDateFormat, CsvImportStatus } from "../../lib/types";
 import type { ImportResult, MappedField, RowProblem } from "./types";
 
@@ -41,66 +42,43 @@ export function resultFromStatus(status: CsvImportStatus, title: string): Import
 export const STATUS_POLL_INTERVAL_MS = 1500;
 
 /**
- * Header synonyms, for guessing the column mapping.
+ * What is wrong with a row, if anything, in the words the review screen shows:
+ * "Amount required", "Invalid date".
  *
- * Owners export from Excel, Google Sheets, a POS app or a bookkeeper's
- * template, and the headings are mostly the obvious English words. Making
- * someone map four dropdowns by hand when their file literally says
- * "date,description,amount,category" is the kind of friction UAT item 32
- * measures ("could record a day quickly enough to do it regularly").
+ * A deliberate mirror of csvImport.service's validateRows, checked in the same
+ * order (description, date, amount) so the row's badge names the same field the
+ * server would skip it for. The server is still the authority and re-checks
+ * every corrected value, so a drift here can only show a problem that is not
+ * one, never let a bad row through.
  *
- * The guess is a starting point, never a decision: every field stays editable
- * and says that it was matched automatically.
+ * Category is not checked: an expense row with none is given one on import
+ * (the owner's history, then FinSight's suggestion, then Uncategorised).
  */
-export const HEADER_SYNONYMS: Record<"date" | "description" | "amount" | "category" | "vendor", string[]> = {
-  date: ["date", "txn date", "transaction date", "trans date", "posted", "day", "petsa"],
-  description: ["description", "item", "particulars", "details", "detail", "memo", "notes", "note"],
-  amount: ["amount", "total", "price", "cost", "value", "debit", "halaga"],
-  category: ["category", "type", "class", "account", "group", "uri"],
-  vendor: ["vendor", "supplier", "store", "shop", "merchant", "payee", "seller", "from", "tindahan"],
-};
-
 export function problemWith(
   values: Record<MappedField, string>,
-  needsCategory: boolean,
   dateFormat: CsvDateFormat,
+  usesSignedAmounts = false,
+  /** The business's today (YYYY-MM-DD); a later date is refused, as the server does. */
+  today?: string,
 ): RowProblem {
-  if (!values.Description.trim()) return { field: "Description", reason: "Missing description" };
+  if (!values.Description.trim()) return { field: "Description", reason: "Description required" };
 
-  /*
-   * Parsed with the shared calendar parser, NOT `new Date(rawDate)`.
-   *
-   * The string constructor guessed month-first, parsed in browser-local time
-   * and rolled Feb 31 over into March — so this check used to pass rows the
-   * server then skipped and flag rows it would have accepted. A preview that
-   * disagrees with the import is worse than no preview: the owner "fixes" a
-   * row that was never wrong. See lib/csvDates.ts.
-   */
+  // The shared calendar parser, NOT `new Date(rawDate)`, which guesses
+  // month-first in browser-local time. See lib/csvDates.ts.
   const rawDate = values.Date.trim();
-  if (!rawDate || parseCsvDate(rawDate, dateFormat) === null) {
-    return { field: "Date", reason: `Invalid date: "${rawDate}"` };
-  }
+  if (!rawDate) return { field: "Date", reason: "Date required" };
+  const isoDate = parseCsvDate(rawDate, dateFormat);
+  if (isoDate === null) return { field: "Date", reason: "Invalid date" };
+  if (today && isoDate > today) return { field: "Date", reason: "Date can't be in the future" };
 
   const rawAmount = values.Amount.trim();
-  const amount = rawAmount ? Number(rawAmount.replace(/,/g, "")) : NaN;
-  if (!Number.isFinite(amount) || amount <= 0) {
-    return { field: "Amount", reason: `Invalid amount: "${rawAmount}"` };
+  if (!rawAmount) return { field: "Amount", reason: "Amount required" };
+  const signedAmount = parseSignedAmount(rawAmount);
+  const amount = usesSignedAmounts && signedAmount !== null ? Math.abs(signedAmount) : signedAmount;
+  if (amount === null || !Number.isFinite(amount) || amount <= 0) {
+    return { field: "Amount", reason: "Invalid amount" };
   }
-
-  if (needsCategory && !values.Category.trim()) {
-    return { field: "Category", reason: "Missing category" };
-  }
+  // The server's Decimal(12,2) column: a third decimal place is a skip there.
+  if (Number(amount.toFixed(2)) !== amount) return { field: "Amount", reason: "Too many decimals" };
   return null;
-}
-
-function normalise(header: string): string {
-  return header.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
-}
-
-/** Exact synonym match first, then a contains match, so "Txn Date (PHP)" lands. */
-export function guessColumn(headers: string[], field: keyof typeof HEADER_SYNONYMS): string {
-  const synonyms = HEADER_SYNONYMS[field];
-  const exact = headers.find((h) => synonyms.includes(normalise(h)));
-  if (exact) return exact;
-  return headers.find((h) => synonyms.some((s) => normalise(h).includes(s))) ?? "";
 }

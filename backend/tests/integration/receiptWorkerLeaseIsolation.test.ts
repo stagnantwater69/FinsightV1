@@ -183,6 +183,7 @@ describe("receipt worker lease isolation", () => {
         amountConfidences: [1],
         itemEvidence: [{ pageNumber: 1, sourceText: "STALE ITEM 999.00" }],
       },
+      providerRead: true,
     };
     const staleAttempt = persistReceiptProcessingOutput(
       scan.id,

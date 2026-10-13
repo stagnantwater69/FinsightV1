@@ -52,8 +52,7 @@ export function utcEndOfDay(d: Date): Date {
  * IANA zone (including ones with daylight saving), not just Manila's fixed
  * +08:00 — see docs/RECOVERY-TARGET-IMPROVEMENT-PLAN.md §9.1.
  */
-export function resolveBusinessToday(timezone: string): Date {
-  const now = new Date();
+export function resolveBusinessToday(timezone: string, now: Date = new Date()): Date {
   // en-CA formats as YYYY-MM-DD directly, so no separate re-ordering step is
   // needed between the formatter's output and the UTC-midnight encoding below.
   const localDateKey = new Intl.DateTimeFormat("en-CA", {

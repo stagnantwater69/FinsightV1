@@ -168,7 +168,7 @@ describe('RecoveryTargetScreen — terminology and freshness', () => {
     const queries = await renderScreen({ ...baseInsight, status: 'behind' });
     expect(
       await queries.findByText(
-        'Your Sales Coverage Target compares recorded sales references with your expected monthly expense amount. It is a planning guide and does not calculate profit, cash flow, or formal break-even.',
+        'Your Sales Coverage Target compares recorded sales references with the monthly expense basis shown below. It is a planning guide and does not calculate profit, cash flow, or formal break-even.',
       ),
     ).toBeTruthy();
   });

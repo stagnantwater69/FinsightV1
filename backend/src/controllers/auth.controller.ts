@@ -79,6 +79,9 @@ const emailField = z
  */
 const platformField = z.enum(["web", "mobile"]).default("web");
 
+/** Digits only, so a letter or a symbol never reaches `User_PhoneNumber`. */
+const phoneNumberField = z.string().max(20).regex(/^\d*$/, "Use numbers only.");
+
 export const registerSchema = z.object({
   /*
    * NO DISPOSABLE-DOMAIN REFUSAL HERE, deliberately — it was tried and removed.
@@ -103,7 +106,7 @@ export const registerSchema = z.object({
   firstName: z.string().min(1).max(100),
   middleName: z.string().max(100).optional(),
   lastName: z.string().min(1).max(100),
-  phoneNumber: z.string().max(20).optional(),
+  phoneNumber: phoneNumberField.optional(),
   platform: platformField,
 });
 
@@ -144,7 +147,7 @@ const updateProfileSchema = z.object({
   firstName: z.string().min(1).max(100).optional(),
   middleName: z.string().max(100).nullable().optional(),
   lastName: z.string().min(1).max(100).optional(),
-  phoneNumber: z.string().max(20).nullable().optional(),
+  phoneNumber: phoneNumberField.nullable().optional(),
 });
 
 /**
@@ -217,6 +220,12 @@ function bearerToken(req: Request): string {
   return token;
 }
 
+function looksLikeAccessJwt(token: string): boolean {
+  if (token.length > 12_000) return false;
+  const segments = token.split(".");
+  return segments.length === 3 && segments.every((segment) => segment.length > 0 && /^[A-Za-z0-9_-]+$/.test(segment));
+}
+
 /**
  * 202, not 201, and no session.
  *
@@ -273,7 +282,8 @@ export async function login(req: Request, res: Response) {
 }
 
 /**
- * Ends this device's session. `/logout-all` below ends every device's.
+ * Ends this device's refresh session. `/logout-all` revokes every refresh
+ * session; already-issued access JWTs remain valid until their expiry.
  *
  * They were one endpoint with global scope, which meant the ordinary "Log out"
  * on a phone also signed the owner out of the shop's tablet, silently. Two
@@ -283,7 +293,9 @@ export async function login(req: Request, res: Response) {
 export async function logout(req: Request, res: Response) {
   const header = req.headers.authorization;
   const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
-  if (token) {
+  // Local logout stays a best-effort 204 so a dead token never strands the
+  // client, but malformed input must not buy an outbound provider request.
+  if (token && looksLikeAccessJwt(token)) {
     await authService.logoutUser(token, "local");
   }
   res.status(204).send();
@@ -307,7 +319,7 @@ export async function changePassword(req: Request, res: Response) {
   const input = changePasswordSchema.parse(req.body);
   await authService.changePassword(req.user!.id, input.currentPassword, input.newPassword, bearerToken(req));
   res.status(200).json({
-    message: "Password changed. You're still signed in here; any other devices have been signed out.",
+    message: "Password changed. You're still signed in here. Other devices cannot renew their sessions and will need to sign in again after their current access expires.",
   });
 }
 

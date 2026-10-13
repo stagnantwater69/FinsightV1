@@ -140,6 +140,44 @@ describe("POST /records/receipts/:id/confirm", () => {
 });
 
 describe("confirmReceipt called directly", () => {
+  it("requires one current top-level decision and applies it to every receipt split", async () => {
+    const baselineAt = new Date("2026-07-20T01:00:00.000Z");
+    await prisma.businessProfile.update({
+      where: { id: ctx.profile.id },
+      data: {
+        availableFundsBaselineAt: baselineAt,
+        availableFundsBaselineDate: new Date("2026-07-20T00:00:00.000Z"),
+      },
+    });
+    const scan = await makeReadScan();
+    const input = {
+      ...shared,
+      description: "Split baseline receipt",
+      splits: [
+        { categoryId: ctx.categories.Inventory!, amount: 600 },
+        { categoryId: ctx.categories.Utilities!, amount: 400 },
+      ],
+    };
+
+    await expect(confirmReceipt(ctx.user.id, scan.id, input)).rejects.toMatchObject({
+      status: 400,
+      code: "AVAILABLE_FUNDS_BASELINE_CLASSIFICATION_REQUIRED",
+    });
+    await expectNothingWritten(scan.id, 0);
+
+    const records = await confirmReceipt(ctx.user.id, scan.id, {
+      ...input,
+      includedInAvailableFundsBaseline: false,
+      availableFundsBaselineAt: baselineAt.toISOString(),
+    });
+
+    expect(records).toHaveLength(2);
+    expect(records.every((record) => (
+      record.includedInAvailableFundsBaseline === false
+      && record.availableFundsDeltaBaselineAt?.getTime() === baselineAt.getTime()
+    ))).toBe(true);
+  });
+
   it("refuses every mixed shape before touching the scan", async () => {
     const scan = await makeReadScan([{ name: "Rice 25kg", amount: 1000 }]);
     const itemId = scan.items[0]!.id;

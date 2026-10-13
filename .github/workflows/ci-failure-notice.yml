@@ -1,0 +1,84 @@
+name: CI failure notice
+
+# CI going red is only useful if someone finds out. The purge-job clock rot sat
+# red for two days because nothing announced it and nobody re-ran the suite by
+# hand. This opens one issue when CI fails on the default branch or a nightly
+# run, and closes it when CI goes green again, so the signal lives somewhere
+# durable rather than in an email nobody opens.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  issues: write
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    # A failure on someone's feature branch is their business; this is for the
+    # branches everyone builds on, and for the nightly run.
+    if: >-
+      github.event.workflow_run.head_branch == github.event.repository.default_branch ||
+      github.event.workflow_run.event == 'schedule'
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            const title = `CI is failing on ${run.head_branch}`;
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              labels: "ci-failure",
+            });
+            const existing = open.find((issue) => issue.title === title);
+
+            if (run.conclusion === "success") {
+              if (existing) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: existing.number,
+                  body: `Green again as of ${run.html_url}.`,
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: existing.number,
+                  state: "closed",
+                });
+              }
+              return;
+            }
+
+            if (run.conclusion !== "failure") return;
+
+            const body = [
+              `CI failed on \`${run.head_branch}\` (${run.event}).`,
+              ``,
+              `Run: ${run.html_url}`,
+              `Commit: ${run.head_sha}`,
+              ``,
+              `A nightly failure with no new commits usually means a fixture that pinned a`,
+              `clock has aged out, rather than a regression. See`,
+              `docs/RELIABILITY-REVIEW-2026-09-17.md.`,
+            ].join("\n");
+
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body,
+              });
+              return;
+            }
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: ["ci-failure"],
+            });

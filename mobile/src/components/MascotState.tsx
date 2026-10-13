@@ -77,13 +77,15 @@ import { radius } from "../theme/tokens";
  */
 
 /**
- * THE ART IS NOT CUT OUT, and this is the workaround.
+ * Contextual art is not cut out, so it needs this workaround.
  *
- * Every pose in `assets/mascot/` except `finsightlogo.png` is an OPAQUE RGB
- * PNG on a near-white plate (measured: 252–255 on all three channels at all
- * four corners of all 33 files), at a variety of aspect ratios rather than
- * square. The manifest in that folder asks for "transparent background"; the
- * delivered art does not have one.
+ * Every contextual pose in `assets/mascot/` is an OPAQUE RGB PNG on a
+ * near-white plate (measured: 252–255 on all three channels at all four
+ * corners), at a variety of aspect ratios rather than square. The manifest in
+ * that folder asks for "transparent background"; the delivered pose art does
+ * not have one. `newmascotlogo.png` is the exception: it is a reviewed RGBA
+ * cutout and the `brandMark` state renders it directly on the surrounding
+ * surface.
  *
  * On a white card in Light mode nobody can tell. In Dark mode the same image
  * is a bright white rectangle sitting on a near-black card — and with
@@ -96,8 +98,8 @@ import { radius } from "../theme/tokens";
  * own background are the same colour, and it reads as intentional in both
  * themes. It is invisible in Light, where the card behind it is already white.
  *
- * REPLACING THE ART IS THE REAL FIX. When transparent poses land, pass
- * `plate={false}` (or flip the default) and this whole treatment disappears.
+ * Replacing the art is the real fix. If transparent contextual poses land,
+ * callers can pass `plate={false}` and this treatment disappears for them too.
  *
  * The colour is `mascotPlate` in theme/palette.ts — fixed in both themes,
  * because it is a property of the artwork rather than of the page.
@@ -178,17 +180,14 @@ const SOURCES: Record<MascotState, Thunk> = {
   possibleDuplicate: () => require("../../assets/mascot/06-warnings/possibleduplicatefound.png"),
   unusualExpense: () => require("../../assets/mascot/06-warnings/unusualexpensedetected.png"),
 
-  brandMark: () => require("../../assets/mascot/finsightlogo.png"),
+  brandMark: () => require("../../assets/mascot/newmascotlogo.png"),
 };
 
 /**
  * What is shown when the requested state's art will not load.
  *
- * The badge mark, not another character pose: it is the smallest, most
- * compressible asset here, it is already a native resource on this device
- * (it is the app icon's source), and it carries no expression — so falling
- * back to it can never put a cheerful Fin beside a failure, which is the one
- * thing the plan's severity rule forbids outright.
+ * The brand mark carries no situational expression, so a failed pose cannot
+ * replace a warning with an accidentally cheerful reaction.
  */
 const FALLBACK: Thunk = SOURCES.brandMark;
 
@@ -214,17 +213,16 @@ export function Mascot({
   size = 96,
   style,
   label,
-  plate = true,
+  plate,
 }: {
   state: MascotState;
   /** Rendered square. The art is `contain`ed inside it, never cropped. */
   size?: number;
   style?: StyleProp<ViewStyle>;
   /**
-   * Draw the rounded near-white plate behind the art. On by default because
-   * none of the current poses are cut out — see the plate note above. Pass `false`
-   * for genuinely transparent art, or where the surface behind is already
-   * that colour.
+   * Draw the rounded near-white plate behind the art. By default contextual
+   * poses use it and the transparent `brandMark` does not. An explicit value
+   * overrides that state-aware default.
    */
   plate?: boolean;
   /**
@@ -251,6 +249,7 @@ export function Mascot({
   if (gaveUp) return null;
 
   const decorative = label === undefined;
+  const showPlate = plate ?? (state !== "brandMark");
 
   return (
     <View
@@ -259,7 +258,7 @@ export function Mascot({
           width: size,
           height: size,
           alignSelf: "center",
-          ...(plate
+          ...(showPlate
             ? { backgroundColor: t.mascotPlate, borderRadius: radius.lg, overflow: "hidden" as const }
             : null),
         },

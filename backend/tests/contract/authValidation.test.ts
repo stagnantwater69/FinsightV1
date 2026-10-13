@@ -152,6 +152,8 @@ describe("register: client and server agree", () => {
     { name: "an address with no @", input: { ...base, email: "owner.shop.ph" } },
     { name: "a name past the ceiling", input: { ...base, firstName: "a".repeat(101) } },
     { name: "a phone past the ceiling", input: { ...base, phoneNumber: "9".repeat(21) } },
+    { name: "a phone with a letter in it", input: { ...base, phoneNumber: "0917abc4567" } },
+    { name: "a phone with spaces or a plus sign", input: { ...base, phoneNumber: "+63 917 123 4567" } },
     {
       name: "an address past what the column can hold",
       input: { ...base, email: `${"a".repeat(MAX_EMAIL_LENGTH)}@shop.ph` },

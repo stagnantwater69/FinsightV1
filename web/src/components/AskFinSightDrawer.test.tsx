@@ -576,3 +576,68 @@ describe("what the drawer has always had to say", () => {
     expect(await screen.findByText(/read/i)).toHaveTextContent("PHP 11,000");
   });
 });
+
+describe("the composer holds a question longer than one line", () => {
+  function answer() {
+    post.mockResolvedValueOnce({
+      data: {
+        conversation: conversation({ id: 99, title: "Long one" }),
+        userMessage: message(101, "user", "Line one\nLine two"),
+        assistantMessage: message(102, "assistant", "Here is what I found."),
+        provider: "gemini",
+        detectedAmount: null,
+      },
+    });
+  }
+
+  it("keeps a line break instead of sending on Shift+Enter", async () => {
+    renderApp();
+    await open();
+    await userEvent.type(box(), "Line one{Shift>}{Enter}{/Shift}Line two");
+
+    expect(box()).toHaveValue("Line one\nLine two");
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("sends the whole question, line breaks and all, on Enter", async () => {
+    answer();
+    renderApp();
+    await open();
+    await userEvent.type(box(), "Line one{Shift>}{Enter}{/Shift}Line two{Enter}");
+
+    await screen.findByText("Here is what I found.");
+    expect(post).toHaveBeenCalledWith("/ai/conversations", {
+      businessProfileId: 7,
+      question: "Line one\nLine two",
+      originModule: "Dashboard",
+    });
+  });
+});
+
+describe("the send button's two states", () => {
+  /*
+   * The button now sits INSIDE the composer box and carries its own off/on
+   * colour, so its disabled state is the visible affordance rather than a
+   * detail only a hover would reveal. The colour itself is a class and not
+   * worth pinning; that it is genuinely off with nothing to send is.
+   */
+  it("is off with an empty box and on once something is typed", async () => {
+    renderApp();
+    await open();
+    const send = () => screen.getByRole("button", { name: "Send" });
+
+    expect(send()).toBeDisabled();
+
+    await userEvent.type(box(), "Why did rent go up?");
+    expect(send()).toBeEnabled();
+  });
+
+  it("stays off for a question that is only whitespace", async () => {
+    renderApp();
+    await open();
+
+    await userEvent.type(box(), "   ");
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(post).not.toHaveBeenCalled();
+  });
+});

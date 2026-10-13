@@ -27,6 +27,7 @@ const SHEET_HEIGHT = Math.round(Dimensions.get("window").height * 0.88);
 import { Ionicons } from "@expo/vector-icons";
 import { Button, Callout, ErrorNote, T } from "./ui";
 import { ChatHistoryPanel } from "./ChatHistoryPanel";
+import { ChatMarkdown, ChatReplyExtras } from "./ChatReply";
 import { useAiChat } from "../context/AiChatContext";
 import * as haptics from "../lib/haptics";
 import { formatMoney } from "../lib/money";
@@ -275,6 +276,12 @@ export function AskFinSight({
       visible={visible}
       animationType="none"
       transparent
+      // Edge to edge on Android, so the sheet reaches the bottom of the screen
+      // and the composer's own inset is the only gap under it. Without these
+      // the window stopped above the navigation bar and the composer padded
+      // for that bar a second time.
+      statusBarTranslucent
+      navigationBarTranslucent
       // Android's back button. While the history list is up it closes the
       // list, the way Escape does on web — backing out of the sheet entirely
       // from a list you only opened to look at is a step too far.
@@ -419,7 +426,28 @@ export function AskFinSight({
                   ) : null}
                 </View>
               }
-              renderItem={({ item }) => <Bubble from={item.role === "user" ? "user" : "ai"}>{item.content}</Bubble>}
+              renderItem={({ item, index }) =>
+                item.role === "user" ? (
+                  <Bubble from="user">{item.content}</Bubble>
+                ) : (
+                  <View style={{ gap: space.sm }}>
+                    <Bubble from="ai" markdown={item.content} />
+                    {item.metadata ? (
+                      <ChatReplyExtras
+                        metadata={item.metadata}
+                        // The newest reply, while nothing newer is being
+                        // written, is the one whose follow-ups and actions
+                        // are still current.
+                        latest={index === messages.length - 1 && !chat.sending}
+                        feedback={item.feedback ?? null}
+                        onFollowUp={(question) => chat.setInput(question)}
+                        onRate={(value) => void chat.rate(item.id, value)}
+                        onLeave={close}
+                      />
+                    ) : null}
+                  </View>
+                )
+              }
               ListFooterComponent={
                 <View style={{ gap: space.md, marginTop: space.md }}>
                   {chat.sending ? (
@@ -503,17 +531,24 @@ export function AskFinSight({
           </View>
 
           {/*
+            Hidden while the history list is up: a question typed there would
+            go to whichever thread happens to be active behind the list.
+
             The composer clears the home indicator itself. The sheet is a bare
             Animated.View rather than a SafeAreaView, because the safe area
             belongs at the BOTTOM of the sheet only — applying it to the whole
             sheet would inset the dark header away from the rounded top corners.
           */}
+          {historyOpen ? null : (
           <View
             style={{
               flexDirection: "row",
+              alignItems: "flex-end",
               gap: space.sm,
               padding: space.md,
-              paddingBottom: space.md + insets.bottom,
+              // With the keyboard up it already covers the home indicator, so
+              // clearing it as well left a band of empty space above the keys.
+              paddingBottom: space.md + (inputFocused ? 0 : insets.bottom),
               borderTopWidth: 1,
               borderTopColor: ink[200],
               backgroundColor: paper.DEFAULT,
@@ -525,7 +560,15 @@ export function AskFinSight({
               placeholder="Ask about your numbers…"
               placeholderTextColor={ink[400]}
               maxLength={FIELD_LIMITS.aiQuestion}
-              onSubmitEditing={() => submit(chat.input)}
+              /*
+                Multi-line, so a question longer than the box stays readable
+                while it is being written — a single line scrolled its own start
+                out of sight. Return inserts a line break rather than sending;
+                Send is the only way out, which is what every phone keyboard's
+                return key already implies here.
+              */
+              multiline
+              textAlignVertical="top"
               onFocus={() => setInputFocused(true)}
               onBlur={() => setInputFocused(false)}
               /*
@@ -540,10 +583,16 @@ export function AskFinSight({
               style={{
                 flex: 1,
                 minHeight: TAP,
+                // Around six lines. Past that the field scrolls, so the
+                // composer can never grow over the conversation behind it.
+                maxHeight: 140,
                 borderWidth: 1,
                 borderColor: inputFocused ? brand[600] : ink[200],
-                borderRadius: radius.full,
+                // Not radius.full: at one line this reads as the same pill as
+                // before, but a pill on a six-line box bows its own edges.
+                borderRadius: radius.xl,
                 paddingHorizontal: space.md,
+                paddingVertical: space.md,
                 fontSize: typeScale.body,
                 color: ink[900],
               }}
@@ -554,13 +603,14 @@ export function AskFinSight({
               disabled={!chat.input.trim() || chat.sending}
             />
           </View>
+          )}
         </KeyboardAvoidingView>
       </Animated.View>
     </Modal>
   );
 }
 
-function Bubble({ from, children }: { from: "ai" | "user"; children: React.ReactNode }) {
+function Bubble({ from, children, markdown }: { from: "ai" | "user"; children?: React.ReactNode; markdown?: string }) {
   const t = useTheme();
   const { brand } = t;
   const isUser = from === "user";
@@ -577,7 +627,11 @@ function Bubble({ from, children }: { from: "ai" | "user"; children: React.React
           paddingVertical: space.sm,
         }}
       >
-        <T style={{ color: isUser ? t.onBrandFill : t.textSecondary, fontSize: typeScale.bodySm, lineHeight: 20 }}>{children}</T>
+        {markdown !== undefined ? (
+          <ChatMarkdown text={markdown} color={t.textSecondary} />
+        ) : (
+          <T style={{ color: isUser ? t.onBrandFill : t.textSecondary, fontSize: typeScale.bodySm, lineHeight: 20 }}>{children}</T>
+        )}
       </View>
     </View>
   );

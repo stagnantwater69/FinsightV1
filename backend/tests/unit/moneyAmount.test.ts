@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { MAX_MONEY_AMOUNT, moneyAmountSchema } from "../../src/lib/money";
+import {
+  MAX_MONEY_AMOUNT,
+  moneyAmountSchema,
+  nonnegativeMoneyAmountSchema,
+} from "../../src/lib/money";
+import { simulateSpendingImpact } from "../../src/services/insights.service";
 
 /**
  * API-004. `z.number().positive()` accepted 0.001, Prisma rounded it into a
@@ -40,4 +45,27 @@ describe("moneyAmountSchema", () => {
     expect(moneyAmountSchema.safeParse(Number.NaN).success).toBe(false);
     expect(moneyAmountSchema.safeParse(Number.POSITIVE_INFINITY).success).toBe(false);
   });
+});
+
+describe("nonnegativeMoneyAmountSchema", () => {
+  it.each([0, 0.01, 12.5, MAX_MONEY_AMOUNT])("accepts simulation amount %p", (value) => {
+    expect(nonnegativeMoneyAmountSchema.safeParse(value).success).toBe(true);
+  });
+
+  it.each([
+    -0.01,
+    0.001,
+    MAX_MONEY_AMOUNT + 0.01,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+  ])("rejects non-money simulation amount %p", (value) => {
+    expect(nonnegativeMoneyAmountSchema.safeParse(value).success).toBe(false);
+  });
+
+  it.each([-0.01, 0.001, MAX_MONEY_AMOUNT + 0.01, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects %p inside the spending-impact service before ownership or database work",
+    async (value) => {
+      await expect(simulateSpendingImpact(1, 1, value)).rejects.toMatchObject({ status: 400 });
+    },
+  );
 });

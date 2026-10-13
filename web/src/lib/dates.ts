@@ -56,3 +56,28 @@ export function toLocalIsoDate(date: Date = new Date(), timeZone?: string): stri
 export function todayIso(timeZone?: string): string {
   return toLocalIsoDate(new Date(), timeZone);
 }
+
+/**
+ * Expense and sales dates may not be later than the business's today. The
+ * server enforces the same rule; this is the message both show.
+ */
+export const FUTURE_DATE_MESSAGE = "Date can't be in the future. Choose today or an earlier date.";
+
+/**
+ * The inline error for a transaction date, or null when it is allowed.
+ * Both values are `YYYY-MM-DD`, so comparing the strings compares the days
+ * with no timezone conversion. An empty value is left to `required`.
+ */
+export function futureDateError(value: string, today: string): string | null {
+  return value && value > today ? FUTURE_DATE_MESSAGE : null;
+}
+
+/** "Oct 5, 2026" for a stored `YYYY-MM-DD`, read in UTC so it is never shifted a day. */
+export function formatCalendarDate(key: string): string {
+  return new Date(`${key.slice(0, 10)}T00:00:00Z`).toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+}

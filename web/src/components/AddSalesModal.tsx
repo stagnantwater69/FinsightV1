@@ -3,10 +3,11 @@ import { Modal } from "./Modal";
 import { Button } from "./Button";
 import { useToast } from "./Toast";
 import { Field, FormError, MoneyInput, TextInput } from "./Field";
+import { TransactionDateField, useTransactionDate } from "./TransactionDateField";
 import { api } from "../lib/api";
 import { getErrorMessage } from "../lib/errors";
 import type { RecordItem } from "../lib/types";
-import { todayIso as today } from "../lib/dates";
+import { AvailableFundsBaselineChoice, useAvailableFundsBaselineChoice } from "./AvailableFundsBaselineChoice";
 
 export interface DuplicateSalesSeed {
   description: string;
@@ -42,7 +43,9 @@ export function AddSalesModal({
 }) {
   const toast = useToast();
   const editing = recordId !== undefined;
-  const [date, setDate] = useState(today());
+  const dateField = useTransactionDate();
+  const date = dateField.date;
+  const baselineChoice = useAvailableFundsBaselineChoice(date);
   const [description, setDescription] = useState("Daily sales");
   const [amount, setAmount] = useState<number | "">("");
   const [loading, setLoading] = useState(false);
@@ -50,10 +53,11 @@ export function AddSalesModal({
   const [submitting, setSubmitting] = useState(false);
 
   function reset() {
-    setDate(today());
+    dateField.setDate(dateField.today);
     setDescription("Daily sales");
     setAmount("");
     setError(null);
+    baselineChoice.setDecision(null);
   }
 
   // See AddExpenseModal's identical effect — the modal stays mounted across
@@ -67,9 +71,13 @@ export function AddSalesModal({
       api
         .get<RecordItem>(`/records/sales/${recordId}`)
         .then(({ data }) => {
-          setDate(data.date.slice(0, 10));
+          dateField.setDate(data.date.slice(0, 10));
           setDescription(data.description);
           setAmount(data.amount);
+          baselineChoice.setFromRecord(
+            data.includedInAvailableFundsBaseline ?? null,
+            data.availableFundsDeltaBaselineAt,
+          );
         })
         .catch((err) => setError(getErrorMessage(err)))
         .finally(() => setLoading(false));
@@ -87,22 +95,32 @@ export function AddSalesModal({
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (amount === "") return;
+    if (amount === "" || !dateField.check() || !baselineChoice.check()) return;
     setError(null);
     setSubmitting(true);
     try {
       if (editing && recordId !== undefined) {
-        await api.patch(`/records/sales/${recordId}`, { date, description, amount });
+        await api.patch(
+          `/records/sales/${recordId}`,
+          { date, description, amount, ...baselineChoice.requestFields() },
+          { serverStateScope: { businessProfileId } },
+        );
         toast("Changes saved");
       } else {
-        await api.post("/records/sales", { businessProfileId, date, description, amount });
+        await api.post("/records/sales", {
+          businessProfileId,
+          date,
+          description,
+          amount,
+          ...baselineChoice.requestFields(),
+        });
         toast("Sales reference saved");
       }
       reset();
       onSaved();
       onClose();
     } catch (err) {
-      setError(getErrorMessage(err));
+      if (!dateField.absorb(err) && !(await baselineChoice.absorb(err))) setError(getErrorMessage(err));
     } finally {
       setSubmitting(false);
     }
@@ -112,9 +130,8 @@ export function AddSalesModal({
     <Modal open={open} onClose={handleClose} title={editing ? "Edit sales reference" : "Add sales reference"}>
       <form onSubmit={handleSubmit} className="space-y-4">
         {loading ? <p className="text-sm text-ink-500">Loading…</p> : null}
-        <Field label="Date" required>
-          <TextInput type="date" required value={date} onChange={(e) => setDate(e.target.value)} />
-        </Field>
+        <TransactionDateField field={dateField} />
+        <AvailableFundsBaselineChoice choice={baselineChoice} disabled={submitting || loading} />
         <Field label="Description" required>
           <TextInput required value={description} onChange={(e) => setDescription(e.target.value)} />
         </Field>
@@ -127,7 +144,7 @@ export function AddSalesModal({
           />
         </Field>
         {error ? <FormError>{error}</FormError> : null}
-        <Button type="submit" variant="primary" fullWidth disabled={submitting || loading}>
+        <Button type="submit" variant="primary" fullWidth disabled={submitting || loading || dateField.invalid}>
           {submitting ? "Saving…" : editing ? "Save changes" : "Save sales reference"}
         </Button>
       </form>

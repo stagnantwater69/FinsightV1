@@ -4,13 +4,19 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 // test exercises real parsing, real category resolution and real DB writes
 // without needing network or credentials. The upload itself is covered by the
 // live regression pass, not here.
-vi.mock("../../src/services/storage.service", () => ({
-  uploadCsvFile: vi.fn(async () => "test/mock-csv-path.csv"),
-  uploadReceiptImage: vi.fn(async () => "test/mock-receipt-path.jpg"),
-}));
+vi.mock("../../src/services/storage.service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/services/storage.service")>();
+  return {
+    ...actual,
+    uploadCsvFile: vi.fn(async () => "test/mock-csv-path.csv"),
+    uploadCsvFileAtReference: vi.fn(async () => undefined),
+    uploadReceiptImage: vi.fn(async () => "test/mock-receipt-path.jpg"),
+  };
+});
 
 import { prisma } from "../../src/config/prisma";
-import { confirmImport, MAX_IMPORT_ROWS, previewCsv } from "../../src/services/csvImport.service";
+import { confirmImport, previewCsv } from "../../src/services/csvImport.service";
+import { CSV_MAX_FILE_BYTES } from "../../src/lib/csvUploadValidation";
 import { disconnectDb, makeOwnerWithProfile, resetDb, utcDayString } from "../setup/testDb";
 
 let ctx: Awaited<ReturnType<typeof makeOwnerWithProfile>>;
@@ -52,68 +58,49 @@ async function importExpenses(
   });
 }
 
-describe("the import is bounded by ROW COUNT, not only by file size", () => {
+describe("the import is bounded by FILE SIZE, not by row count", () => {
   /*
-   * WHY THIS BOUND EXISTS AND WHY IT IS NOT MEGABYTES. The upload is already
-   * capped at 5 MB by multer, and that number says almost nothing about how
-   * much work the file represents. A CSV is plain text, so its size tracks the
-   * characters in it rather than the records:
-   *
-   *   `2026-01-05,Load,120`           ~25 bytes  →  5 MB is ~200,000 rows
-   *   a row with a full description  ~600 bytes  →  5 MB is ~8,000 rows
-   *
-   * Twenty-five times the work for an identical file size — and each row
-   * becomes an ExpenseRecord with its own validation, duplicate check, large-
-   * expense evaluation and analysis job. Bytes do not bound the cost; rows do.
+   * There is no row limit; 5 MB is the limit. The row cap (5,000, then 30,000,
+   * then 100,000) kept refusing ordinary files — a burger stall's three years
+   * of per-sale history is 64,158 rows — while 5 MB already bounds the work:
+   * the shortest usable row is ~15 bytes, so no 5 MB file is much past 350,000
+   * rows, and anything over SYNC_ROW_LIMIT runs on the chunked worker.
    */
   function rowsOfLength(count: number): string[] {
     return Array.from({ length: count }, (_, i) => `${utcDayString(-((i % 27) + 1))},Row ${i},100,Inventory`);
   }
 
-  it("accepts a file exactly at the limit", () => {
-    expect(previewCsv(csv(rowsOfLength(MAX_IMPORT_ROWS))).totalRows).toBe(MAX_IMPORT_ROWS);
+  /** The shortest rows an import can use, filling the file up to `bytes`. */
+  function shortestRowsUpTo(bytes: number): Buffer {
+    const header = "Transaction Date,Particulars,Cash Out,Class";
+    const row = `${utcDayString(-1)},a,1,b`;
+    return csv(Array(Math.floor((bytes - header.length - 1) / (row.length + 1)) - 1).fill(row));
+  }
+
+  it("accepts far more rows than the old caps, as long as the file is under 5 MB", () => {
+    const buffer = shortestRowsUpTo(CSV_MAX_FILE_BYTES);
+    expect(buffer.byteLength).toBeLessThanOrEqual(CSV_MAX_FILE_BYTES);
+    expect(previewCsv(buffer).totalRows).toBeGreaterThan(250_000);
   });
 
-  it("refuses one row past it, with a message that says what to do", () => {
-    let message = "";
+  it("refuses a file over 5 MB, with a message that says what to do", () => {
+    const buffer = csv(rowsOfLength(Math.ceil(CSV_MAX_FILE_BYTES / 30)));
+    expect(buffer.byteLength).toBeGreaterThan(CSV_MAX_FILE_BYTES);
+
+    let error: unknown;
     try {
-      previewCsv(csv(rowsOfLength(MAX_IMPORT_ROWS + 1)));
+      previewCsv(buffer);
     } catch (err) {
-      message = err instanceof Error ? err.message : String(err);
+      error = err;
     }
-    // Names both figures and the remedy: "too large" is unactionable when the
-    // file is only a few megabytes and the owner cannot see why.
-    expect(message).toContain(String(MAX_IMPORT_ROWS + 1).replace(/\B(?=(\d{3})+(?!\d))/g, ","));
-    expect(message).toMatch(/split/i);
+    expect(error).toMatchObject({ status: 413, code: "CSV_FILE_TOO_LARGE" });
+    expect((error as Error).message).toMatch(/5 MB/);
+    expect((error as Error).message).toMatch(/split/i);
   });
 
-  /**
-   * Refused at PREVIEW, not only at confirm. An owner must not spend time
-   * mapping columns for an import that was never going to run.
-   */
-  it("refuses on the mapping screen, before any column is matched", () => {
-    expect(() => previewCsv(csv(rowsOfLength(MAX_IMPORT_ROWS + 1)))).toThrow(/limit is/i);
-  });
-
-  it("refuses the same file at confirm, so the two cannot disagree", async () => {
-    await expect(importExpenses(csv(rowsOfLength(MAX_IMPORT_ROWS + 1)))).rejects.toThrow(/limit is/i);
-  });
-
-  /**
-   * Set from measured capacity AND from use.
-   *
-   * The floor below is the case that drove it up from 5,000: a business
-   * importing per-transaction SALES history produces 50-100 rows a day, which
-   * 5,000 covered for under three months. A year of that is the bar.
-   *
-   * The ceiling is real too — the import runs inside one request, and the
-   * measured cost is ~160µs a row — so a limit far above this wants the job
-   * queue rather than a bigger number, and this test fails if someone raises it
-   * to a figure that no longer fits a request.
-   */
-  it("covers a year of per-transaction sales without leaving request scope", () => {
-    expect(MAX_IMPORT_ROWS).toBeGreaterThanOrEqual(365 * 50);
-    expect(MAX_IMPORT_ROWS).toBeLessThanOrEqual(50_000);
+  it("refuses the same oversized file at confirm, so preview and confirm cannot disagree", async () => {
+    const buffer = csv(rowsOfLength(Math.ceil(CSV_MAX_FILE_BYTES / 30)));
+    await expect(importExpenses(buffer)).rejects.toMatchObject({ code: "CSV_FILE_TOO_LARGE" });
   });
 });
 
@@ -377,7 +364,9 @@ describe("import of a file with a mix of valid and invalid rows", () => {
   it("records the batch with a stored file reference (NOT NULL in the dictionary)", async () => {
     const result = await importExpenses(csv([`${utcDayString(-1)},Supplier stocks,1400,Inventory`]));
     const batch = await prisma.cSVImportBatch.findUniqueOrThrow({ where: { id: result.batchId } });
-    expect(batch.fileReference).toBe("test/mock-csv-path.csv");
+    expect(batch.fileReference).toMatch(
+      new RegExp(`^${ctx.profile.id}/[0-9a-f-]{36}-test\\.csv$`, "i"),
+    );
     expect(batch.title).toBe("Test batch");
   });
 });
@@ -653,9 +642,10 @@ describe("mixed sales-and-expense imports", () => {
    * file this feature exists to accept.
    */
   it("files uncategorised expenses rather than rejecting them", async () => {
+    // Nothing in "Juan dela Cruz" says what was bought, so nothing is guessed.
     const result = await importMixed(
       Buffer.from(
-        ["Date,Particulars,Amount,Type", `${utcDayString(-1)},Morning sales,2500,Sale`, `${utcDayString(-1)},Supplier stocks,1400,Expense`].join("\n") + "\n",
+        ["Date,Particulars,Amount,Type", `${utcDayString(-1)},Morning sales,2500,Sale`, `${utcDayString(-1)},Juan dela Cruz,1400,Expense`].join("\n") + "\n",
       ),
       { date: "Date", description: "Particulars", amount: "Amount", recordType: "Type" },
     );
@@ -668,6 +658,26 @@ describe("mixed sales-and-expense imports", () => {
       include: { category: true },
     });
     expect(expense.category.name).toBe("Uncategorised");
+  });
+
+  it("suggests a category for an expense row the file does not categorise", async () => {
+    const result = await importMixed(
+      Buffer.from(
+        ["Date,Particulars,Amount,Type", `${utcDayString(-1)},Morning sales,2500,Sale`, `${utcDayString(-1)},Supplier stocks,1400,Expense`].join("\n") + "\n",
+      ),
+      { date: "Date", description: "Particulars", amount: "Amount", recordType: "Type" },
+    );
+
+    expect(result.imported).toBe(2);
+    expect(result.uncategorised).toBe(0);
+    const expense = await prisma.expenseRecord.findFirstOrThrow({
+      where: { businessProfileId: ctx.profile.id },
+      include: { category: true },
+    });
+    // The business already has "Inventory", so it is reused rather than a
+    // standard "Inventory / Stock" created beside it.
+    expect(expense.category.name).toBe("Inventory");
+    expect(await prisma.expenseCategory.count({ where: { businessProfileId: ctx.profile.id, name: "Inventory / Stock" } })).toBe(0);
   });
 
   it("reads the bank-statement convention where expenses are negative", async () => {

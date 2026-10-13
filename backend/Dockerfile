@@ -1,7 +1,7 @@
 # ---------------------------------------------------------------------------
 # Build — compiles TypeScript and generates the Prisma client.
 # ---------------------------------------------------------------------------
-FROM node:24-bookworm-slim AS build
+FROM node:22-bookworm-slim AS build
 WORKDIR /app
 
 # Prisma's query engine needs OpenSSL at both build and run time.
@@ -31,7 +31,7 @@ RUN npm run build
 # node_modules and would otherwise be missing from this tree. It is the
 # generated client the runtime needs, never the CLI.
 # ---------------------------------------------------------------------------
-FROM node:24-bookworm-slim AS deps
+FROM node:22-bookworm-slim AS deps
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends openssl \
@@ -48,7 +48,7 @@ RUN npm uninstall --no-save --ignore-scripts --omit=dev prisma
 # ---------------------------------------------------------------------------
 # Runtime
 # ---------------------------------------------------------------------------
-FROM node:24-bookworm-slim AS runtime
+FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends openssl \

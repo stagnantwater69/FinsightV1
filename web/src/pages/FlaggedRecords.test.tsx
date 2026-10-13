@@ -305,7 +305,7 @@ describe("the unified review queue", () => {
 describe("the flagged list is paged, not truncated", () => {
   it("asks for a bounded page rather than the whole flagged history", async () => {
     renderPage();
-    await screen.findByText("Nothing needs review right now");
+    await screen.findByText("Nothing needs review");
 
     const call = gets.find((g) => g.url === "/records/flagged");
     expect(call).toBeDefined();
@@ -367,7 +367,7 @@ describe("the flagged list is paged, not truncated", () => {
 
   it("shows the empty state when there is genuinely nothing flagged", async () => {
     renderPage();
-    expect(await screen.findByText("Nothing needs review right now")).toBeInTheDocument();
+    expect(await screen.findByText("Nothing needs review")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Show more/ })).not.toBeInTheDocument();
   });
 

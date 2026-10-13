@@ -14,6 +14,10 @@ vi.mock("../../src/services/storage.service", () => ({
   signedReceiptImageUrl: vi.fn(),
 }));
 
+import { createHash } from "node:crypto";
+
+import { ReceiptPurgeMode, ReceiptPurgeReason } from "@prisma/client";
+
 import { prisma } from "../../src/config/prisma";
 import { runReceiptWorkerOnce } from "../../src/services/receiptScan/worker";
 import { disconnectDb, makeOwnerWithProfile, resetDb } from "../setup/testDb";
@@ -65,6 +69,48 @@ describe("receipt worker attempt ceiling", () => {
 
     const after = await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } });
     expect(after.processingAttemptCount).toBe(2);
+  });
+
+  it("does not fail a scan that is already scheduled for purge", async () => {
+    /*
+     * Every other transition in the pipeline — claimScan, storedInput,
+     * persistReceiptProcessingOutput — refuses to touch a scan with a
+     * DELETE_SCAN purge job or an evidenceDeletionRequestedAt. This one used
+     * to write regardless, which would stamp a fresh lastActivityAt and an
+     * owner-facing "could not be read" error onto a row that is on its way
+     * out, putting a deleted receipt back in the owner's failed list.
+     *
+     * Today's enqueue paths all move the scan to Deletion Pending in the same
+     * transaction, so the state below has to be built directly. That is the
+     * point of pinning it: the guard is what keeps a future enqueue path, or a
+     * purge that is retrying its stages, from depending on a status flip that
+     * this query never checked.
+     */
+    const scan = await staleScan(3);
+    await prisma.receiptScan.update({
+      where: { id: scan.id },
+      data: { evidenceDeletionRequestedAt: new Date() },
+    });
+    await prisma.receiptPurgeJob.create({
+      data: {
+        businessProfileId: scan.businessProfileId!,
+        receiptScanId: scan.id,
+        receiptScanBusinessProfileId: scan.businessProfileId!,
+        // The table's CHECK constraint requires lowercase 64-char hex.
+        requestKeyHash: createHash("sha256").update(`purge-request-${scan.id}`).digest("hex"),
+        targetReferenceHash: createHash("sha256").update(`purge-target-${scan.id}`).digest("hex"),
+        reason: ReceiptPurgeReason.OWNER_REQUEST,
+        mode: ReceiptPurgeMode.DELETE_SCAN,
+        storageObjectsExpected: 1,
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    });
+
+    await runReceiptWorkerOnce();
+
+    const after = await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } });
+    expect(after.processingStatus).toBe("Processing");
+    expect(after.processingErrorCode).toBeNull();
   });
 
   it("leaves a fresh lease alone even at the ceiling", async () => {
