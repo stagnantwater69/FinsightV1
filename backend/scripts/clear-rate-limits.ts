@@ -34,7 +34,7 @@ async function main() {
 
   const filter = process.argv[2];
   const { count } = await prisma.apiRateLimit.deleteMany(
-    filter ? { where: { key: { contains: filter } } } : {},
+    filter ? { where: { key: { contains: filter } } } : undefined,
   );
 
   console.log(

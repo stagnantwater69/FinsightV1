@@ -39,9 +39,11 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-const [, , rawType, email] = process.argv;
+const [, , rawType, rawEmail] = process.argv;
 
-if (!rawType || !email) fail(USAGE);
+if (!rawType || !rawEmail) fail(USAGE);
+// Bound after the check so main() sees a string, not string | undefined.
+const email: string = rawEmail;
 if (rawType !== "signup" && rawType !== "recovery") {
   fail(`Unknown link type "${rawType}".\n  ${USAGE}`);
 }
