@@ -375,12 +375,14 @@ async function toError(res: Response, path: string, generation: number, signal: 
 }
 
 function networkError(err: unknown): ApiError {
-  const detail = err instanceof Error ? err.message : String(err);
-  return new ApiError(
-    0,
-    `Couldn't reach FinSight. Check your internet connection, and if you're on a phone make sure it can ` +
-      `reach the server address in your settings (${API_BASE_URL}). [${detail}]`
-  );
+  const detail = err instanceof Error ? err.message : "";
+  if (detail === "The request timed out" || detail === "The upload timed out") {
+    return new ApiError(0, "The request timed out. Please try again.");
+  }
+  if (detail === "The request was cancelled" || detail === "The upload was cancelled") {
+    return new ApiError(0, "The request was cancelled. Please try again when you're ready.");
+  }
+  return new ApiError(0, "Couldn't reach FinSight. Check your connection and try again in a moment.");
 }
 
 /**
@@ -657,9 +659,6 @@ function uploadRequest<T>(
         reject(new ApiError(status, message, fieldErrors, code, responseBody));
       };
 
-      // XHR reports every transport failure as a bare event with no reason
-      // attached, so this is the one place the detail in networkError cannot
-      // come from an exception.
       xhr.onerror = () => { detach(); reject(networkError(new Error("Network request failed"))); };
       xhr.ontimeout = () => { detach(); reject(networkError(new Error("The upload timed out"))); };
       xhr.onabort = () => { detach(); reject(networkError(new Error("The upload was cancelled"))); };
