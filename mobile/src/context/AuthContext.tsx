@@ -6,6 +6,7 @@ import { commitPreferences, DEFAULT_PREFERENCES } from "../lib/preferences";
 import { clearReceiptScannerCache } from "../lib/receiptScannerCache";
 import { beginServerStateSession, clearServerStateCache } from "../lib/serverStateCache";
 import { clearChatSendRecovery } from "../lib/chatSendRecovery";
+import { clearReceiptReviewDraftsForOwner } from "../lib/receiptReviewDraft";
 import type {
   BusinessProfile,
   LoginInput,
@@ -154,7 +155,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const replaceExpectedAccount = useCallback((userId: number | null, preserveTransport = false): AccountSessionGuard => {
     const previousUserId = expectedUserIdRef.current;
-    if (previousUserId !== null && previousUserId !== userId) void clearChatSendRecovery(previousUserId).catch(() => undefined);
+    if (previousUserId !== null && previousUserId !== userId) {
+      void clearChatSendRecovery(previousUserId).catch(() => undefined);
+      void clearReceiptReviewDraftsForOwner(previousUserId).catch(() => undefined);
+    }
     if (!preserveTransport) invalidateApiSessionRequests();
     for (const controller of accountRequestControllersRef.current) controller.abort();
     accountRequestControllersRef.current.clear();
