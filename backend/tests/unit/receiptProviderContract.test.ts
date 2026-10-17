@@ -9,6 +9,8 @@ import {
   validateReceiptProviderOutcome,
 } from "../../src/services/receiptProviderContract";
 import { MAX_MONEY_AMOUNT } from "../../src/lib/money";
+import type { NormalizedEvidence } from "../../src/services/receiptProviderContract";
+import type { RescueReasonCode } from "../../src/services/receiptRescueDecision";
 import {
   evidence,
   localExtraction,
@@ -470,5 +472,113 @@ describe("Phase 1 provider implementations", () => {
 
     expect(adapterSource).not.toMatch(/azure|document.?intelligence|form.?recognizer/i);
     expect(dependencyNames.some((name) => /azure.*(document|form)|@(azure)\/ai/i.test(name))).toBe(false);
+  });
+});
+
+// The local vendor is never validated (nothing corroborates a header guess), so a
+// validated provider vendor wins in both modes; snapVendorToHistory restores a confirmed one.
+describe("vendor precedence between the local parse and the provider", () => {
+  // Exactly what worker.ts localEvidence(false) gives every local vendor.
+  const localVendorEvidence: NormalizedEvidence = {
+    ...evidence("local-tesseract", { confidenceBand: "LOW", calibrationState: "UNCALIBRATED", validationState: "UNVALIDATED" }),
+    validationCodes: ["FORMAT_VALID", "REGION_UNAVAILABLE", "OWNER_REVIEW_REQUIRED"],
+  };
+  // Exactly what providerAdapters.ts gives a provider vendor.
+  const providerVendorEvidence: NormalizedEvidence = {
+    ...evidence("gemini", { confidenceBand: "MEDIUM", calibrationState: "UNCALIBRATED", validationState: "VALIDATED" }),
+    validationCodes: ["FORMAT_VALID", "REGION_UNAVAILABLE", "OWNER_REVIEW_REQUIRED"],
+  };
+  const unvalidatedProviderEvidence: NormalizedEvidence = {
+    ...providerVendorEvidence,
+    confidenceBand: "LOW",
+    validationState: "UNVALIDATED",
+  };
+
+  const modes: [string, RescueReasonCode[]][] = [
+    // Rescue opened for the total; the vendor line itself parsed cleanly.
+    ["rescue", ["CONFLICTING_CRITICAL_TOTAL"]],
+    ["always", ["PROVIDER_ROUTING_ALWAYS"]],
+  ];
+
+  function merge(
+    reasons: RescueReasonCode[],
+    localVendor: string | null,
+    providerVendor: { value: string | null; evidence: NormalizedEvidence | null },
+  ) {
+    const request = providerRequest({ rescueDecision: rescueDecision({ reasons }) });
+    const local = localExtraction({
+      vendor: { value: localVendor, evidence: localVendor === null ? null : localVendorEvidence },
+    });
+    const extraction = successfulOutcome(request).extraction!;
+    const providerEvidence = evidence("gemini");
+    return {
+      local,
+      merged: mergeReceiptProviderOutcome(local, request, successfulOutcome(request, {
+        extraction: {
+          ...extraction,
+          // Same date and total as the local read, so only the vendor can differ.
+          date: { value: local.date.value, evidence: providerEvidence },
+          total: { value: local.total.value, evidence: providerEvidence },
+          currency: { value: null, evidence: null },
+          vendor: providerVendor,
+        },
+      })),
+    };
+  }
+
+  it.each(modes)("%s routing: a validated provider vendor replaces a cleanly parsed, differing local one", (_mode, reasons) => {
+    const { merged } = merge(reasons, "SAVEMORE MARKET", { value: "SM Savemore", evidence: providerVendorEvidence });
+
+    expect(merged.appliedFields).toEqual(["vendor"]);
+    expect(merged.receipt.vendor).toEqual({ value: "SM Savemore", evidence: providerVendorEvidence });
+  });
+
+  it.each(modes)("%s routing: the provider vendor fills a vendor the local parse missed", (_mode, reasons) => {
+    const missingReasons: RescueReasonCode[] = ["MISSING_CRITICAL_VENDOR", ...reasons];
+    const { merged } = merge(missingReasons, null, { value: "SM Savemore", evidence: providerVendorEvidence });
+
+    expect(merged.appliedFields).toEqual(["vendor"]);
+    expect(merged.receipt.vendor.value).toBe("SM Savemore");
+  });
+
+  it.each(modes)("%s routing: agreeing readings keep the local spelling and apply nothing", (_mode, reasons) => {
+    const { local, merged } = merge(reasons, "SAVEMORE MARKET", { value: "  savemore market ", evidence: providerVendorEvidence });
+
+    expect(merged.appliedFields).toEqual([]);
+    expect(merged.reason).toBe("NO_SAFER_FIELDS");
+    expect(merged.receipt.vendor).toEqual(local.vendor);
+  });
+
+  it.each(modes)("%s routing: a provider that read no vendor leaves the local one in place", (_mode, reasons) => {
+    const { local, merged } = merge(reasons, "SAVEMORE MARKET", { value: null, evidence: null });
+
+    expect(merged.appliedFields).not.toContain("vendor");
+    expect(merged.receipt.vendor).toEqual(local.vendor);
+  });
+
+  it.each(modes)("%s routing: an unvalidated provider vendor never displaces the local one", (_mode, reasons) => {
+    const { local, merged } = merge(reasons, "SAVEMORE MARKET", { value: "SM Savemore", evidence: unvalidatedProviderEvidence });
+
+    expect(merged.appliedFields).not.toContain("vendor");
+    expect(merged.receipt.vendor).toEqual(local.vendor);
+  });
+
+  it.each(modes)("%s routing: an unvalidated provider vendor does not fill a missing local one", (_mode, reasons) => {
+    const { merged } = merge(reasons, null, { value: "SM Savemore", evidence: unvalidatedProviderEvidence });
+
+    expect(merged.appliedFields).not.toContain("vendor");
+    expect(merged.receipt.vendor).toEqual({ value: null, evidence: null });
+  });
+
+  it("rescue routing: only local evidence that claimed validation could hold the vendor, which is why the worker never claims it", () => {
+    const request = providerRequest({ rescueDecision: rescueDecision({ reasons: ["CONFLICTING_CRITICAL_TOTAL"] }) });
+    const local = localExtraction({ vendor: { value: "bn eee ippines, Inc. i", evidence: evidence("local-tesseract") } });
+    const extraction = successfulOutcome(request).extraction!;
+    const merged = mergeReceiptProviderOutcome(local, request, successfulOutcome(request, {
+      extraction: { ...extraction, vendor: { value: "SM Savemore", evidence: providerVendorEvidence } },
+    }));
+
+    expect(merged.appliedFields).not.toContain("vendor");
+    expect(merged.receipt.vendor.value).toBe("bn eee ippines, Inc. i");
   });
 });

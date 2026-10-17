@@ -9,6 +9,7 @@ vi.mock("../../src/services/storage.service", () => ({
   uploadReceiptImage: vi.fn(),
 }));
 
+import { logger } from "../../src/config/logger";
 import { prisma } from "../../src/config/prisma";
 import { getScan, retryScan } from "../../src/services/receiptScan/queue";
 import {
@@ -153,5 +154,97 @@ describe("receipt processing timing", () => {
     expect(reconciled.processingStatus).toBe("Failed");
     expect(reconciled.processingCompletedAt).not.toBeNull();
     expect(reconciled.processingCompletedAt!.getTime() - processingStartedAt.getTime()).toBeGreaterThanOrEqual(120_000);
+  });
+
+  it("logs one timing line per attempt, each starting from zero, and stores none for a failed attempt", async () => {
+    const info = vi.spyOn(logger, "info");
+    const owner = await makeOwnerWithProfile({}, ["Inventory"]);
+    const scan = await prisma.receiptScan.create({
+      data: {
+        businessProfileId: owner.profile.id,
+        imageFile: `${owner.profile.id}/timed-lines.jpg`,
+        processingStatus: "Processing",
+        confirmationStatus: "Pending",
+        nextProcessingAttemptAt: new Date(Date.now() - 5_000),
+        pages: {
+          create: { pageNumber: 1, imageFile: `${owner.profile.id}/timed-lines.jpg` },
+        },
+      },
+    });
+
+    try {
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        expect(await runReceiptWorkerOnce()).toBe(true);
+        if (attempt < 3) {
+          await prisma.receiptScan.update({ where: { id: scan.id }, data: { nextProcessingAttemptAt: new Date() } });
+        }
+      }
+
+      const lines = info.mock.calls
+        .filter(([, message]) => message === "receipt scan timings")
+        .map(([fields]) => fields as Record<string, unknown>);
+      expect(lines.map((line) => [line.scanId, line.attempt, line.outcome])).toEqual([
+        [scan.id, 1, "retrying"],
+        [scan.id, 2, "retrying"],
+        [scan.id, 3, "failed"],
+      ]);
+      for (const line of lines) {
+        // The evidence store is offline, so every attempt ends in restore.
+        expect(line).toMatchObject({ ocrMs: null, providerMs: null, finalizeMs: null, persistMs: null });
+        expect(line.restoreMs).toEqual(expect.any(Number));
+        expect(line.queueWaitMs).toEqual(expect.any(Number));
+        expect(line.totalMs as number).toBeGreaterThanOrEqual(line.restoreMs as number);
+      }
+      expect(lines[0]!.queueWaitMs as number).toBeGreaterThanOrEqual(5_000);
+
+      const failed = await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } });
+      expect(failed.extractorVersions).toBeNull();
+    } finally {
+      info.mockRestore();
+    }
+  });
+
+  it("never stores scan timings from a stale lease", async () => {
+    const owner = await makeOwnerWithProfile({}, ["Inventory"]);
+    const now = new Date();
+    const scan = await prisma.receiptScan.create({
+      data: {
+        businessProfileId: owner.profile.id,
+        imageFile: `${owner.profile.id}/timed-stale.jpg`,
+        processingStatus: "Processing",
+        confirmationStatus: "Pending",
+        processingWorkerId: "current-worker",
+        processingAttemptCount: 2,
+        processingStartedAt: now,
+        processingHeartbeatAt: now,
+        pages: {
+          create: { pageNumber: 1, imageFile: `${owner.profile.id}/timed-stale.jpg` },
+        },
+      },
+    });
+    const output = (attempt: number) => ({
+      scan: {
+        rawText: "TOTAL 10.00",
+        extractorVersions: {
+          scanTimings: { attempt, queueWaitMs: 10, restoreMs: 1, ocrMs: 2, providerMs: 3, finalizeMs: 4 },
+        },
+      },
+      pages: [{ pageNumber: 1, data: { rawText: "TOTAL 10.00" } }],
+      items: { parsedItems: [], vendor: null, extractedByVision: false, amountConfidences: [], itemEvidence: [] },
+      providerRead: false,
+    });
+
+    // The earlier attempt of the same worker, and a different worker on the current attempt.
+    await expect(persistReceiptProcessingOutput(scan.id, owner.profile.id, { workerId: "current-worker", attempt: 1 }, output(1)))
+      .rejects.toBeInstanceOf(ReceiptLeaseLostError);
+    await expect(persistReceiptProcessingOutput(scan.id, owner.profile.id, { workerId: "stale-worker", attempt: 2 }, output(2)))
+      .rejects.toBeInstanceOf(ReceiptLeaseLostError);
+    expect((await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).extractorVersions).toBeNull();
+
+    await persistReceiptProcessingOutput(scan.id, owner.profile.id, { workerId: "current-worker", attempt: 2 }, output(2));
+    const stored = await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } });
+    expect((stored.extractorVersions as { scanTimings: unknown }).scanTimings).toEqual(
+      { attempt: 2, queueWaitMs: 10, restoreMs: 1, ocrMs: 2, providerMs: 3, finalizeMs: 4 },
+    );
   });
 });
