@@ -187,9 +187,12 @@ export function buildFieldEvidence(
   // vendor is located by its FINAL spelling; a history-corrected name that no
   // longer appears verbatim on the receipt honestly locates nowhere. A value
   // is OCR's only while it is still the parser's own: one the provider
-  // replaced is the model's reading even though the parser also had one.
+  // replaced is the model's reading even though the parser also had one. A
+  // vendor that history snapping changed is not the model's either: it is a
+  // confirmed name found in the OCR text, so it is reported as OCR.
   const date = entry(rescued.date, parsed.date !== null && rescued.date === parsed.date, rescued.dateSourceText);
-  const vendorEntry = entry(vendor, parsed.vendor !== null && rescued.vendor === parsed.vendor, vendor);
+  const vendorFromOcr = (parsed.vendor !== null && rescued.vendor === parsed.vendor) || vendor !== rescued.vendor;
+  const vendorEntry = entry(vendor, vendorFromOcr, vendor);
   const amount = entry(
     rescued.amount !== null ? rescued.amount.toFixed(2) : null,
     parsed.amount !== null && rescued.amount === parsed.amount,

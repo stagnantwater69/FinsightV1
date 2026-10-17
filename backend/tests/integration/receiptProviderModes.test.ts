@@ -518,6 +518,7 @@ describe("rescue routing: vendor precedence", () => {
     }));
 
     expect(stored.vendor).toBe("LOCAL STORE");
+    expect(stored.sources.vendor).toBe("ocr");
   });
 });
 
