@@ -179,3 +179,9 @@ describe("Dashboard period filter", () => {
     await waitFor(() => expect(summaryCalls.at(-1)).toMatchObject({ period: "week" }));
   });
 });
+
+it('binds the dashboard view to its own reporting period scope', () => {
+  const wrapper = Dashboard();
+  expect(wrapper.props.scope).toBe('dashboard');
+  expect(typeof wrapper.props.children.type).toBe('function');
+});

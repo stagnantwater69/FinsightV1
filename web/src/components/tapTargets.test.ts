@@ -61,27 +61,8 @@ const SOURCES = [
   ),
 ];
 
-/**
- * Dense control clusters that are still under the floor, each one a row of
- * adjacent buttons where laying every control out to 44px — or expanding its
- * hit area to 44px — would make it overlap the control beside it and turn
- * "which button did I press" into a question of stacking order. Fixing these
- * needs a spacing decision about the surrounding layout, not a bigger number
- * here, so they are recorded rather than silently passing.
- *
- * THIS LIST MAY ONLY SHRINK. A new file here means a new control was written
- * under the floor; fix the control instead.
- */
-const KNOWN_DENSE_CLUSTERS = [
-  "components/Modal.tsx", // close button, tucked into the header corner
-  "components/Pagination.tsx", // adjacent page-number buttons
-  "components/aiChat/ChatHistoryOverlay.tsx", // list row actions
-  "components/aiChat/ConversationItem.tsx", // hover actions inside a list row
-  "components/tour/TourOverlay.tsx", // dismiss, inset into the callout corner
-  "pages/Records.tsx", // four row actions in one table cell
-  "pages/ScanReceipt.tsx", // per-row remove control
-  "pages/scanReceipt/PickedFileThumb.tsx", // remove badge on a thumbnail corner
-];
+// Every control cluster now meets the same 44px floor.
+const KNOWN_DENSE_CLUSTERS: string[] = [];
 
 /** Tailwind's `h-11` is 44px — the first step that reaches the floor. */
 const FLOOR_STEP = 11;

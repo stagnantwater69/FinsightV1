@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from "react";
 import { Link } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { api } from "../lib/api";
+import { apiPage } from "../lib/apiPage";
 import { getErrorMessage } from "../lib/errors";
 import type {
   ChatFocus,
@@ -23,7 +24,7 @@ import {
   type ReviewItem,
 } from "../lib/findingPresentation";
 import { SIGNAL_COPY } from "../lib/confidenceBands";
-import { Card, PageHead, Pill } from "../components/ui";
+import { Callout, Card, PageHead, Pill } from "../components/ui";
 import { Alert } from "../components/Alert";
 import { useAskFinSight } from "../components/AskFinSightButton";
 import { Button } from "../components/Button";
@@ -99,7 +100,7 @@ function LargeExpenseReason({ record, profile }: { record: RecordItem; profile: 
       <Money value={record.amount} /> is at or above your large-expense threshold of{" "}
       <Money value={threshold} />. That is {profile.largeExpenseThresholdPercent}% of your{" "}
       <Money value={profile.expectedMonthlyExpenses} /> starting monthly estimate.{" "}
-      <Link to="/business-profiles" className="tap-inline font-medium text-brand-700 underline-offset-2 hover:underline">
+      <Link to="/business-profiles" className="tap-inline link-action">
         Change the threshold
       </Link>{" "}
       if this is normal for your business.
@@ -143,7 +144,7 @@ function AuditSection({ item }: { item: ReviewItem }) {
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-controls={panelId}
-        className="tap-inline text-xs font-medium text-brand-700 transition hover:text-brand-800"
+        className="tap-inline text-xs link-action"
       >
         {open ? "Hide why FinSight flagged this" : "Why FinSight flagged this"}
       </button>
@@ -186,6 +187,7 @@ export function FlaggedRecords() {
   const [batches, setBatches] = useState<ImportBatchSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [supplementErrors, setSupplementErrors] = useState({ findings: false, batches: false });
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [filter, setFilter] = useState<ReviewFilter>("all");
   /*
@@ -210,6 +212,7 @@ export function FlaggedRecords() {
       setFlaggedCursor(null);
       setFindingsCursor(null);
       setError(null);
+      setSupplementErrors({ findings: false, batches: false });
       setLoading(false);
       return;
     }
@@ -233,13 +236,15 @@ export function FlaggedRecords() {
             signal,
             params: { businessProfileId: selected.id, status: "OPEN", take: FINDINGS_PAGE_SIZE },
           })
-          .catch(() => ({ data: { items: [], nextCursor: null } as AnomalyFindingPage })),
+          .then((response) => ({ ...response, failed: false }))
+          .catch(() => ({ data: { items: [], nextCursor: null } as AnomalyFindingPage, failed: true })),
         api
-          .get<ImportBatchSummary[]>("/records/csv-imports/batches", {
+          .get<{ items: ImportBatchSummary[]; nextCursor: string | null } | ImportBatchSummary[]>("/records/csv-imports/batches", {
             signal,
-            params: { businessProfileId: selected.id },
+            params: { businessProfileId: selected.id, pageSize: 50 },
           })
-          .catch(() => ({ data: [] as ImportBatchSummary[] })),
+          .then((response) => ({ data: apiPage(response.data).items, failed: false }))
+          .catch(() => ({ data: [] as ImportBatchSummary[], failed: true })),
       ]);
       /*
        * The two supplements swallow their own rejection, so an abort reaches
@@ -253,6 +258,7 @@ export function FlaggedRecords() {
       setFindings(findingPage.data.items);
       setFindingsCursor(findingPage.data.nextCursor);
       setBatches(importBatches.data);
+      setSupplementErrors({ findings: findingPage.failed, batches: importBatches.failed });
     } catch (err) {
       if (signal?.aborted) return;
       setError(getErrorMessage(err));
@@ -515,6 +521,13 @@ export function FlaggedRecords() {
         </div>
       ) : null}
 
+      {supplementErrors.findings || supplementErrors.batches ? (
+        <div className="mb-4"><Callout tone="warn">
+          <p role="status">{supplementErrors.findings ? "Some spending checks couldn't load. Available record flags are still shown." : "Import names couldn't load. Available review items are still shown."}</p>
+          <Button type="button" variant="secondary" size="sm" disabled={loading} className="mt-2" onClick={() => void load()}>Retry review checks</Button>
+        </Callout></div>
+      ) : null}
+
       {/*
         The chips are toggle buttons, not tabs: they filter one list in place
         rather than swapping panels, and `aria-pressed` says which one is on
@@ -554,7 +567,12 @@ export function FlaggedRecords() {
           <SkeletonRows rows={4} />
         </Card>
       ) : !selected || nothingAtAll ? (
-        <EmptyState title="Nothing needs review" icon="✓" />
+        error || supplementErrors.findings ? (
+          <EmptyState title="Review checks are incomplete" icon="!">
+            Retry the checks to see what needs your attention.
+            {error ? <Button type="button" variant="secondary" className="mt-3" onClick={() => void load()}>Retry review checks</Button> : null}
+          </EmptyState>
+        ) : <EmptyState title="Nothing needs review" icon="✓" />
       ) : (
         <div id={queueId} className="space-y-3">
           {visible.groups.map((group) => (
@@ -660,7 +678,7 @@ function ReviewCard({
           {record ? (
             <Link
               to={editPath(record)}
-              className="tap-inline mt-1 inline-block text-xs font-medium text-brand-700 underline-offset-2 hover:underline"
+              className="tap-inline mt-1 inline-block text-xs link-action"
             >
               Open this record
             </Link>
@@ -851,7 +869,7 @@ function GroupCard({
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
           aria-controls={listId}
-          className="tap-inline text-xs font-medium text-brand-700 transition hover:text-brand-800"
+          className="tap-inline text-xs link-action"
         >
           {open ? "Hide these records" : `Show ${count === 1 ? "this record" : `these ${count} records`}`}
         </button>
@@ -860,7 +878,7 @@ function GroupCard({
             <li key={`${r.type}-${r.id}`} className="flex items-baseline justify-between gap-3 text-sm">
               <Link
                 to={editPath(r)}
-                className="min-w-0 truncate text-brand-700 underline-offset-2 hover:underline"
+                className="min-w-0 truncate link-action"
               >
                 {r.description}
                 <span className="ml-1.5 text-xs text-ink-500">{r.date.slice(0, 10)}</span>

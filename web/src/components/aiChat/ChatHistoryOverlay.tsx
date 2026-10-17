@@ -2,6 +2,7 @@ import { IconChevronLeft } from "../icons";
 import { SkeletonLine } from "../Skeleton";
 import { groupConversations } from "../../lib/conversationGroups";
 import { ConversationItem } from "./ConversationItem";
+import { Button } from "../Button";
 import type { Conversation } from "../../lib/types";
 
 /**
@@ -30,6 +31,10 @@ interface Props {
   onRename: (id: number, title: string) => void;
   onDelete: (conversation: Conversation) => void;
   onClose: () => void;
+  nextCursor?: string | null;
+  loadingMore?: boolean;
+  onReload?: () => void;
+  onLoadMore?: () => void;
 }
 
 export function ChatHistoryOverlay({
@@ -41,6 +46,10 @@ export function ChatHistoryOverlay({
   onRename,
   onDelete,
   onClose,
+  nextCursor,
+  loadingMore = false,
+  onReload,
+  onLoadMore,
 }: Props) {
   const groups = groupConversations(conversations);
 
@@ -62,7 +71,7 @@ export function ChatHistoryOverlay({
           onClick={onClose}
           aria-label="Close chat history"
           aria-expanded
-          className="tap h-9 w-9 min-h-0 min-w-0 rounded-lg text-ink-500 transition hover:bg-paper-100 hover:text-ink-700"
+          className="tap h-11 w-11 shrink-0 rounded-lg text-ink-500 transition hover:bg-paper-100 hover:text-ink-700"
         >
           {/* Back to the conversation, so the arrow points the way the panel
               is about to move rather than being a generic dismiss ×. */}
@@ -71,18 +80,18 @@ export function ChatHistoryOverlay({
       </div>
 
       <div className="scroll-slim min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-        {loading ? (
+        {error ? <div className="mx-1 mt-3 rounded-lg bg-tint-danger p-3">
+          <p role="alert" className="text-xs text-tone-danger">{error}</p>
+          {onReload ? <Button type="button" variant="secondary" size="sm" className="mt-2" disabled={loading || loadingMore} onClick={onReload}>Retry chat history</Button> : null}
+        </div> : null}
+        {loading && conversations.length === 0 ? (
           <div className="space-y-2 px-1 pt-3" aria-busy="true">
             <SkeletonLine className="h-4 w-20" />
             <SkeletonLine className="h-4" />
             <SkeletonLine className="h-4" />
             <SkeletonLine className="h-4 w-2/3" />
           </div>
-        ) : error ? (
-          <p role="alert" className="mx-1 mt-3 rounded-lg bg-tint-danger p-3 text-xs text-tone-danger">
-            {error}
-          </p>
-        ) : conversations.length === 0 ? (
+        ) : conversations.length === 0 && !error ? (
           // No mascot here. The welcome state this is sitting on top of already
           // carries Fin at full size, and a second illustration one keypress
           // apart would put the same character on screen twice in one panel.
@@ -110,6 +119,7 @@ export function ChatHistoryOverlay({
             </div>
           ))
         )}
+        {nextCursor && onLoadMore ? <Button type="button" variant="secondary" className="mt-3 w-full" disabled={loading || loadingMore} onClick={onLoadMore}>{loadingMore ? "Loading older conversations…" : "Older conversations"}</Button> : null}
       </div>
     </div>
   );

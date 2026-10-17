@@ -14,6 +14,14 @@ export interface RecoveryHistoryState {
 
 export const EMPTY_RECOVERY_HISTORY: RecoveryHistoryState = { scans: [], nextCursor: null, pagesLoaded: 0 };
 
+export function recoveryRowId(scanId: number): string {
+  return `unfinished-scan-${scanId}`;
+}
+
+export function recoveryRowActionId(scanId: number): string {
+  return `${recoveryRowId(scanId)}-action`;
+}
+
 /** Server order: createdAt descending, then id descending. */
 function isOlderThan(candidate: ReceiptHistoryItem, boundary: ReceiptHistoryItem): boolean {
   const candidateTime = Date.parse(candidate.createdAt);

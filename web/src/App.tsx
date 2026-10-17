@@ -26,6 +26,7 @@ const RecoverPassword = lazy(() => route.loadRecoverPasswordRoute().then((m) => 
 // redirected to the Site URL instead, which presents as "the link goes to the
 // wrong page" rather than as an error.
 const ResetPassword = lazy(() => route.loadResetPasswordRoute().then((m) => ({ default: m.ResetPassword })));
+const GoogleCallback = lazy(() => import("./pages/GoogleCallback").then((m) => ({ default: m.GoogleCallback })));
 const ConfirmEmail = lazy(() => route.loadConfirmEmailRoute().then((m) => ({ default: m.ConfirmEmail })));
 const Faqs = lazy(() => route.loadFaqsRoute().then((m) => ({ default: m.Faqs })));
 const Blogs = lazy(() => route.loadBlogsRoute().then((m) => ({ default: m.Blogs })));
@@ -122,6 +123,8 @@ function App() {
                 <Route path="/recover-password" element={<RecoverPassword />} />
                 <Route path="/auth/reset-password" element={<ResetPassword />} />
                 <Route path="/auth/confirm" element={<ConfirmEmail />} />
+                <Route path="/verify-email" element={<ConfirmEmail />} />
+                <Route path="/auth/google/callback" element={<GoogleCallback />} />
 
                 {/* Public help-centre pages. Outside AuthenticatedLayout —
                     they are reachable signed out, and each renders its own

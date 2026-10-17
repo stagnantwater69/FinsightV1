@@ -930,12 +930,11 @@ export interface RecurringPattern {
   confidence: number;
   nextExpectedDate: string;
   /**
-   * No DISABLED here on purpose. The Prisma enum still carries the value, but
-   * nothing on the server ever writes it and the review endpoint's schema now
-   * rejects it with a 400 — so a client modelling it would be offering a
-   * status the API refuses. Pausing lives on RecurringSchedule.isActive.
+   * Reads can include legacy DISABLED rows. Review writes accept only
+   * CANDIDATE, CONFIRMED, or DISMISSED; pausing a declared schedule uses
+   * RecurringSchedule.isActive.
    */
-  status: "CANDIDATE" | "CONFIRMED" | "DISMISSED";
+  status: "CANDIDATE" | "CONFIRMED" | "DISMISSED" | "DISABLED";
   category: { name: string };
 }
 
@@ -1341,6 +1340,22 @@ export type ChatFocus =
 /** `GET /ai/conversations/:id` — the conversation plus its messages, oldest first. */
 export interface ConversationDetail extends Conversation {
   messages: ChatMessage[];
+  nextCursor?: string | null;
+}
+
+export interface ConversationPage {
+  items: Conversation[];
+  nextCursor: string | null;
+}
+
+export interface ImportBatchPage {
+  items: ImportBatchSummary[];
+  nextCursor: string | null;
+}
+
+export interface OperatingDayOverridePage {
+  items: OperatingDayOverride[];
+  nextCursor: string | null;
 }
 
 /**
@@ -1357,6 +1372,14 @@ export interface ChatSendResponse {
   assistantMessage: ChatMessage;
   provider: "gemini" | "openrouter" | "unavailable";
   detectedAmount: number | null;
+}
+
+export interface ChatSendStatus {
+  status: "PROCESSING" | "COMPLETE" | "FAILED" | "DELETED";
+  result: ChatSendResponse | null;
+  error: { status: number; code: string; message: string } | null;
+  createdAt: string;
+  completedAt: string | null;
 }
 
 export interface CategorySuggestion {

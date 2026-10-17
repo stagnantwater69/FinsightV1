@@ -40,8 +40,7 @@ export function AuthenticatedLayout() {
         <ExpenseCategoryProvider>
           <BusinessOwnedBoundary>
             <NotificationProvider>
-              {/* One period for every date-dependent screen, so moving from the
-                  Dashboard to Expense Insights keeps the month being read. */}
+              {/* Pages share the month list and keep their own period selections. */}
               <ReportingPeriodProvider>
                 {/* TourProvider wraps AppShell so the shell can hold its Quick-add
                     menu open for the tour steps that highlight items inside it. */}

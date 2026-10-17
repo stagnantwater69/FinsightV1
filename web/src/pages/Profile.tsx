@@ -39,6 +39,9 @@ import {
 import { AvatarUpload } from "../components/Avatar";
 import { useConfirm } from "../components/ConfirmDialog";
 import { SkeletonPanel } from "../components/Skeleton";
+import { useToast } from "../components/Toast";
+import { clearManualRecordRecoveryForOwner } from "../lib/manualRecordCreate";
+import { captureServerStateAccount, serverStateAccountMatches } from "../lib/serverStateCache";
 
 export function Profile() {
   const { profile, updateProfile, uploadAvatar, logout, logoutEverywhere } =
@@ -253,7 +256,7 @@ export function Profile() {
             <div className="mb-6 flex flex-wrap items-start justify-between gap-4 border-b border-paper-200 pb-5">
               <div className="flex items-start gap-3">
                 <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-tint-brand text-tone-brand">
-                  <UserRound size={19} aria-hidden />
+                  <UserRound size={20} aria-hidden />
                 </span>
                 <div>
                   <h2 className="text-lg font-semibold text-ink-900">
@@ -273,7 +276,7 @@ export function Profile() {
                 size="sm"
                 onClick={isEditing ? cancelEditing : beginEditing}
               >
-                {isEditing ? null : <Pencil size={15} aria-hidden />}
+                {isEditing ? null : <Pencil size={16} aria-hidden />}
                 {isEditing ? "Cancel" : "Edit profile"}
               </Button>
             </div>
@@ -429,7 +432,7 @@ export function Profile() {
           >
             <div className="flex items-start gap-3 p-5 sm:px-6">
               <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-paper text-tone-danger ring-1 ring-edge-danger">
-                <Trash2 size={19} aria-hidden />
+                <Trash2 size={20} aria-hidden />
               </span>
               <div>
                 <h2
@@ -443,7 +446,7 @@ export function Profile() {
                 </p>
               </div>
             </div>
-            <DeleteAccountPanel onDeleted={logout} />
+            <DeleteAccountPanel key={profile.id} ownerId={profile.id} onDeleted={logout} />
           </section>
         </div>
       </div>
@@ -527,7 +530,7 @@ function SessionsPanel({
     <Card className="flex h-full flex-col p-5 sm:p-6">
       <div className="flex min-w-0 items-start gap-3">
         <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-tint-neutral text-tone-neutral">
-          <MonitorSmartphone size={19} aria-hidden />
+          <MonitorSmartphone size={20} aria-hidden />
         </span>
         <div>
           <h3 className="text-base font-semibold text-ink-900">
@@ -570,12 +573,20 @@ function SessionsPanel({
   );
 }
 
-function DeleteAccountPanel({ onDeleted }: { onDeleted: () => Promise<void> }) {
+function DeleteAccountPanel({ ownerId, onDeleted }: { ownerId: number; onDeleted: () => Promise<void> }) {
   const confirm = useConfirm();
+  const toast = useToast();
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [deleted, setDeleted] = useState(false);
+  const deletedOwner = useRef<number | null>(null);
+  const requestPending = useRef(false);
+  const activeOwner = useRef(ownerId);
+  activeOwner.current = ownerId;
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
   /*
    * The last native window.confirm() in the app, and the one that mattered
@@ -584,34 +595,52 @@ function DeleteAccountPanel({ onDeleted }: { onDeleted: () => Promise<void> }) {
    * hurried Enter keypress no longer lands on "delete everything".
    */
   async function removeAccount() {
-    if (!password) return;
-    const confirmed = await confirm({
-      title: "Delete your account?",
-      body: (
-        <>
-          This permanently removes{" "}
-          <strong>
-            every business, record, receipt image, import, and sign-in
-            credential
-          </strong>{" "}
-          on this account. It cannot be undone and nothing can be recovered
-          afterwards.
-        </>
-      ),
-      confirmLabel: "Delete my account",
-      cancelLabel: "Keep my account",
-      tone: "danger",
-    });
-    if (!confirmed) return;
-    setSubmitting(true);
+    if (requestPending.current || (!deletedOwner.current && !password)) return;
+    const capturedOwner = deletedOwner.current ?? ownerId;
+    const account = captureServerStateAccount();
+    const isCurrent = () => mounted.current && activeOwner.current === capturedOwner && (!account || serverStateAccountMatches(account));
+    requestPending.current = true;
     setError(null);
     try {
-      await api.delete("/auth/me", { data: { currentPassword: password } });
+      if (!deletedOwner.current) {
+        const confirmed = await confirm({
+          title: "Delete your account?",
+          body: (
+            <>
+              This permanently removes{" "}
+              <strong>
+                every business, record, receipt image, import, and sign-in
+                credential
+              </strong>{" "}
+              on this account. It cannot be undone and nothing can be recovered
+              afterwards.
+            </>
+          ),
+          confirmLabel: "Delete my account",
+          cancelLabel: "Keep my account",
+          tone: "danger",
+        });
+        if (!confirmed || !isCurrent()) return;
+        setSubmitting(true);
+        await api.delete("/auth/me", { data: { currentPassword: password }, manualCreateAccount: account });
+        deletedOwner.current = capturedOwner;
+        if (isCurrent()) setDeleted(true);
+      } else {
+        setSubmitting(true);
+      }
+      let cleanupFailed = false;
+      await clearManualRecordRecoveryForOwner(capturedOwner).catch(() => { cleanupFailed = true; });
+      if (!isCurrent()) return;
+      if (cleanupFailed) toast("Your account is deleted. This browser could not clear its saved recovery.");
       await onDeleted();
     } catch (err) {
-      setError(getErrorMessage(err));
+      if (mounted.current && activeOwner.current === capturedOwner
+        && (isCurrent() || (deletedOwner.current === capturedOwner && captureServerStateAccount() === null))) setError(deletedOwner.current
+        ? "Your account is deleted. This browser could not finish signing out. Try Finish sign out below."
+        : getErrorMessage(err));
     } finally {
-      setSubmitting(false);
+      requestPending.current = false;
+      if (mounted.current && activeOwner.current === capturedOwner) setSubmitting(false);
     }
   }
 
@@ -631,6 +660,7 @@ function DeleteAccountPanel({ onDeleted }: { onDeleted: () => Promise<void> }) {
           type="button"
           variant="danger"
           className="w-full shrink-0 sm:w-auto"
+          disabled={deleted || submitting}
           onClick={() => {
             setIsExpanded((open) => !open);
             setError(null);
@@ -662,17 +692,19 @@ function DeleteAccountPanel({ onDeleted }: { onDeleted: () => Promise<void> }) {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 autoComplete="current-password"
+                disabled={deleted || submitting}
               />
             </Field>
             {error ? <FormError>{error}</FormError> : null}
+            {deleted ? <p role="status" className="text-sm text-ink-700">Your account is deleted. Finish signing out of this browser below.</p> : null}
             <div className="flex justify-end">
               <Button
                 type="submit"
                 variant="danger"
                 className="w-full sm:w-auto"
-                disabled={!password || submitting}
+                disabled={(!deleted && !password) || submitting}
               >
-                {submitting ? "Deleting…" : "Delete my account"}
+                {submitting ? deleted ? "Signing out…" : "Deleting…" : deleted ? "Finish sign out" : "Delete my account"}
               </Button>
             </div>
           </div>
@@ -785,7 +817,7 @@ function SecurityPanel() {
       <div className="flex items-start gap-3">
         <div className="flex items-start gap-3">
           <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-tint-brand text-tone-brand">
-            <KeyRound size={19} aria-hidden />
+            <KeyRound size={20} aria-hidden />
           </span>
           <div>
             <h3 className="text-base font-semibold text-ink-900">Password</h3>

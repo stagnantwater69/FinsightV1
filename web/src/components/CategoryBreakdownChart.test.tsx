@@ -107,7 +107,7 @@ describe("CategoryBreakdownChart overflow control", () => {
     renderChart({ breakdown: breakdownOf(13) });
 
     await user.click(screen.getByRole("button", { name: "Show all 13 categories" }));
-    const collapse = screen.getByRole("button", { name: "Show top 5 only" });
+    const collapse = screen.getByRole("button", { name: "Show less" });
     expect(collapse).toHaveAttribute("aria-expanded", "true");
 
     await user.click(collapse);
@@ -122,6 +122,16 @@ describe("CategoryBreakdownChart overflow control", () => {
     const controls = screen.getByRole("button").getAttribute("aria-controls");
     expect(controls).toBeTruthy();
     expect(container.querySelector(`#${CSS.escape(controls!)}`)).not.toBeNull();
+  });
+
+  it("returns to a compact preview after switching business or period", async () => {
+    const user = userEvent.setup();
+    const { rerender } = renderChart({ breakdown: breakdownOf(13), resetKey: "business-1:month" });
+    await user.click(screen.getByRole("button", { name: "Show all 13 categories" }));
+    rerender(<ThemeProvider><CategoryBreakdownChart breakdown={breakdownOf(13)} resetKey="business-2:month" /></ThemeProvider>);
+    expect(screen.getByRole("button", { name: "Show all 13 categories" })).toHaveAttribute("aria-expanded", "false");
+    rerender(<ThemeProvider><CategoryBreakdownChart breakdown={breakdownOf(13)} resetKey="business-1:month" /></ThemeProvider>);
+    expect(screen.getByRole("button", { name: "Show all 13 categories" })).toHaveAttribute("aria-expanded", "false");
   });
 
   it("honours a custom topN in both the label and the threshold", () => {

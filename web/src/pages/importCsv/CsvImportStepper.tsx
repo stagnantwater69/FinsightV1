@@ -15,7 +15,7 @@ export function CsvImportBreadcrumbs() {
     <nav aria-label="Breadcrumb" className="mb-3 text-xs text-ink-500">
       <ol className="flex flex-wrap items-center gap-2">
         <li>
-          <Link to="/records" className="tap-inline font-semibold text-tone-brand underline-offset-4 hover:underline">
+          <Link to="/records" className="tap-inline link-action">
             Records
           </Link>
         </li>

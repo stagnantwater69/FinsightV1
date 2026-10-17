@@ -1,7 +1,8 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { api } from "../lib/api";
+import { apiPage } from "../lib/apiPage";
 import { getErrorMessage } from "../lib/errors";
 import { useConfirm } from "../components/ConfirmDialog";
 import { useToast } from "../components/Toast";
@@ -11,12 +12,13 @@ import { Callout, Card, FormPage, Panel } from "../components/ui";
 import { EmptyState } from "../components/EmptyState";
 import { SkeletonPanel } from "../components/Skeleton";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
-import { todayIso, toLocalIsoDate } from "../lib/dates";
+import { formatCalendarDate, todayIso, toLocalIsoDate } from "../lib/dates";
 import type {
   OperatingDayOverride,
   OperatingDayOverrideInput,
   OperatingDayOverrideType,
   OperatingScheduleEntry,
+  OperatingDayOverridePage,
 } from "../lib/types";
 
 /** 1=Monday .. 7=Sunday, matching `BusinessOperatingDay.weekday` exactly —
@@ -79,35 +81,53 @@ export function OperatingSchedule() {
   const [overrideReason, setOverrideReason] = useState("");
   const [addingOverride, setAddingOverride] = useState(false);
   const [overrideError, setOverrideError] = useState<string | null>(null);
+  const [range, setRange] = useState(defaultOverrideRange);
+  const [visibleRange, setVisibleRange] = useState(defaultOverrideRange);
+  const [overrideCursor, setOverrideCursor] = useState<string | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const loadControllerRef = useRef<AbortController | null>(null);
+  const overrideControllerRef = useRef<AbortController | null>(null);
+  const overrideSeenCursorsRef = useRef(new Set<string>());
+  const failedOverrideRequestRef = useRef<{ profileId: number; cursor: string | null; range: { from: string; to: string } } | null>(null);
 
   async function load() {
     if (!profile) return;
     setLoading(true);
     setLoadError(null);
+    loadControllerRef.current?.abort();
+    const controller = new AbortController();
+    loadControllerRef.current = controller;
     try {
-      const { from, to } = defaultOverrideRange();
       const [scheduleRes, overridesRes] = await Promise.all([
-        api.get<OperatingScheduleEntry[]>(`/business-profiles/${profileId}/operating-schedule`),
-        api.get<OperatingDayOverride[]>(`/business-profiles/${profileId}/operating-overrides`, {
-          params: { from, to },
+        api.get<OperatingScheduleEntry[]>(`/business-profiles/${profileId}/operating-schedule`, { signal: controller.signal }),
+        api.get<OperatingDayOverridePage | OperatingDayOverride[]>(`/business-profiles/${profileId}/operating-overrides`, {
+          params: { ...range, pageSize: 50 }, signal: controller.signal,
         }),
       ]);
+      if (controller.signal.aborted) return;
       // Empty means "never configured" — pre-check all-open rather than
       // leaving the toggles blank, per plan §11: a sensible starting point
       // the owner confirms by saving, not a value silently submitted for them.
       setEntries(scheduleRes.data.length === 7 ? scheduleRes.data : allOpenSchedule());
-      setOverrides(
-        [...overridesRes.data].sort((a, b) => a.date.localeCompare(b.date)),
-      );
+      const page = apiPage(overridesRes.data);
+      overrideSeenCursorsRef.current.clear();
+      if (page.nextCursor !== null) overrideSeenCursorsRef.current.add(page.nextCursor);
+      failedOverrideRequestRef.current = null;
+      setOverrides([...page.items].sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id));
+      setOverrideCursor(page.nextCursor);
+      setVisibleRange(range);
+      setHistoryError(null);
     } catch (err) {
-      setLoadError(getErrorMessage(err));
+      if (!controller.signal.aborted) setLoadError(getErrorMessage(err));
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
     }
   }
 
   useEffect(() => {
     load();
+    return () => { loadControllerRef.current?.abort(); overrideControllerRef.current?.abort(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile?.id]);
 
@@ -120,6 +140,43 @@ export function OperatingSchedule() {
   // guard, but a function's own body is checked independently of the
   // narrowing above it, so `profile` still reads as possibly-undefined there.
   const profileId = profile.id;
+
+  async function loadOverridePage(cursor: string | null = null, requestedRange = visibleRange) {
+    if (!requestedRange.from || !requestedRange.to || requestedRange.from > requestedRange.to) {
+      failedOverrideRequestRef.current = null;
+      setHistoryError("Choose a start date on or before the end date.");
+      return;
+    }
+    overrideControllerRef.current?.abort();
+    const controller = new AbortController();
+    overrideControllerRef.current = controller;
+    const request = { profileId, cursor, range: { ...requestedRange } };
+    setLoadingOlder(true);
+    setHistoryError(null);
+    try {
+      const { data } = await api.get<OperatingDayOverridePage | OperatingDayOverride[]>(`/business-profiles/${profileId}/operating-overrides`, {
+        params: { ...request.range, pageSize: 50, ...(cursor ? { cursor } : {}) }, signal: controller.signal,
+      });
+      if (controller.signal.aborted) return;
+      const page = apiPage(data);
+      if (cursor !== null && page.nextCursor !== null && (page.nextCursor === cursor || overrideSeenCursorsRef.current.has(page.nextCursor))) {
+        throw new Error("FinSight couldn't load more dates because the next page repeated. Your loaded dates are kept; try again.");
+      }
+      if (cursor === null) overrideSeenCursorsRef.current.clear();
+      if (page.nextCursor !== null) overrideSeenCursorsRef.current.add(page.nextCursor);
+      failedOverrideRequestRef.current = null;
+      setOverrides((current) => (cursor ? [...current, ...page.items.filter((item) => !current.some((existing) => existing.id === item.id))] : [...page.items]).sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id));
+      setOverrideCursor(page.nextCursor);
+      setVisibleRange(request.range);
+    } catch (err) {
+      if (!controller.signal.aborted) {
+        failedOverrideRequestRef.current = request;
+        setHistoryError(getErrorMessage(err));
+      }
+    } finally {
+      if (!controller.signal.aborted) setLoadingOlder(false);
+    }
+  }
 
   function toggleDay(weekday: number) {
     setEntries((prev) =>
@@ -162,7 +219,7 @@ export function OperatingSchedule() {
         `/business-profiles/${profileId}/operating-overrides`,
         input,
       );
-      setOverrides((prev) => [...prev, data].sort((a, b) => a.date.localeCompare(b.date)));
+      if (data.date >= visibleRange.from && data.date <= visibleRange.to) setOverrides((prev) => [...prev.filter((item) => item.id !== data.id), data].sort((a, b) => a.date.localeCompare(b.date) || a.id - b.id));
       setOverrideReason("");
       toast("Date override added.");
     } catch (err) {
@@ -264,6 +321,17 @@ export function OperatingSchedule() {
               Mark a specific date as closed (a holiday, an emergency) or open (a special opening on a day
               you'd normally be closed). A date override always takes precedence over the weekly schedule.
             </p>
+            <form className="mb-4 flex flex-wrap items-end gap-3" onSubmit={(event) => { event.preventDefault(); void loadOverridePage(null, range); }}>
+              <Field label="From" htmlFor="override-range-from"><TextInput id="override-range-from" type="date" required value={range.from} onChange={(event) => setRange((current) => ({ ...current, from: event.target.value }))} /></Field>
+              <Field label="To" htmlFor="override-range-to"><TextInput id="override-range-to" type="date" required value={range.to} onChange={(event) => setRange((current) => ({ ...current, to: event.target.value }))} /></Field>
+              <Button type="submit" variant="secondary" disabled={loadingOlder}>Show dates</Button>
+            </form>
+            <p className="mb-3 text-xs text-ink-500">Showing {formatCalendarDate(visibleRange.from)} through {formatCalendarDate(visibleRange.to)}.</p>
+            {historyError ? <div className="mb-3"><p role="alert" className="text-sm text-tone-danger">{historyError}</p><Button type="button" variant="secondary" onClick={() => {
+              const failed = failedOverrideRequestRef.current;
+              if (failed?.profileId === profileId) void loadOverridePage(failed.cursor, failed.range);
+              else void loadOverridePage(null, range);
+            }}>Retry dates</Button></div> : null}
 
             <Card as="form" onSubmit={handleAddOverride} className="mb-4 p-4">
               <div className="grid gap-3 sm:grid-cols-[auto_auto_1fr_auto] sm:items-end">
@@ -306,9 +374,9 @@ export function OperatingSchedule() {
               ) : null}
             </Card>
 
-            {overrides.length === 0 ? (
-              <EmptyState compact title="No date overrides yet" icon="📅">
-                Holidays and special openings you add will show up here, soonest first.
+            {overrides.length === 0 && !historyError && !loadingOlder ? (
+              <EmptyState compact title="No date overrides in this range" icon="📅">
+                Choose other dates to see earlier holidays and special openings.
               </EmptyState>
             ) : (
               <ul className="divide-y divide-paper-200">
@@ -339,6 +407,7 @@ export function OperatingSchedule() {
                 ))}
               </ul>
             )}
+            {overrideCursor ? <Button type="button" variant="secondary" className="mt-3" disabled={loadingOlder} onClick={() => void loadOverridePage(overrideCursor)}>{loadingOlder ? "Loading dates…" : "More dates"}</Button> : null}
           </Panel>
 
           <div className="flex justify-end">

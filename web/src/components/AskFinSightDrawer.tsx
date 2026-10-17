@@ -50,15 +50,29 @@ export function AskFinSightDrawer() {
     conversations,
     listLoading,
     listError,
+    listNextCursor,
+    listLoadingMore,
+    reloadConversations,
+    loadOlderConversations,
     activeId,
     messages,
     messagesLoading,
+    messagesLoadingOlder,
+    messagesNextCursor,
+    reloadMessages,
+    loadOlderMessages,
     input,
     setInput,
     sending,
     error,
     unavailable,
     detectedAmount,
+    pendingQuestion,
+    recoveryMessage,
+    checkingSend,
+    canRetrySend,
+    checkSendStatus,
+    retrySend,
     newChat,
     selectConversation,
     send,
@@ -205,6 +219,16 @@ export function AskFinSightDrawer() {
               is the honest framing the whole feature depends on. */}
           <p className="mt-2 rounded-lg bg-white/10 px-3 py-2 text-xs leading-relaxed text-brand-50">{copy.scope}</p>
         </header>
+        {pendingQuestion || recoveryMessage ? (
+          <div className="border-b border-paper-200 bg-paper-50 px-4 py-3">
+            <p role="status" className="text-xs text-ink-700">{recoveryMessage ?? "Waiting for this answer to be confirmed."}</p>
+            {pendingQuestion ? <p className="mt-1 line-clamp-3 break-words text-xs text-ink-500">{pendingQuestion}</p> : null}
+            {pendingQuestion && !sending ? <div className="mt-2 flex flex-wrap gap-2">
+              <button type="button" disabled={checkingSend} onClick={checkSendStatus} className="tap rounded-lg border border-paper-200 px-3 text-xs font-semibold text-tone-brand hover:bg-tint-brand">{checkingSend ? "Checking answer…" : "Check answer status"}</button>
+              {canRetrySend ? <button type="button" disabled={checkingSend} onClick={retrySend} className="tap rounded-lg border border-paper-200 px-3 text-xs font-semibold text-tone-brand hover:bg-tint-brand">Retry this question</button> : null}
+            </div> : null}
+          </div>
+        ) : null}
 
         {/* The positioning context for the history overlay: it covers the
             messages and nothing else, so the composer stays put and the panel
@@ -224,6 +248,10 @@ export function AskFinSightDrawer() {
             }}
             onRate={rate}
             onNavigate={closeChat}
+            nextCursor={messagesNextCursor}
+            loadingOlder={messagesLoadingOlder}
+            onLoadOlder={loadOlderMessages}
+            onReload={activeId !== null ? reloadMessages : undefined}
           />
 
           {historyOpen ? (
@@ -236,6 +264,10 @@ export function AskFinSightDrawer() {
               onRename={rename}
               onDelete={remove}
               onClose={() => setHistoryOpen(false)}
+              nextCursor={listNextCursor}
+              loadingMore={listLoadingMore}
+              onReload={reloadConversations}
+              onLoadMore={loadOlderConversations}
             />
           ) : null}
         </div>
@@ -312,7 +344,7 @@ export function AskFinSightDrawer() {
             */}
             <button
               type="submit"
-              disabled={sending || !input.trim()}
+              disabled={sending || pendingQuestion !== null || !input.trim()}
               className="tap shrink-0 rounded-full bg-brand-600 text-white transition-colors hover:bg-brand-700 active:bg-brand-800 disabled:cursor-not-allowed disabled:bg-ink-200 disabled:text-ink-400 disabled:hover:bg-ink-200"
               aria-label="Send"
             >

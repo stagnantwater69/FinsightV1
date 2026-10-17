@@ -156,7 +156,7 @@ function CsvOrigin({ origin }: { origin: Extract<RecordOrigin, { kind: "csv_impo
             {origin.fileUrl ? (
               <a
                 href={origin.fileUrl}
-                className="tap-inline font-medium text-brand-700 underline-offset-2 hover:underline"
+                className="tap-inline link-action"
               >
                 Download the file this was imported from
               </a>
@@ -348,7 +348,7 @@ function ReceiptOrigin({
               <li key={sibling.id} className="flex items-baseline justify-between gap-3 text-sm">
                 <a
                   href={`/records/expenses/${sibling.id}/edit`}
-                  className="min-w-0 truncate text-brand-700 underline-offset-2 hover:underline"
+                  className="min-w-0 truncate link-action"
                 >
                   {sibling.categoryName}
                   <span className="ml-1.5 text-xs text-ink-600">{sibling.description}</span>
@@ -398,7 +398,7 @@ function ReceiptImage({ url }: { url: string }) {
         href={url}
         target="_blank"
         rel="noreferrer"
-        className="tap-inline mt-2 inline-block text-xs font-medium text-brand-700 underline-offset-2 hover:underline"
+        className="tap-inline mt-2 inline-block text-xs link-action"
       >
         Open the full-size photo
       </a>

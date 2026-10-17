@@ -77,7 +77,7 @@ export function FileSelectStage({
             <a
               href="/sample-import.csv"
               download
-              className="tap-inline font-semibold text-tone-brand underline underline-offset-4"
+              className="tap-inline link"
             >
               Download example CSV
             </a>

@@ -195,20 +195,18 @@ describe("Recovery Target reporting period", () => {
     ).toBeInTheDocument();
   });
 
-  it("normalizes a shared All time selection to This week before requesting recovery", async () => {
+  it("defaults to its own recorded month without replacing another page's All time choice", async () => {
     window.sessionStorage.setItem(
       "finsight.reportingPeriod.1",
       JSON.stringify({ kind: "all" }),
     );
     renderPage();
 
-    expect(await screen.findByText("This week's pace")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "This week" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    expect(await screen.findByText("Month-to-date pace")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Month" })).toHaveTextContent("October 2026");
     expect(recoveryRequests.some((params) => params.period === "all")).toBe(false);
-    expect(recoveryRequests.at(-1)).toMatchObject({ period: "week" });
+    expect(recoveryRequests.at(-1)).toMatchObject({ period: "month", month: "2026-10" });
+    expect(JSON.parse(window.sessionStorage.getItem("finsight.reportingPeriod.1")!)).toEqual({ kind: "all" });
   });
 
   it("ignores a slower response from the period that was left", async () => {
@@ -236,4 +234,10 @@ describe("Recovery Target reporting period", () => {
     expect(screen.getByText("This week's pace")).toBeInTheDocument();
     expect(screen.queryByText("Month-to-date pace")).not.toBeInTheDocument();
   });
+});
+
+it('binds the recovery-target view to its own reporting period scope', () => {
+  const wrapper = RecoveryInsightPage();
+  expect(wrapper.props.scope).toBe('recovery-target');
+  expect(typeof wrapper.props.children.type).toBe('function');
 });

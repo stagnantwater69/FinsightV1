@@ -32,6 +32,11 @@ const mocks = vi.hoisted(() => ({
   selected: { id: 1, timezone: "Asia/Manila" } as { id: number; timezone?: string },
 }));
 vi.mock("../lib/api", () => ({ api: { post: mocks.post, get: mocks.get, patch: mocks.patch } }));
+vi.mock("../context/AuthContext", () => ({ useAuth: () => ({ profile: { id: 17 } }) }));
+vi.mock("../lib/useManualRecordCreate", () => ({ useManualRecordCreate: () => ({
+  loading: false, busy: false, frozen: false, pending: null, error: null, ownerId: 17,
+  save: async (payload: Record<string, unknown>) => (await mocks.post(payload.categoryId ? "/records/expenses" : "/records/sales", payload)).data,
+}) }));
 vi.mock("../context/BusinessProfileContext", () => ({ useBusinessProfiles: () => ({ selected: mocks.selected }) }));
 vi.mock("../context/ExpenseCategoryContext", () => ({ useExpenseCategories: () => ({
   categories: [{ id: 2, name: "Supplies" }], loading: false, recentCategoryIds: [], rememberCategory: vi.fn(),

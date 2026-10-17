@@ -1,49 +1,37 @@
-import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { AuthLayout } from "../components/AuthLayout";
 import { Button } from "../components/Button";
 import { Field, FormError, TextInput } from "../components/Field";
 import { useAuth } from "../context/AuthContext";
+import { createRecoveryClient, disposeIsolatedAuthClient } from "../lib/supabaseClient";
+import { useCodeResend } from "../hooks/useCodeResend";
 import { api } from "../lib/api";
 import { consumeAuthLink, describeAuthLinkError, type AuthLinkTokens } from "../lib/authLinkTokens";
 import { getErrorMessage } from "../lib/errors";
-import { isPlausibleEmail } from "../lib/authValidation";
+import { isValid, validateRecoveryCode, normaliseRecoveryCode, MAX_RECOVERY_CODE_LENGTH, type FieldErrors, type RecoveryCodeField } from "../lib/authValidation";
 import { isMobileBrowser } from "../lib/mobileBrowser";
 import type { Profile } from "../lib/types";
 
-type State = "checking" | "confirmed" | "failed";
+type State = "checking" | "code" | "confirmed" | "failed";
 
 /** Long enough for "you're confirmed" to be read, short enough not to be a wait. */
 const HANDOFF_TO_APP_DELAY_MS = 900;
 
-/**
- * Where the registration confirmation email lands.
- *
- * This screen used to be a dead end that said "confirmed — now go and log in",
- * which asked the owner to prove their identity a second time immediately
- * after proving it. The link itself carries a Supabase token pair, and
- * POST /auth/confirm-email verifies that token server-side before flipping the
- * account to ACTIVE — so by the time we have a 200 here, the person holding
- * this tab has demonstrably received mail at that address. That is the same
- * evidence a password would have produced, so we sign them in and send them
- * onward: onboarding if they have no business yet, the dashboard if they do.
- *
- * The token is still never stored by this page and never rendered or logged.
- * It is read once out of the fragment (which `consumeAuthLink` strips as it
- * reads, so nothing lands in history), passed to the backend, and handed to
- * AuthContext's `adoptSession` — which is the only place a session is ever
- * installed. Sign-in follows the SUCCESSFUL backend confirmation; a forwarded
- * or replayed link that the backend rejects signs nobody in.
- */
+/** Codes are verified on an isolated client; backend approval precedes session adoption.
+ * Previously issued confirmation links and the mobile handoff remain supported. */
 export function ConfirmEmail() {
   const navigate = useNavigate();
+  const routeState = useLocation().state as { email?: string; codeSent?: boolean } | null;
   const { adoptSession, profile, loading } = useAuth();
   const [state, setState] = useState<State>("checking");
   const [message, setMessage] = useState<string>("");
-  const [email, setEmail] = useState("");
-  const [resending, setResending] = useState(false);
-  const [resent, setResent] = useState(false);
-  const [resendError, setResendError] = useState<string | null>(null);
+  const [email, setEmail] = useState(routeState?.email ?? "");
+  const [code, setCode] = useState("");
+  const [verifying, setVerifying] = useState(false);
+  const [codeError, setCodeError] = useState<string | null>(null);
+  const [codeFieldErrors, setCodeFieldErrors] = useState<FieldErrors<RecoveryCodeField>>({});
+  const codeDelivery = useCodeResend("/auth/resend-verification", routeState?.codeSent === true);
   const [destination, setDestination] = useState("/dashboard");
   const [handingOff, setHandingOff] = useState(false);
   const [handoffError, setHandoffError] = useState<string | null>(null);
@@ -84,12 +72,11 @@ export function ConfirmEmail() {
       return;
     }
     if (result.kind === "none") {
-      if (profile) {
+      if (profile && !routeState?.codeSent) {
         navigate("/dashboard", { replace: true });
         return;
       }
-      setState("failed");
-      setMessage("Open this page from the link in your confirmation email.");
+      setState("code");
       return;
     }
 
@@ -167,20 +154,79 @@ export function ConfirmEmail() {
   }
 
   async function resend() {
-    setResendError(null);
-    if (!isPlausibleEmail(email)) {
-      setResendError("Enter the email address you registered with.");
-      return;
-    }
-    setResending(true);
+    if (await codeDelivery.resend(email)) setState("code");
+  }
+
+  async function verifyCode(event: FormEvent) {
+    event.preventDefault();
+    if (verifying) return;
+    setCodeError(null);
+    const invalid = validateRecoveryCode({ email, code });
+    setCodeFieldErrors(invalid);
+    if (!isValid(invalid)) return;
+    setVerifying(true);
+    const client = createRecoveryClient();
+    let approvedForApp = false;
     try {
-      await api.post("/auth/resend-verification", { email, platform: "web" });
-      setResent(true);
-    } catch (err) {
-      setResendError(getErrorMessage(err));
+      const { data, error: verificationError } = await client.auth.verifyOtp({
+        email: email.trim(), token: normaliseRecoveryCode(code), type: "email",
+      });
+      if (verificationError || !data.session) {
+        setCodeError("That code couldn't be verified. Check the address and code, or request a new code if it has expired.");
+        return;
+      }
+      const tokens = data.session;
+      const { data: confirmed } = await api.post<{ message: string; profile: Profile; needsOnboarding: boolean }>(
+        "/auth/confirm-email", null, { headers: { Authorization: `Bearer ${tokens.access_token}` } },
+      );
+      await adoptSession({ accessToken: tokens.access_token, refreshToken: tokens.refresh_token, profile: confirmed.profile });
+      approvedForApp = true;
+      linkTokens.current = { accessToken: tokens.access_token, refreshToken: tokens.refresh_token, type: "signup" };
+      setCode("");
+      setDestination(confirmed.needsOnboarding ? "/onboarding" : "/dashboard");
+      setMessage(confirmed.message);
+      setState("confirmed");
+    } catch {
+      setCodeError("We couldn't finish confirming your email. Try again, or request another code.");
     } finally {
-      setResending(false);
+      if (!approvedForApp) await client.auth.signOut({ scope: "local" }).catch(() => undefined);
+      disposeIsolatedAuthClient(client);
+      setVerifying(false);
     }
+  }
+
+  if (state === "code") {
+    return (
+      <AuthLayout title="Confirm your email" subtitle="Enter the code from your FinSight email."
+        heroTitle="One more step." heroBody="Confirm that this inbox belongs to you before accessing your business records.">
+        <form onSubmit={verifyCode} className="space-y-4" noValidate>
+          <Field label="Email" htmlFor="confirmationEmail" required error={codeFieldErrors.email}>
+            <TextInput id="confirmationEmail" type="email" autoComplete="email" value={email} disabled={verifying}
+              onChange={(event) => { setEmail(event.target.value); setCodeFieldErrors((previous) => ({ ...previous, email: undefined })); setCodeError(null); }} />
+          </Field>
+          <Field label="Confirmation code" htmlFor="confirmationCode" required error={codeFieldErrors.code}
+            hint="Paste or type the numbered code in your email. Each code can be used once.">
+            <TextInput id="confirmationCode" type="text" inputMode="numeric" autoComplete="one-time-code"
+              maxLength={MAX_RECOVERY_CODE_LENGTH + 4} value={code} disabled={verifying}
+              onChange={(event) => { setCode(event.target.value); setCodeFieldErrors((previous) => ({ ...previous, code: undefined })); setCodeError(null); }} />
+          </Field>
+          {codeError ? <FormError>{codeError}</FormError> : null}
+          <Button type="submit" variant="primary" fullWidth disabled={verifying || codeDelivery.sending}>
+            {verifying ? "Checking…" : "Confirm email"}
+          </Button>
+        </form>
+        <div className="mt-4 space-y-3">
+          <Button variant="secondary" fullWidth disabled={verifying || codeDelivery.sending || codeDelivery.remaining > 0}
+            onClick={() => void codeDelivery.resend(email)}>
+            {codeDelivery.sending ? "Sending…" : codeDelivery.remaining > 0 ? `Resend code in ${codeDelivery.remaining}s` : "Send another code"}
+          </Button>
+          {codeDelivery.message ? <p className="text-sm text-ink-600" role="status">{codeDelivery.message}</p> : null}
+          {codeDelivery.error ? <FormError>{codeDelivery.error}</FormError> : null}
+          <p className="text-sm text-ink-500">Use the newest code. If it hasn't arrived, check your spam folder.</p>
+        </div>
+        <p className="mt-6 text-center text-sm"><Link to="/login" className="tap-inline link-action">Back to log in</Link></p>
+      </AuthLayout>
+    );
   }
 
   if (state === "checking") {
@@ -228,36 +274,22 @@ export function ConfirmEmail() {
     <AuthLayout
       title="That link didn't work"
       subtitle="Confirmation links expire, and each one works only once."
-      heroTitle="Let's send another."
-      heroBody="Confirmation links are short-lived on purpose. Enter the address you registered with and we'll send a fresh one."
+      heroTitle="Let's send another code."
+      heroBody="Confirmation links are short-lived on purpose. Enter the address you registered with and we'll send a code."
     >
       <p className="text-center text-sm text-ink-600">{message}</p>
-      {resent ? (
-        <p className="mt-6 text-center text-sm text-ink-600">
-          If that address is waiting to be confirmed, a new link is on its way. Check your inbox.
-        </p>
-      ) : (
-        <div className="mt-6 space-y-4">
-          <Field label="Email" htmlFor="email" required error={resendError}>
-            <TextInput
-              id="email"
-              type="email"
-              autoComplete="email"
-              value={email}
-              onChange={(e) => {
-                setEmail(e.target.value);
-                setResendError(null);
-              }}
-            />
-          </Field>
-          {resendError ? <FormError>{resendError}</FormError> : null}
-          <Button variant="primary" fullWidth disabled={resending} onClick={() => void resend()}>
-            {resending ? "Sending…" : "Send a new link"}
-          </Button>
-        </div>
-      )}
+      <div className="mt-6 space-y-4">
+        <Field label="Email" htmlFor="email" required>
+          <TextInput id="email" type="email" autoComplete="email" value={email}
+            onChange={(event) => setEmail(event.target.value)} />
+        </Field>
+        {codeDelivery.error ? <FormError>{codeDelivery.error}</FormError> : null}
+        <Button variant="primary" fullWidth disabled={codeDelivery.sending || codeDelivery.remaining > 0} onClick={() => void resend()}>
+          {codeDelivery.sending ? "Sending…" : codeDelivery.remaining > 0 ? `Resend code in ${codeDelivery.remaining}s` : "Send a new code"}
+        </Button>
+      </div>
       <p className="mt-6 text-center text-sm text-ink-500">
-        <Link to="/login" className="tap-inline font-medium text-brand-700 hover:text-brand-800">
+        <Link to="/login" className="tap-inline link-action">
           Back to log in
         </Link>
       </p>

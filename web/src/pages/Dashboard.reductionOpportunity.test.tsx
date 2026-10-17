@@ -154,10 +154,10 @@ describe("Dashboard top reduction opportunity card", () => {
   it("shows the top opportunity with its category and a supporting figure, linking to Expense Insights", async () => {
     renderDashboard();
 
-    expect(await screen.findByText("Reduction opportunity")).toBeInTheDocument();
+    expect(await screen.findByText("Office Supplies")).toBeInTheDocument();
     expect(screen.getByText("Office Supplies made up a large share of expenses this period.")).toBeInTheDocument();
     expect(screen.getByText("PHP 7,654")).toBeInTheDocument();
-    const link = screen.getByRole("link", { name: "Review opportunity" });
+    const link = screen.getByRole("link", { name: "Review reduction opportunity" });
     expect(link).toHaveAttribute("href", "/insights/expense-behavior");
   });
 
@@ -166,7 +166,7 @@ describe("Dashboard top reduction opportunity card", () => {
     renderDashboard();
 
     await waitFor(() => expect(screen.getByText("Available funds")).toBeInTheDocument());
-    expect(screen.queryByText("Reduction opportunity")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Review reduction opportunity" })).not.toBeInTheDocument();
   });
 
   it("does not show the card when there is no top opportunity", async () => {
@@ -174,7 +174,7 @@ describe("Dashboard top reduction opportunity card", () => {
     renderDashboard();
 
     await waitFor(() => expect(screen.getByText("Available funds")).toBeInTheDocument());
-    expect(screen.queryByText("Reduction opportunity")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Review reduction opportunity" })).not.toBeInTheDocument();
   });
 
   it("keeps the dashboard usable when only the opportunity panel is unavailable", async () => {
@@ -187,13 +187,14 @@ describe("Dashboard top reduction opportunity card", () => {
     renderDashboard();
 
     await waitFor(() => expect(screen.getByText("Available funds")).toBeInTheDocument());
-    expect(screen.queryByText("Reduction opportunity")).not.toBeInTheDocument();
-    expect(screen.getByText("Reduction opportunities unavailable.")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Review reduction opportunity" })).not.toBeInTheDocument();
+    expect(screen.getByText("Reduction opportunities couldn’t load.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reload reduction opportunities" })).toBeInTheDocument();
   });
 
   it("clears a stale card from the previous business profile on switch", async () => {
     const { rerender } = renderDashboard();
-    expect(await screen.findByText("Reduction opportunity")).toBeInTheDocument();
+    expect(await screen.findByText("Office Supplies")).toBeInTheDocument();
 
     selectedProfile = profileB;
     overviewHandler = () => ({ data: overviewWithTop(null) });
@@ -205,6 +206,6 @@ describe("Dashboard top reduction opportunity card", () => {
       </MemoryRouter>,
     );
 
-    await waitFor(() => expect(screen.queryByText("Reduction opportunity")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText("Office Supplies")).not.toBeInTheDocument());
   });
 });

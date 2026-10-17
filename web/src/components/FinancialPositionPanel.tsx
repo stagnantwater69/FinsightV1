@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { CalendarCheck2, WalletCards } from "lucide-react";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { getErrorMessage } from "../lib/errors";
 import { monthLabel } from "../lib/reportingPeriod";
@@ -103,7 +102,7 @@ export function FinancialPositionPanel({ profile }: { profile: BusinessProfile }
 
   if (loading && !position) {
     return (
-      <Card className="p-5 sm:p-6">
+      <Card className="p-5 shadow-none sm:p-7">
         <div className="skeleton h-5 w-44 rounded" aria-hidden />
         <div className="skeleton mt-5 h-16 rounded-xl" aria-hidden />
         <div className="skeleton mt-3 h-24 rounded-xl" aria-hidden />
@@ -116,7 +115,7 @@ export function FinancialPositionPanel({ profile }: { profile: BusinessProfile }
 
   if (!position) {
     return (
-      <Card className="p-5 sm:p-6">
+      <Card className="p-5 shadow-none sm:p-7">
         <PanelHeading />
         <div className="mt-5">
           <FormError>{error ?? "Recorded financial position could not be loaded."}</FormError>
@@ -147,62 +146,66 @@ export function FinancialPositionPanel({ profile }: { profile: BusinessProfile }
       : undefined;
 
   return (
-    <Card className="p-5 sm:p-6">
+    <Card className="p-5 shadow-none sm:p-7">
       <PanelHeading />
 
-      <div className="mt-5 divide-y divide-paper-200">
-        <div className="pb-4">
-          <p className="text-xs font-semibold text-ink-500">
+      <div className="mt-6 grid gap-6 lg:grid-cols-2 lg:gap-8">
+        <section className="min-w-0">
+          <h3 className="text-sm font-semibold text-ink-700">
             Recorded available funds
-          </p>
-          <p className="figure mt-1 font-display text-2xl font-bold tracking-[-0.02em] text-ink-900">
+          </h3>
+          <p className="figure mt-2 text-2xl font-semibold tracking-[-0.02em] text-ink-900 [overflow-wrap:anywhere] sm:text-3xl">
             {formatMoney(funds.calculatedAmount)}
           </p>
-          <p className="mt-2 text-xs leading-relaxed text-ink-600">
-            {formatMoney(funds.baselineAmount)} starting funds, plus{" "}
-            {formatMoney(funds.confirmedSalesAdded)} confirmed sales, less{" "}
-            {formatMoney(funds.confirmedExpensesDeducted)} confirmed expenses.
-          </p>
-          <p className="mt-1 text-xs leading-relaxed text-ink-500">
+          <dl className="mt-4 space-y-2 text-sm">
+            <CalculationRow label="Starting funds" amount={funds.baselineAmount} />
+            <CalculationRow label="Plus confirmed sales" amount={funds.confirmedSalesAdded} />
+            <CalculationRow label="Less confirmed expenses" amount={funds.confirmedExpensesDeducted} />
+          </dl>
+          <p className="mt-4 max-w-[70ch] text-xs leading-relaxed text-ink-500">
             From records saved after {dateLabel(funds.baselineDate)}. Calculated
             through {dateLabel(funds.asOfDate)}.
           </p>
-        </div>
+        </section>
 
-        <div className="py-4">
-          <p className="text-xs font-semibold text-ink-500">
+        <section className="min-w-0 border-t border-paper-200 pt-6 lg:border-l lg:border-t-0 lg:pl-8 lg:pt-0">
+          <h3 className="text-sm font-semibold text-ink-700">
             Monthly expense basis
-          </p>
-          <p className="figure mt-1 text-lg font-semibold text-ink-900">
+          </h3>
+          <p className="figure mt-2 text-2xl font-semibold tracking-[-0.02em] text-ink-900 [overflow-wrap:anywhere] sm:text-3xl">
             {formatMoney(basis.amount)}
           </p>
-          <p className="mt-1 text-xs leading-relaxed text-ink-500">
+          <p className="mt-4 max-w-[60ch] text-sm leading-relaxed text-ink-600">
             {basis.source === "previous_complete_month" && basis.sourceMonth
               ? `From ${basis.eligibleRecordCount} confirmed expense ${basis.eligibleRecordCount === 1 ? "record" : "records"} in ${monthLabel(basis.sourceMonth)}.`
               : "Using your starting estimate because the previous month is not confirmed complete."}
           </p>
+          <p className="mt-2 max-w-[60ch] text-xs leading-relaxed text-ink-500">
+            Used to calculate Recovery Target for this business.
+          </p>
+        </section>
+      </div>
+
+      <section className="mt-7 grid gap-5 border-t border-paper-200 pt-6 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] lg:gap-8">
+        <div className="min-w-0">
+          <h3 className="font-display text-base font-semibold text-ink-900">
+            Record coverage
+          </h3>
+          <p className="mt-2 max-w-[60ch] text-sm leading-relaxed text-ink-600">
+            Confirm only a month whose expense records are fully entered
+            and reviewed. FinSight can then use records instead of your
+            starting estimate.
+          </p>
+          <p className="mt-2 text-xs leading-relaxed text-ink-500">
+            Coverage confirmation saves separately from your profile changes.
+          </p>
         </div>
 
-        <div className="pt-4">
-          <div className="mb-3 flex items-start gap-3">
-            <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-paper-100 text-tone-brand">
-              <CalendarCheck2 size={19} aria-hidden />
-            </span>
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-ink-900">
-                Record coverage
-              </p>
-              <p className="mt-1 text-xs leading-relaxed text-ink-500">
-                Confirm only a month whose expense records are fully entered
-                and reviewed.
-              </p>
-            </div>
-          </div>
-
+        <div className="min-w-0">
           <Field
             label="Expense records complete through"
             htmlFor={`expense-records-complete-through-${profile.id}`}
-            hint={`Choose ${monthLabel(maximumMonth)} or an earlier month. FinSight can then use records instead of the starting estimate.`}
+            hint={`Choose ${monthLabel(maximumMonth)} or an earlier month.`}
             error={monthError}
           >
             <TextInput
@@ -225,7 +228,7 @@ export function FinancialPositionPanel({ profile }: { profile: BusinessProfile }
 
           {error ? <div className="mt-3"><FormError>{error}</FormError></div> : null}
 
-          <div className="mt-3 flex flex-wrap gap-2">
+          <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
             <Button
               type="button"
               variant="brand"
@@ -248,25 +251,31 @@ export function FinancialPositionPanel({ profile }: { profile: BusinessProfile }
             ) : null}
           </div>
         </div>
-      </div>
+      </section>
     </Card>
   );
 }
 
 function PanelHeading() {
   return (
-    <div className="flex items-start gap-3">
-      <span className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-tint-brand text-tone-brand ring-1 ring-edge-brand">
-        <WalletCards size={21} aria-hidden />
-      </span>
-      <div className="min-w-0 pt-0.5">
-        <h2 className="font-display text-base font-semibold text-ink-900 sm:text-lg">
-          Recorded financial position
-        </h2>
-        <p className="mt-0.5 text-sm leading-relaxed text-ink-500">
-          Calculated from your starting values and confirmed records.
-        </p>
-      </div>
+    <div className="min-w-0">
+      <h2 className="font-display text-lg font-semibold text-ink-900">
+        Recorded financial position
+      </h2>
+      <p className="mt-1 max-w-[70ch] text-sm leading-relaxed text-ink-500">
+        Calculated from your starting values and confirmed records.
+      </p>
+    </div>
+  );
+}
+
+function CalculationRow({ label, amount }: { label: string; amount: number }) {
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,auto)] items-baseline gap-4">
+      <dt className="text-ink-500">{label}</dt>
+      <dd className="figure text-right font-medium text-ink-700 [overflow-wrap:anywhere]">
+        {formatMoney(amount)}
+      </dd>
     </div>
   );
 }

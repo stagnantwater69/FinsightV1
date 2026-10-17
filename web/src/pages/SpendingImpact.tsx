@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { IconTile } from "../components/IconTile";
 import { Link, useLocation } from "react-router-dom";
 import {
-  ArrowRight,
   CircleDollarSign,
+  Coins,
   HelpCircle,
   MessageCircle,
   Package,
@@ -11,7 +12,7 @@ import {
   RotateCcw,
   Sparkles,
   Tag as Tag_,
-  TrendingDown,
+  Target,
   WalletCards,
 } from "lucide-react";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
@@ -32,20 +33,14 @@ import type {
   PurchaseReview,
   SpendingImpact as SpendingImpactData,
 } from "../lib/types";
-import { Callout, InfoNote, PageHead, Pill, type PillTone } from "../components/ui";
-import { Field, MoneyInput, SelectInput, TextInput } from "../components/Field";
+import { PageHead, Pill, type PillTone } from "../components/ui";
+import { Field, SelectInput } from "../components/Field";
 import { Money, formatMoney } from "../components/Money";
 import { discussionPrompt } from "../lib/purchaseConversation";
+import { PriceRangeStrip, SlipMeter, ZoneBand } from "./spendingImpact/ImpactVisuals";
 
-// The impact band as a themed Pill rather than a white-on-solid chip painted
-// with an inline style. The band glyphs stay: severity must survive greyscale
+// The band glyphs stay beside the stamp text: severity must survive greyscale
 // and colourblindness, so the shape carries it as well as the colour.
-const BAND_TONE: Record<ImpactBand, PillTone> = {
-  "Low Impact": "ok",
-  "Noticeable Impact": "warn",
-  "High Impact": "danger",
-};
-
 const BAND_GLYPH: Record<ImpactBand, string> = {
   "Low Impact": "✓",
   "Noticeable Impact": "●",
@@ -60,60 +55,59 @@ const QUICK_AMOUNTS = [5000, 10000, 25000];
 
 function ImpactGauge({ data }: { data: SpendingImpactData }) {
   const displayCeiling = Math.max(data.thresholdPercent * 1.35, data.percentOfFunds, 1);
-  const position = Math.min(100, (data.percentOfFunds / displayCeiling) * 100);
-  const noticeablePosition = Math.min(100, ((data.thresholdPercent * 0.4) / displayCeiling) * 100);
-  const thresholdPosition = Math.min(100, (data.thresholdPercent / displayCeiling) * 100);
 
   return (
-    <div className="mt-5">
-      <div className="mb-2 flex items-end justify-between gap-4">
-        <div>
-          <p className="text-sm font-semibold text-ink-900">Share of available funds</p>
-        </div>
-        <strong className="figure text-xl text-ink-900">{percentText(data)}</strong>
+    <div
+      role="meter"
+      aria-label="Planned expense as a percentage of available funds"
+      aria-valuemin={0}
+      aria-valuemax={Math.ceil(displayCeiling)}
+      aria-valuenow={Math.min(Math.ceil(displayCeiling), Math.round(data.percentOfFunds))}
+      aria-valuetext={`${percentText(data)} of available funds; ${data.impactBand}`}
+    >
+      <div className="flex items-baseline justify-between gap-3 text-xs">
+        <span className="font-semibold text-ink-700">Share of available funds</span>
+        <span className="figure text-base font-bold text-ink-900">{percentText(data)}</span>
       </div>
-      <div
-        className="relative pt-7"
-        role="meter"
-        aria-label="Planned expense as a percentage of available funds"
-        aria-valuemin={0}
-        aria-valuemax={Math.ceil(displayCeiling)}
-        aria-valuenow={Math.min(Math.ceil(displayCeiling), Math.round(data.percentOfFunds))}
-        aria-valuetext={`${percentText(data)} of available funds; ${data.impactBand}`}
-      >
-        <div
-          className="absolute top-0 -translate-x-1/2 whitespace-nowrap rounded-lg bg-ink-900 px-2 py-1 text-[11px] font-semibold text-paper shadow-sm transition-[left] duration-300 ease-out"
-          style={{ left: `${position}%` }}
-        >
-          Your scenario
-        </div>
-        <div className="relative flex h-4 overflow-hidden rounded-full ring-1 ring-paper-200">
-          <div className="bg-tint-brand" style={{ width: `${noticeablePosition}%` }} />
-          <div className="bg-tint-accent" style={{ width: `${thresholdPosition - noticeablePosition}%` }} />
-          <div className="flex-1 bg-tint-danger" />
-          <span
-            aria-hidden
-            className="absolute inset-y-[-4px] w-0.5 bg-ink-900 transition-[left] duration-300 ease-out"
-            style={{ left: `${position}%` }}
-          />
-          <span
-            aria-hidden
-            className="absolute inset-y-0 w-px bg-tone-danger/70"
-            style={{ left: `${thresholdPosition}%` }}
-          />
-        </div>
-        <div className="mt-2 grid grid-cols-3 text-[11px] font-semibold">
-          <span className="text-tone-brand">Low</span>
-          <span className="text-center text-tone-accent">Noticeable</span>
-          <span className="text-right text-tone-danger">High</span>
-        </div>
-        <p className="mt-2 text-xs leading-relaxed text-ink-500">
-          High impact from {data.thresholdPercent}% (<Money value={data.thresholdAmount} />)
-        </p>
-      </div>
+      <SlipMeter
+        percent={data.percentOfFunds}
+        noticeableAt={data.thresholdPercent * 0.4}
+        highAt={data.thresholdPercent}
+        band={data.impactBand}
+      />
+      <p className="mt-2 text-[11px] text-ink-500">
+        High impact from {data.thresholdPercent}% (<Money value={data.thresholdAmount} />)
+      </p>
     </div>
   );
 }
+
+/** The stamp's ink, per band. Text colour drives the border via currentColor. */
+const STAMP_INK: Record<ImpactBand, string> = {
+  "Low Impact": "text-tone-brand",
+  "Noticeable Impact": "text-tone-accent",
+  "High Impact": "text-tone-danger",
+};
+
+/** One ledger line on the slip. */
+function SlipLine({
+  label,
+  value,
+  muted = false,
+}: {
+  label: ReactNode;
+  value: ReactNode;
+  muted?: boolean;
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-4">
+      <dt className={`min-w-0 truncate ${muted ? "text-ink-500" : "text-ink-700"}`}>{label}</dt>
+      <dd className={`figure shrink-0 ${muted ? "text-ink-500" : "font-semibold text-ink-900"}`}>{value}</dd>
+    </div>
+  );
+}
+
+const SLIP_RULE = "my-4 border-t-2 border-dashed border-paper-200";
 
 /**
  * What the owner is actually buying, next to what it does to their money.
@@ -203,7 +197,7 @@ function PriceContextPanel({
   const hasHistory = price.recordCount > 0 || price.similar.length > 0;
 
   return (
-    <div className="rounded-xl border border-paper-200 bg-paper-100 p-4">
+    <div className="rounded-2xl border border-paper-200 bg-paper-50 p-4 sm:p-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <p className="text-sm font-semibold text-ink-900">
@@ -255,6 +249,20 @@ function PriceContextPanel({
             </div>
           ) : null}
 
+          {price.typicalAmount !== null &&
+          price.smallestAmount !== null &&
+          price.largestAmount !== null &&
+          price.recordCount > 1 ? (
+            <div className="mt-3">
+              <PriceRangeStrip
+                smallest={price.smallestAmount}
+                largest={price.largestAmount}
+                typical={price.typicalAmount}
+                planned={plannedAmount === "" ? null : plannedAmount}
+              />
+            </div>
+          ) : null}
+
           {price.typicalAmount !== null && price.categoryName ? (
             <p className="mt-3 text-sm leading-relaxed text-ink-700">
               Your {price.recordCount} {price.categoryName} {price.recordCount === 1 ? "record" : "records"} in
@@ -269,8 +277,7 @@ function PriceContextPanel({
               ) : null}
               {price.multipleOfTypical && price.multipleOfTypical >= 1.4 ? (
                 <>
-                  {" "}
-                  — this one is about{" "}
+                  . This one is about{" "}
                   <b className="figure font-semibold text-ink-900">{price.multipleOfTypical}×</b> that.
                 </>
               ) : (
@@ -307,125 +314,141 @@ function PurchaseReviewCard({
   busy: boolean;
 }) {
   const KindIcon = PURCHASE_KIND_ICON[review.kind];
+  // Ticks are the owner's own working-out while they decide. Kept only on
+  // this card, never saved, and reset whenever a new review arrives.
+  const [answered, setAnswered] = useState<ReadonlySet<string>>(new Set());
+  useEffect(() => setAnswered(new Set()), [review]);
+
+  const facts: { icon: typeof Package; label: string; body: string }[] = [
+    { icon: Target, label: "Usually for", body: review.businessUse },
+    { icon: Coins, label: "Costs to keep", body: review.ongoingCosts ?? "None identified." },
+    /*
+      What to CHECK about the amount — never what the amount should be. The
+      server refuses any answer that names a figure or calls the price fair,
+      cheap or steep, because FinSight has no price feed and a guess sitting
+      beside the real figures below would be indistinguishable from them.
+    */
+    ...(review.priceCheck ? [{ icon: Tag_, label: "Check the price", body: review.priceCheck }] : []),
+  ];
 
   return (
-    <div className="rounded-2xl bg-paper p-5 shadow-md ring-1 ring-paper-200 sm:p-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex min-w-0 items-start gap-3">
-          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-tint-brand text-tone-brand">
-            <KindIcon aria-hidden size={20} />
-          </span>
-          <div className="min-w-0">
-            <h2 className="font-display text-lg font-bold tracking-[-0.02em] text-ink-900">
-              About {item}
-            </h2>
-            {/*
-              Says who wrote these words, in the same language the rest of the
-              app uses for the distinction. The figures on this page are
-              calculated; this paragraph is not, and an owner is entitled to
-              know which is which before weighing it.
-            */}
-            <p className="mt-0.5 text-xs text-ink-500">Written by AI from what you typed</p>
+    <article className="overflow-hidden rounded-2xl bg-paper shadow-sm ring-1 ring-paper-200">
+      <div className="grid lg:grid-cols-[minmax(0,17rem)_minmax(0,1fr)]">
+        {/* The item itself, and who wrote about it. */}
+        <aside className="flex flex-col border-b border-paper-200 bg-tint-brand/40 p-6 lg:border-b-0 lg:border-r">
+          <IconTile icon={KindIcon} size="lg" />
+          <h2 className="mt-4 break-words font-display text-2xl font-bold tracking-[-0.02em] text-ink-900">
+            About {item}
+          </h2>
+          {/*
+            Says who wrote these words, in the same language the rest of the
+            app uses for the distinction. The figures on this page are
+            calculated; this paragraph is not, and an owner is entitled to
+            know which is which before weighing it.
+          */}
+          <p className="mt-1 text-xs text-ink-600">Written by AI from what you typed</p>
+          <div className="mt-3">
+            <Pill tone={PURCHASE_KIND_TONE[review.kind]}>{PURCHASE_KIND_LABEL[review.kind]}</Pill>
+          </div>
+          <p className="mt-4 text-sm leading-relaxed text-ink-700">{review.kindReason}</p>
+
+          {/*
+            The card is one turn, not the end of the subject. This carries what
+            was just said into the drawer as a written-out opening question —
+            the owner reads it and presses send themselves. Nothing is asked on
+            their behalf.
+          */}
+          <div className="mt-6 flex flex-col gap-2 lg:mt-auto lg:pt-6">
+            <button
+              type="button"
+              onClick={onDiscuss}
+              aria-label={`Ask FinSight about ${item}`}
+              className="inline-flex min-h-tap items-center justify-center gap-2 rounded-xl bg-brand-800 px-4 text-sm font-semibold text-brand-50 shadow-sm transition-colors hover:bg-brand-900"
+            >
+              <MessageCircle aria-hidden size={16} />
+              Ask FinSight
+            </button>
+            {stale ? (
+              <button
+                type="button"
+                onClick={onRefresh}
+                disabled={busy}
+                className="inline-flex min-h-tap items-center justify-center gap-1.5 rounded-xl bg-paper px-3 text-xs font-semibold text-ink-700 ring-1 ring-paper-200 transition-colors hover:bg-tint-brand hover:text-tone-brand disabled:opacity-60"
+              >
+                <RefreshCw aria-hidden size={14} /> {busy ? "Looking…" : "Item changed: look again"}
+              </button>
+            ) : null}
+            <p className="text-center text-[11.5px] text-ink-600">The decision is yours.</p>
+          </div>
+        </aside>
+
+        <div className="min-w-0 p-6">
+          <dl className="divide-y divide-paper-200">
+            {facts.map(({ icon: Icon, label, body }) => (
+              <div key={label} className="grid gap-1.5 py-3.5 first:pt-0 sm:grid-cols-[9.5rem_minmax(0,1fr)] sm:gap-4">
+                <dt className="flex items-center gap-2 text-xs font-semibold text-ink-600">
+                  <Icon aria-hidden size={15} className="shrink-0 text-tone-brand" />
+                  {label}
+                </dt>
+                <dd className="text-sm leading-relaxed text-ink-700">{body}</dd>
+              </div>
+            ))}
+          </dl>
+
+          {price ? (
+            <div className="mt-4">
+              <PriceContextPanel price={price} plannedAmount={plannedAmount} />
+            </div>
+          ) : null}
+
+          <div className="mt-6">
+            <div className="flex items-baseline justify-between gap-3">
+              <p className="text-sm font-semibold text-ink-900">Questions only you can answer</p>
+              <span className="figure text-xs text-ink-500">
+                {answered.size}/{review.questions.length}
+              </span>
+            </div>
+            <ul className="mt-2.5 space-y-2">
+              {review.questions.map((question) => {
+                const done = answered.has(question);
+                return (
+                  <li key={question}>
+                    <label
+                      className={`flex cursor-pointer gap-3 rounded-xl p-3 text-sm leading-relaxed ring-1 transition-colors ${
+                        done
+                          ? "bg-paper-100 text-ink-600 ring-paper-200"
+                          : "bg-paper text-ink-700 ring-paper-200 hover:bg-tint-brand/50 hover:ring-edge-brand"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={done}
+                        onChange={() =>
+                          setAnswered((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(question)) next.delete(question);
+                            else next.add(question);
+                            return next;
+                          })
+                        }
+                        className="mt-0.5 size-4 shrink-0 accent-brand-700"
+                      />
+                      {question}
+                    </label>
+                  </li>
+                );
+              })}
+            </ul>
           </div>
         </div>
-        <Pill tone={PURCHASE_KIND_TONE[review.kind]}>{PURCHASE_KIND_LABEL[review.kind]}</Pill>
       </div>
-
-      <p className="mt-4 text-sm leading-relaxed text-ink-700">{review.kindReason}</p>
-
-      <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        <div className="rounded-xl bg-paper-100 p-4">
-          <p className="text-xs font-semibold uppercase tracking-wide text-ink-600">
-            What it is usually for
-          </p>
-          <p className="mt-1.5 text-sm leading-relaxed text-ink-700">{review.businessUse}</p>
-        </div>
-        <div className="rounded-xl bg-paper-100 p-4">
-          <p className="text-xs font-semibold uppercase tracking-wide text-ink-600">
-            What it costs to keep
-          </p>
-          <p className="mt-1.5 text-sm leading-relaxed text-ink-700">
-            {review.ongoingCosts ?? "None identified."}
-          </p>
-        </div>
-      </div>
-
-      {/*
-        What to CHECK about the amount — never what the amount should be. The
-        server refuses any answer that names a figure or calls the price fair,
-        cheap or steep, because FinSight has no price feed and a guess sitting
-        beside the real figures below would be indistinguishable from them.
-      */}
-      {review.priceCheck ? (
-        <div className="mt-3 flex gap-3 rounded-xl bg-tint-brand p-4">
-          <Tag_ aria-hidden className="mt-0.5 shrink-0 text-tone-brand" size={18} />
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-tone-brand">
-              What to check about the price
-            </p>
-            <p className="mt-1.5 text-sm leading-relaxed text-ink-700">{review.priceCheck}</p>
-          </div>
-        </div>
-      ) : null}
-
-      {price ? (
-        <div className="mt-5">
-          <PriceContextPanel price={price} plannedAmount={plannedAmount} />
-        </div>
-      ) : null}
-
-      <div className="mt-5">
-        <p className="text-sm font-semibold text-ink-900">Questions to consider</p>
-        <ul className="mt-2.5 space-y-2">
-          {review.questions.map((question) => (
-            <li key={question} className="flex gap-2.5 text-sm leading-relaxed text-ink-700">
-              <span
-                aria-hidden
-                className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-brand-500"
-              />
-              {question}
-            </li>
-          ))}
-        </ul>
-      </div>
-
-      {/*
-        The card is one turn, not the end of the subject. This carries what was
-        just said into the drawer as a written-out opening question — the owner
-        reads it and presses send themselves, the same contract the "expand on
-        this" link elsewhere on the page honours. Nothing is asked on their
-        behalf.
-      */}
-      <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-paper-200 pt-4">
-        <button
-          type="button"
-          onClick={onDiscuss}
-          aria-label={`Ask FinSight about ${item}`}
-          className="inline-flex min-h-tap items-center gap-2 rounded-xl bg-brand-800 px-4 text-sm font-semibold text-brand-50 shadow-sm transition-colors hover:bg-brand-900"
-        >
-          <MessageCircle aria-hidden size={16} />
-          Ask FinSight
-        </button>
-        {stale ? (
-          <button
-            type="button"
-            onClick={onRefresh}
-            disabled={busy}
-            className="inline-flex min-h-tap shrink-0 items-center gap-1.5 rounded-xl bg-paper-100 px-3 text-xs font-semibold text-ink-700 ring-1 ring-paper-200 transition-colors hover:bg-tint-brand hover:text-tone-brand disabled:opacity-60"
-          >
-            <RefreshCw aria-hidden size={14} /> {busy ? "Looking…" : "Item changed — look again"}
-          </button>
-        ) : null}
-      </div>
-
-      <p className="mt-3 text-[11.5px] leading-relaxed text-ink-500">The decision is yours.</p>
-    </div>
+    </article>
   );
 }
 
 export function SpendingImpact() {
   return (
-    <ReportingPeriodScope>
+    <ReportingPeriodScope scope="spending-impact">
       <SpendingImpactPage />
     </ReportingPeriodScope>
   );
@@ -443,7 +466,7 @@ function SpendingImpactPage() {
     return typeof prefill === "number" && Number.isFinite(prefill) && prefill > 0 ? prefill : "";
   });
   const [description, setDescription] = useState("");
-  // The shared period (This week, a month, All time): what "recent spending"
+  // The page's period (This week, a month, All time): what "recent spending"
   // means for the before/after expense line.
   const { selection, ready: periodReady } = useReportingPeriod();
   const periodKey = JSON.stringify(selection);
@@ -637,37 +660,53 @@ function SpendingImpactPage() {
 
       <InsightsTabs />
 
-      <section className="overflow-hidden rounded-2xl bg-paper shadow-md ring-1 ring-paper-200">
-        <div className="grid lg:grid-cols-[minmax(0,0.88fr)_minmax(0,1.12fr)]">
-          <div className="p-5 sm:p-7">
-            <div className="mb-6 flex items-start gap-3">
-              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-tint-brand text-tone-brand">
-                <Sparkles aria-hidden size={20} />
-              </span>
-              <div>
-                <h2 className="font-display text-xl font-bold tracking-[-0.02em] text-ink-900">
-                  Spending scenario
-                </h2>
-              </div>
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_10rem]">
-              <Field label="What are you planning to buy?" htmlFor="description" optional>
-                <TextInput
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder="e.g. Display fridge"
-                />
-              </Field>
-              <Field label="Planned amount" htmlFor="plannedAmount">
-                <MoneyInput
+      <section className="overflow-hidden rounded-2xl bg-paper shadow-sm ring-1 ring-paper-200">
+        <div className="grid lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
+          {/* ============ The question, written as a sentence ============ */}
+          <div className="flex flex-col p-5 sm:p-8">
+            <h2 className="eyebrow">Spending scenario</h2>
+            {/*
+              The two inputs sit inside the sentence they answer, so the form
+              reads as the question the owner is actually asking. Each keeps
+              its own label for assistive tech; the sentence is the visual one.
+            */}
+            <p className="mt-4 font-display text-[1.6rem] font-semibold leading-[1.75] tracking-[-0.015em] text-ink-900 sm:text-[2rem]">
+              If I buy{" "}
+              <label htmlFor="description" className="sr-only">
+                What are you planning to buy? (optional)
+              </label>
+              <input
+                id="description"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="e.g. Display fridge"
+                style={{ width: `${description ? Math.max(description.length, 4) + 1 : 17}ch` }}
+                className="max-w-full border-0 border-b-2 border-dashed border-ink-300 bg-transparent px-1 text-tone-brand placeholder:font-normal placeholder:text-ink-300 focus:border-solid focus:border-brand-600 focus:outline-none"
+              />{" "}
+              for{" "}
+              <span className="inline-flex items-baseline whitespace-nowrap">
+                <span aria-hidden className="figure mr-1.5 text-[0.7em] text-ink-400">PHP</span>
+                <label htmlFor="plannedAmount" className="sr-only">
+                  Planned amount
+                </label>
+                <input
+                  id="plannedAmount"
+                  type="number"
+                  inputMode="decimal"
                   min={0}
+                  step="0.01"
                   value={plannedAmount}
                   onChange={(e) => setPlannedAmount(e.target.value === "" ? "" : Number(e.target.value))}
+                  // A focused number box would otherwise change its value
+                  // when the owner scrolls the page past it.
+                  onWheel={(e) => e.currentTarget.blur()}
                   placeholder="11000"
+                  style={{ width: `${Math.max(String(plannedAmount).length, 5) + 1}ch` }}
+                  className="figure border-0 border-b-2 border-dashed border-ink-300 bg-transparent px-1 text-tone-brand [appearance:textfield] placeholder:font-normal placeholder:text-ink-300 focus:border-solid focus:border-brand-600 focus:outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                 />
-              </Field>
-            </div>
+              </span>
+              , what is left?
+            </p>
 
             {/*
               The description used to be a field that changed nothing — a note
@@ -676,7 +715,7 @@ function SpendingImpactPage() {
               amount, and hands back the questions the owner is the only person
               who can answer.
             */}
-            <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+            <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2">
               <button
                 type="button"
                 onClick={fetchReview}
@@ -695,7 +734,7 @@ function SpendingImpactPage() {
               </p>
             </div>
 
-            <div className="mt-5">
+            <div className="mt-8">
               <div className="flex items-center justify-between gap-3">
                 <label htmlFor="amount-slider" className="text-xs font-semibold text-ink-700">
                   Adjust amount
@@ -710,9 +749,16 @@ function SpendingImpactPage() {
                 step={500}
                 value={plannedAmount === "" ? 0 : Math.min(plannedAmount, sliderMaximum)}
                 onChange={(e) => setPlannedAmount(Number(e.target.value))}
-                className="spending-range mt-3 w-full"
+                className="spending-range mt-1 w-full"
                 aria-label="Explore planned spending amount"
               />
+              {data ? (
+                <ZoneBand
+                  max={sliderMaximum}
+                  noticeableAmount={data.thresholdAmount * 0.4}
+                  highAmount={data.thresholdAmount}
+                />
+              ) : null}
               <div className="mt-3 flex flex-wrap gap-2">
                 {QUICK_AMOUNTS.filter((amount) => amount <= sliderMaximum).map((amount) => (
                   <button
@@ -720,7 +766,7 @@ function SpendingImpactPage() {
                     type="button"
                     onClick={() => setPlannedAmount(amount)}
                     aria-pressed={plannedAmount === amount}
-                    className="figure min-h-tap rounded-xl bg-paper-100 px-3 text-xs font-semibold text-ink-700 ring-1 ring-paper-200 transition-colors hover:bg-tint-brand hover:text-tone-brand aria-pressed:bg-brand-700 aria-pressed:text-white"
+                    className="figure min-h-tap rounded-full bg-paper-100 px-4 text-xs font-semibold text-ink-700 ring-1 ring-paper-200 transition-colors hover:bg-tint-brand hover:text-tone-brand aria-pressed:bg-brand-700 aria-pressed:text-white aria-pressed:ring-brand-700"
                   >
                     {formatMoney(amount)}
                   </button>
@@ -736,14 +782,15 @@ function SpendingImpactPage() {
                     setReviewedItem(null);
                     setReviewError(null);
                   }}
-                  className="inline-flex min-h-tap items-center gap-1.5 rounded-xl px-3 text-xs font-semibold text-ink-500 hover:bg-paper-100 hover:text-ink-900"
+                  className="inline-flex min-h-tap items-center gap-1.5 rounded-full px-3 text-xs font-semibold text-ink-500 hover:bg-paper-100 hover:text-ink-900"
                 >
                   <RotateCcw aria-hidden size={14} /> Reset
                 </button>
               </div>
             </div>
 
-            <div className="mt-6 border-t border-paper-200 pt-4 sm:max-w-xs">
+            <div className="mt-auto pt-8">
+            <div className="grid gap-4 border-t border-paper-200 pt-5 sm:grid-cols-[minmax(0,16rem)_minmax(0,1fr)] sm:items-end">
               <Field
                 label="Reference category"
                 htmlFor="category"
@@ -761,12 +808,9 @@ function SpendingImpactPage() {
                   {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </SelectInput>
               </Field>
-            </div>
-
-            <div className="mt-5 flex flex-wrap items-center justify-between gap-2 text-xs text-ink-500">
-              {selected ? (
-                <>
-                  <span className="min-w-0">
+              <div className="min-w-0 text-xs text-ink-500 sm:text-right">
+                {selected ? (
+                  <>
                     <span>{availableFundsLabel}</span>:{" "}
                     <b className="figure text-ink-700">
                       {formatMoney(displayedAvailableFunds)}
@@ -776,103 +820,137 @@ function SpendingImpactPage() {
                         {availableFundsProvenance}
                       </span>
                     ) : null}
-                  </span>
-                  <Link to={`/business-profiles/${selected.id}/edit`} className="font-semibold text-brand-700 hover:text-brand-800">
-                    Edit starting funds
-                  </Link>
-                </>
-              ) : (
-                <>
-                  {/* No funds figure to work against, so the scenario cannot
-                      be calculated — the link goes where that gets fixed
-                      rather than to a business-profile edit page that does
-                      not exist yet. */}
-                  <span>Set up your business to add available funds.</span>
-                  <Link to="/onboarding" className="font-semibold text-brand-700 hover:text-brand-800">
-                    Finish setup
-                  </Link>
-                </>
-              )}
+                    <Link
+                      to={`/business-profiles/${selected.id}/edit`}
+                      className="tap-inline mt-1 inline-block link-action"
+                    >
+                      Edit starting funds
+                    </Link>
+                  </>
+                ) : (
+                  <>
+                    {/* No funds figure to work against, so the scenario cannot
+                        be calculated — the link goes where that gets fixed
+                        rather than to a business-profile edit page that does
+                        not exist yet. */}
+                    <span>Set up your business to add available funds.</span>{" "}
+                    <Link to="/onboarding" className="tap-inline link-action">
+                      Finish setup
+                    </Link>
+                  </>
+                )}
+              </div>
+            </div>
             </div>
           </div>
 
-          <div className="relative bg-paper-100 p-5 sm:p-7" aria-live="polite" aria-busy={isCalculating}>
+          {/* ============ The answer, as a receipt ============ */}
+          <div
+            className="relative border-t border-paper-200 bg-paper-100 px-5 py-8 sm:px-8 lg:border-l lg:border-t-0"
+            aria-live="polite"
+            aria-busy={isCalculating}
+          >
             {isCalculating ? (
-              <span className="absolute right-5 top-5 text-xs font-semibold text-tone-brand">Updating…</span>
+              <span className="absolute right-5 top-3 text-xs font-semibold text-tone-brand">Updating…</span>
             ) : null}
-            {!data ? (
-              <div className="flex min-h-[24rem] flex-col items-center justify-center text-center">
-                <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-paper text-tone-brand shadow-sm">
-                  <CircleDollarSign aria-hidden size={30} />
-                </span>
-                <h2 className="mt-5 font-display text-xl font-bold text-ink-900">
-                  {selected ? "Enter a planned amount" : "Set up your business first"}
-                </h2>
-                {!selected ? (
-                  <ButtonLink to="/onboarding" variant="primary" className="mt-5">
-                    Finish business setup
-                  </ButtonLink>
-                ) : null}
-              </div>
-            ) : (
-              <div className={`transition-opacity duration-200 ${isCalculating ? "opacity-60" : "opacity-100"}`}>
+            <div className="receipt-slip-shadow mx-auto w-full max-w-md">
+              <div className="receipt-slip relative px-6 pt-6 sm:px-7">
                 <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-medium text-ink-600">Funds after</p>
-                    <p className={`figure mt-1 break-words text-4xl font-semibold tracking-[-0.03em] sm:text-5xl ${data.funds.after < 0 ? "text-tone-danger" : "text-ink-900"}`}>
-                      {formatMoney(data.funds.after)}
+                  <div className="min-w-[11rem]">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-500">
+                      What-if slip
                     </p>
-                    <p className="mt-2 flex items-center gap-1.5 text-sm text-ink-600">
-                      <TrendingDown aria-hidden size={16} /> {formatMoney(data.plannedAmount)} less
+                    <p className="mt-0.5 text-xs text-ink-500">
+                      {periodLabel(selection)} · not saved
                     </p>
                   </div>
-                  <Pill tone={BAND_TONE[data.impactBand]}>
-                    <span aria-hidden>{BAND_GLYPH[data.impactBand]}</span>
-                    {data.impactBand}
-                  </Pill>
+                  {data ? (
+                    <span
+                      className={`impact-stamp inline-flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 font-display text-[11px] font-bold uppercase tracking-[0.08em] ${STAMP_INK[data.impactBand]}`}
+                    >
+                      <span aria-hidden>{BAND_GLYPH[data.impactBand]}</span>
+                      {data.impactBand}
+                    </span>
+                  ) : null}
                 </div>
 
-                {data.exceedsFunds ? (
-                  <div className="mt-5"><Callout tone="warn"><b>Exceeds your available funds.</b></Callout></div>
-                ) : null}
-
-                <div className="mt-6 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 rounded-2xl bg-paper p-4 shadow-sm">
-                  <div>
-                    <p className="text-xs font-medium text-ink-500">Before</p>
-                    <p className="figure mt-1 text-lg font-semibold text-ink-900">{formatMoney(data.funds.before)}</p>
+                {!data ? (
+                  <div className="py-10 text-center">
+                    <IconTile icon={CircleDollarSign} size="lg" />
+                    <h2 className="mt-4 font-display text-lg font-bold text-ink-900">
+                      {selected ? "Enter a planned amount" : "Set up your business first"}
+                    </h2>
+                    <div aria-hidden className="mx-auto mt-6 max-w-[16rem] space-y-2.5">
+                      {[100, 80, 92].map((w) => (
+                        <div key={w} className="flex justify-between gap-4">
+                          <span className="h-2 rounded-full bg-paper-200" style={{ width: `${w / 2}%` }} />
+                          <span className="h-2 w-16 rounded-full bg-paper-200" />
+                        </div>
+                      ))}
+                    </div>
+                    {!selected ? (
+                      <ButtonLink to="/onboarding" variant="primary" className="mt-6">
+                        Finish business setup
+                      </ButtonLink>
+                    ) : null}
                   </div>
-                  <span className="flex h-9 w-9 items-center justify-center rounded-full bg-tint-brand text-tone-brand"><ArrowRight aria-hidden size={18} /></span>
-                  <div className="text-right">
-                    <p className="text-xs font-medium text-ink-500">After</p>
-                    <p className={`figure mt-1 text-lg font-semibold ${data.funds.after < 0 ? "text-tone-danger" : "text-ink-900"}`}>{formatMoney(data.funds.after)}</p>
+                ) : (
+                  <div className={`transition-opacity duration-200 ${isCalculating ? "opacity-60" : "opacity-100"}`}>
+                    <div className={SLIP_RULE} />
+                    <dl className="space-y-2 text-sm">
+                      <SlipLine label="Available funds" value={formatMoney(data.funds.before)} />
+                      <SlipLine
+                        label={description.trim() || "Planned purchase"}
+                        value={`−${formatMoney(data.plannedAmount)}`}
+                      />
+                    </dl>
+                    <div className="my-3 border-t-[3px] border-double border-ink-300" />
+                    <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-1">
+                      <p className="text-xs font-bold uppercase tracking-[0.14em] text-ink-700">Funds after</p>
+                      <p
+                        className={`figure break-words text-[2.5rem] font-semibold leading-none tracking-[-0.03em] ${data.funds.after < 0 ? "text-tone-danger" : "text-ink-900"}`}
+                      >
+                        {formatMoney(data.funds.after)}
+                      </p>
+                    </div>
+                    {data.exceedsFunds ? (
+                      <p className="mt-2 text-right text-xs font-semibold text-tone-danger">
+                        Exceeds your available funds.
+                      </p>
+                    ) : null}
+
+                    <div className={SLIP_RULE} />
+                    <ImpactGauge data={data} />
+
+                    <div className={SLIP_RULE} />
+                    <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-ink-700">
+                      <WalletCards aria-hidden className="text-tone-brand" size={14} />
+                      Expenses · {periodLabel(selection)}
+                    </p>
+                    <dl className="space-y-1.5 text-sm">
+                      <SlipLine muted label="Now" value={formatMoney(data.periodExpenses.before)} />
+                      <SlipLine label="With this purchase" value={formatMoney(data.periodExpenses.after)} />
+                    </dl>
+                    {data.periodExpenses.before === 0 ? (
+                      <p className="mt-2 text-xs text-ink-500">No expenses {periodPhrase(selection)}.</p>
+                    ) : null}
+
+                    <div className={SLIP_RULE} />
+                    <button
+                      type="button"
+                      onClick={() => askFinSight(expandQuestion)}
+                      aria-label="Ask FinSight about this scenario"
+                      className="tap-inline mx-auto flex items-center gap-2 text-sm link-action"
+                    >
+                      <MessageCircle aria-hidden size={16} />
+                      Ask FinSight about this
+                    </button>
                   </div>
-                </div>
-
-                <ImpactGauge data={data} />
-
-                <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                  <div className="flex gap-3 rounded-xl bg-paper p-3.5 ring-1 ring-paper-200">
-                    <WalletCards aria-hidden className="mt-0.5 shrink-0 text-tone-brand" size={18} />
-                    <div><p className="text-xs text-ink-500">Expenses · {periodLabel(selection)}</p><p className="figure mt-1 text-sm font-semibold text-ink-900">{formatMoney(data.periodExpenses.before)} <span className="mx-1 text-ink-500">→</span> {formatMoney(data.periodExpenses.after)}</p></div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => askFinSight(expandQuestion)}
-                    aria-label="Ask FinSight about this scenario"
-                    className="flex min-h-tap items-center justify-between gap-3 rounded-xl bg-brand-800 p-3.5 text-left text-brand-50 shadow-sm transition-colors hover:bg-brand-900"
-                  >
-                    <span className="text-sm font-semibold">Ask FinSight</span>
-                    <Sparkles aria-hidden size={18} />
-                  </button>
-                </div>
-
-                {data.periodExpenses.before === 0 ? (
-                  <div className="mt-4"><InfoNote>No expenses {periodPhrase(selection)}.</InfoNote></div>
-                ) : null}
+                )}
               </div>
-            )}
+            </div>
 
-            {error ? <p role="alert" className="mt-4 text-sm text-tone-danger">{error}</p> : null}
+            {error ? <p role="alert" className="mx-auto mt-4 max-w-md text-sm text-tone-danger">{error}</p> : null}
           </div>
         </div>
       </section>

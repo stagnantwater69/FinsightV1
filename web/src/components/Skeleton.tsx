@@ -86,15 +86,27 @@ export function SkeletonDashboard() {
   return (
     <div className="space-y-6" aria-busy="true" aria-live="polite">
       <span className="sr-only">Loading your dashboard…</span>
-      <div className="grid gap-4 sm:grid-cols-3">
-        <SkeletonStatTile />
-        <SkeletonStatTile />
-        <SkeletonStatTile />
+      <div className="flex justify-between gap-5" aria-hidden="true">
+        <SkeletonLine className="h-3 w-40" />
+        <SkeletonLine className="h-3 w-40" />
       </div>
-      <div className="skeleton h-14 rounded-2xl" aria-hidden />
-      <div className="grid gap-4 lg:grid-cols-2">
-        <SkeletonPanel lines={5} />
-        <SkeletonPanel lines={5} />
+      <div className="grid grid-cols-1 overflow-hidden rounded-xl border border-paper-200 bg-paper min-[360px]:grid-cols-2 xl:grid-cols-4">
+        {Array.from({ length: 4 }, (_, index) => (
+          <div key={index} className="min-w-0 space-y-3 border-paper-200 p-4 sm:p-5">
+            <SkeletonLine className="max-w-24" />
+            <SkeletonLine className="h-7 max-w-32" />
+            <SkeletonLine className="max-w-20" />
+          </div>
+        ))}
+      </div>
+      <div className="grid gap-5 lg:grid-cols-12">
+        <div className="min-w-0 lg:col-span-7"><SkeletonPanel lines={7} /></div>
+        <div className="min-w-0 lg:col-span-5"><SkeletonPanel lines={5} /></div>
+      </div>
+      <SkeletonPanel lines={8} />
+      <div className="grid gap-5 lg:grid-cols-12">
+        <div className="lg:col-span-7"><SkeletonPanel lines={5} /></div>
+        <div className="lg:col-span-5"><SkeletonPanel lines={5} /></div>
       </div>
     </div>
   );

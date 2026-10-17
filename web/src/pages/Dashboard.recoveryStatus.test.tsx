@@ -121,7 +121,7 @@ describe("Dashboard recovery-status KPI — status-driven rendering", () => {
     currentSummary = summaryWithStatus("no_current_month_data");
     renderDashboard();
     await waitFor(() => expect(screen.getByText("No sales yet")).toBeInTheDocument());
-    expect(screen.getByText("No sales this month")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Add sale" })).toHaveAttribute("href", "/records/sales/new");
   });
 
   it("shows 'Target reached' for covered", async () => {

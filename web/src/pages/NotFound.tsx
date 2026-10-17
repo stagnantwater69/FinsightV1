@@ -70,14 +70,14 @@ export function NotFound() {
         {profile ? (
           <Link
             to="/records"
-            className="tap-inline text-sm font-medium text-brand-700 hover:text-brand-800"
+            className="tap-inline text-sm link-action"
           >
             View records
           </Link>
         ) : (
           <Link
             to="/login"
-            className="tap-inline text-sm font-medium text-brand-700 hover:text-brand-800"
+            className="tap-inline text-sm link-action"
           >
             Log in
           </Link>

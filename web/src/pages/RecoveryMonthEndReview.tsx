@@ -302,10 +302,10 @@ function MonthEndReview() {
               Nothing here changes your settings.{" "}
               <Link
                 to={`/business-profiles/${selected.id}/edit`}
-                className="tap-inline inline-flex items-center gap-1.5 font-semibold text-brand-700 underline underline-offset-2"
+                className="tap-inline inline-flex items-center gap-1.5 link"
               >
                 Edit business profile
-                <ArrowRight aria-hidden className="size-3.5" strokeWidth={1.9} />
+                <ArrowRight aria-hidden className="size-3.5" />
               </Link>
             </p>
           </Panel>

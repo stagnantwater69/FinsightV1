@@ -79,7 +79,7 @@ export function Modal({
           type="button"
           onClick={onClose}
           aria-label="Close"
-          className="tap -m-2 flex h-9 w-9 min-h-0 min-w-0 items-center justify-center rounded-lg text-lg leading-none text-ink-500 transition hover:bg-paper-100 hover:text-ink-800"
+          className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-lg leading-none text-ink-500 transition hover:bg-paper-100 hover:text-ink-800"
         >
           ×
         </button>

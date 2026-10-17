@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { OTHER_COLOR } from "../lib/chartPalette";
 import { useCategoricalPalette } from "../lib/useChartPalette";
 import { formatMoney } from "./Money";
@@ -22,9 +23,9 @@ import { formatMoney } from "./Money";
  */
 
 const TOP_N = 6;
-const SIZE = 168;
-const RADIUS = 62;
-const STROKE = 22;
+const SIZE = 200;
+const RADIUS = 76;
+const STROKE = 26;
 
 /**
  * The clear space inside the ring — the only room the centre total has.
@@ -95,22 +96,40 @@ export function toSlices(
 
 export function DonutChart({ breakdown }: { breakdown: { categoryName: string; total: number }[] }) {
   const palette = useCategoricalPalette();
+  const [active, setActive] = useState<string | null>(null);
   const slices = toSlices(breakdown, palette);
   if (slices.length === 0) return null;
 
   const total = slices.reduce((s, d) => s + d.total, 0);
-  const totalLabel = formatMoney(total);
+  const focus = slices.find((d) => d.name === active) ?? null;
+  // The centre names whichever slice is being pointed at, and the total
+  // otherwise; the figure is fitted to the ring either way.
+  const centerValue = formatMoney(focus ? focus.total : total);
   const circumference = 2 * Math.PI * RADIUS;
   const center = SIZE / 2;
+  // No track behind the ring: the cuts between segments show the card itself,
+  // which reads cleaner than a grey ring peeking through.
+  const gap = slices.length > 1 ? 2.5 : 0;
 
   let offset = 0;
 
   return (
-    <div className="flex flex-col items-center gap-5 sm:flex-row sm:items-center">
-      <div className="relative shrink-0">
-        <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} role="presentation">
+    <div
+      className="grid items-center gap-6 sm:grid-cols-[auto_minmax(0,1fr)] sm:gap-8"
+      onMouseLeave={() => setActive(null)}
+    >
+      <div className="relative mx-auto shrink-0" style={{ width: SIZE, height: SIZE }}>
+        <svg
+          width={SIZE}
+          height={SIZE}
+          viewBox={`-8 -8 ${SIZE + 16} ${SIZE + 16}`}
+          role="presentation"
+          className="overflow-visible"
+        >
           {slices.map((d) => {
             const len = (d.total / total) * circumference;
+            const drawn = Math.max(len - gap, 0.001);
+            const isActive = active === d.name;
             const seg = (
               <circle
                 key={d.name}
@@ -119,43 +138,60 @@ export function DonutChart({ breakdown }: { breakdown: { categoryName: string; t
                 r={RADIUS}
                 fill="none"
                 stroke={d.color}
-                strokeWidth={STROKE}
-                // The 2px shortfall is the surface gap between adjacent
-                // segments, so touching slices stay visually separate rather
-                // than bleeding into one another.
-                strokeDasharray={`${Math.max(len - 2, 0)} ${circumference - Math.max(len - 2, 0)}`}
-                strokeDashoffset={-offset}
+                strokeWidth={isActive ? STROKE + 8 : STROKE}
+                strokeDasharray={`${drawn} ${circumference - drawn}`}
+                strokeDashoffset={-(offset + gap / 2)}
                 transform={`rotate(-90 ${center} ${center})`}
+                opacity={active && !isActive ? 0.25 : 1}
+                className="cursor-pointer transition-[stroke-width,opacity] duration-200 ease-out motion-reduce:transition-none"
+                onMouseEnter={() => setActive(d.name)}
               />
             );
             offset += len;
             return seg;
           })}
         </svg>
-        <div className="pointer-events-none absolute inset-0 grid place-content-center text-center">
-          <span
-            className="figure block font-bold leading-none text-ink-900"
-            style={{ fontSize: fitLabelSize(totalLabel), maxWidth: HOLE_WIDTH }}
-          >
-            {totalLabel}
+        <div className="pointer-events-none absolute inset-0 grid place-content-center px-8 text-center">
+          <span className="block text-[11px] font-medium uppercase tracking-[0.08em] text-ink-500">
+            {focus ? `${((focus.total / total) * 100).toFixed(1)}%` : "Total spent"}
           </span>
-          <span className="mt-1 block text-[11px] text-ink-500">total</span>
+          <span
+            className="figure mt-1 block font-bold leading-none text-ink-900"
+            style={{ fontSize: fitLabelSize(centerValue), maxWidth: HOLE_WIDTH }}
+          >
+            {centerValue}
+          </span>
+          <span className="mx-auto mt-1.5 block max-w-[7.5rem] truncate text-xs text-ink-600">
+            {focus ? focus.name : `${slices.length} ${slices.length === 1 ? "category" : "categories"}`}
+          </span>
         </div>
       </div>
 
       {/* The legend is the accessible reading of the chart, and doubles as the
-          data table — name, value and share for every slice. */}
-      <ul className="flex w-full min-w-0 flex-col gap-2.5">
-        {slices.map((d) => (
-          <li key={d.name} className="flex items-center gap-2.5 text-[13px]">
-            <span aria-hidden className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: d.color }} />
-            <span className="min-w-0 flex-1 truncate font-medium text-ink-700">{d.name}</span>
-            <span className="figure shrink-0 font-semibold text-ink-900">{formatMoney(d.total)}</span>
-            <span className="figure w-12 shrink-0 text-right text-xs text-ink-500">
-              {((d.total / total) * 100).toFixed(1)}%
-            </span>
-          </li>
-        ))}
+          data table: name, share and value for every slice. Each row also
+          points at its slice, by pointer or keyboard focus. */}
+      <ul className="w-full min-w-0 divide-y divide-paper-200">
+        {slices.map((d) => {
+          const share = (d.total / total) * 100;
+          const isActive = active === d.name;
+          return (
+            <li
+              key={d.name}
+              tabIndex={0}
+              onMouseEnter={() => setActive(d.name)}
+              onFocus={() => setActive(d.name)}
+              onBlur={() => setActive(null)}
+              className={`grid cursor-default grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-3 rounded-md px-2 py-2.5 text-[13px] outline-none transition-[background-color,opacity] focus-visible:ring-2 focus-visible:ring-brand-500 ${
+                isActive ? "bg-paper-100" : ""
+              } ${active && !isActive ? "opacity-50" : ""}`}
+            >
+              <span aria-hidden className="h-3 w-3 rounded-[4px]" style={{ background: d.color }} />
+              <span className="truncate font-medium text-ink-800">{d.name}</span>
+              <span className="figure w-14 text-right font-semibold text-ink-900">{share.toFixed(1)}%</span>
+              <span className="figure w-24 text-right text-ink-500">{formatMoney(d.total)}</span>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

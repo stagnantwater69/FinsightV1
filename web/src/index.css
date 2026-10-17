@@ -97,6 +97,11 @@
      sees exactly the app they saw before. */
   :root,
   [data-theme="classic"] {
+    /* The canvas glow behind the app (see .app-canvas). Light themes get
+       their depth from colour, not from dark surfaces: a soft mint and a
+       paler teal pooled at the top of the page, under white cards. */
+    --canvas-glow-a: 186 240 226;
+    --canvas-glow-b: 214 238 232;
     --paper: 255 255 255;
     --paper-50: 251 253 252;
     --paper-100: 244 248 247;
@@ -114,19 +119,19 @@
     --ink-900: 26 32 34;
     --ink-950: 14 18 19;
 
-    --tint-brand: 239 252 249;
+    --tint-brand: 222 246 240;
     --tone-brand: 15 80 75;
     --edge-brand: 200 247 236;
-    --tint-accent: 255 249 237;
+    --tint-accent: 254 240 210;
     --tone-accent: 148 82 11;
     --edge-accent: 251 216 148;
-    --tint-danger: 255 241 242;
+    --tint-danger: 255 228 231;
     --tone-danger: 159 18 57;
     --edge-danger: 254 205 211;
-    --tint-info: 240 249 255;
+    --tint-info: 225 241 254;
     --tone-info: 12 74 110;
     --edge-info: 186 230 253;
-    --tint-neutral: 244 248 247;
+    --tint-neutral: 234 241 239;
     --tone-neutral: 74 88 92;
     --edge-neutral: 213 219 221;
 
@@ -168,9 +173,9 @@
 
     /* Shadow tinted toward the brand hue — see the config's note. */
     --shadow: 6 45 35;
-    --shadow-sm-a: 0.06;
-    --shadow-sm-b: 0.05;
-    --shadow-md-a: 0.08;
+    --shadow-sm-a: 0.08;
+    --shadow-sm-b: 0.06;
+    --shadow-md-a: 0.11;
     --shadow-lg-a: 0.16;
   }
 
@@ -181,6 +186,8 @@
      teal-cooled, and the page sits a step brighter. For anyone who finds
      Classic's warmth muddy, or who is reading in bright light. */
   [data-theme="light"] {
+    --canvas-glow-a: 196 236 228;
+    --canvas-glow-b: 219 232 250;
     --paper: 255 255 255;
     --paper-50: 248 250 252;
     --paper-100: 241 245 249;
@@ -198,19 +205,19 @@
     --ink-900: 15 23 42;
     --ink-950: 2 6 23;
 
-    --tint-brand: 239 252 249;
+    --tint-brand: 222 246 240;
     --tone-brand: 15 80 75;
     --edge-brand: 200 247 236;
-    --tint-accent: 255 249 237;
+    --tint-accent: 254 240 210;
     --tone-accent: 148 82 11;
     --edge-accent: 251 216 148;
-    --tint-danger: 255 241 242;
+    --tint-danger: 255 228 231;
     --tone-danger: 159 18 57;
     --edge-danger: 254 205 211;
-    --tint-info: 240 249 255;
+    --tint-info: 225 241 254;
     --tone-info: 12 74 110;
     --edge-info: 186 230 253;
-    --tint-neutral: 241 245 249;
+    --tint-neutral: 232 238 245;
     --tone-neutral: 71 85 105;
     --edge-neutral: 226 232 240;
 
@@ -256,9 +263,9 @@
 
     /* Neutral rather than green-tinted, to match the cooler neutrals. */
     --shadow: 15 23 42;
-    --shadow-sm-a: 0.06;
-    --shadow-sm-b: 0.05;
-    --shadow-md-a: 0.08;
+    --shadow-sm-a: 0.08;
+    --shadow-sm-b: 0.06;
+    --shadow-md-a: 0.11;
     --shadow-lg-a: 0.14;
   }
 
@@ -805,6 +812,121 @@
 
   /* The soft radial bloom the mockup floats over its AI cards. Purely
      decorative, so it is always aria-hidden at the call site. */
+  /* The app's canvas in the light themes. Dark mode gets its depth for free
+     (bright marks on a deep surface); on a near-white page every card sat at
+     the same brightness as the floor and the screen read as flat. Two soft
+     radial pools of the brand's mint, fixed to the viewport so they stay put
+     while the content scrolls, give the white cards something to sit above.
+     Dark keeps its plain surface: the glow is already there. */
+  [data-theme="classic"] .app-canvas,
+  [data-theme="light"] .app-canvas {
+    background-color: rgb(var(--paper-50));
+    background-image:
+      radial-gradient(64rem 30rem at 92% -8%, rgb(var(--canvas-glow-a) / 0.9), transparent 70%),
+      radial-gradient(56rem 34rem at 18% -6%, rgb(var(--canvas-glow-b) / 0.95), transparent 72%),
+      radial-gradient(48rem 40rem at 6% 78%, rgb(var(--canvas-glow-a) / 0.32), transparent 70%),
+      linear-gradient(180deg, rgb(var(--canvas-glow-b) / 0.45), transparent 32rem);
+    background-attachment: fixed;
+  }
+
+  /* ---------------------------------------------------------------
+     Links and disclosures: one system for the whole app
+     ---------------------------------------------------------------
+     Three kinds of "click this text", each with one look:
+
+       .link         a link inside a sentence. Always underlined (a link in
+                     running text must not rely on colour alone), with a
+                     soft underline that firms up on hover.
+       .link-action  a standalone action beside or under content ("View all
+                     records"). No underline at rest, since its position
+                     already says it is an action; the underline arrives on
+                     hover. Destinations add a chevron via ArrowLink.
+       .disclosure   the <summary> of a <details> ("How it's calculated").
+                     A small tinted button with a chevron that turns when
+                     open, in place of the browser's black triangle.
+
+     All three use the themed brand tone, so they stay readable in every
+     theme (the fixed brand-700 they replace disappears on a dark card). */
+  .link,
+  .link-action {
+    color: rgb(var(--tone-brand));
+    font-weight: 600;
+    text-decoration-line: underline;
+    text-decoration-thickness: 1.5px;
+    text-underline-offset: 3px;
+    border-radius: 0.25rem;
+    transition:
+      color 150ms ease,
+      text-decoration-color 150ms ease;
+  }
+  .link {
+    text-decoration-color: rgb(var(--tone-brand) / 0.35);
+  }
+  .link-action {
+    text-decoration-color: transparent;
+  }
+  .link:hover,
+  .link-action:hover {
+    text-decoration-color: currentColor;
+  }
+  .link:disabled,
+  .link-action:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .disclosure {
+    list-style: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    min-height: 2.75rem;
+    cursor: pointer;
+    color: rgb(var(--tone-brand));
+    font-size: 0.75rem;
+    font-weight: 600;
+    user-select: none;
+  }
+  .disclosure::-webkit-details-marker {
+    display: none;
+  }
+  .disclosure::before {
+    content: "";
+    width: 1.25rem;
+    height: 1.25rem;
+    flex-shrink: 0;
+    border-radius: 0.375rem;
+    background-color: rgb(var(--tint-brand));
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230e655c' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 18 6-6-6-6'/%3E%3C/svg%3E");
+    background-size: 0.8rem;
+    background-position: center;
+    background-repeat: no-repeat;
+    transition:
+      transform 150ms ease,
+      background-color 150ms ease;
+  }
+  [data-theme="dark"] .disclosure::before {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235adcc4' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 18 6-6-6-6'/%3E%3C/svg%3E");
+  }
+  details[open] > .disclosure::before {
+    transform: rotate(90deg);
+  }
+  .disclosure:hover::before {
+    background-color: rgb(var(--edge-brand));
+  }
+  .disclosure:hover {
+    text-decoration-line: underline;
+    text-decoration-thickness: 1.5px;
+    text-underline-offset: 3px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .disclosure::before,
+    .link,
+    .link-action {
+      transition: none;
+    }
+  }
+
   .surface-ai-glow {
     background-image: radial-gradient(circle, rgba(146, 238, 218, 0.18), transparent 70%);
   }
@@ -991,6 +1113,38 @@
   outline: 2px solid #0d7f72;
   outline-offset: 2px;
   border-radius: 9999px;
+}
+
+/* ---------------------------------------------------------------
+   The what-if receipt (Spending impact)
+   ---------------------------------------------------------------
+   FinSight's own object is the receipt, so a hypothetical purchase is shown
+   as one: a paper slip with a torn bottom edge. The edge is a mask, not an
+   image, so it follows the theme's paper colour. The shadow sits on the
+   wrapper (`.receipt-slip-shadow`) because a mask would clip a box-shadow. */
+.receipt-slip {
+  --tear: 7px;
+  background: rgb(var(--paper));
+  padding-bottom: calc(var(--tear) * 2 + 1.25rem);
+  -webkit-mask:
+    conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg)
+      50% / calc(var(--tear) * 2) 100%;
+  mask:
+    conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg)
+      50% / calc(var(--tear) * 2) 100%;
+}
+
+.receipt-slip-shadow {
+  filter: drop-shadow(0 10px 18px rgb(var(--shadow) / 0.12))
+    drop-shadow(0 1px 2px rgb(var(--shadow) / 0.08));
+}
+
+/* A rubber stamp for the impact band: ink that looks pressed on, slightly
+   askew. It names a classification the server computed, nothing more. */
+.impact-stamp {
+  transform: rotate(-7deg);
+  border: 2.5px solid currentColor;
+  box-shadow: inset 0 0 0 1.5px rgb(var(--paper)), inset 0 0 0 3px currentColor;
 }
 
 /* ---------------------------------------------------------------

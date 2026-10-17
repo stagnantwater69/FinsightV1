@@ -1,4 +1,5 @@
-import { Area, AreaChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Area, AreaChart, CartesianGrid, ReferenceDot, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { ChartTooltip } from "./ChartTooltip";
 import { formatMoney } from "./Money";
 import type { DailyExpenseTotal } from "../lib/types";
 
@@ -52,15 +53,11 @@ function DayTooltip({ active, payload, bucket }: TooltipPayload) {
   const row = payload?.[0]?.payload;
   if (!active || !row) return null;
   return (
-    <div className="rounded-lg border border-paper-200 bg-paper px-3 py-2 shadow-md">
-      <p className="text-[11.5px] font-semibold text-ink-900">{pointLabel(row.date, bucket)}</p>
-      <p className="figure mt-0.5 text-[13px] font-bold text-ink-900">{formatMoney(row.total)}</p>
-      <p className="mt-0.5 text-[11px] text-ink-500">
-        {row.count === 0
-          ? "No expenses recorded"
-          : `${row.count} expense${row.count === 1 ? "" : "s"}`}
-      </p>
-    </div>
+    <ChartTooltip
+      title={pointLabel(row.date, bucket)}
+      rows={[{ label: "Spent", value: formatMoney(row.total), color: "rgb(var(--chart-emphasis))", strong: true }]}
+      footer={row.count === 0 ? "No expenses recorded" : `${row.count} expense${row.count === 1 ? "" : "s"}`}
+    />
   );
 }
 
@@ -98,14 +95,15 @@ export function DailySpendChart({ daily, bucket = "day" }: { daily: DailyExpense
           <AreaChart data={daily} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <defs>
               <linearGradient id="dailySpendFill" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="rgb(var(--chart-emphasis))" stopOpacity={0.28} />
-                <stop offset="100%" stopColor="rgb(var(--chart-emphasis))" stopOpacity={0.02} />
+                <stop offset="0%" stopColor="rgb(var(--chart-emphasis))" stopOpacity={0.45} />
+                <stop offset="60%" stopColor="rgb(var(--chart-emphasis))" stopOpacity={0.12} />
+                <stop offset="100%" stopColor="rgb(var(--chart-emphasis))" stopOpacity={0} />
               </linearGradient>
             </defs>
 
             {/* Recessive grid: horizontal only. Vertical rules add nothing when
                 the x-axis is already a labelled sequence of days. */}
-            <CartesianGrid stroke="currentColor" strokeOpacity={0.18} vertical={false} />
+            <CartesianGrid stroke="currentColor" strokeOpacity={0.12} strokeDasharray="3 4" vertical={false} />
 
             <XAxis
               dataKey="date"
@@ -153,15 +151,28 @@ export function DailySpendChart({ daily, bucket = "day" }: { daily: DailyExpense
               type="monotone"
               dataKey="total"
               stroke="rgb(var(--chart-emphasis))"
-              strokeWidth={2}
+              strokeWidth={2.5}
               fill="url(#dailySpendFill)"
               // Off for the same reason as the breakdown chart: the panel
               // re-fetches on every period change, and a chart that re-animates
               // on each one is noise rather than feedback.
               isAnimationActive={false}
               dot={false}
-              activeDot={{ r: 4, strokeWidth: 2, stroke: "rgb(var(--paper))" }}
+              activeDot={{ r: 5, strokeWidth: 2.5, stroke: "rgb(var(--paper))" }}
             />
+            {/* The busiest point, marked: the sentence above names it, and the
+                dot shows where it sits. */}
+            {busiest.total > 0 ? (
+              <ReferenceDot
+                x={busiest.date}
+                y={busiest.total}
+                r={5}
+                fill="rgb(var(--chart-emphasis))"
+                stroke="rgb(var(--paper))"
+                strokeWidth={2.5}
+                ifOverflow="extendDomain"
+              />
+            ) : null}
           </AreaChart>
         </ResponsiveContainer>
       </div>
@@ -173,9 +184,7 @@ export function DailySpendChart({ daily, bucket = "day" }: { daily: DailyExpense
           is the point and thirty rows are not, but it is real markup in the
           DOM, so assistive tech and Ctrl-F find it either way. */}
       <details className="mt-4 border-t border-paper-200 pt-3">
-        <summary className="cursor-pointer list-none text-[12.5px] font-medium text-brand-700 transition hover:text-brand-800">
-          <span className="tap-inline">Show as table</span>
-        </summary>
+        <summary className="disclosure">Show as table</summary>
         <div className="scroll-slim mt-3 max-h-64 overflow-y-auto">
           <table className="w-full border-collapse text-left text-[12.5px]">
             <caption className="sr-only">Expenses recorded in each {unit} of the period.</caption>

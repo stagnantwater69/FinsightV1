@@ -88,7 +88,7 @@ export function RecoverPassword() {
           <Button
             variant="primary"
             fullWidth
-            onClick={() => navigate("/auth/reset-password", { state: { email } })}
+            onClick={() => navigate("/auth/reset-password", { state: { email: email.trim(), codeSent: true } })}
           >
             Enter the code
           </Button>
@@ -120,7 +120,7 @@ export function RecoverPassword() {
                 Did you mean{" "}
                 <button
                   type="button"
-                  className="font-semibold text-tone-brand underline underline-offset-2 hover:no-underline"
+                  className="link"
                   onClick={() => {
                     setEmail(emailSuggestion);
                     setEmailSuggestion(null);
@@ -134,12 +134,12 @@ export function RecoverPassword() {
           </Field>
           {error ? <FormError>{error}</FormError> : null}
           <Button type="submit" variant="primary" fullWidth disabled={submitting}>
-            {submitting ? "Sending…" : "Send reset link"}
+            {submitting ? "Sending…" : "Send recovery code"}
           </Button>
         </form>
       )}
       <p className="mt-6 text-center text-sm text-ink-500">
-        <Link to="/login" className="tap-inline font-medium text-brand-700 hover:text-brand-800">
+        <Link to="/login" className="tap-inline link-action">
           Back to log in
         </Link>
       </p>

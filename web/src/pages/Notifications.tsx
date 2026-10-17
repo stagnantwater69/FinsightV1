@@ -1,216 +1,172 @@
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useNotifications } from "../context/NotificationContext";
-import { Alert, alertKindFromType } from "../components/Alert";
-import { Button } from "../components/Button";
-import { EmptyState } from "../components/EmptyState";
+import { Button, ButtonLink } from "../components/Button";
+import {
+  NotificationEmpty,
+  NotificationItem,
+} from "../components/NotificationItem";
 import { PageHead } from "../components/ui";
-import { relativeTime } from "../components/NotificationBell";
+import { dayLabel } from "../lib/notificationPresentation";
+import { IconSettings } from "../components/icons";
 
 type FilterKey = "all" | "unread";
 
-/**
- * The full notification archive — the bell dropdown's "View all".
- *
- * Rendered through the shared <Alert> family rather than styled locally, so a
- * "possible duplicate" looks the same here as it does on a record row, in the
- * dashboard's panel, and in the bell. Law of Similarity: the same flag should
- * never need to be recognised twice.
- *
- * Grouped by day. A flat list of forty alerts gives no sense of whether
- * something is happening now or happened a fortnight ago, and "when" is most
- * of what makes an alert actionable.
- */
-
-function dayLabel(iso: string) {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "Earlier";
-
-  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  const days = Math.round((startOfDay(new Date()) - startOfDay(date)) / 86_400_000);
-
-  if (days <= 0) return "Today";
-  if (days === 1) return "Yesterday";
-  if (days < 7) return "Earlier this week";
-  if (days < 30) return "Earlier this month";
-  return date.toLocaleDateString(undefined, { month: "long", year: "numeric" });
-}
-
 export function Notifications() {
   const { selected } = useBusinessProfiles();
-  const { notifications, unreadCount, loading, error, markRead, markAllRead, refresh } = useNotifications();
+  const {
+    notifications,
+    unreadCount,
+    loading,
+    error,
+    markRead,
+    markAllRead,
+    refresh,
+  } = useNotifications();
   const [filter, setFilter] = useState<FilterKey>("all");
-
   const visible = useMemo(
-    () => (filter === "unread" ? notifications.filter((n) => !n.readStatus) : notifications),
+    () =>
+      filter === "unread"
+        ? notifications.filter((item) => !item.readStatus)
+        : notifications,
     [notifications, filter],
   );
-
-  // Server order is already newest-first, so grouping in sequence preserves it
-  // without a second sort.
   const groups = useMemo(() => {
-    const out: { label: string; items: typeof visible }[] = [];
+    const result: { label: string; items: typeof visible }[] = [];
+    // Keep the server's newest-first ordering within each date group.
     for (const item of visible) {
       const label = dayLabel(item.dateCreated);
-      const last = out[out.length - 1];
-      if (last?.label === label) last.items.push(item);
-      else out.push({ label, items: [item] });
+      const group = result.find((entry) => entry.label === label);
+      if (group) group.items.push(item);
+      else result.push({ label, items: [item] });
     }
-    return out;
+    return result;
   }, [visible]);
 
-  /*
-   * Read-only, so no business means an empty archive rather than a gate card:
-   * NotificationProvider already settles to `[]` without one, and the "nothing
-   * needs your attention" state below is a truthful description of that. It
-   * offers no action because there is nothing to do here — finishing setup is
-   * offered once, in the shell (see components/SetupPrompt).
-   */
-
   return (
-    <div>
+    <div className="max-w-5xl">
       <PageHead
-        eyebrow="Account"
         title="Notifications"
         subtitle={
-          selected
-            ? `Everything FinSight has flagged for ${selected.name}.`
-            : "Everything FinSight has flagged."
+          selected ? (
+            <span className="block break-words [overflow-wrap:anywhere]">
+              Updates and record alerts for{" "}
+              <span className="font-medium text-ink-700">{selected.name}</span>.
+            </span>
+          ) : (
+            "Updates and record alerts from FinSight."
+          )
         }
         actions={
-          unreadCount > 0 ? (
-            <Button variant="secondary" size="sm" onClick={markAllRead}>
-              Mark all as read
-            </Button>
+          selected ? (
+            <ButtonLink
+              to={`/business-profiles/${selected.id}/recovery-notifications`}
+              variant="secondary"
+              size="sm"
+            >
+              <IconSettings className="h-4 w-4" />
+              Recovery alerts
+            </ButtonLink>
           ) : null
         }
       />
-
-      {/* Two states only. A per-type filter would be four more controls for a
-          list that is usually short, and the type is already legible on every
-          row — "have I dealt with this?" is the only question worth a filter. */}
-      <div
-        role="group"
-        aria-label="Filter notifications"
-        className="mb-4 flex w-max gap-1 rounded-xl border border-paper-200 bg-paper-100 p-1"
-      >
-        {(
-          [
-            { key: "all", label: `All${notifications.length ? ` (${notifications.length})` : ""}` },
-            { key: "unread", label: `Unread${unreadCount ? ` (${unreadCount})` : ""}` },
-          ] as const
-        ).map((option) => (
-          <button
-            key={option.key}
-            type="button"
-            aria-pressed={filter === option.key}
-            onClick={() => setFilter(option.key)}
-            className={`flex min-h-tap items-center whitespace-nowrap rounded-lg px-4 text-[13.5px] font-semibold transition ${
-              filter === option.key ? "bg-paper text-tone-brand shadow-sm" : "text-ink-500 hover:text-tone-brand"
-            }`}
+      <div className="overflow-hidden rounded-2xl border border-paper-200 bg-paper">
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-paper-200 px-4 py-3 sm:px-6">
+          <div
+            role="group"
+            aria-label="Filter notifications"
+            className="flex gap-1 rounded-xl bg-paper-100 p-1"
           >
-            {option.label}
-          </button>
-        ))}
+            {(
+              [
+                {
+                  key: "all",
+                  label: `All${notifications.length ? ` (${notifications.length})` : ""}`,
+                },
+                {
+                  key: "unread",
+                  label: `Unread${unreadCount ? ` (${unreadCount})` : ""}`,
+                },
+              ] as const
+            ).map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                aria-pressed={filter === option.key}
+                onClick={() => setFilter(option.key)}
+                className={`flex min-h-tap items-center whitespace-nowrap rounded-lg px-3 text-sm font-semibold transition ${filter === option.key ? "bg-paper text-tone-brand" : "text-ink-600 hover:text-tone-brand"}`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          {unreadCount > 0 && !loading ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-tone-brand"
+              onClick={() => void markAllRead()}
+            >
+              Mark all as read
+            </Button>
+          ) : null}
+        </div>
+        {error ? (
+          <div
+            role="alert"
+            className="m-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-tint-danger px-4 py-3 text-sm text-tone-danger sm:mx-6"
+          >
+            <p>{error}</p>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => void refresh()}
+            >
+              Try again
+            </Button>
+          </div>
+        ) : null}
+        {loading ? (
+          <div className="space-y-3 p-4 sm:p-6" aria-busy="true" role="status">
+            <span className="sr-only">Loading notifications…</span>
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="skeleton h-24 rounded-xl" aria-hidden />
+            ))}
+          </div>
+        ) : visible.length === 0 && !error ? (
+          <NotificationEmpty
+            title={
+              filter === "unread"
+                ? "Nothing unread"
+                : "Nothing needs your attention"
+            }
+          >
+            {filter === "unread"
+              ? "Switch to All to see earlier alerts."
+              : "Duplicates, large expenses and finished imports appear here."}
+          </NotificationEmpty>
+        ) : (
+          <div>
+            {groups.map((group) => (
+              <section key={group.label} aria-label={group.label}>
+                <h2 className="border-b border-paper-200 bg-paper-100 px-4 py-3 text-xs font-semibold text-ink-600 sm:px-6">
+                  {group.label}
+                </h2>
+                <ul className="divide-y divide-paper-200">
+                  {group.items.map((item) => (
+                    <li key={item.id}>
+                      <NotificationItem
+                        notification={item}
+                        onMarkRead={markRead}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ))}
+          </div>
+        )}
       </div>
-
-      {error ? (
-        <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl bg-tint-danger px-3.5 py-3 text-sm text-tone-danger ring-1 ring-edge-danger">
-          <p>{error}</p>
-          <Button variant="secondary" size="sm" onClick={() => void refresh()}>
-            Try again
-          </Button>
-        </div>
-      ) : null}
-
-      {loading ? (
-        <div className="space-y-2" aria-busy="true" aria-live="polite">
-          <span className="sr-only">Loading notifications…</span>
-          {[0, 1, 2, 3].map((i) => (
-            <div key={i} className="skeleton h-[4.5rem] rounded-xl" aria-hidden />
-          ))}
-        </div>
-      ) : visible.length === 0 && !error ? (
-        /*
-         * NOT shown when the load failed. "Nothing needs your attention" is a
-         * claim about the server's list, and a request that never answered
-         * gives no grounds for it — under the error banner it read as an
-         * all-clear the app could not possibly have verified.
-         */
-        <EmptyState
-          title={filter === "unread" ? "Nothing unread" : "Nothing needs your attention"}
-          icon="✓"
-        >
-          {filter === "unread" ? "Switch to All to see earlier alerts." : "Duplicates, large expenses and finished imports appear here."}
-        </EmptyState>
-      ) : (
-        <div className="space-y-6">
-          {groups.map((group) => (
-            <section key={group.label} aria-label={group.label}>
-              <h2 className="mb-2 text-[11px] font-bold uppercase tracking-[0.13em] text-ink-500">
-                {group.label}
-              </h2>
-              <ul className="space-y-2">
-                {group.items.map((item) => (
-                  <li key={item.id} className={item.readStatus ? "opacity-60" : undefined}>
-                    <Alert
-                      kind={alertKindFromType(item.type)}
-                      label={item.type}
-                      meta={relativeTime(item.dateCreated)}
-                      action={
-                        <div className="flex items-center gap-1">
-                          {item.expenseRecordId ? (
-                            /*
-                              A duplicate notification goes straight to the
-                              decision, not to the list. "Review record" used
-                              to land the owner on /records with the row
-                              highlighted, which answered "which record?" but
-                              not "what do you want me to do about it?" —
-                              they still had to find the compare action
-                              themselves. Every other notification kind has no
-                              single decision attached, so those still open
-                              the record in its list context.
-                            */
-                            <Link
-                              to={
-                                alertKindFromType(item.type) === "duplicate"
-                                  ? `/records?reviewDuplicateId=${item.expenseRecordId}`
-                                  : `/records?highlightRecordId=${item.expenseRecordId}`
-                              }
-                              onClick={() => {
-                                if (!item.readStatus) markRead(item.id);
-                              }}
-                              className="tap rounded-lg px-2 text-xs font-semibold text-tone-brand transition hover:bg-tint-brand"
-                            >
-                              {alertKindFromType(item.type) === "duplicate"
-                                ? "Review duplicate"
-                                : "Review record"}
-                              <span className="sr-only"> — {item.message}</span>
-                            </Link>
-                          ) : null}
-                          {!item.readStatus ? (
-                            <button
-                              type="button"
-                              onClick={() => markRead(item.id)}
-                              className="tap rounded-lg px-2 text-xs font-medium text-ink-500 transition hover:bg-paper hover:text-ink-800"
-                            >
-                              Mark read
-                              <span className="sr-only"> — {item.message}</span>
-                            </button>
-                          ) : null}
-                        </div>
-                      }
-                    >
-                      {item.message}
-                    </Alert>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

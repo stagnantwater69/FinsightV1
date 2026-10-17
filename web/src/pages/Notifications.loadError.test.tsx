@@ -23,6 +23,8 @@ let notificationState: {
   error: string | null;
 };
 const refresh = vi.fn();
+const markRead = vi.fn();
+const markAllRead = vi.fn();
 
 vi.mock("../context/BusinessProfileContext", () => ({
   useBusinessProfiles: () => ({ selected: profile }),
@@ -30,8 +32,8 @@ vi.mock("../context/BusinessProfileContext", () => ({
 vi.mock("../context/NotificationContext", () => ({
   useNotifications: () => ({
     ...notificationState,
-    markRead: vi.fn(),
-    markAllRead: vi.fn(),
+    markRead,
+    markAllRead,
     refresh,
   }),
 }));
@@ -39,7 +41,7 @@ vi.mock("../context/NotificationContext", () => ({
 const page = () => render(<MemoryRouter><Notifications /></MemoryRouter>);
 
 beforeEach(() => {
-  refresh.mockReset();
+  vi.clearAllMocks();
   notificationState = { notifications: [], unreadCount: 0, loading: false, error: null };
 });
 
@@ -82,5 +84,80 @@ describe("the notifications archive after a failed load", () => {
     page();
 
     expect(screen.getByText("Nothing needs your attention")).toBeInTheDocument();
+  });
+});
+
+
+const notification = (overrides: Partial<Notification> = {}): Notification => ({
+  id: 7,
+  businessProfileId: profile.id,
+  expenseRecordId: 42,
+  type: "Possible duplicate",
+  message: "This expense may repeat a receipt recorded earlier today.",
+  dateCreated: new Date().toISOString(),
+  readStatus: false,
+  ...overrides,
+});
+
+describe("notification archive actions", () => {
+  it("sends duplicate reviews to the comparison and marks only the selected notification read", async () => {
+    const user = userEvent.setup();
+    notificationState.notifications = [notification()];
+    notificationState.unreadCount = 1;
+    page();
+
+    const review = screen.getByRole("link", { name: /Review duplicate/ });
+    expect(review).toHaveAttribute("href", "/records?reviewDuplicateId=42");
+    await user.click(review);
+    expect(markRead).toHaveBeenCalledExactlyOnceWith(7);
+  });
+
+  it("opens other expense flags in record context without remarking a read notification", async () => {
+    const user = userEvent.setup();
+    notificationState.notifications = [notification({ type: "Large expense", readStatus: true })];
+    page();
+
+    const review = screen.getByRole("link", { name: /Review record/ });
+    expect(review).toHaveAttribute("href", "/records?highlightRecordId=42");
+    await user.click(review);
+    expect(markRead).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /^Mark read/ })).not.toBeInTheDocument();
+  });
+
+  it("filters read items and restores them when All is selected", async () => {
+    const user = userEvent.setup();
+    const earlier = notification({ id: 8, readStatus: true, message: "An earlier reviewed expense." });
+    notificationState.notifications = [notification(), earlier];
+    notificationState.unreadCount = 1;
+    page();
+
+    const filters = screen.getByRole("group", { name: "Filter notifications" });
+    await user.click(within(filters).getByRole("button", { name: /^Unread/ }));
+    expect(screen.queryByText(earlier.message)).not.toBeInTheDocument();
+    expect(screen.getByText(notification().message)).toBeVisible();
+    await user.click(within(filters).getByRole("button", { name: /^All/ }));
+    expect(screen.getByText(earlier.message)).toBeVisible();
+  });
+
+  it("keeps a cached message visible during a refresh error and offers retry", () => {
+    notificationState.notifications = [notification()];
+    notificationState.error = "Couldn't load notifications.";
+    page();
+
+    expect(screen.getByText(notification().message)).toBeVisible();
+    expect(screen.getByText(notificationState.error)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeVisible();
+    expect(screen.queryByText("Nothing needs your attention")).not.toBeInTheDocument();
+  });
+
+  it("marks all notifications read only after the owner asks", async () => {
+    const user = userEvent.setup();
+    notificationState.notifications = [notification()];
+    notificationState.unreadCount = 1;
+    page();
+
+    expect(markAllRead).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Mark all as read" }));
+    expect(markAllRead).toHaveBeenCalledTimes(1);
   });
 });

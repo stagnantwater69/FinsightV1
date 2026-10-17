@@ -1,14 +1,10 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
 import { ReportingPeriodScope, useReportingPeriod } from "../context/ReportingPeriodContext";
-import { cachedApiGet, peekCachedApiData } from "../lib/serverStateApi";
-import { getErrorMessage } from "../lib/errors";
-import { CategoryBreakdownChart } from "../components/CategoryBreakdownChart";
 import { CategoryComparisonChart } from "../components/CategoryComparisonChart";
-import { RecoveryMeter } from "../components/RecoveryMeter";
 import { AskFinSightButton, useAskFinSight } from "../components/AskFinSightButton";
 import { SkeletonDashboard } from "../components/Skeleton";
 import { EmptyState, SetupProgress } from "../components/EmptyState";
@@ -17,255 +13,184 @@ import { ButtonLink } from "../components/Button";
 import { formatMoney } from "../components/Money";
 import { DonutChart } from "../components/DonutChart";
 import { PeriodFilter } from "../components/PeriodFilter";
-import { Callout, KpiCard, Panel, PageHead, Pill } from "../components/ui";
-import { IconArrowRight, IconCheck, IconExpense, IconInsights, IconSales } from "../components/icons";
-import type { DashboardSummary, ReductionOpportunity } from "../lib/types";
-import type { DashboardExpenseComparison, DashboardExpenseOverview } from "../lib/expenseOverview";
-import { ALL_TIME, periodLabel, periodParams, periodPhrase, previousLabel } from "../lib/reportingPeriod";
-import { useServerStateRefresh } from "../lib/useServerStateRefresh";
+import { Callout, Panel, PageHead, Pill } from "../components/ui";
+import { IconArrowRight } from "../components/icons";
+import { ALL_TIME, formatDayRange, periodLabel, periodPhrase, previousLabel } from "../lib/reportingPeriod";
 import { formatCalendarDate } from "../lib/dates";
+import {
+  ArrowDownLeft,
+  BarChart3,
+  BellRing,
+  CheckCircle2,
+  ChevronRight,
+  Flag,
+  GitCompareArrows,
+  History,
+  Lightbulb,
+  ListOrdered,
+  Minus,
+  PieChart,
+  Plus,
+  Receipt,
+  RefreshCw,
+  Scale,
+  ScanLine,
+  ShoppingBag,
+  Sparkles,
+  TrendingDown,
+  TrendingUp,
+  Wallet,
+  type LucideIcon,
+} from "lucide-react";
+import { ArrowLink, IconTile, PanelTitle } from "./dashboard/DashboardBits";
+import { CashflowChart } from "./dashboard/CashflowChart";
+import { FeedNotice } from "./dashboard/FeedNotice";
+import { RecoveryFocus } from "./dashboard/RecoveryFocus";
+import { UpcomingExpenses } from "./dashboard/UpcomingExpenses";
+import { useDashboardOverview } from "./dashboard/useDashboardOverview";
+import {
+  useCashflow,
+  useRecentRecords,
+  type CashflowGranularity,
+} from "./dashboard/useDashboardFeeds";
 
 export function Dashboard() {
   return (
-    <ReportingPeriodScope>
+    <ReportingPeriodScope scope="dashboard">
       <DashboardPage />
     </ReportingPeriodScope>
   );
 }
 
+type KpiTone = "brand" | "info" | "accent" | "danger" | "neutral";
+const KPI_WASH: Record<KpiTone, string> = {
+  brand: "from-tint-brand/70",
+  info: "from-tint-info/70",
+  accent: "from-tint-accent/70",
+  danger: "from-tint-danger/70",
+  neutral: "from-tint-neutral/70",
+};
+const KPI_MARK: Record<KpiTone, string> = {
+  brand: "text-tone-brand",
+  info: "text-tone-info",
+  accent: "text-tone-accent",
+  danger: "text-tone-danger",
+  neutral: "text-tone-neutral",
+};
+
+function KpiCell({
+  label,
+  icon: Icon,
+  tone,
+  value,
+  caption,
+  delta = null,
+  valueTone,
+  className = "",
+}: {
+  label: string;
+  icon: LucideIcon;
+  tone: KpiTone;
+  value: string;
+  caption: ReactNode;
+  delta?: { percent: number | null; amount: number; against: string; upIsBad: boolean } | null;
+  valueTone?: "danger" | "brand";
+  className?: string;
+}) {
+  const up = (delta?.amount ?? 0) > 0;
+  const bad = delta ? (up ? delta.upIsBad : !delta.upIsBad) : false;
+  const Trend = up ? TrendingUp : TrendingDown;
+  let changeLabel = "No change";
+  if (delta && delta.amount !== 0) {
+    const magnitude = delta.percent === null
+      ? formatMoney(Math.abs(delta.amount))
+      : `${Math.abs(delta.percent).toLocaleString(undefined, { maximumFractionDigits: 1 })}%`;
+    changeLabel = `${magnitude} ${up ? "increase" : "decrease"}`;
+  }
+  return (
+    <div className={`relative isolate min-w-0 overflow-hidden bg-gradient-to-b ${KPI_WASH[tone]} to-paper to-70% p-4 sm:p-5 ${className}`}>
+      <Icon
+        aria-hidden="true"
+        focusable="false"
+        strokeWidth={1.5}
+        className={`pointer-events-none absolute -bottom-6 -right-6 -z-10 size-28 -rotate-12 opacity-[0.07] ${KPI_MARK[tone]}`}
+      />
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-xs font-medium text-ink-600">{label}</p>
+        <IconTile icon={Icon} size="sm" />
+      </div>
+      <p
+        className={`figure mt-1 break-all text-xl font-semibold leading-tight tracking-[-0.02em] sm:text-[1.75rem] ${
+          valueTone === "danger" ? "text-tone-danger" : valueTone === "brand" ? "text-tone-brand" : "text-ink-900"
+        }`}
+      >
+        {value}
+      </p>
+      <div className="mt-2 text-xs leading-relaxed text-ink-500">
+        <p>{caption}</p>
+        {delta ? <p className="mt-1">
+          <span className={`figure inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-semibold ${delta.amount === 0 ? "bg-tint-neutral text-tone-neutral" : bad ? "bg-tint-danger text-tone-danger" : "bg-tint-brand text-tone-brand"}`}>
+            {delta.amount === 0 ? <Minus aria-hidden className="h-3 w-3" /> : <Trend aria-hidden className="h-3 w-3" />}
+            {changeLabel}
+          </span>{" "}vs {delta.against}
+        </p> : null}
+      </div>
+    </div>
+  );
+}
+
+function AttentionRow({
+  icon,
+  title,
+  value,
+  detail,
+  action,
+}: {
+  icon: LucideIcon;
+  title: ReactNode;
+  value?: string;
+  detail: ReactNode;
+  action?: ReactNode;
+}) {
+  return (
+    <li className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-3 px-5 py-3.5">
+      <IconTile icon={icon} />
+      <div className="min-w-0">
+        <p className="text-sm font-semibold text-ink-900">{title}</p>
+        <div className="mt-0.5 text-xs leading-relaxed text-ink-500">{detail}</div>
+        {action ? <div className="mt-1.5">{action}</div> : null}
+      </div>
+      {value !== undefined ? (
+        <span className="figure text-xl font-semibold text-ink-900">{value}</span>
+      ) : <span />}
+    </li>
+  );
+}
+
 function DashboardPage() {
   const { selected } = useBusinessProfiles();
-  // The ONE mascot this preference governs — Fin's daily line below. Every
-  // other appearance (Ask FinSight, the tour, empty states, onboarding) is a
-  // reply to something the owner just did, not an unprompted daily message,
-  // and stays put.
+  // This preference only controls the daily dashboard message.
   const { preferences } = useAuth();
   const { categories } = useExpenseCategories();
   const { selection, setSelection, ready: periodReady } = useReportingPeriod();
-  const [summary, setSummary] = useState<DashboardSummary | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [comparison, setComparison] = useState<DashboardExpenseComparison | null>(null);
-  const [comparisonState, setComparisonState] = useState<"loading" | "ready" | "error">("loading");
-  const [opportunityState, setOpportunityState] = useState<"loading" | "ready" | "error">("loading");
-  const [overviewRefreshError, setOverviewRefreshError] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
-  /** The selected period's top eligible opportunity from the overview projection. */
-  const [topOpportunity, setTopOpportunity] = useState<ReductionOpportunity | null>(null);
   const askFinSight = useAskFinSight("Dashboard");
-  const periodKey = JSON.stringify(selection);
+  const [granularity, setGranularity] = useState<CashflowGranularity>("monthly");
+  const cashflow = useCashflow(selected?.id ?? null, granularity);
   const allTime = selection.kind === "all";
-  const dashboardScopeKey = JSON.stringify({
-    businessProfileId: selected?.id ?? null,
-    period: selection,
-    periodReady,
-  });
-  const activeDashboardScopeRef = useRef(dashboardScopeKey);
-  activeDashboardScopeRef.current = dashboardScopeKey;
+  const {
+    summary, overviewUpdatedAt, loading, error, reload,
+    comparison, comparisonState, topOpportunity, opportunityState,
+    overviewRefreshError, reloadExpenseOverview,
+  } = useDashboardOverview(selected?.id ?? null, selection, periodReady);
   const isInitialLoad = loading && !summary;
   const isRefreshing = loading && !!summary;
 
-  async function load(signal?: AbortSignal, force = false) {
-    const requestScopeKey = dashboardScopeKey;
-    if (activeDashboardScopeRef.current !== requestScopeKey) return;
-    /*
-     * No business — an owner who chose "Skip for now". This must SETTLE, not
-     * just return: `loading` starts true, so bailing out silently left the
-     * page under its skeleton forever.
-     */
-    if (!selected) {
-      setSummary(null);
-      setError(null);
-      setLoading(false);
-      return;
-    }
-    // Wait for the period's default (the newest month with records) so the
-    // page loads once, for the right period.
-    if (!periodReady) {
-      setSummary(null);
-      setError(null);
-      setLoading(true);
-      return;
-    }
-    const params = { businessProfileId: selected.id, ...periodParams(selection) };
-    const scope = {
-      businessProfileId: selected.id,
-      period: selection,
-      tags: ["dashboard", "financial"],
-    };
-    const cached = peekCachedApiData<DashboardSummary>(
-      "/dashboard/summary",
-      { params },
-      scope,
-    );
-
-    setLoading(!cached || cached.stale || force);
-    setError(null);
-    if (cached) setSummary(cached.data);
-    else if (!force) setSummary(null);
-    try {
-      const { data } = await cachedApiGet<DashboardSummary>(
-        "/dashboard/summary",
-        { signal, params },
-        scope,
-        { force },
-      );
-      if (activeDashboardScopeRef.current !== requestScopeKey) return;
-      setError(null);
-      setSummary(data);
-    } catch (err) {
-      // A superseded request is not a failure: switching business mid-flight
-      // must not settle the OLD business's figures under the new heading.
-      if (
-        signal?.aborted ||
-        (err as { name?: string })?.name === "AbortError" ||
-        activeDashboardScopeRef.current !== requestScopeKey
-      ) return;
-      setError(getErrorMessage(err));
-    } finally {
-      if (!signal?.aborted && activeDashboardScopeRef.current === requestScopeKey) setLoading(false);
-    }
-  }
-
-  useLayoutEffect(() => {
-    const controller = new AbortController();
-    load(controller.signal);
-    return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id, periodKey, periodReady]);
-
-  function applyExpenseOverview(overview: DashboardExpenseOverview) {
-    if (overview.comparison.status === "available") {
-      setComparison(overview.comparison.data);
-      setComparisonState("ready");
-    } else {
-      setComparison(null);
-      setComparisonState("error");
-    }
-
-    if (overview.topOpportunity.status === "available") {
-      const top = overview.topOpportunity.data;
-      setTopOpportunity(top && top.confidence !== "limited" ? top : null);
-      setOpportunityState("ready");
-    } else {
-      setTopOpportunity(null);
-      setOpportunityState("error");
-    }
-  }
-
-  /** One shared server computation supplies both optional dashboard panels. */
-  async function loadExpenseOverview(signal?: AbortSignal, force = false) {
-    const requestScopeKey = dashboardScopeKey;
-    if (activeDashboardScopeRef.current !== requestScopeKey) return;
-    if (!selected || !periodReady || allTime) {
-      setComparison(null);
-      setTopOpportunity(null);
-      setComparisonState("ready");
-      setOpportunityState("ready");
-      setOverviewRefreshError(null);
-      return;
-    }
-    if (!force) setOverviewRefreshError(null);
-
-    const params = {
-      businessProfileId: selected.id,
-      ...periodParams(selection),
-      view: "dashboard" as const,
-    };
-    const scope = {
-      businessProfileId: selected.id,
-      period: selection,
-      tags: ["dashboard", "financial", "expense-overview"],
-    };
-    const cached = peekCachedApiData<DashboardExpenseOverview>(
-      "/insights/expense-overview",
-      { params },
-      scope,
-    );
-
-    if (cached) {
-      applyExpenseOverview(cached.data);
-    } else if (!force) {
-      setComparison(null);
-      setTopOpportunity(null);
-      setComparisonState("loading");
-      setOpportunityState("loading");
-    }
-
-    try {
-      const { data } = await cachedApiGet<DashboardExpenseOverview>(
-        "/insights/expense-overview",
-        { signal, params },
-        scope,
-        { force },
-      );
-      if (activeDashboardScopeRef.current !== requestScopeKey) return;
-      setOverviewRefreshError(null);
-      applyExpenseOverview(data);
-    } catch (err) {
-      if (
-        signal?.aborted ||
-        (err as { name?: string })?.name === "AbortError" ||
-        activeDashboardScopeRef.current !== requestScopeKey
-      ) return;
-      const hadUsableData = cached
-        ? cached.data.comparison.status === "available" || cached.data.topOpportunity.status === "available"
-        : force && (comparisonState === "ready" || opportunityState === "ready");
-      if (hadUsableData) {
-        setOverviewRefreshError(getErrorMessage(err));
-        return;
-      }
-      setComparison(null);
-      setTopOpportunity(null);
-      setComparisonState("error");
-      setOpportunityState("error");
-    }
-  }
-
-  useLayoutEffect(() => {
-    const controller = new AbortController();
-    void loadExpenseOverview(controller.signal);
-    return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id, periodKey, periodReady]);
-
-  useServerStateRefresh(
-    [{
-      resource: "/dashboard/summary",
-      businessProfileId: selected?.id ?? null,
-      period: selection,
-      tags: ["dashboard", "financial"],
-    }],
-    (signal) => void load(signal, true),
-  );
-
-  useServerStateRefresh(
-    [{
-      resource: "/insights/expense-overview",
-      businessProfileId: selected?.id ?? null,
-      period: selection,
-      tags: ["dashboard", "financial", "expense-overview"],
-    }],
-    (signal) => void loadExpenseOverview(signal, true),
-  );
-
-  /*
-   * NO BUSINESS DOES NOT MEAN NO PAGE. The dashboard renders its own chrome —
-   * heading, period filter, setup checklist — around its own empty state.
-   * Nothing below may assume `selected`.
-   */
-
-  /*
-   * "Has this business ever recorded anything" — NOT "did it record anything
-   * in the selected period". An owner who imported two years of history must
-   * not see "Record your first expense or sale" unticked because none of it
-   * falls in this week. Falls back to the period figures for an older server.
-   */
+  // Setup completion uses lifetime records, with a fallback for older servers.
   const hasAnyRecords = summary?.lifetime
     ? summary.lifetime.recordCount > 0
     : !!summary && (summary.overview.totalExpenses > 0 || summary.overview.totalSalesReference > 0);
 
-  /** Records exist, just none in this period — said, so it never reads as a failed import. */
   const periodIsEmpty =
     !!summary &&
     hasAnyRecords &&
@@ -284,82 +209,19 @@ function DashboardPage() {
         summary.recoveryStatus.expectedMonthlyExpenses <= 0));
 
   const periodCaption = periodLabel(selection);
+  const recent = useRecentRecords(
+    selected?.id ?? null,
+    summary && !allTime
+      ? { dateFrom: summary.periodStart.slice(0, 10), dateTo: summary.periodEnd.slice(0, 10) }
+      : null,
+    !!summary,
+  );
 
   const topCategory = summary?.expenseCategoryBreakdown?.length
     ? [...summary.expenseCategoryBreakdown].sort((a, b) => b.total - a.total)[0]
     : null;
 
-  /**
-   * Recovery reduced to a KPI-sized verdict.
-   *
-   * Prefers the server's explicit `status` (plan §8.1), which can tell "no
-   * sales yet this month" from "behind pace"; falls back to the boolean pair
-   * for an older response. An explicit status keeps a valid record-derived
-   * zero from being mistaken for missing setup.
-   */
-  const recovery: { label: string; meta: ReactNode; tone: "brand" | "accent" | "danger" | "info" } = !summary
-    ? { label: "—", meta: "", tone: "info" }
-    : summary.recoveryStatus.status
-      ? (() => {
-          const r = summary.recoveryStatus;
-          switch (r.status) {
-            case "needs_setup":
-              return { label: "Not set up", meta: "Add a starting monthly estimate", tone: "info" as const };
-            case "no_current_month_data":
-              return { label: "No sales yet", meta: "No sales this month", tone: "info" as const };
-            case "data_incomplete":
-              return { label: "Data incomplete", meta: "Some records need review", tone: "info" as const };
-            case "covered":
-              return {
-                label: "Target reached",
-                meta: `${Math.round(r.monthCoveragePercent)}% of the month covered`,
-                tone: "brand" as const,
-              };
-            case "ahead":
-              return {
-                label: "Ahead of pace",
-                meta: `${Math.round(r.monthCoveragePercent)}% of the month covered`,
-                tone: "brand" as const,
-              };
-            case "on_pace":
-              return {
-                label: "On track",
-                meta: `${Math.round(r.monthCoveragePercent)}% of the month covered`,
-                tone: "brand" as const,
-              };
-            case "behind":
-            default:
-              return {
-                label: "Behind pace",
-                meta: (
-                  <>
-                    <span className="figure">{formatMoney(r.remainingTarget)}</span> still needed
-                  </>
-                ),
-                tone: "danger" as const,
-              };
-          }
-        })()
-      : recoveryNeedsSetup
-        ? { label: "Not set up", meta: "Add a starting monthly estimate", tone: "info" }
-        : summary.recoveryStatus.onTrack
-          ? {
-              label: "On track",
-              meta: `${Math.round(summary.recoveryStatus.monthCoveragePercent)}% of the month covered`,
-              tone: "brand",
-            }
-          : {
-              label: "Behind pace",
-              meta: (
-                <>
-                  <span className="figure">{formatMoney(summary.recoveryStatus.remainingTarget)}</span> still needed
-                </>
-              ),
-              tone: "danger",
-            };
-
-  // Names the specific thing on screen — the records needing review if any,
-  // otherwise the top category — rather than a generic "summarise this".
+  // Give the assistant the review count or largest category as the question's context.
   const expandQuestion = summary
     ? summary.recordsNeedingReview > 0
       ? `What should I do about the ${summary.recordsNeedingReview} record${summary.recordsNeedingReview === 1 ? "" : "s"} that need${summary.recordsNeedingReview === 1 ? "s" : ""} review?`
@@ -379,11 +241,29 @@ function DashboardPage() {
         : { to: "/insights/recovery", label: "View recovery plan" };
 
   const comparisonTrends = comparison?.categoryTrends.filter((t) => t.current > 0 || t.previous > 0) ?? [];
+  const net = summary ? summary.overview.totalSalesReference - summary.overview.totalExpenses : 0;
   const comparedWith = previousLabel(comparison?.period);
   const changePercent =
     comparison && comparison.totals.previous > 0
       ? ((comparison.totals.current - comparison.totals.previous) / comparison.totals.previous) * 100
       : null;
+  const periodComparison = summary?.periodComparison;
+  const previousPeriodCaption = periodComparison
+    ? periodComparison.previousStart.slice(0, 4) === periodComparison.previousEnd.slice(0, 4)
+      ? `${formatDayRange(periodComparison.previousStart.slice(0, 10), periodComparison.previousEnd.slice(0, 10))}, ${periodComparison.previousStart.slice(0, 4)}`
+      : `${formatCalendarDate(periodComparison.previousStart)} to ${formatCalendarDate(periodComparison.previousEnd)}`
+    : null;
+  const summaryDelta = (kind: "sales" | "expenses" | "net") => periodComparison && previousPeriodCaption
+    ? {
+        percent: periodComparison[kind].changePercent,
+        amount: periodComparison[kind].changeAmount,
+        against: previousPeriodCaption,
+        upIsBad: kind === "expenses",
+      }
+    : null;
+  const recordsHref = summary && !allTime
+    ? `/records?${new URLSearchParams({ dateFrom: summary.periodStart.slice(0, 10), dateTo: summary.periodEnd.slice(0, 10) })}`
+    : "/records";
 
   return (
     <div>
@@ -399,14 +279,33 @@ function DashboardPage() {
         </p>
       ) : null}
 
-      {/* data-tour="dashboard-summary" is the product tour's "dashboard
-          overview" spotlight. The recovery panel below carries the same marker
-          as a fallback for an owner who turned the daily message off. The
-          `selected &&` guard: with no business there is no fetch, so the
-          greeting's skeleton lines would never resolve. */}
+      {/* The recovery panel shares this tour marker when the greeting is disabled.
+          A business is required because the greeting waits for its summary. */}
       {selected && preferences.showDashboardMascotMessage ? (
         <div data-tour="dashboard-summary">
-          <GreetingHero summary={isInitialLoad ? null : summary} />
+          <GreetingHero summary={isInitialLoad ? null : summary} action={summary && summary.recordsNeedingReview > 0 ? (
+            <Link to="/records/flagged" className="tap-inline group inline-flex items-center gap-0.5 text-xs font-semibold underline decoration-current/40 decoration-[1.5px] underline-offset-[3px] hover:decoration-current">
+              Review {summary.recordsNeedingReview} {summary.recordsNeedingReview === 1 ? "record" : "records"}
+              <ChevronRight aria-hidden className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none" />
+            </Link>
+          ) : undefined} shortcuts={
+            <nav aria-label="Quick actions" className="grid grid-cols-3 gap-2 sm:w-[19rem]">
+              {[
+                { to: "/records/sales/new", label: "Add sale", icon: Plus },
+                { to: "/records/expenses/new", label: "Add expense", icon: Receipt },
+                { to: "/records/receipts/new", label: "Scan receipt", icon: ScanLine },
+              ].map(({ to, label, icon }) => (
+                <Link
+                  key={to}
+                  to={to}
+                  className="group flex min-h-tap flex-col items-center gap-2 rounded-xl px-2 py-3 text-center text-xs font-semibold text-ink-700 transition-colors hover:bg-paper-50 hover:text-ink-900"
+                >
+                  <IconTile icon={icon} />
+                  {label}
+                </Link>
+              ))}
+            </nav>
+          } />
         </div>
       ) : null}
 
@@ -424,8 +323,6 @@ function DashboardPage() {
         />
       ) : null}
 
-      {/* One line above the panels explains all of them: the records exist,
-          just not in this period, and where they are. */}
       {!loading && periodIsEmpty ? (
         <div className="mb-6">
           <Callout tone="info">
@@ -448,7 +345,7 @@ function DashboardPage() {
             <button
               type="button"
               onClick={() => setSelection(ALL_TIME)}
-              className="tap-inline font-semibold text-brand-700 underline underline-offset-2"
+              className="tap-inline link"
             >
               Show all time
             </button>
@@ -464,7 +361,7 @@ function DashboardPage() {
             </b>
             <p className="mt-0.5">{error}</p>
           </div>
-          <button type="button" onClick={() => void load(undefined, true)} className="tap rounded-lg bg-paper px-3 py-2 font-semibold text-ink-800 shadow-sm">
+          <button type="button" onClick={reload} className="tap rounded-lg bg-paper px-3 py-2 font-semibold text-ink-800 shadow-sm">
             Try again
           </button>
         </div>
@@ -475,12 +372,11 @@ function DashboardPage() {
           <Callout tone="warn">
             <b className="font-semibold">Dashboard details couldn’t refresh.</b>{" "}
             Showing recently loaded comparison and opportunity data. {overviewRefreshError}
+            <button type="button" onClick={reloadExpenseOverview} className="tap-inline ml-2 font-semibold underline underline-offset-2">Reload dashboard details</button>
           </Callout>
         </div>
       ) : null}
 
-      {/* Doherty: the dashboard commits to its shape on load and on every
-          period or business switch, so the change feels instant. */}
       {isInitialLoad ? (
         <SkeletonDashboard />
       ) : !selected ? (
@@ -498,101 +394,233 @@ function DashboardPage() {
       ) : !summary ? null
       : (
         <div
-          className={`space-y-6 transition-opacity duration-200 ${isRefreshing ? "opacity-60" : ""}`}
+          className="space-y-6"
           aria-busy={isRefreshing}
         >
-          {/*
-            Serial position: available funds first (the figure owners check
-            most), expenses and sales as a pair in the middle, and the recovery
-            verdict as the "so what" an owner leaves with.
-          */}
-          <Panel
-            title="Recovery position"
-            className="overflow-hidden border-brand-200 bg-tint-brand"
-            action={<Pill tone={recovery.tone === "danger" ? "danger" : recovery.tone === "brand" ? "ok" : "info"}>{recovery.label}</Pill>}
-          >
-            <div data-tour="dashboard-summary" className="grid items-center gap-5 lg:grid-cols-[0.72fr_1.28fr]">
-              <div>
-                <p className="text-xs font-semibold text-ink-500">Available funds</p>
-                <p className="figure mt-1 font-display text-3xl font-bold tracking-[-0.02em] text-ink-900">
-                  {formatMoney(summary.overview.availableFunds)}
-                </p>
-                <p className="mt-1 max-w-[48ch] text-xs leading-relaxed text-ink-500">
-                  {fundsProvenance}
-                </p>
-                {recovery.meta ? <p className="mt-2 text-sm font-medium text-ink-700">{recovery.meta}</p> : null}
-                <ButtonLink to={recoveryAction.to} variant="primary" className="mt-4">
-                  {recoveryAction.label}
-                </ButtonLink>
-              </div>
-              <div className="border-t border-paper-200 pt-5 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
-                {!recoveryNeedsSetup ? (
-                  <RecoveryMeter recoveryStatus={summary.recoveryStatus} />
-                ) : (
-                  <p className="text-sm text-ink-600">Add a starting monthly expense estimate to get a daily sales target.</p>
-                )}
-              </div>
-            </div>
-          </Panel>
-
-          <div className="grid gap-4 sm:grid-cols-3">
-            <KpiCard
-              label="Total expenses"
-              value={<span className="figure">{formatMoney(summary.overview.totalExpenses)}</span>}
-              meta={periodCaption}
-              glyph={<IconExpense className="h-5 w-5" />}
-              tone="accent"
-            />
-            <KpiCard
-              label="Total sales"
-              value={<span className="figure">{formatMoney(summary.overview.totalSalesReference)}</span>}
-              meta={periodCaption}
-              glyph={<IconSales className="h-5 w-5" />}
-              tone="info"
-            />
-            <KpiCard
-              label="Records to review"
-              value={<span className="figure">{summary.recordsNeedingReview}</span>}
-              meta={
-                summary.recordsNeedingReview ? (
-                  <Link to="/records/flagged" className="tap-inline font-semibold text-brand-700 hover:text-brand-800">
-                    Open review queue
-                  </Link>
-                ) : (
-                  "All clear"
-                )
-              }
-              glyph={summary.recordsNeedingReview ? <IconInsights className="h-5 w-5" /> : <IconCheck className="h-5 w-5" />}
-              tone={summary.recordsNeedingReview ? "danger" : "brand"}
-            />
+          <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-1 text-xs leading-relaxed text-ink-500">
+            <p className="inline-flex items-center gap-1.5"><RefreshCw aria-hidden className={`h-3.5 w-3.5 ${isRefreshing ? "animate-spin motion-reduce:animate-none" : ""}`} />{isRefreshing ? "Refreshing overview…" : overviewUpdatedAt ? <>Overview updated <time dateTime={new Date(overviewUpdatedAt).toISOString()}>{new Date(overviewUpdatedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</time></> : "Overview update time unavailable"}</p>
+            <p className="inline-flex items-center gap-1.5"><History aria-hidden className="h-3.5 w-3.5" />Latest transaction recorded: {latestRecordDate ? <time dateTime={latestRecordDate.slice(0, 10)}>{formatCalendarDate(latestRecordDate)}</time> : summary.lifetime?.recordCount === 0 ? "No records yet" : "Unavailable"}</p>
           </div>
 
-          {/*
-            Composed from the figures on this page, NOT AI-written, so it does
-            not claim to be. Real AI is one click away in Ask FinSight.
-          */}
-          <Panel title="Largest expense category">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-sm text-ink-600">
-                {topCategory ? (
-                  <>
-                    <b className="font-semibold text-ink-800">{topCategory.categoryName}</b>{" "}
-                    <span className="figure font-semibold text-ink-800">{formatMoney(topCategory.total)}</span>
-                  </>
-                ) : (
-                  <>No expenses {periodPhrase(selection)}.</>
-                )}
+          <section
+            aria-label="Key figures"
+            className="grid grid-cols-1 overflow-hidden rounded-xl border border-paper-200 bg-paper min-[360px]:grid-cols-2 xl:grid-cols-4"
+          >
+            <h2 className="sr-only">Key figures</h2>
+            <div className="relative isolate min-w-0 overflow-hidden border-b border-paper-200 bg-gradient-to-b from-tint-brand/70 to-paper to-70% p-4 min-[360px]:border-r sm:p-5 xl:border-b-0">
+              <Wallet
+                aria-hidden="true"
+                focusable="false"
+                strokeWidth={1.5}
+                className="pointer-events-none absolute -bottom-6 -right-6 -z-10 size-28 -rotate-12 text-tone-brand opacity-[0.07]"
+              />
+              <div className="flex items-start justify-between gap-3">
+                <p className="text-xs font-medium text-ink-600">
+                  <span>Available funds</span>
+                </p>
+                <IconTile icon={Wallet} size="sm" />
+              </div>
+              <p className="figure mt-1 break-all text-xl font-semibold leading-tight tracking-[-0.02em] text-ink-900 sm:text-[1.75rem]">
+                {formatMoney(summary.overview.availableFunds)}
               </p>
-              <button
-                type="button"
-                onClick={() => askFinSight(expandQuestion)}
-                aria-label="Ask FinSight about these figures"
-                className="tap-inline min-h-tap text-sm font-semibold text-brand-700 hover:text-brand-800"
-              >
-                Ask FinSight
-              </button>
+              <p className="mt-1.5 text-xs leading-relaxed text-ink-500">{fundsCalculation ? "Starting balance + confirmed records" : "From your business profile"}</p>
+              <details className="mt-1 text-xs text-ink-500">
+                <summary className="disclosure">How it’s calculated</summary>
+                <p className="pb-1 leading-relaxed">{fundsProvenance}</p>
+              </details>
             </div>
-          </Panel>
+            <KpiCell
+              label="Sales"
+              icon={ArrowDownLeft}
+              tone="info"
+              value={formatMoney(summary.overview.totalSalesReference)}
+              caption={periodCaption}
+              delta={summaryDelta("sales")}
+              className="border-b border-paper-200 xl:border-b-0 xl:border-r"
+            />
+            <KpiCell
+              label="Expenses"
+              icon={Receipt}
+              tone="accent"
+              value={formatMoney(summary.overview.totalExpenses)}
+              caption={periodCaption}
+              delta={
+                summaryDelta("expenses") ?? (periodComparison === undefined && changePercent !== null && comparedWith && comparison
+                  ? { percent: changePercent, amount: comparison.totals.current - comparison.totals.previous, against: comparedWith, upIsBad: true }
+                  : null
+                )
+              }
+              className="border-b border-paper-200 min-[360px]:border-b-0 min-[360px]:border-r"
+            />
+            <KpiCell
+              label="Net"
+              icon={Scale}
+              tone={net < 0 ? "danger" : "brand"}
+              value={`${net >= 0 ? "+" : "−"}${formatMoney(Math.abs(net))}`}
+              valueTone={net < 0 ? "danger" : net > 0 ? "brand" : undefined}
+              delta={summaryDelta("net")}
+              caption={
+                net < 0 ? "Expenses exceeded sales"
+                  : summary.overview.totalSalesReference > 0
+                  ? `${Math.round((net / summary.overview.totalSalesReference) * 100)}% of sales kept`
+                  : "Sales minus expenses"
+              }
+            />
+          </section>
+
+          <div className="grid gap-5 lg:grid-cols-12">
+            <RecoveryFocus summary={summary} needsSetup={recoveryNeedsSetup} action={recoveryAction} />
+            <Panel title={<PanelTitle icon={BellRing}>Needs attention</PanelTitle>} className="min-w-0 lg:col-span-5" bodyClassName="!px-0 !pb-1">
+              <ul className="divide-y divide-paper-200 border-t border-paper-200">
+                <AttentionRow
+                  icon={summary.recordsNeedingReview ? Flag : CheckCircle2}
+                  title="Records to review"
+                  value={String(summary.recordsNeedingReview)}
+                  detail={summary.recordsNeedingReview ? "Flagged or pending review · all dates" : "All clear across your records"}
+                  action={summary.recordsNeedingReview ? <ArrowLink to="/records/flagged">Review records</ArrowLink> : null}
+                />
+                {topOpportunity ? (
+                  <AttentionRow icon={Lightbulb} title={topOpportunity.categoryName}
+                    detail={<><span className="block text-ink-700">{topOpportunity.observation}</span><span className="mt-1 block">Spent {periodPhrase(selection)}: <span className="figure font-semibold">{formatMoney(topOpportunity.evidence.currentAmount)}</span></span></>}
+                    action={<ArrowLink to="/insights/expense-behavior">Review reduction opportunity</ArrowLink>}
+                  />
+                ) : opportunityState === "error" ? (
+                  <li className="px-5 py-3"><FeedNotice label="Reduction opportunities" onRetry={reloadExpenseOverview} /></li>
+                ) : opportunityState === "loading" ? (
+                  <li role="status" className="px-5 py-4 text-xs text-ink-500">Checking spending opportunities…</li>
+                ) : topCategory ? (
+                  <AttentionRow icon={PieChart} title="Largest expense category" value={`${Math.round(topCategory.percent)}%`}
+                    detail={<><span className="font-medium text-ink-700">{topCategory.categoryName}</span> · <span className="figure">{formatMoney(topCategory.total)}</span><span className="mt-1 block">Of expenses {periodPhrase(selection)}</span></>}
+                    action={<ArrowLink to="/insights/expense-behavior">See category spending</ArrowLink>}
+                  />
+                ) : null}
+              </ul>
+              <div className="grid grid-cols-2 border-t border-paper-200">
+                <button type="button" onClick={() => askFinSight(expandQuestion)} aria-label="Ask FinSight about these figures" className="flex min-h-tap items-center justify-center gap-2 border-r border-paper-200 px-3 py-3 text-xs font-semibold text-tone-brand transition-colors hover:bg-paper-50">
+                  <Sparkles aria-hidden className="h-4 w-4" />Ask FinSight
+                </button>
+                <Link to="/insights/spending-impact" className="flex min-h-tap items-center justify-center gap-2 px-3 py-3 text-xs font-semibold text-tone-brand transition-colors hover:bg-paper-50">
+                  <ShoppingBag aria-hidden className="h-4 w-4" />Plan a purchase
+                </Link>
+              </div>
+            </Panel>
+          </div>
+
+          <div className="grid gap-5 lg:grid-cols-12">
+            <Panel
+              title={<PanelTitle icon={BarChart3}>Cash flow</PanelTitle>}
+              className="min-w-0 lg:col-span-12"
+              action={
+                <div role="group" aria-label="Cash flow range" className="inline-flex rounded-lg bg-paper-100 p-0.5 ring-1 ring-paper-200">
+                  {(["monthly", "daily"] as const).map((g) => (
+                    <button
+                      key={g}
+                      type="button"
+                      aria-pressed={granularity === g}
+                      onClick={() => setGranularity(g)}
+                      className="min-h-tap rounded-md px-3 text-xs font-semibold text-ink-600 transition-colors aria-pressed:bg-paper aria-pressed:text-ink-900 aria-pressed:shadow-sm"
+                    >
+                      {g === "daily" ? "7 days" : "6 months"}
+                    </button>
+                  ))}
+                </div>
+              }
+            >
+              <p className="mb-4 text-xs text-ink-500">{granularity === "daily" ? "Last 7 days" : "Last 6 months"}, through today</p>
+              {cashflow.state.status === "error" && cashflow.state.data ? <FeedNotice label="Cash flow" onRetry={cashflow.reload} retained /> : null}
+              {cashflow.state.status === "error" && !cashflow.state.data ? (
+                <FeedNotice label="Cash flow" onRetry={cashflow.reload} />
+              ) : !cashflow.state.data ? (
+                <div aria-live="polite" className="py-16 text-center text-sm text-ink-500">Loading cash flow…</div>
+              ) : cashflow.state.data.points.every((p) => p.sales === 0 && p.expenses === 0) ? (
+                <div className="py-14 text-center">
+                  <p className="text-sm text-ink-600">
+                    No sales or expenses in the {granularity === "daily" ? "last 7 days" : "last 6 months"}.
+                  </p>
+                  {granularity === "daily" ? (
+                    <button
+                      type="button"
+                      onClick={() => setGranularity("monthly")}
+                      className="tap-inline mt-2 text-sm link-action"
+                    >
+                      Show the last 6 months
+                    </button>
+                  ) : null}
+                </div>
+              ) : (
+                <CashflowChart points={cashflow.state.data.points} granularity={cashflow.state.data.granularity} />
+              )}
+            </Panel>
+
+          </div>
+
+          <div className="grid gap-5 lg:grid-cols-12">
+            <Panel
+              title={<PanelTitle icon={ListOrdered}>Recent records</PanelTitle>}
+              className="min-w-0 lg:col-span-7"
+              bodyClassName="!px-0 !pb-2"
+              action={<ArrowLink to={recordsHref}>View all records</ArrowLink>}
+            >
+              <p className="px-5 pb-3 text-xs text-ink-500">{periodCaption}</p>
+              {recent.state.status === "error" && recent.state.data ? <div className="px-5"><FeedNotice label="Recent records" onRetry={recent.reload} retained /></div> : null}
+              {recent.state.status === "error" && !recent.state.data ? (
+                <div className="px-5"><FeedNotice label="Recent records" onRetry={recent.reload} /></div>
+              ) : !recent.state.data ? (
+                <div aria-live="polite" className="px-5 py-10 text-center text-sm text-ink-500">Loading records…</div>
+              ) : recent.state.data.items.length === 0 ? (
+                <p className="px-5 py-8 text-center text-sm text-ink-500">No records {periodPhrase(selection)}.</p>
+              ) : (
+                <table className="w-full table-fixed border-collapse text-left text-sm">
+                  <caption className="sr-only">Most recent records, {periodCaption}.</caption>
+                  <colgroup>
+                    <col className="w-[4rem] sm:w-24" />
+                    <col />
+                    <col className="w-[6rem] sm:w-36" />
+                  </colgroup>
+                  <thead>
+                    <tr className="border-y border-paper-200 bg-paper-50 text-[11px] uppercase tracking-[0.06em] text-ink-500">
+                      <th scope="col" className="px-3 py-2 font-semibold sm:px-5">Date</th>
+                      <th scope="col" className="px-2 py-2 font-semibold sm:px-3">Record</th>
+                      <th scope="col" className="px-3 py-2 text-right font-semibold sm:px-5">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recent.state.data.items.map((r) => (
+                      <tr key={`${r.type}-${r.id}`} className="border-b border-paper-200 last:border-0">
+                        <td className="figure px-3 py-2.5 text-xs text-ink-500 sm:px-5">
+                          {new Date(r.date).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" })}
+                        </td>
+                        <td className="px-2 py-2 sm:px-3">
+                          <div className="flex min-w-0 items-center gap-2.5">
+                            <IconTile size="sm" icon={r.type === "sales" ? ArrowDownLeft : Receipt} />
+                            <Link to={`/records/${r.type === "sales" ? "sales" : "expenses"}/${r.id}/edit`} className="tap-inline break-words link-action">{r.description}</Link>
+                          </div>
+                          <p className="truncate pl-[2.375rem] text-xs text-ink-500">
+                            {r.type === "sales"
+                              ? "Sales"
+                              : categories.find((c) => c.id === r.categoryId)?.name ?? "Expense"}
+                          </p>
+                          {r.reviewStatus === "Needs Review" || r.duplicateStatus === "Flagged" ? (
+                            <div className="mt-1 flex flex-wrap gap-1 pl-[2.375rem]">
+                              {r.reviewStatus === "Needs Review" ? <span className="rounded bg-tint-danger px-1.5 py-0.5 text-[11px] font-semibold text-tone-danger">Needs review</span> : null}
+                              {r.duplicateStatus === "Flagged" ? <span className="rounded bg-tint-accent px-1.5 py-0.5 text-[11px] font-semibold text-tone-accent">Possible duplicate</span> : null}
+                            </div>
+                          ) : null}
+                        </td>
+                        <td className={`figure break-all px-3 py-2.5 text-right text-xs font-semibold sm:px-5 sm:text-sm ${r.type === "sales" ? "text-tone-brand" : "text-ink-900"}`}>
+                          <span className="sr-only">{r.type === "sales" ? "Sale of " : "Expense of "}</span>
+                          {r.type === "sales" ? "+" : "−"}
+                          {formatMoney(r.amount)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </Panel>
+
+            <UpcomingExpenses businessProfileId={selected.id} />
+          </div>
 
           <div className="lg:hidden">
             <button
@@ -606,32 +634,28 @@ function DashboardPage() {
             </button>
           </div>
 
-          <div className={`${showDetails ? "grid" : "hidden"} gap-5 lg:grid ${allTime ? "" : "lg:grid-cols-2"}`}>
-            <Panel title="Expense distribution" className="min-w-0">
+          <div className={`${showDetails ? "grid" : "hidden"} gap-5 lg:grid ${allTime ? "" : "lg:grid-cols-12"}`}>
+            <Panel
+              title={<PanelTitle icon={PieChart}>Spending by category</PanelTitle>}
+              className="min-w-0 lg:col-span-6"
+              action={<ArrowLink to="/insights/expense-behavior">Expense insight</ArrowLink>}
+            >
               {summary.expenseCategoryBreakdown.length === 0 ? (
                 <EmptyState compact title={`No expenses ${periodPhrase(selection)}`} icon="◔" />
               ) : (
-                <>
-                  <DonutChart breakdown={summary.expenseCategoryBreakdown} />
-                  {/* Bars below the donut: a donut answers "what share", the
-                      bars answer "how much bigger". */}
-                  <div className="mt-5 border-t border-paper-200 pt-4">
-                    <CategoryBreakdownChart breakdown={summary.expenseCategoryBreakdown} />
-                  </div>
-                </>
+                <DonutChart breakdown={summary.expenseCategoryBreakdown} />
               )}
             </Panel>
 
             {/* All time has nothing before it to compare with. */}
             {!allTime ? (
               <Panel
-                title="Expense comparison"
-                className="min-w-0"
+                title={<PanelTitle icon={GitCompareArrows}>Expense comparison</PanelTitle>}
+                className="min-w-0 lg:col-span-6"
                 action={
                   changePercent !== null && comparedWith ? (
                     <Pill tone={changePercent > 0 ? "warn" : "ok"}>
-                      <span aria-hidden>{changePercent > 0 ? "▲" : changePercent < 0 ? "▼" : "="}</span>
-                      {Math.abs(changePercent).toFixed(0)}% vs {comparedWith}
+                      {changePercent === 0 ? "No change" : `${Math.abs(changePercent).toFixed(0)}% ${changePercent > 0 ? "increase" : "decrease"}`} vs {comparedWith}
                     </Pill>
                   ) : null
                 }
@@ -643,7 +667,7 @@ function DashboardPage() {
                     compact
                     title="Comparison couldn’t load"
                     action={
-                      <button type="button" onClick={() => void loadExpenseOverview(undefined, true)} className="tap rounded-lg border border-paper-200 bg-paper px-3 py-2 text-sm font-semibold text-brand-700">
+                      <button type="button" onClick={reloadExpenseOverview} className="tap rounded-lg border border-paper-200 bg-paper px-3 py-2 text-sm font-semibold text-brand-700">
                         Try again
                       </button>
                     }
@@ -654,44 +678,13 @@ function DashboardPage() {
                   <CategoryComparisonChart
                     trends={comparison!.categoryTrends}
                     currentLabel={periodCaption}
+                    resetKey={`${selected.id}:${JSON.stringify(selection)}`}
                     previousLabel={comparedWith ?? "Before"}
                   />
                 )}
               </Panel>
             ) : null}
           </div>
-
-          {/* The top reduction opportunity only: the full list stays on Expense
-              Insights (§5.1). Hidden rather than shown empty. */}
-          {topOpportunity ? (
-            <Panel
-              title="Reduction opportunity"
-              action={<Pill tone="warn">{topOpportunity.categoryName}</Pill>}
-            >
-              <p className="text-sm text-ink-700">{topOpportunity.observation}</p>
-              <p className="mt-2 text-xs text-ink-500">
-                Spent {periodPhrase(selection)}:{" "}
-                <span className="figure font-semibold text-ink-800">
-                  {formatMoney(topOpportunity.evidence.currentAmount)}
-                </span>
-              </p>
-              <div className="mt-4 border-t border-paper-200 pt-3">
-                <Link
-                  to="/insights/expense-behavior"
-                  className="tap-inline text-sm font-semibold text-brand-700 hover:text-brand-800"
-                >
-                  Review opportunity
-                </Link>
-              </div>
-            </Panel>
-          ) : opportunityState === "error" ? (
-            <Callout tone="info">
-              <b className="font-semibold">Reduction opportunities unavailable.</b>{" "}
-              <button type="button" onClick={() => void loadExpenseOverview(undefined, true)} className="tap-inline min-h-tap font-semibold text-brand-700 underline underline-offset-2">
-                Try again
-              </button>
-            </Callout>
-          ) : null}
 
           {!hasAnyRecords ? (
             <EmptyState

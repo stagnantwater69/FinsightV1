@@ -108,15 +108,19 @@ beforeEach(() => {
     return { data: { ...conversation({ id }), messages: DETAIL[id] ?? [] } };
   });
 
-  post.mockImplementation(async (_url: string, body: { question: string }) => ({
-    data: {
-      conversation: conversation({ id: 99, title: body.question }),
-      userMessage: message(101, "user", body.question),
-      assistantMessage: message(102, "assistant", "Here is what I found."),
-      provider: "gemini",
-      detectedAmount: null,
-    },
-  }));
+  post.mockImplementation(async (url: string, body: { question: string }) => {
+    const append = /\/ai\/conversations\/(\d+)\/messages$/.exec(url);
+    const id = append ? Number(append[1]) : 99;
+    return {
+      data: {
+        conversation: conversation({ id, title: LIST.find((item) => item.id === id)?.title ?? body.question }),
+        userMessage: message(101, "user", body.question),
+        assistantMessage: message(102, "assistant", "Here is what I found."),
+        provider: "gemini",
+        detectedAmount: null,
+      },
+    };
+  });
 
   patch.mockResolvedValue({ data: {} });
   del.mockResolvedValue({ data: {} });
@@ -272,6 +276,7 @@ describe("the drawer's open flag is not a conversation lifecycle", () => {
     await screen.findByText("Here is what I found.");
     expect(post).toHaveBeenCalledWith("/ai/conversations/1/messages", {
       businessProfileId: 7,
+      idempotencyKey: expect.stringMatching(/^[A-Za-z0-9_-]{8,100}$/),
       question: "By how much?",
     });
   });
@@ -304,6 +309,7 @@ describe("lazy conversation creation", () => {
     await screen.findByText("Here is what I found.");
     expect(post).toHaveBeenCalledWith("/ai/conversations", {
       businessProfileId: 7,
+      idempotencyKey: expect.stringMatching(/^[A-Za-z0-9_-]{8,100}$/),
       originModule: "Dashboard",
       question: "What can I cut?",
     });
@@ -324,7 +330,7 @@ describe("lazy conversation creation", () => {
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith(
         "/ai/conversations",
-        expect.objectContaining({ originModule: "Expense Insights" }),
+        expect.objectContaining({ originModule: "Expense Insights", businessProfileId: 7, idempotencyKey: expect.stringMatching(/^[A-Za-z0-9_-]{8,100}$/) }),
       ),
     );
   });
@@ -341,6 +347,7 @@ describe("the selected reduction opportunity handed over with a primed question"
     await screen.findByText("Here is what I found.");
     expect(post).toHaveBeenCalledWith("/ai/conversations", {
       businessProfileId: 7,
+      idempotencyKey: expect.stringMatching(/^[A-Za-z0-9_-]{8,100}$/),
       originModule: "Dashboard",
       question: "Why was this reduction opportunity selected, and what should I check first?",
       reductionOpportunity,
@@ -392,7 +399,7 @@ describe("the history overlay", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Supplies last month" }));
 
     expect(await screen.findByText("Supplies were 12,400.")).toBeInTheDocument();
-    expect(get).toHaveBeenCalledWith("/ai/conversations/2");
+    expect(get).toHaveBeenCalledWith("/ai/conversations/2", { params: { pageSize: 50 }, signal: expect.any(AbortSignal) });
     // The list stood down on its own once it had done its job.
     expect(historyToggle()).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByRole("heading", { name: "Chat history" })).not.toBeInTheDocument();
@@ -570,7 +577,7 @@ describe("what the drawer has always had to say", () => {
 
     renderApp();
     await open();
-    await userEvent.type(box(), "fridge");
+    await userEvent.type(box(), "What if I spend 11,000 on a fridge?");
     await userEvent.click(screen.getByRole("button", { name: "Send" }));
 
     expect(await screen.findByText(/read/i)).toHaveTextContent("PHP 11,000");
@@ -608,6 +615,7 @@ describe("the composer holds a question longer than one line", () => {
     await screen.findByText("Here is what I found.");
     expect(post).toHaveBeenCalledWith("/ai/conversations", {
       businessProfileId: 7,
+      idempotencyKey: expect.stringMatching(/^[A-Za-z0-9_-]{8,100}$/),
       question: "Line one\nLine two",
       originModule: "Dashboard",
     });

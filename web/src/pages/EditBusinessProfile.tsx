@@ -1,12 +1,6 @@
 import { useState, type ComponentType, type SVGProps } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import {
-  Bell,
-  CalendarDays,
-  ChevronRight,
-  Settings,
-  Upload,
-} from "lucide-react";
+import { Bell, CalendarDays, ChevronRight, Upload } from "lucide-react";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { BusinessProfileForm } from "../components/BusinessProfileForm";
 import { FinancialPositionPanel } from "../components/FinancialPositionPanel";
@@ -56,14 +50,10 @@ export function BusinessProfileEditor({
   }
 
   return (
-    <div className="w-full">
+    <div className="w-full max-w-6xl">
       <PageHead
         title="Business profile"
-        subtitle={
-          <>
-            Settings for <span className="font-medium text-ink-700">{profile.name}</span>. Changes apply to this business only.
-          </>
-        }
+        subtitle="Settings apply to this business only."
         actions={
           <ButtonLink to="/business-profiles/all" variant="secondary" size="sm">
             View all businesses
@@ -103,24 +93,22 @@ export function BusinessProfileEditor({
           <>
             <FinancialPositionPanel profile={profile} />
 
-            <Card className="p-5 sm:p-6">
-              <SettingsHeading
-                icon={Settings}
-                title="Business tools"
-                description="Fine-tune how FinSight calculates targets and sends reminders."
-              />
-              <div className="mt-5 divide-y divide-paper-200">
+            <Card className="p-5 shadow-none sm:p-7">
+              <h2 className="font-display text-lg font-semibold text-ink-900">
+                Business tools
+              </h2>
+              <div className="mt-2 divide-y divide-paper-200 lg:grid lg:grid-cols-2 lg:divide-x lg:divide-y-0">
                 <ManagementLink
                   Icon={CalendarDays}
                   title="Operating schedule"
-                  description="Set regular opening days, holidays, and special openings used by Recovery Target."
+                  description="Opening days, holidays, and special openings used by Recovery Target."
                   to={`/business-profiles/${profile.id}/operating-schedule`}
                   action="Manage schedule"
                 />
                 <ManagementLink
                   Icon={Bell}
                   title="Recovery Target notifications"
-                  description="Choose alerts, quiet hours, and how frequently this business can notify you."
+                  description="Alerts, quiet hours, and how often this business can notify you."
                   to={`/business-profiles/${profile.id}/recovery-notifications`}
                   action="Manage notifications"
                 />
@@ -151,32 +139,6 @@ export function EditBusinessProfile() {
   );
 }
 
-function SettingsHeading({
-  icon: Icon,
-  title,
-  description,
-}: {
-  icon: LucideIcon;
-  title: string;
-  description: string;
-}) {
-  return (
-    <div className="flex items-start gap-3">
-      <span className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-tint-brand text-tone-brand ring-1 ring-edge-brand">
-        <Icon size={21} aria-hidden />
-      </span>
-      <div className="min-w-0 pt-0.5">
-        <h2 className="font-display text-base font-semibold text-ink-900 sm:text-lg">
-          {title}
-        </h2>
-        <p className="mt-0.5 text-sm leading-relaxed text-ink-500">
-          {description}
-        </p>
-      </div>
-    </div>
-  );
-}
-
 function ManagementLink({
   Icon,
   title,
@@ -191,23 +153,21 @@ function ManagementLink({
   action: string;
 }) {
   return (
-    <div className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-3 py-5 first:pt-0 last:pb-0 2xl:grid-cols-[auto_minmax(0,1fr)_auto] 2xl:items-center">
-      <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-tint-brand text-tone-brand">
-        <Icon size={20} aria-hidden />
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-semibold text-ink-900">{title}</p>
+    <Link
+      to={to}
+      className="group flex min-w-0 items-start gap-3 rounded-lg py-5 transition-colors hover:bg-paper-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 lg:pr-6 lg:last:pl-6 lg:last:pr-0"
+    >
+      <Icon size={20} className="mt-0.5 shrink-0 text-tone-brand" aria-hidden />
+      <div className="min-w-0">
+        <h3 className="text-sm font-semibold text-ink-900">{title}</h3>
         <p className="mt-1 max-w-[52ch] text-sm leading-relaxed text-ink-500">
           {description}
         </p>
+        <span className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-tone-brand group-hover:underline">
+          {action}
+          <ChevronRight size={16} aria-hidden />
+        </span>
       </div>
-      <Link
-        to={to}
-        className="tap col-span-2 inline-flex w-full shrink-0 items-center justify-center gap-2 rounded-lg border border-ink-200 bg-paper px-3 text-sm font-medium text-ink-700 transition-colors hover:bg-paper-100 2xl:col-span-1 2xl:w-auto"
-      >
-        {action}
-        <ChevronRight size={16} aria-hidden />
-      </Link>
-    </div>
+    </Link>
   );
 }

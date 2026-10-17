@@ -1,7 +1,7 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useState } from "react";
 import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { useCategoricalPalette } from "../lib/useChartPalette";
-import { Button } from "./Button";
+import { ListDisclosureControl, useListDisclosure } from "./ListDisclosure";
 import { EmptyState } from "./EmptyState";
 import { formatMoney } from "./Money";
 import type { DashboardSummary } from "../lib/types";
@@ -71,15 +71,16 @@ export function toRows(
 export function CategoryBreakdownChart({
   breakdown,
   topN = 5,
+  resetKey,
 }: {
   breakdown: DashboardSummary["expenseCategoryBreakdown"];
   /** Rows shown before the reveal. Below this many categories there is no toggle. */
   topN?: number;
+  resetKey?: string;
 }) {
   const narrow = useIsNarrow();
   const palette = useCategoricalPalette();
-  const [expanded, setExpanded] = useState(false);
-  const regionId = useId();
+  const disclosure = useListDisclosure({ total: breakdown.length, limit: topN, resetKey });
 
   if (breakdown.length === 0) {
     return (
@@ -87,8 +88,7 @@ export function CategoryBreakdownChart({
     );
   }
 
-  const data = toRows(breakdown, topN, expanded);
-  const hidden = breakdown.length - topN;
+  const data = toRows(breakdown, topN, disclosure.expanded);
 
   return (
     // `text-ink-500` on the wrapper is load-bearing, not decoration: the axis
@@ -96,7 +96,7 @@ export function CategoryBreakdownChart({
     // `fill` as an SVG presentation attribute, where `rgb(var(--ink-500))`
     // would not resolve — `currentColor` does, and follows the theme.
     <div className="min-w-0 text-ink-500">
-      <div id={regionId}>
+      <div id={disclosure.contentId}>
         <ResponsiveContainer width="100%" height={Math.max(120, data.length * 44)}>
           <BarChart
             data={data}
@@ -171,19 +171,7 @@ export function CategoryBreakdownChart({
         ) : null}
       </div>
 
-      {hidden > 0 ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="mt-1 w-full justify-center text-xs"
-          aria-expanded={expanded}
-          aria-controls={regionId}
-          onClick={() => setExpanded((v) => !v)}
-        >
-          {expanded ? `Show top ${topN} only` : `Show all ${breakdown.length} categories`}
-        </Button>
-      ) : null}
+      <ListDisclosureControl disclosure={disclosure} total={breakdown.length} itemLabel="categories" className="mt-3" />
     </div>
   );
 }

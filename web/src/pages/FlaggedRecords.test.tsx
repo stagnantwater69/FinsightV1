@@ -143,6 +143,48 @@ beforeEach(() => {
 });
 
 describe("the unified review queue", () => {
+  it("does not announce all clear when spending checks failed and the available record queue is empty", async () => {
+    getHandlers["/insights/findings"] = () => { throw new Error("Findings unavailable"); };
+    renderPage();
+    expect(await screen.findByText("Review checks are incomplete")).toBeInTheDocument();
+    expect(screen.queryByText("Nothing needs review")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Some spending checks couldn't load");
+    getHandlers["/insights/findings"] = ok({ items: [], nextCursor: null });
+    await userEvent.click(screen.getByRole("button", { name: "Retry review checks" }));
+    expect(await screen.findByText("Nothing needs review")).toBeInTheDocument();
+    expect(screen.queryByText("Review checks are incomplete")).not.toBeInTheDocument();
+  });
+
+  it("keeps available record flags visible while announcing failed findings and import names", async () => {
+    getHandlers["/records/flagged"] = ok(flaggedPage([record({ largeExpenseFlag: true })]));
+    getHandlers["/insights/findings"] = () => { throw new Error("Findings unavailable"); };
+    getHandlers["/records/csv-imports/batches"] = () => { throw new Error("Imports unavailable"); };
+    renderPage();
+    expect(await screen.findByText(/Rice sack/)).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Some spending checks couldn't load");
+    expect(screen.queryByText("Nothing needs review")).not.toBeInTheDocument();
+    getHandlers["/insights/findings"] = ok({ items: [outlier], nextCursor: null });
+    getHandlers["/records/csv-imports/batches"] = ok({ items: [], nextCursor: null });
+    await userEvent.click(screen.getByRole("button", { name: "Retry review checks" }));
+    expect(await screen.findByText("Unusually large Inventory expense")).toBeInTheDocument();
+    expect(screen.queryByText(/Some spending checks couldn't load/)).not.toBeInTheDocument();
+  });
+
+  it("announces import-name failure while retaining a complete empty review verdict", async () => {
+    getHandlers["/records/csv-imports/batches"] = () => { throw new Error("Imports unavailable"); };
+    renderPage();
+    expect(await screen.findByText("Nothing needs review")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Import names couldn't load");
+  });
+
+  it("does not claim all clear when the primary flagged-record request fails", async () => {
+    getHandlers["/records/flagged"] = () => { throw new Error("Records unavailable"); };
+    renderPage();
+    expect(await screen.findByText("Records unavailable")).toBeInTheDocument();
+    expect(screen.getByText("Review checks are incomplete")).toBeInTheDocument();
+    expect(screen.queryByText("Nothing needs review")).not.toBeInTheDocument();
+  });
+
   it("shows one card, not two, when a finding and a legacy flag describe the same record", async () => {
     getHandlers["/records/flagged"] = ok(flaggedPage([record({ id: 1, largeExpenseFlag: true })]));
     getHandlers["/insights/findings"] = ok({ items: [outlier], nextCursor: null });

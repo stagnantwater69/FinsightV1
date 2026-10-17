@@ -2,10 +2,10 @@ import { useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { suggestEmail } from "../lib/emailSuggestion";
+import { GoogleSignInButton } from "../components/GoogleSignInButton";
 import { AuthLayout } from "../components/AuthLayout";
 import { Button } from "../components/Button";
 import { Field, FormError, TextInput, PasswordInput } from "../components/Field";
-import { api } from "../lib/api";
 import { getErrorMessage, getFieldErrors } from "../lib/errors";
 import { digitsOnly, isValid, validateRegister, MIN_PASSWORD_LENGTH, type FieldErrors, type RegisterField } from "../lib/authValidation";
 import { focusFirstInvalidField } from "../lib/formFocus";
@@ -24,17 +24,6 @@ export function Register() {
     confirmPassword: "",
   });
   const [error, setError] = useState<string | null>(null);
-  /**
-   * What the server said once the request was accepted.
-   *
-   * Non-null switches this screen to the "check your email" state. Registration
-   * no longer returns a session — the account is pending until its address is
-   * confirmed — so there is nothing to navigate into, and the honest end of
-   * this form is an instruction rather than a redirect.
-   */
-  const [acknowledgement, setAcknowledgement] = useState<string | null>(null);
-  const [resent, setResent] = useState(false);
-  const [resending, setResending] = useState(false);
   /**
    * Per-field messages, from this form's checks or from the server's.
    *
@@ -68,7 +57,7 @@ export function Register() {
 
     setSubmitting(true);
     try {
-      const { message } = await register({
+      await register({
         email: form.email,
         password: form.password,
         firstName: form.firstName,
@@ -76,7 +65,8 @@ export function Register() {
         lastName: form.lastName,
         phoneNumber: form.phoneNumber.trim() || undefined,
       });
-      setAcknowledgement(message);
+      setForm((current) => ({ ...current, password: "", confirmPassword: "" }));
+      navigate("/auth/confirm", { state: { email: form.email.trim(), codeSent: true } });
     } catch (err) {
       // Fields the server rejected go under those fields; everything else —
       // an address already registered, a network failure — has no field to
@@ -89,54 +79,6 @@ export function Register() {
     } finally {
       setSubmitting(false);
     }
-  }
-
-  async function resend() {
-    setResending(true);
-    try {
-      await api.post("/auth/resend-verification", { email: form.email, platform: "web" });
-      setResent(true);
-    } catch {
-      // The endpoint answers the same way whatever happened, so there is
-      // nothing here worth putting on screen that "check your inbox" does not
-      // already say.
-      setResent(true);
-    } finally {
-      setResending(false);
-    }
-  }
-
-  /*
-   * The end of registration, and it is not the app.
-   *
-   * Sending someone straight to /business-profiles used to be possible because
-   * registration handed back a session — which is precisely how an address
-   * nobody owned became a working account. The account now exists in a pending
-   * state until the link in that inbox is clicked, and this screen says so
-   * rather than pretending otherwise.
-   */
-  if (acknowledgement) {
-    return (
-      <AuthLayout
-        title="Check your email"
-        subtitle="One more step."
-        heroTitle="Almost there."
-        heroBody="We've sent a confirmation link to your address. Clicking it proves the inbox is yours and activates your FinSight account."
-      >
-        <p className="text-center text-sm text-ink-600">{acknowledgement}</p>
-        <p className="mt-4 text-center text-sm text-ink-500">
-          The link expires after a while, and nothing is active until you use it.
-        </p>
-        <div className="mt-6 space-y-3">
-          <Button variant="primary" fullWidth onClick={() => navigate("/login")}>
-            Go to log in
-          </Button>
-          <Button variant="ghost" fullWidth disabled={resending || resent} onClick={() => void resend()}>
-            {resent ? "Link sent — check your inbox" : resending ? "Sending…" : "Didn't arrive? Send it again"}
-          </Button>
-        </div>
-      </AuthLayout>
-    );
   }
 
   return (
@@ -154,6 +96,7 @@ export function Register() {
       footnote="Your records stay organised per business profile."
       showBack
     >
+      <GoogleSignInButton disabled={submitting} />
       <form ref={formRef} onSubmit={handleSubmit} className="space-y-4" noValidate>
         {/* Stacks below `sm`: at 320px two side-by-side name fields leave
             about 130px each, which is not enough for a long surname to be
@@ -210,7 +153,7 @@ export function Register() {
               Did you mean{" "}
               <button
                 type="button"
-                className="font-semibold text-tone-brand underline underline-offset-2 hover:no-underline"
+                className="link"
                 onClick={() => {
                   update("email", emailSuggestion);
                   setEmailSuggestion(null);
@@ -260,7 +203,7 @@ export function Register() {
       </form>
       <p className="mt-6 text-center text-sm text-ink-500">
         Already have an account?{" "}
-        <Link to="/login" className="tap-inline font-medium text-brand-700 hover:text-brand-800">
+        <Link to="/login" className="tap-inline link-action">
           Log in
         </Link>
       </p>

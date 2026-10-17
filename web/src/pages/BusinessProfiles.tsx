@@ -8,20 +8,16 @@ export function BusinessProfiles() {
 
   if (loading) {
     return (
-      <div>
+      <div className="max-w-6xl">
         <PageHead
           title="Business profile"
           subtitle="Settings apply to the selected business only."
         />
-        <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(20rem,0.85fr)]">
-          <div className="space-y-5">
-            <div className="skeleton h-72 rounded-2xl" aria-hidden />
-            <div className="skeleton h-96 rounded-2xl" aria-hidden />
-          </div>
-          <div className="space-y-5">
-            <div className="skeleton h-64 rounded-2xl" aria-hidden />
-            <div className="skeleton h-72 rounded-2xl" aria-hidden />
-          </div>
+        <div className="space-y-6" aria-hidden>
+          <div className="skeleton h-72 rounded-2xl" />
+          <div className="skeleton h-96 rounded-2xl" />
+          <div className="skeleton h-16 rounded-xl" />
+          <div className="skeleton h-96 rounded-2xl" />
         </div>
         <span className="sr-only" aria-live="polite">
           Loading your business profile…

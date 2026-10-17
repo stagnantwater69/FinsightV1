@@ -47,6 +47,11 @@ interface SessionScope {
   generation: number;
 }
 
+export interface ServerStateAccount {
+  userId: string;
+  generation: number;
+}
+
 export interface ServerStateInvalidation {
   businessProfileId?: number | string | null;
   resourcePrefix?: string;
@@ -64,6 +69,14 @@ const listeners = new Set<(event: ServerStateCacheEvent) => void>();
 let activeSession: SessionScope | null = null;
 let sessionGeneration = 0;
 let cacheRevision = 0;
+
+export function captureServerStateAccount(): ServerStateAccount | null {
+  return activeSession ? { ...activeSession } : null;
+}
+
+export function serverStateAccountMatches(account: ServerStateAccount): boolean {
+  return activeSession?.userId === account.userId && activeSession.generation === account.generation;
+}
 
 function normalized(value: unknown): unknown {
   if (value === undefined) return { $undefined: true };

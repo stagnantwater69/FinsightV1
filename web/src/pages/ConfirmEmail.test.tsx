@@ -21,15 +21,20 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
  * browser's session, which a hand-stubbed context could only pretend.
  */
 
-const { getSession, setSession, signOut, onAuthStateChange } = vi.hoisted(() => ({
+const { getSession, setSession, signOut, onAuthStateChange, verifyOtp, recoverySignOut, disposeIsolatedAuthClient } = vi.hoisted(() => ({
   getSession: vi.fn(),
   setSession: vi.fn(),
   signOut: vi.fn(),
+  verifyOtp: vi.fn(),
+  recoverySignOut: vi.fn(),
+  disposeIsolatedAuthClient: vi.fn(),
   onAuthStateChange: vi.fn(() => ({ data: { subscription: { unsubscribe: vi.fn() } } })),
 }));
 
 vi.mock("../lib/supabaseClient", () => ({
   supabase: { auth: { getSession, setSession, signOut, onAuthStateChange } },
+  disposeIsolatedAuthClient,
+  createRecoveryClient: () => ({ auth: { verifyOtp, signOut: recoverySignOut } }),
 }));
 
 const { apiGet, apiPost, apiPatch } = vi.hoisted(() => ({
@@ -96,9 +101,9 @@ function LocationProbe() {
   return <span data-testid="path">{useLocation().pathname}</span>;
 }
 
-function renderConfirm() {
+function renderConfirm(state?: { email?: string; codeSent?: boolean }) {
   return render(
-    <MemoryRouter initialEntries={["/auth/confirm"]}>
+    <MemoryRouter initialEntries={[{ pathname: "/auth/confirm", state }]}>
       <AuthProvider>
         <Routes>
           <Route path="/auth/confirm" element={<ConfirmEmail />} />
@@ -120,6 +125,8 @@ beforeEach(() => {
   // No stored session by default: the visitor arrives from their inbox.
   getSession.mockResolvedValue({ data: { session: null } });
   setSession.mockResolvedValue({ data: {}, error: null });
+  verifyOtp.mockResolvedValue({ data: { session: { access_token: ACCESS_TOKEN, refresh_token: REFRESH_TOKEN } }, error: null });
+  recoverySignOut.mockResolvedValue({ error: null });
   apiGet.mockResolvedValue({ data: PROFILE });
   setLinkUrl(`#access_token=${ACCESS_TOKEN}&refresh_token=${REFRESH_TOKEN}&type=signup`);
   setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36");
@@ -132,6 +139,56 @@ afterEach(() => {
 });
 
 describe("ConfirmEmail", () => {
+  it("verifies a signup code before backend approval and session installation", async () => {
+    setLinkUrl("");
+    apiPost.mockResolvedValue({ data: { message: "Your email is confirmed.", profile: PROFILE, needsOnboarding: true } });
+    const user = userEvent.setup();
+    renderConfirm({ email: PROFILE.email, codeSent: true });
+    expect(await screen.findByLabelText(/^email/i)).toHaveValue(PROFILE.email);
+    expect(screen.getByRole("button", { name: /resend code in/i })).toBeDisabled();
+    await user.type(screen.getByLabelText(/confirmation code/i), "7532-4744");
+    await user.click(screen.getByRole("button", { name: "Confirm email" }));
+    await waitFor(() => expect(setSession).toHaveBeenCalled());
+    expect(verifyOtp).toHaveBeenCalledWith({ email: PROFILE.email, token: "75324744", type: "email" });
+    expect(apiPost).toHaveBeenCalledWith("/auth/confirm-email", null, { headers: { Authorization: `Bearer ${ACCESS_TOKEN}` } });
+    expect(apiPost.mock.invocationCallOrder[0]).toBeLessThan(setSession.mock.invocationCallOrder[0]);
+    await waitFor(() => expect(disposeIsolatedAuthClient).toHaveBeenCalled());
+    await atPath("/onboarding");
+    expect(recoverySignOut).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { data: { session: null }, error: { message: "Email not found" } },
+    { data: { session: null }, error: { message: "Expired or already used" } },
+    { data: { session: null }, error: null },
+  ])("keeps signup verification failures generic and installs no session", async result => {
+    setLinkUrl("");
+    verifyOtp.mockResolvedValue(result);
+    const user = userEvent.setup();
+    renderConfirm({ email: PROFILE.email });
+    await user.type(await screen.findByLabelText(/confirmation code/i), "75324744");
+    await user.click(screen.getByRole("button", { name: "Confirm email" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/code couldn't be verified/i);
+    expect(apiPost).not.toHaveBeenCalled();
+    expect(setSession).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Email not found/i)).not.toBeInTheDocument();
+    await waitFor(() => expect(disposeIsolatedAuthClient).toHaveBeenCalled());
+  });
+
+  it("does not adopt signup tokens when the backend rejects the verified session", async () => {
+    setLinkUrl("");
+    apiPost.mockRejectedValue(new Error("Account suspended"));
+    const user = userEvent.setup();
+    renderConfirm({ email: PROFILE.email });
+    await user.type(await screen.findByLabelText(/confirmation code/i), "75324744");
+    await user.click(screen.getByRole("button", { name: "Confirm email" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/couldn't finish confirming/i);
+    expect(setSession).not.toHaveBeenCalled();
+    expect(screen.getByLabelText(/confirmation code/i)).toBeInTheDocument();
+    await waitFor(() => expect(disposeIsolatedAuthClient).toHaveBeenCalled());
+    expect(recoverySignOut).toHaveBeenCalledWith({ scope: "local" });
+  });
+
   it("adopts the link's session and opens onboarding when there is no business yet", async () => {
     apiPost.mockResolvedValue({ data: { message: "Your email is confirmed.", profile: PROFILE, needsOnboarding: true } });
 
@@ -164,11 +221,24 @@ describe("ConfirmEmail", () => {
 
     renderConfirm();
 
-    expect(await screen.findByRole("button", { name: "Send a new link" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Send a new code" })).toBeInTheDocument();
     expect(screen.getByText(/That link has expired/)).toBeInTheDocument();
     expect(setSession).not.toHaveBeenCalled();
     expect(apiPost).not.toHaveBeenCalled();
     expect(screen.getByTestId("path")).toHaveTextContent("/auth/confirm");
+  });
+
+  it("opens the code form after resending from an expired legacy link", async () => {
+    setLinkUrl("#error=access_denied&error_code=otp_expired");
+    apiPost.mockResolvedValue({ data: { message: "If eligible, a code is on its way." } });
+    const user = userEvent.setup();
+    renderConfirm();
+    await user.type(await screen.findByLabelText(/^email/i), PROFILE.email);
+    await user.click(screen.getByRole("button", { name: "Send a new code" }));
+    expect(await screen.findByLabelText(/confirmation code/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /resend code in/i })).toBeDisabled();
+    expect(apiPost).toHaveBeenCalledWith("/auth/resend-verification", { email: PROFILE.email, platform: "web" });
+    expect(setSession).not.toHaveBeenCalled();
   });
 
   it("keeps the recovery screen when the backend refuses an already-used link", async () => {
@@ -176,7 +246,7 @@ describe("ConfirmEmail", () => {
 
     renderConfirm();
 
-    expect(await screen.findByRole("button", { name: "Send a new link" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Send a new code" })).toBeInTheDocument();
     expect(setSession).not.toHaveBeenCalled();
   });
 
@@ -193,16 +263,17 @@ describe("ConfirmEmail", () => {
     renderConfirm();
 
     await atPath("/dashboard");
-    expect(screen.queryByRole("button", { name: "Send a new link" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send a new code" })).not.toBeInTheDocument();
     expect(apiPost).not.toHaveBeenCalled();
   });
 
-  it("shows the recovery screen for a bare visit with no session", async () => {
+  it("shows the verification-code form for a bare visit with no session", async () => {
     setLinkUrl("");
 
     renderConfirm();
 
-    expect(await screen.findByRole("button", { name: "Send a new link" })).toBeInTheDocument();
+    expect(await screen.findByLabelText(/confirmation code/i)).toBeInTheDocument();
+    expect(setSession).not.toHaveBeenCalled();
   });
 
   it("hands off to the app with an opaque code, never the refresh token", async () => {

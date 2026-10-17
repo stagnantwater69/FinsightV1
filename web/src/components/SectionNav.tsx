@@ -67,7 +67,7 @@ export function SectionNav({
                       : "text-ink-600 hover:bg-tint-brand hover:text-tone-brand"
                   }`}
                 >
-                  <Icon aria-hidden className="size-4" strokeWidth={1.9} />
+                  <Icon aria-hidden className="size-4" />
                   {item.label}
                 </a>
               </li>

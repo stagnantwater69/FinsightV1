@@ -3,6 +3,7 @@ import { EmptyState } from "./EmptyState";
 import { ButtonLink } from "./Button";
 import { Money } from "./Money";
 import { Panel, Pill } from "./ui";
+import { ListDisclosureControl, useListDisclosure } from "./ListDisclosure";
 import type { RecurringDueState, RecurringSchedule } from "../lib/types";
 
 /**
@@ -144,7 +145,40 @@ function ScheduleRow({ schedule }: { schedule: RecurringSchedule }) {
   );
 }
 
-export function RecurringAgenda({ schedules }: { schedules: RecurringSchedule[] }) {
+function ScheduleGroupSection({ group, resetKey }: {
+  group: ScheduleGroup;
+  resetKey: string;
+}) {
+  const disclosure = useListDisclosure({ total: group.items.length, resetKey });
+
+  return (
+    <section aria-label={group.label}>
+      <h3 className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.13em] text-ink-500">
+        {group.label}
+        <span className="figure font-semibold normal-case tracking-normal">
+          {group.items.length}
+        </span>
+      </h3>
+      <p className="mb-2 mt-0.5 text-xs text-ink-500">{group.caption}</p>
+      <ul id={disclosure.contentId} className="space-y-2">
+        {group.items.slice(0, disclosure.visibleCount).map((schedule) => (
+          <ScheduleRow key={schedule.id} schedule={schedule} />
+        ))}
+      </ul>
+      <ListDisclosureControl
+        disclosure={disclosure}
+        total={group.items.length}
+        itemLabel={`${group.label.toLowerCase()} payments`}
+        className="mt-3"
+      />
+    </section>
+  );
+}
+
+export function RecurringAgenda({ schedules, resetKey }: {
+  schedules: RecurringSchedule[];
+  resetKey?: string;
+}) {
   const groups = groupSchedulesByDueState(schedules);
   const overdue = overdueScheduleCount(schedules);
 
@@ -184,24 +218,11 @@ export function RecurringAgenda({ schedules }: { schedules: RecurringSchedule[] 
       ) : (
         <div className="space-y-5">
           {groups.map((group) => (
-            <section key={group.key} aria-label={group.label}>
-              <h3 className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.13em] text-ink-500">
-                {group.label}
-                <span className="figure font-semibold normal-case tracking-normal">
-                  {group.items.length}
-                </span>
-              </h3>
-              {/* One line saying what the group MEANS — the same captions
-                  mobile's agenda carries. "Paused" in particular has to say
-                  that FinSight is not watching these, or a row sitting quietly
-                  at the bottom of the list reads as an oversight. */}
-              <p className="mb-2 mt-0.5 text-xs text-ink-500">{group.caption}</p>
-              <ul className="space-y-2">
-                {group.items.map((schedule) => (
-                  <ScheduleRow key={schedule.id} schedule={schedule} />
-                ))}
-              </ul>
-            </section>
+            <ScheduleGroupSection
+              key={group.key}
+              group={group}
+              resetKey={resetKey ?? String(schedules[0]?.businessProfileId ?? "")}
+            />
           ))}
         </div>
       )}

@@ -28,6 +28,8 @@ interface GroupProps {
   update: (key: BusinessTextField, value: string) => void;
   compact?: boolean;
   autoFocus?: boolean;
+  /** Full-width profile settings; setup and compact forms retain their copy. */
+  settings?: boolean;
 }
 
 interface NumbersGroupProps extends GroupProps {
@@ -41,6 +43,7 @@ export function BusinessBasicsFields({
   update,
   compact = false,
   autoFocus = true,
+  settings = false,
 }: GroupProps) {
   /*
    * A type that is not on the list can only have come from "Other" — either
@@ -78,7 +81,9 @@ export function BusinessBasicsFields({
         hint={
           compact
             ? undefined
-            : "Helps FinSight compare you against the right kind of business."
+            : settings
+              ? "Choose a type, or select Other to enter your own."
+              : "Helps FinSight compare you against the right kind of business."
         }
       >
         <SelectInput
@@ -182,6 +187,7 @@ export function BusinessNumbersFields({
   update,
   compact = false,
   existingProfile = false,
+  settings = false,
 }: NumbersGroupProps) {
   return (
     <>
@@ -218,7 +224,9 @@ export function BusinessNumbersFields({
           hint={
             compact
               ? undefined
-              : "Enter your best estimate for a normal month. FinSight uses it until the previous month's expense records are confirmed complete."
+              : settings
+                ? "Used until the previous month’s expense records are confirmed complete."
+                : "Enter your best estimate for a normal month. FinSight uses it until the previous month's expense records are confirmed complete."
           }
         >
           <MoneyInput
@@ -241,7 +249,9 @@ export function BusinessNumbersFields({
           hint={
             compact
               ? undefined
-              : "How many days a month the business is actually open. Used to spread your target across the days you can actually sell."
+              : settings
+                ? "Open days in a normal month. Your daily target is spread across these days."
+                : "How many days a month the business is actually open. Used to spread your target across the days you can actually sell."
           }
         >
           <TextInput
@@ -275,7 +285,9 @@ export function BusinessNumbersFields({
           hint={
             compact
               ? undefined
-              : "Expenses this big get set aside for review. FinSight suggests an amount from your starting monthly estimate, and you can change it anytime."
+              : settings
+                ? "Larger expenses are flagged for review. The suggested amount comes from your monthly estimate."
+                : "Expenses this big get set aside for review. FinSight suggests an amount from your starting monthly estimate, and you can change it anytime."
           }
         >
           <MoneyInput

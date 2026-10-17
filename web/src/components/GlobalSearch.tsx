@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
+import { getErrorMessage } from "../lib/errors";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
 import { useAiChat } from "../context/AiChatContext";
@@ -102,8 +103,11 @@ export function GlobalSearch({ className = "" }: { className?: string }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
-  const [records, setRecords] = useState<RecordItem[]>([]);
+  const [recordResult, setRecordResult] = useState<{ query: string; items: RecordItem[] } | null>(null);
   const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<{ query: string; message: string } | null>(null);
+  const [searchAttempt, setSearchAttempt] = useState(0);
+  const searchId = useId();
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -111,11 +115,14 @@ export function GlobalSearch({ className = "" }: { className?: string }) {
 
   const trimmed = query.trim();
   const debounced = useDebounced(trimmed, 220);
+  const businessProfileId = selected?.id;
+  const records = useMemo(() => recordResult?.query === trimmed ? recordResult.items : [], [recordResult, trimmed]);
 
   // ---- remote: records ----
   useEffect(() => {
-    if (!selected || debounced.length < 2) {
-      setRecords([]);
+    if (businessProfileId === undefined || debounced.length < 2) {
+      setRecordResult(null);
+      setSearchError(null);
       setSearching(false);
       return;
     }
@@ -123,21 +130,23 @@ export function GlobalSearch({ className = "" }: { className?: string }) {
     // stops the browser holding open a request whose answer is already stale.
     const controller = new AbortController();
     setSearching(true);
+    setSearchError(null);
     api
       .get<{ items: RecordItem[]; nextCursor: string | null }>("/records/search", {
-        params: { businessProfileId: selected.id, type: "all", keyword: debounced, limit: 6 },
+        params: { businessProfileId, type: "all", keyword: debounced, limit: 6 },
         signal: controller.signal,
       })
-      .then(({ data }) => setRecords(data.items))
-      .catch(() => {
-        // A failed record search shouldn't blank the local results that are
-        // already on screen and already useful.
+      .then(({ data }) => {
+        if (!controller.signal.aborted) setRecordResult({ query: debounced, items: data.items });
+      })
+      .catch((err) => {
+        if (!controller.signal.aborted) setSearchError({ query: debounced, message: getErrorMessage(err) });
       })
       .finally(() => {
         if (!controller.signal.aborted) setSearching(false);
       });
     return () => controller.abort();
-  }, [debounced, selected]);
+  }, [debounced, businessProfileId, searchAttempt]);
 
   // ---- assemble ----
   const results = useMemo<Result[]>(() => {
@@ -290,7 +299,7 @@ export function GlobalSearch({ className = "" }: { className?: string }) {
   }
 
   const showPanel = open && trimmed.length > 0;
-  const listboxId = "global-search-results";
+  const listboxId = `${searchId}-results`;
 
   return (
     <div ref={wrapRef} className={`relative ${className}`}>
@@ -305,7 +314,7 @@ export function GlobalSearch({ className = "" }: { className?: string }) {
           aria-expanded={showPanel}
           aria-controls={listboxId}
           aria-autocomplete="list"
-          aria-activedescendant={showPanel && results[activeIndex] ? `gs-${activeIndex}` : undefined}
+          aria-activedescendant={showPanel && results[activeIndex] ? `${searchId}-${activeIndex}` : undefined}
           aria-label="Search FinSight"
           value={query}
           onChange={(e) => {
@@ -328,7 +337,7 @@ export function GlobalSearch({ className = "" }: { className?: string }) {
         <div className="absolute left-0 right-0 top-full z-50 mt-2 animate-pop-down overflow-hidden rounded-2xl border border-paper-200 bg-paper shadow-lg">
           {results.length === 0 ? (
             <p className="px-4 py-6 text-center text-sm text-ink-500">
-              {searching ? "Searching…" : <>Nothing matches “{trimmed}”.</>}
+              {searching || trimmed !== debounced ? "Searching…" : searchError?.query === trimmed ? "Record search could not finish." : <>Nothing matches “{trimmed}”.</>}
             </p>
           ) : (
             <ul
@@ -352,7 +361,7 @@ export function GlobalSearch({ className = "" }: { className?: string }) {
                       </div>
                     ) : null}
                     <div
-                      id={`gs-${index}`}
+                      id={`${searchId}-${index}`}
                       role="option"
                       aria-selected={active}
                       data-index={index}
@@ -388,6 +397,12 @@ export function GlobalSearch({ className = "" }: { className?: string }) {
             </ul>
           )}
 
+          {searchError?.query === trimmed ? (
+            <div className="flex flex-wrap items-center gap-2 border-t border-paper-200 px-3 py-2">
+              <p role="alert" className="flex-1 text-xs text-tone-danger">Couldn't search records. {searchError.message}</p>
+              <button type="button" disabled={searching} onClick={() => setSearchAttempt((value) => value + 1)} className="tap rounded-lg px-3 text-xs font-semibold text-tone-brand hover:bg-tint-brand">Retry record search</button>
+            </div>
+          ) : null}
           <div className="flex items-center gap-3 border-t border-paper-200 bg-paper-100 px-3 py-2 text-[11px] text-ink-600">
             <span>
               <b className="font-semibold text-ink-600">↑↓</b> to move

@@ -13,7 +13,8 @@ test("mocked browser: warm Dashboard return reuses the scoped overview cache", a
   let dashboardOverviewRequests = 0;
   let detailOverviewRequests = 0;
   let dashboardSummaryRequests = 0;
-  let recordSearchRequests = 0;
+  let dashboardFeedRequests = 0;
+  let recordListRequests = 0;
   let legacyCoreRequests = 0;
 
   await page.route("**/records/months**", (route) => route.fulfill({ json: { months: ["2026-09"] } }));
@@ -81,7 +82,9 @@ test("mocked browser: warm Dashboard return reuses the scoped overview cache", a
     return route.abort("failed");
   });
   await page.route("**/records/search**", (route) => {
-    recordSearchRequests += 1;
+    const params = new URL(route.request().url()).searchParams;
+    if (params.get("limit") === "6") dashboardFeedRequests += 1;
+    else recordListRequests += 1;
     return route.fulfill({ json: { items: [], nextCursor: null } });
   });
   await page.route("**/records/flagged/count**", (route) => route.fulfill({
@@ -93,13 +96,14 @@ test("mocked browser: warm Dashboard return reuses the scoped overview cache", a
   await page.route("**/insights/recurring-schedules**", (route) => route.fulfill({ json: [] }));
 
   await loginViaUi(page);
-  await page.goto("/dashboard");
+  await page.getByRole("link", { name: "Dashboard", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Dashboard", exact: true })).toBeVisible();
   await expect.poll(() => dashboardOverviewRequests).toBe(1);
+  await expect.poll(() => dashboardFeedRequests).toBe(1);
 
   await page.getByRole("link", { name: "Records", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Records", exact: true })).toBeVisible();
-  await expect.poll(() => recordSearchRequests).toBe(1);
+  await expect.poll(() => recordListRequests).toBe(1);
 
   await page.getByRole("button", { name: "Insights", exact: true }).click();
   await page.getByRole("link", { name: "Expense insight", exact: true }).click();
@@ -132,6 +136,7 @@ test("mocked browser: warm Dashboard return reuses the scoped overview cache", a
   expect(dashboardOverviewRequests).toBe(1);
   expect(detailOverviewRequests).toBe(1);
   expect(dashboardSummaryRequests).toBe(1);
-  expect(recordSearchRequests).toBe(1);
+  expect(dashboardFeedRequests).toBe(1);
+  expect(recordListRequests).toBe(1);
   expect(legacyCoreRequests).toBe(0);
 });

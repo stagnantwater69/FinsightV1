@@ -7,6 +7,8 @@ import { AddExpense } from "./AddExpense";
 
 const mocks = vi.hoisted(() => ({ post: vi.fn(), selected: { id: 1 }, remember: vi.fn() }));
 vi.mock("../lib/api", () => ({ api: { post: mocks.post } }));
+vi.mock("../context/AuthContext", () => ({ useAuth: () => ({ profile: { id: 17 } }) }));
+vi.mock("../lib/useManualRecordCreate", () => ({ useManualRecordCreate: () => ({ loading: false, busy: false, frozen: false, pending: null, error: null, ownerId: 17 }) }));
 vi.mock("../context/BusinessProfileContext", () => ({ useBusinessProfiles: () => ({ selected: mocks.selected }) }));
 vi.mock("../context/ExpenseCategoryContext", () => ({ useExpenseCategories: () => ({
   categories: [{ id: 2, name: "Supplies" }, { id: 3, name: "Utilities" }], loading: false,

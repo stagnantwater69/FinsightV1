@@ -47,7 +47,7 @@ function GuidancePanel() {
       <div className="flex flex-wrap items-start justify-between gap-5 bg-brand-900 px-5 py-5 sm:px-6 sm:py-6">
         <div className="min-w-0">
           <span className="mb-4 flex size-10 items-center justify-center rounded-xl bg-white/10 text-brand-100">
-            <Sparkles size={19} aria-hidden />
+            <Sparkles size={20} aria-hidden />
           </span>
           <h2 className="font-display text-lg font-semibold text-white">
             Guidance and learning
@@ -128,7 +128,7 @@ function GuidedTourSettingContent({ tour }: { tour: TourContextValue }) {
       <SettingHeading
         id="guided-tour-heading"
         tone="info"
-        icon={<GraduationCap size={19} aria-hidden />}
+        icon={<GraduationCap size={20} aria-hidden />}
         title="Guided Tour"
         description="Revisit the walkthrough or make it appear automatically whenever you sign in."
       />
@@ -199,7 +199,7 @@ function AppearancePanel() {
     <Card className="p-5 sm:p-6">
       <div className="mb-5 flex items-start gap-3">
         <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-tint-brand text-tone-brand">
-          <Palette size={19} aria-hidden />
+          <Palette size={20} aria-hidden />
         </span>
         <div>
           <h2 className="text-base font-semibold text-ink-900">Appearance</h2>
@@ -226,7 +226,7 @@ function PreferenceDetailsPanel() {
     <Card className="p-5 sm:p-6">
       <div className="mb-5 flex items-start gap-3">
         <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-tint-neutral text-tone-neutral">
-          <Info size={19} aria-hidden />
+          <Info size={20} aria-hidden />
         </span>
         <div>
           <h2 className="text-base font-semibold text-ink-900">
