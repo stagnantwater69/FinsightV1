@@ -86,11 +86,10 @@ jobs:
         working-directory: backend
         env:
           DATABASE_URL: postgresql://testuser:testpass@localhost:55432/finsight_test
-      # Web and mobile each carry a copy of the shared API types. The script
-      # only compares exported NAMES (the contract tests below cover shapes),
-      # but it was never wired into CI and drifted to 16 mismatches
-      # (CONTRACT-01). Exemptions live in the script with a reason each.
+      # Compare shared API data shapes and verify the checker's regression fixtures.
       - run: node scripts/check-type-parity.mjs
+      - run: node --test scripts/check-type-parity.test.mjs
+      - run: node --test scripts/development-checkpoint.test.mjs
       - run: npm run typecheck --prefix backend
       - run: npm run lint --prefix backend
       # Compiles the actual production artifact (dist/) that Dockerfile's
@@ -502,6 +501,61 @@ jobs:
         run: docker logs finsight-backend-smoke || true
       - if: always()
         run: docker rm -f finsight-backend-smoke || true
+
+  browser-local-api:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: finsight_test
+        ports: ["55434:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - run: npm ci --prefix backend
+      - run: npm ci --prefix web
+      - run: npm exec --prefix web -- playwright install --with-deps chromium
+      - run: npm run prisma:generate --prefix backend
+      - name: Verify browser journeys against the local API and database
+        run: npm run test:browser-api --prefix backend
+        env:
+          NODE_ENV: "development"
+          FINSIGHT_LOCAL_API_BROWSER: "1"
+          DATABASE_URL: postgresql://testuser:testpass@127.0.0.1:55434/finsight_test
+          DIRECT_URL: postgresql://testuser:testpass@127.0.0.1:55434/finsight_test
+          FINSIGHT_VERIFICATION_OUTPUT: ${{ runner.temp }}
+
+  ml-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - run: python -m venv ml/.venv
+      - run: ml/.venv/bin/python -m pip install -r ml/requirements.txt
+      - run: ml/.venv/bin/python -m pip check
+      - run: npm ci --prefix backend
+      - name: Verify real Python worker HTTP contract
+        run: npm run test:ml-contract --prefix backend
+        env:
+          FINSIGHT_REQUIRE_ML_WORKER_CONTRACT: "1"
+          FINSIGHT_ML_CONTRACT_PYTHON: ${{ github.workspace }}/ml/.venv/bin/python
 
   ml:
     runs-on: ubuntu-24.04

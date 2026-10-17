@@ -1,39 +1,18 @@
 #!/usr/bin/env node
-// Tripwire for web/mobile API-contract drift. The two clients hand-copy the
-// same server contracts (no shared codegen yet), and that copying has silently
-// broken before: see the audit that found mobile missing
-// RecordOriginItem/RecordOrigin/RecordDetail entirely, and the Phase 2 review
-// that found the receipt-scan contracts living outside this script's reach.
-//
-// This does NOT type-check field shapes. It only catches the loudest signal:
-// an exported type/interface that exists on one side and not the other.
-//
-// Three lists per group:
-//   - web/mobile: the files whose exported names are compared.
-//   - exempt: names deliberately present on only one side (platform-only UI
-//     state or helpers). Each entry carries its reason.
-//   - knownDrift: names that ARE a contract mismatch today, recorded here so
-//     the script still passes while the owning client fixes them. They are
-//     printed on every run and the script FAILS if an entry goes stale (the
-//     name now exists on both sides), so this list can only shrink.
-
-import { readFileSync } from "node:fs";
+// Compare hand-copied API data contracts, including imported and inherited fields.
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { inspectContracts, shapeDifferences } from "./type-parity.mjs";
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
-const GROUPS = [
+export const GROUPS = [
   {
     name: "shared API types",
     web: ["web/src/lib/types.ts"],
     mobile: ["mobile/src/lib/types.ts"],
     exempt: {
-      // Mobile-only: backend/src/routes/dashboard.routes.ts exposes GET
-      // /dashboard/cashflow (backend/src/services/dashboard.service.ts) and
-      // mobile's DashboardScreen/charts.tsx actually renders it. Web has no
-      // code path that calls this endpoint, so there's nothing on the web side
-      // to keep these in sync with; porting them would be dead types.
+      // Only mobile calls the cashflow endpoint.
       CashflowGranularity: "mobile-only: web never calls GET /dashboard/cashflow",
       CashflowPoint: "mobile-only: web never calls GET /dashboard/cashflow",
       DashboardCashflow: "mobile-only: web never calls GET /dashboard/cashflow",
@@ -45,10 +24,17 @@ const GROUPS = [
     web: ["web/src/pages/scanReceipt/types.ts"],
     mobile: [
       "mobile/src/screens/records/scanReceipt/types.ts",
-      // Mobile keeps the duplicate-candidate contract in its own module; web
-      // keeps the same names in scanReceipt/types.ts.
+      // Mobile keeps duplicate-review types in a separate module.
       "mobile/src/screens/records/scanReceipt/duplicateReview.ts",
     ],
+    shapeExempt: {
+      ReceiptScanResult: "screen-specific response projections; shared items, batches and history are checked separately",
+      ReceiptPageEvidence: "mobile narrows processingMode to its capture modes; web retains server strings",
+      ReceiptPageImage: "mobile refines the label through ReceiptPageEvidenceVariant; web retains server strings",
+      ReceiptDuplicateCandidate: "mobile validates forward-compatible reason strings; web names the current reason vocabulary",
+      ReceiptDuplicateReview: "mobile's parsed review requires a valid non-null fingerprint",
+      ReceiptDuplicateCandidatePage: "mobile's parsed page retains validated fingerprint and cursor fields",
+    },
     exempt: {
       // Web-only screen state, never sent to or received from the server.
       AddedItem: "web-only: client-side line the owner adds before Confirm",
@@ -66,75 +52,94 @@ const GROUPS = [
     name: "receipt provider consent",
     web: ["web/src/lib/receiptProviderConsent.ts"],
     mobile: ["mobile/src/lib/receiptProviderConsent.ts"],
+    shapeExempt: {
+      ReceiptProviderTerms: "mobile's parser validates the exact data-class tuple",
+      ActiveReceiptProviderConsent: "mobile's parser narrows provider, training policy and data classes",
+      ReceiptProviderConsentState: "mobile normalizes defaults and retains only validated active consent",
+      ReceiptProviderConsentGrant: "mobile constructs an exact data-class tuple; web uses the offered array",
+    },
     exempt: {},
     knownDrift: {},
   },
 ];
 
-function exportedNames(relativePaths) {
-  const names = new Set();
-  const re = /^export\s+(?:interface|type)\s+([A-Za-z0-9_]+)/gm;
-  for (const relativePath of relativePaths) {
-    const src = readFileSync(path.join(repoRoot, relativePath), "utf8");
-    let match;
-    while ((match = re.exec(src)) !== null) {
-      names.add(match[1]);
+export function checkParity(groups = GROUPS, root = repoRoot, log = console) {
+  const paths = (files) => files.map((file) => path.join(root, file));
+  const inspector = inspectContracts(groups.flatMap((group) => paths([...group.web, ...group.mobile])));
+  let failed = false;
+  for (const group of groups) {
+    const webTypes = inspector.exportsFrom(paths(group.web));
+    const mobileTypes = inspector.exportsFrom(paths(group.mobile));
+    const webNames = new Set(webTypes.keys());
+    const mobileNames = new Set(mobileTypes.keys());
+    const exempt = new Set(Object.keys(group.exempt));
+    const drift = group.knownDrift;
+
+    const onlyInWeb = [...webNames].filter((name) => !mobileNames.has(name) && !exempt.has(name));
+    const onlyInMobile = [...mobileNames].filter((name) => !webNames.has(name) && !exempt.has(name));
+    const matched = [...webNames].filter((name) => mobileNames.has(name)).length;
+    const staleDrift = Object.keys(drift).filter((name) => webNames.has(name) && mobileNames.has(name));
+    const newInWeb = onlyInWeb.filter((name) => !(name in drift));
+    const newInMobile = onlyInMobile.filter((name) => !(name in drift));
+    const recordedDrift = [...onlyInWeb, ...onlyInMobile].filter((name) => name in drift);
+
+    log.log(
+      `check-type-parity [${group.name}]: ${matched} exported types match on both sides` +
+        (recordedDrift.length ? `, ${recordedDrift.length} recorded drift entries still open.` : "."),
+    );
+    for (const name of recordedDrift) log.log(`  drift: ${name}: ${drift[name]}`);
+    if (staleDrift.length) {
+      failed = true;
+      log.error(`\n[${group.name}] knownDrift entries now present on both sides, remove them from scripts/check-type-parity.mjs:`);
+      for (const name of staleDrift) log.error(`  - ${name}`);
     }
+    if (newInWeb.length) {
+      failed = true;
+      log.error(`\n[${group.name}] exported from ${group.web.join(", ")} but missing from ${group.mobile.join(", ")}:`);
+      for (const name of newInWeb) log.error(`  - ${name}`);
+    }
+    if (newInMobile.length) {
+      failed = true;
+      log.error(`\n[${group.name}] exported from ${group.mobile.join(", ")} but missing from ${group.web.join(", ")}:`);
+      for (const name of newInMobile) log.error(`  - ${name}`);
+    }
+    let compared = 0;
+    for (const name of [...webNames].filter((name) => mobileNames.has(name)).sort()) {
+      try {
+        const differences = shapeDifferences(inspector.shapeOf(webTypes.get(name)), inspector.shapeOf(mobileTypes.get(name)), name);
+        if (group.shapeExempt?.[name]) {
+          log.log(`  name-only: ${name}: ${group.shapeExempt[name]}`);
+          if (!differences.length) {
+            failed = true;
+            log.error(`  [${group.name}] ${name}: shape exemption is stale; remove it`);
+          }
+          continue;
+        }
+        compared += 1;
+        if (differences.length) {
+          failed = true;
+          for (const difference of differences) log.error(`  [${group.name}] ${difference}`);
+        }
+      } catch (error) {
+        failed = true;
+        log.error(`  [${group.name}] ${error.message}`);
+      }
+    }
+    log.log(`check-type-parity [${group.name}]: ${compared} data shapes checked.`);
   }
-  return names;
+  return !failed;
 }
 
-let failed = false;
-
-for (const group of GROUPS) {
-  const webNames = exportedNames(group.web);
-  const mobileNames = exportedNames(group.mobile);
-  const exempt = new Set(Object.keys(group.exempt));
-  const drift = group.knownDrift;
-
-  const onlyInWeb = [...webNames].filter((n) => !mobileNames.has(n) && !exempt.has(n));
-  const onlyInMobile = [...mobileNames].filter((n) => !webNames.has(n) && !exempt.has(n));
-  const matched = [...webNames].filter((n) => mobileNames.has(n)).length;
-
-  const staleDrift = Object.keys(drift).filter((n) => webNames.has(n) && mobileNames.has(n));
-  const newInWeb = onlyInWeb.filter((n) => !(n in drift));
-  const newInMobile = onlyInMobile.filter((n) => !(n in drift));
-  const recordedDrift = [...onlyInWeb, ...onlyInMobile].filter((n) => n in drift);
-
-  console.log(
-    `check-type-parity [${group.name}]: ${matched} exported types match on both sides` +
-      (recordedDrift.length > 0 ? `, ${recordedDrift.length} recorded drift entries still open.` : "."),
-  );
-  for (const n of recordedDrift) {
-    console.log(`  drift: ${n}: ${drift[n]}`);
-  }
-
-  if (staleDrift.length > 0) {
-    failed = true;
-    console.error(`\n[${group.name}] knownDrift entries now present on both sides, remove them from scripts/check-type-parity.mjs:`);
-    for (const n of staleDrift) console.error(`  - ${n}`);
-  }
-  if (newInWeb.length > 0) {
-    failed = true;
-    console.error(`\n[${group.name}] exported from ${group.web.join(", ")} but missing from ${group.mobile.join(", ")}:`);
-    for (const n of newInWeb) console.error(`  - ${n}`);
-  }
-  if (newInMobile.length > 0) {
-    failed = true;
-    console.error(`\n[${group.name}] exported from ${group.mobile.join(", ")} but missing from ${group.web.join(", ")}:`);
-    for (const n of newInMobile) console.error(`  - ${n}`);
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  if (process.argv.includes("--help")) {
+    console.log("Usage: node scripts/check-type-parity.mjs\nChecks exported API names and recursive TypeScript data shapes. Uses backend's installed TypeScript; no root install.\nSelf-tests: node --test scripts/check-type-parity.test.mjs");
+  } else {
+    try {
+      process.exitCode = checkParity() ? 0 : 1;
+    } catch (error) {
+      console.error(`check-type-parity: ${error.message}`);
+      process.exitCode = 1;
+    }
+    if (process.exitCode === 1) console.error("\nAlign API fields on both clients. Platform-only exported names require a documented exemption; do not add knownDrift entries to silence mismatches.");
   }
 }
-
-if (!failed) {
-  process.exit(0);
-}
-
-console.error(
-  "\nIf this is intentional (a platform-only type), add it to that group's exempt " +
-    "table in scripts/check-type-parity.mjs with a reason. Otherwise, port the " +
-    "missing type across, see CLAUDE.md's hard rules and the mobile/types.ts " +
-    "banner comment for the sync convention. Do not add new knownDrift entries " +
-    "to make a new mismatch pass.",
-);
-process.exit(1);
