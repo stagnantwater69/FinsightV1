@@ -45,7 +45,10 @@ export const DEFAULT_DETECTION_CONFIG: Readonly<DetectionConfig> = Object.freeze
   notificationMinimumSeverity: "HIGH",
 });
 
-export function detectionConfig(overrides: Partial<DetectionConfig> = {}): DetectionConfig {
+/** Flags merge over the defaults one by one, so an override names only the flags it changes. */
+export function detectionConfig(
+  overrides: Omit<Partial<DetectionConfig>, "featureFlags"> & { featureFlags?: Partial<DetectionFeatureFlags> } = {},
+): DetectionConfig {
   return {
     ...DEFAULT_DETECTION_CONFIG,
     ...overrides,
