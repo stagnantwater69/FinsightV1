@@ -28,11 +28,26 @@ export async function runOwnedProcess(command: string, args: string[], options: 
         } else { process.kill(-child.pid, "SIGKILL"); }
       } catch (error) { if (!ended) throw error; }
       if (!await wait(2_000)) throw new Error("Owned browser process tree did not terminate");
+      // The group leader closing does not mean its descendants are reaped yet.
+      if (process.platform !== "win32" && !await groupGone(child.pid, 2_000)) {
+        throw new Error("Owned browser process tree did not terminate");
+      }
     }
   }
   const exit = await closed;
   if (spawnError) throw spawnError;
   return { exit, output, timedOut };
+}
+
+async function groupGone(pgid: number, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try { process.kill(-pgid, 0); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
+    }
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
 }
 
 export async function cleanOwnedResources(steps: (() => Promise<unknown>)[]) {
