@@ -1,26 +1,12 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-
-/**
- * TS↔Python contract test: drives the REAL sidecar (ml/worker/server.py)
- * with the real pinned venv, over real HTTP. This is the test that fails when
- * either side drifts from if-contract-v1 — the integration tests mock the
- * client precisely because this file covers the wire.
- *
- * Skipped (loudly, not silently green) when the ml venv has not been created;
- * CI and dev machines create it with:
- *   python3 -m venv ml/.venv && ml/.venv/bin/pip install -r ml/requirements.txt
- */
+import { checkWorkerPrerequisites, startOwnedWorker, withinWorkerStartupBudget, workerEnvironment, WORKER_BOOTSTRAP } from "../support/mlWorkerHarness";
 
 const REPO_ROOT = path.resolve(__dirname, "../../..");
-const PYTHON = path.join(REPO_ROOT, "ml/.venv/bin/python");
-const SERVER = path.join(REPO_ROOT, "ml/worker/server.py");
-const PORT = 8399;
-const BASE = `http://127.0.0.1:${PORT}`;
-
-const available = existsSync(PYTHON) && existsSync(SERVER);
+const environment = workerEnvironment(REPO_ROOT);
+const skipMissing = !environment.available && !environment.required;
+let base: string;
 
 function request(rows: number, overrides: Record<string, unknown> = {}) {
   return {
@@ -36,41 +22,37 @@ function request(rows: number, overrides: Record<string, unknown> = {}) {
 }
 
 async function post(body: unknown) {
-  const response = await fetch(`${BASE}/score`, {
+  const response = await fetch(`${base}/score`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10_000),
   });
   return { status: response.status, json: await response.json() };
 }
 
-describe.skipIf(!available)("ml worker contract (if-contract-v1)", () => {
-  let worker: ChildProcess;
+describe.skipIf(skipMissing)("ml worker contract (if-contract-v1)", () => {
+  let worker: Awaited<ReturnType<typeof startOwnedWorker>> | undefined;
 
   beforeAll(async () => {
-    worker = spawn(PYTHON, [SERVER, "--port", String(PORT)], { stdio: "ignore" });
-    const deadline = Date.now() + 15_000;
-    // Poll health until the interpreter has imported sklearn and bound the port.
-    for (;;) {
-      try {
-        const health = await fetch(`${BASE}/health`);
-        if (health.ok) break;
-      } catch {
-        /* not up yet */
-      }
-      if (Date.now() > deadline) throw new Error("ml worker did not become healthy in 15s");
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
+    worker = await withinWorkerStartupBudget(
+      () => { checkWorkerPrerequisites(environment); },
+      (remainingMs) => startOwnedWorker(environment.python,
+        (nonce) => ["-u", "-c", WORKER_BOOTSTRAP, environment.server, nonce], remainingMs),
+    );
+    base = worker.base;
   }, 20_000);
 
-  afterAll(() => {
-    worker?.kill();
+  afterAll(async () => {
+    await worker?.stop();
   });
 
   it("reports its versions on /health", async () => {
-    const health = await (await fetch(`${BASE}/health`)).json();
+    const health = await (await fetch(`${base}/health`, { signal: AbortSignal.timeout(5_000) })).json();
     expect(health).toMatchObject({ status: "ok", contractVersion: "if-contract-v1", modelVersion: "iforest-v1" });
-    expect(health.sklearnVersion).toBeTruthy();
+    const versions = checkWorkerPrerequisites(environment);
+    expect(health.sklearnVersion).toBe(versions.sklearn);
+    expect(health.numpyVersion).toBe(versions.numpy);
   });
 
   it("scores a valid batch with one entry per row, ids preserved", async () => {
@@ -121,20 +103,43 @@ describe.skipIf(!available)("ml worker contract (if-contract-v1)", () => {
   });
 
   it("rejects oversized bodies with 413", async () => {
-    const huge = { padding: "x".repeat(1_100_000) };
-    const response = await fetch(`${BASE}/score`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(huge),
+    const huge = JSON.stringify({ padding: "x".repeat(1_100_000) });
+    const result = await new Promise<{ status: number | undefined; body: string; continued: boolean }>((resolve, reject) => {
+      let continued = false;
+      const upload = httpRequest(`${base}/score`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(huge),
+          Expect: "100-continue",
+        },
+      }, (response) => {
+        let body = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk: string) => {
+          body += chunk;
+          if (body.length > 16_384) upload.destroy(new Error("Worker rejection response exceeded expected bounds"));
+        });
+        response.on("end", () => {
+          upload.destroy();
+          resolve({ status: response.statusCode, body, continued });
+        });
+        response.on("error", reject);
+      });
+      upload.on("error", reject);
+      upload.on("continue", () => { continued = true; upload.end(huge); });
+      upload.setTimeout(10_000, () => upload.destroy(new Error("Oversized worker request timed out")));
+      // Wait for acceptance before writing; early 413 otherwise races a Windows TCP reset.
+      upload.flushHeaders();
     });
-    expect(response.status).toBe(413);
+    expect(result.status).toBe(413);
+    expect(result.continued).toBe(false);
+    expect(JSON.parse(result.body)).toEqual({ error: "body must be 1..1000000 bytes" });
   });
 });
 
-// When the venv is absent we still want the suite to say so rather than
-// silently passing an empty file.
-describe.skipIf(available)("ml worker contract (environment)", () => {
-  it("is skipped because ml/.venv is not set up (see ml/README.md)", () => {
-    expect(available).toBe(false);
+if (skipMissing) describe("ml worker contract (environment)", () => {
+  it("reports unavailable pinned Python; strict verification requires FINSIGHT_REQUIRE_ML_WORKER_CONTRACT=1", () => {
+    expect(environment.available).toBe(false);
   });
 });

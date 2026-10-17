@@ -4,6 +4,7 @@ import * as expenseRecordService from "../services/expenseRecord.service";
 import * as salesRecordService from "../services/salesRecord.service";
 import * as recordMonthsService from "../services/recordMonths.service";
 import * as futureDatedRecordsService from "../services/futureDatedRecords.service";
+import * as recordPositionService from "../services/recordPosition.service";
 import {
   DEFAULT_RECORD_SORT,
   RECORD_SORTS,
@@ -39,6 +40,15 @@ const searchQuerySchema = z.object({
    */
   sort: z.enum(RECORD_SORTS).default(DEFAULT_RECORD_SORT),
   cursor: z.string().max(500).optional(),
+  /**
+   * Start the page this many records in, instead of at `cursor`. Lets a client
+   * jump to a numbered page (the last of 6,417, say) in one request rather than
+   * walking the cursor chain to it. Ignored when `cursor` is present. The
+   * response then carries `cursor`, the cursor that opens this page, so the
+   * client can page on from it with plain cursors.
+   */
+  offset: z.coerce.number().int().min(0).max(10_000_000).optional(),
+  includeTotal: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
 });
 
 /**
@@ -145,7 +155,7 @@ export async function search(req: Request, res: Response) {
   const query = searchQuerySchema.parse(req.query);
   const userId = req.user!.id;
   const sort = query.sort;
-  const cursor = decodeCursor(query.cursor, sort);
+  let cursor = decodeCursor(query.cursor, sort);
   const common = { take: query.limit + 1, sort };
   const cursorFor = (side: "expense" | "sales") =>
     cursor
@@ -165,16 +175,56 @@ export async function search(req: Request, res: Response) {
         }
       : undefined;
 
-  const [expenses, sales] = await Promise.all([
-    query.type !== "sales"
+  const expenseFilters = {
+    businessProfileId: query.businessProfileId,
+    categoryId: query.categoryId,
+    dateFrom: query.dateFrom,
+    dateTo: query.dateTo,
+    keyword: query.keyword,
+    source: query.source,
+    importBatchId: query.importBatchId,
+  };
+  const salesFilters = {
+    businessProfileId: query.businessProfileId,
+    dateFrom: query.dateFrom,
+    dateTo: query.dateTo,
+    keyword: query.keyword,
+    source: query.source === "RECEIPT_SCAN" ? undefined : query.source,
+    importBatchId: query.importBatchId,
+  };
+  const includeExpenses = query.type !== "sales";
+  const includeSales = query.type !== "expense" && query.source !== "RECEIPT_SCAN" && query.categoryId === undefined;
+
+  // A jump: the record just before `offset` is exactly what the previous page
+  // would have ended on, so its cursor opens the requested page.
+  let pageCursor: string | undefined;
+  if (!cursor && query.offset !== undefined && query.offset > 0) {
+    const boundary = await recordPositionService.findRecordAtPosition(userId, {
+      ...expenseFilters,
+      source: query.source,
+    }, { includeExpenses, includeSales, sort, offset: query.offset! - 1 });
+    if (!boundary) {
+      const totalCount = query.includeTotal
+        ? (includeExpenses ? await expenseRecordService.countSearchExpenseRecords(userId, expenseFilters) : 0) +
+          (includeSales ? await salesRecordService.countSearchSalesRecords(userId, salesFilters) : 0)
+        : undefined;
+      res.status(200).json({ items: [], nextCursor: null, cursor: null, ...(totalCount !== undefined ? { totalCount } : {}) });
+      return;
+    }
+    pageCursor = encodeCursor(boundary, sort);
+    cursor = {
+      date: boundary.date.toISOString(),
+      amount: recordSortField(sort) === "amount" ? boundary.amount.toFixed(2) : undefined,
+      type: boundary.type,
+      id: boundary.id,
+      sort,
+    };
+  }
+
+  const [expenses, sales, expenseTotal, salesTotal] = await Promise.all([
+    includeExpenses
       ? expenseRecordService.searchExpenseRecords(userId, {
-          businessProfileId: query.businessProfileId,
-          categoryId: query.categoryId,
-          dateFrom: query.dateFrom,
-          dateTo: query.dateTo,
-          keyword: query.keyword,
-          source: query.source,
-          importBatchId: query.importBatchId,
+          ...expenseFilters,
           ...common,
           cursor: cursorFor("expense"),
         })
@@ -186,18 +236,19 @@ export async function search(req: Request, res: Response) {
     //  - categoryId: the sales table has no category column at all. Running the
     //    query anyway returned the entire sales ledger alongside the one
     //    category the owner asked for, which is what FUN-010 reported.
-    query.type !== "expense" && query.source !== "RECEIPT_SCAN" && query.categoryId === undefined
+    includeSales
       ? salesRecordService.searchSalesRecords(userId, {
-          businessProfileId: query.businessProfileId,
-          dateFrom: query.dateFrom,
-          dateTo: query.dateTo,
-          keyword: query.keyword,
-          source: query.source,
-          importBatchId: query.importBatchId,
+          ...salesFilters,
           ...common,
           cursor: cursorFor("sales"),
         })
       : Promise.resolve([]),
+    query.includeTotal && includeExpenses
+      ? expenseRecordService.countSearchExpenseRecords(userId, expenseFilters)
+      : Promise.resolve(0),
+    query.includeTotal && includeSales
+      ? salesRecordService.countSearchSalesRecords(userId, salesFilters)
+      : Promise.resolve(0),
   ]);
 
   // Each half over-fetched by one, so a merged length past the page size still
@@ -207,7 +258,12 @@ export async function search(req: Request, res: Response) {
   const last = items.at(-1);
   const hasMore = merged.length > query.limit;
   const nextCursor = hasMore && last ? encodeCursor(last, sort) : null;
-  res.status(200).json({ items, nextCursor });
+  res.status(200).json({
+    items,
+    nextCursor,
+    ...(pageCursor ? { cursor: pageCursor } : {}),
+    ...(query.includeTotal ? { totalCount: expenseTotal + salesTotal } : {}),
+  });
 }
 
 /**

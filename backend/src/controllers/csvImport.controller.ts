@@ -3,6 +3,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import * as csvImportService from "../services/csvImport.service";
 import { ApiError } from "../middleware/error.middleware";
+import { datePageQuerySchema } from "../lib/datePagination";
 
 const columnMappingSchema = z.object({
   date: z.string().min(1).max(255),
@@ -217,12 +218,18 @@ export async function preview(req: Request, res: Response) {
 
 const listBatchesQuerySchema = z.object({
   businessProfileId: z.coerce.number().int().positive().max(2147483647),
-});
+  search: z.string().trim().max(150).optional(),
+}).extend(datePageQuerySchema.shape);
 
 export async function listBatches(req: Request, res: Response) {
   const query = listBatchesQuerySchema.parse(req.query);
-  const batches = await csvImportService.listImportBatches(req.user!.id, query.businessProfileId);
-  res.status(200).json(batches);
+  const paginated = query.pageSize !== undefined || query.cursor !== undefined || query.search !== undefined;
+  const page = await csvImportService.listImportBatchesPage(req.user!.id, query.businessProfileId, {
+    ...query,
+    pageSize: query.pageSize ?? (paginated ? 50 : 100),
+  });
+  if (page.nextCursor) res.setHeader("X-Next-Cursor", page.nextCursor);
+  res.status(200).json(paginated ? page : page.items);
 }
 
 const batchParamsSchema = z.object({

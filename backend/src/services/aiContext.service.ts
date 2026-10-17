@@ -23,7 +23,7 @@ import { extractQuestionPeriod, type QuestionPeriod } from "../lib/questionPerio
 import { resolveReportingWindow, windowDateFilter, type PeriodSelection } from "../lib/reportingPeriod";
 import { plainFindingReasons } from "../lib/findingReasons";
 import { ApiError } from "../middleware/error.middleware";
-import { recordTag, type ChatAction, type RecordReference } from "./aiAnswer.service";
+import { recordTag, tagFinancialFacts, type ChatAction, type RecordReference } from "./aiAnswer.service";
 
 export const INTERACTION_MODULES = [
   "Expense Insights",
@@ -415,7 +415,8 @@ async function recoveryLines(
   profile: BusinessProfile,
   loadInsight?: () => Promise<RecoveryInsight>
 ): Promise<string[]> {
-  const recovery = await (loadInsight ?? (() => getRecoveryInsight(userId, profile.id, RECOVERY_COVERAGE_DAYS)))();
+  const recovery = await (loadInsight ?? (() =>
+    getRecoveryInsight(userId, profile.id, RECOVERY_COVERAGE_DAYS, undefined, { evaluateAlerts: false })))();
   const lines = [
     "",
     "=== RECOVERY TARGET DETAIL ===",
@@ -719,10 +720,11 @@ async function focusLines(
           `${record.vendor ? `, from ${record.vendor}` : ""} ${refs.tag("expense", record)}`
       );
     }
-    for (const reason of plainFindingReasons(finding.reasons)) lines.push(`- Why it was flagged: ${reason}`);
+    const reasonSubject = record ? `For "${record.description}": ` : "";
+    for (const reason of plainFindingReasons(finding.reasons)) lines.push(`- ${reasonSubject}Why it was flagged: ${reason}`);
     if (typeof metadata.categoryMean === "number" && typeof metadata.historyCount === "number") {
       lines.push(
-        `- Compared against: the owner's usual ${peso(metadata.categoryMean)} in this category, across ${metadata.historyCount} past record(s)`
+        `- ${reasonSubject}Compared against: the owner's usual ${peso(metadata.categoryMean)} in this category, across ${metadata.historyCount} past record(s)`
       );
     }
     lines.push("This is the flag the owner opened the chat from. Answer about THIS flag; mention other flags only if asked.");
@@ -1040,7 +1042,7 @@ export async function buildModuleContext(
   // keeps doing the cheaper targets-only read on its own. The numbers are the
   // same either way — both paths anchor on the same business-local day and
   // the same profile row.
-  const loadRecoveryInsight = once(() => getRecoveryInsight(userId, profile.id, RECOVERY_COVERAGE_DAYS));
+  const loadRecoveryInsight = once(() => getRecoveryInsight(userId, profile.id, RECOVERY_COVERAGE_DAYS, undefined, { evaluateAlerts: false }));
   const rendersRecoveryDetail = module === "Dashboard" || module === "Recovery Target";
 
   // The focus resolves first and on its own: when it is strict and does not
@@ -1088,10 +1090,11 @@ export async function buildModuleContext(
     `Today's date: ${utcDateKey(today)}. All amounts are Philippine pesos.`,
   ];
 
+  const context = contextWithinBudget(tagFinancialFacts(priorityLines), requiredTailLines);
   return {
-    context: contextWithinBudget(priorityLines, requiredTailLines),
+    context,
     scenario,
-    references: refs.entries,
+    references: new Map([...refs.entries].filter(([tag]) => context.includes(tag))),
     actions,
     period: period?.label ?? null,
   };

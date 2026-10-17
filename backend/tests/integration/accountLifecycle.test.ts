@@ -275,6 +275,34 @@ beforeEach(async () => {
 });
 afterAll(disconnectDb);
 
+describe("Google sign-in route boundary", () => {
+  it.each([undefined, "Bearer not-a-jwt", "Basic header.payload.signature"])(
+    "rejects missing or malformed credentials before calling Supabase (%s)", async header => {
+      const pending = request(app).post("/api/v1/auth/google");
+      const response = await (header ? pending.set("Authorization", header) : pending);
+      expect(response.status).toBe(401);
+      expect(callsTo("getUser")).toHaveLength(0);
+    },
+  );
+
+  it("does not treat syntactically valid JWT text as verified authentication", async () => {
+    const response = await request(app).post("/api/v1/auth/google").set(...LOGOUT_AUTH);
+    expect(response.status).toBe(401);
+    expect(callsTo("getUser")).toHaveLength(1);
+    expect(await prisma.user.count()).toBe(1);
+  });
+
+  it("shares the login rate limit and refuses excess provider requests", async () => {
+    for (let attempt = 0; attempt < LIMITS.AUTH_LOGIN.limit; attempt += 1) {
+      const response = await request(app).post("/api/v1/auth/google").set(...LOGOUT_AUTH);
+      expect(response.status).toBe(401);
+    }
+    const blocked = await request(app).post("/api/v1/auth/google").set(...LOGOUT_AUTH);
+    expect(blocked.status).toBe(429);
+    expect(callsTo("getUser")).toHaveLength(LIMITS.AUTH_LOGIN.limit);
+  });
+});
+
 describe("registration proves the address before the account works", () => {
   it("creates a PENDING_VERIFICATION account and issues no session", async () => {
     const res = await request(app).post("/api/v1/auth/register").send(registration());

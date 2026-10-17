@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import * as expenseRecordService from "../services/expenseRecord.service";
 import { moneyAmountSchema } from "../lib/money";
+import { manualRecordIdempotencyKeySchema } from "../lib/manualRecordCreate";
 import { ApiError } from "../middleware/error.middleware";
 
 /*
@@ -11,6 +12,7 @@ import { ApiError } from "../middleware/error.middleware";
  * a form quietly truncating what the API would have accepted.
  */
 export const createSchema = z.object({
+  idempotencyKey: manualRecordIdempotencyKeySchema.optional(),
   businessProfileId: z.number().int().positive().max(2147483647),
   categoryId: z.number().int().positive().max(2147483647),
   date: z.string().date(),

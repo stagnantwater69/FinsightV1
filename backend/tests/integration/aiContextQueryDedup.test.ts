@@ -116,6 +116,14 @@ describe("recovery read is shared per message", () => {
     expect(recoveryTargetCalls).toHaveBeenCalledTimes(1);
   });
 
+  it("reads recovery figures without evaluating recovery alerts", async () => {
+    await contextFor("Dashboard");
+    expect(recoveryInsightCalls).toHaveBeenCalledWith(
+      expect.any(Number), expect.any(Number), expect.any(Number), undefined, { evaluateAlerts: false },
+    );
+    expect(await prisma.recoveryNotificationTriggerState.count()).toBe(0);
+  });
+
   it("keeps the cheaper targets-only read for modules without a recovery block", async () => {
     await contextFor("Expense Insights", "why is inventory so high?");
     expect(recoveryTargetCalls).toHaveBeenCalledTimes(1);

@@ -1547,6 +1547,9 @@ export async function getRecoveryInsight(
   businessProfileId: number,
   coverageDays: number,
   period?: RecoveryReportingSelection,
+  // Ask FinSight reads these figures as context and must not evaluate alerts:
+  // the screens already do, and the writes sat on every chat reply's path.
+  options: { evaluateAlerts?: boolean } = {},
 ) {
   const context = await requireOwnedBusinessContext(userId, businessProfileId);
   const { profile } = context;
@@ -1586,10 +1589,27 @@ export async function getRecoveryInsight(
   const coverageStart = boundedCoverageStart > selectedStart ? boundedCoverageStart : selectedStart;
   const coverageEnd = utcEndOfDay(periodAsOf);
 
-  const coverageRecords = await prisma.salesReferenceRecord.findMany({
-    where: { businessProfileId, date: { gte: coverageStart, lte: coverageEnd } },
-    select: { date: true, amount: true },
-  });
+  // Independent reads: issued together so they cost one round trip, not three.
+  const [coverageRecords, latestSale, weeklyCheckpoints] = await Promise.all([
+    prisma.salesReferenceRecord.findMany({
+      where: { businessProfileId, date: { gte: coverageStart, lte: coverageEnd } },
+      select: { date: true, amount: true },
+    }),
+    prisma.salesReferenceRecord.findFirst({
+      where: { businessProfileId, date: { lte: utcEndOfDay(businessToday) } },
+      orderBy: { date: "desc" },
+      select: { date: true },
+    }),
+    selection.kind === "month"
+      ? computeWeeklyCheckpoints(
+          businessProfileId,
+          profile,
+          targetAsOf,
+          targets.dailyNeededTarget,
+          exactCalendar,
+        )
+      : [],
+  ]);
 
   const salesByDay = new Map<string, number>();
   for (const r of coverageRecords) {
@@ -1633,12 +1653,6 @@ export async function getRecoveryInsight(
     });
   }
 
-  const latestSale = await prisma.salesReferenceRecord.findFirst({
-    where: { businessProfileId, date: { lte: utcEndOfDay(businessToday) } },
-    orderBy: { date: "desc" },
-    select: { date: true },
-  });
-
   const monthHasNoRecords = targetSnapshot.eligibility.recordCount === 0;
   // §9.7 precedence step 2, folded on top of the pure per-snapshot status —
   // see applyMonthDataStatus's doc comment for why this can't be decided
@@ -1649,19 +1663,10 @@ export async function getRecoveryInsight(
   const changeSincePreviousDay = currentMonthSelected
     ? computeRecoveryChangeSincePreviousDay(profile, targetAsOf, targets, exactCalendar)
     : null;
-  const weeklyCheckpoints = selection.kind === "month"
-    ? await computeWeeklyCheckpoints(
-        businessProfileId,
-        profile,
-        targetAsOf,
-        targets.dailyNeededTarget,
-        exactCalendar,
-      )
-    : [];
 
   // Only current-month reads evaluate alerts; filtered and historical reads stay side-effect free.
   // The evaluator is idempotent because Dashboard and Recovery can both call it.
-  if (currentMonthSelected) {
+  if (currentMonthSelected && options.evaluateAlerts !== false) {
     const todayKey = targets.asOfDate;
     const lastThreeCompletedOperatingDayStatuses = dailyCoverage
       .filter((row) => row.isOperatingDay && row.date !== todayKey)

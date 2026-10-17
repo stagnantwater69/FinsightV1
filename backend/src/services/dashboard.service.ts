@@ -68,6 +68,15 @@ async function activitySpan(businessProfileId: number, today: Date) {
   };
 }
 
+function periodChange(current: number, previous: number) {
+  const changeAmount = current - previous;
+  return {
+    previous,
+    changeAmount,
+    changePercent: previous > 0 ? (changeAmount / previous) * 100 : null,
+  };
+}
+
 export async function getDashboardSummary(
   userId: number,
   businessProfileId: number,
@@ -109,8 +118,12 @@ export async function getDashboardSummary(
    * correction) is in no total. See lib/reportingPeriod.ts.
    */
   const dateFilter = windowDateFilter(window, today);
+  const previousWindow = window.previous && window.start && window.start <= today ? window.previous : null;
+  const previousWhere = previousWindow
+    ? { businessProfileId: profile.id, date: windowDateFilter(previousWindow, today) }
+    : null;
 
-  const [expenseTotals, salesAgg, reviewCounts, alerts, recoveryStatus, lifetime, availableFundsCalculation] = await Promise.all([
+  const [expenseTotals, salesAgg, reviewCounts, alerts, recoveryStatus, lifetime, availableFundsCalculation, previousTotals] = await Promise.all([
     /*
      * GROUPED IN POSTGRES, not read into memory and reduced here.
      *
@@ -166,11 +179,28 @@ export async function getDashboardSummary(
      */
     activitySpan(businessProfileId, today),
     calculateAvailableFundsForOwnedBusiness(context, today),
+    previousWhere
+      ? Promise.all([
+          prisma.expenseRecord.aggregate({ where: previousWhere, _sum: { amount: true } }),
+          prisma.salesReferenceRecord.aggregate({ where: previousWhere, _sum: { amount: true } }),
+        ])
+      : null,
   ]);
 
   const totalExpenses = expenseTotals.reduce((sum, g) => sum + Number(g._sum.amount ?? 0), 0);
   const totalSalesReference = Number(salesAgg._sum.amount ?? 0);
   const recordsNeedingReview = reviewCounts[0] + reviewCounts[1];
+  const previousExpenses = Number(previousTotals?.[0]._sum.amount ?? 0);
+  const previousSales = Number(previousTotals?.[1]._sum.amount ?? 0);
+  const periodComparison = previousWindow
+    ? {
+        previousStart: utcDateKey(previousWindow.start),
+        previousEnd: utcDateKey(previousWindow.end),
+        sales: periodChange(totalSalesReference, previousSales),
+        expenses: periodChange(totalExpenses, previousExpenses),
+        net: periodChange(totalSalesReference - totalExpenses, previousSales - previousExpenses),
+      }
+    : null;
 
   // Names for the grouped ids only — one query bounded by the categories that
   // actually appear in the period, not by the records in it.
@@ -207,6 +237,7 @@ export async function getDashboardSummary(
     periodEnd: allTime ? today : window.end,
     /** The resolved window, as date keys — what the period filter labels itself from. */
     period: describeWindow(window),
+    periodComparison,
     overview: {
       availableFunds: availableFundsCalculation.calculatedAmount,
       availableFundsCalculation,

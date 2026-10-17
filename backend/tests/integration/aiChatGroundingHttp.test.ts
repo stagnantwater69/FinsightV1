@@ -238,6 +238,34 @@ describe("record links", () => {
     expect(detail.body.messages[1].metadata.references).toHaveLength(1);
   });
 
+  it("rejects the category baseline as the focused record's actual amount", async () => {
+    const meals = await addExpense(alice, "Team lunch", 900, "2026-09-20");
+    const focused = await addFinding(alice, meals.id, "Unusual Business Meals expense");
+    askSpy.mockResolvedValue({
+      answer: `Team lunch [ref:e${meals.id}] was PHP 305.14. Review your recorded meals.`,
+      provider: "gemini",
+    });
+
+    const response = await request(app)
+      .post(BASE)
+      .set(...AUTH)
+      .send({
+        businessProfileId: alice.profile.id,
+        originModule: "Records Review",
+        question: "Give me a link to it",
+        focus: { kind: "finding", findingId: focused.id },
+      })
+      .expect(201);
+
+    expect(lastContext()).toContain(`"Team lunch" PHP 900.00`);
+    expect(lastContext()).toContain("usual PHP 305.14");
+    expect(askSpy).toHaveBeenCalledTimes(2);
+    expect(askSpy.mock.calls[1]![0].revisionNote).toContain("305.14");
+    expect(response.body.assistantMessage.content).toBe("Review your recorded meals.");
+    expect(response.body.assistantMessage.metadata.amountCheck).toBe("trimmed");
+    expect(response.body.assistantMessage.metadata.references).toEqual([]);
+  });
+
   it("trims a figure the model invented after one retry", async () => {
     askSpy
       .mockResolvedValueOnce({ answer: "You're PHP 594.86 over. Worth checking.", provider: "gemini" })

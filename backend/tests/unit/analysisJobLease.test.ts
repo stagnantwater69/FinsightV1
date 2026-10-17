@@ -114,6 +114,69 @@ afterEach(() => {
 });
 
 describe("analysis job lease", () => {
+  it("fences an old worker when an edit resets attempts and the same process claims the job again", async () => {
+    let currentWorkerId = "";
+    let currentStatus = "PROCESSING";
+    const staleWrite = vi.fn();
+    const freshWrite = vi.fn();
+    let releaseOld: () => void = () => {};
+    let releaseNew: () => void = () => {};
+    let oldStarted: () => void = () => {};
+    let newStarted: () => void = () => {};
+    const oldReady = new Promise<void>((resolve) => { oldStarted = resolve; });
+    const newReady = new Promise<void>((resolve) => { newStarted = resolve; });
+    const oldHold = new Promise<void>((resolve) => { releaseOld = resolve; });
+    const newHold = new Promise<void>((resolve) => { releaseNew = resolve; });
+
+    queryRaw.mockImplementation(async (sql: { values: unknown[] }) => {
+      currentWorkerId = sql.values.find((value) => typeof value === "string" && value.startsWith("analysis-")) as string;
+      currentStatus = "PROCESSING";
+      return [{ ...CLAIMED, attemptCount: 1, workerId: currentWorkerId }];
+    });
+    transactionQueryRaw.mockImplementation(async (sql: { values: unknown[] }) =>
+      currentStatus === "PROCESSING" && sql.values.includes(currentWorkerId) && sql.values.includes(1)
+        ? [{ id: CLAIMED.id }] : []);
+    analysisJobUpdateMany.mockImplementation(async (args: unknown) => {
+      const { where, data } = args as { where: { workerId: string; attemptCount: number }; data: { status?: string } };
+      if (currentStatus !== "PROCESSING" || where.workerId !== currentWorkerId || where.attemptCount !== 1) return { count: 0 };
+      if (data.status) currentStatus = data.status;
+      return { count: 1 };
+    });
+    refreshOwnedCategoryStatistics.mockImplementationOnce(async (...args: unknown[]) => {
+      oldStarted();
+      await oldHold;
+      const mutate = args[4] as (body: () => Promise<unknown>) => Promise<unknown>;
+      await mutate(async () => { staleWrite(); return []; });
+      return [];
+    });
+    refreshOwnedCategoryStatistics.mockImplementationOnce(async (...args: unknown[]) => {
+      newStarted();
+      await newHold;
+      const mutate = args[4] as (body: () => Promise<unknown>) => Promise<unknown>;
+      await mutate(async () => { freshWrite(); return []; });
+      return [];
+    });
+
+    const oldRun = runAnalysisWorkerOnce();
+    let newRun: Promise<boolean> | undefined;
+    try {
+      await oldReady;
+      newRun = runAnalysisWorkerOnce();
+      await newReady;
+      releaseOld();
+      await oldRun;
+      expect(staleWrite).not.toHaveBeenCalled();
+      releaseNew();
+      await newRun;
+      expect(freshWrite).toHaveBeenCalledTimes(1);
+      expect(currentStatus).toBe("COMPLETE");
+    } finally {
+      releaseOld();
+      releaseNew();
+      await Promise.all([oldRun, newRun]);
+    }
+  });
+
   it("refreshes the heartbeat while a long refresh is still running", async () => {
     vi.useFakeTimers();
     let release: () => void = () => {};

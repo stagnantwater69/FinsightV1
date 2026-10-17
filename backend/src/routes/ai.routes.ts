@@ -49,6 +49,7 @@ aiRouter.post(
  * Thread metadata writes use the shared authenticated-write guard; reads do not.
  */
 aiRouter.get("/conversations", asyncHandler(aiController.listConversations));
+aiRouter.get("/send-requests/:idempotencyKey", asyncHandler(aiController.chatSendStatus));
 aiRouter.post(
   "/conversations",
   rateLimit(LIMITS.ASK_BURST),

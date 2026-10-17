@@ -72,7 +72,7 @@ app.use(
     },
     credentials: true,
     // Cross-origin clients need cooldown headers; DevTools also reads request timings.
-    exposedHeaders: ["Server-Timing", "Retry-After", "RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset"],
+    exposedHeaders: ["Server-Timing", "Retry-After", "RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset", "X-Next-Cursor"],
   }),
 );
 app.use(express.json());

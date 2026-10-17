@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import type { Request, Response } from "express";
 import { prisma } from "../../src/config/prisma";
 import { search } from "../../src/controllers/records.controller";
-import { disconnectDb, makeOwnerWithProfile, resetDb } from "../setup/testDb";
+import { disconnectDb, makeOwnerWithProfile, makeProfile, resetDb } from "../setup/testDb";
 
 /**
  * FUN-010 and FUN-007.
@@ -29,7 +29,7 @@ beforeEach(async () => {
 afterAll(disconnectDb);
 
 type Item = { id: number; type: "expense" | "sales"; amount: number; date: string; description: string };
-type Body = { items: Item[]; nextCursor: string | null };
+type Body = { items: Item[]; nextCursor: string | null; totalCount?: number };
 
 async function runSearch(query: Record<string, string | undefined>, userId = ctx.user.id): Promise<Body> {
   let body: Body | undefined;
@@ -303,5 +303,76 @@ describe("records search — ownership isolation under sort and cursor", () => {
     await expect(
       runSearch({ businessProfileId: String(ctx.profile.id), type: "all", limit: "3", sort: "amount_desc" }, other.user.id),
     ).rejects.toThrow();
+  });
+});
+
+
+describe("records search — optional filtered totals", () => {
+  beforeEach(async () => {
+    await seedLedger(ctx.profile.id, ctx.categories.Inventory!, ctx.categories.Utilities!);
+  });
+
+  it.each([
+    [{ type: "all" }, 12],
+    [{ type: "expense" }, 7],
+    [{ type: "sales" }, 5],
+    [{ type: "all", keyword: "TAKINGS", source: "MANUAL_ENTRY", dateFrom: "2026-01-02", dateTo: "2026-01-04" }, 2],
+    [{ type: "all", source: "RECEIPT_SCAN" }, 0],
+    [{ type: "all", source: "MANUAL_ENTRY", importBatchId: "999" }, 0],
+  ] as const)("counts the entire matching ledger for %j", async (filters, expected) => {
+    const result = await runSearch({ businessProfileId: String(ctx.profile.id), limit: "1", includeTotal: "true", ...filters });
+    expect(result.totalCount).toBe(expected);
+    expect(result.items.length).toBeLessThanOrEqual(1);
+  });
+
+  it("counts only matching expenses when a category excludes all sales", async () => {
+    const filters = { businessProfileId: String(ctx.profile.id), categoryId: String(ctx.categories.Inventory!), includeTotal: "true", limit: "2" };
+    expect((await runSearch({ ...filters, type: "all" })).totalCount).toBe(6);
+    expect((await runSearch({ ...filters, type: "sales" })).totalCount).toBe(0);
+  });
+
+  it.each(["date_desc", "date_asc", "amount_desc", "amount_asc"])("keeps the full total on later %s cursor pages", async (sort) => {
+    const filters = { businessProfileId: String(ctx.profile.id), type: "all", includeTotal: "true", limit: "2", sort };
+    const first = await runSearch(filters);
+    const second = await runSearch({ ...filters, cursor: first.nextCursor! });
+    expect(first.items).toHaveLength(2);
+    expect(second.items).toHaveLength(2);
+    expect(first.totalCount).toBe(12);
+    expect(second.totalCount).toBe(12);
+    expect(second.items.map(key)).not.toEqual(first.items.map(key));
+  });
+
+  it.each([undefined, "false"])("preserves the legacy response when includeTotal=%s", async (includeTotal) => {
+    const result = await runSearch({ businessProfileId: String(ctx.profile.id), type: "all", limit: "2", includeTotal });
+    expect(result.items).toHaveLength(2);
+    expect(result).not.toHaveProperty("totalCount");
+  });
+
+  it("counts only the selected CSV batch across expenses and sales", async () => {
+    const batch = await prisma.cSVImportBatch.create({ data: { businessProfileId: ctx.profile.id, title: "Selected import", uploadDate: new Date("2026-01-09"), fileReference: "test.csv" } });
+    const otherBatch = await prisma.cSVImportBatch.create({ data: { businessProfileId: ctx.profile.id, title: "Other import", uploadDate: new Date("2026-01-09"), fileReference: "other.csv" } });
+    for (const importBatchId of [batch.id, otherBatch.id]) {
+      await prisma.expenseRecord.create({ data: { businessProfileId: ctx.profile.id, categoryId: ctx.categories.Inventory!, date: new Date("2026-01-09"), description: "Imported expense", amount: 25, source: "CSV_UPLOAD", importBatchId } });
+      await prisma.salesReferenceRecord.create({ data: { businessProfileId: ctx.profile.id, date: new Date("2026-01-09"), description: "Imported sale", amount: 50, source: "CSV_UPLOAD", importBatchId } });
+    }
+    const result = await runSearch({ businessProfileId: String(ctx.profile.id), type: "all", source: "CSV_UPLOAD", importBatchId: String(batch.id), includeTotal: "true", limit: "1" });
+    expect(result.totalCount).toBe(2);
+    expect((await pageThrough({ businessProfileId: String(ctx.profile.id), type: "all", source: "CSV_UPLOAD", importBatchId: String(batch.id), limit: "1" })).map((item) => item.description).sort()).toEqual(["Imported expense", "Imported sale"]);
+  });
+
+  it("isolates counts from another business belonging to the owner and rejects another owner's profile", async () => {
+    const sameOwnerBusiness = await makeProfile(ctx.user.id, { name: "Second business" });
+    const other = await makeOwnerWithProfile({}, ["Inventory"]);
+    for (const businessProfileId of [sameOwnerBusiness.id, other.profile.id]) {
+      await prisma.salesReferenceRecord.create({ data: { businessProfileId, date: new Date("2026-01-09"), description: "Other business sale", amount: 50, source: "MANUAL_ENTRY" } });
+    }
+    const result = await runSearch({ businessProfileId: String(ctx.profile.id), type: "all", includeTotal: "true", limit: "1" });
+    expect(result.totalCount).toBe(12);
+    expect((await runSearch({ businessProfileId: String(sameOwnerBusiness.id), type: "sales", includeTotal: "true" })).totalCount).toBe(1);
+    await expect(runSearch({ businessProfileId: String(other.profile.id), type: "all", includeTotal: "true" })).rejects.toThrow();
+  });
+
+  it("rejects an invalid includeTotal value", async () => {
+    await expect(runSearch({ businessProfileId: String(ctx.profile.id), includeTotal: "yes" })).rejects.toThrow();
   });
 });

@@ -1,8 +1,13 @@
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
-import { isAbsolute, normalize, resolve } from "node:path";
+import { resolve } from "node:path";
 import { z } from "zod";
+import { CAPTURE_CONDITIONS, captureConditionsOf, developmentCohortReport, PARTITIONS, type CaptureCondition, type DevelopmentCohortReport, type DevelopmentPartition } from "./development-cohort";
+import type { CohortReadinessReport } from "./cohort-readiness";
+import { classifyProvenance, PROVENANCE_LABELS, type LocalCorpusEntry, type ProvenanceLabel } from "./local-corpus-contract";
+export { classifyProvenance, localCorpusEntrySchema, PROVENANCE_LABELS, type LocalCorpusEntry, type ProvenanceLabel } from "./local-corpus-contract";
+import { COHORT_TAGS } from "./policy-v1-contract";
 import { parseLineItems, parseReceiptFields } from "../../src/services/ocr.service";
 import {
   scoreAmount,
@@ -13,70 +18,6 @@ import {
   type ItemScore,
   type Verdict,
 } from "../ocr-accuracy/scoring";
-
-export const PROVENANCE_LABELS = [
-  "SYNTHETIC_GENERATED",
-  "SYNTHETIC_DERIVED",
-  "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
-  "EXISTING_REAL_UNKNOWN_CONSENT",
-  "ANONYMIZED_CONSENTED_REAL_DOUBLE_REVIEWED",
-] as const;
-
-export type ProvenanceLabel = (typeof PROVENANCE_LABELS)[number];
-
-const explicitProvenanceSchema = z.discriminatedUnion("label", [
-  z.object({
-    label: z.literal("PUBLIC_LICENSED_REAL_SINGLE_REVIEW"),
-    sourceAttributionRecorded: z.literal(true),
-    licenseAttributionRecorded: z.literal(true),
-    groundTruthReviewerCount: z.literal(1),
-  }).strict(),
-  z.object({
-    label: z.literal("EXISTING_REAL_UNKNOWN_CONSENT"),
-    consentRecorded: z.literal(false),
-    sourceAttributionRecorded: z.literal(false),
-  }).strict(),
-  z.object({
-    label: z.literal("ANONYMIZED_CONSENTED_REAL_DOUBLE_REVIEWED"),
-    consentRecorded: z.literal(true),
-    anonymizationReviewed: z.literal(true),
-    groundTruthReviewerCount: z.number().int().min(2),
-  }).strict(),
-]);
-
-export const localCorpusEntrySchema = z.object({
-  id: z.string().min(1).max(160),
-  file: z.string().min(1).refine(
-    (value) => !isAbsolute(value)
-      && normalize(value) === value
-      && !value.split(/[\\/]/).includes(".."),
-    "file must be a normalized relative path inside the image root",
-  ),
-  kind: z.enum(["real", "synthetic", "degraded"]),
-  derived_from: z.string().min(1).optional(),
-  conditions: z.string(),
-  needs_review: z.boolean().optional(),
-  provenance: explicitProvenanceSchema.optional(),
-  expected: z.object({
-    date: z.string().nullable(),
-    vendor: z.string().nullable(),
-    amount: z.number().finite().nullable(),
-    items: z.array(z.object({
-      name: z.string(),
-      quantity: z.number().finite().nullable(),
-      amount: z.number().finite(),
-    }).strict()).nullable().optional(),
-  }).strict(),
-}).passthrough().superRefine((entry, context) => {
-  if (entry.kind === "real" && !entry.provenance) {
-    context.addIssue({ code: "custom", path: ["provenance"], message: "real fixtures require explicit provenance evidence" });
-  }
-  if (entry.kind !== "real" && entry.provenance) {
-    context.addIssue({ code: "custom", path: ["provenance"], message: "synthetic fixtures cannot claim real-receipt provenance" });
-  }
-});
-
-export type LocalCorpusEntry = z.infer<typeof localCorpusEntrySchema>;
 
 const thresholdProfileSchema = z.object({
   includedProvenance: z.array(z.enum(PROVENANCE_LABELS)).min(1),
@@ -158,6 +99,7 @@ export interface LocalQualityReport {
   };
   corpus: {
     requestedScope: "synthetic" | "all" | "anonymized-real";
+    requestedPartition: DevelopmentPartition | "ALL";
     discoveredSamples: number;
     totalReviewedManifestSamples: number;
     attemptedSamples: number;
@@ -168,19 +110,19 @@ export interface LocalQualityReport {
   };
   metrics: LocalQualityMetrics;
   metricsByProvenance: Partial<Record<ProvenanceLabel, LocalQualityMetrics>>;
+  developmentCohort: DevelopmentCohortReport;
+  metricsByDevelopmentPartition: Partial<Record<DevelopmentPartition, {
+    metrics: LocalQualityMetrics;
+    byCohort: Partial<Record<(typeof COHORT_TAGS)[number], LocalQualityMetrics>>;
+  }>>;
+  metricsByCaptureCondition: Partial<Record<CaptureCondition, LocalQualityMetrics>>;
+  representativeReadiness?: CohortReadinessReport;
   gate: {
     profile: LocalQualityThresholds["profile"];
     checks: GateCheck[];
     status: "PASS" | "FAIL";
   };
   samples: LocalSampleObservation[];
-}
-
-export function classifyProvenance(entry: LocalCorpusEntry): ProvenanceLabel {
-  if (entry.kind === "synthetic") return "SYNTHETIC_GENERATED";
-  if (entry.kind === "degraded") return "SYNTHETIC_DERIVED";
-  if (!entry.provenance) throw new Error("Real corpus entry is missing explicit provenance evidence");
-  return entry.provenance.label;
 }
 
 export function opaqueSampleId(id: string): string {
@@ -356,6 +298,8 @@ export function buildLocalQualityReport(options: {
   observations: LocalSampleObservation[];
   thresholds: LocalQualityThresholds;
   requestedScope: LocalQualityReport["corpus"]["requestedScope"];
+  requestedPartition?: DevelopmentPartition | "ALL";
+  representativeReadiness?: CohortReadinessReport;
   generatedAtUtc?: string;
 }): LocalQualityReport {
   const reviewedEntries = options.allEntries.filter((entry) => !entry.needs_review);
@@ -369,6 +313,26 @@ export function buildLocalQualityReport(options: {
     const matching = options.observations.filter((observation) => observation.provenance === label);
     if (matching.length > 0) metricsByProvenance[label] = summarizeObservations(matching);
   }
+  const metricsByDevelopmentPartition: LocalQualityReport["metricsByDevelopmentPartition"] = {};
+  for (const partition of PARTITIONS) {
+    const entries = options.attemptedEntries.filter((entry) => entry.developmentCohort?.partition === partition);
+    const ids = new Set(entries.map((entry) => entry.id));
+    const observations = options.observations.filter((observation) => ids.has(observation.id));
+    if (observations.length === 0) continue;
+    const byCohort: NonNullable<typeof metricsByDevelopmentPartition.CALIBRATION>["byCohort"] = {};
+    for (const cohort of COHORT_TAGS) {
+      const cohortIds = new Set(entries.filter((entry) => entry.developmentCohort!.cohortTags.includes(cohort)).map((entry) => entry.id));
+      const cohortObservations = observations.filter((observation) => cohortIds.has(observation.id));
+      if (cohortObservations.length > 0) byCohort[cohort] = summarizeObservations(cohortObservations);
+    }
+    metricsByDevelopmentPartition[partition] = { metrics: summarizeObservations(observations), byCohort };
+  }
+  const metricsByCaptureCondition: LocalQualityReport["metricsByCaptureCondition"] = {};
+  for (const condition of CAPTURE_CONDITIONS) {
+    const ids = new Set(options.attemptedEntries.filter((entry) => captureConditionsOf(entry).includes(condition)).map((entry) => entry.id));
+    const observations = options.observations.filter((observation) => ids.has(observation.id));
+    if (observations.length > 0) metricsByCaptureCondition[condition] = summarizeObservations(observations);
+  }
 
   return {
     schemaVersion: "finsight-local-ocr-quality-report-v2",
@@ -376,6 +340,7 @@ export function buildLocalQualityReport(options: {
     engine: { provider: "LOCAL_TESSERACT", externalProviderCalls: false },
     corpus: {
       requestedScope: options.requestedScope,
+      requestedPartition: options.requestedPartition ?? "ALL",
       discoveredSamples: scopedReviewedEntries.length,
       totalReviewedManifestSamples: reviewedEntries.length,
       attemptedSamples: options.attemptedEntries.length,
@@ -389,6 +354,10 @@ export function buildLocalQualityReport(options: {
     },
     metrics: summarizeObservations(options.observations),
     metricsByProvenance,
+    developmentCohort: developmentCohortReport(options.allEntries),
+    metricsByDevelopmentPartition,
+    metricsByCaptureCondition,
+    ...(options.representativeReadiness ? { representativeReadiness: options.representativeReadiness } : {}),
     gate: evaluateGate(options.observations, options.thresholds.profile),
     samples: options.observations.map((observation) => ({ ...observation, id: opaqueSampleId(observation.id) })),
   };

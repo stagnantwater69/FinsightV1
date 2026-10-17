@@ -958,13 +958,23 @@ function isMissingMigrationsTable(err: unknown): boolean {
 }
 
 function isDatabaseUnavailable(err: unknown): boolean {
-  const code = err instanceof Prisma.PrismaClientKnownRequestError
-    ? err.code
-    : err instanceof Prisma.PrismaClientInitializationError
-      ? err.errorCode
-      : undefined;
-  return code !== undefined && ["P1001", "P1002", "P1008", "P1017"].includes(code);
+  // An engine that could not open a connection at all — refused, reset, the
+  // pooler at its client limit — often carries no code, but it has learned
+  // nothing about the schema either.
+  if (err instanceof Prisma.PrismaClientInitializationError) return true;
+  return err instanceof Prisma.PrismaClientKnownRequestError &&
+    ["P1001", "P1002", "P1008", "P1017", "P2024"].includes(err.code);
 }
+
+/*
+ * How long a starting process keeps asking an unreachable database before it
+ * gives up: about 90 seconds. Exiting on the first failure turned a momentary
+ * blip — a restart overlapping the old process's pooled connections, a pooler
+ * hiccup — into a process that stayed down, because `tsx watch` and most
+ * supervisors do not restart a process that exited on its own. Waiting keeps
+ * the gate closed: nothing is served until the schema is proven current.
+ */
+const STARTUP_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000, 30_000, 30_000];
 
 /**
  * Compares the migrations in the repository against those recorded in the
@@ -1043,8 +1053,18 @@ export async function checkMigrationDrift(migrationsDir: string = MIGRATIONS_DIR
 export async function assertMigrationsApplied(
   processName: string,
   migrationsDir: string = MIGRATIONS_DIR,
+  retryDelaysMs: readonly number[] = STARTUP_RETRY_DELAYS_MS,
 ): Promise<void> {
-  const drift = await checkMigrationDrift(migrationsDir);
+  let drift = await checkMigrationDrift(migrationsDir);
+  for (const delay of retryDelaysMs) {
+    if (drift.status !== "unknown" || drift.verificationFailure !== "database_unavailable") break;
+    logger.warn(
+      { processName, reason: drift.reason, retryInMs: delay },
+      "database unreachable while verifying migrations; retrying before refusing to start",
+    );
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    drift = await checkMigrationDrift(migrationsDir);
+  }
 
   if (drift.status === "ok") {
     logger.info({ processName }, "database migrations verified");

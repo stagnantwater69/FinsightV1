@@ -89,7 +89,7 @@ describe("registration delivery failures", () => {
     const body = branch.slice(0, branch.indexOf('reason: error?.message ?? "no user returned"'));
     // No throw: a delivery failure must not become a distinguishable error.
     expect(body).not.toMatch(/throw new ApiError/);
-    expect(body).toContain("return REGISTRATION_ACKNOWLEDGEMENT");
+    expect(body).toContain("return registrationAcknowledgement(platform)");
   });
 
   it("checks for delivery failure before the rejection path, or it is dead code", () => {
