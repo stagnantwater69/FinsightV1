@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { env } from "../config/env";
 import { prisma } from "../config/prisma";
 import { ApiError } from "../middleware/error.middleware";
@@ -83,6 +84,19 @@ Linking:
 Follow-up suggestions:
 - End every reply with one final line in exactly this form: FOLLOW-UPS: first question? | second question?
 - Give 2 or 3 short questions (under 70 characters each) that the owner might sensibly ask next and that CONTEXT can answer. Write them in the same language as the owner's latest question: an English question gets English follow-ups.`;
+
+/**
+ * What an Ask FinSight answer was produced by, for tests/ai-eval to record
+ * beside its results. The prompt is identified by hash so a result can be
+ * matched to the exact text without copying it into every report.
+ */
+export function askFinSightIdentity() {
+  return {
+    primaryModel: GEMINI_MODEL,
+    fallbackModel: OPENROUTER_MODEL,
+    systemPromptSha256: createHash("sha256").update(SYSTEM_PROMPT).digest("hex"),
+  };
+}
 
 export interface ConversationTurn {
   question: string;
