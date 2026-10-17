@@ -148,3 +148,54 @@ describe("optional recurring schedule availability", () => {
     expect(result.current.state.data).toEqual([]);
   });
 });
+
+describe("dashboard feeds after the owner returns to the tab", () => {
+  // Only Date is faked: the cache ages entries by Date.now, waitFor needs real timers.
+  beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-10-18T09:00:00Z")); });
+  afterEach(() => {
+    vi.useRealTimers();
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+  });
+
+  function returnToTab() {
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    document.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(new Event("focus"));
+  }
+
+  it("keeps a read that is still inside its cache window without fetching", async () => {
+    get.mockResolvedValue({ data: firstFlow });
+    const { result } = renderHook(() => useCashflow(1, "monthly"));
+    await waitFor(() => expect(result.current.state.data).toEqual(firstFlow));
+
+    vi.setSystemTime(new Date("2026-10-18T09:00:10Z"));
+    await act(async () => { returnToTab(); });
+
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it("fetches a stale read once on return and shows what changed elsewhere", async () => {
+    get.mockResolvedValueOnce({ data: firstFlow }).mockResolvedValueOnce({ data: secondFlow });
+    const { result } = renderHook(() => useCashflow(1, "monthly"));
+    await waitFor(() => expect(result.current.state.data).toEqual(firstFlow));
+
+    vi.setSystemTime(new Date("2026-10-18T09:05:00Z"));
+    await act(async () => { returnToTab(); });
+
+    await waitFor(() => expect(result.current.state.data).toEqual(secondFlow));
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(get.mock.calls[1]![1]).toMatchObject({ params: { businessProfileId: 1, granularity: "monthly" } });
+  });
+
+  it("does nothing while the tab stays hidden", async () => {
+    get.mockResolvedValue({ data: firstFlow });
+    const { result } = renderHook(() => useCashflow(1, "monthly"));
+    await waitFor(() => expect(result.current.state.data).toEqual(firstFlow));
+
+    vi.setSystemTime(new Date("2026-10-18T09:05:00Z"));
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+});
