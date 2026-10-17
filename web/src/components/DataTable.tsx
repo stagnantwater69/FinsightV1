@@ -12,7 +12,7 @@ import { usePersistentState } from "../lib/hooks";
  * same).
  *
  * What it owns:
- *   sorting, pagination, the sticky header, the loading skeleton, the empty
+ *   sorting, pagination, the header row, the loading skeleton, the empty
  *   state, and the responsive switch to cards.
  *
  * What it does NOT own: fetching, searching, or filtering. Those stay with
@@ -299,7 +299,10 @@ export function DataTable<T>({
                             : "none"
                         : undefined
                     }
-                    className={`sticky top-[var(--topbar-h)] z-10 border-b border-paper-200 bg-paper-100/95 px-4 py-2.5 text-xs font-semibold uppercase tracking-[0.06em] text-ink-600 backdrop-blur ${
+                    // Not sticky: the overflow-x-auto wrapper is the scroll
+                    // container, so a top offset pushed the header down over
+                    // the first row instead of pinning it under the top bar.
+                    className={`border-b border-paper-200 bg-paper-100/95 px-4 py-2.5 text-xs font-semibold uppercase tracking-[0.06em] text-ink-600 ${
                       column.width === "content" ? "w-px whitespace-nowrap" : ""
                     } ${alignRight ? "text-right" : ""}`}
                   >
