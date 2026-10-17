@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { isAxiosError } from "axios";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { CategorySelect } from "../components/CategorySelect";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
@@ -20,18 +20,16 @@ import { everyLineIsReady, groupByCategory, sumCentavos, toReviewLines } from ".
  * ADR-4. One mapping for the whole product replaces the three inconsistent
  * cutoffs this screen used to carry (80/60 for the page, 75 per item).
  */
-import { BAND_COPY, confidenceBand, scanConfidenceBand } from "../lib/confidenceBands";
-import { Callout, Card, PageHead, FormPage, Pill } from "../components/ui";
+import { BAND_COPY, scanConfidenceBand } from "../lib/confidenceBands";
+import { Callout, Card, PageHead, Pill } from "../components/ui";
 import { Button } from "../components/Button";
-import { Checkbox, Field, FormError, MoneyInput, TextInput } from "../components/Field";
-import { Money } from "../components/Money";
+import { Field, FormError, MoneyInput, TextInput } from "../components/Field";
 import { useToast } from "../components/Toast";
-import { EvidenceNote } from "./scanReceipt/EvidenceNote";
 import { GapOption } from "./scanReceipt/GapOption";
 import { MultiFileInput } from "./scanReceipt/MultiFileInput";
 import { ScannedField } from "./scanReceipt/ScannedField";
 import { ScanProgress } from "./scanReceipt/ScanProgress";
-import { attentionFieldsFor, originOf, provisionalClass } from "./scanReceipt/helpers";
+import { attentionFieldsFor, originOf, provisionalClass, scannedItemRemoveId, scannedItemRowId } from "./scanReceipt/helpers";
 import {
   FIELD_LABELS,
   scanPollDelayMs,
@@ -42,9 +40,6 @@ import type {
   AddedItem,
   Origin,
   ReceiptCaptureBatch,
-  ReceiptDuplicateCandidate,
-  ReceiptDuplicateCandidatePage,
-  ReceiptDuplicateReason,
   ReceiptDuplicateReview,
   ReceiptPurgeJob,
   ReceiptHistoryItem,
@@ -58,21 +53,17 @@ import { ResultDetails } from "../components/ResultDetails";
 import { ReceiptResultNotes } from "./scanReceipt/ReceiptResultNotes";
 import { randomId } from "../lib/uuid";
 import { useUnsavedChangesWarning } from "../lib/navigationGuards";
+import {
+  readReceiptReviewDraft,
+  removeReceiptReviewDraft,
+  type ReceiptReviewDraftEdits,
+} from "../lib/receiptReviewDraft";
 import { PrintedReceiptDetails } from "./scanReceipt/PrintedReceiptDetails";
 import { ReceiptProviderConsent } from "./scanReceipt/ReceiptProviderConsent";
 import { ReceiptPagePreview } from "./scanReceipt/ReceiptPagePreview";
 import { useConfirm } from "../components/ConfirmDialog";
 import { AvailableFundsBaselineChoice, useAvailableFundsBaselineChoice } from "../components/AvailableFundsBaselineChoice";
-import {
-  IconCamera,
-  IconCheck,
-  IconCrop,
-  IconDuplicate,
-  IconEdit,
-  IconEye,
-  IconRecords,
-  IconSun,
-} from "../components/icons";
+import { IconCamera, IconCheck, IconEdit, IconEye } from "../components/icons";
 import {
   recoveryRowActionId,
   recoveryRowId,
@@ -82,333 +73,27 @@ import {
 
 import { useReceiptRecoveryHistory } from "./scanReceipt/useReceiptRecoveryHistory";
 import { ReceiptRecoveryHistory } from "./scanReceipt/ReceiptRecoveryHistory";
-
-interface BatchReceiptBinding {
-  batchId: number;
-  receiptOrdinal: number;
-}
-
-type ReceiptReviewMode = "review" | "results" | "compact";
-type DuplicateCheckStatus = "idle" | "loading" | "success" | "error";
-
-// Temporarily hidden; set to true to restore the per-item photo extraction label.
-const SHOW_AI_PHOTO_EXTRACTION_LABEL = false;
-
-const REVIEW_MODES: Array<{
-  id: ReceiptReviewMode;
-  label: string;
-  Icon: typeof IconEye;
-}> = [
-  { id: "review", label: "Review", Icon: IconEye },
-  { id: "results", label: "Results", Icon: IconEdit },
-  { id: "compact", label: "Compact", Icon: IconRecords },
-];
-
-function ReceiptWorkflowProgress({ current }: { current: "upload" | "review" | "save" }) {
-  const steps = [
-    { id: "upload", label: "Upload" },
-    { id: "review", label: "Review" },
-    { id: "save", label: "Save" },
-  ] as const;
-  const currentIndex = steps.findIndex((step) => step.id === current);
-
-  return (
-    <nav aria-label="Receipt scan progress" className="mb-5">
-      <ol className="grid grid-cols-3" role="list">
-        {steps.map((step, index) => {
-          const complete = index < currentIndex;
-          const active = index === currentIndex;
-          return (
-            <li key={step.id} className="relative flex min-w-0 flex-col items-center gap-1.5 text-center">
-              {index > 0 ? (
-                <span
-                  aria-hidden
-                  className={`absolute right-1/2 top-[1.125rem] h-px w-full -translate-y-1/2 ${
-                    index <= currentIndex ? "bg-brand-500" : "bg-paper-200"
-                  }`}
-                />
-              ) : null}
-              <span
-                aria-hidden
-                className={`relative z-10 flex h-9 w-9 items-center justify-center rounded-full text-xs font-bold ring-4 ring-paper ${
-                  complete || active
-                    ? "bg-brand-700 text-white"
-                    : "bg-paper-200 text-ink-600"
-                }`}
-              >
-                {complete ? <IconCheck className="h-4 w-4" /> : index + 1}
-              </span>
-              <span
-                aria-current={active ? "step" : undefined}
-                className={`truncate text-xs font-semibold ${active ? "text-tone-brand" : "text-ink-600"}`}
-              >
-                {step.label}
-              </span>
-            </li>
-          );
-        })}
-      </ol>
-    </nav>
-  );
-}
-
-function ReceiptReviewTabs({
-  value,
-  onChange,
-}: {
-  value: ReceiptReviewMode;
-  onChange: (mode: ReceiptReviewMode) => void;
-}) {
-  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
-
-  function moveFocus(index: number) {
-    const next = (index + REVIEW_MODES.length) % REVIEW_MODES.length;
-    const mode = REVIEW_MODES[next]!.id;
-    onChange(mode);
-    tabRefs.current[next]?.focus();
-  }
-
-  function handleKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
-    if (event.key === "ArrowRight") {
-      event.preventDefault();
-      moveFocus(index + 1);
-    } else if (event.key === "ArrowLeft") {
-      event.preventDefault();
-      moveFocus(index - 1);
-    } else if (event.key === "Home") {
-      event.preventDefault();
-      moveFocus(0);
-    } else if (event.key === "End") {
-      event.preventDefault();
-      moveFocus(REVIEW_MODES.length - 1);
-    }
-  }
-
-  return (
-    <div
-      role="tablist"
-      aria-label="Receipt review view"
-      className="mb-4 grid grid-cols-3 overflow-hidden rounded-xl border border-paper-200 bg-paper-100 p-1"
-    >
-      {REVIEW_MODES.map(({ id, label, Icon }, index) => {
-        const selected = value === id;
-        return (
-          <button
-            key={id}
-            ref={(node) => {
-              tabRefs.current[index] = node;
-            }}
-            id={`receipt-view-tab-${id}`}
-            type="button"
-            role="tab"
-            aria-selected={selected}
-            aria-controls="receipt-view-panel"
-            tabIndex={selected ? 0 : -1}
-            onClick={() => onChange(id)}
-            onKeyDown={(event) => handleKeyDown(event, index)}
-            className={`flex min-h-tap min-w-tap items-center justify-center gap-2 rounded-lg px-2 text-sm font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 ${
-              selected
-                ? "bg-tint-brand text-tone-brand ring-1 ring-edge-brand"
-                : "text-ink-600 hover:bg-paper hover:text-ink-900"
-            }`}
-          >
-            <Icon className="h-4 w-4 shrink-0" />
-            <span className="min-w-0 truncate">{label}</span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function ReceiptPhotoTips() {
-  const tips = [
-    {
-      title: "Use even lighting",
-      detail: "Avoid glare and strong shadows across the printed total.",
-      Icon: IconSun,
-    },
-    {
-      title: "Keep every edge in frame",
-      detail: "Lay the receipt flat and keep the text in focus.",
-      Icon: IconCrop,
-    },
-    {
-      title: "Add pages in reading order",
-      detail: "For a long receipt, upload up to eight overlapping photos.",
-      Icon: IconRecords,
-    },
-  ];
-
-  return (
-    <Card className="p-5">
-      <div className="flex items-center gap-3">
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-tint-brand text-tone-brand">
-          <IconCamera className="h-5 w-5" />
-        </span>
-        <div>
-          <h2 id="receipt-photo-tips-title" className="font-display text-base font-semibold text-ink-900">Photo tips</h2>
-          <p className="mt-0.5 text-xs text-ink-500">A clear image gives you less to correct.</p>
-        </div>
-      </div>
-      <ul className="mt-4 divide-y divide-paper-200">
-        {tips.map(({ title, detail, Icon }) => (
-          <li key={title} className="flex gap-3 py-3 first:pt-0 last:pb-0">
-            <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-tint-brand text-tone-brand">
-              <Icon className="h-[18px] w-[18px]" />
-            </span>
-            <span className="min-w-0">
-              <b className="block text-sm font-semibold text-ink-800">{title}</b>
-              <span className="mt-0.5 block text-xs leading-relaxed text-ink-500">{detail}</span>
-            </span>
-          </li>
-        ))}
-      </ul>
-    </Card>
-  );
-}
-
-interface DuplicateReviewState extends Pick<
-  ReceiptDuplicateReview,
-  "candidateSetHash" | "candidates" | "candidateCount" | "nextCursor"
-> {
-  changed: boolean;
-}
-
-const DUPLICATE_REASON_COPY: Record<ReceiptDuplicateReason, string> = {
-  EXACT_IMAGE: "same receipt image",
-  SAME_VENDOR: "same merchant",
-  SAME_DESCRIPTION: "same description",
-  SAME_DATE: "same date",
-  SAME_TOTAL: "same total",
-};
-const DUPLICATE_REASONS = new Set<ReceiptDuplicateReason>(Object.keys(DUPLICATE_REASON_COPY) as ReceiptDuplicateReason[]);
-
-/**
- * A receipt batch response controls which private uploads are attached to a
- * selection. Do not trust its TypeScript annotation at the HTTP boundary.
- */
-function isCollectingReceiptBatch(
-  value: unknown,
-  businessProfileId: number,
-  expectedReceiptCount: number,
-): value is ReceiptCaptureBatch {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const batch = value as Record<string, unknown>;
-  return Number.isInteger(batch.id)
-    && Number(batch.id) > 0
-    && batch.businessProfileId === businessProfileId
-    && batch.expectedReceiptCount === expectedReceiptCount
-    && batch.status === "COLLECTING"
-    && batch.uploadedReceiptCount === 0
-    && Array.isArray(batch.receipts)
-    && batch.receipts.length === 0;
-}
-
-function isCancelledReceiptBatch(value: unknown): boolean {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value)
-    && (value as { status?: unknown }).status === "CANCELLED");
-}
-
-/**
- * DELETE /records/receipts/:id answers 409 for more than one reason. Only the
- * "purge already running" one means the row is gone; a scan that already has
- * financial records, or a reused idempotency key, still needs the owner to read
- * the message.
- */
-function isDeletionAlreadyUnderway(error: unknown): boolean {
-  if (!isAxiosError(error) || error.response?.status !== 409) return false;
-  const body = error.response.data as { error?: unknown; code?: unknown } | undefined;
-  // The stable code is the contract; the message match keeps older servers working.
-  return body?.code === "PURGE_IN_PROGRESS" || (typeof body?.error === "string" && /already being deleted/i.test(body.error));
-}
-
-/**
- * The confirm-time hash when a DUPLICATE_REVIEW_CHANGED answer names exactly the
- * acknowledged target records. Row ids move with the edited identity; targets do not.
- */
-function sameMatchesHash(error: unknown, acknowledged: DuplicateReviewState): string | null {
-  if (!isAxiosError(error) || error.response?.status !== 409) return null;
-  const body = error.response.data as Partial<ReceiptDuplicateReview> | undefined;
-  if (body?.code !== "DUPLICATE_REVIEW_CHANGED") return null;
-  const current = duplicateReviewFrom(body, true);
-  if (!current || current.nextCursor !== null || current.candidates.length !== current.candidateCount) return null;
-  const targetKey = (candidate: ReceiptDuplicateCandidate) => `${candidate.target.kind}:${candidate.target.id}`;
-  const acknowledgedTargets = new Set(acknowledged.candidates.map(targetKey));
-  const currentTargets = new Set(current.candidates.map(targetKey));
-  if (acknowledgedTargets.size !== currentTargets.size) return null;
-  for (const key of currentTargets) if (!acknowledgedTargets.has(key)) return null;
-  return current.candidateSetHash;
-}
-
-function scannedItemRowId(itemId: number): string {
-  return `scanned-item-${itemId}`;
-}
-
-function scannedItemRemoveId(itemId: number): string {
-  return `${scannedItemRowId(itemId)}-remove`;
-}
-
-/** The server binds an upload key to one batch slot or to a single receipt. */
-function uploadBindingKey(batch?: BatchReceiptBinding): string {
-  return batch ? `batch:${batch.batchId}:${batch.receiptOrdinal}` : "single";
-}
-
-function duplicateReviewFrom(value: unknown, changed = false): DuplicateReviewState | null {
-  if (!value || typeof value !== "object") return null;
-  const candidateSetHash = (value as { candidateSetHash?: unknown }).candidateSetHash;
-  const candidates = (value as { candidates?: unknown }).candidates;
-  const candidateCountValue = (value as { candidateCount?: unknown }).candidateCount;
-  const candidatesTruncatedValue = (value as { candidatesTruncated?: unknown }).candidatesTruncated;
-  const nextCursorValue = (value as { nextCursor?: unknown }).nextCursor;
-  if (typeof candidateSetHash !== "string" || !/^[0-9a-f]{64}$/.test(candidateSetHash) || !Array.isArray(candidates)) {
-    return null;
-  }
-  const valid = candidates.filter((candidate): candidate is ReceiptDuplicateCandidate => {
-    if (!candidate || typeof candidate !== "object") return false;
-    const row = candidate as Partial<ReceiptDuplicateCandidate>;
-    return Number.isInteger(row.id)
-      && typeof row.date === "string"
-      && typeof row.total === "number"
-      && Number.isFinite(row.total)
-      && (row.vendor === null || typeof row.vendor === "string")
-      && (row.scoreBand === "EXACT" || row.scoreBand === "LIKELY")
-      && Array.isArray(row.reasons)
-      && row.reasons.every((reason) => DUPLICATE_REASONS.has(reason))
-      && Boolean(row.target && (row.target.kind === "receipt" || row.target.kind === "expense") && Number.isInteger(row.target.id));
-  });
-  if (valid.length !== candidates.length || valid.length === 0) return null;
-  const candidateCount = candidateCountValue === undefined
-    ? valid.length
-    : candidateCountValue;
-  if (!Number.isInteger(candidateCount) || Number(candidateCount) < valid.length) return null;
-  const nextCursor = nextCursorValue === undefined ? null : nextCursorValue;
-  if (nextCursor !== null && (typeof nextCursor !== "string" || nextCursor.length === 0)) return null;
-  if (candidatesTruncatedValue !== undefined
-    && (typeof candidatesTruncatedValue !== "boolean"
-      || candidatesTruncatedValue !== (nextCursor !== null))) return null;
-  return {
-    candidateSetHash,
-    candidates: valid,
-    candidateCount: Number(candidateCount),
-    nextCursor,
-    changed,
-  };
-}
-
-function isEmptyDuplicateCandidatePage(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const page = value as Partial<ReceiptDuplicateCandidatePage>;
-  const sourceFingerprintIsValid = page.sourceFingerprint === null
-    || (typeof page.sourceFingerprint === "string" && /^[0-9a-f]{64}$/.test(page.sourceFingerprint));
-  return sourceFingerprintIsValid
-    && page.candidateSetHash === null
-    && Array.isArray(page.candidates)
-    && page.candidates.length === 0
-    && page.candidateCount === 0
-    && page.candidatesTruncated === false
-    && page.nextCursor === null;
-}
+import {
+  isCancelledReceiptBatch,
+  isCollectingReceiptBatch,
+  isDeletionAlreadyUnderway,
+  uploadBindingKey,
+  type BatchReceiptBinding,
+} from "./scanReceipt/receiptBatch";
+import { duplicateReviewFrom, sameMatchesHash } from "./scanReceipt/duplicateReview";
+import { useReceiptDuplicateReview } from "./scanReceipt/useReceiptDuplicateReview";
+import { useReceiptReviewDraftPersistence } from "./scanReceipt/useReceiptReviewDraftPersistence";
+import { ReceiptWorkflowProgress } from "./scanReceipt/ReceiptWorkflowProgress";
+import { ReceiptReviewTabs, type ReceiptReviewMode } from "./scanReceipt/ReceiptReviewTabs";
+import { ReceiptPhotoTips } from "./scanReceipt/ReceiptPhotoTips";
+import { KeptDraftNotice, RestoredDraftNotice } from "./scanReceipt/ReceiptDraftNotices";
+import { FailedReceiptScan, ForeignCurrencyReceipt } from "./scanReceipt/UnreviewableReceipt";
+import { BatchProgressList } from "./scanReceipt/BatchProgressList";
+import { ScannedItemsTable } from "./scanReceipt/ScannedItemsTable";
+import { ItemReconciliation } from "./scanReceipt/ItemReconciliation";
+import { SplitEditor } from "./scanReceipt/SplitEditor";
+import { DuplicateReviewPanel, CompactDuplicateReviewPanel } from "./scanReceipt/DuplicateReviewPanel";
+import { CompactReceiptSummary } from "./scanReceipt/CompactReceiptSummary";
 
 export function ScanReceipt() {
   const { selected } = useBusinessProfiles();
@@ -443,11 +128,6 @@ function ScanReceiptForm() {
   const { history: resumeHistory, loading: resumeLoading, loadingOlder: resumeLoadingOlder, error: resumeError,
     refresh: refreshActiveReceiptHistory, loadOlder: loadOlderReceiptHistory, remove: removeFromHistory, seed: seedHistory } = recoveryHistory;
   const resumeScans = resumeHistory.scans;
-  const [duplicateReview, setDuplicateReview] = useState<DuplicateReviewState | null>(null);
-  const [duplicateLoading, setDuplicateLoading] = useState(false);
-  const [duplicateCheckStatus, setDuplicateCheckStatus] = useState<DuplicateCheckStatus>("idle");
-  const [duplicateCheckAttempt, setDuplicateCheckAttempt] = useState(0);
-  const [duplicateAcknowledged, setDuplicateAcknowledged] = useState(false);
   const [deletingScanId, setDeletingScanId] = useState<number | null>(null);
 
   /**
@@ -558,7 +238,6 @@ function ScanReceiptForm() {
   } | null>(null);
   const currentFiles = useRef<File[]>([]);
   const requests = useRef(new AbortController());
-  const duplicateRequests = useRef<AbortController | null>(null);
   const startPending = useRef(false);
   const savePending = useRef(false);
   const stopRequested = useRef(false);
@@ -578,7 +257,13 @@ function ScanReceiptForm() {
         || editingItem.amount !== editedItem.amount),
   );
   const hasUnsavedReviewChanges = Boolean(scan && (reviewDirty || hasPendingItemEdit));
-  const allowReviewNavigation = useUnsavedChangesWarning(hasUnsavedReviewChanges);
+  const allowReviewNavigation = useUnsavedChangesWarning(hasUnsavedReviewChanges, undefined, () => {
+    if (scan && selected) removeReceiptReviewDraft(selected.id, scan.id);
+  });
+  /** The scan whose saved draft was put back on screen, until it is saved or discarded. */
+  const [restoredDraftFor, setRestoredDraftFor] = useState<number | null>(null);
+  // Bumped after discarding a draft from the upload stage, which reads drafts during render.
+  const [, setDraftsVersion] = useState(0);
 
   useEffect(() => {
     requests.current = new AbortController();
@@ -597,116 +282,19 @@ function ScanReceiptForm() {
   }, []);
 
   const selectedBusinessProfileId = selected?.id;
-  const duplicateScanId = scan?.id;
-  const duplicateScanStatus = scan?.processingStatus;
-  useEffect(() => {
-    if (duplicateScanId === undefined || duplicateScanStatus !== "Complete") {
-      duplicateRequests.current?.abort();
-      duplicateRequests.current = null;
-      setDuplicateReview(null);
-      setDuplicateAcknowledged(false);
-      setDuplicateLoading(false);
-      setDuplicateCheckStatus("idle");
-      return;
-    }
-    duplicateRequests.current?.abort();
-    const controller = new AbortController();
-    duplicateRequests.current = controller;
-    setDuplicateReview(null);
-    setDuplicateAcknowledged(false);
-    setDuplicateLoading(true);
-    setDuplicateCheckStatus("loading");
-    void api.get<ReceiptDuplicateCandidatePage>(`/records/receipts/${duplicateScanId}/duplicate-candidates`, {
-      params: { take: 50 },
-      signal: controller.signal,
-    }).then(({ data }) => {
-      if (controller.signal.aborted) return;
-      const review = duplicateReviewFrom(data);
-      if (!review && !isEmptyDuplicateCandidatePage(data)) {
-        throw new Error("Duplicate candidate response was invalid");
-      }
-      setDuplicateReview(review);
-      setDuplicateCheckStatus("success");
-    }).catch(() => {
-      if (!controller.signal.aborted) setDuplicateCheckStatus("error");
-    }).finally(() => {
-      if (!controller.signal.aborted) setDuplicateLoading(false);
-    });
-    return () => {
-      controller.abort();
-      if (duplicateRequests.current === controller) duplicateRequests.current = null;
-    };
-  }, [duplicateCheckAttempt, duplicateScanId, duplicateScanStatus]);
-
-  const duplicateListComplete = duplicateReview === null
-    || (duplicateReview.nextCursor === null
-      && duplicateReview.candidates.length === duplicateReview.candidateCount);
-
-  async function loadMoreDuplicateCandidates() {
-    if (!scan || !duplicateReview?.nextCursor || duplicateLoading) return;
-    const current = duplicateReview;
-    const signal = duplicateRequests.current?.signal;
-    if (!signal || signal.aborted) return;
-    setDuplicateLoading(true);
-    setDuplicateCheckStatus("loading");
-    setConfirmError(null);
-    try {
-      const { data } = await api.get<ReceiptDuplicateCandidatePage>(
-        `/records/receipts/${scan.id}/duplicate-candidates`,
-        { params: { cursor: current.nextCursor, take: 50 }, signal },
-      );
-      signal.throwIfAborted();
-      const page = duplicateReviewFrom(data, current.changed);
-      if (!page) {
-        throw new Error("Duplicate candidate page was invalid");
-      }
-      if (page.candidateSetHash !== current.candidateSetHash) {
-        const fresh = await api.get<ReceiptDuplicateCandidatePage>(
-          `/records/receipts/${scan.id}/duplicate-candidates`,
-          { params: { take: 50 }, signal },
-        );
-        signal.throwIfAborted();
-        const refreshedReview = duplicateReviewFrom(fresh.data, true);
-        if (!refreshedReview && !isEmptyDuplicateCandidatePage(fresh.data)) {
-          throw new Error("Duplicate candidate response was invalid");
-        }
-        setDuplicateReview(refreshedReview);
-        setDuplicateCheckStatus("success");
-        setDuplicateAcknowledged(false);
-        setConfirmError("The possible matches changed. Review the current list before saving.");
-        return;
-      }
-
-      const candidates = [...new Map(
-        [...current.candidates, ...page.candidates].map((candidate) => [candidate.id, candidate]),
-      ).values()];
-      if (candidates.length > page.candidateCount
-        || (page.nextCursor === null && candidates.length !== page.candidateCount)) {
-        throw new Error("Duplicate candidate page did not match its full-set count");
-      }
-      setDuplicateReview({
-        candidateSetHash: current.candidateSetHash,
-        candidates,
-        candidateCount: page.candidateCount,
-        nextCursor: page.nextCursor,
-        changed: current.changed,
-      });
-      setDuplicateCheckStatus("success");
-      setDuplicateAcknowledged(false);
-    } catch {
-      if (!signal.aborted) {
-        setDuplicateCheckStatus("error");
-        setConfirmError("FinSight could not load every possible match. Try loading the list again before saving.");
-      }
-    } finally {
-      if (!signal.aborted) setDuplicateLoading(false);
-    }
-  }
-
-  function retryDuplicateCheck() {
-    setConfirmError(null);
-    setDuplicateCheckAttempt((attempt) => attempt + 1);
-  }
+  const {
+    duplicateReview,
+    setDuplicateReview,
+    duplicateLoading,
+    setDuplicateLoading,
+    duplicateCheckStatus,
+    setDuplicateCheckStatus,
+    duplicateAcknowledged,
+    setDuplicateAcknowledged,
+    duplicateListComplete,
+    loadMoreDuplicateCandidates,
+    retryDuplicateCheck,
+  } = useReceiptDuplicateReview(scan, setConfirmError);
 
   /**
    * Focus lands on the first field that needs a decision.
@@ -786,6 +374,13 @@ function ScanReceiptForm() {
     const next = nextItemId === null ? null : document.getElementById(scannedItemRemoveId(nextItemId));
     (next ?? document.getElementById("amount"))?.focus();
   }, [focusItemAfterRemove]);
+
+  useReceiptReviewDraftPersistence(
+    selectedBusinessProfileId,
+    scan?.processingStatus === "Complete" ? scan.id : undefined,
+    hasUnsavedReviewChanges,
+    { date, description, vendor, amount, splits, itemCategories, addedItems, gapPlan, gapCategoryId, keptRepeatItemIds, editingItem },
+  );
 
   if (!selected) return <NoBusinessProfile />;
 
@@ -939,6 +534,79 @@ function ScanReceiptForm() {
     setSplits([{ categoryId: "", amount: "" }]);
     setReviewDirty(false);
     setReviewMode("review");
+    const draft = readReceiptReviewDraft(selected!.id, data.id);
+    if (draft) restoreDraft(data, draft);
+    else setRestoredDraftFor(null);
+  }
+
+  /** Puts saved edits back over the fresh reading, dropping any for lines no longer on the scan. */
+  function restoreDraft(data: ReceiptScanResult, draft: ReceiptReviewDraftEdits) {
+    const itemIds = new Set(data.items.map((item) => item.id));
+    setDate(draft.date);
+    setDescription(draft.description);
+    setVendor(draft.vendor);
+    setAmount(draft.amount);
+    setSplits(draft.splits);
+    setItemCategories(Object.fromEntries(data.items.map((item) => [
+      item.id,
+      draft.itemCategories[item.id] ?? item.categoryId ?? "",
+    ])));
+    setAddedItems(draft.addedItems);
+    setGapPlan(draft.gapPlan);
+    setGapCategoryId(draft.gapCategoryId);
+    setKeptRepeatItemIds(new Set(draft.keptRepeatItemIds.filter((id) => itemIds.has(id))));
+    setEditingItem(draft.editingItem && itemIds.has(draft.editingItem.id) ? draft.editingItem : null);
+    setReviewDirty(true);
+    setRestoredDraftFor(data.id);
+  }
+
+  async function discardRestoredDraft() {
+    if (!scan) return;
+    const approved = await confirm({
+      title: "Discard your restored changes?",
+      body: "The review goes back to what FinSight read from this receipt.",
+      confirmLabel: "Discard changes",
+      cancelLabel: "Keep changes",
+      tone: "danger",
+    });
+    if (!approved) return;
+    removeReceiptReviewDraft(selected!.id, scan.id);
+    const singleItem = scan.items.length === 1 ? scan.items[0]! : null;
+    const singleCategory = singleItem?.categoryId != null
+      ? categories.find((category) => category.id === singleItem.categoryId)
+      : undefined;
+    setDate(scan.extractedDate ? scan.extractedDate.slice(0, 10) : "");
+    setDescription(scan.extractedDescription ?? "");
+    setVendor(scan.extractedVendor ?? "");
+    setAmount(scan.extractedAmount ?? "");
+    setItemCategories(Object.fromEntries(scan.items.map((item) => [item.id, item.categoryId ?? ""])));
+    setSplits([{
+      categoryId: singleCategory && singleCategory.name.toLowerCase() !== "uncategorized" ? singleCategory.id : "",
+      amount: "",
+    }]);
+    setAddedItems([]);
+    setGapPlan(null);
+    setGapCategoryId("");
+    setKeptRepeatItemIds(new Set());
+    setEditingItem(null);
+    setDuplicateAcknowledged(false);
+    setConfirmError(null);
+    setReviewDirty(false);
+    setRestoredDraftFor(null);
+    toast("Restored changes discarded.");
+  }
+
+  async function discardStoredDraft(target: ReceiptHistoryItem) {
+    const approved = await confirm({
+      title: `Discard unsaved changes to ${recoveryRowTitle(target)}?`,
+      body: "The scan stays in unfinished scans with what FinSight read from it.",
+      confirmLabel: "Discard changes",
+      cancelLabel: "Keep changes",
+      tone: "danger",
+    });
+    if (!approved) return;
+    removeReceiptReviewDraft(selected!.id, target.id);
+    setDraftsVersion((version) => version + 1);
   }
 
   /** Uploads one receipt, retaining its ordered local pages for review. */
@@ -1185,6 +853,7 @@ function ScanReceiptForm() {
         throw new Error("FinSight returned a deletion result that did not match this receipt scan.");
       }
       deleteKeys.current.delete(target.id);
+      removeReceiptReviewDraft(selected!.id, target.id);
       const rowIndex = resumeScans.findIndex((row) => row.id === target.id);
       const neighbour = rowIndex === -1
         ? null
@@ -1214,6 +883,7 @@ function ScanReceiptForm() {
         // so the row is as gone as a fresh 200 would have made it; keeping it
         // with an error would invite a third attempt at the same thing.
         deleteKeys.current.delete(target.id);
+        removeReceiptReviewDraft(selected!.id, target.id);
           const rowIndex = resumeScans.findIndex((row) => row.id === target.id);
         const neighbour = rowIndex === -1
           ? null
@@ -1266,6 +936,7 @@ function ScanReceiptForm() {
   }
 
   async function finishConfirmedReceipt(saved: { id: number }[] | null) {
+    if (scan) removeReceiptReviewDraft(selected!.id, scan.id);
     if (saved) {
       toast(saved.length === 1 ? "Expense saved from receipt" : `${saved.length} expenses saved from receipt`);
     } else {
@@ -1485,6 +1156,7 @@ function ScanReceiptForm() {
     setDuplicateReview(null);
     setDuplicateLoading(false);
     setDuplicateAcknowledged(false);
+    setRestoredDraftFor(null);
   }
 
   /**
@@ -1503,6 +1175,7 @@ function ScanReceiptForm() {
       });
       if (!approved) return;
     }
+    if (scan) removeReceiptReviewDraft(selected!.id, scan.id);
     const abandoned: ReceiptScanResult[] = [];
     if (scan && scan.confirmationStatus !== "Confirmed") abandoned.push(scan);
     for (const file of fileQueue) {
@@ -1916,6 +1589,8 @@ function ScanReceiptForm() {
 
   // ---- stage 1: choose a photo ------------------------------------------
   if (!scan) {
+    const draftRow = resumeScans.find((row) => row.allowedActions.reviewResult
+      && readReceiptReviewDraft(selected.id, row.id) !== null) ?? null;
     return (
       <div>
         <PageHead
@@ -1927,6 +1602,15 @@ function ScanReceiptForm() {
           <ReceiptWorkflowProgress current="upload" />
           <div className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(17rem,1fr)] xl:items-start">
             <Card as="form" onSubmit={handleStartScanning} className="p-4 sm:p-5">
+              {draftRow ? (
+                <KeptDraftNotice
+                  draftRow={draftRow}
+                  scanning={scanning}
+                  deletingScanId={deletingScanId}
+                  openStoredScan={openStoredScan}
+                  discardStoredDraft={discardStoredDraft}
+                />
+              ) : null}
               <ReceiptRecoveryHistory
                 history={resumeHistory} loading={resumeLoading} loadingOlder={resumeLoadingOlder} error={resumeError}
                 scanning={scanning} deletingScanId={deletingScanId}
@@ -2027,75 +1711,32 @@ function ScanReceiptForm() {
 
   if (scan.processingStatus === "Failed") {
     return (
-      <FormPage eyebrow="Records" title="Receipt needs another try">
-        <div className="space-y-4">
-          <Callout tone="warn">
-            <p className="font-semibold">FinSight could not finish reading this receipt.</p>
-            <p className="mt-1 text-sm">
-              {scan.processingError ?? "The saved images are still available for another processing attempt."}
-            </p>
-          </Callout>
-          {receiptPreview}
-          {scanError ? <FormError>{scanError}</FormError> : null}
-          {scanning ? <ScanProgress stage={scanStage} /> : null}
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="primary" onClick={retryProcessing} disabled={scanning}>
-              {scanning ? "Retrying…" : "Retry processing"}
-            </Button>
-            {scanning ? (
-              <Button type="button" variant="secondary" onClick={handleStopWaiting}>
-                Stop waiting
-              </Button>
-            ) : null}
-            <Link to="/records/expenses/new" className="tap-inline inline-flex items-center link">
-              Enter manually
-            </Link>
-            <Button type="button" variant="secondary" onClick={handleRescan} disabled={scanning}>
-              Choose another image
-            </Button>
-            <Button
-              type="button"
-              variant="danger"
-              onClick={() => void deleteUnconfirmedScan(scan)}
-              disabled={scanning || deletingScanId !== null}
-            >
-              {deletingScanId === scan.id ? "Deleting…" : "Delete scan"}
-            </Button>
-          </div>
-        </div>
-      </FormPage>
+      <FailedReceiptScan
+        scan={scan}
+        receiptPreview={receiptPreview}
+        scanError={scanError}
+        scanning={scanning}
+        scanStage={scanStage}
+        retryProcessing={retryProcessing}
+        handleStopWaiting={handleStopWaiting}
+        handleRescan={handleRescan}
+        deleteUnconfirmedScan={deleteUnconfirmedScan}
+        deletingScanId={deletingScanId}
+      />
     );
   }
 
   if (foreignCurrency) {
     return (
-      <FormPage title="Review receipt">
-        <div className="space-y-4">
-          <Callout tone="warn">
-            <p className="font-semibold">This receipt uses {foreignCurrency}. FinSight records expenses in PHP.</p>
-            <Link to="/records/expenses/new" className="tap-inline font-semibold underline underline-offset-2">
-              Enter the PHP amount manually
-            </Link>
-          </Callout>
-          {scan.extractedAmount !== null && scan.receiptDetails?.currency ? (
-            <p className="text-sm text-ink-700">Printed total: <strong className="figure">{foreignCurrency} {new Intl.NumberFormat("en-PH", { minimumFractionDigits: 2 }).format(scan.extractedAmount)}</strong></p>
-          ) : null}
-          <PrintedReceiptDetails details={scan.receiptDetails} />
-          {receiptPreview}
-          {scanError ? <FormError>{scanError}</FormError> : null}
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="secondary" onClick={handleRescan}>Choose another receipt</Button>
-            <Button
-              type="button"
-              variant="danger"
-              onClick={() => void deleteUnconfirmedScan(scan)}
-              disabled={deletingScanId !== null}
-            >
-              {deletingScanId === scan.id ? "Deleting…" : "Delete scan"}
-            </Button>
-          </div>
-        </div>
-      </FormPage>
+      <ForeignCurrencyReceipt
+        scan={scan}
+        foreignCurrency={foreignCurrency}
+        receiptPreview={receiptPreview}
+        scanError={scanError}
+        handleRescan={handleRescan}
+        deleteUnconfirmedScan={deleteUnconfirmedScan}
+        deletingScanId={deletingScanId}
+      />
     );
   }
 
@@ -2112,74 +1753,12 @@ function ScanReceiptForm() {
         subtitle="Check the details FinSight found and correct anything before saving."
       />
       <ReceiptWorkflowProgress current={confirming ? "save" : "review"} />
+      {restoredDraftFor === scan.id ? (
+        <RestoredDraftNotice confirming={confirming} discardRestoredDraft={discardRestoredDraft} />
+      ) : null}
       <ReceiptReviewTabs value={reviewMode} onChange={setReviewMode} />
 
-      {/*
-        The batch progress row — a plain-text "Receipt 2 of 4" in the subtitle
-        was easy to miss, and gave no way to actually SEE receipt 1 again once
-        it scrolled past. Each earlier receipt is now a real link.
-
-        Opens in a NEW TAB rather than navigating in place: this app is a
-        single-page client, and an in-app navigation to a saved record would
-        unmount this screen — losing fileQueue, queuePosition and everything
-        else this in-progress batch is holding. A new tab leaves the batch
-        exactly where it was.
-      */}
-      {queueTotal > 0 ? (
-        <div className="mb-4 flex flex-wrap items-center gap-2" role="list" aria-label="Receipts in this batch">
-          {Array.from({ length: queueTotal }, (_, i) => i + 1).map((n) => {
-            const history = queueHistory.find((h) => h.position === n);
-            if (n === queuePosition) {
-              return (
-                <span
-                  key={n}
-                  role="listitem"
-                  className="inline-flex items-center gap-1.5 rounded-full bg-brand-700 px-3 py-1.5 text-xs font-semibold text-white"
-                >
-                  Receipt {n} · Reviewing now
-                </span>
-              );
-            }
-            if (history && history.recordIds[0] !== undefined) {
-              return (
-                <a
-                  key={n}
-                  role="listitem"
-                  href={`/records/expenses/${history.recordIds[0]}/edit`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="tap-inline inline-flex items-center gap-1.5 rounded-full bg-tint-brand px-3 py-1.5 text-xs font-medium text-tone-brand ring-1 ring-edge-brand transition hover:bg-tint-brand/70"
-                >
-                  <span aria-hidden>✓</span>
-                  Receipt {n} · Saved. View it
-                  <span className="sr-only">(opens in a new tab)</span>
-                </a>
-              );
-            }
-            if (history) {
-              return (
-                <span
-                  key={n}
-                  role="listitem"
-                  className="inline-flex items-center gap-1.5 rounded-full bg-tint-brand px-3 py-1.5 text-xs font-medium text-tone-brand ring-1 ring-edge-brand"
-                >
-                  <span aria-hidden>✓</span>
-                  Receipt {n} · Saved
-                </span>
-              );
-            }
-            return (
-              <span
-                key={n}
-                role="listitem"
-                className="inline-flex items-center gap-1.5 rounded-full bg-paper-100 px-3 py-1.5 text-xs text-ink-600"
-              >
-                Receipt {n} · Not yet
-              </span>
-            );
-          })}
-        </div>
-      ) : null}
+      <BatchProgressList queueTotal={queueTotal} queuePosition={queuePosition} queueHistory={queueHistory} />
 
       <div
         id="receipt-view-panel"
@@ -2399,551 +1978,48 @@ function ScanReceiptForm() {
                   )}
                 </p>
 
-                <div className="mt-2 overflow-x-auto rounded-xl border border-paper-200">
-                  <table className="w-full min-w-[38rem] text-left text-sm">
-                    <caption className="sr-only">
-                      Each item read from the receipt, with the category it will be filed under
-                    </caption>
-                    <thead>
-                      <tr className="border-b border-paper-200 bg-paper-100">
-                        <th scope="col" className="px-3 py-2 text-xs font-semibold uppercase tracking-[0.06em] text-ink-600">
-                          Item
-                        </th>
-                        <th scope="col" className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600">
-                          Qty
-                        </th>
-                        <th scope="col" className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600">
-                          Price
-                        </th>
-                        <th scope="col" className="w-56 px-3 py-2 text-xs font-semibold uppercase tracking-[0.06em] text-ink-600">
-                          Category
-                        </th>
-                        <th scope="col" className="w-24 px-3 py-2">
-                          <span className="sr-only">Actions</span>
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {items.map((item) => (
-                        <tr key={item.id} id={scannedItemRowId(item.id)} className="border-t border-paper-200 align-middle">
-                          <td className="px-3 py-2 text-ink-800">
-                            {editingItem?.id === item.id ? (
-                              <>
-                                <label htmlFor={`item-name-${item.id}`} className="sr-only">
-                                  Item name
-                                </label>
-                                <TextInput
-                                  id={`item-name-${item.id}`}
-                                  value={editingItem.name}
-                                  onChange={(event) =>
-                                    setEditingItem((current) => current
-                                      ? { ...current, name: event.target.value }
-                                      : current)
-                                  }
-                                />
-                              </>
-                            ) : (
-                              item.name
-                            )}
-                            {/*
-                              When the items do not add up, the server names
-                              the line it is least sure of. Pointing beats
-                              asking the owner to re-read all nine — and it
-                              never changes the figure, because the right
-                              value is not something the engine knows.
-                            */}
-                            {scan.suspectItemId === item.id ? (
-                              <span className="ml-1.5 inline-flex items-center gap-1 rounded-full bg-tint-accent px-1.5 py-0.5 text-[10px] font-medium text-tone-accent ring-1 ring-edge-accent align-middle">
-                                <span aria-hidden>⚠</span>
-                                Check this one first
-                              </span>
-                            ) : null}
-                            {/*
-                              Marked per row, not just once at the top, because
-                              the row is where the owner decides. A line a model
-                              inferred from a photograph should look different
-                              from one read off text at the moment it is checked.
-                            */}
-                            {SHOW_AI_PHOTO_EXTRACTION_LABEL && item.extractedByVision ? (
-                              <span className="ml-1.5 inline-flex items-center gap-0.5 rounded-full bg-tint-accent px-1.5 py-0.5 text-[10px] font-medium text-tone-accent ring-1 ring-edge-accent align-middle">
-                                <span aria-hidden>✦</span>
-                                AI read this from the photo
-                              </span>
-                            ) : null}
-                            {item.ownerEditedFields?.length ? (
-                              <span className="ml-1.5 inline-flex rounded-full bg-tint-brand px-1.5 py-0.5 text-[10px] font-medium text-tone-brand ring-1 ring-edge-brand align-middle">
-                                Corrected by you
-                              </span>
-                            ) : null}
-                            {/*
-                              The printed line this row came off, quoted. It is
-                              the cheapest possible way to check a row: the
-                              owner compares two strings instead of hunting the
-                              paper for a number.
-                            */}
-                            {item.evidence ? (
-                              <span className="mt-0.5 block text-[10px] leading-relaxed text-ink-500">
-                                <EvidenceNote evidence={item.evidence} />
-                              </span>
-                            ) : null}
-                            {/*
-                              A line that may be the overlap between two photos
-                              read twice. FinSight removes a repeat on its own
-                              only when the receipt's total proves it; anything
-                              short of that is the owner's call, made on the row.
-                            */}
-                            {item.possibleRepeatOf && !keptRepeatItemIds.has(item.id) ? (
-                              <span className="mt-1.5 block rounded-lg border border-edge-accent bg-tint-accent px-2 py-1.5 text-xs text-tone-accent">
-                                May be counted twice. Your photos overlap, and page {item.possibleRepeatOf.pageNumber} also shows{" "}
-                                {item.possibleRepeatOf.name} for PHP {item.possibleRepeatOf.amount.toFixed(2)}.
-                                <span className="mt-1.5 flex flex-wrap gap-2">
-                                  <Button
-                                    type="button"
-                                    variant="secondary"
-                                    size="sm"
-                                    aria-label={`Remove ${item.name}, it repeats page ${item.possibleRepeatOf.pageNumber}`}
-                                    disabled={editingItem !== null || removingItemId !== null}
-                                    onClick={() => void removeScannedItem(item)}
-                                  >
-                                    Remove repeat
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="sm"
-                                    aria-label={`Keep ${item.name}, it is a separate purchase`}
-                                    disabled={removingItemId === item.id}
-                                    onClick={() => setKeptRepeatItemIds((current) => new Set(current).add(item.id))}
-                                  >
-                                    Keep both
-                                  </Button>
-                                </span>
-                              </span>
-                            ) : null}
-                          </td>
-                          <td className="figure px-3 py-2 text-right text-ink-600">
-                            {item.quantity ?? "Not listed"}
-                          </td>
-                          <td className="px-3 py-2 text-right">
-                            {editingItem?.id === item.id ? (
-                              <>
-                                <label htmlFor={`item-amount-${item.id}`} className="sr-only">
-                                  Item amount
-                                </label>
-                                <MoneyInput
-                                  id={`item-amount-${item.id}`}
-                                  min={0.01}
-                                  value={editingItem.amount}
-                                  onChange={(event) =>
-                                    setEditingItem((current) => current
-                                      ? {
-                                          ...current,
-                                          amount: event.target.value === "" ? "" : Number(event.target.value),
-                                        }
-                                      : current)
-                                  }
-                                />
-                              </>
-                            ) : (
-                              <Money value={item.amount} decimals />
-                            )}
-                            {/*
-                              The engine's own doubt about THIS figure. Shown
-                              only when it is low enough to act on — a
-                              percentage beside every correct price would be
-                              noise, and noise is what stops people checking.
-                            */}
-                            {/*
-                              The engine's own doubt about THIS figure, as a
-                              band rather than "72% sure". Same mapping as the
-                              header cue (lib/confidenceBands.ts) — before
-                              this, the page used 80/60 and the item badge used
-                              75, so a receipt could read "clear" above a row
-                              the same engine was unsure of. The raw figure
-                              stays in the title, as evidence.
-                            */}
-                            {confidenceBand({
-                              confidence: item.amountConfidence,
-                              visionAssisted: item.extractedByVision,
-                            }) !== "clear" && typeof item.amountConfidence === "number" ? (
-                              <span
-                                className="mt-0.5 block text-[10px] font-medium text-tone-accent"
-                                title={`FinSight's own confidence reading this amount: ${item.amountConfidence}%`}
-                              >
-                                {BAND_COPY[
-                                  confidenceBand({
-                                    confidence: item.amountConfidence,
-                                    visionAssisted: item.extractedByVision,
-                                  })
-                                ].label}
-                              </span>
-                            ) : null}
-                          </td>
-                          <td className="px-3 py-2">
-                            <label htmlFor={`item-category-${item.id}`} className="sr-only">
-                              Category for {item.name}
-                            </label>
-                            <CategorySelect
-                              id={`item-category-${item.id}`}
-                              value={itemCategories[item.id] ?? ""}
-                              onChange={(categoryId) => {
-                                setReviewDirty(true);
-                                setItemCategories((prev) => ({ ...prev, [item.id]: categoryId }));
-                              }}
-                            />
-                            {/*
-                              Why FinSight is unsure of this line's category,
-                              in the row's own "check this" style (the amount
-                              band above uses the same tone).
-                            */}
-                            {categoryReviewNote(item) ? (
-                              <p className="mt-1.5 text-[11px] leading-relaxed text-tone-accent">
-                                {categoryReviewNote(item)}
-                              </p>
-                            ) : null}
-                            {/*
-                              A category FinSight thinks is missing.
+                <ScannedItemsTable
+                  scan={scan}
+                  items={items}
+                  editingItem={editingItem}
+                  setEditingItem={setEditingItem}
+                  updatingItemId={updatingItemId}
+                  removingItemId={removingItemId}
+                  keptRepeatItemIds={keptRepeatItemIds}
+                  setKeptRepeatItemIds={setKeptRepeatItemIds}
+                  itemCategories={itemCategories}
+                  setItemCategories={setItemCategories}
+                  setReviewDirty={setReviewDirty}
+                  categoryReviewNote={categoryReviewNote}
+                  suggestedNewCategoryFor={suggestedNewCategoryFor}
+                  creatingCategoryFor={creatingCategoryFor}
+                  acceptSuggestedCategory={acceptSuggestedCategory}
+                  saveItemEdit={saveItemEdit}
+                  beginItemEdit={beginItemEdit}
+                  removeScannedItem={removeScannedItem}
+                  addedItems={addedItems}
+                  updateAddedItem={updateAddedItem}
+                  removeAddedItem={removeAddedItem}
+                />
 
-                              Shown only where it is still useful — see
-                              suggestedNewCategoryFor. Phrased as an offer
-                              rather than an assignment, because nothing is
-                              created until the owner says so; the whole
-                              reason this is a suggestion and not a decision
-                              is that inventing categories in someone's books
-                              is not FinSight's call to make.
-                            */}
-                            {suggestedNewCategoryFor(item) ? (
-                              <p className="mt-1.5 text-[11px] leading-relaxed text-ink-500">
-                                <span aria-hidden className="text-tone-accent">
-                                  ✦
-                                </span>{" "}
-                                Nothing fits this. FinSight suggests a new category,{" "}
-                                <b className="font-semibold text-ink-700">{item.suggestedCategoryName}</b>.{" "}
-                                <button
-                                  type="button"
-                                  onClick={() => acceptSuggestedCategory(item.suggestedCategoryName!)}
-                                  disabled={creatingCategoryFor !== null}
-                                  className="tap-inline disabled:opacity-50 link"
-                                >
-                                  {creatingCategoryFor === item.suggestedCategoryName
-                                    ? "Creating…"
-                                    : "Create it"}
-                                  <span className="sr-only"> and file {item.name} under it</span>
-                                </button>
-                              </p>
-                            ) : null}
-                          </td>
-                          <td className="px-3 py-2">
-                            <div className="flex items-center justify-end gap-1">
-                              {editingItem?.id === item.id ? (
-                                <>
-                                  <button
-                                    type="button"
-                                    onClick={() => void saveItemEdit()}
-                                    disabled={updatingItemId === item.id}
-                                    className="tap-inline shrink-0 rounded-lg px-2 py-1 text-xs font-semibold text-tone-brand transition hover:bg-tint-brand disabled:opacity-50"
-                                  >
-                                    {updatingItemId === item.id ? "Saving…" : "Save"}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => setEditingItem(null)}
-                                    disabled={updatingItemId === item.id}
-                                    className="tap-inline shrink-0 rounded-lg px-2 py-1 text-xs font-medium text-ink-600 transition hover:bg-paper-100 disabled:opacity-50"
-                                  >
-                                    Cancel
-                                  </button>
-                                </>
-                              ) : (
-                                <button
-                                  type="button"
-                                  aria-label={`Edit ${item.name}`}
-                                  onClick={() => beginItemEdit(item)}
-                                  disabled={editingItem !== null || removingItemId !== null}
-                                  className="tap-inline shrink-0 rounded-lg px-2 py-1 text-xs font-semibold text-tone-brand transition hover:bg-tint-brand disabled:opacity-50"
-                                >
-                                  Edit
-                                </button>
-                              )}
-                              {/*
-                                Disabled while ANY row is being removed, not
-                                just this one. Each × sends the scan revision
-                                it was rendered with, so a second click during
-                                a delete in flight comes back 409 — "this
-                                receipt changed in another request" — for a
-                                change the owner made themselves a moment ago.
-                              */}
-                              <button
-                                type="button"
-                                id={scannedItemRemoveId(item.id)}
-                                onClick={() => void removeScannedItem(item)}
-                                disabled={removingItemId !== null || editingItem !== null}
-                                className="tap-inline flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-xs font-medium text-ink-500 transition hover:bg-paper-100 hover:text-tone-danger disabled:opacity-50"
-                              >
-                                <span aria-hidden>×</span>
-                                <span className="sr-only">
-                                  Remove {item.name}. This was not a purchase
-                                </span>
-                              </button>
-                            </div>
-
-                          </td>
-                        </tr>
-                      ))}
-
-                      {/*
-                        Lines the owner is adding because OCR missed them.
-
-                        Kept visually distinct from the extracted rows: the
-                        panel above claims FinSight READ these items off the
-                        receipt, and that claim must not quietly extend to a
-                        row a human typed. The same distinction is stored
-                        server-side (ReceiptScanItem.addedByOwner) so it
-                        survives onto the saved record.
-                      */}
-                      {addedItems.map((added, i) => (
-                        <tr key={added.key} className="border-t border-paper-200 bg-paper-50 align-middle">
-                          <td className="px-3 py-2">
-                            <label htmlFor={`added-name-${added.key}`} className="sr-only">
-                              Name for added item {i + 1}
-                            </label>
-                            <TextInput
-                              id={`added-name-${added.key}`}
-                              placeholder="Item name"
-                              value={added.name}
-                              onChange={(e) => updateAddedItem(added.key, { name: e.target.value })}
-                            />
-                          </td>
-                          <td className="px-3 py-2 text-right text-ink-500">Not listed</td>
-                          <td className="px-3 py-2">
-                            <label htmlFor={`added-amount-${added.key}`} className="sr-only">
-                              Amount for added item {i + 1}
-                            </label>
-                            <MoneyInput
-                              id={`added-amount-${added.key}`}
-                              min={0.01}
-                              value={added.amount}
-                              onChange={(e) =>
-                                updateAddedItem(added.key, {
-                                  amount: e.target.value === "" ? "" : Number(e.target.value),
-                                })
-                              }
-                            />
-                          </td>
-                          <td className="px-3 py-2">
-                            <label htmlFor={`added-category-${added.key}`} className="sr-only">
-                              Category for added item {i + 1}
-                            </label>
-                            <CategorySelect
-                              id={`added-category-${added.key}`}
-                              value={added.categoryId}
-                              onChange={(categoryId) => updateAddedItem(added.key, { categoryId })}
-                            />
-                          </td>
-                          <td className="px-3 py-2">
-                            <div className="flex items-center justify-end gap-1">
-                              <button
-                                type="button"
-                                onClick={() => removeAddedItem(added.key)}
-                                className="tap-inline flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-xs font-medium text-ink-500 transition hover:bg-paper-100 hover:text-tone-danger"
-                              >
-                                <span aria-hidden>×</span>
-                                <span className="sr-only">Remove added item {i + 1}</span>
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/*
-                  The live per-category subtotals. Derived from the rows on
-                  every render rather than held in their own state, so moving
-                  one item between categories cannot leave a stale figure
-                  behind — both affected subtotals change in the same paint.
-                */}
-                <div className="mt-3 rounded-xl bg-paper-100 p-3">
-                  <p className="text-xs font-semibold text-ink-600">What gets saved</p>
-                  <ul className="mt-1.5 space-y-1">
-                    {itemGroups.map((group) => (
-                      <li
-                        key={String(group.categoryId)}
-                        className="flex items-baseline justify-between gap-3 text-sm"
-                      >
-                        <span className="min-w-0 truncate text-ink-700">
-                          {group.categoryId === "" ? (
-                            <span className="text-tone-accent">Not categorised yet</span>
-                          ) : (
-                            categoryName(group.categoryId)
-                          )}
-                          <span className="ml-1.5 text-xs text-ink-600">
-                            ({group.count} item{group.count === 1 ? "" : "s"})
-                          </span>
-                        </span>
-                        <span className="figure shrink-0 font-medium text-ink-900">
-                          <Money value={group.subtotal} decimals />
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                  <p
-                    aria-live="polite"
-                    className={`mt-2 flex items-center gap-1.5 border-t border-paper-200 pt-2 text-xs font-medium ${
-                      itemsAreComplete ? "text-tone-brand" : "text-tone-accent"
-                    }`}
-                  >
-                    <span aria-hidden>{itemsAreComplete ? "✓" : "⚠"}</span>
-                    {!everyItemHasCategory ? (
-                      <>Every item needs a category before this can be saved.</>
-                    ) : itemGapCentavos === 0 ? (
-                      <>
-                        {itemGroups.length} record{itemGroups.length === 1 ? "" : "s"} will be saved, adding
-                        up to the receipt total.
-                      </>
-                    ) : gapPlan === "shrink" ? (
-                      <>
-                        The receipt will be saved as <Money value={itemsTotalCentavos / 100} decimals /> based
-                        on the items' own total instead of the amount above.
-                      </>
-                    ) : gapPlanIsResolved ? (
-                      <>
-                        {itemGroups.length + (gapPlan === "category" ? 1 : 0)} record
-                        {itemGroups.length + (gapPlan === "category" ? 1 : 0) === 1 ? "" : "s"} will be saved,
-                        adding up to the receipt total of{" "}
-                        <Money value={totalCentavos / 100} decimals />.
-                      </>
-                    ) : itemGapCentavos > 0 ? (
-                      <>
-                        The items come to <Money value={itemsTotalCentavos / 100} decimals />, which is{" "}
-                        <Money value={itemGapCentavos / 100} decimals /> less than the receipt total above.
-                      </>
-                    ) : (
-                      <>
-                        The items come to <Money value={itemsTotalCentavos / 100} decimals />, which is{" "}
-                        <Money value={-itemGapCentavos / 100} decimals /> more than the receipt total above.
-                      </>
-                    )}
-                  </p>
-
-                  {gapPlan === "proportional" && gapNeedsAPlan ? (
-                    <p className="mt-1 text-xs text-ink-600">
-                      Each category above will carry its share of the{" "}
-                      <Money value={Math.abs(itemGapCentavos) / 100} decimals bare /> when saved.
-                    </p>
-                  ) : null}
-                </div>
-
-                {/*
-                  Accounting for the difference.
-
-                  A gap is normal rather than a mistake: a VAT-exclusive
-                  register adds tax on top of the printed lines, a discount
-                  takes money off, and OCR sometimes just misses one. The old
-                  screen offered a single way out — set the receipt total down
-                  to the items — which balances the arithmetic by DELETING
-                  money the owner really spent. On a receipt totalling 1,120
-                  with 1,000 of items, that filed a 1,000 expense.
-
-                  So the owner is asked what the difference actually is. The
-                  total they confirmed against the photo is the anchor and
-                  never moves on its own; only the last option, for a total
-                  OCR misread, changes it, and then only to figures read off
-                  the receipt.
-                */}
-                {everyItemHasCategory && gapNeedsAPlan ? (
-                  <fieldset className="mt-3 rounded-xl border border-tone-accent/30 bg-tone-accent/5 p-3">
-                    <legend className="px-1 text-xs font-semibold text-ink-700">
-                      {itemGapCentavos > 0 ? (
-                        <>
-                          What is the missing <Money value={itemGapCentavos / 100} decimals bare />?
-                        </>
-                      ) : (
-                        <>
-                          What is the extra <Money value={-itemGapCentavos / 100} decimals bare />?
-                        </>
-                      )}
-                    </legend>
-
-                    <p className="mt-1 text-xs leading-relaxed text-ink-500">
-                      {itemGapCentavos > 0
-                        ? "Usually tax, a service charge, or a line that didn't scan."
-                        : "Usually a discount or a voided line."}
-                    </p>
-
-                    <div className="mt-2 space-y-1.5">
-                      <GapOption
-                        name="gap-plan"
-                        checked={gapPlan === "proportional"}
-                        onChange={() => {
-                          setReviewDirty(true);
-                          setGapPlan("proportional");
-                        }}
-                        label={itemGapCentavos > 0 ? "Tax or a service charge" : "A discount on the whole receipt"}
-                        detail="Split across the categories above, in proportion to each."
-                      />
-
-                      {canFileGapInOneCategory ? (
-                        <GapOption
-                          name="gap-plan"
-                          checked={gapPlan === "category"}
-                          onChange={() => {
-                            setReviewDirty(true);
-                            setGapPlan("category");
-                          }}
-                          label="A separate charge to track on its own"
-                          detail="Saved as its own expense record under one category."
-                        >
-                          {gapPlan === "category" ? (
-                            <div className="mt-1.5">
-                              <label htmlFor="gap-category" className="sr-only">
-                                Category for the remaining amount
-                              </label>
-                              <CategorySelect
-                                id="gap-category"
-                                value={gapCategoryId}
-                                onChange={(categoryId) => {
-                                  setReviewDirty(true);
-                                  setGapCategoryId(categoryId);
-                                }}
-                              />
-                            </div>
-                          ) : null}
-                        </GapOption>
-                      ) : null}
-
-                      <GapOption
-                        name="gap-plan"
-                        checked={gapPlan === "shrink"}
-                        onChange={() => {
-                          setReviewDirty(true);
-                          setGapPlan("shrink");
-                        }}
-                        label="FinSight misread the receipt total"
-                        detail={
-                          <>
-                            Save <Money value={itemsTotalCentavos / 100} decimals bare /> based on the items' own
-                            total instead of the amount above.
-                          </>
-                        }
-                      />
-                    </div>
-
-                    {/*
-                      A missing line is not a category question, so it sits
-                      apart from the radios: adding it changes the gap rather
-                      than explaining it, and often closes it entirely.
-                    */}
-                    <button
-                      type="button"
-                      onClick={addAddedItem}
-                      className="tap-inline mt-2.5 border-t border-tone-accent/20 pt-2 text-xs link-action"
-                    >
-                      + Add a missing item to the list
-                    </button>
-                  </fieldset>
-                ) : null}
+                <ItemReconciliation
+                  itemGroups={itemGroups}
+                  categoryName={categoryName}
+                  itemsAreComplete={itemsAreComplete}
+                  everyItemHasCategory={everyItemHasCategory}
+                  itemGapCentavos={itemGapCentavos}
+                  itemsTotalCentavos={itemsTotalCentavos}
+                  totalCentavos={totalCentavos}
+                  gapPlan={gapPlan}
+                  gapPlanIsResolved={gapPlanIsResolved}
+                  gapNeedsAPlan={gapNeedsAPlan}
+                  canFileGapInOneCategory={canFileGapInOneCategory}
+                  gapCategoryId={gapCategoryId}
+                  setReviewDirty={setReviewDirty}
+                  setGapPlan={setGapPlan}
+                  setGapCategoryId={setGapCategoryId}
+                  addAddedItem={addAddedItem}
+                />
               </fieldset>
             ) : !isSplit ? (
               <Field
@@ -2959,77 +2035,12 @@ function ScanReceiptForm() {
                 />
               </Field>
             ) : (
-              <fieldset>
-                <legend className="text-sm font-medium text-ink-700">
-                  Split across categories
-                  <span className="ml-1 text-tone-danger" title="Required">
-                    <span aria-hidden>*</span>
-                    <span className="sr-only">(required)</span>
-                  </span>
-                </legend>
-                <p className="mt-1 text-xs leading-relaxed text-ink-500">
-                  The parts must add up to the total above.
-                </p>
-
-                <ul className="mt-2 space-y-2">
-                  {splits.map((split, i) => (
-                    <li key={i} className="flex items-start gap-2">
-                      <div className="min-w-0 flex-1">
-                        <label htmlFor={`split-category-${i}`} className="sr-only">
-                          Category for part {i + 1}
-                        </label>
-                        <CategorySelect
-                          id={`split-category-${i}`}
-                          value={split.categoryId}
-                          onChange={(id) => updateSplit(i, { categoryId: id })}
-                        />
-                      </div>
-                      <div className="w-36 shrink-0">
-                        <label htmlFor={`split-amount-${i}`} className="sr-only">
-                          Amount for part {i + 1}
-                        </label>
-                        <MoneyInput
-                          id={`split-amount-${i}`}
-                          min={0.01}
-                          required
-                          value={split.amount}
-                          onChange={(e) =>
-                            updateSplit(i, { amount: e.target.value === "" ? "" : Number(e.target.value) })
-                          }
-                        />
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => removeSplit(i)}
-                        aria-label={`Remove part ${i + 1}`}
-                        className="tap mt-0.5 h-11 w-11 shrink-0 rounded-lg text-ink-500 transition hover:bg-paper-100 hover:text-tone-danger"
-                      >
-                        <span aria-hidden>×</span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-
-                <p
-                  aria-live="polite"
-                  className={`mt-2 flex items-center gap-1.5 text-xs font-medium ${
-                    unallocatedCentavos === 0 ? "text-tone-brand" : "text-tone-accent"
-                  }`}
-                >
-                  <span aria-hidden>{unallocatedCentavos === 0 ? "✓" : "⚠"}</span>
-                  {unallocatedCentavos === 0 ? (
-                    <>The parts add up to the receipt total.</>
-                  ) : unallocatedCentavos > 0 ? (
-                    <>
-                      <Money value={unallocatedCentavos / 100} /> of the total isn't assigned yet.
-                    </>
-                  ) : (
-                    <>
-                      The parts are <Money value={-unallocatedCentavos / 100} /> over the receipt total.
-                    </>
-                  )}
-                </p>
-              </fieldset>
+              <SplitEditor
+                splits={splits}
+                updateSplit={updateSplit}
+                removeSplit={removeSplit}
+                unallocatedCentavos={unallocatedCentavos}
+              />
             )}
 
             {/* Splitting by hand is for receipts FinSight could NOT itemise. */}
@@ -3063,83 +2074,18 @@ function ScanReceiptForm() {
               </Callout>
             ) : null}
 
-            {duplicateCheckStatus === "loading" && duplicateReview === null ? (
-              <p className="text-xs text-ink-500" role="status">Checking for possible duplicate receipts…</p>
-            ) : null}
-
-            {duplicateCheckStatus === "error" ? (
-              <div role="alert">
-                <Callout tone="warn">
-                  <p>FinSight could not check for duplicate receipts. Try again before saving.</p>
-                  <Button type="button" variant="secondary" size="sm" className="mt-2" onClick={retryDuplicateCheck}>
-                    Retry duplicate check
-                  </Button>
-                </Callout>
-              </div>
-            ) : null}
-
-            {duplicateReview ? (
-              <section
-                aria-labelledby="duplicate-review-title"
-                className="space-y-3 rounded-xl border border-edge-warning bg-tint-warning p-4"
-              >
-                <div>
-                  <h2 id="duplicate-review-title" className="text-sm font-semibold text-ink-900">
-                    Possible duplicate {duplicateReview.candidateCount === 1 ? "receipt" : "receipts"}
-                  </h2>
-                  <p className="mt-1 text-xs leading-relaxed text-ink-600">
-                    {duplicateReview.changed
-                      ? "The matches changed while you were reviewing. Check this current list before choosing again."
-                      : "FinSight found an earlier record with matching details. Compare it before saving another copy."}
-                  </p>
-                </div>
-                <ul className="space-y-2">
-                  {duplicateReview.candidates.map((candidate) => (
-                    <li key={candidate.id} className="rounded-lg border border-paper-200 bg-paper px-3 py-2">
-                      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                        <span className="text-sm font-medium text-ink-800">
-                          {candidate.vendor?.trim() || "Earlier expense"}
-                        </span>
-                        <Money value={candidate.total} />
-                      </div>
-                      <p className="mt-1 text-xs text-ink-600">
-                        <time dateTime={candidate.date}>{candidate.date.slice(0, 10)}</time>
-                        {candidate.reasons.length > 0
-                          ? ` · ${candidate.reasons.map((reason) => DUPLICATE_REASON_COPY[reason]).join(", ")}`
-                          : ""}
-                      </p>
-                    </li>
-                  ))}
-                </ul>
-                {!duplicateListComplete ? (
-                  <div className="space-y-2">
-                    <p className="text-xs text-ink-600" role="status">
-                      Showing {duplicateReview.candidates.length} of {duplicateReview.candidateCount} matches.
-                      Load the rest before deciding.
-                    </p>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      disabled={duplicateLoading}
-                      onClick={() => { void loadMoreDuplicateCandidates(); }}
-                    >
-                      {duplicateLoading ? "Loading matches…" : "Load remaining matches"}
-                    </Button>
-                  </div>
-                ) : (
-                  <Checkbox
-                    checked={duplicateAcknowledged}
-                    onChange={(checked) => {
-                      setReviewDirty(true);
-                      setDuplicateAcknowledged(checked);
-                      if (checked) setConfirmError(null);
-                    }}
-                    label="I reviewed these matches and still want to save this receipt."
-                    hint="This choice applies to this full list. If the list changes, FinSight will ask again."
-                  />
-                )}
-              </section>
-            ) : null}
+            <DuplicateReviewPanel
+              duplicateCheckStatus={duplicateCheckStatus}
+              duplicateReview={duplicateReview}
+              retryDuplicateCheck={retryDuplicateCheck}
+              duplicateListComplete={duplicateListComplete}
+              duplicateLoading={duplicateLoading}
+              loadMoreDuplicateCandidates={loadMoreDuplicateCandidates}
+              duplicateAcknowledged={duplicateAcknowledged}
+              setReviewDirty={setReviewDirty}
+              setDuplicateAcknowledged={setDuplicateAcknowledged}
+              setConfirmError={setConfirmError}
+            />
 
             {confirmError ? <FormError>{confirmError}</FormError> : null}
 
@@ -3169,63 +2115,17 @@ function ScanReceiptForm() {
               </>
             ) : (
               <>
-                <section aria-labelledby="compact-receipt-title">
-                  <div className="flex flex-wrap items-start justify-between gap-3 border-b border-paper-200 pb-5">
-                    <div className="flex min-w-0 items-start gap-3">
-                      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-tint-brand text-tone-brand">
-                        <IconRecords className="h-5 w-5" />
-                      </span>
-                      <div className="min-w-0">
-                        <h2 id="compact-receipt-title" className="truncate font-display text-lg font-semibold text-ink-900">
-                          {vendor.trim() || description.trim() || "Receipt details need review"}
-                        </h2>
-                        <p className="mt-1 break-words text-sm text-ink-500">{description.trim() || "Add a description before saving."}</p>
-                      </div>
-                    </div>
-                    <Pill tone={BAND_COPY[receiptBand].tone === "ok" ? "ok" : BAND_COPY[receiptBand].tone === "warn" ? "warn" : "danger"}>
-                      {BAND_COPY[receiptBand].label}
-                    </Pill>
-                  </div>
-
-                  <dl className="grid min-w-0 grid-cols-1 gap-x-8 gap-y-5 py-5 sm:grid-cols-2 lg:grid-cols-3">
-                    <div className="min-w-0">
-                      <dt className="text-xs font-semibold text-ink-500">Date</dt>
-                      <dd className="mt-1 text-sm font-semibold text-ink-900">
-                        {date ? <time dateTime={date}>{date}</time> : "Date needed"}
-                      </dd>
-                    </div>
-                    <div className="min-w-0">
-                      <dt className="text-xs font-semibold text-ink-500">Vendor</dt>
-                      <dd className="mt-1 break-words text-sm font-semibold text-ink-900">{vendor.trim() || "Not provided"}</dd>
-                    </div>
-                    <div className="min-w-0">
-                      <dt className="text-xs font-semibold text-ink-500">Total amount</dt>
-                      <dd className="figure mt-1 text-sm font-semibold text-ink-900">
-                        {amount === "" ? "Amount needed" : <Money value={Number(amount)} decimals />}
-                      </dd>
-                    </div>
-                    <div className="min-w-0">
-                      <dt className="text-xs font-semibold text-ink-500">Items</dt>
-                      <dd className="mt-1 text-sm font-semibold text-ink-900">
-                        {compactItemCount} item{compactItemCount === 1 ? "" : "s"}
-                      </dd>
-                    </div>
-                    <div className="min-w-0">
-                      <dt className="text-xs font-semibold text-ink-500">Category</dt>
-                      <dd className="mt-1 break-words text-sm font-semibold text-ink-900">{compactCategoryLabel}</dd>
-                    </div>
-                    <div className="min-w-0">
-                      <dt className="text-xs font-semibold text-ink-500">Review status</dt>
-                      <dd className="mt-1 text-sm font-semibold text-ink-900">
-                        {attentionFields.length > 0
-                          ? `${attentionFields.length} field${attentionFields.length === 1 ? "" : "s"} flagged`
-                          : allWarnings.length > 0
-                            ? `${allWarnings.length} scan note${allWarnings.length === 1 ? "" : "s"}`
-                            : "No fields flagged"}
-                      </dd>
-                    </div>
-                  </dl>
-                </section>
+                <CompactReceiptSummary
+                  vendor={vendor}
+                  description={description}
+                  receiptBand={receiptBand}
+                  date={date}
+                  amount={amount}
+                  compactItemCount={compactItemCount}
+                  compactCategoryLabel={compactCategoryLabel}
+                  attentionFields={attentionFields}
+                  allWarnings={allWarnings}
+                />
 
                 {attentionFields.length > 0 ? (
                   <Callout tone="warn">
@@ -3253,93 +2153,18 @@ function ScanReceiptForm() {
                   </Callout>
                 ) : null}
 
-                {duplicateCheckStatus === "loading" && duplicateReview === null ? (
-                  <p className="text-sm text-ink-500" role="status">Checking for possible duplicate receipts…</p>
-                ) : null}
-
-                {duplicateCheckStatus === "error" ? (
-                  <div role="alert">
-                    <Callout tone="warn">
-                      <p>FinSight could not check for duplicate receipts. Try again before saving.</p>
-                      <Button type="button" variant="secondary" size="sm" className="mt-2" onClick={retryDuplicateCheck}>
-                        Retry duplicate check
-                      </Button>
-                    </Callout>
-                  </div>
-                ) : null}
-
-                {duplicateReview ? (
-                  <section
-                    aria-labelledby="compact-duplicate-review-title"
-                    className="space-y-3 rounded-xl bg-tint-accent p-4 ring-1 ring-edge-accent"
-                  >
-                    <div className="flex items-start gap-3">
-                      <IconDuplicate className="mt-0.5 h-5 w-5 shrink-0 text-tone-accent" />
-                      <div className="min-w-0">
-                        <h2 id="compact-duplicate-review-title" className="text-sm font-semibold text-ink-900">
-                          Possible duplicate {duplicateReview.candidateCount === 1 ? "receipt" : "receipts"}
-                        </h2>
-                        <p className="mt-1 text-xs leading-relaxed text-ink-600">
-                          Compare every match before saving another copy.
-                        </p>
-                      </div>
-                    </div>
-                    <details className="rounded-lg bg-paper px-3 py-2 ring-1 ring-paper-200">
-                      <summary className="disclosure text-sm">
-                        View {duplicateReview.candidateCount} match{duplicateReview.candidateCount === 1 ? "" : "es"}
-                      </summary>
-                      <ul className="mt-2 space-y-2">
-                        {duplicateReview.candidates.map((candidate) => (
-                          <li key={candidate.id} className="border-t border-paper-200 pt-2 first:border-0 first:pt-0">
-                            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                              <span className="text-sm font-medium text-ink-800">
-                                {candidate.vendor?.trim() || "Earlier expense"}
-                              </span>
-                              <Money value={candidate.total} />
-                            </div>
-                            <p className="mt-1 text-xs text-ink-600">
-                              <time dateTime={candidate.date}>{candidate.date.slice(0, 10)}</time>
-                              {candidate.reasons.length > 0
-                                ? ` · ${candidate.reasons.map((reason) => DUPLICATE_REASON_COPY[reason]).join(", ")}`
-                                : ""}
-                            </p>
-                          </li>
-                        ))}
-                      </ul>
-                    </details>
-                    {!duplicateListComplete ? (
-                      <div className="space-y-2">
-                        <p className="text-xs text-ink-600" role="status">
-                          Showing {duplicateReview.candidates.length} of {duplicateReview.candidateCount} matches.
-                        </p>
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          disabled={duplicateLoading}
-                          onClick={() => { void loadMoreDuplicateCandidates(); }}
-                        >
-                          {duplicateLoading ? "Loading matches…" : "Load remaining matches"}
-                        </Button>
-                      </div>
-                    ) : (
-                      <Checkbox
-                        checked={duplicateAcknowledged}
-                        onChange={(checked) => {
-                          setReviewDirty(true);
-                          setDuplicateAcknowledged(checked);
-                          if (checked) setConfirmError(null);
-                        }}
-                        label="I reviewed these matches and still want to save this receipt."
-                        hint="If the list changes before saving, FinSight will ask you to review it again."
-                      />
-                    )}
-                  </section>
-                ) : duplicateCheckStatus === "success" ? (
-                  <div className="flex items-center gap-2 text-sm text-ink-600">
-                    <IconCheck className="h-4 w-4 shrink-0 text-tone-brand" />
-                    <span>No possible duplicate was found in the current check.</span>
-                  </div>
-                ) : null}
+                <CompactDuplicateReviewPanel
+                  duplicateCheckStatus={duplicateCheckStatus}
+                  duplicateReview={duplicateReview}
+                  retryDuplicateCheck={retryDuplicateCheck}
+                  duplicateListComplete={duplicateListComplete}
+                  duplicateLoading={duplicateLoading}
+                  loadMoreDuplicateCandidates={loadMoreDuplicateCandidates}
+                  duplicateAcknowledged={duplicateAcknowledged}
+                  setReviewDirty={setReviewDirty}
+                  setDuplicateAcknowledged={setDuplicateAcknowledged}
+                  setConfirmError={setConfirmError}
+                />
 
                 {confirmError ? <FormError>{confirmError}</FormError> : null}
 

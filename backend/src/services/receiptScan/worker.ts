@@ -62,6 +62,12 @@ import {
   refreshReceiptCaptureBatchStatus,
 } from "../receiptCaptureBatch.service";
 import { refreshReceiptDuplicateCandidatesForScan } from "../receiptDuplicate.service";
+import {
+  createReceiptScanClock,
+  receiptQueueWaitMs,
+  type ReceiptScanClock,
+  type ReceiptScanOutcome,
+} from "./scanTimings";
 
 const RECEIPT_WORKER_ID = `${hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`;
 const MAX_PROCESSING_ATTEMPTS = 3;
@@ -466,7 +472,7 @@ async function processScan(
   scanId: number,
   input: StoredInput,
   attempt: number,
-  claimedAt: number = performance.now(),
+  clock: ReceiptScanClock,
 ): Promise<void> {
   // OCR on one difficult photo can outlast the normal scheduler interval.
   // Refresh independently of page boundaries so another replica never
@@ -483,6 +489,7 @@ async function processScan(
   }, 30_000);
   heartbeatTimer.unref();
   let logProviderGate: ((persisted: boolean) => void) | null = null;
+  let stopFinalize: (() => void) | null = null;
   try {
     const ocrResults: OcrResult[] = [];
     const originalOcrResults: (OcrResult | null)[] = [];
@@ -498,19 +505,14 @@ async function processScan(
       inputSha256: string;
       loadBytes: () => Promise<Buffer>;
     }[] = [];
-    // Stage clocks for the gate log line: millisecond counts only, no receipt content.
-    let ocrMs = 0;
-    let providerMs = 0;
-    let persistMs = 0;
-    const ocrStartedAt = performance.now();
-    const pageReads = await readReceiptPagesWithinOcrBudget(input.pages, async (page) => {
-      const [original, processed] = await Promise.all([
-        readStoredCandidate(page.original, true),
-        page.processed ? readStoredCandidate(page.processed, false) : Promise.resolve(null),
-      ]);
-      return { page, original, processed };
-    });
-    ocrMs = performance.now() - ocrStartedAt;
+    const pageReads = await clock.measure("ocr", () =>
+      readReceiptPagesWithinOcrBudget(input.pages, async (page) => {
+        const [original, processed] = await Promise.all([
+          readStoredCandidate(page.original, true),
+          page.processed ? readStoredCandidate(page.processed, false) : Promise.resolve(null),
+        ]);
+        return { page, original, processed };
+      }));
     for (const { page, original, processed } of pageReads) {
       /*
        * One page's failed read no longer costs the whole receipt.
@@ -627,8 +629,7 @@ async function processScan(
     });
     const localExtraction = localNormalizedExtraction(parsed, deterministicItems, currency, reconciliation.reconciled);
     const adapter = providerConfig.provider === "veryfi" ? createVeryfiReceiptAdapter() : createGeminiReceiptAdapter();
-    const dispatchStartedAt = performance.now();
-    const gate = await dispatchReceiptProviderRescue(
+    const gate = await clock.measure("provider", () => dispatchReceiptProviderRescue(
       {
         businessProfileId: input.businessProfileId,
         receiptScanId: scanId,
@@ -640,13 +641,15 @@ async function processScan(
         normalizedSchemaVersion: RECEIPT_PROVIDER_CONTRACT_VERSION,
       },
       { adapter, loadConfiguration: getReceiptProviderConfiguration },
-    );
-    providerMs = performance.now() - dispatchStartedAt;
+    ));
+    stopFinalize = clock.start("finalize");
     // Operators need to see why a rescue did or did not run without opening
     // the scan row; ids, gate code, and stage timings only. Emitted after
     // persistence so persistMs is real; the catch below emits it on failure.
+    // The full per-attempt timing record is the "receipt scan timings" line.
     logProviderGate = (persisted: boolean) => {
       logProviderGate = null;
+      const timings = clock.snapshot();
       logger.info(
         {
           scanId,
@@ -660,11 +663,11 @@ async function processScan(
           providerItemCount: gate.merge.receipt.items.length,
           localItemCount: deterministicItems.length,
           persisted,
-          ocrMs: Math.round(ocrMs),
-          providerMs: Math.round(providerMs),
+          ocrMs: timings.ocrMs ?? 0,
+          providerMs: timings.providerMs ?? 0,
           providerTelemetry: gate.telemetry ?? null,
-          persistMs: Math.round(persistMs),
-          totalMs: Math.round(performance.now() - claimedAt),
+          persistMs: timings.persistMs ?? 0,
+          totalMs: timings.totalMs,
         },
         "receipt provider gate",
       );
@@ -730,8 +733,8 @@ async function processScan(
     const itemEvidence = rescued.itemsFromVision
       ? rescued.itemEvidence ?? []
       : locateItemLines(pageTexts, rescued.items.map((item) => item.amount));
-    const persistStartedAt = performance.now();
-    await persistReceiptProcessingOutput(
+    stopFinalize?.();
+    await clock.measure("persist", () => persistReceiptProcessingOutput(
       scanId,
       input.businessProfileId,
       { workerId: RECEIPT_WORKER_ID, attempt },
@@ -758,7 +761,8 @@ async function processScan(
           amountConfidence: rescued.visionAssisted
             ? null
             : confidenceForValue(combinedLines, rescued.amount?.toFixed(2) ?? null),
-          extractorVersions: extractorVersions as Prisma.InputJsonValue,
+          // Inside the lease-guarded write, so a stale attempt never stores its timings.
+          extractorVersions: { ...extractorVersions, scanTimings: clock.stored() } as Prisma.InputJsonValue,
           // An empty evidence object is left as NULL, not {} — "nothing could
           // be located" and "never assessed" read the same to a client, and
           // null is the established spelling for the second.
@@ -804,25 +808,49 @@ async function processScan(
         // read. Only SUCCEEDED means the provider answered and was accepted.
         providerRead: gate.dispatchStatus === "SUCCEEDED",
       },
-    );
-    persistMs = performance.now() - persistStartedAt;
+    ));
     logProviderGate?.(true);
+    logScanTimings(scanId, "complete", clock);
   } catch (err) {
+    stopFinalize?.();
     logProviderGate?.(false);
     // A newer worker owns the row now. The stale worker must not overwrite its
     // state with either a success or failure from an expired lease.
-    if (err instanceof ReceiptLeaseLostError) return;
+    if (err instanceof ReceiptLeaseLostError) {
+      logScanTimings(scanId, "lease-lost", clock);
+      return;
+    }
     const failure = safeProcessingFailure(err);
     logger.error({ scanId, code: failure.code, ...safeErrorDetail(err) }, "receipt scan processing failed");
-    await recordProcessingFailure(scanId, attempt, failure);
+    await recordFailureWithTimings(scanId, attempt, failure, clock);
   } finally {
     clearInterval(heartbeatTimer);
   }
 }
 
-async function recordProcessingFailure(scanId: number, attempt: number, failure: ReceiptProcessingFailure): Promise<void> {
+/** One line per attempt, whatever its end. Durations and ids only. */
+function logScanTimings(scanId: number, outcome: ReceiptScanOutcome, clock: ReceiptScanClock): void {
+  logger.info({ scanId, outcome, ...clock.snapshot() }, "receipt scan timings");
+}
+
+async function recordFailureWithTimings(
+  scanId: number,
+  attempt: number,
+  failure: ReceiptProcessingFailure,
+  clock: ReceiptScanClock,
+): Promise<void> {
+  let outcome: ReceiptScanOutcome = attempt < MAX_PROCESSING_ATTEMPTS ? "retrying" : "failed";
+  try {
+    if (!(await recordProcessingFailure(scanId, attempt, failure))) outcome = "lease-lost";
+  } finally {
+    logScanTimings(scanId, outcome, clock);
+  }
+}
+
+/** False when this attempt no longer owned the scan and nothing was written. */
+async function recordProcessingFailure(scanId: number, attempt: number, failure: ReceiptProcessingFailure): Promise<boolean> {
   const retryable = attempt < MAX_PROCESSING_ATTEMPTS;
-  await prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx) => {
     const batchLink = await tx.receiptScan.findUnique({
       where: { id: scanId },
       select: { captureBatchId: true },
@@ -832,7 +860,7 @@ async function recordProcessingFailure(scanId: number, attempt: number, failure:
       && batchLink?.captureBatchId !== undefined
       && !(await lockReceiptCaptureBatchForMutation(tx, batchLink.captureBatchId))
     ) {
-      return;
+      return false;
     }
     const transitionAt = new Date();
     const updated = await tx.receiptScan.updateMany({
@@ -860,6 +888,7 @@ async function recordProcessingFailure(scanId: number, attempt: number, failure:
     if (updated.count === 1 && batchLink?.captureBatchId !== null && batchLink?.captureBatchId !== undefined) {
       await refreshReceiptCaptureBatchStatus(tx, batchLink.captureBatchId);
     }
+    return updated.count === 1;
   });
 }
 
@@ -949,7 +978,7 @@ async function storedInput(scanId: number, attempt: number): Promise<StoredInput
 }
 
 /** Atomically lease one eligible scan. The conditional update is the race guard. */
-async function claimScan(): Promise<{ id: number; attempt: number } | null> {
+async function claimScan(): Promise<{ id: number; attempt: number; queueWaitMs: number } | null> {
   const now = new Date();
   const staleBefore = new Date(now.getTime() - RECEIPT_PROCESSING_LEASE_MS);
   const eligible: Prisma.ReceiptScanWhereInput = {
@@ -966,7 +995,13 @@ async function claimScan(): Promise<{ id: number; attempt: number } | null> {
   const candidate = await prisma.receiptScan.findFirst({
     where: eligible,
     orderBy: [{ nextProcessingAttemptAt: "asc" }, { id: "asc" }],
-    select: { id: true, processingAttemptCount: true },
+    select: {
+      id: true,
+      processingAttemptCount: true,
+      nextProcessingAttemptAt: true,
+      processingWorkerId: true,
+      processingHeartbeatAt: true,
+    },
   });
   if (!candidate) return null;
   const claimed = await prisma.receiptScan.updateMany({
@@ -980,24 +1015,34 @@ async function claimScan(): Promise<{ id: number; attempt: number } | null> {
       lastActivityAt: now,
     },
   });
-  return claimed.count === 1 ? { id: candidate.id, attempt: candidate.processingAttemptCount + 1 } : null;
+  return claimed.count === 1
+    ? {
+      id: candidate.id,
+      attempt: candidate.processingAttemptCount + 1,
+      queueWaitMs: receiptQueueWaitMs(now, candidate, RECEIPT_PROCESSING_LEASE_MS),
+    }
+    : null;
 }
 
 async function claimAndProcessScan(): Promise<boolean> {
   const claimedAt = performance.now();
   const claimed = await claimScan();
   if (!claimed) return false;
+  const clock = createReceiptScanClock({ attempt: claimed.attempt, queueWaitMs: claimed.queueWaitMs, claimedAt });
   let input: StoredInput;
   try {
-    input = await storedInput(claimed.id, claimed.attempt);
+    input = await clock.measure("restore", () => storedInput(claimed.id, claimed.attempt));
   } catch (err) {
-    if (err instanceof ReceiptLeaseLostError) return true;
+    if (err instanceof ReceiptLeaseLostError) {
+      logScanTimings(claimed.id, "lease-lost", clock);
+      return true;
+    }
     const failure = safeProcessingFailure(err);
     logger.error({ scanId: claimed.id, code: failure.code }, "receipt scan evidence restore failed");
-    await recordProcessingFailure(claimed.id, claimed.attempt, failure);
+    await recordFailureWithTimings(claimed.id, claimed.attempt, failure, clock);
     return true;
   }
-  await processScan(claimed.id, input, claimed.attempt, claimedAt);
+  await processScan(claimed.id, input, claimed.attempt, clock);
   return true;
 }
 

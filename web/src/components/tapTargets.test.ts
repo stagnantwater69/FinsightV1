@@ -127,4 +127,31 @@ describe("tap targets", () => {
       expect(KNOWN_DENSE_CLUSTERS, `${chrome} must meet the floor, not be excused from it`).not.toContain(chrome);
     }
   });
+
+  it("keeps the floor on the individual controls that used to fall below it (backlog T1)", () => {
+    // Each entry is a control that rendered at 20-40px with no `.tap` to scan for.
+    const fixed: Array<[file: string, control: RegExp]> = [
+      ["components/AccountMenu.tsx", /role="radio"[\s\S]{0,200}?className=\{`[^`]*\bmin-h-tap\b/],
+      ["components/DataTable.tsx", /onClick=\{\(\) => toggleSort[\s\S]{0,250}?className=\{`[^`]*\bmin-h-tap\b[^`]*\bmin-w-tap\b/],
+      ["components/ErrorBoundary.tsx", /className="[^"]*\bmin-h-tap\b[^"]*"\s*>\s*Reload the page/],
+      ["components/Toast.tsx", /t\.onAction\?\.\(\)[\s\S]{0,250}?className="[^"]*\bmin-h-tap\b/],
+      ["components/AppShell.tsx", /className="[^"]*\bmin-h-tap min-w-tap\b[^"]*"\s*aria-label="FinSight home"/],
+      ["components/RecordOriginPanel.tsx", /className="min-w-0 truncate py-3 link-action"/],
+      ["pages/FlaggedRecords.tsx", /className="min-w-0 truncate py-3 link-action"/],
+      ["pages/Contact.tsx", /href=\{`mailto:[\s\S]{0,60}?className="[^"]*\bmin-h-tap\b/],
+      ["pages/Contact.tsx", /to="\/faqs" className="[^"]*\bmin-h-tap\b/],
+    ];
+    for (const [file, control] of fixed) {
+      const source = SOURCES.find(({ name }) => name === file)?.src;
+      expect(source, `${file} was not scanned`).toBeDefined();
+      expect(source, `${file} lost its 44px floor`).toMatch(control);
+    }
+
+    const publicLayout = SOURCES.find(({ name }) => name === "components/PublicLayout.tsx")!.src;
+    const footerLinks = publicLayout.match(/className="[^"]*text-landing-muted transition-colors hover:text-landing-green"/g) ?? [];
+    expect(footerLinks).toHaveLength(7);
+    for (const link of footerLinks) expect(link).toMatch(/\bmin-h-tap\b/);
+    expect(publicLayout).toMatch(/role="menuitem"\s*className="[^"]*\bmin-h-tap\b/);
+    expect(publicLayout).toMatch(/className="[^"]*\bmin-h-tap\b[^"]*">Home<\/Link>/);
+  });
 });

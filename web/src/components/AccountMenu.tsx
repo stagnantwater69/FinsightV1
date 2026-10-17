@@ -167,7 +167,7 @@ export function AccountMenu() {
                   role="radio"
                   aria-checked={theme === option}
                   onClick={() => setTheme(option)}
-                  className={`flex-1 rounded-lg px-2 py-1.5 text-[12px] font-semibold transition ${
+                  className={`flex min-h-tap flex-1 items-center justify-center rounded-lg px-2 text-[12px] font-semibold transition ${
                     theme === option
                       ? "bg-paper text-tone-brand shadow-sm"
                       : "text-ink-500 hover:text-ink-800"

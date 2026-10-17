@@ -1,67 +1,70 @@
 import { ContentScrollView } from "../../components/ContentScrollView";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Alert,
-  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
-  ScrollView,
   TextInput,
   useWindowDimensions,
   View,
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import * as ImagePicker from "expo-image-picker";
-import { ResultDetails } from "../../components/ResultDetails";
 import { receiptFileError } from "../../lib/importFiles";
 import { useImportOperation } from "../../lib/useImportOperation";
 import { newIdempotencyKey } from "../../lib/csvImport";
-import { Button, Card, ErrorNote, Field, Money, Screen, T } from "../../components/ui";
+import { Button, Card, ErrorNote, Field, Screen, T } from "../../components/ui";
 import { useBusinessProfiles } from "../../context/BusinessProfileContext";
+import { useAuth } from "../../context/AuthContext";
 import { api } from "../../lib/api";
 import { describeActionFailure, saveFailureMessage, toLoadFailure } from "../../lib/connectionState";
 import {
   buildItemisedConfirmPayload,
   buildReceiptConfirmPayload,
   gapCentavos,
-  type ReconciliationPlan,
 } from "../../lib/receiptConfirm";
-import { categoriesCreatedByScan, categoryReviewNote, rowsToApplySuggestionTo, suggestedNewCategory } from "../../lib/categorySuggestion";
-import { BAND_COPY, confidenceBand, needsAttention, scanConfidenceBand } from "../../lib/confidenceBands";
-import {
-  evidenceSummary,
-  fieldsNeedingAttention,
-  warningHeadline,
-  warningPageSuffix,
-  warningTone,
-} from "../../lib/receiptWarnings";
+import { rowsToApplySuggestionTo, suggestedNewCategory } from "../../lib/categorySuggestion";
+import { scanConfidenceBand } from "../../lib/confidenceBands";
+import { fieldsNeedingAttention } from "../../lib/receiptWarnings";
 import { ReceiptCamera } from "../../components/receipt-camera";
 import type { ReceiptCameraHandle } from "../../components/receipt-camera/ReceiptCamera";
 import { CAPTURE_QUALITY } from "../../lib/receiptCapture";
 import { analysisImageUri } from "../../lib/analysisImage";
 import { setFlash } from "../../lib/flash";
-import { SkeletonBox } from "../../components/Skeleton";
 import { DateField } from "../../components/DateField";
 import { AvailableFundsBaselineChoice, useAvailableFundsBaselineChoice } from "../../components/AvailableFundsBaselineChoice";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import * as haptics from "../../lib/haptics";
-import { font, radius, space, typeScale } from "../../theme/tokens";
+import { radius, space } from "../../theme/tokens";
 import { TAP_FLOOR } from "../../components/touchTarget";
 import { useTheme } from "../../context/ThemeContext";
 import { FIELD_LIMITS } from "../../lib/fieldLimits";
 import { CategoryPicker } from "./shared";
 import { businessToday } from "../../lib/businessDate";
 import { ScanBand } from "./scanReceipt/ScanBand";
-import { ScanningThumbnail } from "./scanReceipt/ScanningThumbnail";
-import { StoredPagePlaceholder } from "./scanReceipt/StoredPagePlaceholder";
 import { ReviewNotices } from "./scanReceipt/ReviewNotices";
 import { ReviewSection } from "./scanReceipt/ReviewSection";
 import { EvidenceNote } from "./scanReceipt/EvidenceNote";
-import { CategoryChips } from "./scanReceipt/CategoryChips";
-import { GapOption } from "./scanReceipt/GapOption";
+import { ScannedItemRow } from "./scanReceipt/ScannedItemRow";
+import { AddedItemRow } from "./scanReceipt/AddedItemRow";
+import { SaveSummaryCard } from "./scanReceipt/SaveSummaryCard";
+import { DuplicateReviewCard } from "./scanReceipt/DuplicateReviewCard";
+import { CaptureFilmstrip } from "./scanReceipt/CaptureFilmstrip";
+import { ReviewPhotos } from "./scanReceipt/ReviewPhotos";
+import { PrintedDetails } from "./scanReceipt/PrintedDetails";
+import { ScanProgress } from "./scanReceipt/ScanProgress";
+import { reviewNoticesFor } from "./scanReceipt/noticeList";
+import {
+  purgeAlreadyUnderway,
+  stoppedWaitingMessage,
+  storedReceiptPages,
+  type QueuedReceipt,
+  type ReceiptBatchChild,
+  type ScanRecoveryAction,
+  type ScanRunMode,
+} from "./scanReceipt/scanSession";
 import {
   pollUntilRead,
   pagesFromSections,
@@ -99,9 +102,13 @@ import {
   type ReceiptCameraIntent,
 } from "./scanReceipt/cameraHandoff";
 import { deleteReceiptScannerFiles } from "../../lib/receiptScannerCache";
+import { clearReceiptReviewDraft } from "../../lib/receiptReviewDraft";
+import { reviewEditsFromScan } from "./scanReceipt/reviewDraft";
+import { useReceiptReviewDraft } from "./scanReceipt/useReceiptReviewDraft";
+import { useReceiptReviewForm } from "./scanReceipt/useReceiptReviewForm";
+import { RestoredReviewNotice } from "./scanReceipt/RestoredReviewNotice";
 import {
   duplicateCandidatePageFromResponse,
-  duplicateReasonLabel,
   duplicateReviewFromError,
   duplicateReviewIsComplete,
   type ReceiptDuplicateDecision,
@@ -117,90 +124,6 @@ import type {
 } from "./scanReceipt/types";
 
 const MIB = 1024 * 1024;
-
-/**
- * DELETE /records/receipts/:id answers 409 PURGE_IN_PROGRESS when a purge for
- * that scan is already running. The code is the contract; the sentence is a
- * fallback for a server build that predates it.
- */
-function purgeAlreadyUnderway(err: unknown): boolean {
-  if (typeof err !== "object" || err === null) return false;
-  const { status, code, responseBody, message } = err as {
-    status?: unknown; code?: unknown; responseBody?: unknown; message?: unknown;
-  };
-  if (status !== 409) return false;
-  const bodyCode = (responseBody as { code?: unknown } | null | undefined)?.code;
-  if (code === "PURGE_IN_PROGRESS" || bodyCode === "PURGE_IN_PROGRESS") return true;
-  return typeof message === "string" && /already being deleted/i.test(message);
-}
-
-interface ReceiptBatchChild {
-  batchId: number;
-  ordinal: number;
-  /** Present for a newly created batch; history summaries expose only this child's binding. */
-  expectedReceiptCount?: number;
-}
-
-interface QueuedReceipt {
-  pages: CapturedPage[];
-  batchChild: ReceiptBatchChild;
-  /** Present only after the server has accepted this child and owns its images. */
-  accepted: ReceiptScanResult | null;
-}
-
-type ScanRecoveryAction = "review" | "retry" | null;
-type ScanRunMode = "upload" | "review" | "retry";
-function storedReceiptPages(result: ReceiptScanResult, pageCount: number): CapturedPage[] {
-  const evidence = [...(result.pageEvidence ?? [])].sort((left, right) => left.pageNumber - right.pageNumber);
-  const count = Math.max(1, pageCount, evidence.length);
-  return Array.from({ length: count }, (_, index) => {
-    const page = evidence.find((candidate) => candidate.pageNumber === index + 1);
-    return {
-      key: `stored-${result.id}-${index + 1}`,
-      uri: "",
-      fileName: `stored-receipt-${result.id}-page-${index + 1}.jpg`,
-      mimeType: "image/jpeg",
-      originalMimeType: "image/jpeg",
-      quality: null,
-      checkingQuality: false,
-      width: page?.derived?.width ?? page?.source.width ?? 0,
-      height: page?.derived?.height ?? page?.source.height ?? 0,
-      originalWidth: page?.source.width ?? 0,
-      originalHeight: page?.source.height ?? 0,
-      captureMode: page?.captureMode ?? undefined,
-      processingMode: page?.processingMode,
-    };
-  });
-}
-
-/**
- * Every local copy a page can point at. The gallery source is the picker's
- * own cache copy, not the owner's photo library; receiptScannerCache refuses
- * anything outside the app's receipt cache folders regardless.
- */
-/**
- * Phases where cancelling stops bytes leaving the phone. Every other phase
- * is a wait on a receipt the server already holds, so "Cancel upload" would
- * promise an undo that is not on offer.
- */
-function cancelsAnUpload(phase: string): boolean {
-  return phase.startsWith("Uploading")
-    || phase === "Checking receipt size…"
-    || phase === "Creating receipt batch…"
-    || phase === "Replacing cancelled receipt batch…";
-}
-
-/** What stopping leaves the owner with, by what this phone actually holds. */
-function stoppedWaitingMessage(accepted: boolean, hasLocalImages: boolean): string {
-  if (accepted) {
-    return hasLocalImages
-      ? "Your uploaded images are kept. Review the result when you're ready."
-      : "The stored receipt is kept. Review the result when you're ready.";
-  }
-  return hasLocalImages
-    ? "Your selected images are kept. Start the upload again when you're ready."
-    : "Nothing changed. The receipt is still listed under Receipts to finish.";
-}
 
 /**
  * Capture (custom camera or gallery; optional native scanner rollout flag) →
@@ -221,7 +144,7 @@ export function ScanReceiptScreen({ navigation }: any) {
   const { width, fontScale } = useWindowDimensions();
   const stackedFigures = width < 390 || fontScale > 1.2;
   const t = useTheme();
-  const { brand, ink, paper, statusText, statusSurface } = t;
+  const { brand, statusText } = t;
   const { selected, categories, refreshCategories, createCategory } = useBusinessProfiles();
   const [scan, setScan] = useState<ReceiptScanResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -278,63 +201,51 @@ export function ScanReceiptScreen({ navigation }: any) {
   const receiptCameraRef = useRef<ReceiptCameraHandle>(null);
   const cameraCompletionHandled = useRef(false);
 
-  const [categoryId, setCategoryId] = useState<number | null>(null);
-  const [date, setDate] = useState(() => businessToday(selected?.timezone));
+  const review = useReceiptReviewForm(() => businessToday(selected?.timezone));
+  const {
+    categoryId, setCategoryId,
+    date, setDate,
+    description, setDescription,
+    vendor, setVendor,
+    amount, setAmount,
+    itemCategories, setItemCategories,
+    plan, setPlan,
+    gapCategoryId, setGapCategoryId,
+    addedItems, setAddedItems,
+    editingItem, setEditingItem,
+    editingItemErrors, setEditingItemErrors,
+    clear: clearReview,
+  } = review;
   const baselineChoice = useAvailableFundsBaselineChoice(date);
   const clearBaselineDecision = baselineChoice.setDecision;
-  const [description, setDescription] = useState("");
-  const [vendor, setVendor] = useState("");
-  const [amount, setAmount] = useState("");
 
   useEffect(() => {
     clearBaselineDecision(null);
   }, [scan?.id, clearBaselineDecision]);
 
-  /**
-   * The owner's category for each extracted line, keyed by item id.
-   *
-   * Seeded from what the server assigned automatically, then owned by the
-   * owner — every row is editable and nothing is written until Confirm.
-   */
-  const [itemCategories, setItemCategories] = useState<Record<number, number | null>>({});
-  /** How they want to account for any difference between items and total. */
-  const [plan, setPlan] = useState<ReconciliationPlan>(null);
-  /** The category for the "file it on its own" plan. */
-  const [gapCategoryId, setGapCategoryId] = useState<number | null>(null);
   /** The proposed category currently being created, so its row can show progress. */
   const [creatingCategoryFor, setCreatingCategoryFor] = useState<string | null>(null);
-  /**
-   * Lines the owner is adding because OCR missed them.
-   *
-   * Held here until Confirm, like every other answer on this screen — nothing
-   * is written until they accept the whole receipt.
-   */
-  const [addedItems, setAddedItems] = useState<
-    { key: string; name: string; amount: string; categoryId: number | null }[]
-  >([]);
   /** The extracted line currently being removed, so its row can show progress. */
   const [removingItemId, setRemovingItemId] = useState<number | null>(null);
-  const [editingItem, setEditingItem] = useState<{ id: number; name: string; amount: string } | null>(null);
-  const [editingItemErrors, setEditingItemErrors] = useState<{ name?: string; amount?: string }>({});
   const [savingItemId, setSavingItemId] = useState<number | null>(null);
   const [duplicateReview, setDuplicateReview] = useState<ReceiptDuplicateReview | null>(null);
   const [duplicateCandidatesError, setDuplicateCandidatesError] = useState<string | null>(null);
   const duplicateReviewIdentity = useRef("");
 
+  const { profile } = useAuth();
+  const reviewDraft = useReceiptReviewDraft({
+    ownerId: profile?.id,
+    businessProfileId: selected?.id,
+    scan,
+    edits: review.edits,
+    apply: review.apply,
+    navigation,
+  });
+  const resetReviewDraft = reviewDraft.reset;
+
   /** The review form's chain: Description → Vendor → Amount. */
   const vendorRef = useRef<TextInput>(null);
   const amountRef = useRef<TextInput>(null);
-  /**
-   * The added-item rows chain within themselves — name hands off to the
-   * amount on the SAME row, never to the next row's.
-   *
-   * One ref per row, held in a map keyed by the row's own `key`, because the
-   * rows are produced by a `.map()`: a single shared ref would be overwritten
-   * by every row rendered after the first, and typing in row one would jump
-   * the cursor to the bottom of the receipt. The callback clears its entry on
-   * unmount so removing a row does not leave a dead node behind.
-   */
-  const addedAmountRefs = useRef<Record<string, TextInput | null>>({});
 
   /*
    * The camera never outlives this screen.
@@ -378,21 +289,14 @@ export function ScanReceiptScreen({ navigation }: any) {
     deleteScanKeys.current = {};
     setBusy(false);
     setPicking(false);
-    setCategoryId(null);
-    setDate("");
-    setDescription("");
-    setVendor("");
-    setAmount("");
-    setItemCategories({});
-    setAddedItems([]);
-    setEditingItem(null);
-    setEditingItemErrors({});
+    clearReview();
     setSavingItemId(null);
     setDuplicateReview(null);
     setDuplicateCandidatesError(null);
     duplicateReviewIdentity.current = "";
     setError(null);
-  }, [selected?.id]);
+    resetReviewDraft();
+  }, [selected?.id, clearReview, resetReviewDraft]);
 
   const currentDuplicateIdentity = `${date.trim()}\u0000${vendor.trim()}\u0000${description.trim()}\u0000${amount.trim()}`;
   useEffect(() => {
@@ -452,7 +356,7 @@ export function ScanReceiptScreen({ navigation }: any) {
     batchChildAttempts.current.clear();
     batchGroupsForAcceptance.current = null;
     duplicateReviewIdentity.current = "";
-    addedAmountRefs.current = {};
+    reviewDraft.reset();
     setScan(null);
     setPages([]);
     setQueuedReceiptGroups([]);
@@ -466,19 +370,9 @@ export function ScanReceiptScreen({ navigation }: any) {
     setBusy(false);
     setPicking(false);
     setPhase("Uploading receipt…");
-    setCategoryId(null);
-    setDate("");
-    setDescription("");
-    setVendor("");
-    setAmount("");
-    setItemCategories({});
-    setPlan(null);
-    setGapCategoryId(null);
+    clearReview();
     setCreatingCategoryFor(null);
-    setAddedItems([]);
     setRemovingItemId(null);
-    setEditingItem(null);
-    setEditingItemErrors({});
     setSavingItemId(null);
     setDuplicateReview(null);
     setDuplicateCandidatesError(null);
@@ -606,23 +500,15 @@ export function ScanReceiptScreen({ navigation }: any) {
     setDuplicateReview(null);
     setDuplicateCandidatesError(null);
     duplicateReviewIdentity.current = "";
-    setDate(result.extractedDate ? String(result.extractedDate).slice(0, 10) : "");
-    setVendor(result.extractedVendor ?? "");
-    setDescription(result.extractedDescription ?? "");
-    setCategoryId(result.items.length === 1 ? result.items[0]!.categoryId : null);
-    setAmount(result.extractedAmount != null ? result.extractedAmount.toFixed(2) : "");
-    setItemCategories(Object.fromEntries(result.items.map((item) => [item.id, item.categoryId ?? null])));
+    const seeded = reviewEditsFromScan(result);
+    review.apply(seeded);
     // The scan may have created categories this screen has never loaded (the
     // standard ones FinSight adds, or Uncategorized). Without them the rows
     // filed there would show no category at all.
     if (result.items.some((item) => item.categoryId != null && !categories.some((category) => category.id === item.categoryId))) {
       refreshCategories().catch(() => undefined);
     }
-    setAddedItems([]);
-    setEditingItem(null);
-    setEditingItemErrors({});
-    setPlan(null);
-    setGapCategoryId(null);
+    reviewDraft.begin(result, seeded);
     if (result.visionAssisted) haptics.warned();
     else haptics.succeeded();
   }
@@ -1081,22 +967,14 @@ export function ScanReceiptScreen({ navigation }: any) {
 
       delete deleteScanKeys.current[scanId];
       setActiveReceipts((current) => current.filter((item) => item.id !== scanId));
+      if (isCurrent && scan?.id === scanId) reviewDraft.close(scanId);
+      else if (profile?.id) void clearReceiptReviewDraft({ ownerId: profile.id, businessProfileId: selected!.id, scanId }).catch(() => undefined);
       if (isCurrent) {
         uploadAttempt.current = null;
         batchChildAttempts.current.clear();
         batchGroupsForAcceptance.current = null;
         setScan(null);
-        setCategoryId(null);
-        setDate("");
-        setDescription("");
-        setVendor("");
-        setAmount("");
-        setItemCategories({});
-        setAddedItems([]);
-        setEditingItem(null);
-        setEditingItemErrors({});
-        setPlan(null);
-        setGapCategoryId(null);
+        clearReview();
         setEvidencePage(null);
         setScanRecoveryAction(null);
         setUploadIssuePageKeys({});
@@ -1268,6 +1146,7 @@ export function ScanReceiptScreen({ navigation }: any) {
   async function finishReceiptConfirmation(task: NonNullable<ReturnType<typeof operation.begin>>) {
     // Cache cleanup must not delay or overturn a confirmed financial write.
     void deleteReceiptScannerFiles(scannerFileUris(pages));
+    if (scan) reviewDraft.close(scan.id);
     haptics.succeeded();
     setDuplicateReview(null);
     setDuplicateCandidatesError(null);
@@ -1285,17 +1164,7 @@ export function ScanReceiptScreen({ navigation }: any) {
       setActiveBatchChild(next.batchChild);
       setUploadIssuePageKeys({});
       setScan(null);
-      setCategoryId(null);
-      setDate("");
-      setDescription("");
-      setVendor("");
-      setAmount("");
-      setItemCategories({});
-      setAddedItems([]);
-      setEditingItem(null);
-      setEditingItemErrors({});
-      setPlan(null);
-      setGapCategoryId(null);
+      clearReview();
       setFlash(`Receipt saved. ${remaining.length + 1} stored receipt${remaining.length === 0 ? "" : "s"} remain to review.`);
       operation.finish(task);
       await scanSingleReceipt(storedPages, { batchChild: next.batchChild });
@@ -1652,28 +1521,6 @@ export function ScanReceiptScreen({ navigation }: any) {
   }
 
   /**
-   * Everything worth checking about this reading, in the order it matters.
-   *
-   * TWO SOURCES, AND ONLY ONE OF THEM AT A TIME.
-   *
-   * The server now emits machine-readable warning CODES, each carrying its
-   * own actionable sentence (`guidance`). When a scan has them, they ARE this
-   * list and their wording is the server's — which is the whole point of the
-   * contract: the app and the website used to write their own prose for the
-   * same signals, and the two had already drifted apart. A client that
-   * rewrites a sentence here re-creates that bug.
-   *
-   * The hand-derived notices below it are the fallback for scans read before
-   * warnings were recorded. They are NOT merged with the codes: a blurry page
-   * reported once by the server and once by this screen reads as two separate
-   * problems with the same photograph.
-   *
-   * The ORDER, in both cases, is the argument: the photograph comes first
-   * because it has the cheapest answer on the screen and the camera is one tap
-   * away, then the things that make figures wrong, then the things that only
-   * make them uncertain.
-   */
-  /**
    * The one cue at the top: how much of this reading to doubt.
    *
    * Derived from the page reading, every item amount and whether a model was
@@ -1695,121 +1542,7 @@ export function ScanReceiptScreen({ navigation }: any) {
    */
   const attentionFields = fieldsNeedingAttention(scan?.warnings ?? []);
 
-  const reviewNotices: ReviewNotice[] = (() => {
-    if (!scan) return [];
-
-    const warnings = scan.warnings ?? [];
-    const notices: ReviewNotice[] = [];
-
-    /*
-     * FinSight created categories in the owner's books for this receipt. Said
-     * once, by name, so nothing new appears in their category list unexplained.
-     */
-    const created = categoriesCreatedByScan(scan.items, categories);
-    if (created.length > 0) {
-      notices.push({
-        tone: "info",
-        text: `New ${created.length === 1 ? "category" : "categories"} added for this receipt: ${created.join(", ")}.`,
-      });
-    }
-
-    if (scan.receiptLikelihood?.outcome === "obvious-non-receipt") {
-      notices.push({
-        tone: "warn",
-        text: "This may not be a receipt. Check every field before saving.",
-      });
-    } else if (scan.receiptLikelihood?.outcome === "uncertain") {
-      notices.push({
-        tone: "info",
-        text: "This receipt was hard to identify. Check every field.",
-      });
-    }
-
-    if (warnings.length > 0) {
-      notices.push(...warnings.map((w) => ({
-        tone: warningTone(w.code),
-        text: [
-          w.guidance ?? `${warningHeadline(w.code)}.`,
-          warningPageSuffix(w),
-        ]
-          .filter(Boolean)
-          .join(" "),
-        detail: w.detail,
-      })));
-      return notices;
-    }
-
-    if (scan.captureQuality?.tooBlurredToTrust) {
-      notices.push({
-        tone: "warn",
-        text: "Blurry receipt. Retake the photo or check the figures carefully.",
-      });
-    }
-
-    // Page 1's own reading is already covered by captureQuality above.
-    const blurryPages = (scan.pageQualities ?? [])
-      .map((q, i) => (q?.tooBlurredToTrust ? i + 1 : null))
-      .filter((n): n is number => n !== null && n !== 1);
-    if ((scan.pageQualities?.length ?? 0) > 1 && blurryPages.length > 0) {
-      notices.push({
-        tone: "warn",
-        text:
-          `Page${blurryPages.length === 1 ? "" : "s"} ${blurryPages.join(", ")} came out blurry. Check the ` +
-          `figures from ${blurryPages.length === 1 ? "that page" : "those pages"} carefully below.`,
-      });
-    }
-
-    const duplicates = scan.duplicatePages ?? [];
-    if (duplicates.length > 0) {
-      notices.push({
-        tone: "warn",
-        text:
-          `Pages ${duplicates.map((p) => `${p - 1} and ${p}`).join(", ")} look the same. Check for double-counted items.`,
-      });
-    }
-
-    /*
-     * Suppressed when duplicatePages already fired: a page flagged as a
-     * repeat of its neighbour will also, necessarily, overlap it, and two
-     * remarks about one pair of photographs read as two separate problems.
-     */
-    const overlaps = scan.overlappingPages ?? [];
-    if (overlaps.length > 0 && duplicates.length === 0) {
-      notices.push({
-        tone: "info",
-        text:
-          `Sections ${overlaps.map((p) => `${p - 1} and ${p}`).join(", ")} overlap. Remove any repeated items.`,
-      });
-    }
-
-    if (scan.looksLikeMultipleReceipts) {
-      notices.push({
-        tone: "warn",
-        text: "There may be two receipts here. Scan each separately if so.",
-      });
-    }
-
-    /*
-     * Three-way split, same as the web confirm screen. The amounts on a
-     * merely vision-ASSISTED read were still read off the paper and add up to
-     * the printed total; only the wording came from a model. Showing the
-     * stronger warning there would be false, and false in the direction that
-     * teaches owners to skip warnings.
-     */
-    if (scan.items.some((i) => i.extractedByVision)) {
-      notices.push({
-        tone: "warn",
-        text: "AI interpreted these values. Check every field and the total against the receipt.",
-      });
-    } else if (scan.visionAssisted) {
-      notices.push({
-        tone: "warn",
-        text: "AI helped read item names. Check them against the receipt.",
-      });
-    }
-
-    return notices;
-  })();
+  const reviewNotices: ReviewNotice[] = scan ? reviewNoticesFor(scan, categories) : [];
 
   /** Items and completed added lines, grouped by category with a subtotal each. */
   const itemGroups = (() => {
@@ -1999,21 +1732,17 @@ export function ScanReceiptScreen({ navigation }: any) {
                 // reasoning as web's ScanReceipt read skeleton. The scanning
                 // thumbnail shows the actual photo being read; the bars
                 // underneath still say which fields are about to fill in.
-                <View style={{ gap: space.sm, paddingVertical: space.md }}>
-                  <T variant="caption" accessibilityLiveRegion="polite" style={{ marginBottom: space.xs }}>{phase}</T>
-                  {pages[0] ? <ScanningThumbnail uri={pages[0].uri} /> : null}
-                  <SkeletonBox width="40%" height={14} />
-                  <SkeletonBox height={14} />
-                  <SkeletonBox width="70%" height={14} />
-                  <SkeletonBox width="55%" height={14} />
-                  <Button title={cancelsAnUpload(phase) ? "Cancel upload" : "Stop waiting"} variant="ghost" onPress={() => {
+                <ScanProgress
+                  phase={phase}
+                  thumbnailUri={pages[0]?.uri}
+                  onStop={() => {
                     operation.cancel();
                     setBusy(false);
                     const accepted = Boolean(uploadAttempt.current?.accepted);
                     if (accepted) setScanRecoveryAction("review");
                     setError(stoppedWaitingMessage(accepted, pages.some((page) => Boolean(page.uri))));
-                  }} />
-                </View>
+                  }}
+                />
               ) : (
                 <>
                   {/*
@@ -2023,115 +1752,15 @@ export function ScanReceiptScreen({ navigation }: any) {
                     old single-tap flow, so the common case gains no step.
                   */}
                   {pages.length > 0 ? (
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: space.md }}>
-                      <View style={{ flexDirection: "row", gap: space.sm }}>
-                        {pages.map((p, i) => (
-                          <View key={p.key} style={{ width: 84 }}>
-                            <View
-                              style={{
-                                width: 84,
-                                height: 112,
-                                borderRadius: radius.sm,
-                                overflow: "hidden",
-                                backgroundColor: paper[100],
-                                borderWidth: 1,
-                                borderColor: ink[200],
-                              }}
-                            >
-                              {p.uri ? (
-                                <Image source={{ uri: p.uri }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
-                              ) : (
-                                <StoredPagePlaceholder label="Stored" compact />
-                              )}
-                              <View
-                                style={{
-                                  position: "absolute",
-                                  top: 4,
-                                  left: 4,
-                                  backgroundColor: "rgba(255,255,255,0.9)",
-                                  borderRadius: radius.full,
-                                  paddingHorizontal: 6,
-                                  paddingVertical: 1,
-                                }}
-                              >
-                                <T style={{ fontSize: typeScale.micro, fontFamily: font.sansSemibold, color: ink[700] }}>
-                                  {capturedReceiptGroups.length > 1
-                                    ? `R${receiptPositionByPage.get(p.key)?.receipt} · P${receiptPositionByPage.get(p.key)?.page}`
-                                    : pages.length > 1 ? `Part ${i + 1}` : i + 1}
-                                </T>
-                              </View>
-                              <Pressable
-                                onPress={() => removePage(p.key)}
-                                disabled={scanStarted}
-                                accessibilityRole="button"
-                                accessibilityLabel={pages.length > 1 && capturedReceiptGroups.length === 1 ? `Remove part ${i + 1}` : `Remove page ${i + 1}`}
-                                // The visible chip stays 22px so it doesn't
-                                // swallow the thumbnail, but hitSlop brings
-                                // the actual tap target up to TAP (44px) —
-                                // 8px was 6px short even with hitSlop.
-                                hitSlop={11}
-                                style={{
-                                  position: "absolute",
-                                  top: 4,
-                                  right: 4,
-                                  width: 22,
-                                  height: 22,
-                                  borderRadius: radius.full,
-                                  backgroundColor: "rgba(255,255,255,0.9)",
-                                  alignItems: "center",
-                                  justifyContent: "center",
-                                  opacity: scanStarted ? 0.35 : 1,
-                                }}
-                              >
-                                <Ionicons name="close" size={14} color={ink[700]} />
-                              </Pressable>
-                              {p.checkingQuality ? (
-                                <View style={{ position: "absolute", bottom: 4, right: 4 }}>
-                                  <ActivityIndicator size="small" color={brand[600]} />
-                                </View>
-                              ) : null}
-                            </View>
-                            {/*
-                              Caught at capture, not after the whole session
-                              uploads — see addPage's own comment for why that
-                              order matters.
-                            */}
-                            {p.quality?.tooBlurredToTrust ? (
-                              <T style={{ fontSize: typeScale.axis, color: statusText.warning, marginTop: 2, textAlign: "center" }}>
-                                ⚠ blurry
-                              </T>
-                            ) : null}
-                            {uploadIssuePageKeys[p.key] ? (
-                              <T style={{ fontSize: typeScale.axis, color: statusText.critical, marginTop: 2, textAlign: "center" }}>
-                                ⚠ Can't upload yet
-                              </T>
-                            ) : null}
-                            <View style={{ flexDirection: "row", justifyContent: "center", gap: 2, marginTop: 2 }}>
-                              <Pressable
-                                onPress={() => movePage(p.key, -1)}
-                                disabled={scanStarted || !canMoveWithinReceipt(pages, i, -1)}
-                                accessibilityRole="button"
-                                accessibilityLabel={pages.length > 1 && capturedReceiptGroups.length === 1 ? `Move part ${i + 1} up` : `Move page ${i + 1} earlier`}
-                                hitSlop={8}
-                                style={{ padding: 4, opacity: scanStarted || !canMoveWithinReceipt(pages, i, -1) ? 0.3 : 1 }}
-                              >
-                                <Ionicons name="chevron-up" size={16} color={ink[600]} />
-                              </Pressable>
-                              <Pressable
-                                onPress={() => movePage(p.key, 1)}
-                                disabled={scanStarted || !canMoveWithinReceipt(pages, i, 1)}
-                                accessibilityRole="button"
-                                accessibilityLabel={pages.length > 1 && capturedReceiptGroups.length === 1 ? `Move part ${i + 1} down` : `Move page ${i + 1} later`}
-                                hitSlop={8}
-                                style={{ padding: 4, opacity: scanStarted || !canMoveWithinReceipt(pages, i, 1) ? 0.3 : 1 }}
-                              >
-                                <Ionicons name="chevron-down" size={16} color={ink[600]} />
-                              </Pressable>
-                            </View>
-                          </View>
-                        ))}
-                      </View>
-                    </ScrollView>
+                    <CaptureFilmstrip
+                      pages={pages}
+                      receiptCount={capturedReceiptGroups.length}
+                      positions={receiptPositionByPage}
+                      scanStarted={scanStarted}
+                      uploadIssuePageKeys={uploadIssuePageKeys}
+                      onRemove={removePage}
+                      onMove={movePage}
+                    />
                   ) : null}
 
                   <View style={{ gap: space.sm }}>
@@ -2241,72 +1870,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                 files the capture session produced, so they cost nothing to
                 display and are already the exact images that were read.
               */}
-              {pages.length > 0 ? (
-                <Card>
-                  <T variant="title" style={{ marginBottom: 2 }}>Check the details</T>
-                  <T variant="caption" style={{ marginBottom: space.md }}>
-                    Receipt scanned. Open each page to check the source image and any edited version before saving.
-                  </T>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                    <View style={{ flexDirection: "row", gap: space.sm }}>
-                      {pages.map((p, i) => (
-                        <Pressable
-                          key={p.key}
-                          accessibilityRole="button"
-                          accessibilityLabel={pages.length === 1 ? "Inspect receipt image" : `Inspect receipt page ${i + 1} of ${pages.length}`}
-                          onPress={() => setEvidencePage(i)}
-                          style={{
-                            width: 96,
-                            height: 128,
-                            borderRadius: radius.sm,
-                            overflow: "hidden",
-                            backgroundColor: paper[100],
-                            borderWidth: 1,
-                            borderColor: ink[200],
-                          }}
-                        >
-                          {p.uri ? (
-                            <Image
-                              source={{ uri: p.uri }}
-                              style={{ width: "100%", height: "100%" }}
-                              resizeMode="cover"
-                              accessible={false}
-                              accessibilityIgnoresInvertColors
-                            />
-                          ) : (
-                            <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: space.xs, padding: space.xs }}>
-                              <Ionicons name="receipt-outline" size={24} color={ink[500]} />
-                              <T variant="caption" style={{ color: ink[600], textAlign: "center" }}>Open stored image</T>
-                            </View>
-                          )}
-                          {pages.length > 1 ? (
-                            <View
-                              style={{
-                                position: "absolute",
-                                top: 4,
-                                left: 4,
-                                backgroundColor: "rgba(255,255,255,0.9)",
-                                borderRadius: radius.full,
-                                paddingHorizontal: 6,
-                                paddingVertical: 1,
-                              }}
-                            >
-                              <T style={{ fontSize: typeScale.micro, fontFamily: font.monoMedium, color: ink[700] }}>{i + 1}</T>
-                            </View>
-                          ) : null}
-                        </Pressable>
-                      ))}
-                    </View>
-                  </ScrollView>
-                </Card>
-              ) : (
-                <Card>
-                  <T variant="title" style={{ marginBottom: 2 }}>Check the details</T>
-                  <T variant="caption">
-                    Receipt scanned. Review the details before saving.
-                  </T>
-                </Card>
-              )}
+              <ReviewPhotos pages={pages} onInspect={setEvidencePage} />
 
               {/*
                 The band goes ABOVE the warnings: it is the one-line answer to
@@ -2314,35 +1878,21 @@ export function ScanReceiptScreen({ navigation }: any) {
                 detail behind it. The other way round buries the summary under
                 its own footnotes.
               */}
+              {reviewDraft.restored ? (
+                <RestoredReviewNotice onDiscard={reviewDraft.discardRestored} disabled={busy || savingItemId !== null || removingItemId !== null} />
+              ) : null}
+
               <ScanBand band={scanBand} fields={attentionFields} />
 
               <ReviewNotices notices={reviewNotices} />
 
-              {scan.receiptDetails && Object.values(scan.receiptDetails).some((value) => value !== null) ? (
-                <View>
-                <T variant="heading">As printed on the receipt</T>
-                <ResultDetails label="as printed on the receipt">
-                  {([
-                    ["Currency", scan.receiptDetails.currency],
-                    ["Time", scan.receiptDetails.transactionTime],
-                    ["Subtotal", scan.receiptDetails.subtotal],
-                    ["Tax", scan.receiptDetails.tax],
-                    ["Tip", scan.receiptDetails.tip],
-                    ["Discount", scan.receiptDetails.discount],
-                    ["Payment", scan.receiptDetails.paymentMethod],
-                    ["Receipt number", scan.receiptDetails.receiptNumber],
-                  ] as const).filter(([, value]) => value !== null).map(([label, value]) => (
-                    <T key={label} variant="caption">{label}: {typeof value === "number" ? value.toFixed(2) : value}</T>
-                  ))}
-                </ResultDetails>
-                </View>
-              ) : null}
+              <PrintedDetails details={scan.receiptDetails} />
 
               {requiresManualCurrencyConversion ? (
                 <View style={{ gap: space.sm }}>
                   <ErrorNote>{foreignCurrency ? `This receipt is in ${foreignCurrency}. Enter the converted PHP amount manually before saving.` : "Enter this receipt manually with the amount paid in PHP."}</ErrorNote>
                   <Button title="Enter expense manually" variant="primary" onPress={() => navigation.navigate("AddExpense")} />
-                  <Button title="Choose another receipt" variant="ghost" onPress={resetForAnotherReceipt} />
+                  <Button title="Choose another receipt" variant="ghost" onPress={() => reviewDraft.confirmDiscard(resetForAnotherReceipt)} />
                 </View>
               ) : <>
 
@@ -2416,247 +1966,43 @@ export function ScanReceiptScreen({ navigation }: any) {
                 >
 
                   {items.map((item) => (
-                    <View
+                    <ScannedItemRow
                       key={item.id}
-                      /*
-                        A rule ABOVE each row and generous padding, rather than
-                        a box per item. A receipt can carry a dozen lines and
-                        boxing each one turns the list into a stack of cards
-                        inside a card; a rule separates them at a fraction of
-                        the visual weight.
-                      */
-                      style={{
-                        borderTopWidth: 1,
-                        borderTopColor: paper[200],
-                        paddingTop: space.md,
-                        paddingBottom: space.md,
+                      item={item}
+                      categories={categories}
+                      categoryId={itemCategories[item.id] ?? null}
+                      editing={editingItem?.id === item.id ? editingItem : null}
+                      editingErrors={editingItemErrors}
+                      locked={editingItem !== null || savingItemId !== null || removingItemId !== null}
+                      saving={savingItemId === item.id}
+                      removing={removingItemId === item.id}
+                      repeatKept={keptRepeatItemIds.has(item.id)}
+                      suspect={scan.suspectItemId === item.id}
+                      suggestedCategory={suggestedNewCategoryFor(item)}
+                      creatingCategory={creatingCategoryFor}
+                      onStartEdit={() => {
+                        setEditingItem({ id: item.id, name: item.name, amount: item.amount.toFixed(2) });
+                        setEditingItemErrors({});
+                        setError(null);
                       }}
-                    >
-                      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: space.sm }}>
-                        <T style={{ flex: 1, fontSize: typeScale.bodySm, color: ink[900], lineHeight: 20 }}>
-                          {item.name}
-                          {item.quantity != null ? (
-                            <T variant="caption"> × {item.quantity}</T>
-                          ) : null}
-                        </T>
-                        {/*
-                          `decimals` is not cosmetic here. Without it
-                          toLocaleString ROUNDS to whole pesos, so a 123.50
-                          line printed as "PHP 124" — a figure that appears
-                          nowhere on the receipt — and a column of them stopped
-                          adding up to the total shown above. Whole pesos are
-                          right for a summary; they are wrong for a line the
-                          owner is checking against paper. Web's own scan
-                          review passes it on every amount for this reason.
-                        */}
-                        <Money value={item.amount} size={14} weight="semibold" decimals />
-                        <Pressable
-                          onPress={() => {
-                            setEditingItem({ id: item.id, name: item.name, amount: item.amount.toFixed(2) });
-                            setEditingItemErrors({});
-                            setError(null);
-                          }}
-                          disabled={editingItem !== null || savingItemId !== null || removingItemId !== null}
-                          accessibilityRole="button"
-                          accessibilityLabel={`Edit ${item.name}`}
-                          style={{
-                            width: TAP_FLOOR,
-                            height: TAP_FLOOR,
-                            borderRadius: radius.full,
-                            alignItems: "center",
-                            justifyContent: "center",
-                            opacity: editingItem !== null || savingItemId !== null || removingItemId !== null ? 0.4 : 1,
-                          }}
-                        >
-                          <Ionicons name="pencil-outline" size={18} color={ink[600]} />
-                        </Pressable>
-                        {/* Removing a line OCR should never have read. */}
-                        <Pressable
-                          onPress={() => removeScannedItem(item.id)}
-                          disabled={editingItem !== null || savingItemId !== null || removingItemId !== null}
-                          accessibilityRole="button"
-                          accessibilityLabel={`Remove ${item.name} — this was not a purchase`}
-                          style={{
-                            width: TAP_FLOOR,
-                            height: TAP_FLOOR,
-                            borderRadius: radius.full,
-                            alignItems: "center",
-                            justifyContent: "center",
-                            backgroundColor: paper[100],
-                            opacity: editingItem !== null || savingItemId !== null || removingItemId !== null ? 0.4 : 1,
-                          }}
-                        >
-                          {/*
-                            An icon rather than a "×" glyph: the glyph rendered
-                            at whatever weight the system font gave it, which
-                            beside a bold amount read as punctuation rather
-                            than as a control.
-                          */}
-                          <Ionicons name="close" size={14} color={ink[500]} />
-                        </Pressable>
-                      </View>
-
-                      {editingItem?.id === item.id ? (
-                        <View style={{ marginTop: space.sm }}>
-                          <Field
-                            label="Item name"
-                            accessibilityLabel={`Edit item name for ${item.name}`}
-                            value={editingItem.name}
-                            maxLength={255}
-                            error={editingItemErrors.name}
-                            onChangeText={(name) => {
-                              setEditingItem((current) => current ? { ...current, name } : current);
-                              setEditingItemErrors((current) => ({ ...current, name: undefined }));
-                            }}
-                            returnKeyType="next"
-                          />
-                          <Field
-                            label="Item amount (PHP)"
-                            accessibilityLabel={`Edit item amount for ${item.name}`}
-                            value={editingItem.amount}
-                            error={editingItemErrors.amount}
-                            onChangeText={(itemAmount) => {
-                              setEditingItem((current) => current ? { ...current, amount: itemAmount } : current);
-                              setEditingItemErrors((current) => ({ ...current, amount: undefined }));
-                            }}
-                            keyboardType="decimal-pad"
-                            returnKeyType="done"
-                            onSubmitEditing={() => void saveScannedItem()}
-                          />
-                          <Button
-                            title="Save item changes"
-                            variant="secondary"
-                            loading={savingItemId === item.id}
-                            onPress={() => void saveScannedItem()}
-                          />
-                          <Button
-                            title="Cancel item edit"
-                            variant="ghost"
-                            disabled={savingItemId === item.id}
-                            onPress={() => {
-                              setEditingItem(null);
-                              setEditingItemErrors({});
-                            }}
-                          />
-                        </View>
-                      ) : null}
-
-                      {/*
-                        A line a model inferred from a photograph must not look
-                        like one read off text. Marked per row, because the row
-                        is where the owner actually decides.
-                      */}
-                      {item.extractedByVision ? (
-                        <T variant="caption" style={{ marginTop: 2, color: statusText.warning }}>
-                          ✦ AI read this from the photo
-                        </T>
-                      ) : null}
-
-                      {/*
-                        A line that may be the overlap between two photos read
-                        twice. FinSight only removes a repeat on its own when
-                        the receipt's total proves it; anything short of that
-                        is the owner's call, made here on the row.
-                      */}
-                      {item.possibleRepeatOf && !keptRepeatItemIds.has(item.id) ? (
-                        <View style={{ marginTop: space.sm, padding: space.sm, borderRadius: radius.md, backgroundColor: statusSurface.warning, gap: space.sm }}>
-                          <T variant="caption" style={{ color: statusText.warning }}>
-                            May be counted twice. Your photos overlap, and page {item.possibleRepeatOf.pageNumber} also shows {item.possibleRepeatOf.name} for PHP {item.possibleRepeatOf.amount.toFixed(2)}.
-                          </T>
-                          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
-                            <Button
-                              title="Remove repeat"
-                              accessibilityLabel={`Remove ${item.name}, it repeats page ${item.possibleRepeatOf.pageNumber}`}
-                              variant="secondary"
-                              loading={removingItemId === item.id}
-                              disabled={editingItem !== null || savingItemId !== null || removingItemId !== null}
-                              onPress={() => void removeScannedItem(item.id)}
-                            />
-                            <Button
-                              title="Keep both"
-                              accessibilityLabel={`Keep ${item.name}, it is a separate purchase`}
-                              variant="ghost"
-                              disabled={removingItemId === item.id}
-                              onPress={() => setKeptRepeatItemIds((current) => new Set(current).add(item.id))}
-                            />
-                          </View>
-                        </View>
-                      ) : null}
-
-                      {/*
-                        The server names the line it is least sure of when the
-                        items do not add up. Pointing at one row beats asking the
-                        owner to re-read all nine.
-                      */}
-                      {scan.suspectItemId === item.id ? (
-                        <T variant="caption" style={{ marginTop: 2, color: statusText.warning }}>
-                          ⚠ Check this one first — the items don't add up to the total
-                        </T>
-                      ) : needsAttention({
-                          confidence: item.amountConfidence,
-                          visionAssisted: item.extractedByVision,
-                        }) && typeof item.amountConfidence === "number" ? (
-                        /*
-                          The BAND, not "FinSight was 62% sure of this amount".
-                          A percentage against one line invited the owner to
-                          grade it, and it used its own 75 cutoff — a third
-                          opinion about the same number. Same mapping as the
-                          heading now (lib/confidenceBands.ts).
-                        */
-                        <T variant="caption" style={{ marginTop: 2, color: statusText.warning }}>
-                          {BAND_COPY[confidenceBand({
-                            confidence: item.amountConfidence,
-                            visionAssisted: item.extractedByVision,
-                          })].label} — check this amount against the receipt
-                        </T>
-                      ) : null}
-                      {/* Which printed line this came from, where the server
-                          could locate it. Never invented. */}
-                      {evidenceSummary(item.evidence) ? <ResultDetails label={`source for ${item.name}`}><T variant="caption">{evidenceSummary(item.evidence)}</T></ResultDetails> : null}
-
-                      <View style={{ marginTop: space.sm }}>
-                        <CategoryChips
-                          categories={categories}
-                          value={itemCategories[item.id] ?? null}
-                          // No haptic here: the chip fires its own, and firing a
-                          // second would buzz twice for one tap.
-                          onChange={(id) => setItemCategories((prev) => ({ ...prev, [item.id]: id }))}
-                          label={item.name}
-                        />
-                      </View>
-                      {/*
-                        Why FinSight is unsure about this line's category, until
-                        the owner answers it by choosing one themselves.
-                      */}
-                      {categoryReviewNote(item, itemCategories[item.id] ?? null) ? (
-                        <T variant="caption" style={{ marginTop: space.xs, color: statusText.warning }}>
-                          {categoryReviewNote(item, itemCategories[item.id] ?? null)}
-                        </T>
-                      ) : null}
-
-                      {/*
-                        A category FinSight thinks is missing.
-
-                        Phrased as an offer rather than an assignment, because
-                        nothing is created until the owner says so — inventing
-                        categories in someone's books is not FinSight's call.
-                      */}
-                      {suggestedNewCategoryFor(item) ? (
-                        <Pressable
-                          onPress={() => acceptSuggestedCategory(item.suggestedCategoryName!)}
-                          disabled={creatingCategoryFor !== null}
-                          accessibilityRole="button"
-                          accessibilityLabel={`Create the category ${item.suggestedCategoryName} and file ${item.name} under it`}
-                          style={{ marginTop: space.sm, opacity: creatingCategoryFor !== null ? 0.5 : 1 }}
-                        >
-                          <T variant="caption" style={{ color: brand[700] }}>
-                            {creatingCategoryFor === item.suggestedCategoryName
-                              ? "Creating…"
-                              : `✦ Nothing fits this. Create "${item.suggestedCategoryName}"?`}
-                          </T>
-                        </Pressable>
-                      ) : null}
-                    </View>
+                      onEditName={(name) => {
+                        setEditingItem((current) => current ? { ...current, name } : current);
+                        setEditingItemErrors((current) => ({ ...current, name: undefined }));
+                      }}
+                      onEditAmount={(itemAmount) => {
+                        setEditingItem((current) => current ? { ...current, amount: itemAmount } : current);
+                        setEditingItemErrors((current) => ({ ...current, amount: undefined }));
+                      }}
+                      onSaveEdit={() => void saveScannedItem()}
+                      onCancelEdit={() => {
+                        setEditingItem(null);
+                        setEditingItemErrors({});
+                      }}
+                      onRemove={() => void removeScannedItem(item.id)}
+                      onKeepRepeat={() => setKeptRepeatItemIds((current) => new Set(current).add(item.id))}
+                      onCategory={(id) => setItemCategories((prev) => ({ ...prev, [item.id]: id }))}
+                      onAcceptSuggestion={() => void acceptSuggestedCategory(item.suggestedCategoryName!)}
+                    />
                   ))}
 
                   {/*
@@ -2669,78 +2015,14 @@ export function ScanReceiptScreen({ navigation }: any) {
                     survives onto the saved record.
                   */}
                   {addedItems.map((added, i) => (
-                    <View
+                    <AddedItemRow
                       key={added.key}
-                      style={{
-                        borderTopWidth: 1,
-                        borderTopColor: paper[100],
-                        backgroundColor: paper[50],
-                        paddingVertical: space.sm,
-                        paddingHorizontal: space.sm,
-                      }}
-                    >
-                      <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                        <T variant="caption">You're adding this line</T>
-                        <Pressable
-                          onPress={() => setAddedItems((prev) => prev.filter((x) => x.key !== added.key))}
-                          accessibilityRole="button"
-                          accessibilityLabel={`Remove added item ${i + 1}`}
-                          /*
-                           * Was 32 x 28 with no hitSlop at all — the smallest
-                           * target left in the app, on a destructive control.
-                           * Laid out to the floor rather than slopped: it is
-                           * the right-hand end of a two-item `space-between`
-                           * row whose other item is a caption, so nothing
-                           * tappable is anywhere near it, and the block below
-                           * it is a form field rather than more chrome.
-                           */
-                          style={{
-                            minWidth: TAP_FLOOR,
-                            minHeight: TAP_FLOOR,
-                            alignItems: "flex-end",
-                            justifyContent: "center",
-                          }}
-                        >
-                          <T style={{ fontSize: typeScale.bodyLg, color: ink[400] }}>×</T>
-                        </Pressable>
-                      </View>
-                      <Field
-                        label="Item name"
-                        value={added.name}
-                        onChangeText={(v: string) =>
-                          setAddedItems((prev) => prev.map((x) => (x.key === added.key ? { ...x, name: v } : x)))
-                        }
-                        returnKeyType="next"
-                        submitBehavior="submit"
-                        onSubmitEditing={() => addedAmountRefs.current[added.key]?.focus()}
-                      />
-                      <Field
-                        ref={(el) => {
-                          if (el) addedAmountRefs.current[added.key] = el;
-                          else delete addedAmountRefs.current[added.key];
-                        }}
-                        label="Amount (PHP)"
-                        value={added.amount}
-                        keyboardType="decimal-pad"
-                        // The row ends at its category chips, which are pressables
-                        // and cannot be focused from a keyboard — so this closes
-                        // the keyboard and leaves the chips visible underneath.
-                        returnKeyType="done"
-                        onChangeText={(v: string) =>
-                          setAddedItems((prev) => prev.map((x) => (x.key === added.key ? { ...x, amount: v } : x)))
-                        }
-                      />
-                      <CategoryChips
-                        categories={categories}
-                        value={added.categoryId}
-                        onChange={(id) =>
-                          setAddedItems((prev) =>
-                            prev.map((x) => (x.key === added.key ? { ...x, categoryId: id } : x)),
-                          )
-                        }
-                        label={added.name || `added item ${i + 1}`}
-                      />
-                    </View>
+                      added={added}
+                      index={i}
+                      categories={categories}
+                      onChange={(patch) => setAddedItems((prev) => prev.map((x) => (x.key === added.key ? { ...x, ...patch } : x)))}
+                      onRemove={() => setAddedItems((prev) => prev.filter((x) => x.key !== added.key))}
+                    />
                   ))}
 
                   <Pressable
@@ -2770,228 +2052,38 @@ export function ScanReceiptScreen({ navigation }: any) {
                 describes the OUTCOME rather than the reading.
               */}
               {isItemised ? (
-                <Card emphasis>
-                  <View>
-                    <View
-                      style={{
-                        flexDirection: stackedFigures ? "column" : "row",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        gap: space.sm,
-                        marginBottom: space.sm,
-                      }}
-                    >
-                      <View style={{ flex: 1 }}>
-                        <T variant="heading" accessibilityRole="header" style={{ color: brand[900] }}>
-                          What gets saved
-                        </T>
-                        {/* The band, not the percentage — the number is at the
-                            top of the screen in words already, and repeating
-                            it here as "87%" would put the two cues back into
-                            competition. */}
-                        <T variant="caption">{BAND_COPY[scanBand].label}</T>
-                      </View>
-                      {/*
-                        Whether the receipt balances, stated as a badge rather
-                        than left for the owner to work out by comparing two
-                        numbers in different places. Colour is never the only
-                        signal — the badge carries a glyph and words.
-                      */}
-                      <View
-                        style={{
-                          flexDirection: "row",
-                          alignItems: "center",
-                          gap: 4,
-                          paddingHorizontal: space.sm,
-                          paddingVertical: 3,
-                          borderRadius: radius.full,
-                          // The wash under the balance badge, paired with the
-                          // `statusText` step written on it. Both halves have
-                          // to come from the same family or the pair stops
-                          // clearing contrast the moment the page goes dark —
-                          // these were Light's literal surfaces, which left a
-                          // near-white pill behind light green text in Dark.
-                          backgroundColor: gap === 0 ? statusSurface.good : statusSurface.warning,
-                        }}
-                      >
-                        <T
-                          style={{
-                            fontSize: typeScale.micro,
-                            color: gap === 0 ? statusText.good : statusText.warning,
-                          }}
-                        >
-                          {gap === 0
-                            ? "✓ Balances"
-                            : `⚠ ${gap > 0 ? "Short" : "Over"} PHP ${(Math.abs(gap) / 100).toFixed(2)}`}
-                        </T>
-                      </View>
-                    </View>
-                    {itemGroups.map(([catId, g]) => (
-                      <View
-                        key={String(catId)}
-                        style={{ flexDirection: stackedFigures ? "column" : "row", justifyContent: "space-between", gap: space.sm, marginTop: space.sm }}
-                      >
-                        <T style={{ flex: 1, fontSize: typeScale.label, color: catId == null ? statusText.warning : ink[700] }}>
-                          {catId == null
-                            ? "Not categorised yet"
-                            : (categories.find((c) => c.id === catId)?.name ?? "Category")}
-                          <T variant="caption"> ({g.count} item{g.count === 1 ? "" : "s"})</T>
-                        </T>
-                        <Money value={g.total} size={13} decimals />
-                      </View>
-                    ))}
-                    <T
-                      variant="caption"
-                      style={{ marginTop: space.sm, color: everyItemHasCategory && planResolved ? statusText.good : statusText.warning }}
-                    >
-                      {!everyItemHasCategory
-                        ? "⚠ Every item needs a category before this can be saved."
-                        : gap === 0
-                          ? `✓ ${itemGroups.length} record${itemGroups.length === 1 ? "" : "s"} will be saved, adding up to the receipt total.`
-                          : plan === "shrink"
-                            ? `✓ The receipt will be saved as PHP ${itemsTotal.toFixed(2)} — the items' own total.`
-                            : planResolved
-                              ? "✓ Ready to save."
-                              : gap > 0
-                                ? `⚠ The items come to PHP ${itemsTotal.toFixed(2)}, which is PHP ${(gap / 100).toFixed(2)} less than the total above.`
-                                : `⚠ The items come to PHP ${itemsTotal.toFixed(2)}, which is PHP ${(-gap / 100).toFixed(2)} more than the total above.`}
-                    </T>
-                  </View>
-
-                  {/*
-                    Accounting for the difference.
-
-                    A gap is normal rather than a mistake: a VAT-exclusive
-                    register adds tax on top of the printed lines, a discount
-                    takes money off, and OCR sometimes just misses a line. So the
-                    screen asks what the difference IS instead of blocking until
-                    the arithmetic works — which, on a VAT-exclusive receipt, it
-                    never would. The total never changes on its own; only the
-                    last option touches it, and only to figures read off the
-                    receipt.
-                  */}
-                  {everyItemHasCategory && gap !== 0 ? (
-                    <View style={{ marginTop: space.md }}>
-                      <T variant="label" style={{ color: ink[700], marginBottom: 4 }}>
-                        {gap > 0
-                          ? `What is the missing PHP ${(gap / 100).toFixed(2)}?`
-                          : `What is the extra PHP ${(-gap / 100).toFixed(2)}?`}
-                      </T>
-                      <T variant="caption" style={{ marginBottom: space.sm }}>
-                        {gap > 0
-                          ? "Receipts often add tax or a service charge on top of the item prices, and sometimes a line just doesn't scan."
-                          : "A discount or a voided line usually explains this."}
-                      </T>
-
-                      <GapOption
-                        selected={plan === "proportional"}
-                        onPress={() => {
-                          haptics.tapped();
-                          setPlan("proportional");
-                        }}
-                        title={gap > 0 ? "Tax or a service charge" : "A discount on the whole receipt"}
-                        detail="Split across the categories above, in proportion to what each came to. Keeps every category's spending accurate."
-                      />
-                      {canFileGapOnItsOwn ? (
-                        <GapOption
-                          selected={plan === "category"}
-                          onPress={() => {
-                            haptics.tapped();
-                            setPlan("category");
-                          }}
-                          title="A separate charge to track on its own"
-                          detail="Saved as its own expense record under one category."
-                        >
-                          {plan === "category" ? (
-                            <View style={{ marginTop: space.sm }}>
-                              <CategoryChips
-                                categories={categories}
-                                value={gapCategoryId}
-                                onChange={setGapCategoryId}
-                                label="the remaining amount"
-                              />
-                            </View>
-                          ) : null}
-                        </GapOption>
-                      ) : null}
-                      <GapOption
-                        selected={plan === "shrink"}
-                        onPress={() => {
-                          haptics.tapped();
-                          setPlan("shrink");
-                        }}
-                        title="FinSight misread the receipt total"
-                        detail={`Save PHP ${itemsTotal.toFixed(2)} — the items' own total — instead of the amount above.`}
-                      />
-                    </View>
-                  ) : null}
-                </Card>
+                <SaveSummaryCard
+                  band={scanBand}
+                  gap={gap}
+                  itemGroups={itemGroups}
+                  itemsTotal={itemsTotal}
+                  categories={categories}
+                  everyItemHasCategory={everyItemHasCategory}
+                  planResolved={planResolved}
+                  canFileGapOnItsOwn={canFileGapOnItsOwn}
+                  plan={plan}
+                  onPlan={setPlan}
+                  gapCategoryId={gapCategoryId}
+                  onGapCategory={setGapCategoryId}
+                  stackedFigures={stackedFigures}
+                />
               ) : null}
 
               {duplicateReview ? (
-                <Card emphasis>
-                  <T variant="title" accessibilityRole="header">Possible duplicate</T>
-                  <T variant="caption" style={{ marginTop: 2, marginBottom: space.md }}>
-                    {duplicateReview.code === "DUPLICATE_REVIEW_CHANGED"
-                      ? "The possible matches changed while you were reviewing them. Compare this latest list before deciding."
-                      : "This receipt may already be in your records. Compare the vendor, date and total before saving another copy."}
-                  </T>
-                  <T variant="caption" accessibilityLiveRegion="polite" style={{ marginBottom: space.sm }}>
-                    Showing {duplicateReview.candidates.length} of {duplicateReview.candidateCount} possible {duplicateReview.candidateCount === 1 ? "match" : "matches"}.
-                  </T>
-                  <View style={{ gap: space.sm }}>
-                    {duplicateReview.candidates.map((candidate) => (
-                      <View
-                        key={candidate.id}
-                        style={{ borderTopWidth: 1, borderTopColor: t.border, paddingTop: space.sm, gap: 2 }}
-                      >
-                        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "baseline", gap: space.sm }}>
-                          <T variant="heading" style={{ flex: 1 }}>{candidate.vendor?.trim() || "Vendor not recorded"}</T>
-                          <Money value={candidate.total} decimals />
-                        </View>
-                        <T variant="caption">{candidate.date.slice(0, 10)} · {candidate.scoreBand === "EXACT" ? "Exact match" : "Likely match"}</T>
-                        <T variant="caption">
-                          {candidate.reasons.length > 0
-                            ? [...new Set(candidate.reasons.map(duplicateReasonLabel))].join(" · ")
-                            : "Similar receipt details"}
-                        </T>
-                      </View>
-                    ))}
-                  </View>
-                  <View style={{ gap: space.sm, marginTop: space.md }}>
-                    {duplicateCandidatesError ? <ErrorNote>{duplicateCandidatesError}</ErrorNote> : null}
-                    {!duplicateReviewIsComplete(duplicateReview) ? (
-                      <>
-                        <T variant="caption">Load and review every possible match before saving another copy.</T>
-                        <Button
-                          title={duplicateCandidatesError ? "Try loading remaining matches again" : "Load remaining matches"}
-                          variant="secondary"
-                          loading={busy}
-                          disabled={deletingScanId !== null || removingItemId !== null || creatingCategoryFor !== null || editingItem !== null || savingItemId !== null}
-                          onPress={() => { void loadRemainingDuplicateCandidates(); }}
-                        />
-                      </>
-                    ) : null}
-                    <Button
-                      title="Save anyway"
-                      variant="danger"
-                      loading={busy}
-                      disabled={!duplicateReviewIsComplete(duplicateReview) || deletingScanId !== null || removingItemId !== null || creatingCategoryFor !== null || editingItem !== null || savingItemId !== null}
-                      onPress={() => { void confirm({ action: "SAVE_ANYWAY", candidateSetHash: duplicateReview.candidateSetHash }); }}
-                    />
-                    <Button
-                      title="Go back and edit"
-                      variant="ghost"
-                      disabled={busy}
-                      onPress={() => {
-                        setDuplicateReview(null);
-                        setDuplicateCandidatesError(null);
-                        duplicateReviewIdentity.current = "";
-                        setError(null);
-                      }}
-                    />
-                  </View>
-                </Card>
+                <DuplicateReviewCard
+                  review={duplicateReview}
+                  loadError={duplicateCandidatesError}
+                  busy={busy}
+                  locked={deletingScanId !== null || removingItemId !== null || creatingCategoryFor !== null || editingItem !== null || savingItemId !== null}
+                  onLoadMore={() => { void loadRemainingDuplicateCandidates(); }}
+                  onSaveAnyway={() => { void confirm({ action: "SAVE_ANYWAY", candidateSetHash: duplicateReview.candidateSetHash }); }}
+                  onGoBack={() => {
+                    setDuplicateReview(null);
+                    setDuplicateCandidatesError(null);
+                    duplicateReviewIdentity.current = "";
+                    setError(null);
+                  }}
+                />
               ) : null}
 
               {/*
@@ -3003,6 +2095,11 @@ export function ScanReceiptScreen({ navigation }: any) {
               */}
               <View>
                 {error ? <View style={{ marginBottom: space.sm }}><ErrorNote>{error}</ErrorNote></View> : null}
+                {reviewDraft.saveFailed ? (
+                  <T variant="caption" accessibilityLiveRegion="polite" style={{ marginBottom: space.sm, color: statusText.warning }}>
+                    This device couldn't keep a copy of your changes. They are still on screen; save before closing the app.
+                  </T>
+                ) : null}
                 {!duplicateReview ? (
                   <Button
                     title={
@@ -3020,7 +2117,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                   title="Retake photo"
                   variant="ghost"
                   disabled={deletingScanId !== null || busy || removingItemId !== null || creatingCategoryFor !== null || savingItemId !== null}
-                  onPress={resetForAnotherReceipt}
+                  onPress={() => reviewDraft.confirmDiscard(resetForAnotherReceipt)}
                 />
                 <Button
                   title="Delete scan"

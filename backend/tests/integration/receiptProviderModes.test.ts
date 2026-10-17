@@ -52,6 +52,7 @@ vi.mock("../../src/services/receiptScan/providerAdapters", async (importOriginal
   };
 });
 
+import { logger } from "../../src/config/logger";
 import { prisma } from "../../src/config/prisma";
 import { getReceiptProviderConfiguration } from "../../src/config/receiptProvider";
 import {
@@ -425,6 +426,101 @@ describe("provider merge against the local read", () => {
   });
 });
 
+// A validated provider vendor replaces even a clean header parse; the exception is a
+// vendor the owner already confirmed, which snapVendorToHistory restores from the OCR text.
+describe("rescue routing: vendor precedence", () => {
+  const providerVendor = (value: string | null) => ({
+    value,
+    evidence: value === null ? null : {
+      source: "gemini",
+      sourceVersion: "gemini-3.5-flash-lite",
+      pageNumber: null,
+      regionStatus: "UNAVAILABLE",
+      region: null,
+      confidenceBand: "MEDIUM",
+      calibrationState: "UNCALIBRATED",
+      validationState: "VALIDATED",
+      validationCodes: ["FORMAT_VALID", "REGION_UNAVAILABLE", "OWNER_REVIEW_REQUIRED"],
+    },
+  });
+
+  async function rescueRead(suffix: string, before?: (owner: Awaited<ReturnType<typeof makeOwnerWithProfile>>) => Promise<unknown>) {
+    // A clean vendor line; the rescue opens only because the item does not reach the total.
+    ocrText.value = "LOCAL STORE\n2026-09-01\nRice 60.00\nTOTAL PHP 100.00";
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    await before?.(owner);
+    const scan = await queuedScan(owner.profile.id, suffix);
+    expect(await runReceiptWorkerOnce()).toBe(true);
+    expect(adapterExtract.current).toHaveBeenCalledTimes(1);
+    const versions = (await extractorVersions(scan.id)).versions;
+    expect(versions.providerGateCode).toBe("PROVIDER_OK");
+    expect(versions.rescueReasonCodes).not.toContain("PROVIDER_ROUTING_ALWAYS");
+    return storedFields(scan.id);
+  }
+
+  it("replaces a cleanly parsed local vendor with a differing validated provider vendor", async () => {
+    adapterExtraction.value = { vendor: providerVendor("SM Savemore") };
+
+    const stored = await rescueRead("rescue-vendor-differs");
+
+    expect(stored.vendor).toBe("SM Savemore");
+    expect(stored.sources.vendor).toBe("vision");
+  });
+
+  it("replaces a weak local vendor, here a total line misread as the header", async () => {
+    adapterExtraction.value = { vendor: providerVendor("SM Savemore") };
+    // No header line: the parser falls back to "TOTAL PHP 100.00" as the vendor.
+    ocrText.value = "2026-09-01\nRice 60.00\nTOTAL PHP 100.00";
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const scan = await queuedScan(owner.profile.id, "rescue-vendor-weak");
+
+    expect(await runReceiptWorkerOnce()).toBe(true);
+    expect(adapterExtract.current).toHaveBeenCalledTimes(1);
+
+    const stored = await storedFields(scan.id);
+    expect(stored.vendor).toBe("SM Savemore");
+    expect(stored.sources.vendor).toBe("vision");
+  });
+
+  it("keeps the local spelling when both readings agree", async () => {
+    adapterExtraction.value = { vendor: providerVendor("local store") };
+
+    const stored = await rescueRead("rescue-vendor-agrees");
+
+    expect(stored.vendor).toBe("LOCAL STORE");
+    expect(stored.sources.vendor).toBe("ocr");
+  });
+
+  it("keeps the local vendor when the provider read none", async () => {
+    adapterExtraction.value = { vendor: providerVendor(null) };
+
+    const stored = await rescueRead("rescue-vendor-null");
+
+    expect(stored.vendor).toBe("LOCAL STORE");
+    expect(stored.sources.vendor).toBe("ocr");
+  });
+
+  it("restores a vendor the owner already confirmed when it is printed on the receipt", async () => {
+    adapterExtraction.value = { vendor: providerVendor("SM Savemore") };
+
+    const stored = await rescueRead("rescue-vendor-history", (owner) => prisma.expenseRecord.create({
+      data: {
+        businessProfileId: owner.profile.id,
+        categoryId: owner.categories.Inventory!,
+        date: new Date("2026-08-01T00:00:00.000Z"),
+        description: "Purchase from LOCAL STORE",
+        vendor: "LOCAL STORE",
+        amount: 80,
+        source: "MANUAL_ENTRY",
+      },
+    }));
+
+    expect(stored.vendor).toBe("LOCAL STORE");
+  });
+});
+
 describe("RECEIPT_PROVIDER_CONSENT_MODE", () => {
   it("still requires an owner grant in explicit mode", async () => {
     const owner = await makeOwnerWithProfile();
@@ -572,5 +668,48 @@ describe("RECEIPT_PROVIDER_CONSENT_MODE", () => {
     const stored = await extractorVersions(scan.id);
     expect(stored).toMatchObject({ processingStatus: "Complete", processingErrorCode: null });
     expect(stored.versions.providerGateCode).toBe("PROVIDER_OK");
+  });
+});
+
+describe("per-attempt scan timings", () => {
+  it("stores the pre-persist stages with the scan and logs every stage once on completion", async () => {
+    const info = vi.spyOn(logger, "info");
+    try {
+      enableMockedGeminiProvider({ RECEIPT_PROVIDER_ROUTING: "always" });
+      const owner = await makeOwnerWithProfile();
+      await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+      const scan = await queuedScan(owner.profile.id, "timed-complete");
+
+      expect(await runReceiptWorkerOnce()).toBe(true);
+      expect(adapterExtract.current).toHaveBeenCalledTimes(1);
+
+      const versions = (await extractorVersions(scan.id)).versions;
+      expect(versions.scanTimings).toEqual({
+        attempt: 1,
+        queueWaitMs: expect.any(Number),
+        restoreMs: expect.any(Number),
+        ocrMs: expect.any(Number),
+        providerMs: expect.any(Number),
+        finalizeMs: expect.any(Number),
+      });
+
+      const lines = info.mock.calls
+        .filter(([, message]) => message === "receipt scan timings")
+        .map(([fields]) => fields as Record<string, unknown>);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatchObject({
+        scanId: scan.id,
+        outcome: "complete",
+        ...(versions.scanTimings as Record<string, unknown>),
+        persistMs: expect.any(Number),
+        totalMs: expect.any(Number),
+      });
+      const stages = ["restoreMs", "ocrMs", "providerMs", "finalizeMs", "persistMs"] as const;
+      const stageSum = stages.reduce((sum, stage) => sum + (lines[0]![stage] as number), 0);
+      // Rounded per stage, so allow one millisecond each.
+      expect(lines[0]!.totalMs as number).toBeGreaterThanOrEqual(stageSum - stages.length);
+    } finally {
+      info.mockRestore();
+    }
   });
 });

@@ -153,7 +153,7 @@ function ResourcesMenu() {
                 key={r.to}
                 to={r.to}
                 role="menuitem"
-                className="block px-4 py-2.5 font-landing-sans text-sm font-medium text-landing-charcoal transition-colors hover:bg-landing-mint-pale hover:text-landing-green"
+                className="flex min-h-tap items-center px-4 font-landing-sans text-sm font-medium text-landing-charcoal transition-colors hover:bg-landing-mint-pale hover:text-landing-green"
               >
                 {r.label}
               </Link>
@@ -452,28 +452,28 @@ export function PublicLayout({ children }: { children: ReactNode }) {
               <h3 className="font-landing-display text-sm font-bold uppercase tracking-wider text-landing-charcoal">
                 Product & Help
               </h3>
-              <ul className="mt-4 space-y-2.5 text-sm font-medium">
+              <ul className="mt-2 text-sm font-medium">
                 <li>
                   <a
                     href="/#features"
                     onClick={handleSectionClick("features")}
-                    className="rounded text-landing-muted transition-colors hover:text-landing-green"
+                    className="inline-flex min-h-tap items-center rounded text-landing-muted transition-colors hover:text-landing-green"
                   >
                     Features
                   </a>
                 </li>
                 <li>
-                  <Link to="/blogs" className="rounded text-landing-muted transition-colors hover:text-landing-green">
+                  <Link to="/blogs" className="inline-flex min-h-tap items-center rounded text-landing-muted transition-colors hover:text-landing-green">
                     Blogs & Articles
                   </Link>
                 </li>
                 <li>
-                  <Link to="/tutorials" className="rounded text-landing-muted transition-colors hover:text-landing-green">
+                  <Link to="/tutorials" className="inline-flex min-h-tap items-center rounded text-landing-muted transition-colors hover:text-landing-green">
                     Video Tutorials
                   </Link>
                 </li>
                 <li>
-                  <Link to="/faqs" className="rounded text-landing-muted transition-colors hover:text-landing-green">
+                  <Link to="/faqs" className="inline-flex min-h-tap items-center rounded text-landing-muted transition-colors hover:text-landing-green">
                     FAQ Center
                   </Link>
                 </li>
@@ -484,19 +484,19 @@ export function PublicLayout({ children }: { children: ReactNode }) {
               <h3 className="font-landing-display text-sm font-bold uppercase tracking-wider text-landing-charcoal">
                 Company & Legal
               </h3>
-              <ul className="mt-4 space-y-2.5 text-sm font-medium">
+              <ul className="mt-2 text-sm font-medium">
                 <li>
-                  <Link to="/contact" className="rounded text-landing-muted transition-colors hover:text-landing-green">
+                  <Link to="/contact" className="inline-flex min-h-tap items-center rounded text-landing-muted transition-colors hover:text-landing-green">
                     Contact Us
                   </Link>
                 </li>
                 <li>
-                  <Link to="/privacy" className="rounded text-landing-muted transition-colors hover:text-landing-green">
+                  <Link to="/privacy" className="inline-flex min-h-tap items-center rounded text-landing-muted transition-colors hover:text-landing-green">
                     Privacy Policy
                   </Link>
                 </li>
                 <li>
-                  <Link to="/terms" className="rounded text-landing-muted transition-colors hover:text-landing-green">
+                  <Link to="/terms" className="inline-flex min-h-tap items-center rounded text-landing-muted transition-colors hover:text-landing-green">
                     Terms of Service
                   </Link>
                 </li>
@@ -523,7 +523,7 @@ export function PublicPageHead({ eyebrow, title, lede }: { eyebrow: string; titl
       <div className="mx-auto max-w-[1240px] px-4 lg:px-6">
         <nav aria-label="Breadcrumb" className="font-landing-sans text-sm text-landing-muted">
           <ol className="flex items-center gap-2">
-            <li><Link to="/" className="rounded-sm underline-offset-4 hover:text-landing-green hover:underline">Home</Link></li>
+            <li><Link to="/" className="inline-flex min-h-tap items-center rounded-sm underline-offset-4 hover:text-landing-green hover:underline">Home</Link></li>
             <li aria-hidden className="text-landing-green/60">/</li>
             <li aria-current="page" className="font-semibold text-landing-green">{eyebrow}</li>
           </ol>

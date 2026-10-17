@@ -39,8 +39,8 @@ export function Contact() {
               The most reliable way to reach us. If a receipt was read wrong, saying which shop it came
               from helps more than anything else.
             </p>
-            <p className="mt-4">
-              <a href={`mailto:${SUPPORT_EMAIL}`} className="text-sm font-semibold text-landing-green underline-offset-4 hover:underline">
+            <p className="mt-2.5">
+              <a href={`mailto:${SUPPORT_EMAIL}`} className="inline-flex min-h-tap items-center text-sm font-semibold text-landing-green underline-offset-4 hover:underline">
                 {SUPPORT_EMAIL}
               </a>
             </p>
@@ -58,8 +58,8 @@ export function Contact() {
               Most questions — whether it works offline, what it costs, what happens to your receipt
               photos — are already answered there.
             </p>
-            <p className="mt-4">
-              <Link to="/faqs" className="text-sm font-semibold text-landing-green underline-offset-4 hover:underline">
+            <p className="mt-2.5">
+              <Link to="/faqs" className="inline-flex min-h-tap items-center text-sm font-semibold text-landing-green underline-offset-4 hover:underline">
                 Read the FAQs
               </Link>
             </p>

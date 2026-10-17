@@ -111,7 +111,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                   t.onAction?.();
                   dismiss(t.id);
                 }}
-                className="shrink-0 rounded-full px-2.5 py-1 font-semibold text-accent-200 underline-offset-2 hover:bg-white/10 hover:underline"
+                // -my-2.5 offsets the pill's py-2.5, so the 44px target spans the toast's height without growing it.
+                className="-my-2.5 inline-flex min-h-tap shrink-0 items-center rounded-full px-2.5 font-semibold text-accent-200 underline-offset-2 hover:bg-white/10 hover:underline"
               >
                 {t.actionLabel}
               </button>

@@ -46,3 +46,11 @@ export function attentionFieldsFor(scan: ReceiptScanResult | null): ReceiptField
   const order: ReceiptField[] = ["date", "description", "vendor", "amount"];
   return order.filter((f) => named.has(f));
 }
+
+export function scannedItemRowId(itemId: number): string {
+  return `scanned-item-${itemId}`;
+}
+
+export function scannedItemRemoveId(itemId: number): string {
+  return `${scannedItemRowId(itemId)}-remove`;
+}

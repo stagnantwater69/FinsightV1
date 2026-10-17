@@ -3,6 +3,7 @@ import { supabase } from "../lib/supabaseClient";
 import { api, setSessionExpiredHandler } from "../lib/api";
 import { beginServerStateSession, endServerStateSession } from "../lib/serverStateCache";
 import { clearChatSendRecovery } from "../lib/chatSendRecovery";
+import { clearReceiptReviewDrafts } from "../lib/receiptReviewDraft";
 import type { LoginInput, Profile, RegisterInput, UpdateProfileInput, UserPreferences } from "../lib/types";
 
 interface AuthContextValue {
@@ -143,6 +144,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // first-time visitor their session expired would be a lie.
       if (signedInRef.current) setSessionExpired(true);
       clearChatSendRecovery();
+      clearReceiptReviewDrafts();
       replaceExpectedAccount(null);
       endServerStateSession();
       setProfile(null);
@@ -194,6 +196,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data: subscription } = supabase.auth.onAuthStateChange((event) => {
       if (event === "SIGNED_OUT") {
         clearChatSendRecovery();
+        clearReceiptReviewDrafts();
         replaceExpectedAccount(null);
         endServerStateSession();
         setProfile(null);
@@ -287,6 +290,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function logout() {
     clearChatSendRecovery();
+    clearReceiptReviewDrafts();
     replaceExpectedAccount(null);
     endServerStateSession();
     // Local scope: this browser only. "Log out everywhere" is a separate,
@@ -316,6 +320,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     if (!accountIsCurrent(logoutGuard)) return;
     clearChatSendRecovery();
+    clearReceiptReviewDrafts();
     // Remote revocation is authoritative, so local cleanup is best-effort.
     await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
     if (expectedUserIdRef.current !== null) return;
