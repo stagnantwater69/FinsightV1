@@ -18,11 +18,13 @@
  *     own line, and a failure is reported rather than thrown.
  */
 import "dotenv/config";
-import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, existsSync, statSync } from "node:fs";
+import { networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { describeDatabaseEndpoint, databaseErrorCode } from "./check-database";
 import { workerHeartbeatPath } from "../src/lib/workerHeartbeat";
+import type { MigrationDrift } from "../src/config/migrationGuard";
 
 export type State = "OK" | "WARN" | "FAIL" | "SKIP";
 export interface Check {
@@ -149,28 +151,44 @@ async function checkDatabase(): Promise<{ check: Check; reachable: boolean }> {
   }
 }
 
-/** Applied rows against migration directories on disk; pending is the useful number. */
+/**
+ * The startup gate's own verdict, so doctor can never call healthy a database
+ * the API and worker would refuse. It used to compare row counts, which missed
+ * a renamed migration, a changed checksum and a broken security control.
+ */
+export function describeMigrationDrift(drift: MigrationDrift): Check {
+  if (drift.status === "ok") return { name: "migrations", state: "OK", summary: "match this build, schema controls verified" };
+  if (drift.status === "unknown") {
+    return {
+      name: "migrations",
+      state: "WARN",
+      summary: `could not verify (${drift.verificationFailure ?? "unknown"})`,
+      hint: "The API and worker refuse to start until this can be verified",
+    };
+  }
+  const parts = [
+    drift.pending.length ? `${drift.pending.length} pending` : "",
+    drift.failed.length ? `${drift.failed.length} half-applied` : "",
+    drift.checksumMismatches?.length ? `${drift.checksumMismatches.length} changed since applied` : "",
+    drift.schemaIssues?.length ? `${drift.schemaIssues.length} schema control(s) missing` : "",
+  ].filter(Boolean);
+  const firstIssue = drift.pending[0] ?? drift.failed[0] ?? drift.checksumMismatches?.[0]?.migration ?? drift.schemaIssues?.[0];
+  return {
+    name: "migrations",
+    state: "FAIL",
+    summary: parts.join(", "),
+    hint: `The API and worker both refuse to start. First: ${firstIssue}`,
+  };
+}
+
 async function checkMigrations(databaseReachable: boolean): Promise<Check> {
   if (!databaseReachable) return { name: "migrations", state: "SKIP", summary: "database unreachable" };
-  const dir = join(REPO, "backend/prisma/migrations");
-  const onDisk = existsSync(dir)
-    ? readdirSync(dir).filter((entry) => statSync(join(dir, entry)).isDirectory()).length
-    : 0;
   try {
+    const { checkMigrationDrift } = await import("../src/config/migrationGuard");
     const { prisma } = await import("../src/config/prisma");
-    const rows = await withTimeout(PROBE_MS, async () =>
-      prisma.$queryRaw<{ count: bigint }[]>`SELECT COUNT(*) AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL`);
+    const drift = await withTimeout(PROBE_MS, () => checkMigrationDrift());
     await prisma.$disconnect().catch(() => undefined);
-    const applied = Number(rows[0]?.count ?? 0);
-    if (applied < onDisk) {
-      return {
-        name: "migrations",
-        state: "FAIL",
-        summary: `${applied} applied, ${onDisk - applied} pending`,
-        hint: "The API and worker both refuse to start until these are applied",
-      };
-    }
-    return { name: "migrations", state: "OK", summary: `${applied} applied` };
+    return describeMigrationDrift(drift);
   } catch (error) {
     return { name: "migrations", state: "WARN", summary: reason(error) };
   }
@@ -324,6 +342,55 @@ async function checkStorage(): Promise<Check> {
  * since reassigned). Reachability from HERE does not prove the phone can get
  * there, and the line says so.
  */
+/** Private IPv4 ranges a phone can reach a dev host on: LAN, Docker, Tailscale. */
+function isPrivateIpv4(host: string): boolean {
+  const parts = host.split(".");
+  if (parts.length !== 4 || parts.some((part) => !/^\d{1,3}$/.test(part) || Number(part) > 255)) return false;
+  const [a, b] = parts.map(Number) as [number, number];
+  return a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31) || (a === 100 && b >= 64 && b <= 127);
+}
+
+/**
+ * The addresses a development build actually calls.
+ *
+ * mobile/src/lib/apiBaseUrl.ts keeps the configured port and path but swaps
+ * a private or loopback http host for the host that served the bundle, which
+ * is this machine. So a stale LAN IP in mobile/.env does not break a dev
+ * build, and probing it here gave a FAIL the phone would never see. Empty
+ * when the configured URL is one the app uses as-is (HTTPS, a public host).
+ */
+export function developmentTargets(configured: string, localHosts: string[]): string[] {
+  let url: URL;
+  try {
+    url = new URL(configured);
+  } catch {
+    return [];
+  }
+  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (url.protocol !== "http:" || (!loopback && !isPrivateIpv4(url.hostname))) return [];
+  return [...new Set(localHosts.filter(isPrivateIpv4))].map((host) => {
+    const target = new URL(configured);
+    target.hostname = host;
+    return target.toString().replace(/\/$/, "");
+  });
+}
+
+function localIpv4Hosts(): string[] {
+  return Object.values(networkInterfaces())
+    .flatMap((entries) => entries ?? [])
+    .filter((entry) => entry.family === "IPv4" && !entry.internal)
+    .map((entry) => entry.address);
+}
+
+async function reachable(target: string): Promise<boolean> {
+  try {
+    const res = await withTimeout(PROBE_MS, () => fetch(`${target.replace(/\/$/, "")}/health/live`));
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 async function checkMobileTarget(): Promise<Check> {
   const file = join(REPO, "mobile/.env");
   if (!existsSync(file)) return { name: "mobile", state: "SKIP", summary: "no mobile/.env" };
@@ -333,6 +400,31 @@ async function checkMobileTarget(): Promise<Check> {
   if (!line) return { name: "mobile", state: "SKIP", summary: "EXPO_PUBLIC_API_BASE_URL is not set" };
   const target = line.slice(line.indexOf("=") + 1).trim().replace(/^["']|["']$/g, "");
   const where = endpointOf(target);
+
+  const devTargets = developmentTargets(target, localIpv4Hosts());
+  if (devTargets.length > 0) {
+    // Which of these the phone uses depends on the address Metro served the
+    // bundle from, which only Metro knows, so every reachable one is listed.
+    const answered: string[] = [];
+    for (const devTarget of devTargets) {
+      if (await reachable(devTarget)) answered.push(endpointOf(devTarget));
+    }
+    if (answered.length > 0) {
+      return {
+        name: "mobile",
+        state: "OK",
+        summary: `dev builds call this machine; reachable at ${answered.join(", ")}`,
+        hint: "The phone uses whichever of these Metro prints in its QR code",
+      };
+    }
+    return {
+      name: "mobile",
+      state: "FAIL",
+      summary: `dev builds call ${devTargets.map(endpointOf).join(" or ")} — none answered`,
+      hint: "The API must listen on this machine's LAN address, not only on localhost, and the firewall must allow its port",
+    };
+  }
+
   try {
     const res = await withTimeout(PROBE_MS, () => fetch(`${target.replace(/\/$/, "")}/health/live`));
     if (!res.ok) return { name: "mobile", state: "WARN", summary: `${where} answered ${res.status}` };
