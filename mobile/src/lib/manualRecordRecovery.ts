@@ -2,6 +2,7 @@ import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
 import { newIdempotencyKey } from "./csvImport";
 import { FIELD_LIMITS } from "./fieldLimits";
+import { splitUtf8 } from "./secureSessionStorage";
 
 export type ManualRecordKind = "expense" | "sales";
 export interface ManualRecordScope { ownerId: number; businessProfileId: number; kind: ManualRecordKind }
@@ -51,17 +52,7 @@ function withOwner<T>(ownerId: number, action: () => Promise<T>): Promise<T> {
 
 /** Split on code points, keeping each native value below the byte ceiling. */
 export function manualRecoveryChunks(value: string): string[] {
-  const chunks: string[] = [];
-  let chunk = "";
-  let bytes = 0;
-  for (const character of value) {
-    const point = character.codePointAt(0)!;
-    const width = point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4;
-    if (bytes + width > CHUNK_BYTES) { chunks.push(chunk); chunk = ""; bytes = 0; }
-    chunk += character;
-    bytes += width;
-  }
-  if (chunk) chunks.push(chunk);
+  const chunks = splitUtf8(value, CHUNK_BYTES);
   if (chunks.length === 0 || chunks.length > MAX_PARTS) throw new Error("This recovery request is too large to store safely. Shorten the entered details before saving.");
   return chunks;
 }
