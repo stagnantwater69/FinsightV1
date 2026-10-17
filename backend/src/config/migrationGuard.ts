@@ -263,6 +263,26 @@ export async function checkPhase2SchemaShape(): Promise<string[]> {
           'ReceiptDuplicateCandidate',
           'ReceiptDuplicateCandidate_decision_timestamp_check',
           $expression$(("ReceiptDuplicateCandidate_DecidedAt" IS NULL) OR ("ReceiptDuplicateCandidate_DecidedAt" >= "ReceiptDuplicateCandidate_CreatedAt"))$expression$
+        ),
+        -- Retry ledgers: a replayed request may only link to a record or thread
+        -- in the business it was sent for.
+        (
+          'constraint.manual_record_create_expense_scope',
+          'ManualRecordCreateRequest',
+          'ManualRecordCreateRequest_expense_scope_check',
+          $expression$((("ExpenseRecord_ID" IS NULL) AND ("ExpenseRecord_BusinessProfile_ID" IS NULL)) OR (("ExpenseRecord_ID" IS NOT NULL) AND ("ExpenseRecord_BusinessProfile_ID" IS NOT NULL) AND ("ManualRecordCreateRequest_Kind" = 'EXPENSE'::"ManualRecordKind") AND ("ExpenseRecord_BusinessProfile_ID" = "BusinessProfile_ID")))$expression$
+        ),
+        (
+          'constraint.manual_record_create_sales_scope',
+          'ManualRecordCreateRequest',
+          'ManualRecordCreateRequest_sales_scope_check',
+          $expression$((("SalesReferenceRecord_ID" IS NULL) AND ("SalesReferenceRecord_BusinessProfile_ID" IS NULL)) OR (("SalesReferenceRecord_ID" IS NOT NULL) AND ("SalesReferenceRecord_BusinessProfile_ID" IS NOT NULL) AND ("ManualRecordCreateRequest_Kind" = 'SALES'::"ManualRecordKind") AND ("SalesReferenceRecord_BusinessProfile_ID" = "BusinessProfile_ID")))$expression$
+        ),
+        (
+          'constraint.chat_send_conversation_scope',
+          'ChatSendRequest',
+          'ChatSendRequest_conversation_scope_check',
+          $expression$((("Conversation_ID" IS NULL) AND ("Conversation_BusinessProfile_ID" IS NULL)) OR (("Conversation_ID" IS NOT NULL) AND ("Conversation_BusinessProfile_ID" IS NOT NULL) AND ("Conversation_BusinessProfile_ID" = "BusinessProfile_ID")))$expression$
         )
     ),
     expected_foreign_keys(
@@ -344,6 +364,66 @@ export async function checkPhase2SchemaShape(): Promise<string[]> {
           'ExpenseRecord',
           ARRAY['ExpenseRecord_ID', 'BusinessProfile_ID']::text[],
           'c',
+          'c'
+        ),
+        (
+          'foreign_key.manual_record_create_profile',
+          'ManualRecordCreateRequest',
+          'ManualRecordCreateRequest_profile_fkey',
+          ARRAY['BusinessProfile_ID']::text[],
+          'BusinessProfile',
+          ARRAY['BusinessProfile_ID']::text[],
+          'c',
+          'c'
+        ),
+        (
+          'foreign_key.manual_record_create_expense',
+          'ManualRecordCreateRequest',
+          'ManualRecordCreateRequest_expense_fkey',
+          ARRAY['ExpenseRecord_ID', 'ExpenseRecord_BusinessProfile_ID']::text[],
+          'ExpenseRecord',
+          ARRAY['ExpenseRecord_ID', 'BusinessProfile_ID']::text[],
+          'n',
+          'c'
+        ),
+        (
+          'foreign_key.manual_record_create_sales',
+          'ManualRecordCreateRequest',
+          'ManualRecordCreateRequest_sales_fkey',
+          ARRAY['SalesReferenceRecord_ID', 'SalesReferenceRecord_BusinessProfile_ID']::text[],
+          'SalesReferenceRecord',
+          ARRAY['SalesReferenceRecord_ID', 'BusinessProfile_ID']::text[],
+          'n',
+          'c'
+        ),
+        (
+          'foreign_key.chat_send_user',
+          'ChatSendRequest',
+          'ChatSendRequest_user_fkey',
+          ARRAY['User_ID']::text[],
+          'User',
+          ARRAY['User_ID']::text[],
+          'c',
+          'c'
+        ),
+        (
+          'foreign_key.chat_send_profile_owner',
+          'ChatSendRequest',
+          'ChatSendRequest_profile_owner_fkey',
+          ARRAY['BusinessProfile_ID', 'User_ID']::text[],
+          'BusinessProfile',
+          ARRAY['BusinessProfile_ID', 'User_ID']::text[],
+          'c',
+          'c'
+        ),
+        (
+          'foreign_key.chat_send_conversation',
+          'ChatSendRequest',
+          'ChatSendRequest_conversation_fkey',
+          ARRAY['Conversation_ID', 'Conversation_BusinessProfile_ID']::text[],
+          'Conversation',
+          ARRAY['Conversation_ID', 'BusinessProfile_ID']::text[],
+          'n',
           'c'
         )
     ),
@@ -925,6 +1005,45 @@ export async function checkPhase2SchemaShape(): Promise<string[]> {
               to_regclass('public."ExternalProviderDispatch_ExternalProviderDispatch_ID_seq"')
             )
             AND has_sequence_privilege(api_role.oid, sequence_object.oid, 'USAGE,SELECT,UPDATE')
+        )),
+        ('table.manual_record_create_request', to_regclass('public."ManualRecordCreateRequest"') IS NOT NULL),
+        ('table.chat_send_request', to_regclass('public."ChatSendRequest"') IS NOT NULL),
+        ('security.manual_record_create_request_rls', COALESCE((
+          SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass('public."ManualRecordCreateRequest"')
+        ), FALSE)),
+        ('security.chat_send_request_rls', COALESCE((
+          SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass('public."ChatSendRequest"')
+        ), FALSE)),
+        ('security.manual_record_create_request_no_policies', NOT EXISTS (
+          SELECT 1 FROM pg_policy WHERE polrelid = to_regclass('public."ManualRecordCreateRequest"')
+        )),
+        ('security.chat_send_request_no_policies', NOT EXISTS (
+          SELECT 1 FROM pg_policy WHERE polrelid = to_regclass('public."ChatSendRequest"')
+        )),
+        ('security.retry_ledgers_no_direct_api_grants', NOT EXISTS (
+          SELECT 1
+          FROM pg_roles api_role
+          CROSS JOIN pg_class table_object
+          WHERE api_role.rolname IN ('anon', 'authenticated', 'service_role')
+            AND table_object.oid IN (
+              to_regclass('public."ManualRecordCreateRequest"'),
+              to_regclass('public."ChatSendRequest"')
+            )
+            AND has_table_privilege(
+              api_role.oid,
+              table_object.oid,
+              'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'
+            )
+        )),
+        ('security.retry_ledgers_no_public_grants', NOT EXISTS (
+          SELECT 1
+          FROM pg_class table_object
+          CROSS JOIN LATERAL aclexplode(COALESCE(table_object.relacl, '{}'::aclitem[])) grant_entry
+          WHERE table_object.oid IN (
+              to_regclass('public."ManualRecordCreateRequest"'),
+              to_regclass('public."ChatSendRequest"')
+            )
+            AND grant_entry.grantee = 0
         )),
         ('security.receipt_sequences_no_public_grants', NOT EXISTS (
           SELECT 1
