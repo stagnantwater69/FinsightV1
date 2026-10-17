@@ -167,6 +167,14 @@ export function RecordFilterSheet({
                     </Pressable>
                   );
                 })}
+                {query.trim() && matches.length === 0 ? (
+                  <T
+                    accessibilityLiveRegion="polite"
+                    style={{ paddingHorizontal: space.md, paddingVertical: space.sm, fontSize: typeScale.body, fontFamily: font.sans, color: t.textMuted }}
+                  >
+                    {`No categories match "${query.trim()}".`}
+                  </T>
+                ) : null}
               </ScrollView>
             </View>
           ) : (
