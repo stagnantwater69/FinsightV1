@@ -43,6 +43,7 @@
     "test:integration": "vitest --config vitest.config.mts run --project database tests/integration",
     "test:ml-contract": "vitest --config tests/contract/vitest.ml-worker.config.mts run",
     "test:browser-api": "vitest --config tests/browser-api/vitest.local-api.config.mts run",
+    "evaluate:ask-finsight": "tsx tests/ai-eval/ask-finsight-eval.ts",
     "evaluate:receipt-scanner": "tsx tests/receipt-scanner-evaluation/run-evaluation.ts",
     "evaluate:receipt-scanner:local": "tsx tests/receipt-scanner-evaluation/run-local-quality-gate.ts",
     "evaluate:receipt-scanner:readiness": "tsx tests/receipt-scanner-evaluation/run-readiness-report.ts",

@@ -17,13 +17,13 @@ const costBehaviorSchema = z.enum(["FIXED", "VARIABLE", "MIXED", "UNCLASSIFIED"]
 
 export const createSchema = z.object({
   businessProfileId: z.number().int().positive().max(2147483647),
-  name: z.string().min(1).max(100),
+  name: z.string().trim().min(1).max(100),
   description: z.string().max(255).optional(),
   costBehavior: costBehaviorSchema.optional(),
 });
 
-const updateSchema = z.object({
-  name: z.string().min(1).max(100).optional(),
+export const updateSchema = z.object({
+  name: z.string().trim().min(1).max(100).optional(),
   description: z.string().max(255).nullable().optional(),
   costBehavior: costBehaviorSchema.optional(),
 });
