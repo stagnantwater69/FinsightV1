@@ -166,6 +166,21 @@ enum SalesRecordSource {
   @@map("SalesRecordSource")
 }
 
+enum ManualRecordKind {
+  EXPENSE
+  SALES
+
+  @@map("ManualRecordKind")
+}
+
+enum ChatSendRequestStatus {
+  PROCESSING
+  COMPLETE
+  FAILED
+
+  @@map("ChatSendRequestStatus")
+}
+
 enum AnomalyFindingType {
   AMOUNT_OUTLIER
   POSSIBLE_DUPLICATE
@@ -500,6 +515,7 @@ model User {
   notifications                Notification[]
   aiInteractions               AIInteraction[]
   conversations                Conversation[]
+  chatSendRequests             ChatSendRequest[]
   reductionOpportunityFeedback ReductionOpportunityFeedback[]
   authHandoffs                 AuthHandoff[]
 
@@ -587,10 +603,12 @@ model BusinessProfile {
   categories                        ExpenseCategory[]
   expenseRecords                    ExpenseRecord[]
   salesReferenceRecords             SalesReferenceRecord[]
+  manualRecordCreateRequests        ManualRecordCreateRequest[]
   receiptScans                      ReceiptScan[]
   csvImportBatches                  CSVImportBatch[]
   aiInteractions                    AIInteraction[]
   conversations                     Conversation[]
+  chatSendRequests                  ChatSendRequest[]
   notifications                     Notification[]
   anomalyFindings                   AnomalyFinding[]
   categoryStatistics                CategoryStatistics[]
@@ -683,6 +701,7 @@ model ExpenseRecord {
   anomalyFindings            AnomalyFinding[]
   analysisJobs               AnalysisJob[]
   receiptDuplicateCandidates ReceiptDuplicateCandidate[]
+  manualCreateRequest        ManualRecordCreateRequest?
 
   @@unique([id, businessProfileId], map: "ExpenseRecord_ID_BusinessProfile_ID_key")
   @@index([businessProfileId])
@@ -882,16 +901,40 @@ model SalesReferenceRecord {
   duplicateStatus                  String            @default("Not a Duplicate") @map("SalesReferenceRecord_DuplicateStatus") @db.VarChar(50)
   createdAt                        DateTime          @default(now()) @map("SalesReferenceRecord_CreatedAt")
 
-  businessProfile BusinessProfile        @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
-  importBatch     CSVImportBatch?        @relation(fields: [importBatchId], references: [id])
-  duplicateOf     SalesReferenceRecord?  @relation("SalesRecordDuplicates", fields: [duplicateOfRecordId], references: [id])
-  duplicates      SalesReferenceRecord[] @relation("SalesRecordDuplicates")
+  businessProfile     BusinessProfile            @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+  importBatch         CSVImportBatch?            @relation(fields: [importBatchId], references: [id])
+  duplicateOf         SalesReferenceRecord?      @relation("SalesRecordDuplicates", fields: [duplicateOfRecordId], references: [id])
+  duplicates          SalesReferenceRecord[]     @relation("SalesRecordDuplicates")
+  manualCreateRequest ManualRecordCreateRequest?
 
+  @@unique([id, businessProfileId], map: "SalesReferenceRecord_ID_BusinessProfile_ID_key")
   @@index([businessProfileId])
   @@index([importBatchId])
   @@index([duplicateOfRecordId])
   @@index([businessProfileId, date, id])
   @@map("SalesReferenceRecord")
+}
+
+/// Deleted records leave their hashed request identity so an old retry cannot recreate them.
+model ManualRecordCreateRequest {
+  keyHash                        String           @id @map("ManualRecordCreateRequest_KeyHash") @db.Char(64)
+  businessProfileId              Int              @map("BusinessProfile_ID")
+  kind                           ManualRecordKind @map("ManualRecordCreateRequest_Kind")
+  inputHash                      String           @map("ManualRecordCreateRequest_InputHash") @db.Char(64)
+  expenseRecordId                Int?             @map("ExpenseRecord_ID")
+  expenseRecordBusinessProfileId Int?             @map("ExpenseRecord_BusinessProfile_ID")
+  salesRecordId                  Int?             @map("SalesReferenceRecord_ID")
+  salesRecordBusinessProfileId    Int?             @map("SalesReferenceRecord_BusinessProfile_ID")
+  createdAt                      DateTime         @default(now()) @map("ManualRecordCreateRequest_CreatedAt")
+
+  businessProfile BusinessProfile       @relation(fields: [businessProfileId], references: [id], onDelete: Cascade, map: "ManualRecordCreateRequest_profile_fkey")
+  expenseRecord   ExpenseRecord?        @relation(fields: [expenseRecordId, expenseRecordBusinessProfileId], references: [id, businessProfileId], onDelete: SetNull, map: "ManualRecordCreateRequest_expense_fkey")
+  salesRecord     SalesReferenceRecord? @relation(fields: [salesRecordId, salesRecordBusinessProfileId], references: [id, businessProfileId], onDelete: SetNull, map: "ManualRecordCreateRequest_sales_fkey")
+
+  @@unique([expenseRecordId, expenseRecordBusinessProfileId], map: "ManualRecordCreateRequest_expense_key")
+  @@unique([salesRecordId, salesRecordBusinessProfileId], map: "ManualRecordCreateRequest_sales_key")
+  @@index([businessProfileId], map: "ManualRecordCreateRequest_profile_idx")
+  @@map("ManualRecordCreateRequest")
 }
 
 model ReceiptCaptureBatch {
@@ -1323,7 +1366,7 @@ model CSVImportBatch {
   salesReferenceRecords SalesReferenceRecord[]
   stageChunks           CSVImportStageChunk[]
 
-  @@index([businessProfileId])
+  @@index([businessProfileId, uploadDate, id], map: "CSVImportBatch_profile_uploaded_id_idx")
   // The async-import worker's claim scan, mirroring AnalysisJob's.
   @@index([processingStatus, nextAttemptAt, heartbeatAt])
   @@index([processingStatus, completedAt], map: "CSVImportBatch_retention_idx")
@@ -1438,13 +1481,15 @@ model Conversation {
   createdAt         DateTime @default(now()) @map("Conversation_DateCreated")
   lastMessageAt     DateTime @default(now()) @map("Conversation_LastMessageAt")
 
-  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  businessProfile BusinessProfile @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
-  messages        ChatMessage[]
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  businessProfile  BusinessProfile   @relation(fields: [businessProfileId, userId], references: [id, userId], onDelete: Cascade, map: "Conversation_profile_owner_fkey")
+  messages         ChatMessage[]
+  chatSendRequests ChatSendRequest[]
 
   // The sidebar's only query: this owner's threads for the active profile,
   // newest activity first.
-  @@index([userId, businessProfileId, lastMessageAt])
+  @@unique([id, businessProfileId], map: "Conversation_ID_BusinessProfile_ID_key")
+  @@index([userId, businessProfileId, lastMessageAt, id], map: "Conversation_owner_profile_activity_idx")
   @@index([businessProfileId], map: "Conversation_BusinessProfile_ID_idx")
   @@map("Conversation")
 }
@@ -1469,8 +1514,34 @@ model ChatMessage {
   // Cascade is what makes deleting a conversation a single statement.
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
-  @@index([conversationId, createdAt])
+  @@index([conversationId, createdAt, id], map: "ChatMessage_conversation_created_id_idx")
   @@map("ChatMessage")
+}
+
+/// A deleted conversation leaves its request identity, preventing an uncertain retry from recreating it.
+model ChatSendRequest {
+  keyHash                       String                @id @map("ChatSendRequest_KeyHash") @db.Char(64)
+  inputHash                     String                @map("ChatSendRequest_InputHash") @db.Char(64)
+  businessProfileId             Int                   @map("BusinessProfile_ID")
+  userId                        Int                   @map("User_ID")
+  status                        ChatSendRequestStatus @default(PROCESSING) @map("ChatSendRequest_Status")
+  response                      Json?                 @map("ChatSendRequest_Response")
+  conversationId                Int?                  @map("Conversation_ID")
+  conversationBusinessProfileId Int?                  @map("Conversation_BusinessProfile_ID")
+  errorStatus                   Int?                  @map("ChatSendRequest_ErrorStatus")
+  errorCode                     String?               @map("ChatSendRequest_ErrorCode") @db.VarChar(80)
+  errorMessage                  String?               @map("ChatSendRequest_ErrorMessage") @db.VarChar(255)
+  createdAt                     DateTime              @default(now()) @map("ChatSendRequest_CreatedAt")
+  completedAt                   DateTime?             @map("ChatSendRequest_CompletedAt")
+
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade, map: "ChatSendRequest_user_fkey")
+  businessProfile BusinessProfile @relation(fields: [businessProfileId, userId], references: [id, userId], onDelete: Cascade, map: "ChatSendRequest_profile_owner_fkey")
+  conversation    Conversation?   @relation(fields: [conversationId, conversationBusinessProfileId], references: [id, businessProfileId], onDelete: SetNull, map: "ChatSendRequest_conversation_fkey")
+
+  @@index([businessProfileId, userId], map: "ChatSendRequest_profile_owner_idx")
+  @@index([userId], map: "ChatSendRequest_user_idx")
+  @@index([conversationId, conversationBusinessProfileId], map: "ChatSendRequest_conversation_idx")
+  @@map("ChatSendRequest")
 }
 
 /// [ADDED] Helpful/not-relevant signal on a reduction-opportunity card, per
