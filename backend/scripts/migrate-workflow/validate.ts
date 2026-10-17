@@ -21,6 +21,7 @@
 // created 127.0.0.1 scratch container.
 
 import { execFileSync, execSync } from "node:child_process";
+import { backendTestCommand, prismaCommand } from "./installedCli";
 import path from "node:path";
 import { createScratchDatabase, teardownScratchDatabase, type ScratchDatabase } from "./scratchDb";
 
@@ -47,14 +48,13 @@ function isTestDbContainerUp(): boolean {
 export async function runValidationPipeline(): Promise<void> {
   step("1/6 create/diff (schema compiles to valid SQL from empty)", () => {
     execFileSync(
-      "npx",
-      ["prisma", "migrate", "diff", "--from-empty", "--to-schema-datamodel", SCHEMA_PATH, "--script"],
+      ...prismaCommand("migrate", "diff", "--from-empty", "--to-schema-datamodel", SCHEMA_PATH, "--script"),
       { cwd: REPO_ROOT, stdio: "inherit" }
     );
   });
 
   step("2/6 prisma validate", () => {
-    execFileSync("npx", ["prisma", "validate"], { cwd: REPO_ROOT, stdio: "inherit" });
+    execFileSync(...prismaCommand("validate"), { cwd: REPO_ROOT, stdio: "inherit" });
   });
 
   let scratch: ScratchDatabase | null = null;
@@ -68,7 +68,7 @@ export async function runValidationPipeline(): Promise<void> {
     scratch = await createScratchDatabase();
 
     step("4/6 prisma migrate status (against the scratch database)", () => {
-      execFileSync("npx", ["prisma", "migrate", "status"], {
+      execFileSync(...prismaCommand("migrate", "status"), {
         cwd: REPO_ROOT,
         stdio: "inherit",
         env: { ...process.env, DATABASE_URL: scratch!.directUrl, DIRECT_URL: scratch!.directUrl },
@@ -82,7 +82,7 @@ export async function runValidationPipeline(): Promise<void> {
             "migrate:validate does not start or reuse it as scratch space (it is reserved for tests)."
         );
       }
-      execFileSync("npm", ["test"], { cwd: REPO_ROOT, stdio: "inherit" });
+      execFileSync(...backendTestCommand(), { cwd: REPO_ROOT, stdio: "inherit" });
     });
   } finally {
     if (scratch) {

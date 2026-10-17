@@ -12,6 +12,7 @@
 // docker port. It never reads backend/.env and never accepts a hosted URL.
 
 import { execFileSync } from "node:child_process";
+import { prismaCommand } from "./installedCli";
 import { createServer } from "node:net";
 import path from "node:path";
 
@@ -106,7 +107,7 @@ export async function createScratchDatabase(): Promise<ScratchDatabase> {
     await waitForReady(containerName);
 
     const url = connectionUrl(port);
-    execFileSync("npx", ["prisma", "migrate", "deploy"], {
+    execFileSync(...prismaCommand("migrate", "deploy"), {
       cwd: REPO_ROOT,
       stdio: "inherit",
       env: { ...process.env, DATABASE_URL: url, DIRECT_URL: url },
