@@ -19,8 +19,10 @@ interface State {
  * network first.
  *
  * So this exists to make a failure legible rather than to recover from it. It
- * deliberately does NOT retry or swallow: the error text stays on screen, and
- * `console.error` still runs so the stack survives for whoever is debugging.
+ * deliberately does NOT retry or swallow, and `console.error` still runs so the
+ * stack survives for whoever is debugging. The message and stack are drawn on
+ * screen only in development: in a production build they can carry record
+ * text, request details or file paths, and an owner can do nothing with them.
  *
  * A class component because that is the only form React supports for this —
  * there is no hook equivalent of componentDidCatch.
@@ -47,13 +49,15 @@ export class ErrorBoundary extends Component<Props, State> {
         <div className="w-full max-w-lg rounded-2xl border border-paper-200 bg-paper p-6">
           <h1 className="text-lg font-semibold text-ink-900">Something broke on this page</h1>
           <p className="mt-2 text-sm text-ink-600">
-            This is a bug in FinSight, not something you did. Reloading usually gets you moving again — the
-            details below are what a developer needs to fix it.
+            This is a bug in FinSight, not something you did. Reloading the page usually fixes it, and anything
+            you already saved is still there.
           </p>
-          <pre className="mt-3 max-h-56 overflow-auto whitespace-pre-wrap rounded-xl bg-paper-100 p-3 text-xs text-ink-700">
-            {error.message}
-            {error.stack ? `\n\n${error.stack}` : null}
-          </pre>
+          {import.meta.env.DEV ? (
+            <pre className="mt-3 max-h-56 overflow-auto whitespace-pre-wrap rounded-xl bg-paper-100 p-3 text-xs text-ink-700">
+              {error.message}
+              {error.stack ? `\n\n${error.stack}` : null}
+            </pre>
+          ) : null}
           <button
             type="button"
             onClick={() => window.location.reload()}

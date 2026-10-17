@@ -453,6 +453,20 @@ export interface DashboardSummary {
   };
 }
 
+export type CashflowGranularity = "daily" | "monthly";
+
+/** One day's or one month's money in vs money out. */
+export interface CashflowPoint {
+  date: string;
+  sales: number;
+  expenses: number;
+}
+
+export interface DashboardCashflow {
+  granularity: CashflowGranularity;
+  points: CashflowPoint[];
+}
+
 export type DayStatus = "above" | "at" | "below";
 
 /**

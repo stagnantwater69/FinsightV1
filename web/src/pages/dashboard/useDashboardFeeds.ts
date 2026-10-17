@@ -4,21 +4,9 @@ import { cachedApiGet, peekCachedApiData } from "../../lib/serverStateApi";
 import { useServerStateRefresh } from "../../lib/useServerStateRefresh";
 import { getErrorMessage } from "../../lib/errors";
 import type { PeriodSelection } from "../../lib/reportingPeriod";
-import type { RecordItem, RecurringSchedule } from "../../lib/types";
+import type { CashflowGranularity, DashboardCashflow, RecordItem, RecurringSchedule } from "../../lib/types";
 
-export type CashflowGranularity = "daily" | "monthly";
-
-/** One day's or one month's money in vs money out. */
-export interface CashflowPoint {
-  date: string;
-  sales: number;
-  expenses: number;
-}
-
-export interface DashboardCashflow {
-  granularity: CashflowGranularity;
-  points: CashflowPoint[];
-}
+export type { CashflowGranularity, CashflowPoint, DashboardCashflow } from "../../lib/types";
 
 export type FeedState<T> =
   | { status: "loading"; data: T | null }
