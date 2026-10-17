@@ -94,7 +94,7 @@ export function main(argv: string[]): number {
   console.log(`[migrate:deploy-hosted] Confirmed target: ${formatSanitizedTarget(verdict.target)}`);
   console.log("[migrate:deploy-hosted] Running prisma migrate deploy against the confirmed hosted target...");
 
-  execFileSync("npx", ["prisma", "migrate", "deploy"], {
+  execFileSync(process.execPath, [require.resolve("prisma/build/index.js"), "migrate", "deploy"], {
     cwd: REPO_ROOT,
     stdio: "inherit",
     env: process.env,
