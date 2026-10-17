@@ -309,7 +309,8 @@ export function DataTable<T>({
                       <button
                         type="button"
                         onClick={() => toggleSort(column.key)}
-                        className={`group -mx-1 flex w-full items-center rounded px-1 py-1 uppercase tracking-[0.06em] transition hover:text-brand-700 ${
+                        // -my-2.5 cancels the cell's py-2.5, so the 44px target fills the header row without growing it.
+                        className={`group -mx-1 -my-2.5 flex min-h-tap w-full min-w-tap items-center rounded px-1 uppercase tracking-[0.06em] transition hover:text-brand-700 ${
                           alignRight ? "justify-end" : ""
                         }`}
                       >

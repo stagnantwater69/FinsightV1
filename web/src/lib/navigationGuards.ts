@@ -46,8 +46,11 @@ export function installNavigationGuardPopstateHandler() {
   }, true);
 }
 
-/** Guards user-driven route changes while keeping programmatic success navigation explicit. */
-export function useUnsavedChangesWarning(when: boolean, message = DEFAULT_MESSAGE) {
+/**
+ * Guards user-driven route changes while keeping programmatic success navigation explicit.
+ * `onDiscard` runs once the owner confirms leaving, so a saved draft is dropped with the edits.
+ */
+export function useUnsavedChangesWarning(when: boolean, message = DEFAULT_MESSAGE, onDiscard?: () => void) {
   const navigate = useNavigate();
   const location = useLocation();
   const { navigator } = useContext(UNSAFE_NavigationContext);
@@ -58,7 +61,10 @@ export function useUnsavedChangesWarning(when: boolean, message = DEFAULT_MESSAG
     typeof window.history.state?.idx === "number" ? window.history.state.idx : null,
   );
 
+  const onDiscardRef = useRef(onDiscard);
+
   whenRef.current = when;
+  onDiscardRef.current = onDiscard;
 
   useEffect(() => {
     if (!when) allowRef.current = false;
@@ -74,7 +80,10 @@ export function useUnsavedChangesWarning(when: boolean, message = DEFAULT_MESSAG
     installNavigationGuardPopstateHandler();
     const registration: ActiveHistoryGuard = {
       shouldWarn: () => whenRef.current && !allowRef.current,
-      approve: () => { allowRef.current = true; },
+      approve: () => {
+        allowRef.current = true;
+        onDiscardRef.current?.();
+      },
       message,
       currentIndex: historyIndexRef,
       ignoreNextPop: ignoreNextPopRef,
@@ -93,6 +102,7 @@ export function useUnsavedChangesWarning(when: boolean, message = DEFAULT_MESSAG
       if (!whenRef.current || allowRef.current) return true;
       if (!window.confirm(message)) return false;
       allowRef.current = true;
+      onDiscardRef.current?.();
       return true;
     }
 
@@ -139,6 +149,7 @@ export function useUnsavedChangesWarning(when: boolean, message = DEFAULT_MESSAG
       if (!window.confirm(message)) return;
 
       allowRef.current = true;
+      onDiscardRef.current?.();
       navigate(`${destination.pathname}${destination.search}${destination.hash}`);
     }
 
@@ -149,6 +160,7 @@ export function useUnsavedChangesWarning(when: boolean, message = DEFAULT_MESSAG
         return;
       }
       allowRef.current = true;
+      onDiscardRef.current?.();
     }
 
     window.addEventListener("beforeunload", onBeforeUnload);

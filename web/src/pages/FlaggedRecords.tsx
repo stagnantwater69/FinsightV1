@@ -878,7 +878,7 @@ function GroupCard({
             <li key={`${r.type}-${r.id}`} className="flex items-baseline justify-between gap-3 text-sm">
               <Link
                 to={editPath(r)}
-                className="min-w-0 truncate link-action"
+                className="min-w-0 truncate py-3 link-action"
               >
                 {r.description}
                 <span className="ml-1.5 text-xs text-ink-500">{r.date.slice(0, 10)}</span>

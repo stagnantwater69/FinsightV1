@@ -348,7 +348,7 @@ function ReceiptOrigin({
               <li key={sibling.id} className="flex items-baseline justify-between gap-3 text-sm">
                 <a
                   href={`/records/expenses/${sibling.id}/edit`}
-                  className="min-w-0 truncate link-action"
+                  className="min-w-0 truncate py-3 link-action"
                 >
                   {sibling.categoryName}
                   <span className="ml-1.5 text-xs text-ink-600">{sibling.description}</span>

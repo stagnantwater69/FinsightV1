@@ -21,6 +21,7 @@ import {
 } from "../lib/types";
 import { PageHead, Pill, Tag, type PillTone } from "../components/ui";
 import { SelectInput, TextInput } from "../components/Field";
+import { CategoryFilter } from "../components/CategoryFilter";
 import { useConfirm } from "../components/ConfirmDialog";
 import { useDebounced } from "../lib/hooks";
 import { useToast } from "../components/Toast";
@@ -875,20 +876,13 @@ export function Records() {
             <label htmlFor="rec-cat" className="mb-1 block text-xs font-medium text-ink-500">
               Category
             </label>
-            <SelectInput
+            <CategoryFilter
               id="rec-cat"
               value={filters.categoryId}
-              onChange={(e) => setFilters((f) => ({ ...f, categoryId: e.target.value }))}
+              onChange={(categoryId) => setFilters((f) => ({ ...f, categoryId }))}
+              categories={categories}
               disabled={filters.type === "sales"}
-              className="px-2 disabled:bg-paper-100 disabled:text-ink-400"
-            >
-              <option value="">All</option>
-              {categories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </SelectInput>
+            />
           </div>
           <div>
             <label htmlFor="rec-src" className="mb-1 block text-xs font-medium text-ink-500">

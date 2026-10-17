@@ -645,7 +645,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             {/* Mark — the sidebar carries it from lg up, so this is mobile only. */}
             <Link
               to="/dashboard"
-              className="flex shrink-0 items-center lg:hidden"
+              className="flex min-h-tap min-w-tap shrink-0 items-center justify-center lg:hidden"
               aria-label="FinSight home"
             >
               <img src="/newmascotlogo.png" alt="" aria-hidden className="h-10 w-10 rounded-lg object-contain" />
