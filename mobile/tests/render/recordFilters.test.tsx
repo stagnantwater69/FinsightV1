@@ -220,6 +220,17 @@ describe('Records filters', () => {
     expect(queries.getByRole('button', { name: `Category: ${target.name}. Change` })).toBeTruthy();
   });
 
+  it('says so when the category search matches nothing', async () => {
+    const queries = await renderScreen();
+    await queries.findByText('Shop rent');
+    await fireEvent.press(queries.getByRole('button', { name: 'Filters' }));
+    await fireEvent.press(queries.getByRole('button', { name: /^Category: any/ }));
+    expect(queries.queryByText(/No categories match/)).toBeNull();
+    await fireEvent.changeText(queries.getByLabelText('Search categories'), 'zzzz');
+    expect(queries.getByText('No categories match "zzzz".')).toBeTruthy();
+    expect(queries.getByRole('button', { name: 'Any category' })).toBeTruthy();
+  });
+
   it('switches record type with the small chips', async () => {
     const queries = await renderScreen();
     await queries.findByText('Shop rent');

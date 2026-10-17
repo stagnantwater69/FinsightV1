@@ -523,7 +523,7 @@ export function PublicPageHead({ eyebrow, title, lede }: { eyebrow: string; titl
       <div className="mx-auto max-w-[1240px] px-4 lg:px-6">
         <nav aria-label="Breadcrumb" className="font-landing-sans text-sm text-landing-muted">
           <ol className="flex items-center gap-2">
-            <li><Link to="/" className="inline-flex min-h-tap items-center rounded-sm underline-offset-4 hover:text-landing-green hover:underline">Home</Link></li>
+            <li><Link to="/" className="inline-flex min-h-tap min-w-tap items-center justify-center rounded-sm underline-offset-4 hover:text-landing-green hover:underline">Home</Link></li>
             <li aria-hidden className="text-landing-green/60">/</li>
             <li aria-current="page" className="font-semibold text-landing-green">{eyebrow}</li>
           </ol>

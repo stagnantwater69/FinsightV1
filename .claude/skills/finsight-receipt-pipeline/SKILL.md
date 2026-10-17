@@ -110,9 +110,15 @@ app never converts currency itself.
 - Reproduce first. A throwaway copy of a real scan row, run through
   `runReceiptWorkerOnce()`, shows the whole pipeline end to end; delete the row
   and its children afterwards.
-- The `receipt provider gate` log line carries `ocrMs`, `providerMs`,
-  `persistMs`, `totalMs`, the gate code and applied fields, once per scan. Read
-  it before theorising about where time goes.
+- Read the timings before theorising about where time goes. The
+  `receipt scan timings` log line is emitted once per attempt, on every outcome
+  (`complete`, `retrying`, `failed`, `lease-lost`), with `queueWaitMs`,
+  `restoreMs`, `ocrMs`, `providerMs`, `finalizeMs`, `persistMs` and `totalMs`;
+  a stage that never ran is `null`. Successful attempts also store the stage
+  durations in `ReceiptScan.extractorVersions.scanTimings`. On a replayed
+  dispatch `providerMs` is only the lookup; the original call's latency stays
+  in `visionLatencyMs`. The `receipt provider gate` line still carries the
+  gate code and applied fields.
 - Latency is usually not the code: the provider call is seconds, and each DB
   round trip costs the network distance to Supabase.
 - Ownership isolation is P0. Every query stays scoped to the authenticated
