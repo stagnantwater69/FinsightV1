@@ -4,6 +4,7 @@ import helmet from "helmet";
 import pinoHttp from "pino-http";
 import { randomUUID } from "node:crypto";
 import { env } from "./config/env";
+import { createCorsOptions } from "./config/cors";
 import { prisma } from "./config/prisma";
 import { logger } from "./config/logger";
 import { authRouter } from "./routes/auth.routes";
@@ -62,19 +63,7 @@ app.use(
     },
   }),
 );
-const allowedOrigins = env.CORS_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean);
-app.use(
-  cors({
-    origin(origin, callback) {
-      // Native/mobile requests have no Origin. Browsers must match the
-      // explicit comma-separated allowlist.
-      callback(null, !origin || allowedOrigins.includes(origin));
-    },
-    credentials: true,
-    // Cross-origin clients need cooldown headers; DevTools also reads request timings.
-    exposedHeaders: ["Server-Timing", "Retry-After", "RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset", "X-Next-Cursor"],
-  }),
-);
+app.use(cors(createCorsOptions(env.CORS_ORIGIN, env.NODE_ENV)));
 app.use(express.json());
 // After the body parser: its stream callbacks run outside the request's async
 // context, so spans recorded under it would be dropped.

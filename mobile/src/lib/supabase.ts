@@ -105,6 +105,9 @@ export const API_BASE_URL = resolveApiBaseUrl(
   extra.apiBaseUrl ?? "",
   Constants.expoConfig?.hostUri ?? null,
   __DEV__,
+  Platform.OS === "web"
+    ? typeof window !== "undefined" ? window.location.origin : null
+    : undefined,
 );
 
 if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !API_BASE_URL) {
