@@ -10,6 +10,7 @@ async function stubService(importOriginal: () => Promise<object>) {
     ? vi.fn(async (...args: unknown[]) => {
       mocks.calls(name, args);
       if (name === "createReceiptCaptureBatch") return { batch: {}, replayed: false };
+      if (name === "listNotificationsWithUnreadCount") return { notifications: [], unreadCount: 0 };
       return /^(list|search|getHistory)/.test(name) ? [] : {};
     }) : value]));
 }

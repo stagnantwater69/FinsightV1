@@ -96,6 +96,30 @@ export async function listNotifications(userId: number, businessProfileId?: numb
   return notifications.map(toDTO);
 }
 
+/**
+ * The unread badge figure, counted in the database.
+ *
+ * A badge counted from a fetched list can only ever be as large as that list:
+ * the dashboard carries ten alerts and the bell at most 500, so an owner with
+ * more unread than that saw a number lower than the truth. This is a TOTAL, so
+ * unlike the list above it must never be capped.
+ */
+export async function countUnreadNotifications(userId: number, businessProfileId?: number) {
+  if (businessProfileId !== undefined) {
+    await requireOwnedBusinessProfile(userId, businessProfileId);
+  }
+  return prisma.notification.count({ where: { userId, businessProfileId, readStatus: false } });
+}
+
+/** The bell's request: the capped list, plus the unread total the list cannot carry. */
+export async function listNotificationsWithUnreadCount(userId: number, businessProfileId?: number) {
+  const [notifications, unreadCount] = await Promise.all([
+    listNotifications(userId, businessProfileId),
+    countUnreadNotifications(userId, businessProfileId),
+  ]);
+  return { notifications, unreadCount };
+}
+
 export async function markNotificationRead(userId: number, id: number) {
   const existing = await prisma.notification.findFirst({ where: { id, userId } });
   if (!existing) {
