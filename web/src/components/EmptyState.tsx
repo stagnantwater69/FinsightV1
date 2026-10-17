@@ -130,7 +130,7 @@ export function SetupProgress({
               {s.done ? "✓" : ""}
             </span>
             {s.href && !s.done ? (
-              <Link className="tap-inline font-medium text-brand-700 hover:text-brand-800" to={s.href}>
+              <Link className="tap-inline link-action" to={s.href}>
                 {s.label}
               </Link>
             ) : (

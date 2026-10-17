@@ -1,3 +1,4 @@
+import { ContentScrollView } from "../../components/ContentScrollView";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -9,6 +10,7 @@ import {
   Pressable,
   ScrollView,
   TextInput,
+  useWindowDimensions,
   View,
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
@@ -44,13 +46,14 @@ import { setFlash } from "../../lib/flash";
 import { SkeletonBox } from "../../components/Skeleton";
 import { DateField } from "../../components/DateField";
 import { AvailableFundsBaselineChoice, useAvailableFundsBaselineChoice } from "../../components/AvailableFundsBaselineChoice";
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import * as haptics from "../../lib/haptics";
 import { font, radius, space, typeScale } from "../../theme/tokens";
 import { TAP_FLOOR } from "../../components/touchTarget";
 import { useTheme } from "../../context/ThemeContext";
 import { FIELD_LIMITS } from "../../lib/fieldLimits";
-import { CategoryPicker, todayISO } from "./shared";
+import { CategoryPicker } from "./shared";
+import { businessToday } from "../../lib/businessDate";
 import { ScanBand } from "./scanReceipt/ScanBand";
 import { ScanningThumbnail } from "./scanReceipt/ScanningThumbnail";
 import { StoredPagePlaceholder } from "./scanReceipt/StoredPagePlaceholder";
@@ -88,6 +91,7 @@ import { ReceiptProviderConsent } from "./scanReceipt/ReceiptProviderConsent";
 import { ReceiptEvidenceViewer } from "./scanReceipt/ReceiptEvidenceViewer";
 import { ActiveReceiptQueue, type ReceiptResumeAction } from "./scanReceipt/ActiveReceiptQueue";
 import { seedLocalReceipts, summaryFromScan } from "./scanReceipt/activeReceipts";
+import { useActiveReceiptHistory } from "./scanReceipt/useActiveReceiptHistory";
 import {
   applyReceiptCameraHandoff,
   assertReceiptBatchLimit,
@@ -107,7 +111,6 @@ import type {
   CapturedPage,
   ReceiptCaptureBatch,
   ReceiptHistoryItem,
-  ReceiptHistoryPage,
   ReceiptPurgeJob,
   ReceiptScanResult,
   ReviewNotice,
@@ -215,6 +218,8 @@ function stoppedWaitingMessage(accepted: boolean, hasLocalImages: boolean): stri
  * in ./scanReceipt/ — this file is the screen itself.
  */
 export function ScanReceiptScreen({ navigation }: any) {
+  const { width, fontScale } = useWindowDimensions();
+  const stackedFigures = width < 390 || fontScale > 1.2;
   const t = useTheme();
   const { brand, ink, paper, statusText, statusSurface } = t;
   const { selected, categories, refreshCategories, createCategory } = useBusinessProfiles();
@@ -247,12 +252,7 @@ export function ScanReceiptScreen({ navigation }: any) {
   const [evidencePage, setEvidencePage] = useState<number | null>(null);
   /** Possible overlap repeats the owner has said are separate purchases. */
   const [keptRepeatItemIds, setKeptRepeatItemIds] = useState<ReadonlySet<number>>(() => new Set());
-  const [activeReceipts, setActiveReceipts] = useState<ReceiptHistoryItem[]>([]);
-  const [activeReceiptsCursor, setActiveReceiptsCursor] = useState<string | null>(null);
-  const [activeReceiptsLoading, setActiveReceiptsLoading] = useState(true);
-  const [activeReceiptsLoadingMore, setActiveReceiptsLoadingMore] = useState(false);
-  const [activeReceiptsError, setActiveReceiptsError] = useState<string | null>(null);
-  const activeReceiptsRequest = useRef<AbortController | null>(null);
+  const { items: activeReceipts, setItems: setActiveReceipts, nextCursor: activeReceiptsCursor, loading: activeReceiptsLoading, loadingMore: activeReceiptsLoadingMore, error: activeReceiptsError, setError: setActiveReceiptsError, load: loadActiveReceipts } = useActiveReceiptHistory(selected?.id);
   const [deletingScanId, setDeletingScanId] = useState<number | null>(null);
   const deleteScanKeys = useRef<Record<number, string>>({});
 
@@ -279,7 +279,7 @@ export function ScanReceiptScreen({ navigation }: any) {
   const cameraCompletionHandled = useRef(false);
 
   const [categoryId, setCategoryId] = useState<number | null>(null);
-  const [date, setDate] = useState(todayISO());
+  const [date, setDate] = useState(() => businessToday(selected?.timezone));
   const baselineChoice = useAvailableFundsBaselineChoice(date);
   const clearBaselineDecision = baselineChoice.setDecision;
   const [description, setDescription] = useState("");
@@ -361,52 +361,6 @@ export function ScanReceiptScreen({ navigation }: any) {
     setCreatingCategoryFor(null);
   }, [operation]));
 
-  const loadActiveReceipts = useCallback(async (cursor?: string) => {
-    const businessProfileId = selected?.id;
-    if (!businessProfileId) return;
-    activeReceiptsRequest.current?.abort();
-    const controller = new AbortController();
-    activeReceiptsRequest.current = controller;
-    if (cursor) setActiveReceiptsLoadingMore(true);
-    else {
-      setActiveReceiptsLoading(true);
-      setActiveReceiptsError(null);
-    }
-    try {
-      const result = await api.get<ReceiptHistoryPage>(
-        "/records/receipts",
-        { businessProfileId, status: "active", take: 50, cursor },
-        controller.signal,
-      );
-      if (controller.signal.aborted) return;
-      if (!result || !Array.isArray(result.items) || result.items.some((item) => item.businessProfileId !== businessProfileId)) {
-        throw new Error("FinSight returned a receipt list that could not be verified for this business.");
-      }
-      setActiveReceipts((current) => {
-        if (!cursor) return result.items;
-        const byId = new Map(current.map((item) => [item.id, item]));
-        for (const item of result.items) byId.set(item.id, item);
-        return [...byId.values()];
-      });
-      setActiveReceiptsCursor(result.nextCursor ?? null);
-      setActiveReceiptsError(null);
-    } catch (err) {
-      if (!controller.signal.aborted) {
-        setActiveReceiptsError(describeActionFailure(toLoadFailure(err), "You can still capture a new receipt."));
-      }
-    } finally {
-      if (!controller.signal.aborted) {
-        setActiveReceiptsLoading(false);
-        setActiveReceiptsLoadingMore(false);
-      }
-    }
-  }, [selected?.id]);
-
-  useFocusEffect(useCallback(() => {
-    void loadActiveReceipts();
-    return () => activeReceiptsRequest.current?.abort();
-  }, [loadActiveReceipts]));
-
   useEffect(() => {
     uploadAttempt.current = null;
     receiptBatchAttempt.current = null;
@@ -420,11 +374,6 @@ export function ScanReceiptScreen({ navigation }: any) {
     setScanStarted(false);
     setUploadIssuePageKeys({});
     setEvidencePage(null);
-    setActiveReceipts([]);
-    setActiveReceiptsCursor(null);
-    setActiveReceiptsLoading(true);
-    setActiveReceiptsLoadingMore(false);
-    setActiveReceiptsError(null);
     setDeletingScanId(null);
     deleteScanKeys.current = {};
     setBusy(false);
@@ -690,10 +639,11 @@ export function ScanReceiptScreen({ navigation }: any) {
   async function retriedScan(
     stored: ReceiptScanResult,
     batchChild: ExpectedBatchChild | null,
+    signal: AbortSignal,
   ): Promise<ReceiptScanResult> {
     try {
       return verifiedReceiptScan(
-        await api.post<ReceiptScanResult>(`/records/receipts/${stored.id}/retry`),
+        await api.post<ReceiptScanResult>(`/records/receipts/${stored.id}/retry`, undefined, { signal }),
         stored.id,
         selected!.id,
         batchChild,
@@ -840,7 +790,7 @@ export function ScanReceiptScreen({ navigation }: any) {
             businessProfileId: selected!.id,
             clientBatchKey: batchAttempt.key,
             expectedReceiptCount: batchGroups.length,
-          });
+          }, { signal: task.controller.signal });
           if (!operation.current(task)) return;
         }
         if (batchAttempt.batch.status === "CANCELLED") {
@@ -851,7 +801,7 @@ export function ScanReceiptScreen({ navigation }: any) {
             businessProfileId: selected!.id,
             clientBatchKey: batchAttempt.key,
             expectedReceiptCount: batchGroups.length,
-          });
+          }, { signal: task.controller.signal });
           if (!operation.current(task)) return;
         }
         if (!Number.isInteger(batchAttempt.batch.id) || batchAttempt.batch.id <= 0
@@ -950,7 +900,7 @@ export function ScanReceiptScreen({ navigation }: any) {
       } else if (mode === "retry") {
         if (!accepted) throw new Error("This receipt has not finished uploading yet.");
         setPhase("Retrying stored receipt…");
-        accepted = await retriedScan(accepted, batchChild);
+        accepted = await retriedScan(accepted, batchChild, task.controller.signal);
         if (!operation.current(task)) return;
         attempt.accepted = accepted;
       } else if (!accepted) {
@@ -986,6 +936,7 @@ export function ScanReceiptScreen({ navigation }: any) {
         hasStoredScan
           ? "Your uploaded images and review changes are still here."
           : "Your selected images are still here.",
+        "local",
       ));
     } finally {
       if (operation.current(task)) setBusy(false);
@@ -1055,7 +1006,7 @@ export function ScanReceiptScreen({ navigation }: any) {
 
       if (action === "retry") {
         if (!item.allowedActions.retryProcessing) throw new Error("This receipt is no longer available for processing retry.");
-        accepted = await retriedScan(accepted, expectedStoredBatch);
+        accepted = await retriedScan(accepted, expectedStoredBatch, task.controller.signal);
         if (!operation.current(task)) return;
         uploadAttempt.current.accepted = accepted;
       }
@@ -1269,7 +1220,7 @@ export function ScanReceiptScreen({ navigation }: any) {
       const res = await ImagePicker.launchImageLibraryAsync({ quality: CAPTURE_QUALITY, mediaTypes: ["images"] });
       if (!res.canceled && res.assets[0]) await addPage(res.assets[0], task);
     } catch (err) {
-      if (operation.current(task)) setError(describeActionFailure(toLoadFailure(err), "Choose another photo or use the camera."));
+      if (operation.current(task)) setError(describeActionFailure(toLoadFailure(err), "Choose another photo or use the camera.", "local"));
     } finally {
       if (operation.current(task)) setPicking(false);
       operation.finish(task);
@@ -1402,7 +1353,7 @@ export function ScanReceiptScreen({ navigation }: any) {
       await api.post(
         `/records/receipts/${scan!.id}/confirm`,
         payload,
-        { cacheScope: { businessProfileId: scan!.businessProfileId } },
+        { signal: task.controller.signal, cacheScope: { businessProfileId: scan!.businessProfileId } },
       );
       if (!operation.current(task)) return;
       await finishReceiptConfirmation(task);
@@ -1503,6 +1454,7 @@ export function ScanReceiptScreen({ navigation }: any) {
         setDuplicateCandidatesError(describeActionFailure(
           toLoadFailure(err),
           "The matches already shown are still here. Try loading the rest again.",
+          "read",
         ));
       }
     } finally {
@@ -1621,10 +1573,10 @@ export function ScanReceiptScreen({ navigation }: any) {
           setError("This receipt changed before your edit was saved. Your typed correction is still here; compare it with the latest result and save again.");
         } catch (refreshError) {
           if (!operation.current(task)) return;
-          setError(describeActionFailure(toLoadFailure(refreshError), "Your typed correction is still here."));
+          setError(describeActionFailure(toLoadFailure(refreshError), "Your typed correction is still here.", "read"));
         }
       } else {
-        setError(describeActionFailure(toLoadFailure(err), "Your typed correction is still here."));
+        setError(describeActionFailure(toLoadFailure(err), "Your typed correction is still here.", "local"));
       }
     } finally {
       if (operation.current(task)) setSavingItemId(null);
@@ -2012,7 +1964,7 @@ export function ScanReceiptScreen({ navigation }: any) {
         keyboard is up.
       */
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2, gap: space.lg }}>
+        <ContentScrollView contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2, gap: space.lg }}>
           {!scan ? (
             <Card>
               <T variant="title" style={{ marginBottom: 4 }}>Scan a receipt</T>
@@ -2212,7 +2164,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                             justifyContent: "center",
                           }}
                         >
-                          <Ionicons name="image-outline" size={22} color={t.brandText} />
+                          <Ionicons name="image-outline" size={20} color={t.brandText} />
                         </Pressable>
                       </View>
                     ) : (
@@ -2410,7 +2362,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                   onCreated={refreshCategories}
                 />
               ) : null}
-              <DateField label="Date" value={date} onChange={setDate} />
+              <DateField label="Date" value={date} today={businessToday(selected?.timezone)} onChange={setDate} />
               <AvailableFundsBaselineChoice choice={baselineChoice} disabled={busy} />
               {/*
                 Where the value above came from. Shown under the field it
@@ -2540,7 +2492,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                             beside a bold amount read as punctuation rather
                             than as a control.
                           */}
-                          <Ionicons name="close" size={13} color={ink[500]} />
+                          <Ionicons name="close" size={14} color={ink[500]} />
                         </Pressable>
                       </View>
 
@@ -2822,7 +2774,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                   <View>
                     <View
                       style={{
-                        flexDirection: "row",
+                        flexDirection: stackedFigures ? "column" : "row",
                         alignItems: "center",
                         justifyContent: "space-between",
                         gap: space.sm,
@@ -2877,7 +2829,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                     {itemGroups.map(([catId, g]) => (
                       <View
                         key={String(catId)}
-                        style={{ flexDirection: "row", justifyContent: "space-between", gap: space.sm, marginTop: 2 }}
+                        style={{ flexDirection: stackedFigures ? "column" : "row", justifyContent: "space-between", gap: space.sm, marginTop: space.sm }}
                       >
                         <T style={{ flex: 1, fontSize: typeScale.label, color: catId == null ? statusText.warning : ink[700] }}>
                           {catId == null
@@ -3081,7 +3033,7 @@ export function ScanReceiptScreen({ navigation }: any) {
               </>}
             </>
           )}
-        </ScrollView>
+        </ContentScrollView>
       </KeyboardAvoidingView>
       )}
     </Screen>

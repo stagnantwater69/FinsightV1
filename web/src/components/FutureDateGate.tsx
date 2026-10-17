@@ -186,7 +186,7 @@ export function FutureDateRemediation() {
       <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-ink-600">
         <span>
           Need help?{" "}
-          <Link to="/contact" className="tap-inline font-semibold text-tone-brand underline-offset-4 hover:underline">
+          <Link to="/contact" className="tap-inline link-action">
             Contact support
           </Link>
         </span>

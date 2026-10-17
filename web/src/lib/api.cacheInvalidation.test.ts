@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AxiosResponse, InternalAxiosRequestConfig } from "axios";
 import {
   beginServerStateSession,
+  captureServerStateAccount,
   endServerStateSession,
   peekServerState,
   queryServerState,
@@ -43,6 +44,20 @@ beforeEach(() => {
 afterEach(() => endServerStateSession());
 
 describe("API mutation cache invalidation", () => {
+  it("does not apply a late manual-create response or its invalidation to another account", async () => {
+    const originalAccount = captureServerStateAccount();
+    let finish!: (response: AxiosResponse) => void;
+    let sentConfig: InternalAxiosRequestConfig | undefined;
+    api.defaults.adapter = async (config) => { sentConfig = config; return new Promise((resolve) => { finish = resolve; }); };
+    const result = api.post("/records/expenses", { businessProfileId: 1, idempotencyKey: "original-save-0001" }, { manualCreateAccount: originalAccount }).catch((error: unknown) => error);
+    await vi.waitFor(() => expect(sentConfig).toBeDefined());
+    beginServerStateSession("user-b");
+    await queryServerState(cachedScope, async () => ({ total: 3456.78 }));
+    finish({ data: { id: 91, businessProfileId: 1, type: "expense" }, status: 201, statusText: "Created", headers: {}, config: sentConfig! });
+    expect(await result).toMatchObject({ code: "ERR_CANCELED" });
+    expect(peekServerState(cachedScope)?.data).toEqual({ total: 3456.78 });
+  });
+
   it("clears cached financial data and cancels in-flight reads after a successful mutation", async () => {
     const events: unknown[] = [];
     const unsubscribe = subscribeToServerState((event) => events.push(event));

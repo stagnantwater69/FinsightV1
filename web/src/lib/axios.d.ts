@@ -9,5 +9,6 @@ declare module "axios" {
     sessionToken?: string;
     /** Set once a 401 has been answered with a refresh, so a request is retried at most once. */
     sessionRetried?: boolean;
+    manualCreateAccount?: { userId: string; generation: number } | null;
   }
 }

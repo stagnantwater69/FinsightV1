@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Animated, Image, View } from "react-native";
+import { Animated, Image, Platform, View } from "react-native";
 import { useReducedMotion } from "../../../lib/useReducedMotion";
 import { radius } from "../../../theme/tokens";
 import { useTheme } from "../../../context/ThemeContext";
@@ -36,7 +36,7 @@ export function ScanningThumbnail({ uri }: { uri: string }) {
       Animated.timing(progress, {
         toValue: 1,
         duration: 1800,
-        useNativeDriver: true,
+        useNativeDriver: Platform.OS !== "web",
       }),
     );
     animation.start();
@@ -63,8 +63,8 @@ export function ScanningThumbnail({ uri }: { uri: string }) {
         <StoredPagePlaceholder label="Stored receipt image" />
       )}
       <Animated.View
-        pointerEvents="none"
         style={{
+          pointerEvents: "none",
           position: "absolute",
           left: 0,
           right: 0,

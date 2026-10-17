@@ -1,17 +1,40 @@
-import { useEffect, useRef, useState, type FormEvent, type MouseEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
+import { IconTile } from "../components/IconTile";
+import { ListDisclosureControl, useListDisclosure } from "../components/ListDisclosure";
 import { Link } from "react-router-dom";
 import {
+  AlertTriangle,
   ArrowDown,
   ArrowRight,
   ArrowUp,
   BookmarkCheck,
+  BookmarkPlus,
+  CalendarCheck,
+  CalendarDays,
   CalendarOff,
+  CalendarRange,
+  Check,
+  ChevronDown,
+  ChevronUp,
   CircleGauge,
+  CircleHelp,
+  Flag,
+  FlaskConical,
   History,
+  Info,
   ListChecks,
   Minus,
   SlidersHorizontal,
   Target,
+  TrendingUp,
+  Wallet,
 } from "lucide-react";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import {
@@ -26,13 +49,23 @@ import {
   AskFinSightButton,
   useAskFinSight,
 } from "../components/AskFinSightButton";
-import { RecoveryMeter } from "../components/RecoveryMeter";
+import { monthToneAndCopy } from "../lib/recoveryMonthState";
 import { PeriodFilter } from "../components/PeriodFilter";
-import { StatTile } from "../components/StatTile";
 import { DataTable, type Column } from "../components/DataTable";
 import { Button, ButtonLink, classesFor } from "../components/Button";
 import { Field, FormError, MoneyInput } from "../components/Field";
-import { STATUS_COLORS, STATUS_TEXT_COLORS } from "../lib/chartPalette";
+import {
+  STATUS_COLORS,
+  STATUS_INK,
+  STATUS_TEXT_COLORS,
+} from "../lib/chartPalette";
+import {
+  CumulativeSalesChart,
+  DailySalesChart,
+  ProgressRing,
+  TargetBreakdown,
+} from "./recovery/RecoveryCharts";
+import { buildCumulativeSeries, shortDay } from "./recovery/recoverySeries";
 import type {
   DailyCoverageRow,
   DailyCoverageStatus,
@@ -135,22 +168,6 @@ function recoveryPeriodStatusLabel(period: RecoveryReportingPeriod): string {
   }
 }
 
-function recoveryPeriodStatusTone(
-  status: RecoveryReportingPeriod["status"],
-): PillTone {
-  if (status === "ahead" || status === "covered") return "ok";
-  if (status === "behind") return "danger";
-  if (status === "needs_setup") return "neutral";
-  return "info";
-}
-
-function recoveryPeriodFill(status: RecoveryReportingPeriod["status"]): string {
-  if (status === "ahead" || status === "covered") return STATUS_COLORS.good;
-  if (status === "behind") return STATUS_COLORS.critical;
-  if (status === "needs_setup") return STATUS_COLORS.warning;
-  return "#149e8d";
-}
-
 function formatOperatingDayNumber(value: number, approximated: boolean): string {
   return approximated
     ? (Math.round(value * 10) / 10).toFixed(1).replace(/\.0$/, "")
@@ -251,77 +268,6 @@ function legacyReportingPeriod(data: RecoveryInsight): RecoveryReportingPeriod {
   };
 }
 
-/** Selected-period focal meter for a week or a completed month. */
-function RecoveryPeriodMeter({ period }: { period: RecoveryReportingPeriod }) {
-  const coverage = Math.min(Math.max(period.coveragePercent, 0), 100);
-  const label = recoveryPeriodLabel(period);
-  const variance = period.sales - period.target;
-
-  return (
-    <div>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <span className="text-xs text-ink-500">{label}</span>
-        <Pill tone={recoveryPeriodStatusTone(period.status)}>
-          {recoveryPeriodStatusLabel(period)}
-        </Pill>
-      </div>
-      <div
-        className="h-3 w-full overflow-hidden rounded-full bg-ink-100"
-        role="progressbar"
-        aria-valuenow={Math.round(coverage)}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-label={`${label} sales coverage of the recovery target`}
-      >
-        <div
-          className="h-full rounded-full transition-[width] duration-700 ease-out"
-          style={{
-            width: `${coverage}%`,
-            backgroundColor: recoveryPeriodFill(period.status),
-          }}
-        />
-      </div>
-      <p className="mt-1.5 text-xs text-ink-500">
-        <Money value={period.sales} /> of <Money value={period.target} /> target (
-        {period.coveragePercent.toFixed(0)}%)
-      </p>
-      <dl className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <div>
-          <dt className="text-xs text-ink-500">Period target</dt>
-          <dd className="figure mt-0.5 text-sm font-semibold text-ink-900">
-            {formatMoney(period.target)}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-xs text-ink-500">Sales reference</dt>
-          <dd className="figure mt-0.5 text-sm font-semibold text-ink-900">
-            {formatMoney(period.sales)}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-xs text-ink-500">
-            {period.isComplete ? "Final difference" : "Pace variance"}
-          </dt>
-          <dd className="figure mt-0.5 text-sm font-semibold text-ink-900">
-            {formatMoney(period.isComplete ? variance : period.paceVarianceAmount, {
-              signed: true,
-            })}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-xs text-ink-500">Operating days</dt>
-          <dd className="figure mt-0.5 text-sm font-semibold text-ink-900">
-            {formatOperatingDays(
-              period.operatingDays,
-              period.operatingDaysIsApproximated,
-            )}
-          </dd>
-        </div>
-      </dl>
-    </div>
-  );
-}
-
 // The Status column as a themed Pill rather than a hand-rolled chip painted
 // with an inline background colour — see the note on PILL_TONES in ui.tsx.
 // "at" reads as informational rather than a warning: reaching the target
@@ -344,7 +290,7 @@ function DailyStatusIcon({ status }: { status: DailyCoverageStatus }) {
         : status === "closed"
           ? CalendarOff
           : ArrowUp;
-  return <Icon aria-hidden className="size-3.5" strokeWidth={2} />;
+  return <Icon aria-hidden className="size-3.5" />;
 }
 
 // Weekly checkpoints — plan §10.4. Same tone/colour convention as the daily
@@ -382,6 +328,37 @@ function checkpointStatusLabel(status: RecoveryCheckpointStatus): string {
   }
 }
 
+/** Surface treatment per checkpoint status, from the themed status tokens. */
+const CHECKPOINT_LOOK: Record<
+  RecoveryCheckpointStatus,
+  { wash: string; ring: string; track: string; fill: string }
+> = {
+  behind: {
+    wash: "from-tint-danger",
+    ring: "ring-edge-danger",
+    track: "bg-edge-danger",
+    fill: "bg-tone-danger",
+  },
+  on_pace: {
+    wash: "from-tint-info",
+    ring: "ring-edge-info",
+    track: "bg-edge-info",
+    fill: "bg-tone-info",
+  },
+  ahead: {
+    wash: "from-tint-brand",
+    ring: "ring-edge-brand",
+    track: "bg-edge-brand",
+    fill: "bg-tone-brand",
+  },
+  pending: {
+    wash: "from-tint-neutral",
+    ring: "ring-paper-200",
+    track: "bg-paper-200",
+    fill: "bg-tone-neutral",
+  },
+};
+
 function formatCheckpointDate(date: string): string {
   return new Date(date).toLocaleDateString(undefined, {
     year: "numeric",
@@ -405,20 +382,32 @@ function CheckpointCard({
   checkpoint: RecoveryCheckpoint;
 }) {
   const isPending = checkpoint.status === "pending";
+  const look = CHECKPOINT_LOOK[checkpoint.status];
+  const reached =
+    !isPending && checkpoint.recordedAmount !== null && checkpoint.cumulativeTarget > 0
+      ? (checkpoint.recordedAmount / checkpoint.cumulativeTarget) * 100
+      : null;
   return (
-    <div className="rounded-xl border border-paper-200 bg-paper-100 p-4">
+    <div
+      className={`relative flex h-full flex-col rounded-xl bg-gradient-to-br ${look.wash} to-paper p-4 ring-1 ${look.ring}`}
+    >
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-600">
-          {label}
-        </p>
+        <div className="flex min-w-0 items-center gap-2.5">
+          <IconTile icon={Flag} />
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-600">
+              {label}
+            </p>
+            <p className="text-sm font-semibold text-ink-900">
+              {formatCheckpointDate(checkpoint.endDate)}
+            </p>
+          </div>
+        </div>
         <Pill tone={CHECKPOINT_STATUS_TONE[checkpoint.status]}>
           {checkpointStatusLabel(checkpoint.status)}
         </Pill>
       </div>
-      <p className="mt-1 text-sm font-medium text-ink-700">
-        {formatCheckpointDate(checkpoint.endDate)}
-      </p>
-      <dl className="mt-3 grid grid-cols-2 gap-3 text-sm">
+      <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
         <div>
           <dt className="text-xs text-ink-600">Cumulative target</dt>
           <dd className="figure font-semibold text-ink-900">
@@ -451,6 +440,21 @@ function CheckpointCard({
           </dd>
         </div>
       </dl>
+      <div className="mt-auto pt-3">
+        <div aria-hidden className={`h-1.5 w-full overflow-hidden rounded-full ${look.track}`}>
+          {reached !== null ? (
+            <div
+              className={`h-full rounded-full ${look.fill}`}
+              style={{ width: `${Math.min(Math.max(reached, reached > 0 ? 3 : 0), 100)}%` }}
+            />
+          ) : null}
+        </div>
+        <p className="mt-1.5 text-[11px] text-ink-500">
+          {reached !== null
+            ? `${Math.round(reached)}% of this checkpoint's target recorded`
+            : "Counts once this date arrives"}
+        </p>
+      </div>
     </div>
   );
 }
@@ -1028,35 +1032,53 @@ function RecoveryChangeSincePreviousDay({
  * fraction of a peso near month-end. Mirrors mobile's `ScenarioRow` floor —
  * keep the literal `1` (one peso) in sync with that file.
  */
-function ScenarioDeltaRow({
+function ScenarioCompareCard({
   label,
   current,
   hypothetical,
+  emphasis = false,
 }: {
   label: string;
   current: number;
   hypothetical: number;
+  /** The figure that answers "what would I need per day?" gets the frame. */
+  emphasis?: boolean;
 }) {
   const delta = hypothetical - current;
   const percent = Math.abs(current) >= 1 ? (delta / current) * 100 : null;
+  const unchanged = Math.abs(delta) < 0.5;
+  // Every figure here is a target, so a lower one is the easier outcome.
+  const Arrow = unchanged ? Minus : delta < 0 ? ArrowDown : ArrowUp;
+  const chipTone = unchanged
+    ? "bg-tint-neutral text-tone-neutral"
+    : delta < 0
+      ? "bg-tint-brand text-tone-brand"
+      : "bg-tint-danger text-tone-danger";
   return (
-    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 py-2 text-sm first:pt-0 last:pb-0">
-      <span className="text-tone-accent">{label}</span>
-      <span className="flex items-baseline gap-2 text-right">
-        <span className="figure text-ink-500 line-through decoration-1">
-          {formatMoney(current)}
+    <div
+      className={`min-w-0 rounded-xl bg-paper p-3.5 shadow-sm ring-1 ${
+        emphasis ? "ring-2 ring-edge-accent" : "ring-paper-200"
+      }`}
+    >
+      <p className="text-xs font-semibold text-ink-600">{label}</p>
+      <p className="figure mt-1.5 break-words text-xl font-semibold leading-tight text-ink-900">
+        {formatMoney(hypothetical)}
+      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+        <span className="figure text-ink-500">Now {formatMoney(current)}</span>
+        <span
+          className={`figure inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-semibold ${chipTone}`}
+        >
+          <Arrow aria-hidden className="size-3" />
+          {unchanged
+            ? "No change"
+            : `${formatMoney(delta, { signed: true })}${
+                percent !== null
+                  ? ` (${percent >= 0 ? "+" : ""}${percent.toFixed(0)}%)`
+                  : ""
+              }`}
         </span>
-        <span className="figure font-semibold text-ink-900">
-          {formatMoney(hypothetical)}
-        </span>
-        <span className="figure text-xs text-tone-accent">
-          ({formatMoney(delta, { signed: true })}
-          {percent !== null
-            ? `, ${percent >= 0 ? "+" : ""}${percent.toFixed(0)}%`
-            : ""}
-          )
-        </span>
-      </span>
+      </div>
     </div>
   );
 }
@@ -1356,10 +1378,8 @@ function RecoveryScenarioPanel({
   // ref above, and as mobile's `RecoveryScenarioSheet`'s `seq` ref.
   const submitSeq = useRef(0);
 
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
+  async function runScenario(value: number) {
     if (submitting) return;
-    const value = Number(rawValue);
     if (!Number.isFinite(value) || value < 0) {
       setError("Enter a number greater than or equal to 0.");
       return;
@@ -1383,6 +1403,25 @@ function RecoveryScenarioPanel({
     } finally {
       if (thisSubmitSeq === submitSeq.current) setSubmitting(false);
     }
+  }
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    void runScenario(Number(rawValue));
+  }
+
+  // One-tap starting points relative to the real basis. They fill the field
+  // and run the scenario, so the owner sees the result without typing.
+  const presets = [
+    { label: "−10%", factor: 0.9 },
+    { label: "−20%", factor: 0.8 },
+    { label: "+10%", factor: 1.1 },
+  ];
+  function applyPreset(factor: number) {
+    const value = Math.round(currentExpectedMonthlyExpenses * factor);
+    touchedRef.current = true;
+    setRawValue(String(value));
+    void runScenario(value);
   }
 
   const [showSavePlanForm, setShowSavePlanForm] = useState(false);
@@ -1423,26 +1462,55 @@ function RecoveryScenarioPanel({
       eyebrow="Optional"
       title="What if my monthly expense basis changed?"
       action={
-        !expanded ? (
+        expanded ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            aria-expanded
+            aria-controls="recovery-scenario-body"
+            onClick={() => setExpanded(false)}
+          >
+            <ChevronUp aria-hidden className="size-4" />
+            Hide
+          </Button>
+        ) : (
           <Button
             type="button"
             variant="secondary"
             size="sm"
+            aria-expanded={false}
+            aria-controls="recovery-scenario-body"
             onClick={() => setExpanded(true)}
           >
-            Try a scenario
+            <ChevronDown aria-hidden className="size-4" />
+            {scenario ? "Show scenario" : "Try a scenario"}
           </Button>
-        ) : null
+        )
       }
     >
       {!expanded ? (
-        <p className="text-sm text-ink-500">
-          Test a different monthly expense amount. Nothing is saved.
-        </p>
+        scenario ? (
+          <p className="text-sm text-ink-600">
+            Last result: at{" "}
+            <span className="figure font-semibold text-ink-900">
+              {formatMoney(scenario.assumedExpectedMonthlyExpenses)}
+            </span>{" "}
+            a month you would need{" "}
+            <span className="figure font-semibold text-ink-900">
+              {formatMoney(scenario.hypothetical.adjustedDailyTarget)}
+            </span>{" "}
+            a day. Not saved.
+          </p>
+        ) : (
+          <p className="text-sm text-ink-500">
+            Test a different monthly expense amount. Nothing is saved.
+          </p>
+        )
       ) : (
-        <div className="space-y-4">
-          {/* noValidate: the JS check above (finite, >= 0) is the single
-              source of the error message shown, same as
+        <div id="recovery-scenario-body" className="space-y-4">
+          {/* noValidate: the JS check in runScenario (finite, >= 0) is the
+              single source of the error message shown, same as
               ReductionSimulationModal's own form — native HTML5 constraint
               validation on a min-0 number input would otherwise silently
               swallow the submit instead of surfacing that message. */}
@@ -1472,117 +1540,115 @@ function RecoveryScenarioPanel({
             </Button>
           </form>
 
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-ink-500">Quick try:</span>
+            {presets.map((preset) => (
+              <button
+                key={preset.label}
+                type="button"
+                disabled={submitting}
+                onClick={() => applyPreset(preset.factor)}
+                className="tap-inline figure rounded-full bg-paper-100 px-3 py-1 text-xs font-semibold text-ink-700 ring-1 ring-paper-200 transition hover:bg-tint-brand hover:text-tone-brand hover:ring-edge-brand disabled:opacity-50"
+              >
+                {preset.label}
+              </button>
+            ))}
+            <span className="text-xs text-ink-500">of your current basis</span>
+          </div>
+
           {error ? <FormError>{error}</FormError> : null}
 
           {scenario ? (
-            // The distinct surface itself: a dashed ring and a different tint
-            // from every other panel on this page, so it cannot be mistaken
-            // for another read of the real target above.
-            <div className="rounded-xl border-2 border-dashed border-edge-accent bg-tint-accent p-4">
-              <Callout tone="warn">
-                <b className="font-semibold">Hypothetical. Not saved.</b> This
-                does not change your records, starting estimate, or active
-                monthly expense basis. Assumed value used:{" "}
-                <span className="figure font-semibold">
-                  {formatMoney(scenario.assumedExpectedMonthlyExpenses)}
-                </span>
-                .
-              </Callout>
-
-              <dl className="mt-4 grid gap-4 sm:grid-cols-3">
-                <div>
-                  <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-tone-accent">
-                    Hypothetical daily needed target
-                  </dt>
-                  <dd className="figure mt-0.5 text-lg font-semibold text-ink-900">
-                    {formatMoney(scenario.hypothetical.dailyNeededTarget)}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-tone-accent">
-                    Hypothetical remaining target
-                  </dt>
-                  <dd className="figure mt-0.5 text-lg font-semibold text-ink-900">
-                    {formatMoney(scenario.hypothetical.remainingTarget)}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-tone-accent">
-                    Hypothetical adjusted daily target
-                  </dt>
-                  <dd className="figure mt-0.5 text-lg font-semibold text-ink-900">
-                    {formatMoney(scenario.hypothetical.adjustedDailyTarget)}
-                  </dd>
-                </div>
-              </dl>
-
-              <p className="mt-3 text-xs text-tone-accent opacity-90">
-                For comparison, your current (real, saved) daily needed target
-                is{" "}
-                <span className="figure font-semibold">
-                  {formatMoney(scenario.current.dailyNeededTarget)}
-                </span>{" "}
-                and remains unchanged in this scenario.
-              </p>
+            // The distinct surface itself: a dashed amber frame unlike every
+            // other panel on this page, so it cannot be mistaken for another
+            // read of the real target above (plan §13.1/§13.2).
+            <div className="rounded-2xl border-2 border-dashed border-edge-accent bg-tint-accent/60 p-4 motion-safe:animate-fade-up sm:p-5">
+              <div className="flex items-start gap-3">
+                <IconTile icon={FlaskConical} />
+                <p className="text-sm leading-relaxed text-ink-700">
+                  <b className="font-semibold text-tone-accent">Hypothetical. Not saved.</b>{" "}
+                  This does not change your records, starting estimate, or
+                  active monthly expense basis. Assumed value used:{" "}
+                  <span className="figure font-semibold text-ink-900">
+                    {formatMoney(scenario.assumedExpectedMonthlyExpenses)}
+                  </span>
+                  .
+                </p>
+              </div>
 
               {/* Side-by-side current/hypothetical with deltas — plan §10.7. */}
-              <div className="mt-4 border-t border-edge-accent/40 pt-4">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.04em] text-tone-accent">
+              <div className="mt-4">
+                <p className="text-xs font-semibold text-ink-700">
                   Current vs. hypothetical
                 </p>
-                <div className="mt-2 divide-y divide-edge-accent/30">
-                  <ScenarioDeltaRow
+                <div className="mt-2 grid gap-3 sm:grid-cols-3">
+                  <ScenarioCompareCard
                     label="Monthly expense basis"
                     current={scenario.current.expectedMonthlyExpenses}
                     hypothetical={scenario.hypothetical.expectedMonthlyExpenses}
                   />
-                  <ScenarioDeltaRow
+                  <ScenarioCompareCard
                     label="Remaining target"
                     current={scenario.current.remainingTarget}
                     hypothetical={scenario.hypothetical.remainingTarget}
                   />
-                  <ScenarioDeltaRow
+                  <ScenarioCompareCard
                     label="Adjusted daily target"
                     current={scenario.current.adjustedDailyTarget}
                     hypothetical={scenario.hypothetical.adjustedDailyTarget}
+                    emphasis
                   />
                 </div>
+              </div>
 
+              <div className="mt-4 space-y-2 border-t border-edge-accent/50 pt-3 text-xs leading-relaxed text-ink-600">
+                <p>
+                  Daily needed target in this scenario:{" "}
+                  <span className="figure font-semibold text-ink-900">
+                    {formatMoney(scenario.hypothetical.dailyNeededTarget)}
+                  </span>
+                  . For comparison, your current (real, saved) daily needed
+                  target is{" "}
+                  <span className="figure font-semibold text-ink-900">
+                    {formatMoney(scenario.current.dailyNeededTarget)}
+                  </span>{" "}
+                  and remains unchanged in this scenario.
+                </p>
                 {/* §9.9: always null right now — say so plainly rather than
                     silently omitting a figure the plan otherwise promises. */}
-                <p className="mt-3 text-xs text-tone-accent opacity-90">
-                  <b className="font-semibold">
-                    Estimated transactions per day:
-                  </b>{" "}
-                  Not available — FinSight can't yet tell whether your sales
-                  records represent individual transactions or daily totals, so
-                  it won't guess a transaction count.
+                <p className="flex items-start gap-1.5">
+                  <Info aria-hidden className="mt-0.5 size-3.5 shrink-0 text-ink-500" />
+                  <span>
+                    <b className="font-semibold text-ink-700">
+                      Estimated transactions per day:
+                    </b>{" "}
+                    Not available. FinSight can't yet tell whether your sales
+                    records represent individual transactions or daily totals,
+                    so it won't guess a transaction count.
+                  </span>
                 </p>
               </div>
 
-              {/* Small, secondary — plan §10.7: "clearly optional/secondary".
+              {/* Secondary — plan §10.7: "clearly optional/secondary".
                   Persists the assumed value above as a separate, owner-visible
                   RecoveryPlan; never touches the real business profile. */}
-              <div className="mt-4 border-t border-edge-accent/40 pt-3">
+              <div className="mt-4 border-t border-edge-accent/50 pt-4">
                 {!showSavePlanForm ? (
-                  <button
+                  <Button
                     type="button"
+                    variant="secondary"
+                    size="sm"
                     onClick={() => setShowSavePlanForm(true)}
-                    className="tap-inline inline-flex items-center gap-1.5 text-xs font-semibold text-tone-accent underline underline-offset-2"
                   >
+                    <BookmarkPlus aria-hidden className="size-4" />
                     Save this as a plan
                     {hasSavedPlan
                       ? " (replaces your current one for this month)"
                       : ""}
-                    <ArrowRight
-                      aria-hidden
-                      className="size-3.5"
-                      strokeWidth={1.9}
-                    />
-                  </button>
+                  </Button>
                 ) : (
                   <form onSubmit={handleSavePlan} className="space-y-3">
-                    <p className="text-xs text-tone-accent opacity-90">
+                    <p className="text-xs text-ink-600">
                       Saves the assumed monthly expense basis above (
                       {formatMoney(scenario.assumedExpectedMonthlyExpenses)}) as
                       this month's target amount for your own reference.
@@ -1651,7 +1717,7 @@ function RecoveryScenarioPanel({
                   </form>
                 )}
                 {planSaveConfirmation ? (
-                  <p className="mt-2 text-xs font-medium text-tone-accent">
+                  <p className="mt-2 text-xs font-medium text-tone-brand">
                     Saved. Your profile and sales are unchanged.
                   </p>
                 ) : null}
@@ -1664,9 +1730,656 @@ function RecoveryScenarioPanel({
   );
 }
 
+type HeroTone = "setup" | "info" | "good" | "critical";
+
+const HERO_TONE_SOLID: Record<HeroTone, string> = {
+  setup: STATUS_TEXT_COLORS.warning,
+  info: "#149e8d",
+  good: STATUS_TEXT_COLORS.good,
+  critical: STATUS_TEXT_COLORS.critical,
+};
+
+const HERO_TONE_FILL: Record<HeroTone, string> = {
+  setup: STATUS_COLORS.warning,
+  info: "#2ec2ac",
+  good: STATUS_COLORS.good,
+  critical: STATUS_COLORS.critical,
+};
+
+function periodHeroState(period: RecoveryReportingPeriod): {
+  tone: HeroTone;
+  label: string;
+  icon: typeof Check;
+} {
+  const label = recoveryPeriodStatusLabel(period);
+  switch (period.status) {
+    case "needs_setup":
+      return { tone: "setup", label, icon: CircleHelp };
+    case "no_data":
+      return { tone: "info", label, icon: Info };
+    case "behind":
+      return { tone: "critical", label, icon: AlertTriangle };
+    default:
+      return { tone: "good", label, icon: Check };
+  }
+}
+
+/**
+ * The page's focal point: where the period stands and the one number that
+ * says what to do next. On a fixed deep-teal gradient (brand colours do not
+ * change between themes) so it reads as the headline above every panel.
+ * The amber figure is the Recovery Meter's sanctioned accent moment.
+ */
+function RecoveryHero({
+  title,
+  period,
+  currentMonthStatus,
+}: {
+  title: string;
+  period: RecoveryReportingPeriod;
+  /** Present only for the current month, where the meter's own status copy applies. */
+  currentMonthStatus: RecoveryStatus | undefined | null;
+}) {
+  const state =
+    currentMonthStatus !== null
+      ? monthToneAndCopy(
+          currentMonthStatus,
+          period.status === "ahead" ||
+            period.status === "on_pace" ||
+            period.status === "covered",
+          period.status === "needs_setup",
+        )
+      : periodHeroState(period);
+  const StatusIcon = state.icon;
+  const coverage = Math.min(Math.max(period.coveragePercent, 0), 100);
+  const isCurrentMonth = currentMonthStatus !== null;
+  const showDailyAsk =
+    !period.isComplete &&
+    period.status !== "needs_setup" &&
+    period.adjustedDailyTarget !== null &&
+    period.remainingTarget > 0;
+
+  return (
+    <section
+      aria-labelledby="recovery-hero-title"
+      className="relative flex min-w-0 flex-col overflow-hidden rounded-2xl bg-gradient-to-br from-brand-800 via-brand-900 to-brand-950 p-5 text-white shadow-md sm:p-6"
+    >
+      <svg
+        aria-hidden
+        viewBox="0 0 200 200"
+        className="pointer-events-none absolute -right-14 -top-14 h-56 w-56 text-white/[0.06]"
+      >
+        <circle cx="100" cy="100" r="92" fill="none" stroke="currentColor" strokeWidth="14" />
+        <circle cx="100" cy="100" r="58" fill="none" stroke="currentColor" strokeWidth="14" />
+        <circle cx="100" cy="100" r="22" fill="currentColor" />
+      </svg>
+
+      <div className="relative flex items-start gap-4">
+        <IconTile icon={Target} size="lg" className="hidden sm:inline-flex" />
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <h2
+              id="recovery-hero-title"
+              className="font-display text-lg font-semibold tracking-[-0.01em]"
+            >
+              {title}
+            </h2>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-white/10 py-1 pl-1 pr-2.5 text-xs font-semibold ring-1 ring-white/15">
+              <span
+                aria-hidden
+                className="inline-flex h-4 w-4 items-center justify-center rounded-full"
+                style={{ backgroundColor: HERO_TONE_SOLID[state.tone] }}
+              >
+                <StatusIcon className="size-2.5" />
+              </span>
+              {state.label}
+            </span>
+          </div>
+
+          {period.status === "needs_setup" ? (
+            <p className="mt-4 max-w-md text-sm text-brand-100">
+              Add a starting monthly expense estimate to calculate your target.
+            </p>
+          ) : showDailyAsk ? (
+            <>
+              <p className="mt-4 text-xs font-medium text-brand-200">
+                Adjusted daily target
+              </p>
+              <p className="figure mt-0.5 text-3xl font-semibold text-accent-200 sm:text-4xl">
+                {formatMoney(period.adjustedDailyTarget!)}
+              </p>
+              <p className="mt-1 max-w-md text-sm text-brand-100">
+                needed on each of the next{" "}
+                {formatOperatingDays(
+                  period.remainingOperatingDays,
+                  period.operatingDaysIsApproximated,
+                )}{" "}
+                operating days to cover the{" "}
+                <span className="figure">{formatMoney(period.target)}</span> target.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="mt-4 text-xs font-medium text-brand-200">
+                Sales reference {recoveryPeriodPhrase(period)}
+              </p>
+              <p className="figure mt-0.5 text-3xl font-semibold text-accent-200 sm:text-4xl">
+                {formatMoney(period.sales)}
+              </p>
+              <p className="mt-1 text-sm text-brand-100">
+                recorded against a{" "}
+                <span className="figure">{formatMoney(period.target)}</span> target.
+              </p>
+            </>
+          )}
+        </div>
+      </div>
+
+      {!period.isComplete && period.status !== "needs_setup" ? (
+        <dl className="relative mt-6 grid grid-cols-3 divide-x divide-white/10 rounded-xl bg-white/[0.06] py-3 ring-1 ring-white/10">
+          {[
+            { label: "Recorded", value: formatMoney(period.sales) },
+            { label: "Still needed", value: formatMoney(period.remainingTarget) },
+            {
+              label: "Days left",
+              value: formatOperatingDays(
+                period.remainingOperatingDays,
+                period.operatingDaysIsApproximated,
+              ),
+            },
+          ].map((item) => (
+            <div key={item.label} className="min-w-0 px-3 sm:px-4">
+              <dt className="text-[11px] font-medium text-brand-200">{item.label}</dt>
+              <dd className="figure mt-0.5 truncate text-sm font-semibold text-white sm:text-base">
+                {item.value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+
+      <div className="relative mt-auto pt-6">
+        <div
+          className="h-2.5 w-full overflow-hidden rounded-full bg-white/15"
+          role="progressbar"
+          aria-valuenow={Math.round(coverage)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label={
+            isCurrentMonth
+              ? "Month-to-date coverage of monthly expense basis"
+              : `${recoveryPeriodLabel(period)} sales coverage of the recovery target`
+          }
+        >
+          <div
+            className="h-full rounded-full transition-[width] duration-700 ease-out motion-reduce:transition-none"
+            style={{
+              width: `${coverage}%`,
+              backgroundColor: HERO_TONE_FILL[state.tone],
+            }}
+          />
+        </div>
+        <div className="mt-2 flex items-baseline justify-between gap-3 text-xs text-brand-100">
+          <span>
+            <span className="figure font-semibold text-white">
+              {formatMoney(period.sales)}
+            </span>{" "}
+            of <span className="figure">{formatMoney(period.target)}</span> recorded
+          </span>
+          <span className="figure font-semibold text-white">
+            {period.coveragePercent.toFixed(0)}%
+          </span>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Recorded sales against what the plan expected by now, as two bars on one
+ * scale. The gap between them is the whole story of "behind pace", so it is
+ * drawn rather than left as two figures to subtract.
+ */
+function PaceComparison({
+  recorded,
+  expected,
+}: {
+  recorded: number;
+  expected: number;
+}) {
+  const max = Math.max(recorded, expected, 1);
+  const behind = recorded < expected;
+  const rows = [
+    {
+      label: "Recorded",
+      value: recorded,
+      fill: behind ? STATUS_COLORS.critical : STATUS_COLORS.good,
+    },
+    { label: "Expected by now", value: expected, fill: "rgb(var(--ink-300))" },
+  ];
+  return (
+    <dl className="space-y-2">
+      {rows.map((row) => (
+        <div key={row.label}>
+          <div className="flex items-baseline justify-between gap-3 text-[11px]">
+            <dt className="text-ink-500">{row.label}</dt>
+            <dd className="figure font-semibold text-ink-800">{formatMoney(row.value)}</dd>
+          </div>
+          <div aria-hidden className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-paper-200">
+            <div
+              className="h-full rounded-full transition-[width] duration-700 ease-out motion-reduce:transition-none"
+              style={{
+                width: `${row.value > 0 ? Math.max((row.value / max) * 100, 2) : 0}%`,
+                backgroundColor: row.fill,
+              }}
+            />
+          </div>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/** The figures behind the hero, plus the state's one primary action. */
+function RecoveryPaceCard({
+  period,
+  action,
+}: {
+  period: RecoveryReportingPeriod;
+  action: ReactNode;
+}) {
+  const variance = period.isComplete
+    ? period.sales - period.target
+    : period.paceVarianceAmount;
+  return (
+    <Card className="flex min-w-0 flex-col p-5 motion-safe:animate-fade-up">
+      <div className="flex items-start gap-3.5">
+        <IconTile icon={CalendarRange} />
+        <div className="min-w-0">
+          <p className="text-xs font-semibold text-ink-600">
+            Target for{" "}
+            {period.kind === "week" ? "this week" : recoveryPeriodLabel(period)}
+          </p>
+          <p className="figure mt-1 text-2xl font-semibold leading-none text-ink-900">
+            {formatMoney(period.target)}
+          </p>
+          <p className="mt-1.5 text-xs text-ink-500">
+            <span className="figure">{formatMoney(period.dailyTarget)}</span> per
+            operating day
+          </p>
+        </div>
+      </div>
+      <div className="my-4 border-t border-dashed border-paper-200" />
+      <div className="flex items-start gap-3.5">
+        <IconTile icon={Flag} />
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-semibold text-ink-600">
+            {period.isComplete ? "Final difference" : "Against expected pace"}
+          </p>
+          <p
+            className="figure mt-1 text-2xl font-semibold leading-none"
+            style={{
+              color:
+                variance < 0
+                  ? STATUS_INK.critical
+                  : variance > 0
+                    ? STATUS_INK.good
+                    : undefined,
+            }}
+          >
+            {variance === 0
+              ? "On pace"
+              : `${formatMoney(Math.abs(variance))} ${
+                  period.isComplete
+                    ? variance < 0
+                      ? "short"
+                      : "over"
+                    : variance < 0
+                      ? "behind"
+                      : "ahead"
+                }`}
+          </p>
+          <p className="mt-1.5 text-xs text-ink-500">
+            {period.isComplete
+              ? `${recoveryPeriodLabel(period)} is closed`
+              : `${formatOperatingDays(
+                  period.remainingOperatingDays,
+                  period.operatingDaysIsApproximated,
+                )} operating days left`}
+          </p>
+          {!period.isComplete && period.expectedSalesToDate > 0 ? (
+            <div className="mt-3">
+              <PaceComparison
+                recorded={period.sales}
+                expected={period.expectedSalesToDate}
+              />
+            </div>
+          ) : null}
+        </div>
+      </div>
+      {action ? (
+        <div className="mt-auto pt-5">
+          <div className="border-t border-paper-200 pt-4">{action}</div>
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
+// Each tone is a matched set from the themed tint/tone/edge tokens, used for
+// the tile's wash only; the icon itself is the shared, uniform IconTile.
+const INPUT_TILE_TONES = {
+  brand: {
+    wash: "from-tint-brand",
+    ring: "ring-edge-brand",
+    mark: "text-tone-brand",
+  },
+  info: {
+    wash: "from-tint-info",
+    ring: "ring-edge-info",
+    mark: "text-tone-info",
+  },
+  danger: {
+    wash: "from-tint-danger",
+    ring: "ring-edge-danger",
+    mark: "text-tone-danger",
+  },
+  neutral: {
+    wash: "from-tint-neutral",
+    ring: "ring-paper-200",
+    mark: "text-tone-neutral",
+  },
+} as const;
+
+/**
+ * One input to the target. Each tile carries a small picture of its own
+ * figure (elapsed days, the target's drift, today's progress) so the row
+ * says something at a glance instead of being four boxed numbers. The faint
+ * oversized glyph repeats the tile's icon to give each tile its own
+ * silhouette; it is decoration only, so it sits behind the text, aria-hidden.
+ */
+function InputTile({
+  icon: Icon,
+  label,
+  value,
+  sublabel,
+  tone,
+  visual,
+  order = 0,
+}: {
+  icon: typeof Check;
+  label: string;
+  value: string;
+  sublabel?: ReactNode;
+  tone: keyof typeof INPUT_TILE_TONES;
+  visual?: ReactNode;
+  /** Position in the row, used to stagger the entrance in reading order. */
+  order?: number;
+}) {
+  const t = INPUT_TILE_TONES[tone];
+  return (
+    <div
+      className={`relative isolate flex min-w-0 flex-col overflow-hidden rounded-2xl bg-gradient-to-br ${t.wash} to-paper p-4 shadow-sm ring-1 ${t.ring} motion-safe:animate-fade-up sm:p-5`}
+      style={{ animationDelay: `${order * 70}ms` }}
+    >
+      <Icon
+        aria-hidden
+        className={`pointer-events-none absolute -bottom-6 -right-6 -z-10 size-32 -rotate-12 opacity-[0.07] ${t.mark}`}
+      />
+      <div className="flex items-center gap-3">
+        <IconTile icon={Icon} />
+        <p className="min-w-0 text-xs font-semibold text-ink-700">{label}</p>
+      </div>
+      <p className="figure mt-4 break-words text-[1.7rem] font-semibold leading-none text-ink-900">
+        {value}
+      </p>
+      {sublabel ? <p className="mt-2 text-xs text-ink-600">{sublabel}</p> : null}
+      {visual ? <div className="mt-auto pt-4">{visual}</div> : null}
+    </div>
+  );
+}
+
+/** One dot per operating day in the period: filled for elapsed, hollow for left. */
+function OperatingDayDots({
+  total,
+  elapsed,
+  approximated,
+}: {
+  total: number;
+  elapsed: number;
+  approximated: boolean;
+}) {
+  const count = Math.max(0, Math.min(Math.round(total), 31));
+  const done = Math.max(0, Math.min(Math.round(elapsed), count));
+  if (count === 0) return null;
+  const left = count - done;
+  return (
+    <div>
+      <div
+        role="img"
+        aria-label={`${done} of ${count} operating days elapsed${approximated ? " (estimated)" : ""}`}
+        className="flex flex-wrap gap-[3px]"
+      >
+        {Array.from({ length: count }, (_, i) => (
+          <span
+            key={i}
+            aria-hidden
+            className={`h-2 w-2 rounded-full ${
+              i < done ? "bg-tone-info" : "bg-paper ring-1 ring-inset ring-edge-info"
+            }`}
+          />
+        ))}
+      </div>
+      <p aria-hidden className="mt-1.5 text-[11px] font-medium text-tone-info">
+        {done} elapsed, {left} left
+      </p>
+    </div>
+  );
+}
+
+/** How far the per-day ask has moved from the plan, now that some days are gone. */
+function DailyTargetDrift({
+  dailyTarget,
+  adjusted,
+}: {
+  dailyTarget: number;
+  adjusted: number;
+}) {
+  const percent = dailyTarget > 0 ? ((adjusted - dailyTarget) / dailyTarget) * 100 : 0;
+  const up = adjusted > dailyTarget;
+  const Arrow = up ? ArrowUp : adjusted < dailyTarget ? ArrowDown : Minus;
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-xl bg-paper/80 px-3 py-2 ring-1 ring-edge-brand">
+      <span className="text-[11px] text-ink-600">
+        Now{" "}
+        <span className="figure font-semibold text-ink-900">{formatMoney(adjusted)}</span>{" "}
+        a day
+      </span>
+      {Math.abs(percent) >= 0.5 ? (
+        <span
+          className={`figure inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[11px] font-semibold ${
+            up ? "bg-tint-danger text-tone-danger" : "bg-tint-brand text-tone-brand"
+          }`}
+        >
+          <Arrow aria-hidden className="size-3" />
+          {up ? "+" : "−"}
+          {Math.abs(percent).toFixed(0)}%
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+/** A thin labelled bar for today's progress inside the status tile. */
+function TileProgress({ percent, tone }: { percent: number; tone: "danger" | "brand" }) {
+  const clamped = Math.min(Math.max(percent, 0), 100);
+  return (
+    <div
+      aria-hidden
+      className={`h-2 w-full overflow-hidden rounded-full ${
+        tone === "danger" ? "bg-edge-danger" : "bg-edge-brand"
+      }`}
+    >
+      <div
+        className={`h-full rounded-full transition-[width] duration-700 ease-out motion-reduce:transition-none ${
+          tone === "danger" ? "bg-tone-danger" : "bg-tone-brand"
+        }`}
+        style={{ width: `${Math.max(clamped, clamped > 0 ? 4 : 0)}%` }}
+      />
+    </div>
+  );
+}
+
+/** Today's sales reference against today's target (current month only). */
+function TodayProgressCard({ data }: { data: RecoveryInsight }) {
+  const percent =
+    data.todaysTarget > 0
+      ? (data.todaysSales / data.todaysTarget) * 100
+      : data.todaysSales > 0
+        ? 100
+        : 0;
+  const ringColor =
+    data.todaysStatus === "below"
+      ? STATUS_COLORS.critical
+      : STATUS_COLORS.good;
+  return (
+    <Panel title="Today" className="h-full">
+      <div className="flex flex-col items-center gap-5 sm:flex-row lg:flex-col xl:flex-row">
+        <ProgressRing
+          percent={percent}
+          color={ringColor}
+          label={`${Math.round(percent)}% of today's target recorded`}
+        />
+        <dl className="grid w-full min-w-0 gap-2.5 text-sm">
+          <div className="flex items-baseline justify-between gap-3">
+            <dt className="text-xs text-ink-500">Sales reference today</dt>
+            <dd className="figure font-semibold text-ink-900">
+              {formatMoney(data.todaysSales)}
+            </dd>
+          </div>
+          <div className="flex items-baseline justify-between gap-3">
+            <dt className="text-xs text-ink-500">Today's target</dt>
+            <dd className="figure font-semibold text-ink-900">
+              {formatMoney(data.todaysTarget)}
+            </dd>
+          </div>
+          <div className="flex items-baseline justify-between gap-3 border-t border-paper-200 pt-2.5">
+            <dt className="text-xs text-ink-500">Today's gap</dt>
+            <dd
+              className="figure font-semibold"
+              style={{ color: statusColor(data.todaysStatus) }}
+            >
+              {data.todaysStatus === "at"
+                ? "Reached"
+                : `${formatMoney(Math.abs(data.todaysGap))} ${data.todaysStatus}`}
+            </dd>
+          </div>
+        </dl>
+      </div>
+    </Panel>
+  );
+}
+
+/**
+ * Plain facts read straight off the daily rows and checkpoints. Nothing is
+ * inferred or predicted here, so nothing needs an AI disclaimer.
+ */
+function RecoveryHighlights({ rows }: { rows: DailyCoverageRow[] }) {
+  const openRows = rows.filter((r) => r.status !== "closed");
+  const hitRows = openRows.filter((r) => r.status === "at" || r.status === "above");
+  const best = rows.reduce<DailyCoverageRow | null>(
+    (top, r) => (r.sales > 0 && (!top || r.sales > top.sales) ? r : top),
+    null,
+  );
+  const closedCount = rows.length - openRows.length;
+
+  const items: { icon: typeof Check; title: string; body: ReactNode }[] = [];
+  if (openRows.length > 0) {
+    items.push({
+      icon: CalendarCheck,
+      title: "Open days on target",
+      body: `${hitRows.length} of ${openRows.length} open ${openRows.length === 1 ? "day" : "days"} so far reached the allocated target.`,
+    });
+  }
+  if (best) {
+    items.push({
+      icon: TrendingUp,
+      title: "Highest sales day",
+      body: (
+        <>
+          {shortDay(best.date)}, with{" "}
+          <span className="figure font-semibold text-ink-700">{formatMoney(best.sales)}</span>{" "}
+          recorded.
+        </>
+      ),
+    });
+  }
+  if (closedCount > 0) {
+    items.push({
+      icon: CalendarOff,
+      title: "Closed days",
+      body: `${closedCount} ${closedCount === 1 ? "day was" : "days were"} closed on your schedule and carry no target.`,
+    });
+  }
+
+  return (
+    <Panel title="Highlights" eyebrow="From your daily records" className="h-full">
+      {items.length === 0 ? (
+        <p className="text-sm text-ink-500">
+          Highlights appear once this period has recorded days.
+        </p>
+      ) : (
+        <ul className="space-y-2.5">
+          {items.map(({ icon: Icon, title, body }) => (
+            <li
+              key={title}
+              className="flex items-start gap-3 rounded-xl border border-paper-200 bg-paper-50 p-3"
+            >
+              <IconTile icon={Icon} size="sm" />
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-ink-900">{title}</p>
+                <p className="mt-0.5 text-xs leading-relaxed text-ink-600">{body}</p>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Panel>
+  );
+}
+
+/** One figure in the daily-plan strip. */
+function PlanFigure({
+  label,
+  value,
+  sublabel,
+  emphasis = false,
+}: {
+  label: string;
+  value: string;
+  sublabel?: ReactNode;
+  emphasis?: boolean;
+}) {
+  return (
+    <div
+      className={`min-w-0 rounded-xl p-3.5 ${
+        emphasis ? "bg-tint-brand ring-1 ring-edge-brand" : ""
+      }`}
+    >
+      <p className={`text-xs font-medium ${emphasis ? "text-tone-brand" : "text-ink-500"}`}>
+        {label}
+      </p>
+      <p className="figure mt-1 break-words text-lg font-semibold text-ink-900">
+        {value}
+      </p>
+      {sublabel ? <p className="mt-0.5 text-xs text-ink-500">{sublabel}</p> : null}
+    </div>
+  );
+}
+
 export function RecoveryInsightPage() {
   return (
-    <ReportingPeriodScope>
+    <ReportingPeriodScope scope="recovery-target">
       <RecoveryInsightContent />
     </ReportingPeriodScope>
   );
@@ -1715,6 +2428,14 @@ function RecoveryInsightContent() {
   const requestId = useRef(0);
   const ownsRecoveryResult = recoveryResult.scopeKey === recoveryScopeKey;
   const data = ownsRecoveryResult ? recoveryResult.data : null;
+  const dailyCoverageDisclosure = useListDisclosure({
+    total: data?.dailyCoverage.length ?? 0,
+    resetKey: recoveryScopeKey,
+  });
+  const dailyCoverageRows = data?.dailyCoverage ?? [];
+  const visibleDailyCoverage = dailyCoverageDisclosure.expanded
+    ? dailyCoverageRows
+    : [...dailyCoverageRows].sort((a, b) => b.date.localeCompare(a.date)).slice(0, dailyCoverageDisclosure.visibleCount);
   const dataUpdatedAt = ownsRecoveryResult ? recoveryResult.updatedAt : null;
   const recoveryLoading = ownsRecoveryResult ? loading : true;
   const error =
@@ -2009,17 +2730,6 @@ function RecoveryInsightContent() {
 
       <InsightsTabs />
 
-      {/*
-        Required product definition (plan §6.1) — must sit before or beside
-        the first status, not only beneath the detailed formulas further down
-        this page. Copy is exact; do not paraphrase.
-      */}
-      <p className="mb-5 text-sm text-ink-500">
-        Your Sales Coverage Target compares recorded sales references with your
-        active monthly expense basis. It is a planning guide and does not
-        calculate profit, cash flow, or formal break-even.
-      </p>
-
       {error && !data ? (
         <div className="mb-5">
           <Callout tone="warn">
@@ -2067,29 +2777,25 @@ function RecoveryInsightContent() {
       {isInitialLoad ? (
         <div className="space-y-6" aria-busy="true" aria-live="polite">
           <span className="sr-only">Loading your recovery target…</span>
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+            <SkeletonPanel lines={4} />
+            <SkeletonPanel lines={4} />
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 xl:grid-cols-4">
+            <SkeletonStatTile />
             <SkeletonStatTile />
             <SkeletonStatTile />
             <SkeletonStatTile />
           </div>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4">
-            <SkeletonStatTile />
-            <SkeletonStatTile />
-            <SkeletonStatTile />
-            <SkeletonStatTile />
-          </div>
-          <SkeletonPanel lines={3} />
-          <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-5">
-            <SkeletonStatTile />
-            <SkeletonStatTile />
-            <SkeletonStatTile />
-            <SkeletonStatTile />
-            <SkeletonStatTile />
+          <div className="grid gap-4 lg:grid-cols-3">
+            <div className="lg:col-span-2">
+              <SkeletonPanel lines={6} />
+            </div>
+            <SkeletonPanel lines={6} />
           </div>
           <Card>
             <SkeletonRows rows={5} />
           </Card>
-          <SkeletonPanel lines={3} />
         </div>
       ) : !selected ? (
         /* A recovery target needs a selected business and its monthly basis. */
@@ -2123,8 +2829,11 @@ function RecoveryInsightContent() {
             hasSavedPlan={plan !== null}
           />
 
-          <div id="recovery-overview" className="scroll-mt-6">
-            <Panel
+          <div
+            id="recovery-overview"
+            className="grid scroll-mt-6 gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]"
+          >
+            <RecoveryHero
               title={
                 isCurrentMonthView
                   ? "Month-to-date pace"
@@ -2132,26 +2841,32 @@ function RecoveryInsightContent() {
                     ? "This week's pace"
                     : `${recoveryPeriodLabel(reportingPeriod)} result`
               }
-            >
-              {currentMonthMeterData ? (
-                <RecoveryMeter recoveryStatus={currentMonthMeterData} />
-              ) : (
-                <RecoveryPeriodMeter period={reportingPeriod} />
-              )}
-              {isCurrentMonthView ? (
-                <div className="mt-4 border-t border-paper-200 pt-4">
+              period={reportingPeriod}
+              currentMonthStatus={
+                currentMonthMeterData ? currentMonthMeterData.status : null
+              }
+            />
+            <RecoveryPaceCard
+              period={reportingPeriod}
+              action={
+                isCurrentMonthView ? (
                   <RecoveryPrimaryAction
                     status={currentMonthMeterData?.status}
                     businessProfileId={selected.id}
                   />
-                </div>
-              ) : null}
-            </Panel>
+                ) : null
+              }
+            />
           </div>
 
-          <Panel
-            title="Inputs"
-            action={
+          <section aria-labelledby="recovery-inputs-title">
+            <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+              <h2
+                id="recovery-inputs-title"
+                className="text-base font-semibold text-ink-900"
+              >
+                Inputs
+              </h2>
               <span className="text-xs text-ink-500">
                 {inputAsOfDate
                   ? `As of ${new Date(inputAsOfDate).toLocaleDateString(
@@ -2165,10 +2880,15 @@ function RecoveryInsightContent() {
                     )}${inputTimezone ? `, ${inputTimezone} time` : ""}`
                   : "Today"}
               </span>
-            }
-          >
-            <div className="grid gap-4 sm:grid-cols-3">
-              <StatTile
+            </div>
+            <div
+              className={`grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 ${
+                isCurrentMonthView ? "xl:grid-cols-4" : "xl:grid-cols-3"
+              }`}
+            >
+              <InputTile
+                icon={Wallet}
+                tone="neutral"
                 label={
                   reportingPeriod.kind === "month"
                     ? "Monthly expense basis"
@@ -2177,7 +2897,17 @@ function RecoveryInsightContent() {
                 value={formatMoney(reportingPeriod.target)}
                 sublabel={reportingPeriodBasisSource(data, reportingPeriod)}
               />
-              <StatTile
+              <InputTile
+                order={1}
+                visual={
+                  <OperatingDayDots
+                    total={reportingPeriod.operatingDays}
+                    elapsed={reportingPeriod.elapsedOperatingDays}
+                    approximated={reportingPeriod.operatingDaysIsApproximated}
+                  />
+                }
+                icon={CalendarDays}
+                tone="info"
                 label={
                   reportingPeriod.kind === "month"
                     ? "Operating days / month"
@@ -2195,7 +2925,9 @@ function RecoveryInsightContent() {
                       : "Estimated from your business profile"
                 }
               />
-              <StatTile
+              <InputTile
+                icon={Target}
+                tone="brand"
                 label={
                   reportingPeriod.operatingDaysIsApproximated
                     ? "Open-day target"
@@ -2203,8 +2935,39 @@ function RecoveryInsightContent() {
                 }
                 value={formatMoney(reportingPeriod.dailyTarget)}
                 sublabel="Computed from the two figures beside it"
-                emphasis
+                order={2}
+                visual={
+                  !reportingPeriod.isComplete &&
+                  reportingPeriod.adjustedDailyTarget !== null ? (
+                    <DailyTargetDrift
+                      dailyTarget={reportingPeriod.dailyTarget}
+                      adjusted={reportingPeriod.adjustedDailyTarget}
+                    />
+                  ) : undefined
+                }
               />
+              {isCurrentMonthView ? (
+                <InputTile
+                  icon={data.todaysStatus === "below" ? AlertTriangle : Check}
+                  tone={data.todaysStatus === "below" ? "danger" : "brand"}
+                  label="Status today"
+                  order={3}
+                  visual={
+                    data.todaysTarget > 0 ? (
+                      <TileProgress
+                        percent={(data.todaysSales / data.todaysTarget) * 100}
+                        tone={data.todaysStatus === "below" ? "danger" : "brand"}
+                      />
+                    ) : undefined
+                  }
+                  value={statusLabel(data.todaysStatus)}
+                  sublabel={
+                    data.todaysTarget > 0
+                      ? `${((data.todaysSales / data.todaysTarget) * 100).toFixed(0)}% of today's target reached`
+                      : undefined
+                  }
+                />
+              ) : null}
             </div>
             <p className="mt-3 text-xs text-ink-500">
               {reportingPeriod.operatingDaysIsApproximated
@@ -2217,41 +2980,37 @@ function RecoveryInsightContent() {
                 versions are not stored.
               </p>
             ) : null}
-          </Panel>
+          </section>
 
           {isCurrentMonthView ? (
-            <>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4">
-                <StatTile
-                  label="Today's target"
-                  value={formatMoney(data.todaysTarget)}
-                />
-                <StatTile
-                  label="Sales reference today"
-                  value={formatMoney(data.todaysSales)}
-                  sublabel="From your records"
-                />
-                <StatTile
-                  label="Today's gap"
-                  value={formatMoney(Math.abs(data.todaysGap))}
-                  sublabel={statusLabel(data.todaysStatus).toLowerCase()}
-                />
-                <StatTile
-                  label="Status"
-                  value={statusLabel(data.todaysStatus)}
-                  sublabel={
-                    data.todaysTarget > 0
-                      ? `${((data.todaysSales / data.todaysTarget) * 100).toFixed(0)}% of today's target reached`
-                      : undefined
-                  }
-                />
-              </div>
-
-              <RecoveryChangeSincePreviousDay
-                change={data.changeSincePreviousDay}
-              />
-            </>
+            <RecoveryChangeSincePreviousDay
+              change={data.changeSincePreviousDay}
+            />
           ) : null}
+
+          <div className="grid gap-4 lg:grid-cols-3">
+            <Panel
+              title="Sales vs. target"
+              eyebrow={`Running totals, ${recoveryPeriodLabel(reportingPeriod)}`}
+              className="min-w-0 lg:col-span-2"
+            >
+              <CumulativeSalesChart
+                points={buildCumulativeSeries(
+                  data.dailyCoverage,
+                  reportingPeriod,
+                  reportingPeriod.kind === "month"
+                    ? data.weeklyCheckpoints ?? []
+                    : [],
+                )}
+              />
+            </Panel>
+            <Panel title="Target breakdown" className="min-w-0">
+              <TargetBreakdown
+                sales={reportingPeriod.sales}
+                target={reportingPeriod.target}
+              />
+            </Panel>
+          </div>
 
           {/* `tabIndex={-1}` makes this focusable-by-script-only (not part of
               the normal tab order) so `focusSection` above can move keyboard
@@ -2271,8 +3030,8 @@ function RecoveryInsightContent() {
                 }
                 eyebrow="Recalculated across your remaining operating days"
               >
-                <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-5">
-                  <StatTile
+                <div className="grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-5">
+                  <PlanFigure
                     label={
                       reportingPeriod.kind === "month"
                         ? "Monthly expense basis"
@@ -2281,7 +3040,7 @@ function RecoveryInsightContent() {
                     value={formatMoney(reportingPeriod.target)}
                     sublabel={reportingPeriodBasisSource(data, reportingPeriod)}
                   />
-                  <StatTile
+                  <PlanFigure
                     label={
                       reportingPeriod.kind === "month"
                         ? "Sales reference so far this month"
@@ -2290,12 +3049,12 @@ function RecoveryInsightContent() {
                     value={formatMoney(reportingPeriod.sales)}
                     sublabel="From your records"
                   />
-                  <StatTile
+                  <PlanFigure
                     label="Remaining target"
                     value={formatMoney(reportingPeriod.remainingTarget)}
                     sublabel="Computed from your records"
                   />
-                  <StatTile
+                  <PlanFigure
                     label="Remaining operating days"
                     value={formatOperatingDays(
                       reportingPeriod.remainingOperatingDays,
@@ -2319,7 +3078,7 @@ function RecoveryInsightContent() {
                           )} operating days elapsed`
                     }
                   />
-                  <StatTile
+                  <PlanFigure
                     label="Adjusted daily target"
                     value={
                       reportingPeriod.adjustedDailyTarget === null
@@ -2342,13 +3101,12 @@ function RecoveryInsightContent() {
                     period.{" "}
                     <Link
                       to={`/business-profiles/${selected.id}/operating-schedule`}
-                      className="tap-inline inline-flex items-center gap-1.5 font-semibold text-brand-700 underline underline-offset-2"
+                      className="tap-inline inline-flex items-center gap-1.5 link"
                     >
                       Edit operating schedule
                       <ArrowRight
                         aria-hidden
                         className="size-3.5"
-                        strokeWidth={1.9}
                       />
                     </Link>
                   </p>
@@ -2372,17 +3130,40 @@ function RecoveryInsightContent() {
             </div>
           ) : null}
 
-          {reportingPeriod.kind === "month" &&
-          data.weeklyCheckpoints &&
-          data.weeklyCheckpoints.length > 0 ? (
-            <div id="recovery-checkpoints" className="scroll-mt-6">
-              <RecoveryCheckpoints
-                checkpoints={data.weeklyCheckpoints}
-                todayKey={reportingPeriod.asOfDate}
-                periodName={recoveryPeriodLabel(reportingPeriod)}
-              />
-            </div>
-          ) : null}
+          {(() => {
+            const showCheckpoints = Boolean(
+              reportingPeriod.kind === "month" &&
+                data.weeklyCheckpoints &&
+                data.weeklyCheckpoints.length > 0,
+            );
+            if (!showCheckpoints && !isCurrentMonthView) return null;
+            return (
+              <div className="grid gap-4 lg:grid-cols-3">
+                {showCheckpoints ? (
+                  <div
+                    id="recovery-checkpoints"
+                    className={`min-w-0 scroll-mt-6 ${
+                      isCurrentMonthView ? "lg:col-span-2" : "lg:col-span-3"
+                    }`}
+                  >
+                    <RecoveryCheckpoints
+                      key={recoveryScopeKey}
+                      checkpoints={data.weeklyCheckpoints!}
+                      todayKey={reportingPeriod.asOfDate}
+                      periodName={recoveryPeriodLabel(reportingPeriod)}
+                    />
+                  </div>
+                ) : null}
+                {isCurrentMonthView ? (
+                  <div
+                    className={`min-w-0 ${showCheckpoints ? "" : "lg:col-span-3"}`}
+                  >
+                    <TodayProgressCard data={data} />
+                  </div>
+                ) : null}
+              </div>
+            );
+          })()}
 
           {isCurrentMonthView &&
           monthKey &&
@@ -2460,7 +3241,7 @@ function RecoveryInsightContent() {
               <h2
                 id="daily-coverage"
                 tabIndex={-1}
-                className="scroll-mt-6 text-sm font-semibold text-ink-700 focus:outline-none"
+                className="scroll-mt-6 text-base font-semibold text-ink-900 focus:outline-none"
               >
                 Daily coverage
               </h2>
@@ -2468,42 +3249,63 @@ function RecoveryInsightContent() {
                 {recoveryPeriodLabel(reportingPeriod)}
               </span>
             </div>
-            <DataTable
-              rows={data.dailyCoverage}
-              columns={DAILY_COVERAGE_COLUMNS}
-              getRowKey={(d) => d.date}
-              caption={`Daily sales reference against target for ${selected.name}, ${recoveryPeriodPhrase(reportingPeriod)}.`}
-              itemNoun="days"
-              storageKey="recovery-daily-coverage"
-              initialSort={{ key: "date", direction: "desc" }}
-              empty={
-                <p className="p-4 text-sm text-ink-500">
-                  No days recorded {recoveryPeriodPhrase(reportingPeriod)}.
-                </p>
-              }
-              mobileRow={(d) => (
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="font-medium text-ink-900">{d.date}</p>
-                    <p className="mt-0.5 text-xs text-ink-500">
-                      {d.neededTarget === null ? (
-                        <>
-                          <Money value={d.sales} bare /> — closed day
-                        </>
-                      ) : (
-                        <>
-                          <Money value={d.sales} bare /> of{" "}
-                          <Money value={d.neededTarget} bare /> allocated
-                        </>
-                      )}
-                    </p>
+            <div className="mb-4 grid gap-4 lg:grid-cols-3">
+              <Panel
+                title="Sales by day"
+                headingLevel={3}
+                className="min-w-0 lg:col-span-2"
+              >
+                <DailySalesChart rows={data.dailyCoverage} />
+              </Panel>
+              <div className="min-w-0">
+                <RecoveryHighlights rows={data.dailyCoverage} />
+              </div>
+            </div>
+            <div id={dailyCoverageDisclosure.contentId}>
+              <DataTable
+                key={`${recoveryScopeKey}:${dailyCoverageDisclosure.expanded}`}
+                rows={visibleDailyCoverage}
+                columns={DAILY_COVERAGE_COLUMNS}
+                getRowKey={(d) => d.date}
+                caption={`Daily sales reference against target for ${selected.name}, ${recoveryPeriodPhrase(reportingPeriod)}.`}
+                itemNoun="days"
+                storageKey="recovery-daily-coverage"
+                initialSort={{ key: "date", direction: "desc" }}
+                empty={
+                  <p className="p-4 text-sm text-ink-500">
+                    No days recorded {recoveryPeriodPhrase(reportingPeriod)}.
+                  </p>
+                }
+                mobileRow={(d) => (
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-medium text-ink-900">{d.date}</p>
+                      <p className="mt-0.5 text-xs text-ink-500">
+                        {d.neededTarget === null ? (
+                          <>
+                            <Money value={d.sales} bare /> — closed day
+                          </>
+                        ) : (
+                          <>
+                            <Money value={d.sales} bare /> of{" "}
+                            <Money value={d.neededTarget} bare /> allocated
+                          </>
+                        )}
+                      </p>
+                    </div>
+                    <Pill tone={STATUS_TONE[d.status]}>
+                      <DailyStatusIcon status={d.status} />
+                      {dailyRowStatusLabel(d.status)}
+                    </Pill>
                   </div>
-                  <Pill tone={STATUS_TONE[d.status]}>
-                    <DailyStatusIcon status={d.status} />
-                    {dailyRowStatusLabel(d.status)}
-                  </Pill>
-                </div>
-              )}
+                )}
+              />
+            </div>
+            <ListDisclosureControl
+              disclosure={dailyCoverageDisclosure}
+              total={dailyCoverageRows.length}
+              itemLabel="days"
+              className="mt-3"
             />
           </div>
 
@@ -2520,7 +3322,6 @@ function RecoveryInsightContent() {
                 <ArrowRight
                   aria-hidden
                   className="size-3.5"
-                  strokeWidth={1.9}
                 />
               </button>
             }

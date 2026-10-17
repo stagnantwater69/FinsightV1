@@ -7,7 +7,7 @@ import { securityEvent } from "../lib/securityLog";
 import { evictTokenOwner } from "../lib/verifiedTokenCache";
 import { isAuthUnreachable } from "../lib/authUnreachable";
 import { lockDuplicateKey } from "../lib/recordLock";
-import { isDisposableEmail } from "../lib/emailPolicy";
+import { isDisposableEmail, normalizeEmail } from "../lib/emailPolicy";
 import { isUsable, statusRefusal, transition } from "./accountLifecycle.service";
 import {
   deletePublicImageUrl,
@@ -231,6 +231,12 @@ const REGISTRATION_ACKNOWLEDGEMENT = {
   message: "If that address can be registered, we've sent it a confirmation link. Check your inbox to finish setting up your account.",
 } as const;
 
+function registrationAcknowledgement(platform: ClientPlatform) {
+  return platform === "mobile"
+    ? REGISTRATION_ACKNOWLEDGEMENT
+    : { message: "If that address can be registered, we've sent it a verification code. Check your inbox to finish setting up your account." };
+}
+
 export async function registerUser(input: RegisterInput, platform: ClientPlatform = "web") {
   securityEvent("register.started", { email: input.email });
 
@@ -272,7 +278,7 @@ export async function registerUser(input: RegisterInput, platform: ClientPlatfor
   const alreadyRegistered = await prisma.user.findUnique({ where: { email: input.email } });
   if (alreadyRegistered) {
     securityEvent("register.rejected", { email: input.email, reason: "address already has a profile" });
-    return REGISTRATION_ACKNOWLEDGEMENT;
+    return registrationAcknowledgement(platform);
   }
 
   const { data, error } = await createAnonAuthClient().auth.signUp({
@@ -315,14 +321,14 @@ export async function registerUser(input: RegisterInput, platform: ClientPlatfor
         kind: "registration",
         reason: error?.message ?? "unknown mailer failure",
       });
-      return REGISTRATION_ACKNOWLEDGEMENT;
+      return registrationAcknowledgement(platform);
     }
 
     securityEvent("register.rejected", { email: input.email, reason: error?.message ?? "no user returned" });
     if (error?.code === "weak_password" || /password/i.test(error?.message ?? "")) {
       throw new ApiError(400, error?.message ?? "Choose a stronger password.");
     }
-    return REGISTRATION_ACKNOWLEDGEMENT;
+    return registrationAcknowledgement(platform);
   }
 
   /*
@@ -335,7 +341,7 @@ export async function registerUser(input: RegisterInput, platform: ClientPlatfor
    */
   if ((data.user.identities?.length ?? 0) === 0) {
     securityEvent("register.rejected", { email: input.email, reason: "address already registered" });
-    return REGISTRATION_ACKNOWLEDGEMENT;
+    return registrationAcknowledgement(platform);
   }
 
   /*
@@ -400,13 +406,13 @@ export async function registerUser(input: RegisterInput, platform: ClientPlatfor
      */
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
       securityEvent("register.rejected", { email: input.email, reason: "address already registered (unique constraint)" });
-      return REGISTRATION_ACKNOWLEDGEMENT;
+      return registrationAcknowledgement(platform);
     }
 
     throw new ApiError(500, "Could not finish creating your account. Please try again.");
   }
 
-  return REGISTRATION_ACKNOWLEDGEMENT;
+  return registrationAcknowledgement(platform);
 }
 
 /**
@@ -430,7 +436,7 @@ export async function resendVerification(email: string, platform: ClientPlatform
       securityEvent("verification.resent", { userId: user.id, email });
     }
   }
-  return REGISTRATION_ACKNOWLEDGEMENT;
+  return registrationAcknowledgement(platform);
 }
 
 /**
@@ -632,6 +638,75 @@ export async function exchangeSessionHandoff(code: string) {
  */
 export async function purgeExpiredHandoffs() {
   await prisma.authHandoff.deleteMany({ where: { expiresAt: { lt: new Date() } } }).catch(() => undefined);
+}
+
+/** Provision Google users only after Supabase verifies their identity and email. */
+export async function loginWithGoogle(accessToken: string) {
+  const { data, error } = await supabaseAdmin.auth.getUser(accessToken);
+  if (isAuthUnreachable(error)) {
+    throw new ApiError(503, "We couldn't confirm your Google sign-in. Please try again in a moment.");
+  }
+  if (error || !data.user) {
+    throw new ApiError(401, "Your Google sign-in has expired. Please try again.");
+  }
+
+  const authUser = data.user;
+  const email = normalizeEmail(authUser.email ?? "");
+  const googleIdentity = authUser.identities?.find((identity) =>
+    identity.provider === "google" &&
+    identity.identity_data?.email_verified === true &&
+    typeof identity.identity_data?.email === "string" &&
+    normalizeEmail(identity.identity_data.email) === email,
+  );
+  if (!googleIdentity || !authUser.email_confirmed_at || !email || email.length > 150) {
+    throw new ApiError(403, "Use a Google account with a verified email address to continue.");
+  }
+
+  let user = await prisma.user.findUnique({ where: { authId: authUser.id } });
+  if (!user) {
+    // Email alone must never attach a different Auth identity to existing records.
+    const existingEmail = await prisma.user.findUnique({ where: { email } });
+    if (existingEmail && existingEmail.authId !== authUser.id) {
+      throw new ApiError(409, "This email already has a FinSight account. Sign in with its existing method.");
+    }
+    user = existingEmail;
+  }
+  if (!user) {
+    const metadata = googleIdentity.identity_data ?? {};
+    const displayText = (value: unknown) => typeof value === "string" ? value.trim().slice(0, 100) : "";
+    const fullName = displayText(metadata.full_name || metadata.name).split(/\s+/).filter(Boolean);
+    try {
+      user = await prisma.user.create({
+        data: {
+          authId: authUser.id,
+          email,
+          firstName: displayText(metadata.given_name) || fullName[0] || "Business owner",
+          lastName: displayText(metadata.family_name) || fullName.slice(1).join(" ").slice(0, 100),
+          status: AccountStatus.ACTIVE,
+        },
+      });
+    } catch (err) {
+      if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== "P2002") throw err;
+      // A concurrent callback may have created this same identity; never adopt an email collision.
+      user = await prisma.user.findUnique({ where: { authId: authUser.id } });
+      if (!user) {
+        throw new ApiError(409, "This email already has a FinSight account. Sign in with its existing method.");
+      }
+    }
+  }
+
+  if (user.status === AccountStatus.PENDING_VERIFICATION) {
+    user = await transition(user, AccountStatus.ACTIVE, { reason: "email confirmed by Google" });
+    securityEvent("register.verified", { userId: user.id, email: user.email, via: "google" });
+  }
+  if (!isUsable(user.status)) {
+    securityEvent("login.refused_status", { userId: user.id, email: user.email, status: user.status });
+    throw new ApiError(403, statusRefusal(user.status));
+  }
+
+  const businessProfiles = await prisma.businessProfile.count({ where: { userId: user.id } });
+  securityEvent("login.succeeded", { userId: user.id, email: user.email, via: "google" });
+  return { profile: toProfile(user), needsOnboarding: businessProfiles === 0 };
 }
 
 export async function loginUser(input: LoginInput) {

@@ -3,6 +3,7 @@ import { z } from "zod";
 import * as businessProfileService from "../services/businessProfile.service";
 import * as financialPositionService from "../services/financialPosition.service";
 import { ApiError } from "../middleware/error.middleware";
+import { nonnegativeMoneyAmountSchema } from "../lib/money";
 
 /*
  * EXPORTED for the contract tests, the same reason auth.controller.ts exports
@@ -23,10 +24,13 @@ const timezoneSchema = z
 export const createSchema = z.object({
   name: z.string().min(1).max(150),
   type: z.string().min(1).max(100),
-  availableFunds: z.number().nonnegative(),
-  expectedMonthlyExpenses: z.number().nonnegative(),
+  availableFunds: nonnegativeMoneyAmountSchema,
+  expectedMonthlyExpenses: nonnegativeMoneyAmountSchema,
   operatingDays: z.number().int().min(1).max(31),
-  largeExpenseThresholdPercent: z.number().positive().max(999.99).optional(),
+  largeExpenseThresholdPercent: z.number().finite().positive().max(999.99)
+    .refine((value) => /^\d+(?:\.\d{1,2})?$/.test(value.toString()), {
+      message: "Percentage can have at most 2 decimal places",
+    }).optional(),
   timezone: timezoneSchema.optional(),
 });
 

@@ -38,3 +38,6 @@ __pycache__/
 
 # Load-test output: run artefacts, not source.
 backend/tests/load/results/
+
+# Named Playwright output dirs (test-results-standard, test-results-phase2, ...)
+web/test-results-*/

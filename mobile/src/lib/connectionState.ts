@@ -5,8 +5,8 @@
  * THERE IS NO OFFLINE QUEUE, AND THIS FILE IS WHERE THAT IS ADMITTED
  * ===================================================================
  * FinSight mobile reads and writes straight through to the API. There is no
- * local database, no outbox, no background sync — a save that fails is a save
- * that did not happen, and it will not happen later on its own. The plan's
+ * local database, no outbox, no background sync. A missing response can follow
+ * a committed save; it does not prove rollback. The plan's
  * resilience section says this out loud: "Do not imply full offline capability
  * until a sync/queue architecture exists."
  *
@@ -72,6 +72,17 @@ export interface LoadFailure {
   reach: FailureReach;
   /** The message the API layer already composed. Shown for server failures. */
   message: string;
+  outcomeUnknown?: boolean;
+}
+
+/** Transport failures and unreadable success responses cannot prove rollback. */
+export function isUnconfirmedMutationFailure(err: unknown): boolean {
+  if (err instanceof SyntaxError) return true;
+  if (!err || typeof err !== "object") return false;
+  const status = (err as { status?: unknown }).status;
+  return typeof status === "number" && (
+    status === 0 || status === 408 || status >= 500 || (status >= 200 && status < 300)
+  );
 }
 
 /** True when the request never got an answer at all. */
@@ -89,7 +100,11 @@ export function isUnreachable(err: unknown): boolean {
  */
 export function toLoadFailure(err: unknown, fallback = "Something went wrong. Please try again."): LoadFailure {
   const message = err instanceof Error && err.message ? err.message : fallback;
-  return { reach: isUnreachable(err) ? "unreachable" : "server", message };
+  return {
+    reach: isUnreachable(err) ? "unreachable" : "server",
+    message,
+    ...(isUnconfirmedMutationFailure(err) ? { outcomeUnknown: true } : {}),
+  };
 }
 
 /* ==================================================================
@@ -243,9 +258,12 @@ export function describeLoadFailure(
  * lost" is the kind of sentence that eventually gets attached to something
  * where it is not true.
  */
-export function describeActionFailure(failure: LoadFailure, reassurance: string): string {
-  return failure.reach === "unreachable"
-    ? `Your phone couldn't reach FinSight's server, so nothing was changed. ${reassurance}`
+export function describeActionFailure(failure: LoadFailure, reassurance: string, operation: "mutation" | "read" | "local" = "mutation"): string {
+  if (operation === "read") {
+    return `${failure.reach === "unreachable" ? "Your phone couldn't get a complete response from FinSight's server." : failure.message} ${reassurance}`;
+  }
+  return failure.reach === "unreachable" || failure.outcomeUnknown
+    ? `FinSight didn't confirm whether the action finished. Refresh this screen to check the result before trying again.${operation === "local" ? ` ${reassurance}` : ""}`
     : `${failure.message} ${reassurance}`;
 }
 
@@ -263,14 +281,14 @@ export function describeActionFailure(failure: LoadFailure, reassurance: string)
  * instruction names the control in front of them rather than a generic "save".
  */
 export function describeSaveFailure(failure: LoadFailure, action = "Save"): LoadNotice {
-  return failure.reach === "unreachable"
+  return failure.reach === "unreachable" || failure.outcomeUnknown
     ? {
         kind: "cannot-load",
         tone: "error",
-        title: "Can't reach FinSight",
+        title: "Save not confirmed",
         body:
-          `Your phone couldn't reach FinSight's server, so this wasn't saved. ` +
-          `Everything you entered is still here — press ${action} again once you have a connection. ` +
+          `FinSight didn't confirm whether this was saved. ` +
+          `Everything you entered is still here. Check your records before choosing ${action} again to avoid a duplicate. ` +
           `FinSight can't save it in the background for you.`,
         retryLabel: action,
       }

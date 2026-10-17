@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert as RNAlert, KeyboardAvoidingView, Platform, ScrollView, TextInput, View } from "react-native";
+import { Alert as RNAlert, TextInput, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { Button, Card, ErrorNote, Field, Screen, T } from "../../components/ui";
+import { FormScreen } from "../../components/FormScreen";
+import { useImportOperation } from "../../lib/useImportOperation";
 import { useBusinessProfiles } from "../../context/BusinessProfileContext";
 import { api } from "../../lib/api";
 import { describeActionFailure, saveFailureMessage, toLoadFailure } from "../../lib/connectionState";
 import { DateField } from "../../components/DateField";
+import { businessToday } from "../../lib/businessDate";
 import * as haptics from "../../lib/haptics";
 import { RecordOriginPanel, type RecordOrigin } from "../../components/RecordOrigin";
 import {
@@ -41,6 +44,8 @@ export function EditRecordScreen({ route, navigation }: any) {
   const [amount, setAmount] = useState(String(record.amount));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const operation = useImportOperation(selected?.id);
+  useFocusEffect(useCallback(() => () => { operation.cancel(); setBusy(false); }, [operation]));
   /*
    * Vendor only exists on an expense — a sales record has no such field
    * server-side, so it is not rendered at all. The chain therefore has to be
@@ -151,7 +156,8 @@ export function EditRecordScreen({ route, navigation }: any) {
     if (!Number.isFinite(value) || value <= 0) return setError("Enter an amount greater than zero.");
     if (isExpense && !categoryId) return setError("Choose a category first.");
     if (!baselineChoice.check()) return;
-
+    const task = operation.begin();
+    if (!task) return;
     setError(null);
     setBusy(true);
     try {
@@ -169,17 +175,19 @@ export function EditRecordScreen({ route, navigation }: any) {
         // category and no vendor server-side. Built in lib/recordUpdate so
         // that distinction is tested rather than remembered.
         isExpense ? buildExpenseUpdatePayload(input) : buildSalesUpdatePayload(input),
-        { cacheScope: { businessProfileId: record.businessProfileId } },
+        { cacheScope: { businessProfileId: record.businessProfileId }, signal: task.controller.signal },
       );
+      if (!operation.current(task)) return;
       haptics.succeeded();
       setFlash("Record updated.");
       navigation.goBack();
     } catch (err) {
       // Every edit is still in the fields — this screen only leaves on
       // success — so the message says so, and says nothing about saving later.
-      if (!(await baselineChoice.absorb(err))) setError(saveFailureMessage(err, "Save changes"));
+      if (operation.current(task) && !(await baselineChoice.absorb(err))) setError(saveFailureMessage(err, "Save changes"));
     } finally {
-      setBusy(false);
+      if (operation.current(task)) setBusy(false);
+      operation.finish(task);
     }
   }
 
@@ -196,6 +204,8 @@ export function EditRecordScreen({ route, navigation }: any) {
    */
   async function resolve() {
     if (!recordCanBeMutated()) return;
+    const task = operation.begin();
+    if (!task) return;
     setError(null);
     setBusy(true);
     try {
@@ -203,16 +213,18 @@ export function EditRecordScreen({ route, navigation }: any) {
       await api.patch(recordUpdatePath(record.type, record.id), {
         duplicateStatus: "Not a Duplicate",
         reviewStatus: "Reviewed",
-      }, { cacheScope: { businessProfileId: record.businessProfileId } });
+      }, { cacheScope: { businessProfileId: record.businessProfileId }, signal: task.controller.signal });
+      if (!operation.current(task)) return;
       haptics.succeeded();
       // Word for word what the list says when the swipe does this, so the app
       // does not describe one action two ways.
       setFlash("Marked reviewed and not a duplicate.");
       navigation.goBack();
     } catch (err) {
-      setError(describeActionFailure(toLoadFailure(err), "The record's flags are unchanged."));
-      // Only on failure: the success path has already left this screen.
-      setBusy(false);
+      if (operation.current(task)) setError(describeActionFailure(toLoadFailure(err), "The record's flags are unchanged."));
+    } finally {
+      if (operation.current(task)) setBusy(false);
+      operation.finish(task);
     }
   }
 
@@ -225,6 +237,7 @@ export function EditRecordScreen({ route, navigation }: any) {
    * tap that destroys a record with neither.
    */
   function confirmDelete() {
+    if (busy || !recordCanBeMutated()) return;
     RNAlert.alert(
       "Delete this record?",
       `"${record.description}" will be removed. This cannot be undone.`,
@@ -235,14 +248,17 @@ export function EditRecordScreen({ route, navigation }: any) {
           style: "destructive",
           onPress: async () => {
             if (!recordCanBeMutated()) return;
+            const task = operation.begin();
+            if (!task) return;
             setBusy(true);
             setError(null);
             try {
               await api.delete(
                 recordUpdatePath(record.type, record.id),
                 undefined,
-                { cacheScope: { businessProfileId: record.businessProfileId } },
+                { cacheScope: { businessProfileId: record.businessProfileId }, signal: task.controller.signal },
               );
+              if (!operation.current(task)) return;
               haptics.committed();
               // A deletion leaves the screen the same way a save does, and the
               // record it removed is gone from the list behind it — so without
@@ -250,8 +266,10 @@ export function EditRecordScreen({ route, navigation }: any) {
               setFlash("Record deleted.");
               navigation.goBack();
             } catch (err) {
-              setError(describeActionFailure(toLoadFailure(err), "The record is still in your books."));
-              setBusy(false);
+              if (operation.current(task)) setError(describeActionFailure(toLoadFailure(err), "The record is still in your books."));
+            } finally {
+              if (operation.current(task)) setBusy(false);
+              operation.finish(task);
             }
           },
         },
@@ -260,96 +278,92 @@ export function EditRecordScreen({ route, navigation }: any) {
   }
 
   return (
-    <Screen>
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}>
-          <Card>
-            <T variant="title" style={{ marginBottom: 4 }}>
-              {isExpense ? "Edit expense" : "Edit sales"}
-            </T>
-            <T variant="caption" style={{ marginBottom: space.md }}>
-              {RECORD_SOURCE_LABELS[record.source as RecordSource] ?? record.source} ·{" "}
-              {record.date.slice(0, 10)}
-            </T>
+    <FormScreen>
+      <Card>
+        <T variant="title" style={{ marginBottom: 4 }}>
+          {isExpense ? "Edit expense" : "Edit sales"}
+        </T>
+        <T variant="caption" style={{ marginBottom: space.md }}>
+          {RECORD_SOURCE_LABELS[record.source as RecordSource] ?? record.source} ·{" "}
+          {record.date.slice(0, 10)}
+        </T>
 
-            {badges(record)}
+        {badges(record)}
 
-            {/*
-              The evidence behind this record — the lines read off the receipt,
-              or the file it was imported from. Fetched rather than passed in
-              route params, because the list endpoint does not carry it.
-            */}
-            {origin ? (
-              <View style={{ marginTop: space.md }}>
-                <RecordOriginPanel origin={origin} recordAmount={record.amount} />
-              </View>
-            ) : loadingOrigin ? (
-              <View style={{ marginTop: space.md }}>
-                <T variant="caption">Loading where this came from…</T>
-              </View>
-            ) : null}
+        {/*
+          The evidence behind this record — the lines read off the receipt,
+          or the file it was imported from. Fetched rather than passed in
+          route params, because the list endpoint does not carry it.
+        */}
+        {origin ? (
+          <View style={{ marginTop: space.md }}>
+            <RecordOriginPanel origin={origin} recordAmount={record.amount} />
+          </View>
+        ) : loadingOrigin ? (
+          <View style={{ marginTop: space.md }}>
+            <T variant="caption">Loading where this came from…</T>
+          </View>
+        ) : null}
 
-            <View style={{ marginTop: space.md }}>
-              {isExpense ? (
-                <CategoryPicker
-                  categories={categories}
-                  value={categoryId}
-                  onChange={setCategoryId}
-                  onCreated={refreshCategories}
-                />
-              ) : null}
-              <DateField label="Date" value={date} onChange={setDate} />
-              <AvailableFundsBaselineChoice choice={baselineChoice} disabled={busy} />
-              <Field
-                label="Description"
-                value={description}
-                maxLength={FIELD_LIMITS.recordDescription}
-                onChangeText={setDescription}
-                returnKeyType="next"
-                submitBehavior="submit"
-                onSubmitEditing={afterDescription}
-              />
-              {isExpense ? (
-                <Field
-                  ref={vendorRef}
-                  label="Vendor"
-                  value={vendor}
-                  maxLength={FIELD_LIMITS.vendor}
-                  onChangeText={setVendor}
-                  returnKeyType="next"
-                  submitBehavior="submit"
-                  onSubmitEditing={() => amountRef.current?.focus()}
-                />
-              ) : null}
-              {/* Decimal keypad: the return key exists on Android only. */}
-              <Field
-                ref={amountRef}
-                label="Amount (PHP)"
-                value={amount}
-                onChangeText={setAmount}
-                keyboardType="decimal-pad"
-                returnKeyType="done"
-                onSubmitEditing={() => {
-                  if (!busy) save();
-                }}
-              />
-            </View>
+        <View style={{ marginTop: space.md }}>
+          {isExpense ? (
+            <CategoryPicker
+              categories={categories}
+              value={categoryId}
+              onChange={setCategoryId}
+              onCreated={refreshCategories}
+            />
+          ) : null}
+          <DateField label="Date" value={date} today={businessToday(selected?.timezone)} onChange={setDate} />
+          <AvailableFundsBaselineChoice choice={baselineChoice} disabled={busy} />
+          <Field
+            label="Description"
+            value={description}
+            maxLength={FIELD_LIMITS.recordDescription}
+            onChangeText={setDescription}
+            returnKeyType="next"
+            submitBehavior="submit"
+            onSubmitEditing={afterDescription}
+          />
+          {isExpense ? (
+            <Field
+              ref={vendorRef}
+              label="Vendor"
+              value={vendor}
+              maxLength={FIELD_LIMITS.vendor}
+              onChangeText={setVendor}
+              returnKeyType="next"
+              submitBehavior="submit"
+              onSubmitEditing={() => amountRef.current?.focus()}
+            />
+          ) : null}
+          {/* Decimal keypad: the return key exists on Android only. */}
+          <Field
+            ref={amountRef}
+            label="Amount (PHP)"
+            value={amount}
+            onChangeText={setAmount}
+            keyboardType="decimal-pad"
+            returnKeyType="done"
+            onSubmitEditing={() => {
+              if (!busy) save();
+            }}
+          />
+        </View>
 
-            {error ? <ErrorNote>{error}</ErrorNote> : null}
+        {error ? <ErrorNote>{error}</ErrorNote> : null}
 
-            <Button title="Save changes" variant="primary" onPress={save} loading={busy} style={{ marginTop: space.md }} />
-            {/*
-              Offered only when there is something to clear — the badges above
-              are what it answers, and with none of them showing the button
-              would be a control for a state the record is not in.
-            */}
-            {needsResolving ? (
-              <Button title="Looks right — mark reviewed" variant="ghost" onPress={resolve} disabled={busy} />
-            ) : null}
-            <Button title="Delete record" variant="ghost" onPress={confirmDelete} />
-          </Card>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </Screen>
+        <Button title="Save changes" variant="primary" onPress={save} loading={busy} style={{ marginTop: space.md }} />
+        {/*
+          Offered only when there is something to clear — the badges above
+          are what it answers, and with none of them showing the button
+          would be a control for a state the record is not in.
+        */}
+        {needsResolving ? (
+          <Button title="Looks right — mark reviewed" variant="ghost" onPress={resolve} disabled={busy} />
+        ) : null}
+        <Button title="Delete record" variant="ghost" onPress={confirmDelete} disabled={busy} />
+      </Card>
+    </FormScreen>
   );
 }

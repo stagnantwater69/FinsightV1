@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
+import { useAuth } from "../context/AuthContext";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
 import { api } from "../lib/api";
+import { useImportBatchPages } from "../lib/useImportBatchPages";
 import { cachedApiGet, peekCachedApiData } from "../lib/serverStateApi";
 import { getErrorMessage } from "../lib/errors";
 import { Money } from "../components/Money";
@@ -13,7 +15,6 @@ import { IconDuplicate, IconEdit, IconSearch, IconTrash } from "../components/ic
 import {
   RECORD_SOURCE_LABELS,
   type FlaggedRecordCounts,
-  type ImportBatchSummary,
   type RecordItem,
   type RecordSort,
   type RecordSource,
@@ -27,6 +28,8 @@ import { useServerStateRefresh } from "../lib/useServerStateRefresh";
 import { availableFundsBaselineRequest, needsAvailableFundsBaselineDecision } from "../lib/availableFundsBaseline";
 import { AddExpenseModal, type DuplicateExpenseSeed } from "../components/AddExpenseModal";
 import { AddSalesModal, type DuplicateSalesSeed } from "../components/AddSalesModal";
+import { clearPendingManualCreate, performManualRecordCreate, type ManualCreatePayload, type PendingManualCreate } from "../lib/manualRecordCreate";
+import { captureServerStateAccount } from "../lib/serverStateCache";
 import { DuplicateReviewModal } from "../components/DuplicateReviewModal";
 import {
   activeAdvancedCount,
@@ -108,7 +111,12 @@ function filtersFromParams(params: URLSearchParams): Filters {
 }
 
 export function Records() {
+  const { profile } = useAuth();
+  const undoTasks = useRef(new Map<string, { busy: boolean; confirmed: boolean; pending?: PendingManualCreate; body?: ManualCreatePayload; controller?: AbortController }>());
+  const activeUndoOwner = useRef(profile?.id);
+  activeUndoOwner.current = profile?.id;
   const { selected } = useBusinessProfiles();
+  useEffect(() => () => { for (const task of undoTasks.current.values()) task.controller?.abort(); }, [profile?.id, selected?.id]);
   const { categories } = useExpenseCategories();
   const [searchParams, setSearchParams] = useSearchParams();
   const confirm = useConfirm();
@@ -217,7 +225,8 @@ export function Records() {
   // source — fetching every business profile's whole import history on every
   // Records page load would be wasted work on the common case of never
   // touching this filter.
-  const [importBatches, setImportBatches] = useState<ImportBatchSummary[]>([]);
+  const importHistory = useImportBatchPages(selected?.id, filters.source === "CSV_UPLOAD");
+  const importBatches = importHistory.items;
   // Hick's Law: the two filters people reach for most (type, search) stay
   // visible; the other four are collapsed until asked for. Auto-expanded when
   // any of them is already set, so an active filter is never hidden.
@@ -449,29 +458,6 @@ export function Records() {
     setNextCursor(null);
   }
 
-  // Fetched only while the Source filter is actually set to CSV Upload —
-  // there is nowhere in the UI to pick a specific import otherwise, so
-  // fetching it eagerly would be wasted on every other filter state.
-  useEffect(() => {
-    if (!selected || filters.source !== "CSV_UPLOAD") {
-      setImportBatches([]);
-      return;
-    }
-    const controller = new AbortController();
-    api
-      .get<ImportBatchSummary[]>("/records/csv-imports/batches", {
-        signal: controller.signal,
-        params: { businessProfileId: selected.id },
-      })
-      .then(({ data }) => setImportBatches(data))
-      .catch(() => {
-        // The picker degrading to "no imports listed" is a minor
-        // inconvenience, not a reason to break the rest of the page.
-      });
-    return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id, filters.source]);
-
   /**
    * Arriving from a notification's "review this" link — looks up the real
    * record so the search can be seeded with its actual description, which is
@@ -532,7 +518,8 @@ export function Records() {
       });
       if (activeRecordsScopeRef.current !== requestScopeKey) return;
       loadFlaggedCount();
-      toast("Record deleted", { actionLabel: "Undo", onAction: () => restoreRecord(record) });
+      const ownerId = profile?.id;
+      toast("Record deleted", { actionLabel: "Undo", onAction: () => { if (ownerId) void restoreRecord(record, requestScopeKey, ownerId); } });
     } catch (err) {
       if (activeRecordsScopeRef.current !== requestScopeKey) return;
       // Put the row back: the server still has it, so leaving it hidden would
@@ -542,12 +529,27 @@ export function Records() {
     }
   }
 
-  async function restoreRecord(record: RecordItem) {
-    const requestScopeKey = recordsScopeKey;
+  async function restoreRecord(record: RecordItem, requestScopeKey: string, ownerId: number) {
+    if (activeUndoOwner.current !== ownerId || activeRecordsScopeRef.current !== requestScopeKey) return;
+    const taskKey = `${ownerId}:${record.businessProfileId}:${record.type}:${record.id}`;
+    const task = undoTasks.current.get(taskKey) ?? { busy: false, confirmed: false };
+    if (task.busy || (task.confirmed && !task.pending)) return;
+    task.busy = true;
+    undoTasks.current.set(taskKey, task);
+    const controller = new AbortController();
+    task.controller = controller;
+    const scope = { ownerId, businessProfileId: record.businessProfileId, kind: record.type };
+    const isCurrent = () => activeUndoOwner.current === ownerId && activeRecordsScopeRef.current === requestScopeKey && !controller.signal.aborted;
     try {
+      if (task.confirmed && task.pending) {
+        await clearPendingManualCreate(scope, task.pending.body.idempotencyKey);
+        task.pending = undefined;
+        if (isCurrent()) { toast("Record restored"); await Promise.allSettled([loadRecords(), loadFlaggedCount()]); }
+        return;
+      }
       const recordDate = record.date.slice(0, 10);
       let baselineFields = {};
-      if (needsAvailableFundsBaselineDecision(selected, recordDate)) {
+      if (!task.body && needsAvailableFundsBaselineDecision(selected, recordDate)) {
         if (
           record.includedInAvailableFundsBaseline == null
           || record.availableFundsDeltaBaselineAt !== selected?.availableFundsBaselineAt
@@ -560,31 +562,31 @@ export function Records() {
           record.includedInAvailableFundsBaseline,
         );
       }
-      if (record.type === "expense") {
-        await api.post("/records/expenses", {
-          businessProfileId: record.businessProfileId,
-          categoryId: record.categoryId,
-          date: recordDate,
-          description: record.description,
-          vendor: record.vendor || undefined,
-          amount: record.amount,
-          ...baselineFields,
-        });
-      } else {
-        await api.post("/records/sales", {
+      task.body ??= {
           businessProfileId: record.businessProfileId,
           date: recordDate,
           description: record.description,
           amount: record.amount,
+          ...(record.type === "expense" ? { categoryId: record.categoryId, vendor: record.vendor || undefined } : {}),
           ...baselineFields,
-        });
-      }
-      if (activeRecordsScopeRef.current !== requestScopeKey) return;
-      await Promise.all([loadRecords(), loadFlaggedCount()]);
+      };
+      const result = await performManualRecordCreate(scope, task.body, {
+        signal: controller.signal, isCurrent, account: captureServerStateAccount(),
+        expectedKey: task.pending?.body.idempotencyKey, requireFresh: !task.pending,
+        onPending: (pending) => { task.pending = pending; task.body = pending.body; },
+      });
+      task.confirmed = true;
+      task.pending = result.cleanupPending ? result.pending : undefined;
+      if (!isCurrent()) return;
       toast("Record restored");
+      if (result.cleanupPending) setError("The record is restored. Open its Add form to finish clearing recovery before adding another record.");
+      await Promise.allSettled([loadRecords(), loadFlaggedCount()]);
     } catch (err) {
-      if (activeRecordsScopeRef.current !== requestScopeKey) return;
-      setError(getErrorMessage(err));
+      if (!isCurrent()) return;
+      setError(task.confirmed ? "The record is restored, but recovery cleanup could not finish. Open its Add form to finish recovery." : `${getErrorMessage(err)} Open the Add ${record.type === "expense" ? "expense" : "sales reference"} form to review a saved recovery request.`);
+    } finally {
+      task.busy = false;
+      task.controller = undefined;
     }
   }
 
@@ -749,7 +751,7 @@ export function Records() {
       width: "content",
       align: "right",
       cell: (r) => (
-        <div className="flex items-center justify-end gap-1">
+        <div className="flex min-w-[9rem] flex-wrap items-center justify-end gap-1">
           {r.duplicateStatus === "Flagged" ? (
             /*
               A button, not a link to the flagged queue. The decision is about
@@ -760,7 +762,7 @@ export function Records() {
               onClick={() => setReviewDuplicate({ id: r.id, type: r.type })}
               title="Review possible duplicate"
               aria-label={`Review possible duplicate — ${r.description}`}
-              className="tap flex h-9 w-9 min-h-0 min-w-0 items-center justify-center rounded-lg text-tone-info transition hover:bg-tint-info"
+              className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-tone-info transition hover:bg-tint-info"
             >
               <span aria-hidden className="text-base leading-none">
                 ⧉
@@ -772,7 +774,7 @@ export function Records() {
             onClick={() => handleEdit(r)}
             title="Edit"
             aria-label={`Edit ${r.description}`}
-            className="tap flex h-9 w-9 min-h-0 min-w-0 items-center justify-center rounded-lg text-ink-500 transition hover:bg-paper-100 hover:text-ink-800"
+            className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-ink-500 transition hover:bg-paper-100 hover:text-ink-800"
           >
             <IconEdit className="h-4 w-4" />
           </button>
@@ -781,7 +783,7 @@ export function Records() {
             onClick={() => handleDuplicate(r)}
             title="Duplicate"
             aria-label={`Duplicate ${r.description}`}
-            className="tap flex h-9 w-9 min-h-0 min-w-0 items-center justify-center rounded-lg text-ink-500 transition hover:bg-paper-100 hover:text-ink-800"
+            className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-ink-500 transition hover:bg-paper-100 hover:text-ink-800"
           >
             <IconDuplicate className="h-4 w-4" />
           </button>
@@ -790,7 +792,7 @@ export function Records() {
             onClick={() => handleDelete(r)}
             title="Delete"
             aria-label={`Delete ${r.description}`}
-            className="tap flex h-9 w-9 min-h-0 min-w-0 items-center justify-center rounded-lg text-ink-500 transition hover:bg-tint-danger hover:text-tone-danger"
+            className="tap flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-ink-500 transition hover:bg-tint-danger hover:text-tone-danger"
           >
             <IconTrash className="h-4 w-4" />
           </button>
@@ -927,12 +929,18 @@ export function Records() {
                 className="px-2"
               >
                 <option value="">All imports</option>
+                {filters.importBatchId && !importBatches.some((batch) => String(batch.id) === filters.importBatchId) ? <option value={filters.importBatchId}>Import #{filters.importBatchId}</option> : null}
                 {importBatches.map((b) => (
                   <option key={b.id} value={b.id}>
                     {b.title} · {new Date(b.uploadDate).toLocaleDateString()}
                   </option>
                 ))}
               </SelectInput>
+              <label htmlFor="rec-import-search" className="mb-1 mt-2 block text-xs font-medium text-ink-500">Find an import</label>
+              <TextInput id="rec-import-search" type="search" value={importHistory.search} onChange={(event) => importHistory.setSearch(event.target.value)} placeholder="File or import name" className="px-2" />
+              {importHistory.loading ? <p role="status" className="mt-1 text-xs text-ink-500">Loading imports…</p> : null}
+              {importHistory.error ? <div className="mt-2"><p role="alert" className="text-xs text-tone-danger">Couldn't load imports. {importHistory.error}</p><Button type="button" variant="secondary" size="sm" onClick={importHistory.reload}>Retry imports</Button></div> : null}
+              {importHistory.nextCursor ? <Button type="button" variant="secondary" size="sm" className="mt-2" disabled={importHistory.loading || importHistory.loadingMore} onClick={importHistory.loadMore}>{importHistory.loadingMore ? "Loading…" : "Older imports"}</Button> : null}
             </div>
           ) : null}
           <div>

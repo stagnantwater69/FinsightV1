@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Button, T } from "../../../components/ui";
 import { TAP_FLOOR } from "../../../components/touchTarget";
@@ -152,7 +152,7 @@ export function ReceiptEvidenceViewer({
             onPress={onClose}
             style={styles.iconButton}
           >
-            <Ionicons name="close-outline" size={26} color={t.onCamera} />
+            <Ionicons name="close-outline" size={24} color={t.onCamera} />
           </Pressable>
           <View style={styles.headerText}>
             <T variant="title" accessibilityRole="header" style={{ color: t.onCamera, textAlign: "center" }}>
@@ -225,7 +225,7 @@ export function ReceiptEvidenceViewer({
             </ScrollView>
           </ScrollView>
           {imageLoading || storedImageLoading ? (
-            <View pointerEvents="none" style={styles.viewerStatus}>
+            <View style={[styles.viewerStatus, { pointerEvents: "none" }]}>
               <ActivityIndicator color={t.onCamera} />
               <T variant="caption" style={{ color: t.onCamera }}>Opening {shownLabel.toLowerCase()}…</T>
             </View>

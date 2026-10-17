@@ -28,6 +28,7 @@ vi.mock('../../src/lib/api', () => ({
   },
   errorMessage: (error: Error) => error.message,
   setSessionEndedHandler: vi.fn(),
+  invalidateApiSessionRequests: vi.fn(),
 }));
 
 vi.mock('../../src/lib/supabase', () => ({

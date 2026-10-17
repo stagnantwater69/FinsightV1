@@ -83,7 +83,7 @@ describe("toSlices", () => {
  * business past five figures — a visible bug. These pin the fix.
  */
 describe("fitLabelSize", () => {
-  const HOLE_WIDTH = 2 * (62 - 22 / 2) - 12; // mirrors the ring geometry
+  const HOLE_WIDTH = 2 * (76 - 26 / 2) - 12; // mirrors the ring geometry
   const widthOf = (label: string) => label.length * 0.6 * fitLabelSize(label);
 
   it.each([

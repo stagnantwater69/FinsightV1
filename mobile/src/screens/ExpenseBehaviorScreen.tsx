@@ -1,13 +1,21 @@
-import { useCallback, useEffect, useState } from "react";
-import { Pressable, RefreshControl, ScrollView, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { ContentScrollView } from "../components/ContentScrollView";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ExpensePagination } from "../components/ExpensePagination";
+import { useCursorCollection } from "../lib/useCursorCollection";
+import { LargeExpenseFlags } from "../components/LargeExpenseFlags";
+import { AskFinSightFab, FAB_CLEARANCE } from "../components/AskFinSightFab";
+import { Pressable, RefreshControl, ScrollView, useWindowDimensions, View } from "react-native";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import * as haptics from "../lib/haptics";
 import { useFocusEffect } from "@react-navigation/native";
-import { Button, Callout, Card, ErrorNote, Money, OptionSheet, Screen, T } from "../components/ui";
-import { CategoryChange, CategoryComparison, SpendTrend } from "../components/charts";
+import { Button, Callout, ErrorNote, OptionSheet, Screen, T } from "../components/ui";
+import { CategoryBars, DailySpending, SpendHero, SpendingComparison } from "../components/ExpenseVisuals";
+import { ExpenseCloserLook, ExpenseGlance, ExpenseSummaryCard } from "../components/ExpenseSummary";
+import { expenseSummaryFigures, expenseSummaryPoints, expenseSummaryQuestions } from "../lib/expenseSummary";
 import { AskFinSight } from "../components/AskFinSight";
-import { AskFinSightFab, FAB_CLEARANCE } from "../components/AskFinSightFab";
-import { DeltaPill, InsightHeader, Medallion, SubTabs } from "../components/InsightsShared";
+import { InsightHeader } from "../components/InsightsShared";
+import { PeriodPill, PeriodStatus } from "../components/PeriodSelector";
+import { TAP_FLOOR } from "../components/touchTarget";
 import { ExpenseAlertsSection } from "../components/ExpenseAlertsSection";
 import { ReductionOpportunitiesSection } from "../components/ReductionOpportunitiesSection";
 import { ReductionSimulationSheet } from "../components/ReductionSimulationSheet";
@@ -16,24 +24,23 @@ import { SkeletonBox, SkeletonCard } from "../components/Skeleton";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useAiChat } from "../context/AiChatContext";
 import { api, errorMessage } from "../lib/api";
+import { openFlaggedRecords } from "../lib/flaggedRecordsNavigation";
 import { takeFlash } from "../lib/flash";
-import { formatMoney } from "../lib/money";
-import { recurringAvailability } from "../lib/recurringAgenda";
+import { groupSchedules, recurringAvailability } from "../lib/recurringAgenda";
 import { findingCategory, feedbackActions, type FeedbackAction } from "../lib/findingFeedback";
 import { REDUCTION_OPPORTUNITY_QUESTION } from "../lib/reductionOpportunityAsk";
 import { useInsight } from "../lib/useInsight";
-import { font, space, typeScale } from "../theme/tokens";
-import { TAP_FLOOR } from "../components/touchTarget";
+import { font, radius, space, typeScale } from "../theme/tokens";
 import { useTheme } from "../context/ThemeContext";
 import { ReportingPeriodScope, useReportingPeriod } from "../context/ReportingPeriodContext";
-import { PeriodSelector } from "../components/PeriodSelector";
 import { ConnectionNotice, FreshnessStatus } from "../components/ConnectionNotice";
 import { describeLoadFailure, toLoadFailure } from "../lib/connectionState";
 import type { DetailExpenseOverview } from "../lib/expenseOverview";
+import type { FinancialPosition } from "../lib/types";
 import {
-  ALL_TIME,
-  formatDayRange,
-  periodLabel as describePeriod,
+  THIS_WEEK,
+  monthLabel,
+  periodLabel,
   periodParams,
   periodPhrase,
   previousLabel as describePrevious,
@@ -41,16 +48,15 @@ import {
 import type {
   AnomalyFinding,
   AnomalyFindingPage,
+  FlaggedRecordPage,
   ExpenseBehavior,
   ReductionOpportunity,
   RecurringPattern,
   RecurringSchedule,
 } from "../lib/types";
 
-/** Keeps a one-line content row from collapsing. See its use — not a target. */
-const CONTENT_ROW_MIN = 32;
-
 const EMPTY_EXPENSE_BEHAVIOR: ExpenseBehavior = {
+  periodDays: 0,
   periodStart: "",
   periodEnd: "",
   previousPeriodStart: null,
@@ -64,15 +70,6 @@ const EMPTY_EXPENSE_BEHAVIOR: ExpenseBehavior = {
 
 
 // ---------------------------------------------------------------- Expense insight
-
-/**
- * How many category rows "What changed" shows before offering the rest.
- *
- * Four fills the card without pushing the flags below the fold on a small
- * phone, and a business with more than four categories is exactly the one
- * whose top few are the story.
- */
-const TREND_PREVIEW_COUNT = 4;
 
 /** Mirrors the overview's summary, actions, and charts to prevent a large layout jump. */
 function ExpenseInsightSkeleton() {
@@ -102,7 +99,7 @@ function ExpenseInsightSkeleton() {
 
 export function ExpenseBehaviorScreen(props: any) {
   return (
-    <ReportingPeriodScope>
+    <ReportingPeriodScope scope="expense-insight">
       <ExpenseBehaviorGate {...props} />
     </ReportingPeriodScope>
   );
@@ -124,16 +121,15 @@ function ExpenseBehaviorGate(props: any) {
 
 function ExpenseBehaviorContent({ navigation }: any) {
   const t = useTheme();
-  const { brand, ink, paper, statusText } = t;
-  const { selected } = useBusinessProfiles();
-  /**
-   * The shared period: This week, a month with records, or All time. The
-   * Month list replaces the "most recent month" option this screen used to
-   * grow when every record predated the rolling window.
-   */
-  const { selection, setSelection } = useReportingPeriod();
+  const { fontScale } = useWindowDimensions();
+  const { brand } = t;
+  const { selected, categories } = useBusinessProfiles();
+  const { selection: sharedSelection, setSelection } = useReportingPeriod();
+  const selection = sharedSelection.kind === "all" ? THIS_WEEK : sharedSelection;
+  useFocusEffect(useCallback(() => {
+    if (sharedSelection.kind === "all") setSelection(THIS_WEEK);
+  }, [sharedSelection.kind, setSelection]));
   const periodKeyValue = JSON.stringify(selection);
-  const allTime = selection.kind === "all";
   const [askOpen, setAskOpen] = useState(false);
   const chat = useAiChat();
   /**
@@ -154,7 +150,10 @@ function ExpenseBehaviorContent({ navigation }: any) {
    * what carries the urgency, and it does so without taking the choice away.
    */
   const [section, setSection] = useState<"overview" | "alerts" | "recurring">("overview");
-  const [showAllTrends, setShowAllTrends] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
+  // Where each overview part sits inside the overview container, for the jump chips.
+  const overviewTop = useRef(0);
+  const anchors = useRef<Partial<Record<"summary" | "spending" | "categories" | "savings", number>>>({});
   const overviewState = useInsight<DetailExpenseOverview>(
     "/insights/expense-overview",
     { businessProfileId: selected?.id, ...periodParams(selection), view: "detail" },
@@ -186,6 +185,23 @@ function ExpenseBehaviorContent({ navigation }: any) {
     [selected?.id],
     { enabled: Boolean(selected) },
   );
+  const flaggedState = useInsight<FlaggedRecordPage>(
+    "/records/flagged",
+    { businessProfileId: selected?.id, limit: 20 },
+    [selected?.id],
+    { enabled: Boolean(selected) },
+  );
+  const reviewScope = `${selected?.id}:${periodKeyValue}`;
+  const flagPages = useCursorCollection(flaggedState, "/records/flagged", { businessProfileId: selected?.id, limit: 20 }, reviewScope, "cursor", (item) => `${item.type}:${item.id}`, (item) => item.type === "expense");
+  const findingPages = useCursorCollection(findingState, "/insights/findings", { businessProfileId: selected?.id, status: "OPEN", take: 20 }, reviewScope, "cursorId", (item) => String(item.id));
+  const reviewSize = 5;
+  const [reviewPage, setReviewPage] = useState(0);
+  const recurringSize = 5;
+  const [recurringPage, setRecurringPage] = useState(0);
+  const [reviewPaging, setReviewPaging] = useState(false);
+  const [reviewPageError, setReviewPageError] = useState<string | null>(null);
+  const reviewRequest = useRef(0);
+  const pageRetry = useRef<{ page: number; size: number } | null>(null);
   const patternState = useInsight<RecurringPattern[]>(
     "/insights/recurring-patterns",
     { businessProfileId: selected?.id },
@@ -198,6 +214,20 @@ function ExpenseBehaviorContent({ navigation }: any) {
    */
   const scheduleState = useInsight<RecurringSchedule[]>(
     "/insights/recurring-schedules",
+    { businessProfileId: selected?.id },
+    [selected?.id],
+    { enabled: Boolean(selected) },
+  );
+  // The summary's denominator and its review count. Both are optional context:
+  // a failure leaves the share blank and the count at zero, never the screen.
+  const positionState = useInsight<FinancialPosition>(
+    `/business-profiles/${selected?.id}/financial-position`,
+    {},
+    [selected?.id],
+    { enabled: Boolean(selected) },
+  );
+  const flaggedCountState = useInsight<{ expenses: number; sales: number; total: number }>(
+    "/records/flagged/count",
     { businessProfileId: selected?.id },
     [selected?.id],
     { enabled: Boolean(selected) },
@@ -231,6 +261,9 @@ function ExpenseBehaviorContent({ navigation }: any) {
   const refreshFindings = findingState.load;
   const refreshPatterns = patternState.load;
   const refreshSchedules = scheduleState.load;
+  const refreshPosition = positionState.load;
+  const refreshFlaggedCount = flaggedCountState.load;
+  const refreshFlaggedRecords = flaggedState.load;
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try {
@@ -239,11 +272,14 @@ function ExpenseBehaviorContent({ navigation }: any) {
         refreshFindings(),
         refreshPatterns(),
         refreshSchedules(),
+        refreshPosition(),
+        refreshFlaggedCount(),
+        refreshFlaggedRecords(),
       ]);
     } finally {
       setRefreshing(false);
     }
-  }, [refreshFindings, refreshOverview, refreshPatterns, refreshSchedules]);
+  }, [refreshFindings, refreshFlaggedCount, refreshFlaggedRecords, refreshOverview, refreshPatterns, refreshPosition, refreshSchedules]);
   /**
    * Why a confirm or dismiss failed.
    *
@@ -288,6 +324,23 @@ function ExpenseBehaviorContent({ navigation }: any) {
   }, [notice]);
 
   const comparedWith = describePrevious(data?.period) ?? "the period before";
+  const recordedFunds = Number.isFinite(positionState.data?.availableFunds.calculatedAmount)
+    ? positionState.data!.availableFunds.calculatedAmount
+    : null;
+  const summaryFigures = expenseSummaryFigures(data, recordedFunds);
+  const flaggedExpenses = flaggedCountState.data?.expenses ?? 0;
+  const summaryContext = {
+    periodText: periodPhrase(selection),
+    comparedWith,
+    allTime: false,
+    flaggedCount: flaggedExpenses,
+    unusualCount: data.unusualExpenses.length,
+  };
+  function askSummaryQuestion(question?: string) {
+    haptics.tapped();
+    if (question) chat.prepareQuestion(question);
+    setAskOpen(true);
+  }
 
   /**
    * Records what the owner actually said about a finding.
@@ -365,8 +418,6 @@ function ExpenseBehaviorContent({ navigation }: any) {
     navigation.navigate("RecurringSchedule", scheduleId ? { scheduleId } : {});
   }
 
-  if (!selected) return null;
-
   /**
    * Opens the records list filtered to one category.
    *
@@ -438,7 +489,7 @@ function ExpenseBehaviorContent({ navigation }: any) {
    * it. So the badge is spent on the one that has a deadline. The candidates
    * are still on the tab, listed under the agenda.
    */
-  const openFindings = findingState.data?.items.length ?? 0;
+  const openFindings = findingPages.read().items.length;
   const candidates = patternState.data?.filter((pattern) => pattern.status === "CANDIDATE") ?? [];
   /*
    * A 404 removes the gated agenda and its controls. A transient refresh keeps
@@ -448,7 +499,8 @@ function ExpenseBehaviorContent({ navigation }: any) {
     data: scheduleState.data,
     error: scheduleState.rawError,
   });
-  const { schedules, canConfirm, overdueCount } = recurring;
+  const { schedules, overdueCount } = recurring;
+  const canConfirm = recurring.canConfirm && scheduleState.data !== null;
   const scheduleNotice = recurring.failure
     ? describeLoadFailure(toLoadFailure(scheduleState.rawError), {
         hasData: recurring.failure === "refresh",
@@ -456,6 +508,98 @@ function ExpenseBehaviorContent({ navigation }: any) {
         subject: "your repeating payments",
       })
     : null;
+
+  const flagSnapshot = flagPages.read();
+  const findingSnapshot = findingPages.read();
+  const flagsFinished = flagSnapshot.ready && (flaggedCountState.data?.expenses === 0 || flagSnapshot.cursor === null);
+  const findingsFinished = findingSnapshot.ready && findingSnapshot.cursor === null;
+  const reviewComplete = flagsFinished && findingsFinished && behaviorData !== null;
+  const unmatchedUnusual = data.unusualExpenses.filter((expense) => !findingSnapshot.items.some((finding) => finding.expenseRecordId === expense.id));
+  const flaggedExpenseCount = flaggedCountState.data?.expenses;
+  const reliableReviewCount = findingsFinished && behaviorData !== null && flagSnapshot.ready
+    && !flagSnapshot.error && !findingSnapshot.error
+    && !flaggedCountState.error && !flaggedCountState.refreshing && !flaggedCountState.isStale
+    && !findingState.error && !findingState.refreshing && !findingState.isStale
+    && !flaggedState.error && !flaggedState.refreshing && !flaggedState.isStale
+    && !overviewState.error && !overviewState.refreshing && !overviewState.isStale
+    && flaggedExpenseCount !== undefined && Number.isInteger(flaggedExpenseCount)
+    && flaggedExpenseCount >= flagSnapshot.items.length
+    && (!flagsFinished || flaggedExpenseCount === flagSnapshot.items.length);
+  const reviewTotalCount = reliableReviewCount ? flaggedExpenseCount + findingSnapshot.items.length + unmatchedUnusual.length : undefined;
+  const reviewRows = [
+    ...flagSnapshot.items.map((item) => ({ kind: "flag" as const, id: item.id })),
+    ...(flagsFinished ? findingSnapshot.items.map((item) => ({ kind: "finding" as const, id: item.id })) : []),
+    ...(flagsFinished && findingsFinished ? unmatchedUnusual.map((item) => ({ kind: "unusual" as const, id: item.id })) : []),
+  ];
+  const reviewVisible = reviewRows.slice(reviewPage * reviewSize, (reviewPage + 1) * reviewSize);
+  const recurringRows = [
+    ...groupSchedules(schedules ?? []).flatMap((group) => group.items.map((item) => ({ kind: "schedule" as const, id: item.id }))),
+    ...candidates.map((item) => ({ kind: "candidate" as const, id: item.id })),
+  ];
+  const recurringVisible = recurringRows.slice(recurringPage * recurringSize, (recurringPage + 1) * recurringSize);
+
+  async function ensureReviewPage(targetPage: number, size: number) {
+    const version = ++reviewRequest.current;
+    const flagSession = flagPages.session;
+    const findingSession = findingPages.session;
+    const end = (targetPage + 1) * size;
+    setReviewPaging(true);
+    setReviewPageError(null);
+    pageRetry.current = { page: targetPage, size };
+    try {
+      if (!flagPages.read().ready) return;
+      while (flagPages.read().items.length < end && flagPages.read().cursor !== null && flaggedCountState.data?.expenses !== 0) {
+        if (!await flagPages.loadNext()) {
+          if (version === reviewRequest.current && flagPages.read().error) setReviewPageError(flagPages.read().error);
+          return;
+        }
+        if (version !== reviewRequest.current) return;
+      }
+      const flags = flagPages.read();
+      if (flags.cursor === null || flaggedCountState.data?.expenses === 0) {
+        const needed = end - flags.items.length;
+        if (needed > 0 && !findingPages.read().ready) return;
+        while (findingPages.read().items.length < needed && findingPages.read().cursor !== null) {
+          if (!await findingPages.loadNext()) {
+            if (version === reviewRequest.current && findingPages.read().error) setReviewPageError(findingPages.read().error);
+            return;
+          }
+          if (version !== reviewRequest.current) return;
+        }
+      }
+      if (version !== reviewRequest.current || flagSession !== flagPages.session || findingSession !== findingPages.session) return;
+      const findings = findingPages.read();
+      const previousSourcesDone = (flags.cursor === null || flaggedCountState.data?.expenses === 0) && findings.ready && findings.cursor === null;
+      const unmatched = previousSourcesDone ? data.unusualExpenses.filter((expense) => !findings.items.some((finding) => finding.expenseRecordId === expense.id)).length : 0;
+      const count = flags.items.length + ((flags.cursor === null || flaggedCountState.data?.expenses === 0) ? findings.items.length + unmatched : 0);
+      setReviewPage(Math.min(targetPage, Math.max(0, Math.ceil(count / size) - 1)));
+      pageRetry.current = null;
+    } finally {
+      if (version === reviewRequest.current) setReviewPaging(false);
+    }
+  }
+
+  useEffect(() => {
+    reviewRequest.current += 1;
+    setReviewPage(0);
+    setReviewPageError(null);
+    setReviewPaging(false);
+    pageRetry.current = null;
+  }, [flagPages.session, findingPages.session]);
+  useEffect(() => {
+    const needsFill = reviewRows.length < (reviewPage + 1) * reviewSize && !reviewComplete;
+    const canFill = flagSnapshot.ready && (flagSnapshot.cursor !== null || (flagsFinished && findingSnapshot.ready && findingSnapshot.cursor !== null));
+    if (section === "alerts" && needsFill && canFill && !reviewPaging && !reviewPageError && !flagSnapshot.loading && !findingSnapshot.loading && !flagSnapshot.error && !findingSnapshot.error && !flaggedState.refreshing && !findingState.refreshing) void ensureReviewPage(reviewPage, reviewSize);
+    // Each automatic request fills only the current page; failures wait for retry.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [section, flagPages.session, findingPages.session, flagSnapshot.loading, findingSnapshot.loading, reviewPaging, reviewPageError, reviewRows.length, reviewPage, reviewSize]);
+  useEffect(() => {
+    setRecurringPage(0);
+  }, [selected?.id]);
+  useEffect(() => {
+    setRecurringPage((page) => Math.min(page, Math.max(0, Math.ceil(recurringRows.length / recurringSize) - 1)));
+  }, [recurringRows.length, recurringSize]);
+  useEffect(() => () => { reviewRequest.current += 1; }, []);
 
   /*
    * The period-on-period change, or null when there is nothing to compare
@@ -469,43 +613,37 @@ function ExpenseBehaviorContent({ navigation }: any) {
       ? ((data.totals.current - data.totals.previous) / data.totals.previous) * 100
       : null;
 
-  /*
-   * Ranked by what they came to, so the preview shows the categories that
-   * moved the most money rather than whichever the server listed first.
-   */
-  const rankedTrends = [...(data?.categoryTrends ?? [])].sort((a, b) => b.current - a.current);
-  const visibleTrends = showAllTrends ? rankedTrends : rankedTrends.slice(0, TREND_PREVIEW_COUNT);
+  const JUMPS: { key: "summary" | "spending" | "categories" | "savings"; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+    { key: "summary", label: "Summary", icon: "document-text-outline" },
+    { key: "spending", label: "Spending", icon: "bar-chart-outline" },
+    { key: "categories", label: "Categories", icon: "pie-chart-outline" },
+    { key: "savings", label: "Savings", icon: "bulb-outline" },
+  ];
+  const jumpTo = (key: (typeof JUMPS)[number]["key"]) => {
+    const y = anchors.current[key];
+    if (y === undefined) return;
+    haptics.tapped();
+    scrollRef.current?.scrollTo({ y: Math.max(0, overviewTop.current + y - space.md), animated: true });
+  };
 
-  /*
-   * THE RECURRING TAB COMES OFF WHEN IT WOULD OPEN ON NOTHING.
-   *
-   * With the agenda unavailable, all that tab can still hold is the candidate
-   * list — ungated detector output, which is often empty. A tab that opens on
-   * blank space reads as a screen that failed to load, which is the same
-   * misreading the empty state was causing one level down. Overview and Alerts
-   * are untouched by any of this: they are separate reads and a dark schedules
-   * endpoint has nothing to say about them.
-   */
   const sections = [
     { label: "Overview", value: "overview" as const },
-    { label: "Alerts", value: "alerts" as const, count: openFindings },
-    ...(schedules !== null || candidates.length > 0
-      ? [{ label: "Recurring", value: "recurring" as const, count: overdueCount }]
-      : []),
+    { label: "Review", value: "alerts" as const, count: openFindings },
+    { label: "Recurring", value: "recurring" as const, count: overdueCount },
   ];
 
-  /*
-   * Derived rather than corrected in an effect: the tab an owner is standing on
-   * can vanish under them when a refetch comes back 404, and `setSection` from
-   * a render would be a second render pass to reach the same place.
-   */
-  const activeSection = sections.some((tab) => tab.value === section) ? section : "overview";
+  const activeSection = section;
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => scrollRef.current?.scrollTo({ y: 0, animated: false }));
+    return () => cancelAnimationFrame(frame);
+  }, [activeSection]);
+
+  if (!selected) return null;
 
   return (
     <Screen safeTop>
-      <ScrollView
-        // The FAB floats over this list, so the scroll has to end far enough
-        // up that it can never cover the last card.
+      <ContentScrollView
+        ref={scrollRef}
         contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl + FAB_CLEARANCE }}
         refreshControl={
           <RefreshControl
@@ -515,14 +653,25 @@ function ExpenseBehaviorContent({ navigation }: any) {
           />
         }
       >
-        <InsightHeader navigation={navigation} active="ExpenseBehavior" title="Expense insight" />
+        <InsightHeader navigation={navigation} active="ExpenseBehavior" title="Expenses" />
 
-        <SubTabs
-          tabs={sections}
-          value={activeSection}
-          onChange={setSection}
-          accessibilityLabel="Expense insight sections"
-        />
+        <View style={{ flexDirection: "row", borderBottomWidth: 1, borderBottomColor: t.border, marginBottom: space.xs }}>
+            {sections.map((tab) => (
+              <Pressable
+                key={tab.value}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: tab.value === activeSection }}
+                accessibilityLabel={tab.count ? `${tab.label}, ${tab.count}${tab.value === "alerts" && !findingsFinished ? " loaded" : ""} needing review` : tab.label}
+                onPress={() => { haptics.tapped(); setSection(tab.value); }}
+                style={({ pressed }) => ({ flex: 1, minWidth: 0, minHeight: TAP_FLOOR, alignItems: "center", justifyContent: "center", flexDirection: fontScale > 1.15 ? "column" : "row", paddingHorizontal: space.xs, paddingVertical: fontScale > 1.15 ? space.sm : 0, gap: space.xs, borderBottomWidth: 2, borderBottomColor: tab.value === activeSection ? t.brandText : "transparent", opacity: pressed ? 0.7 : 1 })}
+              >
+                <T style={{ fontSize: typeScale.label, fontFamily: tab.value === activeSection ? font.sansSemibold : font.sans, color: tab.value === activeSection ? t.brandText : t.textSecondary, textAlign: "center", flexShrink: 1 }}>{tab.label}</T>
+                {fontScale > 1.15 || tab.count ? <View style={{ minHeight: 22, minWidth: tab.count ? 20 : 0, alignItems: "center", justifyContent: "center", paddingHorizontal: tab.count ? space.xs : 0, borderRadius: radius.sm, backgroundColor: tab.count ? t.brandSurface : "transparent" }}>
+                  {tab.count ? <T style={{ fontSize: typeScale.caption, fontFamily: font.sansSemibold, color: tab.value === activeSection ? t.brandText : t.textSecondary }}>{tab.count}</T> : null}
+                </View> : null}
+              </Pressable>
+            ))}
+        </View>
 
         {notice ? (
           <View style={{ marginBottom: space.md }}>
@@ -536,8 +685,9 @@ function ExpenseBehaviorContent({ navigation }: any) {
           on those tabs would imply it filtered them.
         */}
         {activeSection === "overview" ? (
-          <View style={{ marginBottom: space.lg }}>
-            <PeriodSelector />
+          <View style={{ marginBottom: space.sm }}>
+            {/* The period itself is the pill on the card below, as on Home and Recovery. */}
+            <PeriodStatus />
           </View>
         ) : null}
 
@@ -557,28 +707,21 @@ function ExpenseBehaviorContent({ navigation }: any) {
           />
         )}
 
-        {activeSection === "overview" && behaviorData ? (
-          <FreshnessStatus
-            at={overviewState.lastUpdatedAt}
-            now={Date.now()}
-            refreshing={refreshing || overviewState.refreshing}
-            style={{ marginBottom: space.md }}
-          />
-        ) : null}
+
 
         {activeSection === "overview" && error ? <ErrorNote>{error}</ErrorNote> : null}
         {activeSection === "overview" && loading ? (
           <ExpenseInsightSkeleton />
         ) : activeSection === "overview" && !behaviorData ? (
           <View style={{ gap: space.lg }}>
-            <View style={{ alignSelf: "flex-start" }}>
+            {!overviewNotice ? <View style={{ alignSelf: "flex-start" }}>
               <Button
                 title={refreshing ? "Trying again…" : "Try again"}
                 variant="secondary"
                 loading={refreshing}
                 onPress={() => void refresh()}
               />
-            </View>
+            </View> : null}
             {overviewState.data ? (
               <ReductionOpportunitiesSection
                 state={reductionState}
@@ -591,7 +734,7 @@ function ExpenseBehaviorContent({ navigation }: any) {
             ) : null}
           </View>
         ) : (
-          <View style={{ gap: space.lg }}>
+          <View style={{ gap: space.lg }} onLayout={(e) => (overviewTop.current = e.nativeEvent.layout.y)}>
             {/*
               OVERVIEW — the figures, in the order the question is asked.
               The shape first, the figures second: the chart answers "is this
@@ -620,238 +763,121 @@ function ExpenseBehaviorContent({ navigation }: any) {
                   .
                 </Callout>
               ) : null}
-              {data.totals.current === 0 && data.latestExpenseDate && !allTime ? (
-                <Button title="Show all time" variant="secondary" onPress={() => setSelection(ALL_TIME)} />
+              {data.totals.current === 0 && data.latestExpenseDate ? (
+                <Button
+                  title={`View ${monthLabel(data.latestExpenseDate.slice(0, 7))}`}
+                  variant="secondary"
+                  onPress={() => setSelection({ kind: "month", month: data.latestExpenseDate!.slice(0, 7) })}
+                />
               ) : null}
-              <Card>
-                {/*
-                  THE HEADLINE FIGURE, and the reason this card leads.
-                  Everything under it — the curve, the category list, the
-                  flags — is an answer to "why". Opening on a chart made the
-                  owner assemble the total themselves from a shape.
-
-                  Both figures come from `totals`, summed server-side, so this
-                  cannot drift from what web reports for the same period.
-                */}
-                <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6 }}>
-                  <Money value={data.totals.current} size={28} weight="semibold" />
-                  <T style={{ fontSize: typeScale.body, color: ink[600] }}>spent</T>
-                </View>
-                {/*
-                  THE COMPARISON, SAID IN FULL.
-
-                  It read "↑ 12% vs last month", which needs the reader to
-                  supply what rose and against what — and 12% of an unstated
-                  base is not a figure anyone can act on. It now names the
-                  direction in a word, carries the actual amount of the
-                  change, and states the period it is measured against.
-
-                  A rise is drawn in the "serious" tone rather than the alarm
-                  one: spending more is worth noticing and is not by itself
-                  wrong — a month with more stock bought is a month with more
-                  to sell.
-                */}
-                {allTime ? null : periodDelta === null ? (
-                  <T variant="caption" style={{ marginTop: 4 }}>
-                    Nothing recorded in {comparedWith} to compare with.
-                  </T>
-                ) : (
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 5, marginTop: 6, flexWrap: "wrap" }}>
-                    <View
-                      style={{
-                        flexDirection: "row",
-                        alignItems: "center",
-                        gap: 3,
-                        paddingHorizontal: space.sm,
-                        paddingVertical: 2,
-                        borderRadius: 11,
-                        backgroundColor: periodDelta >= 0 ? t.statusSurface.serious : t.statusSurface.good,
-                      }}
-                    >
-                      <Ionicons
-                        name={periodDelta >= 0 ? "arrow-up" : "arrow-down"}
-                        size={12}
-                        color={periodDelta >= 0 ? statusText.serious : statusText.good}
-                      />
-                      <T
-                        style={{
-                          fontSize: typeScale.caption,
-                          fontFamily: font.sansSemibold,
-                          color: periodDelta >= 0 ? statusText.serious : statusText.good,
-                        }}
-                      >
-                        {Math.abs(periodDelta).toFixed(0)}%
-                      </T>
-                    </View>
-                    <T variant="caption" style={{ flexShrink: 1 }}>
-                      {periodDelta >= 0 ? "more" : "less"} than {comparedWith}
-                      {" ("}
-                      {/* Money in prose still wears the mono figure face — the one hard typographic rule this app has for currency. */}
-                      <T variant="caption" style={{ fontFamily: font.mono }}>
-                        {formatMoney(Math.abs(data.totals.current - data.totals.previous))}
-                      </T>
-                      {")"}
-                    </T>
-                  </View>
-                )}
-
-                <View style={{ marginTop: space.lg }}>
-                  <SpendTrend
-                    data={data.dailyTotals ?? []}
-                    title="Spending so far"
-                    // The axis ticks are bare numbers so they cannot overflow
-                    // their gutter, which means the unit has to be said here.
-                    subtitle={`Running total in PHP · ${formatDayRange(data.periodStart.slice(0, 10), data.periodEnd.slice(0, 10))}`}
-                  />
-                </View>
-              </Card>
-
-              {/*
-                THE NEXT STEP after understanding what changed — plan §10.1.
-                After the headline summary, before the lower-priority
-                analytical detail (the comparison/change charts and the full
-                category list below).
-              */}
-              <ReductionOpportunitiesSection
-                state={reductionState}
-                businessProfileId={selected.id}
-                onViewRecords={openCategoryRecords}
-                onAskAboutThis={askAboutOpportunity}
-                onSimulate={simulateOpportunity}
-                historical={false}
+              <SpendHero
+                total={data.totals.current}
+                recordCount={data.categoryTrends.every((trend) => trend.recordCount !== undefined) ? summaryFigures.recordCount : null}
+                categoryCount={summaryFigures.categoryCount}
+                changePercent={periodDelta}
+                changeAmount={data.totals.current - data.totals.previous}
+                comparedWith={comparedWith}
+                header={<PeriodPill showAllTime={false} />}
+              />
+              <SpendingComparison
+                total={data.totals.current}
+                previousTotal={data.totals.previous}
+                period={periodLabel(selection)}
+                comparedWith={comparedWith}
+              />
+              <ExpenseCloserLook
+                flaggedCount={flaggedCountState.data?.expenses ?? null}
+                flaggedLoading={flaggedCountState.loading}
+                flaggedStale={Boolean(flaggedCountState.error)}
+                overdueCount={scheduleState.data === null || schedules === null ? null : overdueCount}
+                recurringLoading={scheduleState.loading}
+                recurringStale={Boolean(scheduleState.error)}
+                onReview={() => setSection("alerts")}
+                onRecurring={() => setSection("recurring")}
+              />
+              <ExpenseGlance
+                summary={summaryFigures}
+                availableFunds={recordedFunds}
+                fundsLoading={positionState.loading}
               />
 
-              <Card>
-                <CategoryComparison
-                  data={data.categoryTrends.map((t) => ({
-                    categoryName: t.categoryName,
-                    current: t.current,
-                    previous: t.previous,
-                    percentChange: t.percentChange,
-                  }))}
-                  subtitle={`${describePeriod(selection)} vs ${comparedWith}`}
-                  previousLabel={comparedWith}
-                  currentLabel={describePeriod(selection)}
-                />
-              </Card>
-
-              <Card>
-                <CategoryChange
-                  data={data.categoryTrends
-                    .filter((t) => t.percentChange !== null)
-                    .map((t) => ({
-                      categoryName: t.categoryName,
-                      percentChange: t.percentChange!,
-                      direction: t.direction,
-                    }))}
-                  subtitle="Against the period before"
-                />
-              </Card>
-
-              {/*
-                The heading sits OUTSIDE its card, which is the one structural
-                borrowing from the reference worth taking. Inside, it read as a
-                title for a table; outside, it labels a group — and it is what
-                lets "View all" be a sibling row rather than a link buried at
-                the bottom of a list.
-              */}
-              <View>
-                <T variant="heading" accessibilityRole="header" style={{ marginBottom: space.sm, color: brand[900] }}>
-                  What changed
-                </T>
-
-                <Card>
-                  {data.categoryTrends.length === 0 ? (
-                    <T variant="caption">No expense records in this period yet.</T>
-                  ) : (
-                    visibleTrends.map((t, i) => (
-                      /*
-                        Tappable, and the chevron is not decoration: it opens
-                        the records list already filtered to this category, so
-                        "Inventory is up 18%" leads straight to the eleven
-                        records that made it so. RecordsList has accepted a
-                        categoryId param all along; nothing on this screen was
-                        using it.
-                      */
-                      <Pressable
-                        key={t.categoryId}
-                        onPress={() => openCategoryRecords(t.categoryId)}
-                        accessibilityRole="button"
-                        accessibilityLabel={`${t.categoryName}, ${formatMoney(t.current)}${
-                          t.percentChange === null
-                            ? ", new this period"
-                            : `, ${t.direction} ${Math.abs(t.percentChange).toFixed(0)} percent`
-                        }. View these records.`}
-                        style={({ pressed }) => ({
-                          flexDirection: "row",
-                          alignItems: "center",
-                          gap: space.sm,
-                          paddingVertical: space.sm,
-                          // TAP_FLOOR rather than the 44-point iOS token:
-                          // these rows stack with a hairline between them, so
-                          // the extra four points on Android cost nothing and
-                          // slop would cross the divider into the row above.
-                          minHeight: TAP_FLOOR,
-                          borderTopWidth: i === 0 ? 0 : 1,
-                          borderTopColor: paper[200],
-                          opacity: pressed ? 0.7 : 1,
-                        })}
-                      >
-                        <Medallion icon="pricetag-outline" tint={brand[700]} surface={brand[50]} />
-                        <T style={{ flex: 1, fontSize: typeScale.bodySm, color: ink[900] }} numberOfLines={1}>
-                          {t.categoryName}
-                        </T>
-                        <Money value={t.current} size={14} weight="medium" />
-                        <DeltaPill percentChange={t.percentChange} direction={t.direction} />
-                        <Ionicons name="chevron-forward" size={16} color={ink[400]} />
-                      </Pressable>
-                    ))
-                  )}
-                </Card>
-
-                {/*
-                  Only when there is more to see. A "View all" that reveals
-                  nothing is a control that teaches people not to press
-                  controls.
-                */}
-                {data.categoryTrends.length > TREND_PREVIEW_COUNT ? (
+              {/* Web's "Jump to": the overview is long, so each part is one tap away. */}
+              <ContentScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={{ flexGrow: 0, marginVertical: space.xs }}
+                contentContainerStyle={{ alignItems: "center", gap: space.sm }}
+              >
+                {JUMPS.map((jump) => (
                   <Pressable
-                    onPress={() => {
-                      haptics.tapped();
-                      setShowAllTrends((v) => !v);
-                    }}
+                    key={jump.key}
                     accessibilityRole="button"
-                    accessibilityState={{ expanded: showAllTrends }}
-                    style={({ pressed }) => ({ marginTop: space.sm, opacity: pressed ? 0.7 : 1 })}
+                    accessibilityLabel={`Jump to ${jump.label}`}
+                    onPress={() => jumpTo(jump.key)}
+                    style={({ pressed }) => ({
+                      minHeight: TAP_FLOOR,
+                      flexShrink: 0,
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 6,
+                      paddingHorizontal: space.md,
+                      borderRadius: radius.full,
+                      borderWidth: 1,
+                      borderColor: t.border,
+                      backgroundColor: pressed ? t.surfaceMuted : t.surface,
+                    })}
                   >
-                    <Card>
-                      {/*
-                        NOT a target. The tappable element is the Pressable
-                        wrapping this whole Card, and the Card's own space.lg
-                        padding already puts it far past the floor — this
-                        minHeight only stops the content row collapsing around
-                        a single line of text. Written as a plain constant
-                        rather than as a subtraction from the tap token,
-                        because that expression reads as a deliberate undercut
-                        of the floor, which is what put this file on the sweep
-                        list in the first place.
-                      */}
-                      <View style={{ flexDirection: "row", alignItems: "center", minHeight: CONTENT_ROW_MIN }}>
-                        <T style={{ flex: 1, fontSize: typeScale.body, color: ink[900] }}>
-                          {showAllTrends
-                            ? "Show fewer categories"
-                            : `View all ${data.categoryTrends.length} category trends`}
-                        </T>
-                        <Ionicons
-                          name={showAllTrends ? "chevron-up" : "chevron-forward"}
-                          size={18}
-                          color={ink[400]}
-                        />
-                      </View>
-                    </Card>
+                    <Ionicons name={jump.icon} size={14} color={t.brandText} />
+                    <T style={{ fontSize: typeScale.label, fontFamily: font.sansSemibold, color: t.textPrimary }}>{jump.label}</T>
                   </Pressable>
-                ) : null}
+                ))}
+              </ContentScrollView>
+
+              <View onLayout={(e) => (anchors.current.summary = e.nativeEvent.layout.y)}>
+                <ExpenseSummaryCard
+                  points={expenseSummaryPoints(summaryFigures, summaryContext)}
+                  summary={summaryFigures}
+                  comparedWith={comparedWith}
+                  flaggedCount={flaggedExpenses}
+                  unusualCount={data.unusualExpenses.length}
+                  questions={expenseSummaryQuestions(summaryFigures, summaryContext)}
+                  onAsk={askSummaryQuestion}
+                  onReviewFlags={flaggedExpenses > 0 ? () => openFlaggedRecords(navigation, "ExpenseBehavior") : undefined}
+                />
               </View>
+
+              <View onLayout={(e) => (anchors.current.spending = e.nativeEvent.layout.y)}>
+                <DailySpending
+                  key={`daily:${selected.id}:${periodKeyValue}`}
+                  days={data.dailyTotals ?? []}
+                />
+              </View>
+
+              <View onLayout={(e) => (anchors.current.categories = e.nativeEvent.layout.y)}>
+                <CategoryBars
+                  key={`categories:${selected.id}:${periodKeyValue}`}
+                  trends={data.categoryTrends}
+                  total={data.totals.current}
+                  previousTotal={data.totals.previous}
+                  comparedWith={comparedWith}
+                  onOpen={openCategoryRecords}
+                />
+              </View>
+
+              <View onLayout={(e) => (anchors.current.savings = e.nativeEvent.layout.y)}>
+                <ReductionOpportunitiesSection
+                  state={reductionState}
+                  businessProfileId={selected.id}
+                  onViewRecords={openCategoryRecords}
+                  onAskAboutThis={askAboutOpportunity}
+                  onSimulate={simulateOpportunity}
+                  historical={false}
+                />
+              </View>
+
+              {/* Repeating payments live on the Recurring tab only; its badge carries any overdue count. */}
+
+              <FreshnessStatus at={overviewState.lastUpdatedAt} now={Date.now()} refreshing={refreshing || overviewState.refreshing} />
               </>
             ) : null}
 
@@ -869,11 +895,28 @@ function ExpenseBehaviorContent({ navigation }: any) {
               and it should look like one rather than like a blank.
             */}
             {activeSection === "alerts" ? (
+              <LargeExpenseFlags
+                items={flagSnapshot.items.filter((item) => reviewVisible.some((row) => row.kind === "flag" && row.id === item.id))}
+                loading={flaggedState.loading}
+                error={flaggedState.error}
+                onRetry={() => void flaggedState.load()}
+                profile={selected}
+                categories={categories}
+                flaggedTotal={flaggedCountState.data ? flaggedCountState.data.expenses : null}
+                onReviewAll={() => openFlaggedRecords(navigation, "ExpenseBehavior")}
+              />
+            ) : null}
+
+            {activeSection === "alerts" ? (
               <ExpenseAlertsSection
                 unusualExpenses={data.unusualExpenses}
                 insufficientHistoryCategories={data.insufficientHistoryCategories}
                 openFindings={openFindings}
-                findingState={findingState}
+                findingState={{ ...findingState, data: findingState.data ? { items: findingSnapshot.items, nextCursor: findingSnapshot.cursor } : null }}
+                visibleFindingIds={reviewVisible.filter((row) => row.kind === "finding").map((row) => row.id)}
+                visibleUnusualIds={reviewVisible.filter((row) => row.kind === "unusual").map((row) => row.id)}
+                hasOtherReviewItems={!flagSnapshot.ready || flagSnapshot.items.length > 0 || flagSnapshot.cursor !== null || (flaggedCountState.data?.expenses ?? 0) > 0}
+                findingsComplete={findingsFinished}
                 findingNotice={findingNotice}
                 refreshFindings={findingState.load}
                 findingsRefreshing={findingState.refreshing}
@@ -891,6 +934,13 @@ function ExpenseBehaviorContent({ navigation }: any) {
                   });
                   setAskOpen(true);
                 }}
+                pagination={
+                  <ExpensePagination label="Review" page={reviewPage} size={reviewSize} count={reviewRows.length} totalCount={reviewTotalCount} complete={reviewComplete} available={flagSnapshot.ready} busy={reviewPaging || flaggedState.refreshing || findingState.refreshing} hasNext={(reviewPage + 1) * reviewSize < reviewRows.length || !flagsFinished || !findingsFinished} error={reviewPageError} onPage={(page) => void ensureReviewPage(page, reviewSize)} onNext={() => void ensureReviewPage(reviewPage + 1, reviewSize)} onRetry={() => {
+                    if (flagSnapshot.blocked || findingSnapshot.blocked) { void Promise.all([flaggedState.load(), findingState.load()]); return; }
+                    const retry = pageRetry.current ?? { page: reviewPage + 1, size: reviewSize };
+                    void ensureReviewPage(retry.page, retry.size);
+                  }} />
+                }
               />
             ) : null}
 
@@ -907,6 +957,8 @@ function ExpenseBehaviorContent({ navigation }: any) {
             */}
             {activeSection === "recurring" ? (
               <ExpenseRecurringSection
+                visibleScheduleIds={recurringVisible.filter((row) => row.kind === "schedule").map((row) => row.id)}
+                visibleCandidateIds={recurringVisible.filter((row) => row.kind === "candidate").map((row) => row.id)}
                 patternActionError={patternActionError}
                 scheduleState={scheduleState}
                 schedules={schedules}
@@ -920,17 +972,12 @@ function ExpenseBehaviorContent({ navigation }: any) {
                 dismissPattern={dismissPattern}
               />
             ) : null}
+            {activeSection === "recurring" ? <ExpensePagination label="Recurring" page={recurringPage} size={recurringSize} count={recurringRows.length} complete={schedules !== null && patternState.data !== null} available={schedules !== null || patternState.data !== null} busy={false} hasNext={(recurringPage + 1) * recurringSize < recurringRows.length} onPage={setRecurringPage} onNext={() => setRecurringPage((page) => page + 1)} /> : null}
           </View>
         )}
-      </ScrollView>
+      </ContentScrollView>
 
-      {/*
-        Outside the ScrollView so it stays put while the page moves under it —
-        the same placement and the same reasoning as Home. The question an
-        owner wants to ask an insight is usually prompted by something they
-        have just scrolled past, which a button pinned to the end of the page
-        is the worst possible place for.
-      */}
+      {/* Outside the ScrollView so it stays put while the page moves under it, as on Home and Recovery. */}
       <AskFinSightFab onPress={() => setAskOpen(true)} />
 
       <AskFinSight visible={askOpen} onClose={() => setAskOpen(false)} module="Expense Insights" />

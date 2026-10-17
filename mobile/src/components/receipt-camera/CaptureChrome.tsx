@@ -1,5 +1,5 @@
 import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '../../context/ThemeContext';
 import { font, typeScale } from '../../theme/tokens';
 import { TAP_FLOOR } from '../touchTarget';
@@ -10,7 +10,7 @@ import { TAP_FLOOR } from '../touchTarget';
  */
 export function CaptureStatusPill({ message, working }: { message: string; working: boolean }) {
   const t = useTheme();
-  return <View pointerEvents="none" style={styles.pillRow}>
+  return <View style={[styles.pillRow, { pointerEvents: "none" }]}>
     <View style={[styles.pill, { backgroundColor: t.scrimStrong }]}>
       {working ? <ActivityIndicator size="small" color={t.onCamera} /> : null}
       <Text accessibilityLiveRegion="polite" numberOfLines={2} style={[styles.pillText, { color: t.onCamera }]}>{message}</Text>

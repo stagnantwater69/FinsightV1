@@ -7,6 +7,7 @@ import { assertNotFutureDate } from "../lib/transactionDate";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
 import { DEFAULT_RECORD_SORT, recordCursorWhere, recordOrderBy, type RecordCursor, type RecordSort } from "../lib/recordSort";
 import { lockSalesDuplicateWriteGate } from "../lib/recordLock";
+import { findManualRecordReplay, manualRecordBaselineInstant, manualRecordRequestIdentity, persistManualRecordRequest } from "../lib/manualRecordCreate";
 import { createNotification, NOTIFICATION_TYPES } from "./notification.service";
 import { duplicateKeyOf, type BulkDbClient, type FlaggedListOptions } from "./expenseRecord.service";
 import { enqueueCsvSourcePurgesIfOrphaned } from "./csvSourcePurge.service";
@@ -17,6 +18,7 @@ import {
 } from "./availableFundsBaseline.service";
 
 interface CreateInput extends AvailableFundsBaselineInput {
+  idempotencyKey?: string;
   businessProfileId: number;
   date: string;
   description: string;
@@ -200,12 +202,33 @@ async function normalizeDuplicateIdentity(
 export async function createSalesRecord(userId: number, input: CreateInput) {
   await requireOwnedBusinessProfile(userId, input.businessProfileId);
 
+  const identity = input.idempotencyKey === undefined ? null : manualRecordRequestIdentity(
+    userId,
+    input.businessProfileId,
+    "SALES",
+    input.idempotencyKey,
+    [
+      input.businessProfileId,
+      input.date,
+      input.description,
+      new Prisma.Decimal(input.amount).toString(),
+      input.source ?? "MANUAL_ENTRY",
+      input.importBatchId ?? null,
+      input.includedInAvailableFundsBaseline ?? null,
+      manualRecordBaselineInstant(input.availableFundsBaselineAt),
+    ],
+  );
+
   const date = new Date(input.date);
   const amount = new Prisma.Decimal(input.amount);
 
   const { record, duplicate } = await prisma.$transaction(async (tx) => {
     await lockSalesDuplicateWriteGate(tx, input.businessProfileId);
     const profile = await requireOwnedBusinessProfile(userId, input.businessProfileId, tx);
+    if (identity) {
+      const replay = await findManualRecordReplay(tx, identity);
+      if (replay?.kind === "SALES") return { record: replay.record, duplicate: undefined };
+    }
     assertNotFutureDate(input.date, profile.timezone);
     const classification = resolveAvailableFundsClassification(
       profile,
@@ -231,6 +254,7 @@ export async function createSalesRecord(userId: number, input: CreateInput) {
       },
     });
 
+    if (identity) await persistManualRecordRequest(tx, identity, created.id);
     return { record: created, duplicate: existing };
   });
 
@@ -616,33 +640,43 @@ export async function bulkResolveSalesDuplicates(
   return owned.length;
 }
 
+function searchSalesWhere(filters: SearchFilters): Prisma.SalesReferenceRecordWhereInput {
+  const cursorWhere = recordCursorWhere(filters.cursor, filters.sort ?? DEFAULT_RECORD_SORT);
+  return {
+    businessProfileId: filters.businessProfileId,
+    source: filters.source,
+    importBatchId: filters.importBatchId,
+    AND: [
+      {
+        date: {
+          gte: filters.dateFrom ? new Date(filters.dateFrom) : undefined,
+          lte: filters.dateTo ? new Date(filters.dateTo) : undefined,
+        },
+      },
+      ...(cursorWhere ? [cursorWhere] : []),
+    ],
+    description: filters.keyword ? { contains: filters.keyword, mode: "insensitive" } : undefined,
+  };
+}
+
 export async function searchSalesRecords(userId: number, filters: SearchFilters) {
   await requireOwnedBusinessProfile(userId, filters.businessProfileId);
 
-  const sort = filters.sort ?? DEFAULT_RECORD_SORT;
-  const cursorWhere = recordCursorWhere(filters.cursor, sort);
-
   const records = await prisma.salesReferenceRecord.findMany({
-    where: {
-      businessProfileId: filters.businessProfileId,
-      source: filters.source,
-      importBatchId: filters.importBatchId,
-      AND: [
-        {
-          date: {
-            gte: filters.dateFrom ? new Date(filters.dateFrom) : undefined,
-            lte: filters.dateTo ? new Date(filters.dateTo) : undefined,
-          },
-        },
-        ...(cursorWhere ? [cursorWhere] : []),
-      ],
-      description: filters.keyword ? { contains: filters.keyword, mode: "insensitive" } : undefined,
-    },
-    orderBy: recordOrderBy(sort),
+    where: searchSalesWhere(filters),
+    orderBy: recordOrderBy(filters.sort ?? DEFAULT_RECORD_SORT),
     take: filters.take,
   });
 
   return records.map(toDTO);
+}
+
+export async function countSearchSalesRecords(
+  userId: number,
+  filters: Omit<SearchFilters, "cursor" | "take">,
+): Promise<number> {
+  await requireOwnedBusinessProfile(userId, filters.businessProfileId);
+  return prisma.salesReferenceRecord.count({ where: searchSalesWhere({ ...filters, cursor: undefined }) });
 }
 
 /** The one definition of "flagged" on this side, shared by the list and the count. */

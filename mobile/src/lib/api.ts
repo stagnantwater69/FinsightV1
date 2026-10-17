@@ -190,6 +190,31 @@ function bearer(token: string | undefined): Record<string, string> {
 type SessionRecovery = { kind: "refreshed"; token: string } | { kind: "unreachable" } | { kind: "refused" };
 
 let recovering: Promise<SessionRecovery> | null = null;
+let sessionGeneration = 0;
+const sessionRequests = new Set<() => void>();
+
+/** Account changes cancel client work; an abort does not undo a server commit. */
+export function invalidateApiSessionRequests(): void {
+  sessionGeneration += 1;
+  recovering = null;
+  for (const cancel of sessionRequests) cancel();
+  sessionRequests.clear();
+}
+
+function assertRequestCurrent(generation: number, signal?: AbortSignal): void {
+  if (generation !== sessionGeneration || signal?.aborted) {
+    throw networkError(new Error("The request was cancelled"));
+  }
+}
+
+function waitWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(networkError(new Error("The request was cancelled")));
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
+}
 
 /**
  * What a 401 on a session-backed request should lead to.
@@ -204,12 +229,20 @@ let recovering: Promise<SessionRecovery> | null = null;
  * Shared across concurrent 401s so a screen that loads several things at once
  * does not spend the refresh token once per request. Mirrors web's api.ts.
  */
-async function recoverSession(rejectedToken: string): Promise<SessionRecovery> {
-  const { data } = await supabase.auth.getSession();
+async function recoverSession(rejectedToken: string, generation: number): Promise<SessionRecovery> {
+  let result: Awaited<ReturnType<typeof supabase.auth.getSession>>;
+  try {
+    result = await supabase.auth.getSession();
+  } catch {
+    return { kind: "unreachable" };
+  }
+  assertRequestCurrent(generation);
+  const { data } = result;
   const current = data.session?.access_token;
   if (current && current !== rejectedToken) return { kind: "refreshed", token: current };
 
-  recovering ??= supabase.auth
+  if (recovering) return recovering;
+  const pending = supabase.auth
     .refreshSession()
     .then(
       ({ data: refreshed, error }): SessionRecovery => {
@@ -220,9 +253,10 @@ async function recoverSession(rejectedToken: string): Promise<SessionRecovery> {
         isAuthRetryableFetchError(err) ? { kind: "unreachable" } : { kind: "refused" },
     )
     .finally(() => {
-      recovering = null;
+      if (recovering === pending) recovering = null;
     });
-  return recovering;
+  recovering = pending;
+  return pending;
 }
 
 /** A 401 that a refresh might fix: sent with the stored session, not yet retried. */
@@ -298,13 +332,13 @@ function rateLimitMessage(header: unknown, responseBody: unknown): string {
  * even though it is from the laptop. "Network request failed" is true and
  * useless, so those get a message that says what to check.
  */
-async function toError(res: Response, path: string): Promise<ApiError> {
+async function toError(res: Response, path: string, generation: number, signal: AbortSignal, reportSessionFailure = true): Promise<ApiError> {
   let message = `Request failed (${res.status})`;
   let fieldErrors: Record<string, string> = {};
   let code: string | undefined;
   let responseBody: unknown;
   try {
-    const body = await res.json();
+    const body = await waitWithSignal(res.json(), signal);
     responseBody = body;
     fieldErrors = fieldErrorsFrom(body);
     code = codeFrom(body);
@@ -317,14 +351,17 @@ async function toError(res: Response, path: string): Promise<ApiError> {
   } catch {
     // Non-JSON body — keep the status-based message.
   }
+  assertRequestCurrent(generation, signal);
   // Only on a request that HAD a session to lose. See CREDENTIAL_ENDPOINTS.
-  if (res.status === 401 && !isCredentialCheck(path)) {
-    message = "Your session has expired. Please log in again.";
+  if (reportSessionFailure) {
+    if (res.status === 401 && !isCredentialCheck(path)) {
+      message = "Your session has expired. Please log in again.";
+    }
   }
   // The message above is what THIS caller shows; this is what ends the session
   // app-wide. Both are needed — a screen mid-request still has an error to
   // render while the shell swaps itself for the login form.
-  reportSessionEnd(res.status, path, code);
+  if (reportSessionFailure) reportSessionEnd(res.status, path, code);
   // 503 is the server saying a dependency is briefly away and naming which —
   // more useful than the generic 5xx line, which would flatten it into
   // "the server had a problem with that" and imply the request was at fault.
@@ -379,6 +416,7 @@ function withTimeout(signal: AbortSignal | undefined, ms: number) {
   else signal?.addEventListener("abort", forward, { once: true });
   return {
     signal: controller.signal,
+    abort: () => controller.abort(),
     timedOut: () => timedOut,
     release: () => {
       clearTimeout(timer);
@@ -405,13 +443,23 @@ async function request<T>(method: string, path: string, opts: {
   authToken?: string;
   /** The stored-session token to send, set only on the one retry after a refresh. */
   retryToken?: string;
+  requestGeneration?: number;
 } = {}): Promise<T> {
-  // A link token is never swapped for the session's, so it is never refreshed.
-  const token = opts.authToken ? undefined : (opts.retryToken ?? (await sessionToken()));
+  const generation = opts.requestGeneration ?? sessionGeneration;
   // The clock covers reading the body too: a connection can stall after the
   // headers arrive, which looks identical to a hang from the screen's side.
   const deadline = withTimeout(opts.signal, JSON_REQUEST_TIMEOUT_MS);
+  sessionRequests.add(deadline.abort);
   try {
+    assertRequestCurrent(generation, deadline.signal);
+    // A link token is never swapped for the stored session's token.
+    let token: string | undefined;
+    try {
+      token = opts.authToken ? undefined : (opts.retryToken ?? (await waitWithSignal(sessionToken(), deadline.signal)));
+    } catch (err) {
+      throw deadline.timedOut() ? networkError(new Error("The request timed out")) : err instanceof ApiError ? err : networkError(err);
+    }
+    assertRequestCurrent(generation, deadline.signal);
     let res: Response;
     try {
       res = await fetch(buildUrl(path, opts.query), {
@@ -428,12 +476,15 @@ async function request<T>(method: string, path: string, opts: {
       throw deadline.timedOut() ? networkError(new Error("The request timed out")) : networkError(err);
     }
 
+    assertRequestCurrent(generation, deadline.signal);
+
     if (recoverable(res.status, path, token, opts.retryToken !== undefined)) {
-      const recovery = await recoverSession(token!);
-      if (recovery.kind === "refreshed") return request<T>(method, path, { ...opts, retryToken: recovery.token });
+      const recovery = await waitWithSignal(recoverSession(token!, generation), deadline.signal);
+      assertRequestCurrent(generation, deadline.signal);
+      if (recovery.kind === "refreshed") return request<T>(method, path, { ...opts, retryToken: recovery.token, requestGeneration: generation });
       if (recovery.kind === "unreachable") throw networkError(new Error("Could not refresh the session"));
     }
-    if (!res.ok) throw await toError(res, path);
+    if (!res.ok) throw await toError(res, path, generation, deadline.signal, !opts.authToken);
     if (res.status === 204) {
       invalidateServerStateForMutation(method, path, opts.body, opts.cacheScope);
       return undefined as T;
@@ -441,14 +492,18 @@ async function request<T>(method: string, path: string, opts: {
 
     let text: string;
     try {
-      text = await res.text();
+      text = await waitWithSignal(res.text(), deadline.signal);
     } catch (err) {
       throw deadline.timedOut() ? networkError(new Error("The request timed out")) : networkError(err);
     }
+    assertRequestCurrent(generation, deadline.signal);
     const data = (text ? JSON.parse(text) : undefined) as T;
     invalidateServerStateForMutation(method, path, opts.body, opts.cacheScope, data);
     return data;
+  } catch (err) {
+    throw deadline.timedOut() ? networkError(new Error("The request timed out")) : err;
   } finally {
+    sessionRequests.delete(deadline.abort);
     deadline.release();
   }
 }
@@ -483,13 +538,29 @@ function uploadRequest<T>(
   formData: FormData,
   options: ApiMutationOptions = {},
   retryToken?: string,
+  generation = sessionGeneration,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     void (async () => {
-      const token = retryToken ?? (await sessionToken());
+      const deadline = withTimeout(options.signal, 120_000);
+      sessionRequests.add(deadline.abort);
+      const cleanup = () => {
+        sessionRequests.delete(deadline.abort);
+        deadline.release();
+      };
+      let token: string | undefined;
+      try {
+        assertRequestCurrent(generation, deadline.signal);
+        token = retryToken ?? (await waitWithSignal(sessionToken(), deadline.signal));
+        assertRequestCurrent(generation, deadline.signal);
+      } catch (err) {
+        cleanup();
+        throw deadline.timedOut() ? networkError(new Error("The upload timed out")) : err instanceof ApiError ? err : networkError(err);
+      }
       const headers = bearer(token);
-      const xhr = new XMLHttpRequest();
-      const { signal } = options;
+      let xhr: XMLHttpRequest;
+      try { xhr = new XMLHttpRequest(); } catch (err) { cleanup(); throw networkError(err); }
+      const signal = deadline.signal;
       // Already cancelled before the request could start — the same failure
       // `xhr.onabort` reports, so it must arrive in the same shape. A bare
       // Error here reached callers as something with no `status`, and code
@@ -498,31 +569,40 @@ function uploadRequest<T>(
       if (signal?.aborted) throw networkError(new Error("The upload was cancelled"));
       const abort = () => xhr.abort();
       signal?.addEventListener("abort", abort, { once: true });
-      const detach = () => signal?.removeEventListener("abort", abort);
-      xhr.open("POST", buildUrl(path));
-      // A stalled upload must release the camera's action lock and leave the
-      // locally captured pages available for retry.
-      xhr.timeout = 120_000;
-      for (const [key, value] of Object.entries(headers)) xhr.setRequestHeader(key, value);
+      const detach = () => { signal.removeEventListener("abort", abort); cleanup(); };
+      try {
+        xhr.open("POST", buildUrl(path));
+        // Stalled uploads leave locally captured pages available for retry.
+        xhr.timeout = 120_000;
+        for (const [key, value] of Object.entries(headers)) xhr.setRequestHeader(key, value);
+      } catch (err) { detach(); throw networkError(err); }
       // Content-Type is deliberately unset: XHR derives it from the FormData
       // along with the multipart boundary, and setting it by hand produces a
       // body the server cannot split.
 
       xhr.onload = () => {
         detach();
+        try { assertRequestCurrent(generation, signal); } catch (err) { reject(err); return; }
         const status = xhr.status;
         const text = xhr.responseText;
 
         // See `request`: one refresh and one retry before a 401 ends the session.
         if (recoverable(status, path, token, retryToken !== undefined)) {
-          void recoverSession(token!).then((recovery) => {
+          // Keep cancellation active while the shared refresh is pending.
+          const recoveryDeadline = withTimeout(options.signal, 120_000);
+          sessionRequests.add(recoveryDeadline.abort);
+          void waitWithSignal(recoverSession(token!, generation), recoveryDeadline.signal).then((recovery) => {
+            assertRequestCurrent(generation, recoveryDeadline.signal);
             if (recovery.kind === "refreshed") {
-              uploadRequest<T>(path, formData, options, recovery.token).then(resolve, reject);
+              uploadRequest<T>(path, formData, options, recovery.token, generation).then(resolve, reject);
             } else if (recovery.kind === "unreachable") {
               reject(networkError(new Error("Could not refresh the session")));
             } else {
               settle(status, text);
             }
+          }).catch(reject).finally(() => {
+            sessionRequests.delete(recoveryDeadline.abort);
+            recoveryDeadline.release();
           });
           return;
         }
@@ -530,6 +610,7 @@ function uploadRequest<T>(
       };
 
       const settle = (status: number, text: string) => {
+        try { assertRequestCurrent(generation, options.signal); } catch (err) { reject(err); return; }
         if (status >= 200 && status < 300) {
           try {
             const data = (text ? JSON.parse(text) : undefined) as T;
@@ -583,7 +664,12 @@ function uploadRequest<T>(
       xhr.ontimeout = () => { detach(); reject(networkError(new Error("The upload timed out"))); };
       xhr.onabort = () => { detach(); reject(networkError(new Error("The upload was cancelled"))); };
 
-      xhr.send(formData);
+      try {
+        xhr.send(formData);
+      } catch (err) {
+        detach();
+        reject(networkError(err));
+      }
     })().catch(reject);
   });
 }

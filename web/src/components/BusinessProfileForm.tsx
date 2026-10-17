@@ -1,5 +1,5 @@
 import { useRef, useState, type FormEvent, type ReactNode } from "react";
-import { BadgeDollarSign, Building2, CircleCheck } from "lucide-react";
+import { CircleCheck } from "lucide-react";
 import type { BusinessProfileInput } from "../lib/types";
 import { Button } from "./Button";
 import { FormError } from "./Field";
@@ -32,7 +32,7 @@ interface Props {
   onCancel?: () => void;
   /** Condensed presentation for the wide modal; full pages retain guidance. */
   compact?: boolean;
-  /** Supporting business tools shown beside the settings form. */
+  /** Independent financial controls and tools shown after the settings form. */
   settingsAside?: ReactNode;
   onDirtyChange?: (dirty: boolean) => void;
 }
@@ -165,92 +165,88 @@ export function BusinessProfileForm({
 
   if (settingsAside) {
     return (
-      <form ref={formRef} onSubmit={handleSubmit} noValidate>
-        <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(20rem,0.85fr)]">
-          <div className="min-w-0 space-y-5">
-            <Card className="p-5 sm:p-6">
+      <>
+        <form ref={formRef} onSubmit={handleSubmit} noValidate>
+          <Card className="overflow-hidden shadow-none">
+            <section className="p-5 sm:p-7">
               <SettingsSectionHeading
-                icon={<Building2 size={21} aria-hidden />}
                 title="Business identity"
-                description="Basic details about this business."
+                description="The name, type, and logo for this business."
               />
-              <div className="mt-5 space-y-5">
-                {logo ? (
-                  <div className="border-b border-paper-200 pb-5">{logo}</div>
-                ) : null}
-                <BusinessBasicsFields
-                  key={resetVersion}
-                  draft={draft}
-                  errors={fieldErrors}
-                  update={update}
-                  autoFocus={false}
-                />
+              <div className={`mt-6 grid gap-6 ${logo ? "lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)] lg:gap-8" : ""}`}>
+                {logo ? <div className="min-w-0">{logo}</div> : null}
+                <div className="min-w-0 space-y-5">
+                  <BusinessBasicsFields
+                    key={resetVersion}
+                    draft={draft}
+                    errors={fieldErrors}
+                    update={update}
+                    autoFocus={false}
+                    settings
+                  />
+                </div>
               </div>
-            </Card>
+            </section>
 
-            <Card className="p-5 sm:p-6">
+            <section className="border-t border-paper-200 p-5 sm:p-7">
               <SettingsSectionHeading
-                icon={<BadgeDollarSign size={21} aria-hidden />}
                 title="Starting figures"
-                description="FinSight keeps these starting values separate from figures calculated from your records."
+                description="Your balance and estimates. Calculated figures from confirmed records appear below."
               />
-              <div className="mt-5">
+              <div className="mt-6 space-y-5">
                 <BusinessNumbersFields
                   draft={draft}
                   errors={fieldErrors}
                   update={update}
                   existingProfile={Boolean(initialValues)}
+                  settings
                 />
               </div>
-            </Card>
+            </section>
+          </Card>
 
-            {error ? <FormError>{error}</FormError> : null}
-          </div>
+          {error ? <div className="mt-4"><FormError>{error}</FormError></div> : null}
 
-          <aside className="min-w-0 space-y-5 xl:sticky xl:top-[calc(var(--topbar-h)+1.5rem)]">
-            {settingsAside}
-          </aside>
-        </div>
-
-        <div className="z-20 -mx-4 mt-6 flex flex-col gap-3 border-t border-paper-200 bg-paper/95 px-4 py-3 shadow-[0_-8px_24px_rgb(var(--shadow)/0.06)] backdrop-blur sm:-mx-6 sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:sticky lg:bottom-0 xl:-mx-8 xl:px-8">
-          <p
-            className={`flex min-h-6 items-center gap-2 text-xs font-medium ${
-              dirty ? "text-tone-accent" : "text-ink-500"
-            }`}
-            aria-live="polite"
-          >
-            {dirty ? (
-              <span aria-hidden className="size-2 rounded-full bg-accent-500" />
-            ) : (
-              <CircleCheck aria-hidden className="size-4 text-tone-brand" />
-            )}
-            {dirty
-              ? "You have unsaved changes"
-              : saved
-                ? "Changes saved"
-                : "Everything is up to date"}
-          </p>
-          <div className="flex flex-col-reverse gap-3 sm:flex-row">
-            <Button
-              type="button"
-              variant="secondary"
-              disabled={submitting || !dirty}
-              onClick={handleCancel}
-              className="w-full sm:min-w-28"
+          <div className="z-20 mt-4 flex flex-col gap-3 rounded-xl border border-paper-200 bg-paper px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <p
+              className={`flex min-h-6 items-center gap-2 text-sm ${dirty ? "text-tone-accent" : "text-ink-500"}`}
+              aria-live="polite"
             >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              variant="primary"
-              disabled={submitting || !dirty}
-              className="w-full sm:min-w-36"
-            >
-              {submitting ? "Saving…" : submitLabel}
-            </Button>
+              {dirty ? (
+                <span aria-hidden className="size-2 shrink-0 rounded-full bg-accent-500" />
+              ) : (
+                <CircleCheck aria-hidden className="size-4 shrink-0 text-tone-brand" />
+              )}
+              {dirty
+                ? "You have unsaved changes"
+                : saved
+                  ? "Changes saved"
+                  : "Everything is up to date"}
+            </p>
+            <div className="flex flex-col-reverse gap-3 sm:flex-row">
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={submitting || !dirty}
+                onClick={handleCancel}
+                className="w-full sm:min-w-28"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={submitting || !dirty}
+                className="w-full sm:min-w-36"
+              >
+                {submitting ? "Saving…" : submitLabel}
+              </Button>
+            </div>
           </div>
-        </div>
-      </form>
+        </form>
+
+        <div className="mt-8 min-w-0 space-y-6">{settingsAside}</div>
+      </>
     );
   }
 
@@ -340,27 +336,20 @@ function sameDraft(a: BusinessProfileDraft, b: BusinessProfileDraft) {
 }
 
 function SettingsSectionHeading({
-  icon,
   title,
   description,
 }: {
-  icon: ReactNode;
   title: string;
   description: string;
 }) {
   return (
-    <div className="flex items-start gap-3">
-      <span className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-tint-brand text-tone-brand ring-1 ring-edge-brand">
-        {icon}
-      </span>
-      <div className="min-w-0 pt-0.5">
-        <h2 className="font-display text-base font-semibold text-ink-900 sm:text-lg">
-          {title}
-        </h2>
-        <p className="mt-0.5 text-sm leading-relaxed text-ink-500">
-          {description}
-        </p>
-      </div>
+    <div className="min-w-0">
+      <h2 className="font-display text-lg font-semibold text-ink-900">
+        {title}
+      </h2>
+      <p className="mt-1 max-w-[70ch] text-sm leading-relaxed text-ink-500">
+        {description}
+      </p>
     </div>
   );
 }

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert as RNAlert, AppState, FlatList, RefreshControl, View } from "react-native";
+import { ActivityIndicator, AppState, FlatList, Pressable, RefreshControl, View } from "react-native";
+import { CONTENT_WIDTH } from "../../components/ContentScrollView";
 import { useFocusEffect } from "@react-navigation/native";
-import { Button, Callout, Card, EmptyState, ErrorNote, Money, Screen, T } from "../../components/ui";
+import { AlertBadge, Button, Card, ConfirmSheet, Disclosure, EmptyState, ErrorNote, Screen, T } from "../../components/ui";
 import { useBusinessProfiles } from "../../context/BusinessProfileContext";
 import { api } from "../../lib/api";
 import { ConnectionNotice, LastUpdated } from "../../components/ConnectionNotice";
@@ -18,9 +19,13 @@ import {
   subscribeToServerState,
 } from "../../lib/serverStateCache";
 import * as haptics from "../../lib/haptics";
-import { font, space } from "../../theme/tokens";
+import { font, radius, space, typeScale } from "../../theme/tokens";
 import { useTheme } from "../../context/ThemeContext";
-import type { FlaggedRecordCounts, FlaggedRecordPage, RecordItem } from "../../lib/types";
+import Ionicons from "@expo/vector-icons/Ionicons";
+import { TAP_FLOOR } from "../../components/touchTarget";
+import { flagReasonText } from "../../lib/flagReasons";
+import { formatMoney } from "../../lib/money";
+import { RECORD_SOURCE_LABELS, type FlaggedRecordCounts, type FlaggedRecordPage, type RecordItem, type RecordSource } from "../../lib/types";
 import { badges, type ImportBatchSummary } from "./shared";
 
 /**
@@ -139,6 +144,8 @@ export function FlaggedRecordsScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [busyKey, setBusyKey] = useState<string | null>(null);
+  /** The group whose "Discard" is waiting on the confirm sheet. */
+  const [pendingDiscard, setPendingDiscard] = useState<DuplicateGroup | null>(null);
   /** A failed resolve — reassures about the record, not about the list's age. */
   const [error, setError] = useState<string | null>(null);
   /** A failed "Load more" — sits with the button, not over the whole screen. */
@@ -179,6 +186,7 @@ export function FlaggedRecordsScreen() {
       setError(null);
       setMoreError(null);
       setBusyKey(null);
+      setPendingDiscard(null);
       setLoadingMore(false);
       setLoading(true);
       setRefreshing(false);
@@ -309,7 +317,7 @@ export function FlaggedRecordsScreen() {
         requestVersionRef.current !== requestVersion ||
         selectedBusinessProfileIdRef.current !== requestBusinessProfileId
       ) return;
-      setMoreError(describeActionFailure(toLoadFailure(err), "The records already listed are still here."));
+      setMoreError(describeActionFailure(toLoadFailure(err), "The records already listed are still here.", "read"));
     } finally {
       if (
         requestVersionRef.current === requestVersion &&
@@ -379,13 +387,22 @@ export function FlaggedRecordsScreen() {
       loadedBusinessProfileIdRef.current !== r.businessProfileId
     ) return;
     const path = r.type === "expense" ? `/records/expenses/${r.id}` : `/records/sales/${r.id}`;
-    await api.patch(
-      path,
-      { duplicateStatus: "Not a Duplicate", reviewStatus: "Reviewed" },
-      { cacheScope: { businessProfileId: r.businessProfileId } },
-    );
-    if (selectedBusinessProfileIdRef.current !== r.businessProfileId) return;
-    await load();
+    const key = `record-${recordKey(r)}`;
+    setBusyKey(key);
+    setError(null);
+    try {
+      await api.patch(
+        path,
+        { duplicateStatus: "Not a Duplicate", reviewStatus: "Reviewed" },
+        { cacheScope: { businessProfileId: r.businessProfileId } },
+      );
+      if (selectedBusinessProfileIdRef.current !== r.businessProfileId) return;
+      await load();
+    } catch (err) {
+      if (selectedBusinessProfileIdRef.current === r.businessProfileId) setError(describeActionFailure(toLoadFailure(err), "This record is still waiting for review."));
+    } finally {
+      if (selectedBusinessProfileIdRef.current === r.businessProfileId) setBusyKey(null);
+    }
   }
 
   /**
@@ -397,66 +414,57 @@ export function FlaggedRecordsScreen() {
    * someone can press and one they abandon.
    */
   async function resolveGroup(group: DuplicateGroup, action: "keep" | "discard") {
-    const count = group.records.length;
-
-    const run = async () => {
-      const activeBusinessProfileId = selectedBusinessProfileIdRef.current;
-      if (
-        activeBusinessProfileId === null ||
-        loadedBusinessProfileIdRef.current !== activeBusinessProfileId ||
-        group.records.some((record) => record.businessProfileId !== activeBusinessProfileId)
-      ) return;
-      setBusyKey(group.key);
-      try {
-        const res = await api.post<{ resolved: number }>("/records/duplicates/resolve", {
-          businessProfileId: activeBusinessProfileId,
-          action,
-          expenseIds: group.records.filter((r) => r.type === "expense").map((r) => r.id),
-          salesIds: group.records.filter((r) => r.type === "sales").map((r) => r.id),
-        });
-        if (selectedBusinessProfileIdRef.current !== activeBusinessProfileId) return;
-        if (action === "discard") {
-          haptics.warned();
-        } else {
-          haptics.succeeded();
-        }
-        // The server's count, not the group's — it excludes anything already
-        // resolved elsewhere, and saying "40" when 38 were left would be a
-        // small lie about the owner's own books.
-        setFlash(
-          action === "keep"
-            ? `Kept ${res.resolved} record${res.resolved === 1 ? "" : "s"}`
-            : `Discarded ${res.resolved} record${res.resolved === 1 ? "" : "s"}`,
-        );
-        await load();
-      } catch (err) {
-        if (selectedBusinessProfileIdRef.current !== activeBusinessProfileId) return;
-        haptics.failed();
-        setError(describeActionFailure(toLoadFailure(err), "These records are still waiting for review."));
-      } finally {
-        if (selectedBusinessProfileIdRef.current === activeBusinessProfileId) setBusyKey(null);
-      }
-    };
-
-    if (action === "keep") {
-      await run();
+    // Discard goes through ConfirmSheet rather than `Alert.alert`: the system
+    // alert is a no-op on Expo web, so the button looked dead there.
+    if (action === "discard") {
+      setPendingDiscard(group);
       return;
     }
+    await runGroupAction(group, action);
+  }
 
-    RNAlert.alert(
-      `Discard ${count} record${count === 1 ? "" : "s"}?`,
-      `This deletes ${count === 1 ? "this copy" : `these ${count} copies`} for good. The original ` +
-        `record${count === 1 ? "" : "s"} they duplicate ${count === 1 ? "is" : "are"} not flagged and ` +
-        `${count === 1 ? "stays" : "stay"} exactly as ${count === 1 ? "it is" : "they are"}.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        { text: `Discard ${count}`, style: "destructive", onPress: () => void run() },
-      ],
-    );
+  async function runGroupAction(group: DuplicateGroup, action: "keep" | "discard") {
+    const activeBusinessProfileId = selectedBusinessProfileIdRef.current;
+    if (
+      activeBusinessProfileId === null ||
+      loadedBusinessProfileIdRef.current !== activeBusinessProfileId ||
+      group.records.some((record) => record.businessProfileId !== activeBusinessProfileId)
+    ) return;
+    setBusyKey(group.key);
+    try {
+      const res = await api.post<{ resolved: number }>("/records/duplicates/resolve", {
+        businessProfileId: activeBusinessProfileId,
+        action,
+        expenseIds: group.records.filter((r) => r.type === "expense").map((r) => r.id),
+        salesIds: group.records.filter((r) => r.type === "sales").map((r) => r.id),
+      });
+      if (selectedBusinessProfileIdRef.current !== activeBusinessProfileId) return;
+      if (action === "discard") {
+        haptics.warned();
+      } else {
+        haptics.succeeded();
+      }
+      // The server's count, not the group's — it excludes anything already
+      // resolved elsewhere, and saying "40" when 38 were left would be a
+      // small lie about the owner's own books.
+      setFlash(
+        action === "keep"
+          ? `Kept ${res.resolved} record${res.resolved === 1 ? "" : "s"}`
+          : `Discarded ${res.resolved} record${res.resolved === 1 ? "" : "s"}`,
+      );
+      await load();
+    } catch (err) {
+      if (selectedBusinessProfileIdRef.current !== activeBusinessProfileId) return;
+      haptics.failed();
+      setError(describeActionFailure(toLoadFailure(err), "These records are still waiting for review."));
+    } finally {
+      if (selectedBusinessProfileIdRef.current === activeBusinessProfileId) setBusyKey(null);
+    }
   }
 
   if (!selected) return null;
 
+  const discardCount = pendingDiscard?.records.length ?? 0;
   const loadedForSelectedBusiness = loadedBusinessProfileId === selected.id;
   const visibleRecords = loadedForSelectedBusiness ? records : [];
   const visibleBatches = loadedForSelectedBusiness ? batches : [];
@@ -472,13 +480,13 @@ export function FlaggedRecordsScreen() {
   const listItems: ReviewListItem[] = [
     ...(byImport.length > 0
       ? [
-          { key: "heading-import", kind: "heading" as const, label: "Duplicates from an imported file", spaced: false },
+          { key: "heading-import", kind: "heading" as const, label: `Duplicates from an imported file · ${byImport.reduce((sum, group) => sum + group.records.length, 0)} records shown`, spaced: false },
           ...byImport.map((group) => ({ key: group.key, kind: "group" as const, group })),
         ]
       : []),
     ...(byMatch.length > 0
       ? [
-          { key: "heading-match", kind: "heading" as const, label: "Possible duplicates", spaced: true },
+          { key: "heading-match", kind: "heading" as const, label: `Possible duplicates · ${byMatch.reduce((sum, group) => sum + group.records.length, 0)} records shown`, spaced: true },
           ...byMatch.map((group) => ({ key: group.key, kind: "group" as const, group })),
         ]
       : []),
@@ -490,53 +498,57 @@ export function FlaggedRecordsScreen() {
       : []),
   ];
 
+  const recordMeta = (record: RecordItem) => [
+    new Date(record.date).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }),
+    categories.find((category) => category.id === record.categoryId)?.name,
+    record.type === "expense" ? "Expense" : "Sales",
+  ].filter(Boolean).join(" · ");
+  const sourceLabel = (record: RecordItem) => RECORD_SOURCE_LABELS[record.source as RecordSource] ?? record.source;
+  const reason = (record: RecordItem) => record.largeExpenseFlag && selected.expectedMonthlyExpenses <= 0
+    ? ["Flagged as a large expense. Add a monthly expense estimate to see the threshold.", record.duplicateStatus === "Flagged" ? flagReasonText({ ...record, largeExpenseFlag: false }, selected) : ""].filter(Boolean).join(" ")
+    : flagReasonText(record, selected);
+  const reviewAction = (title: string, onPress: () => void, disabled: boolean, kind: "keep" | "discard" | "reviewed") => (
+    <Pressable accessibilityRole="button" accessibilityLabel={title} accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={({ pressed }) => ({ minHeight: TAP_FLOOR, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xs, paddingHorizontal: space.md, paddingVertical: space.sm, borderRadius: radius.md, borderWidth: 1, borderColor: kind === "discard" ? t.statusText.critical : t.brandText, backgroundColor: kind === "reviewed" ? t.brandSurface : t.surface, opacity: disabled ? 0.5 : pressed ? 0.7 : 1, ...(kind === "reviewed" ? {} : { flex: 1, minWidth: 125 }) })}>
+      {kind === "reviewed" ? <Ionicons name="checkmark-circle-outline" size={20} color={t.brandText} /> : null}
+      <T style={{ textAlign: "center", flexShrink: 1, fontFamily: font.sansSemibold, fontSize: typeScale.bodySm, color: kind === "discard" ? t.statusText.critical : t.brandText }}>{title}</T>
+    </Pressable>
+  );
   const renderGroup = (group: DuplicateGroup) => {
     const count = group.records.length;
     const first = group.records[0]!;
+    const homogeneous = group.records.every((record) => record.type === first.type && record.amount === first.amount && record.date.slice(0, 10) === first.date.slice(0, 10) && record.description === first.description && record.categoryId === first.categoryId);
+    const amount = homogeneous ? first.amount : group.records.reduce((sum, record) => sum + record.amount, 0);
     return (
-      <Card key={group.key} style={{ marginBottom: space.sm }}>
-        {group.batch ? (
-          <>
-            <T style={{ fontFamily: font.sansMedium }}>{group.batch.title}</T>
-            <T variant="caption">
-              Imported {group.batch.uploadDate.slice(0, 10)} · {count} possible duplicate
-              {count === 1 ? "" : "s"}
-            </T>
-          </>
-        ) : (
-          <>
-            <T style={{ fontFamily: font.sansMedium }}>{first.description}</T>
-            <T variant="caption">
-              {first.date.slice(0, 10)} · {count} cop{count === 1 ? "y" : "ies"}
-            </T>
-          </>
-        )}
-
-        <View style={{ marginTop: space.sm }}>
-          <Callout tone="warn">
-            {group.batch
-              ? "Every record here repeats one you already had — which usually means this file was imported twice. Discarding them leaves the records you already had untouched."
-              : `${count === 1 ? "This record has" : `These ${count} records have`} the same date, amount and description as a record you already had. Discarding ${count === 1 ? "it leaves" : "them leaves"} the original untouched.`}
-          </Callout>
+      <Card key={group.key} style={{ marginBottom: space.md, gap: space.md }}>
+        <View style={{ alignSelf: "flex-start" }}><AlertBadge kind="duplicate" /></View>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", gap: space.sm }}>
+          <View style={{ flexGrow: 1, flexShrink: 1, minWidth: 120, gap: space.xs }}>
+            <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg }}>{group.batch?.title ?? (homogeneous ? first.description : "Records with a possible match")}</T>
+            <T variant="caption">{group.batch ? `Imported ${group.batch.uploadDate.slice(0, 10)} · ${count} records shown` : homogeneous ? recordMeta(first) : `${count} records shown`}</T>
+          </View>
+          <View style={{ gap: space.xs }}>
+            <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg, fontVariant: ["tabular-nums"] }}>{formatMoney(amount, { decimals: true })}</T>
+            {!homogeneous || count > 1 ? <T variant="caption">{homogeneous ? "per record" : "Loaded group total"}</T> : null}
+          </View>
         </View>
-
-        <View style={{ flexDirection: "row", gap: space.sm, marginTop: space.md }}>
-          <View style={{ flex: 1 }}>
-            <Button
-              title={count === 1 ? "Keep it" : `Keep all ${count}`}
-              variant="secondary"
-              disabled={busyKey === group.key}
-              onPress={() => void resolveGroup(group, "keep")}
-            />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Button
-              title={count === 1 ? "Discard it" : `Discard all ${count}`}
-              variant="danger"
-              disabled={busyKey === group.key}
-              onPress={() => void resolveGroup(group, "discard")}
-            />
-          </View>
+        <View style={{ borderTopWidth: 1, borderTopColor: t.border, paddingTop: space.md, gap: space.sm }}>
+          <T style={{ color: t.textSecondary }}>Flagged as possible duplicates. Check the records before choosing what to keep.</T>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}><Ionicons name="copy-outline" size={20} color={t.textSecondary} /><T>{count} {count === 1 ? "record" : "records"} to check</T></View>
+          <T variant="caption">Discard removes only these flagged records.</T>
+          {nextCursor ? <T variant="caption">Actions apply to the records currently loaded in this group. Load more to check the remaining records.</T> : null}
+        </View>
+        <Disclosure title="Records in this group" summary={`${count} records · amounts, sources and flag reasons`}>
+          {group.records.map((record) => <View key={recordKey(record)} style={{ borderTopWidth: 1, borderTopColor: t.border, paddingVertical: space.sm, gap: space.xs }}>
+            <T style={{ fontFamily: font.sansMedium }}>{record.description}</T>
+            <T variant="caption">{recordMeta(record)} · {sourceLabel(record)}</T>
+            <T style={{ fontFamily: font.sansSemibold, fontVariant: ["tabular-nums"] }}>{formatMoney(record.amount, { decimals: true })}</T>
+            <T variant="caption">{reason(record)}</T>
+            {badges(record)}
+          </View>)}
+        </Disclosure>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
+          {reviewAction(count === 1 ? "Keep it" : `Keep all ${count}`, () => void resolveGroup(group, "keep"), busyKey === group.key, "keep")}
+          {reviewAction(count === 1 ? "Discard it" : `Discard all ${count}`, () => void resolveGroup(group, "discard"), busyKey === group.key, "discard")}
         </View>
       </Card>
     );
@@ -545,6 +557,7 @@ export function FlaggedRecordsScreen() {
   return (
     <Screen>
       <FlatList
+        style={{ width: "100%", maxWidth: CONTENT_WIDTH, alignSelf: "center" }}
         data={listItems}
         keyExtractor={(item) => item.key}
         contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}
@@ -559,19 +572,15 @@ export function FlaggedRecordsScreen() {
         )}
         ListHeaderComponent={(
           <>
-        <T variant="title" style={{ marginBottom: visibleFlaggedTotal === null ? space.md : space.xs }}>Records to review</T>
-        {/*
-          The headline count comes from /records/flagged/count, not from
-          records.length — one page is not the whole queue, and saying "3"
-          while 400 wait behind a cursor would be a wrong number about the
-          owner's own books.
-        */}
-        {visibleFlaggedTotal !== null && visibleFlaggedTotal > 0 ? (
-          <T variant="caption" accessibilityLiveRegion="polite" style={{ marginBottom: space.md, color: ink[500] }}>
-            {visibleFlaggedTotal} record{visibleFlaggedTotal === 1 ? "" : "s"} flagged
-            {visibleRecords.length < visibleFlaggedTotal ? ` · showing ${visibleRecords.length}` : ""}
-          </T>
-        ) : null}
+        <View style={{ backgroundColor: t.brandSurface, borderRadius: radius.md, padding: space.lg, marginBottom: space.md, flexDirection: "row", alignItems: "center", gap: space.md }}>
+          <Ionicons name="document-text-outline" size={32} color={t.brandText} />
+          <View style={{ flex: 1, gap: space.xs }}>
+            <T variant="heading" accessibilityRole="header" accessibilityLiveRegion="polite">{visibleFlaggedTotal === null ? visibleLoading ? "Loading review count…" : "Review count unavailable" : `${visibleFlaggedTotal} record${visibleFlaggedTotal === 1 ? " needs" : "s need"} a check`}</T>
+            <T style={{ color: t.textSecondary, fontSize: typeScale.bodySm }}>Review duplicates and unusually large expenses.</T>
+            {visibleFlaggedTotal !== null && visibleRecords.length < visibleFlaggedTotal ? <T variant="caption">{visibleFlaggedTotal} records flagged · showing {visibleRecords.length}</T> : null}
+          </View>
+        </View>
+        <View style={{ flexDirection: "row", gap: space.sm, alignItems: "center", marginBottom: space.lg }}><Ionicons name="information-circle-outline" size={20} color={t.textMuted} /><T variant="caption" style={{ flex: 1 }}>A flag means check the record; it may still be correct.</T></View>
         {visibleError ? <ErrorNote>{visibleError}</ErrorNote> : null}
 
         <ConnectionNotice
@@ -609,7 +618,7 @@ export function FlaggedRecordsScreen() {
         renderItem={({ item }) => {
           if (item.kind === "heading") {
             return (
-              <T variant="label" style={{ marginTop: item.spaced ? space.md : 0, marginBottom: space.sm }}>
+              <T variant="heading" accessibilityRole="header" style={{ marginTop: item.spaced ? space.lg : 0, marginBottom: space.md }}>
                 {item.label}
               </T>
             );
@@ -617,16 +626,17 @@ export function FlaggedRecordsScreen() {
           if (item.kind === "group") return renderGroup(item.group);
           const r = item.record;
           return (
-            <Card style={{ marginBottom: space.sm }}>
-              <View style={{ flexDirection: "row", justifyContent: "space-between", gap: space.md }}>
-                <View style={{ flex: 1 }}>
-                  <T style={{ fontFamily: font.sansMedium }}>{r.description}</T>
-                  <T variant="caption">{r.date.slice(0, 10)} · {categories.find((c) => c.id === r.categoryId)?.name ?? r.type}</T>
-                </View>
-                <Money value={r.amount} size={15} weight="semibold" />
-              </View>
+            <Card style={{ marginBottom: space.md, gap: space.md }}>
               {badges(r)}
-              <Button title="Looks right — mark reviewed" variant="secondary" onPress={() => resolve(r)} style={{ marginTop: space.md }} />
+              <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", gap: space.sm }}>
+                <View style={{ flexGrow: 1, flexShrink: 1, minWidth: 120, gap: space.xs }}>
+                  <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg }}>{r.description}</T>
+                  <T variant="caption">{recordMeta(r)} · {sourceLabel(r)}</T>
+                </View>
+                <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg, fontVariant: ["tabular-nums"] }}>{formatMoney(r.amount, { decimals: true })}</T>
+              </View>
+              <T style={{ borderTopWidth: 1, borderTopColor: t.border, paddingTop: space.md, color: t.textSecondary }}>{reason(r)}</T>
+              {reviewAction(busyKey === `record-${recordKey(r)}` ? "Marking reviewed…" : "Looks right — mark reviewed", () => void resolve(r), busyKey === `record-${recordKey(r)}`, "reviewed")}
             </Card>
           );
         }}
@@ -656,6 +666,24 @@ export function FlaggedRecordsScreen() {
               </T>
             )
         ) : null}
+      />
+      <ConfirmSheet
+        visible={pendingDiscard !== null}
+        title={`Discard ${discardCount} record${discardCount === 1 ? "" : "s"}?`}
+        body={
+          `This deletes ${discardCount === 1 ? "this copy" : `these ${discardCount} copies`} for good. The original ` +
+          `record${discardCount === 1 ? "" : "s"} they duplicate ${discardCount === 1 ? "is" : "are"} not flagged and ` +
+          `${discardCount === 1 ? "stays" : "stay"} exactly as ${discardCount === 1 ? "it is" : "they are"}.`
+        }
+        confirmLabel={`Discard ${discardCount}`}
+        confirmVariant="danger"
+        busy={pendingDiscard !== null && busyKey === pendingDiscard.key}
+        onConfirm={() => {
+          const group = pendingDiscard;
+          if (!group) return;
+          void runGroupAction(group, "discard").finally(() => setPendingDiscard(null));
+        }}
+        onCancel={() => setPendingDiscard(null)}
       />
     </Screen>
   );

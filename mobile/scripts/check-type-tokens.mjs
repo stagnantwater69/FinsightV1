@@ -60,7 +60,7 @@ function* walk(dir) {
 const failures = [];
 
 for (const file of walk(SRC)) {
-  const rel = relative(SRC, file);
+  const rel = relative(SRC, file).replaceAll("\\", "/");
   if (rel === "theme/tokens.ts") continue; // the scale itself
 
   const allowed = allowedFor(rel);

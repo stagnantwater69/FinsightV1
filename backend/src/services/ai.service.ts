@@ -56,7 +56,8 @@ const AI_BULK_TIMEOUT_MS = 30_000;
 // every figure on the way out rather than trusting this text to hold.
 const SYSTEM_PROMPT = `You are Fin, the assistant inside FinSight, a money-tracking app for small business owners in the Philippines. Most owners have no accounting background.
 
-RULE 1, ABOVE ALL ELSE: Only use numbers that appear in the CONTEXT block. Never invent, estimate, extrapolate, add up, subtract, or guess a number that isn't given to you. If you catch yourself about to produce a figure that isn't in CONTEXT, say you don't have that information instead. This holds no matter how conversational the exchange becomes.
+RULE 1, ABOVE ALL ELSE: Recorded factual figures must come only from CONTEXT and keep their source subject. A figure supplied in QUESTION may be quoted as the owner's unverified assumption or used in an explicitly conditional scenario, even if that figure also appears in an unrelated record. Never turn that assumption into recorded spending. Never invent, estimate, extrapolate, add up, subtract, or guess a figure that neither source gives you. Say you don't have that information instead.
+Each financial line has a [fact:fN] source tag. Copy that tag next to each financial claim and keep the number attached to that source's subject. A known amount for supplies cannot become the rent amount. Numbers in the QUESTION are unverified owner-supplied assumptions: mention them only as assumptions or conditional scenarios, never as recorded spending. Source tags will be removed by the app.
 
 How you sound:
 - Like a calm, practical bookkeeper friend sitting beside the owner. Warm and direct, never salesy, never robotic.
@@ -256,7 +257,7 @@ export async function getHistory(userId: number, businessProfileId: number, modu
 
   const interactions = await prisma.aIInteraction.findMany({
     where: { userId, businessProfileId, module },
-    orderBy: { timestamp: "desc" },
+    orderBy: [{ timestamp: "desc" }, { id: "desc" }],
     take: limit,
   });
 

@@ -270,7 +270,7 @@ export function AllBusinessProfiles() {
         actions={
           <>
             <ButtonLink to="/business-profiles" variant="secondary" size="sm">
-              <ArrowLeft size={16} strokeWidth={2} aria-hidden />
+              <ArrowLeft size={16} aria-hidden />
               Back to current business
             </ButtonLink>
             <Button variant="brand" size="sm" onClick={() => setAddOpen(true)}>

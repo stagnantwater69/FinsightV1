@@ -4,7 +4,8 @@ import { AuthLayout } from "../components/AuthLayout";
 import { Button } from "../components/Button";
 import { Field, FormError, PasswordInput, TextInput } from "../components/Field";
 import { api } from "../lib/api";
-import { createRecoveryClient } from "../lib/supabaseClient";
+import { useCodeResend } from "../hooks/useCodeResend";
+import { createRecoveryClient, disposeIsolatedAuthClient } from "../lib/supabaseClient";
 import { getErrorMessage } from "../lib/errors";
 import {
   isValid,
@@ -18,36 +19,11 @@ import {
   type ResetPasswordField,
 } from "../lib/authValidation";
 
-/**
- * Where a password reset is finished — by CODE, and only by code.
- *
- * WHY THERE IS NO LONGER A LINK. The reset email used to carry a button, and
- * the button was the problem: it has to survive an in-app mail viewer, a
- * desktop client with no browser handoff, a phone reading an inbox for an
- * account it is not signed into, and a redirect allow-list in a dashboard this
- * repository cannot see. Every one of those failed in practice, and each one
- * failed as a dead end rather than as an error anyone could act on. The email
- * now carries GoTrue's recovery OTP ({{ .Token }}) and nothing else, so there
- * is exactly one road and it is the one that works from any device, including
- * the one that cannot open this site at all.
- *
- * IT IS ALSO THE SAFER SHAPE, which was not the reason but is worth stating: a
- * link puts a live credential in a URL, where it survives in browser history,
- * in a screenshot and in the `Referer` of the next request. A typed code is
- * never written anywhere. The old link path is gone from here entirely —
- * `consumeAuthLink` is still used by email CONFIRMATION, which keeps its link.
- *
- * THE CODE NEVER REACHES OUR SERVER. It is exchanged with Supabase directly for
- * a session (`verifyOtp`), on a client that persists nothing (see
- * `createRecoveryClient`), and the new password is set against that. Our
- * backend is told only afterwards, and only so it can revoke every OTHER
- * refresh session —
- * which the browser cannot do for itself, and is often the entire reason
- * somebody is resetting.
- */
+/** Recovery sessions remain isolated from the app and are used only to change
+ * the password. The backend then revokes the account's other refresh sessions. */
 export function ResetPassword() {
   const navigate = useNavigate();
-  const { state } = useLocation() as { state?: { email?: string } };
+  const { state } = useLocation() as { state?: { email?: string; codeSent?: boolean } };
   /**
    * The token pair the CODE was exchanged for. Null until then, and null again
    * if it dies under us — which is what puts the code form back on screen.
@@ -77,6 +53,7 @@ export function ResetPassword() {
   const [codeFieldErrors, setCodeFieldErrors] = useState<FieldErrors<RecoveryCodeField>>({});
   const [codeError, setCodeError] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
+  const codeDelivery = useCodeResend("/auth/recover-password", state?.codeSent === true);
 
   function update(key: keyof typeof form, value: string) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -150,9 +127,8 @@ export function ResetPassword() {
       // draw.
       setCodeError("We couldn't check that code just now. Try again in a moment.");
     } finally {
-      // The verification client has done its one job; it is signed out on every
-      // path, exactly as the link path signs out its own.
-      await recovery.auth.signOut({ scope: "local" }).catch(() => undefined);
+      // Signing out here would revoke the refresh token needed by the next step.
+      disposeIsolatedAuthClient(recovery);
       setVerifying(false);
     }
   }
@@ -213,6 +189,7 @@ export function ResetPassword() {
     } finally {
       // The recovery session is never wanted again, whichever way this went.
       await recovery.auth.signOut({ scope: "local" }).catch(() => undefined);
+      disposeIsolatedAuthClient(recovery);
       setSubmitting(false);
     }
   }
@@ -230,13 +207,14 @@ export function ResetPassword() {
         title="Enter your recovery code"
         subtitle="Use the code from your password-reset email."
         heroTitle="Check your email for the code."
-        heroBody="We've sent a numbered code to your inbox. Type it in here and you can set a new password — no link to open, so it works on any device."
+        heroBody="Use the numbered code from your password-reset email to set a new password. If it hasn't arrived, check your spam folder or request another code."
       >
         {expired ? <p className="mb-6 text-center text-sm text-ink-600">{expired}</p> : null}
         <form onSubmit={handleVerifyCode} className="space-y-4" noValidate>
           <Field label="Email" htmlFor="recoveryEmail" required error={codeFieldErrors.email}>
             <TextInput
               id="recoveryEmail"
+              disabled={verifying || codeDelivery.sending}
               type="email"
               autoComplete="email"
               value={codeForm.email}
@@ -252,6 +230,7 @@ export function ResetPassword() {
           >
             <TextInput
               id="recoveryCode"
+              disabled={verifying || codeDelivery.sending}
               /*
                * `text` rather than `number`: a code is a string of digits, not
                * a quantity, and `number` brings spinners, scroll-to-change and
@@ -273,17 +252,20 @@ export function ResetPassword() {
             />
           </Field>
           {codeError ? <FormError>{codeError}</FormError> : null}
-          <Button type="submit" variant="primary" fullWidth disabled={verifying}>
+          <Button type="submit" variant="primary" fullWidth disabled={verifying || codeDelivery.sending}>
             {verifying ? "Checking…" : "Continue"}
           </Button>
         </form>
         <div className="mt-4">
-          <Button variant="secondary" fullWidth onClick={() => navigate("/recover-password")}>
-            Send another code
+          <Button variant="secondary" fullWidth disabled={verifying || codeDelivery.sending || codeDelivery.remaining > 0}
+            onClick={() => void codeDelivery.resend(codeForm.email)}>
+            {codeDelivery.sending ? "Sending…" : codeDelivery.remaining > 0 ? `Resend code in ${codeDelivery.remaining}s` : "Send another code"}
           </Button>
+          {codeDelivery.message ? <p className="mt-3 text-sm text-ink-600" role="status">{codeDelivery.message}</p> : null}
+          {codeDelivery.error ? <FormError>{codeDelivery.error}</FormError> : null}
         </div>
         <p className="mt-6 text-center text-sm text-ink-500">
-          <Link to="/login" className="tap-inline font-medium text-brand-700 hover:text-brand-800">
+          <Link to="/login" className="tap-inline link-action">
             Back to log in
           </Link>
         </p>

@@ -65,7 +65,8 @@ const registry = new Map<TourTargetKey, Registration>();
  * up from where it is now".
  */
 interface TourScroller {
-  scrollBy: (dy: number) => void;
+  scrollBy: (dy: number, options: { animated: boolean; signal?: AbortSignal }) => Promise<boolean>;
+  cancelWait: () => void;
 }
 let scroller: TourScroller | null = null;
 
@@ -124,23 +125,63 @@ export function tourTargetOptions(key: TourTargetKey): TourTargetOptions | undef
 export function useTourScrollView() {
   const ref = useRef<ScrollView | null>(null);
   const offset = useRef(0);
+  const pending = useRef<{ settle: () => void; finish: (moved: boolean) => void } | null>(null);
 
   useEffect(() => {
     const entry: TourScroller = {
-      scrollBy: (dy) =>
-        ref.current?.scrollTo({ y: Math.max(0, offset.current + dy), animated: true }),
+      cancelWait: () => pending.current?.finish(false),
+      scrollBy: (dy, { animated, signal }) => {
+        pending.current?.finish(false);
+        const node = ref.current;
+        const destination = Math.max(0, offset.current + dy);
+        if (!node || signal?.aborted || Math.abs(destination - offset.current) < 1) return Promise.resolve(false);
+        return new Promise<boolean>((resolve) => {
+          let idleTimer: ReturnType<typeof setTimeout> | undefined;
+          const finish = (moved: boolean) => {
+            if (pending.current !== job) return;
+            pending.current = null;
+            clearTimeout(deadline);
+            if (idleTimer) clearTimeout(idleTimer);
+            signal?.removeEventListener("abort", abort);
+            resolve(moved);
+          };
+          const abort = () => {
+            finish(false);
+            node.scrollTo({ y: offset.current, animated: false });
+          };
+          const job = {
+            finish,
+            settle: () => {
+              if (idleTimer) clearTimeout(idleTimer);
+              idleTimer = setTimeout(() => finish(true), 80);
+            },
+          };
+          pending.current = job;
+          // Some native scrolls at the content boundary emit no end event.
+          const deadline = setTimeout(() => finish(true), animated ? 650 : 200);
+          signal?.addEventListener("abort", abort, { once: true });
+          try {
+            node.scrollTo({ y: destination, animated });
+          } catch {
+            finish(false);
+          }
+        });
+      },
     };
     scroller = entry;
     return () => {
+      entry.cancelWait();
       if (scroller === entry) scroller = null;
     };
   }, []);
 
   const onScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
     offset.current = e.nativeEvent.contentOffset.y;
+    pending.current?.settle();
   }, []);
+  const onMomentumScrollEnd = useCallback(() => pending.current?.finish(true), []);
 
-  return { ref, onScroll, scrollEventThrottle: 16 } as const;
+  return { ref, onScroll, onMomentumScrollEnd, scrollEventThrottle: 16 } as const;
 }
 
 /**
@@ -155,20 +196,21 @@ export function useTourScrollView() {
 export async function revealTourTarget(
   key: TourTargetKey,
   viewport: { viewportTop: number; viewportBottom: number; preferredTop: number },
+  options: { animated?: boolean; signal?: AbortSignal } = {},
 ): Promise<boolean> {
   const entry = registry.get(key);
-  if (!entry?.scrolls || !scroller) return false;
+  const currentScroller = scroller;
+  if (!entry?.scrolls || !currentScroller || options.signal?.aborted) return false;
 
-  const rect = await measureTourTarget(key);
-  if (!rect) return false;
+  const rect = await measureTourTarget(key, options.signal);
+  if (!rect || options.signal?.aborted || registry.get(key) !== entry || scroller !== currentScroller) return false;
 
   const delta = scrollDeltaToReveal(rect, viewport);
   // Under a few points is a target that is already fine; moving the page for
   // it would be visible jitter with no gain.
   if (Math.abs(delta) < 24) return false;
 
-  scroller.scrollBy(delta);
-  return true;
+  return currentScroller.scrollBy(delta, { animated: options.animated !== false, signal: options.signal });
 }
 
 /**
@@ -187,9 +229,10 @@ export function stepIsOnScreen(step: { target?: TourTargetKey; requiresQuickAdd?
 /** How long to wait for a measurement before treating the target as absent. */
 const MEASURE_TIMEOUT_MS = 400;
 
-export function measureTourTarget(key: TourTargetKey): Promise<TourRect | null> {
-  const node = registry.get(key)?.get();
-  if (!node) return Promise.resolve(null);
+export function measureTourTarget(key: TourTargetKey, signal?: AbortSignal): Promise<TourRect | null> {
+  const entry = registry.get(key);
+  const node = entry?.get();
+  if (!node || signal?.aborted) return Promise.resolve(null);
 
   return new Promise<TourRect | null>((resolve) => {
     let settled = false;
@@ -197,14 +240,17 @@ export function measureTourTarget(key: TourTargetKey): Promise<TourRect | null> 
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
       resolve(rect);
     };
+    const abort = () => finish(null);
     const timer = setTimeout(() => finish(null), MEASURE_TIMEOUT_MS);
+    signal?.addEventListener("abort", abort, { once: true });
 
     try {
       node.measureInWindow((x, y, width, height) => {
         const usable =
-          Number.isFinite(x) && Number.isFinite(y) && width > 2 && height > 2;
+          registry.get(key) === entry && entry?.get() === node && Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(width) && Number.isFinite(height) && width > 2 && height > 2;
         finish(usable ? { x, y, width, height } : null);
       });
     } catch {
@@ -216,5 +262,6 @@ export function measureTourTarget(key: TourTargetKey): Promise<TourRect | null> 
 /** Test seam and teardown: forget every registration. */
 export function resetTourTargets() {
   registry.clear();
+  scroller?.cancelWait();
   scroller = null;
 }

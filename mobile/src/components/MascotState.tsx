@@ -113,6 +113,7 @@ export type MascotState =
   | "onboardingComplete"
   | "emptyDashboard"
   | "cameraPermission"
+  | "recoveryGuide"
   // 02-authentication
   | "login"
   | "forgotPassword"
@@ -156,6 +157,7 @@ const SOURCES: Record<MascotState, Thunk> = {
   onboardingComplete: () => require("../../assets/mascot/01-onboarding/onboardingcomplete.png"),
   emptyDashboard: () => require("../../assets/mascot/01-onboarding/emptydashboard.png"),
   cameraPermission: () => require("../../assets/mascot/01-onboarding/permission.png"),
+  recoveryGuide: () => require("../../assets/mascot/01-onboarding/tutorial.png"),
 
   login: () => require("../../assets/mascot/02-authentication/loginscreed(idle).png"),
   forgotPassword: () => require("../../assets/mascot/02-authentication/forgotpassword.png"),

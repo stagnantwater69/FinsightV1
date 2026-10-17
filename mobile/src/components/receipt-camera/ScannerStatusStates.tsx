@@ -1,5 +1,5 @@
 import { ActivityIndicator, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { Button, T } from "../ui";
 import { Mascot } from "../MascotState";
 import { space, typeScale } from "../../theme/tokens";

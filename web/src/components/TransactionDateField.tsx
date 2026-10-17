@@ -1,7 +1,8 @@
-import { useCallback, useId, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { FUTURE_DATE_MESSAGE, futureDateError, todayIso } from "../lib/dates";
 import { isFutureDateError } from "../lib/errors";
+import { captureServerStateAccount, serverStateAccountMatches, type ServerStateAccount } from "../lib/serverStateCache";
 import { Field, TextInput } from "./Field";
 
 /**
@@ -24,17 +25,35 @@ export function useTransactionDate(initial?: string) {
   const today = todayIso(selected?.timezone);
   const [date, setDateValue] = useState(initial ?? today);
   const [serverError, setServerError] = useState<string | null>(null);
+  const [focusRequest, setFocusRequest] = useState<{ businessProfileId: number | undefined; account: ServerStateAccount | null } | null>(null);
   const error = futureDateError(date, today) ?? serverError;
 
   // Stable, so a page can call it from an effect that loads the record.
   const setDate = useCallback((value: string) => {
     setDateValue(value);
     setServerError(null);
+    setFocusRequest(null);
   }, []);
 
   function focus() {
     document.getElementById(id)?.focus();
   }
+
+  // A refused save must focus after the submitting fieldset becomes enabled.
+  useEffect(() => {
+    if (!focusRequest) return;
+    const sameAccount = focusRequest.account
+      ? serverStateAccountMatches(focusRequest.account)
+      : captureServerStateAccount() === null;
+    if (!sameAccount || focusRequest.businessProfileId !== selected?.id) {
+      setFocusRequest(null);
+      return;
+    }
+    const input = document.getElementById(id);
+    if (input?.matches(":disabled")) return;
+    input?.focus();
+    setFocusRequest(null);
+  });
 
   return {
     id,
@@ -55,7 +74,7 @@ export function useTransactionDate(initial?: string) {
     absorb(err: unknown): boolean {
       if (!isFutureDateError(err)) return false;
       setServerError(FUTURE_DATE_MESSAGE);
-      focus();
+      setFocusRequest({ businessProfileId: selected?.id, account: captureServerStateAccount() });
       return true;
     },
   };

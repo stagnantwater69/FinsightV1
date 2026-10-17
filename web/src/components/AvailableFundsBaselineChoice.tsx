@@ -73,17 +73,20 @@ export function useAvailableFundsBaselineChoice(date: string, baselineIdentity?:
       return availableFundsBaselineRequest(baseline, date, decision);
     },
     setFromRecord,
-    async absorb(errorValue: unknown): Promise<boolean> {
+    async absorb(errorValue: unknown, isCurrent: () => boolean = () => true): Promise<boolean> {
       if (!isAvailableFundsBaselineRecoveryError(errorValue)) return false;
+      if (!isCurrent()) return true;
       setDecisionValue(null);
       setError(CHANGED_MESSAGE);
       try {
         await refresh();
+        if (!isCurrent()) return true;
         setError(CHANGED_MESSAGE);
       } catch {
+        if (!isCurrent()) return true;
         setError("The recorded balance changed, but its latest details could not be loaded. Try again before saving.");
       }
-      window.setTimeout(focus, 0);
+      window.setTimeout(() => { if (isCurrent()) focus(); }, 0);
       return true;
     },
   };

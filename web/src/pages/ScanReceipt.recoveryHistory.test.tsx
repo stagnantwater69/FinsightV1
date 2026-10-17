@@ -113,6 +113,21 @@ function rowTitles(): string[] {
 }
 
 describe("recovery history pagination (P2-10)", () => {
+  it.each([false, true])("rejects a repeated or cycling receipt-history cursor and preserves loaded scans (cycling: %s)", async (cycling) => {
+    history = (params) => !params.cursor ? { items: range(40, 21), nextCursor: "cursor-a" }
+      : cycling && params.cursor === "cursor-a" ? { items: range(20, 11), nextCursor: "cursor-b" }
+      : { items: range(10, 1), nextCursor: "cursor-a" };
+    render(page()); await screen.findByRole("button", { name: "Show older scans" });
+    if (cycling) {
+      await userEvent.click(screen.getByRole("button", { name: "Show older scans" }));
+      await waitFor(() => expect(rowTitles()).toHaveLength(30));
+    }
+    const loaded = rowTitles();
+    await userEvent.click(screen.getByRole("button", { name: "Show older scans" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/\S/);
+    expect(rowTitles()).toEqual(loaded);
+    expect(historyCalls()).toHaveLength(cycling ? 3 : 2);
+  });
   it("forwards the cursor to load a second page and appends it without duplicates", async () => {
     const user = userEvent.setup();
     history = (params) => params.cursor === undefined

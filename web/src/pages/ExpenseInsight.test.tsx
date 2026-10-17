@@ -636,6 +636,24 @@ describe("ExpenseInsight resilience", () => {
     expect(await screen.findByText("Total expenses")).toBeInTheDocument();
   });
 
+  it("offers suggested questions in the summary that open Ask FinSight without sending", async () => {
+    renderPage();
+    await screen.findByText("Total expenses");
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "How can I spend less on Inventory?" }),
+    );
+    expect(openChat).toHaveBeenCalledTimes(1);
+    expect(openChat).toHaveBeenCalledWith(
+      "Expense Insights",
+      expect.stringContaining("How can I reduce my Inventory expenses"),
+      undefined,
+    );
+    // The same figures as the tiles, as short points rather than one paragraph.
+    expect(screen.getByText(/rose the most/)).toBeInTheDocument();
+    expect(screen.getByText(/Total spending is/)).toBeInTheDocument();
+  });
+
   it("provides direct navigation through the long insight page", async () => {
     renderPage();
     await screen.findByText("Total expenses");
@@ -686,7 +704,7 @@ describe("ExpenseInsight resilience", () => {
     );
   });
 
-  it("keeps populated passive panels and the two-column flags-and-summary layout", async () => {
+  it("keeps populated passive panels, with flags and unusual expenses side by side", async () => {
     const flagged = {
       id: 61,
       type: "expense",
@@ -746,9 +764,16 @@ describe("ExpenseInsight resilience", () => {
     expect(
       screen.getByText("Compressor cost is higher than usual"),
     ).toBeInTheDocument();
-    expect(document.getElementById("expense-review")).toHaveClass(
-      "lg:grid-cols-2",
-    );
+    // The summary now leads the page body; inside Review, flags and unusual
+    // expenses share the two-column row.
+    const review = document.getElementById("expense-review")!;
+    expect(review.querySelector(".lg\\:grid-cols-2")).not.toBeNull();
+    expect(
+      within(review).getByRole("heading", { name: "Large expense flags" }),
+    ).toBeInTheDocument();
+    expect(
+      within(review).getByRole("heading", { name: "Unusual expenses" }),
+    ).toBeInTheDocument();
   });
 
   it("pages findings three at a time once there are more than three", async () => {
@@ -1597,7 +1622,7 @@ describe("ExpenseInsight period filter", () => {
     });
   });
 
-  it("normalizes an inherited All time choice before requesting data", async () => {
+  it("defaults to its own recorded month without replacing another page's All time choice", async () => {
     window.sessionStorage.setItem(
       "finsight.reportingPeriod.1",
       JSON.stringify({ kind: "all" }),
@@ -1609,17 +1634,15 @@ describe("ExpenseInsight period filter", () => {
     const periodCalls = getCalls.filter((call) => call.url === "/insights/expense-overview");
     expect(periodCalls).toHaveLength(1);
     expect(periodCalls[0]?.params).toMatchObject({
-      period: "week",
+      period: "month",
+      month: "2026-09",
       view: "detail",
     });
-    expect(screen.getByRole("button", { name: "This week" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    expect(screen.getByRole("combobox", { name: "Month" })).toHaveTextContent("September 2026");
     expect(screen.queryByRole("button", { name: "All time" })).not.toBeInTheDocument();
     await waitFor(() => {
       expect(JSON.parse(window.sessionStorage.getItem("finsight.reportingPeriod.1")!)).toEqual({
-        kind: "week",
+        kind: "all",
       });
     });
   });
@@ -1695,4 +1718,110 @@ describe("ExpenseInsight period filter", () => {
     expect(screen.queryByText("Inventory")).not.toBeInTheDocument();
     expect(screen.getAllByText("This-week travel").length).toBeGreaterThan(0);
   });
+});
+
+describe("ExpenseInsight long-data previews", () => {
+  function highVolumeBehavior(): ExpenseBehavior {
+    return {
+      ...behavior,
+      totals: { current: 12_000, previous: 9_000 },
+      categoryTrends: Array.from({ length: 12 }, (_, index) => ({
+        ...behavior.categoryTrends[0],
+        categoryId: index + 1,
+        categoryName: `Category ${index + 1}`,
+        current: 1_000,
+        previous: 750,
+        change: 250,
+        recordCount: 4,
+      })),
+      unusualExpenses: Array.from({ length: 13 }, (_, index) => ({
+        id: index + 1,
+        description: `Unusual purchase ${index + 1}`,
+        amount: 900,
+        date: "2026-09-20T00:00:00.000Z",
+        categoryId: 1,
+        categoryName: "Category 1",
+        zScore: 3,
+        categoryMean: 300,
+        categoryStdDev: 200,
+      })),
+    };
+  }
+
+  function panel(title: string) {
+    return screen.getByRole("heading", { name: title }).parentElement!.parentElement!.parentElement!;
+  }
+
+  it("limits categories while retaining totals for every category and allows full inspection", async () => {
+    const user = userEvent.setup();
+    setOverview(highVolumeBehavior());
+    renderPage();
+    await screen.findByRole("heading", { name: "Category summary" });
+    const summary = within(panel("Category summary"));
+    expect(summary.queryByText("Category 7")).not.toBeInTheDocument();
+    const totalRow = summary.getByRole("row", { name: /^Total / });
+    expect(within(totalRow).getByText("PHP 12,000")).toBeInTheDocument();
+    expect(within(totalRow).getByText("48")).toBeInTheDocument();
+    expect(summary.getByText("Showing 6 of 12 categories")).toBeInTheDocument();
+    await user.click(summary.getByRole("button", { name: "Show all 12 categories" }));
+    expect(summary.getAllByText("Category 12").length).toBeGreaterThan(0);
+    expect(within(totalRow).getByText("PHP 12,000")).toBeInTheDocument();
+    await user.click(summary.getByRole("button", { name: "Show less" }));
+    expect(summary.queryByText("Category 7")).not.toBeInTheDocument();
+  });
+
+  it("exposes every unusual expense without changing the full flagged count", async () => {
+    const user = userEvent.setup();
+    setOverview(highVolumeBehavior());
+    renderPage();
+    await screen.findByRole("heading", { name: "Unusual expenses" });
+    const unusual = within(panel("Unusual expenses"));
+    expect(unusual.getByText("13 flagged")).toBeInTheDocument();
+    expect(unusual.getByText("Unusual purchase 5")).toBeInTheDocument();
+    expect(unusual.queryByText("Unusual purchase 6")).not.toBeInTheDocument();
+    await user.click(unusual.getByRole("button", { name: "Show all 13 unusual expenses" }));
+    expect(unusual.getByText("Unusual purchase 13")).toBeInTheDocument();
+    expect(unusual.getByText("13 flagged")).toBeInTheDocument();
+    await user.click(unusual.getByRole("button", { name: "Show less" }));
+    expect(unusual.queryByText("Unusual purchase 6")).not.toBeInTheDocument();
+  });
+
+  it("resets expanded expense previews when the reporting period changes", async () => {
+    const user = userEvent.setup();
+    setOverview(highVolumeBehavior());
+    renderPage();
+    await screen.findByRole("heading", { name: "Unusual expenses" });
+    await user.click(within(panel("Unusual expenses")).getByRole("button", { name: "Show all 13 unusual expenses" }));
+    await user.click(screen.getByRole("button", { name: "This week" }));
+    await waitFor(() => expect(within(panel("Unusual expenses")).queryByText("Unusual purchase 6")).not.toBeInTheDocument());
+    await user.click(screen.getByRole("combobox", { name: "Month" }));
+    await user.click(screen.getByRole("option", { name: "September 2026" }));
+    await waitFor(() => expect(within(panel("Unusual expenses")).getByRole("button", { name: "Show all 13 unusual expenses" })).toHaveAttribute("aria-expanded", "false"));
+  });
+
+  it("reveals reduction opportunities beyond the preview and keeps their actions available", async () => {
+    const user = userEvent.setup();
+    setOverview(behavior, reductionResponse({
+      opportunities: Array.from({ length: 6 }, (_, index) => makeOpportunity({
+        id: `opp-${index + 1}`,
+        categoryId: index + 1,
+        categoryName: `Opportunity category ${index + 1}`,
+      })),
+    }));
+    renderPage();
+    const expand = await screen.findByRole("button", { name: "Show all 6 opportunities" });
+    expect(screen.queryByText("Opportunity category 4")).not.toBeInTheDocument();
+    await user.click(expand);
+    expect(screen.getByText("Opportunity category 6")).toBeInTheDocument();
+    const simulations = screen.getAllByRole("button", { name: /Simulate reduction/ });
+    expect(simulations).toHaveLength(6);
+    await user.click(simulations[5]);
+    expect(await screen.findByRole("heading", { name: "Simulate reduction — Opportunity category 6" })).toBeInTheDocument();
+  });
+});
+
+it('binds the expense-insight view to its own reporting period scope', () => {
+  const wrapper = ExpenseInsight();
+  expect(wrapper.props.scope).toBe('expense-insight');
+  expect(typeof wrapper.props.children.type).toBe('function');
 });

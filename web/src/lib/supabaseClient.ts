@@ -31,27 +31,53 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
 });
 
-/**
- * A throwaway client for the password-reset screen, and nowhere else.
- *
- * The recovery token in a reset link is a real credential — enough to change
- * the password on the account. It must be usable for that one operation and
- * then be gone. So this client:
- *
- *   - does NOT persist: the token never reaches localStorage, so an abandoned
- *     reset tab leaves nothing behind and the main client's session (if the
- *     visitor was already signed in as someone else) is untouched;
- *   - does NOT auto-refresh: it exists for a single `updateUser` call;
- *   - uses its own `storageKey` as belt-and-braces, so even a future change to
- *     the two options above cannot have it overwrite the app's real session.
- */
-export function createRecoveryClient() {
-  return createClient(supabaseUrl, supabaseAnonKey, {
+// Isolated auth operations use memory storage. Only Google's PKCE verifier
+// needs to survive navigation, so its key alone may use sessionStorage.
+const disposers = new WeakMap<typeof supabase, () => void>();
+function createIsolatedClient(storageKey: string, google = false) {
+  const memory = new Map<string, string>();
+  const verifierKey = `${storageKey}-code-verifier`;
+  const client = createClient(supabaseUrl, supabaseAnonKey, {
     auth: {
       detectSessionInUrl: false,
-      persistSession: false,
       autoRefreshToken: false,
-      storageKey: "finsight-recovery-ephemeral",
+      flowType: google ? "pkce" : "implicit",
+      // Supabase accepts custom storage only with persistSession enabled.
+      // The adapter persists no session credentials to browser storage.
+      persistSession: true,
+      storageKey,
+      storage: {
+        getItem: (key) => google && key === verifierKey ? sessionStorage.getItem(key) : memory.get(key) ?? null,
+        setItem: (key, value) => {
+          if (google && key === verifierKey) sessionStorage.setItem(key, value);
+          else memory.set(key, value);
+        },
+        removeItem: (key) => {
+          if (google && key === verifierKey) sessionStorage.removeItem(key);
+          else memory.delete(key);
+        },
+      },
     },
   });
+  disposers.set(client, () => {
+    memory.clear();
+    if (google) sessionStorage.removeItem(verifierKey);
+  });
+  return client;
+}
+
+export function createRecoveryClient() {
+  return createIsolatedClient("finsight-recovery-ephemeral");
+}
+
+let googleClient: typeof supabase | undefined;
+export function createGoogleAuthClient() {
+  googleClient ??= createIsolatedClient("finsight-google-ephemeral", true);
+  return googleClient;
+}
+
+/** Clear local memory without revoking a session being handed to the main client. */
+export function disposeIsolatedAuthClient(client: typeof supabase) {
+  disposers.get(client)?.();
+  void client.auth.stopAutoRefresh();
 }

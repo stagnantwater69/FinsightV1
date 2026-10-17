@@ -11,7 +11,7 @@ describe('RecordsScreen list architecture', () => {
   it('uses a bounded FlatList instead of eagerly mapping rows in a ScrollView', () => {
     expect(source).toMatch(/\bFlatList\b/);
     expect(source).toMatch(/<FlatList<RecordItem>/);
-    expect(source).toMatch(/initialNumToRender=\{8\}/);
+    expect(source).toMatch(/initialNumToRender=\{10\}/);
     expect(source).toMatch(/maxToRenderPerBatch=\{8\}/);
     expect(source).toMatch(/windowSize=\{7\}/);
     expect(source).not.toMatch(/<ScrollView\b/);
@@ -23,7 +23,6 @@ describe('RecordsScreen list architecture', () => {
     expect(source).toMatch(/ListEmptyComponent=/);
     expect(source).toMatch(/ListFooterComponent=/);
     expect(source).toMatch(/refreshControl=/);
-    expect(source).toMatch(/title="Previous"/);
-    expect(source).toMatch(/title=\{loadingMore \? "Loading…" : "Next"\}/);
+    expect(source).toMatch(/<NumberedPagination\b/);
   });
 });

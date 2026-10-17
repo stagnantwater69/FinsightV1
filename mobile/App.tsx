@@ -1,7 +1,8 @@
+import { HeaderBackButton } from "./src/components/HeaderBackButton";
+import { ChangePasswordScreen, DeleteAccountScreen, EditProfileScreen } from "./src/screens/AccountScreens";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Linking, Pressable, View } from "react-native";
-import { StatusBar } from "expo-status-bar";
-import { Ionicons } from "@expo/vector-icons";
+import { ActivityIndicator, Linking, Pressable, StatusBar, View } from "react-native";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import {
   NavigationContainer,
   CommonActions,
@@ -11,17 +12,17 @@ import {
 } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
-import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import * as Font from "expo-font";
 import * as SplashScreen from "expo-splash-screen";
-import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold } from "@expo-google-fonts/inter";
-import { Sora_600SemiBold, Sora_700Bold } from "@expo-google-fonts/sora";
-import {
-  IBMPlexMono_400Regular,
-  IBMPlexMono_500Medium,
-  IBMPlexMono_600SemiBold,
-} from "@expo-google-fonts/ibm-plex-mono";
+import { IBMPlexSans_400Regular } from "@expo-google-fonts/ibm-plex-sans/400Regular";
+import { IBMPlexSans_500Medium } from "@expo-google-fonts/ibm-plex-sans/500Medium";
+import { IBMPlexSans_600SemiBold } from "@expo-google-fonts/ibm-plex-sans/600SemiBold";
+import { IBMPlexSans_700Bold } from "@expo-google-fonts/ibm-plex-sans/700Bold";
+import { IBMPlexMono_400Regular } from "@expo-google-fonts/ibm-plex-mono/400Regular";
+import { IBMPlexMono_500Medium } from "@expo-google-fonts/ibm-plex-mono/500Medium";
+import { IBMPlexMono_600SemiBold } from "@expo-google-fonts/ibm-plex-mono/600SemiBold";
 
 import { AuthProvider, useAuth } from "./src/context/AuthContext";
 import { LaunchScreen } from "./src/components/LaunchScreen";
@@ -82,11 +83,19 @@ import {
 import { OperatingScheduleScreen } from "./src/screens/OperatingScheduleScreen";
 import { RecoveryNotificationPreferencesScreen } from "./src/screens/RecoveryNotificationPreferencesScreen";
 import { MonthEndReviewScreen } from "./src/screens/MonthEndReviewScreen";
-import { font, typeScale } from "./src/theme/tokens";
+import { font } from "./src/theme/tokens";
+import { shadowStyle } from "./src/theme/shadow";
 import type { Palette } from "./src/theme/palette";
 import { ThemeProvider, useTheme, useThemeControl } from "./src/context/ThemeContext";
 import { recordsTabPressAction, RECORDS_LIST_SCREEN } from "./src/lib/tabSelection";
+import { isFullscreenSubpage } from "./src/lib/subpageNavigation";
+import { returnFromOperatingSchedule } from "./src/lib/operatingScheduleNavigation";
+import { returnFromMonthEndReview } from "./src/lib/monthEndReviewNavigation";
+import { returnFromFlaggedRecords } from "./src/lib/flaggedRecordsNavigation";
 import { QuickActionMenu, type RadialAction } from "./src/components/QuickActionMenu";
+import { FloatingTabBar } from "./src/components/FloatingTabBar";
+import { MoneyFlowScreen } from "./src/screens/MoneyFlowScreen";
+import { BAR_HEIGHT } from "./src/components/floatingTabBarLayout";
 import { BusinessNavigationBoundary } from "./src/components/BusinessNavigationBoundary";
 
 /**
@@ -126,6 +135,12 @@ const Stack = createNativeStackNavigator();
 const navThemeFor = (t: Palette) => ({
   ...DefaultTheme,
   dark: t.mode === "dark",
+  fonts: {
+    regular: { fontFamily: font.sans, fontWeight: "normal" as const },
+    medium: { fontFamily: font.sansMedium, fontWeight: "normal" as const },
+    bold: { fontFamily: font.sansSemibold, fontWeight: "normal" as const },
+    heavy: { fontFamily: font.displayBold, fontWeight: "normal" as const },
+  },
   colors: {
     ...DefaultTheme.colors,
     primary: t.brand[600],
@@ -147,6 +162,9 @@ function useScreenOptions() {
     headerStyle: { backgroundColor: t.surface },
     headerTitleStyle: { fontFamily: font.display, color: t.brandHeading },
     headerTintColor: t.brandText,
+    headerBackButtonDisplayMode: "minimal",
+    statusBarStyle: t.statusBarStyle,
+    statusBarBackgroundColor: t.surface,
   } as const;
 }
 
@@ -165,7 +183,8 @@ function DashboardStack() {
         screen uses. Same pattern MoreStack already uses for MoreHome.
       */}
       <Stack.Screen name="DashboardHome" component={DashboardScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="Notifications" component={NotificationsScreen} options={{ title: "Alerts" }} />
+      <Stack.Screen name="Notifications" component={NotificationsScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="MoneyFlow" component={MoneyFlowScreen} options={{ title: "Money in and out" }} />
       {/* How someone who chose "Skip for now" gets back into setup — the
           wizard draws its own header, so this one is hidden. */}
       <Stack.Screen name="Onboarding" component={OnboardingResumeScreen} options={{ headerShown: false }} />
@@ -180,25 +199,6 @@ function DashboardStack() {
 function goBackOr(navigation: { canGoBack(): boolean; goBack(): void; navigate(name: string): void }, fallback: string) {
   if (navigation.canGoBack()) navigation.goBack();
   else navigation.navigate(fallback);
-}
-
-function HeaderBackButton({ tintColor, onPress }: { tintColor?: string; onPress: () => void }) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel="Back"
-      onPress={onPress}
-      style={({ pressed }) => ({
-        width: 48,
-        height: 48,
-        alignItems: "center",
-        justifyContent: "center",
-        opacity: pressed ? 0.6 : 1,
-      })}
-    >
-      <Ionicons name="arrow-back" size={24} color={tintColor} />
-    </Pressable>
-  );
 }
 
 function RecordsStack() {
@@ -241,8 +241,25 @@ function RecordsStack() {
           ),
         })}
       />
-      <Stack.Screen name="ImportCsv" component={ImportCsvScreen} options={{ title: "Import CSV" }} />
-      <Stack.Screen name="FlaggedRecords" component={FlaggedRecordsScreen} options={{ title: "Review" }} />
+      <Stack.Screen name="ImportCsv" component={ImportCsvScreen} options={({ navigation }) => ({
+        title: "Import CSV",
+        headerBackVisible: false,
+        headerLeft: ({ tintColor }) => <HeaderBackButton tintColor={tintColor} onPress={() => {
+          if (navigation.canGoBack()) navigation.goBack();
+          else navigation.replace("RecordsList");
+        }} />,
+      })} />
+      <Stack.Screen
+        name="FlaggedRecords"
+        component={FlaggedRecordsScreen}
+        options={({ navigation, route }: any) => ({
+          title: "Review records",
+          headerBackVisible: false,
+          headerLeft: ({ tintColor }) => (
+            <HeaderBackButton tintColor={tintColor} onPress={() => returnFromFlaggedRecords(navigation, route.params?.from)} />
+          ),
+        })}
+      />
       {/*
         In the Records stack rather than under More, because a category is a
         records concept — the screen's own "view records" route goes straight
@@ -298,22 +315,37 @@ function MoreStack() {
   return (
     <Stack.Navigator screenOptions={screenOptions}>
       <Stack.Screen name="MoreHome" component={MoreScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="Profile" component={ProfileScreen} options={{ title: "My account" }} />
+      <Stack.Screen name="Profile" component={ProfileScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="EditProfile" component={EditProfileScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="ChangePassword" component={ChangePasswordScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="DeleteAccount" component={DeleteAccountScreen} options={{ headerShown: false }} />
       {/*
         How the app behaves for this owner: the guided tour, Fin's daily
         message on Home, and light or dark. It replaces the "Preferences" card
         that used to sit on the More screen itself — see SettingsScreen.tsx.
       */}
-      <Stack.Screen name="Settings" component={SettingsScreen} options={{ title: "Settings" }} />
-      <Stack.Screen name="BusinessProfiles" component={BusinessProfilesScreen} options={{ title: "Businesses" }} />
+      <Stack.Screen name="Settings" component={SettingsScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="BusinessProfiles" component={BusinessProfilesScreen} options={{ headerShown: false }} />
       <Stack.Screen name="BusinessProfileForm" component={BusinessProfileFormScreen} options={{ title: "Business profile" }} />
-      <Stack.Screen name="OperatingSchedule" component={OperatingScheduleScreen} options={{ title: "Operating schedule" }} />
+      <Stack.Screen
+        name="OperatingSchedule"
+        component={OperatingScheduleScreen}
+        options={({ navigation, route }: any) => ({
+          title: "Operating schedule",
+          headerBackVisible: false,
+          headerLeft: ({ tintColor }) => (
+            <HeaderBackButton
+              tintColor={tintColor}
+              onPress={() => returnFromOperatingSchedule(navigation, route.params?.from)}
+            />
+          ),
+        })}
+      />
       <Stack.Screen
         name="RecoveryNotificationPreferences"
         component={RecoveryNotificationPreferencesScreen}
         options={({ navigation }) => ({
           title: "Notification settings",
-          headerTitleStyle: { ...screenOptions.headerTitleStyle, fontSize: typeScale.title },
           headerBackVisible: false,
           headerLeft: ({ tintColor }) => (
             <HeaderBackButton tintColor={tintColor} onPress={() => goBackOr(navigation, "MoreHome")} />
@@ -323,20 +355,29 @@ function MoreStack() {
       <Stack.Screen
         name="MonthEndReview"
         component={MonthEndReviewScreen}
-        options={{ title: "Month-end review" }}
+        options={({ navigation, route }: any) => ({
+          title: "Month-end review",
+          headerBackVisible: false,
+          headerLeft: ({ tintColor }) => (
+            <HeaderBackButton
+              tintColor={tintColor}
+              onPress={() => returnFromMonthEndReview(navigation, route.params?.from)}
+            />
+          ),
+        })}
       />
-      <Stack.Screen name="Notifications" component={NotificationsScreen} options={{ title: "Alerts" }} />
+      <Stack.Screen name="Notifications" component={NotificationsScreen} options={{ headerShown: false }} />
       {/*
         Help and legal live IN the app, not behind a link to the website.
         Most owners have a phone and no computer, so for them this is the only
         place these documents will ever be read — and Privacy and Terms are
         not optional reading to route someone off-device for.
       */}
-      <Stack.Screen name="Faqs" component={FaqsScreen} options={{ title: "Questions" }} />
-      <Stack.Screen name="Tutorials" component={TutorialsScreen} options={{ title: "Tutorials" }} />
-      <Stack.Screen name="Contact" component={ContactScreen} options={{ title: "Contact us" }} />
-      <Stack.Screen name="Privacy" component={PrivacyScreen} options={{ title: "Privacy" }} />
-      <Stack.Screen name="Terms" component={TermsScreen} options={{ title: "Terms of use" }} />
+      <Stack.Screen name="Faqs" component={FaqsScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="Tutorials" component={TutorialsScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="Contact" component={ContactScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="Privacy" component={PrivacyScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="Terms" component={TermsScreen} options={{ headerShown: false }} />
     </Stack.Navigator>
   );
 }
@@ -406,26 +447,19 @@ function TabIcon({
   const pair = TAB_ICONS[routeName];
   return (
     <View {...tourTarget}>
-      <Ionicons name={pair ? pair[focused ? 1 : 0] : "ellipse-outline"} size={22} color={color} />
+      <Ionicons name={pair ? pair[focused ? 1 : 0] : "ellipse-outline"} size={24} color={color} />
     </View>
   );
 }
 
 /**
- * Adding something, given the middle of the bar.
+ * Adding something: the circle beside the floating tab bar.
  *
  * Recording what was spent and earned is what this app is FOR and the reason
- * someone opens it standing at a counter, so it gets the easiest target on
- * the screen rather than being a button two taps away.
- *
- * It used to be a camera, because it opened the camera. It now opens five
- * actions (see QuickActionMenu), so the glyph is a plus — a camera on it
- * would promise which of the five happens, to someone who has not pressed it
- * yet. The plus turns into the X that closes the menu, which is why the
- * selected state matters here and not merely as decoration.
- *
- * Raised out of the bar and drawn as a filled circle so it reads as an action
- * rather than a fifth destination.
+ * someone opens it standing at a counter, so it gets its own large target
+ * under the right thumb rather than a slot among the tabs. It opens five
+ * actions (see QuickActionMenu), so the glyph is a plus — a camera on it would
+ * promise which of the five happens, to someone who has not pressed it yet.
  */
 function ScanTabButton({
   onPress,
@@ -434,90 +468,47 @@ function ScanTabButton({
 }: {
   onPress: () => void;
   active: boolean;
-  // Distinct from `active`: the halo turns on for a quick-add destination
+  // Distinct from `active`: the ring turns on for a quick-add destination
   // screen too (AddExpense, AddSales, ScanReceipt, ImportCsv, Categories),
   // where the menu is already closed and the glyph must stay a plus, not
-  // rotate into the X that means "the menu is open".
+  // turn into the X that means "the menu is open".
   glow?: boolean;
 }) {
   const t = useTheme();
   const lit = active || glow;
-  // The tour's "Receipt scanner" step points here: on a phone this raised
-  // button IS the quick-add menu web spotlights.
+  // The tour's "Receipt scanner" step points here: on a phone this button IS
+  // the quick-add menu web spotlights.
   const tourTarget = useTourTarget("quick-add", { pad: { top: 8, bottom: 8, left: 8, right: 8 }, radius: 999 });
 
   return (
-    <View style={{ flex: 1, alignItems: "center", justifyContent: "flex-start" }}>
-      {/*
-        The selected halo, drawn BEHIND the button rather than as another
-        border on it. A third concentric ring on the button itself would fight
-        the white one that lifts it off the bar; a soft disc behind reads as
-        the same highlight the other tabs get, in the same brand family.
-      */}
-      {lit ? (
-        <View
-          pointerEvents="none"
-          style={{
-            position: "absolute",
-            top: -26,
-            // Centred explicitly rather than relying on the parent's
-            // alignItems reaching an absolutely-positioned child — it does,
-            // but a halo that silently slides to one edge is not worth
-            // leaving to an implicit rule.
-            alignSelf: "center",
-            width: 66,
-            height: 66,
-            borderRadius: 33,
-            backgroundColor: t.brandBorder,
-          }}
-        />
-      ) : null}
-      <Pressable
-        {...tourTarget}
-        onPress={onPress}
-        accessibilityRole="button"
-        accessibilityLabel={active ? "Close the actions menu" : "Add a record"}
-        // Announced as selected, so a screen reader says the same thing the
-        // halo does rather than leaving the state visual-only.
-        accessibilityState={{ selected: lit }}
-        style={({ pressed }) => ({
-          width: 54,
-          height: 54,
-          borderRadius: 27,
-          marginTop: -20,
-          alignItems: "center",
-          justifyContent: "center",
-          // Deeper while scanning, so the button reads as engaged even where
-          // the halo is hard to see — a dark phone in daylight, say.
-          // `brandSolid`, not the brand ramp: this disc is dark teal in BOTH
-          // themes. The ramp's 700 step lightens in Dark so brand TEXT stays
-          // legible on a dark card, which would have turned this button into
-          // a pale mint circle carrying white glyphs.
-          backgroundColor: pressed || lit ? t.brandSolidPressed : t.brandSolid,
-          // A ring in the bar's own colour so the circle reads as sitting
-          // above the bar rather than punched through it.
-          borderWidth: 4,
-          borderColor: t.surface,
-          shadowColor: t.shadow,
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.18 * t.shadowStrength,
-          shadowRadius: 5,
-          elevation: 5,
-        })}
-      >
-        {/*
-          A PLUS, not a camera.
-
-          The button opened the camera and nothing else when it was drawn as
-          one. It now offers five actions — a sale, an expense, a spreadsheet,
-          a category, and yes a scan — and a camera glyph on it is a promise
-          about which one happens, made to someone who has not pressed it yet.
-          A plus is the universal "add something", which is exactly the set
-          behind it, and it rotates into the X that closes the menu.
-        */}
-        <Ionicons name={active ? "close" : "add"} size={30} color={t.onBrandSolid} />
-      </Pressable>
-    </View>
+    <Pressable
+      {...tourTarget}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={active ? "Close the actions menu" : "Add a record"}
+      // Announced as selected, so a screen reader says the same thing the
+      // ring does rather than leaving the state visual-only.
+      accessibilityState={{ selected: lit }}
+      style={({ pressed }) => ({
+        width: BAR_HEIGHT,
+        height: BAR_HEIGHT,
+        borderRadius: BAR_HEIGHT / 2,
+        alignItems: "center",
+        justifyContent: "center",
+        // `brandSolid`, not the brand ramp: this disc is dark teal in BOTH
+        // themes. The ramp's 700 step lightens in Dark so brand TEXT stays
+        // legible on a dark card, which would turn this into a pale mint
+        // circle carrying white glyphs.
+        backgroundColor: pressed || lit ? t.brandSolidPressed : t.brandSolid,
+        // The "you are here" signal for a quick-add screen: a ring in the
+        // brand border colour, where the tabs use a tinted pill.
+        borderWidth: lit ? 3 : 0,
+        borderColor: t.brandBorder,
+        ...shadowStyle({ color: t.shadow, offsetY: 8, opacity: 0.22 * t.shadowStrength, blurRadius: 16, elevation: 8 }),
+      })}
+    >
+      <Ionicons name={active ? "close" : "add"} size={30} color={t.onBrandSolid} />
+    </Pressable>
   );
 }
 
@@ -525,21 +516,9 @@ function ScanTabButton({
 function MainTabs() {
   const t = useTheme();
   const { ACCENT, categorical, categoricalOnColor } = t;
-  /*
-   * The phone's own navigation bar sits under ours.
-   *
-   * React Navigation adds the bottom inset for you — but only while you leave
-   * the tab bar's height alone. Setting a fixed height (which this did) throws
-   * that away, and on a device with gesture or button navigation the labels end
-   * up behind the system bar. The inset is added back explicitly here rather
-   * than dropping the height, because the taller bar is what gives the raised
-   * scan button room.
-   */
-  const insets = useSafeAreaInsets();
-
   /**
-   * The five actions the raised button now offers instead of going straight
-   * to the camera. See components/QuickActionMenu for why it is an arc.
+   * The five actions the "+" offers instead of going straight to the camera.
+   * See components/QuickActionMenu for why they rise as a labelled stack.
    */
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -568,11 +547,17 @@ function MainTabs() {
    * such restriction; a `state` listener keeps this in sync instead.
    */
   const [recordsFocusedScreen, setRecordsFocusedScreen] = useState<string | undefined>();
+  const [subpageFocused, setSubpageFocused] = useState(false);
   useEffect(() => {
     const sync = () => {
       if (!navigationRef.isReady()) return;
       const recordsRoute = navigationRef.getRootState()?.routes.find((r) => r.name === "Records");
       setRecordsFocusedScreen(recordsRoute ? getFocusedRouteNameFromRoute(recordsRoute) : undefined);
+      const rootState = navigationRef.getRootState();
+      const activeRoute = rootState?.routes[rootState.index];
+      const fullscreen = isFullscreenSubpage(activeRoute?.name, activeRoute ? getFocusedRouteNameFromRoute(activeRoute) : undefined);
+      setSubpageFocused(fullscreen);
+      if (fullscreen) setMenuOpen(false);
     };
     sync();
     return navigationRef.addListener("state", sync);
@@ -601,7 +586,7 @@ function MainTabs() {
   const quickActions: RadialAction[] = [
     {
       key: "expense",
-      label: "Expense",
+      label: "Add expense",
       icon: "receipt-outline",
       // The tour's "Record an expense by hand" step.
       tourTarget: "quick-add-expense",
@@ -613,7 +598,7 @@ function MainTabs() {
     },
     {
       key: "sales",
-      label: "Sales",
+      label: "Add sale",
       icon: "cash-outline",
       // And "Add a sales reference" — the two ways money is recorded without
       // a receipt or a spreadsheet, which is why the phone teaches them and
@@ -625,7 +610,7 @@ function MainTabs() {
     },
     {
       key: "scan",
-      label: "Scan receipt",
+      label: "Scan a receipt",
       icon: "camera-outline",
       // The tour's "Receipt scanner" step spotlights this circle, with the
       // menu held open around it — see components/tour/steps.ts.
@@ -642,7 +627,7 @@ function MainTabs() {
     },
     {
       key: "csv",
-      label: "Import CSV",
+      label: "Import a CSV file",
       icon: "cloud-upload-outline",
       // Likewise "Import a spreadsheet", which used to point at Home's own
       // Import CSV tile — a shortcut on one screen rather than the control the
@@ -654,7 +639,7 @@ function MainTabs() {
     },
     {
       key: "categories",
-      label: "Categories",
+      label: "Manage categories",
       icon: "grid-outline",
       color: categorical[6],
       onColor: categoricalOnColor[6],
@@ -678,18 +663,19 @@ function MainTabs() {
        * unfocused look while `onQuickAddScreen` is true — the plus button
        * glows instead, see `glow` on ScanTabButton.
        */
+      tabBar={(props) => {
+        const activeTab = props.state.routes[props.state.index];
+        const focusedScreen = activeTab ? getFocusedRouteNameFromRoute(activeTab) : undefined;
+        if (isFullscreenSubpage(activeTab?.name, focusedScreen)) return null;
+        return <FloatingTabBar
+          {...props}
+          hiddenRoutes={["Scan"]}
+          mutedRoute={onQuickAddScreen ? "Records" : undefined}
+          addButton={<ScanTabButton onPress={() => setMenuOpen(true)} active={menuOpen} glow={onQuickAddScreen} />}
+        />;
+      }}
       screenOptions={({ route }) => ({
         headerShown: false,
-        tabBarActiveTintColor: t.brandText,
-        tabBarInactiveTintColor: t.textMuted,
-        tabBarStyle: {
-          backgroundColor: t.surface,
-          borderTopColor: t.border,
-          height: 60 + insets.bottom,
-          paddingTop: 6,
-          paddingBottom: 8 + insets.bottom,
-        },
-        tabBarLabelStyle: { fontFamily: font.sansMedium, fontSize: 11 },
         tabBarIcon: ({ color, focused }) => (
           <TabIcon
             routeName={route.name}
@@ -715,12 +701,6 @@ function MainTabs() {
       <Tab.Screen
         name="Records"
         component={RecordsStack}
-        options={{
-          // Muted to the same colour Insights/More get while unfocused, so
-          // the tab doesn't glow for a screen the owner reached via the plus
-          // button rather than by pressing Records itself.
-          tabBarActiveTintColor: onQuickAddScreen ? t.textMuted : t.brandText,
-        }}
         listeners={({ navigation, route }) => ({
           tabPress: (e) => {
             const sticky = (route.params as { screen?: string } | undefined)?.screen;
@@ -752,16 +732,9 @@ function MainTabs() {
       <Tab.Screen
         name="Scan"
         component={ScanPlaceholder}
-        options={{
-          tabBarLabel: "",
-          tabBarButton: (props) => (
-            <ScanTabButton
-              onPress={() => props.onPress?.({} as never)}
-              active={menuOpen}
-              glow={onQuickAddScreen}
-            />
-          ),
-        }}
+        // Never shown as a tab: the floating bar draws "+" as its own circle
+        // (hiddenRoutes above), and the route stays only so nothing that
+        // already names it breaks.
         listeners={() => ({
           tabPress: (e) => {
             e.preventDefault();
@@ -781,7 +754,7 @@ function MainTabs() {
       owner had. Web's AppShell does the same for the same two steps.
     */}
     <QuickActionMenu
-      visible={menuOpen || tourHoldsMenu}
+      visible={!subpageFocused && (menuOpen || tourHoldsMenu)}
       heldOpen={tourHoldsMenu}
       actions={quickActions}
       onClose={() => setMenuOpen(false)}
@@ -886,15 +859,24 @@ function Root({ fontsReady }: { fontsReady: boolean }) {
   // here rather than flashing Login at an already-signed-in user. A cold
   // email link must also resolve before choosing the destination screen.
   const ready = fontsReady && !loading && initialLinkReady;
+  /*
+   * The launch animation gets to finish. It writes the name out beside the
+   * logo, and replacing it the instant the session was restored cut it off
+   * mid-word on every fast start. LaunchScreen reports when it is done: once
+   * the sequence has played and its minimum time on screen (MIN_SHOW_MS, 3s
+   * by product decision) has passed, never later than two seconds after that.
+   */
+  const [launchDone, setLaunchDone] = useState(false);
+  const onLaunchFinished = useCallback(() => setLaunchDone(true), []);
 
   useEffect(() => {
-    // Once typography and theme are ready, reveal the committed branded
-    // loading view while session/link restoration finishes. No artificial delay.
+    // Once typography and theme are ready, hand over from the native splash
+    // to the animated one while session/link restoration finishes.
     if (fontsReady) SplashScreen.hideAsync().catch(() => undefined);
   }, [fontsReady]);
 
-  if (!ready) {
-    return <LaunchScreen fontsReady={fontsReady} />;
+  if (!ready || !launchDone) {
+    return <LaunchScreen fontsReady={fontsReady} onFinished={onLaunchFinished} />;
   }
 
   /*
@@ -1070,9 +1052,8 @@ function MainOrOnboarding() {
    * route change under it. Same placement web uses in AuthenticatedLayout.
    */
   /*
-   * ReportingPeriodProvider above the tabs for the same reason: Home, Expense
-   * Insights and Spending Impact read ONE period, and moving between them must
-   * keep it. Same placement web uses in AuthenticatedLayout.
+   * Keep screen-specific period choices above the navigator so returning to a
+   * screen restores its choice. The business's month list is loaded once here.
    */
   return (
     <ReportingPeriodProvider>
@@ -1092,11 +1073,10 @@ export default function App() {
 
   useEffect(() => {
     Font.loadAsync({
-      Inter_400Regular,
-      Inter_500Medium,
-      Inter_600SemiBold,
-      Sora_600SemiBold,
-      Sora_700Bold,
+      IBMPlexSans_400Regular,
+      IBMPlexSans_500Medium,
+      IBMPlexSans_600SemiBold,
+      IBMPlexSans_700Bold,
       IBMPlexMono_400Regular,
       IBMPlexMono_500Medium,
       IBMPlexMono_600SemiBold,
@@ -1112,7 +1092,7 @@ export default function App() {
    *
    * This used to return early while loading fonts, which meant AuthProvider
    * did not exist yet and the session was not read from the keystore until
-   * the eighth typeface had landed — two waits, one after the other, for two
+   * the final font had landed — two waits, one after the other, for two
    * jobs that have nothing to do with each other. Root holds the screen back
    * until both are done, so nothing renders early; they just now overlap.
    */
@@ -1151,7 +1131,7 @@ function Themed({ fontsReady }: { fontsReady: boolean }) {
   return (
     <>
       {/* Screen-specific bars (including the dark launch plate) override this default. */}
-      <StatusBar style={t.statusBarStyle} />
+      <StatusBar barStyle={t.statusBarStyle === "dark" ? "dark-content" : "light-content"} backgroundColor={t.surface} />
       <NavigationContainer ref={navigationRef} theme={navThemeFor(t)}>
         <AuthProvider>
           <Root fontsReady={fontsReady && themeReady} />

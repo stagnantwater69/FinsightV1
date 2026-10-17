@@ -2,6 +2,7 @@ import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, waitFor } from "@testing-library/react-native";
 import { Alert } from "react-native";
+import * as SecureStore from "expo-secure-store";
 import * as fixtures from "./support/fixtures";
 import { RECEIPT_UPLOAD_MAX_OBJECT_BYTES } from "../../src/lib/receiptUploadContract";
 
@@ -20,7 +21,10 @@ let selectedBusiness = fixtures.businessProfile;
 let cameraSections: any[] = [];
 let cameraCompletionsPerPress = 1;
 let renderedCameraMaxReceipts: number | undefined;
-vi.mock("../../src/lib/api", () => ({ api: { upload, post, get, put, patch, delete: remove } }));
+vi.mock("../../src/lib/api", () => ({
+  api: { upload, post, get, put, patch, delete: remove },
+  getFieldErrors: (err: { fieldErrors?: Record<string, string> } | null) => err?.fieldErrors ?? {},
+}));
 vi.mock("expo-image-picker", () => ({ launchImageLibraryAsync: gallery }));
 vi.mock("expo-document-picker", () => ({ getDocumentAsync: document }));
 vi.mock("../../src/lib/analysisImage", () => ({ analysisImageUri: async (uri: string) => uri }));
@@ -75,6 +79,7 @@ vi.mock("@react-navigation/native", () => ({ useFocusEffect: (effect: () => (() 
 vi.mock("../../src/context/BusinessProfileContext", () => ({
   useBusinessProfiles: () => ({ selected: selectedBusiness, categories: fixtures.categories, createCategory: vi.fn(), refreshCategories: vi.fn() }),
 }));
+vi.mock("../../src/context/AuthContext", () => ({ useAuth: () => ({ profile: { id: 17 } }) }));
 vi.mock("../../src/screens/records/scanReceipt/helpers", async (importOriginal) => ({ ...(await importOriginal<object>()), pollUntilRead: poll }));
 vi.mock("../../src/components/DateField", async () => {
   const { Field } = await import("../../src/components/ui");
@@ -141,6 +146,7 @@ function pressHandler(button: ReturnType<Awaited<ReturnType<typeof render>>["get
   throw new Error("Button has no press handler");
 }
 beforeEach(() => {
+  (SecureStore as unknown as { __reset: () => void }).__reset();
   selectedBusiness = fixtures.businessProfile;
   upload.mockReset(); post.mockReset(); get.mockReset(); put.mockReset(); patch.mockReset(); remove.mockReset(); poll.mockReset(); gallery.mockReset(); document.mockReset(); localFileByteSize.mockReset(); deleteScannerFiles.mockReset(); navigation.navigate.mockReset(); navigation.goBack.mockReset();
   cameraSections = [];
@@ -187,16 +193,88 @@ async function readyReceipt() {
 }
 
 describe("receipt scan review workflow", () => {
+  it("aborts a pending confirmation when the review screen unmounts and ignores its late outcome", async () => {
+    const q = await readyReceipt();
+    await fireEvent.press(q.getByRole("button", { name: "Scan this receipt" }));
+    await waitFor(() => expect(q.getByRole("button", { name: "Save this expense" })).toBeEnabled());
+    let finish!: (value: unknown) => void;
+    post.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    await fireEvent.press(q.getByRole("button", { name: "Save this expense" }));
+    const confirmation = post.mock.calls.find(([path]) => path === "/records/receipts/41/confirm")!;
+    try {
+      expect(confirmation[2]?.signal).toBeInstanceOf(AbortSignal);
+      const signal = confirmation[2].signal as AbortSignal;
+      expect(signal.aborted).toBe(false);
+      await q.unmount();
+      expect(signal.aborted).toBe(true);
+      await act(() => finish({}));
+      expect(navigation.goBack).not.toHaveBeenCalled();
+    } finally {
+      finish({});
+      await q.unmount();
+    }
+  });
+
+  it("aborts a stored processing retry when the review screen unmounts", async () => {
+    poll.mockRejectedValueOnce(new ReceiptReadFailure("failed", "This receipt could not be read."));
+    const q = await readyReceipt();
+    await fireEvent.press(q.getByRole("button", { name: "Scan this receipt" }));
+    await waitFor(() => expect(q.getByRole("button", { name: "Retry processing" })).toBeEnabled());
+    let finish!: (value: unknown) => void;
+    post.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    await fireEvent.press(q.getByRole("button", { name: "Retry processing" }));
+    const retry = post.mock.calls.find(([path]) => path === "/records/receipts/41/retry")!;
+    try {
+      expect(retry[2]?.signal).toBeInstanceOf(AbortSignal);
+      const signal = retry[2].signal as AbortSignal;
+      await q.unmount();
+      expect(signal.aborted).toBe(true);
+      await act(() => finish(accepted));
+      expect(poll).toHaveBeenCalledTimes(1);
+    } finally {
+      finish(accepted);
+      await q.unmount();
+    }
+  });
+
+  it("aborts batch creation before any child upload when the review screen unmounts", async () => {
+    cameraSections = [{ localId: "receipt-two", originalUri: "file:///receipt-two.jpg", originalMimeType: "image/jpeg", processedUri: "file:///receipt-two.jpg", processedMimeType: "image/jpeg", width: 600, height: 1000, quality: null, captureSource: "manual-camera", captureMode: "standard", processingMode: "original" }];
+    const q = await readyReceipt();
+    await fireEvent.press(q.getByRole("button", { name: "Capture a separate receipt" }));
+    await fireEvent.press(q.getByRole("button", { name: "Finish mocked camera with unsupported evidence" }));
+    let finish!: (value: unknown) => void;
+    post.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    await fireEvent.press(q.getByRole("button", { name: "Scan 2 separate receipts" }));
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+    const creation = post.mock.calls[0]!;
+    const batch = { id: 70, businessProfileId: 1, expectedReceiptCount: 2, status: "COLLECTING", uploadedReceiptCount: 0, createdAt: "2026-09-13T10:00:00.000Z", finishedAt: null, receipts: [] };
+    try {
+      expect(creation[0]).toBe("/records/receipt-batches");
+      expect(creation[2]?.signal).toBeInstanceOf(AbortSignal);
+      const signal = creation[2].signal as AbortSignal;
+      await q.unmount();
+      expect(signal.aborted).toBe(true);
+      await act(() => finish(batch));
+      expect(upload.mock.calls.filter(([path]) => path === "/records/receipts")).toHaveLength(0);
+      expect(poll).not.toHaveBeenCalled();
+    } finally {
+      finish(batch);
+      await q.unmount();
+    }
+  });
+
   it("does not navigate or retain a manual expense draft after a business switch during save", async () => {
     let finishSave!: (value: unknown) => void;
     post.mockReturnValue(new Promise((resolve) => { finishSave = resolve; }));
     const q = await render(wrap(<AddExpenseScreen navigation={navigation} />));
+    await waitFor(() => expect(q.getByLabelText("Description").props.editable).toBe(true));
     await fireEvent.press(q.getByRole("button", { name: "Choose a category, category" }));
     await fireEvent.press(q.getByRole("button", { name: "Stock" }));
     await fireEvent.changeText(q.getByLabelText("Description"), "Coffee beans");
     await fireEvent.changeText(q.getByLabelText("Amount (PHP)"), "250");
     await act(() => { pressHandler(q.getByRole("button", { name: "Save expense" }))(); });
-    expect(post).toHaveBeenCalledWith("/records/expenses", expect.objectContaining({ businessProfileId: 1, categoryId: 10 }));
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+    expect(post).toHaveBeenCalledWith("/records/expenses", expect.objectContaining({ businessProfileId: 1, categoryId: 10 }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
     selectedBusiness = { ...fixtures.businessProfile, id: 2 };
     await q.rerender(wrap(<AddExpenseScreen navigation={navigation} />));
     await act(() => finishSave({ id: 90 }));
@@ -278,7 +356,7 @@ describe("receipt scan review workflow", () => {
     expect(q.getByRole("button", { name: "Delete stored scan" })).toBeEnabled();
     await fireEvent.press(q.getByRole("button", { name: "Retry processing" }));
     await waitFor(() => expect(q.getByRole("button", { name: "Save this expense" })).toBeTruthy());
-    expect(post).toHaveBeenCalledWith("/records/receipts/41/retry");
+    expect(post).toHaveBeenCalledWith("/records/receipts/41/retry", undefined, { signal: expect.any(AbortSignal) });
     expect(upload.mock.calls.filter(([path]) => path === "/records/receipts")).toHaveLength(1);
   });
 
@@ -478,7 +556,7 @@ describe("receipt scan review workflow", () => {
     await waitFor(() => expect(q.getByRole("button", { name: /^Retry processing for Stored receipt 83/ })).toBeEnabled());
     await fireEvent.press(q.getByRole("button", { name: /^Retry processing for Stored receipt 83/ }));
     await waitFor(() => expect(q.getByRole("button", { name: "Save this expense" })).toBeEnabled());
-    expect(post).toHaveBeenCalledWith("/records/receipts/83/retry");
+    expect(post).toHaveBeenCalledWith("/records/receipts/83/retry", undefined, { signal: expect.any(AbortSignal) });
     expect(upload.mock.calls.filter(([path]) => path === "/records/receipts")).toHaveLength(0);
   });
 
@@ -818,7 +896,7 @@ describe("receipt scan review workflow", () => {
       businessProfileId: 1,
       expectedReceiptCount: 2,
       clientBatchKey: expect.any(String),
-    }));
+    }), { signal: expect.any(AbortSignal) });
     expect(receiptUploads[0]![1].get("receiptBatchId")).toBe("70");
     expect(receiptUploads[0]![1].get("receiptOrdinal")).toBe("1");
     expect(receiptUploads[1]![1].get("receiptBatchId")).toBe("70");
@@ -1228,7 +1306,7 @@ describe("receipt scan review workflow", () => {
     expect(post).toHaveBeenCalledWith(
       "/records/receipts/41/confirm",
       expect.objectContaining({ expectedScanRevision: 1 }),
-      { cacheScope: { businessProfileId: 1 } },
+      { signal: expect.any(AbortSignal), cacheScope: { businessProfileId: 1 } },
     );
   });
 
@@ -1365,7 +1443,7 @@ describe("receipt scan review workflow", () => {
     expect(post.mock.calls[0]).toEqual([
       "/records/receipts/41/confirm",
       expect.not.objectContaining({ duplicateDecision: expect.anything() }),
-      { cacheScope: { businessProfileId: 1 } },
+      { signal: expect.any(AbortSignal), cacheScope: { businessProfileId: 1 } },
     ]);
     expect(post.mock.calls[1]).toEqual([
       "/records/receipts/41/confirm",
@@ -1373,7 +1451,7 @@ describe("receipt scan review workflow", () => {
         expectedScanRevision: 0,
         duplicateDecision: { action: "SAVE_ANYWAY", candidateSetHash: "b".repeat(64) },
       }),
-      { cacheScope: { businessProfileId: 1 } },
+      { signal: expect.any(AbortSignal), cacheScope: { businessProfileId: 1 } },
     ]);
   });
 
@@ -1990,21 +2068,29 @@ describe("receipt scan review workflow", () => {
 });
 
 describe("CSV preflight and results", () => {
-  const preview = { headers: ["date", "description", "amount", "category"], previewRows: [{ date: "2026-09-01", description: "Coffee", amount: "250", category: "Stock" }], totalRows: 10, suggestedMapping: { date: "date", description: "description", amount: "amount", category: "category" } };
+  const preview = { stagedUploadId: "12345678-1234-4123-8123-123456789abc", stageExpiresAt: "2099-10-12T00:00:00.000Z", headers: ["date", "description", "amount", "category"], previewRows: [{ date: "2026-09-01", description: "Coffee", amount: "250", category: "Stock" }], totalRows: 10, suggestedMapping: { date: "date", description: "description", amount: "amount", category: "category" } };
+  function mockCsvResponses(response: (path: string, form: FormData) => Promise<unknown>) {
+    upload.mockImplementation(response);
+    post.mockImplementation(async (path: string, body: Record<string, unknown>) => {
+      const legacyFields = new FormData();
+      for (const [key, value] of Object.entries(body)) {
+        legacyFields.append(key, typeof value === "object" ? JSON.stringify(value) : String(value));
+      }
+      return response(path, legacyFields);
+    });
+  }
   async function confirmCsv() {
     const q = await render(wrap(<ImportCsvScreen navigation={navigation} />));
     await fireEvent.press(q.getByRole("button", { name: "Choose a CSV file" }));
-    await waitFor(() => expect(q.getByRole("button", { name: "Check the rows" })).toBeEnabled());
-    await fireEvent.press(q.getByRole("button", { name: "Check the rows" }));
-    await waitFor(() => expect(q.getByRole("button", { name: "Review import" })).toBeTruthy());
-    await fireEvent.press(q.getByRole("button", { name: "Review import" }));
-    await waitFor(() => expect(q.getByRole("button", { name: "Import" })).toBeTruthy());
-    await act(() => { pressHandler(q.getByRole("button", { name: "Import" }))(); });
+    await waitFor(() => expect(q.getByRole("button", { name: "Check & continue" })).toBeEnabled());
+    await fireEvent.press(q.getByRole("button", { name: "Check & continue" }));
+    await waitFor(() => expect(q.getByRole("button", { name: /^Import [\d,]+ records?$/ })).toBeTruthy());
+    await act(() => { pressHandler(q.getByRole("button", { name: /^Import [\d,]+ records?$/ }))(); });
     return q;
   }
 
   it("uses aggregate skipped counts when the server returns only some row errors", async () => {
-    upload.mockImplementation(async (path: string, form: FormData) => {
+    mockCsvResponses(async (path: string, form: FormData) => {
       if (path.endsWith("confirm")) return { imported: 50, totalRows: 200, skipped: [{ row: 2, reason: "Invalid date" }], skippedCount: 150, skippedTruncated: true };
       if (form.get("recordType")) return { validation: { validRows: 50, invalidRows: 150, skipped: [], skippedTruncated: true } };
       return { ...preview, totalRows: 200 };
@@ -2029,7 +2115,7 @@ describe("CSV preflight and results", () => {
       path: `/business-profiles/${businessProfileId}/financial-position`,
       fetcher: async () => ({ businessProfileId }),
     })));
-    upload.mockImplementation(async (path: string, form: FormData) => {
+    mockCsvResponses(async (path: string, form: FormData) => {
       if (path.endsWith("confirm")) return { batchId: 12, processingStatus: "PENDING", totalRows: 10 };
       if (form.get("recordType")) {
         return { validation: { validRows: 10, invalidRows: 0, skipped: [], skippedTruncated: false } };
@@ -2057,27 +2143,20 @@ describe("CSV preflight and results", () => {
     clearServerStateCache();
   });
 
-  it("rejects stale preflight counts when an already-focused field changes during validation", async () => {
-    let finishPreview!: (value: unknown) => void;
-    let checks = 0;
-    upload.mockImplementation(async (_path: string, form: FormData) => {
-      if (!form.get("recordType")) return preview;
-      if (++checks === 1) return { validation: { validRows: 10, invalidRows: 0, skipped: [], skippedTruncated: false } };
-      return new Promise((resolve) => { finishPreview = resolve; });
-    });
+  it("blocks rechecking while an inline correction remains unsaved", async () => {
+    mockCsvResponses(async (_path: string, form: FormData) => form.get("recordType")
+      ? { validation: { validRows: 10, invalidRows: 0, skipped: [], skippedTruncated: false } }
+      : preview);
     const q = await render(wrap(<ImportCsvScreen navigation={navigation} />));
     await fireEvent.press(q.getByRole("button", { name: "Choose a CSV file" }));
-    await waitFor(() => expect(q.getByRole("button", { name: "Check the rows" })).toBeEnabled());
-    await fireEvent.press(q.getByRole("button", { name: "Check the rows" }));
-    await waitFor(() => expect(q.getByRole("button", { name: "Review import" })).toBeTruthy());
-    await fireEvent.press(q.getByRole("button", { name: "Row 2, Coffee. Show its values" }));
-    const amount = q.getByLabelText("Amount");
-    await fireEvent.press(q.getByRole("button", { name: "Review import" }));
-    await fireEvent.changeText(amount, "not a number");
-    await act(() => finishPreview({ validation: { validRows: 10, invalidRows: 0, skipped: [], skippedTruncated: false } }));
-    expect(q.queryByRole("button", { name: "Import" })).toBeNull();
-    expect(q.getByText("Details changed. Check the rows again.")).toBeTruthy();
+    await waitFor(() => expect(q.getByRole("button", { name: "Check & continue" })).toBeEnabled());
+    await fireEvent.press(q.getByRole("button", { name: /^Row 2, Coffee\. Edit this row\./ }));
+    await fireEvent.changeText(q.getByLabelText("Amount"), "not a number");
+    expect(q.queryByRole("button", { name: "Check & continue" })).toBeNull();
+    expect(post).toHaveBeenCalledTimes(1);
+    await fireEvent.press(q.getByRole("button", { name: "Save changes" }));
     expect(q.getByLabelText(/Amount, Invalid amount/).props.value).toBe("not a number");
+    expect(q.queryByRole("button", { name: /^Import [\d,]+ records?$/ })).toBeNull();
   });
 
   it.each(["poll", "replay"])("reports committed rows after terminal failure from %s without offering a full-file retry", async (source) => {
@@ -2094,7 +2173,7 @@ describe("CSV preflight and results", () => {
         fetcher: async () => ({ businessProfileId }),
       })));
     }
-    upload.mockImplementation(async (path: string, form: FormData) => {
+    mockCsvResponses(async (path: string, form: FormData) => {
       if (path.endsWith("confirm")) return source === "poll"
         ? { batchId: 12, processingStatus: "PENDING", totalRows: 10 }
         : { batchId: 12, processingStatus: "FAILED", totalRows: 10, imported: 4, skippedCount: 1 };
@@ -2125,7 +2204,7 @@ describe("CSV preflight and results", () => {
     }
     await fireEvent.press(q.getByRole("button", { name: "Review saved records" }));
     expect(navigation.navigate).toHaveBeenCalledWith("RecordsList");
-    expect(upload.mock.calls.filter(([path]) => path.endsWith("confirm"))).toHaveLength(1);
+    expect(post.mock.calls.filter(([path]) => path.endsWith("confirm"))).toHaveLength(1);
   });
   it("discards a late CSV preview when the active business changes", async () => {
     let finishPreview!: (value: unknown) => void;
@@ -2138,29 +2217,29 @@ describe("CSV preflight and results", () => {
     await q.rerender(wrap(<ImportCsvScreen navigation={navigation} />));
     expect(task[2].aborted).toBe(true);
     await act(() => finishPreview(preview));
-    expect(q.queryByRole("button", { name: "Check the rows" })).toBeNull();
+    expect(q.queryByText("Review your records")).toBeNull();
     expect(q.getByRole("button", { name: "Choose a CSV file" })).toBeEnabled();
   });
   it("shows full-file skipped and duplicate counts before confirmation, with details collapsed", async () => {
-    upload.mockImplementation(async (path: string, form: FormData) => {
+    mockCsvResponses(async (path: string, form: FormData) => {
       if (path.endsWith("confirm")) return { imported: 8, totalRows: 10, skipped: [{ row: 10, reason: "Invalid date" }, { row: 11, reason: "Missing description" }], flagged: 3 };
       if (form.get("recordType")) return { validation: { validRows: 8, invalidRows: 2, skipped: [{ row: 11, reason: "Missing description" }], skippedTruncated: false, possibleDuplicateRows: 3 } };
       return preview;
     });
     const q = await render(wrap(<ImportCsvScreen navigation={navigation} />));
     await fireEvent.press(q.getByRole("button", { name: "Choose a CSV file" }));
-    await waitFor(() => expect(q.getByRole("button", { name: "Check the rows" })).toBeEnabled());
-    await fireEvent.press(q.getByRole("button", { name: "Check the rows" }));
-    await waitFor(() => expect(q.getByText(/8 rows ready · 2 will be skipped/)).toBeTruthy());
+    await waitFor(() => expect(q.getByRole("button", { name: "Check & continue" })).toBeEnabled());
+    await waitFor(() => expect(q.getByLabelText("Ready to import: 8")).toBeTruthy());
+    expect(q.getByLabelText("Will be skipped: 2")).toBeTruthy();
     expect(q.getByText(/3 possible duplicate/)).toBeTruthy();
     expect(q.queryByText("Row 11: Missing description")).toBeNull();
-    await fireEvent.press(q.getByRole("button", { name: "Show more, row errors" }));
+    await fireEvent.press(q.getByRole("button", { name: "Show more, review details" }));
     expect(q.getByText("Row 11: Missing description")).toBeTruthy();
-    const preflight = upload.mock.calls.find(([, form]) => form.get("recordType"));
-    expect(preflight![1].get("businessProfileId")).toBe("1");
-    await fireEvent.press(q.getByRole("button", { name: "Review import" }));
-    await waitFor(() => expect(q.getByRole("button", { name: "Import" })).toBeTruthy());
-    await fireEvent.press(q.getByRole("button", { name: "Import" }));
+    const preflight = post.mock.calls.find(([path]) => path.endsWith("preview"));
+    expect(preflight![1].businessProfileId).toBe(1);
+    await fireEvent.press(q.getByRole("button", { name: "Check & continue" }));
+    await waitFor(() => expect(q.getByRole("button", { name: /^Import [\d,]+ records?$/ })).toBeTruthy());
+    await fireEvent.press(q.getByRole("button", { name: /^Import [\d,]+ records?$/ }));
     await waitFor(() => expect(q.getByText("Import complete")).toBeTruthy());
     expect(q.getByText("2 row(s) were skipped")).toBeTruthy();
     expect(q.queryByText("Row 10: Invalid date")).toBeNull();
@@ -2169,23 +2248,23 @@ describe("CSV preflight and results", () => {
   });
 
   it("offers category history matches and sends corrections only after Apply", async () => {
-    upload.mockImplementation(async (_path: string, form: FormData) => form.get("recordType") ? {
+    mockCsvResponses(async (_path: string, form: FormData) => form.get("recordType") ? {
       validation: { validRows: 0, invalidRows: 1, skipped: [{ row: 2, reason: "Missing category" }], skippedTruncated: false },
       categorySuggestions: [{ row: 2, categoryId: 10, categoryName: "Stock", source: "history" }],
       categorySuggestionsTruncated: true,
     } : { ...preview, totalRows: 1, previewRows: [{ date: "2026-09-01", description: "Coffee", amount: "250" }], suggestedMapping: { date: "date", description: "description", amount: "amount" } });
     const q = await render(wrap(<ImportCsvScreen navigation={navigation} />));
     await fireEvent.press(q.getByRole("button", { name: "Choose a CSV file" }));
-    await waitFor(() => expect(q.getByRole("button", { name: "Check the rows" })).toBeEnabled());
-    await fireEvent.press(q.getByRole("button", { name: "Check the rows" }));
-    await waitFor(() => expect(q.getByRole("button", { name: "Apply category suggestions" })).toBeTruthy());
-    expect(JSON.parse(upload.mock.calls[1]![1].get("corrections"))).toEqual({});
-    expect(q.queryByText("More rows may need categories. Apply these suggestions, then review the import again.")).toBeNull();
-    await fireEvent.press(q.getByRole("button", { name: "Show more, suggested categories" }));
-    expect(q.getByText("More rows may need categories. Apply these suggestions, then review the import again.")).toBeTruthy();
+    await waitFor(() => expect(q.getByLabelText("Ready to import: 0")).toBeTruthy());
+    expect(q.getByRole("button", { name: "Check & continue" })).toBeDisabled();
+    await waitFor(() => expect(q.getByRole("button", { name: "Show more, review details" })).toBeTruthy());
+    expect(post.mock.calls[0]![1].corrections).toEqual({});
+    expect(q.queryByRole("button", { name: "Apply category suggestions" })).toBeNull();
+    await fireEvent.press(q.getByRole("button", { name: "Show more, review details" }));
+    expect(q.getByText("Apply these, then check again for more suggestions.")).toBeTruthy();
     await fireEvent.press(q.getByRole("button", { name: "Apply category suggestions" }));
-    await fireEvent.press(q.getByRole("button", { name: "Review import" }));
-    await waitFor(() => expect(upload).toHaveBeenCalledTimes(3));
-    expect(JSON.parse(upload.mock.calls[2]![1].get("corrections"))).toEqual({ "2": { category: "Stock" } });
+    await fireEvent.press(q.getByRole("button", { name: "Check & continue" }));
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+    expect(post.mock.calls[1]![1].corrections).toEqual({ "2": { category: "Stock" } });
   });
 });

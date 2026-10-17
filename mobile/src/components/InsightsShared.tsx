@@ -1,7 +1,11 @@
-import { Pressable, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { useState, type ReactNode } from "react";
+import { Modal, Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
+import { CONTENT_WIDTH, ContentScrollView } from "./ContentScrollView";
+import { useReducedMotion } from "../lib/useReducedMotion";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import * as haptics from "../lib/haptics";
-import { Card, Money, SegmentedControl, T } from "./ui";
+import { Card, Money, T } from "./ui";
 import { agendaGroupOf, formatDueDate, type AgendaGroupKey } from "../lib/recurringAgenda";
 import { formatMoney } from "../lib/money";
 import { font, radius, space, typeScale } from "../theme/tokens";
@@ -20,69 +24,172 @@ import type { RecurringSchedule } from "../lib/types";
  */
 
 /*
- * The tab values are screen names. Selection here is derived from the route
- * rather than from state, so the route↔value mapping stays at this call site
- * and SegmentedControl remains a plain controlled component.
+ * The insight screens, by route name. The descriptions are what the switcher
+ * sheet shows under each name: plain words for an owner who does not know
+ * what "spending impact" means yet.
  */
-const INSIGHT_TABS = [
-  { label: "Expenses", value: "ExpenseBehavior", icon: "wallet-outline" },
-  { label: "Spending", value: "SpendingImpact", icon: "bar-chart-outline" },
-  { label: "Recovery", value: "RecoveryTarget", icon: "refresh-circle-outline" },
-] as const;
+const INSIGHT_SCREENS: readonly {
+  id: string;
+  name: string;
+  detail: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  /** Index into the categorical palette, or null for the brand colour. */
+  hue: number | null;
+}[] = [
+  { id: "ExpenseBehavior", name: "Expenses", detail: "Where your money goes", icon: "wallet-outline", hue: 0 },
+  { id: "SpendingImpact", name: "Spending impact", detail: "How spending affects your business", icon: "bar-chart-outline", hue: 1 },
+  { id: "RecoveryTarget", name: "Recovery target", detail: "How much to sell to cover costs", icon: "refresh-circle-outline", hue: null },
+];
 
 /**
- * The header every insight screen shares: where you are, and the three places
- * you can go.
+ * The switcher's sheet: one large row per screen, each with its own tinted
+ * glyph so the three are told apart at a glance, the plain description under
+ * the name, a check on the screen you are on and a chevron on the others.
+ */
+function InsightSwitcherSheet({
+  visible,
+  active,
+  onChoose,
+  onClose,
+}: {
+  visible: boolean;
+  active: string;
+  onChoose: (id: string) => void;
+  onClose: () => void;
+}) {
+  const t = useTheme();
+  const insets = useSafeAreaInsets();
+  const reducedMotion = useReducedMotion();
+  return (
+    <Modal visible={visible} transparent animationType={reducedMotion ? "none" : "slide"} statusBarTranslucent onRequestClose={onClose}>
+      <View style={{ flex: 1, backgroundColor: t.scrim, justifyContent: "flex-end", paddingTop: insets.top + space.md }}>
+        <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Close without choosing" style={StyleSheet.absoluteFill} />
+        <ContentScrollView
+          accessibilityViewIsModal
+          onStartShouldSetResponder={() => true}
+          style={{ maxHeight: "90%", flexGrow: 0, width: "100%", maxWidth: CONTENT_WIDTH, alignSelf: "center", backgroundColor: t.surfaceRaised, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl }}
+          contentContainerStyle={{
+            backgroundColor: t.surfaceRaised,
+            paddingTop: space.md,
+            paddingHorizontal: space.md,
+            paddingBottom: insets.bottom + space.lg,
+            gap: space.xs,
+          }}
+        >
+          <View style={{ alignSelf: "center", width: 36, height: 4, borderRadius: 2, backgroundColor: t.borderStrong, marginBottom: space.sm }} />
+          <T variant="title" accessibilityRole="header" style={{ marginLeft: space.xs, marginBottom: space.sm }}>
+            Explore insights
+          </T>
+          {INSIGHT_SCREENS.map((screen) => {
+            const selected = screen.id === active;
+            const hue = screen.hue === null ? t.brandText : t.categorical[screen.hue] ?? t.brandText;
+            return (
+              <Pressable
+                key={screen.id}
+                accessibilityRole="button"
+                accessibilityLabel={`${screen.name}. ${screen.detail}`}
+                accessibilityState={{ selected }}
+                onPress={() => onChoose(screen.id)}
+                style={({ pressed }) => ({
+                  minHeight: 64,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: space.md,
+                  paddingHorizontal: space.md,
+                  paddingVertical: space.sm,
+                  borderRadius: radius.lg,
+                  borderWidth: 1.5,
+                  borderColor: selected ? t.brandBorder : "transparent",
+                  backgroundColor: selected ? t.brandSurface : pressed ? t.surfaceMuted : "transparent",
+                })}
+              >
+                <View style={{ width: 44, height: 44, borderRadius: radius.md, alignItems: "center", justifyContent: "center", backgroundColor: screen.hue === null ? t.brandSurface : `${hue}1f` }}>
+                  <Ionicons name={screen.icon} size={22} color={hue} />
+                </View>
+                <View style={{ flex: 1, gap: 2 }}>
+                  <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.body, color: t.textPrimary }}>{screen.name}</T>
+                  <T variant="caption">{screen.detail}</T>
+                </View>
+                {selected ? (
+                  <Ionicons name="checkmark-circle" size={22} color={t.brandFill} />
+                ) : (
+                  <Ionicons name="chevron-forward" size={18} color={t.textMuted} />
+                )}
+              </Pressable>
+            );
+          })}
+        </ContentScrollView>
+      </View>
+    </Modal>
+  );
+}
+
+/**
+ * The header every insight screen shares: where you are, and the way to the
+ * other two.
  *
- * "Insights" above the section name rather than the section name alone. The
- * three screens are one destination with three views of it, and titling them
- * "Expense insight" / "Spending impact" / "Recovery target" with no common
- * line made each read as a separate place the tab bar happened to reach.
+ * THE TITLE IS THE SWITCHER. "Expenses ⌄" opens a sheet listing the three
+ * views, each with a line saying what it is for. This replaced two patterns
+ * at once: a row of tabs on Spending and Recovery, and a "⋯" menu on
+ * Expenses — which could not take the tabs, because it already has its own
+ * Overview / Review / Recurring row and two tab rows stacked read as one
+ * confusing grid. One pattern now, one row fewer, and the same "⌄ means tap
+ * to change" cue as the business name and the period pill on Home.
  *
- * Icons on the segments because these are returned to repeatedly — an owner
- * learns the shape of the one they want and stops reading the words. The
- * period switcher below keeps plain labels, which is why the icon is optional
- * on SegmentedControl rather than required.
+ * "Insights" stays above as the line true of all three screens, so an owner
+ * arriving from the tab bar knows where they landed.
  */
 export function InsightHeader({
   navigation,
   active,
   title,
+  titleAccessory,
+  right,
 }: {
   navigation: any;
   active: string;
   title: string;
+  /** Sits right after the view's name, e.g. an "about this" button. */
+  titleAccessory?: ReactNode;
+  /** Sits at the right of the title block, e.g. a settings icon. */
+  right?: ReactNode;
 }) {
   const t = useTheme();
-  const { ink } = t;
+  const [switching, setSwitching] = useState(false);
   return (
-    <View style={{ marginBottom: space.lg }}>
-      {/*
-        "Insights" names the tab; the line under it names which of the three
-        views is showing.
-
-        That order, and not the reverse, because the big word should be the
-        one true of all three screens — an owner arriving from the tab bar
-        wants confirmation they landed where they meant to, and the segmented
-        control below already says which view they are on. The native stack
-        header that used to carry this word, above a back arrow with nowhere
-        to go, is gone; see InsightsStack.
-
-        No size override on it: `variant="title"` is what ScreenHeader gives
-        the Records tab, and two tab roots whose names are set in different
-        sizes read as two different levels of the app.
-      */}
-      <T variant="title" accessibilityRole="header">
-        Insights
-      </T>
-      <T variant="heading" style={{ color: ink[600], marginTop: 2, marginBottom: space.md }}>
-        {title}
-      </T>
-      <SegmentedControl
-        options={INSIGHT_TABS}
-        value={active}
-        onChange={(key) => navigation.navigate(key)}
-        accessibilityLabel="Insight sections"
+    <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, marginBottom: space.md }}>
+      <View style={{ flex: 1 }}>
+        <T variant="caption" accessibilityRole="header" style={{ fontFamily: font.sansMedium }}>
+          Insights
+        </T>
+        <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap" }}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`${title}. Switch insight`}
+            accessibilityHint="Opens Expenses, Spending impact and Recovery target"
+            onPress={() => {
+              haptics.tapped();
+              setSwitching(true);
+            }}
+            style={({ pressed }) => ({ minHeight: TAP_FLOOR, flexDirection: "row", alignItems: "center", gap: space.sm, opacity: pressed ? 0.7 : 1 })}
+          >
+            <T style={{ fontFamily: font.display, fontSize: typeScale.titleLg, color: t.brandHeading, flexShrink: 1 }}>{title}</T>
+            <View style={{ width: 26, height: 26, borderRadius: 13, alignItems: "center", justifyContent: "center", backgroundColor: t.surfaceStrong }}>
+              <Ionicons name="chevron-down" size={15} color={t.brandHeading} />
+            </View>
+          </Pressable>
+          {titleAccessory}
+        </View>
+      </View>
+      {right}
+      <InsightSwitcherSheet
+        visible={switching}
+        active={active}
+        onChoose={(id) => {
+          setSwitching(false);
+          if (id !== active) navigation.navigate(id);
+        }}
+        onClose={() => setSwitching(false)}
       />
     </View>
   );
@@ -195,6 +302,7 @@ export function SubTabs<Value extends string>({
   accessibilityLabel?: string;
 }) {
   const t = useTheme();
+  const { fontScale } = useWindowDimensions();
   const { brand, ink, paper } = t;
   return (
     <View
@@ -233,7 +341,7 @@ export function SubTabs<Value extends string>({
               onChange(tab.value);
             }}
             style={({ pressed }) => ({
-              flexDirection: "row",
+              flexDirection: fontScale > 1.2 ? "column" : "row",
               alignItems: "center",
               justifyContent: "center",
               gap: 6,
@@ -278,7 +386,7 @@ export function SubTabs<Value extends string>({
               <View
                 style={{
                   minWidth: BADGE_HEIGHT + 1,
-                  height: BADGE_HEIGHT,
+                  minHeight: BADGE_HEIGHT,
                   paddingHorizontal: 5,
                   // Radius derived from the height rather than the pill token
                   // — a brand-filled pill with that token is the marker

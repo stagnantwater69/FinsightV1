@@ -306,6 +306,114 @@ describe("BusinessProfiles settings", () => {
     expect(updateProfile).not.toHaveBeenCalled();
   });
 
+  it("saves record coverage with Enter without submitting unsaved profile edits", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    fireEvent.change(screen.getByLabelText(/^Business name/), {
+      target: { value: "Unsaved cafe name" },
+    });
+    const month = await screen.findByLabelText("Expense records complete through");
+    fireEvent.change(month, { target: { value: "2026-09" } });
+    month.focus();
+    await user.keyboard("{Enter}");
+
+    await waitFor(() =>
+      expect(setExpenseRecordsCompleteThroughMonth).toHaveBeenCalledWith(41, "2026-09"),
+    );
+    expect(updateProfile).not.toHaveBeenCalled();
+    expect(screen.getByLabelText(/^Business name/)).toHaveValue("Unsaved cafe name");
+    expect(screen.getByText("You have unsaved changes")).toBeVisible();
+  });
+
+  it("rejects the current month for record coverage without writing or saving the profile", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    const month = await screen.findByLabelText("Expense records complete through");
+    fireEvent.change(month, { target: { value: "2026-10" } });
+    expect(month).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("button", { name: "Save complete month" })).toBeDisabled();
+    month.focus();
+    await user.keyboard("{Enter}");
+
+    expect(setExpenseRecordsCompleteThroughMonth).not.toHaveBeenCalled();
+    expect(updateProfile).not.toHaveBeenCalled();
+  });
+
+  it("retries a failed financial-position load without losing profile edits", async () => {
+    const user = userEvent.setup();
+    getFinancialPosition
+      .mockRejectedValueOnce(new Error("Financial position unavailable"))
+      .mockResolvedValueOnce(financialPosition);
+    renderPage();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Financial position unavailable");
+    fireEvent.change(screen.getByLabelText(/^Business name/), {
+      target: { value: "Unsaved cafe name" },
+    });
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+
+    expect(await screen.findByText("PHP 72,500")).toBeVisible();
+    expect(getFinancialPosition).toHaveBeenCalledTimes(2);
+    expect(screen.getByLabelText(/^Business name/)).toHaveValue("Unsaved cafe name");
+    expect(screen.getByText("You have unsaved changes")).toBeVisible();
+    expect(updateProfile).not.toHaveBeenCalled();
+  });
+
+  it("uploads the logo immediately without committing or clearing unsaved profile edits", async () => {
+    const user = userEvent.setup();
+    const { container } = renderPage();
+    fireEvent.change(screen.getByLabelText(/^Business name/), {
+      target: { value: "Unsaved cafe name" },
+    });
+    const file = new File(["logo"], "cafe.png", { type: "image/png" });
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(input).not.toBeNull();
+    await user.upload(input!, file);
+
+    await waitFor(() => expect(uploadLogo).toHaveBeenCalledWith(41, file));
+    expect(toast).toHaveBeenCalledWith("Logo updated");
+    expect(updateProfile).not.toHaveBeenCalled();
+    expect(screen.getByLabelText(/^Business name/)).toHaveValue("Unsaved cafe name");
+    expect(screen.getByText("You have unsaved changes")).toBeVisible();
+  });
+
+  it("aborts the previous business financial load and ignores its late response after a switch", async () => {
+    let resolvePrevious!: (position: FinancialPosition) => void;
+    getFinancialPosition.mockImplementationOnce(() => new Promise((resolve) => {
+      resolvePrevious = resolve;
+    }));
+    const view = renderPage();
+    const previousSignal = getFinancialPosition.mock.calls[0]![1]!;
+    const otherProfile = { ...selectedProfile, id: 99, name: "Other business" };
+    const otherPosition: FinancialPosition = {
+      ...financialPosition,
+      availableFunds: { ...financialPosition.availableFunds, calculatedAmount: 12_345 },
+    };
+    businessContext = {
+      ...businessContext,
+      profiles: [selectedProfile, otherProfile],
+      selected: otherProfile,
+    };
+    getFinancialPosition.mockResolvedValueOnce(otherPosition);
+    view.rerender(
+      <MemoryRouter initialEntries={["/business-profiles"]}>
+        <Routes>
+          <Route path="/business-profiles" element={<BusinessProfiles />} />
+          <Route path="/onboarding" element={<p>Setup wizard</p>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(previousSignal.aborted).toBe(true);
+    expect(await screen.findByText("PHP 12,345")).toBeVisible();
+    await act(async () => resolvePrevious(financialPosition));
+    expect(screen.queryByText("PHP 72,500")).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/^Business name/)).toHaveValue("Other business");
+    expect(getFinancialPosition).toHaveBeenLastCalledWith(99, expect.any(AbortSignal));
+  });
+
   it("blocks saving invalid values before the update call", async () => {
     const user = userEvent.setup();
     renderPage();

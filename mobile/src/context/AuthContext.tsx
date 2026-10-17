@@ -1,9 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { api, errorMessage, setSessionEndedHandler, type SessionEndReason } from "../lib/api";
-import { supabase } from "../lib/supabase";
+import { api, errorMessage, invalidateApiSessionRequests, setSessionEndedHandler, type SessionEndReason } from "../lib/api";
+import { createGoogleAuthClient, supabase } from "../lib/supabase";
+import { signInWithGoogle, type GoogleAuthClient, type GoogleSignInResult } from "../lib/googleSignIn";
 import { commitPreferences, DEFAULT_PREFERENCES } from "../lib/preferences";
 import { clearReceiptScannerCache } from "../lib/receiptScannerCache";
 import { beginServerStateSession, clearServerStateCache } from "../lib/serverStateCache";
+import { clearChatSendRecovery } from "../lib/chatSendRecovery";
 import type {
   BusinessProfile,
   LoginInput,
@@ -24,6 +26,12 @@ interface AuthValue {
   profile: Profile | null;
   loading: boolean;
   login: (input: LoginInput) => Promise<void>;
+  /**
+   * Google sign-in through the system auth sheet. Resolves with what happened
+   * rather than throwing, because "the owner closed the sheet" is not an error.
+   * See lib/googleSignIn.ts.
+   */
+  loginWithGoogle: () => Promise<GoogleSignInResult>;
   /**
    * Signs the owner in from a session somebody else already established.
    *
@@ -144,7 +152,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const expectedUserIdRef = useRef<number | null>(null);
   const accountRequestControllersRef = useRef(new Set<AbortController>());
 
-  const replaceExpectedAccount = useCallback((userId: number | null): AccountSessionGuard => {
+  const replaceExpectedAccount = useCallback((userId: number | null, preserveTransport = false): AccountSessionGuard => {
+    const previousUserId = expectedUserIdRef.current;
+    if (previousUserId !== null && previousUserId !== userId) void clearChatSendRecovery(previousUserId).catch(() => undefined);
+    if (!preserveTransport) invalidateApiSessionRequests();
     for (const controller of accountRequestControllersRef.current) controller.abort();
     accountRequestControllersRef.current.clear();
     const generation = ++sessionGenerationRef.current;
@@ -247,7 +258,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // If it failed, `me` is null, the app shows Login, and the list is
         // discarded unread — there is no state in which business data is
         // shown to someone the app could not identify.
-        replaceExpectedAccount(me.id);
+        // The parallel profile list belongs to this restored session.
+        replaceExpectedAccount(me.id, true);
         bootstrapProfiles.current = profiles;
         beginServerStateSession(me.id);
         setProfile(me);
@@ -333,6 +345,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       input
     );
     await adoptSession(data.session, data.profile);
+  }
+
+  async function loginWithGoogle() {
+    // Loaded on the tap, not at startup: both are native modules that only
+    // this one action needs.
+    const [WebBrowser, { ensureWebCrypto }] = await Promise.all([
+      import("expo-web-browser"),
+      import("../lib/webCrypto"),
+    ]);
+    ensureWebCrypto();
+    return signInWithGoogle<Profile>({
+      createClient: () => {
+        const { client, dispose } = createGoogleAuthClient();
+        return { client: client as unknown as GoogleAuthClient, dispose };
+      },
+      openAuthSheet: (url, redirectUrl) => WebBrowser.openAuthSessionAsync(url, redirectUrl),
+      approve: (accessToken) =>
+        api.postWithToken<{ profile: Profile; needsOnboarding: boolean }>("/auth/google", accessToken),
+      adoptSession,
+      describeError: errorMessage,
+    });
   }
 
   async function register(input: RegisterInput) {
@@ -485,6 +518,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         profile,
         loading,
         login,
+        loginWithGoogle,
         adoptSession,
         register,
         logout,

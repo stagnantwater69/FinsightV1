@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { isAxiosError } from "axios";
 import { Link, useNavigate } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
@@ -47,7 +47,6 @@ import type {
   ReceiptDuplicateReason,
   ReceiptDuplicateReview,
   ReceiptPurgeJob,
-  ReceiptHistoryPage,
   ReceiptHistoryItem,
   ScannedItem,
   ReceiptScanResult,
@@ -75,16 +74,14 @@ import {
   IconSun,
 } from "../components/icons";
 import {
-  EMPTY_RECOVERY_HISTORY,
-  appendOlderPage,
-  reconcileFirstPage,
-  recoveryRowNames,
+  recoveryRowActionId,
+  recoveryRowId,
   recoveryRowTitle,
-  seedLocalScans,
   summaryFromScan,
-  withoutScan,
-  type RecoveryHistoryState,
 } from "./scanReceipt/recoveryHistory";
+
+import { useReceiptRecoveryHistory } from "./scanReceipt/useReceiptRecoveryHistory";
+import { ReceiptRecoveryHistory } from "./scanReceipt/ReceiptRecoveryHistory";
 
 interface BatchReceiptBinding {
   batchId: number;
@@ -93,6 +90,9 @@ interface BatchReceiptBinding {
 
 type ReceiptReviewMode = "review" | "results" | "compact";
 type DuplicateCheckStatus = "idle" | "loading" | "success" | "error";
+
+// Temporarily hidden; set to true to restore the per-item photo extraction label.
+const SHOW_AI_PHOTO_EXTRACTION_LABEL = false;
 
 const REVIEW_MODES: Array<{
   id: ReceiptReviewMode;
@@ -206,14 +206,14 @@ function ReceiptReviewTabs({
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(id)}
             onKeyDown={(event) => handleKeyDown(event, index)}
-            className={`flex min-h-tap min-w-0 items-center justify-center gap-2 rounded-lg px-2 text-sm font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 ${
+            className={`flex min-h-tap min-w-tap items-center justify-center gap-2 rounded-lg px-2 text-sm font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 ${
               selected
                 ? "bg-tint-brand text-tone-brand ring-1 ring-edge-brand"
                 : "text-ink-600 hover:bg-paper hover:text-ink-900"
             }`}
           >
             <Icon className="h-4 w-4 shrink-0" />
-            <span className="truncate">{label}</span>
+            <span className="min-w-0 truncate">{label}</span>
           </button>
         );
       })}
@@ -341,14 +341,6 @@ function sameMatchesHash(error: unknown, acknowledged: DuplicateReviewState): st
   return current.candidateSetHash;
 }
 
-function recoveryRowId(scanId: number): string {
-  return `unfinished-scan-${scanId}`;
-}
-
-function recoveryRowActionId(scanId: number): string {
-  return `${recoveryRowId(scanId)}-action`;
-}
-
 function scannedItemRowId(itemId: number): string {
   return `scanned-item-${itemId}`;
 }
@@ -447,13 +439,10 @@ function ScanReceiptForm() {
   const [scanError, setScanError] = useState<string | null>(null);
   const [scan, setScan] = useState<ReceiptScanResult | null>(null);
   const [pausedScan, setPausedScan] = useState<ReceiptScanResult | null>(null);
-  const [resumeHistory, setResumeHistory] = useState<RecoveryHistoryState>(EMPTY_RECOVERY_HISTORY);
+  const recoveryHistory = useReceiptRecoveryHistory(selected?.id);
+  const { history: resumeHistory, loading: resumeLoading, loadingOlder: resumeLoadingOlder, error: resumeError,
+    refresh: refreshActiveReceiptHistory, loadOlder: loadOlderReceiptHistory, remove: removeFromHistory, seed: seedHistory } = recoveryHistory;
   const resumeScans = resumeHistory.scans;
-  const [resumeLoading, setResumeLoading] = useState(false);
-  const [resumeLoadingOlder, setResumeLoadingOlder] = useState(false);
-  // A failed refresh offers a reload; a failed older page keeps its cursor,
-  // so "Show older scans" is itself the retry.
-  const [resumeError, setResumeError] = useState<{ message: string; failed: "refresh" | "older" } | null>(null);
   const [duplicateReview, setDuplicateReview] = useState<DuplicateReviewState | null>(null);
   const [duplicateLoading, setDuplicateLoading] = useState(false);
   const [duplicateCheckStatus, setDuplicateCheckStatus] = useState<DuplicateCheckStatus>("idle");
@@ -569,9 +558,6 @@ function ScanReceiptForm() {
   } | null>(null);
   const currentFiles = useRef<File[]>([]);
   const requests = useRef(new AbortController());
-  // Kept apart from `requests`: handleStopWaiting aborts that one, and a
-  // history refresh caught by it would never clear its loading state.
-  const historyRequests = useRef(new AbortController());
   const duplicateRequests = useRef<AbortController | null>(null);
   const startPending = useRef(false);
   const savePending = useRef(false);
@@ -579,8 +565,6 @@ function ScanReceiptForm() {
   /** The unfinished-scans row being waited on, when the wait is not a local upload. */
   const waitingStoredScan = useRef<Pick<ReceiptHistoryItem, "id" | "extractedVendor" | "extractedDescription"> | null>(null);
   const deleteKeys = useRef<Map<number, string>>(new Map());
-  // A history page requested before a delete can settle after it and put the row back.
-  const purgedScanIds = useRef<Set<number>>(new Set());
   const [focusRowAfterDelete, setFocusRowAfterDelete] = useState<{ deletedScanId: number; nextScanId: number | null } | null>(null);
   const [focusItemAfterRemove, setFocusItemAfterRemove] = useState<{ removedItemId: number; nextItemId: number | null } | null>(null);
 
@@ -601,13 +585,11 @@ function ScanReceiptForm() {
     // Stop waiting swaps in a fresh controller, so the cleanup has to abort
     // whichever one is current at unmount, not the one made here.
     const live = requests;
-    const history = historyRequests.current;
     const pending = acceptingScans.current;
     const accepted = acceptedScans.current;
     const keys = uploadKeys.current;
     return () => {
       live.current.abort();
-      history.abort();
       pending.clear();
       accepted.clear();
       keys.clear();
@@ -615,61 +597,6 @@ function ScanReceiptForm() {
   }, []);
 
   const selectedBusinessProfileId = selected?.id;
-  const refreshActiveReceiptHistory = useCallback(async (requestSignal?: AbortSignal, excludeScanId?: number) => {
-    if (selectedBusinessProfileId === undefined) return;
-    const signal = requestSignal ?? historyRequests.current.signal;
-    setResumeLoading(true);
-    setResumeError(null);
-    try {
-      const { data } = await api.get<ReceiptHistoryPage>("/records/receipts", {
-        params: { businessProfileId: selectedBusinessProfileId, status: "active", take: 20 },
-        signal,
-      });
-      signal.throwIfAborted();
-      const purged = purgedScanIds.current;
-      const page = {
-        ...data,
-        items: data.items.filter((candidate) => candidate.id !== excludeScanId && !purged.has(candidate.id)),
-      };
-      setResumeHistory((current) => reconcileFirstPage(current, page));
-    } catch (error) {
-      if (!signal.aborted) setResumeError({ message: getErrorMessage(error), failed: "refresh" });
-    } finally {
-      if (!signal.aborted) setResumeLoading(false);
-    }
-  }, [selectedBusinessProfileId]);
-
-  const resumeCursor = resumeHistory.nextCursor;
-  async function loadOlderReceiptHistory() {
-    if (selectedBusinessProfileId === undefined || resumeCursor === null || resumeLoading || resumeLoadingOlder) return;
-    const signal = historyRequests.current.signal;
-    setResumeLoadingOlder(true);
-    setResumeError(null);
-    try {
-      const { data } = await api.get<ReceiptHistoryPage>("/records/receipts", {
-        params: { businessProfileId: selectedBusinessProfileId, status: "active", take: 20, cursor: resumeCursor },
-        signal,
-      });
-      signal.throwIfAborted();
-      const purged = purgedScanIds.current;
-      setResumeHistory((current) => appendOlderPage(current, {
-        ...data,
-        items: data.items.filter((candidate) => !purged.has(candidate.id)),
-      }));
-    } catch (error) {
-      if (!signal.aborted) setResumeError({ message: getErrorMessage(error), failed: "older" });
-    } finally {
-      if (!signal.aborted) setResumeLoadingOlder(false);
-    }
-  }
-
-  useEffect(() => {
-    if (selectedBusinessProfileId === undefined) return;
-    const controller = new AbortController();
-    void refreshActiveReceiptHistory(controller.signal);
-    return () => controller.abort();
-  }, [refreshActiveReceiptHistory, selectedBusinessProfileId]);
-
   const duplicateScanId = scan?.id;
   const duplicateScanStatus = scan?.processingStatus;
   useEffect(() => {
@@ -1258,12 +1185,11 @@ function ScanReceiptForm() {
         throw new Error("FinSight returned a deletion result that did not match this receipt scan.");
       }
       deleteKeys.current.delete(target.id);
-      purgedScanIds.current.add(target.id);
       const rowIndex = resumeScans.findIndex((row) => row.id === target.id);
       const neighbour = rowIndex === -1
         ? null
         : resumeScans[rowIndex + 1] ?? resumeScans[rowIndex - 1] ?? null;
-      setResumeHistory((current) => withoutScan(current, target.id));
+      removeFromHistory(target.id);
 
       if (scan?.id === target.id) {
         const wasBatchChild = scan.receiptBatchId !== null && scan.receiptBatchId !== undefined;
@@ -1288,12 +1214,11 @@ function ScanReceiptForm() {
         // so the row is as gone as a fresh 200 would have made it; keeping it
         // with an error would invite a third attempt at the same thing.
         deleteKeys.current.delete(target.id);
-        purgedScanIds.current.add(target.id);
-        const rowIndex = resumeScans.findIndex((row) => row.id === target.id);
+          const rowIndex = resumeScans.findIndex((row) => row.id === target.id);
         const neighbour = rowIndex === -1
           ? null
           : resumeScans[rowIndex + 1] ?? resumeScans[rowIndex - 1] ?? null;
-        setResumeHistory((current) => withoutScan(current, target.id));
+        removeFromHistory(target.id);
         if (scan?.id === target.id) resetScanSession();
         else setFocusRowAfterDelete({ deletedScanId: target.id, nextScanId: neighbour?.id ?? null });
         toast("This scan is already being deleted. Its private files will be deleted in the background.");
@@ -1587,10 +1512,7 @@ function ScanReceiptForm() {
     resetScanSession();
     if (selectedBusinessProfileId === undefined || abandoned.length === 0) return;
     const now = new Date().toISOString();
-    setResumeHistory((current) => seedLocalScans(
-      current,
-      abandoned.map((row) => summaryFromScan(row, selectedBusinessProfileId, now)),
-    ));
+    seedHistory(abandoned.map((row) => summaryFromScan(row, selectedBusinessProfileId, now)));
     void refreshActiveReceiptHistory();
   }
 
@@ -1992,8 +1914,6 @@ function ScanReceiptForm() {
     />
   ) : null;
 
-  const resumeRowNames = recoveryRowNames(resumeScans);
-
   // ---- stage 1: choose a photo ------------------------------------------
   if (!scan) {
     return (
@@ -2007,89 +1927,12 @@ function ScanReceiptForm() {
           <ReceiptWorkflowProgress current="upload" />
           <div className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(17rem,1fr)] xl:items-start">
             <Card as="form" onSubmit={handleStartScanning} className="p-4 sm:p-5">
-              {resumeLoading ? <p className="mb-4 text-sm text-ink-500" role="status">Checking unfinished scans…</p> : null}
-              {resumeError?.failed === "refresh" ? (
-                <div className="mb-4 flex flex-wrap items-center gap-2">
-                  <p className="text-sm text-tone-danger" role="alert">{resumeError.message}</p>
-                  <Button type="button" variant="secondary" size="sm" disabled={resumeLoading} onClick={() => void refreshActiveReceiptHistory()}>
-                    Reload unfinished scans
-                  </Button>
-                </div>
-              ) : null}
-              {resumeScans.length > 0 ? (
-                <section aria-labelledby="unfinished-receipts-title" className="mb-4 rounded-xl border border-paper-200 bg-paper-50 p-3">
-                  <h2 id="unfinished-receipts-title" className="text-sm font-semibold text-ink-800">
-                    Continue an unfinished scan
-                  </h2>
-                  <ul aria-label="Unfinished scans" className="mt-2 space-y-2">
-                    {resumeScans.map((pending) => {
-                      const rowName = resumeRowNames.get(pending.id) ?? recoveryRowTitle(pending);
-                      const actionLabel = pending.allowedActions.retryProcessing
-                        ? "Retry processing"
-                        : pending.allowedActions.reviewResult
-                          ? "Review result"
-                          : "Continue waiting";
-                      const deleteLabel = deletingScanId === pending.id ? "Deleting…" : "Delete scan";
-                      return (
-                        <li key={pending.id} id={recoveryRowId(pending.id)} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-paper px-3 py-2 ring-1 ring-paper-200">
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-medium text-ink-800">{recoveryRowTitle(pending)}</p>
-                            <p className="text-xs text-ink-500">
-                              {pending.processingStatus === "Processing"
-                                ? "Still reading"
-                                : pending.processingStatus === "Failed"
-                                  ? "Needs another processing attempt"
-                                  : "Ready to review"}
-                              {pending.receiptOrdinal ? ` · Receipt ${pending.receiptOrdinal}` : ""}
-                            </p>
-                          </div>
-                          <div className="flex flex-wrap gap-2">
-                            <Button
-                              type="button"
-                              id={recoveryRowActionId(pending.id)}
-                              variant={pending.allowedActions.reviewResult ? "primary" : "secondary"}
-                              disabled={scanning || deletingScanId !== null}
-                              onClick={() => void openStoredScan(pending)}
-                              aria-label={`${actionLabel}, ${rowName}`}
-                            >
-                              {actionLabel}
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="danger"
-                              disabled={scanning || deletingScanId !== null}
-                              onClick={() => void deleteUnconfirmedScan(pending)}
-                              aria-label={`${deleteLabel}, ${rowName}`}
-                            >
-                              {deleteLabel}
-                            </Button>
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                  {resumeError?.failed === "older" ? (
-                    <p className="mt-2 text-sm text-tone-danger" role="alert">{resumeError.message}</p>
-                  ) : null}
-                  {resumeLoadingOlder ? (
-                    <p className="mt-2 text-sm text-ink-500" role="status">Loading older scans…</p>
-                  ) : null}
-                  {resumeHistory.nextCursor !== null ? (
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      className="mt-2"
-                      disabled={resumeLoading || resumeLoadingOlder}
-                      onClick={() => void loadOlderReceiptHistory()}
-                    >
-                      Show older scans
-                    </Button>
-                  ) : resumeHistory.pagesLoaded > 1 ? (
-                    <p className="mt-2 text-xs text-ink-500">No more unfinished scans.</p>
-                  ) : null}
-                </section>
-              ) : null}
+              <ReceiptRecoveryHistory
+                history={resumeHistory} loading={resumeLoading} loadingOlder={resumeLoadingOlder} error={resumeError}
+                scanning={scanning} deletingScanId={deletingScanId}
+                onRefresh={() => void refreshActiveReceiptHistory()} onLoadOlder={() => void loadOlderReceiptHistory()}
+                onOpen={(pending) => void openStoredScan(pending)} onDelete={(pending) => void deleteUnconfirmedScan(pending)}
+              />
               <div className="space-y-4">
                 <Field label="Receipt photos" htmlFor="receipt-files" required>
                   <MultiFileInput
@@ -2204,7 +2047,7 @@ function ScanReceiptForm() {
                 Stop waiting
               </Button>
             ) : null}
-            <Link to="/records/expenses/new" className="tap-inline inline-flex items-center font-semibold text-tone-brand underline">
+            <Link to="/records/expenses/new" className="tap-inline inline-flex items-center link">
               Enter manually
             </Link>
             <Button type="button" variant="secondary" onClick={handleRescan} disabled={scanning}>
@@ -2621,7 +2464,7 @@ function ScanReceiptForm() {
                               inferred from a photograph should look different
                               from one read off text at the moment it is checked.
                             */}
-                            {item.extractedByVision ? (
+                            {SHOW_AI_PHOTO_EXTRACTION_LABEL && item.extractedByVision ? (
                               <span className="ml-1.5 inline-flex items-center gap-0.5 rounded-full bg-tint-accent px-1.5 py-0.5 text-[10px] font-medium text-tone-accent ring-1 ring-edge-accent align-middle">
                                 <span aria-hidden>✦</span>
                                 AI read this from the photo
@@ -2780,7 +2623,7 @@ function ScanReceiptForm() {
                                   type="button"
                                   onClick={() => acceptSuggestedCategory(item.suggestedCategoryName!)}
                                   disabled={creatingCategoryFor !== null}
-                                  className="tap-inline font-medium text-tone-brand underline transition hover:decoration-2 disabled:opacity-50"
+                                  className="tap-inline disabled:opacity-50 link"
                                 >
                                   {creatingCategoryFor === item.suggestedCategoryName
                                     ? "Creating…"
@@ -3095,7 +2938,7 @@ function ScanReceiptForm() {
                     <button
                       type="button"
                       onClick={addAddedItem}
-                      className="tap-inline mt-2.5 border-t border-tone-accent/20 pt-2 text-xs font-medium text-tone-brand transition hover:underline"
+                      className="tap-inline mt-2.5 border-t border-tone-accent/20 pt-2 text-xs link-action"
                     >
                       + Add a missing item to the list
                     </button>
@@ -3194,7 +3037,7 @@ function ScanReceiptForm() {
               <button
                 type="button"
                 onClick={addSplit}
-                className="tap-inline text-sm font-medium text-tone-brand transition hover:underline"
+                className="tap-inline text-sm link-action"
               >
                 + Add another category
               </button>
@@ -3442,7 +3285,7 @@ function ScanReceiptForm() {
                       </div>
                     </div>
                     <details className="rounded-lg bg-paper px-3 py-2 ring-1 ring-paper-200">
-                      <summary className="tap-inline cursor-pointer text-sm font-semibold text-tone-brand">
+                      <summary className="disclosure text-sm">
                         View {duplicateReview.candidateCount} match{duplicateReview.candidateCount === 1 ? "" : "es"}
                       </summary>
                       <ul className="mt-2 space-y-2">

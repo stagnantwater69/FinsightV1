@@ -4,6 +4,7 @@ import {
   describeLoadFailure,
   describeSaveFailure,
   isUnreachable,
+  isUnconfirmedMutationFailure,
   lastUpdatedLabel,
   lastUpdatedLine,
   saveFailureMessage,
@@ -15,7 +16,7 @@ import {
  * The offline and stale-data wording, pinned.
  *
  * WHY THE COPY IS TESTED AND NOT JUST THE BRANCHING. This app has no sync
- * queue: a save that fails is a save that did not happen. The plan's rule is
+ * queue: a missing response can follow a committed save. The plan's rule is
  * "do not imply full offline capability until a sync/queue architecture
  * exists", and the way that rule gets broken is not by someone rewriting the
  * architecture — it is by someone softening a sentence. "We'll save this when
@@ -165,7 +166,10 @@ describe("describeSaveFailure", () => {
   it("promises the typing is kept, and only that", () => {
     const notice = describeSaveFailure(UNREACHABLE, "Save expense");
     expect(notice.body).toContain("Everything you entered is still here");
-    expect(notice.body).toContain("press Save expense again once you have a connection");
+    expect(notice.title).toBe("Save not confirmed");
+    expect(notice.body).toContain("didn't confirm whether this was saved");
+    expect(notice.body).toContain("Check your records before choosing Save expense again");
+    expect(notice.body).not.toContain("this wasn't saved");
     // The honesty clause. There is no outbox behind this app.
     expect(notice.body).toContain("FinSight can't save it in the background for you");
   });
@@ -188,12 +192,10 @@ describe("describeSaveFailure", () => {
 });
 
 describe("describeActionFailure", () => {
-  it("reassures about the record rather than about a form", () => {
-    // A failed delete leaves a list, not a half-typed form, so "everything you
-    // entered is still here" would be answering a question nobody asked.
+  it("requires checking an ambiguous action without promising the record was unchanged", () => {
     const line = describeActionFailure(UNREACHABLE, "The record is still in your books.");
     expect(line).toBe(
-      "Your phone couldn't reach FinSight's server, so nothing was changed. The record is still in your books.",
+      "FinSight didn't confirm whether the action finished. Refresh this screen to check the result before trying again.",
     );
   });
 
@@ -264,15 +266,34 @@ describe("no string in this module promises a background sync", () => {
     }
   });
 
-  it("still says the connection is the problem, so the banner is actionable", () => {
-    const unreachableSentences = [
+  it("gives failed reads a connection recovery and unknown mutations a result check", () => {
+    const readSentences = [
       describeLoadFailure(UNREACHABLE, { hasData: true, now })!.body,
       describeLoadFailure(UNREACHABLE, { hasData: false, now })!.body,
-      describeSaveFailure(UNREACHABLE).body,
-      describeActionFailure(UNREACHABLE, "Nothing changed."),
     ];
-    for (const sentence of unreachableSentences) {
+    for (const sentence of readSentences) {
       expect(sentence).toContain("couldn't reach FinSight's server");
     }
+    for (const sentence of [describeSaveFailure(UNREACHABLE).body, describeActionFailure(UNREACHABLE, "Nothing changed.")]) {
+      expect(sentence).toContain("didn't confirm");
+      expect(sentence).not.toContain("Nothing changed");
+    }
+  });
+});
+
+describe("unconfirmed financial mutation outcomes", () => {
+  it.each([0, 408, 500, 503, 200, 201])("requires reconciliation for status %s", (status) => {
+    expect(isUnconfirmedMutationFailure(Object.assign(new Error("Unconfirmed result"), { status }))).toBe(true);
+    const failure = toLoadFailure(Object.assign(new Error("Unconfirmed result"), { status }));
+    expect(describeSaveFailure(failure).body).toContain("didn't confirm whether this was saved");
+    expect(describeActionFailure(failure, "Nothing changed.")).not.toContain("Nothing changed");
+  });
+
+  it("recognises an unreadable successful JSON body as unknown", () => {
+    expect(isUnconfirmedMutationFailure(new SyntaxError("Unexpected end of JSON input"))).toBe(true);
+  });
+
+  it.each([400, 401, 403, 404, 409, 429])("allows the normal rejection flow for status %s", (status) => {
+    expect(isUnconfirmedMutationFailure({ status })).toBe(false);
   });
 });

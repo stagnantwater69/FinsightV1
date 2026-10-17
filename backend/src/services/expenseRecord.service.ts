@@ -7,6 +7,7 @@ import { requireOwnedBusinessProfile } from "../lib/ownership";
 import { DEFAULT_RECORD_SORT, recordCursorWhere, recordOrderBy, type RecordCursor, type RecordSort } from "../lib/recordSort";
 import { expenseDuplicateKeysOf, sameExpenseDuplicateIdentity } from "../lib/expenseDuplicateIdentity";
 import { lockDuplicateKey, lockExpenseDuplicateWriteGate } from "../lib/recordLock";
+import { findManualRecordReplay, manualRecordBaselineInstant, manualRecordRequestIdentity, persistManualRecordRequest } from "../lib/manualRecordCreate";
 import { createNotification, NOTIFICATION_TYPES } from "./notification.service";
 import { signedReceiptImageUrl, signedCsvFileUrl } from "./storage.service";
 import { logger } from "../config/logger";
@@ -21,6 +22,7 @@ import {
 } from "./availableFundsBaseline.service";
 
 interface CreateInput extends AvailableFundsBaselineInput {
+  idempotencyKey?: string;
   businessProfileId: number;
   categoryId: number;
   date: string;
@@ -339,10 +341,41 @@ async function verifyCategoryBelongsToProfile(categoryId: number, businessProfil
  * record whatever happened to the tail.
  */
 export async function createExpenseRecord(userId: number, input: CreateInput) {
-  const { record, runSideEffects } = await prisma.$transaction((tx) =>
-    createExpenseRecordWithin(userId, input, tx, { serializeDuplicateCheck: true }),
+  const identity = input.idempotencyKey === undefined ? null : manualRecordRequestIdentity(
+    userId,
+    input.businessProfileId,
+    "EXPENSE",
+    input.idempotencyKey,
+    [
+      input.businessProfileId,
+      input.categoryId,
+      input.date,
+      input.description,
+      input.vendor ?? null,
+      new Prisma.Decimal(input.amount).toString(),
+      input.source ?? "MANUAL_ENTRY",
+      input.receiptScanId ?? null,
+      input.importBatchId ?? null,
+      input.allocatedCharges === undefined ? null : new Prisma.Decimal(input.allocatedCharges).toString(),
+      input.includedInAvailableFundsBaseline ?? null,
+      manualRecordBaselineInstant(input.availableFundsBaselineAt),
+    ],
   );
-  await runSideEffects();
+  const { record, runSideEffects } = await prisma.$transaction(async (tx) => {
+    if (identity) {
+      await requireOwnedBusinessProfile(userId, input.businessProfileId, tx);
+      await lockExpenseDuplicateWriteGate(tx, input.businessProfileId);
+      const replay = await findManualRecordReplay(tx, identity);
+      if (replay?.kind === "EXPENSE") return { record: toDTO(replay.record), runSideEffects: null };
+    }
+    const created = await createExpenseRecordWithin(userId, input, tx, {
+      serializeDuplicateCheck: true,
+      ...(identity ? { recordGateHeld: true } : {}),
+    });
+    if (identity) await persistManualRecordRequest(tx, identity, created.record.id);
+    return created;
+  });
+  if (runSideEffects) await runSideEffects();
   return record;
 }
 
@@ -983,6 +1016,9 @@ export async function updateExpenseRecord(userId: number, id: number, input: Upd
     if (directFollowers.length > 0) {
       await repairExpenseFollowers(tx, existing.businessProfileId, directFollowers);
     }
+    if (valueFieldsChanged || input.vendor !== undefined || input.categoryId !== undefined) {
+      await enqueueExpenseAnalysis(record.businessProfileId, record.id, tx);
+    }
     return {
       existing,
       record,
@@ -1020,10 +1056,6 @@ export async function updateExpenseRecord(userId: number, id: number, input: Upd
         `Large expense flagged: "${nextDescription}" (PHP ${Number(nextAmount)}) on ${nextDate.toISOString().slice(0, 10)}`,
         record.id,
       ));
-  }
-
-  if (valueFieldsChanged || input.vendor !== undefined || input.categoryId !== undefined) {
-    await runSideEffect("analysis", ids, () => queueAnalysis(record.businessProfileId, record.id));
   }
 
   return toDTO(record);
@@ -1150,34 +1182,44 @@ export async function bulkResolveExpenseDuplicates(
   return owned.length;
 }
 
+function searchExpenseWhere(filters: SearchFilters): Prisma.ExpenseRecordWhereInput {
+  const cursorWhere = recordCursorWhere(filters.cursor, filters.sort ?? DEFAULT_RECORD_SORT);
+  return {
+    businessProfileId: filters.businessProfileId,
+    categoryId: filters.categoryId,
+    source: filters.source,
+    importBatchId: filters.importBatchId,
+    AND: [
+      {
+        date: {
+          gte: filters.dateFrom ? new Date(filters.dateFrom) : undefined,
+          lte: filters.dateTo ? new Date(filters.dateTo) : undefined,
+        },
+      },
+      ...(cursorWhere ? [cursorWhere] : []),
+    ],
+    description: filters.keyword ? { contains: filters.keyword, mode: "insensitive" } : undefined,
+  };
+}
+
 export async function searchExpenseRecords(userId: number, filters: SearchFilters) {
   await requireOwnedBusinessProfile(userId, filters.businessProfileId);
 
-  const sort = filters.sort ?? DEFAULT_RECORD_SORT;
-  const cursorWhere = recordCursorWhere(filters.cursor, sort);
-
   const records = await prisma.expenseRecord.findMany({
-    where: {
-      businessProfileId: filters.businessProfileId,
-      categoryId: filters.categoryId,
-      source: filters.source,
-      importBatchId: filters.importBatchId,
-      AND: [
-        {
-          date: {
-            gte: filters.dateFrom ? new Date(filters.dateFrom) : undefined,
-            lte: filters.dateTo ? new Date(filters.dateTo) : undefined,
-          },
-        },
-        ...(cursorWhere ? [cursorWhere] : []),
-      ],
-      description: filters.keyword ? { contains: filters.keyword, mode: "insensitive" } : undefined,
-    },
-    orderBy: recordOrderBy(sort),
+    where: searchExpenseWhere(filters),
+    orderBy: recordOrderBy(filters.sort ?? DEFAULT_RECORD_SORT),
     take: filters.take,
   });
 
   return records.map(toDTO);
+}
+
+export async function countSearchExpenseRecords(
+  userId: number,
+  filters: Omit<SearchFilters, "cursor" | "take">,
+): Promise<number> {
+  await requireOwnedBusinessProfile(userId, filters.businessProfileId);
+  return prisma.expenseRecord.count({ where: searchExpenseWhere({ ...filters, cursor: undefined }) });
 }
 
 /** The one definition of "flagged", shared by the list and the count. */

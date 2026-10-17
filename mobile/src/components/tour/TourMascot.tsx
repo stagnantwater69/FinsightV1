@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Image, View, type ImageSourcePropType } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { useTheme } from "../../context/ThemeContext";
 import type { TourPose, TourStep } from "./steps";
 

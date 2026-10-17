@@ -112,11 +112,11 @@ export function ConversationItem({ conversation, active, onSelect, onRename, onD
           type="button"
           onClick={onSelect}
           aria-current={active ? "true" : undefined}
-          className={`flex min-h-tap min-w-0 flex-1 items-center rounded-xl px-3 text-left text-[13px] ${
+          className={`flex min-h-tap min-w-tap flex-1 items-center rounded-xl px-3 text-left text-[13px] ${
             active ? "font-semibold text-ink-900" : "text-ink-600"
           }`}
         >
-          <span className="truncate">{conversation.title}</span>
+          <span className="min-w-0 flex-1 truncate">{conversation.title}</span>
         </button>
 
         <div ref={menuRef} className="relative shrink-0 pr-1">
@@ -127,15 +127,7 @@ export function ConversationItem({ conversation, active, onSelect, onRename, onD
             aria-haspopup="menu"
             aria-expanded={menuOpen}
             aria-label={`More options for ${conversation.title}`}
-            /*
-             * Hidden until the row is hovered or the button itself is
-             * focused, so a list of twelve rows is not a column of twelve dot
-             * clusters — but `focus-visible` keeps it reachable by Tab, which
-             * `hidden until hover` alone would not.
-             */
-            className={`tap h-8 w-8 min-h-0 min-w-0 rounded-lg text-ink-500 transition hover:bg-paper-200 hover:text-ink-700 focus-visible:opacity-100 group-hover:opacity-100 ${
-              menuOpen ? "opacity-100" : "opacity-0"
-            }`}
+            className="tap h-11 w-11 shrink-0 rounded-lg text-ink-500 transition hover:bg-paper-200 hover:text-ink-700"
           >
             <MoreHorizontal aria-hidden size={16} />
           </button>

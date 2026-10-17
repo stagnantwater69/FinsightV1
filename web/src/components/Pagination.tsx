@@ -52,7 +52,7 @@ function pageWindow(current: number, total: number): (number | "gap")[] {
 }
 
 const ARROW_BASE =
-  "tap h-9 w-9 min-h-0 min-w-0 rounded-lg border border-paper-200 bg-paper text-ink-600 transition " +
+  "tap h-11 w-11 shrink-0 rounded-lg border border-paper-200 bg-paper text-ink-600 transition " +
   "hover:border-brand-300 hover:text-brand-700 disabled:cursor-not-allowed disabled:opacity-40 " +
   "disabled:hover:border-paper-200 disabled:hover:text-ink-600";
 
@@ -134,7 +134,7 @@ export function Pagination({
           Hidden entirely at one page: a disabled row of arrows next to
           "Showing 1–4 of 4" is noise that implies there is somewhere to go. */}
       {totalPages > 1 ? (
-        <nav aria-label="Pagination" className="flex items-center gap-1">
+        <nav aria-label="Pagination" className="flex max-w-full flex-wrap items-center gap-1">
           <button
             type="button"
             onClick={() => onPageChange(1)}
@@ -157,7 +157,7 @@ export function Pagination({
           {/* The numbered window costs the most horizontal room and is the
               least essential control on a phone — prev/next plus the count
               line already convey position there. */}
-          <ol className="hidden items-center gap-1 sm:flex">
+          <ol className="hidden flex-wrap items-center gap-1 sm:flex">
             {windowed.map((entry, i) =>
               entry === "gap" ? (
                 <li key={`gap-${i}`} aria-hidden className="px-1 text-sm text-ink-400">
@@ -170,7 +170,7 @@ export function Pagination({
                     onClick={() => onPageChange(entry)}
                     aria-current={entry === clamped ? "page" : undefined}
                     aria-label={`Page ${entry}`}
-                    className={`tap h-9 w-9 min-h-0 min-w-0 rounded-lg border text-sm transition ${
+                    className={`tap h-11 w-11 shrink-0 rounded-lg border text-sm transition ${
                       entry === clamped
                         ? "border-brand-600 bg-brand-600 font-semibold text-white"
                         : "border-paper-200 bg-paper text-ink-600 hover:border-brand-300 hover:text-brand-700"

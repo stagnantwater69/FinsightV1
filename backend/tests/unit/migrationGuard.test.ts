@@ -361,19 +361,47 @@ describe("assertMigrationsApplied", () => {
     expect(exit).not.toHaveBeenCalled();
   });
 
-  it("refuses to start when the database is unavailable during verification", async () => {
+  it("refuses to start when the database stays unavailable through every retry", async () => {
     queryRaw.mockRejectedValue(
       new Prisma.PrismaClientKnownRequestError("Timed out fetching a connection", { code: "P1008", clientVersion: "6.19.3" }),
     );
 
-    await assertMigrationsApplied("worker");
+    await assertMigrationsApplied("worker", undefined, [1, 1]);
 
+    expect(queryRaw).toHaveBeenCalledTimes(3);
+    expect(logger.warn).toHaveBeenCalledTimes(2);
     expect(exit).toHaveBeenCalledWith(1);
-    expect(logger.warn).not.toHaveBeenCalled();
     expect(logger.fatal).toHaveBeenCalledWith(
       expect.objectContaining({ verificationFailure: "database_unavailable" }),
       expect.stringContaining("REFUSING TO START"),
     );
+  });
+
+  /*
+   * The outage this prevents: a dev restart (or a deploy) landing on a brief
+   * pooler refusal exited at once, and nothing brought the API back.
+   */
+  it("waits out a brief connection failure and then starts", async () => {
+    queryRaw
+      .mockRejectedValueOnce(new Prisma.PrismaClientInitializationError("Connection refused", "6.19.3"))
+      .mockResolvedValueOnce(repositoryRows())
+      .mockResolvedValueOnce([]);
+
+    await assertMigrationsApplied("api", undefined, [1, 1]);
+
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(exit).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(expect.objectContaining({ processName: "api" }), "database migrations verified");
+  });
+
+  it("does not retry when the database answered but is behind", async () => {
+    queryRaw.mockResolvedValue([]);
+
+    await assertMigrationsApplied("api", undefined, [1, 1]);
+
+    expect(queryRaw).toHaveBeenCalledTimes(1);
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(exit).toHaveBeenCalledWith(1);
   });
 
   it("refuses to start when migration history is reachable but cannot be read", async () => {

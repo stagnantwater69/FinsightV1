@@ -17,6 +17,9 @@ import { NoBusinessProfile } from "../components/NoBusinessProfile";
 import { ResultDetails } from "../components/ResultDetails";
 import { TransactionDateField, useTransactionDate } from "../components/TransactionDateField";
 import { AvailableFundsBaselineChoice, useAvailableFundsBaselineChoice } from "../components/AvailableFundsBaselineChoice";
+import { useAuth } from "../context/AuthContext";
+import { useManualRecordCreate } from "../lib/useManualRecordCreate";
+import { ManualCreateRecovery } from "../components/ManualCreateRecovery";
 
 interface DuplicateExpenseState {
   description: string;
@@ -27,7 +30,8 @@ interface DuplicateExpenseState {
 
 export function AddExpense() {
   const { selected } = useBusinessProfiles();
-  return <AddExpenseForm key={selected?.id ?? "no-profile"} />;
+  const { profile } = useAuth();
+  return <AddExpenseForm key={`${profile?.id}:${selected?.id}`} />;
 }
 
 function AddExpenseForm() {
@@ -55,6 +59,21 @@ function AddExpenseForm() {
   const [suggestionError, setSuggestionError] = useState<string | null>(null);
   const suggestionRequest = useRef<AbortController | null>(null);
   const savePending = useRef(false);
+  const confirmedSave = useRef(false);
+  const recovery = useManualRecordCreate(selected?.id, "expense");
+  const formScope = `${recovery.ownerId}:${selected?.id}`;
+  const currentScope = useRef(formScope);
+  currentScope.current = formScope;
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const frozenBody = recovery.pending?.body ?? recovery.deferredDraft;
+  const setTransactionDate = dateField.setDate;
+  useEffect(() => {
+    if (!frozenBody) return;
+    setCategoryId(frozenBody.categoryId ?? "");
+    setTransactionDate(frozenBody.date);
+    setDescription(frozenBody.description); setVendor(frozenBody.vendor ?? ""); setAmount(frozenBody.amount);
+  }, [frozenBody, setTransactionDate]);
 
   useEffect(() => {
     setSuggestion(null);
@@ -91,20 +110,25 @@ function AddExpenseForm() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!categoryId || amount === "" || savePending.current || !dateField.check() || !baselineChoice.check()) return;
+    if (confirmedSave.current || savePending.current || recovery.busy || recovery.loading) return;
+    if (!recovery.pending && (!categoryId || amount === "" || !dateField.check() || !baselineChoice.check())) return;
+    const requestScope = formScope;
+    const isCurrent = () => mounted.current && currentScope.current === requestScope;
     savePending.current = true;
     setError(null);
     setSubmitting(true);
     try {
-      const { data } = await api.post<RecordItem>("/records/expenses", {
+      const data = await recovery.save(recovery.pending?.body ?? {
         businessProfileId: selected!.id,
-        categoryId,
+        categoryId: Number(categoryId),
         date: dateField.date,
         description,
         vendor: vendor || undefined,
-        amount,
+        amount: Number(amount),
         ...baselineChoice.requestFields(),
       });
+      if (!data || !isCurrent()) return;
+      confirmedSave.current = true;
 
       // Only celebrate if this business has never done it before.
       //
@@ -113,25 +137,32 @@ function AddExpenseForm() {
       // came first, so every single save fetched the business's entire expense
       // history purely to answer a boolean that had already been decided.
       let isFirst = false;
-      if (!hasCelebratedFirstRecord(selected!.id)) {
-        const existing = await api.get<{ items: RecordItem[]; nextCursor: string | null }>("/records/search", {
-          params: { businessProfileId: selected!.id, type: "expense", limit: 2 },
-        });
-        isFirst = existing.data.items.length <= 1;
-      }
+      try {
+        if (!hasCelebratedFirstRecord(selected!.id)) {
+          const existing = await api.get<{ items: RecordItem[]; nextCursor: string | null }>("/records/search", {
+            params: { businessProfileId: selected!.id, type: "expense", limit: 2 },
+          });
+          isFirst = existing.data.items.length <= 1;
+        }
+      } catch { /* An optional celebration lookup cannot change a confirmed save. */ }
+      if (!isCurrent()) return;
 
       if (isFirst) {
-        markFirstRecordCelebrated(selected!.id);
+        try { markFirstRecordCelebrated(selected!.id); } catch { /* Saving the milestone is optional. */ }
         setFirstRecord(data);
         return;
       }
       toast("Expense saved");
       navigate("/records");
     } catch (err) {
-      if (!dateField.absorb(err) && !(await baselineChoice.absorb(err))) setError(getErrorMessage(err));
+      if (!isCurrent()) return;
+      if (confirmedSave.current) { setError("Your expense is saved. Open Records to see it."); return; }
+      if (recovery.pending || (!dateField.absorb(err) && !(await baselineChoice.absorb(err, isCurrent)))) {
+        if (isCurrent()) setError(getErrorMessage(err));
+      }
     } finally {
       savePending.current = false;
-      setSubmitting(false);
+      if (isCurrent()) setSubmitting(false);
     }
   }
 
@@ -145,9 +176,12 @@ function AddExpenseForm() {
               <ButtonLink to="/dashboard" variant="primary">
                 See your dashboard
               </ButtonLink>
-              <ButtonLink to="/records/expenses/new" variant="secondary">
+              <Button type="button" variant="secondary" onClick={() => {
+                confirmedSave.current = false; setFirstRecord(null); setCategoryId(""); setDescription("");
+                setVendor(""); setAmount(""); setError(null); dateField.setDate(dateField.today); baselineChoice.setDecision(null);
+              }}>
                 Add another
-              </ButtonLink>
+              </Button>
             </>
           }
         >
@@ -158,7 +192,7 @@ function AddExpenseForm() {
 
         </Celebration>
         <p className="mt-4 text-center text-sm">
-          <Link to="/records" className="tap-inline font-medium text-brand-700 hover:text-brand-800">
+          <Link to="/records" className="tap-inline link-action">
             Back to all records
           </Link>
         </p>
@@ -169,11 +203,13 @@ function AddExpenseForm() {
   return (
     <FormPage eyebrow="Records" title="Add expense">
       <form onSubmit={handleSubmit} className="space-y-4">
+        <ManualCreateRecovery recovery={recovery} />
+        <fieldset className="min-w-0 space-y-4" disabled={submitting || recovery.loading || recovery.frozen}>
         <Field label="Category" htmlFor="category" required>
           <CategorySelect id="category" value={categoryId} onChange={setCategoryId} />
         </Field>
         <TransactionDateField field={dateField} />
-        <AvailableFundsBaselineChoice choice={baselineChoice} disabled={submitting} />
+        {!recovery.pending ? <AvailableFundsBaselineChoice choice={baselineChoice} disabled={submitting} /> : null}
         <Field label="Description" htmlFor="description" required>
           <TextInput
             required
@@ -215,9 +251,10 @@ function AddExpenseForm() {
             onChange={(e) => setAmount(e.target.value === "" ? "" : Number(e.target.value))}
           />
         </Field>
+        </fieldset>
         {error ? <FormError>{error}</FormError> : null}
-        <Button type="submit" variant="primary" fullWidth disabled={submitting || dateField.invalid}>
-          {submitting ? "Saving…" : "Save expense"}
+        <Button type="submit" variant="primary" fullWidth disabled={confirmedSave.current || submitting || recovery.busy || recovery.loading || recovery.corrupt || (!recovery.pending && dateField.invalid)}>
+          {submitting ? "Saving…" : recovery.pending?.confirmedRecord ? "Finish recovery" : recovery.pending ? "Retry original save" : "Save expense"}
         </Button>
       </form>
     </FormPage>

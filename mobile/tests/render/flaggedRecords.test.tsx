@@ -142,6 +142,7 @@ function countCalls(): Query[] {
 function routeApi(options: {
   pages: Array<{ items: RecordItem[]; nextCursor: string | null } | Error>;
   count?: { expenses: number; sales: number; total: number } | Error;
+  batches?: Array<{ id: number; title: string; uploadDate: string; status: string }>;
 }) {
   const pages = [...options.pages];
   apiGet.mockImplementation(async (path: string) => {
@@ -155,7 +156,7 @@ function routeApi(options: {
       if (options.count instanceof Error) throw options.count;
       return options.count ?? { expenses: 0, sales: 0, total: 0 };
     }
-    if (path === '/records/csv-imports/batches') return [];
+    if (path === '/records/csv-imports/batches') return options.batches ?? [];
     throw new Error(`Unexpected path ${path}`);
   });
 }
@@ -163,7 +164,7 @@ function routeApi(options: {
 beforeEach(() => {
   focusEffects.clear();
   focusCleanups.clear();
-  currentBusinessProfile = fixtures.businessProfile;
+  currentBusinessProfile = { ...fixtures.businessProfile, expectedMonthlyExpenses: 10000, largeExpenseThresholdPercent: 5 };
   apiGet.mockReset();
   apiPost.mockReset();
   apiPatch.mockReset().mockResolvedValue(undefined);
@@ -171,7 +172,122 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
+function importedDuplicates(): RecordItem[] {
+  return [
+    { ...record(71), description: 'Inventory delivery', amount: 1200, duplicateStatus: 'Flagged', duplicateOfRecordId: 11, importBatchId: 9 },
+    { ...record(72), type: 'sales', description: 'Weekend sales', date: '2026-08-22', amount: 3500, largeExpenseFlag: false, duplicateStatus: 'Flagged', duplicateOfRecordId: 12, importBatchId: 9 },
+  ];
+}
+
+describe('FlaggedRecordsScreen — grouped decisions', () => {
+  it('shows a mixed import as a loaded total and exposes each actual amount and match reason', async () => {
+    routeApi({
+      pages: [{ items: importedDuplicates(), nextCursor: 'more-imported-records' }],
+      count: { expenses: 7, sales: 3, total: 10 },
+      batches: [{ id: 9, title: 'August reimport', uploadDate: '2026-08-23', status: 'COMPLETE' }],
+    });
+    const queries = await renderScreen();
+    expect(await queries.findByText('10 records need a check')).toBeTruthy();
+    expect(queries.getByText('Duplicates from an imported file · 2 records shown')).toBeTruthy();
+    expect(queries.getByText('Loaded group total')).toBeTruthy();
+    expect(queries.getByText('PHP 4,700.00')).toBeTruthy();
+    expect(queries.queryByText('per record')).toBeNull();
+    expect(queries.queryByText(/same date, amount and description/)).toBeNull();
+    expect(queries.getByText(/Actions apply to the records currently loaded/)).toBeTruthy();
+    await fireEvent.press(queries.getByRole('button', { name: /^Records in this group:/ }));
+    expect(queries.getByText('Inventory delivery')).toBeTruthy();
+    expect(queries.getByText('Weekend sales')).toBeTruthy();
+    expect(queries.getByText('PHP 1,200.00')).toBeTruthy();
+    expect(queries.getByText('PHP 3,500.00')).toBeTruthy();
+    expect(queries.getByText('over your PHP 500 large-expense limit · possible duplicate of #11')).toBeTruthy();
+    expect(queries.getByText('possible duplicate of #12')).toBeTruthy();
+  });
+
+  it('labels matching copies with their shared amount per record rather than a multiplied total', async () => {
+    const first = { ...record(81), duplicateStatus: 'Flagged' as const, duplicateOfRecordId: 10, largeExpenseFlag: false };
+    routeApi({ pages: [{ items: [first, { ...first, id: 82 }], nextCursor: null }], count: { expenses: 2, sales: 0, total: 2 } });
+    const queries = await renderScreen();
+    expect(await queries.findByText('per record')).toBeTruthy();
+    expect(queries.getByText('PHP 1,200.00')).toBeTruthy();
+    expect(queries.queryByText('Loaded group total')).toBeNull();
+  });
+
+  it('shows a nonduplicate large-expense reason from the business threshold', async () => {
+    routeApi({ pages: [{ items: [record(1)], nextCursor: null }], count: { expenses: 1, sales: 0, total: 1 } });
+    const queries = await renderScreen();
+    expect(await queries.findByText('over your PHP 500 large-expense limit')).toBeTruthy();
+    expect(queries.queryByText(/possible duplicate of/)).toBeNull();
+  });
+
+  it('disables a pending review and retains the record with retry after its save fails', async () => {
+    routeApi({ pages: [{ items: [record(1)], nextCursor: null }], count: { expenses: 1, sales: 0, total: 1 } });
+    let rejectSave!: (error: Error) => void;
+    apiPatch.mockImplementation(() => new Promise((_resolve, reject) => { rejectSave = reject; }));
+    const queries = await renderScreen();
+    await fireEvent.press(await queries.findByRole('button', { name: 'Looks right — mark reviewed' }));
+    const pendingButton = queries.getByRole('button', { name: 'Marking reviewed…' });
+    expect(pendingButton.props.accessibilityState.disabled).toBe(true);
+    await fireEvent.press(pendingButton);
+    expect(apiPatch).toHaveBeenCalledTimes(1);
+    await act(async () => { rejectSave(new Error('Could not save this decision.')); });
+    expect(await queries.findByText(/This record is still waiting for review\./)).toBeTruthy();
+    expect(queries.getByText('Flagged purchase 1')).toBeTruthy();
+    expect(queries.getByRole('button', { name: 'Looks right — mark reviewed' }).props.accessibilityState.disabled).toBe(false);
+    expect(listCalls()).toHaveLength(1);
+  });
+
+  it('keeps each loaded duplicate once with the correct expense and sales identifiers', async () => {
+    routeApi({
+      pages: [{ items: importedDuplicates(), nextCursor: null }, { items: [], nextCursor: null }],
+      count: { expenses: 1, sales: 1, total: 2 },
+      batches: [{ id: 9, title: 'August reimport', uploadDate: '2026-08-23', status: 'COMPLETE' }],
+    });
+    apiPost.mockResolvedValue({ resolved: 2 });
+    const queries = await renderScreen();
+    await fireEvent.press(await queries.findByRole('button', { name: 'Keep all 2' }));
+    await waitFor(() => expect(apiPost).toHaveBeenCalledExactlyOnceWith('/records/duplicates/resolve', {
+      businessProfileId: 1, action: 'keep', expenseIds: [71], salesIds: [72],
+    }));
+    expect(await queries.findByText('Nothing needs your attention')).toBeTruthy();
+  });
+
+  it('waits for destructive confirmation before discarding a group and preserves originals in its warning', async () => {
+    routeApi({
+      pages: [{ items: importedDuplicates(), nextCursor: null }, { items: [], nextCursor: null }],
+      count: { expenses: 1, sales: 1, total: 2 },
+    });
+    apiPost.mockResolvedValue({ resolved: 2 });
+    const queries = await renderScreen();
+    await fireEvent.press(await queries.findByRole('button', { name: 'Discard all 2' }));
+    expect(apiPost).not.toHaveBeenCalled();
+    expect(queries.getByText('Discard 2 records?')).toBeTruthy();
+    expect(queries.getByText(/stay exactly as they are/)).toBeTruthy();
+    await fireEvent.press(queries.getByRole('button', { name: 'Cancel' }));
+    expect(queries.queryByText('Discard 2 records?')).toBeNull();
+    expect(apiPost).not.toHaveBeenCalled();
+
+    await fireEvent.press(queries.getByRole('button', { name: 'Discard all 2' }));
+    await fireEvent.press(queries.getByRole('button', { name: 'Discard 2' }));
+    await waitFor(() => expect(apiPost).toHaveBeenCalledExactlyOnceWith('/records/duplicates/resolve', {
+      businessProfileId: 1, action: 'discard', expenseIds: [71], salesIds: [72],
+    }));
+    expect(await queries.findByText('Nothing needs your attention')).toBeTruthy();
+  });
+});
+
 describe('FlaggedRecordsScreen — count endpoint', () => {
+  it('does not show zero or an all-clear while the initial response is pending', async () => {
+    let finish!: (page: { items: RecordItem[]; nextCursor: null }) => void;
+    const pending = new Promise<{ items: RecordItem[]; nextCursor: null }>((resolve) => { finish = resolve; });
+    apiGet.mockImplementation((path: string) => path === '/records/flagged' ? pending : Promise.resolve(path === '/records/flagged/count' ? { expenses: 1, sales: 0, total: 1 } : []));
+    const queries = await renderScreen();
+    expect(queries.getByText('Loading review count…')).toBeTruthy();
+    expect(queries.queryByText('0 records need a check')).toBeNull();
+    expect(queries.queryByText('Nothing needs your attention')).toBeNull();
+    await act(async () => { finish({ items: [record(1)], nextCursor: null }); await pending; });
+    expect(await queries.findByText('1 record needs a check')).toBeTruthy();
+  });
+
   it('renders the headline count from /records/flagged/count, not from the list', async () => {
     routeApi({
       pages: [{ items: [record(1), record(2)], nextCursor: 'cursor-1' }],
@@ -181,7 +297,8 @@ describe('FlaggedRecordsScreen — count endpoint', () => {
     const queries = await renderScreen();
 
     // The number on screen is the server's count, not the two records loaded.
-    expect(await queries.findByText(/412 records flagged/)).toBeTruthy();
+    expect(await queries.findByText('412 records need a check')).toBeTruthy();
+    expect(queries.getByText('412 records flagged · showing 2')).toBeTruthy();
     expect(countCalls()).toEqual([{ businessProfileId: 1 }]);
   });
 
@@ -200,7 +317,7 @@ describe('FlaggedRecordsScreen — count endpoint', () => {
     expect(listCalls()[0]).toMatchObject({ businessProfileId: 1 });
   });
 
-  it('omits the count line rather than claiming zero when the count call fails', async () => {
+  it('says the count is unavailable rather than claiming zero when the count call fails', async () => {
     routeApi({
       pages: [{ items: [record(1)], nextCursor: null }],
       count: new Error('count unavailable'),
@@ -210,6 +327,8 @@ describe('FlaggedRecordsScreen — count endpoint', () => {
     await queries.findByText('Flagged purchase 1');
 
     expect(queries.queryByText(/records flagged/)).toBeNull();
+    expect(queries.getByText('Review count unavailable')).toBeTruthy();
+    expect(queries.queryByText('0 records need a check')).toBeNull();
   });
 });
 

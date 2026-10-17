@@ -9,15 +9,16 @@ const mocks = vi.hoisted(() => ({
   patch: vi.fn(),
   setSession: vi.fn(),
   authChange: { value: null as ((event: string) => void) | null },
+  expired: { value: null as (() => void) | null },
 }));
 
 vi.mock("../lib/api", () => ({
   api: {
     get: (...args: unknown[]) => mocks.get(...args),
     patch: (...args: unknown[]) => mocks.patch(...args),
-    post: vi.fn(),
+    post: vi.fn(async () => ({ data: {} })),
   },
-  setSessionExpiredHandler: vi.fn(),
+  setSessionExpiredHandler: (handler: (() => void) | null) => { mocks.expired.value = handler; },
 }));
 
 vi.mock("../lib/supabaseClient", () => ({
@@ -118,6 +119,35 @@ async function switchToAccountB() {
 }
 
 describe("AuthContext account-generation isolation", () => {
+  it.each(["logout", "signed out", "expired"])("clears only chat recovery storage when the session ends through %s", async (ending) => {
+    await renderAccountA();
+    sessionStorage.setItem("finsight.pendingChatSend.1.1", JSON.stringify({ body: { question: "Private draft" } }));
+    sessionStorage.setItem("finsight.pendingChatSend.2.2", JSON.stringify({ body: { question: "Older account draft" } }));
+    sessionStorage.setItem("unrelated-visit-setting", "keep");
+    await act(async () => {
+      if (ending === "logout") await auth.logout();
+      else if (ending === "signed out") mocks.authChange.value?.("SIGNED_OUT");
+      else mocks.expired.value?.();
+    });
+    expect(sessionStorage.getItem("finsight.pendingChatSend.1.1")).toBeNull();
+    expect(sessionStorage.getItem("finsight.pendingChatSend.2.2")).toBeNull();
+    expect(sessionStorage.getItem("unrelated-visit-setting")).toBe("keep");
+    expect(screen.getByText("signed-out")).toBeInTheDocument();
+  });
+
+  it("keeps the current account when installing another session returns a provider error", async () => {
+    await renderAccountA();
+    mocks.setSession.mockResolvedValueOnce({ data: { session: null }, error: new Error("Session refused") });
+    await act(async () => {
+      await expect(auth.adoptSession({
+        accessToken: "bad-token", refreshToken: "bad-refresh", profile: accountB,
+      })).rejects.toThrow("Session refused");
+    });
+    expect(screen.getByText("a@example.com")).toBeInTheDocument();
+    expect(screen.queryByText("b@example.com")).not.toBeInTheDocument();
+    expect(serverStateCacheStats().activeUserId).toBe(String(accountA.id));
+  });
+
   it("drops account A's late profile response after account B becomes active", async () => {
     await renderAccountA();
     const latePatch = deferred<{ data: Profile }>();

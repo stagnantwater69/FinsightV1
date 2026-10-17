@@ -27,7 +27,7 @@ vi.mock("../../src/context/AuthContext", () => ({
 const { BusinessProfileProvider, useBusinessProfiles } = await import(
   "../../src/context/BusinessProfileContext"
 );
-const { ReportingPeriodProvider, useReportingPeriod } = await import(
+const { ReportingPeriodProvider, ReportingPeriodScope, useReportingPeriod } = await import(
   "../../src/context/ReportingPeriodContext"
 );
 const { invalidateServerState } = await import("../../src/lib/serverStateCache");
@@ -241,5 +241,128 @@ describe("ReportingPeriodProvider business isolation", () => {
 
     await waitFor(() => expect(period.selection).toEqual({ kind: "month", month: "2025-09" }));
     expect(monthsCalls()).toHaveLength(1);
+  });
+});
+
+const scopeNames = ["dashboard", "expense-insight", "recovery-target", "spending-impact"] as const;
+const scopedPeriods: Partial<Record<(typeof scopeNames)[number], ReturnType<typeof useReportingPeriod>>> = {};
+
+function ScopedProbe({ name }: { name: (typeof scopeNames)[number] }) {
+  business = useBusinessProfiles();
+  scopedPeriods[name] = useReportingPeriod();
+  return null;
+}
+
+function scopedTree(showInsights = true) {
+  return (
+    <BusinessProfileProvider>
+      <ReportingPeriodProvider>
+        {scopeNames.filter((name) => showInsights || name !== "expense-insight").map((name) => (
+          <ReportingPeriodScope key={name} scope={name}>
+            <ScopedProbe name={name} />
+          </ReportingPeriodScope>
+        ))}
+      </ReportingPeriodProvider>
+    </BusinessProfileProvider>
+  );
+}
+
+function mockScopedMonths(secondMonths?: Promise<{ months: string[] }>) {
+  const secondBusiness = { ...fixtures.businessProfile, id: 2, name: "Second business" };
+  apiGet.mockImplementation((path: string, query?: { businessProfileId?: number }) => {
+    if (path === "/business-profiles") return Promise.resolve([fixtures.businessProfile, secondBusiness]);
+    if (path === "/records/categories") return Promise.resolve([]);
+    if (path === "/records/months") {
+      return query?.businessProfileId === secondBusiness.id
+        ? secondMonths ?? Promise.resolve({ months: ["2025-12"] })
+        : Promise.resolve({ months: ["2026-08", "2026-07"] });
+    }
+    throw new Error(`Unexpected GET ${path}`);
+  });
+  return secondBusiness;
+}
+
+async function waitForScopes() {
+  await waitFor(() => {
+    for (const name of scopeNames) expect(scopedPeriods[name]?.ready).toBe(true);
+  });
+}
+
+const monthsCalls = () => apiGet.mock.calls.filter(([path]) => path === "/records/months");
+
+describe("independent screen reporting periods", () => {
+  it("keeps Insight month and all-time choices separate from the other screens", async () => {
+    mockScopedMonths();
+    await render(scopedTree());
+    await waitForScopes();
+    await act(() => scopedPeriods["expense-insight"]!.setSelection({ kind: "month", month: "2026-07" }));
+    expect(scopedPeriods["expense-insight"]!.selection).toEqual({ kind: "month", month: "2026-07" });
+    for (const name of ["dashboard", "recovery-target", "spending-impact"] as const) {
+      expect(scopedPeriods[name]!.selection).toEqual({ kind: "month", month: "2026-08" });
+    }
+    await act(() => scopedPeriods["expense-insight"]!.setSelection({ kind: "all" }));
+    await act(() => scopedPeriods["recovery-target"]!.setSelection({ kind: "week" }));
+    expect(scopedPeriods["expense-insight"]!.selection).toEqual({ kind: "all" });
+    expect(scopedPeriods.dashboard!.selection).toEqual({ kind: "month", month: "2026-08" });
+    expect(scopedPeriods["spending-impact"]!.selection).toEqual({ kind: "month", month: "2026-08" });
+    expect(monthsCalls()).toHaveLength(1);
+  });
+
+  it("restores each screen's choice when its scope remounts", async () => {
+    mockScopedMonths();
+    const view = await render(scopedTree());
+    await waitForScopes();
+    await act(() => scopedPeriods["expense-insight"]!.setSelection({ kind: "all" }));
+    await act(() => scopedPeriods.dashboard!.setSelection({ kind: "week" }));
+    await view.rerender(scopedTree(false));
+    await view.rerender(scopedTree());
+    await waitForScopes();
+    expect(scopedPeriods["expense-insight"]!.selection).toEqual({ kind: "all" });
+    expect(scopedPeriods.dashboard!.selection).toEqual({ kind: "week" });
+    expect(monthsCalls()).toHaveLength(1);
+  });
+
+  it("gates saved months during a business switch and restores the first business's screen choices", async () => {
+    const pending = deferred<{ months: string[] }>();
+    const secondBusiness = mockScopedMonths(pending.promise);
+    await render(scopedTree());
+    await waitForScopes();
+    await act(() => scopedPeriods.dashboard!.setSelection({ kind: "month", month: "2026-07" }));
+    await act(() => scopedPeriods["expense-insight"]!.setSelection({ kind: "all" }));
+    await act(() => business.selectProfile(secondBusiness.id));
+    for (const name of scopeNames) {
+      expect(scopedPeriods[name]!.ready).toBe(false);
+      expect(scopedPeriods[name]!.months).toEqual([]);
+    }
+    await act(() => pending.resolve({ months: ["2025-12"] }));
+    await waitForScopes();
+    for (const name of scopeNames) {
+      expect(scopedPeriods[name]!.selection).toEqual({ kind: "month", month: "2025-12" });
+    }
+    const returnMonths = deferred<{ months: string[] }>();
+    apiGet.mockImplementation((path: string) => {
+      if (path === "/records/months") return returnMonths.promise;
+      if (path === "/records/categories") return Promise.resolve([]);
+      throw new Error(`Unexpected GET ${path}`);
+    });
+    await act(() => business.selectProfile(fixtures.businessProfile.id));
+    expect(scopedPeriods.dashboard!.ready).toBe(false);
+    await act(() => returnMonths.resolve({ months: ["2026-08", "2026-07"] }));
+    await waitForScopes();
+    expect(scopedPeriods.dashboard!.selection).toEqual({ kind: "month", month: "2026-07" });
+    expect(scopedPeriods["expense-insight"]!.selection).toEqual({ kind: "all" });
+    expect(scopedPeriods["recovery-target"]!.selection).toEqual({ kind: "month", month: "2026-08" });
+  });
+
+  it("shares one month refresh without replacing independent choices", async () => {
+    mockScopedMonths();
+    await render(scopedTree());
+    await waitForScopes();
+    await act(() => scopedPeriods["expense-insight"]!.setSelection({ kind: "all" }));
+    await act(() => scopedPeriods.dashboard!.setSelection({ kind: "week" }));
+    await act(() => invalidateServerState({ businessProfileId: fixtures.businessProfile.id, pathPrefixes: ["/records"] }));
+    await waitFor(() => expect(monthsCalls()).toHaveLength(2));
+    expect(scopedPeriods["expense-insight"]!.selection).toEqual({ kind: "all" });
+    expect(scopedPeriods.dashboard!.selection).toEqual({ kind: "week" });
   });
 });

@@ -1,6 +1,6 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, fireEvent, waitFor } from '@testing-library/react-native';
+import { act, render, fireEvent, waitFor } from '@testing-library/react-native';
 
 import * as fixtures from './support/fixtures';
 import type { RecoveryNotificationPreference } from '../../src/lib/types';
@@ -16,6 +16,7 @@ import type { RecoveryNotificationPreference } from '../../src/lib/types';
 
 const apiGet = vi.fn();
 const apiPut = vi.fn();
+let selected = fixtures.businessProfile;
 
 vi.mock('@react-navigation/native', () => ({
   useFocusEffect: (effect: () => void | (() => void)) => {
@@ -38,7 +39,7 @@ vi.mock('../../src/lib/api', () => ({
 vi.mock('../../src/context/BusinessProfileContext', () => ({
   useBusinessProfiles: () => ({
     profiles: [fixtures.businessProfile],
-    selected: fixtures.businessProfile,
+    selected,
     categories: fixtures.categories,
     loading: false,
     error: null,
@@ -79,11 +80,50 @@ async function renderScreen(preference: RecoveryNotificationPreference = DEFAULT
 }
 
 beforeEach(() => {
+  selected = fixtures.businessProfile;
   apiGet.mockReset();
   apiPut.mockReset();
   apiPut.mockImplementation((_path: string, body: unknown) =>
     Promise.resolve({ ...DEFAULT_PREFERENCE, ...(body as object) }),
   );
+});
+
+describe('Recovery preferences request scope', () => {
+  it('ignores a previous business preference response after a business switch', async () => {
+    let finish!: (value: RecoveryNotificationPreference) => void;
+    const pending = new Promise<RecoveryNotificationPreference>((resolve) => { finish = resolve; });
+    apiGet.mockImplementation((path: string) => path.includes('/1/') ? pending : Promise.resolve({ ...DEFAULT_PREFERENCE, targetIncreaseThresholdPercent: 25 }));
+    const { RecoveryNotificationPreferencesScreen } = await import('../../src/screens/RecoveryNotificationPreferencesScreen');
+    const { ThemeProvider } = await import('../../src/context/ThemeContext');
+    const tree = () => <ThemeProvider initialMode="light"><RecoveryNotificationPreferencesScreen /></ThemeProvider>;
+    const screen = await render(tree());
+    selected = { ...selected, id: 2 };
+    await screen.rerender(tree());
+    expect((await screen.findByLabelText('Increase threshold (%)')).props.value).toBe('25');
+    await act(async () => { finish({ ...DEFAULT_PREFERENCE, targetIncreaseThresholdPercent: 90 }); await pending; });
+    expect(screen.getByLabelText('Increase threshold (%)').props.value).toBe('25');
+  });
+
+  it('locks same-frame saves and suppresses an old save confirmation after switching businesses', async () => {
+    let finish!: (value: RecoveryNotificationPreference) => void;
+    const pending = new Promise<RecoveryNotificationPreference>((resolve) => { finish = resolve; });
+    const screen = await renderScreen();
+    await screen.findByLabelText('Increase threshold (%)');
+    apiPut.mockReturnValue(pending);
+    type Fiber = { return?: Fiber; memoizedProps?: { onPress?: () => void } };
+    const button = screen.getByRole('button', { name: 'Save preferences' });
+    let fiber = (button as unknown as { unstable_fiber: Fiber }).unstable_fiber;
+    while (!fiber.memoizedProps?.onPress && fiber.return) fiber = fiber.return;
+    const save = fiber.memoizedProps!.onPress!;
+    await act(async () => { void save(); void save(); });
+    expect(apiPut).toHaveBeenCalledTimes(1);
+    selected = { ...selected, id: 2 };
+    const { RecoveryNotificationPreferencesScreen } = await import('../../src/screens/RecoveryNotificationPreferencesScreen');
+    const { ThemeProvider } = await import('../../src/context/ThemeContext');
+    await screen.rerender(<ThemeProvider initialMode="light"><RecoveryNotificationPreferencesScreen /></ThemeProvider>);
+    await act(async () => { finish(DEFAULT_PREFERENCE); await pending; });
+    expect(screen.queryByText('Preferences saved.')).toBeNull();
+  });
 });
 
 describe('RecoveryNotificationPreferencesScreen — defaults', () => {

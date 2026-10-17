@@ -139,15 +139,6 @@ beforeEach(() => {
 });
 
 describe("Recovery Target — terminology and freshness (plan §6/§8.1)", () => {
-  it("shows the required Sales Coverage Target definition before/beside the status", () => {
-    renderPage();
-    expect(
-      screen.getByText(
-        /Your Sales Coverage Target compares recorded sales references with your active monthly expense basis/,
-      ),
-    ).toBeInTheDocument();
-  });
-
   it("shows the as-of date and timezone when the server sends them", async () => {
     currentRecovery = {
       ...recovery,
@@ -557,7 +548,7 @@ describe("Recovery Target — state-specific primary action (plan §10.1/§10.2)
 
   it("renders no primary action when status is absent (older/cached response)", async () => {
     renderPage();
-    await screen.findByText(/Sales Coverage Target compares/);
+    await screen.findByText("Month-to-date pace");
     expect(
       screen.queryByRole("link", { name: "Complete setup" }),
     ).not.toBeInTheDocument();
@@ -639,7 +630,7 @@ describe('Recovery Target — "Why your target changed" (plan §10.3)', () => {
   it("renders nothing when changeSincePreviousDay is null", async () => {
     currentRecovery = { ...recovery, changeSincePreviousDay: null };
     renderPage();
-    await screen.findByText(/Sales Coverage Target compares/);
+    await screen.findByText("Month-to-date pace");
     expect(
       screen.queryByText("Why your target changed"),
     ).not.toBeInTheDocument();
@@ -656,7 +647,7 @@ describe('Recovery Target — "Why your target changed" (plan §10.3)', () => {
       },
     };
     renderPage();
-    await screen.findByText(/Sales Coverage Target compares/);
+    await screen.findByText("Month-to-date pace");
     expect(
       screen.queryByText("Why your target changed"),
     ).not.toBeInTheDocument();
@@ -682,7 +673,7 @@ describe("Recovery Target — data-quality warning note (plan §8.2/§10.5)", ()
   it("does not show the disclosure when dataWarnings is empty", async () => {
     currentRecovery = { ...recovery, dataWarnings: [] };
     renderPage();
-    await screen.findByText(/Sales Coverage Target compares/);
+    await screen.findByText("Month-to-date pace");
     expect(
       screen.queryByText(/pending review or flagged as a possible duplicate/),
     ).not.toBeInTheDocument();
@@ -690,6 +681,34 @@ describe("Recovery Target — data-quality warning note (plan §8.2/§10.5)", ()
 });
 
 describe("Recovery Target — operating calendar (plan §7.2-§7.4/§8.3/§11 Phase 2)", () => {
+  it("previews the latest six coverage days and preserves access to the full history", async () => {
+    const user = userEvent.setup();
+    currentRecovery = {
+      ...recovery,
+      dailyCoverage: Array.from({ length: 13 }, (_, index) => ({
+        date: `2026-01-${String(index + 1).padStart(2, "0")}`,
+        neededTarget: 500,
+        sales: 500,
+        gap: 0,
+        status: "at" as const,
+        isOperatingDay: true,
+      })),
+    };
+    renderPage();
+    const expand = await screen.findByRole("button", { name: "Show all 13 days" });
+    const history = document.getElementById(expand.getAttribute("aria-controls")!)!;
+    expect(within(history).getAllByText("2026-01-13").length).toBeGreaterThan(0);
+    expect(within(history).queryByText("2026-01-01")).not.toBeInTheDocument();
+    expect(screen.getByText("Showing 6 of 13 days")).toBeInTheDocument();
+    expect(within(history).queryByRole("navigation", { name: "Pagination" })).not.toBeInTheDocument();
+    await user.click(expand);
+    expect(screen.getByText("All 13 days available")).toBeInTheDocument();
+    await user.click(within(history).getByRole("button", { name: "Last page" }));
+    expect(within(history).getAllByText("2026-01-01").length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: "Show less" }));
+    expect(within(history).queryByText("2026-01-01")).not.toBeInTheDocument();
+  });
+
   it("renders a closed day neutrally, without a target/gap figure or a below/above tone", async () => {
     currentRecovery = {
       ...recovery,
@@ -841,13 +860,44 @@ describe("Recovery Target — scenario deltas (plan §10.7, Phase 4)", () => {
     expect(remainingTargetRow.textContent).not.toMatch(/%/);
   });
 
+  it("hides the scenario and brings back the same result when shown again", async () => {
+    renderPage();
+    await openScenarioWith("15000");
+
+    await userEvent.click(screen.getByRole("button", { name: "Hide" }));
+    expect(screen.queryByText("Hypothetical. Not saved.")).not.toBeInTheDocument();
+    expect(screen.getByText(/Last result: at/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Show scenario" }));
+    expect(screen.getByText("Hypothetical. Not saved.")).toBeInTheDocument();
+    expect(screen.getByLabelText(/Assumed monthly expense basis/)).toHaveValue(15000);
+    // Showing it again re-renders the kept result; it does not re-request it.
+    expect(postCalls).toHaveLength(1);
+  });
+
+  it("runs a quick-try preset against the real basis in one tap", async () => {
+    renderPage();
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Try a scenario" }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "−20%" }));
+
+    await screen.findByText("Hypothetical. Not saved.");
+    expect(postCalls).toEqual([
+      {
+        url: "/insights/recovery-scenario",
+        body: { businessProfileId: profile.id, assumedExpectedMonthlyExpenses: 16000 },
+      },
+    ]);
+  });
+
   it("shows an explicit, non-alarming note that estimated transactions per day is not available", async () => {
     renderPage();
     await openScenarioWith("15000");
 
     expect(
       screen.getByText(
-        /Not available — FinSight can't yet tell whether your sales records represent/,
+        /Not available\. FinSight can't yet tell whether your sales\s+records represent/,
       ),
     ).toBeInTheDocument();
   });
@@ -982,7 +1032,7 @@ describe("Recovery Target — weekly checkpoints (plan §10.4, Phase 4)", () => 
 
   it("renders nothing when weeklyCheckpoints is absent (older server)", async () => {
     renderPage();
-    await screen.findByText(/Sales Coverage Target compares/);
+    await screen.findByText("Month-to-date pace");
     expect(screen.queryByText("Weekly checkpoints")).not.toBeInTheDocument();
   });
 });

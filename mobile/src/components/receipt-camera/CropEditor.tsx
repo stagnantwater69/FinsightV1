@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Image, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import Svg, { Polygon } from 'react-native-svg';
 import { useTheme } from '../../context/ThemeContext';
 import { font, typeScale } from '../../theme/tokens';
@@ -68,7 +68,7 @@ export function CropEditor({ uri, width, height, initial, busy, onApply, onCance
     </Text>
     <View style={{ flex: 1, minHeight: 160 }} onLayout={e => setBox(e.nativeEvent.layout)}>
       {box.width > 1 && box.height > 1 ? <Image source={{ uri }} style={{ position: 'absolute', left: ox, top: oy, width: fit.width, height: fit.height }} resizeMode="contain" resizeMethod="scale" /> : null}
-      <Svg pointerEvents="none" style={StyleSheet.absoluteFill} width={box.width} height={box.height}>
+      <Svg style={[StyleSheet.absoluteFill, { pointerEvents: "none" }]} width={box.width} height={box.height}>
         <Polygon points={keys.map(k => `${ox + corners[k].x * fit.scale},${oy + corners[k].y * fit.scale}`).join(' ')} fill="rgba(46,194,172,0.14)" stroke={t.brand[400]} strokeWidth={2} />
       </Svg>
       {!busy && !finding ? keys.map(key => <Handle key={key} label={`${key.replace(/([A-Z])/g, ' $1')} crop corner`} point={corners[key]} scale={fit.scale} offsetX={ox} offsetY={oy} width={width} height={height} onMove={p => setCorners(prev => ({ ...prev, [key]: p }))} />) : null}

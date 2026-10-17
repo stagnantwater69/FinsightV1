@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Image, Pressable, View } from "react-native";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import * as ImagePicker from "expo-image-picker";
 import { ErrorNote, T } from "./ui";
 import { api, errorMessage } from "../lib/api";
-import { radius, space, typeScale } from "../theme/tokens";
+import { font, radius, space, typeScale } from "../theme/tokens";
 import { useTheme } from "../context/ThemeContext";
+import { TAP_FLOOR } from "./touchTarget";
 
 /**
  * Choosing a profile photo or a business logo.
@@ -23,6 +25,10 @@ export function PhotoUpload({
   label,
   shape = "circle",
   onUploaded,
+  appearance = "default",
+  initials,
+  disabled = false,
+  onBusyChange,
 }: {
   /** The current image, or null when none is set. */
   url: string | null;
@@ -31,27 +37,36 @@ export function PhotoUpload({
   label: string;
   shape?: "circle" | "square";
   onUploaded: (updated: unknown) => void;
+  appearance?: "default" | "account";
+  initials?: string;
+  disabled?: boolean;
+  onBusyChange?: (busy: boolean) => void;
 }) {
   const t = useTheme();
   const { brand, ink, paper } = t;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const pending = useRef(false);
+  const active = useRef(true);
+  useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
 
   const size = 72;
 
   async function pick() {
-    setError(null);
-    const res = await ImagePicker.launchImageLibraryAsync({
-      quality: 0.7,
-      mediaTypes: ["images"],
-      allowsEditing: true,
-      aspect: [1, 1],
-    });
-    if (res.canceled || !res.assets[0]) return;
-
-    const asset = res.assets[0];
+    if (pending.current || disabled) return;
+    pending.current = true;
     setBusy(true);
+    onBusyChange?.(true);
+    setError(null);
     try {
+      const res = await ImagePicker.launchImageLibraryAsync({
+        quality: 0.7,
+        mediaTypes: ["images"],
+        allowsEditing: true,
+        aspect: [1, 1],
+      });
+      if (res.canceled || !res.assets[0] || !active.current) return;
+      const asset = res.assets[0];
       const form = new FormData();
       // React Native's FormData takes this {uri,name,type} shape rather than a
       // Blob — the browser's File API does not exist here.
@@ -60,12 +75,40 @@ export function PhotoUpload({
         name: asset.fileName ?? `photo-${Date.now()}.jpg`,
         type: asset.mimeType ?? "image/jpeg",
       } as any);
-      onUploaded(await api.upload(endpoint, form));
+      const updated = await api.upload(endpoint, form);
+      if (active.current) onUploaded(updated);
     } catch (err) {
-      setError(errorMessage(err));
+      if (active.current) setError(errorMessage(err));
     } finally {
-      setBusy(false);
+      pending.current = false;
+      if (active.current) {
+        setBusy(false);
+        onBusyChange?.(false);
+      }
     }
+  }
+
+  if (appearance === "account") {
+    return (
+      <View style={{ marginBottom: space.sm }}>
+        <Pressable onPress={() => void pick()} disabled={busy || disabled} accessibilityRole="button"
+          accessibilityLabel={url ? `Change ${label}` : `Add ${label}`}
+          accessibilityState={{ disabled: busy || disabled, busy }}
+          style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: space.lg, minHeight: TAP_FLOOR, padding: space.lg, borderRadius: radius.md, backgroundColor: t.brandSurface, opacity: busy || disabled ? 0.65 : pressed ? 0.8 : 1 })}>
+          <View style={{ width: size, height: size, borderRadius: radius.full, backgroundColor: t.brandBorder, alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+            {busy ? <ActivityIndicator color={t.brandText} /> : url ? <Image source={{ uri: url }} style={{ width: size, height: size }} accessibilityIgnoresInvertColors /> : <T style={{ color: t.brandHeading, fontSize: typeScale.title, fontFamily: font.displayBold }}>{initials || "?"}</T>}
+          </View>
+          <View style={{ flex: 1, gap: space.sm }}>
+            <T style={{ color: t.textPrimary, fontFamily: font.sansSemibold }}>{label}</T>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+              <Ionicons name="image-outline" size={22} color={t.brandText} accessibilityElementsHidden importantForAccessibility="no" />
+              <T style={{ flex: 1, color: t.brandText, fontSize: typeScale.bodySm, fontFamily: font.sansSemibold }}>{busy ? "Uploading..." : url ? "Change photo" : "Choose a photo"}</T>
+            </View>
+          </View>
+        </Pressable>
+        {error ? <ErrorNote>{error}</ErrorNote> : null}
+      </View>
+    );
   }
 
   return (
@@ -133,10 +176,11 @@ export function PhotoUpload({
           </T>
           <Pressable
             onPress={pick}
-            disabled={busy}
+            disabled={busy || disabled}
             accessibilityRole="button"
             accessibilityLabel={url ? `Change ${label}` : `Add ${label}`}
-            style={{ paddingVertical: space.sm, opacity: busy ? 0.5 : 1 }}
+            accessibilityState={{ disabled: busy || disabled, busy }}
+            style={{ minHeight: TAP_FLOOR, justifyContent: "center", paddingVertical: space.sm, opacity: busy || disabled ? 0.5 : 1 }}
           >
             <T style={{ color: brand[700], fontSize: typeScale.bodySm }}>
               {busy ? "Uploading…" : url ? "Change photo" : "Choose a photo"}

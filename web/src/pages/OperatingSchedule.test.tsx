@@ -17,20 +17,22 @@ import type { BusinessProfile, OperatingDayOverride, OperatingScheduleEntry } fr
 
 const profile = { id: 1, name: "Sari-sari" } as unknown as BusinessProfile;
 
-let getHandlers: Record<string, () => unknown>;
+let getHandlers: Record<string, (params: Record<string, unknown>) => unknown>;
+let getCalls: { url: string; params: Record<string, unknown> }[];
 let putCalls: { url: string; body: unknown }[];
 let postCalls: { url: string; body: unknown }[];
 let deleteCalls: string[];
 
 vi.mock("../lib/api", () => ({
   api: {
-    get: async (url: string) => {
+    get: async (url: string, config?: { params?: Record<string, unknown> }) => {
+      getCalls.push({ url, params: config?.params ?? {} });
       const key = url.startsWith("/business-profiles/1/operating-schedule")
         ? "schedule"
         : url.startsWith("/business-profiles/1/operating-overrides")
           ? "overrides"
           : null;
-      if (key && getHandlers[key]) return { data: getHandlers[key]!() };
+      if (key && getHandlers[key]) return { data: await getHandlers[key]!(config?.params ?? {}) };
       throw new Error(`unmocked GET ${url}`);
     },
     put: async (url: string, body: unknown) => {
@@ -72,6 +74,7 @@ function renderPage() {
 }
 
 beforeEach(() => {
+  getCalls = [];
   putCalls = [];
   postCalls = [];
   deleteCalls = [];
@@ -79,6 +82,119 @@ beforeEach(() => {
     schedule: (): OperatingScheduleEntry[] => [],
     overrides: (): OperatingDayOverride[] => [],
   };
+});
+
+describe("OperatingSchedule paged history preserves weekly edits", () => {
+  it("retries the failed continuation cursor and preserves all loaded overrides and dirty weekly edits", async () => {
+    let attempts = 0;
+    const first = { id: 1, businessProfileId: 1, date: "2026-10-01", type: "CLOSED", reason: "First closure" };
+    const second = { ...first, id: 2, date: "2026-10-02", reason: "Second closure" };
+    const third = { ...first, id: 3, date: "2026-10-03", reason: "Third closure" };
+    getHandlers.overrides = (params) => {
+      if (!params.cursor) return { items: [first], nextCursor: "cursor-a" };
+      if (params.cursor === "cursor-a") return { items: [second], nextCursor: "cursor-b" };
+      if (++attempts === 1) throw new Error("Older dates unavailable");
+      return { items: [third], nextCursor: null };
+    };
+    renderPage(); await screen.findByText("First closure");
+    const sunday = screen.getByRole("button", { name: /Sun/ }); await userEvent.click(sunday);
+    await userEvent.click(screen.getByRole("button", { name: "More dates" }));
+    await screen.findByText("Second closure");
+    fireEvent.change(screen.getByLabelText("From"), { target: { value: "2025-01-01" } });
+    fireEvent.change(screen.getByLabelText("To"), { target: { value: "2025-01-31" } });
+    await userEvent.click(screen.getByRole("button", { name: "More dates" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Older dates unavailable");
+    const failed = getCalls.at(-1)!.params;
+    await userEvent.click(screen.getByRole("button", { name: "Retry dates" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(getCalls.at(-1)!.params).toEqual(failed);
+    expect(screen.getByText("First closure")).toBeInTheDocument();
+    expect(screen.getByText("Second closure")).toBeInTheDocument();
+    expect(screen.getByText("Third closure")).toBeInTheDocument();
+    expect(sunday).toHaveAttribute("aria-pressed", "false");
+    expect(putCalls).toHaveLength(0);
+    expect(getCalls.filter((item) => item.url.endsWith("/operating-schedule"))).toHaveLength(1);
+  });
+
+  it.each([false, true])("rejects a repeated or cycling override cursor and preserves loaded dates (cycling: %s)", async (cycling) => {
+    const first = { id: 1, businessProfileId: 1, date: "2026-10-01", type: "CLOSED", reason: "First closure" };
+    getHandlers.overrides = (params) => {
+      if (!params.cursor) return { items: [first], nextCursor: "cursor-a" };
+      if (cycling && params.cursor === "cursor-a") return { items: [{ ...first, id: 2, date: "2026-10-02", reason: "Second closure" }], nextCursor: "cursor-b" };
+      return { items: [{ ...first, id: 3, date: "2026-10-03", reason: "Invalid continuation" }], nextCursor: "cursor-a" };
+    };
+    renderPage(); await screen.findByText("First closure");
+    if (cycling) {
+      await userEvent.click(screen.getByRole("button", { name: "More dates" }));
+      await screen.findByText("Second closure");
+    }
+    await userEvent.click(screen.getByRole("button", { name: "More dates" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/\S/);
+    expect(screen.getByText("First closure")).toBeInTheDocument();
+    if (cycling) expect(screen.getByText("Second closure")).toBeInTheDocument();
+    expect(screen.queryByText("Invalid continuation")).not.toBeInTheDocument();
+    expect(getCalls.filter((item) => item.url.endsWith("/operating-overrides"))).toHaveLength(cycling ? 3 : 2);
+  });
+  it("requests bounded dates, appends older pages without duplicates, and retains unsaved weekdays", async () => {
+    const first: OperatingDayOverride = { id: 1, businessProfileId: 1, date: "2026-10-01", type: "CLOSED", reason: "First closure" };
+    const next: OperatingDayOverride = { id: 2, businessProfileId: 1, date: "2026-10-02", type: "OPEN", reason: "Second opening" };
+    getHandlers.overrides = (params) => params.cursor ? { items: [first, next], nextCursor: null } : { items: [first], nextCursor: "after-first" };
+    renderPage();
+    const sunday = await screen.findByRole("button", { name: /Sun/ });
+    await userEvent.click(sunday);
+    expect(sunday).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(screen.getByRole("button", { name: "More dates" }));
+    expect(await screen.findByText("Second opening")).toBeInTheDocument();
+    expect(screen.getAllByText("First closure")).toHaveLength(1);
+    expect(sunday).toHaveAttribute("aria-pressed", "false");
+    expect(putCalls).toHaveLength(0);
+    const requests = getCalls.filter((item) => item.url.endsWith("/operating-overrides"));
+    expect(requests[0]!.params).toMatchObject({ pageSize: 50, from: expect.stringMatching(/^\d{4}-\d{2}-01$/), to: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) });
+    expect(requests[1]!.params).toEqual({ ...requests[0]!.params, cursor: "after-first" });
+    expect(getCalls.filter((item) => item.url.endsWith("/operating-schedule"))).toHaveLength(1);
+  });
+
+  it("changes historical date bounds without reloading or saving dirty weekly entries", async () => {
+    getHandlers.overrides = (params) => ({ items: params.from === "2025-01-01" ? [{ id: 4, businessProfileId: 1, date: "2025-01-15", type: "CLOSED", reason: "Earlier holiday" }] : [], nextCursor: null });
+    renderPage();
+    const sunday = await screen.findByRole("button", { name: /Sun/ });
+    await userEvent.click(sunday);
+    fireEvent.change(screen.getByLabelText("From"), { target: { value: "2025-01-01" } });
+    fireEvent.change(screen.getByLabelText("To"), { target: { value: "2025-01-31" } });
+    await userEvent.click(screen.getByRole("button", { name: "Show dates" }));
+    expect(await screen.findByText("Earlier holiday")).toBeInTheDocument();
+    expect(sunday).toHaveAttribute("aria-pressed", "false");
+    expect(putCalls).toHaveLength(0);
+    expect(getCalls.filter((item) => item.url.endsWith("/operating-schedule"))).toHaveLength(1);
+    expect(getCalls.at(-1)!.params).toEqual({ from: "2025-01-01", to: "2025-01-31", pageSize: 50 });
+  });
+
+  it("retains visible overrides and weekly edits after range failure and supports explicit retry", async () => {
+    getHandlers.overrides = () => [{ id: 1, businessProfileId: 1, date: "2026-10-01", type: "CLOSED", reason: "Saved closure" }];
+    renderPage(); await screen.findByText("Saved closure");
+    const sunday = screen.getByRole("button", { name: /Sun/ }); await userEvent.click(sunday);
+    getHandlers.overrides = () => { throw new Error("Dates unavailable"); };
+    await userEvent.click(screen.getByRole("button", { name: "Show dates" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Dates unavailable");
+    expect(screen.getByText("Saved closure")).toBeInTheDocument();
+    expect(sunday).toHaveAttribute("aria-pressed", "false");
+    getHandlers.overrides = () => ({ items: [], nextCursor: null });
+    await userEvent.click(screen.getByRole("button", { name: "Retry dates" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(screen.getByText("No date overrides in this range")).toBeInTheDocument();
+    expect(sunday).toHaveAttribute("aria-pressed", "false");
+    expect(putCalls).toHaveLength(0);
+  });
+
+  it("does not request a reversed date range", async () => {
+    renderPage(); await screen.findByRole("button", { name: /Sun/ });
+    const before = getCalls.length;
+    fireEvent.change(screen.getByLabelText("From"), { target: { value: "2025-02-01" } });
+    fireEvent.change(screen.getByLabelText("To"), { target: { value: "2025-01-01" } });
+    await userEvent.click(screen.getByRole("button", { name: "Show dates" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Choose a start date on or before the end date.");
+    expect(getCalls).toHaveLength(before);
+  });
 });
 
 describe("OperatingSchedule — weekly schedule", () => {
@@ -145,13 +261,14 @@ describe("OperatingSchedule — date overrides", () => {
     renderPage();
     await screen.findByRole("button", { name: /Mon/ });
 
-    fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2026-09-01" } });
+    const visibleDate = (screen.getByLabelText("From") as HTMLInputElement).value;
+    fireEvent.change(screen.getByLabelText("Date"), { target: { value: visibleDate } });
     await userEvent.type(screen.getByLabelText(/Reason/), "Holiday");
     await userEvent.click(screen.getByRole("button", { name: "Add" }));
 
     await waitFor(() => expect(postCalls).toHaveLength(1));
     expect(postCalls[0]!.url).toBe("/business-profiles/1/operating-overrides");
-    expect(postCalls[0]!.body).toEqual({ date: "2026-09-01", type: "CLOSED", reason: "Holiday" });
+    expect(postCalls[0]!.body).toEqual({ date: visibleDate, type: "CLOSED", reason: "Holiday" });
     expect(putCalls).toHaveLength(0);
     expect(await screen.findByText("Holiday")).toBeInTheDocument();
   });

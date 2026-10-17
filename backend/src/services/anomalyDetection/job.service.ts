@@ -15,7 +15,6 @@ import { detectVelocityForExpense } from "./velocity.service";
 import { NOTIFICATION_TYPES } from "../notification.service";
 import type { AnalysisMutationGuard } from "./mutationGuard";
 
-const WORKER_ID = `analysis-${process.pid}-${randomUUID().slice(0, 8)}`;
 const LEASE_MS = 5 * 60_000;
 const HEARTBEAT_MS = 30_000;
 const MAX_ATTEMPTS = 5;
@@ -40,7 +39,7 @@ async function heartbeatJob(job: ClaimedJob): Promise<void> {
     where: {
       id: job.id,
       status: AnalysisJobStatus.PROCESSING,
-      workerId: WORKER_ID,
+      workerId: job.workerId,
       attemptCount: job.attemptCount,
     },
     data: { heartbeatAt: new Date() },
@@ -50,7 +49,7 @@ async function heartbeatJob(job: ClaimedJob): Promise<void> {
 
 /** Every terminal write re-checks the lease, so a superseded worker records nothing. */
 function leaseGuard(job: ClaimedJob) {
-  return { id: job.id, workerId: WORKER_ID, attemptCount: job.attemptCount };
+  return { id: job.id, status: AnalysisJobStatus.PROCESSING, workerId: job.workerId, attemptCount: job.attemptCount };
 }
 
 function leaseMutationGuard(job: ClaimedJob): AnalysisMutationGuard {
@@ -60,7 +59,7 @@ function leaseMutationGuard(job: ClaimedJob): AnalysisMutationGuard {
       FROM "AnalysisJob"
       WHERE "AnalysisJob_ID" = ${job.id}
         AND "AnalysisJob_Status" = 'PROCESSING'
-        AND "AnalysisJob_WorkerID" = ${WORKER_ID}
+        AND "AnalysisJob_WorkerID" = ${job.workerId}
         AND "AnalysisJob_AttemptCount" = ${job.attemptCount}
       FOR UPDATE
     `);
@@ -74,11 +73,23 @@ function leaseMutationGuard(job: ClaimedJob): AnalysisMutationGuard {
 // Severity gate moved to ./config so the recurring watchdog, which emits from
 // the PROFILE_REFRESH path, applies the identical rule. Behaviour unchanged.
 
-export async function enqueueExpenseAnalysis(businessProfileId: number, expenseRecordId: number) {
-  return prisma.analysisJob.upsert({
+export async function enqueueExpenseAnalysis(
+  businessProfileId: number,
+  expenseRecordId: number,
+  db: Prisma.TransactionClient | typeof prisma = prisma,
+) {
+  return db.analysisJob.upsert({
     where: { idempotencyKey: `transaction:${expenseRecordId}` },
     create: { businessProfileId, expenseRecordId, idempotencyKey: `transaction:${expenseRecordId}`, kind: AnalysisJobKind.TRANSACTION },
-    update: { status: AnalysisJobStatus.PENDING, attemptCount: 0, nextAttemptAt: new Date(), lastError: null },
+    update: {
+      status: AnalysisJobStatus.PENDING,
+      attemptCount: 0,
+      nextAttemptAt: new Date(),
+      lastError: null,
+      workerId: null,
+      heartbeatAt: null,
+      processingStartedAt: null,
+    },
   });
 }
 
@@ -105,7 +116,15 @@ export async function enqueueProfileRefresh(businessProfileId: number, today = u
   return prisma.analysisJob.upsert({
     where: { idempotencyKey: `profile:${businessProfileId}:${date}` },
     create: { businessProfileId, idempotencyKey: `profile:${businessProfileId}:${date}`, kind: AnalysisJobKind.PROFILE_REFRESH },
-    update: { status: AnalysisJobStatus.PENDING, attemptCount: 0, nextAttemptAt: new Date(), lastError: null },
+    update: {
+      status: AnalysisJobStatus.PENDING,
+      attemptCount: 0,
+      nextAttemptAt: new Date(),
+      lastError: null,
+      workerId: null,
+      heartbeatAt: null,
+      processingStartedAt: null,
+    },
   });
 }
 
@@ -137,17 +156,19 @@ export async function enqueueDailyProfileAnalyses(today = utcToday()) {
   return profiles.length;
 }
 
-type ClaimedJob = { id: number; businessProfileId: number; expenseRecordId: number | null; kind: AnalysisJobKind; attemptCount: number };
+type ClaimedJob = { id: number; businessProfileId: number; expenseRecordId: number | null; kind: AnalysisJobKind; attemptCount: number; workerId: string };
 
 async function claimJob(): Promise<ClaimedJob | null> {
   const stale = new Date(Date.now() - LEASE_MS);
+  // Rearming resets attempts, so each claim needs a token an older attempt cannot regain.
+  const workerId = `analysis-${process.pid}-${randomUUID()}`;
   const rows = await prisma.$queryRaw<ClaimedJob[]>(Prisma.sql`
     UPDATE "AnalysisJob" SET
       "AnalysisJob_Status" = 'PROCESSING',
       "AnalysisJob_AttemptCount" = "AnalysisJob_AttemptCount" + 1,
       "AnalysisJob_ProcessingStartedAt" = NOW(),
       "AnalysisJob_HeartbeatAt" = NOW(),
-      "AnalysisJob_WorkerID" = ${WORKER_ID},
+      "AnalysisJob_WorkerID" = ${workerId},
       "AnalysisJob_UpdatedAt" = NOW()
     WHERE "AnalysisJob_ID" = (
       SELECT "AnalysisJob_ID" FROM "AnalysisJob"
@@ -160,7 +181,7 @@ async function claimJob(): Promise<ClaimedJob | null> {
       "ExpenseRecord_ID" AS "expenseRecordId", "AnalysisJob_Kind" AS kind,
       "AnalysisJob_AttemptCount" AS "attemptCount"
   `);
-  return rows[0] ?? null;
+  return rows[0] ? { ...rows[0], workerId } : null;
 }
 
 async function processJob(job: ClaimedJob, mutate: AnalysisMutationGuard) {

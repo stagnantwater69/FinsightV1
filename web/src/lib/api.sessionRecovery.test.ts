@@ -25,9 +25,11 @@ vi.mock("./supabaseClient", () => ({
 }));
 
 const { api, setSessionExpiredHandler } = await import("./api");
+const { beginServerStateSession, captureServerStateAccount } = await import("./serverStateCache");
 
 /** Tokens the fake server refuses with a 401. */
 let rejected = new Set<string>();
+let rejectionStatus = 401;
 const sent: unknown[] = [];
 
 api.defaults.adapter = async (config: InternalAxiosRequestConfig) => {
@@ -36,8 +38,8 @@ api.defaults.adapter = async (config: InternalAxiosRequestConfig) => {
   const token = typeof authorization === "string" ? authorization.replace(/^Bearer /, "") : "";
   if (!token || rejected.has(token)) {
     const response = {
-      data: { error: "Invalid or expired session" },
-      status: 401,
+      data: { error: "Invalid or expired session", ...(rejectionStatus === 403 ? { code: "ACCOUNT_NOT_ACTIVE" } : {}) },
+      status: rejectionStatus,
       statusText: "Unauthorized",
       headers: {},
       config,
@@ -55,6 +57,7 @@ function session(token: string): SessionResult {
 
 beforeEach(() => {
   rejected = new Set();
+  rejectionStatus = 401;
   sent.length = 0;
   getSession.mockReset();
   refreshSession.mockReset();
@@ -63,6 +66,20 @@ beforeEach(() => {
 });
 
 describe("a 401 on a session-backed request", () => {
+  it.each([
+    ["/auth/google", 401], ["/auth/google", 403],
+    ["/auth/confirm-email", 401], ["/auth/confirm-email", 403],
+    ["/auth/reset-password/complete", 401], ["/auth/reset-password/complete", 403],
+  ])("isolates a one-off credential rejection on %s (%s) from the ambient session", async (endpoint, status) => {
+    rejectionStatus = Number(status);
+    rejected.add("one-off-token");
+    await expect(api.post(String(endpoint), null, { headers: { Authorization: "Bearer one-off-token" } }))
+      .rejects.toMatchObject({ response: { status } });
+    expect(getSession).not.toHaveBeenCalled();
+    expect(refreshSession).not.toHaveBeenCalled();
+    expect(sessionExpired).not.toHaveBeenCalled();
+  });
+
   it("refreshes once and retries with the new token instead of signing out", async () => {
     rejected.add("old");
     getSession.mockResolvedValue(session("old"));
@@ -140,5 +157,33 @@ describe("a stored session whose refresh could not reach Supabase", () => {
     expect(sent).toEqual([]);
     expect((err as AxiosError).code).toBe(AxiosError.ERR_NETWORK);
     expect(sessionExpired).not.toHaveBeenCalled();
+  });
+});
+
+describe("manual creates remain bound to their original account generation", () => {
+  it.each([17, 18])("does not dispatch after delayed session lookup and reauthentication as owner %s", async (nextOwner) => {
+    beginServerStateSession(17);
+    const account = captureServerStateAccount();
+    let finish!: (value: SessionResult) => void;
+    getSession.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    const attempt = api.post("/records/expenses", { businessProfileId: 1, idempotencyKey: "same-save-0001" }, { manualCreateAccount: account });
+    const result = attempt.catch((error: unknown) => error);
+    await vi.waitFor(() => expect(getSession).toHaveBeenCalledTimes(1));
+    beginServerStateSession(nextOwner); finish(session("new-owner-token"));
+    expect(await result).toMatchObject({ code: AxiosError.ERR_CANCELED });
+    expect(sent).toEqual([]); expect(sessionExpired).not.toHaveBeenCalled();
+  });
+
+  it("does not resend a create under another account after a delayed 401 refresh", async () => {
+    beginServerStateSession(17);
+    getSession.mockResolvedValue(session("old")); rejected.add("old");
+    let finish!: (value: SessionResult) => void;
+    refreshSession.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    const attempt = api.post("/records/sales", { businessProfileId: 1, idempotencyKey: "same-save-0001" }, { manualCreateAccount: captureServerStateAccount() });
+    const result = attempt.catch((error: unknown) => error);
+    await vi.waitFor(() => expect(refreshSession).toHaveBeenCalledTimes(1));
+    beginServerStateSession(18); finish(session("new-owner-token"));
+    expect(await result).toMatchObject({ code: AxiosError.ERR_CANCELED });
+    expect(sent).toEqual(["Bearer old"]); expect(sessionExpired).not.toHaveBeenCalled();
   });
 });

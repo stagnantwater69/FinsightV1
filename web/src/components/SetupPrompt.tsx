@@ -34,7 +34,7 @@ export function SetupPrompt() {
       <p className="min-w-0">Your dashboard is empty until you add a business.</p>
       <Link
         to="/onboarding"
-        className="tap-inline font-semibold text-brand-700 underline underline-offset-2 hover:text-brand-800"
+        className="tap-inline link"
       >
         Finish setup
       </Link>

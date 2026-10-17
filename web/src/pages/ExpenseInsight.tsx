@@ -1,7 +1,9 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { IconTile } from "../components/IconTile";
 import { Link } from "react-router-dom";
 import { isAxiosError } from "axios";
 import {
+  AlertTriangle,
   ArrowDownRight,
   ArrowUpRight,
   Boxes,
@@ -11,6 +13,7 @@ import {
   ListFilter,
   MessageCircleQuestion,
   Repeat,
+  ShieldCheck,
   SlidersHorizontal,
   ThumbsDown,
   ThumbsUp,
@@ -39,9 +42,14 @@ import { EmptyState } from "../components/EmptyState";
 import { SectionNav, type SectionNavItem } from "../components/SectionNav";
 import { Button, ButtonLink } from "../components/Button";
 import { formatMoney } from "../components/Money";
-import { STATUS_INK } from "../lib/chartPalette";
+import { CATEGORICAL_PALETTE, STATUS_INK } from "../lib/chartPalette";
+
+// The donut colours categories by rank, so the largest one is always slot 1.
+// Slot 1 is byte-identical in the light and dark palettes (see the table in
+// chartPalette.ts), which is why it can be read here without the theme hook.
+const TOP_CATEGORY_COLOR = CATEGORICAL_PALETTE[0]!;
 import { RecurringAgenda } from "../components/RecurringAgenda";
-import { AiCard, Kw, PageHead, Panel, Callout, Pill } from "../components/ui";
+import { PageHead, Panel, Callout, Pill, type PillTone } from "../components/ui";
 import { ReductionSimulationModal } from "../components/ReductionSimulationModal";
 import { PeriodFilter } from "../components/PeriodFilter";
 import { Pagination } from "../components/Pagination";
@@ -72,6 +80,15 @@ import type {
 } from "../lib/types";
 import type { DetailExpenseOverview } from "../lib/expenseOverview";
 import { useServerStateRefresh } from "../lib/useServerStateRefresh";
+import {
+  KpiTile,
+  PairBars,
+  ShareBar,
+  Sparkline,
+  UsualBar,
+} from "./expenseInsight/ExpenseVisuals";
+import { ExpenseSummaryCard } from "./expenseInsight/ExpenseSummaryCard";
+import { ListDisclosureControl, useListDisclosure } from "../components/ListDisclosure";
 
 /**
  * Expense Insight.
@@ -180,9 +197,9 @@ function ChangeFigure({
       style={{ color: up ? STATUS_INK.serious : STATUS_INK.good }}
     >
       {up ? (
-        <ArrowUpRight aria-hidden className="mr-1 size-3.5" strokeWidth={2} />
+        <ArrowUpRight aria-hidden className="mr-1 size-3.5" />
       ) : (
-        <ArrowDownRight aria-hidden className="mr-1 size-3.5" strokeWidth={2} />
+        <ArrowDownRight aria-hidden className="mr-1 size-3.5" />
       )}
       {up ? "+" : "−"}
       {formatMoney(Math.abs(change))}
@@ -234,6 +251,13 @@ function ExpenseSectionNav({
 // server-side (aiContext.service.ts: `take: 5`), so the two surfaces never
 // disagree about what "a short list" means.
 const MAX_FLAGGED_SHOWN = 5;
+
+/** Severity is named by the pill; the icon beside it is the uniform tile. */
+const FINDING_SEVERITY_LOOK: Record<string, { pill: PillTone }> = {
+  HIGH: { pill: "danger" },
+  MEDIUM: { pill: "warn" },
+  LOW: { pill: "neutral" },
+};
 
 /**
  * How many flagged records this panel's short list asks the server for.
@@ -430,7 +454,7 @@ function OpportunityCard({
             aria-hidden
             className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-paper-100 text-brand-700 ring-1 ring-paper-200"
           >
-            <TrendingUp className="size-4" strokeWidth={1.9} />
+            <TrendingUp className="size-4" />
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-start justify-between gap-2">
@@ -466,12 +490,11 @@ function OpportunityCard({
           <Link
             to={`/records?type=expense&categoryId=${opportunity.categoryId}`}
             aria-label={`View related records for ${opportunity.categoryName}`}
-            className="tap-inline inline-flex items-center text-xs font-semibold text-brand-700 underline-offset-2 hover:underline"
+            className="tap-inline inline-flex items-center text-xs link-action"
           >
             <ListFilter
               aria-hidden
               className="mr-1.5 size-3.5"
-              strokeWidth={1.9}
             />
             View records
             <span className="sr-only"> for {opportunity.categoryName}</span>
@@ -480,12 +503,11 @@ function OpportunityCard({
             type="button"
             aria-label={`Ask FinSight about this reduction opportunity for ${opportunity.categoryName}`}
             onClick={() => askFinSight(OPPORTUNITY_ASK_QUESTION, opportunity)}
-            className="tap-inline inline-flex items-center text-xs font-semibold text-brand-700 underline-offset-2 hover:underline"
+            className="tap-inline inline-flex items-center text-xs link-action"
           >
             <MessageCircleQuestion
               aria-hidden
               className="mr-1.5 size-3.5"
-              strokeWidth={1.9}
             />
             Ask FinSight
             <span className="sr-only">
@@ -496,12 +518,11 @@ function OpportunityCard({
           <button
             type="button"
             onClick={() => setSimulateOpen(true)}
-            className="tap-inline inline-flex items-center text-xs font-semibold text-brand-700 underline-offset-2 hover:underline"
+            className="tap-inline inline-flex items-center text-xs link-action"
           >
             <SlidersHorizontal
               aria-hidden
               className="mr-1.5 size-3.5"
-              strokeWidth={1.9}
             />
             Simulate reduction
             <span className="sr-only"> for {opportunity.categoryName}</span>
@@ -509,9 +530,9 @@ function OpportunityCard({
         </div>
 
         <details className="group mt-3 border-t border-paper-200 pt-3">
-          <summary className="tap-inline cursor-pointer list-none text-xs font-semibold text-ink-500 marker:hidden hover:text-brand-700">
-            <span className="group-open:hidden">Details +</span>
-            <span className="hidden group-open:inline">Hide details −</span>
+          <summary className="disclosure">
+            <span className="group-open:hidden">Details</span>
+            <span className="hidden group-open:inline">Hide details</span>
           </summary>
           <div className="mt-3 rounded-xl bg-paper-100 p-3.5">
             <div className="flex flex-wrap gap-2">
@@ -577,7 +598,7 @@ function OpportunityCard({
                 : "text-ink-500 ring-ink-200 hover:bg-paper-100"
             }`}
           >
-            <ThumbsUp aria-hidden className="mr-1 size-3.5" strokeWidth={1.9} />
+            <ThumbsUp aria-hidden className="mr-1 size-3.5" />
             Helpful
             <span className="sr-only"> — {opportunity.categoryName}</span>
           </button>
@@ -595,7 +616,6 @@ function OpportunityCard({
             <ThumbsDown
               aria-hidden
               className="mr-1 size-3.5"
-              strokeWidth={1.9}
             />
             Not relevant
             <span className="sr-only"> — {opportunity.categoryName}</span>
@@ -694,7 +714,7 @@ function isDefinitiveScheduleUnavailable(error: unknown): boolean {
 
 export function ExpenseInsight() {
   return (
-    <ReportingPeriodScope>
+    <ReportingPeriodScope scope="expense-insight">
       <ExpenseInsightPage />
     </ReportingPeriodScope>
   );
@@ -708,7 +728,7 @@ function ExpenseInsightPage() {
     setSelection,
     ready: periodReady,
   } = useReportingPeriod();
-  // Normalize All time from another screen before this page builds a request.
+  // Normalize unsupported All time before this page builds a request.
   const selection: PeriodSelection =
     sharedSelection.kind === "all" ? THIS_WEEK : sharedSelection;
   const periodKey = JSON.stringify(selection);
@@ -1386,9 +1406,34 @@ function ExpenseInsightPage() {
    * either, and it is not offered.
    */
   const canWatchPatterns = recurringSchedules !== null;
-  const hasCandidates = recurringPatterns.some(
+  const candidatePatterns = recurringPatterns.filter(
     (pattern) => pattern.status === "CANDIDATE",
   );
+  const hasCandidates = candidatePatterns.length > 0;
+  const categoryDisclosure = useListDisclosure({
+    total: data?.categoryTrends.length ?? 0,
+    resetKey: expenseScopeKey,
+  });
+  const unusualDisclosure = useListDisclosure({
+    total: data?.unusualExpenses.length ?? 0,
+    limit: 5,
+    resetKey: expenseScopeKey,
+  });
+  const opportunityDisclosure = useListDisclosure({
+    total: reductionOpportunities?.opportunities.length ?? 0,
+    limit: MAX_OPPORTUNITIES_SHOWN,
+    resetKey: expenseScopeKey,
+  });
+  const flaggedDisclosure = useListDisclosure({
+    total: flaggedExpenses.length,
+    limit: MAX_FLAGGED_SHOWN,
+    resetKey: expenseScopeKey,
+  });
+  const recurringDisclosure = useListDisclosure({
+    total: candidatePatterns.length,
+    limit: 5,
+    resetKey: expenseScopeKey,
+  });
   // With no agenda and no candidates the whole block is an empty container.
   const showRecurringBlock =
     recurringSchedules !== null ||
@@ -1404,7 +1449,8 @@ function ExpenseInsightPage() {
    * for a business with three thousand.
    */
   const flaggedTotal = flaggedExpenseCount ?? flaggedExpenses.length;
-  const shownFlagged = Math.min(flaggedExpenses.length, MAX_FLAGGED_SHOWN);
+  const hasFlaggedRecordLink =
+    flaggedTotal > Math.min(flaggedExpenses.length, MAX_FLAGGED_SHOWN);
   const flaggedState = combinedSupplementState([flaggedListState, flaggedCountState]);
   const showFlaggedPanel = flaggedState !== "ready" || flaggedTotal > 0;
   const showFindingsPanel = findingsState !== "ready" || findings.length > 0;
@@ -1476,35 +1522,6 @@ function ExpenseInsightPage() {
     return categories.find((c) => c.id === categoryId)?.name ?? "—";
   }
 
-  /**
-   * The AI card's body — composed from figures already on this page, not
-   * generated. Same reasoning as the Dashboard's "This month at a glance"
-   * card: it can share a denominator with the KPI row above it and never
-   * drift out of step with them, which an actual model call could.
-   */
-  const aiSummary = summary ? (
-    <>
-      {summary.top ? (
-        <>
-          <Kw>{summary.top.categoryName}</Kw> is your highest expense category{" "}
-          {periodText}: <Kw>{summary.topShare.toFixed(1)}%</Kw> of expenses.{" "}
-        </>
-      ) : (
-        <>No expenses {periodText}. </>
-      )}
-      {summary.biggestIncrease && !allTime ? (
-        <>
-          <Kw>{summary.biggestIncrease.categoryName}</Kw> rose the most: up{" "}
-          <Kw>
-            <span className="figure">
-              {formatMoney(summary.biggestIncrease.change)}
-            </span>
-          </Kw>{" "}
-          vs {comparedWith}.
-        </>
-      ) : null}
-    </>
-  ) : null;
 
   // Names the exact category and figure the card above just named — a much
   // more useful starting point in the drawer than a generic "why did my
@@ -1575,13 +1592,13 @@ function ExpenseInsightPage() {
       {isInitialLoad ? (
         <div className="space-y-6" aria-busy="true" aria-live="polite">
           <span className="sr-only">Loading expense insights…</span>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-[1.35fr_1fr_1fr_1fr]">
             <SkeletonStatTile />
             <SkeletonStatTile />
             <SkeletonStatTile />
             <SkeletonStatTile />
           </div>
-          <div className="grid gap-5 lg:grid-cols-2">
+          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)]">
             <SkeletonPanel lines={6} />
             <SkeletonPanel lines={6} />
           </div>
@@ -1647,139 +1664,175 @@ function ExpenseInsightPage() {
           }`}
           aria-busy={isRefreshing}
         >
-          {/* One briefing band: the total leads; the other figures explain it. */}
+          {/* The total leads on its own dark band; the three tiles beside it
+              explain it, each with a small picture of its own figure. */}
           <section
             id="expense-overview"
             aria-label="Expense summary"
-            className="scroll-mt-6 overflow-hidden rounded-2xl border border-paper-200 bg-paper shadow-sm"
+            className="grid scroll-mt-6 gap-4 sm:grid-cols-2 sm:[&>*:last-child]:col-span-2 xl:grid-cols-[1.35fr_1fr_1fr_1fr] xl:[&>*:last-child]:col-span-1"
           >
             <h2 className="sr-only">Total expenses</h2>
-            <div className="grid sm:grid-cols-2 xl:grid-cols-[1.15fr_0.85fr_1fr_1fr]">
-              <div className="relative min-w-0 border-b border-paper-200 p-5 pl-[4.5rem] sm:border-r xl:border-b-0">
-                <WalletCards
-                  aria-hidden
-                  className="absolute left-5 top-5 size-10 rounded-xl bg-tint-brand p-2 text-tone-brand ring-1 ring-edge-brand"
-                  strokeWidth={1.8}
+            <div className="relative isolate flex min-w-0 flex-col overflow-hidden rounded-2xl bg-gradient-to-br from-brand-800 via-brand-900 to-brand-950 p-5 text-white shadow-md sm:col-span-2 xl:col-span-1">
+              <WalletCards
+                aria-hidden
+                className="pointer-events-none absolute -right-8 -top-8 -z-10 size-40 -rotate-12 text-white/[0.06]"
+              />
+              <p className="text-xs font-semibold uppercase tracking-[0.08em] text-brand-200">
+                Total spent
+              </p>
+              <p className="figure mt-2 text-3xl font-bold text-white">
+                {formatMoney(summary.total)}
+              </p>
+              <p className="mt-1 text-xs text-brand-100">
+                {data.categoryTrends.reduce(
+                  (sum, trend) => sum + trend.recordCount,
+                  0,
+                )}{" "}
+                expenses · {summary.categoryCount} categor
+                {summary.categoryCount === 1 ? "y" : "ies"}
+              </p>
+              <div className="mt-auto pt-4 text-brand-300">
+                <Sparkline
+                  points={data.dailyTotals}
+                  label={`Spending ${periodText}, ${data.dailyBucket === "month" ? "month" : "day"} by day`}
                 />
-                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-brand-700">
-                  Total spent
-                </p>
-                <p className="figure mt-2 text-2xl font-bold text-ink-950 sm:text-3xl">
-                  {formatMoney(summary.total)}
-                </p>
-                <p className="mt-1 text-xs text-ink-500">
-                  {data.categoryTrends.reduce(
-                    (sum, trend) => sum + trend.recordCount,
-                    0,
-                  )}{" "}
-                  expenses · {summary.categoryCount} categor
-                  {summary.categoryCount === 1 ? "y" : "ies"}
-                </p>
               </div>
-              <div className="relative min-w-0 border-b border-paper-200 p-5 pl-[4.5rem] xl:border-b-0 xl:border-r">
-                <ChartPie
-                  aria-hidden
-                  className="absolute left-5 top-5 size-10 rounded-xl bg-tint-brand p-2 text-tone-brand ring-1 ring-edge-brand"
-                  strokeWidth={1.8}
-                />
-                <p className="text-xs font-medium text-ink-500">
-                  Share of recorded available funds
-                </p>
-                <p className="figure mt-2 text-2xl font-bold text-ink-900">
-                  {summary.fundsShare === null
-                    ? "—"
-                    : `${summary.fundsShare.toFixed(0)}%`}
-                </p>
-                <p className="mt-1 text-xs text-ink-500">
-                  {summary.fundsShare === null
-                    ? allTime
-                      ? "Shown for a week or a month"
-                      : availableFundsAreLoading
-                        ? "Loading recorded available funds…"
-                        : usingStartingFundsFallback
-                          ? (startingFundsFallback ?? 0) > 0
-                            ? `${formatMoney(summary.total)} of ${formatMoney(startingFundsFallback)} starting funds`
-                            : `Starting funds fallback: ${formatMoney(startingFundsFallback ?? 0)}`
-                          : `Recorded available funds: ${formatMoney(availableFundsDenominator ?? 0)}`
-                    : `${formatMoney(summary.total)} of ${formatMoney(availableFundsDenominator ?? 0)} recorded available funds`}
-                </p>
-                {usingStartingFundsFallback ? (
-                  <div
-                    role="alert"
-                    className="mt-2 text-xs leading-relaxed text-tone-accent"
+            </div>
+
+            <KpiTile
+              icon={ChartPie}
+              tone={
+                summary.fundsShare !== null && summary.fundsShare > 75
+                  ? "danger"
+                  : "brand"
+              }
+              label="Share of recorded available funds"
+              order={1}
+              visual={
+                summary.fundsShare !== null ? (
+                  <ShareBar
+                    percent={summary.fundsShare}
+                    color={
+                      summary.fundsShare > 75
+                        ? "rgb(var(--tone-danger))"
+                        : "rgb(var(--tone-brand))"
+                    }
+                    trackClassName="bg-paper"
+                  />
+                ) : undefined
+              }
+            >
+              <p className="figure mt-2 text-2xl font-bold text-ink-900">
+                {summary.fundsShare === null
+                  ? "—"
+                  : `${summary.fundsShare.toFixed(0)}%`}
+              </p>
+              <p className="mt-1 text-xs text-ink-600">
+                {summary.fundsShare === null
+                  ? allTime
+                    ? "Shown for a week or a month"
+                    : availableFundsAreLoading
+                      ? "Loading recorded available funds…"
+                      : usingStartingFundsFallback
+                        ? (startingFundsFallback ?? 0) > 0
+                          ? `${formatMoney(summary.total)} of ${formatMoney(startingFundsFallback)} starting funds`
+                          : `Starting funds fallback: ${formatMoney(startingFundsFallback ?? 0)}`
+                        : `Recorded available funds: ${formatMoney(availableFundsDenominator ?? 0)}`
+                  : `${formatMoney(summary.total)} of ${formatMoney(availableFundsDenominator ?? 0)} recorded available funds`}
+              </p>
+              {usingStartingFundsFallback ? (
+                <div
+                  role="alert"
+                  className="mt-2 text-xs leading-relaxed text-tone-accent"
+                >
+                  <span title={currentFinancialPositionError ?? undefined}>
+                    Recorded balance couldn’t load. Using starting funds.
+                  </span>{" "}
+                  <button
+                    type="button"
+                    className="tap-inline font-semibold underline underline-offset-2"
+                    onClick={() =>
+                      setFinancialPositionReload((version) => version + 1)
+                    }
                   >
-                    <span title={currentFinancialPositionError ?? undefined}>
-                      Recorded balance couldn’t load. Using starting funds.
-                    </span>{" "}
-                    <button
-                      type="button"
-                      className="tap-inline font-semibold underline underline-offset-2"
-                      onClick={() =>
-                        setFinancialPositionReload((version) => version + 1)
-                      }
-                    >
-                      Retry recorded balance
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-              <div className="relative min-w-0 border-b border-paper-200 p-5 pl-[4.5rem] sm:border-r xl:border-b-0">
-                <Boxes
-                  aria-hidden
-                  className="absolute left-5 top-5 size-10 rounded-xl bg-tint-brand p-2 text-tone-brand ring-1 ring-edge-brand"
-                  strokeWidth={1.8}
-                />
-                <p className="text-xs font-medium text-ink-500">
-                  Largest category
-                </p>
-                <p className="mt-2 truncate text-xl font-bold text-ink-900">
-                  {summary.top?.categoryName ?? "—"}
-                </p>
-                <p className="figure mt-1 text-xs text-ink-500">
-                  {summary.top
-                    ? `${summary.topShare.toFixed(1)}% · ${formatMoney(summary.top.current)}`
-                    : "No spending yet"}
-                </p>
-              </div>
-              {allTime ? (
-                <div className="relative min-w-0 p-5 pl-[4.5rem]">
-                  <TrendingUp
-                    aria-hidden
-                    className="absolute left-5 top-5 size-10 rounded-xl bg-paper-100 p-2 text-ink-500 ring-1 ring-paper-200"
-                    strokeWidth={1.8}
-                  />
-                  <p className="text-xs font-medium text-ink-500">Average per month</p>
-                  <p className="figure mt-2 text-xl font-bold text-ink-900">
-                    {summary.monthlyAverage === null ? "—" : formatMoney(summary.monthlyAverage)}
-                  </p>
-                  <p className="mt-1 text-xs text-ink-500">
-                    {data.dailyTotals.length} month{data.dailyTotals.length === 1 ? "" : "s"}
-                  </p>
+                    Retry recorded balance
+                  </button>
                 </div>
-              ) : (
-              <div className="relative min-w-0 p-5 pl-[4.5rem]">
-                {summary.periodDelta > 0 ? (
-                  <ArrowUpRight
-                    aria-hidden
-                    className="absolute left-5 top-5 size-10 rounded-xl bg-tint-danger p-2 text-tone-danger ring-1 ring-edge-danger"
-                    strokeWidth={1.8}
+              ) : null}
+            </KpiTile>
+
+            <KpiTile
+              icon={Boxes}
+              tone="info"
+              label="Largest category"
+              order={2}
+              visual={
+                summary.top ? (
+                  <ShareBar
+                    percent={summary.topShare}
+                    color={TOP_CATEGORY_COLOR}
+                    trackClassName="bg-paper"
                   />
-                ) : summary.periodDelta < 0 ? (
-                  <ArrowDownRight
-                    aria-hidden
-                    className="absolute left-5 top-5 size-10 rounded-xl bg-tint-brand p-2 text-tone-brand ring-1 ring-edge-brand"
-                    strokeWidth={1.8}
-                  />
-                ) : (
-                  <TrendingUp
-                    aria-hidden
-                    className="absolute left-5 top-5 size-10 rounded-xl bg-paper-100 p-2 text-ink-500 ring-1 ring-paper-200"
-                    strokeWidth={1.8}
-                  />
-                )}
-                <p className="text-xs font-medium text-ink-500">
-                  vs {comparedWith}
+                ) : undefined
+              }
+            >
+              <p className="mt-2 truncate text-xl font-bold text-ink-900">
+                {summary.top?.categoryName ?? "—"}
+              </p>
+              <p className="figure mt-1 text-xs text-ink-600">
+                {summary.top
+                  ? `${summary.topShare.toFixed(1)}% · ${formatMoney(summary.top.current)}`
+                  : "No spending yet"}
+              </p>
+            </KpiTile>
+
+            {allTime ? (
+              <KpiTile icon={TrendingUp} tone="neutral" label="Average per month" order={3}>
+                <p className="figure mt-2 text-xl font-bold text-ink-900">
+                  {summary.monthlyAverage === null ? "—" : formatMoney(summary.monthlyAverage)}
                 </p>
+                <p className="mt-1 text-xs text-ink-600">
+                  {data.dailyTotals.length} month{data.dailyTotals.length === 1 ? "" : "s"}
+                </p>
+              </KpiTile>
+            ) : (
+              <KpiTile
+                icon={
+                  summary.periodDelta > 0
+                    ? ArrowUpRight
+                    : summary.periodDelta < 0
+                      ? ArrowDownRight
+                      : TrendingUp
+                }
+                tone={
+                  summary.periodDelta > 0
+                    ? "danger"
+                    : summary.periodDelta < 0
+                      ? "brand"
+                      : "neutral"
+                }
+                label={`vs ${comparedWith}`}
+                order={3}
+                visual={
+                  <PairBars
+                    rows={[
+                      {
+                        label: periodCaption,
+                        value: summary.total,
+                        color:
+                          summary.periodDelta > 0
+                            ? "rgb(var(--tone-danger))"
+                            : "rgb(var(--tone-brand))",
+                      },
+                      {
+                        label: comparedWith,
+                        value: data.totals.previous,
+                        color: "rgb(var(--ink-300))",
+                      },
+                    ]}
+                  />
+                }
+              >
                 {summary.periodDelta !== 0 ? (
                   <>
                     <p
@@ -1792,7 +1845,7 @@ function ExpenseInsightPage() {
                       {summary.periodDelta > 0 ? "+" : "−"}
                       {formatMoney(Math.abs(summary.periodDelta))}
                     </p>
-                    <p className="mt-1 text-xs text-ink-500">
+                    <p className="mt-1 text-xs text-ink-600">
                       {summary.periodPercent === null
                         ? "No earlier data"
                         : `${Math.abs(summary.periodPercent).toFixed(0)}% ${
@@ -1805,12 +1858,11 @@ function ExpenseInsightPage() {
                     <p className="mt-2 text-xl font-bold text-ink-900">
                       No change
                     </p>
-                    <p className="mt-1 text-xs text-ink-500">Same total</p>
+                    <p className="mt-1 text-xs text-ink-600">Same total</p>
                   </>
                 )}
-              </div>
-              )}
-            </div>
+              </KpiTile>
+            )}
           </section>
 
           <ExpenseSectionNav
@@ -1828,10 +1880,38 @@ function ExpenseInsightPage() {
             </Callout>
           ) : null}
 
+          {/* What it means, beside when it happened. The summary is read
+              first, so it sits on the left at the top of the page's body. */}
+          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)]">
+            <ExpenseSummaryCard
+              summary={summary}
+              periodText={periodText}
+              comparedWith={comparedWith}
+              allTime={allTime}
+              categoryColor={TOP_CATEGORY_COLOR}
+              flaggedCount={flaggedState === "ready" || flaggedState === "stale" ? flaggedTotal : 0}
+              unusualCount={data.unusualExpenses.length}
+              expandQuestion={expandQuestion}
+              onAsk={askFinSight}
+            />
+            {/* ===================== WHEN IT LEFT ===================== */}
+            <Panel
+              title="Spending over time"
+              action={<span className="text-xs text-ink-500">{periodCaption}</span>}
+              className="min-w-0"
+            >
+              <DailySpendChart
+                key={expenseScopeKey}
+                daily={data.dailyTotals}
+                bucket={data.dailyBucket ?? "day"}
+              />
+            </Panel>
+          </div>
+
           {/* ================= 2 & 3. WHERE IT WENT / WHAT CHANGED ================= */}
           <div
             id="expense-categories"
-            className={`scroll-mt-6 grid gap-5 ${allTime ? "" : "xl:grid-cols-[0.8fr_1.2fr]"}`}
+            className={`scroll-mt-6 grid items-start gap-5 ${allTime ? "" : "xl:grid-cols-[0.8fr_1.2fr]"}`}
           >
             <Panel title="Category distribution" className="min-w-0 xl:order-2">
               <DonutChart
@@ -1851,6 +1931,7 @@ function ExpenseInsightPage() {
                   trends={data.categoryTrends}
                   currentLabel={periodCaption}
                   previousLabel={comparedWith}
+                  resetKey={expenseScopeKey}
                 />
               </Panel>
             ) : null}
@@ -1872,190 +1953,214 @@ function ExpenseInsightPage() {
             {/* On a phone, a six-column table turns comparison into horizontal
                 scavenger hunting. The same values become compact category
                 records; the semantic table remains the desktop reading. */}
-            <ul className="space-y-2 px-4 pb-4 md:hidden">
-              {data.categoryTrends.map((trend) => (
-                <li
-                  key={trend.categoryId}
-                  className="rounded-xl border border-paper-200 bg-paper-100/50 p-3.5"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="font-semibold text-ink-900">
-                        {trend.categoryName}
+            <div id={categoryDisclosure.contentId}>
+              <ul className="space-y-2 px-4 pb-4 md:hidden">
+                {data.categoryTrends.slice(0, categoryDisclosure.visibleCount).map((trend) => (
+                  <li
+                    key={trend.categoryId}
+                    className="rounded-xl border border-paper-200 bg-paper-100/50 p-3.5"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-semibold text-ink-900">
+                          {trend.categoryName}
+                        </p>
+                        <p className="mt-0.5 text-xs text-ink-500">
+                          {trend.recordCount} expense
+                          {trend.recordCount === 1 ? "" : "s"} ·{" "}
+                          {summary.total > 0
+                            ? ((trend.current / summary.total) * 100).toFixed(1)
+                            : "0.0"}
+                          %
+                        </p>
+                      </div>
+                      <p className="figure shrink-0 text-sm font-bold text-ink-900">
+                        {formatMoney(trend.current)}
                       </p>
-                      <p className="mt-0.5 text-xs text-ink-500">
-                        {trend.recordCount} expense
-                        {trend.recordCount === 1 ? "" : "s"} ·{" "}
-                        {summary.total > 0
-                          ? ((trend.current / summary.total) * 100).toFixed(1)
-                          : "0.0"}
-                        %
-                      </p>
                     </div>
-                    <p className="figure shrink-0 text-sm font-bold text-ink-900">
-                      {formatMoney(trend.current)}
-                    </p>
-                  </div>
-                  {!allTime ? (
-                  <dl className="mt-3 grid grid-cols-2 gap-3 border-t border-paper-200 pt-3">
-                    <div>
-                      <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-500">
-                        {comparedWith}
-                      </dt>
-                      <dd className="figure mt-1 text-sm text-ink-600">
-                        {formatMoney(trend.previous)}
-                      </dd>
-                    </div>
-                    <div className="text-right">
-                      <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-500">
-                        Change
-                      </dt>
-                      <dd className="mt-1 text-sm">
-                        <ChangeFigure
-                          change={trend.change}
-                          percent={trend.percentChange}
-                        />
-                      </dd>
-                    </div>
-                  </dl>
-                  ) : null}
-                </li>
-              ))}
-              <li className="flex items-center justify-between gap-3 border-t border-paper-200 px-1 pt-3 text-sm">
-                <span className="font-semibold text-ink-600">Total</span>
-                <span className="figure font-bold text-ink-900">
-                  {formatMoney(summary.total)}
-                </span>
-              </li>
-            </ul>
-
-            <div className="scroll-slim hidden overflow-x-auto md:block">
-              <table className="w-full border-collapse text-left text-sm">
-                <caption className="sr-only">
-                  Expenses by category for {selected.name}, {periodText}
-                  {allTime ? "" : `, compared with ${comparedWith}`}.
-                </caption>
-                <thead>
-                  <tr className="border-y border-paper-200 bg-paper-100/60">
-                    <th
-                      scope="col"
-                      className="px-5 py-2.5 text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
-                    >
-                      Category
-                    </th>
-                    <th
-                      scope="col"
-                      className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
-                    >
-                      {periodCaption}
-                    </th>
-                    <th
-                      scope="col"
-                      className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
-                    >
-                      Share
-                    </th>
+                    <ShareBar
+                      percent={summary.total > 0 ? (trend.current / summary.total) * 100 : 0}
+                      color="rgb(var(--chart-emphasis))"
+                      className="mt-2.5 h-1.5"
+                    />
                     {!allTime ? (
-                      <>
-                        <th
-                          scope="col"
-                          className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
-                        >
+                    <dl className="mt-3 grid grid-cols-2 gap-3 border-t border-paper-200 pt-3">
+                      <div>
+                        <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-500">
                           {comparedWith}
-                        </th>
-                        <th
-                          scope="col"
-                          className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
-                        >
+                        </dt>
+                        <dd className="figure mt-1 text-sm text-ink-600">
+                          {formatMoney(trend.previous)}
+                        </dd>
+                      </div>
+                      <div className="text-right">
+                        <dt className="text-[11px] font-semibold uppercase tracking-[0.04em] text-ink-500">
                           Change
-                        </th>
-                      </>
+                        </dt>
+                        <dd className="mt-1 text-sm">
+                          <ChangeFigure
+                            change={trend.change}
+                            percent={trend.percentChange}
+                          />
+                        </dd>
+                      </div>
+                    </dl>
                     ) : null}
-                    <th
-                      scope="col"
-                      className="px-5 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
-                    >
-                      Count
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.categoryTrends.map((t) => (
-                    <tr
-                      key={t.categoryId}
-                      className="border-b border-paper-200 last:border-0"
-                    >
+                  </li>
+                ))}
+                <li className="flex items-center justify-between gap-3 border-t border-paper-200 px-1 pt-3 text-sm">
+                  <span className="font-semibold text-ink-600">Total</span>
+                  <span className="figure font-bold text-ink-900">
+                    {formatMoney(summary.total)}
+                  </span>
+                </li>
+              </ul>
+
+              <div className="scroll-slim hidden overflow-x-auto md:block">
+                <table className="w-full border-collapse text-left text-sm">
+                  <caption className="sr-only">
+                    Expenses by category for {selected.name}, {periodText}
+                    {allTime ? "" : `, compared with ${comparedWith}`}.
+                  </caption>
+                  <thead>
+                    <tr className="border-y border-paper-200 bg-paper-100/60">
+                      <th
+                        scope="col"
+                        className="px-5 py-2.5 text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
+                      >
+                        Category
+                      </th>
+                      <th
+                        scope="col"
+                        className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
+                      >
+                        {periodCaption}
+                      </th>
+                      <th
+                        scope="col"
+                        className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
+                      >
+                        Share
+                      </th>
+                      {!allTime ? (
+                        <>
+                          <th
+                            scope="col"
+                            className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
+                          >
+                            {comparedWith}
+                          </th>
+                          <th
+                            scope="col"
+                            className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
+                          >
+                            Change
+                          </th>
+                        </>
+                      ) : null}
+                      <th
+                        scope="col"
+                        className="px-5 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.06em] text-ink-600"
+                      >
+                        Count
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.categoryTrends.slice(0, categoryDisclosure.visibleCount).map((t) => (
+                      <tr
+                        key={t.categoryId}
+                        className="border-b border-paper-200 last:border-0"
+                      >
+                        <th
+                          scope="row"
+                          className="px-5 py-3 text-left font-medium text-ink-900"
+                        >
+                          {t.categoryName}
+                        </th>
+                        <td className="figure px-4 py-3 text-right font-semibold text-ink-900">
+                          {formatMoney(t.current)}
+                        </td>
+                        <td className="px-4 py-3 text-right text-ink-600">
+                          <div className="flex items-center justify-end gap-2.5">
+                            <div className="w-20">
+                              <ShareBar
+                                percent={summary.total > 0 ? (t.current / summary.total) * 100 : 0}
+                                color="rgb(var(--chart-emphasis))"
+                                className="h-1.5"
+                              />
+                            </div>
+                            <span className="figure w-12">
+                              {summary.total > 0
+                                ? ((t.current / summary.total) * 100).toFixed(1)
+                                : "0.0"}
+                              %
+                            </span>
+                          </div>
+                        </td>
+                        {!allTime ? (
+                          <>
+                            <td className="figure px-4 py-3 text-right text-ink-500">
+                              {formatMoney(t.previous)}
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <ChangeFigure
+                                change={t.change}
+                                percent={t.percentChange}
+                              />
+                            </td>
+                          </>
+                        ) : null}
+                        <td className="figure px-5 py-3 text-right text-ink-600">
+                          {t.recordCount}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t border-paper-200 bg-paper-100/60">
                       <th
                         scope="row"
-                        className="px-5 py-3 text-left font-medium text-ink-900"
+                        className="px-5 py-3 text-left text-xs font-bold uppercase tracking-[0.06em] text-ink-600"
                       >
-                        {t.categoryName}
+                        Total
                       </th>
-                      <td className="figure px-4 py-3 text-right font-semibold text-ink-900">
-                        {formatMoney(t.current)}
+                      <td className="figure px-4 py-3 text-right font-bold text-ink-900">
+                        {formatMoney(summary.total)}
                       </td>
                       <td className="figure px-4 py-3 text-right text-ink-600">
-                        {summary.total > 0
-                          ? ((t.current / summary.total) * 100).toFixed(1)
-                          : "0.0"}
-                        %
+                        100.0%
                       </td>
                       {!allTime ? (
                         <>
-                          <td className="figure px-4 py-3 text-right text-ink-500">
-                            {formatMoney(t.previous)}
+                          <td className="figure px-4 py-3 text-right text-ink-600">
+                            {formatMoney(data.totals.previous)}
                           </td>
                           <td className="px-4 py-3 text-right">
                             <ChangeFigure
-                              change={t.change}
-                              percent={t.percentChange}
+                              change={summary.periodDelta}
+                              percent={summary.periodPercent}
                             />
                           </td>
                         </>
                       ) : null}
                       <td className="figure px-5 py-3 text-right text-ink-600">
-                        {t.recordCount}
+                        {data.categoryTrends.reduce(
+                          (s, t) => s + t.recordCount,
+                          0,
+                        )}
                       </td>
                     </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr className="border-t border-paper-200 bg-paper-100/60">
-                    <th
-                      scope="row"
-                      className="px-5 py-3 text-left text-xs font-bold uppercase tracking-[0.06em] text-ink-600"
-                    >
-                      Total
-                    </th>
-                    <td className="figure px-4 py-3 text-right font-bold text-ink-900">
-                      {formatMoney(summary.total)}
-                    </td>
-                    <td className="figure px-4 py-3 text-right text-ink-600">
-                      100.0%
-                    </td>
-                    {!allTime ? (
-                      <>
-                        <td className="figure px-4 py-3 text-right text-ink-600">
-                          {formatMoney(data.totals.previous)}
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          <ChangeFigure
-                            change={summary.periodDelta}
-                            percent={summary.periodPercent}
-                          />
-                        </td>
-                      </>
-                    ) : null}
-                    <td className="figure px-5 py-3 text-right text-ink-600">
-                      {data.categoryTrends.reduce(
-                        (s, t) => s + t.recordCount,
-                        0,
-                      )}
-                    </td>
-                  </tr>
-                </tfoot>
-              </table>
+                  </tfoot>
+                </table>
+              </div>
             </div>
+            <ListDisclosureControl
+              disclosure={categoryDisclosure}
+              total={data.categoryTrends.length}
+              itemLabel="categories"
+              className="mx-4 pb-3"
+            />
           </Panel>
 
           {/* ============ 4.5 REDUCTION OPPORTUNITIES — the next step ============
@@ -2120,10 +2225,11 @@ function ExpenseInsightPage() {
                       </Callout>
                     ) : null}
                     <ul
+                      id={opportunityDisclosure.contentId}
                       className={`grid gap-3 xl:grid-cols-2 ${reductionOpportunities.dataQuality.status === "limited" ? "mt-3" : ""}`}
                     >
                       {reductionOpportunities.opportunities
-                        .slice(0, MAX_OPPORTUNITIES_SHOWN)
+                        .slice(0, opportunityDisclosure.visibleCount)
                         .map((o) => (
                           <OpportunityCard
                             key={o.id}
@@ -2133,6 +2239,12 @@ function ExpenseInsightPage() {
                           />
                         ))}
                     </ul>
+                    <ListDisclosureControl
+                      disclosure={opportunityDisclosure}
+                      total={reductionOpportunities.opportunities.length}
+                      itemLabel="opportunities"
+                      className="mt-3"
+                    />
                   </>
                 )}
               </Panel>
@@ -2140,302 +2252,315 @@ function ExpenseInsightPage() {
           ) : null}
 
           {/* ===================== 5. FLAGS + AI ===================== */}
-          <div
+          {/* ===================== 5. REVIEW ===================== */}
+          <section
             id="expense-review"
-            className={`scroll-mt-6 grid gap-5 ${showFlaggedPanel ? "lg:grid-cols-2" : ""}`}
+            aria-label="Expenses to review"
+            className="scroll-mt-6 space-y-5"
           >
-            {showFlaggedPanel ? (
+            {!showFlaggedPanel && !showUnusualPanel && !showFindingsPanel ? (
+              <div className="flex items-center gap-3 rounded-2xl border border-paper-200 bg-paper px-5 py-4 shadow-sm">
+                <IconTile icon={ShieldCheck} />
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-ink-900">All clear</p>
+                  <p className="text-xs text-ink-500">
+                    No large, unusual or open findings {periodText}.
+                  </p>
+                </div>
+              </div>
+            ) : null}
+            {showFlaggedPanel || showUnusualPanel ? (
+              <div
+                className={`grid items-start gap-5 ${showFlaggedPanel && showUnusualPanel ? "lg:grid-cols-2" : ""}`}
+              >
+              {showFlaggedPanel ? (
+                <Panel
+                  title="Large expense flags"
+                  className="min-w-0"
+                  action={
+                    flaggedState === "stale" ? (
+                      <Pill>Saved data</Pill>
+                    ) : flaggedState === "unavailable" ? (
+                      <Pill>Unavailable</Pill>
+                    ) : flaggedState === "ready" && flaggedTotal > 0 ? (
+                      <Pill tone="danger">{flaggedTotal} flagged</Pill>
+                    ) : null
+                  }
+                >
+                  <SupplementNotice
+                    state={flaggedState}
+                    label="flagged record details"
+                  />
+                  {flaggedState === "loading" ? (
+                    <p
+                      aria-live="polite"
+                      className="py-6 text-center text-sm text-ink-500"
+                    >
+                      Loading flagged records…
+                    </p>
+                  ) : flaggedState === "unavailable" ||
+                    (flaggedState === "stale" && flaggedTotal === 0) ||
+                    flaggedTotal === 0 ? null : (
+                    <>
+                      <ul id={flaggedDisclosure.contentId} className="space-y-2">
+                        {flaggedExpenses
+                          .slice(0, flaggedDisclosure.visibleCount)
+                          .map((r) => (
+                            <li
+                              key={r.id}
+                              className="flex items-start gap-3 rounded-xl border border-paper-200 bg-paper-50 px-3.5 py-3"
+                            >
+                              <IconTile icon={Flag} />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                                  <p className="min-w-0 text-sm font-semibold text-ink-900">
+                                    {r.description}
+                                  </p>
+                                  <p className="figure shrink-0 text-sm font-bold text-tone-danger">
+                                    {formatMoney(r.amount)}
+                                  </p>
+                                </div>
+                                <p className="mt-1 text-xs text-ink-500">
+                                  {categoryName(r.categoryId)} ·{" "}
+                                  {r.date.slice(0, 10)} ·{" "}
+                                  <FlagReason record={r} profile={selected} />
+                                </p>
+                              </div>
+                            </li>
+                          ))}
+                      </ul>
+                      <ListDisclosureControl
+                        disclosure={flaggedDisclosure}
+                        total={flaggedExpenses.length}
+                        itemLabel={flaggedTotal > flaggedExpenses.length ? "loaded flags" : "flags"}
+                        className="mt-3"
+                      />
+                      {hasFlaggedRecordLink ? (
+                        <Link
+                          to="/records/flagged"
+                          className="tap-inline mt-3 block text-sm link-action"
+                        >
+                          Review all {flaggedTotal} flagged
+                        </Link>
+                      ) : null}
+                    </>
+                  )}
+                </Panel>
+              ) : null}
+            {/* ===================== 7. ANYTHING ODD (statistical) ===================== */}
+            {showUnusualPanel ? (
               <Panel
-                title="Large expense flags"
+                title="Unusual expenses"
+                className="min-w-0"
                 action={
-                  flaggedState === "stale" ? (
-                    <Pill>Saved data</Pill>
-                  ) : flaggedState === "unavailable" ? (
-                    <Pill>Unavailable</Pill>
-                  ) : flaggedState === "ready" && flaggedTotal > 0 ? (
-                    <Pill tone="danger">{flaggedTotal} flagged</Pill>
+                  data.unusualExpenses.length > 0 ? (
+                    <span className="text-xs text-ink-500">
+                      {data.unusualExpenses.length} flagged
+                    </span>
                   ) : null
                 }
               >
-                <SupplementNotice
-                  state={flaggedState}
-                  label="flagged record details"
-                />
-                {flaggedState === "loading" ? (
-                  <p
-                    aria-live="polite"
-                    className="py-6 text-center text-sm text-ink-500"
-                  >
-                    Loading flagged records…
-                  </p>
-                ) : flaggedState === "unavailable" ||
-                  (flaggedState === "stale" && flaggedTotal === 0) ||
-                  flaggedTotal === 0 ? null : (
-                  <>
-                    <ul className="space-y-2">
-                      {flaggedExpenses
-                        .slice(0, MAX_FLAGGED_SHOWN)
-                        .map((r) => (
-                          <li
-                            key={r.id}
-                            className="flex items-start gap-2.5 rounded-xl bg-tint-danger px-3.5 py-3 ring-1 ring-edge-danger"
-                          >
-                            <Flag
-                              aria-hidden
-                              className="mt-0.5 size-4 shrink-0 text-tone-danger"
-                              strokeWidth={1.9}
-                            />
-                            <div className="min-w-0 flex-1">
-                              <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                                <p className="min-w-0 text-sm font-semibold text-tone-danger">
-                                  {r.description}
-                                </p>
-                                <p className="figure shrink-0 text-sm font-bold text-tone-danger">
-                                  {formatMoney(r.amount)}
-                                </p>
-                              </div>
-                              <p className="mt-1 text-xs text-tone-danger opacity-90">
-                                {categoryName(r.categoryId)} ·{" "}
-                                {r.date.slice(0, 10)} ·{" "}
-                                <FlagReason record={r} profile={selected} />
+              {isRefreshing && data.unusualExpenses.length === 0 ? (
+                <p aria-live="polite" className="py-6 text-center text-sm text-ink-500">
+                  Refreshing unusual expenses…
+                </p>
+              ) : refreshError && data.unusualExpenses.length === 0 ? (
+                <p role="status" className="text-sm text-tone-accent">
+                  Showing recently loaded unusual-expense results; the latest
+                  refresh failed.
+                </p>
+              ) : (
+                <>
+                  <ul id={unusualDisclosure.contentId} className="space-y-2">
+                    {data.unusualExpenses.slice(0, unusualDisclosure.visibleCount).map((u) => {
+                      const times =
+                        u.categoryMean > 0 ? u.amount / u.categoryMean : null;
+                      return (
+                        <li
+                          key={u.id}
+                          className="rounded-xl border border-paper-200 bg-paper-50 px-3.5 py-3"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold text-ink-900">
+                                {u.description}
+                              </p>
+                              <p className="mt-0.5 text-xs text-ink-500">
+                                {u.categoryName} · {u.date.slice(0, 10)}
                               </p>
                             </div>
-                          </li>
-                        ))}
-                    </ul>
-                    {flaggedTotal > shownFlagged ? (
-                      <Link
-                        to="/records/flagged"
-                        className="tap-inline mt-3 block text-sm font-semibold text-brand-700 hover:text-brand-800"
-                      >
-                        Review all {flaggedTotal} flagged
-                      </Link>
-                    ) : null}
-                  </>
-                )}
+                            <div className="shrink-0 text-right">
+                              <p className="figure text-sm font-bold text-ink-900">
+                                {formatMoney(u.amount)}
+                              </p>
+                              {/* Said in multiples of the usual, not in standard
+                                  deviations. "4.2× usual" lands; "z-score 3.2"
+                                  does not. */}
+                              {times && times >= 1.5 ? (
+                                <span className="figure mt-0.5 inline-block rounded-full bg-tint-danger px-1.5 py-0.5 text-[11px] font-semibold text-tone-danger">
+                                  {times.toFixed(1)}× usual
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
+                          <UsualBar amount={u.amount} usual={u.categoryMean} />
+                          <p className="mt-1.5 text-[11px] text-ink-500">
+                            Usual{" "}
+                            <span className="figure font-medium text-ink-700">
+                              {formatMoney(u.categoryMean)}
+                            </span>{" "}
+                            (the line)
+                          </p>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <ListDisclosureControl
+                    disclosure={unusualDisclosure}
+                    total={data.unusualExpenses.length}
+                    itemLabel="unusual expenses"
+                    className="mt-3"
+                  />
+                </>
+              )}
+
+              {data.insufficientHistoryCategories.length > 0 ? (
+                <p className="mt-3 text-xs text-ink-500">
+                  Not enough history to check:{" "}
+                  {data.insufficientHistoryCategories
+                    .map((c) => c.categoryName)
+                    .join(", ")}
+                </p>
+              ) : null}
               </Panel>
             ) : null}
 
-            <AiCard
-              title="Summary"
-              subtitle="Composed from your records, not AI-written"
-              footer={
-                <button
-                  type="button"
-                  onClick={() => askFinSight(expandQuestion)}
-                  className="tap-inline font-semibold text-accent-200 underline-offset-2 hover:underline"
-                >
-                  Ask FinSight
-                </button>
-              }
-            >
-              {aiSummary}
-            </AiCard>
-          </div>
-
-          {/* ===================== 6. WHEN IT LEFT ===================== */}
-          <Panel
-            title="Spending over time"
-            action={<span className="text-xs text-ink-500">{periodCaption}</span>}
-          >
-            <DailySpendChart daily={data.dailyTotals} bucket={data.dailyBucket ?? "day"} />
-          </Panel>
-
-          {/* ===================== 7. ANYTHING ODD (statistical) ===================== */}
-          {showUnusualPanel ? (
-            <Panel
-              title="Unusual expenses"
-              action={
-                data.unusualExpenses.length > 0 ? (
-                  <span className="text-xs text-ink-500">
-                    {data.unusualExpenses.length} flagged
-                  </span>
-                ) : null
-              }
-            >
-            {isRefreshing && data.unusualExpenses.length === 0 ? (
-              <p aria-live="polite" className="py-6 text-center text-sm text-ink-500">
-                Refreshing unusual expenses…
-              </p>
-            ) : refreshError && data.unusualExpenses.length === 0 ? (
-              <p role="status" className="text-sm text-tone-accent">
-                Showing recently loaded unusual-expense results; the latest
-                refresh failed.
-              </p>
-            ) : (
-              <ul className="space-y-2">
-                {data.unusualExpenses.map((u) => {
-                  const times =
-                    u.categoryMean > 0 ? u.amount / u.categoryMean : null;
-                  return (
-                    <li
-                      key={u.id}
-                      className="rounded-xl bg-tint-accent px-3.5 py-3 ring-1 ring-edge-accent"
-                    >
-                      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                        <p className="min-w-0 text-sm font-semibold text-tone-accent">
-                          {u.description}
-                        </p>
-                        <p className="figure shrink-0 text-sm font-bold text-tone-accent">
-                          {formatMoney(u.amount)}
-                        </p>
-                      </div>
-                      {/* Said in multiples of the usual, not in standard
-                          deviations. "About 4x your usual Inventory expense"
-                          lands; "z-score 3.2" does not. */}
-                      <p className="mt-1 text-xs text-tone-accent opacity-90">
-                        {u.categoryName} · {u.date.slice(0, 10)} ·{" "}
-                        {times && times >= 1.5 ? (
-                          <>
-                            about {times.toFixed(1)}× your usual{" "}
-                            <span className="figure">
-                              {formatMoney(u.categoryMean)}
-                            </span>
-                          </>
-                        ) : (
-                          <>
-                            usually around{" "}
-                            <span className="figure">
-                              {formatMoney(u.categoryMean)}
-                            </span>
-                          </>
-                        )}
-                      </p>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-
-            {data.insufficientHistoryCategories.length > 0 ? (
-              <p className="mt-3 text-xs text-ink-500">
-                Not enough history to check:{" "}
-                {data.insufficientHistoryCategories
-                  .map((c) => c.categoryName)
-                  .join(", ")}
-              </p>
+              </div>
             ) : null}
-            </Panel>
-          ) : null}
+            {showFindingsPanel ? (
+              <Panel
+                title="Findings to review"
+                action={
+                  findingsState === "stale" ? (
+                    <Pill>Saved data</Pill>
+                  ) : findingsState === "unavailable" ? (
+                    <Pill>Unavailable</Pill>
+                  ) : findingsState === "ready" && findings.length > 0 ? (
+                    <span className="text-xs text-ink-500">
+                      {findings.length} open
+                    </span>
+                  ) : null
+                }
+              >
+              <SupplementNotice state={findingsState} label="finding details" />
+              {findingsState === "loading" ? (
+                <p aria-live="polite" className="py-6 text-center text-sm text-ink-500">
+                  Loading findings…
+                </p>
+              ) : findingsState === "unavailable" || (findingsState === "stale" && findings.length === 0) ? null
+              : findings.length === 0 ? null : (
+                <>
+                <ul className="space-y-3">
+                  {findings
+                    .slice((visibleFindingsPage - 1) * FINDINGS_PER_PAGE, visibleFindingsPage * FINDINGS_PER_PAGE)
+                    .map((finding) => (
+                    <li
+                      key={finding.id}
+                      className="rounded-xl border border-paper-200 bg-paper-50 p-3.5"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex min-w-0 items-center gap-3">
+                          <IconTile icon={AlertTriangle} />
+                          <p className="text-sm font-semibold text-ink-900">
+                            {finding.title}
+                          </p>
+                        </div>
+                        <Pill tone={(FINDING_SEVERITY_LOOK[finding.severity] ?? FINDING_SEVERITY_LOOK.LOW!).pill}>
+                          {finding.severity.toLowerCase()}
+                        </Pill>
+                      </div>
+                      <ul className="mt-2 list-disc space-y-1 pl-[3.75rem] text-xs text-ink-500">
+                        {finding.reasons.map((reason) => (
+                          <li key={reason}>{reason}</li>
+                        ))}
+                      </ul>
+                      {/*
+                        Button primitives, not hand-rolled ones. These two were
+                        the last raw <button>s carrying their own colour classes:
+                        they missed the 44px tap floor every other button in the
+                        app clears, and one of them named an `edge` step that
+                        generates no CSS at all, so it silently fell back to
+                        Tailwind's hard-coded #e5e7eb — a fixed grey that ignores
+                        the theme and is wrong in Dark.
 
-          {showFindingsPanel ? (
-            <Panel
-              title="Findings to review"
-              action={
-                findingsState === "stale" ? (
-                  <Pill>Saved data</Pill>
-                ) : findingsState === "unavailable" ? (
-                  <Pill>Unavailable</Pill>
-                ) : findingsState === "ready" && findings.length > 0 ? (
-                  <span className="text-xs text-ink-500">
-                    {findings.length} open
-                  </span>
-                ) : null
-              }
-            >
-            <SupplementNotice state={findingsState} label="finding details" />
-            {findingsState === "loading" ? (
-              <p aria-live="polite" className="py-6 text-center text-sm text-ink-500">
-                Loading findings…
-              </p>
-            ) : findingsState === "unavailable" || (findingsState === "stale" && findings.length === 0) ? null
-            : findings.length === 0 ? null : (
-              <>
-              <ul className="space-y-3">
-                {findings
-                  .slice((visibleFindingsPage - 1) * FINDINGS_PER_PAGE, visibleFindingsPage * FINDINGS_PER_PAGE)
-                  .map((finding) => (
-                  <li
-                    key={finding.id}
-                    className="rounded-xl border border-paper-200 p-3.5"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-sm font-semibold text-ink-800">
-                        {finding.title}
-                      </p>
-                      <Pill>{finding.severity.toLowerCase()}</Pill>
-                    </div>
-                    <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-ink-500">
-                      {finding.reasons.map((reason) => (
-                        <li key={reason}>{reason}</li>
-                      ))}
-                    </ul>
-                    {/*
-                      Button primitives, not hand-rolled ones. These two were
-                      the last raw <button>s carrying their own colour classes:
-                      they missed the 44px tap floor every other button in the
-                      app clears, and one of them named an `edge` step that
-                      generates no CSS at all, so it silently fell back to
-                      Tailwind's hard-coded #e5e7eb — a fixed grey that ignores
-                      the theme and is wrong in Dark.
-
-                      Only two of the five feedback values are reachable here,
-                      on purpose: this panel is a SUMMARY beside the expense
-                      figures, and the full set of answers (including "wrong
-                      match", the one the duplicate detector most needs) lives
-                      on the review queue, which the link below leads to.
-                    */}
-                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        onClick={() =>
-                          void reviewFinding(
-                            finding.id,
-                            "CONFIRMED",
-                            finding.type === "POSSIBLE_DUPLICATE"
-                              ? "DUPLICATE"
-                              : "CONFIRMED_UNUSUAL",
-                          )
-                        }
-                      >
-                        Confirm
-                        <span className="sr-only"> — {finding.title}</span>
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        onClick={() =>
-                          void reviewFinding(
-                            finding.id,
-                            "DISMISSED",
-                            "EXPECTED_TRANSACTION",
-                          )
-                        }
-                      >
-                        Expected / dismiss
-                        <span className="sr-only"> — {finding.title}</span>
-                      </Button>
-                      <Link
-                        to="/records/flagged"
-                        className="tap-inline text-xs font-medium text-brand-700 underline-offset-2 hover:underline"
-                      >
-                        More options
-                        <span className="sr-only">
-                          {" "}
-                          for {finding.title}, on the review queue
-                        </span>
-                      </Link>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-              {findings.length > FINDINGS_PER_PAGE ? (
-                <Pagination
-                  page={visibleFindingsPage}
-                  pageSize={FINDINGS_PER_PAGE}
-                  totalItems={findings.length}
-                  onPageChange={setFindingsPage}
-                  itemNoun="findings"
-                  idPrefix="findings"
-                  className="mt-4 border-t border-paper-200 pt-3"
-                />
-              ) : null}
-              </>
-            )}
-            </Panel>
-          ) : null}
+                        Only two of the five feedback values are reachable here,
+                        on purpose: this panel is a SUMMARY beside the expense
+                        figures, and the full set of answers (including "wrong
+                        match", the one the duplicate detector most needs) lives
+                        on the review queue, which the link below leads to.
+                      */}
+                      <div className="mt-3 flex flex-wrap items-center gap-2 pl-11">
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={() =>
+                            void reviewFinding(
+                              finding.id,
+                              "CONFIRMED",
+                              finding.type === "POSSIBLE_DUPLICATE"
+                                ? "DUPLICATE"
+                                : "CONFIRMED_UNUSUAL",
+                            )
+                          }
+                        >
+                          Confirm
+                          <span className="sr-only"> — {finding.title}</span>
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          onClick={() =>
+                            void reviewFinding(
+                              finding.id,
+                              "DISMISSED",
+                              "EXPECTED_TRANSACTION",
+                            )
+                          }
+                        >
+                          Expected / dismiss
+                          <span className="sr-only"> — {finding.title}</span>
+                        </Button>
+                        <Link
+                          to="/records/flagged"
+                          className="tap-inline text-xs link-action"
+                        >
+                          More options
+                          <span className="sr-only">
+                            {" "}
+                            for {finding.title}, on the review queue
+                          </span>
+                        </Link>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+                {findings.length > FINDINGS_PER_PAGE ? (
+                  <Pagination
+                    page={visibleFindingsPage}
+                    pageSize={FINDINGS_PER_PAGE}
+                    totalItems={findings.length}
+                    onPageChange={setFindingsPage}
+                    itemNoun="findings"
+                    idPrefix="findings"
+                    className="mt-4 border-t border-paper-200 pt-3"
+                  />
+                ) : null}
+                </>
+              )}
+              </Panel>
+            ) : null}
+          </section>
         </div>
       )}
 
@@ -2475,15 +2600,15 @@ function ExpenseInsightPage() {
           {/* Hidden when there is no successful snapshot or the server
               definitively reports that schedules are unavailable. */}
           {recurringSchedules !== null ? (
-            <RecurringAgenda schedules={recurringSchedules} />
+            <RecurringAgenda schedules={recurringSchedules} resetKey={expenseScopeKey} />
           ) : null}
 
           {hasCandidates ? (
             <Panel title="Possible recurring expenses">
               <SupplementNotice state={patternsState} label="recurring expense suggestions" />
-              <ul className="space-y-2">
-                {recurringPatterns
-                  .filter((pattern) => pattern.status === "CANDIDATE")
+              <ul id={recurringDisclosure.contentId} className="space-y-2">
+                {candidatePatterns
+                  .slice(0, recurringDisclosure.visibleCount)
                   .map((pattern) => (
                     <li
                       key={pattern.id}
@@ -2537,6 +2662,12 @@ function ExpenseInsightPage() {
                     </li>
                   ))}
               </ul>
+              <ListDisclosureControl
+                disclosure={recurringDisclosure}
+                total={candidatePatterns.length}
+                itemLabel="recurring suggestions"
+                className="mt-3"
+              />
             </Panel>
           ) : patternsState === "stale" || patternsState === "unavailable" ? (
             <Panel title="Recurring expense suggestions">

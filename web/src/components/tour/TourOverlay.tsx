@@ -315,7 +315,7 @@ export function TourOverlay() {
                   type="button"
                   onClick={() => setConfirmOpen(true)}
                   aria-label="Close tour"
-                  className="tap -mr-1 -mt-1 h-8 w-8 min-h-0 min-w-0 shrink-0 rounded-lg text-ink-500 transition hover:bg-paper-100 hover:text-ink-800"
+                  className="tap h-11 w-11 shrink-0 rounded-lg text-ink-500 transition hover:bg-paper-100 hover:text-ink-800"
                 >
                   <span aria-hidden className="text-base leading-none">✕</span>
                 </button>

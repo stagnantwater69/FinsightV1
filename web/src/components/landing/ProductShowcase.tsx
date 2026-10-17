@@ -40,7 +40,7 @@ function OcrPanel() {
           ].map((item) => (
             <li key={item} className="flex items-start gap-3 font-landing-sans text-[15px] text-landing-charcoal/90">
               <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-landing-mint-pale">
-                <Check className="h-3 w-3 text-landing-green" strokeWidth={3} />
+                <Check className="h-3 w-3 text-landing-green" />
               </span>
               {item}
             </li>
@@ -60,7 +60,7 @@ function OcrPanel() {
             </div>
           </div>
           <span className="inline-flex items-center gap-1.5 rounded-full border border-landing-mint-light bg-landing-mint-pale px-3 py-1 font-landing-sans text-xs font-semibold text-landing-green">
-            <Check className="h-3 w-3" strokeWidth={3} />
+            <Check className="h-3 w-3" />
             Check before saving
           </span>
         </div>

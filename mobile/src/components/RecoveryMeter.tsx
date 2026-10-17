@@ -1,9 +1,11 @@
 import { View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { Money, T } from "./ui";
+import { ChartPlotPressArea, ChartValueReadout, useChartSelection, type ChartDatum } from "./ChartInteraction";
 import { font, radius, space, typeScale } from "../theme/tokens";
 import { useTheme } from "../context/ThemeContext";
 import { dayStatusTone } from "../lib/recoveryTone";
+import { resolveMonthStatus } from "../lib/recoveryStatus";
 import type { RecoveryTargets } from "../lib/types";
 
 /**
@@ -18,45 +20,6 @@ import type { RecoveryTargets } from "../lib/types";
  * Dashboard and the Recovery screen cannot drift apart, and neither can mobile
  * and web.
  */
-
-/**
- * Resolves the month status pill's tone, glyph and copy from the backend's
- * `status` field (Improvement Plan §8.1/§9.7), falling back to the older
- * `needsSetup`/`onTrack` booleans only when an older/cached response has no
- * `status` at all. `data_incomplete` isn't sent yet (Phase 2+) but is mapped
- * here so the switch stays exhaustive when it starts arriving.
- *
- * There is no "info" entry in this theme's status palette (`StatusKey` is
- * just good/warning/serious/critical) — states that are informational rather
- * than a warning or a success still use `status.warning`/`statusText.warning`
- * rather than inventing a new palette entry.
- */
-function resolveMonthStatus(
-  data: RecoveryTargets,
-): { tone: "warning" | "good" | "critical"; glyph: string; copy: string } {
-  const status = data.status;
-  if (status) {
-    switch (status) {
-      case "needs_setup":
-        return { tone: "warning", glyph: "?", copy: "Recovery Target isn't ready yet" };
-      case "no_current_month_data":
-      case "data_incomplete":
-        return { tone: "warning", glyph: "i", copy: "No sales recorded yet this month" };
-      case "covered":
-        return { tone: "good", glyph: "✓", copy: "Sales coverage target reached" };
-      case "ahead":
-        return { tone: "good", glyph: "✓", copy: "Ahead of pace" };
-      case "on_pace":
-        return { tone: "good", glyph: "✓", copy: "On pace for the month" };
-      case "behind":
-        return { tone: "critical", glyph: "!", copy: "Behind pace for the month" };
-    }
-  }
-  // Back-compat: older/cached responses with no `status` field at all.
-  if (data.needsSetup) return { tone: "warning", glyph: "?", copy: "Recovery Target isn't ready yet" };
-  if (data.onTrack) return { tone: "good", glyph: "✓", copy: "On pace for the month" };
-  return { tone: "critical", glyph: "!", copy: "Behind pace for the month" };
-}
 
 export function RecoveryMeter({
   data,
@@ -122,7 +85,7 @@ export function RecoveryMeter({
         </T>
       ) : null}
 
-      <Bar ratio={monthRatio} color={monthFill} height={12} label="Month-to-date coverage" />
+      <Bar ratio={monthRatio} color={monthFill} height={12} label="Month-to-date coverage" detail={{ key: data.asOfDate ?? "month", label: "Month-to-date coverage", values: [{ label: "Sales recorded", value: data.salesThisMonth }, { label: "Expense basis", value: needsSetupNow ? null : data.expectedMonthlyExpenses, unavailableLabel: "Needs setup" }, { label: "Coverage", value: needsSetupNow ? null : data.monthCoveragePercent, display: needsSetupNow ? undefined : `${data.monthCoveragePercent.toFixed(1)}%`, unavailableLabel: "Needs setup" }], note: monthStatus.copy }} />
       <T variant="caption" style={{ marginTop: 6 }}>
         <Money value={data.salesThisMonth} size={12} weight="regular" color={ink[500]} /> of{" "}
         <Money value={data.expectedMonthlyExpenses} size={12} weight="regular" color={ink[500]} /> needed this month (
@@ -176,7 +139,7 @@ export function RecoveryMeter({
               justifyContent: "center",
             }}
           >
-            <Ionicons name="calendar-outline" size={15} color={todayInk} />
+            <Ionicons name="calendar-outline" size={16} color={todayInk} />
           </View>
           <T style={{ flex: 1, fontSize: typeScale.bodySm, color: ink[900], fontFamily: font.sansSemibold }}>Today</T>
           <T style={{ color: todayInk, fontSize: typeScale.caption }}>
@@ -190,7 +153,7 @@ export function RecoveryMeter({
             )}
           </T>
         </View>
-        <Bar ratio={todayRatio} color={todayFill} height={8} label="Today's progress" />
+        <Bar ratio={todayRatio} color={todayFill} height={8} label="Today's progress" detail={{ key: data.asOfDate ?? "today", label: "Today's progress", values: [{ label: "Sales recorded", value: data.todaysSales }, { label: "Today's target", value: needsSetupNow ? null : data.todaysTarget, unavailableLabel: "Needs setup" }, { label: "Gap", value: needsSetupNow ? null : data.todaysGap, unavailableLabel: "Needs setup" }], note: data.todaysStatus === "at" ? "Reached target" : `${data.todaysStatus === "below" ? "Below" : "Above"} target` }} />
         <T variant="caption" style={{ marginTop: 6 }}>
           <Money value={data.todaysSales} size={12} weight="regular" color={ink[500]} /> recorded of{" "}
           <Money value={data.todaysTarget} size={12} weight="regular" color={ink[500]} /> needed today
@@ -200,10 +163,14 @@ export function RecoveryMeter({
   );
 }
 
-function Bar({ ratio, color, height, label }: { ratio: number; color: string; height: number; label: string }) {
+function Bar({ ratio, color, height, label, detail }: { ratio: number; color: string; height: number; label: string; detail: ChartDatum }) {
   const t = useTheme();
   const { ink } = t;
+  const barData = [detail];
+  const barSelection = useChartSelection(barData);
   return (
+    <View>
+    <ChartPlotPressArea selection={barSelection} count={1} chartLabel={label}>
     <View
       // Without `accessible`, RN leaves `isAccessibilityElement` false and the
       // role/label/value below are set on a view the platform never surfaces —
@@ -216,6 +183,9 @@ function Bar({ ratio, color, height, label }: { ratio: number; color: string; he
       style={{ height, backgroundColor: ink[100], borderRadius: height / 2, overflow: "hidden" }}
     >
       <View style={{ width: `${ratio * 100}%`, height: "100%", backgroundColor: color, borderRadius: height / 2 }} />
+    </View>
+    </ChartPlotPressArea>
+    <ChartValueReadout data={barData} selection={barSelection} chartLabel={label} />
     </View>
   );
 }

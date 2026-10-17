@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { Records } from "./Records";
 import type { BusinessProfile, RecordItem } from "../lib/types";
+vi.mock("../context/AuthContext", () => ({ useAuth: () => ({ profile: { id: 17 } }) }));
 
 /**
  * WHAT THIS FILE GUARDS: the Records table does not sort. The server does.
@@ -53,6 +54,8 @@ const SERVER_ORDER = [
 let searchResponses: { items: RecordItem[]; nextCursor: string | null }[];
 let failNextSearch = false;
 let searchHandler: ((params: Record<string, unknown>) => Promise<{ data: { items: RecordItem[]; nextCursor: string | null } }>) | null;
+let importHandler: (params: Record<string, unknown>) => unknown;
+const importCalls: Record<string, unknown>[] = [];
 const searchCalls: Record<string, unknown>[] = [];
 
 vi.mock("../lib/api", () => ({
@@ -68,6 +71,10 @@ vi.mock("../lib/api", () => ({
         return { data: searchResponses.shift() ?? { items: SERVER_ORDER, nextCursor: null } };
       }
       if (url === "/records/flagged/count") return { data: { expenses: 0, sales: 0, total: 0 } };
+      if (url === "/records/csv-imports/batches") {
+        importCalls.push(config?.params ?? {});
+        return { data: await importHandler(config?.params ?? {}) };
+      }
       throw new Error(`unmocked GET ${url}`);
     },
     post: async () => ({ data: {} }),
@@ -88,9 +95,9 @@ vi.mock("../components/AddExpenseModal", () => ({ AddExpenseModal: () => null })
 vi.mock("../components/AddSalesModal", () => ({ AddSalesModal: () => null }));
 vi.mock("../components/DuplicateReviewModal", () => ({ DuplicateReviewModal: () => null }));
 
-function renderPage() {
+function renderPage(entry = "/records") {
   return render(
-    <MemoryRouter initialEntries={["/records"]}>
+    <MemoryRouter initialEntries={[entry]}>
       <Records />
     </MemoryRouter>,
   );
@@ -112,10 +119,38 @@ beforeEach(() => {
   searchResponses = [];
   failNextSearch = false;
   searchHandler = null;
+  importCalls.length = 0;
+  importHandler = () => ({ items: [], nextCursor: null });
   window.localStorage.clear();
 });
 
 describe("Records sorting", () => {
+  it("retains an older import deep link even when the first history page does not contain it", async () => {
+    importHandler = () => ({ items: [{ id: 1, title: "Newest import", uploadDate: "2026-10-13T00:00:00Z" }], nextCursor: "older" });
+    renderPage("/records?source=CSV_UPLOAD&importBatchId=999");
+    const selected = await screen.findByLabelText("Which import");
+    await waitFor(() => expect(importCalls).toHaveLength(1));
+    expect(selected).toHaveValue("999");
+    expect(within(selected).getByRole("option", { name: "Import #999" })).toBeInTheDocument();
+    expect(lastSearch()).toMatchObject({ source: "CSV_UPLOAD", importBatchId: "999" });
+    expect(screen.getByRole("button", { name: "Older imports" })).toBeInTheDocument();
+  });
+
+  it("makes older and searched import options reachable while preserving the selected filter", async () => {
+    importHandler = (params) => params.search ? { items: [{ id: 7, title: "March sales", uploadDate: "2026-03-01T00:00:00Z" }], nextCursor: null }
+      : params.cursor ? { items: [{ id: 2, title: "Earlier import", uploadDate: "2026-09-13T00:00:00Z" }], nextCursor: null }
+      : { items: [{ id: 1, title: "Newest import", uploadDate: "2026-10-13T00:00:00Z" }], nextCursor: "older" };
+    renderPage("/records?source=CSV_UPLOAD&importBatchId=999");
+    await userEvent.click(await screen.findByRole("button", { name: "Older imports" }));
+    expect(await screen.findByRole("option", { name: /Earlier import/ })).toBeInTheDocument();
+    expect(importCalls[1]).toMatchObject({ pageSize: 50, cursor: "older" });
+    await userEvent.type(screen.getByLabelText("Find an import"), "March");
+    expect(await screen.findByRole("option", { name: /March sales/ })).toBeInTheDocument();
+    expect(importCalls.at(-1)).toEqual({ businessProfileId: 1, pageSize: 50, search: "March" });
+    expect(screen.getByLabelText("Which import")).toHaveValue("999");
+    expect(lastSearch()).toMatchObject({ importBatchId: "999" });
+  });
+
   it("asks the server for the default order on first load", async () => {
     renderPage();
     await screen.findByRole("table");

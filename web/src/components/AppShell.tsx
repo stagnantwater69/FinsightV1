@@ -353,7 +353,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div
-      className="min-h-screen bg-paper-50 transition-[grid-template-columns] duration-250 ease-shell lg:grid"
+      className="app-canvas min-h-screen bg-paper-50 transition-[grid-template-columns] duration-250 ease-shell lg:grid"
       style={{
         // Inline rather than a class pair, because this is the property being
         // transitioned and Tailwind would have to emit two arbitrary values

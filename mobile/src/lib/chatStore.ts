@@ -4,9 +4,12 @@ import type {
   ChatSendResponse,
   Conversation,
   ConversationDetail,
+  ConversationPage,
+  ChatSendStatus,
   InteractionModule,
   ReductionOpportunity,
 } from "./types";
+import { createPendingChatSend, parsePendingChatSend, type ChatSendPersistence, type PendingChatSend } from "./chatSendIntent";
 
 /**
  * Ask FinSight's whole conversation state, held OUTSIDE the sheet that draws it.
@@ -69,12 +72,13 @@ import type {
 
 /** Everything the store needs from the network, so a test can supply its own. */
 export interface ChatTransport {
-  listConversations(businessProfileId: number): Promise<Conversation[]>;
-  getConversation(id: number): Promise<ConversationDetail>;
+  listConversations(businessProfileId: number, cursor?: string): Promise<ConversationPage | Conversation[]>;
+  getConversation(id: number, cursor?: string): Promise<ConversationDetail>;
   createConversation(input: {
     businessProfileId: number;
     originModule: InteractionModule;
     question: string;
+    idempotencyKey?: string;
     /**
      * The selected Reduction Opportunity card for THIS one message — see
      * lib/reductionOpportunityAsk.ts for the entry point that fills it. Sent
@@ -92,7 +96,9 @@ export interface ChatTransport {
     question: string,
     reductionOpportunity?: ReductionOpportunity,
     focus?: ChatFocus,
+    send?: { businessProfileId: number; idempotencyKey: string },
   ): Promise<ChatSendResponse>;
+  getSendStatus?(key: string, businessProfileId: number): Promise<ChatSendStatus>;
   /** Thumbs up/down on one assistant reply; null clears it. */
   rateMessage(conversationId: number, messageId: number, feedback: "up" | "down" | null): Promise<void>;
   renameConversation(conversationId: number, title: string): Promise<void>;
@@ -109,11 +115,16 @@ export interface ChatState {
   listError: string | null;
   /** Whether the list has been fetched for the profile currently selected. */
   listLoaded: boolean;
+  listCursor: string | null;
+  listLoadingMore: boolean;
 
   // --- the open conversation ---
   activeId: number | null;
   messages: ChatMessage[];
   messagesLoading: boolean;
+  messagesCursor: string | null;
+  messagesLoadingMore: boolean;
+  messagesError: string | null;
 
   // --- the composer ---
   input: string;
@@ -135,6 +146,11 @@ export interface ChatState {
   error: string | null;
   unavailable: boolean;
   detectedAmount: number | null;
+  pendingSend: PendingChatSend | null;
+  recoveryLoading: boolean;
+  recoveryError: string | null;
+  checkingSend: boolean;
+  canRetrySend: boolean;
 }
 
 const EMPTY: ChatState = {
@@ -143,9 +159,14 @@ const EMPTY: ChatState = {
   listLoading: false,
   listError: null,
   listLoaded: false,
+  listCursor: null,
+  listLoadingMore: false,
   activeId: null,
   messages: [],
   messagesLoading: false,
+  messagesCursor: null,
+  messagesLoadingMore: false,
+  messagesError: null,
   input: "",
   pendingReductionOpportunity: null,
   pendingFocus: null,
@@ -153,6 +174,11 @@ const EMPTY: ChatState = {
   error: null,
   unavailable: false,
   detectedAmount: null,
+  pendingSend: null,
+  recoveryLoading: false,
+  recoveryError: null,
+  checkingSend: false,
+  canRetrySend: false,
 };
 
 /**
@@ -176,7 +202,7 @@ export interface ChatStore {
   subscribe(listener: () => void): () => void;
 
   /** The business the thread belongs to. Changing it drops everything. */
-  setBusinessProfile(id: number | null): void;
+  setBusinessProfile(id: number | null, ownerId?: string | number | null): void;
   setSeedModule(module: InteractionModule): void;
   setInput(value: string): void;
   /**
@@ -189,20 +215,41 @@ export interface ChatStore {
 
   /** Fetch the history list once per business profile. Safe to call on every open. */
   ensureList(): void;
+  reloadList(): void;
+  loadMoreConversations(): Promise<void>;
 
   newChat(): void;
   selectConversation(id: number): Promise<void>;
+  reloadConversation(): Promise<void>;
+  loadOlderMessages(): Promise<void>;
   send(text: string): Promise<void>;
+  checkSend(): Promise<void>;
+  retrySend(): Promise<void>;
+  reloadRecovery(): Promise<void>;
   rename(id: number, title: string): Promise<void>;
   remove(id: number): Promise<void>;
   /** Thumbs on one reply of the open conversation. Optimistic; rolled back on failure. */
   rate(messageId: number, feedback: "up" | "down" | null): Promise<void>;
 }
 
-export function createChatStore(transport: ChatTransport): ChatStore {
+export function createChatStore(transport: ChatTransport, persistence?: ChatSendPersistence): ChatStore {
   let state: ChatState = EMPTY;
   let businessProfileId: number | null = null;
   let businessGeneration = 0;
+  let ownerId: string | null = null;
+  let selectionVersion = 0;
+  let draftVersion = 0;
+  let listVersion = 0;
+  let listLoadedAt = 0;
+  let sendFlight: PendingChatSend | null = null;
+  const seenListCursors = new Set<string>();
+  const seenMessageCursors = new Set<string>();
+  const deleted = new Set<number>();
+  const mutations = new Map<string, Promise<void>>();
+  const mutationVersions = new Map<string, number>();
+  const messageVersions = new Map<number, number>();
+  const attemptedSends = new Set<string>();
+  const sendContexts = new Map<string, { selection: number; draft: number; messages: ChatMessage[]; nextCursor: string | null }>();
   const listeners = new Set<() => void>();
 
   /**
@@ -210,7 +257,7 @@ export function createChatStore(transport: ChatTransport): ChatStore {
    * and silent. Not part of `state`: nothing renders differently because an
    * entry landed in it.
    */
-  const cache = new Map<number, ChatMessage[]>();
+  const cache = new Map<number, { messages: ChatMessage[]; at: number; nextCursor: string | null }>();
   /** The conversation a fetch was started for, so a slow one cannot land late over a newer choice. */
   let wanted: number | null = null;
 
@@ -223,7 +270,219 @@ export function createChatStore(transport: ChatTransport): ChatStore {
     return { error: null, unavailable: false, detectedAmount: null, pendingReductionOpportunity: null, pendingFocus: null };
   }
 
-  return {
+  const mergeMessages = (...lists: ChatMessage[][]) => [...new Map(lists.flat().map((message) => [message.id, message])).values()]
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id);
+
+  function cacheMessages(id: number, messages: ChatMessage[], nextCursor: string | null, at = Date.now()) {
+    cache.delete(id);
+    if (messages.length > 200 || deleted.has(id)) return;
+    cache.set(id, { messages, nextCursor, at });
+    while (cache.size > 20) cache.delete(cache.keys().next().value!);
+  }
+
+  function serializeMutation(key: string, action: () => Promise<void>) {
+    const previous = mutations.get(key) ?? Promise.resolve();
+    const pending = previous.catch(() => undefined).then(action);
+    mutations.set(key, pending);
+    void pending.finally(() => { if (mutations.get(key) === pending) mutations.delete(key); }).catch(() => undefined);
+    return pending;
+  }
+
+  async function restoreRecovery() {
+    if (!persistence || ownerId === null || businessProfileId === null) return;
+    const owner = ownerId;
+    const business = businessProfileId;
+    const generation = businessGeneration;
+    set({ recoveryLoading: true, recoveryError: null });
+    try {
+      const pending = await persistence.read(owner, business);
+      if (generation !== businessGeneration) return;
+      const restored = pending ? parsePendingChatSend(pending, owner, business) : null;
+      if (restored) attemptedSends.add(restored.body.idempotencyKey);
+      set({ pendingSend: restored, recoveryLoading: false, canRetrySend: false });
+    } catch (err) {
+      if (generation === businessGeneration) set({ recoveryLoading: false, recoveryError: messageOf(err) });
+    }
+  }
+
+  async function loadList(cursor?: string, force = false) {
+    if (businessProfileId === null || state.listLoading || state.listLoadingMore) return;
+    if (!cursor && !force && state.listLoaded && Date.now() - listLoadedAt < 30_000) return;
+    const business = businessProfileId;
+    const generation = businessGeneration;
+    const request = ++listVersion;
+    const before = new Map(state.conversations.map((row) => [row.id, row]));
+    set(cursor ? { listLoadingMore: true, listError: null } : { listLoading: true, listError: null });
+    try {
+      const result = cursor ? await transport.listConversations(business, cursor) : await transport.listConversations(business);
+      if (generation !== businessGeneration || request !== listVersion) return;
+      const page = Array.isArray(result) ? { items: result, nextCursor: null } : result;
+      if (!page || !Array.isArray(page.items) || (page.nextCursor !== null && typeof page.nextCursor !== "string")) throw new Error("The conversation page could not be read.");
+      if (cursor && page.nextCursor !== null && (page.nextCursor === cursor || seenListCursors.has(page.nextCursor))) throw new Error("The conversation page did not advance. Reload history before continuing.");
+      if (cursor) seenListCursors.add(cursor); else seenListCursors.clear();
+      const rows = cursor ? [...state.conversations, ...page.items] : [...page.items];
+      for (const row of state.conversations) {
+        if (before.get(row.id) !== row || row.id === state.activeId) {
+          const at = rows.findIndex((item) => item.id === row.id);
+          if (at >= 0) rows[at] = row; else rows.push(row);
+        }
+      }
+      const conversations = [...new Map(rows.filter((row) => !deleted.has(row.id)).map((row) => [row.id, row])).values()]
+        .sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt) || b.id - a.id);
+      listLoadedAt = Date.now();
+      set({ conversations, listCursor: page.nextCursor, listLoaded: true, listLoading: false, listLoadingMore: false });
+    } catch (err) {
+      if (generation === businessGeneration && request === listVersion) set({ listError: messageOf(err), listLoading: false, listLoadingMore: false });
+    }
+  }
+
+  async function openConversation(id: number, force = false, cursor?: string) {
+    if (businessProfileId === null || deleted.has(id)) return;
+    const generation = businessGeneration;
+    const business = businessProfileId;
+    if (cursor && state.messagesLoadingMore) return;
+    if (!cursor) {
+      if (!force && id === state.activeId && (state.messagesLoading || !state.messagesError)) return;
+      selectionVersion += 1;
+      wanted = id;
+      seenMessageCursors.clear();
+      const cached = cache.get(id);
+      if (!force && cached && Date.now() - cached.at < 30_000) {
+        cache.delete(id); cache.set(id, cached);
+        set({ activeId: id, messages: cached.messages, messagesCursor: cached.nextCursor, messagesLoading: false, messagesLoadingMore: false, messagesError: null, ...clearExchangeState() });
+        return;
+      }
+      set({ activeId: id, messages: [], messagesCursor: null, messagesLoading: true, messagesLoadingMore: false, messagesError: null, ...clearExchangeState() });
+    } else set({ messagesLoadingMore: true, messagesError: null });
+    const selection = selectionVersion;
+    const messageVersion = messageVersions.get(id) ?? 0;
+    try {
+      const detail = cursor ? await transport.getConversation(id, cursor) : await transport.getConversation(id);
+      if (generation !== businessGeneration || deleted.has(id) || (messageVersions.get(id) ?? 0) !== messageVersion) return;
+      if (!detail || detail.id !== id || !Array.isArray(detail.messages)) throw new Error("This conversation could not be verified.");
+      const receivedBusiness = (detail as ConversationDetail & { businessProfileId?: number }).businessProfileId;
+      if (receivedBusiness !== undefined && receivedBusiness !== business) throw new Error("This conversation belongs to another business.");
+      const nextCursor = detail.nextCursor ?? null;
+      if (cursor && nextCursor !== null && (nextCursor === cursor || seenMessageCursors.has(nextCursor))) throw new Error("The message page did not advance. Reload this conversation before continuing.");
+      const current = selection === selectionVersion && wanted === id;
+      if (cursor && !current) return;
+      if (cursor) seenMessageCursors.add(cursor);
+      const messages = mergeMessages(cursor ? state.messages : [], detail.messages);
+      cacheMessages(id, messages, nextCursor);
+      if (current) set({ messages, messagesCursor: nextCursor, messagesLoading: false, messagesLoadingMore: false, messagesError: null });
+    } catch (err) {
+      if (generation === businessGeneration && selection === selectionVersion && wanted === id) set({ error: messageOf(err), messagesError: messageOf(err), messagesLoading: false, messagesLoadingMore: false });
+    } finally {
+      if (generation === businessGeneration && selection === selectionVersion && wanted === id) set({ messagesLoading: false, messagesLoadingMore: false });
+    }
+  }
+
+  async function finishIntent(intent: PendingChatSend, generation: number) {
+    try {
+      if (persistence) await persistence.remove(intent);
+      if (generation === businessGeneration && state.pendingSend?.body.idempotencyKey === intent.body.idempotencyKey) {
+        sendContexts.delete(intent.body.idempotencyKey);
+        attemptedSends.delete(intent.body.idempotencyKey);
+        set({ pendingSend: null, canRetrySend: false, recoveryError: null });
+      }
+    } catch (err) {
+      if (generation === businessGeneration) set({ recoveryError: `The request outcome is known, but device recovery could not be cleared. ${messageOf(err)}`, canRetrySend: false });
+    }
+  }
+
+  function publish(intent: PendingChatSend, result: ChatSendResponse, generation: number, selection: number | null) {
+    if (generation !== businessGeneration || deleted.has(result.conversation.id)) return;
+    if (!result.userMessage || result.userMessage.content !== intent.body.question || (intent.conversationId !== null && result.conversation.id !== intent.conversationId)) throw new Error("FinSight returned a different question's result. Check the previous request before sending again.");
+    const id = result.conversation.id;
+    const entry = cache.get(id);
+    const origin = sendContexts.get(intent.body.idempotencyKey);
+    const previous = state.activeId === id ? state.messages : entry?.messages ?? origin?.messages ?? [];
+    const knownMessages = new Map([...(entry?.messages ?? []), ...(state.activeId === id ? state.messages : [])].map((message) => [message.id, message]));
+    // Send results are immutable commit snapshots; ratings can change afterward.
+    const receivedMessages = [result.userMessage, result.assistantMessage].map((message) => {
+      const existing = knownMessages.get(message.id);
+      return existing?.feedback !== undefined ? { ...message, feedback: existing.feedback } : message;
+    });
+    const messages = mergeMessages(previous, receivedMessages);
+    const nextCursor = state.activeId === id ? state.messagesCursor : entry?.nextCursor ?? origin?.nextCursor ?? null;
+    messageVersions.set(id, (messageVersions.get(id) ?? 0) + 1);
+    if (intent.conversationId === null || entry || origin || (state.activeId === id && !state.messagesError)) cacheMessages(id, messages, nextCursor);
+    const current = state.conversations.find((row) => row.id === id);
+    const conversation = current && mutationVersions.has(`rename:${id}`)
+      ? { ...result.conversation, title: current.title } : result.conversation;
+    const conversations = [conversation, ...state.conversations.filter((row) => row.id !== id)];
+    const sameSelection = selection !== null && selection === selectionVersion && state.activeId === intent.conversationId;
+    set({ conversations, ...((sameSelection || state.activeId === id) ? { ...(sameSelection ? { activeId: id } : {}), messages, messagesCursor: nextCursor, messagesLoading: false, unavailable: result.provider === "unavailable", detectedAmount: result.detectedAmount } : {}) });
+    if (sameSelection) wanted = id;
+  }
+
+  async function postIntent(intent: PendingChatSend, generation: number, selection: number | null, draft: number) {
+    const previouslyAttempted = attemptedSends.has(intent.body.idempotencyKey);
+    sendFlight = intent;
+    set({ sending: true, pendingSend: intent, canRetrySend: false, error: null, recoveryError: null });
+    let posted = false;
+    try {
+      if (persistence) {
+        if (intent.ownerId === null) throw new Error("Sign in before sending a question.");
+        await persistence.store(intent);
+      }
+      if (generation !== businessGeneration) return;
+      if (selection === selectionVersion && draft === draftVersion) { set({ input: "", pendingReductionOpportunity: null, pendingFocus: null }); draftVersion += 1; draft = draftVersion; }
+      const origin = sendContexts.get(intent.body.idempotencyKey);
+      if (origin && selection === selectionVersion) origin.draft = draft;
+      const { body, conversationId } = intent;
+      posted = true;
+      attemptedSends.add(body.idempotencyKey);
+      const result = conversationId === null ? await transport.createConversation({ ...body, originModule: body.originModule! })
+        : await transport.sendMessage(conversationId, body.question, body.reductionOpportunity, body.focus, { businessProfileId: body.businessProfileId, idempotencyKey: body.idempotencyKey });
+      if (generation !== businessGeneration) return;
+      publish(intent, result, generation, selection);
+      await finishIntent(intent, generation);
+    } catch (err) {
+      if (generation !== businessGeneration) return;
+      const status = (err as { status?: number } | null)?.status;
+      const code = (err as { code?: string } | null)?.code;
+      const unknown = previouslyAttempted || (posted && (status === undefined || status === 0 || status === 408 || status >= 500 || code === "CHAT_SEND_IN_PROGRESS"));
+      if (posted && !unknown) await finishIntent(intent, generation);
+      const message = unknown ? "FinSight did not confirm whether this question finished. Check its status before retrying; your original question is kept."
+        : !posted ? `Question recovery could not be saved. Nothing was sent. ${messageOf(err)}` : messageOf(err);
+      const restore = selection === selectionVersion && draft === draftVersion && !state.input;
+      set({ error: message, ...(!posted ? { recoveryError: message } : {}), ...(restore ? { input: intent.body.question, pendingReductionOpportunity: intent.body.reductionOpportunity ?? null, pendingFocus: intent.body.focus ?? null } : {}) });
+    } finally {
+      if (sendFlight === intent) { sendFlight = null; if (generation === businessGeneration) set({ sending: false }); }
+    }
+  }
+
+  async function resolveSend(retry: boolean) {
+    const intent = state.pendingSend;
+    if (!intent || !transport.getSendStatus || sendFlight || state.checkingSend) return;
+    const generation = businessGeneration;
+    const origin = sendContexts.get(intent.body.idempotencyKey);
+    const selection = origin?.selection ?? null;
+    const draft = origin?.draft ?? draftVersion;
+    set({ checkingSend: true, error: null });
+    try {
+      const status = await transport.getSendStatus(intent.body.idempotencyKey, intent.body.businessProfileId);
+      if (generation !== businessGeneration) return;
+      if (status.status === "COMPLETE" && status.result) {
+        publish(intent, status.result, generation, selection);
+        await finishIntent(intent, generation);
+      } else if (status.status === "FAILED" || status.status === "DELETED") {
+        await finishIntent(intent, generation);
+        set({ error: status.error?.message ?? "The earlier conversation was deleted. You can start a new question." });
+      } else set({ error: "FinSight is still working on this question. Check again before retrying.", canRetrySend: false });
+    } catch (err) {
+      if (generation !== businessGeneration) return;
+      if ((err as { status?: number } | null)?.status === 404) {
+        set({ canRetrySend: true, error: "FinSight has no saved outcome for this request. Retry the original question when you are ready." });
+        if (retry) await postIntent(intent, generation, selection, draft);
+      } else set({ error: `The earlier question could not be checked. ${messageOf(err)}`, canRetrySend: false });
+    } finally {
+      if (generation === businessGeneration) set({ checkingSend: false });
+    }
+  }
+
+  const store: ChatStore = {
     getState: () => state,
     subscribe(listener) {
       listeners.add(listener);
@@ -236,25 +495,29 @@ export function createChatStore(transport: ChatTransport): ChatStore {
      * resets a conversation without the owner asking — and it is another
      * business's data, which must never be on screen under the wrong profile.
      */
-    setBusinessProfile(id) {
-      if (id === businessProfileId) return;
+    setBusinessProfile(id, account) {
+      const nextOwner = account === undefined ? ownerId : account === null ? null : String(account);
+      if (id === businessProfileId && nextOwner === ownerId) return;
       businessProfileId = id;
+      ownerId = nextOwner;
       businessGeneration += 1;
+      selectionVersion += 1;
+      draftVersion += 1;
+      listVersion += 1;
+      listLoadedAt = 0;
+      sendFlight = null;
+      seenListCursors.clear();
+      seenMessageCursors.clear();
+      deleted.clear();
+      mutations.clear();
+      mutationVersions.clear();
+      messageVersions.clear();
+      attemptedSends.clear();
+      sendContexts.clear();
       cache.clear();
       wanted = null;
-      set({
-        conversations: [],
-        listError: null,
-        listLoaded: false,
-        listLoading: false,
-        activeId: null,
-        messages: [],
-        messagesLoading: false,
-        input: "",
-        sending: false,
-        seedModule: "Dashboard",
-        ...clearExchangeState(),
-      });
+      set({ ...EMPTY });
+      void restoreRecovery();
     },
 
     setSeedModule(module) {
@@ -266,20 +529,26 @@ export function createChatStore(transport: ChatTransport): ChatStore {
 
     setInput(value) {
       if (businessProfileId === null) return;
+      draftVersion += 1;
       if (value !== state.input) set({ input: value });
     },
 
     prepareQuestion(question, reductionOpportunity, focus) {
       if (businessProfileId === null) return;
+      draftVersion += 1;
       if (focus) {
         // A question about one specific flag gets a thread of its own:
         // continuing whatever was open would answer it with that thread's
         // history and focus.
         wanted = null;
+        selectionVersion += 1;
         set({
           activeId: null,
           messages: [],
           messagesLoading: false,
+          messagesCursor: null,
+          messagesLoadingMore: false,
+          messagesError: null,
           ...clearExchangeState(),
           input: question,
           pendingReductionOpportunity: reductionOpportunity ?? null,
@@ -296,131 +565,51 @@ export function createChatStore(transport: ChatTransport): ChatStore {
      * re-requesting anything.
      */
     ensureList() {
-      if (businessProfileId === null || state.listLoaded || state.listLoading) return;
-      const forProfile = businessProfileId;
-      const generation = businessGeneration;
-      set({ listLoading: true, listError: null });
-      void transport
-        .listConversations(forProfile)
-        .then((conversations) => {
-          if (businessProfileId !== forProfile || businessGeneration !== generation) return;
-          set({ conversations, listLoaded: true, listLoading: false });
-        })
-        .catch((err: unknown) => {
-          if (businessProfileId !== forProfile || businessGeneration !== generation) return;
-          set({ listError: messageOf(err), listLoading: false });
-        });
+      void loadList();
     },
+    reloadList() { void loadList(undefined, true); },
+    async loadMoreConversations() { if (state.listCursor) await loadList(state.listCursor); },
+    async reloadRecovery() { await restoreRecovery(); },
+    async checkSend() { await resolveSend(false); },
+    async retrySend() { await resolveSend(true); },
 
     newChat() {
       if (businessProfileId === null) return;
       wanted = null;
+      selectionVersion += 1;
+      draftVersion += 1;
       set({
         activeId: null,
         messages: [],
         messagesLoading: false,
+        messagesCursor: null,
+        messagesLoadingMore: false,
+        messagesError: null,
         input: "",
         ...clearExchangeState(),
       });
     },
 
     async selectConversation(id) {
-      if (businessProfileId === null) return;
-      const forProfile = businessProfileId;
-      const generation = businessGeneration;
-      if (id === state.activeId) return;
-      wanted = id;
-
-      const cached = cache.get(id);
-      if (cached) {
-        set({ activeId: id, messages: cached, messagesLoading: false, ...clearExchangeState() });
-        return;
-      }
-
-      set({ activeId: id, messages: [], messagesLoading: true, ...clearExchangeState() });
-      try {
-        const detail = await transport.getConversation(id);
-        if (businessProfileId !== forProfile || businessGeneration !== generation) return;
-        cache.set(id, detail.messages);
-        if (wanted !== id) return;
-        set({ messages: detail.messages, messagesLoading: false });
-      } catch (err) {
-        if (
-          wanted !== id ||
-          businessProfileId !== forProfile ||
-          businessGeneration !== generation
-        ) return;
-        set({ error: messageOf(err), messagesLoading: false });
-      }
+      await openConversation(id);
     },
+    async reloadConversation() { if (state.activeId !== null) await openConversation(state.activeId, true); },
+    async loadOlderMessages() { if (state.activeId !== null && state.messagesCursor) await openConversation(state.activeId, false, state.messagesCursor); },
 
     async send(text) {
       const question = text.trim();
-      if (!question || state.sending || businessProfileId === null) return;
-
-      const creating = state.activeId === null;
-      const forProfile = businessProfileId;
-      const generation = businessGeneration;
-      const previous = creating ? [] : state.messages;
-      const conversationId = state.activeId;
-      // Read before `clearExchangeState()` wipes it below — queued for this
-      // send only, so it must not survive to ground a later, unrelated one.
-      const reductionOpportunity = state.pendingReductionOpportunity ?? undefined;
-      const focus = state.pendingFocus ?? undefined;
-
-      set({ input: "", sending: true, ...clearExchangeState() });
-
+      if (!question || sendFlight || state.sending || businessProfileId === null || state.recoveryLoading || state.recoveryError) return;
+      if (state.pendingSend) { set({ error: "Check the earlier question before sending different details." }); return; }
       try {
-        const data = creating
-          ? await transport.createConversation({
-              businessProfileId: forProfile,
-              originModule: state.seedModule,
-              question,
-              reductionOpportunity,
-              ...(focus ? { focus } : {}),
-            })
-          : focus
-            ? await transport.sendMessage(conversationId as number, question, reductionOpportunity, focus)
-            : reductionOpportunity
-              ? await transport.sendMessage(conversationId as number, question, reductionOpportunity)
-              : await transport.sendMessage(conversationId as number, question);
-
-        if (businessProfileId !== forProfile || businessGeneration !== generation) return;
-
-        const next = [...previous, data.userMessage, data.assistantMessage];
-        cache.set(data.conversation.id, next);
-        wanted = data.conversation.id;
-
-        // Newest activity first, which is where the server would have put it
-        // too — so the row does not jump on the next reload.
-        const without = state.conversations.filter((c) => c.id !== data.conversation.id);
-
-        set({
-          activeId: data.conversation.id,
-          messages: next,
-          conversations: [data.conversation, ...without],
-          sending: false,
-          // Both providers failed. The backend still answers with a
-          // placeholder, so surface it as an outage rather than as a
-          // considered reply.
-          unavailable: data.provider === "unavailable",
-          detectedAmount: data.detectedAmount,
+        const intent = createPendingChatSend(ownerId, state.activeId, {
+          businessProfileId, question,
+          ...(state.activeId === null ? { originModule: state.seedModule } : {}),
+          ...(state.pendingReductionOpportunity ? { reductionOpportunity: state.pendingReductionOpportunity } : {}),
+          ...(state.pendingFocus ? { focus: state.pendingFocus } : {}),
         });
-      } catch (err) {
-        if (businessProfileId !== forProfile || businessGeneration !== generation) return;
-        // The question goes back in the box rather than being lost with the
-        // failure — retyping it is the last thing anyone wants after a network
-        // error on a phone. Its opportunity goes back with it, so pressing
-        // Send again re-sends the same grounded question rather than a bare
-        // one.
-        set({
-          error: messageOf(err),
-          input: question,
-          pendingReductionOpportunity: reductionOpportunity ?? null,
-          pendingFocus: focus ?? null,
-          sending: false,
-        });
-      }
+        sendContexts.set(intent.body.idempotencyKey, { selection: selectionVersion, draft: draftVersion, messages: state.messages, nextCursor: state.messagesCursor });
+        await postIntent(intent, businessGeneration, selectionVersion, draftVersion);
+      } catch (err) { set({ error: messageOf(err) }); }
     },
 
     async rename(id, title) {
@@ -432,14 +621,20 @@ export function createChatStore(transport: ChatTransport): ChatStore {
       // blank space. Silently keep what was there.
       if (!next) return;
 
-      const before = state.conversations;
-      set({ conversations: before.map((c) => (c.id === id ? { ...c, title: next } : c)) });
-      try {
-        await transport.renameConversation(id, next);
-      } catch (err) {
-        if (businessProfileId !== forProfile || businessGeneration !== generation) return;
-        set({ conversations: before, error: messageOf(err) });
-      }
+      await serializeMutation(`rename:${id}`, async () => {
+        if (businessProfileId !== forProfile || businessGeneration !== generation || deleted.has(id)) return;
+        const before = state.conversations.find((row) => row.id === id)?.title;
+        if (before === undefined) return;
+        const key = `rename:${id}`;
+        const version = (mutationVersions.get(key) ?? 0) + 1;
+        mutationVersions.set(key, version);
+        set({ conversations: state.conversations.map((row) => row.id === id ? { ...row, title: next } : row) });
+        try { await transport.renameConversation(id, next); }
+        catch (err) {
+          if (businessProfileId !== forProfile || businessGeneration !== generation || deleted.has(id) || mutationVersions.get(key) !== version) return;
+          set({ conversations: state.conversations.map((row) => row.id === id && row.title === next ? { ...row, title: before } : row), error: messageOf(err) });
+        }
+      });
     },
 
     async remove(id) {
@@ -454,6 +649,8 @@ export function createChatStore(transport: ChatTransport): ChatStore {
         return;
       }
       if (businessProfileId !== forProfile || businessGeneration !== generation) return;
+      deleted.add(id);
+      messageVersions.set(id, (messageVersions.get(id) ?? 0) + 1);
       cache.delete(id);
       if (wanted === id) wanted = null;
       const conversations = state.conversations.filter((c) => c.id !== id);
@@ -461,9 +658,10 @@ export function createChatStore(transport: ChatTransport): ChatStore {
       // deleting any other one leaves it alone.
       set(
         state.activeId === id
-          ? { conversations, activeId: null, messages: [], ...clearExchangeState() }
+          ? { conversations, activeId: null, messages: [], messagesCursor: null, messagesLoading: false, messagesError: null, ...clearExchangeState() }
           : { conversations },
       );
+      if (state.activeId === null) selectionVersion += 1;
     },
 
     async rate(messageId, feedback) {
@@ -471,21 +669,31 @@ export function createChatStore(transport: ChatTransport): ChatStore {
       const forProfile = businessProfileId;
       const generation = businessGeneration;
       const conversationId = state.activeId;
-      const before = state.messages.find((m) => m.id === messageId)?.feedback ?? null;
       const apply = (list: ChatMessage[], value: "up" | "down" | null) =>
         list.map((m) => (m.id === messageId ? { ...m, feedback: value } : m));
-
-      const next = apply(state.messages, feedback);
-      cache.set(conversationId, next);
-      set({ messages: next });
-      try {
-        await transport.rateMessage(conversationId, messageId, feedback);
-      } catch (err) {
-        if (businessProfileId !== forProfile || businessGeneration !== generation) return;
-        const restored = apply(cache.get(conversationId) ?? state.messages, before);
-        cache.set(conversationId, restored);
-        set({ ...(state.activeId === conversationId ? { messages: restored } : {}), error: messageOf(err) });
-      }
+      await serializeMutation(`feedback:${conversationId}:${messageId}`, async () => {
+        if (businessProfileId !== forProfile || businessGeneration !== generation || deleted.has(conversationId)) return;
+        const entry = cache.get(conversationId);
+        const messages = state.activeId === conversationId ? state.messages : entry?.messages ?? [];
+        if (!messages.some((message) => message.id === messageId)) return;
+        const before = messages.find((message) => message.id === messageId)?.feedback ?? null;
+        const key = `feedback:${conversationId}:${messageId}`;
+        const version = (mutationVersions.get(key) ?? 0) + 1;
+        mutationVersions.set(key, version);
+        const next = apply(messages, feedback);
+        messageVersions.set(conversationId, (messageVersions.get(conversationId) ?? 0) + 1);
+        cacheMessages(conversationId, next, entry?.nextCursor ?? state.messagesCursor, entry?.at);
+        if (state.activeId === conversationId) set({ messages: next });
+        try { await transport.rateMessage(conversationId, messageId, feedback); }
+        catch (err) {
+          if (businessProfileId !== forProfile || businessGeneration !== generation || deleted.has(conversationId) || mutationVersions.get(key) !== version) return;
+          const current = cache.get(conversationId);
+          const restored = apply(state.activeId === conversationId ? state.messages : current?.messages ?? [], before);
+          cacheMessages(conversationId, restored, current?.nextCursor ?? null, current?.at);
+          set({ ...(state.activeId === conversationId ? { messages: restored } : {}), error: messageOf(err) });
+        }
+      });
     },
   };
+  return store;
 }

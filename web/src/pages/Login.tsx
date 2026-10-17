@@ -1,6 +1,7 @@
 import { useRef, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { GoogleSignInButton } from "../components/GoogleSignInButton";
 import { AuthLayout } from "../components/AuthLayout";
 import { Button } from "../components/Button";
 import { Checkbox, Field, FormError, PasswordInput, TextInput } from "../components/Field";
@@ -120,7 +121,7 @@ export function Login() {
           labelAction={
             <Link
               to="/recover-password"
-              className="tap-inline text-xs font-medium text-brand-700 hover:text-brand-800"
+              className="tap-inline text-xs link-action"
             >
               Forgot password?
             </Link>
@@ -141,9 +142,10 @@ export function Login() {
           {submitting ? "Logging in…" : "Log in"}
         </Button>
       </form>
+      <GoogleSignInButton disabled={submitting} placement="after-email" />
       <p className="mt-6 text-center text-sm text-ink-500">
         Don't have an account?{" "}
-        <Link to="/register" className="tap-inline font-medium text-brand-700 hover:text-brand-800">
+        <Link to="/register" className="tap-inline link-action">
           Create account
         </Link>
       </p>

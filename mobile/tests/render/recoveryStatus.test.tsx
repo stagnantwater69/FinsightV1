@@ -1,6 +1,6 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, fireEvent } from '@testing-library/react-native';
+import { render, fireEvent, waitFor } from '@testing-library/react-native';
 
 import * as fixtures from './support/fixtures';
 import type { RecoveryCheckpoint, RecoveryInsight, RecoveryTargets } from '../../src/lib/types';
@@ -113,6 +113,9 @@ vi.mock('../../src/context/BusinessProfileContext', () => ({
   BusinessProfileProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 
+vi.mock('../../src/context/AiChatContext', () => ({
+  useAiChat: () => ({ prepareQuestion: vi.fn() }),
+}));
 vi.mock('../../src/components/AskFinSight', () => ({ AskFinSight: () => null }));
 vi.mock('../../src/components/AskFinSightFab', () => ({ AskFinSightFab: () => null, FAB_CLEARANCE: 0 }));
 
@@ -149,6 +152,7 @@ async function renderScreen(insight: RecoveryInsight) {
     // §7.5 saved-plan lookup, fetched alongside the main load — absent by
     // default in these tests, none of which are about it.
     if (path.endsWith('/recovery-plans')) return Promise.resolve([]);
+    if (path === '/records/months') return Promise.resolve({ months: [] });
     return Promise.reject(new Error(`unexpected path ${path}`));
   });
   const { RecoveryTargetScreen } = await import('../../src/screens/RecoveryTargetScreen');
@@ -164,23 +168,29 @@ beforeEach(() => {
 });
 
 describe('RecoveryTargetScreen — terminology and freshness', () => {
-  it('shows the required Sales Coverage Target definition before the first status', async () => {
+  it('keeps the required Sales Coverage Target definition one tap away, before the first status', async () => {
     const queries = await renderScreen({ ...baseInsight, status: 'behind' });
+    await queries.findByText('Behind pace for the month');
+    await fireEvent.press(queries.getByRole('button', { name: 'About the recovery target' }));
+    expect(await queries.findByText('About this target')).toBeTruthy();
     expect(
-      await queries.findByText(
-        'Your Sales Coverage Target compares recorded sales references with the monthly expense basis shown below. It is a planning guide and does not calculate profit, cash flow, or formal break-even.',
-      ),
+      queries.getByText('Your Sales Coverage Target compares recorded sales references with your expected monthly expense amount.'),
+    ).toBeTruthy();
+    expect(
+      queries.getByText('It is a planning guide and does not calculate profit, cash flow, or formal break-even.'),
     ).toBeTruthy();
   });
 
-  it('shows the as-of date and timezone when the server sends them', async () => {
+  it('shows the as-of date on the status card, and the full date and timezone in the definition sheet', async () => {
     const queries = await renderScreen({
       ...baseInsight,
       status: 'on_pace',
       asOfDate: '2026-08-15',
       timezone: 'Asia/Manila',
     });
-    expect(await queries.findByText(/As of August 15, 2026, Asia\/Manila time/)).toBeTruthy();
+    expect(await queries.findByText('As of Aug 15')).toBeTruthy();
+    await fireEvent.press(queries.getByRole('button', { name: 'About the recovery target' }));
+    expect(await queries.findByText('As of August 15, 2026 · Asia/Manila time')).toBeTruthy();
   });
 
   it('renders nothing extra for freshness when asOfDate is missing (older cached response)', async () => {
@@ -205,6 +215,45 @@ describe('RecoveryTargetScreen — terminology and freshness', () => {
  * must appear only while the remaining-days figure is still an
  * approximation (i.e. no schedule has been configured yet).
  */
+describe('RecoveryTargetScreen — Ask FinSight card', () => {
+  it('leads with "Why am I behind this month?" when the month is behind', async () => {
+    const queries = await renderScreen({ ...baseInsight, status: 'behind' });
+    expect(await queries.findByRole('button', { name: 'Why am I behind this month? Ask FinSight' })).toBeTruthy();
+  });
+
+  it('falls back to a neutral prompt when the month is not behind', async () => {
+    const queries = await renderScreen({ ...baseInsight, status: 'on_pace', onTrack: true });
+    expect(await queries.findByRole('button', { name: 'Ask about this period. Ask FinSight' })).toBeTruthy();
+    expect(queries.queryByText(/Why am I behind/)).toBeNull();
+  });
+});
+
+describe('RecoveryTargetScreen — day calendar', () => {
+  it('opens a day\'s sold-vs-target sheet when its square is tapped, and closes it again', async () => {
+    const queries = await renderScreen({
+      ...baseInsight,
+      status: 'behind',
+      dailyCoverage: [
+        { date: '2026-08-01', neededTarget: null, sales: 0, gap: null, status: 'closed', isOperatingDay: false },
+        { date: '2026-08-02', neededTarget: 1500, sales: 1200, gap: -300, status: 'below', isOperatingDay: true },
+      ],
+    });
+    await fireEvent.press(await queries.findByRole('button', { name: /Aug 2, sold PHP 1,200, below target/ }));
+
+    expect(await queries.findByText('Short by')).toBeTruthy();
+    expect(queries.getByText('Below target')).toBeTruthy();
+
+    await fireEvent.press(queries.getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(queries.queryByText('Short by')).toBeNull());
+  });
+
+  it('does not let a future day open an empty sheet', async () => {
+    const queries = await renderScreen({ ...baseInsight, status: 'behind' });
+    const future = await queries.findByRole('button', { name: /Aug 20, not yet/ });
+    expect(future.props.accessibilityState?.disabled).toBe(true);
+  });
+});
+
 describe('RecoveryTargetScreen — operating schedule (Phase 2)', () => {
   it('renders a closed day as "Closed" in a neutral tone, not a critical/warning/good one, without touching Money formatting on a null gap', async () => {
     const queries = await renderScreen({
@@ -227,7 +276,11 @@ describe('RecoveryTargetScreen — operating schedule (Phase 2)', () => {
       remainingOperatingDaysIsApproximated: true,
       operatingScheduleConfigured: false,
     });
-    expect(await queries.findByText('Edit operating schedule')).toBeTruthy();
+    const editSchedule = await queries.findByRole('link', { name: /^Edit operating schedule/ });
+    await fireEvent.press(editSchedule);
+    expect(navigation.navigate).toHaveBeenLastCalledWith('More', {
+      screen: 'OperatingSchedule', initial: false, params: { from: 'RecoveryTarget' },
+    });
   });
 });
 
@@ -254,9 +307,9 @@ describe('RecoveryTargetScreen — primary action (Phase 3, §10.2)', () => {
     expect(await queries.findByText('Review sales')).toBeTruthy();
   });
 
-  it('shows an informational, non-button label for behind', async () => {
+  it('shows a "View today\'s plan" button for behind that jumps to the daily plan on this screen', async () => {
     const queries = await renderScreen({ ...baseInsight, status: 'behind' });
-    expect(await queries.findByText(/View today's plan/)).toBeTruthy();
+    expect(await queries.findByRole('button', { name: "View today's plan" })).toBeTruthy();
   });
 
   it('shows "Record today\'s sales" for on_pace', async () => {
@@ -409,18 +462,31 @@ describe('RecoveryTargetScreen — weekly checkpoints (Phase 4, §10.4)', () => 
     expect(queries.queryByText('Weekly checkpoints')).toBeNull();
   });
 
-  it('shows the current (most recent passed) and next checkpoint prominently', async () => {
+  it('shows the last passed and the next checkpoint prominently', async () => {
     const queries = await renderScreen({ ...baseInsight, status: 'behind', today: '2026-08-15', weeklyCheckpoints: checkpoints });
     expect(await queries.findByText('Weekly checkpoints')).toBeTruthy();
-    // "today" is 2026-08-15: the current checkpoint is 8/14 (already passed), the next is 8/21.
-    expect(await queries.findByText(/Current checkpoint · Aug 14/)).toBeTruthy();
-    expect(await queries.findByText(/Next checkpoint · Aug 21/)).toBeTruthy();
+    // "today" is 2026-08-15: the last checkpoint is 8/14 (already passed, missed by 1,000), the next is 8/21.
+    expect(await queries.findByLabelText(/By Aug 14 · last checkpoint, Missed\..*Short by PHP 1,000/)).toBeTruthy();
+    expect(await queries.findByLabelText(/By Aug 21 · next checkpoint, 6 days away\..*Still needed/)).toBeTruthy();
   });
 
-  it('shows "Not yet reached" for a pending future checkpoint without crashing on its null recordedAmount/variance', async () => {
+  it('renders the next checkpoint card without crashing on its null recordedAmount/variance', async () => {
     const queries = await renderScreen({ ...baseInsight, status: 'behind', today: '2026-08-15', weeklyCheckpoints: checkpoints });
     await queries.findByText('Weekly checkpoints');
-    expect(queries.getAllByText('Not yet reached').length).toBeGreaterThan(0);
+    expect(queries.getByText('Sold so far')).toBeTruthy();
+  });
+
+  it('counts the days to the next checkpoint when today is a full ISO timestamp', async () => {
+    const queries = await renderScreen({ ...baseInsight, status: 'behind', today: '2026-08-15T00:00:00.000Z', weeklyCheckpoints: checkpoints });
+    await queries.findByText('Weekly checkpoints');
+    expect(await queries.findByLabelText(/By Aug 21 · next checkpoint, 6 days away/)).toBeTruthy();
+  });
+
+  it('shows only the next checkpoint before the first one has passed', async () => {
+    const queries = await renderScreen({ ...baseInsight, status: 'behind', today: '2026-08-03', weeklyCheckpoints: checkpoints });
+    await queries.findByText('Weekly checkpoints');
+    expect(queries.queryByLabelText(/last checkpoint/)).toBeNull();
+    expect(await queries.findByLabelText(/By Aug 7 · next checkpoint, 4 days away/)).toBeTruthy();
   });
 
   it('keeps the full checkpoint list secondary, behind an expand/collapse disclosure', async () => {
@@ -429,10 +495,80 @@ describe('RecoveryTargetScreen — weekly checkpoints (Phase 4, §10.4)', () => 
 
     const toggle = await queries.findByRole('button', { name: /All checkpoints this month/ });
     expect(toggle.props.accessibilityState.expanded).toBe(false);
-    // Aug 7 only appears once the list is expanded — it isn't the current/next checkpoint.
-    expect(queries.queryByText('Aug 7')).toBeNull();
+    // Every date shows on the flag row, so the list itself is checked by its
+    // own row: Aug 7's target line only appears once the list is expanded.
+    expect(queries.queryByText('Target PHP 5,000')).toBeNull();
 
     await fireEvent.press(toggle);
-    expect(await queries.findByText('Aug 7')).toBeTruthy();
+    expect(await queries.findByText('Target PHP 5,000')).toBeTruthy();
   });
+});
+
+describe('RecoveryTargetScreen — reporting period', () => {
+  const weekPeriod = {
+    kind: 'week' as const,
+    month: null,
+    start: '2026-08-10',
+    end: '2026-08-16',
+    asOfDate: '2026-08-15',
+    timezone: 'Asia/Manila',
+    isCurrent: true,
+    isComplete: false,
+    targetBasis: 'prorated_monthly_expenses' as const,
+    monthlyExpenseBases: [],
+    target: 1000,
+    sales: 300,
+    confirmedSales: 300,
+    provisionalSales: 0,
+    remainingTarget: 700,
+    coveragePercent: 30,
+    dailyTarget: 150,
+    adjustedDailyTarget: 350,
+    operatingDays: 7,
+    elapsedOperatingDays: 5,
+    remainingOperatingDays: 2,
+    operatingScheduleConfigured: false,
+    operatingDaysIsApproximated: false,
+    expectedSalesToDate: 700,
+    paceVarianceAmount: -400,
+    status: 'behind' as const,
+    confidence: 'limited' as const,
+    recordCount: 3,
+    dataWarnings: [],
+  };
+
+  it('shows a week on its own terms and hides what only describes the current month', async () => {
+    const queries = await renderScreen({ ...baseInsight, status: 'behind', reportingPeriod: weekPeriod });
+    expect(await queries.findByText('Behind pace')).toBeTruthy();
+    expect(queries.getByText('Remaining weekly target')).toBeTruthy();
+    expect(queries.getByText('Why PHP 350 a day?')).toBeTruthy();
+    expect(queries.getAllByText('of PHP 1,000').length).toBeGreaterThan(0);
+    expect(
+      queries.getByText(
+        'Recorded sales this week are PHP 300 against a PHP 1,000 target. Behind pace. The remaining target is PHP 700, or about PHP 350 per remaining operating day.',
+      ),
+    ).toBeTruthy();
+    // Month-to-date only: these would show monthly figures under a weekly heading.
+    expect(queries.queryByRole('header', { name: /Today's goal/ })).toBeNull();
+    expect(queries.queryByRole('button', { name: 'Type amount' })).toBeNull();
+    expect(queries.queryByText('Remaining recovery target')).toBeNull();
+  });
+
+  it('keeps the month-to-date cards for the current month and adds today', async () => {
+    const queries = await renderScreen({
+      ...baseInsight,
+      status: 'behind',
+      reportingPeriod: { ...weekPeriod, kind: 'month', month: '2026-08', start: '2026-08-01', end: '2026-08-31' },
+    });
+    expect(await queries.findByRole('button', { name: 'Type amount' })).toBeTruthy();
+    expect(queries.getByRole('header', { name: /Today's goal/ })).toBeTruthy();
+    expect(queries.getByText('Remaining recovery target')).toBeTruthy();
+  });
+});
+
+it('binds the recovery-target view to its own reporting period scope', async () => {
+  const { RecoveryTargetScreen } = await import('../../src/screens/RecoveryTargetScreen');
+  const wrapper = RecoveryTargetScreen({});
+  expect(wrapper.props.scope).toBe('recovery-target');
+  expect(typeof wrapper.props.children.type).toBe('function');
 });

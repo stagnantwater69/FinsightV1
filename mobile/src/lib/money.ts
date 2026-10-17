@@ -18,6 +18,14 @@ export function formatMoney(
   return `${sign}${bare ? "" : "PHP "}${abs}`;
 }
 
+/** A short figure for tight spots (calendar cells, slider ends): 4.1k, 1.2M. The full amount is always shown nearby. */
+export function compactAmount(value: number): string {
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000) return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  if (abs >= 1_000) return `${(value / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
+  return String(Math.round(value));
+}
+
 export function formatPercent(value: number, decimals = 1): string {
   return `${value.toFixed(decimals)}%`;
 }

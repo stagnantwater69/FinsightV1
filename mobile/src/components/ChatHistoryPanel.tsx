@@ -4,19 +4,22 @@ import {
   Alert as RNAlert,
   Animated,
   Easing,
+  Platform,
   Pressable,
   SectionList,
   TextInput,
   View,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ErrorNote, T } from "./ui";
+import { Button, ErrorNote, T } from "./ui";
+import { TAP_FLOOR } from "./touchTarget";
 import * as haptics from "../lib/haptics";
 import { CONVERSATION_TITLE_MAX } from "../lib/chatStore";
 import { groupConversations } from "../lib/conversationGroups";
+import { formatDueDate } from "../lib/recurringAgenda";
 import { useReducedMotion } from "../lib/useReducedMotion";
-import { TAP, radius, space, typeScale } from "../theme/tokens";
+import { font, radius, space, typeScale } from "../theme/tokens";
 import { useTheme } from "../context/ThemeContext";
 import type { Conversation } from "../lib/types";
 
@@ -47,6 +50,11 @@ export function ChatHistoryPanel({
   onSelect,
   onRename,
   onDelete,
+  onRetry,
+  hasMore = false,
+  loadingMore = false,
+  onLoadMore,
+  onRefresh,
 }: {
   conversations: Conversation[];
   activeId: number | null;
@@ -55,10 +63,19 @@ export function ChatHistoryPanel({
   onSelect: (id: number) => void;
   onRename: (id: number, title: string) => void;
   onDelete: (conversation: Conversation) => void;
+  onRetry?: () => void;
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  onLoadMore?: () => void;
+  onRefresh?: () => void;
 }) {
   const t = useTheme();
   const { brand, ink, paper } = t;
-  const sections = groupConversations(conversations).map((group) => ({
+  const [search, setSearch] = useState("");
+  const [searchFocused, setSearchFocused] = useState(false);
+  const query = search.trim().toLowerCase();
+  const filtered = conversations.filter((conversation) => conversation.title.toLowerCase().includes(query));
+  const sections = groupConversations(filtered).map((group) => ({
     title: group.label,
     data: group.conversations,
   }));
@@ -85,7 +102,7 @@ export function ChatHistoryPanel({
       toValue: 1,
       duration: 180,
       easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
+      useNativeDriver: Platform.OS !== "web",
     }).start();
   }, [enter, reduceMotion]);
 
@@ -108,6 +125,9 @@ export function ChatHistoryPanel({
         sections={sections}
         keyExtractor={(item) => String(item.id)}
         keyboardShouldPersistTaps="handled"
+        initialNumToRender={10}
+        maxToRenderPerBatch={8}
+        windowSize={7}
         contentContainerStyle={{ padding: space.md, paddingBottom: space.xxl + insets.bottom }}
         renderSectionHeader={({ section }) => (
           <T
@@ -115,8 +135,6 @@ export function ChatHistoryPanel({
             accessibilityRole="header"
             style={{
               color: ink[500],
-              textTransform: "uppercase",
-              letterSpacing: 0.6,
               paddingHorizontal: space.sm,
               paddingTop: space.md,
               paddingBottom: space.xs,
@@ -136,7 +154,29 @@ export function ChatHistoryPanel({
           />
         )}
         ListHeaderComponent={
-          loading ? (
+          <View style={{ gap: space.md, paddingBottom: space.md }}>
+          {onRefresh ? <Button title="Reload chat history" variant="ghost" loading={loading} onPress={onRefresh} /> : null}
+          <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: TAP_FLOOR, borderWidth: 1, borderColor: searchFocused ? t.brandText : t.ink[400], borderRadius: radius.md, paddingHorizontal: space.md, backgroundColor: t.surface }}>
+            <Ionicons name="search-outline" size={20} color={t.textMuted} />
+            <TextInput
+              value={search}
+              onChangeText={setSearch}
+              accessibilityLabel="Search conversations"
+              placeholder="Search conversation titles"
+              placeholderTextColor={t.textMuted}
+              autoCorrect={false}
+              returnKeyType="search"
+              onFocus={() => setSearchFocused(true)}
+              onBlur={() => setSearchFocused(false)}
+              style={{ flex: 1, minHeight: TAP_FLOOR, fontFamily: font.sans, fontSize: typeScale.bodySm, color: t.textPrimary, paddingVertical: space.sm }}
+            />
+            {search ? (
+              <Pressable accessibilityRole="button" accessibilityLabel="Clear search" onPress={() => setSearch("")} style={{ minWidth: TAP_FLOOR, minHeight: TAP_FLOOR, alignItems: "center", justifyContent: "center" }}>
+                <Ionicons name="close-outline" size={20} color={t.textMuted} />
+              </Pressable>
+            ) : null}
+          </View>
+          {loading ? (
             <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, padding: space.sm }}>
               <ActivityIndicator color={brand[600]} />
               <T variant="caption">Loading your conversations…</T>
@@ -144,16 +184,23 @@ export function ChatHistoryPanel({
           ) : error ? (
             <View style={{ padding: space.sm }}>
               <ErrorNote>{error}</ErrorNote>
+              {onRetry ? (
+                <Pressable accessibilityRole="button" accessibilityLabel="Retry loading conversations" onPress={onRetry} style={{ minHeight: TAP_FLOOR, justifyContent: "center" }}>
+                  <T style={{ color: t.brandText, fontFamily: font.sansSemibold }}>Try again</T>
+                </Pressable>
+              ) : null}
             </View>
-          ) : null
+          ) : null}
+          </View>
         }
         ListEmptyComponent={
           loading || error ? null : (
             <T variant="caption" style={{ padding: space.md, lineHeight: 18 }}>
-              Your conversations will appear here once you ask something.
+              {query ? "No conversations match this title. Try another search." : "Your conversations will appear here once you ask something."}
             </T>
           )
         }
+        ListFooterComponent={hasMore && onLoadMore ? <Button title="Load older conversations" variant="secondary" loading={loadingMore} onPress={onLoadMore} /> : null}
       />
     </Animated.View>
   );
@@ -197,13 +244,17 @@ function ConversationRow({
   const { brand, ink, paper } = t;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(conversation.title);
+  const renameCommitted = useRef(false);
 
   function startRename() {
+    renameCommitted.current = false;
     setDraft(conversation.title);
     setEditing(true);
   }
 
   function commitRename() {
+    if (renameCommitted.current) return;
+    renameCommitted.current = true;
     setEditing(false);
     const next = draft.trim();
     // An empty title is a slip, not an edit — the row would become blank
@@ -247,11 +298,12 @@ function ConversationRow({
           onSubmitEditing={commitRename}
           onBlur={commitRename}
           style={{
-            minHeight: TAP,
+            minHeight: TAP_FLOOR,
             borderWidth: 1,
             borderColor: brand[600],
             borderRadius: radius.md,
             paddingHorizontal: space.md,
+            fontFamily: font.sans,
             fontSize: typeScale.bodySm,
             color: ink[900],
             backgroundColor: paper.DEFAULT,
@@ -275,7 +327,7 @@ function ConversationRow({
         accessibilityHint="Long press for rename and delete"
         style={{
           flex: 1,
-          minHeight: TAP,
+          minHeight: TAP_FLOOR,
           justifyContent: "center",
           paddingHorizontal: space.md,
           borderRadius: radius.md,
@@ -283,22 +335,22 @@ function ConversationRow({
           // hairline, the way an active tab does — not by a block of brand
           // colour, which in a list of a dozen rows reads as a stripe that
           // pulls the eye off the conversation itself.
-          backgroundColor: active ? paper.DEFAULT : "transparent",
+          backgroundColor: active ? t.surfaceMuted : "transparent",
           borderWidth: 1,
           borderColor: active ? brand[200] : "transparent",
         }}
       >
-        <T numberOfLines={1} style={{ color: active ? ink[900] : ink[700], fontSize: typeScale.bodySm }}>
+        <T numberOfLines={2} style={{ color: ink[900], fontSize: typeScale.body, fontFamily: font.sansMedium }}>
           {conversation.title}
         </T>
+        <T variant="caption" style={{ marginTop: space.xs }}>{conversation.originModule} · {formatDueDate(conversation.lastMessageAt)}</T>
       </Pressable>
 
       <Pressable
         onPress={openActions}
         accessibilityRole="button"
         accessibilityLabel={`More options for ${conversation.title}`}
-        hitSlop={8}
-        style={{ minWidth: TAP, minHeight: TAP, alignItems: "center", justifyContent: "center" }}
+        style={{ minWidth: TAP_FLOOR, minHeight: TAP_FLOOR, alignItems: "center", justifyContent: "center" }}
       >
         <Ionicons name="ellipsis-horizontal" size={18} color={ink[500]} />
       </Pressable>

@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useAuth } from "../context/AuthContext";
-import { Card } from "./ui";
 import { SkeletonLine } from "./Skeleton";
 import { dateLine, greetingFor, pickHeadline } from "../lib/homeInsight";
 import { GREETING_FRAMES } from "../lib/greetingFrames";
@@ -32,8 +31,13 @@ const MESSAGE_TONE = {
   warn: "bg-tint-accent text-tone-accent ring-edge-accent",
 } as const;
 
-/** Matches the 96px empty-state mascot box, less the row's own breathing room. */
-const MASCOT_BOX = 88;
+/** The bubble's tail: the same wash, with the two edges that face outward. */
+const TAIL_TONE = {
+  plain: "bg-tint-brand border-edge-brand",
+  warn: "bg-tint-accent border-edge-accent",
+} as const;
+
+const MASCOT_BOX = 112;
 
 /**
  * Fetch and decode every frame before playback, resolving when the whole
@@ -210,61 +214,95 @@ function FinFlipbook({ label }: { label: string }) {
  * Ported from mobile's GreetingHero so both clients open the same way. The
  * sentence itself comes from `pickHeadline`, shared verbatim with mobile.
  */
-export function GreetingHero({ summary }: { summary: DashboardSummary | null }) {
+export function GreetingHero({
+  summary,
+  action,
+  shortcuts,
+}: {
+  summary: DashboardSummary | null;
+  action?: ReactNode;
+  /** Optional quick actions shown at the card's right edge on wider screens. */
+  shortcuts?: ReactNode;
+}) {
   const { profile } = useAuth();
   const now = new Date();
   const greeting = greetingFor(now.getHours());
   const firstName = profile?.firstName?.trim();
-  const headline = summary ? pickHeadline(summary) : null;
-  const tone = MESSAGE_TONE[headline?.tone ?? "plain"];
+  const headline = summary && summary.recordsNeedingReview === 0 && summary.recoveryStatus.status === "needs_setup"
+    ? { text: "Add your monthly expense estimate to start tracking recovery.", tone: "plain" as const }
+    : summary && summary.recordsNeedingReview === 0 && summary.recoveryStatus.status === "data_incomplete"
+      ? { text: "Review your records before relying on this month’s recovery target.", tone: "warn" as const }
+      : summary && summary.recordsNeedingReview === 0 && summary.recoveryStatus.status === "no_current_month_data"
+        ? { text: "No sales recorded this month. Add a sale to start tracking progress.", tone: "plain" as const }
+        : summary ? pickHeadline(summary) : null;
+  const toneKey = headline?.tone ?? "plain";
+  const tone = MESSAGE_TONE[toneKey];
 
+  /*
+    Fin on the left, large enough to read as a character rather than an icon,
+    sitting on a soft disc of the brand tint. The greeting and Fin's line sit
+    beside it, the line as a speech bubble whose tail points back at Fin, and
+    capped at a reading width so a short sentence never stretches across the
+    whole page. On a phone the row stacks and centres.
+  */
   return (
-    <Card className="mb-6 p-5">
-      <p className="text-xs uppercase tracking-[0.06em] text-ink-500">{dateLine(now)}</p>
-
-      {/*
-        The NAME is the bold word, not the whole line. "Good evening" is the
-        same three words every day at this hour; the name is the only part that
-        is about the person reading it, so it carries the weight.
-      */}
-      <h2 className="mt-0.5 font-display text-xl font-semibold text-ink-900">
-        {greeting}
-        {firstName ? (
-          <>
-            , <span className="font-extrabold">{firstName}</span>
-          </>
-        ) : null}
-        !
-      </h2>
-
-      {/*
-        Fin and its line share a row, with a plain gap rather than the panel
-        tucking under the mascot: the art's alpha box is a centred square with
-        no transparent margin to slide beneath, so any overlap clips it.
-      */}
-      {/* Wraps below ~200px (a 320px phone at 200% zoom), where Fin and the
-          panel cannot share a line: the panel's own padding alone exceeds
-          what is left beside the art. The row is unchanged above that. */}
-      <div className="mt-4 flex flex-wrap items-center gap-3">
-        <FinFlipbook label="Fin, FinSight's mascot" />
-
-        <div className={`min-w-0 flex-1 rounded-2xl px-4 py-3 ring-1 ${tone}`}>
-          <p className="text-xs font-semibold">Fin</p>
-          {headline ? (
-            <p className="mt-0.5 text-[13px] leading-relaxed">{headline.text}</p>
-          ) : (
-            /*
-              The panel keeps its shape while the figures load rather than
-              popping into existence a beat after the card — a greeting that
-              changes height on arrival reads as a glitch.
-            */
-            <div className="mt-2 space-y-1.5">
-              <SkeletonLine className="h-2 w-[92%]" />
-              <SkeletonLine className="h-2 w-[64%]" />
-            </div>
-          )}
+    <section
+      aria-label="Greeting"
+      className="mb-6 overflow-hidden rounded-2xl border border-paper-200 bg-paper shadow-sm"
+    >
+      <div className="flex flex-col items-center gap-4 p-5 sm:flex-row sm:gap-6 sm:px-6">
+        <div className="relative shrink-0">
+          <span aria-hidden className="absolute inset-1.5 rounded-full bg-tint-brand" />
+          <div className="relative">
+            <FinFlipbook label="Fin, FinSight's mascot" />
+          </div>
         </div>
+
+        <div className="min-w-0 flex-1 text-center sm:text-left">
+          <p className="text-xs font-medium text-ink-500">{dateLine(now)}</p>
+          {/*
+            The NAME is the bold word, not the whole line. "Good evening" is the
+            same three words every day at this hour; the name is the only part
+            that is about the person reading it, so it carries the weight.
+          */}
+          <h2 className="mt-0.5 font-display text-xl font-semibold text-ink-900 sm:text-2xl">
+            {greeting}
+            {firstName ? (
+              <>
+                , <span className="font-extrabold">{firstName}</span>
+              </>
+            ) : null}
+            !
+          </h2>
+
+          <div className={`relative mt-3 inline-block w-full max-w-xl rounded-2xl px-4 py-3 text-left ring-1 sm:w-auto ${tone}`}>
+            <span
+              aria-hidden
+              className={`absolute -left-[7px] top-5 hidden h-3 w-3 rotate-45 border-b border-l sm:block ${TAIL_TONE[toneKey]}`}
+            />
+            {headline ? (
+              <p className="relative text-sm leading-relaxed">{headline.text}</p>
+            ) : (
+              /*
+                The bubble keeps its shape while the figures load rather than
+                popping into existence a beat after the card — a greeting that
+                changes height on arrival reads as a glitch.
+              */
+              <div className="relative w-64 max-w-full space-y-2 py-1">
+                <SkeletonLine className="h-2 w-[92%]" />
+                <SkeletonLine className="h-2 w-[64%]" />
+              </div>
+            )}
+            {action ? <div className="relative mt-1.5">{action}</div> : null}
+          </div>
+        </div>
+
+        {shortcuts ? (
+          <div className="w-full shrink-0 border-t border-paper-200 pt-4 sm:w-auto sm:border-l sm:border-t-0 sm:pl-6 sm:pt-0">
+            {shortcuts}
+          </div>
+        ) : null}
       </div>
-    </Card>
+    </section>
   );
 }

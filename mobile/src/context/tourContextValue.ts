@@ -28,6 +28,9 @@ export interface TourContextValue {
   next: () => void;
   /** Backward over the same set; a no-op on the first eligible step. */
   back: () => void;
+  /** Measurement failures apply to this run only, never the saved step order. */
+  unavailableStepIds?: readonly string[];
+  skipUnavailable?: (direction: "next" | "back") => void;
   stop: (status: "completed" | "skipped") => void;
   /** Rewind to step 0 and re-arm the start gate — the Settings screen's entry. */
   restart: () => void;

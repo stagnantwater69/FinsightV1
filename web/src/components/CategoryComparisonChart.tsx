@@ -1,16 +1,19 @@
 import { useState } from "react";
 import { formatMoney } from "./Money";
+import { ChartTooltip } from "./ChartTooltip";
 import type { CategoryTrend } from "../lib/types";
+import { ListDisclosureControl, useListDisclosure } from "./ListDisclosure";
 
 /**
  * This period vs the previous one, per category.
  *
- * FORM. The job is "did this go up or down, and by how much" — one series is
- * the point and the other is context. So this is emphasis, not identity: the
- * current period takes a single hue and the previous period a recessive grey,
- * rather than two colours competing for attention. Horizontal bars because
- * category names are words, and words fit along a horizontal axis without
- * being rotated.
+ * FORM. The job is "did this go up or down, and by how much". One series is
+ * the point and the other is context, so it is drawn as a bullet: the current
+ * period is a filled bar on a track, the previous period a dark tick on that
+ * same track. Up or down is then read as the bar passing or stopping short of
+ * its tick, and the chip at the end says by how much. Expenses only, so an
+ * increase is shown in the danger tone and a decrease in brand. Horizontal
+ * because category names are words.
  *
  * SCALE. Every row is measured against ONE maximum across both periods, not
  * per-row. A per-row scale would draw a PHP 400 category and a PHP 40,000 one
@@ -28,14 +31,17 @@ export function CategoryComparisonChart({
   trends,
   previousLabel = "Last period",
   currentLabel = "This period",
+  resetKey,
 }: {
   trends: CategoryTrend[];
   previousLabel?: string;
   currentLabel?: string;
+  resetKey?: string;
 }) {
   const [hovered, setHovered] = useState<number | null>(null);
 
   const rows = trends.filter((t) => t.current > 0 || t.previous > 0);
+  const disclosure = useListDisclosure({ total: rows.length, resetKey });
   if (rows.length === 0) return null;
 
   const max = Math.max(...rows.map((t) => Math.max(t.current, t.previous)), 1);
@@ -44,88 +50,91 @@ export function CategoryComparisonChart({
 
   return (
     <div>
-      {/* Two series, so a legend is mandatory — identity is never colour
-          alone. */}
+      {/* Two series, so a legend is mandatory: identity is never colour
+          alone. The previous period is a tick on the same track as the bar,
+          so "did it go up or down" is read as the bar passing or falling
+          short of its tick. */}
       <div className="mb-4 flex flex-wrap items-center justify-end gap-4 text-[11.5px] text-ink-500">
         <span className="flex items-center gap-1.5">
-          <span
-            aria-hidden
-            className="h-2.5 w-2.5 rounded-sm"
-            style={{ background: "rgb(var(--chart-emphasis))" }}
-          />
+          <span aria-hidden className="h-2.5 w-4 rounded-full" style={{ background: "linear-gradient(90deg, rgb(var(--chart-emphasis) / 0.55), rgb(var(--chart-emphasis)))" }} />
           {currentLabel}
         </span>
         <span className="flex items-center gap-1.5">
-          <span
-            aria-hidden
-            className="h-2.5 w-2.5 rounded-sm"
-            style={{ background: "rgb(var(--chart-muted))" }}
-          />
+          <span aria-hidden className="h-3 w-0.5 rounded-full bg-ink-700" />
           {previousLabel}
         </span>
       </div>
 
-      <ul className="space-y-3.5">
-        {rows.map((t) => {
+      <ul id={disclosure.contentId} className="space-y-3">
+        {rows.slice(0, disclosure.visibleCount).map((t) => {
           const isUp = t.change > 0;
           const isDown = t.change < 0;
           const active = hovered === t.categoryId;
+          const dimmed = hovered !== null && !active;
 
           return (
             <li
               key={t.categoryId}
-              className="relative grid grid-cols-[minmax(4.5rem,7rem)_1fr_auto] items-center gap-3"
+              className={`relative grid grid-cols-1 items-center gap-1.5 sm:grid-cols-[minmax(4.5rem,7rem)_1fr_8.75rem] sm:gap-3 rounded-lg px-1 py-0.5 outline-none transition-opacity focus-visible:ring-2 focus-visible:ring-brand-500 ${dimmed ? "opacity-50" : ""}`}
               onMouseEnter={() => setHovered(t.categoryId)}
               onMouseLeave={() => setHovered(null)}
               onFocus={() => setHovered(t.categoryId)}
               onBlur={() => setHovered(null)}
               tabIndex={0}
             >
-              <span className="truncate text-[12.5px] text-ink-600" title={t.categoryName}>
+              <span className="truncate text-[12.5px] font-medium text-ink-700" title={t.categoryName}>
                 {t.categoryName}
               </span>
 
-              {/* The two bars. 2px of surface between them so adjacent fills
-                  stay visually separate, and rounded right ends anchored to a
-                  common left baseline. */}
-              <span className="flex min-w-0 flex-col gap-[2px]">
+              <span aria-hidden className="relative h-3 min-w-0 rounded-full bg-paper-200">
                 <span
-                  className="h-3 rounded-r transition-[width,filter] duration-500 ease-out"
+                  className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-500 ease-out motion-reduce:transition-none"
                   style={{
                     width: `${width(t.current)}%`,
-                    background: "rgb(var(--chart-emphasis))",
-                    filter: active ? "brightness(1.12)" : undefined,
+                    background: "linear-gradient(90deg, rgb(var(--chart-emphasis) / 0.55), rgb(var(--chart-emphasis)))",
+                    boxShadow: active ? "0 0 0 2px rgb(var(--chart-emphasis) / 0.25)" : undefined,
                   }}
                 />
-                <span
-                  className="h-2 rounded-r transition-[width] duration-500 ease-out"
-                  style={{ width: `${width(t.previous)}%`, background: "rgb(var(--chart-muted))" }}
-                />
+                {t.previous > 0 ? (
+                  <span
+                    className="absolute -top-1 h-5 w-0.5 -translate-x-1/2 rounded-full bg-ink-700"
+                    style={{ left: `${width(t.previous)}%` }}
+                  />
+                ) : null}
               </span>
 
-              <span className="figure shrink-0 text-right text-[12.5px] font-semibold text-ink-900">
-                {formatMoney(t.current)}
-              </span>
-
-              {/* Hover detail. The bars answer "how big"; this answers "by how
-                  much did it move", which is the whole reason both periods are
-                  on screen. */}
-              {active ? (
+              <span className="flex min-w-0 flex-wrap items-center justify-between gap-2 sm:justify-end">
+                <span className="figure break-all text-[12.5px] font-semibold text-ink-900">{formatMoney(t.current)}</span>
                 <span
-                  role="tooltip"
-                  className="pointer-events-none absolute right-0 top-full z-20 mt-1 whitespace-nowrap rounded-lg bg-ink-900 px-2.5 py-1.5 text-[11.5px] font-medium text-paper shadow-md"
+                  className={`figure inline-flex min-w-[3.25rem] justify-center rounded-md px-1.5 py-0.5 text-[11px] font-semibold ${
+                    isUp ? "bg-tint-danger text-tone-danger" : isDown ? "bg-tint-brand text-tone-brand" : "bg-tint-neutral text-tone-neutral"
+                  }`}
+                  aria-hidden
                 >
-                  <span className="figure">{formatMoney(t.previous)}</span> →{" "}
-                  <span className="figure">{formatMoney(t.current)}</span>
-                  {t.previous > 0 || t.current > 0 ? (
-                    <span className="ml-1.5 opacity-80">
-                      {isUp ? "▲" : isDown ? "▼" : "—"}{" "}
-                      <span className="figure">{formatMoney(Math.abs(t.change))}</span>
-                      {t.percentChange !== null && t.previous > 0
-                        ? ` (${Math.abs(t.percentChange).toFixed(0)}%)`
-                        : " (new)"}
-                    </span>
-                  ) : null}
+                  {isUp ? "▲" : isDown ? "▼" : "="}
+                  {t.percentChange !== null && t.previous > 0
+                    ? ` ${Math.abs(t.percentChange).toFixed(0)}%`
+                    : t.previous === 0 && t.current > 0
+                      ? " new"
+                      : ""}
+                </span>
+              </span>
+
+              {/* Hover detail: the two amounts behind the bar and its tick. */}
+              {active ? (
+                <span role="tooltip" className="pointer-events-none absolute right-0 top-full z-20 mt-1">
+                  <ChartTooltip
+                    title={t.categoryName}
+                    rows={[
+                      { label: currentLabel, value: formatMoney(t.current), color: "rgb(var(--chart-emphasis))" },
+                      { label: previousLabel, value: formatMoney(t.previous), color: "rgb(var(--ink-700))" },
+                      {
+                        label: "Change",
+                        value: `${isUp ? "+" : isDown ? "−" : ""}${formatMoney(Math.abs(t.change))}`,
+                        strong: true,
+                      },
+                    ]}
+                  />
                 </span>
               ) : null}
 
@@ -144,6 +153,7 @@ export function CategoryComparisonChart({
           );
         })}
       </ul>
+      <ListDisclosureControl disclosure={disclosure} total={rows.length} itemLabel="categories" className="mt-3" />
     </div>
   );
 }

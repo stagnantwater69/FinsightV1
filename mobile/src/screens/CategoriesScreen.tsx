@@ -1,10 +1,15 @@
-import { useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, ScrollView, TextInput, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useFocusEffect } from "@react-navigation/native";
+import { HeaderHeightContext } from "@react-navigation/elements";
+import { CONTENT_WIDTH } from "../components/ContentScrollView";
+import { useImportOperation } from "../lib/useImportOperation";
+import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable, TextInput, useWindowDimensions, View } from "react-native";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { errorMessage } from "../lib/api";
 import { Button, Card, EmptyState, ErrorNote, Field, Screen, ScreenHeader, SelectChip, T } from "../components/ui";
-import { TAP, font, radius, space, typeScale } from "../theme/tokens";
+import { font, radius, space, typeScale } from "../theme/tokens";
+import { TAP_FLOOR } from "../components/touchTarget";
 import { useTheme } from "../context/ThemeContext";
 import type { ExpenseCategory, ExpenseCostBehavior } from "../lib/types";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
@@ -60,6 +65,21 @@ export function CategoriesScreen({ navigation }: { navigation: { navigate: (scre
   const [costBehavior, setCostBehavior] = useState<ExpenseCostBehavior | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const operation = useImportOperation(selected?.id);
+  const headerHeight = useContext(HeaderHeightContext) ?? 0;
+  const { width, fontScale } = useWindowDimensions();
+  const stackedActions = width < 390 || fontScale > 1.2;
+  const descriptionRef = useRef<TextInput>(null);
+  useEffect(() => {
+    setKeyword("");
+    setAdding(false);
+    setName("");
+    setDescription("");
+    setCostBehavior(null);
+    setSaving(false);
+    setError(null);
+  }, [selected?.id]);
+  useFocusEffect(useCallback(() => () => { operation.cancel(); setSaving(false); }, [operation]));
 
   // Same predicate as web: name OR description, case-insensitive.
   const filtered = useMemo(() => {
@@ -80,6 +100,8 @@ export function CategoriesScreen({ navigation }: { navigation: { navigate: (scre
     const trimmed = name.trim();
     if (!trimmed) return;
 
+    const task = operation.begin();
+    if (!task) return;
     setSaving(true);
     setError(null);
     try {
@@ -88,14 +110,16 @@ export function CategoriesScreen({ navigation }: { navigation: { navigate: (scre
         description: description.trim() || undefined,
         costBehavior: costBehavior ?? undefined,
       });
+      if (!operation.current(task)) return;
       setName("");
       setDescription("");
       setCostBehavior(null);
       setAdding(false);
     } catch (err) {
-      setError(errorMessage(err));
+      if (operation.current(task)) setError(errorMessage(err));
     } finally {
-      setSaving(false);
+      if (operation.current(task)) setSaving(false);
+      operation.finish(task);
     }
   }
 
@@ -103,7 +127,20 @@ export function CategoriesScreen({ navigation }: { navigation: { navigate: (scre
 
   return (
     <Screen>
-      <ScrollView contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}>
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={headerHeight} style={{ flex: 1 }}>
+      <FlatList
+        data={categoryListReady ? sorted : []}
+        keyExtractor={(category) => String(category.id)}
+        renderItem={({ item }) => <CategoryRow category={item} onOpenRecords={() => navigation.navigate("RecordsList", { type: "expense", categoryId: item.id })} />}
+        style={{ width: "100%", maxWidth: CONTENT_WIDTH, alignSelf: "center" }}
+        contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}
+        initialNumToRender={10}
+        maxToRenderPerBatch={8}
+        windowSize={7}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        ListHeaderComponent={<>
+
         <ScreenHeader
           eyebrow="Management"
           title="Expense categories"
@@ -112,7 +149,7 @@ export function CategoriesScreen({ navigation }: { navigation: { navigate: (scre
 
         {!adding ? (
           <Button
-            title="+ New category"
+            title="New category"
             variant="primary"
             onPress={() => {
               setAdding(true);
@@ -127,14 +164,20 @@ export function CategoriesScreen({ navigation }: { navigation: { navigate: (scre
               onChangeText={setName}
               maxLength={FIELD_LIMITS.categoryName}
               autoFocus
+              returnKeyType="next"
+              submitBehavior="submit"
+              onSubmitEditing={() => descriptionRef.current?.focus()}
               placeholder="e.g. Rent, Supplies, Utilities"
             />
             <Field
+              ref={descriptionRef}
               label="Description (optional)"
               value={description}
               onChangeText={setDescription}
               maxLength={FIELD_LIMITS.categoryDescription}
               placeholder="What belongs in here"
+              returnKeyType="done"
+              onSubmitEditing={() => { if (!saving) void handleCreate(); }}
             />
 
             {/*
@@ -166,7 +209,7 @@ export function CategoriesScreen({ navigation }: { navigation: { navigate: (scre
 
             {error ? <ErrorNote>{error}</ErrorNote> : null}
 
-            <View style={{ flexDirection: "row", gap: space.sm, marginTop: space.sm }}>
+            <View style={{ flexDirection: stackedActions ? "column" : "row", gap: space.sm, marginTop: space.sm }}>
               <View style={{ flex: 1 }}>
                 <Button
                   title={saving ? "Saving…" : "Save category"}
@@ -242,12 +285,13 @@ export function CategoriesScreen({ navigation }: { navigation: { navigate: (scre
                   onFocus={() => setSearchFocused(true)}
                   onBlur={() => setSearchFocused(false)}
                   style={{
-                    minHeight: TAP,
+                    minHeight: TAP_FLOOR,
                     borderWidth: 1,
                     borderColor: searchFocused ? brand[600] : ink[200],
                     borderRadius: radius.md,
                     paddingHorizontal: space.md,
                     paddingVertical: space.sm,
+                    fontFamily: font.sans,
                     fontSize: typeScale.body,
                     color: ink[900],
                     backgroundColor: paper.DEFAULT,
@@ -262,37 +306,18 @@ export function CategoriesScreen({ navigation }: { navigation: { navigate: (scre
                 : `${categories.length} categor${categories.length === 1 ? "y" : "ies"}`}
             </T>
 
-            {sorted.length === 0 ? (
-              keyword.trim() ? (
-                <EmptyState
-                  icon="⌕"
-                  title="No categories match that search"
-                  body="Try a shorter word, or clear the search box."
-                  action={<Button title="Clear search" variant="ghost" onPress={() => setKeyword("")} />}
-                />
-              ) : (
-                <EmptyState
-                  title="No categories yet"
-                  body="Categories are how FinSight groups your spending. Without them, every expense looks the same. Start with the three or four you spend on most."
-                  action={
-                    <Button title="Create your first category" variant="primary" onPress={() => setAdding(true)} />
-                  }
-                />
-              )
-            ) : (
-              sorted.map((c) => (
-                <CategoryRow
-                  key={c.id}
-                  category={c}
-                  onOpenRecords={() =>
-                    navigation.navigate("RecordsList", { type: "expense", categoryId: c.id })
-                  }
-                />
-              ))
-            )}
           </>
         ) : null}
-      </ScrollView>
+        </>}
+        ListEmptyComponent={categoryListReady ? (
+          keyword.trim() ? (
+            <EmptyState title="No categories match that search" body="Try a shorter word, or clear the search box." action={<Button title="Clear search" variant="ghost" onPress={() => setKeyword("")} />} />
+          ) : (
+            <EmptyState title="No categories yet" body="Start with the categories your business spends on most, such as supplies, rent or utilities." action={<Button title="Create your first category" variant="primary" onPress={() => setAdding(true)} />} />
+          )
+        ) : null}
+      />
+      </KeyboardAvoidingView>
     </Screen>
   );
 }
@@ -318,7 +343,7 @@ function CategoryRow({
         flexDirection: "row",
         alignItems: "center",
         gap: space.md,
-        minHeight: TAP,
+        minHeight: TAP_FLOOR,
         borderWidth: 1,
         borderColor: ink[200],
         borderRadius: radius.md,

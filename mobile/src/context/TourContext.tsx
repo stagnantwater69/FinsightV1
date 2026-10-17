@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { View } from "react-native";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { AppState, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { useAuth } from "./AuthContext";
 import { useBusinessProfiles } from "./BusinessProfileContext";
@@ -75,9 +75,42 @@ export function TourProvider({ children }: { children: ReactNode }) {
   const [active, setActive] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
   const [home, setHome] = useState<HomeStage>({ onHomeTab: false, dashboardLoaded: false });
+  const [foreground, setForeground] = useState(AppState.currentState !== "background" && AppState.currentState !== "inactive");
+  const [unavailableStepIds, setUnavailableStepIds] = useState<readonly string[]>([]);
 
   const userId = profile?.id;
+  const businessId = selected?.id ?? null;
   const startedRef = useRef(false);
+  const interruptedRef = useRef(false);
+  const scope = useRef({ userId, generation: 0 });
+  if (scope.current.userId !== userId) scope.current = { userId, generation: scope.current.generation + 1 };
+  const generation = scope.current.generation;
+  const runScope = useRef({ businessId, revision: 0 });
+  if (runScope.current.businessId !== businessId) runScope.current = { businessId, revision: runScope.current.revision + 1 };
+  const runRevision = runScope.current.revision;
+  const mounted = useRef(true);
+  const activeRef = useRef(active);
+  const stepRef = useRef(stepIndex);
+  const storedRef = useRef(stored);
+  const unavailableRef = useRef(unavailableStepIds);
+  activeRef.current = active;
+  stepRef.current = stepIndex;
+  storedRef.current = stored;
+  unavailableRef.current = unavailableStepIds;
+  const preferenceRevision = useRef(0);
+
+  useEffect(() => {
+    mounted.current = true;
+    const listener = AppState.addEventListener("change", (state) => setForeground(state === "active"));
+    return () => {
+      mounted.current = false;
+      scope.current.generation += 1;
+      listener.remove();
+    };
+  }, []);
+
+  const isCurrent = useCallback(() => mounted.current && scope.current.userId === userId && scope.current.generation === generation, [userId, generation]);
+  const canControl = useCallback(() => isCurrent() && runScope.current.revision === runRevision, [isCurrent, runRevision]);
 
   /*
    * True once this account's server-side tour state has been read and either
@@ -95,42 +128,52 @@ export function TourProvider({ children }: { children: ReactNode }) {
   /** Cache locally AND tell the account. One writer, so the two cannot drift. */
   const persist = useCallback(
     (next: StoredTour) => {
-      if (userId == null) return;
+      if (userId == null || !isCurrent()) return;
       void writeTour(userId, next);
       // Fire and forget: the cache has already answered, and a running tour
       // must not stall or error out because a preference write did. The next
       // advance — or the next sign-in's reconcile — sends it again.
       void updatePreferences(preferencePatch(next)).catch(() => undefined);
     },
-    [userId, updatePreferences],
+    [userId, updatePreferences, isCurrent],
   );
 
   // Read the stored record for whoever is signed in. Re-reading on a change of
   // user is what keeps a shared phone honest, and clearing `startedRef` there
   // is what makes "always show on login" mean per-login rather than per-install.
-  useEffect(() => {
+  useLayoutEffect(() => {
     let live = true;
     startedRef.current = false;
+    interruptedRef.current = false;
+    activeRef.current = false;
+    storedRef.current = null;
+    unavailableRef.current = [];
     reconciledFor.current = null;
     setReconciled(false);
     setActive(false);
     setStored(null);
+    setHome({ onHomeTab: false, dashboardLoaded: false });
+    setUnavailableStepIds([]);
     if (userId == null) return;
     void readTour(userId).then((value) => {
-      if (live) setStored(value);
+      if (live && isCurrent()) {
+        storedRef.current = value;
+        setStored(value);
+      }
     });
     return () => {
       live = false;
     };
-  }, [userId]);
+  }, [userId, isCurrent]);
 
   // Then reconcile the cache against the account, exactly once per sign-in.
   useEffect(() => {
-    if (userId == null || stored === null || !preferencesLoaded) return;
+    if (userId == null || stored === null || stored !== storedRef.current || !preferencesLoaded || !isCurrent()) return;
     if (reconciledFor.current === userId) return;
     reconciledFor.current = userId;
 
     const { tour, push } = reconcile(stored, preferences);
+    storedRef.current = tour;
     setStored(tour);
     void writeTour(userId, tour);
     // The migrate-up: progress this account's row has never heard about goes
@@ -138,29 +181,52 @@ export function TourProvider({ children }: { children: ReactNode }) {
     // someone finished before any of this was stored server-side.
     if (push) void updatePreferences(push).catch(() => undefined);
     setReconciled(true);
-  }, [userId, stored, preferencesLoaded, preferences, updatePreferences]);
+  }, [userId, stored, preferencesLoaded, preferences, updatePreferences, isCurrent]);
 
   // Persist progress on every change while a run is live, so an interruption
   // resumes from the right step rather than from the beginning.
   useEffect(() => {
-    if (!active || userId == null) return;
-    persist({ status: "in_progress", step: stepIndex, alwaysShow: stored?.alwaysShow === true });
+    if (!active || !activeRef.current || userId == null || reconciledFor.current !== userId || !isCurrent()) return;
+    const next: StoredTour = { status: "in_progress", step: stepIndex, alwaysShow: storedRef.current?.alwaysShow === true };
+    storedRef.current = next;
+    setStored(next);
+    persist(next);
     // `stored` is deliberately not a dependency: it changes on every write
     // this effect makes, and re-running on its own output would be a loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, stepIndex, userId, persist]);
+  }, [active, stepIndex, userId, persist, isCurrent]);
 
   // Leaving Home pauses the run. Its targets live on that screen and in the
   // tab bar; a card describing the dashboard on top of the records list would
   // be worse than quietly waiting to resume.
+  const pause = useCallback(() => {
+    if (!activeRef.current || !isCurrent()) return;
+    activeRef.current = false;
+    interruptedRef.current = true;
+    setActive(false);
+    const next: StoredTour = { ...storedRef.current, status: "in_progress", step: stepRef.current };
+    storedRef.current = next;
+    setStored(next);
+    persist(next);
+  }, [persist, isCurrent]);
+  const previousBusiness = useRef(businessId);
   useEffect(() => {
-    if (active && !home.onHomeTab) setActive(false);
-  }, [active, home.onHomeTab]);
+    if (previousBusiness.current !== businessId) {
+      previousBusiness.current = businessId;
+      pause();
+      unavailableRef.current = [];
+      setUnavailableStepIds([]);
+    }
+  }, [businessId, pause]);
+  useEffect(() => {
+    if (active && (!home.onHomeTab || !home.dashboardLoaded || !foreground || !selected || profilesLoading)) pause();
+  }, [active, home.onHomeTab, home.dashboardLoaded, foreground, selected, profilesLoading, pause]);
 
   // Start / resume.
   useEffect(() => {
-    if (active || startedRef.current) return;
+    if (active || (startedRef.current && !interruptedRef.current) || !foreground || !isCurrent()) return;
     if (userId == null || stored === null || profilesLoading) return;
+    if (reconciledFor.current !== userId || stored !== storedRef.current) return;
 
     const open = shouldStartTour({
       status: stored.status,
@@ -173,50 +239,86 @@ export function TourProvider({ children }: { children: ReactNode }) {
     if (!open) return;
 
     startedRef.current = true;
-    setStepIndex(resumeStepIndex(stored.status, stored.step, TOUR_STEPS.length));
+    interruptedRef.current = false;
+    const resumeAt = resumeStepIndex(stored.status, stored.step, TOUR_STEPS.length);
+    stepRef.current = resumeAt;
+    activeRef.current = true;
+    setStepIndex(resumeAt);
     setActive(true);
-  }, [active, userId, stored, reconciled, profilesLoading, selected, home.dashboardLoaded, home.onHomeTab]);
+  }, [active, userId, stored, reconciled, profilesLoading, selected, home.dashboardLoaded, home.onHomeTab, foreground, isCurrent]);
 
   const reportHomeStage = useCallback((stage: HomeStage) => {
+    if (!canControl()) return;
     setHome((prev) =>
       prev.onHomeTab === stage.onHomeTab && prev.dashboardLoaded === stage.dashboardLoaded
         ? prev
         : stage,
     );
-  }, []);
+  }, [canControl]);
 
   const stop = useCallback(
     (status: "completed" | "skipped") => {
+      if (!activeRef.current || !canControl()) return;
+      activeRef.current = false;
+      interruptedRef.current = false;
       setActive(false);
-      const next: StoredTour = { ...(stored ?? { status }), status, step: stepIndex };
+      const next: StoredTour = { ...(storedRef.current ?? { status }), status, step: stepRef.current };
+      storedRef.current = next;
       setStored(next);
       persist(next);
     },
-    [stepIndex, stored, persist],
+    [persist, canControl],
   );
 
   const next = useCallback(() => {
-    const target = nextStepIndex(TOUR_STEPS, stepIndex, stepIsOnScreen);
+    if (!canControl() || !activeRef.current || stepRef.current !== stepIndex) return;
+    const target = nextStepIndex(TOUR_STEPS, stepIndex, (step) => !unavailableRef.current.includes(step.id) && stepIsOnScreen(step));
     if (target === null) stop("completed");
-    else setStepIndex(target);
-  }, [stepIndex, stop]);
+    else {
+      stepRef.current = target;
+      setStepIndex(target);
+    }
+  }, [stepIndex, stop, canControl]);
 
   const back = useCallback(() => {
-    const target = previousStepIndex(TOUR_STEPS, stepIndex, stepIsOnScreen);
-    if (target !== null) setStepIndex(target);
-  }, [stepIndex]);
+    if (!canControl() || !activeRef.current || stepRef.current !== stepIndex) return;
+    const target = previousStepIndex(TOUR_STEPS, stepIndex, (step) => !unavailableRef.current.includes(step.id) && stepIsOnScreen(step));
+    if (target !== null) {
+      stepRef.current = target;
+      setStepIndex(target);
+    }
+  }, [stepIndex, canControl]);
+
+  const skipUnavailable = useCallback((direction: "next" | "back") => {
+    if (!canControl() || !activeRef.current || stepRef.current !== stepIndex) return;
+    const id = TOUR_STEPS[stepIndex]?.id;
+    if (id && !unavailableRef.current.includes(id)) {
+      unavailableRef.current = [...unavailableRef.current, id];
+      setUnavailableStepIds(unavailableRef.current);
+    }
+    const hasPrevious = previousStepIndex(TOUR_STEPS, stepIndex, (step) => !unavailableRef.current.includes(step.id) && stepIsOnScreen(step)) !== null;
+    if (direction === "back" && hasPrevious) back();
+    else next();
+  }, [stepIndex, next, back, canControl]);
 
   const restart = useCallback(() => {
+    if (!canControl()) return;
     // Re-arm rather than activate: the caller navigates to Home, and the start
     // gate above opens the tour once Home is focused with its figures in. On
     // Home already, that is the same tick.
     startedRef.current = false;
+    interruptedRef.current = false;
+    activeRef.current = false;
+    stepRef.current = 0;
+    unavailableRef.current = [];
+    setUnavailableStepIds([]);
     setStepIndex(0);
     setActive(false);
-    const next: StoredTour = { ...(stored ?? { status: "in_progress" }), status: "in_progress", step: 0 };
+    const next: StoredTour = { ...(storedRef.current ?? { status: "in_progress" }), status: "in_progress", step: 0 };
+    storedRef.current = next;
     setStored(next);
     persist(next);
-  }, [stored, persist]);
+  }, [persist, canControl]);
 
   /*
    * The one tour write that is NOT fire-and-forget.
@@ -230,20 +332,28 @@ export function TourProvider({ children }: { children: ReactNode }) {
    */
   const setAlwaysShow = useCallback(
     async (value: boolean) => {
-      const previous: StoredTour = stored ?? { status: "not_started" };
+      if (!isCurrent()) return;
+      const revision = ++preferenceRevision.current;
+      const previous: StoredTour = storedRef.current ?? { status: "not_started" };
       const next: StoredTour = { ...previous, alwaysShow: value ? true : undefined };
+      storedRef.current = next;
       setStored(next);
       if (userId == null) return;
       await writeTour(userId, next);
+      if (!isCurrent()) return;
       try {
         await updatePreferences(preferencePatch(next));
       } catch (err) {
-        setStored(previous);
-        await writeTour(userId, previous);
+        if (isCurrent() && preferenceRevision.current === revision) {
+          const restored: StoredTour = { ...(storedRef.current ?? previous), alwaysShow: previous.alwaysShow };
+          storedRef.current = restored;
+          setStored(restored);
+          await writeTour(userId, restored);
+        }
         throw err;
       }
     },
-    [stored, userId, updatePreferences],
+    [userId, updatePreferences, isCurrent],
   );
 
   const value: TourContextValue = {
@@ -252,6 +362,8 @@ export function TourProvider({ children }: { children: ReactNode }) {
     activeStepId: active ? (TOUR_STEPS[stepIndex]?.id ?? null) : null,
     next,
     back,
+    unavailableStepIds,
+    skipUnavailable,
     stop,
     restart,
     alwaysShow: stored?.alwaysShow === true,

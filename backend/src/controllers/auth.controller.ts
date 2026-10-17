@@ -281,6 +281,13 @@ export async function login(req: Request, res: Response) {
   res.status(200).json(result);
 }
 
+export async function loginWithGoogle(req: Request, res: Response) {
+  const token = bearerToken(req);
+  if (!looksLikeAccessJwt(token)) throw new ApiError(401, "Invalid or expired session");
+  const result = await authService.loginWithGoogle(token);
+  res.status(200).json(result);
+}
+
 /**
  * Ends this device's refresh session. `/logout-all` revokes every refresh
  * session; already-issued access JWTs remain valid until their expiry.
@@ -312,7 +319,11 @@ export async function recoverPassword(req: Request, res: Response) {
   // Identical whatever happened inside, including a mail-delivery failure —
   // that is logged rather than shown, because the visitor is not entitled to
   // learn whether this address has an account from the shape of the answer.
-  res.status(200).json({ message: "If that email is registered, a reset link has been sent." });
+  res.status(200).json({
+    message: platform === "mobile"
+      ? "If that email is registered, a reset link has been sent."
+      : "If that email is registered, a password reset code has been sent.",
+  });
 }
 
 export async function changePassword(req: Request, res: Response) {

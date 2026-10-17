@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { Image, Pressable, ScrollView, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { Image, Pressable, useWindowDimensions, View } from "react-native";
+import { ContentScrollView } from "../components/ContentScrollView";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { Card, Screen, T } from "../components/ui";
 import { SignOutSheet } from "../components/SignOutSheet";
 /*
@@ -11,7 +12,9 @@ import { SignOutSheet } from "../components/SignOutSheet";
 import { Row, Section } from "../components/SettingsList";
 import { useAuth } from "../context/AuthContext";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
-import { font, space, typeScale } from "../theme/tokens";
+import { font, radius, space, typeScale } from "../theme/tokens";
+import { HERO } from "../theme/hero";
+import { TealPanel } from "../components/CoachKit";
 import { useTheme } from "../context/ThemeContext";
 
 /**
@@ -37,10 +40,11 @@ function initialsOf(first: string, last: string): string {
 
 export function MoreScreen({ navigation }: any) {
   const t = useTheme();
-  const { ink } = t;
   const { profile } = useAuth();
   const { selected, profiles } = useBusinessProfiles();
   const [signOutOpen, setSignOutOpen] = useState(false);
+  const { width, fontScale } = useWindowDimensions();
+  const compact = width < 360 || fontScale >= 1.3;
 
   return (
     <Screen safeTop>
@@ -50,7 +54,7 @@ export function MoreScreen({ navigation }: any) {
         valuable row on a word the owner just tapped. The profile card leads
         instead — it is the thing they came here to check or change.
       */}
-      <ScrollView contentContainerStyle={{ padding: space.lg, paddingTop: space.md, paddingBottom: space.xxl * 2, gap: space.lg }}>
+      <ContentScrollView contentContainerStyle={{ padding: space.lg, paddingTop: space.md, paddingBottom: space.xxl * 2, gap: space.lg }}>
         {/*
           WHO IS SIGNED IN, as a card rather than a caption under the title.
           It was one grey line, which is not enough on the one screen where
@@ -59,74 +63,73 @@ export function MoreScreen({ navigation }: any) {
           into the wrong one is a day's books.
         */}
         {profile ? (
-          <Pressable
-            onPress={() => navigation.navigate("Profile")}
-            accessibilityRole="button"
-            accessibilityLabel={`Signed in as ${profile.firstName} ${profile.lastName}, ${profile.email}. Open my account.`}
-            style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
-          >
-            <Card>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: space.md }}>
-                {/*
-                  THE AVATAR DISC, in semantic roles rather than a ramp step
-                  and a literal white.
-
-                  `brand[700]` LIGHTENS in Dark — that is the whole point of
-                  the inverting ramp — so the disc was drifting to a pale teal
-                  while the initials on it stayed a hard-coded `#fff`, which is
-                  the pairing palette.ts calls out by name: the avatar disc is
-                  the fixed dark-teal chrome plane (`brandSolid`), not brand
-                  text, and what sits on it is `onBrandSolid`. Same colour in
-                  Light, correct in Dark, and the two can no longer move apart.
-                */}
-                <View
-                  style={{
-                    width: 52,
-                    height: 52,
-                    borderRadius: 26,
-                    backgroundColor: t.brandSolid,
-                    alignItems: "center",
-                    justifyContent: "center",
-                    overflow: "hidden",
-                  }}
-                >
-                  {profile.avatarUrl ? (
-                    <Image
-                      source={{ uri: profile.avatarUrl }}
-                      style={{ width: "100%", height: "100%" }}
-                      accessibilityIgnoresInvertColors
-                    />
-                  ) : (
-                    <T style={{ color: t.onBrandSolid, fontSize: typeScale.title, fontFamily: font.sansSemibold }}>
-                      {initialsOf(profile.firstName, profile.lastName)}
-                    </T>
-                  )}
-                </View>
-                <View style={{ flex: 1 }}>
-                  {/*
-                    "Signed in as" is an EYEBROW here, not a line under the
-                    name. The reference mockup prints the name, then "Signed in
-                    as <the same name>", then the email — which states the name
-                    twice and the useful part once. Moving the framing above it
-                    keeps what that line was for and drops the repetition.
-                  */}
-                  <T variant="caption" style={{ fontSize: typeScale.micro, letterSpacing: 0.3, textTransform: "uppercase" }}>
-                    Signed in as
+          <TealPanel>
+            <Pressable
+              onPress={() => navigation.navigate("Profile")}
+              accessibilityRole="button"
+              accessibilityLabel={`Signed in as ${profile.firstName} ${profile.lastName}, ${profile.email}. Open my account.`}
+              style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: space.md, opacity: pressed ? 0.85 : 1 })}
+            >
+              {!compact ? <View
+                style={{
+                  width: 52,
+                  height: 52,
+                  borderRadius: 18,
+                  backgroundColor: t.ACCENT.fill,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  overflow: "hidden",
+                }}
+              >
+                {profile.avatarUrl ? (
+                  <Image source={{ uri: profile.avatarUrl }} style={{ width: "100%", height: "100%" }} accessibilityIgnoresInvertColors />
+                ) : (
+                  <T style={{ color: t.ACCENT.onFill, fontSize: typeScale.title, fontFamily: font.displayBold }}>
+                    {initialsOf(profile.firstName, profile.lastName)}
                   </T>
-                  <T
-                    style={{ fontSize: typeScale.bodyLg, color: ink[900], fontFamily: font.sansSemibold, marginTop: 1 }}
-                    numberOfLines={1}
-                  >
-                    {profile.firstName} {profile.lastName}
-                  </T>
-                  <T variant="caption" numberOfLines={1}>
-                    {profile.email}
-                  </T>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color={ink[300]} />
+                )}
+              </View> : null}
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <T style={{ fontSize: typeScale.micro, letterSpacing: 0.3, textTransform: "uppercase", color: HERO.muted }}>
+                  Signed in as
+                </T>
+                <T style={{ fontSize: typeScale.title, color: HERO.ink, fontFamily: font.displayBold, marginTop: 1 }}>
+                  {profile.firstName} {profile.lastName}
+                </T>
+                <T style={{ fontSize: typeScale.caption, color: HERO.muted }}>
+                  {profile.email}
+                </T>
               </View>
-            </Card>
-          </Pressable>
+              <Ionicons name="chevron-forward" size={18} color={HERO.muted} />
+            </Pressable>
+
+            <Pressable
+              onPress={() => navigation.navigate("BusinessProfiles")}
+              accessibilityRole="button"
+              accessibilityLabel={selected ? `Current business ${selected.name}. Switch business` : "Set up a business"}
+              style={({ pressed }) => ({
+                flexDirection: "row",
+                alignItems: "center",
+                gap: space.md,
+                padding: space.md,
+                borderRadius: radius.lg,
+                backgroundColor: pressed ? HERO.washStrong : HERO.wash,
+              })}
+            >
+              <View style={{ width: 34, height: 34, borderRadius: 11, backgroundColor: HERO.washStrong, alignItems: "center", justifyContent: "center" }}>
+                <Ionicons name="storefront-outline" size={18} color={HERO.ink} />
+              </View>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <T style={{ fontSize: typeScale.micro, color: HERO.muted }}>Current business</T>
+                <T style={{ fontSize: typeScale.bodySm, fontFamily: font.sansSemibold, color: HERO.ink }}>
+                  {selected ? selected.name : "None yet"}
+                </T>
+              </View>
+              {!compact ? <View style={{ paddingHorizontal: space.md, paddingVertical: 6, borderRadius: radius.full, backgroundColor: HERO.washStrong }}>
+                <T style={{ fontSize: typeScale.label, fontFamily: font.sansSemibold, color: HERO.ink }}>{selected ? "Switch" : "Set up"}</T>
+              </View> : <Ionicons name="chevron-forward" size={18} color={HERO.muted} />}
+            </Pressable>
+          </TealPanel>
         ) : null}
 
         <Section title="Account & business">
@@ -149,6 +152,7 @@ export function MoreScreen({ navigation }: any) {
           />
           <Row
             icon="notifications-outline"
+            tone="accent"
             label="Alerts"
             detail="Duplicates, large expenses, anything worth a look"
             onPress={() => navigation.navigate("Notifications")}
@@ -168,6 +172,7 @@ export function MoreScreen({ navigation }: any) {
           */}
           <Row
             icon="settings-outline"
+            tone="neutral"
             label="Settings"
             detail="The guided tour, Fin's daily message, and light or dark"
             onPress={() => navigation.navigate("Settings")}
@@ -183,18 +188,21 @@ export function MoreScreen({ navigation }: any) {
           <Row
             first
             icon="help-circle-outline"
+            tone="neutral"
             label="Questions & answers"
             detail="What FinSight does, and what it does not"
             onPress={() => navigation.navigate("Faqs")}
           />
           <Row
             icon="school-outline"
+            tone="neutral"
             label="Tutorials"
             detail="Step by step, from setup to reading your dashboard"
             onPress={() => navigation.navigate("Tutorials")}
           />
           <Row
             icon="mail-outline"
+            tone="neutral"
             label="Contact us"
             detail="Something wrong? We would rather hear about it"
             onPress={() => navigation.navigate("Contact")}
@@ -205,12 +213,14 @@ export function MoreScreen({ navigation }: any) {
           <Row
             first
             icon="lock-closed-outline"
+            tone="neutral"
             label="Privacy"
             detail="What is stored, and who can reach it"
             onPress={() => navigation.navigate("Privacy")}
           />
           <Row
             icon="document-text-outline"
+            tone="neutral"
             label="Terms of use"
             detail="What FinSight is for, and what it is not"
             onPress={() => navigation.navigate("Terms")}
@@ -223,13 +233,13 @@ export function MoreScreen({ navigation }: any) {
           land on it.
         */}
         <Card>
-          <Row first destructive icon="log-out-outline" label="Sign out" onPress={() => setSignOutOpen(true)} />
+          <Row first tone="neutral" icon="log-out-outline" label="Sign out" detail="End your session on this phone" focusRingColor={t.brandText} onPress={() => setSignOutOpen(true)} />
         </Card>
 
         <T variant="caption" style={{ textAlign: "center" }}>
           FinSight — see smarter, spend wiser.
         </T>
-      </ScrollView>
+      </ContentScrollView>
 
       {/*
         Signing out used to happen on the tap.

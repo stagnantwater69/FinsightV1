@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import userEvent from "@testing-library/user-event";
 import {
   RecurringAgenda,
   agendaGroupOf,
@@ -110,6 +111,28 @@ describe("groupSchedulesByDueState", () => {
 });
 
 describe("RecurringAgenda", () => {
+  it("previews long groups independently and keeps the full overdue count", async () => {
+    const user = userEvent.setup();
+    const schedules = Array.from({ length: 9 }, (_, index) => schedule({
+      id: index + 1,
+      label: `Overdue payment ${index + 1}`,
+      dueState: "OVERDUE",
+    }));
+    schedules.push(schedule({ id: 20, label: "Future payment", dueState: "SCHEDULED" }));
+    const { rerender } = renderAgenda(schedules);
+    const overdue = within(screen.getByRole("region", { name: "Overdue" }));
+    expect(screen.getByText("9 overdue")).toBeInTheDocument();
+    expect(overdue.queryByText("Overdue payment 7")).not.toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Scheduled" })).getAllByText("Future payment").length).toBeGreaterThan(0);
+    await user.click(overdue.getByRole("button", { name: "Show all 9 overdue payments" }));
+    expect(overdue.getAllByText("Overdue payment 9").length).toBeGreaterThan(0);
+    expect(screen.getByText("9 overdue")).toBeInTheDocument();
+    rerender(<MemoryRouter><RecurringAgenda schedules={schedules.map((row) => ({ ...row, businessProfileId: 2 }))} /></MemoryRouter>);
+    expect(within(screen.getByRole("region", { name: "Overdue" })).queryByText("Overdue payment 7")).not.toBeInTheDocument();
+    rerender(<MemoryRouter><RecurringAgenda schedules={schedules} /></MemoryRouter>);
+    expect(within(screen.getByRole("region", { name: "Overdue" })).queryByText("Overdue payment 7")).not.toBeInTheDocument();
+  });
+
   it("renders an overdue schedule under the Overdue heading", () => {
     renderAgenda([
       schedule({ id: 1, label: "Staff salary", dueState: "OVERDUE" }),

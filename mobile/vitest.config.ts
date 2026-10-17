@@ -45,6 +45,10 @@ export default defineConfig({
           // agree on which implementation is in use.
           alias: [
             {
+              find: /^@expo\/vector-icons\/Ionicons$/,
+              replacement: here('tests/harness/stubs/ionicons.js'),
+            },
+            {
               find: /^@expo\/vector-icons(\/.*)?$/,
               replacement: here('tests/harness/stubs/vector-icons.js'),
             },

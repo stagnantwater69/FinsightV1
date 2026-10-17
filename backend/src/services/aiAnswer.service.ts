@@ -10,10 +10,9 @@ import type { AskInput, AskResult } from "./ai.service";
  * `stripsVerdict` and the category classifier takes by matching names back
  * against the owner's own list:
  *
- *   1. Every peso amount and percentage in the answer must appear in the
- *      CONTEXT the model was given (or the owner's own question). One retry
- *      with a correction note; after that, sentences carrying an unknown
- *      figure are removed rather than shown.
+ *   1. Financial figures must agree with their cited source and named subject.
+ *      Question-only figures require conditional or owner-attributed wording.
+ *      After one revision, unsupported claims are removed.
  *   2. Record tags resolve only to records that were in THIS message's
  *      context. The context is built from the owner's own business profile,
  *      so a tag can never open another owner's record — and a tag the model
@@ -110,8 +109,11 @@ export interface StatedFigure {
 
 export type KnownFigure = Pick<StatedFigure, "value" | "kind">;
 
-const ACCOUNTING_MONEY_PATTERN = /\([ \t]*(?:[-−][ \t]*)?(?:PHP|Php|php|₱)[ \t]*(?:[-−][ \t]*)?(\d[\d,]*(?:\.\d+)?)([ \t]?[kK]\b)?[ \t]*\)/g;
-const MONEY_PATTERN = /(?:(?<![\d.,])([-−])[ \t]*)?(?:PHP|Php|php|₱)[ \t]*([-−])?[ \t]*(\d[\d,]*(?:\.\d+)?)([ \t]?[kK]\b)?/g;
+const ACCOUNTING_MONEY_PATTERN = /\([ \t]*(?:[-−][ \t]*)?(?:PHP|₱)[ \t]*(?:[-−][ \t]*)?(\d[\d,]*(?:\.\d+)?)([ \t]?[kK]\b)?[ \t]*\)/gi;
+const MONEY_PATTERN = /(?:(?<![\d.,])([-−])[ \t]*)?(?:PHP|₱)[ \t]*([-−])?[ \t]*(\d[\d,]*(?:\.\d+)?)([ \t]?[kK]\b)?/gi;
+const WORD_MONEY_PATTERN = /(?<![\w.,])([-−]?[ \t]*\d[\d,]*(?:\.\d+)?)([ \t]?[kK]\b)?[ \t]*(?:pesos?|pisos?|php)\b/gi;
+const PREFIX_WORD_MONEY_PATTERN = /\b(?:pesos?|pisos?)\s+([-−]?[ \t]*\d[\d,]*(?:\.\d+)?)([ \t]?[kK]\b)?/gi;
+const ACCOUNTING_WORD_MONEY_PATTERN = /\([ \t]*(?:[-−][ \t]*)?(\d[\d,]*(?:\.\d+)?)([ \t]?[kK]\b)?[ \t]*(?:pesos?|pisos?|php)\b[ \t]*\)/gi;
 // A number with thousands separators or two decimals reads as money even
 // without a currency mark ("about 11,000", "347.33").
 const ACCOUNTING_BARE_MONEY_PATTERN = /\([ \t]*(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d{2})[ \t]*\)/g;
@@ -134,6 +136,13 @@ export function statedFigures(text: string): StatedFigure[] {
     moneyFigures.push({ start, figure: { raw: match[0], value: -toNumber(match[1]!) * thousands, kind: "money" } });
     covered.push([start, start + match[0].length]);
   }
+  for (const match of text.matchAll(ACCOUNTING_WORD_MONEY_PATTERN)) {
+    const start = match.index!;
+    moneyFigures.push({ start, figure: {
+      raw: match[0], value: -toNumber(match[1]!) * (match[2] ? 1000 : 1), kind: "money",
+    } });
+    covered.push([start, start + match[0].length]);
+  }
   for (const match of text.matchAll(MONEY_PATTERN)) {
     const start = match.index!;
     if (covered.some(([a, b]) => start >= a && start < b)) continue;
@@ -142,6 +151,16 @@ export function statedFigures(text: string): StatedFigure[] {
     const magnitude = toNumber(match[3]!) * thousands;
     moneyFigures.push({ start, figure: { raw: match[0], value: negative ? -magnitude : magnitude, kind: "money" } });
     covered.push([start, start + match[0].length]);
+  }
+  for (const pattern of [WORD_MONEY_PATTERN, PREFIX_WORD_MONEY_PATTERN]) {
+    for (const match of text.matchAll(pattern)) {
+      const start = match.index!;
+      if (covered.some(([a, b]) => start < b && start + match[0].length > a)) continue;
+      moneyFigures.push({ start, figure: {
+        raw: match[0], value: toNumber(match[1]!.replace(/\s/g, "")) * (match[2] ? 1000 : 1), kind: "money",
+      } });
+      covered.push([start, start + match[0].length]);
+    }
   }
   for (const match of text.matchAll(ACCOUNTING_BARE_MONEY_PATTERN)) {
     const start = match.index!;
@@ -184,7 +203,7 @@ export function statedFigures(text: string): StatedFigure[] {
 export function knownNumbers(...sources: string[]): KnownFigure[] {
   const values = new Map<string, KnownFigure>();
   for (const raw of sources) {
-    const source = raw.replace(/\b\d{4}-\d{2}(?:-\d{2})?\b/g, " ").replace(/\[(?:ref|page):[^\]]*\]/g, " ");
+    const source = raw.replace(/\b\d{4}-\d{2}(?:-\d{2})?\b/g, " ").replace(/\[(?:ref|page|fact):[^\]]*\]/g, " ");
     for (const figure of statedFigures(source)) {
       if (Number.isFinite(figure.value)) {
         const value = Object.is(figure.value, -0) ? 0 : figure.value;
@@ -252,6 +271,131 @@ export function withoutUnknownFigures(text: string, known: KnownFigure[]): strin
   return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
+interface FinancialFact {
+  tag: string;
+  figures: KnownFigure[];
+  subjects: string[];
+}
+
+const SUBJECT_STOP_WORDS = new Set((
+  "the a an your you our their this that these those record records equivalent period total amount " +
+  "was were are is be been have has had cost costs spent spend spending paid purchase " +
+  "today todays reference against about " +
+  "from for and with before after on per as of in to at php peso pesos piso pisos"
+).split(" "));
+
+function subjectWords(text: string): string[] {
+  return [...new Set((text.toLowerCase().match(/[\p{L}]{3,}/gu) ?? [])
+    .filter((word) => !SUBJECT_STOP_WORDS.has(word)))];
+}
+
+/** Fact tags bind each financial line before the context budget is applied. */
+export function tagFinancialFacts(lines: readonly string[]): string[] {
+  let index = 0;
+  return lines.map((line) => {
+    const clean = line.replace(/\[fact:[^\]]*\]/g, "").trimEnd();
+    return statedFigures(clean).length > 0 ? `${clean} [fact:f${++index}]` : clean;
+  });
+}
+
+function financialFacts(context: string): FinancialFact[] {
+  return context.split("\n").flatMap((line, index) => {
+    const figures = knownNumbers(line);
+    if (figures.length === 0) return [];
+    const first = statedFigures(line)[0]!;
+    const prefix = line.slice(0, line.indexOf(first.raw));
+    return [{ tag: line.match(/\[fact:f\d+\]/)?.[0] ?? `[fact:f${index}]`, figures, subjects: subjectWords(prefix) }];
+  });
+}
+
+function claimParts(text: string): string[] {
+  return text.split("\n").flatMap((line) => /^\s*(?:[-*•]|\d+\.)\s/.test(line)
+    ? [line]
+    : line.split(/(?<=[.!?])\s+/));
+}
+
+function hypothesisClaim(text: string, figurePosition: number, figureLength: number): boolean {
+  // A condition in an introductory clause does not qualify a later recorded claim.
+  const masked = text.replace(/\[(?:ref|fact|page):[^\]]*\]/g, (tag) => " ".repeat(tag.length));
+  const prefix = masked.slice(0, figurePosition + figureLength)
+    .split(/(?<!\d),|,(?!\d)|[;:]|[—–]|\b(?:and|but|pero|at)\b/i).at(-1)!;
+  const beforeFigure = prefix.slice(0, -figureLength);
+  const conditional = beforeFigure.match(/\b(?:if|assum(?:e|ing)|suppose|kung|sakali|halimbawa)\s+(.*)$/i);
+  if (conditional) {
+    const predicate = conditional[1]!.trim().replace(/^that\s+/i, "");
+    const monetaryTail = /^(?:(?:about|around|roughly|approximately|only|a|total|of|ng|nang)\s*)*$/i;
+    const governed = predicate.match(/\b(?:is|are|was|were|costs?|would(?:\s+be)?|could(?:\s+be)?|might(?:\s+be)?|spend|spent|pay|paid|buy|bought|have|had|need|want|ay|gagastos|magbabayad|bibili|kailangan|gusto)\b/i);
+    if (governed) {
+      const subject = predicate.slice(0, governed.index).trim();
+      const tail = predicate.slice(governed.index! + governed[0].length).trim();
+      // The first predicate must govern this amount, rather than introduce a recap or explanation.
+      if (monetaryTail.test(tail) && subject.length > 0) return true;
+      if (/^(?:gagastos|magbabayad|bibili)$/i.test(governed[0])
+        && /^(?:(?:ako|ka|tayo|kami|sila|siya|ko|mo|ng|nang)\s*)*$/i.test(tail)) return true;
+    } else if (predicate.length === 0) return true;
+  }
+  if (/\bhypothetical(?:\s+(?:amount|expense|cost|purchase|funds|budget|of))*\s*$/i.test(beforeFigure)) return true;
+  if (/\b(?:you mentioned|you said|sinabi mo)\b/i.test(prefix)) return true;
+  if (/\b(?:was|were|spent|paid|recorded|actual|nagbayad|binayaran|ginastos|naitala)\b/i.test(prefix)) return false;
+  const suffixClause = text.slice(figurePosition + figureLength).split(/\b(?:and|but|at|pero)\b|[;,]/i)[0]!;
+  return /\b(?:would|could|planned|planning|balak)\b/i.test(prefix + suffixClause);
+}
+
+function unsupportedClaims(
+  text: string,
+  context: string,
+  question: string,
+  references: ReadonlyMap<string, RecordReference>,
+): string[] {
+  const contextKnown = knownNumbers(context);
+  const questionKnown = knownNumbers(question);
+  const facts = financialFacts(context);
+  const allSubjects = new Set(facts.flatMap((fact) => fact.subjects));
+  return claimParts(text).filter((claim) => {
+    const figures = statedFigures(claim);
+    if (figures.length === 0) return false;
+    const citedTags: string[] = claim.match(/\[fact:f\d+\]/g) ?? [];
+    const citedFacts = facts.filter((fact) => citedTags.includes(fact.tag));
+    if (citedTags.some((tag) => !facts.some((fact) => fact.tag === tag))) return true;
+    const namedRecords = [...references].filter(([tag, record]) => claim.includes(tag)
+      || (record.label.length >= 3 && claim.toLowerCase().includes(record.label.toLowerCase())));
+    let cursor = 0;
+    return figures.some((figure) => {
+      const previousEnd = cursor;
+      const position = claim.indexOf(figure.raw, cursor);
+      cursor = position + figure.raw.length;
+      if (isKnownFigure(figure, questionKnown) && hypothesisClaim(claim, position, figure.raw.length)) return false;
+      if (!isKnownFigure(figure, contextKnown)) {
+        return true;
+      }
+      if (citedTags.length > 0 && !citedFacts.some((fact) => isKnownFigure(figure, fact.figures))) return true;
+      const nearby = claim.slice(Math.max(0, position - 35), position).toLowerCase();
+      const comparison = /\b(?:usual|average|mean|normally|share|target|gap|basis|karaniwan|average)\b/.test(nearby);
+      if (figure.kind === "money" && namedRecords.length > 0 && !comparison) {
+        const nearest = namedRecords.map(([tag, record]) => ({
+          record,
+          distance: Math.min(...[claim.indexOf(tag), claim.toLowerCase().indexOf(record.label.toLowerCase())]
+            .filter((offset) => offset >= 0).map((offset) => Math.abs(offset - position))),
+        })).sort((left, right) => left.distance - right.distance
+          || right.record.label.length - left.record.label.length)[0]!;
+        if (!isKnownFigure(figure, [{ kind: "money", value: nearest.record.amount }])) return true;
+      }
+      const candidates = facts.filter((fact) => isKnownFigure(figure, fact.figures));
+      const localSubjects = subjectWords(claim.slice(previousEnd, position))
+        .filter((word) => allSubjects.has(word));
+      const claimSubjects = localSubjects.length > 0 ? localSubjects
+        : subjectWords(claim).filter((word) => allSubjects.has(word));
+      const distinguishingSubjects = claimSubjects.filter((subject) =>
+        facts.some((fact) => !fact.subjects.includes(subject)),
+      );
+      const requiredSubjects = distinguishingSubjects.length > 0 ? distinguishingSubjects : claimSubjects;
+      // Named subjects must agree with the source line; a value alone is insufficient.
+      return requiredSubjects.length > 0 && !candidates.some((fact) =>
+        requiredSubjects.every((subject) => fact.subjects.includes(subject)));
+    });
+  });
+}
+
 // ============================================================
 // Tags and follow-ups
 // ============================================================
@@ -271,7 +415,7 @@ export function splitFollowUps(text: string): { body: string; followUps: string[
   const body = (text.slice(0, match.index) + text.slice(match.index! + match[0].length)).trim();
   const followUps = match[1]!
     .split("|")
-    .map((q) => q.replace(/\[(?:ref|page):[^\]]*\]/g, "").trim())
+    .map((q) => q.replace(/\[(?:ref|page|fact):[^\]]*\]/g, "").trim())
     .filter((q) => q.length >= 6 && q.length <= 90 && q.endsWith("?"));
   return { body, followUps: [...new Set(followUps)].slice(0, 3) };
 }
@@ -297,9 +441,7 @@ export function resolveTags(
   // model used as a sentence's object ("check it on [page:records].") would
   // leave "check it on." behind, so the preposition goes with it.
   const cleaned = text
-    .replace(/\[(?:ref|page):[^\]]*\]/g, "\u0000")
-    .replace(/\s+(?:on|at|in|via|from|to|using)(?:\s+the)?\s*\u0000/gi, "\u0000")
-    .replace(/\u0000/g, "")
+    .replace(/(?:\s+(?:on|at|in|via|from|to|using)(?:\s+the)?\s*)?\[(?:ref|page|fact):[^\]]*\]/gi, "")
     .replace(/[ \t]+([.,;:!?)])/g, "$1")
     .replace(/\(\s*\)/g, "")
     .replace(/[ \t]{2,}/g, " ")
@@ -355,33 +497,35 @@ export async function groundAnswer(
   // The outage placeholder is FinSight's own sentence, not a model answer.
   if (first.provider === "unavailable") return { ...first, metadata: { ...baseMetadata, actions: [] } };
 
-  const known = knownNumbers(askInput.context, askInput.question);
   let draft = splitFollowUps(first.answer);
   let provider = first.provider;
   let amountCheck: AmountCheck = "passed";
 
-  const unknown = unknownFigures(draft.body, known);
-  if (unknown.length > 0) {
+  const invalidClaims = unsupportedClaims(draft.body, askInput.context, askInput.question, references);
+  if (invalidClaims.length > 0) {
     const second = await ask({
       ...askInput,
       revisionNote:
-        `Your previous draft used figures that are not in CONTEXT: ${[...new Set(unknown)].join(", ")}. ` +
-        "Answer again using only figures that appear in CONTEXT, copied exactly. Do not add, subtract or estimate.",
+        `Your previous draft contains unsupported financial claims: ${invalidClaims.join(" ")}. ` +
+        "Copy the figure with its own source subject and fact or record tag from CONTEXT. " +
+        "A number in the question is an owner-supplied assumption, never a recorded fact. " +
+        "Label hypothetical figures conditionally. Do not add, subtract or estimate.",
     });
     if (second.provider !== "unavailable") {
       draft = splitFollowUps(second.answer);
       provider = second.provider;
       amountCheck = "revised";
     }
-    if (unknownFigures(draft.body, known).length > 0) {
-      draft = { body: withoutUnknownFigures(draft.body, known), followUps: draft.followUps };
+    const stillInvalid = new Set(unsupportedClaims(draft.body, askInput.context, askInput.question, references));
+    if (stillInvalid.size > 0) {
+      draft = { body: claimParts(draft.body).filter((claim) => !stillInvalid.has(claim)).join("\n").trim(), followUps: draft.followUps };
       amountCheck = "trimmed";
     }
   }
 
   const resolved = resolveTags(draft.body, references);
   const text = ownersRecords(resolved.text.trim()) || AMOUNT_FALLBACK_ANSWER;
-  const followUps = draft.followUps.filter((q) => unknownFigures(q, known).length === 0);
+  const followUps = draft.followUps.filter((q) => unsupportedClaims(q, askInput.context, askInput.question, references).length === 0);
 
   return {
     answer: text,

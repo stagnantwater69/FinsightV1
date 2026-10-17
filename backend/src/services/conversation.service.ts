@@ -1,7 +1,9 @@
-import { Prisma, type ChatMessage, type Conversation } from "@prisma/client";
+import { ChatSendRequestStatus, Prisma, type ChatMessage, type ChatSendRequest, type Conversation } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { ApiError } from "../middleware/error.middleware";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
+import { dateCursorScope, datePageSize, decodeDateCursor, finishDatePage, invalidDateCursor, type DatePageInput } from "../lib/datePagination";
+import { chatSendIdentity, chatSendKeyHash, checkChatSendReplay, claimChatSendRequest, completeChatSendRequest, deletedChatSend, findChatSendRequest, resolveChatSendFailure, storedChatSendError, type ChatSendError, type ChatSendIdentity } from "../lib/chatSendRequest";
 import { buildModuleContext, type ChatFocus, type InteractionModule } from "./aiContext.service";
 import { askFinSight, HISTORY_TURNS_FOR_CONTEXT, truncateAnswer, type ConversationTurn } from "./ai.service";
 import { groundAnswer, type AnswerMetadata } from "./aiAnswer.service";
@@ -64,6 +66,66 @@ export interface ChatSendResult {
   assistantMessage: ChatMessageDTO;
   provider: "gemini" | "openrouter" | "unavailable";
   detectedAmount: number | null;
+}
+
+export interface ChatSendStatusDTO {
+  status: "PROCESSING" | "COMPLETE" | "FAILED" | "DELETED";
+  result: ChatSendResult | null;
+  error: ChatSendError | null;
+  createdAt: Date;
+  completedAt: Date | null;
+}
+
+function restoredChatSendResult(request: ChatSendRequest): ChatSendResult {
+  const stored = request.response as unknown as ChatSendResult;
+  return {
+    ...stored,
+    conversation: {
+      ...stored.conversation,
+      createdAt: new Date(String(stored.conversation.createdAt)),
+      lastMessageAt: new Date(String(stored.conversation.lastMessageAt)),
+    },
+    userMessage: { ...stored.userMessage, createdAt: new Date(String(stored.userMessage.createdAt)) },
+    assistantMessage: { ...stored.assistantMessage, createdAt: new Date(String(stored.assistantMessage.createdAt)) },
+  };
+}
+
+function replayChatSend(request: ChatSendRequest, identity: ChatSendIdentity): ChatSendResult {
+  checkChatSendReplay(request, identity);
+  return restoredChatSendResult(request);
+}
+
+async function runChatSendOutcome(identity: ChatSendIdentity | undefined, run: () => Promise<ChatSendResult>): Promise<ChatSendResult> {
+  try {
+    return await run();
+  } catch (error) {
+    if (!identity) throw error;
+    return replayChatSend(await resolveChatSendFailure(identity, error), identity);
+  }
+}
+
+export async function getChatSendStatus(userId: number, businessProfileId: number, key: string): Promise<ChatSendStatusDTO> {
+  await requireOwnedBusinessProfile(userId, businessProfileId);
+  const request = await prisma.chatSendRequest.findFirst({
+    where: { keyHash: chatSendKeyHash(userId, businessProfileId, key), userId, businessProfileId },
+  });
+  if (!request) throw new ApiError(404, "Message request not found");
+  const common = { createdAt: request.createdAt, completedAt: request.completedAt };
+  if (request.status === ChatSendRequestStatus.COMPLETE) {
+    if (request.conversationId === null) {
+      return {
+        ...common,
+        status: "DELETED",
+        result: null,
+        error: { status: 409, code: "CHAT_SEND_CONVERSATION_DELETED", message: "The conversation from this send was deleted." },
+      };
+    }
+    return { ...common, status: "COMPLETE", result: restoredChatSendResult(request), error: null };
+  }
+  if (request.status === ChatSendRequestStatus.FAILED) {
+    return { ...common, status: "FAILED", result: null, error: storedChatSendError(request) };
+  }
+  return { ...common, status: "PROCESSING", result: null, error: null };
 }
 
 function toConversationDTO(conversation: Conversation): ConversationSummaryDTO {
@@ -155,35 +217,63 @@ export async function listConversations(
   businessProfileId: number,
   limit: number = DEFAULT_LIST_LIMIT,
 ): Promise<ConversationSummaryDTO[]> {
-  await requireOwnedBusinessProfile(userId, businessProfileId);
+  return (await listConversationsPage(userId, businessProfileId, { pageSize: limit })).items;
+}
 
+export async function listConversationsPage(
+  userId: number,
+  businessProfileId: number,
+  input: DatePageInput,
+) {
+  await requireOwnedBusinessProfile(userId, businessProfileId);
+  const pageSize = datePageSize(input);
+  const scope = dateCursorScope(["conversations", userId, businessProfileId]);
+  const cursor = decodeDateCursor(input.cursor, scope);
+  if (cursor && !await prisma.conversation.findFirst({ where: { id: cursor.id, userId, businessProfileId }, select: { id: true } })) {
+    invalidDateCursor();
+  }
   const conversations = await prisma.conversation.findMany({
-    where: { userId, businessProfileId },
-    orderBy: { lastMessageAt: "desc" },
-    take: limit,
+    where: {
+      userId,
+      businessProfileId,
+      ...(cursor ? { OR: [{ lastMessageAt: { lt: cursor.at } }, { lastMessageAt: cursor.at, id: { lt: cursor.id } }] } : {}),
+    },
+    orderBy: [{ lastMessageAt: "desc" }, { id: "desc" }],
+    take: pageSize + 1,
   });
-  return conversations.map(toConversationDTO);
+  const page = finishDatePage(conversations, pageSize, scope, (row) => row.lastMessageAt);
+  return { ...page, items: page.items.map(toConversationDTO) };
 }
 
 /**
- * One conversation with its full message list, oldest first.
+ * One conversation with a bounded message page, oldest first within the page.
  *
  * The `userId` in the WHERE clause is the isolation boundary: a conversation
  * belonging to someone else does not match, so it 404s indistinguishably from
  * one that never existed.
  */
-export async function getConversation(userId: number, id: number) {
-  const conversation = await prisma.conversation.findFirst({
-    where: { id, userId },
-    include: { messages: { orderBy: { createdAt: "asc" } } },
-  });
-  if (!conversation) {
-    throw new ApiError(404, "Conversation not found");
+export async function getConversation(userId: number, id: number, input: DatePageInput = { pageSize: 100 }) {
+  const conversation = await requireOwnedConversation(userId, id);
+  const pageSize = datePageSize(input);
+  const scope = dateCursorScope(["conversation-messages", userId, conversation.businessProfileId, id]);
+  const cursor = decodeDateCursor(input.cursor, scope);
+  if (cursor && !await prisma.chatMessage.findFirst({ where: { id: cursor.id, conversationId: id }, select: { id: true } })) {
+    invalidDateCursor();
   }
+  const messages = await prisma.chatMessage.findMany({
+    where: {
+      conversationId: id,
+      ...(cursor ? { OR: [{ createdAt: { lt: cursor.at } }, { createdAt: cursor.at, id: { lt: cursor.id } }] } : {}),
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: pageSize + 1,
+  });
+  const page = finishDatePage(messages, pageSize, scope, (row) => row.createdAt);
   return {
     ...toConversationDTO(conversation),
     businessProfileId: conversation.businessProfileId,
-    messages: conversation.messages.map(toMessageDTO),
+    messages: page.items.reverse().map(toMessageDTO),
+    nextCursor: page.nextCursor,
   };
 }
 
@@ -272,49 +362,65 @@ export async function createConversationWithFirstMessage(
   context?: string,
   reductionOpportunity?: ReductionOpportunity,
   focus?: ChatFocus,
+  idempotencyKey?: string,
 ): Promise<ChatSendResult> {
-  // Strict on creation: a focus that is not this owner's 404s before a
-  // conversation row exists or a model is billed.
-  const { answer, provider, metadata, detectedAmount } = await askInConversation(
-    userId,
-    businessProfileId,
-    originModule,
-    question,
-    [],
-    context,
-    reductionOpportunity,
-    focus ? { value: focus, strict: true } : null,
-  );
+  const identity = idempotencyKey === undefined ? undefined : chatSendIdentity(userId, businessProfileId, idempotencyKey, [
+    "create", businessProfileId, originModule, question, title ?? null, context ?? null, reductionOpportunity ?? null, focus ?? null,
+  ]);
+  if (identity) {
+    await requireOwnedBusinessProfile(userId, businessProfileId);
+    const previous = await findChatSendRequest(identity);
+    if (previous) return replayChatSend(previous, identity);
+    const concurrent = await claimChatSendRequest(identity);
+    if (concurrent) return replayChatSend(concurrent, identity);
+  }
+  return runChatSendOutcome(identity, async () => {
+    // Strict on creation: a focus that is not this owner's 404s before a
+    // conversation row exists or a model is billed.
+    const { answer, provider, metadata, detectedAmount } = await askInConversation(
+      userId,
+      businessProfileId,
+      originModule,
+      question,
+      [],
+      context,
+      reductionOpportunity,
+      focus ? { value: focus, strict: true } : null,
+    );
 
-  const storedTitle = title?.trim() ? title.trim().slice(0, TITLE_MAX_LENGTH) : deriveTitle(question);
-  const storedAnswer = truncateAnswer(answer, MESSAGE_MAX_LENGTH);
+    const storedTitle = title?.trim() ? title.trim().slice(0, TITLE_MAX_LENGTH) : deriveTitle(question);
+    const storedAnswer = truncateAnswer(answer, MESSAGE_MAX_LENGTH);
 
-  const created = await prisma.$transaction(async (tx) => {
-    const conversation = await tx.conversation.create({
-      data: {
-        userId,
-        businessProfileId,
-        title: storedTitle,
-        originModule,
-        ...(focus ? { focus: focus as unknown as Prisma.InputJsonValue } : {}),
-      },
+    const created = await prisma.$transaction(async (tx) => {
+      const conversation = await tx.conversation.create({
+        data: {
+          userId,
+          businessProfileId,
+          title: storedTitle,
+          originModule,
+          ...(focus ? { focus: focus as unknown as Prisma.InputJsonValue } : {}),
+        },
+      });
+      const userMessage = await tx.chatMessage.create({
+        data: { conversationId: conversation.id, role: "user", content: question },
+      });
+      const assistantMessage = await tx.chatMessage.create({
+        data: { conversationId: conversation.id, role: "assistant", content: storedAnswer, metadata: metadataJson(metadata) },
+      });
+      const result: ChatSendResult = {
+        conversation: toConversationDTO(conversation),
+        userMessage: toMessageDTO(userMessage),
+        assistantMessage: toMessageDTO(assistantMessage),
+        provider,
+        detectedAmount,
+      };
+      if (identity) {
+        await completeChatSendRequest(tx, identity, conversation.id, JSON.parse(JSON.stringify(result)) as Prisma.InputJsonValue);
+      }
+      return result;
     });
-    const userMessage = await tx.chatMessage.create({
-      data: { conversationId: conversation.id, role: "user", content: question },
-    });
-    const assistantMessage = await tx.chatMessage.create({
-      data: { conversationId: conversation.id, role: "assistant", content: storedAnswer, metadata: metadataJson(metadata) },
-    });
-    return { conversation, userMessage, assistantMessage };
+    return created;
   });
-
-  return {
-    conversation: toConversationDTO(created.conversation),
-    userMessage: toMessageDTO(created.userMessage),
-    assistantMessage: toMessageDTO(created.assistantMessage),
-    provider,
-    detectedAmount,
-  };
 }
 
 /**
@@ -328,67 +434,101 @@ export async function appendMessage(
   context?: string,
   reductionOpportunity?: ReductionOpportunity,
   focus?: ChatFocus,
+  idempotencyKey?: string,
+  businessProfileId?: number,
 ): Promise<ChatSendResult> {
+  let identity: ChatSendIdentity | undefined;
+  if (idempotencyKey !== undefined && businessProfileId !== undefined) {
+    await requireOwnedBusinessProfile(userId, businessProfileId);
+    identity = chatSendIdentity(userId, businessProfileId, idempotencyKey, [
+      "append", businessProfileId, conversationId, question, context ?? null, reductionOpportunity ?? null, focus ?? null,
+    ]);
+    const previous = await findChatSendRequest(identity);
+    if (previous) return replayChatSend(previous, identity);
+  }
   const conversation = await requireOwnedConversation(userId, conversationId);
-  // A new focus (the owner pressed "Explain this flag" on a different card
-  // while this thread was open) replaces the stored one and is held to the
-  // same strict check as creation; the stored one is re-validated leniently,
-  // so a flag resolved mid-conversation just drops out of the context.
-  const activeFocus = focus
-    ? { value: focus, strict: true }
-    : (() => {
-        const stored = storedFocus(conversation.focus);
-        return stored ? { value: stored, strict: false } : null;
-      })();
+  if (businessProfileId !== undefined && conversation.businessProfileId !== businessProfileId) {
+    throw new ApiError(404, "Conversation not found");
+  }
+  if (idempotencyKey !== undefined) {
+    identity ??= chatSendIdentity(userId, conversation.businessProfileId, idempotencyKey, [
+      "append", conversation.businessProfileId, conversationId, question, context ?? null, reductionOpportunity ?? null, focus ?? null,
+    ]);
+    const concurrent = await claimChatSendRequest(identity, conversationId);
+    if (concurrent) return replayChatSend(concurrent, identity);
+  }
+  return runChatSendOutcome(identity, async () => {
+    // A new focus (the owner pressed "Explain this flag" on a different card
+    // while this thread was open) replaces the stored one and is held to the
+    // same strict check as creation; the stored one is re-validated leniently,
+    // so a flag resolved mid-conversation just drops out of the context.
+    const activeFocus = focus
+      ? { value: focus, strict: true }
+      : (() => {
+          const stored = storedFocus(conversation.focus);
+          return stored ? { value: stored, strict: false } : null;
+        })();
 
-  // Newest first, then reversed: the tail of a long thread is what gets
-  // replayed, not its opening.
-  const recent = await prisma.chatMessage.findMany({
-    where: { conversationId: conversation.id },
-    orderBy: { createdAt: "desc" },
-    take: HISTORY_TURNS_FOR_CONTEXT * 2,
+    // Newest first, then reversed: the tail of a long thread is what gets
+    // replayed, not its opening.
+    const recent = await prisma.chatMessage.findMany({
+      where: { conversationId: conversation.id },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: HISTORY_TURNS_FOR_CONTEXT * 2,
+    });
+    const priorTurns = toPriorTurns(recent.reverse());
+
+    const { answer, provider, metadata, detectedAmount } = await askInConversation(
+      userId,
+      conversation.businessProfileId,
+      conversation.originModule as InteractionModule,
+      question,
+      priorTurns,
+      context,
+      reductionOpportunity,
+      activeFocus,
+    );
+
+    const storedAnswer = truncateAnswer(answer, MESSAGE_MAX_LENGTH);
+
+    const written = await prisma.$transaction(async (tx) => {
+      const existing = await tx.$queryRaw<Array<{ id: number }>>`
+        SELECT "Conversation_ID" AS id FROM "Conversation"
+        WHERE "Conversation_ID" = ${conversation.id}
+          AND "User_ID" = ${userId}
+          AND "BusinessProfile_ID" = ${conversation.businessProfileId}
+        FOR UPDATE
+      `;
+      if (existing.length !== 1) deletedChatSend();
+      const userMessage = await tx.chatMessage.create({
+        data: { conversationId: conversation.id, role: "user", content: question },
+      });
+      const assistantMessage = await tx.chatMessage.create({
+        data: { conversationId: conversation.id, role: "assistant", content: storedAnswer, metadata: metadataJson(metadata) },
+      });
+      // lastMessageAt is what orders the sidebar, so it advances with the write
+      // rather than being derived at read time from a join.
+      const updated = await tx.conversation.update({
+        where: { id: conversation.id },
+        data: {
+          lastMessageAt: assistantMessage.createdAt,
+          ...(focus ? { focus: focus as unknown as Prisma.InputJsonValue } : {}),
+        },
+      });
+      const result: ChatSendResult = {
+        conversation: toConversationDTO(updated),
+        userMessage: toMessageDTO(userMessage),
+        assistantMessage: toMessageDTO(assistantMessage),
+        provider,
+        detectedAmount,
+      };
+      if (identity) {
+        await completeChatSendRequest(tx, identity, conversation.id, JSON.parse(JSON.stringify(result)) as Prisma.InputJsonValue);
+      }
+      return result;
+    });
+    return written;
   });
-  const priorTurns = toPriorTurns(recent.reverse());
-
-  const { answer, provider, metadata, detectedAmount } = await askInConversation(
-    userId,
-    conversation.businessProfileId,
-    conversation.originModule as InteractionModule,
-    question,
-    priorTurns,
-    context,
-    reductionOpportunity,
-    activeFocus,
-  );
-
-  const storedAnswer = truncateAnswer(answer, MESSAGE_MAX_LENGTH);
-
-  const written = await prisma.$transaction(async (tx) => {
-    const userMessage = await tx.chatMessage.create({
-      data: { conversationId: conversation.id, role: "user", content: question },
-    });
-    const assistantMessage = await tx.chatMessage.create({
-      data: { conversationId: conversation.id, role: "assistant", content: storedAnswer, metadata: metadataJson(metadata) },
-    });
-    // lastMessageAt is what orders the sidebar, so it advances with the write
-    // rather than being derived at read time from a join.
-    const updated = await tx.conversation.update({
-      where: { id: conversation.id },
-      data: {
-        lastMessageAt: assistantMessage.createdAt,
-        ...(focus ? { focus: focus as unknown as Prisma.InputJsonValue } : {}),
-      },
-    });
-    return { updated, userMessage, assistantMessage };
-  });
-
-  return {
-    conversation: toConversationDTO(written.updated),
-    userMessage: toMessageDTO(written.userMessage),
-    assistantMessage: toMessageDTO(written.assistantMessage),
-    provider,
-    detectedAmount,
-  };
 }
 
 export async function renameConversation(
@@ -409,10 +549,29 @@ export async function renameConversation(
   return toConversationDTO(updated);
 }
 
-/** One statement — ChatMessage cascades off the conversation row. */
+/** Keep replay identities after deletion, without retaining the deleted message content. */
 export async function deleteConversation(userId: number, id: number): Promise<void> {
   const conversation = await requireOwnedConversation(userId, id);
-  await prisma.conversation.delete({ where: { id: conversation.id } });
+  await prisma.$transaction(async (tx) => {
+    const existing = await tx.$queryRaw<Array<{ id: number }>>`
+      SELECT "Conversation_ID" AS id FROM "Conversation"
+      WHERE "Conversation_ID" = ${conversation.id}
+        AND "User_ID" = ${userId}
+        AND "BusinessProfile_ID" = ${conversation.businessProfileId}
+      FOR UPDATE
+    `;
+    if (existing.length !== 1) throw new ApiError(404, "Conversation not found");
+    await tx.chatSendRequest.updateMany({
+      where: {
+        userId,
+        businessProfileId: conversation.businessProfileId,
+        conversationId: conversation.id,
+        status: ChatSendRequestStatus.COMPLETE,
+      },
+      data: { response: {} },
+    });
+    await tx.conversation.delete({ where: { id: conversation.id, userId, businessProfileId: conversation.businessProfileId } });
+  });
 }
 
 /**

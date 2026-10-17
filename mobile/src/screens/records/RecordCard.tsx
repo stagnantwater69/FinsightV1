@@ -1,7 +1,8 @@
-import { Pressable, View } from "react-native";
+import { Pressable, useWindowDimensions, View } from "react-native";
 import { Swipeable } from "react-native-gesture-handler";
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { Card, Money, T } from "../../components/ui";
+import { TAP_FLOOR } from "../../components/touchTarget";
 import { formatMoney } from "../../lib/money";
 import * as haptics from "../../lib/haptics";
 import { font, radius, space, typeScale } from "../../theme/tokens";
@@ -50,6 +51,7 @@ function SwipeAction({
       accessibilityLabel={label}
       style={{
         width: 84,
+        minHeight: TAP_FLOOR,
         marginBottom: space.sm,
         backgroundColor: colour,
         alignItems: "center",
@@ -77,6 +79,8 @@ export function RecordCard({
   onResolve?: () => void;
 }) {
   const t = useTheme();
+  const { width, fontScale } = useWindowDimensions();
+  const stacked = width < 390 || fontScale > 1.2;
   const { brand, ink, statusText, statusSolid, statusSurface, textOnFill } = t;
   /*
    * Swipe reveals; it never acts on its own.
@@ -103,7 +107,7 @@ export function RecordCard({
    */
   const spoken = [
     r.description,
-    formatMoney(r.amount),
+    formatMoney(r.amount, { decimals: true }),
     `${r.date.slice(0, 10)}, ${r.type === "expense" ? `expense, ${categoryName}` : "sales"}`,
     r.duplicateStatus === "Flagged" ? "possible duplicate" : null,
     r.reviewStatus === "Needs Review" ? "needs review" : null,
@@ -143,14 +147,14 @@ export function RecordCard({
           >
             <Ionicons
               name={r.type === "expense" ? "bag-handle-outline" : "trending-up-outline"}
-              size={19}
+              size={20}
               color={r.type === "expense" ? statusText.serious : brand[700]}
             />
           </View>
 
           <View style={{ flex: 1 }}>
-            <View style={{ flexDirection: "row", gap: space.sm }}>
-              <T style={{ flex: 1, fontFamily: font.sansMedium, color: ink[900] }} numberOfLines={2}>
+            <View style={{ flexDirection: stacked ? "column" : "row", gap: space.sm }}>
+              <T style={{ flex: stacked ? undefined : 1, fontFamily: font.sansMedium, color: ink[900] }} numberOfLines={stacked ? undefined : 2}>
                 {r.description}
               </T>
               <Money
@@ -159,6 +163,7 @@ export function RecordCard({
                 weight="semibold"
                 decimals
                 color={r.type === "expense" ? ink[900] : brand[700]}
+                style={{ maxWidth: "100%" }}
               />
             </View>
             <T variant="caption" style={{ marginTop: 2 }}>
@@ -172,7 +177,7 @@ export function RecordCard({
               answerable at a glance.
             */}
             <View style={{ flexDirection: "row", alignItems: "center", gap: 5, marginTop: space.sm }}>
-              <Ionicons name={SOURCE_ICONS[r.source as RecordSource] ?? "ellipse-outline"} size={13} color={ink[400]} />
+              <Ionicons name={SOURCE_ICONS[r.source as RecordSource] ?? "ellipse-outline"} size={14} color={ink[400]} />
               <T variant="caption">{RECORD_SOURCE_LABELS[r.source as RecordSource] ?? r.source}</T>
             </View>
           </View>

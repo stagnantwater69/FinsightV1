@@ -192,7 +192,7 @@ export function Categories() {
       cell: (c) => (
         <Link
           to={`/records?type=expense&categoryId=${c.id}`}
-          className="tap-inline inline-flex items-center gap-1 font-medium text-brand-700 transition hover:text-brand-800"
+          className="tap-inline inline-flex items-center gap-1 link-action"
         >
           View records
           <IconArrowRight aria-hidden className="h-3.5 w-3.5" />

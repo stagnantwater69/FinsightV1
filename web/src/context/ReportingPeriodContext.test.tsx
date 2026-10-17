@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BusinessProfile } from "../lib/types";
 import { invalidateServerState } from "../lib/serverStateCache";
 import { PeriodFilter } from "../components/PeriodFilter";
-import { ReportingPeriodProvider, useReportingPeriod } from "./ReportingPeriodContext";
+import { ReportingPeriodProvider, ReportingPeriodScope, useReportingPeriod } from "./ReportingPeriodContext";
 
 /** The month picker renders its options only while open. */
 async function findMonthOption(name: string) {
@@ -267,5 +267,120 @@ describe("ReportingPeriodProvider business ownership", () => {
     expect(await findMonthOption("September 2026")).toBeInTheDocument();
     expect(await findMonthOption("August 2026")).toBeInTheDocument();
     expect(requestedBusinessIds).toEqual([profileA.id, profileA.id, profileA.id]);
+  });
+});
+
+const scopeNames = ["dashboard", "expense-insight", "recovery-target", "spending-impact"] as const;
+const scopedPeriods: Partial<Record<(typeof scopeNames)[number], ReturnType<typeof useReportingPeriod>>> = {};
+
+function ScopedProbe({ name }: { name: (typeof scopeNames)[number] }) {
+  scopedPeriods[name] = useReportingPeriod();
+  return null;
+}
+
+function scopedTree(showInsights = true) {
+  return (
+    <ReportingPeriodProvider>
+      {scopeNames.filter((name) => showInsights || name !== "expense-insight").map((name) => (
+        <ReportingPeriodScope key={name} scope={name}>
+          <ScopedProbe name={name} />
+        </ReportingPeriodScope>
+      ))}
+    </ReportingPeriodProvider>
+  );
+}
+
+async function waitForScopes() {
+  await waitFor(() => {
+    for (const name of scopeNames) expect(scopedPeriods[name]?.ready).toBe(true);
+  });
+}
+
+describe("independent page reporting periods", () => {
+  it("keeps Insight month and all-time choices separate from the other pages", async () => {
+    monthRequests[profileA.id] = [Promise.resolve({ data: { months: ["2026-08", "2026-07"] } })];
+    render(scopedTree());
+    await waitForScopes();
+    act(() => scopedPeriods["expense-insight"]!.setSelection({ kind: "month", month: "2026-07" }));
+    expect(scopedPeriods["expense-insight"]!.selection).toEqual({ kind: "month", month: "2026-07" });
+    for (const name of ["dashboard", "recovery-target", "spending-impact"] as const) {
+      expect(scopedPeriods[name]!.selection).toEqual({ kind: "month", month: "2026-08" });
+    }
+    act(() => scopedPeriods["expense-insight"]!.setSelection({ kind: "all" }));
+    act(() => scopedPeriods["recovery-target"]!.setSelection({ kind: "week" }));
+    expect(scopedPeriods["expense-insight"]!.selection).toEqual({ kind: "all" });
+    expect(scopedPeriods.dashboard!.selection).toEqual({ kind: "month", month: "2026-08" });
+    expect(scopedPeriods["spending-impact"]!.selection).toEqual({ kind: "month", month: "2026-08" });
+    expect(requestedBusinessIds).toEqual([profileA.id]);
+  });
+
+  it("restores each page's choice when its scope remounts", async () => {
+    monthRequests[profileA.id] = [Promise.resolve({ data: { months: ["2026-08", "2026-07"] } })];
+    const view = render(scopedTree());
+    await waitForScopes();
+    act(() => scopedPeriods["expense-insight"]!.setSelection({ kind: "all" }));
+    act(() => scopedPeriods.dashboard!.setSelection({ kind: "week" }));
+    view.rerender(scopedTree(false));
+    view.rerender(scopedTree());
+    await waitForScopes();
+    expect(scopedPeriods["expense-insight"]!.selection).toEqual({ kind: "all" });
+    expect(scopedPeriods.dashboard!.selection).toEqual({ kind: "week" });
+    expect(requestedBusinessIds).toEqual([profileA.id]);
+  });
+
+  it("ignores a legacy global choice when defaulting named page scopes", async () => {
+    window.sessionStorage.setItem("finsight.reportingPeriod.1", JSON.stringify({ kind: "all" }));
+    monthRequests[profileA.id] = [Promise.resolve({ data: { months: ["2026-08"] } })];
+    render(scopedTree());
+    await waitForScopes();
+    for (const name of scopeNames) {
+      expect(scopedPeriods[name]!.selection).toEqual({ kind: "month", month: "2026-08" });
+    }
+  });
+
+  it("gates saved months during a business switch and restores the first business's page choices", async () => {
+    const pending = deferred<{ data: { months: string[] } }>();
+    monthRequests[profileA.id] = [
+      Promise.resolve({ data: { months: ["2026-08", "2026-07"] } }),
+      Promise.resolve({ data: { months: ["2026-08", "2026-07"] } }),
+    ];
+    monthRequests[profileB.id] = [pending.promise];
+    const view = render(scopedTree());
+    await waitForScopes();
+    act(() => scopedPeriods.dashboard!.setSelection({ kind: "month", month: "2026-07" }));
+    act(() => scopedPeriods["expense-insight"]!.setSelection({ kind: "all" }));
+    selectedProfile = profileB;
+    view.rerender(scopedTree());
+    for (const name of scopeNames) {
+      expect(scopedPeriods[name]!.ready).toBe(false);
+      expect(scopedPeriods[name]!.months).toEqual([]);
+    }
+    await act(async () => pending.resolve({ data: { months: ["2025-12"] } }));
+    await waitForScopes();
+    for (const name of scopeNames) {
+      expect(scopedPeriods[name]!.selection).toEqual({ kind: "month", month: "2025-12" });
+    }
+    selectedProfile = profileA;
+    view.rerender(scopedTree());
+    expect(scopedPeriods.dashboard!.ready).toBe(false);
+    await waitForScopes();
+    expect(scopedPeriods.dashboard!.selection).toEqual({ kind: "month", month: "2026-07" });
+    expect(scopedPeriods["expense-insight"]!.selection).toEqual({ kind: "all" });
+    expect(scopedPeriods["recovery-target"]!.selection).toEqual({ kind: "month", month: "2026-08" });
+  });
+
+  it("shares one month refresh without replacing independent choices", async () => {
+    monthRequests[profileA.id] = [
+      Promise.resolve({ data: { months: ["2026-08", "2026-07"] } }),
+      Promise.resolve({ data: { months: ["2026-08", "2026-07"] } }),
+    ];
+    render(scopedTree());
+    await waitForScopes();
+    act(() => scopedPeriods["expense-insight"]!.setSelection({ kind: "all" }));
+    act(() => scopedPeriods.dashboard!.setSelection({ kind: "week" }));
+    act(() => invalidateServerState({ businessProfileId: profileA.id, tags: ["record-months"] }));
+    await waitFor(() => expect(requestedBusinessIds).toEqual([profileA.id, profileA.id]));
+    expect(scopedPeriods["expense-insight"]!.selection).toEqual({ kind: "all" });
+    expect(scopedPeriods.dashboard!.selection).toEqual({ kind: "week" });
   });
 });

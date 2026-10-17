@@ -2,6 +2,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { SkeletonBubble } from "../Skeleton";
 import { formatMoney } from "../Money";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { Button } from "../Button";
 import { AnswerExtras } from "./AnswerExtras";
 import type { ChatMessage, InteractionModule } from "../../lib/types";
 
@@ -103,6 +104,10 @@ interface Props {
   onRate?: (messageId: number, feedback: "up" | "down" | null) => void;
   /** A link under a reply is leaving for another page. */
   onNavigate?: () => void;
+  nextCursor?: string | null;
+  loadingOlder?: boolean;
+  onLoadOlder?: () => void;
+  onReload?: () => void;
 }
 
 export function ChatMessages({
@@ -117,19 +122,36 @@ export function ChatMessages({
   onFollowUp = onStarter,
   onRate = () => undefined,
   onNavigate = () => undefined,
+  nextCursor,
+  loadingOlder = false,
+  onLoadOlder,
+  onReload,
 }: Props) {
   const copy = MODULE_COPY[originModule];
   const bodyRef = useRef<HTMLDivElement>(null);
+  const olderScrollRef = useRef<{ height: number; top: number } | null>(null);
 
   useEffect(() => {
-    bodyRef.current?.scrollTo({ top: bodyRef.current.scrollHeight });
+    const node = bodyRef.current;
+    if (!node) return;
+    const previous = olderScrollRef.current;
+    if (previous) {
+      node.scrollTo({ top: node.scrollHeight - previous.height + previous.top });
+      olderScrollRef.current = null;
+    } else node.scrollTo({ top: node.scrollHeight });
   }, [messages, sending]);
+  useEffect(() => { if (!loadingOlder) olderScrollRef.current = null; }, [loadingOlder]);
 
   const welcome = messages.length === 0 && !loading;
 
   return (
     <div ref={bodyRef} className="scroll-slim min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-3">
+        {nextCursor && onLoadOlder ? <Button type="button" variant="secondary" disabled={loadingOlder || loading} onClick={() => {
+          const node = bodyRef.current;
+          if (node) olderScrollRef.current = { height: node.scrollHeight, top: node.scrollTop };
+          onLoadOlder();
+        }}>{loadingOlder ? "Loading older messages…" : "Older messages"}</Button> : null}
         {/*
           The opening line gets Fin at full size rather than the 24px avatar
           every later reply carries — this is the "ready to listen" moment in
@@ -168,7 +190,7 @@ export function ChatMessages({
           </div>
         ) : null}
 
-        {loading ? <p className="text-center text-xs text-ink-500">Loading this conversation…</p> : null}
+        {loading ? <p role="status" className="text-center text-xs text-ink-500">Loading this conversation…</p> : null}
 
         {messages.map((m, index) => {
           if (m.role === "user") {
@@ -201,6 +223,7 @@ export function ChatMessages({
         })}
 
         {sending ? <SkeletonBubble /> : null}
+        <p role="status" aria-live="polite" className="sr-only">{sending ? "FinSight is preparing an answer." : messages.length > 0 ? "Conversation updated." : ""}</p>
 
         {/*
           Both providers failed. The backend still returns a placeholder answer
@@ -228,9 +251,10 @@ export function ChatMessages({
         ) : null}
 
         {error ? (
-          <p role="alert" className="rounded-lg bg-tint-danger p-3 text-xs text-tone-danger">
-            {error}
-          </p>
+          <div className="rounded-lg bg-tint-danger p-3">
+            <p role="alert" className="text-xs text-tone-danger">{error}</p>
+            {onReload ? <Button type="button" variant="secondary" size="sm" className="mt-2" disabled={loading || loadingOlder} onClick={onReload}>Reload conversation</Button> : null}
+          </div>
         ) : null}
       </div>
     </div>

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Modal } from "./Modal";
 import { Button } from "./Button";
 import { useToast } from "./Toast";
@@ -8,6 +8,8 @@ import { api } from "../lib/api";
 import { getErrorMessage } from "../lib/errors";
 import type { RecordItem } from "../lib/types";
 import { AvailableFundsBaselineChoice, useAvailableFundsBaselineChoice } from "./AvailableFundsBaselineChoice";
+import { useManualRecordCreate } from "../lib/useManualRecordCreate";
+import { ManualCreateRecovery } from "./ManualCreateRecovery";
 
 export interface DuplicateSalesSeed {
   description: string;
@@ -51,6 +53,20 @@ export function AddSalesModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const recovery = useManualRecordCreate(businessProfileId, "sales", open && !editing);
+  const savePending = useRef(false);
+  const confirmedSave = useRef(false);
+  const formScope = `${recovery.ownerId}:${businessProfileId}:${open}:${recordId}`;
+  const currentScope = useRef(formScope);
+  currentScope.current = formScope;
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const frozenBody = recovery.pending?.body ?? recovery.deferredDraft;
+  const setTransactionDate = dateField.setDate;
+  useEffect(() => {
+    if (!frozenBody) return;
+    setTransactionDate(frozenBody.date); setDescription(frozenBody.description); setAmount(frozenBody.amount);
+  }, [frozenBody, setTransactionDate]);
 
   function reset() {
     dateField.setDate(dateField.today);
@@ -65,6 +81,7 @@ export function AddSalesModal({
   // three modes it was opened in.
   useEffect(() => {
     if (!open) return;
+    confirmedSave.current = false;
     reset();
     if (editing && recordId !== undefined) {
       setLoading(true);
@@ -95,7 +112,11 @@ export function AddSalesModal({
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (amount === "" || !dateField.check() || !baselineChoice.check()) return;
+    if (confirmedSave.current || savePending.current || recovery.busy || (!editing && recovery.loading)) return;
+    if (!recovery.pending && (amount === "" || !dateField.check() || !baselineChoice.check())) return;
+    savePending.current = true;
+    const requestScope = formScope;
+    const isCurrent = () => mounted.current && currentScope.current === requestScope;
     setError(null);
     setSubmitting(true);
     try {
@@ -105,33 +126,43 @@ export function AddSalesModal({
           { date, description, amount, ...baselineChoice.requestFields() },
           { serverStateScope: { businessProfileId } },
         );
+        if (!isCurrent()) return;
+        confirmedSave.current = true;
         toast("Changes saved");
       } else {
-        await api.post("/records/sales", {
+        const saved = await recovery.save(recovery.pending?.body ?? {
           businessProfileId,
           date,
           description,
-          amount,
+          amount: Number(amount),
           ...baselineChoice.requestFields(),
         });
+        if (!saved || !isCurrent()) return;
+        confirmedSave.current = true;
         toast("Sales reference saved");
       }
       reset();
-      onSaved();
-      onClose();
+      try { onSaved(); } finally { onClose(); }
     } catch (err) {
-      if (!dateField.absorb(err) && !(await baselineChoice.absorb(err))) setError(getErrorMessage(err));
+      if (!isCurrent()) return;
+      if (confirmedSave.current) { setError("Your record is saved. Close this form and refresh Records to see it."); return; }
+      if (recovery.pending || (!dateField.absorb(err) && !(await baselineChoice.absorb(err, isCurrent)))) {
+        if (isCurrent()) setError(getErrorMessage(err));
+      }
     } finally {
-      setSubmitting(false);
+      savePending.current = false;
+      if (isCurrent()) setSubmitting(false);
     }
   }
 
   return (
     <Modal open={open} onClose={handleClose} title={editing ? "Edit sales reference" : "Add sales reference"}>
       <form onSubmit={handleSubmit} className="space-y-4">
+        {!editing ? <ManualCreateRecovery recovery={recovery} /> : null}
         {loading ? <p className="text-sm text-ink-500">Loading…</p> : null}
+        <fieldset className="min-w-0 space-y-4" disabled={submitting || (!editing && (recovery.loading || recovery.frozen))}>
         <TransactionDateField field={dateField} />
-        <AvailableFundsBaselineChoice choice={baselineChoice} disabled={submitting || loading} />
+        {!recovery.pending ? <AvailableFundsBaselineChoice choice={baselineChoice} disabled={submitting || loading} /> : null}
         <Field label="Description" required>
           <TextInput required value={description} onChange={(e) => setDescription(e.target.value)} />
         </Field>
@@ -143,9 +174,10 @@ export function AddSalesModal({
             onChange={(e) => setAmount(e.target.value === "" ? "" : Number(e.target.value))}
           />
         </Field>
+        </fieldset>
         {error ? <FormError>{error}</FormError> : null}
-        <Button type="submit" variant="primary" fullWidth disabled={submitting || loading || dateField.invalid}>
-          {submitting ? "Saving…" : editing ? "Save changes" : "Save sales reference"}
+        <Button type="submit" variant="primary" fullWidth disabled={confirmedSave.current || submitting || recovery.busy || recovery.corrupt || loading || (!editing && recovery.loading) || (!recovery.pending && dateField.invalid)}>
+          {submitting ? "Saving…" : editing ? "Save changes" : recovery.pending?.confirmedRecord ? "Finish recovery" : recovery.pending ? "Retry original save" : "Save sales reference"}
         </Button>
       </form>
     </Modal>

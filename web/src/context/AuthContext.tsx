@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { supabase } from "../lib/supabaseClient";
 import { api, setSessionExpiredHandler } from "../lib/api";
 import { beginServerStateSession, endServerStateSession } from "../lib/serverStateCache";
+import { clearChatSendRecovery } from "../lib/chatSendRecovery";
 import type { LoginInput, Profile, RegisterInput, UpdateProfileInput, UserPreferences } from "../lib/types";
 
 interface AuthContextValue {
@@ -141,6 +142,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // during the initial profile fetch is just "not logged in", and telling a
       // first-time visitor their session expired would be a lie.
       if (signedInRef.current) setSessionExpired(true);
+      clearChatSendRecovery();
       replaceExpectedAccount(null);
       endServerStateSession();
       setProfile(null);
@@ -191,6 +193,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const { data: subscription } = supabase.auth.onAuthStateChange((event) => {
       if (event === "SIGNED_OUT") {
+        clearChatSendRecovery();
         replaceExpectedAccount(null);
         endServerStateSession();
         setProfile(null);
@@ -220,10 +223,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const installGuard = replaceExpectedAccount(nextProfile.id);
     endServerStateSession();
     try {
-      await supabase.auth.setSession({
+      const result = await supabase.auth.setSession({
         access_token: tokens.accessToken,
         refresh_token: tokens.refreshToken,
       });
+      if (result?.error) throw result.error;
     } catch (err) {
       if (accountIsCurrent(installGuard)) {
         replaceExpectedAccount(previousUserId);
@@ -282,6 +286,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function logout() {
+    clearChatSendRecovery();
     replaceExpectedAccount(null);
     endServerStateSession();
     // Local scope: this browser only. "Log out everywhere" is a separate,
@@ -310,6 +315,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw err;
     }
     if (!accountIsCurrent(logoutGuard)) return;
+    clearChatSendRecovery();
     // Remote revocation is authoritative, so local cleanup is best-effort.
     await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
     if (expectedUserIdRef.current !== null) return;

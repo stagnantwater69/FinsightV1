@@ -33,6 +33,7 @@ authRouter.post(
 // there is no requireAuth here: the account is not usable yet, so it could not
 // pass one. The service verifies the token against Supabase before trusting it.
 authRouter.post("/confirm-email", rateLimit(LIMITS.AUTH_LOGIN), asyncHandler(authController.confirmEmail));
+authRouter.post("/google", rateLimit(LIMITS.AUTH_LOGIN), asyncHandler(authController.loginWithGoogle));
 
 /*
  * The web → mobile session handoff.

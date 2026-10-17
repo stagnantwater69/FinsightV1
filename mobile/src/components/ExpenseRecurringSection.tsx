@@ -1,47 +1,21 @@
-import { ActivityIndicator, View } from "react-native";
+import { ActivityIndicator, Pressable, useWindowDimensions, View } from "react-native";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { ConnectionNotice } from "./ConnectionNotice";
-import { Button, Callout, Card, EmptyState, ErrorNote, T } from "./ui";
-import { Medallion, ScheduleRow } from "./InsightsShared";
-import { groupSchedules } from "../lib/recurringAgenda";
+import { ExpenseActionButton } from "./ExpenseActionButton";
+import { Button, Card, ErrorNote, T } from "./ui";
+import { formatDueDate, groupSchedules, overdueScheduleCount } from "../lib/recurringAgenda";
+import { formatMoney } from "../lib/money";
 import { font, radius, space, typeScale } from "../theme/tokens";
+import { TAP_FLOOR } from "./touchTarget";
 import { useTheme } from "../context/ThemeContext";
 import type { RecurringPattern, RecurringSchedule } from "../lib/types";
 import type { LoadNotice } from "../lib/connectionState";
 
-/**
- * The Recurring sub-section of Expense insight — the payments the owner has
- * told FinSight to watch, and under them the ones FinSight is offering to
- * watch.
- *
- * THAT ORDER IS THE POINT OF THIS SECTION. It used to show only candidates,
- * so a schedule disappeared the moment it was confirmed and there was no
- * screen anywhere that listed what FinSight was actually watching. An owner
- * who had confirmed five payments saw the same "none found yet" empty state
- * as one who had never seen a candidate at all.
- *
- * Split out of ExpenseBehaviorScreen.tsx as a pure presentational piece: the
- * two fetches (schedules, patterns) and the confirm/dismiss/open handlers
- * stay on the screen and are handed down as props.
- */
-export function ExpenseRecurringSection({
-  patternActionError,
-  scheduleState,
-  schedules,
-  candidates,
-  canConfirm,
-  scheduleNotice,
-  refreshSchedules,
-  scheduleRefreshing,
-  openSchedule,
-  confirmPattern,
-  dismissPattern,
-}: {
+export function ExpenseRecurringSection({ patternActionError, scheduleState, schedules, candidates, canConfirm, scheduleNotice, refreshSchedules, scheduleRefreshing, openSchedule, confirmPattern, dismissPattern, visibleScheduleIds, visibleCandidateIds }: {
+  visibleScheduleIds?: number[];
+  visibleCandidateIds?: number[];
   patternActionError: string | null;
   scheduleState: { data: RecurringSchedule[] | null; loading: boolean };
-  /**
-   * `null` when the agenda could not be read (typically the server's
-   * ANOMALY_RECURRING_ENABLED flag being off) — see recurringAvailability.
-   */
   schedules: RecurringSchedule[] | null;
   candidates: RecurringPattern[];
   canConfirm: boolean;
@@ -53,195 +27,112 @@ export function ExpenseRecurringSection({
   dismissPattern: (id: number) => void | Promise<void>;
 }) {
   const t = useTheme();
-  const { brand, ink, paper } = t;
+  const { width, fontScale } = useWindowDimensions();
+  const compact = width >= 360 && fontScale <= 1.1;
+  const overdue = overdueScheduleCount(schedules ?? []);
+  const visibleCandidates = visibleCandidateIds ? candidates.filter((pattern) => visibleCandidateIds.includes(pattern.id)) : candidates;
+  const groups = groupSchedules(schedules ?? []).map((group) => ({ ...group, total: group.items.length, items: visibleScheduleIds ? group.items.filter((schedule) => visibleScheduleIds.includes(schedule.id)) : group.items })).filter((group) => group.items.length > 0);
+  const empty = schedules !== null && schedules.length === 0 && candidates.length === 0 && !scheduleState.loading;
   return (
     <>
-      <ConnectionNotice
-        notice={scheduleNotice}
-        onRetry={() => void refreshSchedules()}
-        busy={scheduleRefreshing}
-      />
+      <ConnectionNotice notice={scheduleNotice} onRetry={() => void refreshSchedules()} busy={scheduleRefreshing} />
       {patternActionError ? <ErrorNote>{patternActionError}</ErrorNote> : null}
-      {scheduleState.loading && scheduleState.data === null && schedules !== null ? (
-        <ActivityIndicator color={brand[600]} />
-      ) : null}
-
-      {/*
-        THE ONLY STATE THAT MAY SAY "NOTHING HERE".
-
-        Both lists empty — nothing declared and nothing offered. The
-        old condition tested candidates alone, which told an owner
-        with schedules on file that none had been found.
-
-        `schedules !== null` is the second half of that same rule and
-        the more important one: an unread agenda is not an empty one.
-      */}
-      {schedules !== null && schedules.length === 0 && candidates.length === 0 && !scheduleState.loading ? (
-        <EmptyState
-          title="No repeating payments yet"
-          // `icon`, not a mascot: docs/mascot-scenario-library.md maps
-          // this state to a pose, but 04-empty-states/ ships no files
-          // on either client, and require()-ing a path that is not
-          // there is a build error rather than a missing picture.
-          icon="↻"
-          body="Rent, wages, a delivery you pay every week — add one and FinSight will tell you when it's late. It also offers them here once it notices the same expense a few times."
-          action={
-            <Button
-              title="Add a repeating payment"
-              variant="primary"
-              onPress={() => openSchedule()}
-            />
-          }
-        />
-      ) : null}
-
-      {/*
-        THE AGENDA. Grouped on the server's own `dueState` — see
-        lib/recurringAgenda.ts for why none of this is worked out
-        from the date here.
-      */}
-      {groupSchedules(schedules ?? []).map((group) => (
-        <View key={group.key}>
-          <T
-            variant="heading"
-            accessibilityRole="header"
-            style={{ color: brand[900], marginBottom: 2 }}
-          >
-            {group.title}
-          </T>
-          <T variant="caption" style={{ marginBottom: space.sm }}>
-            {group.caption}
-          </T>
-          {group.items.map((schedule) => (
-            <ScheduleRow
-              key={schedule.id}
-              schedule={schedule}
-              onPress={() => openSchedule(schedule.id)}
-            />
-          ))}
+      {schedules === null && !scheduleNotice ? (
+        <View style={{ borderWidth: 1, borderColor: t.brandBorder, borderRadius: radius.lg, backgroundColor: t.brandSurface, padding: space.md, gap: space.md }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+            <Ionicons name="repeat-outline" size={24} color={t.brandText} accessible={false} importantForAccessibility="no" />
+            <T variant="heading" accessibilityRole="header" style={{ flex: 1 }}>Repeating payments unavailable</T>
+          </View>
+          <T style={{ color: t.textSecondary }}>Your payment agenda is unavailable right now. Retry before adding or confirming a repeating payment.</T>
+          <Button title="Retry repeating payments" variant="secondary" loading={scheduleRefreshing} onPress={() => void refreshSchedules()} />
         </View>
-      ))}
-
-      {/*
-        The add button goes with the agenda, not beside it: creating
-        a schedule is POST /insights/recurring-schedules, behind the
-        same gate as the read, so offering it while the agenda is
-        unavailable would walk the owner into a form that cannot save.
-      */}
-      {schedules !== null && schedules.length > 0 ? (
-        <Button
-          title="Add a repeating payment"
-          variant="secondary"
-          onPress={() => openSchedule()}
-        />
       ) : null}
-
-      {/*
-        CANDIDATES, kept but demoted. They are FinSight's suggestions,
-        not the owner's list, and a suggestion should not outrank a
-        commitment.
-      */}
-      {candidates.length > 0 ? (
-        <Card>
-          <View style={{ flexDirection: "row", gap: space.sm, alignItems: "flex-start", marginBottom: space.md }}>
-            <Medallion icon="sparkles-outline" tint={brand[700]} surface={brand[50]} />
-            <View style={{ flex: 1 }}>
-              <T variant="heading" accessibilityRole="header">FinSight noticed these repeat</T>
-              {/*
-                The caption promises what the buttons below can
-                actually do. With confirming unavailable there is no
-                "list above" to join, and repeating the promise
-                anyway would send the owner looking for a button
-                that is deliberately not there.
-              */}
-              <T variant="caption" style={{ marginTop: 2 }}>
-                {canConfirm
-                  ? "Confirm one and it joins the list above, where you can edit or pause it."
-                  : "Spotted in your records. Tell FinSight which of these aren't worth a second look."}
-              </T>
-            </View>
-          </View>
-          <View style={{ gap: space.sm }}>
-            {candidates.map((pattern) => (
-              <View
-                key={pattern.id}
-                style={{
-                  borderWidth: 1,
-                  borderColor: paper[200],
-                  borderRadius: radius.md,
-                  padding: space.md,
-                }}
-              >
-                <T style={{ fontSize: typeScale.bodySm, color: ink[900], fontFamily: font.sansSemibold }}>
-                  {pattern.description}
-                </T>
-                <T variant="caption" style={{ marginTop: 2 }}>
-                  {pattern.category.name} · About every {pattern.intervalDays} days
-                </T>
-                {/*
-                  "Confirm recurring" and "Not recurring" in two
-                  half-width buttons wrapped to two lines each on a
-                  normal phone, which made a routine yes/no look like a
-                  paragraph. The question is already asked by the card
-                  above them, so the answers can be the one word that
-                  differs: Confirm, and Not recurring.
-                */}
-                {/*
-                  CONFIRM IS HIDDEN, NOT DISABLED, when the agenda is
-                  unavailable. POST .../confirm creates a schedule, so
-                  it is behind the same server gate as the read and
-                  can only 404 — and a greyed-out button still
-                  advertises a capability, sending the owner hunting
-                  for whatever would switch it back on. Web hides it
-                  the same way, for the same reason
-                  (web/src/pages/ExpenseInsight.tsx).
-
-                  "Not recurring" stays either way: PATCH
-                  /insights/recurring-patterns/:id is ungated, so
-                  dismissing a bad guess still works.
-                */}
-                <View style={{ flexDirection: "row", gap: space.sm, marginTop: space.md }}>
-                  {canConfirm ? (
-                    <View style={{ flex: 1 }}>
-                      <Button
-                        title="Confirm"
-                        variant="brand"
-                        onPress={() => void confirmPattern(pattern.id)}
-                      />
-                    </View>
-                  ) : null}
-                  <View style={{ flex: 1 }}>
-                    <Button
-                      title="Not recurring"
-                      variant="secondary"
-                      onPress={() => void dismissPattern(pattern.id)}
-                    />
-                  </View>
+      {scheduleState.loading && scheduleState.data === null && schedules !== null ? <ActivityIndicator accessibilityLabel="Loading repeating payments" color={t.brand[600]} /> : null}
+      {schedules !== null && schedules.length > 0 ? (
+        <View style={{ gap: space.md }}>
+          {groups.length > 0 ? <View style={{ gap: space.xs }}>
+            <T accessibilityRole="header" style={{ fontSize: typeScale.title, lineHeight: 26, fontFamily: font.sansSemibold, color: t.textPrimary }}>Repeating payments</T>
+            <T style={{ color: overdue > 0 ? t.statusText.serious : t.textSecondary }}>{overdue > 0 ? `${overdue} ${overdue === 1 ? "payment is" : "payments are"} overdue` : "Stay on top of your regular expenses."}</T>
+          </View> : null}
+          {groups.map((group) => {
+            const warning = group.key === "OVERDUE";
+            const paused = group.key === "PAUSED";
+            const color = warning ? t.statusText.serious : paused ? t.textSecondary : t.brandText;
+            const surface = warning ? t.statusSurface.serious : paused ? t.surfaceMuted : t.brandSurface;
+            return (
+              <View key={group.key} style={{ borderWidth: 1, borderColor: warning ? t.statusBorder.serious : paused ? t.border : t.brandBorder, borderRadius: radius.lg, overflow: "hidden", backgroundColor: t.surface }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, backgroundColor: surface, paddingHorizontal: space.md, paddingVertical: space.sm }}>
+                  <Ionicons name={warning ? "alert-circle-outline" : paused ? "pause-circle-outline" : "time-outline"} size={22} color={color} />
+                  <T accessibilityRole="header" style={{ fontFamily: font.sansSemibold, color, flex: 1 }}>{group.title} · {group.total}</T>
                 </View>
+                {group.items.map((schedule, index) => (
+                  <Pressable
+                    key={schedule.id}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${schedule.label}, ${formatMoney(schedule.expectedAmount, { decimals: true })}, due ${formatDueDate(schedule.nextDueDate)}, ${schedule.isActive ? group.title : "paused"}. Edit this payment.`}
+                    onPress={() => openSchedule(schedule.id)}
+                    style={({ pressed }) => ({ padding: space.md, minHeight: TAP_FLOOR, borderTopWidth: index > 0 ? 1 : 0, borderTopColor: t.border, gap: space.sm, backgroundColor: pressed ? t.surfaceMuted : t.surface })}
+                  >
+                    <View style={{ flexDirection: compact ? "row" : "column", alignItems: compact ? "center" : "stretch", gap: space.sm }}>
+                      <View style={{ flex: compact ? 1 : undefined, flexDirection: "row", alignItems: "center", gap: space.sm }}>
+                        <Ionicons name="receipt-outline" size={24} color={t.brandText} accessible={false} importantForAccessibility="no" />
+                        <T style={{ flex: 1, fontFamily: font.sansSemibold, color: t.textPrimary }}>{schedule.label}</T>
+                      </View>
+                      <View style={{ flex: compact ? 1 : undefined, alignItems: compact ? "flex-end" : "flex-start", gap: space.xs }}>
+                        <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg, lineHeight: 24, fontVariant: ["tabular-nums"], color: t.textPrimary }}>{formatMoney(schedule.expectedAmount, { decimals: true })}</T>
+                        <T style={{ fontSize: typeScale.bodySm, color }}>{paused ? "Paused" : `Due ${formatDueDate(schedule.nextDueDate)}`}</T>
+                      </View>
+                      <Ionicons name="chevron-forward" size={18} color={t.textMuted} style={compact ? undefined : { position: "absolute", right: 0, top: 0 }} />
+                    </View>
+                    <T variant="caption">{[schedule.categoryName, schedule.vendor, `Every ${schedule.intervalDays} days`, paused ? `Next date ${formatDueDate(schedule.nextDueDate)}` : null].filter(Boolean).join(" · ")}</T>
+                  </Pressable>
+                ))}
               </View>
-            ))}
-          </View>
+            );
+          })}
+          <ExpenseActionButton title="Add a repeating payment" variant="secondary" onPress={() => openSchedule()} />
+        </View>
+      ) : null}
+      {empty ? (
+        <Card style={{ gap: space.md }}>
+          <T variant="heading" accessibilityRole="header">No repeating payments yet</T>
+          <T style={{ color: t.textSecondary }}>Add rent, wages or another regular expense. FinSight will watch its due date.</T>
+          <ExpenseActionButton title="Add a repeating payment" variant="primary" onPress={() => openSchedule()} />
         </Card>
       ) : null}
-
-      {/*
-        WHAT WATCHING ACTUALLY BUYS, and only what it buys.
-
-        This used to promise a notification for late, early AND
-        changed amounts. Only the first is delivered: the backend
-        emits a notification when a scheduled payment goes unrecorded
-        past its date, and when one is coming up. An early repeat or
-        a changed amount is raised as a finding on the Alerts tab and
-        nothing is sent. Said accurately here rather than generously,
-        because a promise of an alert that never arrives is worse
-        than no promise — the owner stops watching for it themselves.
-      */}
+      {schedules !== null && schedules.length === 0 && candidates.length > 0 && !scheduleState.loading ? (
+        <View style={{ gap: space.md }}>
+          <T variant="heading" accessibilityRole="header">No confirmed payments yet</T>
+          <ExpenseActionButton title="Add a repeating payment" variant="secondary" onPress={() => openSchedule()} />
+        </View>
+      ) : null}
+      {visibleCandidates.length > 0 ? (
+        <View style={{ gap: space.md, marginTop: space.sm }}>
+          <View style={{ gap: space.xs }}>
+            <T variant="heading" accessibilityRole="header" style={{ color: t.textPrimary }}>Possible repeating payments</T>
+            <T style={{ color: t.textSecondary }}>{canConfirm ? "Based on your recent expenses. Confirm a pattern to watch its due date." : "Patterns found in your records. You can dismiss a wrong match."}</T>
+          </View>
+          {visibleCandidates.map((pattern) => (
+            <View key={pattern.id} style={{ borderWidth: 1, borderColor: t.brandBorder, borderRadius: radius.lg, backgroundColor: t.brandSurface, padding: space.md, gap: space.md }}>
+              <View style={{ flexDirection: "row", alignItems: "flex-start", gap: space.md }}>
+                <Ionicons name="repeat-outline" size={24} color={t.brandText} />
+                <View style={{ flex: 1, gap: space.xs }}>
+                  <T style={{ fontFamily: font.sansSemibold, color: t.textPrimary }}>{pattern.description}</T>
+                  <T style={{ fontSize: typeScale.bodyLg, lineHeight: 24, fontFamily: font.sansSemibold, fontVariant: ["tabular-nums"], color: t.textPrimary }}>{formatMoney(pattern.expectedAmount, { decimals: true })}</T>
+                  <T style={{ fontSize: typeScale.bodySm, color: t.textSecondary }}>Expected {formatDueDate(pattern.nextExpectedDate)} · About every {pattern.intervalDays} days</T>
+                  <T variant="caption">{[pattern.category.name, pattern.vendor].filter(Boolean).join(" · ")}</T>
+                </View>
+              </View>
+              <View style={{ gap: space.sm, flexDirection: compact ? "row" : "column" }}>
+                {canConfirm ? <View style={compact ? { flex: 1 } : undefined}><ExpenseActionButton title="Confirm" style={compact ? { flexGrow: 1 } : undefined} variant="brand" onPress={() => void confirmPattern(pattern.id)} /></View> : null}
+                <View style={compact ? { flex: 1 } : undefined}><ExpenseActionButton title="Not recurring" style={compact ? { flexGrow: 1 } : undefined} variant="secondary" onPress={() => void dismissPattern(pattern.id)} /></View>
+              </View>
+            </View>
+          ))}
+        </View>
+      ) : null}
       {schedules !== null && (schedules.length > 0 || candidates.length > 0) ? (
-        <Callout tone="info">
-          You'll be notified when a payment on this list is due or goes unrecorded past its date.
-          A different amount, or an extra payment sooner than expected, shows up under Alerts
-          rather than as a notification.
-        </Callout>
+        <T variant="caption">FinSight notifies you when a watched payment is due or overdue. Changed amounts and extra early payments appear in expense review.</T>
       ) : null}
     </>
   );

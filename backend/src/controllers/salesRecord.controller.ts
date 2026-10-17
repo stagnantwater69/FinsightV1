@@ -2,9 +2,11 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import * as salesRecordService from "../services/salesRecord.service";
 import { moneyAmountSchema } from "../lib/money";
+import { manualRecordIdempotencyKeySchema } from "../lib/manualRecordCreate";
 import { ApiError } from "../middleware/error.middleware";
 
 const createSchema = z.object({
+  idempotencyKey: manualRecordIdempotencyKeySchema.optional(),
   businessProfileId: z.number().int().positive().max(2147483647),
   date: z.string().date(),
   description: z.string().min(1).max(255),

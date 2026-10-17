@@ -1,17 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { periodLabel, periodParams, type PeriodSelection } from "../lib/reportingPeriod";
-import { Modal, Pressable, ScrollView, TextInput, View } from "react-native";
+import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Ionicons } from "@expo/vector-icons";
-import { Button, ErrorNote, Money, SegmentedControl, T } from "./ui";
+import Ionicons from "@expo/vector-icons/Ionicons";
+import { Button, ErrorNote, SegmentedControl, T } from "./ui";
 import { TAP_FLOOR } from "./touchTarget";
 import * as haptics from "../lib/haptics";
 import { api, errorMessage } from "../lib/api";
 import { formatMoney } from "../lib/money";
+import { useReducedMotion } from "../lib/useReducedMotion";
 import { font, radius, space, typeScale } from "../theme/tokens";
 import { useTheme } from "../context/ThemeContext";
 import { parseSimNumber, percentValidationError, simAmountValidationError } from "../lib/reductionSimulationForm";
 import type { ReductionOpportunity, ReductionSimulation, ReductionSpec } from "../lib/types";
+import { ChartPlotPressArea, ChartValueReadout, useChartSelection, type ChartDatum } from "./ChartInteraction";
 
 /**
  * "Simulate reduction" — Expense Reduction Opportunities plan §12, Phase 4.
@@ -65,6 +67,7 @@ export function ReductionSimulationSheet({
   const t = useTheme();
   const { brand, ink, statusText } = t;
   const insets = useSafeAreaInsets();
+  const reduceMotion = useReducedMotion();
 
   const [kind, setKind] = useState<"percent" | "amount">("percent");
   const [rawValue, setRawValue] = useState("");
@@ -152,22 +155,24 @@ export function ReductionSimulationSheet({
   }
 
   return (
-    <Modal visible={visible} transparent animationType="slide" statusBarTranslucent onRequestClose={close}>
+    <Modal visible={visible} transparent animationType={reduceMotion ? "none" : "slide"} statusBarTranslucent onRequestClose={close}>
+      <KeyboardAvoidingView style={{ flex: 1, backgroundColor: t.scrim, justifyContent: "flex-end" }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
       <Pressable
         onPress={close}
         accessibilityRole="button"
-        accessibilityLabel="Close simulate reduction"
-        style={{ flex: 1, backgroundColor: t.scrim, justifyContent: "flex-end" }}
-      >
-        {/* Swallows touches — see OptionSheet's own note in ui.tsx for why this is a View, not a Pressable. */}
+        accessible={false}
+        importantForAccessibility="no-hide-descendants"
+        style={StyleSheet.absoluteFill}
+      />
         <View
-          onStartShouldSetResponder={() => true}
           style={{
             backgroundColor: t.surfaceRaised,
             borderTopLeftRadius: radius.xl,
             borderTopRightRadius: radius.xl,
-            maxHeight: "88%",
+            maxHeight: "92%",
+            flexShrink: 1,
           }}
+          accessibilityViewIsModal
         >
           <View
             style={{
@@ -190,26 +195,30 @@ export function ReductionSimulationSheet({
             <Pressable
               onPress={close}
               accessibilityRole="button"
-              accessibilityLabel="Close"
+              accessibilityLabel="Close simulate reduction"
               hitSlop={10}
-              style={{ padding: space.xs }}
+              style={{ minWidth: TAP_FLOOR, minHeight: TAP_FLOOR, alignItems: "center", justifyContent: "center" }}
             >
               <Ionicons name="close" size={20} color={ink[500]} />
             </Pressable>
           </View>
 
           <ScrollView
+            style={{ flexShrink: 1 }}
             contentContainerStyle={{
               paddingHorizontal: space.lg,
               paddingBottom: insets.bottom + space.lg,
               gap: space.md,
             }}
             keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
           >
-            <T variant="caption" style={{ lineHeight: 18 }}>
-              A what-if check — nothing is saved, and no record is created, edited or deleted. This asks what your
-              recorded expenses would look like if {opportunity.categoryName} were lower by the amount you choose.
-            </T>
+            <View style={{ gap: space.xs, paddingVertical: space.md, borderBottomWidth: 1, borderBottomColor: t.border }}>
+              <T style={{ color: t.textSecondary }}>{opportunity.categoryName} · {periodLabel(period)}</T>
+              <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.titleLg, lineHeight: 32, fontVariant: ["tabular-nums"] }}>{formatMoney(evidenceBaseline, { decimals: true })}</T>
+              <T variant="caption">Recorded category expenses</T>
+            </View>
+            <T style={{ color: t.textSecondary }}>Try a lower expense amount. This is a hypothetical check; your records stay unchanged.</T>
 
             <View>
               <T variant="label" style={{ marginBottom: 6 }}>
@@ -249,14 +258,15 @@ export function ReductionSimulationSheet({
                   borderColor: valueError ? statusText.critical : valueFocused ? brand[600] : ink[200],
                   borderRadius: radius.md,
                   paddingHorizontal: space.md,
-                  fontSize: typeScale.body,
+                  fontSize: typeScale.title, lineHeight: 28,
+                  fontFamily: font.sans,
+                  fontVariant: ["tabular-nums"],
                   color: ink[900],
                 }}
               />
               {kind === "amount" && evidenceBaseline > 0 ? (
                 <T variant="caption" style={{ marginTop: 4 }}>
-                  This category's period total is {formatMoney(evidenceBaseline)} — the most you can simulate reducing
-                  it by.
+                  Maximum reduction: {formatMoney(evidenceBaseline, { decimals: true })}.
                 </T>
               ) : null}
               {valueError ? (
@@ -264,7 +274,7 @@ export function ReductionSimulationSheet({
                   accessibilityLiveRegion="polite"
                   style={{ flexDirection: "row", gap: 5, marginTop: space.sm, alignItems: "flex-start" }}
                 >
-                  <T style={{ fontSize: typeScale.micro, color: statusText.critical }}>⚠</T>
+                  <Ionicons name="alert-circle-outline" size={18} color={statusText.critical} />
                   <T style={{ flex: 1, fontSize: typeScale.caption, lineHeight: 17, color: statusText.critical }}>
                     {valueError}
                   </T>
@@ -279,7 +289,7 @@ export function ReductionSimulationSheet({
             {result ? <ReductionSimulationResult result={result} periodText={periodLabel(period)} /> : null}
           </ScrollView>
         </View>
-      </Pressable>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -292,42 +302,23 @@ export function ReductionSimulationSheet({
  */
 function ReductionSimulationResult({ result, periodText }: { result: ReductionSimulation; periodText: string }) {
   const t = useTheme();
+  const [showAssumptions, setShowAssumptions] = useState(false);
   return (
-    <View
-      // Same as RecoveryScenarioSheet: the label here was on a View with no
-      // `accessible`, so it was never announced, and adding `accessible`
-      // would have swallowed the figures below it. The heading inside carries
-      // the meaning instead.
-      style={{
-        backgroundColor: t.surfaceMuted,
-        borderRadius: radius.md,
-        padding: space.md,
-        gap: space.md,
-      }}
-    >
-      <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodySm, color: t.textPrimary }}>
-        Hypothetical result — nothing was changed or saved
-      </T>
-
+    <View style={{ borderTopWidth: 1, borderTopColor: t.border, paddingTop: space.lg, gap: space.lg }}>
+      <View accessibilityLiveRegion="polite" style={{ gap: space.xs }}>
+        <T accessibilityRole="header" style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg }}>Hypothetical result</T>
+        <T style={{ color: t.statusText.good, fontSize: typeScale.titleLg, lineHeight: 32, fontFamily: font.sansSemibold, fontVariant: ["tabular-nums"] }}>{formatMoney(result.hypotheticalReduction, { decimals: true })} lower</T>
+        <T variant="caption">{result.requestedReductionPercent}% of this category's period total. Nothing was changed or saved.</T>
+      </View>
       <BeforeAfterRow label={`${result.categoryName} (${periodText})`} before={result.categoryExpenses.before} after={result.categoryExpenses.after} />
       <BeforeAfterRow label="Total recorded expenses" before={result.totalExpenses.before} after={result.totalExpenses.after} />
-
-      <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6, flexWrap: "wrap" }}>
-        <T style={{ fontSize: typeScale.bodySm }}>Hypothetical reduction:</T>
-        <Money value={result.hypotheticalReduction} size={typeScale.bodySm} weight="semibold" />
-        <T variant="caption">({result.requestedReductionPercent}% of this category's period total)</T>
-      </View>
-
       {result.assumptions.length > 0 ? (
         <View>
-          <T variant="caption" style={{ fontFamily: font.sansSemibold, color: t.ink[700] }}>
-            Assumptions
-          </T>
-          {result.assumptions.map((assumption) => (
-            <T key={assumption} variant="caption" style={{ marginTop: 2, lineHeight: 17 }}>
-              • {assumption}
-            </T>
-          ))}
+          <Pressable accessibilityRole="button" accessibilityState={{ expanded: showAssumptions }} accessibilityLabel="Simulation assumptions" onPress={() => setShowAssumptions(!showAssumptions)} style={{ minHeight: TAP_FLOOR, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm }}>
+            <T style={{ color: t.brand[700], flex: 1 }}>{showAssumptions ? "Hide assumptions" : "View assumptions"}</T>
+            <Ionicons name={showAssumptions ? "chevron-up" : "chevron-down"} size={18} color={t.brand[700]} />
+          </Pressable>
+          {showAssumptions ? <View style={{ gap: space.sm }}>{result.assumptions.map((assumption, index) => <T key={index} style={{ color: t.textSecondary }}>{assumption}</T>)}</View> : null}
         </View>
       ) : null}
     </View>
@@ -336,21 +327,29 @@ function ReductionSimulationResult({ result, periodText }: { result: ReductionSi
 
 function BeforeAfterRow({ label, before, after }: { label: string; before: number; after: number }) {
   const t = useTheme();
+  const maximum = Math.max(before, after);
+  const comparisonData: ChartDatum[] = [{ key: label, label, values: [{ label: "Before", value: before, color: t.textMuted }, { label: "After (hypothetical)", value: after, color: t.brandFill }], note: "Hypothetical reduction. Nothing has been saved or changed in your records." }];
+  const comparisonSelection = useChartSelection(comparisonData);
   return (
-    <View>
-      <T variant="label" style={{ color: t.ink[700], marginBottom: 2 }}>
-        {label}
-      </T>
-      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "baseline" }}>
-        <View>
-          <T variant="caption">Before</T>
-          <Money value={before} size={14} weight="medium" style={{ marginTop: 1 }} />
+    <View style={{ gap: space.sm }}>
+      <T style={{ fontFamily: font.sansSemibold }}>{label}</T>
+      {[
+        { label: "Before", amount: before, color: t.textMuted },
+        { label: "After (hypothetical)", amount: after, color: t.brand[600] },
+      ].map((row) => (
+        <View key={row.label} style={{ gap: space.xs }}>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", gap: space.xs }}>
+            <T style={{ color: t.textSecondary, fontSize: typeScale.bodySm }}>{row.label}</T>
+            <T style={{ fontFamily: font.sansSemibold, fontVariant: ["tabular-nums"] }}>{formatMoney(row.amount, { decimals: true })}</T>
+          </View>
+          <ChartPlotPressArea selection={comparisonSelection} count={1} chartLabel={`${label} reduction simulation`}>
+          <View accessible={false} style={{ height: 8, backgroundColor: t.surfaceMuted }}>
+            <View style={{ height: 8, width: `${maximum > 0 ? Math.max(0, row.amount / maximum * 100) : 0}%`, backgroundColor: row.color }} />
+          </View>
+          </ChartPlotPressArea>
         </View>
-        <View style={{ alignItems: "flex-end" }}>
-          <T variant="caption">After (hypothetical)</T>
-          <Money value={after} size={14} weight="semibold" style={{ marginTop: 1 }} />
-        </View>
-      </View>
+      ))}
+      <ChartValueReadout data={comparisonData} selection={comparisonSelection} chartLabel={`${label} reduction simulation`} />
     </View>
   );
 }

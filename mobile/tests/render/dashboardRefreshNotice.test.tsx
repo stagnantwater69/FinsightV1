@@ -52,7 +52,11 @@ vi.mock('../../src/components/tour/targets', () => ({
 }));
 vi.mock('../../src/components/HomeHeader', () => ({ HomeHeader: () => null }));
 vi.mock('../../src/components/GreetingHero', () => ({ GreetingHero: () => null }));
-vi.mock('../../src/components/PeriodSelector', () => ({ PeriodSelector: () => null }));
+vi.mock('../../src/components/PeriodSelector', () => ({ PeriodSelector: () => null, PeriodPill: () => null, PeriodStatus: () => null }));
+// RecordCard (Recent records on Home) swipes; the harness has no native gesture module.
+vi.mock('react-native-gesture-handler', () => ({
+  Swipeable: ({ children }: { children: React.ReactNode }) => children,
+}));
 vi.mock('../../src/components/AskFinSight', () => ({ AskFinSight: () => null }));
 vi.mock('../../src/components/AskFinSightFab', () => ({
   AskFinSightFab: () => null,
@@ -60,8 +64,8 @@ vi.mock('../../src/components/AskFinSightFab', () => ({
 }));
 vi.mock('../../src/components/charts', () => ({
   CashflowChart: ({ data }: { data: unknown[] }) => <Text>{`Cashflow points: ${data.length}`}</Text>,
+  CategoryComparison: () => null,
 }));
-vi.mock('../../src/components/SpendingBreakdownCard', () => ({ SpendingBreakdownCard: () => null }));
 
 const { DashboardScreen } = await import('../../src/screens/DashboardScreen');
 const { ThemeProvider } = await import('../../src/context/ThemeContext');
@@ -193,6 +197,21 @@ afterEach(async () => {
 });
 
 describe('Dashboard cached overview refresh', () => {
+  it('opens flagged review with a Dashboard origin and a retained RecordsList base', async () => {
+    apiGet.mockImplementation((path: string) => {
+      if (path === '/dashboard/summary') return Promise.resolve({ ...summary, recordsNeedingReview: 3 });
+      if (path === '/insights/expense-overview') return Promise.resolve(overview);
+      return Promise.reject(new Error(`unexpected path ${path}`));
+    });
+    const queries = await render(
+      <ThemeProvider initialMode="light"><DashboardScreen navigation={navigation} /></ThemeProvider>,
+    );
+    await fireEvent.press(await queries.findByRole('button', { name: '3 to review' }));
+    expect(navigation.navigate).toHaveBeenLastCalledWith('Records', {
+      screen: 'FlaggedRecords', initial: false, params: { from: 'Dashboard' },
+    });
+  });
+
   it('keeps the opportunity visible and names the failed refresh', async () => {
     beginServerStateSession('dashboard-refresh');
     let failOverview = false;
@@ -213,33 +232,22 @@ describe('Dashboard cached overview refresh', () => {
     );
 
     const opportunityCard = await queries.findByRole('button', {
-      name: /Reduction opportunity: Stock/,
+      name: 'Save on Stock',
     });
     failOverview = true;
     invalidateServerState({ pathPrefixes: ['/insights/expense-overview'] });
 
     expect(await queries.findByText("Couldn't refresh")).toBeTruthy();
     expect(opportunityCard).toBeTruthy();
-    expect(queries.getByRole('button', { name: /Reduction opportunity: Stock/ })).toBeTruthy();
+    expect(queries.getByRole('button', { name: 'Save on Stock' })).toBeTruthy();
   });
 
-  it('keeps the cached cashflow chart visible and names its failed refresh', async () => {
-    beginServerStateSession('dashboard-cashflow-refresh');
-    let failCashflow = false;
+  it('shows one "Where it went" card in place of More charts, linking to the trend screens', async () => {
+    beginServerStateSession('dashboard-where-it-went');
+    navigation.navigate.mockReset();
     apiGet.mockImplementation((path: string) => {
       if (path === '/dashboard/summary') return Promise.resolve(summary);
       if (path === '/insights/expense-overview') return Promise.resolve(overview);
-      if (path === '/dashboard/cashflow') {
-        return failCashflow
-          ? Promise.reject(new Error('Could not refresh cashflow details.'))
-          : Promise.resolve({
-              granularity: 'daily',
-              points: [
-                { date: '2026-08-20', sales: 900, expenses: 400 },
-                { date: '2026-08-21', sales: 1200, expenses: 600 },
-              ],
-            });
-      }
       return Promise.reject(new Error(`unexpected path ${path}`));
     });
 
@@ -249,15 +257,15 @@ describe('Dashboard cached overview refresh', () => {
       </ThemeProvider>,
     );
 
-    await queries.findByRole('button', { name: /Reduction opportunity: Stock/ });
-    await fireEvent.press(queries.getByRole('button', { name: 'View detailed charts' }));
-    expect(await queries.findByText('Cashflow points: 2')).toBeTruthy();
-
-    failCashflow = true;
-    invalidateServerState({ pathPrefixes: ['/dashboard/cashflow'] });
-
-    expect(await queries.findByText("Couldn't refresh")).toBeTruthy();
-    expect(queries.getByText('Cashflow points: 2')).toBeTruthy();
+    await queries.findByRole('button', { name: 'Save on Stock' });
+    expect(queries.queryByRole('button', { name: 'More charts' })).toBeNull();
+    // Home no longer loads the cashflow series; its own screen does.
+    expect(apiGet.mock.calls.some((call) => call[0] === '/dashboard/cashflow')).toBe(false);
+    expect(queries.getByText('Where it went')).toBeTruthy();
+    await fireEvent.press(queries.getByRole('link', { name: 'Money in and out' }));
+    expect(navigation.navigate).toHaveBeenCalledWith('MoneyFlow');
+    await fireEvent.press(queries.getByRole('link', { name: 'Spending trends' }));
+    expect(navigation.navigate).toHaveBeenCalledWith('Insights', { screen: 'ExpenseBehavior' });
   });
 });
 
@@ -277,8 +285,11 @@ describe('Dashboard record-derived financial figures', () => {
     );
 
     expect(await queries.findByText('Target reached')).toBeTruthy();
-    expect(queries.getByText('Monthly expense coverage')).toBeTruthy();
+    expect(queries.getByRole('progressbar', { name: 'Monthly expenses covered by sales' })).toBeTruthy();
     expect(queries.getByText('0%')).toBeTruthy();
+    // Both explanations are one tap away rather than paragraphs on Home.
+    await fireEvent.press(queries.getByRole('button', { name: 'How the monthly target is worked out' }));
+    await fireEvent.press(queries.getByRole('button', { name: 'How available funds are worked out' }));
     expect(
       queries.getByText('Using 0 eligible expense records from September 2026.'),
     ).toBeTruthy();
@@ -297,4 +308,10 @@ describe('Dashboard record-derived financial figures', () => {
     await fireEvent.press(action);
     expect(navigation.navigate).toHaveBeenCalledWith('Insights', { screen: 'RecoveryTarget' });
   });
+});
+
+it('binds the dashboard view to its own reporting period scope', () => {
+  const wrapper = DashboardScreen({});
+  expect(wrapper.props.scope).toBe('dashboard');
+  expect(typeof wrapper.props.children.type).toBe('function');
 });

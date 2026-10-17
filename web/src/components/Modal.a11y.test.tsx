@@ -3,6 +3,7 @@ import { render, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { AddExpenseModal } from "./AddExpenseModal";
 import { AddSalesModal } from "./AddSalesModal";
+vi.mock("../context/AuthContext", () => ({ useAuth: () => ({ profile: { id: 17 } }) }));
 
 /**
  * WEB-F01. Records mounts its own Add expense / Add sales popups and AppShell

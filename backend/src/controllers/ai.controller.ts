@@ -4,6 +4,8 @@ import * as aiService from "../services/ai.service";
 import * as conversationService from "../services/conversation.service";
 import * as insightsService from "../services/insights.service";
 import type { ReductionOpportunity } from "../services/reductionOpportunity.service";
+import { datePageQuerySchema } from "../lib/datePagination";
+import { chatSendIdempotencyKeySchema } from "../lib/chatSendRequest";
 
 /*
  * Selected reduction opportunity (plan §11.1) — the client echoes back the
@@ -189,6 +191,7 @@ const chatFocusSchema = z.discriminatedUnion("kind", [
 ]);
 
 export const createConversationSchema = z.object({
+  idempotencyKey: chatSendIdempotencyKeySchema.optional(),
   businessProfileId: z.number().int().positive().max(2147483647),
   originModule: z.enum(aiService.INTERACTION_MODULES),
   question: z.string().min(1).max(1000),
@@ -203,10 +206,15 @@ export const createConversationSchema = z.object({
 });
 
 export const appendMessageSchema = z.object({
+  idempotencyKey: chatSendIdempotencyKeySchema.optional(),
+  businessProfileId: z.number().int().positive().max(2147483647).optional(),
   question: z.string().min(1).max(1000),
   context: z.string().max(3000).optional(),
   reductionOpportunity: reductionOpportunitySchema.optional(),
   focus: chatFocusSchema.optional(),
+}).refine((input) => input.idempotencyKey === undefined || input.businessProfileId !== undefined, {
+  path: ["businessProfileId"],
+  message: "Business profile is required for a message with a send key",
 });
 
 export const messageFeedbackSchema = z.object({
@@ -220,7 +228,7 @@ export const renameConversationSchema = z.object({
 const conversationListQuerySchema = z.object({
   businessProfileId: z.coerce.number().int().positive().max(2147483647),
   limit: z.coerce.number().int().positive().max(100).default(50),
-});
+}).extend(datePageQuerySchema.shape);
 
 const conversationIdSchema = z.object({
   id: z.coerce.number().int().positive().max(2147483647),
@@ -228,17 +236,20 @@ const conversationIdSchema = z.object({
 
 export async function listConversations(req: Request, res: Response) {
   const query = conversationListQuerySchema.parse(req.query);
-  const result = await conversationService.listConversations(
+  const result = await conversationService.listConversationsPage(
     req.user!.id,
     query.businessProfileId,
-    query.limit
+    { pageSize: query.pageSize ?? query.limit, cursor: query.cursor },
   );
-  res.status(200).json(result);
+  if (result.nextCursor) res.setHeader("X-Next-Cursor", result.nextCursor);
+  res.status(200).json(query.pageSize !== undefined || query.cursor !== undefined ? result : result.items);
 }
 
 export async function getConversation(req: Request, res: Response) {
   const { id } = conversationIdSchema.parse(req.params);
-  const result = await conversationService.getConversation(req.user!.id, id);
+  const query = datePageQuerySchema.parse(req.query);
+  const result = await conversationService.getConversation(req.user!.id, id, { ...query, pageSize: query.pageSize ?? 100 });
+  if (result.nextCursor) res.setHeader("X-Next-Cursor", result.nextCursor);
   res.status(200).json(result);
 }
 
@@ -252,7 +263,8 @@ export async function createConversation(req: Request, res: Response) {
     input.title,
     input.context,
     input.reductionOpportunity,
-    input.focus
+    input.focus,
+    input.idempotencyKey,
   );
   res.status(201).json(result);
 }
@@ -266,9 +278,22 @@ export async function sendConversationMessage(req: Request, res: Response) {
     input.question,
     input.context,
     input.reductionOpportunity,
-    input.focus
+    input.focus,
+    input.idempotencyKey,
+    input.businessProfileId,
   );
   res.status(201).json(result);
+}
+
+const chatSendStatusQuerySchema = z.object({
+  businessProfileId: z.coerce.number().int().positive().max(2147483647),
+});
+
+export async function chatSendStatus(req: Request, res: Response) {
+  const key = chatSendIdempotencyKeySchema.parse(req.params.idempotencyKey);
+  const query = chatSendStatusQuerySchema.parse(req.query);
+  const result = await conversationService.getChatSendStatus(req.user!.id, query.businessProfileId, key);
+  res.status(200).json(result);
 }
 
 const messageIdParamsSchema = z.object({

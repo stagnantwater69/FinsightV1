@@ -154,7 +154,7 @@ export function ImportResultSummary({
             </b>{" "}
             <Link
               to="/records"
-              className="tap-inline font-semibold text-tone-brand underline underline-offset-2"
+              className="tap-inline link"
             >
               Categorise
             </Link>

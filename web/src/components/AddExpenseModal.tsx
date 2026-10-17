@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Modal } from "./Modal";
 import { Button } from "./Button";
 import { useToast } from "./Toast";
@@ -12,6 +12,8 @@ import type { RecordDetail } from "../lib/types";
 import { FUTURE_DATE_MESSAGE, futureDateError, todayIso } from "../lib/dates";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { AvailableFundsBaselineChoice, useAvailableFundsBaselineChoice } from "./AvailableFundsBaselineChoice";
+import { useManualRecordCreate } from "../lib/useManualRecordCreate";
+import { ManualCreateRecovery } from "./ManualCreateRecovery";
 
 interface FieldErrors {
   category?: string;
@@ -99,6 +101,20 @@ export function AddExpenseModal({
   // Errors appear on blur only for fields the owner has already left, so the
   // form doesn't turn red under a cursor that is still on the first input.
   const [touched, setTouched] = useState<Partial<Record<keyof FieldErrors, boolean>>>({});
+  const recovery = useManualRecordCreate(businessProfileId, "expense", open && !editing);
+  const savePending = useRef(false);
+  const confirmedSave = useRef(false);
+  const formScope = `${recovery.ownerId}:${businessProfileId}:${open}:${recordId}`;
+  const currentScope = useRef(formScope);
+  currentScope.current = formScope;
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const frozenBody = recovery.pending?.body ?? recovery.deferredDraft;
+  useEffect(() => {
+    if (!frozenBody) return;
+    setCategoryId(frozenBody.categoryId ?? ""); setDate(frozenBody.date); setDescription(frozenBody.description);
+    setVendor(frozenBody.vendor ?? ""); setAmount(frozenBody.amount); setFieldErrors({}); setTouched({}); setServerDateError(null);
+  }, [frozenBody]);
 
   function reset() {
     setCategoryId("");
@@ -121,6 +137,7 @@ export function AddExpenseModal({
   // previous open's fields on its own.
   useEffect(() => {
     if (!open) return;
+    confirmedSave.current = false;
     reset();
     if (editing && recordId !== undefined) {
       setLoading(true);
@@ -178,13 +195,17 @@ export function AddExpenseModal({
      * browser would have caught is now caught here instead, because the native
      * tooltip is unstyled, untranslated, and vanishes on the next keystroke.
      */
-    if (Object.values(errors).some(Boolean)) {
+    if (confirmedSave.current || savePending.current || recovery.busy || (!editing && recovery.loading)) return;
+    if (!recovery.pending && Object.values(errors).some(Boolean)) {
       setFieldErrors(errors);
       setTouched({ category: true, date: true, description: true, amount: true });
       if (errors.date) document.getElementById(dateFieldId)?.focus();
       return;
     }
-    if (!baselineChoice.check()) return;
+    if (!recovery.pending && !baselineChoice.check()) return;
+    savePending.current = true;
+    const requestScope = formScope;
+    const isCurrent = () => mounted.current && currentScope.current === requestScope;
     setFieldErrors({});
     setError(null);
     setSubmitting(true);
@@ -195,29 +216,38 @@ export function AddExpenseModal({
         description,
         vendor: vendor || (editing ? null : undefined),
         amount,
-        ...baselineChoice.requestFields(),
+        ...(recovery.pending ? {} : baselineChoice.requestFields()),
       };
       if (editing && recordId !== undefined) {
         await api.patch(`/records/expenses/${recordId}`, payload, {
           serverStateScope: { businessProfileId },
         });
+        if (!isCurrent()) return;
+        confirmedSave.current = true;
         toast("Changes saved");
       } else {
-        await api.post("/records/expenses", { businessProfileId, ...payload });
+        const saved = await recovery.save(recovery.pending?.body ?? {
+          businessProfileId, ...payload, categoryId: Number(categoryId), amount: Number(amount), vendor: vendor || undefined,
+        });
+        if (!saved || !isCurrent()) return;
+        confirmedSave.current = true;
         toast("Expense saved");
       }
       reset();
-      onSaved();
-      onClose();
+      try { onSaved(); } finally { onClose(); }
     } catch (err) {
+      if (!isCurrent()) return;
+      if (confirmedSave.current) { setError("Your record is saved. Close this form and refresh Records to see it."); return; }
+      if (recovery.pending) { setError(getErrorMessage(err)); return; }
       if (isFutureDateError(err)) {
         setServerDateError(FUTURE_DATE_MESSAGE);
         document.getElementById(dateFieldId)?.focus();
-      } else if (!(await baselineChoice.absorb(err))) {
+      } else if (!(await baselineChoice.absorb(err, isCurrent))) {
         setError(getErrorMessage(err));
       }
     } finally {
-      setSubmitting(false);
+      savePending.current = false;
+      if (isCurrent()) setSubmitting(false);
     }
   }
 
@@ -245,7 +275,9 @@ export function AddExpenseModal({
     <Modal open={open} onClose={handleClose} title={editing ? "Edit expense" : "Add expense"}>
       {/* noValidate hands validation to the code above; see handleSubmit. */}
       <form onSubmit={handleSubmit} className="space-y-4" noValidate>
+        {!editing ? <ManualCreateRecovery recovery={recovery} /> : null}
         {loading ? <p className="text-sm text-ink-500">Loading…</p> : null}
+        <fieldset className="min-w-0 space-y-4" disabled={submitting || (!editing && (recovery.loading || recovery.frozen))}>
         <Field label="Category" htmlFor={categoryFieldId} required error={shownErrors.category}>
           <CategorySelect
             id={categoryFieldId}
@@ -266,7 +298,7 @@ export function AddExpenseModal({
             onBlur={() => markTouched("date")}
           />
         </Field>
-        <AvailableFundsBaselineChoice choice={baselineChoice} disabled={submitting || loading} />
+        {!recovery.pending ? <AvailableFundsBaselineChoice choice={baselineChoice} disabled={submitting || loading} /> : null}
         <Field label="Description" required error={shownErrors.description}>
           <TextInput
             value={description}
@@ -313,9 +345,10 @@ export function AddExpenseModal({
             add up to the record.
           </Callout>
         ) : null}
+        </fieldset>
         {error ? <FormError>{error}</FormError> : null}
-        <Button type="submit" variant="primary" fullWidth disabled={submitting || loading || futureDate !== null}>
-          {submitting ? "Saving…" : editing ? "Save changes" : "Save expense"}
+        <Button type="submit" variant="primary" fullWidth disabled={confirmedSave.current || submitting || recovery.busy || recovery.corrupt || loading || (!editing && recovery.loading) || (!recovery.pending && futureDate !== null)}>
+          {submitting ? "Saving…" : editing ? "Save changes" : recovery.pending?.confirmedRecord ? "Finish recovery" : recovery.pending ? "Retry original save" : "Save expense"}
         </Button>
       </form>
     </Modal>

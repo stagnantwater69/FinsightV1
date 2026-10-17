@@ -1,7 +1,7 @@
 import axios, { AxiosError, isAxiosError, type InternalAxiosRequestConfig } from "axios";
 import { isAuthRetryableFetchError } from "@supabase/supabase-js";
 import { supabase } from "./supabaseClient";
-import { invalidateServerState, type ServerStateInvalidation } from "./serverStateCache";
+import { invalidateServerState, serverStateAccountMatches, type ServerStateInvalidation } from "./serverStateCache";
 
 const baseURL = import.meta.env.VITE_API_BASE_URL as string;
 
@@ -36,6 +36,7 @@ export const api = axios.create({ baseURL, timeout: 90_000 });
  * instruction, and it is only ever set deliberately.
  */
 api.interceptors.request.use(async (config) => {
+  assertManualCreateAccount(config);
   // Read through `get()` where axios gave us an AxiosHeaders (it matches
   // case-insensitively), and fall back to the plain-object shape a hand-built
   // config or a test double can still be carrying.
@@ -51,6 +52,7 @@ api.interceptors.request.use(async (config) => {
   if (alreadySet) return config;
 
   const { data, error } = await supabase.auth.getSession();
+  assertManualCreateAccount(config);
   const token = data.session?.access_token;
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
@@ -69,6 +71,12 @@ api.interceptors.request.use(async (config) => {
   return config;
 });
 
+function assertManualCreateAccount(config: InternalAxiosRequestConfig) {
+  if ("manualCreateAccount" in config && (!config.manualCreateAccount || !serverStateAccountMatches(config.manualCreateAccount))) {
+    throw new AxiosError("This save belongs to a previous account. Reopen the form.", AxiosError.ERR_CANCELED, config);
+  }
+}
+
 /*
  * Endpoints where a 401 means "those credentials were wrong", not "your
  * session ended".
@@ -79,7 +87,10 @@ api.interceptors.request.use(async (config) => {
  * session. Without this list, one wrong password on the change-password panel
  * would log the owner out of the app they are already signed in to.
  */
-const CREDENTIAL_ENDPOINTS = ["/auth/login", "/auth/register", "/auth/change-password", "/auth/me"];
+const CREDENTIAL_ENDPOINTS = [
+  "/auth/login", "/auth/register", "/auth/change-password", "/auth/me",
+  "/auth/google", "/auth/confirm-email", "/auth/reset-password/complete",
+];
 
 function isCredentialCheck(config?: InternalAxiosRequestConfig): boolean {
   const url = config?.url ?? "";
@@ -235,6 +246,7 @@ export function setSessionExpiredHandler(handler: SessionExpiredHandler | null) 
  */
 api.interceptors.response.use(
   (response) => {
+    assertManualCreateAccount(response.config);
     const invalidation = mutationInvalidation(response.config, response.data);
     if (invalidation) invalidateServerState(invalidation);
     return response;
@@ -242,12 +254,15 @@ api.interceptors.response.use(
   async (error: unknown) => {
     if (!isAxiosError(error)) return Promise.reject(error);
 
+    if (error.config) assertManualCreateAccount(error.config);
+
     if (error.response?.status === 401 && !isCredentialCheck(error.config)) {
       const config = error.config;
       // Only a request sent with the stored session can be recovered, and only
       // once. A caller-set link token's 401 is about that link.
       if (config?.sessionToken && !config.sessionRetried) {
         const recovery = await recoverSession(config.sessionToken);
+        assertManualCreateAccount(config);
         if (recovery.kind === "refreshed") {
           config.sessionRetried = true;
           config.sessionToken = recovery.token;
@@ -275,7 +290,7 @@ api.interceptors.response.use(
      */
     if (error.response?.status === 403) {
       const code = (error.response.data as { code?: string } | undefined)?.code;
-      if (code === "ACCOUNT_NOT_ACTIVE") sessionExpiredHandler?.();
+      if (code === "ACCOUNT_NOT_ACTIVE" && !isCredentialCheck(error.config)) sessionExpiredHandler?.();
     }
 
     return Promise.reject(error);

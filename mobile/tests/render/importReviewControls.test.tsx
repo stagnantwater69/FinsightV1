@@ -9,7 +9,7 @@ vi.mock("../../src/lib/api", () => ({ api: { post } }));
 const { ThemeProvider } = await import("../../src/context/ThemeContext");
 const { ResultDetails } = await import("../../src/components/ResultDetails");
 const { ReviewNotices } = await import("../../src/screens/records/scanReceipt/ReviewNotices");
-const { CategorySelect } = await import("../../src/components/ui");
+const { Button, CategorySelect, OptionSheet } = await import("../../src/components/ui");
 const { CategorySuggestionAction } = await import("../../src/components/CategorySuggestionAction");
 const { useImportOperation } = await import("../../src/lib/useImportOperation");
 const wrap = (node: React.ReactNode) => <ThemeProvider initialMode="light">{node}</ThemeProvider>;
@@ -28,6 +28,18 @@ describe("import review controls", () => {
     expect(less.props.accessibilityState.expanded).toBe(true);
     await fireEvent.press(less);
     expect(q.queryByText("Printed source text")).toBeNull();
+  });
+
+  it("keeps a named disclosure title while its accessible expanded state changes", async () => {
+    const q = await render(wrap(<ResultDetails label="review details" title="Review details"><Text>File validation details</Text></ResultDetails>));
+    expect(q.getByText("Review details")).toBeTruthy();
+    expect(q.queryByText("File validation details")).toBeNull();
+    await fireEvent.press(q.getByRole("button", { name: "Show more, review details" }));
+    expect(q.getByText("Review details")).toBeTruthy();
+    expect(q.getByText("File validation details")).toBeTruthy();
+    expect(q.getByRole("button", { name: "Show less, review details" }).props.accessibilityState.expanded).toBe(true);
+    await fireEvent.press(q.getByRole("button", { name: "Show less, review details" }));
+    expect(q.queryByText("File validation details")).toBeNull();
   });
 
   it("keeps duplicate warnings visible while optional evidence is collapsed", async () => {
@@ -54,6 +66,39 @@ describe("import review controls", () => {
     await fireEvent.press(q.getByRole("button", { name: "Choose a category, category" }));
     expect(q.getByText("Recently chosen")).toBeTruthy();
     expect(q.getByLabelText("Search categories").props.value).toBe("");
+  });
+
+  it("keeps sheet actions outside the dismiss button and resets search after dismissal", async () => {
+    const selected = vi.fn();
+    const closed = vi.fn();
+    function Probe() {
+      const [open, setOpen] = React.useState(true);
+      return <>
+        <Button title="Open columns" onPress={() => setOpen(true)} />
+        <OptionSheet visible={open} title="Choose column" options={categories} value={null} onChoose={selected}
+          onClose={() => { closed(); setOpen(false); }} emptyText="No columns" searchPlaceholder="Search column names" />
+      </>;
+    }
+    const q = await render(wrap(<Probe />));
+    let ancestor = q.getByRole("button", { name: "Inventory" }).unstable_fiber?.return;
+    while (ancestor) {
+      if (ancestor.tag === 5) expect(ancestor.memoizedProps?.accessibilityRole).not.toBe("button");
+      ancestor = ancestor.return;
+    }
+    await fireEvent.changeText(q.getByLabelText("Search column names"), "util");
+    expect(q.queryByRole("button", { name: "Inventory" })).toBeNull();
+    await fireEvent.press(q.getByRole("button", { name: "Close without choosing" }));
+    expect(closed).toHaveBeenCalledTimes(1);
+    expect(selected).not.toHaveBeenCalled();
+    await fireEvent.press(q.getByRole("button", { name: "Open columns" }));
+    expect(q.getByLabelText("Search column names").props.value).toBe("");
+    await fireEvent.press(q.getByRole("button", { name: "Inventory" }));
+    expect(selected).toHaveBeenCalledWith(701);
+    expect(closed).toHaveBeenCalledTimes(2);
+    await fireEvent.press(q.getByRole("button", { name: "Open columns" }));
+    await fireEvent.press(q.getByRole("button", { name: "Close" }));
+    expect(closed).toHaveBeenCalledTimes(3);
+    expect(selected).toHaveBeenCalledTimes(1);
   });
 
   it("applies a suggested category only after the owner explicitly accepts it", async () => {

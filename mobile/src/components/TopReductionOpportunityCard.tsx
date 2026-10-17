@@ -1,5 +1,5 @@
 import { Pressable, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { Card, Money, T } from "./ui";
 import { TAP_FLOOR } from "./touchTarget";
 import * as haptics from "../lib/haptics";
@@ -18,8 +18,8 @@ import type { ReductionOpportunity } from "../lib/types";
  * should render, it just draws what it is given (same division of labor
  * `ReductionOpportunitiesSection` follows for its own state).
  *
- * Modeled on SpendingBreakdownCard's "small self-contained summary card"
- * shape rather than reusing the full opportunity card from Expense
+ * A small self-contained summary card
+ * rather than reusing the full opportunity card from Expense
  * Insight — plan §13.1 is explicit that the Dashboard shows title, category,
  * ONE supporting figure and a link, not the complete card.
  */

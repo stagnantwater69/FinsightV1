@@ -7,6 +7,12 @@
   "include": [
     "local-quality-gate.ts",
     "run-local-quality-gate.ts",
+    "development-cohort*.ts",
+    "local-corpus-contract.ts",
+    "cohort-readiness.ts",
+    "run-readiness-report.ts",
+    "readiness-cohort.test.ts",
+    "capture-condition-metrics.test.ts",
     "../ocr-accuracy/scoring.ts"
   ]
 }

@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import * as scheduleService from "../services/businessOperatingSchedule.service";
 import { ApiError } from "../middleware/error.middleware";
+import { datePageQuerySchema } from "../lib/datePagination";
 
 /*
  * EXPORTED for the contract tests, the same reason auth.controller.ts exports
@@ -29,7 +30,7 @@ export const createOverrideSchema = z.object({
 const listOverridesQuerySchema = z.object({
   from: z.string().date().optional(),
   to: z.string().date().optional(),
-});
+}).extend(datePageQuerySchema.shape);
 
 function parseBusinessProfileId(raw: string): number {
   const id = Number(raw);
@@ -63,8 +64,13 @@ export async function putSchedule(req: Request, res: Response) {
 export async function listOverrides(req: Request, res: Response) {
   const businessProfileId = parseBusinessProfileId(req.params.id!);
   const query = listOverridesQuerySchema.parse(req.query);
-  const overrides = await scheduleService.listOverrides(req.user!.id, businessProfileId, query);
-  res.status(200).json(overrides);
+  const paginated = query.pageSize !== undefined || query.cursor !== undefined;
+  const page = await scheduleService.listOverridesPage(req.user!.id, businessProfileId, {
+    ...query,
+    pageSize: query.pageSize ?? (paginated ? 50 : 100),
+  });
+  if (page.nextCursor) res.setHeader("X-Next-Cursor", page.nextCursor);
+  res.status(200).json(paginated ? page : page.items);
 }
 
 export async function createOverride(req: Request, res: Response) {

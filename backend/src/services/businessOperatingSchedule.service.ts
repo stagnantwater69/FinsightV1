@@ -1,6 +1,7 @@
 import { prisma } from "../config/prisma";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
 import { ApiError } from "../middleware/error.middleware";
+import { dateCursorScope, datePageSize, decodeDateCursor, finishDatePage, invalidDateCursor, type DatePageInput } from "../lib/datePagination";
 import { Prisma, type BusinessOperatingDay, type BusinessOperatingDayOverride, type OperatingDayOverrideType } from "@prisma/client";
 
 // Write/CRUD surface only, per docs/RECOVERY-TARGET-IMPROVEMENT-PLAN.md §7.2-§7.4
@@ -103,7 +104,16 @@ export interface OverrideListFilter {
 }
 
 export async function listOverrides(userId: number, businessProfileId: number, filter: OverrideListFilter) {
+  return (await listOverridesPage(userId, businessProfileId, { ...filter, pageSize: 100 })).items;
+}
+
+export async function listOverridesPage(
+  userId: number,
+  businessProfileId: number,
+  filter: OverrideListFilter & DatePageInput,
+) {
   await requireOwnedBusinessProfile(userId, businessProfileId);
+  const pageSize = datePageSize(filter);
 
   let dateFilter: Prisma.BusinessOperatingDayOverrideWhereInput = {};
   if (filter.from || filter.to) {
@@ -128,11 +138,22 @@ export async function listOverrides(userId: number, businessProfileId: number, f
     };
   }
 
+  const scope = dateCursorScope(["operating-overrides", userId, businessProfileId, filter.from ?? null, filter.to ?? null]);
+  const cursor = decodeDateCursor(filter.cursor, scope);
+  const where = { businessProfileId, ...dateFilter };
+  if (cursor && !await prisma.businessOperatingDayOverride.findFirst({ where: { ...where, id: cursor.id }, select: { id: true } })) {
+    invalidDateCursor();
+  }
   const overrides = await prisma.businessOperatingDayOverride.findMany({
-    where: { businessProfileId, ...dateFilter },
-    orderBy: { date: "asc" },
+    where: {
+      ...where,
+      ...(cursor ? { OR: [{ date: { gt: cursor.at } }, { date: cursor.at, id: { gt: cursor.id } }] } : {}),
+    },
+    orderBy: [{ date: "asc" }, { id: "asc" }],
+    take: pageSize + 1,
   });
-  return overrides.map(toOverrideDTO);
+  const page = finishDatePage(overrides, pageSize, scope, (row) => row.date);
+  return { ...page, items: page.items.map(toOverrideDTO) };
 }
 
 export interface CreateOverrideInput {

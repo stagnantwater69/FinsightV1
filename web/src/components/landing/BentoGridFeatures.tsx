@@ -27,7 +27,7 @@ function OcrPreview() {
           <p className="figure mt-1.5 text-sm font-bold text-landing-charcoal">₱4,600.00</p>
         </div>
         <span className="flex items-center gap-1 rounded-full bg-landing-emerald px-2 py-0.5 text-[9px] font-bold text-landing-mint">
-          <Check className="h-2.5 w-2.5" strokeWidth={3} />
+          <Check className="h-2.5 w-2.5" />
           Captured
         </span>
       </div>
@@ -128,11 +128,11 @@ function ExportPreview() {
     <PreviewFrame>
       <div className="flex items-center justify-center gap-4 py-1">
         <span className="flex flex-col items-center gap-1">
-          <FileSpreadsheet className="h-8 w-8 text-landing-green" strokeWidth={1.5} />
+          <FileSpreadsheet className="h-8 w-8 text-landing-green" />
           <span className="rounded bg-landing-green px-1.5 py-0.5 text-[8px] font-bold text-white">XLSX</span>
         </span>
         <span className="flex flex-col items-center gap-1">
-          <FileText className="h-8 w-8 text-landing-emerald" strokeWidth={1.5} />
+          <FileText className="h-8 w-8 text-landing-emerald" />
           <span className="rounded bg-landing-emerald px-1.5 py-0.5 text-[8px] font-bold text-white">CSV</span>
         </span>
       </div>

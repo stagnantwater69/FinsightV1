@@ -1,9 +1,10 @@
-import { forwardRef, useState, type ReactNode } from "react";
+import { forwardRef, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ActivityIndicator,
   Image,
   ImageSourcePropType,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -15,14 +16,16 @@ import {
   View,
   ViewStyle,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { font, radius, space, typeScale } from "../theme/tokens";
+import { shadowStyle } from "../theme/shadow";
 import { TAP_FLOOR } from "./touchTarget";
 import type { Palette, ThemeMode } from "../theme/palette";
 import { useTheme } from "../context/ThemeContext";
 import { formatMoney, type AlertKind } from "../lib/money";
 import * as haptics from "../lib/haptics";
+import { useReducedMotion } from "../lib/useReducedMotion";
 
 /**
  * Shared primitives, mirroring the web design system.
@@ -53,10 +56,9 @@ type Variant = "titleLg" | "title" | "heading" | "body" | "label" | "caption";
  * had gone back to fix. `titleLg` exists for the one genuine hero (the auth
  * screens' headline), which is the only place 26 was ever wanted.
  *
- * `heading` is sans, not the display face. The display face is Sora, which is
- * geometric and wide — it earns its keep at 18 and above and reads worse than
- * Inter at 15, which is exactly the dense-list size `heading` is used at. So
- * the display face stops at `title`.
+ * Titles and interface copy share Plex Sans. Semibold marks ordinary section
+ * titles; bold is reserved for the larger headline. Explicit leading lets
+ * headings and labels wrap consistently alongside body copy.
  */
 /*
  * A function of the palette rather than a constant, because the COLOUR in each
@@ -66,12 +68,12 @@ type Variant = "titleLg" | "title" | "heading" | "body" | "label" | "caption";
  * diffing for no benefit.
  */
 const textVariants = (t: Palette): Record<Variant, TextStyle> => ({
-  titleLg: { fontFamily: font.displayBold, fontSize: typeScale.titleLg, color: t.brandHeading },
-  title: { fontFamily: font.displayBold, fontSize: typeScale.title, color: t.brandHeading },
-  heading: { fontFamily: font.sansSemibold, fontSize: typeScale.body, color: t.textSecondary },
+  titleLg: { fontFamily: font.displayBold, fontSize: typeScale.titleLg, color: t.brandHeading, lineHeight: 34 },
+  title: { fontFamily: font.display, fontSize: typeScale.title, color: t.brandHeading, lineHeight: 24 },
+  heading: { fontFamily: font.sansSemibold, fontSize: typeScale.body, color: t.textSecondary, lineHeight: 20 },
   body: { fontFamily: font.sans, fontSize: typeScale.body, color: t.textSecondary, lineHeight: 22 },
-  label: { fontFamily: font.sansMedium, fontSize: typeScale.label, color: t.textMuted },
-  caption: { fontFamily: font.sans, fontSize: typeScale.caption, color: t.textMuted },
+  label: { fontFamily: font.sansMedium, fontSize: typeScale.label, color: t.textMuted, lineHeight: 18 },
+  caption: { fontFamily: font.sans, fontSize: typeScale.caption, color: t.textMuted, lineHeight: 16 },
 });
 
 export function T({
@@ -81,12 +83,35 @@ export function T({
   ...rest
 }: TextProps & { variant?: Variant; children?: ReactNode }) {
   const { text } = useStyles();
+  const base = text[variant];
+  /*
+   * A LARGER SIZE BRINGS ITS OWN LINE HEIGHT.
+   *
+   * `body` sets lineHeight 22 for 15pt text. A caller that enlarges the text
+   * through `style` (a 34pt figure, say) without restating the line height
+   * kept that 22, and Android clips a glyph to its line box: "PHP 25,225.00"
+   * lost the bottom of every digit, and its commas read as full stops. The
+   * web build does not clip, so it never showed there. Here a size the
+   * inherited line height cannot hold gets one in proportion; anything the
+   * caller sets explicitly still wins.
+   */
+  const flat = StyleSheet.flatten(style);
+  const grown =
+    flat?.fontSize !== undefined &&
+    flat.lineHeight === undefined &&
+    base.lineHeight !== undefined &&
+    base.lineHeight < flat.fontSize * LINE_RATIO
+      ? { lineHeight: Math.round(flat.fontSize * LINE_RATIO) }
+      : null;
   return (
-    <Text style={[text[variant], style]} {...rest}>
+    <Text style={[base, style, grown]} {...rest}>
       {children}
     </Text>
   );
 }
+
+/** Line height per point of type, for text enlarged past its variant's line box. */
+const LINE_RATIO = 1.3;
 
 /**
  * A peso amount. Monospaced with tabular figures — so a column of amounts
@@ -151,6 +176,7 @@ export function Button({
   style,
   accessibilityLabel = title,
   testID,
+  focusRingColor,
 }: {
   title: string;
   onPress: () => void;
@@ -160,9 +186,14 @@ export function Button({
   style?: ViewStyle;
   accessibilityLabel?: string;
   testID?: string;
+  focusRingColor?: string;
 }) {
   const t = useTheme();
   const styles = useStyles();
+  const [focused, setFocused] = useState(false);
+  const focusStyle: ViewStyle = Platform.OS === "web" && focusRingColor && focused
+    ? { outlineColor: focusRingColor, outlineWidth: 2, outlineStyle: "solid", outlineOffset: -2 }
+    : {};
 
   // primary = the amber accent, with DARK ink on it. White on amber measures
   // 2.04:1 and fails; this is the same rule the web app follows — and it
@@ -219,25 +250,20 @@ export function Button({
        */
       accessibilityState={{ disabled: !!disabled || !!loading, busy: !!loading }}
       onPress={onPress}
+      onFocus={focusRingColor ? () => setFocused(true) : undefined}
+      onBlur={focusRingColor ? () => setFocused(false) : undefined}
       disabled={disabled || loading}
       style={({ pressed }) => [
         styles.button,
         { backgroundColor: bg, borderColor: border, opacity: disabled || loading ? 0.6 : pressed ? 0.85 : 1 },
         style,
+        focusStyle,
       ]}
     >
-      {/*
-        The label is capped at one line. A button that wraps reads as a broken
-        layout rather than a longer label, and when two sit side by side in a
-        row it drags the whole row taller than its neighbour. Nothing is at
-        risk of being clipped: the longest title in the app measures 213px
-        against a 262px budget on the narrowest screen supported, so the cap
-        only ever catches a label already too long to belong on a button.
-      */}
       {loading ? (
         <ActivityIndicator color={fg} />
       ) : (
-        <Text numberOfLines={1} style={{ fontFamily: font.sansSemibold, fontSize: typeScale.body, color: fg }}>
+        <Text style={{ flexShrink: 1, textAlign: "center", fontFamily: font.sansSemibold, fontSize: typeScale.body, color: fg }}>
           {title}
         </Text>
       )}
@@ -331,7 +357,7 @@ export const Field = forwardRef<TextInput, FieldProps>(function Field(
         {icon ? (
           <Ionicons
             name={icon}
-            size={19}
+            size={20}
             color={error ? t.statusText.critical : focused ? t.brandText : t.textMuted}
             style={{ position: "absolute", left: space.md, zIndex: 1 }}
             accessibilityElementsHidden
@@ -381,6 +407,7 @@ export const Field = forwardRef<TextInput, FieldProps>(function Field(
             // underneath it.
             paddingRight: isPassword && hasText ? 48 : space.md,
             paddingVertical: space.sm,
+            fontFamily: font.sans,
             fontSize: typeScale.body,
             color: t.textPrimary,
             backgroundColor: t.surface,
@@ -554,6 +581,9 @@ export function CategorySelect<Option extends { id: number; name: string; kind?:
 }) {
   const t = useTheme();
   const [open, setOpen] = useState(false);
+  const disabledRef = useRef(disabled);
+  disabledRef.current = disabled;
+  useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
   // Store IDs only, separated by the business's available category set.
   const recentScope = options.map((option) => option.id).sort((a, b) => a - b).join(",");
 
@@ -567,6 +597,7 @@ export function CategorySelect<Option extends { id: number; name: string; kind?:
     <>
       <Pressable
         onPress={() => {
+          if (disabledRef.current) return;
           haptics.tapped();
           setOpen(true);
         }}
@@ -616,11 +647,12 @@ export function CategorySelect<Option extends { id: number; name: string; kind?:
       </Pressable>
 
       <OptionSheet
-        visible={open}
+        visible={open && !disabled}
         title={sheetTitle}
         options={sheetOptions}
         value={value}
         onChoose={(id) => {
+          if (disabledRef.current) return;
           const recent = recentCategoryChoices.get(recentScope) ?? [];
           recentCategoryChoices.set(recentScope, [id, ...recent.filter((entry) => entry !== id)].slice(0, 4));
           // Session-only convenience, bounded even when owners switch businesses.
@@ -857,23 +889,14 @@ export function OptionSheet<Option extends { id: number | string; name: string; 
 
   return (
     <Modal visible={visible} transparent animationType="slide" statusBarTranslucent onRequestClose={close}>
-      <Pressable
-        onPress={close}
-        accessibilityRole="button"
-        accessibilityLabel="Close without choosing"
-        style={{ flex: 1, backgroundColor: t.scrim, justifyContent: "flex-end" }}
-      >
-        {/*
-          The sheet swallows touches so they never reach the backdrop behind —
-          without this, a tap anywhere on it would close it, and choosing the
-          last option in a scrolled list would dismiss instead of select.
-
-          A View claiming the responder, NOT a Pressable with an empty
-          onPress: it is not a control, and a button role here would put a
-          phantom stop between every real option for a screen reader.
-        */}
+      <View style={{ flex: 1, backgroundColor: t.scrim, justifyContent: "flex-end" }}>
+        <Pressable
+          onPress={close}
+          accessibilityRole="button"
+          accessibilityLabel="Close without choosing"
+          style={[StyleSheet.absoluteFill, { minHeight: TAP_FLOOR, minWidth: TAP_FLOOR }]}
+        />
         <View
-          onStartShouldSetResponder={() => true}
           style={{
             backgroundColor: t.surfaceRaised,
             borderTopLeftRadius: radius.xl,
@@ -960,7 +983,7 @@ export function OptionSheet<Option extends { id: number | string; name: string; 
             ) : null}
           </ScrollView>
         </View>
-      </Pressable>
+      </View>
     </Modal>
   );
 }
@@ -1020,9 +1043,9 @@ export function DropdownPill<Value extends string | number>({
           opacity: pressed ? 0.85 : 1,
         })}
       >
-        {icon ? <Ionicons name={icon} size={15} color={t.ink[600]} /> : null}
+        {icon ? <Ionicons name={icon} size={16} color={t.ink[600]} /> : null}
         <T style={{ fontSize: 13.5, color: t.ink[800], fontFamily: font.sansMedium }}>{current?.label}</T>
-        <Ionicons name="chevron-down" size={15} color={t.textMuted} />
+        <Ionicons name="chevron-down" size={16} color={t.textMuted} />
       </Pressable>
 
       <OptionSheet
@@ -1062,6 +1085,7 @@ export function ConfirmSheet({
   confirmLabel,
   cancelLabel = "Cancel",
   confirmVariant = "brand",
+  presentation = "sheet",
   busy = false,
   error,
   onConfirm,
@@ -1079,6 +1103,7 @@ export function ConfirmSheet({
    * green, not a red that would imply data is about to be lost.
    */
   confirmVariant?: "brand" | "primary" | "danger";
+  presentation?: "sheet" | "dialog";
   /**
    * True while the confirmed action is running. It puts a spinner on the
    * confirm button, and it LOCKS THE SHEET: cancel, the backdrop and the
@@ -1098,34 +1123,34 @@ export function ConfirmSheet({
   const dismiss = () => {
     if (!busy) onCancel();
   };
+  const { width, fontScale } = useWindowDimensions();
+  const stackActions = width < 360 || fontScale >= 1.3;
+  const reduceMotion = useReducedMotion();
+  const dialog = presentation === "dialog";
 
   return (
-    <Modal visible={visible} transparent animationType="slide" statusBarTranslucent onRequestClose={dismiss}>
+    <Modal visible={visible} transparent animationType={reduceMotion ? "none" : dialog ? "fade" : "slide"} statusBarTranslucent onRequestClose={dismiss} accessibilityLabel={dialog ? title : undefined}>
+      <View style={{ flex: 1, backgroundColor: t.scrim, justifyContent: dialog ? "center" : "flex-end", paddingTop: insets.top + (dialog ? space.xl : space.lg), ...(dialog ? { paddingHorizontal: space.xl, paddingBottom: insets.bottom + space.xl } : {}) }}>
       <Pressable
         onPress={dismiss}
-        accessibilityRole="button"
-        accessibilityLabel="Dismiss without doing anything"
-        style={{ flex: 1, backgroundColor: t.scrim, justifyContent: "flex-end" }}
-      >
-        {/*
-          Swallows touches so a tap on the sheet cannot reach the backdrop.
-          A View claiming the responder, not a Pressable — it is not a control,
-          and a button role here would put a phantom stop between the two that
-          are.
-        */}
+        accessible={false}
+        importantForAccessibility="no-hide-descendants"
+        style={StyleSheet.absoluteFill}
+      />
         <View
-          onStartShouldSetResponder={() => true}
+          accessibilityViewIsModal
           style={{
+            width: "100%",
+            maxWidth: dialog ? 400 : 720,
+            maxHeight: "100%",
+            alignSelf: "center",
             backgroundColor: t.surfaceRaised,
-            borderTopLeftRadius: radius.xl,
-            borderTopRightRadius: radius.xl,
-            paddingTop: space.md,
-            paddingHorizontal: space.lg,
-            paddingBottom: insets.bottom + space.lg,
+            ...(dialog ? { borderRadius: radius.lg } : { borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl }),
           }}
         >
+          <ScrollView style={{ flexGrow: 0 }} keyboardShouldPersistTaps="handled" contentContainerStyle={dialog ? { padding: space.xl } : { paddingTop: space.md, paddingHorizontal: space.lg, paddingBottom: insets.bottom + space.lg }}>
           {/* The grabber. Says "this came from the bottom and goes back there". */}
-          <View
+          {!dialog ? <View
             style={{
               alignSelf: "center",
               width: 36,
@@ -1134,13 +1159,13 @@ export function ConfirmSheet({
               backgroundColor: t.borderStrong,
               marginBottom: space.lg,
             }}
-          />
+          /> : null}
 
-          <T variant="title" accessibilityRole="header" style={{ textAlign: "center" }}>
+          <T variant="title" accessibilityRole="header" style={{ textAlign: "center", ...(dialog ? { color: t.textPrimary } : {}) }}>
             {title}
           </T>
           {body ? (
-            <T style={{ fontSize: typeScale.bodySm, color: t.ink[600], textAlign: "center", marginTop: 6, lineHeight: 20 }}>
+            <T style={{ fontSize: dialog ? typeScale.body : typeScale.bodySm, color: t.ink[600], textAlign: "center", marginTop: 6, lineHeight: dialog ? 24 : 20 }}>
               {body}
             </T>
           ) : null}
@@ -1151,16 +1176,17 @@ export function ConfirmSheet({
             </View>
           ) : null}
 
-          <View style={{ flexDirection: "row", gap: space.sm, marginTop: space.lg }}>
-            <View style={{ flex: 1 }}>
-              <Button title={cancelLabel} variant="secondary" onPress={onCancel} disabled={busy} />
+          <View style={{ flexDirection: stackActions ? "column" : "row", gap: space.sm, marginTop: space.lg }}>
+            <View style={stackActions ? undefined : { flex: 1 }}>
+              <Button title={cancelLabel} variant="secondary" onPress={dialog ? dismiss : onCancel} disabled={busy} focusRingColor={dialog ? t.brandText : undefined} />
             </View>
-            <View style={{ flex: 1 }}>
-              <Button title={confirmLabel} variant={confirmVariant} onPress={onConfirm} loading={busy} />
+            <View style={stackActions ? undefined : { flex: 1 }}>
+              <Button title={confirmLabel} variant={confirmVariant} onPress={onConfirm} loading={busy} focusRingColor={dialog ? confirmVariant === "brand" ? t.onBrandFill : confirmVariant === "primary" ? t.ACCENT.onFill : t.brandText : undefined} />
             </View>
           </View>
+          </ScrollView>
         </View>
-      </Pressable>
+      </View>
     </Modal>
   );
 }
@@ -1660,6 +1686,7 @@ const createStyles = (t: Palette) => ({
   ...StyleSheet.create({
   button: {
     minHeight: TAP_FLOOR,
+    paddingVertical: space.sm,
     paddingHorizontal: space.lg,
     borderRadius: radius.md,
     borderWidth: 1,
@@ -1718,10 +1745,8 @@ const createStyles = (t: Palette) => ({
    * the sheet from the background — and lets colour mean something when it
    * does appear.
    *
-   * Both shadow systems are set because they are not interchangeable: iOS
-   * reads shadowColor/Offset/Opacity/Radius, Android reads elevation only.
-   * Giving one and not the other is how a card ends up flat on half the
-   * devices it ships to.
+   * Native shadow and elevation values stay paired; web receives the same
+   * geometry and opacity through boxShadow.
    */
   card: {
     backgroundColor: t.surface,
@@ -1729,11 +1754,7 @@ const createStyles = (t: Palette) => ({
     borderWidth: 1,
     borderColor: t.border,
     padding: space.lg,
-    shadowColor: t.shadow,
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04 * t.shadowStrength,
-    shadowRadius: 3,
-    elevation: 1,
+    ...shadowStyle({ color: t.shadow, offsetY: 1, opacity: 0.04 * t.shadowStrength, blurRadius: 3, elevation: 1 }),
   },
   alert: { flexDirection: "row", borderRadius: radius.md, overflow: "hidden" },
   alertBody: { flex: 1, padding: space.md },

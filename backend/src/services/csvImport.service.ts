@@ -3,6 +3,7 @@ import { hostname } from "node:os";
 import { promisify } from "node:util";
 import { gunzip, gzip } from "node:zlib";
 import { parse } from "csv-parse/sync";
+import { z } from "zod";
 import { AccountStatus, CsvImportProcessingStatus, Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { logger } from "../config/logger";
@@ -10,6 +11,7 @@ import { ApiError } from "../middleware/error.middleware";
 import { businessTodayKey, isAfterToday } from "../lib/transactionDate";
 import { utcAddDays, utcDateKey, utcToday } from "../lib/dates";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
+import { dateCursorScope, datePageSize, decodeDateCursor, finishDatePage, invalidDateCursor, type DatePageInput } from "../lib/datePagination";
 import {
   csvFileReference,
   uploadCsvFileAtReference,
@@ -1609,22 +1611,43 @@ export interface ImportBatchSummary {
 }
 
 /**
- * Every CSV import a business profile has on file, newest first.
+ * The newest CSV imports for a business profile, capped for legacy callers.
  *
  * Feeds the Records page's "which import" filter — an owner narrowing to CSV
  * Upload needs a way to say WHICH file, not just that a record came from one.
  */
 export async function listImportBatches(userId: number, businessProfileId: number): Promise<ImportBatchSummary[]> {
-  await requireOwnedBusinessProfile(userId, businessProfileId);
+  return (await listImportBatchesPage(userId, businessProfileId, { pageSize: 100 })).items;
+}
 
-  return prisma.cSVImportBatch.findMany({
+export async function listImportBatchesPage(
+  userId: number,
+  businessProfileId: number,
+  input: DatePageInput & { search?: string },
+) {
+  await requireOwnedBusinessProfile(userId, businessProfileId);
+  const pageSize = datePageSize(input);
+  const search = z.string().trim().max(150).parse(input.search ?? "");
+  const scope = dateCursorScope(["csv-import-batches", userId, businessProfileId, search]);
+  const cursor = decodeDateCursor(input.cursor, scope);
+  const where = {
+    businessProfileId,
+    processingStatus: { notIn: [CsvImportProcessingStatus.STAGING, CsvImportProcessingStatus.STAGED] },
+    ...(search ? { title: { contains: search, mode: "insensitive" as const } } : {}),
+  };
+  if (cursor && !await prisma.cSVImportBatch.findFirst({ where: { ...where, id: cursor.id }, select: { id: true } })) {
+    invalidDateCursor();
+  }
+  const rows = await prisma.cSVImportBatch.findMany({
     where: {
-      businessProfileId,
-      processingStatus: { notIn: [CsvImportProcessingStatus.STAGING, CsvImportProcessingStatus.STAGED] },
+      ...where,
+      ...(cursor ? { OR: [{ uploadDate: { lt: cursor.at } }, { uploadDate: cursor.at, id: { lt: cursor.id } }] } : {}),
     },
     select: { id: true, title: true, uploadDate: true, status: true },
-    orderBy: { uploadDate: "desc" },
+    orderBy: [{ uploadDate: "desc" }, { id: "desc" }],
+    take: pageSize + 1,
   });
+  return finishDatePage(rows, pageSize, scope, (row) => row.uploadDate);
 }
 
 /**

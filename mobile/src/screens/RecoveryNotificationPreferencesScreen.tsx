@@ -1,7 +1,7 @@
-import { useCallback, useState } from "react";
-import { Pressable, ScrollView, Switch, useWindowDimensions, View } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Pressable, Switch, TextInput, useWindowDimensions, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
-import { Button, Card, ErrorNote, Field, Screen, T } from "../components/ui";
+import { Button, Card, ErrorNote, Field, T } from "../components/ui";
 import { useTheme } from "../context/ThemeContext";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { api, errorMessage } from "../lib/api";
@@ -14,6 +14,7 @@ import {
 } from "../lib/recoveryNotificationPreferencesForm";
 import { space, typeScale } from "../theme/tokens";
 import type { RecoveryNotificationPreference } from "../lib/types";
+import { FormScreen } from "../components/FormScreen";
 
 /**
  * Recovery Target notification preferences — Recovery Target Improvement
@@ -54,6 +55,30 @@ export function RecoveryNotificationPreferencesScreen() {
   const theme = useTheme();
   const { width, fontScale } = useWindowDimensions();
   const stackTimeFields = width < 360 || fontScale > 1.2;
+  const businessId = selected?.id;
+  const scope = useRef({ businessId, generation: 0 });
+  if (scope.current.businessId !== businessId) {
+    scope.current = { businessId, generation: scope.current.generation + 1 };
+  }
+  const loadRequest = useRef(0);
+  const savingRequest = useRef<object | null>(null);
+  const [loadedGeneration, setLoadedGeneration] = useState<number | null>(null);
+  const thresholdRef = useRef<TextInput>(null);
+  const quietStartRef = useRef<TextInput>(null);
+  const quietEndRef = useRef<TextInput>(null);
+  const minHoursRef = useRef<TextInput>(null);
+
+  useEffect(() => {
+    savingRequest.current = null;
+    setSaving(false);
+    setSaved(false);
+    setSaveError(null);
+    setFieldErrors({});
+    return () => {
+      scope.current = { ...scope.current, generation: scope.current.generation + 1 };
+      loadRequest.current += 1;
+    };
+  }, [businessId]);
 
   const [pref, setPref] = useState<RecoveryNotificationPreference>(DEFAULTS);
   const [thresholdRaw, setThresholdRaw] = useState(String(DEFAULTS.targetIncreaseThresholdPercent));
@@ -69,7 +94,10 @@ export function RecoveryNotificationPreferencesScreen() {
   const [fieldErrors, setFieldErrors] = useState<{ threshold?: string; minHours?: string; quiet?: string }>({});
 
   const load = useCallback(async () => {
-    if (!selected) return;
+    if (businessId === undefined) return;
+    const generation = scope.current.generation;
+    const request = ++loadRequest.current;
+    const current = () => request === loadRequest.current && generation === scope.current.generation;
     setLoading(true);
     setLoadError(null);
     setSaved(false);
@@ -77,23 +105,26 @@ export function RecoveryNotificationPreferencesScreen() {
     setFieldErrors({});
     try {
       const loaded = await api.get<RecoveryNotificationPreference>(
-        `/business-profiles/${selected.id}/recovery-notification-preferences`,
+        `/business-profiles/${businessId}/recovery-notification-preferences`,
       );
+      if (!current()) return;
       setPref(loaded);
       setThresholdRaw(String(loaded.targetIncreaseThresholdPercent));
       setQuietStartRaw(loaded.quietHoursStart ?? "");
       setQuietEndRaw(loaded.quietHoursEnd ?? "");
       setMinHoursRaw(String(loaded.minHoursBetweenNotifications));
+      setLoadedGeneration(generation);
     } catch (err) {
-      setLoadError(errorMessage(err));
+      if (current()) setLoadError(errorMessage(err));
     } finally {
-      setLoading(false);
+      if (current()) setLoading(false);
     }
-  }, [selected]);
+  }, [businessId]);
 
   useFocusEffect(
     useCallback(() => {
-      load();
+      void load();
+      return () => { loadRequest.current += 1; };
     }, [load]),
   );
 
@@ -103,7 +134,8 @@ export function RecoveryNotificationPreferencesScreen() {
   }
 
   async function save() {
-    if (!selected) return;
+    if (!selected || savingRequest.current || loadedGeneration !== scope.current.generation) return;
+    const generation = scope.current.generation;
     setSaved(false);
 
     const errors: { threshold?: string; minHours?: string; quiet?: string } = {};
@@ -120,8 +152,13 @@ export function RecoveryNotificationPreferencesScreen() {
     else if (bothErr) errors.quiet = bothErr;
 
     setFieldErrors(errors);
-    if (Object.keys(errors).length > 0) return;
+    if (Object.keys(errors).length > 0) {
+      (errors.threshold ? thresholdRef : errors.quiet ? endErr ? quietEndRef : quietStartRef : minHoursRef).current?.focus();
+      return;
+    }
 
+    const request = {};
+    savingRequest.current = request;
     setSaving(true);
     setSaveError(null);
     try {
@@ -142,6 +179,7 @@ export function RecoveryNotificationPreferencesScreen() {
         `/business-profiles/${selected.id}/recovery-notification-preferences`,
         payload,
       );
+      if (generation !== scope.current.generation || savingRequest.current !== request) return;
       setPref(updated);
       setThresholdRaw(String(updated.targetIncreaseThresholdPercent));
       setQuietStartRaw(updated.quietHoursStart ?? "");
@@ -149,25 +187,26 @@ export function RecoveryNotificationPreferencesScreen() {
       setMinHoursRaw(String(updated.minHoursBetweenNotifications));
       setSaved(true);
     } catch (err) {
-      setSaveError(errorMessage(err));
+      if (generation === scope.current.generation && savingRequest.current === request) setSaveError(errorMessage(err));
     } finally {
-      setSaving(false);
+      if (savingRequest.current === request) {
+        savingRequest.current = null;
+        setSaving(false);
+      }
     }
   }
 
   if (!selected) return null;
 
   return (
-    <Screen>
-      <ScrollView
-        keyboardShouldPersistTaps="handled"
+    <FormScreen
         contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2, gap: space.xxl }}
       >
         <T style={{ fontSize: typeScale.bodySm }}>
           Choose Sales Coverage Target alerts for {selected.name}. All alerts are optional.
         </T>
 
-        {loading ? (
+        {loading || (loadedGeneration !== scope.current.generation && !loadError) ? (
           <T variant="caption">Loading…</T>
         ) : loadError ? (
           <View style={{ gap: space.md }}>
@@ -191,6 +230,7 @@ export function RecoveryNotificationPreferencesScreen() {
                 {pref.targetIncreaseAlertEnabled ? (
                   <View style={{ marginTop: space.md }}>
                     <Field
+                      ref={thresholdRef}
                       label="Increase threshold (%)"
                       value={thresholdRaw}
                       editable={!saving}
@@ -236,6 +276,7 @@ export function RecoveryNotificationPreferencesScreen() {
                 <View style={{ flexDirection: stackTimeFields ? "column" : "row", gap: space.md }}>
                   <View style={{ flex: 1 }}>
                     <Field
+                      ref={quietStartRef}
                       label="Start"
                       value={quietStartRaw}
                       editable={!saving}
@@ -250,6 +291,7 @@ export function RecoveryNotificationPreferencesScreen() {
                   </View>
                   <View style={{ flex: 1 }}>
                     <Field
+                      ref={quietEndRef}
                       label="End"
                       value={quietEndRaw}
                       editable={!saving}
@@ -272,6 +314,7 @@ export function RecoveryNotificationPreferencesScreen() {
                   Set the minimum time between alerts to avoid repeated notifications.
                 </T>
                 <Field
+                  ref={minHoursRef}
                   label="Hours between notifications"
                   value={minHoursRaw}
                   editable={!saving}
@@ -305,8 +348,7 @@ export function RecoveryNotificationPreferencesScreen() {
             </View>
           </>
         )}
-      </ScrollView>
-    </Screen>
+    </FormScreen>
   );
 }
 
@@ -335,7 +377,7 @@ function NotificationToggle({ label, detail, value, onPress, disabled }: {
     >
       <View style={{ flexDirection: "row", alignItems: "center", gap: space.md }}>
         <T variant="heading" style={{ flex: 1, color: theme.textPrimary }}>{label}</T>
-        <View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+        <View style={{ pointerEvents: "none" }} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
           <Switch
             accessible={false}
             value={value}

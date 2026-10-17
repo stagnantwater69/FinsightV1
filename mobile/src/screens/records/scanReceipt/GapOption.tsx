@@ -29,7 +29,8 @@ export function GapOption({
     <Pressable
       onPress={onPress}
       accessibilityRole="radio"
-      accessibilityState={{ selected }}
+      accessibilityLabel={`${title}. ${detail}`}
+      accessibilityState={{ selected, checked: selected }}
       style={{
         borderWidth: 1,
         borderColor: selected ? brand[600] : ink[200],

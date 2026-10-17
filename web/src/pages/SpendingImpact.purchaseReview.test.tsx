@@ -454,3 +454,9 @@ describe("when the AI cannot answer", () => {
     expect(await screen.findByRole("alert")).toBeInTheDocument();
   });
 });
+
+it('binds the spending-impact view to its own reporting period scope', () => {
+  const wrapper = SpendingImpact();
+  expect(wrapper.props.scope).toBe('spending-impact');
+  expect(typeof wrapper.props.children.type).toBe('function');
+});

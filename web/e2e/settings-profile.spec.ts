@@ -83,6 +83,7 @@ test("business profile exposes dirty, cancel, and saved states", async ({
   await expect(
     page.getByRole("heading", { name: "Recorded financial position" }),
   ).toBeVisible();
+  await expect(page.getByText("Used to calculate Recovery Target for this business.", { exact: true })).toBeVisible();
   await expect(page.locator("button", { hasText: "Change logo" })).toBeVisible();
   await expect(page.getByRole("link", { name: /Manage schedule/ })).toBeVisible();
   await expect(

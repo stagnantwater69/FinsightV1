@@ -27,12 +27,13 @@ import { MemoryRouter } from "react-router-dom";
  * address for free.
  */
 
-const { verifyOtp, setSession, updateUser, signOut, createRecoveryClient } = vi.hoisted(() => {
+const { verifyOtp, setSession, updateUser, signOut, createRecoveryClient, disposeIsolatedAuthClient } = vi.hoisted(() => {
   const verifyOtp = vi.fn();
   const setSession = vi.fn();
   const updateUser = vi.fn();
   const signOut = vi.fn();
   return {
+    disposeIsolatedAuthClient: vi.fn(),
     verifyOtp,
     setSession,
     updateUser,
@@ -43,6 +44,7 @@ const { verifyOtp, setSession, updateUser, signOut, createRecoveryClient } = vi.
 
 vi.mock("../lib/supabaseClient", () => ({
   createRecoveryClient,
+  disposeIsolatedAuthClient,
   supabase: { auth: {} },
 }));
 
@@ -81,6 +83,41 @@ afterEach(() => {
 });
 
 describe("arriving with nothing in the URL", () => {
+  it("rejects an incomplete code before contacting the provider", async () => {
+    const user = userEvent.setup();
+    renderPage({ email: EMAIL });
+    await user.type(await screen.findByLabelText(/recovery code/i), "123");
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    expect(verifyOtp).not.toHaveBeenCalled();
+    expect(screen.getByLabelText(/recovery code/i)).toHaveAttribute("aria-invalid", "true");
+    expect(screen.queryByLabelText(/^new password/i)).toBeNull();
+  });
+
+  it("refuses verification without a session and disposes the isolated client", async () => {
+    verifyOtp.mockResolvedValue({ data: { session: null }, error: null });
+    const user = userEvent.setup();
+    renderPage({ email: EMAIL });
+    await user.type(await screen.findByLabelText(/recovery code/i), "75324744");
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    expect(await screen.findByText(/that didn't work/i)).toBeInTheDocument();
+    expect(disposeIsolatedAuthClient).toHaveBeenCalled();
+    expect(setSession).not.toHaveBeenCalled();
+    expect(apiPost).not.toHaveBeenCalled();
+  });
+
+  it("keeps provider transport details private and allows retry", async () => {
+    verifyOtp.mockRejectedValueOnce(new Error("Unknown email owner@example.com"));
+    const user = userEvent.setup();
+    renderPage({ email: EMAIL });
+    await user.type(await screen.findByLabelText(/recovery code/i), "75324744");
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    expect(await screen.findByText(/couldn't check that code/i)).toBeInTheDocument();
+    expect(screen.queryByText(/unknown email/i)).toBeNull();
+    expect(disposeIsolatedAuthClient).toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /continue/i })).toBeEnabled();
+    expect(updateUser).not.toHaveBeenCalled();
+  });
+
   /*
    * This used to read "Open this page from the link in your password-reset
    * email." and stop. With no link in the email at all, that would now be a
@@ -104,7 +141,8 @@ describe("arriving with nothing in the URL", () => {
     expect(await screen.findByLabelText(/^new password/i)).toBeTruthy();
     expect(verifyOtp).toHaveBeenCalledWith({ email: EMAIL, token: "75324744", type: "recovery" });
     // The verification client is spent on every path, exactly like the link one.
-    expect(signOut).toHaveBeenCalledWith({ scope: "local" });
+    expect(disposeIsolatedAuthClient).toHaveBeenCalled();
+    expect(signOut).not.toHaveBeenCalled();
   });
 
   /** People paste the code as it is grouped in the email. */
@@ -173,6 +211,7 @@ describe("arriving with nothing in the URL", () => {
       headers: { Authorization: "Bearer otp-access-token" },
     });
     expect(await screen.findByText(/password changed/i)).toBeTruthy();
+    await waitFor(() => expect(signOut).toHaveBeenCalledWith({ scope: "local" }));
     expect(screen.getByRole("status")).toHaveTextContent(/password has been changed/i);
     expect(screen.getByText(/other devices will need to sign in again after their current access expires/i)).toBeInTheDocument();
   });

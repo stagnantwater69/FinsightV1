@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
@@ -24,15 +24,18 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
  * sheet feel dismissible rather than like a new page.
  */
 const SHEET_HEIGHT = Math.round(Dimensions.get("window").height * 0.88);
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { Button, Callout, ErrorNote, T } from "./ui";
+import { TAP_FLOOR } from "./touchTarget";
 import { ChatHistoryPanel } from "./ChatHistoryPanel";
 import { ChatMarkdown, ChatReplyExtras } from "./ChatReply";
+import { Mascot } from "./MascotState";
 import { useAiChat } from "../context/AiChatContext";
+import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import * as haptics from "../lib/haptics";
 import { formatMoney } from "../lib/money";
 import { useReducedMotion } from "../lib/useReducedMotion";
-import { TAP, font, radius, space, typeScale } from "../theme/tokens";
+import { font, radius, space, typeScale } from "../theme/tokens";
 import { useTheme } from "../context/ThemeContext";
 import type { ChatMessage, InteractionModule } from "../lib/types";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
@@ -61,32 +64,20 @@ import { FIELD_LIMITS } from "../lib/fieldLimits";
  * ago.
  */
 
-const MODULE_COPY: Record<InteractionModule, { title: string; scope: string; greeting: string; starters: string[] }> = {
-  Dashboard: {
-    title: "Ask about your dashboard",
-    scope: "Scoped to your Dashboard — totals, what needs review, and your recovery pace.",
-    greeting: "I can explain what's on your dashboard right now. What would you like to know?",
-    starters: ["Summarise this month for me", "What needs my attention?", "How can I reduce my expenses?"],
-  },
-  "Expense Insights": {
-    title: "Ask about your expenses",
-    scope: "Scoped to Expense Insights — category shares, increases, and unusual records.",
-    greeting: "I can help you understand your expense behaviour. What would you like to know?",
-    starters: ["Why did my expenses increase?", "Which category is highest?", "How can I reduce my expenses?"],
-  },
-  "Spending Impact": {
-    title: "Ask about spending",
-    scope: "Describe a planned expense in your own words. The numbers are computed, not estimated by AI.",
-    greeting: 'Try: "What if I spend ₱11,000 on a fridge?"',
-    starters: ["What if I spend ₱11,000 on a fridge?", "Is this a large expense for me?"],
-  },
-  "Recovery Target": {
-    title: "Ask about recovery",
-    scope: "Scoped to Recovery Target — today's gap and your remaining operating days.",
-    greeting: "I can compare your recorded sales against your needed target. What would you like to check?",
-    starters: ["How much more sales do I need?", "Did I reach today's target?", "What is my adjusted daily target?"],
-  },
-};
+const STARTERS: { module: InteractionModule; question: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+  { module: "Expense Insights", question: "Which category is highest?", icon: "grid-outline" },
+  { module: "Dashboard", question: "What needs my attention?", icon: "analytics-outline" },
+  { module: "Spending Impact", question: "What if I spend ₱11,000 on a fridge?", icon: "calculator-outline" },
+  { module: "Recovery Target", question: "How much more sales do I need?", icon: "trending-up-outline" },
+];
+
+interface SendAttempt {
+  question: string;
+  businessId: number;
+  conversationId: number | null;
+  draft: string | null;
+  generation: number;
+}
 
 export function AskFinSight({
   visible,
@@ -105,8 +96,10 @@ export function AskFinSight({
   const t = useTheme();
   const { brand, ink, paper } = t;
   const chat = useAiChat();
+  const { selected } = useBusinessProfiles();
   const active = chat.conversations.find((c) => c.id === chat.activeId) ?? null;
-  const copy = MODULE_COPY[active?.originModule ?? module];
+  const currentModule = active?.originModule ?? chat.seedModule;
+  const businessId = selected?.id ?? null;
 
   /*
    * The sheet's own animation.
@@ -165,12 +158,12 @@ export function AskFinSight({
           toValue: settled,
           duration: to === "open" ? 260 : 200,
           easing: to === "open" ? Easing.out(Easing.cubic) : Easing.in(Easing.cubic),
-          useNativeDriver: true,
+          useNativeDriver: Platform.OS !== "web",
         }),
         Animated.timing(backdrop, {
           toValue: dimmed,
           duration: to === "open" ? 260 : 200,
-          useNativeDriver: true,
+          useNativeDriver: Platform.OS !== "web",
         }),
       ]).start(({ finished }) => {
         if (finished) onDone?.();
@@ -219,13 +212,22 @@ export function AskFinSight({
           // is removed here is the spring overshoot on release.
           translateY.setValue(0);
         } else {
-          Animated.spring(translateY, { toValue: 0, useNativeDriver: true, bounciness: 4 }).start();
+          Animated.spring(translateY, { toValue: 0, useNativeDriver: Platform.OS !== "web", bounciness: 4 }).start();
         }
       },
     }),
   ).current;
   const dragHandlers = pan.panHandlers;
   const [inputFocused, setInputFocused] = useState(false);
+  const composerInputId = `ask-finsight-input-${useId()}`;
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    const style = document.createElement("style");
+    const selector = `textarea[id="${composerInputId}"]`;
+    style.textContent = `${selector} { scrollbar-width: none; outline: none; } ${selector}::-webkit-scrollbar { display: none; }`;
+    document.head.appendChild(style);
+    return () => style.remove();
+  }, [composerInputId]);
   /**
    * Whether the history list is over the messages.
    *
@@ -236,6 +238,31 @@ export function AskFinSight({
    */
   const [historyOpen, setHistoryOpen] = useState(false);
   const listRef = useRef<FlatList<ChatMessage>>(null);
+  const starterDraft = useRef<{ businessId: number | null; module: InteractionModule; draft: string } | null>(null);
+  const attemptRef = useRef<SendAttempt | null>(null);
+  const lifecycle = useRef({ businessId, generation: 0, mounted: true });
+  if (lifecycle.current.businessId !== businessId) {
+    lifecycle.current = { businessId, generation: lifecycle.current.generation + 1, mounted: lifecycle.current.mounted };
+  }
+  useEffect(() => {
+    lifecycle.current.mounted = true;
+    return () => {
+      lifecycle.current.mounted = false;
+      lifecycle.current.generation += 1;
+    };
+  }, []);
+  const [failedSend, setFailedSend] = useState<SendAttempt | null>(null);
+  const currentScope = useRef({ businessId, activeId: chat.activeId });
+  if (currentScope.current.activeId !== chat.activeId && chat.sending) lifecycle.current.generation += 1;
+  currentScope.current = { businessId, activeId: chat.activeId };
+
+  useEffect(() => {
+    setFailedSend(null);
+  }, [businessId, chat.activeId]);
+  useEffect(() => {
+    attemptRef.current = null;
+    starterDraft.current = null;
+  }, [businessId]);
 
   /*
    * Opening the sheet does two things, and creating a conversation is not one
@@ -243,7 +270,7 @@ export function AskFinSight({
    * asks for the history list, which the store fetches once per business and
    * then serves from memory. Reopening the sheet costs no request.
    */
-  const { setSeedModule, ensureList } = chat;
+  const { setSeedModule, ensureList, getState } = chat;
   useEffect(() => {
     if (!visible) {
       // A view reset and nothing more: the sheet should reopen on the
@@ -251,25 +278,61 @@ export function AskFinSight({
       setHistoryOpen(false);
       return;
     }
-    setSeedModule(module);
+    const state = getState();
+    const chosen = starterDraft.current;
+    const preserveStarter = chosen && chosen.businessId === businessId && state.activeId === null && state.input.trim() && state.input === chosen.draft && !state.pendingFocus && !state.pendingReductionOpportunity;
+    setSeedModule(preserveStarter ? chosen.module : module);
     ensureList();
     // The store's own methods are stable for its lifetime, so this effect runs
     // on open and on a module change — never on every state update, which
     // would re-ask for the list after a failed fetch in a loop.
-  }, [visible, module, setSeedModule, ensureList]);
+  }, [visible, module, businessId, getState, setSeedModule, ensureList]);
 
   const messages = chat.messages;
+  const latestMessageId = messages.at(-1)?.id;
   useEffect(() => {
-    if (!visible || messages.length === 0) return;
+    if (!visible || latestMessageId === undefined) return;
     const timer = setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
     return () => clearTimeout(timer);
-  }, [visible, messages]);
+  }, [visible, latestMessageId, chat.activeId]);
 
-  function submit(text: string) {
-    if (!text.trim() || chat.sending) return;
+  async function submit(text: string, retry = false) {
+    const question = text.trim();
+    if (!question || chat.getState().sending || attemptRef.current || businessId === null) return;
+    const attempt: SendAttempt = {
+      question,
+      businessId,
+      conversationId: chat.activeId,
+      draft: retry && chat.input !== question ? chat.input : null,
+      generation: lifecycle.current.generation,
+    };
+    attemptRef.current = attempt;
+    setFailedSend(null);
     haptics.pressed();
-    void chat.send(text);
+    const pending = retry && chat.pendingSend ? chat.retrySend() : chat.send(question);
+    if (retry && attempt.draft !== null) chat.setInput(attempt.draft);
+    await pending;
+    if (attemptRef.current === attempt) attemptRef.current = null;
+    if (!lifecycle.current.mounted || lifecycle.current.generation !== attempt.generation || currentScope.current.businessId !== attempt.businessId) return;
+    const result = chat.getState();
+    if (result.error && result.activeId === attempt.conversationId) setFailedSend(attempt);
+    // The store restores the failed question; an independently typed draft
+    // belongs to the composer while Retry continues to use the original.
+    if (attempt.draft !== null && (!result.error || result.activeId === attempt.conversationId)) {
+      chat.setInput(attempt.draft);
+    }
   }
+
+  function setDraft(value: string) {
+    if (attemptRef.current) attemptRef.current.draft = value;
+    if (starterDraft.current) starterDraft.current.draft = value;
+    chat.setInput(value);
+  }
+
+  const latestPeriod = [...messages].reverse().find((message) => message.role === "assistant")?.metadata?.period;
+  const showWelcome = chat.activeId === null && messages.length === 0 && !chat.messagesLoading && !chat.sending;
+  const starters = [...STARTERS].sort((a, b) => Number(b.module === currentModule) - Number(a.module === currentModule));
+  const canRetry = failedSend && failedSend.businessId === businessId && failedSend.conversationId === chat.activeId;
 
   return (
     <Modal
@@ -285,7 +348,7 @@ export function AskFinSight({
       // Android's back button. While the history list is up it closes the
       // list, the way Escape does on web — backing out of the sheet entirely
       // from a list you only opened to look at is a step too far.
-      onRequestClose={() => (historyOpen ? setHistoryOpen(false) : onClose())}
+      onRequestClose={() => (historyOpen ? setHistoryOpen(false) : close())}
     >
       {/*
         A dimmed backdrop that closes on tap. `pageSheet` gave this behaviour
@@ -311,6 +374,7 @@ export function AskFinSight({
       </Animated.View>
 
       <Animated.View
+        accessibilityViewIsModal
         style={{
           position: "absolute",
           left: 0,
@@ -324,13 +388,7 @@ export function AskFinSight({
           transform: [{ translateY }],
         }}
       >
-        {/*
-          The header plane is dark teal in BOTH themes — `brandSolid`, not the
-          brand ramp, for the reason the raised + button gives in App.tsx.
-          Everything drawn on it therefore wears the fixed `onBrandSolid`
-          pair rather than a theme-resolved ink.
-        */}
-        <View style={{ backgroundColor: t.brandSolidPressed, paddingHorizontal: space.lg, paddingBottom: space.lg }}>
+        <View style={{ backgroundColor: paper[50], paddingHorizontal: space.lg, paddingBottom: space.md, borderBottomWidth: 1, borderBottomColor: t.border }}>
           {/*
             The drag handle, and the ONLY part that responds to a drag. Putting
             the pan responder on the whole sheet would make it fight the
@@ -338,16 +396,17 @@ export function AskFinSight({
             close the sheet instead.
           */}
           <View {...dragHandlers} style={{ paddingVertical: space.md, alignItems: "center" }}>
-            <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: t.brand[400] }} />
+            <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: t.borderStrong }} />
           </View>
 
-          {/*
-            Four controls on one line, in the order they are reached for: get
-            back to an earlier thread, see where you are, start a fresh one,
-            leave. Everything keeps the sheet's existing TAP target — a header
-            is exactly where controls get quietly shrunk to fit.
-          */}
           <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs }}>
+            <T
+              accessibilityRole="header"
+              style={{ color: t.textPrimary, fontFamily: font.sansSemibold, fontSize: typeScale.title, flex: 1 }}
+            >
+              {historyOpen ? "Chat history" : "Ask FinSight"}
+            </T>
+
             <Pressable
               onPress={() => {
                 haptics.tapped();
@@ -356,18 +415,10 @@ export function AskFinSight({
               accessibilityRole="button"
               accessibilityLabel={historyOpen ? "Back to this conversation" : "Chat history"}
               accessibilityState={{ expanded: historyOpen }}
-              hitSlop={8}
-              style={{ minWidth: TAP, minHeight: TAP, alignItems: "flex-start", justifyContent: "center" }}
+              style={{ minWidth: TAP_FLOOR, minHeight: TAP_FLOOR, alignItems: "center", justifyContent: "center" }}
             >
-              <Ionicons name={historyOpen ? "chevron-back" : "time-outline"} size={22} color={t.onBrandSolid} />
+              <Ionicons name={historyOpen ? "chevron-back" : "time-outline"} size={20} color={t.textSecondary} />
             </Pressable>
-
-            <T
-              numberOfLines={1}
-              style={{ color: t.onBrandSolid, fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg, flex: 1 }}
-            >
-              {historyOpen ? "Chat history" : active ? active.title : `✦ ${copy.title}`}
-            </T>
 
             <Pressable
               onPress={() => {
@@ -376,28 +427,32 @@ export function AskFinSight({
                 // greeting, and only the first send creates a conversation, so
                 // an abandoned empty chat never reaches the list.
                 chat.newChat();
+                starterDraft.current = null;
+                setFailedSend(null);
                 setHistoryOpen(false);
               }}
               accessibilityRole="button"
               accessibilityLabel="New chat"
-              hitSlop={8}
-              style={{ minWidth: TAP, minHeight: TAP, alignItems: "center", justifyContent: "center" }}
+              style={{ minWidth: TAP_FLOOR, minHeight: TAP_FLOOR, alignItems: "center", justifyContent: "center" }}
             >
-              <Ionicons name="create-outline" size={22} color={t.onBrandSolid} />
+              <Ionicons name="add-outline" size={22} color={t.textSecondary} />
             </Pressable>
 
             <Pressable
               onPress={close}
               accessibilityRole="button"
               accessibilityLabel="Close Ask FinSight"
-              hitSlop={12}
-              style={{ minWidth: TAP, minHeight: TAP, alignItems: "flex-end", justifyContent: "center" }}
+              style={{ minWidth: TAP_FLOOR, minHeight: TAP_FLOOR, alignItems: "center", justifyContent: "center" }}
             >
-              <T style={{ color: t.onBrandSolid, fontSize: 22 }}>×</T>
+              <Ionicons name="close-outline" size={24} color={t.textSecondary} />
             </Pressable>
           </View>
-          <T style={{ color: t.onBrandSolidMuted, fontSize: typeScale.caption, marginTop: space.sm, lineHeight: 18 }}>
-            {historyOpen ? "Pick up an earlier thread, or long-press one to rename or delete it." : copy.scope}
+          <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm, marginTop: space.sm }}>
+            <Ionicons name="storefront-outline" size={14} color={t.textMuted} />
+            <T variant="label" style={{ color: t.textSecondary, flex: 1 }}>{selected?.name ?? "Choose a business"}</T>
+          </View>
+          <T variant="caption" style={{ marginTop: space.xs }}>
+            {historyOpen ? "Search or manage your saved conversations." : `${currentModule}${latestPeriod ? ` · ${latestPeriod}` : ""}`}
           </T>
         </View>
 
@@ -417,30 +472,77 @@ export function AskFinSight({
               ref={listRef}
               data={messages}
               keyExtractor={(m) => String(m.id)}
-              contentContainerStyle={{ padding: space.lg, gap: space.md }}
+              keyboardShouldPersistTaps="handled"
+              maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+              accessibilityElementsHidden={historyOpen}
+              importantForAccessibility={historyOpen ? "no-hide-descendants" : "auto"}
+              contentContainerStyle={{ padding: space.xl, paddingTop: showWelcome ? space.lg : space.xl, gap: space.xxl }}
               ListHeaderComponent={
-                <View style={{ gap: space.md }}>
-                  {messages.length === 0 ? <Bubble from="ai">{copy.greeting}</Bubble> : null}
+                <View style={{ gap: space.xl }}>
+                  {chat.messagesCursor ? <Button title="Load earlier messages" variant="secondary" loading={chat.messagesLoadingMore} onPress={() => void chat.loadOlderMessages()} /> : null}
+                  {showWelcome ? (
+                    <View style={{ gap: space.md }}>
+                      <Mascot state="brandMark" size={56} style={{ alignSelf: "flex-start" }} />
+                      <T accessibilityRole="header" style={{ fontFamily: font.sansSemibold, fontSize: typeScale.titleLg, lineHeight: 32, color: t.textPrimary }}>
+                        Make sense of your numbers.
+                      </T>
+                      <T style={{ color: t.textMuted }}>Ask about your records, a planned expense or your recovery target.</T>
+                      <View style={{ gap: space.xs, marginTop: space.xs }}>
+                        <T variant="caption">Start with a question</T>
+                        {starters.map((starter) => (
+                          <Pressable
+                            key={starter.module}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Use this question: ${starter.question}`}
+                            accessibilityHint={`Fills the question box for ${starter.module}. Tap Send when ready.`}
+                            onPress={() => {
+                              haptics.tapped();
+                              chat.setSeedModule(starter.module);
+                              chat.prepareQuestion(starter.question);
+                              starterDraft.current = { businessId, module: starter.module, draft: starter.question };
+                              setFailedSend(null);
+                            }}
+                            style={({ pressed }) => ({ minHeight: TAP_FLOOR, flexDirection: "row", alignItems: "center", gap: space.md, paddingVertical: space.sm, borderBottomWidth: 1, borderBottomColor: t.border, backgroundColor: pressed ? t.surfaceMuted : "transparent" })}
+                          >
+                            <Ionicons name={starter.icon} size={22} color={t.brandText} />
+                            <View style={{ flex: 1, gap: space.xs }}>
+                              <T style={{ fontFamily: font.sansMedium, color: t.textPrimary }}>{starter.question}</T>
+                              <T variant="caption">{starter.module}</T>
+                            </View>
+                            <Ionicons name="chevron-forward" size={16} color={t.textMuted} />
+                          </Pressable>
+                        ))}
+                      </View>
+                    </View>
+                  ) : null}
                   {chat.messagesLoading ? (
-                    <T variant="caption" style={{ textAlign: "center" }}>Loading this conversation…</T>
+                    <T variant="caption" accessibilityLiveRegion="polite" style={{ textAlign: "center" }}>Loading this conversation…</T>
                   ) : null}
                 </View>
               }
               renderItem={({ item, index }) =>
                 item.role === "user" ? (
-                  <Bubble from="user">{item.content}</Bubble>
+                  <Bubble>{item.content}</Bubble>
                 ) : (
-                  <View style={{ gap: space.sm }}>
-                    <Bubble from="ai" markdown={item.content} />
+                  <View style={{ gap: space.md }}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+                      <Ionicons name="book-outline" size={16} color={t.brandText} />
+                      <T variant="label" style={{ color: t.textSecondary, fontFamily: font.sansSemibold }}>FinSight</T>
+                    </View>
+                    <ChatMarkdown text={item.content} color={t.textSecondary} />
                     {item.metadata ? (
                       <ChatReplyExtras
                         metadata={item.metadata}
+                        scopeKey={`${businessId}:${chat.activeId}`}
                         // The newest reply, while nothing newer is being
                         // written, is the one whose follow-ups and actions
                         // are still current.
                         latest={index === messages.length - 1 && !chat.sending}
                         feedback={item.feedback ?? null}
-                        onFollowUp={(question) => chat.setInput(question)}
+                        onFollowUp={(question) => {
+                          setFailedSend(null);
+                          chat.setInput(question);
+                        }}
                         onRate={(value) => void chat.rate(item.id, value)}
                         onLeave={close}
                       />
@@ -453,14 +555,13 @@ export function AskFinSight({
                   {chat.sending ? (
                     <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
                       <ActivityIndicator color={brand[600]} />
-                      <T variant="caption">Working from your records…</T>
+                      <T variant="caption" accessibilityLiveRegion="polite">Working from your records…</T>
                     </View>
                   ) : null}
                   {chat.unavailable ? (
                     <ErrorNote>
-                      FinSight's AI assistant is unreachable right now, so the message above is a placeholder rather than
-                      a real answer. The figures on your other screens are unaffected — those are calculated by FinSight,
-                      not by AI.
+                      FinSight's AI assistant is unreachable right now. The message above is a placeholder. Your other
+                      screens still show figures calculated by FinSight.
                     </ErrorNote>
                   ) : null}
                   {/*
@@ -476,32 +577,27 @@ export function AskFinSight({
                     </Callout>
                   ) : null}
                   {chat.error ? <ErrorNote>{chat.error}</ErrorNote> : null}
-                  {messages.length === 0 && !chat.messagesLoading ? (
+                  {chat.messagesError && chat.activeId !== null ? <Button title="Reload conversation" variant="secondary" loading={chat.messagesLoading} onPress={() => void chat.reloadConversation()} /> : null}
+                  {chat.recoveryLoading ? <T variant="caption">Checking this device for an unfinished question…</T> : null}
+                  {chat.recoveryError ? <View style={{ gap: space.sm }}><ErrorNote>{chat.recoveryError}</ErrorNote><Button title="Reload question recovery" variant="secondary" onPress={() => void chat.reloadRecovery()} /></View> : null}
+                  {chat.pendingSend ? <View style={{ gap: space.sm }}>
+                    <T variant="caption">Previous question: {chat.pendingSend.body.question}</T>
+                    <Button title="Check previous question" variant="secondary" disabled={chat.sending} loading={chat.checkingSend} onPress={() => void chat.checkSend()} />
+                    {chat.canRetrySend ? <Button title="Retry previous question" variant="secondary" disabled={chat.sending || chat.checkingSend} onPress={() => void chat.retrySend()} /> : null}
+                  </View> : null}
+                  {canRetry ? (
                     <View style={{ gap: space.sm }}>
-                      {copy.starters.map((s) => (
-                        <Pressable
-                          key={s}
-                          onPress={() => {
-                            haptics.tapped();
-                            chat.setInput(s);
-                          }}
-                          accessibilityRole="button"
-                          // Read out bare, a starter sounds like a question that
-                          // has already been asked. The label says what the tap
-                          // actually does — it fills the box, it does not send.
-                          accessibilityLabel={`Use this question: ${s}`}
-                          style={{
-                            minHeight: TAP,
-                            justifyContent: "center",
-                            borderWidth: 1,
-                            borderColor: brand[200],
-                            borderRadius: radius.full,
-                            paddingHorizontal: space.md,
-                          }}
-                        >
-                          <T style={{ color: brand[700], fontSize: typeScale.label }}>{s}</T>
-                        </Pressable>
-                      ))}
+                      <T variant="caption">Question to retry: {failedSend.question}</T>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Retry question"
+                        disabled={chat.sending}
+                        accessibilityState={{ disabled: chat.sending }}
+                        onPress={() => void submit(failedSend.question, true)}
+                        style={({ pressed }) => ({ minHeight: TAP_FLOOR, alignSelf: "flex-start", justifyContent: "center", paddingHorizontal: space.lg, borderRadius: radius.md, backgroundColor: pressed ? t.brandFillPressed : t.brandFill })}
+                      >
+                        <T style={{ color: t.onBrandFill, fontFamily: font.sansSemibold }}>Retry question</T>
+                      </Pressable>
                     </View>
                   ) : null}
                 </View>
@@ -514,7 +610,13 @@ export function AskFinSight({
                 activeId={chat.activeId}
                 loading={chat.listLoading}
                 error={chat.listError}
+                hasMore={Boolean(chat.listCursor)}
+                loadingMore={chat.listLoadingMore}
+                onLoadMore={() => void chat.loadMoreConversations()}
+                onRefresh={() => chat.reloadList()}
                 onSelect={(id) => {
+                  setFailedSend(null);
+                  starterDraft.current = null;
                   void chat.selectConversation(id);
                   // Straight back to the messages: choosing a thread IS the
                   // exit from the list, so a separate "close" tap would be one
@@ -526,6 +628,7 @@ export function AskFinSight({
                   haptics.committed();
                   void chat.remove(conversation.id);
                 }}
+                onRetry={() => chat.reloadList()}
               />
             ) : null}
           </View>
@@ -537,28 +640,40 @@ export function AskFinSight({
             The composer clears the home indicator itself. The sheet is a bare
             Animated.View rather than a SafeAreaView, because the safe area
             belongs at the BOTTOM of the sheet only — applying it to the whole
-            sheet would inset the dark header away from the rounded top corners.
+            sheet would inset the header away from the rounded top corners.
           */}
           {historyOpen ? null : (
           <View
             style={{
-              flexDirection: "row",
-              alignItems: "flex-end",
+              flexDirection: "column",
+              alignItems: "stretch",
               gap: space.sm,
               padding: space.md,
               // With the keyboard up it already covers the home indicator, so
               // clearing it as well left a band of empty space above the keys.
               paddingBottom: space.md + (inputFocused ? 0 : insets.bottom),
               borderTopWidth: 1,
-              borderTopColor: ink[200],
-              backgroundColor: paper.DEFAULT,
+              borderTopColor: t.border,
+              backgroundColor: paper[50],
             }}
           >
+            <View style={{
+              flexDirection: "row",
+              alignItems: "flex-end",
+              gap: space.xs,
+              padding: space.xs,
+              borderWidth: 1,
+              borderColor: inputFocused ? t.brandText : t.ink[400],
+              borderRadius: radius.lg,
+              backgroundColor: t.surface,
+            }}>
             <TextInput
+              nativeID={composerInputId}
+              accessibilityLabel="Ask about your business"
               value={chat.input}
-              onChangeText={chat.setInput}
-              placeholder="Ask about your numbers…"
-              placeholderTextColor={ink[400]}
+              onChangeText={setDraft}
+              placeholder="Ask about your business…"
+              placeholderTextColor={t.textMuted}
               maxLength={FIELD_LIMITS.aiQuestion}
               /*
                 Multi-line, so a question longer than the box stays readable
@@ -571,37 +686,42 @@ export function AskFinSight({
               textAlignVertical="top"
               onFocus={() => setInputFocused(true)}
               onBlur={() => setInputFocused(false)}
-              /*
-                Same focus border as every other input in the app. The argument
-                for leaving it off — one input, keyboard already up, nothing to
-                disambiguate — is true here, but it is just as true of the
-                single-field password reset screen, which has the border. An
-                input that behaves differently for reasons the owner cannot see
-                is the kind of small exception that makes an app feel assembled
-                rather than designed.
-              */
               style={{
                 flex: 1,
-                minHeight: TAP,
+                minHeight: TAP_FLOOR,
                 // Around six lines. Past that the field scrolls, so the
                 // composer can never grow over the conversation behind it.
                 maxHeight: 140,
-                borderWidth: 1,
-                borderColor: inputFocused ? brand[600] : ink[200],
-                // Not radius.full: at one line this reads as the same pill as
-                // before, but a pill on a six-line box bows its own edges.
-                borderRadius: radius.xl,
-                paddingHorizontal: space.md,
+                borderWidth: 0,
+                paddingHorizontal: space.sm,
                 paddingVertical: space.md,
+                fontFamily: font.sans,
                 fontSize: typeScale.body,
                 color: ink[900],
+                backgroundColor: "transparent",
               }}
             />
-            <Button
-              title="Send"
-              onPress={() => submit(chat.input)}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Send"
+              accessibilityState={{ disabled: !chat.input.trim() || chat.sending }}
+              onPress={() => void submit(chat.input)}
               disabled={!chat.input.trim() || chat.sending}
-            />
+              style={({ pressed }) => ({
+                width: TAP_FLOOR,
+                height: TAP_FLOOR,
+                flexShrink: 0,
+                alignSelf: "center",
+                alignItems: "center",
+                justifyContent: "center",
+                borderRadius: radius.md,
+                backgroundColor: !chat.input.trim() || chat.sending ? t.surfaceMuted : pressed ? t.ACCENT.fillStrong : t.ACCENT.fill,
+              })}
+            >
+              <Ionicons name="arrow-up" size={22} color={!chat.input.trim() || chat.sending ? t.textMuted : t.ACCENT.onFill} />
+            </Pressable>
+            </View>
+            <T variant="caption" style={{ textAlign: "center" }}>Check important decisions against your records.</T>
           </View>
           )}
         </KeyboardAvoidingView>
@@ -610,28 +730,21 @@ export function AskFinSight({
   );
 }
 
-function Bubble({ from, children, markdown }: { from: "ai" | "user"; children?: React.ReactNode; markdown?: string }) {
+function Bubble({ children }: { children: React.ReactNode }) {
   const t = useTheme();
-  const { brand } = t;
-  const isUser = from === "user";
   return (
-    <View style={{ alignItems: isUser ? "flex-end" : "flex-start" }}>
+    <View style={{ alignItems: "flex-end" }}>
       <View
         style={{
           maxWidth: "88%",
-          backgroundColor: isUser ? t.brandFill : t.surface,
-          borderWidth: isUser ? 0 : 1,
-          borderColor: brand[100],
+          backgroundColor: t.surfaceMuted,
           borderRadius: radius.lg,
+          borderBottomRightRadius: space.xs,
           paddingHorizontal: space.md,
           paddingVertical: space.sm,
         }}
       >
-        {markdown !== undefined ? (
-          <ChatMarkdown text={markdown} color={t.textSecondary} />
-        ) : (
-          <T style={{ color: isUser ? t.onBrandFill : t.textSecondary, fontSize: typeScale.bodySm, lineHeight: 20 }}>{children}</T>
-        )}
+        <T style={{ color: t.textPrimary, fontSize: typeScale.body, lineHeight: 22 }}>{children}</T>
       </View>
     </View>
   );

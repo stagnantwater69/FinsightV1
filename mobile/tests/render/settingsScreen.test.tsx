@@ -9,6 +9,8 @@ const restart = vi.fn();
 const setAlwaysShow = vi.fn();
 let hasTour = true;
 
+vi.mock('@react-navigation/native', () => ({ useIsFocused: () => true }));
+
 vi.mock('../../src/context/AuthContext', () => ({
   useAuth: () => ({
     preferences: { showDashboardMascotMessage: true },
@@ -30,8 +32,10 @@ const { SettingsScreen } = await import('../../src/screens/SettingsScreen');
 
 async function renderScreen() {
   const navigate = vi.fn();
-  const queries = await render(<SettingsScreen navigation={{ navigate }} />);
-  return { ...queries, navigate };
+  const goBack = vi.fn();
+  const canGoBack = vi.fn().mockReturnValue(true);
+  const queries = await render(<SettingsScreen navigation={{ navigate, goBack, canGoBack }} />);
+  return { ...queries, navigate, goBack, canGoBack };
 }
 
 beforeEach(() => {
@@ -42,6 +46,17 @@ beforeEach(() => {
 });
 
 describe('SettingsScreen', () => {
+  it('returns through the unlabeled back control or its tab-root fallback', async () => {
+    const screen = await renderScreen();
+    expect(screen.getByRole('header', { name: 'Settings' })).toBeTruthy();
+    await fireEvent.press(screen.getByRole('button', { name: 'Go back' }));
+    expect(screen.goBack).toHaveBeenCalledExactlyOnceWith();
+    screen.canGoBack.mockReturnValue(false);
+    await fireEvent.press(screen.getByRole('button', { name: 'Go back' }));
+    expect(screen.navigate).toHaveBeenCalledExactlyOnceWith('MoreHome');
+    expect(screen.goBack).toHaveBeenCalledTimes(1);
+  });
+
   it('selects the saved system preference even when the phone resolves to light', async () => {
     const screen = await renderScreen();
     expect(screen.getByRole('button', { name: /Auto$/ }).props.accessibilityState.selected).toBe(true);
@@ -59,10 +74,10 @@ describe('SettingsScreen', () => {
   it('shows a failed mascot update and permits retry', async () => {
     updatePreferences.mockRejectedValueOnce(new Error('Unable to save your preference.'));
     const screen = await renderScreen();
-    await fireEvent.press(screen.getByRole('switch', { name: /^Show Fin/ }));
+    await fireEvent.press(screen.getByRole('switch', { name: /^Fin's daily message/ }));
     expect(updatePreferences).toHaveBeenCalledWith({ showDashboardMascotMessage: false });
     expect(await screen.findByText('Unable to save your preference.')).toBeTruthy();
-    await fireEvent.press(screen.getByRole('switch', { name: /^Show Fin/ }));
+    await fireEvent.press(screen.getByRole('switch', { name: /^Fin's daily message/ }));
     expect(updatePreferences).toHaveBeenCalledTimes(2);
     expect(screen.queryByText('Unable to save your preference.')).toBeNull();
   });
@@ -71,19 +86,19 @@ describe('SettingsScreen', () => {
     let finish!: () => void;
     updatePreferences.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve; }));
     const screen = await renderScreen();
-    await fireEvent.press(screen.getByRole('switch', { name: /^Show Fin/ }));
-    expect(screen.getByRole('switch', { name: /^Show Fin/ }).props.accessibilityState.disabled).toBe(true);
-    await fireEvent.press(screen.getByRole('switch', { name: /^Show Fin/ }));
+    await fireEvent.press(screen.getByRole('switch', { name: /^Fin's daily message/ }));
+    expect(screen.getByRole('switch', { name: /^Fin's daily message/ }).props.accessibilityState.disabled).toBe(true);
+    await fireEvent.press(screen.getByRole('switch', { name: /^Fin's daily message/ }));
     expect(updatePreferences).toHaveBeenCalledTimes(1);
     await act(async () => finish());
-    expect(screen.getByRole('switch', { name: /^Show Fin/ }).props.accessibilityState.disabled).toBe(false);
+    expect(screen.getByRole('switch', { name: /^Fin's daily message/ }).props.accessibilityState.disabled).toBe(false);
   });
 
-  it('restarts the tour on Home', async () => {
+  it('restarts the tour at Home even if the Dashboard stack retains Alerts', async () => {
     const screen = await renderScreen();
     await fireEvent.press(screen.getByRole('button', { name: /^Restart/ }));
     expect(restart).toHaveBeenCalledTimes(1);
-    expect(screen.navigate).toHaveBeenCalledWith('Dashboard');
+    expect(screen.navigate).toHaveBeenCalledExactlyOnceWith('Dashboard', { screen: 'DashboardHome' });
   });
 
   it('works without a tour provider', async () => {

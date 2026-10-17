@@ -1,5 +1,5 @@
 import { View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { T } from "../../../components/ui";
 import { useTheme } from "../../../context/ThemeContext";
 import { space, typeScale } from "../../../theme/tokens";

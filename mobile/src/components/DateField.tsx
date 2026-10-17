@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Platform, Pressable, View } from "react-native";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { SelectChip, T } from "./ui";
 import * as haptics from "../lib/haptics";
 import { toLocalISODate as toISO } from "../lib/localDate";
@@ -45,10 +45,10 @@ function parseISO(iso: string): Date {
  */
 
 /** How the date reads to a person, once it is chosen. */
-function humanise(iso: string): string {
+function humanise(iso: string, referenceDay: string): string {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return "Choose a date";
   const date = parseISO(iso);
-  const today = new Date();
+  const today = parseISO(referenceDay);
   const isSameDay = (a: Date, b: Date) => toISO(a) === toISO(b);
   const yesterday = new Date(today);
   yesterday.setDate(today.getDate() - 1);
@@ -65,6 +65,8 @@ export function DateField({
   optional = false,
   onClear,
   allowFuture = false,
+  disabled = false,
+  today,
 }: {
   label: string;
   /** ISO "YYYY-MM-DD", or "" when not set. */
@@ -85,11 +87,17 @@ export function DateField({
    * every date the field exists to hold.
    */
   allowFuture?: boolean;
+  disabled?: boolean;
+  today?: string;
 }) {
   const t = useTheme();
   const { brand, ink, paper } = t;
   const [open, setOpen] = useState(false);
+  const disabledRef = useRef(disabled);
+  disabledRef.current = disabled;
+  useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
   const hasValue = /^\d{4}-\d{2}-\d{2}$/.test(value);
+  const referenceDay = today ?? toISO(new Date());
 
   return (
     <View style={{ marginBottom: space.md }}>
@@ -100,12 +108,15 @@ export function DateField({
 
       <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
         <Pressable
+          disabled={disabled}
+          accessibilityState={{ disabled }}
           onPress={() => {
+            if (disabledRef.current) return;
             haptics.tapped();
             setOpen(true);
           }}
           accessibilityRole="button"
-          accessibilityLabel={`${label}. ${hasValue ? humanise(value) : "No date chosen"}. Opens a date picker.`}
+          accessibilityLabel={`${label}. ${hasValue ? humanise(value, referenceDay) : "No date chosen"}. Opens a date picker.`}
           style={{
             flex: 1,
             flexDirection: "row",
@@ -121,13 +132,16 @@ export function DateField({
         >
           <Ionicons name="calendar-outline" size={18} color={ink[500]} />
           <T style={{ flex: 1, fontSize: typeScale.body, color: hasValue ? ink[900] : ink[400] }}>
-            {hasValue ? humanise(value) : "Choose a date"}
+            {hasValue ? humanise(value, referenceDay) : "Choose a date"}
           </T>
         </Pressable>
 
         {onClear && hasValue ? (
           <Pressable
+            disabled={disabled}
+            accessibilityState={{ disabled }}
             onPress={() => {
+              if (disabledRef.current) return;
               haptics.tapped();
               onClear();
             }}
@@ -144,20 +158,21 @@ export function DateField({
              */
             style={{ minHeight: TAP_FLOOR, minWidth: TAP_FLOOR, alignItems: "center", justifyContent: "center" }}
           >
-            <Ionicons name="close-circle" size={20} color={ink[300]} />
+            <Ionicons name="close-circle-outline" size={20} color={ink[300]} />
           </Pressable>
         ) : null}
       </View>
 
-      {open ? (
+      {open && !disabled ? (
         <DateTimePicker
-          value={hasValue ? parseISO(value) : new Date()}
+          value={hasValue && (allowFuture || value <= referenceDay) ? parseISO(value) : parseISO(referenceDay)}
           mode="date"
           // Spinner on iOS reads better inside a form than the compact chip;
           // Android ignores this and shows its own dialog either way.
           display={Platform.OS === "ios" ? "spinner" : "default"}
-          maximumDate={allowFuture ? undefined : new Date()}
+          maximumDate={allowFuture ? undefined : parseISO(referenceDay)}
           onChange={(event, picked) => {
+            if (disabledRef.current) return;
             /*
              * Android fires this once for the whole dialog and reports
              * "dismissed" on cancel; iOS fires on every spin with the picker
@@ -172,7 +187,7 @@ export function DateField({
       ) : null}
 
       {/* iOS keeps the spinner inline, so it needs a way to put it away. */}
-      {open && Platform.OS === "ios" ? (
+      {open && !disabled && Platform.OS === "ios" ? (
         <Pressable
           onPress={() => setOpen(false)}
           accessibilityRole="button"

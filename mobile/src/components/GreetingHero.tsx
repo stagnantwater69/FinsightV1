@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Animated, Image, View } from "react-native";
+import { Animated, AppState, Image, Platform, View } from "react-native";
 import { useIsFocused } from "@react-navigation/native";
 import { Card, T } from "./ui";
 import { SkeletonBox } from "./Skeleton";
@@ -105,14 +105,18 @@ const messageTone = (t: Palette) =>
 function FinFlipbook({ label }: { label: string }) {
   const reduceMotion = useReducedMotion();
   const focused = useIsFocused();
-  const [frame, setFrame] = useState(0);
+  const t = useTheme();
+  const [frame, setFrame] = useState(GREETING_REST_FRAME);
+  const [ready, setReady] = useState(false);
+  const [active, setActive] = useState(() => AppState.currentState === "active");
 
   /*
    * A ref rather than state, so it survives the effect re-running: leaving the
    * tab and coming back picks the wave up where it was paused instead of
    * snapping Fin back to the opening frame.
    */
-  const position = useRef(0);
+  const position = useRef(GREETING_REST_FRAME);
+  const failed = useRef(false);
 
   // Opacity of the outgoing final frame, laid over the restarted wave for one
   // short blend. Parked at 0 the rest of the time, so the overlay is invisible
@@ -120,60 +124,81 @@ function FinFlipbook({ label }: { label: string }) {
   const wrap = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    /*
-     * "Reduce Motion" is usually on for a reason — see useReducedMotion's own
-     * header. A wave that repeats forever is exactly the kind of thing that
-     * setting exists to stop, so it holds on a calm centred pose instead.
-     */
-    if (reduceMotion) {
+    const subscription = AppState.addEventListener("change", (state) => setActive(state === "active"));
+    return () => subscription.remove();
+  }, []);
+
+  useEffect(() => {
+    if (reduceMotion || ready || failed.current) return;
+    let cancelled = false;
+    // RN web prefetch also decodes; its successful result can be undefined.
+    void Promise.all(GREETING_FRAMES.map(async (source) => {
+      const uri = Platform.OS === "web" ? source.uri : Image.resolveAssetSource(source)?.uri;
+      if (!uri) return false;
+      try {
+        return (await Image.prefetch(uri)) !== false;
+      } catch {
+        return false;
+      }
+    })).then((loaded) => {
+      if (cancelled) return;
+      if (loaded.every(Boolean)) setReady(true);
+      else failed.current = true;
+    });
+    return () => { cancelled = true; };
+  }, [reduceMotion, ready]);
+
+  useEffect(() => {
+    wrap.stopAnimation();
+    wrap.setValue(0);
+    if (reduceMotion || !ready) {
+      position.current = GREETING_REST_FRAME;
       setFrame(GREETING_REST_FRAME);
       return;
     }
-
-    /*
-     * Home is a tab, and react-navigation keeps a visited tab mounted. Without
-     * this the flipbook would go on ticking twelve times a second behind
-     * Records or More — work nobody can see, on the JS thread, indefinitely.
-     * Whatever frame is showing simply stays put until the tab comes back.
-     */
-    if (!focused) return;
+    if (!focused || !active) return;
 
     let current = position.current;
     setFrame(current);
-
     const id = setInterval(() => {
       const next = advanceGreetingFrame(current, GREETING_FRAMES.length);
       current = next.frame;
       position.current = current;
-
-      /*
-       * The tick that wraps the end of the wave back to its start. The sequence
-       * opens closer to camera than it closes, so this is a cut of twice a
-       * normal step; fading the outgoing final frame out over the restarted
-       * wave covers it. See GREETING_WRAP_CROSSFADE_MS for why the seam is
-       * blended rather than trimmed away.
-       */
       if (next.blend) {
+        wrap.stopAnimation();
         wrap.setValue(1);
         Animated.timing(wrap, {
           toValue: 0,
           duration: GREETING_WRAP_CROSSFADE_MS,
-          useNativeDriver: true,
+          useNativeDriver: Platform.OS !== "web",
         }).start();
       }
-
       setFrame(current);
     }, 1000 / GREETING_FPS);
 
-    return () => clearInterval(id);
-  }, [focused, reduceMotion, wrap]);
+    return () => {
+      clearInterval(id);
+      wrap.stopAnimation();
+      wrap.setValue(0);
+    };
+  }, [focused, active, reduceMotion, ready, wrap]);
+
+  const holdRestPose = () => {
+    failed.current = true;
+    setReady(false);
+    position.current = GREETING_REST_FRAME;
+    setFrame(GREETING_REST_FRAME);
+  };
 
   return (
-    <View style={{ width: MASCOT_BOX, height: MASCOT_BOX, borderRadius: 12, overflow: "hidden" }}>
+    <View style={{ width: MASCOT_BOX, height: MASCOT_BOX, flexShrink: 0, borderRadius: 12, overflow: "hidden" }}>
+      <View style={{ pointerEvents: "none", position: "absolute", top: 5, right: 5, bottom: 5, left: 5, borderRadius: radius.full, backgroundColor: t.brandSurface }} />
       <Image
         source={GREETING_FRAMES[frame]}
         style={{ width: "100%", height: "100%" }}
-        resizeMode="cover"
+        resizeMode="contain"
+        fadeDuration={0}
+        onError={holdRestPose}
         // The image carries the mascot's name unconditionally now. It used to
         // be announced only when the speech bubble beside it was absent —
         // otherwise the bubble's own "Fin" label said the name a second time
@@ -188,9 +213,11 @@ function FinFlipbook({ label }: { label: string }) {
         accessibilityRole="image"
         accessibilityLabel={label}
       />
-      <Animated.Image
+      {ready && !reduceMotion ? <Animated.Image
         source={GREETING_FRAMES[GREETING_FRAMES.length - 1]}
-        resizeMode="cover"
+        resizeMode="contain"
+        fadeDuration={0}
+        onError={holdRestPose}
         // Never announced: it is the same mascot as the image underneath it,
         // on screen for a quarter of a second.
         accessibilityElementsHidden
@@ -201,7 +228,7 @@ function FinFlipbook({ label }: { label: string }) {
           height: "100%",
           opacity: wrap,
         }}
-      />
+      /> : null}
     </View>
   );
 }

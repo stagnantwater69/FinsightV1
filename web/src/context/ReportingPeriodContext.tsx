@@ -5,11 +5,7 @@ import { useBusinessProfiles } from "./BusinessProfileContext";
 import { THIS_WEEK, type PeriodSelection } from "../lib/reportingPeriod";
 
 /**
- * The period the owner is looking at, shared by every date-dependent screen.
- *
- * One selection for the Dashboard, Expense Insights and Spending Impact: an
- * owner who picks August on the Dashboard and opens Expense Insights is still
- * looking at August, rather than at whatever window that page defaulted to.
+ * Pages keep independent selections while sharing the business's month list.
  *
  * The Month list is the business's own months with records, newest first,
  * from `GET /records/months` — never a fixed January to December.
@@ -41,9 +37,15 @@ const ReportingPeriodContext = createContext<ReportingPeriodValue | null>(null);
 
 const STORAGE_KEY = "finsight.reportingPeriod";
 
-function readStored(businessId: number): PeriodSelection | null {
+export type ReportingPeriodScopeName = "dashboard" | "expense-insight" | "recovery-target" | "spending-impact";
+
+function storageKey(businessId: number, scope?: ReportingPeriodScopeName): string {
+  return `${STORAGE_KEY}.${businessId}${scope ? `.${scope}` : ""}`;
+}
+
+function readStored(businessId: number, scope?: ReportingPeriodScopeName): PeriodSelection | null {
   try {
-    const raw = window.sessionStorage.getItem(`${STORAGE_KEY}.${businessId}`);
+    const raw = window.sessionStorage.getItem(storageKey(businessId, scope));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as PeriodSelection;
     if (parsed.kind === "week" || parsed.kind === "all") return parsed;
@@ -54,9 +56,9 @@ function readStored(businessId: number): PeriodSelection | null {
   return null;
 }
 
-function writeStored(businessId: number, selection: PeriodSelection) {
+function writeStored(businessId: number, selection: PeriodSelection, scope?: ReportingPeriodScopeName) {
   try {
-    window.sessionStorage.setItem(`${STORAGE_KEY}.${businessId}`, JSON.stringify(selection));
+    window.sessionStorage.setItem(storageKey(businessId, scope), JSON.stringify(selection));
   } catch {
     // A private window can refuse storage; the selection still holds for this visit.
   }
@@ -66,7 +68,39 @@ function defaultFor(months: string[]): PeriodSelection {
   return months[0] ? { kind: "month", month: months[0] } : THIS_WEEK;
 }
 
-function useReportingPeriodState(): ReportingPeriodValue {
+function usePeriodSelection(
+  months: string[],
+  monthsState: ReportingPeriodValue["monthsState"],
+  scope?: ReportingPeriodScopeName,
+): Pick<ReportingPeriodValue, "selection" | "setSelection" | "ready"> {
+  const { selected } = useBusinessProfiles();
+  const businessId = selected?.id ?? null;
+  const [chosen, setChosen] = useState<{
+    businessId: number | null;
+    scope: ReportingPeriodScopeName | undefined;
+    selection: PeriodSelection;
+  } | null>(null);
+  const stored = chosen && chosen.businessId === businessId && chosen.scope === scope
+    ? chosen.selection
+    : businessId !== null ? readStored(businessId, scope) : null;
+  const settled = monthsState !== "loading";
+  // Removed months fall back to the default; failed refreshes preserve the choice.
+  const storedStillValid =
+    stored && (stored.kind !== "month" || (settled && (months.includes(stored.month) || monthsState === "error")));
+  const selection = storedStillValid ? stored : defaultFor(months);
+
+  const setSelection = useCallback(
+    (next: PeriodSelection) => {
+      setChosen({ businessId, scope, selection: next });
+      if (businessId !== null) writeStored(businessId, next, scope);
+    },
+    [businessId, scope],
+  );
+
+  return { selection, setSelection, ready: settled || (stored !== null && stored.kind !== "month") };
+}
+
+function useReportingPeriodState(scope?: ReportingPeriodScopeName): ReportingPeriodValue {
   const { selected } = useBusinessProfiles();
   const businessId = selected?.id ?? null;
   const [monthResult, setMonthResult] = useState<{
@@ -74,7 +108,6 @@ function useReportingPeriodState(): ReportingPeriodValue {
     months: string[];
     state: "loading" | "ready" | "error";
   }>(() => ({ businessId, months: [], state: businessId === null ? "ready" : "loading" }));
-  const [chosen, setChosen] = useState<{ businessId: number | null; selection: PeriodSelection } | null>(null);
   const version = useRef(0);
   const activeRequest = useRef<{
     businessId: number;
@@ -179,21 +212,7 @@ function useReportingPeriodState(): ReportingPeriodValue {
       ? "ready"
       : "loading";
 
-  // A business's own selection, if it made one this visit.
-  const stored = chosen && chosen.businessId === businessId ? chosen.selection : businessId !== null ? readStored(businessId) : null;
-  const settled = monthsState !== "loading";
-  // A chosen month that no longer has records falls back to the default.
-  const storedStillValid =
-    stored && (stored.kind !== "month" || (settled && (months.includes(stored.month) || monthsState === "error")));
-  const selection = storedStillValid ? stored : defaultFor(months);
-
-  const setSelection = useCallback(
-    (next: PeriodSelection) => {
-      setChosen({ businessId, selection: next });
-      if (businessId !== null) writeStored(businessId, next);
-    },
-    [businessId],
-  );
+  const period = usePeriodSelection(months, monthsState, scope);
 
   const refreshMonths = useCallback(() => {
     if (businessId === null || activeRequest.current?.businessId === businessId) return;
@@ -201,29 +220,39 @@ function useReportingPeriodState(): ReportingPeriodValue {
   }, [businessId, load]);
 
   return {
-    selection,
-    setSelection,
+    ...period,
     months,
     monthsState,
     refreshMonths,
-    ready: settled || (stored !== null && stored.kind !== "month"),
   };
 }
 
-export function ReportingPeriodProvider({ children }: { children: ReactNode }) {
-  const value = useReportingPeriodState();
+export function ReportingPeriodProvider({ children, scope }: { children: ReactNode; scope?: ReportingPeriodScopeName }) {
+  const value = useReportingPeriodState(scope);
   return <ReportingPeriodContext.Provider value={value}>{children}</ReportingPeriodContext.Provider>;
 }
 
 /**
- * Provides the period only where nothing above does. Each page that reads the
- * period renders inside one, so a page rendered on its own (as the page tests
- * do) still has ONE period shared by its filter and its figures.
+ * Scoped pages share month loading, while keeping their filter and figures on
+ * one page-owned selection. Standalone pages load their own month list.
  */
-export function ReportingPeriodScope({ children }: { children: ReactNode }) {
+export function ReportingPeriodScope({ children, scope }: { children: ReactNode; scope?: ReportingPeriodScopeName }) {
   const existing = useContext(ReportingPeriodContext);
-  if (existing) return <>{children}</>;
-  return <ReportingPeriodProvider>{children}</ReportingPeriodProvider>;
+  if (existing) {
+    return scope
+      ? <ScopedReportingPeriod shared={existing} scope={scope}>{children}</ScopedReportingPeriod>
+      : <>{children}</>;
+  }
+  return <ReportingPeriodProvider scope={scope}>{children}</ReportingPeriodProvider>;
+}
+
+function ScopedReportingPeriod({ children, shared, scope }: {
+  children: ReactNode;
+  shared: ReportingPeriodValue;
+  scope: ReportingPeriodScopeName;
+}) {
+  const period = usePeriodSelection(shared.months, shared.monthsState, scope);
+  return <ReportingPeriodContext.Provider value={{ ...shared, ...period }}>{children}</ReportingPeriodContext.Provider>;
 }
 
 export function useReportingPeriod(): ReportingPeriodValue {

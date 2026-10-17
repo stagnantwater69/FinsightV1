@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, View } from "react-native";
+import { ActivityIndicator, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { Button, Callout, Card, CategorySelect, Checkbox, ConfirmSheet, ErrorNote, Field, Screen, T } from "../components/ui";
 import { DateField } from "../components/DateField";
@@ -12,6 +12,7 @@ import { dueDateISO, intervalDaysError } from "../lib/recurringAgenda";
 import { space } from "../theme/tokens";
 import { useTheme } from "../context/ThemeContext";
 import type { RecurringSchedule } from "../lib/types";
+import { FormScreen } from "../components/FormScreen";
 
 /**
  * Declaring a repeating payment, and editing one.
@@ -43,6 +44,11 @@ export function RecurringScheduleScreen({ navigation, route }: any) {
   const selectedBusinessProfileId = selected?.id ?? null;
   const selectedBusinessProfileIdRef = useRef(selectedBusinessProfileId);
   selectedBusinessProfileIdRef.current = selectedBusinessProfileId;
+  const scope = useRef({ businessId: selectedBusinessProfileId, scheduleId, generation: 0 });
+  if (scope.current.businessId !== selectedBusinessProfileId || scope.current.scheduleId !== scheduleId) {
+    scope.current = { businessId: selectedBusinessProfileId, scheduleId, generation: scope.current.generation + 1 };
+  }
+  const mutation = useRef<object | null>(null);
 
   const [label, setLabel] = useState("");
   const [vendor, setVendor] = useState("");
@@ -59,6 +65,11 @@ export function RecurringScheduleScreen({ navigation, route }: any) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  useEffect(() => {
+    mutation.current = null;
+    setBusy(false);
+    return () => { scope.current = { ...scope.current, generation: scope.current.generation + 1 }; };
+  }, [scheduleId, selectedBusinessProfileId]);
 
   const clearDraft = useCallback(() => {
     setLabel("");
@@ -148,6 +159,7 @@ export function RecurringScheduleScreen({ navigation, route }: any) {
   const formBelongsToSelectedBusiness = loadedBusinessProfileId === selected.id;
 
   async function submit() {
+    if (mutation.current) return;
     const mutationBusinessProfileId = loadedBusinessProfileId;
     if (
       mutationBusinessProfileId === null ||
@@ -166,6 +178,9 @@ export function RecurringScheduleScreen({ navigation, route }: any) {
     if (!Number.isFinite(amount) || amount <= 0) return setError("Enter an amount greater than zero.");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(nextDueDate)) return setError("Choose the date this is next due.");
 
+    const request = {};
+    const generation = scope.current.generation;
+    mutation.current = request;
     setError(null);
     setBusy(true);
     try {
@@ -198,18 +213,22 @@ export function RecurringScheduleScreen({ navigation, route }: any) {
           vendor: body.vendor ?? undefined,
         });
       }
+      if (generation !== scope.current.generation || mutation.current !== request) return;
       haptics.succeeded();
       setFlash(editing ? "Repeating payment updated." : "FinSight is now watching this payment.");
       navigation.goBack();
     } catch (err) {
-      setError(errorMessage(err));
+      if (generation === scope.current.generation && mutation.current === request) setError(errorMessage(err));
     } finally {
-      setBusy(false);
+      if (mutation.current === request) {
+        mutation.current = null;
+        setBusy(false);
+      }
     }
   }
 
   async function remove() {
-    setConfirmDelete(false);
+    if (mutation.current) return;
     const mutationBusinessProfileId = loadedBusinessProfileId;
     if (
       !editing ||
@@ -219,6 +238,9 @@ export function RecurringScheduleScreen({ navigation, route }: any) {
       setError("This repeating payment is not available for the selected business.");
       return;
     }
+    const request = {};
+    const generation = scope.current.generation;
+    mutation.current = request;
     setBusy(true);
     try {
       await api.delete(
@@ -226,25 +248,24 @@ export function RecurringScheduleScreen({ navigation, route }: any) {
         undefined,
         { cacheScope: { businessProfileId: mutationBusinessProfileId } },
       );
+      if (generation !== scope.current.generation || mutation.current !== request) return;
       haptics.succeeded();
+      setConfirmDelete(false);
       setFlash("Repeating payment removed.");
       navigation.goBack();
     } catch (err) {
-      setError(errorMessage(err));
+      if (generation === scope.current.generation && mutation.current === request) setError(errorMessage(err));
     } finally {
-      setBusy(false);
+      if (mutation.current === request) {
+        mutation.current = null;
+        setBusy(false);
+      }
     }
   }
 
   return (
     <Screen>
-      {/*
-        The amount and the date sit low on the card and the keyboard is tall,
-        so without this it opens straight over the field being typed into. Same
-        shell every other form in the app uses.
-      */}
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}>
+      <FormScreen>
           {loading || (!formBelongsToSelectedBusiness && !error) ? (
             <ActivityIndicator color={brand[600]} style={{ marginTop: space.xl }} />
           ) : !formBelongsToSelectedBusiness ? (
@@ -273,6 +294,7 @@ export function RecurringScheduleScreen({ navigation, route }: any) {
 
                 <Field
                   label="What is it"
+                  editable={!busy}
                   value={label}
                   maxLength={FIELD_LIMITS.recurringScheduleLabel}
                   onChangeText={setLabel}
@@ -282,6 +304,7 @@ export function RecurringScheduleScreen({ navigation, route }: any) {
                 />
                 <Field
                   label="Paid to (optional)"
+                  editable={!busy}
                   value={vendor}
                   maxLength={FIELD_LIMITS.vendor}
                   onChangeText={setVendor}
@@ -294,6 +317,7 @@ export function RecurringScheduleScreen({ navigation, route }: any) {
                   <T variant="label" style={{ marginBottom: 4 }}>Category</T>
                   <CategorySelect
                     options={categories}
+                    disabled={busy}
                     value={categoryId}
                     onChange={setCategoryId}
                     accessibilityContext={label.trim() || "this repeating payment"}
@@ -305,6 +329,7 @@ export function RecurringScheduleScreen({ navigation, route }: any) {
                     deciding what "monthly" is worth in days on its own. */}
                 <Field
                   label="Repeats every (days)"
+                  editable={!busy}
                   value={intervalDays}
                   onChangeText={setIntervalDays}
                   keyboardType="number-pad"
@@ -315,6 +340,7 @@ export function RecurringScheduleScreen({ navigation, route }: any) {
                     MoneyInput, so the unit is carried by the label. */}
                 <Field
                   label="Expected amount (PHP)"
+                  editable={!busy}
                   value={expectedAmount}
                   onChangeText={setExpectedAmount}
                   keyboardType="decimal-pad"
@@ -360,8 +386,7 @@ export function RecurringScheduleScreen({ navigation, route }: any) {
               ) : null}
             </>
           )}
-        </ScrollView>
-      </KeyboardAvoidingView>
+      </FormScreen>
 
       <ConfirmSheet
         visible={confirmDelete && formBelongsToSelectedBusiness}
@@ -370,6 +395,8 @@ export function RecurringScheduleScreen({ navigation, route }: any) {
         confirmLabel="Remove"
         cancelLabel="Keep it"
         confirmVariant="danger"
+        busy={busy}
+        error={error}
         onConfirm={() => void remove()}
         onCancel={() => setConfirmDelete(false)}
       />
