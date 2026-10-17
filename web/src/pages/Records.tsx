@@ -871,7 +871,7 @@ export function Records() {
       </div>
 
       {showAdvanced || advancedCount > 0 ? (
-        <div className="mt-3 grid animate-slide-up gap-3 border-t border-paper-200 pt-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="relative z-20 mt-3 grid animate-slide-up gap-3 border-t border-paper-200 pt-3 sm:grid-cols-2 lg:grid-cols-4">
           <div>
             <label htmlFor="rec-cat" className="mb-1 block text-xs font-medium text-ink-500">
               Category
