@@ -146,6 +146,9 @@ describe("the mascot state map", () => {
         "passwordResetSuccess",
         "possibleDuplicate",
         "receiptScanning",
+        // Recovery Target coach when the month is behind or on pace: the
+        // pointing pose from the approved recovery redesign mockup (2026-10-10).
+        "recoveryGuide",
         "signUpStart",
         "unusualExpense",
         "uploadingFile",

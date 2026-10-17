@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Modal, Pressable, ScrollView, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { Button, ErrorNote, Field, Money, T } from "./ui";
 import { DateField } from "./DateField";
 import { TAP_FLOOR } from "./touchTarget";
@@ -67,16 +67,16 @@ export function RecoveryScenarioSheet({
     setResult(null);
   }, [visible]);
 
-  async function submit() {
+  async function submit(raw: string = rawValue) {
     if (submitting) return;
-    const invalid = assumedExpensesValidationError(rawValue);
+    const invalid = assumedExpensesValidationError(raw);
     if (invalid) {
       setValueError(invalid);
       haptics.failed();
       return;
     }
     setValueError(null);
-    const value = parseScenarioNumber(rawValue)!;
+    const value = parseScenarioNumber(raw)!;
 
     const mySeq = (seq.current += 1);
     setSubmitting(true);
@@ -173,7 +173,7 @@ export function RecoveryScenarioSheet({
                 }}
                 onFocus={() => setValueFocused(true)}
                 onBlur={() => setValueFocused(false)}
-                onSubmitEditing={submit}
+                onSubmitEditing={() => void submit()}
                 keyboardType="decimal-pad"
                 placeholder={`e.g. ${Math.round(currentExpectedMonthlyExpenses)}`}
                 placeholderTextColor={ink[400]}
@@ -184,6 +184,7 @@ export function RecoveryScenarioSheet({
                   borderColor: valueError ? statusText.critical : valueFocused ? brand[600] : ink[200],
                   borderRadius: radius.md,
                   paddingHorizontal: space.md,
+                  fontFamily: font.sans,
                   fontSize: typeScale.body,
                   color: ink[900],
                 }}
@@ -204,7 +205,7 @@ export function RecoveryScenarioSheet({
               ) : null}
             </View>
 
-            <Button title={submitting ? "Calculating…" : "See hypothetical target"} onPress={submit} disabled={submitting} loading={submitting} />
+            <Button title={submitting ? "Calculating…" : "See hypothetical target"} onPress={() => void submit()} disabled={submitting} loading={submitting} />
 
             {submitError ? <ErrorNote>{submitError}</ErrorNote> : null}
 

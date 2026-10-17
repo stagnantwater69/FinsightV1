@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, fireEvent, waitFor } from '@testing-library/react-native';
 
 import * as fixtures from './support/fixtures';
+import { chartReadout, tapChart } from './support/chartInteractions';
 
 /**
  * Rendered accessibility tests for Spending Impact (plan ticket §9.12).
@@ -117,6 +118,23 @@ beforeEach(() => {
 });
 
 describe('Spending Impact — the impact gauge', () => {
+  it('selects exact gauge and before/after values with hypothetical labels', async () => {
+    const q = await renderScreen();
+    await check(q, '11000');
+    await tapChart(q, 'Spending impact');
+    const name = chartReadout(q, 'Spending impact').props.accessibilityLabel;
+    expect(name).toContain('Planned purchase: PHP 11,000.00');
+    expect(name).toContain('High-impact threshold: PHP 3,928.50');
+    expect(name).toContain('Hypothetical purchase; no records are changed.');
+    await fireEvent.press(q.getByRole('button', { name: /^Before and after, in detail:/ }));
+    await tapChart(q, 'Recorded available funds');
+    expect(chartReadout(q, 'Recorded available funds').props.accessibilityLabel).toContain('Before purchase: PHP 13,095.00. After purchase: PHP 2,095.00');
+    const expenses = q.getByLabelText(/^Recorded expenses .* plot$/, { includeHiddenElements: true });
+    const label = expenses.props.accessibilityLabel.replace(/ plot$/, '');
+    await tapChart(q, label);
+    expect(chartReadout(q, label).props.accessibilityLabel).toContain('Before purchase: PHP 8,400.00. After purchase: PHP 19,400.00');
+    expect(apiPost).not.toHaveBeenCalled();
+  });
   it('exposes the gauge as a progressbar that announces its value in words', async () => {
     const queries = await renderScreen();
     await check(queries, '11000');
@@ -268,6 +286,19 @@ describe('Spending Impact — when the AI is unreachable', () => {
     );
   }
 
+  it('selects record-derived price-range marks with exact amounts and source notes', async () => {
+    const q = await renderScreen();
+    await check(q, '11000');
+    await askAboutItem(q, { review: null, priceContext: fixtures.priceContext });
+    await q.findByRole('button', { name: 'Explore Purchase price range values' });
+    await tapChart(q, 'Purchase price range', 0);
+    expect(chartReadout(q, 'Purchase price range').props.accessibilityLabel).toContain('PHP 7,800.00');
+    expect(chartReadout(q, 'Purchase price range').props.accessibilityLabel).toContain('From your own expense records');
+    await fireEvent.press(q.getByRole('button', { name: 'Next value in Purchase price range' }));
+    expect(chartReadout(q, 'Purchase price range').props.accessibilityLabel).toContain('Median amount from your own expense records');
+    expect(chartReadout(q, 'Purchase price range').props.accessibilityLabel).toContain('PHP 9,200.00');
+  });
+
   it('keeps the calculated figures on screen and says why the written half is missing', async () => {
     const queries = await renderScreen();
     await check(queries, '11000');
@@ -348,4 +379,10 @@ describe('Spending Impact — the period control', () => {
       expect.objectContaining({ plannedAmount: 11000, period: 'all' }),
     );
   });
+});
+
+it('binds the spending-impact view to its own reporting period scope', () => {
+  const wrapper = SpendingImpactScreen({});
+  expect(wrapper.props.scope).toBe('spending-impact');
+  expect(typeof wrapper.props.children.type).toBe('function');
 });

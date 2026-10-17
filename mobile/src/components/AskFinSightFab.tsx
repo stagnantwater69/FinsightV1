@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Animated, Image, Pressable } from "react-native";
+import { Animated, Image, Platform, Pressable } from "react-native";
 import { space } from "../theme/tokens";
 import { useTourTarget } from "./tour/targets";
 import { cropArtToBox, FAB_ART_BOUNDS } from "../lib/artCrop";
@@ -64,8 +64,8 @@ export function AskFinSightFab({ onPress }: { onPress: () => void }) {
     bob.setValue(0);
     const animation = Animated.loop(
       Animated.sequence([
-        Animated.timing(bob, { toValue: 1, duration: BOB_DURATION, useNativeDriver: true }),
-        Animated.timing(bob, { toValue: 0, duration: BOB_DURATION, useNativeDriver: true }),
+        Animated.timing(bob, { toValue: 1, duration: BOB_DURATION, useNativeDriver: Platform.OS !== "web" }),
+        Animated.timing(bob, { toValue: 0, duration: BOB_DURATION, useNativeDriver: Platform.OS !== "web" }),
       ])
     );
     animation.start();
@@ -101,10 +101,10 @@ export function AskFinSightFab({ onPress }: { onPress: () => void }) {
           onPress();
         }}
         onPressIn={() =>
-          Animated.spring(press, { toValue: 0.92, useNativeDriver: true, speed: 40, bounciness: 0 }).start()
+          Animated.spring(press, { toValue: 0.92, useNativeDriver: Platform.OS !== "web", speed: 40, bounciness: 0 }).start()
         }
         onPressOut={() =>
-          Animated.spring(press, { toValue: 1, useNativeDriver: true, speed: 40, bounciness: 6 }).start()
+          Animated.spring(press, { toValue: 1, useNativeDriver: Platform.OS !== "web", speed: 40, bounciness: 6 }).start()
         }
         accessibilityRole="button"
         accessibilityLabel="Ask FinSight"

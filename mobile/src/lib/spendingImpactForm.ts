@@ -265,7 +265,7 @@ export interface ScenarioInput {
 /**
  * Reset clears the AMOUNT, THE ITEM AND THE CATEGORY, and not the period.
  *
- * The period is the shared one (context/ReportingPeriodContext), a way of
+ * The period belongs to Spending Impact (context/ReportingPeriodContext), a way of
  * looking rather than part of the scenario, so Reset has nothing to say about
  * it. Web resets the same three.
  */

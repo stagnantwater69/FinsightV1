@@ -8,6 +8,13 @@
 import { createRequire } from 'node:module';
 import { vi } from 'vitest';
 
+vi.mock('@react-navigation/elements', async () => {
+  const { createContext } = await import('react');
+  // Native stack headers are absent from this renderer; tests can provide an
+  // explicit height to exercise the form's keyboard offset contract.
+  return { HeaderHeightContext: createContext<number | undefined>(undefined) };
+});
+
 const require = createRequire(import.meta.url);
 
 const define = (name: string, value: unknown) => {

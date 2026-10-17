@@ -1,24 +1,30 @@
-import { useState } from "react";
-import { ScrollView, View } from "react-native";
-import { ErrorNote, Screen, SegmentedControl, T } from "../components/ui";
-import { Row, Section } from "../components/SettingsList";
+import { useRef, useState } from "react";
+import { View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { ContentScrollView } from "../components/ContentScrollView";
+import { ErrorNote, Screen, T } from "../components/ui";
+import { ThemePicker } from "../components/ThemePicker";
+import { Row } from "../components/SettingsList";
+import { SubpageCard, SubpageHeader } from "../components/SubpageKit";
 import { useAuth, errorMessage } from "../context/AuthContext";
 import { useTheme, useThemeControl } from "../context/ThemeContext";
 import { useTourOptional } from "../context/TourContext";
 import { space, typeScale } from "../theme/tokens";
-import type { ThemePreference } from "../theme/palette";
 
 /** Appearance is device-local; account switches save immediately. */
 export function SettingsScreen({ navigation }: any) {
   const { preferences, updatePreferences } = useAuth();
   const { mode, preference, setPreference } = useThemeControl();
-  const { textSecondary, textMuted } = useTheme();
+  const { textSecondary, textMuted, brandText } = useTheme();
   const tour = useTourOptional();
+  const insets = useSafeAreaInsets();
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const writing = useRef(false);
 
   async function write(change: () => Promise<void>) {
-    if (saving) return;
+    if (writing.current) return;
+    writing.current = true;
     setError(null);
     setSaving(true);
     try {
@@ -27,68 +33,63 @@ export function SettingsScreen({ navigation }: any) {
       // Preference updates restore their previous state on failure.
       setError(errorMessage(err));
     } finally {
+      writing.current = false;
       setSaving(false);
     }
   }
 
   return (
     <Screen>
-      <ScrollView
-        contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2, gap: space.xxl }}
+      <SubpageHeader title="Settings" onBack={() => {
+        if (navigation.canGoBack?.() !== false && navigation.goBack) navigation.goBack();
+        else navigation.navigate("MoreHome");
+      }} />
+      <ContentScrollView
+        contentContainerStyle={{ padding: space.lg, paddingTop: space.xs, paddingBottom: Math.max(insets.bottom, space.lg) + space.lg, gap: space.md }}
       >
-        <View style={{ gap: space.xs }}>
-          <T style={{ color: textSecondary }}>Make FinSight feel right for you.</T>
-          <T style={{ color: textMuted, fontSize: typeScale.bodySm, lineHeight: 20 }}>
-            Appearance and guidance changes save automatically.
-          </T>
-        </View>
-
         {error ? <ErrorNote>{error}</ErrorNote> : null}
 
-        <Section title="Appearance">
+        <SubpageCard title="Appearance" icon="sunny-outline">
           <View style={{ paddingVertical: space.xs, gap: space.md }}>
-            <T style={{ color: textSecondary, fontSize: typeScale.bodySm, lineHeight: 20 }}>
-              Choose a theme for this phone. Auto follows your phone&apos;s light or dark setting.
-            </T>
-            <SegmentedControl<ThemePreference>
-              accessibilityLabel="Appearance"
-              options={
-                [
-                  { label: "Light", value: "light", icon: "sunny-outline" },
-                  { label: "Dark", value: "dark", icon: "moon-outline" },
-                  { label: "Auto", value: "system", icon: "phone-portrait-outline" },
-                ] as const
-              }
+            <ThemePicker
+              options={[
+                { label: "Light", value: "light" },
+                { label: "Dark", value: "dark" },
+                { label: "Auto", value: "system" },
+              ]}
               value={preference}
               onChange={setPreference}
             />
+            <T style={{ color: textSecondary, fontSize: typeScale.bodySm, lineHeight: 20 }}>
+              Auto follows your phone&apos;s appearance.
+            </T>
             {preference === "system" ? (
               <T style={{ color: textMuted, fontSize: typeScale.bodySm, lineHeight: 20 }}>
                 Your phone is set to {mode === "dark" ? "Dark" : "Light"} right now.
               </T>
             ) : null}
           </View>
-        </Section>
+        </SubpageCard>
 
-        <Section title="Notifications">
+        <SubpageCard title="Notifications" icon="notifications-outline">
           <Row
+            focusRingColor={brandText}
             first
-            expandedDetail
             icon="notifications-outline"
             label="Notification settings"
-            detail="Manage Sales Coverage Target alerts, quiet hours, and frequency."
+            detail="Targets, quiet hours and frequency"
             onPress={() => navigation.navigate("RecoveryNotificationPreferences")}
           />
-        </Section>
+        </SubpageCard>
 
-        <Section title="Guidance">
+        <SubpageCard title="Guidance" icon="compass-outline">
           <Row
+            focusRingColor={brandText}
             first
-            expandedDetail
             disabled={saving}
             icon="chatbubble-ellipses-outline"
-            label="Show Fin's daily message"
-            detail="Daily tips and helpful messages from Fin on your Home screen."
+            label="Fin's daily message"
+            detail="Helpful messages on Home"
             toggle={{ value: preferences.showDashboardMascotMessage }}
             onPress={() =>
               void write(() =>
@@ -101,29 +102,30 @@ export function SettingsScreen({ navigation }: any) {
           {tour ? (
             <>
               <Row
-                expandedDetail
+                focusRingColor={brandText}
                 disabled={saving}
                 icon="play-circle-outline"
-                label="Always show the tour on login"
-                detail="Replay the guided tour each time you sign in. Useful for demos or getting familiar with the app."
+                label="Tour on sign-in"
+                detail="Replay the guided introduction"
                 toggle={{ value: tour.alwaysShow }}
                 onPress={() => void write(() => tour.setAlwaysShow(!tour.alwaysShow))}
               />
               <Row
-                expandedDetail
+                focusRingColor={brandText}
                 icon="refresh-outline"
                 label="Restart product tour"
-                detail="Take another walkthrough, starting on your Home screen."
+                detail="Start again from Home"
                 onPress={() => {
                   // The tour targets Home and the tab bar; focus Home after re-arming it.
                   tour.restart();
-                  navigation.navigate("Dashboard");
+                  navigation.navigate("Dashboard", { screen: "DashboardHome" });
                 }}
               />
             </>
           ) : null}
-        </Section>
-      </ScrollView>
+        </SubpageCard>
+        <T variant="caption" style={{ textAlign: "center" }}>Appearance and guidance changes save automatically.</T>
+      </ContentScrollView>
     </Screen>
   );
 }

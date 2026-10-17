@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, TextInput, View, useWindowDimensions } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { StatusBar } from "expo-status-bar";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Button, Callout, Checkbox, ErrorNote, Field, Screen, T } from "../components/ui";
 import { Mascot, type MascotState } from "../components/MascotState";
+import { GoogleSignInButton } from "../components/GoogleSignInButton";
 import { useAuth } from "../context/AuthContext";
 import * as haptics from "../lib/haptics";
 import { api, errorMessage, getFieldErrors } from "../lib/api";
@@ -27,6 +28,8 @@ import {
 } from "../lib/authValidation";
 import { createRecoveryClient } from "../lib/supabase";
 import type { AuthLinkTokens } from "../lib/authLinkTokens";
+import { suggestEmail } from "../lib/emailSuggestion";
+import { TAP_FLOOR } from "../components/touchTarget";
 import type { Profile } from "../lib/types";
 import { isSavingAccount, savedEmail, setSavedAccount } from "../lib/savedAccountStore";
 import { font, radius, space } from "../theme/tokens";
@@ -298,6 +301,7 @@ export function LoginScreen({ navigation }: any) {
    */
   const [fieldErrors, setFieldErrors] = useState<FieldErrors<LoginField>>({});
   const [busy, setBusy] = useState(false);
+  const submitting = useRef(false);
   const emailRef = useRef<TextInput>(null);
   const passwordRef = useRef<TextInput>(null);
   /** Every field's ref, in the order the form reads — see `focusFirstInvalid`. */
@@ -332,6 +336,7 @@ export function LoginScreen({ navigation }: any) {
   }, []);
 
   async function submit() {
+    if (submitting.current) return;
     setError(null);
 
     const invalid = validateLogin({ email, password });
@@ -345,6 +350,7 @@ export function LoginScreen({ navigation }: any) {
     }
     setFieldErrors({});
 
+    submitting.current = true;
     setBusy(true);
     try {
       await login({ email: email.trim(), password });
@@ -360,6 +366,7 @@ export function LoginScreen({ navigation }: any) {
       focusFirstInvalid(fromServer, fieldOrder);
       setError(Object.keys(fromServer).length > 0 ? null : errorMessage(err));
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }
@@ -457,6 +464,7 @@ export function LoginScreen({ navigation }: any) {
       </View>
       {error ? <ErrorNote>{error}</ErrorNote> : null}
       <Button title="Log in" variant="primary" onPress={submit} loading={busy} style={{ marginTop: space.md }} />
+      <GoogleSignInButton disabled={busy} placement="after-email" />
     </AuthShell>
   );
 }
@@ -468,9 +476,12 @@ export function RegisterScreen({ navigation }: any) {
   const namesSideBySide = formWidth >= 360 && fontScale <= 1.2;
   const { register } = useAuth();
   const [form, setForm] = useState({ firstName: "", lastName: "", middleName: "", email: "", phoneNumber: "", password: "", confirmPassword: "" });
+  /** "Did you mean gmail.com?" A suggestion only: `.co` is a real domain. See lib/emailSuggestion. */
+  const [emailSuggestion, setEmailSuggestion] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors<RegisterField>>({});
   const [busy, setBusy] = useState(false);
+  const submitting = useRef(false);
   /**
    * What the server said once the request was accepted.
    *
@@ -482,6 +493,7 @@ export function RegisterScreen({ navigation }: any) {
   const [acknowledgement, setAcknowledgement] = useState<string | null>(null);
   const [resent, setResent] = useState(false);
   const [resending, setResending] = useState(false);
+  const resendInFlight = useRef(false);
   const cooldown = useResendCooldown();
   const set = (k: keyof typeof form) => (v: string) => {
     setForm((f) => ({ ...f, [k]: v }));
@@ -515,6 +527,7 @@ export function RegisterScreen({ navigation }: any) {
   ] as const satisfies readonly (readonly [RegisterField, React.RefObject<TextInput | null>])[];
 
   async function submit() {
+    if (submitting.current) return;
     setError(null);
 
     const invalid = validateRegister(form);
@@ -526,6 +539,7 @@ export function RegisterScreen({ navigation }: any) {
     }
     setFieldErrors({});
 
+    submitting.current = true;
     setBusy(true);
     try {
       const { message } = await register({
@@ -549,11 +563,14 @@ export function RegisterScreen({ navigation }: any) {
       focusFirstInvalid(fromServer, fieldOrder);
       setError(Object.keys(fromServer).length > 0 ? null : errorMessage(err));
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }
 
   async function resend() {
+    if (resendInFlight.current || cooldown.remaining > 0) return;
+    resendInFlight.current = true;
     setResending(true);
     try {
       await api.post("/auth/resend-verification", { email: form.email.trim(), platform: "mobile" });
@@ -562,6 +579,7 @@ export function RegisterScreen({ navigation }: any) {
       // nothing to show that "check your inbox" does not already say.
     } finally {
       setResent(true);
+      resendInFlight.current = false;
       setResending(false);
       cooldown.start();
     }
@@ -642,6 +660,7 @@ export function RegisterScreen({ navigation }: any) {
       switchAction="Log in"
       onSwitch={() => navigation.navigate("Login")}
     >
+      <GoogleSignInButton disabled={busy} />
       <T style={{ color: t.textSecondary, marginBottom: space.lg }}>Fields without (optional) are required.</T>
       <View style={{ flexDirection: namesSideBySide ? "row" : "column", gap: namesSideBySide ? space.md : 0 }}>
         <View style={namesSideBySide ? { flex: 1, minWidth: 0 } : undefined}>
@@ -691,6 +710,7 @@ export function RegisterScreen({ navigation }: any) {
         label="Email"
         value={form.email}
         onChangeText={set("email")}
+        onBlur={() => setEmailSuggestion(suggestEmail(form.email))}
         error={fieldErrors.email}
         autoCapitalize="none"
         keyboardType="email-address"
@@ -699,6 +719,21 @@ export function RegisterScreen({ navigation }: any) {
         submitBehavior="submit"
         onSubmitEditing={() => phoneNumberRef.current?.focus()}
       />
+      {emailSuggestion ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Did you mean ${emailSuggestion}? Tap to use it.`}
+          onPress={() => {
+            set("email")(emailSuggestion);
+            setEmailSuggestion(null);
+          }}
+          style={{ minHeight: TAP_FLOOR, justifyContent: "center", marginTop: -space.sm }}
+        >
+          <T variant="caption">
+            Did you mean <T variant="caption" style={{ color: t.brandText, fontFamily: font.sansSemibold }}>{emailSuggestion}</T>?
+          </T>
+        </Pressable>
+      ) : null}
       <Field
         ref={phoneNumberRef}
         icon="call-outline"
@@ -768,6 +803,7 @@ export function RecoverPasswordScreen({ navigation }: any) {
   const [error, setError] = useState<string | null>(null);
   const [emailError, setEmailError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const submitting = useRef(false);
   const emailRef = useRef<TextInput>(null);
   const cooldown = useResendCooldown();
   const focusEmailOnReturn = useRef(false);
@@ -779,6 +815,7 @@ export function RecoverPasswordScreen({ navigation }: any) {
   }, [sent]);
 
   async function submit() {
+    if (submitting.current) return;
     setError(null);
 
     /*
@@ -800,6 +837,7 @@ export function RecoverPasswordScreen({ navigation }: any) {
     }
     setEmailError(null);
 
+    submitting.current = true;
     setBusy(true);
     try {
       // `platform` tells the server which app to point the emailed link at; the
@@ -827,6 +865,7 @@ export function RecoverPasswordScreen({ navigation }: any) {
       if (fromServer.email) emailRef.current?.focus();
       setError(fromServer.email ? null : errorMessage(err));
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }
@@ -969,6 +1008,7 @@ export function ResetPasswordScreen({
   const [codeFieldErrors, setCodeFieldErrors] = useState<FieldErrors<RecoveryCodeField>>({});
   const [codeError, setCodeError] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
+  const verificationInFlight = useRef(false);
   /** What the verified code bought: the pair the link used to carry. */
   const [tokens, setTokens] = useState<{ accessToken: string; refreshToken: string } | null>(null);
 
@@ -976,6 +1016,7 @@ export function ResetPasswordScreen({
   const [fieldErrors, setFieldErrors] = useState<FieldErrors<ResetPasswordField>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const submitting = useRef(false);
   const [done, setDone] = useState(false);
   const [refreshRevocationConfirmed, setRefreshRevocationConfirmed] = useState(true);
 
@@ -1012,6 +1053,7 @@ export function ResetPasswordScreen({
    * session" rather than two.
    */
   async function verify() {
+    if (verificationInFlight.current) return;
     setCodeError(null);
 
     const invalid = validateRecoveryCode(codeForm);
@@ -1023,6 +1065,7 @@ export function ResetPasswordScreen({
     }
     setCodeFieldErrors({});
 
+    verificationInFlight.current = true;
     setVerifying(true);
     const recovery = createRecoveryClient();
     try {
@@ -1069,11 +1112,13 @@ export function ResetPasswordScreen({
     } finally {
       // The verification client has done its one job, whichever way it went.
       await recovery.auth.signOut({ scope: "local" }).catch(() => undefined);
+      verificationInFlight.current = false;
       setVerifying(false);
     }
   }
 
   async function submit() {
+    if (submitting.current) return;
     if (!tokens) return;
     setError(null);
 
@@ -1086,6 +1131,7 @@ export function ResetPasswordScreen({
     }
     setFieldErrors({});
 
+    submitting.current = true;
     setBusy(true);
     const recovery = createRecoveryClient();
     try {
@@ -1138,6 +1184,7 @@ export function ResetPasswordScreen({
     } finally {
       // The recovery session is never wanted again, whichever way this went.
       await recovery.auth.signOut({ scope: "local" }).catch(() => undefined);
+      submitting.current = false;
       setBusy(false);
     }
   }
@@ -1158,7 +1205,7 @@ export function ResetPasswordScreen({
           <View accessibilityLiveRegion="polite">
             <Callout tone="warn">
               Your new password is active, but FinSight couldn't confirm that other refresh sessions were revoked. Log
-              in, open My account, then use Security &gt; Log out on all devices.
+              in, open More, then My account &gt; Change password. Update your password again to retry signing out other devices.
             </Callout>
           </View>
         )}

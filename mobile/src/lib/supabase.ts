@@ -133,6 +133,40 @@ export function createRecoveryClient() {
   });
 }
 
+/**
+ * A throwaway client for one Google sign-in attempt.
+ *
+ * PKCE needs somewhere to keep the code verifier between opening Google and
+ * exchanging the code, so this has storage, but only in memory: the session it
+ * produces is not the app's until POST /auth/google has approved it, and then
+ * AuthContext.adoptSession hands it to the main client. Same shape as web's
+ * createGoogleAuthClient.
+ */
+export function createGoogleAuthClient() {
+  const memory = new Map<string, string>();
+  const client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    auth: {
+      flowType: "pkce",
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+      // Supabase only takes custom storage with persistSession on; this
+      // storage is a Map that dies with the attempt.
+      persistSession: true,
+      storageKey: "finsight-google-ephemeral",
+      storage: {
+        getItem: (key) => memory.get(key) ?? null,
+        setItem: (key, value) => {
+          memory.set(key, value);
+        },
+        removeItem: (key) => {
+          memory.delete(key);
+        },
+      },
+    },
+  });
+  return { client, dispose: () => memory.clear() };
+}
+
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     // On web (Expo's react-native-web target, used for layout verification)

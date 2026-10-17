@@ -1,49 +1,93 @@
+import { CONTENT_WIDTH, ContentScrollView } from "../../components/ContentScrollView";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFocusEffect } from "@react-navigation/native";
-import { FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { AccessibilityInfo, BackHandler, FlatList, Keyboard, Pressable, View } from "react-native";
 import * as DocumentPicker from "expo-document-picker";
 import { Alert as AlertBanner, Button, Callout, Card, ConfirmSheet, ErrorNote, Field, OptionSheet, Screen, SelectChip, T } from "../../components/ui";
 import { useBusinessProfiles } from "../../context/BusinessProfileContext";
-import { api } from "../../lib/api";
+import { api, getFieldErrors } from "../../lib/api";
 import { describeActionFailure, toLoadFailure } from "../../lib/connectionState";
 import {
   EMPTY_MAPPING,
+  CORRECTABLE_FIELDS,
   analyseRows,
   checkMapping,
   columnMappingPayload,
   correctionsPayload,
+  csvReviewBodyError,
   defaultImportTitle,
-  guessMapping,
   importProgress,
   newCategoryNames,
   newIdempotencyKey,
-  offeredFields,
   problemsFirst,
   requiredFields,
   reviewCounts,
+  rowProblem,
   type AnalysedRow,
   type ColumnMapping,
   type CorrectableField,
   type Corrections,
   type ImportRecordType,
+  type ImportRowCategory,
   type MappedField,
   type MixedStrategy,
   type RowRules,
   type RowCorrection,
+  type RowProblem,
 } from "../../lib/csvImport";
 import { DATE_FORMAT_LABELS, parseCsvDate, type ChosenDateFormat, type CsvDateFormat } from "../../lib/csvDates";
 import { SkeletonList } from "../../components/Skeleton";
-import { TAP, radius, space, typeScale } from "../../theme/tokens";
+import { font, radius, space, typeScale } from "../../theme/tokens";
 import { useTheme } from "../../context/ThemeContext";
 import { FIELD_LIMITS } from "../../lib/fieldLimits";
 import { ImportSteps } from "./importCsv/ImportSteps";
+import { ChooseFileStage } from "./importCsv/ChooseFileStage";
+import { ConfirmImportStage } from "./importCsv/ConfirmImportStage";
+import { DetectedColumns, type UnmappedColumn } from "./importCsv/DetectedColumns";
 import { ReviewRowCard } from "./importCsv/ReviewRowCard";
 import { FIELD_LABELS, IMPORT_POLL_INTERVAL_MS, IMPORT_POLL_TIMEOUT_MS } from "./importCsv/constants";
 import { ResultDetails } from "../../components/ResultDetails";
 import { csvFileError } from "../../lib/importFiles";
+import { csvUploadForm, releaseCsvObjectUrl } from "../../lib/csvUploadForm";
 import { useImportOperation } from "../../lib/useImportOperation";
 import { invalidateRecordDerivedServerState } from "../../lib/serverStateCache";
 import { AvailableFundsBaselineChoice, useAvailableFundsBaselineChoice } from "../../components/AvailableFundsBaselineChoice";
+import { TAP_FLOOR } from "../../components/touchTarget";
+import { HeaderBackButton } from "../../components/HeaderBackButton";
+import { CsvKeyboardFrame } from "./importCsv/CsvKeyboardFrame";
+
+const EMPTY_CORRECTION: RowCorrection = {};
+type ReviewFilter = "preview" | "problems" | "duplicates" | "excluded" | "edited";
+interface ImportPreview {
+  headers: string[];
+  previewRows: Record<string, string>[];
+  totalRows: number;
+  stagedUploadId: string;
+  stageExpiresAt: string;
+  detectedTypeColumn?: string | null;
+  columnsWithNegatives?: string[];
+  detectedDateFormat?: CsvDateFormat;
+  dateFormatAmbiguous?: boolean;
+  suggestedMapping?: Partial<ColumnMapping>;
+  columnDetection?: {
+    unmapped: UnmappedColumn[];
+    suggestedRecordType: "expense" | "sales" | null;
+  };
+  rowCategories?: ImportRowCategory[];
+  validation?: ImportValidation;
+  categorySuggestions?: ImportCategorySuggestion[];
+  categorySuggestionsTruncated?: boolean;
+  availableFundsBaseline?: AvailableFundsBaselineSummary | null;
+  reviewRows?: { row: number; values: Record<string, string> }[];
+  reviewRowsTruncated?: boolean;
+  categorySummary?: {
+    fromFile: number;
+    suggested: number;
+    uncategorised: number;
+    newCategories: { name: string; rows: number }[];
+  };
+}
 
 interface ImportValidation {
   validRows: number;
@@ -61,6 +105,14 @@ interface AvailableFundsBaselineSummary {
   matchingRowCount: number;
 }
 
+function withCheckedDateProblems(rows: AnalysedRow[], validation: ImportValidation | null): AnalysedRow[] {
+  const futureDates = new Map((validation?.skipped ?? []).filter((entry) => entry.reason.startsWith("Future date:")).map((entry) => [entry.row, entry.reason]));
+  return rows.map((row) => {
+    const reason = futureDates.get(row.rowNumber);
+    return reason && !row.excluded ? { ...row, problem: { field: "date" as const, reason } } : row;
+  });
+}
+
 function withoutBaselineOverrides(corrections: Corrections): Corrections {
   let changed = false;
   const next: Corrections = {};
@@ -75,34 +127,25 @@ function withoutBaselineOverrides(corrections: Corrections): Corrections {
   return changed ? next : corrections;
 }
 
-/**
- * Importing a spreadsheet, in the three steps the website has always had:
- * choose a file, map the columns, review the rows.
- *
- * WHAT WAS MISSING BEFORE, and why each absence mattered on a phone
- * specifically — this is the client most FinSight owners actually have:
- *
- *   - NO ROW REVIEW AT ALL. The app posted a mapping and found out afterwards
- *     which rows had been thrown away, listed as "Row 47: Invalid date" with
- *     no way to fix one except editing the file on a computer the owner may
- *     not own.
- *   - NO CORRECTIONS. The server has accepted a `corrections` patch since the
- *     web review panel was built. Mobile never sent one.
- *   - NO VENDOR COLUMN. A supplier column in the file was silently dropped.
- *   - NO EDITABLE TITLE. `file.name` was posted raw, so a long export name —
- *     the kind a bank app or a phone's Downloads folder produces — failed the
- *     whole import with a 400 naming a field the screen never showed.
- *   - NO IDEMPOTENCY KEY. A retried confirm imported the file twice.
- *
- * The rules behind the review step are in lib/csvImport.ts, mirrored from the
- * server's own `validateRows`, and unit-tested there — this file is the
- * interface over them. The step components and constants it shares with
- * nothing else live in ./importCsv/.
- */
 export function ImportCsvScreen({ navigation }: any) {
   const t = useTheme();
   const { brand, ink, paper, statusText } = t;
   const { selected, categories } = useBusinessProfiles();
+  const insets = useSafeAreaInsets();
+  const listRef = useRef<FlatList<AnalysedRow>>(null);
+  const alignedEditor = useRef<number | null>(null);
+  const alignmentFrame = useRef<number | null>(null);
+  const reviewHeaderHeight = useRef(0);
+  const reviewScrollOffset = useRef(0);
+  const reviewScrollRestore = useRef<number | null>(null);
+  const reviewListLaidOut = useRef(false);
+  const reviewContentMeasured = useRef(false);
+  const restoreReviewScroll = useCallback(() => {
+    const offset = reviewScrollRestore.current;
+    if (offset === null || !reviewListLaidOut.current || !reviewContentMeasured.current || !listRef.current) return;
+    reviewScrollRestore.current = null;
+    listRef.current.scrollToOffset({ offset, animated: false });
+  }, []);
   const [file, setFile] = useState<DocumentPicker.DocumentPickerAsset | null>(null);
   /**
    * The replay token for THIS file, generated once when it is chosen and
@@ -114,8 +157,36 @@ export function ImportCsvScreen({ navigation }: any) {
   const [headers, setHeaders] = useState<string[]>([]);
   const [previewRows, setPreviewRows] = useState<Record<string, string>[]>([]);
   const [totalRows, setTotalRows] = useState(0);
+  const [stagedUploadId, setStagedUploadId] = useState<string | null>(null);
+  const [stageExpired, setStageExpired] = useState(false);
+  const [extraRows, setExtraRows] = useState<Map<number, Record<string, string>>>(new Map());
+  const [reviewRowsTruncated, setReviewRowsTruncated] = useState(false);
+  const [duplicateRows, setDuplicateRows] = useState<Set<number>>(new Set());
+  const [categorySummary, setCategorySummary] = useState<ImportPreview["categorySummary"]>();
+  const [unmappedColumns, setUnmappedColumns] = useState<UnmappedColumn[]>([]);
+  const [rowCategories, setRowCategories] = useState<Map<number, ImportRowCategory>>(new Map());
+  const [columnSheetField, setColumnSheetField] = useState<MappedField | null>(null);
+  const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("preview");
+  const [editingRow, setEditingRow] = useState<number | null>(null);
+  const editorRef = useRef(editingRow);
+  editorRef.current = editingRow;
+  const [draft, setDraft] = useState<RowCorrection>({});
+  const [draftError, setDraftError] = useState<RowProblem | null>(null);
+  const [selecting, setSelecting] = useState(false);
+  const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
+  const [lastExcluded, setLastExcluded] = useState<number[]>([]);
+  const [pendingEditor, setPendingEditor] = useState<number | "select" | "back" | "file" | null>(null);
+  const checkedSignature = useRef<string | null>(null);
+  const confirmAttempt = useRef<{ body: Record<string, unknown>; businessId: number } | null>(null);
+  const stageLifecycle = useRef<{ id: string | null; businessId?: number; confirmationAttempted: boolean }>({ id: null, confirmationAttempted: false });
+  const uploadIntent = useRef<{ key: string; businessId?: number; stageIds: Set<string> } | null>(null);
+  const attemptedStages = useRef(new Set<string>());
+  const discardedStages = useRef(new Set<string>());
+  const screenMounted = useRef(true);
+  const [confirmRecovery, setConfirmRecovery] = useState(false);
+  const recoveringRef = useRef(confirmRecovery);
+  recoveringRef.current = confirmRecovery;
   const [mapping, setMapping] = useState<ColumnMapping>(EMPTY_MAPPING);
-  const [autoMapped, setAutoMapped] = useState<MappedField[]>([]);
   /**
    * What the file is read as. Mobile could once only import expenses, so a
    * phone could not bring in sales history at all and a combined sheet had to
@@ -128,10 +199,9 @@ export function ImportCsvScreen({ navigation }: any) {
   const [detectedFormat, setDetectedFormat] = useState<CsvDateFormat>("iso");
   const [dateAmbiguous, setDateAmbiguous] = useState(false);
   /** The owner's answer. Only sent when the file is genuinely ambiguous. */
-  const [dateFormat, setDateFormat] = useState<ChosenDateFormat | null>(null);
+  const [dateFormat, setDateFormat] = useState<Exclude<ChosenDateFormat, "iso"> | null>(null);
   const [dateSheetOpen, setDateSheetOpen] = useState(false);
   const [corrections, setCorrections] = useState<Corrections>({});
-  const [step, setStep] = useState<"map" | "review">("map");
   const [result, setResult] = useState<any | null>(null);
   /** The polled status of a large import the server took off the request. */
   const [batchStatus, setBatchStatus] = useState<any | null>(null);
@@ -154,9 +224,36 @@ export function ImportCsvScreen({ navigation }: any) {
   const setBaselineDecision = baselineChoice.setDecision;
   const dateSemanticsKey = `${mapping.date}\u0000${dateFormat ?? detectedFormat}`;
   const previousDateSemantics = useRef(dateSemanticsKey);
+  const automaticCheckKey = useRef<string | null>(null);
   const operation = useImportOperation(selected?.id);
+  const confirming = useRef<NonNullable<ReturnType<typeof operation.begin>> | null>(null);
+  const polling = useRef<NonNullable<ReturnType<typeof operation.begin>> | null>(null);
+  const profileRef = useRef(selected?.id);
+  profileRef.current = selected?.id;
+  useEffect(() => {
+    screenMounted.current = true;
+    return () => { screenMounted.current = false; };
+  }, []);
+  const discardStage = useCallback((id: string, businessId: number | undefined) => {
+    if (attemptedStages.current.has(id) || discardedStages.current.has(id)) return;
+    discardedStages.current.add(id);
+    void api.delete(`/records/csv-imports/stages/${encodeURIComponent(id)}`, undefined,
+      businessId === undefined ? undefined : { cacheScope: { businessProfileId: businessId } },
+    ).catch(() => undefined);
+  }, []);
+  const discardAbandonedStage = useCallback(() => {
+    const stage = stageLifecycle.current;
+    if (stage.id && !stage.confirmationAttempted) {
+      stageLifecycle.current = { id: null, confirmationAttempted: false };
+      discardStage(stage.id, stage.businessId);
+    }
+    const intent = uploadIntent.current;
+    uploadIntent.current = null;
+    for (const id of intent?.stageIds ?? []) discardStage(id, intent?.businessId);
+  }, [discardStage]);
   const reviewSignature = JSON.stringify({
     file: file?.uri,
+    stagedUploadId,
     mapping,
     recordType,
     mixedStrategy,
@@ -170,7 +267,71 @@ export function ImportCsvScreen({ navigation }: any) {
   });
   const latestReviewSignature = useRef(reviewSignature);
   latestReviewSignature.current = reviewSignature;
-  useEffect(() => { reset(); setBusy(false); }, [selected?.id]);
+  useEffect(() => {
+    if (checkedSignature.current && checkedSignature.current !== reviewSignature) {
+      checkedSignature.current = null;
+      setConfirmOpen(false);
+    }
+  }, [reviewSignature]);
+  const reset = useCallback(() => {
+    discardAbandonedStage();
+    stageLifecycle.current = { id: null, confirmationAttempted: false };
+    setFile(null);
+    setIdempotencyKey(null);
+    setHeaders([]);
+    setPreviewRows([]);
+    setTotalRows(0);
+    setStagedUploadId(null);
+    setStageExpired(false);
+    setExtraRows(new Map());
+    setReviewRowsTruncated(false);
+    setDuplicateRows(new Set());
+    setCategorySummary(undefined);
+    setUnmappedColumns([]);
+    setRowCategories(new Map());
+    setColumnSheetField(null);
+    setReviewFilter("preview");
+    setEditingRow(null);
+    setDraft({});
+    setDraftError(null);
+    setSelecting(false);
+    setSelectedRows(new Set());
+    setLastExcluded([]);
+    reviewScrollOffset.current = 0;
+    reviewScrollRestore.current = null;
+    reviewListLaidOut.current = false;
+    reviewContentMeasured.current = false;
+    setPendingEditor(null);
+    checkedSignature.current = null;
+    confirmAttempt.current = null;
+    setConfirmRecovery(false);
+    setMapping(EMPTY_MAPPING);
+    setRecordType("expense");
+    setMixedStrategy("column");
+    setTitle("");
+    setDetectedFormat("iso");
+    setDateAmbiguous(false);
+    setDateFormat(null);
+    setDateSheetOpen(false);
+    setCorrections({});
+    setReviewOrder([]);
+    automaticCheckKey.current = null;
+    setResult(null);
+    setBatchStatus(null);
+    setError(null);
+    setValidation(null);
+    setCategorySuggestions([]);
+    setCategorySuggestionsTruncated(false);
+    setAvailableFundsBaseline(null);
+    setBaselineDecision(null);
+    setConfirmOpen(false);
+  }, [setBaselineDecision, discardAbandonedStage]);
+  useEffect(() => { reset(); setBusy(false); }, [selected?.id, reset]);
+  useEffect(() => () => discardAbandonedStage(), [selected?.id, discardAbandonedStage]);
+  useEffect(() => {
+    const uri = file?.uri;
+    return () => releaseCsvObjectUrl(uri);
+  }, [file?.uri]);
   useEffect(() => {
     if (previousDateSemantics.current === dateSemanticsKey) return;
     previousDateSemantics.current = dateSemanticsKey;
@@ -180,7 +341,53 @@ export function ImportCsvScreen({ navigation }: any) {
     setValidation(null);
     setConfirmOpen(false);
   }, [dateSemanticsKey, setBaselineDecision]);
-  useFocusEffect(useCallback(() => () => { operation.cancel(); setBusy(false); }, [operation]));
+  const interruptConfirmation = useCallback(() => {
+    if (!confirming.current || confirming.current.businessId !== profileRef.current) return false;
+    recoveringRef.current = true;
+    setConfirmRecovery(true);
+    setError("Confirmation interrupted. Check the same import before making more changes.");
+    return true;
+  }, []);
+  useFocusEffect(useCallback(() => () => {
+    if (!interruptConfirmation() && polling.current && polling.current.businessId === profileRef.current) {
+      setError("Checking paused. The import is still running. Check progress when you return.");
+    }
+    operation.cancel();
+    setBusy(false);
+  }, [operation, interruptConfirmation]));
+  const backWithinReview = useCallback(() => {
+    if (interruptConfirmation()) {
+      operation.cancel();
+      setBusy(false);
+      return true;
+    }
+    if (result || batchStatus || !stagedUploadId) return false;
+    if (confirmRecovery) { setError("Check the same import before changing its details."); return true; }
+    if (confirmOpen) { setConfirmOpen(false); return true; }
+    operation.cancel();
+    setBusy(false);
+    if (editorRef.current !== null) setPendingEditor("back");
+    else if (selecting) { setSelecting(false); setSelectedRows(new Set()); }
+    else return false;
+    return true;
+  }, [result, batchStatus, stagedUploadId, selecting, confirmRecovery, confirmOpen, operation, interruptConfirmation]);
+  const goBack = useCallback(() => {
+    if (backWithinReview()) return;
+    if (navigation.canGoBack?.()) navigation.goBack();
+    else if (navigation.replace) navigation.replace("RecordsList");
+    else navigation.navigate("RecordsList");
+  }, [navigation, backWithinReview]);
+  useEffect(() => navigation.setOptions?.({
+    headerBackVisible: false,
+    headerLeft: ({ tintColor }: { tintColor?: string }) => <HeaderBackButton tintColor={tintColor} onPress={goBack} />,
+  }), [navigation, goBack]);
+  useEffect(() => navigation.addListener?.("beforeRemove", (event: { preventDefault: () => void }) => {
+    if (backWithinReview()) event.preventDefault();
+  }), [navigation, backWithinReview]);
+  useFocusEffect(useCallback(() => {
+    const listener = BackHandler.addEventListener("hardwareBackPress", () => { goBack(); return true; });
+    return () => listener.remove();
+  }, [goBack]));
 
   const dateRules: RowRules = useMemo(
     () => ({
@@ -192,29 +399,56 @@ export function ImportCsvScreen({ navigation }: any) {
     [recordType, mixedStrategy, dateFormat, detectedFormat],
   );
 
+  const sourceRows = useMemo(() => {
+    const rows = new Map(previewRows.map((values, i) => [i + 2, values]));
+    for (const [number, values] of extraRows) rows.set(number, values);
+    return rows;
+  }, [previewRows, extraRows]);
   const analysed = useMemo(
-    () => analyseRows(previewRows, mapping, corrections, dateRules),
-    [previewRows, mapping, corrections, dateRules],
+    () => withCheckedDateProblems(analyseRows([...sourceRows.values()], mapping, corrections, dateRules, [...sourceRows.keys()]), validation),
+    [sourceRows, mapping, corrections, dateRules, validation],
   );
-  /**
-   * The order the review list is shown in, FROZEN when the step opens.
-   *
-   * Problem rows come first — a phone shows about two cards at a time, and
-   * leaving the four that need fixing scattered through three hundred that do
-   * not is the same as hiding them. But the order must then STOP moving: if it
-   * were recomputed as the owner typed, the row being corrected would jump to
-   * the bottom of the list the moment it became valid, taking the keyboard and
-   * their place on screen with it.
-   */
+  // Freeze row order while owners work; saving a correction must not move their place.
   const [reviewOrder, setReviewOrder] = useState<number[]>([]);
   const reviewRows = useMemo(() => {
     const byRow = new Map(analysed.map((r) => [r.rowNumber, r]));
     const ordered = reviewOrder.map((n) => byRow.get(n)).filter((r): r is AnalysedRow => r !== undefined);
-    // Anything the frozen order does not know about (a mapping changed after
-    // the freeze) is appended rather than dropped.
-    return ordered.length === analysed.length ? ordered : problemsFirst(analysed);
+    const known = new Set(ordered.map((row) => row.rowNumber));
+    return [...ordered, ...analysed.filter((row) => !known.has(row.rowNumber))];
   }, [analysed, reviewOrder]);
   const counts = reviewCounts(analysed, corrections);
+  const excludedCount = Object.values(corrections).filter((fix) => fix.exclude).length;
+  const shownRows = useMemo(() => reviewRows.filter((row) => {
+    if (reviewFilter === "excluded") return row.excluded;
+    if (row.excluded) return false;
+    if (reviewFilter === "problems") return row.problem !== null;
+    if (reviewFilter === "duplicates") return duplicateRows.has(row.rowNumber);
+    if (reviewFilter === "edited") return Object.keys(corrections[row.rowNumber] ?? {}).some((field) => field !== "exclude");
+    return row.rowNumber < previewRows.length + 2;
+  }), [reviewRows, reviewFilter, duplicateRows, previewRows.length, corrections]);
+  const shownRowsRef = useRef(shownRows);
+  shownRowsRef.current = shownRows;
+  const cancelEditorAlignment = useCallback(() => {
+    if (alignmentFrame.current !== null) cancelAnimationFrame(alignmentFrame.current);
+    alignmentFrame.current = null;
+  }, []);
+  useEffect(() => cancelEditorAlignment, [cancelEditorAlignment]);
+  const alignEditor = useCallback((number: number) => {
+    if (editorRef.current !== number || alignedEditor.current === number) return;
+    cancelEditorAlignment();
+    alignmentFrame.current = requestAnimationFrame(() => {
+      alignmentFrame.current = requestAnimationFrame(() => {
+        alignmentFrame.current = null;
+        if (editorRef.current !== number) return;
+        const index = shownRowsRef.current.findIndex((row) => row.rowNumber === number);
+        if (index < 0) return;
+        if (index === 0) {
+          listRef.current?.scrollToOffset({ offset: reviewHeaderHeight.current + space.lg + space.sm, animated: false });
+        } else listRef.current?.scrollToIndex({ index, animated: false, viewPosition: 0 });
+        alignedEditor.current = number;
+      });
+    });
+  }, [cancelEditorAlignment]);
   const mappingCheck = checkMapping(mapping, recordType, mixedStrategy);
   const newCategories = newCategoryNames(analysed, categories.map((c) => c.name));
   const typeSplit =
@@ -228,94 +462,94 @@ export function ImportCsvScreen({ navigation }: any) {
   /** True until the owner has answered a question only they can answer. */
   const needsDateAnswer = dateAmbiguous && dateFormat === null;
 
-  if (!selected) return null;
 
-  function formFor(f: DocumentPicker.DocumentPickerAsset) {
-    const form = new FormData();
-    form.append("file", { uri: f.uri, name: f.name, type: "text/csv" } as any);
-    return form;
-  }
-
-  function reset() {
-    setFile(null);
-    setIdempotencyKey(null);
-    setHeaders([]);
-    setPreviewRows([]);
-    setTotalRows(0);
-    setMapping(EMPTY_MAPPING);
-    setAutoMapped([]);
-    setRecordType("expense");
-    setMixedStrategy("column");
-    setTitle("");
-    setDetectedFormat("iso");
-    setDateAmbiguous(false);
-    setDateFormat(null);
-    setCorrections({});
-    setReviewOrder([]);
-    setStep("map");
-    setResult(null);
-    setBatchStatus(null);
-    setError(null);
-    setValidation(null);
-    setCategorySuggestions([]);
-    setCategorySuggestionsTruncated(false);
-    setAvailableFundsBaseline(null);
-    baselineChoice.setDecision(null);
-    setConfirmOpen(false);
-  }
-
-  async function pick(retry = false) {
+  async function pick(retry = false, preserveReview = false) {
     const task = operation.begin();
     if (!task) return;
     setBusy(true);
     try {
       const res = retry ? null : await DocumentPicker.getDocumentAsync({ type: ["text/csv", "text/comma-separated-values", "*/*"], copyToCacheDirectory: true });
-      if (!operation.current(task)) return;
+      if (!operation.current(task)) {
+        res?.assets?.forEach((asset) => releaseCsvObjectUrl(asset.uri));
+        return;
+      }
       const f = retry ? file : res && !res.canceled ? res.assets?.[0] : null;
       if (!f) return;
       const invalid = csvFileError(f);
-      if (invalid) { setError(invalid); return; }
+      if (invalid) {
+        if (!retry) releaseCsvObjectUrl(f.uri);
+        setError(invalid);
+        return;
+      }
       if (!retry) {
         reset();
         setFile(f);
-        setIdempotencyKey(newIdempotencyKey());
         setTitle(defaultImportTitle(f.name));
       }
       setError(null);
-      const preview = await api.upload<{
-        headers: string[];
-        previewRows: Record<string, string>[];
-        totalRows: number;
-        detectedTypeColumn?: string | null;
-        columnsWithNegatives?: string[];
-        detectedDateFormat?: CsvDateFormat;
-        dateFormatAmbiguous?: boolean;
-        suggestedMapping?: Partial<ColumnMapping>;
-      }>("/records/csv-imports/preview", formFor(f), task.controller.signal);
-      if (!operation.current(task)) return;
+      const replayKey = retry ? idempotencyKey : newIdempotencyKey();
+      if (!replayKey) throw new Error("Choose the CSV again to start its upload.");
+      if (!retry) setIdempotencyKey(replayKey);
+      if (uploadIntent.current?.key !== replayKey || uploadIntent.current.businessId !== task.businessId) {
+        uploadIntent.current = { key: replayKey, businessId: task.businessId, stageIds: new Set() };
+      }
+      const form = csvUploadForm(f);
+      form.append("businessProfileId", String(task.businessId));
+      form.append("idempotencyKey", replayKey);
+      const preview = await api.upload<ImportPreview>("/records/csv-imports/preview", form, task.controller.signal);
+      if (!operation.current(task)) {
+        if (preview.stagedUploadId) {
+          const intent = uploadIntent.current;
+          if (screenMounted.current && profileRef.current === task.businessId && intent?.key === replayKey && intent.businessId === task.businessId) {
+            intent.stageIds.add(preview.stagedUploadId);
+          } else discardStage(preview.stagedUploadId, task.businessId);
+        }
+        return;
+      }
+      if (!preview.stagedUploadId) throw new Error("The upload could not be prepared. Try again.");
 
+      uploadIntent.current?.stageIds.add(preview.stagedUploadId);
+      if (stageLifecycle.current.id !== preview.stagedUploadId) {
+        const previousStage = stageLifecycle.current;
+        if (previousStage.id && !previousStage.confirmationAttempted) discardStage(previousStage.id, previousStage.businessId);
+        stageLifecycle.current = { id: preview.stagedUploadId, businessId: task.businessId, confirmationAttempted: false };
+      }
+      setStagedUploadId(preview.stagedUploadId);
+      setStageExpired(false);
       setHeaders(preview.headers);
       setPreviewRows(preview.previewRows ?? []);
       setTotalRows(preview.totalRows ?? 0);
+      setUnmappedColumns(preview.columnDetection?.unmapped ?? []);
       setDetectedFormat(preview.detectedDateFormat ?? "iso");
       setDateAmbiguous(preview.dateFormatAmbiguous === true);
+      if (!preserveReview) setExtraRows(new Map());
+      setValidation(null);
+      setRowCategories(new Map());
+      if (preserveReview) return;
 
-      const guess = guessMapping(preview.headers, {
-        detectedTypeColumn: preview.detectedTypeColumn,
-        columnsWithNegatives: preview.columnsWithNegatives,
-      });
-      // Offered, not applied silently: the owner still sees every choice, and
-      // the review step labels each row before anything is written.
-      setMapping(preview.suggestedMapping ? { ...EMPTY_MAPPING, ...preview.suggestedMapping } : guess.mapping);
-      setAutoMapped(guess.autoMapped);
-      setRecordType(guess.recordType);
-      setMixedStrategy(guess.mixedStrategy);
+      const nextMapping = { ...EMPTY_MAPPING, ...preview.suggestedMapping };
+      const typeColumn = preview.detectedTypeColumn ?? "";
+      nextMapping.recordType = typeColumn;
+      if (typeColumn) {
+        setRecordType("mixed");
+        setMixedStrategy("column");
+        if (nextMapping.category === typeColumn) nextMapping.category = "";
+      } else if (nextMapping.amount && (preview.columnsWithNegatives ?? []).includes(nextMapping.amount)) {
+        setRecordType("mixed");
+        setMixedStrategy("sign");
+      } else {
+        setRecordType(preview.columnDetection?.suggestedRecordType ?? "expense");
+        setMixedStrategy("column");
+      }
+      setMapping(nextMapping);
     } catch (err) {
       if (!operation.current(task)) return;
       // The file is still chosen and the idempotency key still minted, so
       // "Try again" re-previews the same spreadsheet rather than sending the
       // owner back to the file picker.
-      setError(describeActionFailure(toLoadFailure(err), "The file you chose is still selected."));
+      const failure = toLoadFailure(err);
+      const fileError = getFieldErrors(err).file;
+      setError(describeActionFailure(fileError ? { ...failure, message: fileError } : failure, "The file you chose is still selected.", "local"));
     } finally {
       if (operation.current(task)) setBusy(false);
       operation.finish(task);
@@ -334,7 +568,7 @@ export function ImportCsvScreen({ navigation }: any) {
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, IMPORT_POLL_INTERVAL_MS));
       if (!operation.current(task)) return;
-      const status = await api.get<any>(`/records/csv-imports/batches/${batchId}/status`);
+      const status = await api.get<any>(`/records/csv-imports/batches/${batchId}/status`, undefined, task.controller.signal);
       if (!operation.current(task)) return;
       setBatchStatus(status);
       if (status.processingStatus === "COMPLETE") {
@@ -370,43 +604,52 @@ export function ImportCsvScreen({ navigation }: any) {
   }
 
   async function confirm() {
-    if (!file || !idempotencyKey) return;
+    if (!file || !idempotencyKey || !stagedUploadId || editingRow !== null) return;
+    if (!confirmRecovery && checkedSignature.current !== latestReviewSignature.current) {
+      setConfirmOpen(false);
+      setError("Details changed. Check the rows again before importing.");
+      return;
+    }
     if (availableFundsBaseline && !baselineChoice.check()) return;
     const task = operation.begin();
     if (!task) return;
     setConfirmOpen(false);
     setBusy(true);
     setError(null);
+    let sentConfirm = false;
     try {
-      const form = formFor(file);
-      form.append("businessProfileId", String(selected!.id));
-      form.append("recordType", recordType);
-      if (recordType === "mixed") form.append("mixedStrategy", mixedStrategy);
-      form.append("title", title.trim());
-      form.append("columnMapping", JSON.stringify(columnMappingPayload(mapping, recordType, mixedStrategy)));
-      const patch = correctionsPayload(corrections);
-      if (Object.keys(patch).length > 0) form.append("corrections", JSON.stringify(patch));
-      // The same key on every attempt: the server returns the SAME logical
-      // import for a replay rather than a second copy of the records.
-      form.append("idempotencyKey", idempotencyKey);
-      // Sent only when the file cannot say for itself — otherwise confirm
-      // refuses the file, which is the server asking this exact question.
-      if (dateAmbiguous && dateFormat) form.append("dateFormat", dateFormat);
-      if (baselineChoice.required && baselineChoice.decision !== null) {
-        const baseline = baselineChoice.requestFields();
-        form.append("includedInAvailableFundsBaseline", String(baseline.includedInAvailableFundsBaseline));
-        form.append("availableFundsBaselineAt", baseline.availableFundsBaselineAt);
-      }
-
-      const confirmed = await api.upload<any>("/records/csv-imports/confirm", form, {
+      const savedAttempt = confirmAttempt.current;
+      const body = confirmRecovery && savedAttempt && savedAttempt.businessId === task.businessId ? savedAttempt.body : {
+        stagedUploadId,
+        businessProfileId: task.businessId,
+        recordType,
+        ...(recordType === "mixed" ? { mixedStrategy } : {}),
+        title: title.trim(),
+        columnMapping: columnMappingPayload(mapping, recordType, mixedStrategy),
+        corrections: correctionsPayload(corrections),
+        idempotencyKey,
+        ...(dateAmbiguous && dateFormat ? { dateFormat } : {}),
+        ...(baselineChoice.required && baselineChoice.decision !== null ? baselineChoice.requestFields() : {}),
+      };
+      const bodyError = csvReviewBodyError(body);
+      if (bodyError) throw new Error(bodyError);
+      confirmAttempt.current = { body, businessId: task.businessId! };
+      sentConfirm = true;
+      stageLifecycle.current.confirmationAttempted = true;
+      attemptedStages.current.add(stagedUploadId);
+      confirming.current = task;
+      const confirmed = await api.post<any>("/records/csv-imports/confirm", body, {
         signal: task.controller.signal,
         cacheScope: { businessProfileId: selected!.id },
       });
       if (!operation.current(task)) return;
+      confirming.current = null;
+      recoveringRef.current = false;
+      setConfirmRecovery(false);
       if (confirmed.processingStatus === "PENDING" || confirmed.processingStatus === "PROCESSING") {
-        // 202: the batch exists and the worker has it, but no records are
-        // written yet. Nothing here is final until the poll says so.
-        setBatchStatus({ ...confirmed, processedRows: 0 });
+        // Confirmation replays may already have saved rows; wait for the status counter.
+        setBatchStatus(confirmed);
+        polling.current = task;
         await pollBatch(confirmed.batchId, task);
       } else if (confirmed.processingStatus === "FAILED") {
         setBatchStatus({ ...confirmed, importedRows: confirmed.imported, skippedRows: confirmed.skippedCount ?? confirmed.skipped?.length ?? 0 });
@@ -417,6 +660,7 @@ export function ImportCsvScreen({ navigation }: any) {
     } catch (err) {
       if (!operation.current(task)) return;
       if (await baselineChoice.absorb(err)) {
+        setConfirmRecovery(false);
         setValidation(null);
         setAvailableFundsBaseline(null);
         setError("The recorded balance changed. Review this import again using the latest balance.");
@@ -433,43 +677,43 @@ export function ImportCsvScreen({ navigation }: any) {
         actually landed before the connection dropped comes back as the SAME
         import rather than a second copy of the records.
       */
+      const stageCode = (err as { code?: string }).code;
+      if (["CSV_STAGE_EXPIRED", "CSV_STAGE_STALE", "CSV_STAGE_NOT_FOUND"].includes(stageCode ?? "")) { setStageExpired(true); setConfirmRecovery(false); }
+      const status = (err as { status?: number }).status;
+      if (sentConfirm && (!status || status >= 500 || stageCode === "CSV_STAGE_ALREADY_CONFIRMED")) setConfirmRecovery(true);
       const failure = toLoadFailure(err);
       setError(failure.reach === "unreachable"
         ? "Connection lost. Your import may still be running. Retry here to check the same import."
-        : `${failure.message} Your mapping and changes are kept.`);
+        : `${failure.message} Your column choices and row changes are kept.`);
     } finally {
+      if (confirming.current === task) confirming.current = null;
+      if (polling.current === task) polling.current = null;
       if (operation.current(task)) setBusy(false);
       operation.finish(task);
     }
   }
 
   async function checkAllRows(openConfirmation = false) {
-    if (!file || !mappingCheck.ready || needsDateAnswer) return;
-    if (openConfirmation && availableFundsBaseline && !baselineChoice.check()) return;
+    if (!file || !stagedUploadId || !mappingCheck.ready || needsDateAnswer || editingRow !== null || selecting || totalRows === 0 || stageExpired) return;
     const task = operation.begin();
     if (!task) return;
+    automaticCheckKey.current = JSON.stringify({ stagedUploadId, mapping, recordType, mixedStrategy, dateFormat, detectedFormat, dateAmbiguous });
     setBusy(true);
     setError(null);
     try {
-      const form = formFor(file);
-      form.append("recordType", recordType);
-      form.append("businessProfileId", String(selected!.id));
-      form.append("columnMapping", JSON.stringify(columnMappingPayload(mapping, recordType, mixedStrategy)));
-      form.append("corrections", JSON.stringify(correctionsPayload(corrections)));
-      if (recordType === "mixed") form.append("mixedStrategy", mixedStrategy);
-      if (dateFormat) form.append("dateFormat", dateFormat);
-      if (baselineChoice.required && baselineChoice.decision !== null) {
-        const baseline = baselineChoice.requestFields();
-        form.append("includedInAvailableFundsBaseline", String(baseline.includedInAvailableFundsBaseline));
-        form.append("availableFundsBaselineAt", baseline.availableFundsBaselineAt);
-      }
-      const preview = await api.upload<{
-        validation?: ImportValidation;
-        dateFormatAmbiguous?: boolean;
-        categorySuggestions?: ImportCategorySuggestion[];
-        categorySuggestionsTruncated?: boolean;
-        availableFundsBaseline?: AvailableFundsBaselineSummary | null;
-      }>("/records/csv-imports/preview", form, task.controller.signal);
+      const body = {
+        stagedUploadId,
+        recordType,
+        businessProfileId: task.businessId,
+        columnMapping: columnMappingPayload(mapping, recordType, mixedStrategy),
+        corrections: correctionsPayload(corrections),
+        ...(recordType === "mixed" ? { mixedStrategy } : {}),
+        ...(dateFormat ? { dateFormat } : {}),
+        ...(baselineChoice.required && baselineChoice.decision !== null ? baselineChoice.requestFields() : {}),
+      };
+      const bodyError = csvReviewBodyError(body);
+      if (bodyError) throw new Error(bodyError);
+      const preview = await api.post<ImportPreview>("/records/csv-imports/preview", body, task.controller.signal);
       if (!operation.current(task)) return;
       if (latestReviewSignature.current !== reviewSignature) {
         setValidation(null);
@@ -478,8 +722,8 @@ export function ImportCsvScreen({ navigation }: any) {
         return;
       }
       if (!preview.validation) {
-        if (preview.dateFormatAmbiguous) { setDateAmbiguous(true); setDateFormat(null); setStep("map"); }
-        setError("Check the column mapping and date format, then try again.");
+        if (preview.dateFormatAmbiguous) { setDateAmbiguous(true); setDateFormat(null); }
+        setError(preview.dateFormatAmbiguous ? "Choose how to read these dates, then check again." : "Check the detected columns and date format, then try again.");
         return;
       }
       const nextBaseline = preview.availableFundsBaseline ?? null;
@@ -497,11 +741,22 @@ export function ImportCsvScreen({ navigation }: any) {
       }
 
       setValidation(preview.validation);
+      const nextExtras = new Map((preview.reviewRows ?? []).slice(0, 200).map((entry) => [entry.row, entry.values]));
+      for (const [number, values] of extraRows) {
+        if (Object.keys(corrections[number] ?? {}).length > 0) nextExtras.set(number, values);
+      }
+      setExtraRows(nextExtras);
+      const nextSource = new Map(previewRows.map((values, index) => [index + 2, values]));
+      for (const [number, values] of nextExtras) nextSource.set(number, values);
+      const nextAnalysed = withCheckedDateProblems(analyseRows([...nextSource.values()], mapping, corrections, dateRules, [...nextSource.keys()]), preview.validation);
+      setReviewRowsTruncated(preview.reviewRowsTruncated === true);
+      setDuplicateRows(new Set(preview.validation.duplicateRows ?? []));
+      setCategorySummary(preview.categorySummary);
+      setRowCategories(new Map((preview.rowCategories ?? []).map((entry) => [entry.row, entry])));
       setCategorySuggestions(preview.categorySuggestions ?? []);
       setCategorySuggestionsTruncated(preview.categorySuggestionsTruncated === true);
       setAvailableFundsBaseline(nextBaseline);
-      setReviewOrder(problemsFirst(analysed).map((row) => row.rowNumber));
-      setStep("review");
+      setReviewOrder(problemsFirst(nextAnalysed).map((row) => row.rowNumber));
       if (baselineIdentityChanged && availableFundsBaseline) {
         setError("The recorded balance changed. Choose again before importing.");
       }
@@ -509,7 +764,15 @@ export function ImportCsvScreen({ navigation }: any) {
         openConfirmation
         && preview.validation.validRows > 0
         && (!nextBaseline || (!baselineIdentityChanged && baselineChoice.decision !== null))
-      ) setConfirmOpen(true);
+      ) {
+        checkedSignature.current = reviewSignature;
+        reviewScrollRestore.current = reviewScrollOffset.current;
+        reviewListLaidOut.current = false;
+        reviewContentMeasured.current = false;
+        setConfirmOpen(true);
+      } else if (openConfirmation && nextBaseline && baselineChoice.decision === null) {
+        baselineChoice.check();
+      }
     } catch (err) {
       if (operation.current(task)) {
         if (await baselineChoice.absorb(err)) {
@@ -517,7 +780,9 @@ export function ImportCsvScreen({ navigation }: any) {
           setAvailableFundsBaseline(null);
           setError("The recorded balance changed. Review this import again using the latest balance.");
         } else {
-          setError(describeActionFailure(toLoadFailure(err), "Your mapping and row changes are still here."));
+          const stageCode = (err as { code?: string }).code;
+          if (["CSV_STAGE_EXPIRED", "CSV_STAGE_STALE", "CSV_STAGE_NOT_FOUND"].includes(stageCode ?? "")) setStageExpired(true);
+          setError(describeActionFailure(toLoadFailure(err), "Your column choices and row changes are still here.", "local"));
         }
       }
     } finally {
@@ -526,38 +791,217 @@ export function ImportCsvScreen({ navigation }: any) {
     }
   }
 
-  function correct(rowNumber: number, field: CorrectableField, value: string) {
+  const detectionCheckKey = JSON.stringify({ stagedUploadId, mapping, recordType, mixedStrategy, dateFormat, detectedFormat, dateAmbiguous });
+  const automaticCheck = useRef(checkAllRows);
+  automaticCheck.current = checkAllRows;
+  useEffect(() => {
+    if (!stagedUploadId || !mappingCheck.ready || needsDateAnswer || totalRows === 0 || stageExpired || busy || confirmRecovery || editingRow !== null || selecting || result || batchStatus) return;
+    if (automaticCheckKey.current === detectionCheckKey) return;
+    const timer = setTimeout(() => {
+      automaticCheckKey.current = detectionCheckKey;
+      void automaticCheck.current();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [detectionCheckKey, stagedUploadId, mappingCheck.ready, needsDateAnswer, totalRows, stageExpired, busy, confirmRecovery, editingRow, selecting, result, batchStatus]);
+
+  const invalidateReview = useCallback(() => {
     setValidation(null);
-    setCategorySuggestions((previous) => previous.filter((suggestion) => suggestion.row !== rowNumber));
-    setCorrections((previous) => {
-      const current: RowCorrection = { ...previous[rowNumber], [field]: value };
-      delete current.includedInAvailableFundsBaseline;
-      return { ...previous, [rowNumber]: current };
+    checkedSignature.current = null;
+    setConfirmOpen(false);
+  }, []);
+  const openEditor = useCallback((number: number) => {
+    const row = analysed.find((item) => item.rowNumber === number);
+    if (!row || row.excluded) return;
+    reviewScrollRestore.current = null;
+    cancelEditorAlignment();
+    alignedEditor.current = null;
+    setEditingRow(number);
+    setDraft({ ...(corrections[number] ?? {}) });
+    setDraftError(null);
+    setError(null);
+  }, [analysed, corrections, cancelEditorAlignment]);
+  const requestEditor = useCallback((number: number) => {
+    if (recoveringRef.current) return;
+    if (editorRef.current !== null && editorRef.current !== number) { setPendingEditor(number); return; }
+    if (editorRef.current === number) return;
+    openEditor(number);
+  }, [openEditor]);
+  const updateDraft = useCallback((field: CorrectableField, value: string) => {
+    setDraft((current) => {
+      const next = { ...current, [field]: value };
+      if (field === "date") delete next.includedInAvailableFundsBaseline;
+      return next;
     });
+    setDraftError(null);
+  }, []);
+  const updateDraftBaseline = useCallback((value: boolean | undefined) => {
+    setDraft((current) => {
+      const next = { ...current };
+      if (value === undefined) delete next.includedInAvailableFundsBaseline;
+      else next.includedInAvailableFundsBaseline = value;
+      return next;
+    });
+  }, []);
+  const closeEditor = useCallback(() => {
+    cancelEditorAlignment();
+    editorRef.current = null;
+    alignedEditor.current = null;
+    setEditingRow(null);
+    setDraft({});
+    setDraftError(null);
+    Keyboard.dismiss();
+  }, [cancelEditorAlignment]);
+  const toggleSelection = useCallback((number: number) => {
+    if (recoveringRef.current) return;
+    setSelectedRows((current) => {
+      const next = new Set(current);
+      if (next.has(number)) next.delete(number);
+      else next.add(number);
+      return next;
+    });
+  }, []);
+  const restoreRow = useCallback((number: number) => {
+    if (recoveringRef.current) return;
+    invalidateReview();
+    setCorrections((current) => {
+      const next = { ...current };
+      const fields = { ...next[number] };
+      delete fields.exclude;
+      if (Object.keys(fields).length) next[number] = fields;
+      else delete next[number];
+      return next;
+    });
+    AccessibilityInfo.announceForAccessibility(`Row ${number} restored to this import.`);
+  }, [invalidateReview]);
+  function saveDraft() {
+    const number = editorRef.current;
+    const row = analysed.find((item) => item.rowNumber === number);
+    if (number === null || !row) return;
+    const values = { ...row.values };
+    for (const field of CORRECTABLE_FIELDS) if (draft[field] !== undefined) values[field] = draft[field];
+    const problem = rowProblem(values, dateRules);
+    if (problem && CORRECTABLE_FIELDS.includes(problem.field as CorrectableField)) {
+      setDraftError({ ...problem });
+      AccessibilityInfo.announceForAccessibility(problem.reason);
+      return;
+    }
+    invalidateReview();
+    setCorrections((current) => ({ ...current, [number]: { ...draft } }));
+    setCategorySuggestions((current) => current.filter((suggestion) => suggestion.row !== number));
+    closeEditor();
+    AccessibilityInfo.announceForAccessibility(`Changes to row ${number} saved. Check them before importing.`);
+  }
+  function removeSelected() {
+    if (confirmRecovery) return;
+    if (!selectedRows.size || editingRow !== null || busy) return;
+    const numbers = [...selectedRows].filter((number) => analysed.some((row) => row.rowNumber === number && !row.excluded));
+    invalidateReview();
+    setCorrections((current) => {
+      const next = { ...current };
+      for (const number of numbers) next[number] = { ...(next[number] ?? {}), exclude: true };
+      return next;
+    });
+    setLastExcluded(numbers);
+    setSelectedRows(new Set());
+    setSelecting(false);
+    AccessibilityInfo.announceForAccessibility(`${numbers.length} rows excluded from this import. You can undo this.`);
+  }
+  function undoRemoval() {
+    if (confirmRecovery) return;
+    invalidateReview();
+    setCorrections((current) => {
+      const next = { ...current };
+      for (const number of lastExcluded) {
+        const fields = { ...next[number] };
+        delete fields.exclude;
+        if (Object.keys(fields).length) next[number] = fields;
+        else delete next[number];
+      }
+      return next;
+    });
+    setLastExcluded([]);
+    AccessibilityInfo.announceForAccessibility("The last excluded rows have been restored.");
+  }
+  function discardAndSwitch() {
+    const next = pendingEditor;
+    closeEditor();
+    setPendingEditor(null);
+    if (next === "select") setSelecting(true);
+    else if (next === "back") goBack();
+    else if (next === "file") reset();
+    else if (next !== null) openEditor(next);
   }
 
-  function correctBaseline(rowNumber: number, value: boolean | undefined) {
-    setValidation(null);
-    setCorrections((previous) => {
-      const current: RowCorrection = { ...(previous[rowNumber] ?? {}) };
-      if (value === undefined) delete current.includedInAvailableFundsBaseline;
-      else current.includedInAvailableFundsBaseline = value;
-      if (Object.keys(current).length === 0) {
-        const next = { ...previous };
-        delete next[rowNumber];
-        return next;
-      }
-      return { ...previous, [rowNumber]: current };
-    });
-  }
+  if (!selected) return null;
+
+  const detectedColumns = <DetectedColumns
+    mapping={mapping}
+    recordType={recordType}
+    mixedStrategy={mixedStrategy}
+    check={mappingCheck}
+    previewRows={previewRows}
+    unmapped={unmappedColumns}
+    disabled={busy || editingRow !== null || selecting || confirmRecovery}
+    onChoose={setColumnSheetField}
+  />;
+  const reviewOptions = (
+    <View style={{ gap: space.md, marginTop: space.lg, paddingTop: space.md, borderTopWidth: 1, borderTopColor: t.border }}>
+      {mappingCheck.ready ? detectedColumns : null}
+      <ResultDetails label="import settings" title="Import settings">
+        <T variant="caption">Detected as {recordType === "sales" ? "sales" : recordType === "expense" ? "expenses" : mixedStrategy === "sign" ? "sales and expenses, using the amount sign" : `sales and expenses, using ${mapping.recordType || "a type column"}`}.</T>
+        <Field label="What to call this import" value={title} onChangeText={setTitle} maxLength={FIELD_LIMITS.importTitle} editable={!busy && editingRow === null && !selecting && !confirmRecovery} />
+        <T variant="label">Import as</T>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
+          {([["expense", "Expenses"], ["sales", "Sales"], ["mixed", "Both in one file"]] as const).map(([value, label]) => (
+            <SelectChip key={value} label={label} selected={recordType === value} disabled={busy || editingRow !== null || selecting || confirmRecovery} onPress={() => { invalidateReview(); setRecordType(value); }} />
+          ))}
+        </View>
+        {recordType === "mixed" ? (
+          <>
+            <T variant="label">How does your file say which is which?</T>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
+              <SelectChip label={'A column says "sale" or "expense"'} selected={mixedStrategy === "column"} disabled={busy || editingRow !== null || selecting || confirmRecovery} onPress={() => { invalidateReview(); setMixedStrategy("column"); }} />
+              <SelectChip label="Expenses are negative (−)" selected={mixedStrategy === "sign"} disabled={busy || editingRow !== null || selecting || confirmRecovery} onPress={() => { invalidateReview(); setMixedStrategy("sign"); }} />
+            </View>
+          </>
+        ) : null}
+      </ResultDetails>
+      <ResultDetails label="review details" title="Review details">
+        <T variant="caption">{file?.name} · {previewRows.length} sample rows. Each check supplies up to 200 additional issue rows; saved edits and exclusions stay available. Counts cover the whole file.</T>
+        {validation && validation.skipped.length > 0 ? <View style={{ gap: space.sm }}>
+          {validation.skipped.slice(0, 100).map((entry) => <T key={entry.row} variant="caption">Row {entry.row}: {entry.reason}</T>)}
+          {validation.skipped.length > 100 || validation.skippedTruncated ? <T variant="caption">Showing the first 100 skipped row details.</T> : null}
+        </View> : null}
+        {typeSplit ? <T variant="caption">In sample and review rows: {typeSplit.sales} sales · {typeSplit.expenses} expenses{typeSplit.unknown ? ` · ${typeSplit.unknown} unknown types` : ""}</T> : null}
+        {validation && categorySummary ? <T variant="caption">{categorySummary.fromFile} from your file · {categorySummary.suggested} suggested · {categorySummary.uncategorised} uncategorised</T>
+          : newCategories.length > 0 ? <T variant="caption">New categories in shown rows: {newCategories.join(", ")}. Later rows may create more categories.</T> : null}
+        {categorySuggestions.length > 0 ? (
+          <View style={{ gap: space.sm }}>
+            <T variant="caption">{categorySuggestions.length} suggestions from your past choices.</T>
+            <Button title="Apply category suggestions" variant="secondary" disabled={busy || editingRow !== null || selecting || confirmRecovery} onPress={() => {
+              invalidateReview();
+              setCorrections((previous) => {
+                const next = { ...previous };
+                for (const suggestion of categorySuggestions) if (!next[suggestion.row]?.category?.trim()) next[suggestion.row] = { ...next[suggestion.row], category: suggestion.categoryName };
+                return next;
+              });
+              setCategorySuggestions([]);
+            }} />
+            {categorySuggestionsTruncated ? <T variant="caption">Apply these, then check again for more suggestions.</T> : null}
+          </View>
+        ) : null}
+      </ResultDetails>
+    </View>
+  );
 
   // ---- What is on screen right now -------------------------------------
 
   if (result) {
     return (
       <Screen>
-        <ScrollView contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}>
+        <ContentScrollView contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}>
           <Card>
+            <ImportSteps current={2} />
             <T variant="title" style={{ marginBottom: space.sm }}>Import complete</T>
             <T style={{ fontSize: typeScale.body, marginBottom: space.sm }}>
               Imported {result.imported} of {result.totalRows} rows.
@@ -600,13 +1044,13 @@ export function ImportCsvScreen({ navigation }: any) {
                 <Button
                   title="Review the flagged rows"
                   variant="secondary"
-                  onPress={() => navigation.navigate("FlaggedRecords")}
+                  onPress={() => navigation.navigate("FlaggedRecords", { from: undefined })}
                 />
               ) : null}
-              <Button title="Done" variant="primary" onPress={() => navigation.goBack()} />
+              <Button title="Done" variant="primary" onPress={goBack} />
             </View>
           </Card>
-        </ScrollView>
+        </ContentScrollView>
       </Screen>
     );
   }
@@ -620,8 +1064,9 @@ export function ImportCsvScreen({ navigation }: any) {
     const failed = batchStatus.processingStatus === "FAILED";
     return (
       <Screen>
-        <ScrollView contentContainerStyle={{ padding: space.lg }}>
+        <ContentScrollView contentContainerStyle={{ padding: space.lg }}>
           <Card>
+            <ImportSteps current={2} />
             <T variant="title" style={{ marginBottom: 4 }}>{failed ? "Import stopped" : "Importing your records"}</T>
             <T variant="caption" style={{ marginBottom: space.md }}>
               {failed ? `${batchStatus.importedRows ?? 0} rows saved · ${batchStatus.skippedRows ?? 0} skipped` : "Importing in the background. You can leave this screen."}
@@ -661,7 +1106,7 @@ export function ImportCsvScreen({ navigation }: any) {
                 </T>
               </>
             ) : (
-              <T variant="caption">FinSight is reading the file. It will start counting rows in a moment.</T>
+              <T variant="caption">FinSight is processing the import. Checking its row count.</T>
             )}
             {error ? <View style={{ marginTop: space.md }}><ErrorNote>{error}</ErrorNote></View> : null}
             {failed ? (
@@ -675,7 +1120,7 @@ export function ImportCsvScreen({ navigation }: any) {
               />
             ) : null}
           </Card>
-        </ScrollView>
+        </ContentScrollView>
       </Screen>
     );
   }
@@ -683,22 +1128,7 @@ export function ImportCsvScreen({ navigation }: any) {
   if (!file) {
     return (
       <Screen>
-        <ScrollView contentContainerStyle={{ padding: space.lg }}>
-          <Card>
-            <T variant="title" style={{ marginBottom: 4 }}>Import a spreadsheet</T>
-            <T variant="caption" style={{ marginBottom: space.lg }}>
-              Upload a CSV, match the columns, then review before importing. Up to 5 MB.
-            </T>
-            <ImportSteps current={0} />
-            {error ? <View style={{ marginBottom: space.md }}><ErrorNote>{error}</ErrorNote></View> : null}
-            <Button title="Choose a CSV file" variant="primary" onPress={() => void pick()} loading={busy} />
-            <ResultDetails label="CSV format">
-              <T variant="caption">Use a header row, then one transaction per row. Date, description, and amount are required. Vendor and category are optional. Amounts are in PHP.</T>
-              <T variant="caption" selectable>{"date,description,amount,category,vendor\n2026-09-01,Coffee beans,450,Inventory,Local supplier"}</T>
-              <T variant="caption">Use YYYY-MM-DD dates where possible. For mixed files, add a type column with sale or expense. Other columns, including tax and currency, are not imported.</T>
-            </ResultDetails>
-          </Card>
-        </ScrollView>
+        <ChooseFileStage businessName={selected.name} bottomInset={insets.bottom} busy={busy} error={error} onChoose={() => void pick()} />
       </Screen>
     );
   }
@@ -706,14 +1136,14 @@ export function ImportCsvScreen({ navigation }: any) {
   if (busy && headers.length === 0) {
     return (
       <Screen>
-        <ScrollView contentContainerStyle={{ padding: space.lg }}>
+        <ContentScrollView contentContainerStyle={{ padding: space.lg }}>
           <Card>
             <ImportSteps current={0} />
             <T variant="caption" style={{ marginBottom: space.md }}>Reading {file.name}…</T>
             <SkeletonList count={4} />
             <Button title="Cancel upload" variant="ghost" onPress={() => { operation.cancel(); setBusy(false); setError("Your file is kept. Try again when ready."); }} />
           </Card>
-        </ScrollView>
+        </ContentScrollView>
       </Screen>
     );
   }
@@ -731,344 +1161,224 @@ export function ImportCsvScreen({ navigation }: any) {
     );
   }
 
-  if (step === "review") {
+  if ((confirmOpen || busy && confirming.current) && validation && !confirmRecovery) {
     return (
       <Screen>
-        <FlatList
-          /*
-           * VIRTUALIZED, unlike the mapping list above it. A preview is up to
-           * fifty rows and each card here carries up to four text inputs — a
-           * ScrollView would mount every one of them, and the inputs are the
-           * expensive part. This is also the screen an owner scrolls hardest.
-           */
-          data={reviewRows}
-          keyExtractor={(row) => String(row.rowNumber)}
-          contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2, gap: space.sm }}
-          keyboardShouldPersistTaps="handled"
-          pointerEvents={busy ? "none" : "auto"}
-          ListHeaderComponent={
-            <View style={{ gap: space.sm, marginBottom: space.sm }}>
-              <Card>
-                <ImportSteps current={2} />
-                <T variant="title" style={{ marginBottom: 4 }}>Check your rows</T>
-                <T variant="caption">
-                  {validation ? `${validation.validRows} rows ready · ${validation.invalidRows} will be skipped.` : "Your changes will be checked before importing."}
-                  {previewRows.length < totalRows
-                    ? ` This is the first ${previewRows.length} of ${totalRows} rows; the rest are checked when you import.`
-                    : ""}
-                </T>
-                {validation?.invalidRows ? (
-                  <ResultDetails label="row errors">
-                    {validation.skipped.map((row) => <T key={row.row} variant="caption">Row {row.row}: {row.reason}</T>)}
-                    {validation.skippedTruncated ? <T variant="caption">Showing the first 100 errors. Correct later rows in the CSV and upload it again.</T> : null}
-                  </ResultDetails>
-                ) : null}
-                {(validation?.possibleDuplicateRows ?? 0) > 0 ? (
-                  <T variant="caption" style={{ color: statusText.warning, marginTop: space.sm }}>
-                    {validation!.possibleDuplicateRows} possible duplicate row(s). They will be flagged if imported.
-                  </T>
-                ) : null}
-                {counts.corrected > 0 ? (
-                  <T variant="caption" style={{ marginTop: space.sm, color: brand[700] }}>
-                    {counts.corrected} row{counts.corrected === 1 ? "" : "s"} corrected. Your fixes are sent
-                    with the file — the original stays as it is.
-                  </T>
-                ) : null}
-              </Card>
-
-              {availableFundsBaseline ? (
-                <Card>
-                  <AvailableFundsBaselineChoice
-                    choice={baselineChoice}
-                    disabled={busy}
-                    question="Were these rows already included in the recorded balance?"
-                    help={`${availableFundsBaseline.matchingRowCount} valid row${availableFundsBaseline.matchingRowCount === 1 ? " uses" : "s use"} the same date as the latest balance you recorded. Choose the answer that applies by default. Open a matching row to change an exception.`}
-                  />
-                </Card>
-              ) : null}
-
-              {typeSplit ? (
-                <Callout tone={typeSplit.unknown > 0 ? "warn" : "info"}>
-                  In these rows: {typeSplit.sales} sales · {typeSplit.expenses} expenses
-                  {typeSplit.unknown > 0
-                    ? ` · ${typeSplit.unknown} unrecognised. Rows FinSight can't read a type from are skipped, never guessed.`
-                    : "."}
-                </Callout>
-              ) : null}
-
-              {newCategories.length > 0 ? (
-                <View>
-                  <T variant="caption">
-                  {newCategories.length} new categor{newCategories.length === 1 ? "y" : "ies"} in this preview. Check spellings before importing.
-                  </T>
-                  <ResultDetails label="new categories">
-                    <T variant="caption">{newCategories.join(", ")}</T>
-                    {previewRows.length < totalRows ? <T variant="caption">Later rows may create more categories.</T> : null}
-                  </ResultDetails>
-                </View>
-              ) : null}
-              {categorySuggestions.length > 0 ? (
-                <View style={{ gap: space.sm }}>
-                  <T variant="label">{categorySuggestions.length} category suggestion(s) from your past choices.</T>
-                  <Button title="Apply category suggestions" variant="secondary" disabled={busy} onPress={() => {
-                    setCorrections((previous) => {
-                      const next = { ...previous };
-                      for (const suggestion of categorySuggestions) {
-                        if (!next[suggestion.row]?.category?.trim()) next[suggestion.row] = { ...next[suggestion.row], category: suggestion.categoryName };
-                      }
-                      return next;
-                    });
-                    setValidation(null);
-                    setCategorySuggestions([]);
-                  }} />
-                  <ResultDetails label="suggested categories">
-                    {categorySuggestions.map((suggestion) => <T key={suggestion.row} variant="caption">Row {suggestion.row}: {suggestion.categoryName}</T>)}
-                    {categorySuggestionsTruncated ? <T variant="caption">More rows may need categories. Apply these suggestions, then review the import again.</T> : null}
-                  </ResultDetails>
-                </View>
-              ) : null}
-            </View>
-          }
-          renderItem={({ item }) => (
-            <ReviewRowCard
-              row={item}
-              onCorrect={(field, value) => correct(item.rowNumber, field, value)}
-              corrected={corrections[item.rowNumber] ?? {}}
-              baseline={
-                availableFundsBaseline
-                && baselineChoice.decision !== null
-                && item.problem === null
-                && parseCsvDate(item.values.date, dateRules.dateFormat) === availableFundsBaseline.baselineDate
-                  ? {
-                      defaultDecision: baselineChoice.decision,
-                      override: corrections[item.rowNumber]?.includedInAvailableFundsBaseline,
-                      onChange: (value) => correctBaseline(item.rowNumber, value),
-                    }
-                  : undefined
-              }
-            />
-          )}
-          ListFooterComponent={
-            <View style={{ marginTop: space.md, gap: space.sm }}>
-              {error ? <ErrorNote>{error}</ErrorNote> : null}
-              <Button
-                title="Review import"
-                variant="primary"
-                onPress={() => void checkAllRows(true)}
-                loading={busy}
-              />
-              <Button title="Back to the columns" variant="ghost" onPress={() => { setValidation(null); setStep("map"); }} disabled={busy} />
-            </View>
-          }
-        />
-        <ConfirmSheet
-          visible={confirmOpen}
-          title="Import this file?"
-          body={
-            `${totalRows} row${totalRows === 1 ? "" : "s"} will be checked and added to your records as "${title.trim()}".` +
-            ((validation?.invalidRows ?? counts.problems) > 0
-              ? ` ${validation?.invalidRows ?? counts.problems} invalid row(s) will be skipped and listed afterwards.`
-              : "") +
-            (newCategories.length > 0 ? ` ${newCategories.length} new categor${newCategories.length === 1 ? "y" : "ies"} will be created.` : "")
-          }
-          confirmLabel="Import"
-          onConfirm={confirm}
-          onCancel={() => setConfirmOpen(false)}
+        <ConfirmImportStage
+          businessName={selected.name}
+          title={title.trim()}
+          fileName={file.name}
+          ready={validation.validRows}
+          skipped={validation.invalidRows}
+          excluded={excludedCount}
+          duplicates={validation.possibleDuplicateRows ?? 0}
+          newCategories={categorySummary?.newCategories.map((category) => category.name) ?? newCategories}
+          bottomInset={insets.bottom}
+          busy={busy}
+          onImport={() => void confirm()}
+          onBack={() => setConfirmOpen(false)}
         />
       </Screen>
     );
   }
 
-  // ---- Step 2: map the columns -----------------------------------------
-
   return (
-    <Screen>
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-      >
-        <ScrollView
-          contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}
-          keyboardShouldPersistTaps="handled"
-          pointerEvents={busy ? "none" : "auto"}
-        >
-          <Card>
-            <ImportSteps current={1} />
-            <T variant="label" style={{ marginBottom: 4 }}>{file.name}</T>
-            <T variant="caption" style={{ marginBottom: space.md }}>
-              Match your columns to FinSight's fields. Every field says what it will be filled from.
-            </T>
-
-            {/*
-              A file with a header row and nothing under it. Caught here rather
-              than at confirm: uploading it, storing it and creating a batch
-              row for it just to report "0 imported" is work nobody needed and
-              an empty import in the owner's records afterwards.
-            */}
-            {totalRows === 0 ? (
-              <View style={{ marginBottom: space.md }}>
-                <Callout tone="warn">
-                  This file has column headings but no rows under them. There is nothing to import — check
-                  you picked the right file.
-                </Callout>
-              </View>
-            ) : null}
-
-            <Field
-              label="What to call this import"
-              value={title}
-              onChangeText={setTitle}
-              maxLength={FIELD_LIMITS.importTitle}
-            />
-            <T variant="caption" style={{ marginTop: -space.sm, marginBottom: space.md }}>
-              So you can find it again in your records. Starts from the file's name, shortened to fit.
-            </T>
-
-            <T variant="label" style={{ marginBottom: 4 }}>Import as</T>
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm, marginBottom: space.md }}>
-              {(
-                [
-                  ["expense", "Expenses"],
-                  ["sales", "Sales"],
-                  ["mixed", "Both in one file"],
-                ] as const
-              ).map(([value, label]) => (
-                <SelectChip
-                  key={value}
-                  label={label}
-                  selected={recordType === value}
-                  onPress={() => setRecordType(value)}
-                />
-              ))}
-            </View>
-
-            {/*
-              Asked as a question about the FILE, not about FinSight: an owner
-              knows whether their sheet has a "type" column or writes expenses
-              with a minus sign; they do not know what a "strategy" is.
-            */}
-            {recordType === "mixed" ? (
-              <>
-                <T variant="label" style={{ marginBottom: 4 }}>How does your file say which is which?</T>
-                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm, marginBottom: space.md }}>
-                  <SelectChip
-                    label={'A column says "sale" or "expense"'}
-                    selected={mixedStrategy === "column"}
-                    onPress={() => setMixedStrategy("column")}
-                  />
-                  <SelectChip
-                    label="Expenses are negative (−)"
-                    selected={mixedStrategy === "sign"}
-                    onPress={() => setMixedStrategy("sign")}
-                  />
+      <Screen>
+        <CsvKeyboardFrame>
+          <FlatList
+            ref={listRef}
+            contentOffset={{ x: 0, y: reviewScrollOffset.current }}
+            onScroll={(event) => { reviewScrollOffset.current = event.nativeEvent.contentOffset.y; }}
+            onScrollBeginDrag={() => { reviewScrollRestore.current = null; }}
+            onLayout={(event) => {
+              if (event.nativeEvent.layout.height > 0) { reviewListLaidOut.current = true; restoreReviewScroll(); }
+            }}
+            onContentSizeChange={(_width, height) => {
+              if (height > 0) { reviewContentMeasured.current = true; restoreReviewScroll(); }
+            }}
+            scrollEventThrottle={16}
+            onScrollToIndexFailed={({ index, averageItemLength }) => listRef.current?.scrollToOffset({ offset: reviewHeaderHeight.current + space.lg + space.sm + index * averageItemLength, animated: false })}
+            data={shownRows}
+            extraData={{ editingRow, draft, selectedRows, validation }}
+            initialNumToRender={8}
+            maxToRenderPerBatch={8}
+            windowSize={5}
+            removeClippedSubviews={false}
+            keyExtractor={(row) => String(row.rowNumber)}
+            style={{ flex: 1, width: "100%", maxWidth: CONTENT_WIDTH, alignSelf: "center", pointerEvents: busy || confirmRecovery ? "none" : "auto" }}
+            contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl }}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            automaticallyAdjustKeyboardInsets
+            ListHeaderComponent={
+              <View onLayout={(event) => { reviewHeaderHeight.current = event.nativeEvent.layout.height; }} style={{ gap: space.sm, marginBottom: space.sm }}>
+                <ImportSteps current={1} />
+                <T variant="title" accessibilityRole="header">Review your records</T>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <T variant="caption">{selected.name}</T>
+                    <T variant="caption" numberOfLines={2}>{file.name}</T>
+                  </View>
+                  <Button title="Change file" variant="ghost" disabled={busy || confirmRecovery} onPress={() => {
+                    if (editingRow !== null) { setPendingEditor("file"); return; }
+                    reset();
+                  }} />
                 </View>
-              </>
-            ) : null}
-
-            {/*
-              THE ONE QUESTION ONLY THE OWNER CAN ANSWER. When every sampled
-              date fits both readings, "05/01/2026" is either 5 January or
-              1 May, and no amount of parsing settles it. The server refuses
-              the file until it is told, which is the right refusal — a month
-              of records filed into the wrong months is not recoverable by
-              looking at them.
-            */}
-            {dateAmbiguous ? (
-              <View style={{ marginBottom: space.md, gap: space.sm }}>
-                <Callout tone="warn">
-                  The dates in this file can be read two ways — 05/01/2026 is either 5 January or 1 May.
-                  FinSight will not guess. Tell it which your file uses.
-                </Callout>
-                <Pressable
-                  onPress={() => setDateSheetOpen(true)}
-                  accessibilityRole="button"
-                  accessibilityLabel="Choose how the dates in this file should be read"
-                  style={{
-                    minHeight: TAP,
-                    justifyContent: "center",
-                    borderWidth: 1,
-                    borderColor: dateFormat ? brand[600] : statusText.warning,
-                    borderRadius: radius.md,
-                    paddingHorizontal: space.md,
-                  }}
-                >
-                  <T style={{ fontSize: typeScale.bodySm, color: dateFormat ? ink[900] : statusText.warning }}>
-                    {dateFormat ? DATE_FORMAT_LABELS[dateFormat] : "Choose how to read these dates"}
-                  </T>
-                </Pressable>
-              </View>
-            ) : null}
-
-            {offeredFields(recordType, mixedStrategy).map((field) => (
-              <View key={field} style={{ marginBottom: space.md }}>
-                <T variant="label" style={{ marginBottom: 4 }}>
-                  {FIELD_LABELS[field]}
-                  {requiredFields(recordType, mixedStrategy).includes(field) ? "" : " (optional)"}
-                </T>
-                {autoMapped.includes(field) && mapping[field] ? (
-                  <T variant="caption" style={{ marginBottom: 4 }}>
-                    Matched automatically — change it if that's the wrong column.
-                  </T>
+                {validation ? (
+                  <View style={{ gap: space.xs, paddingVertical: space.sm }}>
+                    <View style={{ flexDirection: "row", gap: space.md }}>
+                      {([[validation.validRows, "Ready to import", t.brandText], [validation.invalidRows, "Will be skipped", t.statusText.warning]] as const).map(([count, label, color]) => (
+                        <View key={label} accessible accessibilityLabel={`${label}: ${count.toLocaleString()}`} style={{ flex: 1, gap: space.xs }}>
+                          <T style={{ fontFamily: font.monoSemibold, fontSize: typeScale.title, color }}>{count.toLocaleString()}</T>
+                          <T variant="caption">{label}</T>
+                        </View>
+                      ))}
+                    </View>
+                    {excludedCount > 0 ? <T variant="caption" accessibilityLabel={`Left out by you: ${excludedCount.toLocaleString()}, included in will be skipped`}>Includes {excludedCount.toLocaleString()} left out by you.</T> : null}
+                  </View>
+                ) : <T variant="caption">{busy ? "Checking the whole file…" : "Check your saved changes before importing."}</T>}
+                {(validation?.possibleDuplicateRows ?? 0) > 0 ? <T variant="caption" style={{ color: statusText.warning }}>{validation!.possibleDuplicateRows!.toLocaleString()} possible duplicates · Included in ready, flagged if imported</T> : null}
+                {validation && categorySummary && categorySummary.newCategories.length > 0 ? <T variant="caption">New categories: {categorySummary.newCategories.map((category) => `${category.name} (${category.rows})`).join(", ")}. Created when you import.</T> : null}
+                {validation && categorySummary && categorySummary.uncategorised > 0 ? <T variant="caption" style={{ color: statusText.warning }}>{categorySummary.uncategorised.toLocaleString()} expense{categorySummary.uncategorised === 1 ? " has" : "s have"} no category. You can add one while reviewing.</T> : null}
+                {totalRows === 0 ? <Callout tone="warn">This file has column headings but no records. Choose a CSV with one transaction per row.</Callout> : null}
+                {dateAmbiguous ? (
+                  <View style={{ gap: space.sm }}>
+                    <Callout tone="warn">These dates can be read two ways. Choose the format your file uses before importing.</Callout>
+                    <Pressable
+                      disabled={busy || editingRow !== null || selecting || confirmRecovery}
+                      onPress={() => setDateSheetOpen(true)}
+                      accessibilityRole="button"
+                      accessibilityLabel="Choose how the dates in this file should be read"
+                      accessibilityState={{ disabled: busy || editingRow !== null || selecting || confirmRecovery }}
+                      style={{ minHeight: TAP_FLOOR, justifyContent: "center", borderWidth: 1, borderColor: dateFormat ? brand[600] : statusText.warning, borderRadius: radius.md, paddingHorizontal: space.md }}
+                    >
+                      <T style={{ color: dateFormat ? ink[900] : statusText.warning }}>{dateFormat ? DATE_FORMAT_LABELS[dateFormat] : "Choose how to read these dates"}</T>
+                    </Pressable>
+                  </View>
+                ) : null}
+                {!mappingCheck.ready ? detectedColumns : null}
+                {availableFundsBaseline ? (
+                  <View style={{ gap: space.sm, marginVertical: space.sm }}>
+                    <AvailableFundsBaselineChoice choice={baselineChoice} disabled={busy || editingRow !== null || confirmRecovery} question="Were these rows already included in the recorded balance?" help={`${availableFundsBaseline.matchingRowCount} valid rows use the balance date. Choose the default answer; edit a row to override it.`} />
+                  </View>
                 ) : null}
                 <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
-                  {headers.map((h) => (
-                    <SelectChip
-                      key={h}
-                      label={h}
-                      selected={mapping[field] === h}
-                      onPress={() => {
-                        // Tapping the chosen column again clears it, which is
-                        // the only way to UNMAP an optional field.
-                        setMapping((m) => ({ ...m, [field]: m[field] === h ? "" : h }));
-                        setAutoMapped((prev) => prev.filter((f) => f !== field));
-                      }}
-                      // Every column name appears once per field, so the chip
-                      // has to say which field it would fill — otherwise four
-                      // identical "Amount" chips read out identically.
-                      accessibilityLabel={`${h}, for ${FIELD_LABELS[field]}`}
-                    />
+                  {([
+                    ["preview", `Preview (${previewRows.length})`],
+                    ["problems", `Needs fixing (${counts.problems})`],
+                    ["duplicates", `Duplicates (${analysed.filter((row) => duplicateRows.has(row.rowNumber) && !row.excluded).length})`],
+                    ["excluded", `Excluded (${excludedCount})`],
+                    ["edited", `Edited (${counts.corrected})`],
+                  ] as const).filter(([value]) => value === "preview" || value === "problems" && counts.problems > 0 || value === "duplicates" && duplicateRows.size > 0 || value === "excluded" && excludedCount > 0 || value === "edited" && counts.corrected > 0).map(([value, label]) => (
+                    <SelectChip key={value} label={label} selected={reviewFilter === value} disabled={busy || confirmRecovery} onPress={() => {
+                      if (recoveringRef.current) return;
+                      if (editingRow !== null) { setError("Save or cancel this edit before changing the list."); return; }
+                      reviewScrollRestore.current = null;
+                      setReviewFilter(value); setSelectedRows(new Set());
+                    }} />
                   ))}
                 </View>
-                {mapping[field] && mappingCheck.duplicated.includes(mapping[field]) ? (
-                  <T variant="caption" style={{ marginTop: 4, color: statusText.critical }}>
-                    "{mapping[field]}" is already filling another field. Each one needs its own column.
-                  </T>
+                <T variant="caption">{reviewFilter === "preview" ? `${previewRows.length} sample rows shown.` : `${shownRows.length} available rows shown.`} {validation ? `All ${totalRows.toLocaleString()} rows checked.` : "Check saved changes before importing."}</T>
+                {reviewRowsTruncated || validation?.duplicateRowsTruncated || validation?.skippedTruncated ? <T variant="caption" style={{ color: statusText.warning }}>Limited row details. Fix remaining issues in the CSV.</T> : null}
+                {counts.corrected > 0 ? <T variant="caption">{counts.corrected} edited row{counts.corrected === 1 ? "" : "s"} · {validation ? "Checked" : "Awaiting check"}</T> : null}
+                {lastExcluded.length > 0 ? (
+                  <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
+                    <T variant="caption">{lastExcluded.length} rows removed from this import.</T>
+                    <Button title="Undo" variant="ghost" onPress={undoRemoval} disabled={busy || editingRow !== null || confirmRecovery} />
+                  </View>
                 ) : null}
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm }}>
+                  <View style={{ flex: 1, minWidth: 0, gap: space.xs }}>
+                    <T variant="heading" accessibilityRole="header">{selecting ? `${selectedRows.size} selected` : "Records"}</T>
+                    <T variant="caption">{selecting ? "Select rows to leave out." : "Tap a row to edit."}</T>
+                  </View>
+                  <Button title={selecting ? "Done" : "Select"} variant="ghost" disabled={busy || confirmRecovery} onPress={() => {
+                    if (recoveringRef.current) return;
+                    if (editingRow !== null) { setPendingEditor("select"); return; }
+                    setSelecting((current) => !current); setSelectedRows(new Set());
+                  }} />
+                </View>
               </View>
-            ))}
-
-            {error ? <ErrorNote>{error}</ErrorNote> : null}
-            <Button
-              title="Check the rows"
-              variant="primary"
-              onPress={() => void checkAllRows()}
-              loading={busy}
-              disabled={!mappingCheck.ready || needsDateAnswer || title.trim().length === 0 || totalRows === 0}
-              style={{ marginTop: space.sm }}
-            />
-            {!mappingCheck.ready || needsDateAnswer ? (
-              <T variant="caption" style={{ marginTop: space.sm }}>
-                {needsDateAnswer
-                  ? "Choose how the dates should be read first."
-                  : mappingCheck.duplicated.length > 0
-                    ? "Two fields are pointing at the same column."
-                    : `Still to map: ${mappingCheck.missing.map((f) => FIELD_LABELS[f]).join(", ")}.`}
-              </T>
-            ) : null}
-            <Button title="Choose a different file" variant="ghost" onPress={reset} disabled={busy} />
-          </Card>
-        </ScrollView>
-      </KeyboardAvoidingView>
-
-      <OptionSheet
-        visible={dateSheetOpen}
-        title="How should these dates be read?"
-        options={(["dmy", "mdy", "iso"] as const).map((id) => ({ id, name: DATE_FORMAT_LABELS[id] }))}
-        value={dateFormat}
-        onChoose={(id) => setDateFormat(id as ChosenDateFormat)}
-        onClose={() => setDateSheetOpen(false)}
-        emptyText="No date formats available."
-      />
-    </Screen>
+            }
+            renderItem={({ item }) => <ReviewRowCard
+              row={item}
+              categoryDecision={rowCategories.get(item.rowNumber)}
+              corrected={corrections[item.rowNumber] ?? EMPTY_CORRECTION}
+              editing={editingRow === item.rowNumber}
+              draft={editingRow === item.rowNumber ? draft : undefined}
+              draftError={editingRow === item.rowNumber ? draftError : undefined}
+              selecting={selecting}
+              selected={selectedRows.has(item.rowNumber)}
+              disabled={busy || confirmRecovery}
+              duplicate={duplicateRows.has(item.rowNumber)}
+              duplicateStale={validation === null}
+              signedAmounts={recordType === "mixed" && mixedStrategy === "sign"}
+              sourceRow={sourceRows.get(item.rowNumber)!}
+              onEdit={requestEditor}
+              onEditorLayout={alignEditor}
+              onDraftChange={updateDraft}
+              onSelect={toggleSelection}
+              onRestore={restoreRow}
+              baselineDate={availableFundsBaseline?.baselineDate}
+              baselineDecision={baselineChoice.decision}
+              rowDate={parseCsvDate(editingRow === item.rowNumber ? draft.date ?? item.values.date : item.values.date, dateRules.dateFormat)}
+              onDraftBaseline={updateDraftBaseline}
+            />}
+            ListEmptyComponent={<Callout tone="info">{reviewFilter === "excluded" ? "No rows are excluded." : reviewFilter === "problems" ? "No shown rows need fixing." : reviewFilter === "duplicates" ? "No duplicate details are available in this list." : reviewFilter === "edited" ? "No included edited rows remain." : "No included sample rows remain. Check the file before continuing."}</Callout>}
+            ListFooterComponent={reviewOptions}
+          />
+          <View testID="csv-review-footer" style={{ width: "100%", maxWidth: CONTENT_WIDTH, alignSelf: "center", borderTopWidth: 1, borderTopColor: t.border, backgroundColor: t.surface, padding: space.md, paddingBottom: Math.max(insets.bottom, space.md), gap: space.sm }}>
+            {confirmRecovery ? <ErrorNote>The confirmation response was lost. Check the same import before making more changes.</ErrorNote> : error ? <ErrorNote>{error}</ErrorNote> : null}
+            {stageExpired ? <Button title="Upload this file again" variant="secondary" loading={busy} onPress={() => void pick(true, true)} /> : null}
+            {confirmRecovery ? <Button title="Check the same import" variant="primary" loading={busy} onPress={() => void confirm()} /> : editingRow !== null ? (
+              <>
+                <View style={{ flexDirection: "row", gap: space.sm }}>
+                  <Button title="Cancel" variant="secondary" onPress={closeEditor} style={{ flex: 1 }} />
+                  <Button title="Save changes" variant="brand" onPress={saveDraft} style={{ flex: 1 }} />
+                </View>
+                <T variant="caption">Save or cancel this edit to continue.</T>
+              </>
+            ) : selecting ? (
+              <>
+                <Button title={`Remove ${selectedRows.size} from import`} variant="danger" onPress={removeSelected} disabled={busy || selectedRows.size === 0} />
+                <T variant="caption">Only selected rows are excluded. They can be restored.</T>
+              </>
+            ) : (
+              <>
+                <Button title="Check & continue" variant="primary" onPress={() => void checkAllRows(true)} loading={busy} disabled={stageExpired || !mappingCheck.ready || needsDateAnswer || totalRows === 0 || !title.trim() || validation?.validRows === 0} />
+                {!mappingCheck.ready || needsDateAnswer ? <T variant="caption">{needsDateAnswer ? "Choose how to read these dates first." : mappingCheck.duplicated.length > 0 ? "Each field needs a different column." : `Choose the missing columns: ${mappingCheck.missing.map((field) => FIELD_LABELS[field]).join(", ")}.`}</T> : null}
+                <T variant="caption">Nothing is added until you confirm.</T>
+              </>
+            )}
+          </View>
+        </CsvKeyboardFrame>
+        <ConfirmSheet visible={pendingEditor !== null} title="Discard this unsaved edit?" body="The row's saved changes are kept. Only the changes you have not saved will be discarded." confirmLabel="Discard edit" onConfirm={discardAndSwitch} onCancel={() => setPendingEditor(null)} />
+        <OptionSheet
+          visible={columnSheetField !== null}
+          title={`Choose ${columnSheetField ? FIELD_LABELS[columnSheetField].toLowerCase() : "a column"}`}
+          options={[
+            ...(columnSheetField && !requiredFields(recordType, mixedStrategy).includes(columnSheetField) ? [{ id: "", name: "Not in file", detail: "Do not import this optional field" }] : []),
+            ...headers.map((name) => ({ id: name, name, detail: previewRows.find((row) => row[name]?.trim())?.[name] || "No sample value" })),
+          ]}
+          value={columnSheetField ? mapping[columnSheetField] : null}
+          onChoose={(name) => {
+            if (!columnSheetField) return;
+            setMapping((current) => ({ ...current, [columnSheetField]: name }));
+            invalidateReview();
+          }}
+          onClose={() => setColumnSheetField(null)}
+          emptyText="No columns found."
+          searchPlaceholder="Search column names"
+        />
+        <OptionSheet
+          visible={dateSheetOpen}
+          title="How should these dates be read?"
+          options={(["dmy", "mdy"] as const).map((id) => ({ id, name: DATE_FORMAT_LABELS[id] }))}
+          value={dateFormat}
+          onChoose={setDateFormat}
+          onClose={() => setDateSheetOpen(false)}
+          emptyText="No date formats available."
+        />
+      </Screen>
   );
 }

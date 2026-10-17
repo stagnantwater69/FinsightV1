@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   cardPlacement,
+  cardViewportHeight,
   frameIsUsable,
   rectsAgree,
   resolvePadding,
@@ -180,6 +181,25 @@ describe("where the card goes", () => {
     const frame = spotlightFrame({ x: 16, y: 300, width: 360, height: 300 }, { x: 0, y: 0 }, SCREEN);
     const placement = cardPlacement({ frame, size: SCREEN, insets: INSETS, cardHeight: 400, gap: 12 });
     expect(placement.overlaps).toBe(true);
+  });
+});
+
+describe("fitting a scrollable tour card inside the viewport", () => {
+  it("keeps long content inside portrait and landscape safe areas", () => {
+    for (const size of [{ width: 320, height: 568 }, { width: 568, height: 320 }, SCREEN]) {
+      const available = cardViewportHeight(size, INSETS, 12);
+      const height = Math.min(900, available);
+      for (const y of [0, size.height / 2, size.height - 44]) {
+        const frame = spotlightFrame({ x: 16, y, width: 100, height: 44 }, { x: 0, y: 0 }, size);
+        const placement = cardPlacement({ frame, size, insets: INSETS, cardHeight: height, gap: 12 });
+        expect(placement.top).toBeGreaterThanOrEqual(INSETS.top);
+        expect(placement.top + height).toBeLessThanOrEqual(size.height - INSETS.bottom);
+      }
+    }
+  });
+
+  it("never gives a negative scrolling height when safe-area insets consume the window", () => {
+    expect(cardViewportHeight({ width: 320, height: 60 }, INSETS, 12)).toBe(0);
   });
 });
 

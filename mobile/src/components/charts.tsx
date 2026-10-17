@@ -2,8 +2,11 @@ import { ReactNode } from "react";
 import { View } from "react-native";
 import Svg, { Circle, Defs, LinearGradient, Path, Rect, Stop } from "react-native-svg";
 import { Money, T } from "./ui";
+import { ChartPlotPressArea, ChartValueReadout, useChartSelection } from "./ChartInteraction";
+import { chartIndexAtX, donutIndexAtPoint } from "../lib/chartInteraction";
+import { formatFinancialDate } from "../lib/financialPosition";
 import { formatMoney } from "../lib/money";
-import { font, space, typeScale } from "../theme/tokens";
+import { font, radius, space, typeScale } from "../theme/tokens";
 import { useTheme } from "../context/ThemeContext";
 
 /**
@@ -92,6 +95,11 @@ export function CategoryBreakdown({
   const rows = [...data].sort((a, b) => b.total - a.total).slice(0, 8);
   const max = Math.max(...rows.map((r) => r.total), 1);
   const grandTotal = data.reduce((sum, r) => sum + r.total, 0);
+  const values = rows.map((row) => ({ key: String(row.categoryId), label: row.categoryName, values: [
+    { label: "Spending", value: row.total },
+    { label: "Share of spending", value: grandTotal > 0 ? row.total / grandTotal * 100 : 0, display: `${(grandTotal > 0 ? row.total / grandTotal * 100 : 0).toFixed(2)}%` },
+  ] }));
+  const selection = useChartSelection(values, `${title}:${subtitle ?? ""}`);
 
   if (rows.length === 0) {
     return (
@@ -142,7 +150,7 @@ export function CategoryBreakdown({
            */
           const fitsInsideFill = fillPct >= 16;
           return (
-            <View key={row.categoryId} style={{ marginBottom: i === rows.length - 1 ? 0 : space.md }}>
+            <ChartPlotPressArea key={row.categoryId} chartLabel={`${title}: ${row.categoryName}`} count={rows.length} selection={selection} indexAtPoint={() => i} style={{ marginBottom: i === rows.length - 1 ? 0 : space.md, borderRadius: radius.sm, backgroundColor: selection.selectedIndex === i ? t.brandSurface : "transparent" }}>
               <View style={{ flexDirection: "row", justifyContent: "space-between", gap: space.sm }}>
                 {/*
                   The name is the label AND the relief for the contrast warning
@@ -196,10 +204,10 @@ export function CategoryBreakdown({
                   positioned by CSS percentage sits outside that distortion.
                 */}
                 <View
-                  pointerEvents="none"
                   style={
                     fitsInsideFill
                       ? {
+                          pointerEvents: "none",
                           position: "absolute",
                           left: 0,
                           top: 0,
@@ -209,6 +217,7 @@ export function CategoryBreakdown({
                           justifyContent: "center",
                         }
                       : {
+                          pointerEvents: "none",
                           position: "absolute",
                           left: `${fillPct}%`,
                           top: 0,
@@ -233,10 +242,11 @@ export function CategoryBreakdown({
                   </T>
                 </View>
               </View>
-            </View>
+            </ChartPlotPressArea>
           );
         })}
       </View>
+      <ChartValueReadout data={values} selection={selection} chartLabel={title} />
     </ChartFrame>
   );
 }
@@ -300,13 +310,6 @@ export function SpendTrend({
 }) {
   const t = useTheme();
   const { brand, ink, paper } = t;
-  if (data.length < 2) {
-    return (
-      <ChartFrame title={title}>
-        <T variant="caption">A few more days of records and the trend will show here.</T>
-      </ChartFrame>
-    );
-  }
 
   /*
    * The plot area is inset on the left for the value ticks. The SVG scales to
@@ -323,6 +326,14 @@ export function SpendTrend({
     running += d.total;
     return { date: d.date, daily: d.total, total: running };
   });
+  const values = series.map((row) => ({ key: row.date, label: formatFinancialDate(row.date.slice(0, 10)), values: [
+    { label: "Spending that day", value: row.daily },
+    { label: "Running total", value: row.total },
+  ] }));
+  const selection = useChartSelection(values, `${title}:${subtitle ?? ""}`);
+  if (series.length === 0) {
+    return <ChartFrame title={title}><T variant="caption">A few more days of records and the trend will show here.</T></ChartFrame>;
+  }
 
   const max = Math.max(...series.map((d) => d.total), 1);
   /*
@@ -333,10 +344,10 @@ export function SpendTrend({
   const axisMax = Math.max(step * 3, max);
   const ticks = [3, 2, 1, 0].map((i) => step * i);
 
-  const stepX = W / (series.length - 1);
+  const stepX = W / Math.max(series.length - 1, 1);
   const y = (v: number) => padY + (1 - v / axisMax) * (H - padY * 2);
 
-  const points = series.map((d, i) => ({ x: i * stepX, y: y(d.total), ...d }));
+  const points = series.map((d, i) => ({ x: series.length === 1 ? W / 2 : i * stepX, y: y(d.total), ...d }));
   const line = points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
   const area = `${line} L${W},${H} L0,${H} Z`;
 
@@ -385,7 +396,7 @@ export function SpendTrend({
             ))}
           </View>
 
-          <View style={{ flex: 1 }}>
+          <ChartPlotPressArea chartLabel={title} selection={selection} count={series.length} style={{ flex: 1 }}>
             <Svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
               <Defs>
                 <LinearGradient id="spendFill" x1="0" y1="0" x2="0" y2="1">
@@ -410,7 +421,8 @@ export function SpendTrend({
                 />
               ))}
 
-              <Path d={area} fill="url(#spendFill)" />
+              {selection.selectedIndex !== null ? <Path d={`M${points[selection.selectedIndex]!.x},0 V${H}`} stroke={t.brandText} strokeWidth={1.5} strokeDasharray="3 3" vectorEffect="non-scaling-stroke" /> : null}
+              {series.length > 1 ? <Path d={area} fill="url(#spendFill)" /> : null}
               <Path
                 d={line}
                 stroke={brand[600]}
@@ -428,10 +440,10 @@ export function SpendTrend({
               Positioned by percentage so it tracks the stretched geometry.
             */}
             <View
-              pointerEvents="none"
               style={{
+                pointerEvents: "none",
                 position: "absolute",
-                left: "100%",
+                left: `${(last.x / W) * 100}%`,
                 top: last.y,
                 marginLeft: -9,
                 marginTop: -5,
@@ -453,9 +465,10 @@ export function SpendTrend({
                 {series[series.length - 1]!.date.slice(5, 10)}
               </T>
             </View>
-          </View>
+          </ChartPlotPressArea>
         </View>
       </View>
+      <ChartValueReadout data={values} selection={selection} chartLabel={title} />
     </ChartFrame>
   );
 }
@@ -531,6 +544,12 @@ export function CashflowChart({
 }) {
   const t = useTheme();
   const { brand, ink, status } = t;
+  const values = data.map((row) => ({ key: row.date, label: `${cashflowTick(row.date, granularity)} ${row.date.slice(0, 4)}`, values: [
+    { label: "Money in", value: row.sales, color: brand[600] },
+    { label: "Money out", value: row.expenses, color: status.serious },
+    { label: "Net", value: row.sales - row.expenses },
+  ] }));
+  const selection = useChartSelection(values, `${title}:${subtitle ?? ""}:${granularity}`);
   const header = (
     <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm }}>
       <View style={{ flexDirection: "row", alignItems: "baseline", flexWrap: "wrap", flex: 1, gap: 6 }}>
@@ -543,7 +562,7 @@ export function CashflowChart({
     </View>
   );
 
-  if (data.length < 2) {
+  if (data.length === 0) {
     return (
       <View>
         {header}
@@ -563,10 +582,11 @@ export function CashflowChart({
   const rawMax = Math.max(...data.flatMap((d) => [d.sales, d.expenses]));
   const axisMax = niceAxisMax(rawMax);
   const gridValues = [0, axisMax / 4, axisMax / 2, (axisMax * 3) / 4, axisMax];
-  const stepX = W / (data.length - 1);
+  const stepX = W / Math.max(data.length - 1, 1);
+  const x = (index: number) => data.length === 1 ? W / 2 : index * stepX;
   const y = (v: number) => padY + (1 - v / axisMax) * (H - padY * 2);
   const path = (pick: (d: (typeof data)[number]) => number) =>
-    data.map((d, i) => `${i === 0 ? "M" : "L"}${(i * stepX).toFixed(1)},${y(pick(d)).toFixed(1)}`).join(" ");
+    data.map((d, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(pick(d)).toFixed(1)}`).join(" ");
 
   const totalSales = data.reduce((s, d) => s + d.sales, 0);
   const totalExpenses = data.reduce((s, d) => s + d.expenses, 0);
@@ -602,7 +622,7 @@ export function CashflowChart({
             ))}
           </View>
 
-          <View style={{ flex: 1 }}>
+          <ChartPlotPressArea chartLabel={title} selection={selection} count={data.length} style={{ flex: 1 }}>
             <Svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
               {gridValues.map((v) => (
                 <Path
@@ -614,6 +634,7 @@ export function CashflowChart({
                   vectorEffect="non-scaling-stroke"
                 />
               ))}
+              {selection.selectedIndex !== null ? <Path d={`M${x(selection.selectedIndex)},0 V${H}`} stroke={t.brandText} strokeWidth={1.5} strokeDasharray="3 3" vectorEffect="non-scaling-stroke" /> : null}
               {/* Expenses drawn first so the sales line, the one an owner wants to see win, sits on top. */}
               <Path
                 d={path((d) => d.expenses)}
@@ -634,18 +655,23 @@ export function CashflowChart({
                 vectorEffect="non-scaling-stroke"
               />
             </Svg>
+            {data.length === 1 ? [
+              { value: data[0]!.expenses, color: status.serious },
+              { value: data[0]!.sales, color: brand[600] },
+            ].map((point, index) => <View key={index} style={{ pointerEvents: "none", position: "absolute", left: "50%", top: y(point.value), marginLeft: -3, marginTop: -3, width: 6, height: 6, borderRadius: 3, backgroundColor: point.color }} />) : null}
 
             {/* One tick per point, angled — the reference's diagonal date row. */}
             <View style={{ height: 30, marginTop: 4 }}>
               {data.map((d, i) => (
-                <View key={d.date} style={{ position: "absolute", left: `${(i / (data.length - 1)) * 100}%`, top: 0 }}>
+                <View key={d.date} style={{ position: "absolute", top: 0, width: 48, ...(data.length === 1 ? { left: "50%", marginLeft: -24 } : i === 0 ? { left: space.xs } : i === data.length - 1 ? { right: space.xs } : { left: `${(x(i) / W) * 100}%`, marginLeft: -24 }) }}>
                   <T
                     numberOfLines={1}
                     style={{
                       width: 48,
                       fontSize: typeScale.axis,
                       color: ink[400],
-                      transform: [{ translateX: -12 }, { rotate: "-40deg" }],
+                      textAlign: i === data.length - 1 ? "right" : "left",
+                      transform: [{ rotate: "-40deg" }],
                     }}
                   >
                     {cashflowTick(d.date, granularity)}
@@ -653,7 +679,7 @@ export function CashflowChart({
                 </View>
               ))}
             </View>
-          </View>
+          </ChartPlotPressArea>
         </View>
 
         {/* Two series, so a legend carrying the totals is mandatory, not optional. */}
@@ -674,6 +700,7 @@ export function CashflowChart({
           </View>
         </View>
       </View>
+      <ChartValueReadout data={values} selection={selection} chartLabel={title} />
     </View>
   );
 }
@@ -696,6 +723,11 @@ export function CategoryChange({
 }) {
   const t = useTheme();
   const { ink, statusText, status } = t;
+  const rows = data.slice(0, 6);
+  const values = rows.map((row) => ({ key: row.categoryName, label: row.categoryName, values: [
+    { label: "Change", value: row.percentChange, display: `${row.percentChange > 0 ? "+" : ""}${row.percentChange.toFixed(2)}%` },
+  ], note: row.direction }));
+  const selection = useChartSelection(values, `${title}:${subtitle ?? ""}`);
   if (data.length === 0) {
     return (
       <ChartFrame title={title}>
@@ -704,7 +736,6 @@ export function CategoryChange({
     );
   }
 
-  const rows = data.slice(0, 6);
   const widest = Math.max(...rows.map((r) => Math.abs(r.percentChange)), 1);
 
   return (
@@ -736,7 +767,7 @@ export function CategoryChange({
           const share = Math.abs(row.percentChange) / widest;
 
           return (
-            <View key={row.categoryName} style={{ marginBottom: i === rows.length - 1 ? 0 : space.sm }}>
+            <ChartPlotPressArea key={row.categoryName} chartLabel={`${title}: ${row.categoryName}`} selection={selection} count={rows.length} indexAtPoint={() => i} style={{ marginBottom: i === rows.length - 1 ? 0 : space.sm, borderRadius: radius.sm, backgroundColor: selection.selectedIndex === i ? t.brandSurface : "transparent" }}>
               <View style={{ flexDirection: "row", justifyContent: "space-between", gap: space.sm }}>
                 <T style={{ fontSize: typeScale.label, color: ink[800], flex: 1 }} numberOfLines={1}>
                   {row.categoryName}
@@ -764,10 +795,11 @@ export function CategoryChange({
                   ) : null}
                 </View>
               </View>
-            </View>
+            </ChartPlotPressArea>
           );
         })}
       </View>
+      <ChartValueReadout data={values} selection={selection} chartLabel={title} />
     </ChartFrame>
   );
 }
@@ -792,6 +824,12 @@ export function CoverageColumns({
 }) {
   const t = useTheme();
   const { ink, statusText, status } = t;
+  const rows = data.slice(-14);
+  const values = rows.map((row) => ({ key: row.date, label: formatFinancialDate(row.date.slice(0, 10)), values: [
+    { label: "Sales", value: row.amount },
+    { label: "Target", value: target },
+  ], note: row.amount >= target ? "Met target" : "Below target" }));
+  const selection = useChartSelection(values, `${title}:${subtitle}`);
   if (data.length === 0) {
     return (
       <ChartFrame title={title}>
@@ -800,7 +838,6 @@ export function CoverageColumns({
     );
   }
 
-  const rows = data.slice(-14);
   const W = 320;
   const H = height;
   const max = Math.max(...rows.map((r) => r.amount), target, 1);
@@ -873,8 +910,9 @@ export function CoverageColumns({
             </T>
           ))}
         </View>
-        <View style={{ flex: 1 }}>
+        <ChartPlotPressArea chartLabel={title} selection={selection} count={rows.length} mode="bands" style={{ flex: 1 }}>
         <Svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+          {selection.selectedIndex !== null ? <Rect x={selection.selectedIndex * slot} y={0} width={slot} height={H} fill={t.brandSurface} /> : null}
           {/* Gridlines under the columns, hairline and recessive. */}
           {axisTicks.map((tick) => (
             <Path
@@ -914,8 +952,9 @@ export function CoverageColumns({
           </T>
           <T variant="caption" style={{ fontSize: typeScale.axis }}>{rows[rows.length - 1]!.date.slice(5, 10)}</T>
         </View>
-        </View>
+        </ChartPlotPressArea>
       </View>
+      <ChartValueReadout data={values} selection={selection} chartLabel={title} />
     </ChartFrame>
   );
 }
@@ -969,13 +1008,6 @@ export function DonutChart({
   const { ink, categorical } = t;
   const sorted = [...data].filter((d) => d.total > 0).sort((a, b) => b.total - a.total);
 
-  if (sorted.length === 0) {
-    return (
-      <ChartFrame title={title}>
-        <T variant="caption">Record an expense and its share of the total shows here.</T>
-      </ChartFrame>
-    );
-  }
 
   const head = sorted.slice(0, DONUT_TOP_N);
   const tail = sorted.slice(DONUT_TOP_N);
@@ -987,6 +1019,14 @@ export function DonutChart({
   ];
 
   const total = slices.reduce((s, d) => s + d.total, 0);
+  const values = slices.map((slice) => ({ key: slice.name, label: slice.name, values: [
+    { label: "Spending", value: slice.total, color: slice.color },
+    { label: "Share of spending", value: total > 0 ? slice.total / total * 100 : 0, display: `${(total > 0 ? slice.total / total * 100 : 0).toFixed(2)}%` },
+  ] }));
+  const selection = useChartSelection(values, `${title}:${subtitle ?? ""}`);
+  if (sorted.length === 0) {
+    return <ChartFrame title={title}><T variant="caption">Record an expense and its share of the total shows here.</T></ChartFrame>;
+  }
   const SIZE = 168;
   // From the module constants, so the ring and the label that has to fit
   // inside it can never disagree about how big the hole is.
@@ -1020,9 +1060,9 @@ export function DonutChart({
           .map((s) => `${s.name}, ${formatMoney(s.total)}, ${((s.total / total) * 100).toFixed(0)} percent`)
           .join(". ")}`}
       >
-        <View style={{ width: SIZE, height: SIZE }}>
+        <ChartPlotPressArea chartLabel={title} selection={selection} count={slices.length} indexAtPoint={(point) => donutIndexAtPoint(point, slices.map((slice) => slice.total), (RADIUS - STROKE / 2) / centre, (RADIUS + STROKE / 2 + 2) / centre)} style={{ width: SIZE, height: SIZE }}>
           <Svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`}>
-            {slices.map((slice) => {
+            {slices.map((slice, index) => {
               const length = (slice.total / total) * circumference;
               const dash = Math.max(length - GAP, 0.5);
               const circle = (
@@ -1032,7 +1072,8 @@ export function DonutChart({
                   cy={centre}
                   r={RADIUS}
                   stroke={slice.color}
-                  strokeWidth={STROKE}
+                  strokeWidth={selection.selectedIndex === index ? STROKE + 4 : STROKE}
+                  opacity={selection.selectedIndex === null || selection.selectedIndex === index ? 1 : 0.45}
                   fill="none"
                   strokeDasharray={`${dash} ${circumference - dash}`}
                   strokeDashoffset={-offset}
@@ -1058,12 +1099,12 @@ export function DonutChart({
             <T variant="caption">Total</T>
             <Money value={total} size={fitDonutLabel(formatMoney(total))} weight="semibold" />
           </View>
-        </View>
+        </ChartPlotPressArea>
 
         {/* A legend is mandatory for more than one series. */}
         <View style={{ flex: 1, gap: 6 }}>
-          {slices.map((slice) => (
-            <View key={slice.name} style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+          {slices.map((slice, index) => (
+            <ChartPlotPressArea key={slice.name} chartLabel={`${title}: ${slice.name}`} selection={selection} count={slices.length} indexAtPoint={() => index} style={{ flexDirection: "row", alignItems: "center", gap: 6, borderRadius: radius.sm, backgroundColor: selection.selectedIndex === index ? t.brandSurface : "transparent" }}>
               <View style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: slice.color }} />
               <T style={{ flex: 1, fontSize: typeScale.caption, color: ink[700] }} numberOfLines={1}>
                 {slice.name}
@@ -1071,10 +1112,11 @@ export function DonutChart({
               <T variant="caption" style={{ color: ink[600] }}>
                 {((slice.total / total) * 100).toFixed(0)}%
               </T>
-            </View>
+            </ChartPlotPressArea>
           ))}
         </View>
       </View>
+      <ChartValueReadout data={values} selection={selection} chartLabel={title} />
     </ChartFrame>
   );
 }
@@ -1101,6 +1143,12 @@ export function CategoryComparison({
   const t = useTheme();
   const { brand, ink } = t;
   const rows = data.filter((r) => r.current > 0 || r.previous > 0).slice(0, 6);
+  const values = rows.map((row) => ({ key: row.categoryName, label: row.categoryName, values: [
+    { label: previousLabel, value: row.previous, color: ink[300] },
+    { label: currentLabel, value: row.current, color: brand[600] },
+    { label: "Change", value: row.percentChange, display: row.percentChange === null ? undefined : `${row.percentChange > 0 ? "+" : ""}${row.percentChange.toFixed(2)}%`, unavailableLabel: "No previous amount to compare" },
+  ] }));
+  const selection = useChartSelection(values, `${title}:${subtitle ?? ""}:${previousLabel}:${currentLabel}`);
 
   if (rows.length === 0) {
     return (
@@ -1156,11 +1204,12 @@ export function CategoryComparison({
             <T variant="caption" style={{ fontFamily: font.mono }}>0</T>
           </View>
 
-          <View style={{ flex: 1, minWidth: 0 }}>
+          <ChartPlotPressArea chartLabel={title} selection={selection} count={rows.length} indexAtPoint={(point) => chartIndexAtX(point.x - point.width * 0.04, point.width * 0.92, rows.length)} style={{ flex: 1, minWidth: 0 }}>
             <Svg width="100%" height={plotHeight} viewBox={`0 0 100 ${plotHeight}`} preserveAspectRatio="none">
               {[plotTop, y(max / 2), plotBottom].map((lineY) => (
                 <Path key={lineY} d={`M0,${lineY} H100`} stroke={ink[200]} strokeWidth={0.5} />
               ))}
+              {selection.selectedIndex !== null ? <Path d={`M${x(selection.selectedIndex)},0 V${plotHeight}`} stroke={t.brandText} strokeWidth={1.5} strokeDasharray="3 3" vectorEffect="non-scaling-stroke" /> : null}
               <Path
                 d={seriesPath("previous")}
                 fill="none"
@@ -1199,7 +1248,7 @@ export function CategoryComparison({
                 />
               ))}
             </Svg>
-          </View>
+          </ChartPlotPressArea>
         </View>
 
         <View
@@ -1210,8 +1259,8 @@ export function CategoryComparison({
             height: 78,
           }}
         >
-          {rows.map((row) => (
-            <View key={row.categoryName} style={{ flex: 1, alignItems: "center" }}>
+          {rows.map((row, index) => (
+            <View key={row.categoryName} style={{ position: "absolute", top: 0, width: 82, ...(rows.length === 1 ? { left: "50%", marginLeft: -41 } : index === 0 ? { left: 0 } : index === rows.length - 1 ? { right: 0 } : { left: `${x(index)}%`, marginLeft: -41 }) }}>
               <T
                 variant="caption"
                 numberOfLines={1}
@@ -1233,6 +1282,145 @@ export function CategoryComparison({
           PHP · categories ordered by this period's spending
         </T>
       </View>
+      <ChartValueReadout data={values} selection={selection} chartLabel={title} />
+    </ChartFrame>
+  );
+}
+
+// ============================================================
+// Sales vs target — running totals across a recovery period
+// ============================================================
+
+/**
+ * Two running totals on one scale: recorded sales (solid, stops at today) and
+ * the target (dashed past today, where it is drawn between known anchors
+ * rather than summed from recorded days). Same construction as SpendTrend.
+ */
+export function CumulativeSalesChart({
+  points,
+  title = "Sales vs. target",
+  subtitle,
+  height = 160,
+}: {
+  points: { date: string; sales: number | null; target: number; estimated: boolean }[];
+  title?: string;
+  subtitle?: string;
+  height?: number;
+}) {
+  const t = useTheme();
+  const { brand, ink } = t;
+  const values = points.map((point) => ({ key: point.date, label: formatFinancialDate(point.date.slice(0, 10)), values: [
+    { label: "Recorded sales", value: point.sales, unavailableLabel: "Not yet recorded", color: brand[600] },
+    { label: point.estimated ? "Target by then (estimated)" : "Target by then", value: point.target, color: ink[400] },
+  ], note: point.estimated ? "Estimated target for days ahead." : point.sales === null ? "Sales have not been recorded for this day." : undefined }));
+  const selection = useChartSelection(values, `${title}:${subtitle ?? ""}`);
+  if (points.length === 0) {
+    return (
+      <ChartFrame title={title} subtitle={subtitle}>
+        <T variant="caption">The running totals show here once this period has two days.</T>
+      </ChartFrame>
+    );
+  }
+
+  const W = 320;
+  const H = height;
+  const padY = 12;
+  const max = Math.max(...points.map((p) => Math.max(p.target, p.sales ?? 0)), 1);
+  const step = niceStep(max / 3);
+  const axisMax = Math.max(step * 3, max);
+  const ticks = [3, 2, 1, 0].map((i) => step * i);
+  const stepX = W / Math.max(points.length - 1, 1);
+  const x = (index: number) => points.length === 1 ? W / 2 : index * stepX;
+  const y = (v: number) => padY + (1 - v / axisMax) * (H - padY * 2);
+  const path = (list: { x: number; v: number }[]) =>
+    list.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${y(p.v).toFixed(1)}`).join(" ");
+
+  const known = points.map((p, i) => ({ ...p, x: x(i) })).filter((p) => !p.estimated);
+  const firstEstimate = points.findIndex((p) => p.estimated);
+  // The estimate starts from the last known point so the two target segments join.
+  const estimated = firstEstimate === -1
+    ? []
+    : points.map((p, i) => ({ ...p, x: x(i) })).slice(Math.max(0, firstEstimate - 1));
+  const sales = points.map((p, i) => ({ x: x(i), v: p.sales })).filter((p): p is { x: number; v: number } => p.v !== null);
+
+  const lastSales = [...points].reverse().find((p) => p.sales !== null);
+  const final = points[points.length - 1]!;
+  const spoken = lastSales
+    ? `Recorded sales reach ${formatMoney(lastSales.sales!)} by ${lastSales.date}, against ${formatMoney(lastSales.target)} of target by then. The period target is ${formatMoney(final.target)}.`
+    : `No sales recorded yet. The period target is ${formatMoney(final.target)}.`;
+
+  return (
+    <ChartFrame title={title} subtitle={subtitle}>
+      <View accessible accessibilityRole="image" accessibilityLabel={spoken}>
+        <View style={{ flexDirection: "row" }}>
+          <View style={{ width: AXIS_GUTTER, height: H, justifyContent: "space-between", paddingVertical: padY - 6, paddingRight: 6 }}>
+            {ticks.map((tick) => (
+              <T key={tick} variant="caption" style={{ fontSize: typeScale.axis, textAlign: "right" }} numberOfLines={1}>
+                {axisTick(tick)}
+              </T>
+            ))}
+          </View>
+          <ChartPlotPressArea chartLabel={title} selection={selection} count={points.length} style={{ flex: 1 }}>
+            <Svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+              {ticks.map((tick) => (
+                <Path
+                  key={tick}
+                  d={`M0,${y(tick).toFixed(1)} H${W}`}
+                  stroke={tick === 0 ? ink[200] : ink[100]}
+                  strokeWidth={1}
+                  strokeDasharray={tick === 0 ? undefined : "3 4"}
+                  vectorEffect="non-scaling-stroke"
+                />
+              ))}
+              {selection.selectedIndex !== null ? <Path d={`M${x(selection.selectedIndex)},0 V${H}`} stroke={t.brandText} strokeWidth={1.5} strokeDasharray="3 3" vectorEffect="non-scaling-stroke" /> : null}
+              {known.length > 1 ? (
+                <Path d={path(known.map((p) => ({ x: p.x, v: p.target })))} stroke={ink[400]} strokeWidth={2} fill="none" vectorEffect="non-scaling-stroke" />
+              ) : null}
+              {estimated.length > 1 ? (
+                <Path
+                  d={path(estimated.map((p) => ({ x: p.x, v: p.target })))}
+                  stroke={ink[400]}
+                  strokeWidth={2}
+                  strokeDasharray="5 5"
+                  fill="none"
+                  vectorEffect="non-scaling-stroke"
+                />
+              ) : null}
+              {sales.length > 1 ? (
+                <Path
+                  d={path(sales)}
+                  stroke={brand[600]}
+                  strokeWidth={2.5}
+                  fill="none"
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                  vectorEffect="non-scaling-stroke"
+                />
+              ) : null}
+            </Svg>
+            {points.length === 1 ? [
+              { value: points[0]!.target, color: ink[400] },
+              ...(points[0]!.sales !== null ? [{ value: points[0]!.sales, color: brand[600] }] : []),
+            ].map((point, index) => <View key={index} style={{ pointerEvents: "none", position: "absolute", left: "50%", top: y(point.value), marginLeft: -3, marginTop: -3, width: 6, height: 6, borderRadius: 3, backgroundColor: point.color }} />) : null}
+            <View style={{ flexDirection: "row", justifyContent: "space-between", marginTop: 6 }}>
+              <T variant="caption" style={{ fontSize: typeScale.axis }}>{points[0]!.date.slice(5, 10)}</T>
+              <T variant="caption" style={{ fontSize: typeScale.axis }}>{final.date.slice(5, 10)}</T>
+            </View>
+          </ChartPlotPressArea>
+        </View>
+        {/* Every series carries a text label; colour is never the only cue. */}
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md, marginTop: space.sm }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+            <View style={{ width: 14, height: 3, borderRadius: 2, backgroundColor: brand[600] }} />
+            <T variant="caption">Recorded sales</T>
+          </View>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+            <View style={{ width: 14, height: 2, backgroundColor: ink[400] }} />
+            <T variant="caption">Target{firstEstimate === -1 ? "" : " (dashed: still ahead)"}</T>
+          </View>
+        </View>
+      </View>
+      <ChartValueReadout data={values} selection={selection} chartLabel={title} />
     </ChartFrame>
   );
 }

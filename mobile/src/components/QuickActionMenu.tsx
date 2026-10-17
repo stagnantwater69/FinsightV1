@@ -1,34 +1,30 @@
-import { useEffect, useRef, useState } from "react";
-import { Animated, BackHandler, Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { useEffect, useRef } from "react";
+import { Animated, BackHandler, Platform, Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from "react-native";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { T } from "./ui";
+import { QuickActionIcon } from "./QuickActionIcon";
 import { useTourTarget } from "./tour/targets";
 import type { TourTargetKey } from "./tour/steps";
-import { font, radius, space } from "../theme/tokens";
+import { font, radius, space, typeScale } from "../theme/tokens";
+import { shadowStyle } from "../theme/shadow";
+import { BAR_HEIGHT, addCentreFromBottom, barAreaHeight, barSideInset } from "./floatingTabBarLayout";
 import { useTheme } from "../context/ThemeContext";
 import { useReducedMotion } from "../lib/useReducedMotion";
 import * as haptics from "../lib/haptics";
 
 /**
- * The five things an owner opens FinSight to do, arced above the raised
- * button in the tab bar.
+ * The five things an owner opens FinSight to do, as a speed dial rising from
+ * the "+" beside the floating tab bar.
  *
- * WHY THE BUTTON STOPPED BEING A SHORTCUT TO ONE THING. It went straight to
- * the camera, which is right for the single most common action and wrong for
- * the bar's most prominent control: recording a sale, typing an expense,
- * importing a spreadsheet and fixing a category were each three taps away
- * behind a tab, while the one action that already had a Quick Actions card on
- * Home had the whole button to itself. Scanning stays first — it is the
- * centre of the arc and the largest — but it no longer crowds out the four
- * things beside it.
- *
- * WHY AN ARC AND NOT A SHEET. The actions have to read as belonging to the
- * button that produced them, and a sheet sliding up from the bottom edge
- * reads as belonging to the screen. Springing them out of the button along a
- * curve says where they came from and where they will go back to, which is
- * also what makes the X in the middle obvious rather than a control that
- * needs a label.
+ * WHY A STACK, AND WHY EVERY LABEL SHOWS. The "+" moved out of the middle of
+ * the bar to its own circle at the right, so the actions rise straight up
+ * from it, under the same thumb, nearest action first. The arc this replaced
+ * showed a label only while a finger was on a circle, because five captions
+ * across an arc collided; stacked, each one has a row to itself, so the owner
+ * reads "Add expense" before touching anything instead of guessing from an
+ * icon. Springing out of the button still says where they came from, and the
+ * X drawn over it says how to put them back.
  */
 
 export interface RadialAction {
@@ -50,34 +46,8 @@ export interface RadialAction {
   tourTarget?: TourTargetKey;
 }
 
-/**
- * Where each action lands, measured anticlockwise from the right-hand
- * horizontal. Five slots across the top half, symmetrical about vertical.
- *
- * WIDER THAN BEFORE, and stopping further from horizontal. At 24°/156° the
- * outer pair sat almost level with the tab bar's own icons and read as part
- * of it; at 30°/150° they clear it, and the extra spread between neighbours
- * is what stops two adjacent circles overlapping once the radius is small on
- * a narrow phone.
- */
-const ANGLES = [150, 120, 90, 60, 30];
-
 /** Each action's circle. */
-const ITEM = 54;
-
-/**
- * How far the actions travel, derived from the screen rather than fixed.
- *
- * A constant 132 put the outer circles at ±114pt from centre, which is off
- * the edge of a 320pt phone once the label is counted. This keeps the whole
- * arc inside the screen with a margin, and never grows so large on a tablet
- * that the actions leave the thumb's reach.
- */
-function radiusFor(width: number): number {
-  const halfSpan = Math.cos((30 * Math.PI) / 180); // the outermost x, as a fraction
-  const usable = width / 2 - ITEM / 2 - space.lg;
-  return Math.max(96, Math.min(150, usable / halfSpan));
-}
+const ITEM = 52;
 
 export function QuickActionMenu({
   visible,
@@ -86,7 +56,7 @@ export function QuickActionMenu({
   heldOpen = false,
 }: {
   visible: boolean;
-  /** Up to five. The middle of the list takes the top of the arc. */
+  /** Up to five. The first sits nearest the "+", the rest stack above it. */
   actions: RadialAction[];
   onClose: () => void;
   /**
@@ -101,33 +71,21 @@ export function QuickActionMenu({
   heldOpen?: boolean;
 }) {
   const t = useTheme();
-  const { brand, paper } = t;
-  const { width } = useWindowDimensions();
+  const { brand } = t;
   const insets = useSafeAreaInsets();
+  const { width, height, fontScale } = useWindowDimensions();
   const reduceMotion = useReducedMotion();
-  const RADIUS = radiusFor(width);
-
-  /**
-   * Which action the finger is currently on, or null.
-   *
-   * The labels were drawn under every circle at once and the outer ones
-   * overlapped their neighbours — five captions across an arc is more text
-   * than the arc has room for. Showing only the one being touched fixes the
-   * collision and, more usefully, turns the label into an answer to the
-   * question a finger hovering over an unfamiliar icon is actually asking.
-   */
-  const [touched, setTouched] = useState<string | null>(null);
 
   /*
    * One value per action rather than one shared value, because they are
-   * staggered — the arc should unfurl from the middle outwards rather than
-   * arriving as a single block, which is what tells the eye there are five
-   * separate things rather than one shape.
+   * staggered — the stack should rise from the button one action at a time
+   * rather than arriving as a single block, which is what tells the eye there
+   * are five separate things rather than one shape.
    */
   const progress = useRef(actions.map(() => new Animated.Value(0))).current;
 
   /*
-   * When the arc does not fly, and why that is not only a motion preference.
+   * When the stack does not fly, and why that is not only a motion preference.
    *
    * "Reduce Motion" is usually on for a reason: the actions still appear, they
    * simply do not travel.
@@ -153,19 +111,16 @@ export function QuickActionMenu({
       return;
     }
 
-    /*
-     * Ordered from the centre out, so the stagger radiates rather than
-     * sweeping left to right. `Math.abs` of the distance from the middle
-     * index gives each side the same delay as its mirror.
-     */
-    const middle = (actions.length - 1) / 2;
+    // Nearest the button first, so the stack reads as rising out of it.
     const animations = progress.map((value, i) =>
       Animated.sequence([
-        Animated.delay(Math.abs(i - middle) * 45),
-        Animated.spring(value, { toValue: 1, useNativeDriver: true, speed: 14, bounciness: 7 }),
+        Animated.delay(i * 40),
+        Animated.spring(value, { toValue: 1, useNativeDriver: Platform.OS !== "web", speed: 14, bounciness: 7 }),
       ]),
     );
-    Animated.parallel(animations).start();
+    const animation = Animated.parallel(animations);
+    animation.start();
+    return () => animation.stop();
   }, [visible, settled, progress, actions.length]);
 
   /*
@@ -184,14 +139,10 @@ export function QuickActionMenu({
 
   if (!visible) return null;
 
-  /*
-   * The centre of the raised tab-bar button, derived from the same figures
-   * MainTabs lays the bar out with: a 60pt bar over the safe-area inset, 6pt
-   * of top padding, and a 54pt circle pulled 20pt above it. Hard-coding a
-   * guess here would drift the moment the bar's height changed.
-   */
-  const centreFromBottom = 47 + insets.bottom;
-  const tabBarHeight = 60 + insets.bottom;
+  // The "+" centre, from the same figures the floating bar lays itself out with.
+  const centreFromBottom = addCentreFromBottom(insets.bottom, fontScale);
+  const tabBarHeight = barAreaHeight(insets.bottom, fontScale);
+  const sideInset = barSideInset(width);
 
   return (
     /*
@@ -211,7 +162,9 @@ export function QuickActionMenu({
         onPress={heldOpen ? undefined : onClose}
         accessibilityRole={heldOpen ? undefined : "button"}
         accessibilityLabel={heldOpen ? undefined : "Close the actions menu"}
-        style={{ flex: 1 }}
+        accessible={false}
+        importantForAccessibility="no-hide-descendants"
+        style={StyleSheet.absoluteFill}
       >
         {/*
           The dim stops above the tab bar so the bar stays legible — an owner
@@ -220,7 +173,7 @@ export function QuickActionMenu({
           "tap outside to close" has to mean for the gesture to be reliable.
 
           Dropped entirely while the tour holds the menu open: the tour lays
-          its own scrim over the screen, and two of them stacked make the arc
+          its own scrim over the screen, and two scrims together make the stack
           read as sitting in a hole rather than above the page.
         */}
         {heldOpen ? null : (
@@ -236,24 +189,22 @@ export function QuickActionMenu({
           />
         )}
 
-        {actions.map((action, i) => {
-          const angle = ((ANGLES[i] ?? 90) * Math.PI) / 180;
-          return (
-            <RadialItem
-              key={action.key}
-              action={action}
-              value={progress[i]!}
-              settled={settled}
-              dx={Math.cos(angle) * RADIUS}
-              dy={Math.sin(angle) * RADIUS}
-              left={width / 2 - ITEM / 2}
-              bottom={centreFromBottom - ITEM / 2}
-              showLabel={touched === action.key}
-              onTouch={setTouched}
-              onClose={onClose}
-            />
-          );
-        })}
+      </Pressable>
+        <ScrollView
+          style={{ position: "absolute", right: sideInset, bottom: tabBarHeight, width: width - sideInset * 2, maxHeight: Math.max(48, height - tabBarHeight - insets.top - space.lg) }}
+          contentContainerStyle={{ flexGrow: 1, justifyContent: "flex-end", alignItems: "flex-end", gap: space.md, paddingVertical: space.sm }}
+          keyboardShouldPersistTaps="handled"
+        >
+        {[...actions].reverse().map((action, reverseIndex) => (
+          <DialItem
+            key={action.key}
+            action={action}
+            value={progress[actions.length - reverseIndex - 1]!}
+            settled={settled}
+            onClose={onClose}
+          />
+        ))}
+        </ScrollView>
 
         {/*
           The button itself, redrawn as an X in the same place and at the same
@@ -267,158 +218,114 @@ export function QuickActionMenu({
           accessibilityLabel="Close the actions menu"
           style={({ pressed }) => ({
             position: "absolute",
-            left: width / 2 - 27,
-            bottom: centreFromBottom - 27,
-            width: 54,
-            height: 54,
-            borderRadius: 27,
+            right: sideInset,
+            bottom: centreFromBottom - BAR_HEIGHT / 2,
+            width: BAR_HEIGHT,
+            height: BAR_HEIGHT,
+            borderRadius: BAR_HEIGHT / 2,
             backgroundColor: pressed ? brand[800] : brand[700],
-            borderWidth: 4,
-            borderColor: paper.DEFAULT,
             alignItems: "center",
             justifyContent: "center",
           })}
         >
-          <Ionicons name="close" size={24} color={t.onBrandSolid} />
+          <Ionicons name="close" size={28} color={t.onBrandSolid} />
         </Pressable>
-      </Pressable>
     </View>
   );
 }
 
 /**
- * One circle in the arc.
+ * One row of the dial: its label on the left, its circle on the right, the
+ * whole row one target.
  *
  * Its own component only so that `useTourTarget` can be called for it — a hook
- * cannot be called inside the parent's `map`. Same reason QuickActions splits
- * its tiles. Everything else about the circle is what it was inline.
+ * cannot be called inside the parent's `map`.
  */
-function RadialItem({
+function DialItem({
   action,
   value,
   settled,
-  dx,
-  dy,
-  left,
-  bottom,
-  showLabel,
-  onTouch,
   onClose,
 }: {
   action: RadialAction;
   value: Animated.Value;
   /** Placed where it lands rather than flown into place — see `settled`. */
   settled: boolean;
-  dx: number;
-  dy: number;
-  left: number;
-  bottom: number;
-  showLabel: boolean;
-  onTouch: (key: string | null) => void;
   onClose: () => void;
 }) {
   const t = useTheme();
-  const { ink, paper } = t;
-  // Round target, round ring. Registered on the circle itself rather than on
-  // the container, so the spotlight is measured on the coloured disc the owner
-  // is being shown.
+  const { paper } = t;
+  // Registered on the circle itself, so the tour's spotlight is measured on the
+  // coloured disc the owner is being shown.
   const tourTarget = useTourTarget(action.tourTarget, {
     radius: 999,
     pad: { top: 6, right: 6, bottom: 6, left: 6 },
   });
 
   const content = (
-    <>
-      {/*
-        The label, only while the finger is on the action.
-
-        `onPressIn`/`onPressOut` rather than a long-press: the point is to
-        answer "what is this one?" for a finger already on the target, and a
-        delay would make that answer arrive after the decision. Positioned
-        absolutely ABOVE the circle so showing it cannot move the circle under
-        the finger.
-      */}
-      {showLabel ? (
-        <View
-          pointerEvents="none"
-          style={{
-            position: "absolute",
-            bottom: ITEM + 8,
-            paddingHorizontal: space.sm,
-            paddingVertical: 4,
-            borderRadius: radius.sm,
-            backgroundColor: ink[900],
-          }}
-        >
-          <T style={{ fontSize: 11.5, color: t.textOnFill, fontFamily: font.sansMedium }} numberOfLines={1}>
-            {action.label}
-          </T>
-        </View>
-      ) : null}
-
-      <Pressable
-        {...tourTarget}
-        onPressIn={() => onTouch(action.key)}
-        onPressOut={() => onTouch(null)}
-        onPress={() => {
-          haptics.tapped();
-          onClose();
-          action.onPress();
+    <Pressable
+      onPress={() => {
+        haptics.tapped();
+        onClose();
+        action.onPress();
+      }}
+      accessibilityRole="button"
+      accessibilityLabel={action.label}
+      style={({ pressed }) => ({ minHeight: ITEM, flexDirection: "row", alignItems: "center", gap: space.sm, opacity: pressed ? 0.85 : 1 })}
+    >
+      <View
+        style={{
+          flexShrink: 1,
+          minHeight: 36,
+          justifyContent: "center",
+          paddingHorizontal: space.md,
+          borderRadius: radius.full,
+          backgroundColor: t.surfaceRaised,
+          ...shadowStyle({ color: t.shadow, offsetY: 3, opacity: 0.16 * t.shadowStrength, blurRadius: 8, elevation: 4 }),
         }}
-        accessibilityRole="button"
-        accessibilityLabel={action.label}
-        style={({ pressed }) => ({
+      >
+        <T style={{ fontSize: typeScale.bodySm, fontFamily: font.sansSemibold, color: t.textPrimary, paddingVertical: space.sm }}>
+          {action.label}
+        </T>
+      </View>
+      <View
+        {...tourTarget}
+        style={{
           width: ITEM,
           height: ITEM,
           borderRadius: ITEM / 2,
           backgroundColor: action.color,
           alignItems: "center",
           justifyContent: "center",
-          // A ring in the scrim's own colour, so the circles read as sitting
+          // A ring in the page's own colour, so the circles read as sitting
           // above the dimmed page rather than punched into it.
           borderWidth: 3,
           borderColor: paper.DEFAULT,
-          transform: [{ scale: pressed ? 1.08 : 1 }],
-        })}
+        }}
       >
-        <Ionicons name={action.icon} size={23} color={action.onColor} />
-      </Pressable>
-    </>
+        <QuickActionIcon actionKey={action.key} fallback={action.icon} color={action.onColor} />
+      </View>
+    </Pressable>
   );
 
   /*
    * NO TRANSFORM in the settled case, deliberately. Where the circle is
    * becomes a question of layout, which `measureInWindow` answers identically
    * on every platform and at every instant — which is what the product tour
-   * needs in order to put a spotlight on it. The animated case below is the
-   * ordinary one, where nothing is measuring anything.
+   * needs in order to put a spotlight on it.
    */
   if (settled) {
-    return (
-      <View style={{ position: "absolute", left: left + dx, bottom: bottom + dy, alignItems: "center" }}>
-        {content}
-      </View>
-    );
+    return <View style={{ maxWidth: "100%" }}>{content}</View>;
   }
 
   return (
     <Animated.View
       style={{
-        position: "absolute",
-        left,
-        bottom,
-        alignItems: "center",
+        maxWidth: "100%",
         opacity: value,
         transform: [
-          { translateX: value.interpolate({ inputRange: [0, 1], outputRange: [0, dx] }) },
-          { translateY: value.interpolate({ inputRange: [0, 1], outputRange: [0, -dy] }) },
-          /*
-            Scaled from nothing rather than from 0.4, and rotated a little on
-            the way out. Starting at 0.4 meant five circles were already
-            visible, stacked on the button, before the animation began — so the
-            arc appeared to slide apart rather than to come out of anything.
-          */
-          { scale: value.interpolate({ inputRange: [0, 1], outputRange: [0.2, 1] }) },
+          { translateY: value.interpolate({ inputRange: [0, 1], outputRange: [24, 0] }) },
+          { scale: value.interpolate({ inputRange: [0, 1], outputRange: [0.6, 1] }) },
         ],
       }}
     >

@@ -76,6 +76,7 @@ export function SignOutSheet({
   return (
     <ConfirmSheet
       visible={visible}
+      presentation="dialog"
       title={everywhere ? "Sign out on all devices?" : "Sign out of FinSight?"}
       body={
         everywhere
@@ -87,6 +88,7 @@ export function SignOutSheet({
       error={error}
       onConfirm={() => void confirm()}
       onCancel={() => {
+        if (running.current) return;
         setError(null);
         onClose();
       }}

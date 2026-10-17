@@ -86,6 +86,7 @@ export interface UpdateProfileInput {
 
 export interface BusinessProfile {
   id: number;
+  timezone?: string;
   name: string;
   type: string;
   /** Owner-entered opening amount. Current recorded funds are returned by FinancialPosition. */
@@ -93,13 +94,13 @@ export interface BusinessProfile {
   /** Owner-entered fallback used until a complete past month is confirmed. */
   expectedMonthlyExpenses: number;
   /** Exact instant when the current available-funds baseline took effect. */
-  availableFundsBaselineAt: string;
+  availableFundsBaselineAt?: string;
   /** Business-local calendar date for that same baseline. */
-  availableFundsBaselineDate: string;
+  availableFundsBaselineDate?: string;
   /** Latest past month the owner has confirmed complete, as YYYY-MM. */
-  expenseRecordsCompleteThroughMonth: string | null;
+  expenseRecordsCompleteThroughMonth?: string | null;
   /** When the completeness assertion was last confirmed. */
-  expenseRecordsCompleteThroughConfirmedAt: string | null;
+  expenseRecordsCompleteThroughConfirmedAt?: string | null;
   operatingDays: number;
   largeExpenseThresholdPercent: number;
   /** A public URL for the business logo, or null if none was uploaded. */
@@ -624,6 +625,10 @@ export interface CategoryTrend {
   previous: number;
   direction: "up" | "down" | "flat";
   percentChange: number | null;
+  /** Number of expense records in the current period. */
+  recordCount: number;
+  /** Absolute peso movement, `current - previous`. */
+  change: number;
 }
 
 export interface UnusualExpense {
@@ -646,6 +651,7 @@ export interface DailyExpenseTotal {
 }
 
 export interface ExpenseBehavior {
+  periodDays: number;
   periodStart: string;
   periodEnd: string;
   /** Null for all time, which has nothing before it to compare with. */
@@ -790,15 +796,17 @@ export type ReductionSpec = { kind: "percent"; value: number } | { kind: "amount
 export interface ReductionSimulationInput {
   businessProfileId: number;
   categoryId: number;
-  periodDays: number;
+  periodDays?: number;
   endDate?: string;
+  period?: "week" | "month" | "all";
+  month?: string;
   reduction: ReductionSpec;
 }
 
 export interface ReductionSimulation {
   categoryId: number;
   categoryName: string;
-  period: { days: number; start: string; end: string };
+  period: { days: number; start: string | null; end: string };
   categoryExpenses: { before: number; after: number };
   totalExpenses: { before: number; after: number };
   hypotheticalReduction: number;
@@ -846,6 +854,9 @@ export interface AnomalyFinding {
   reasons: string[];
   status: AnomalyFindingStatus;
   detectedAt: string;
+  method?: string;
+  detectorVersion?: string;
+  metadata?: AnomalyFindingMetadata;
   /** What the owner already said about it, when they have said something. */
   feedback?: AnomalyFindingFeedback | null;
 }
@@ -929,7 +940,7 @@ export interface RecoveryReportingPeriod {
   isCurrent: boolean;
   isComplete: boolean;
   targetBasis: "prorated_monthly_expenses" | "monthly_expenses";
-  monthlyExpenseBases: Array<{ targetMonth: string; basis: MonthlyExpenseBasis }>;
+  monthlyExpenseBases?: Array<{ targetMonth: string; basis: MonthlyExpenseBasis }>;
   target: number;
   sales: number;
   confirmedSales: number;
@@ -1213,7 +1224,7 @@ export interface PurchasePriceContext {
   windowDays: number;
 }
 
-export type InteractionModule = "Expense Insights" | "Spending Impact" | "Recovery Target" | "Dashboard";
+export type InteractionModule = "Expense Insights" | "Spending Impact" | "Recovery Target" | "Dashboard" | "Records Review";
 
 export interface AIInteraction {
   id: number;
@@ -1314,6 +1325,22 @@ export type ChatFocus =
 /** `GET /ai/conversations/:id` — the conversation plus its messages, oldest first. */
 export interface ConversationDetail extends Conversation {
   messages: ChatMessage[];
+  nextCursor?: string | null;
+}
+
+export interface ConversationPage {
+  items: Conversation[];
+  nextCursor: string | null;
+}
+
+export interface ImportBatchPage {
+  items: ImportBatchSummary[];
+  nextCursor: string | null;
+}
+
+export interface OperatingDayOverridePage {
+  items: OperatingDayOverride[];
+  nextCursor: string | null;
 }
 
 /**
@@ -1332,9 +1359,18 @@ export interface ChatSendResponse {
   detectedAmount: number | null;
 }
 
+export interface ChatSendStatus {
+  status: "PROCESSING" | "COMPLETE" | "FAILED" | "DELETED";
+  result: ChatSendResponse | null;
+  error: { status: number; code: string; message: string } | null;
+  createdAt: string;
+  completedAt: string | null;
+}
+
 export interface CategorySuggestion {
   categoryId: number;
   categoryName: string;
+  source?: "history" | "ai";
 }
 
 export interface FutureDatedRecord {

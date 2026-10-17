@@ -21,6 +21,7 @@ export function __reset() {
 }
 
 export const WHEN_UNLOCKED = 'whenUnlocked';
+export const WHEN_UNLOCKED_THIS_DEVICE_ONLY = 'whenUnlockedThisDeviceOnly';
 export const AFTER_FIRST_UNLOCK = 'afterFirstUnlock';
 
 export default {

@@ -6,10 +6,7 @@ import { isServerStateAffected, subscribeToServerState } from "../lib/serverStat
 import { toLoadFailure, type LoadFailure } from "../lib/connectionState";
 
 /**
- * The period the owner is looking at, shared by Home, Expense Insights and
- * Spending Impact — the same model web uses (web/src/context/
- * ReportingPeriodContext.tsx): This week, a month the business has records
- * in, or All time.
+ * Each screen keeps its own period while sharing the business's month list.
  *
  * The Month list is the business's own months with records, newest first,
  * from `GET /records/months`. The default is the newest of them, so a
@@ -17,9 +14,8 @@ import { toLoadFailure, type LoadFailure } from "../lib/connectionState";
  * than on an empty week; with no records at all (or no answer) it is This
  * week.
  *
- * Held in memory per business for as long as the app runs: the provider sits
- * above the tabs, so moving between Home and Insights keeps the choice, and a
- * business switch starts from that business's own default.
+ * Choices stay in memory per business and screen above the navigator, so
+ * returning to a screen restores its choice without changing another screen.
  */
 export interface ReportingPeriodValue {
   selection: PeriodSelection;
@@ -37,6 +33,18 @@ export interface ReportingPeriodValue {
 
 const ReportingPeriodContext = createContext<ReportingPeriodValue | null>(null);
 
+export type ReportingPeriodScopeName = "dashboard" | "expense-insight" | "recovery-target" | "spending-impact";
+type SelectionScope = ReportingPeriodScopeName | "default";
+
+interface ReportingPeriodStore {
+  monthsValue: Omit<ReportingPeriodValue, "selection" | "setSelection" | "ready">;
+  businessId: number | null;
+  chosen: Partial<Record<SelectionScope, Record<number, PeriodSelection>>>;
+  setSelection: (scope: SelectionScope, selection: PeriodSelection) => void;
+}
+
+const ReportingPeriodStoreContext = createContext<ReportingPeriodStore | null>(null);
+
 interface MonthsSnapshot {
   businessId: number | null;
   months: string[];
@@ -50,7 +58,7 @@ function defaultFor(months: string[]): PeriodSelection {
   return months[0] ? { kind: "month", month: months[0] } : THIS_WEEK;
 }
 
-function useReportingPeriodState(): ReportingPeriodValue {
+function useReportingPeriodState(): ReportingPeriodStore {
   const { selected } = useBusinessProfiles();
   const businessId = selected?.id ?? null;
   const [monthsSnapshot, setMonthsSnapshot] = useState<MonthsSnapshot>({
@@ -61,7 +69,7 @@ function useReportingPeriodState(): ReportingPeriodValue {
     updatedAt: null,
     refreshing: false,
   });
-  const [chosen, setChosen] = useState<Record<number, PeriodSelection>>({});
+  const [chosen, setChosen] = useState<ReportingPeriodStore["chosen"]>({});
   const version = useRef(0);
   const activeRequest = useRef<{ businessId: number; version: number } | null>(null);
   const queuedRefreshBusinessId = useRef<number | null>(null);
@@ -194,16 +202,13 @@ function useReportingPeriodState(): ReportingPeriodValue {
   const monthsFailure = ownsSnapshot ? monthsSnapshot.failure : null;
   const monthsUpdatedAt = ownsSnapshot ? monthsSnapshot.updatedAt : null;
   const monthsRefreshing = ownsSnapshot ? monthsSnapshot.refreshing : false;
-  const stored = businessId !== null ? chosen[businessId] ?? null : null;
-  const settled = monthsState !== "loading";
-  const storedStillValid =
-    stored && (stored.kind !== "month" || (settled && (months.includes(stored.month) || monthsState === "error")));
-  const selection = storedStillValid ? stored : defaultFor(months);
-
   const setSelection = useCallback(
-    (next: PeriodSelection) => {
+    (scope: SelectionScope, next: PeriodSelection) => {
       if (businessId === null) return;
-      setChosen((current) => ({ ...current, [businessId]: next }));
+      setChosen((current) => ({
+        ...current,
+        [scope]: { ...current[scope], [businessId]: next },
+      }));
     },
     [businessId],
   );
@@ -213,36 +218,70 @@ function useReportingPeriodState(): ReportingPeriodValue {
   }, [load]);
 
   return {
-    selection,
+    businessId,
+    chosen,
     setSelection,
-    months,
-    monthsState,
-    monthsFailure,
-    monthsUpdatedAt,
-    monthsRefreshing,
-    refreshMonths,
-    ready: settled || (stored !== null && stored.kind !== "month"),
+    monthsValue: {
+      months,
+      monthsState,
+      monthsFailure,
+      monthsUpdatedAt,
+      monthsRefreshing,
+      refreshMonths,
+    },
   };
 }
 
 export function ReportingPeriodProvider({ children }: { children: ReactNode }) {
-  const value = useReportingPeriodState();
+  const store = useReportingPeriodState();
+  return (
+    <ReportingPeriodStoreContext.Provider value={store}>
+      <BoundReportingPeriod scope="default">{children}</BoundReportingPeriod>
+    </ReportingPeriodStoreContext.Provider>
+  );
+}
+
+function BoundReportingPeriod({ scope, children }: { scope: SelectionScope; children: ReactNode }) {
+  const store = useContext(ReportingPeriodStoreContext)!;
+  const { businessId, chosen, monthsValue, setSelection: setScopedSelection } = store;
+  const { months, monthsState } = monthsValue;
+  const stored = businessId !== null ? chosen[scope]?.[businessId] ?? null : null;
+  const settled = monthsState !== "loading";
+  const storedStillValid = stored && (
+    stored.kind !== "month" || (settled && (months.includes(stored.month) || monthsState === "error"))
+  );
+  const selection = storedStillValid ? stored : defaultFor(months);
+  const setSelection = useCallback((next: PeriodSelection) => {
+    setScopedSelection(scope, next);
+  }, [scope, setScopedSelection]);
+  const value: ReportingPeriodValue = {
+    ...monthsValue,
+    selection,
+    setSelection,
+    ready: settled || (stored !== null && stored.kind !== "month"),
+  };
   return <ReportingPeriodContext.Provider value={value}>{children}</ReportingPeriodContext.Provider>;
 }
 
-/**
- * Provides the period only where nothing above does, so a screen rendered on
- * its own (as the render tests do) still has one period for its selector and
- * its figures.
- */
-export function ReportingPeriodScope({ children }: { children: ReactNode }) {
+/** Standalone screens get a loader; named scopes reuse the app's shared loader. */
+export function ReportingPeriodScope({ scope, children }: { scope?: ReportingPeriodScopeName; children: ReactNode }) {
+  const store = useContext(ReportingPeriodStoreContext);
   const existing = useContext(ReportingPeriodContext);
+  if (scope && store) return <BoundReportingPeriod scope={scope}>{children}</BoundReportingPeriod>;
+  if (scope) return (
+    <ReportingPeriodProvider>
+      <BoundReportingPeriod scope={scope}>{children}</BoundReportingPeriod>
+    </ReportingPeriodProvider>
+  );
   if (existing) return <>{children}</>;
   return <ReportingPeriodProvider>{children}</ReportingPeriodProvider>;
 }
 
-export function useReportingPeriod(): ReportingPeriodValue {
+export function useReportingPeriod(optional: true): ReportingPeriodValue | null;
+export function useReportingPeriod(optional?: false): ReportingPeriodValue;
+export function useReportingPeriod(optional = false): ReportingPeriodValue | null {
   const value = useContext(ReportingPeriodContext);
+  if (optional) return value;
   if (!value) throw new Error("useReportingPeriod must be used inside a ReportingPeriodProvider or ReportingPeriodScope");
   return value;
 }

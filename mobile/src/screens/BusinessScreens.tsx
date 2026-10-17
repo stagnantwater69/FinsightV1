@@ -1,25 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert as RNAlert, KeyboardAvoidingView, Platform, Pressable, ScrollView, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert as RNAlert, Image, Modal, Pressable, ScrollView, TextInput, View } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
-import { Ionicons } from "@expo/vector-icons";
-import { Button, Callout, Card, ConfirmSheet, EmptyState, ErrorNote, Field, Money, Screen, ScreenHeader, T } from "../components/ui";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import Ionicons from "@expo/vector-icons/Ionicons";
+import { Button, Callout, Card, ConfirmSheet, EmptyState, ErrorNote, Field, Money, Screen, T } from "../components/ui";
 import { PhotoUpload } from "../components/PhotoUpload";
-import { SignOutSheet } from "../components/SignOutSheet";
-import { useAuth } from "../context/AuthContext";
-import {
-  digitsOnly,
-  isValid,
-  validateChangePassword,
-  type ChangePasswordField,
-  type FieldErrors,
-} from "../lib/authValidation";
+import { ContentScrollView } from "../components/ContentScrollView";
+import { SubpageCard, SubpageHeader, SubpageIcon } from "../components/SubpageKit";
+import { FormScreen } from "../components/FormScreen";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
-import { api, errorMessage, getFieldErrors } from "../lib/api";
+import { api, errorMessage } from "../lib/api";
 import * as haptics from "../lib/haptics";
 import { font, radius, space, typeScale } from "../theme/tokens";
 import { TAP_FLOOR } from "../components/touchTarget";
 import { useTheme } from "../context/ThemeContext";
-import type { BusinessProfile, FinancialPosition, Profile } from "../lib/types";
+import type { BusinessProfile, FinancialPosition } from "../lib/types";
 import { FIELD_LIMITS } from "../lib/fieldLimits";
 import { availableFundsProvenance, latestCompletableMonth, monthlyExpenseBasisProvenance } from "../lib/financialPosition";
 import { formatMonthLabel, shiftMonthKey } from "../lib/monthEndReview";
@@ -33,6 +28,7 @@ import {
   toBusinessProfileInput,
   validateDraft,
   type BusinessProfileDraft,
+  type BusinessFieldErrors,
   type BusinessTextField,
 } from "../lib/businessProfileDraft";
 
@@ -50,19 +46,35 @@ const HIDE_LINK_SLOP = Math.ceil((TAP_FLOOR - HIDE_LINK_HEIGHT) / 2);
 
 export function BusinessProfilesScreen({ navigation }: any) {
   const t = useTheme();
-  const { brand } = t;
-  const { profiles, selected, selectProfile, loading, archiveProfile, restoreProfile, listArchived } =
+  const insets = useSafeAreaInsets();
+  const [detailsId, setDetailsId] = useState<number | null>(null);
+  const { profiles, selected, selectProfile, loading, error: profilesError, refresh, archiveProfile, restoreProfile, listArchived } =
     useBusinessProfiles();
   const [archived, setArchived] = useState<BusinessProfile[] | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [archivedLoading, setArchivedLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const archivedRequest = useRef(0);
+  const archivedPending = useRef<object | null>(null);
+  const profileMutation = useRef(false);
+
+  useEffect(() => () => { archivedRequest.current += 1; }, []);
 
   const loadArchived = useCallback(async () => {
+    if (archivedPending.current) return;
+    const pending = {};
+    archivedPending.current = pending;
+    const request = ++archivedRequest.current;
     setError(null);
+    setArchivedLoading(true);
     try {
-      setArchived(await listArchived());
+      const rows = await listArchived();
+      if (request === archivedRequest.current) setArchived(rows);
     } catch (err) {
-      setError(errorMessage(err));
+      if (request === archivedRequest.current) setError(errorMessage(err));
+    } finally {
+      if (archivedPending.current === pending) archivedPending.current = null;
+      if (request === archivedRequest.current) setArchivedLoading(false);
     }
   }, [listArchived]);
 
@@ -96,6 +108,9 @@ export function BusinessProfilesScreen({ navigation }: any) {
           text: "Archive",
           style: "destructive",
           onPress: async () => {
+            if (profileMutation.current) return;
+            profileMutation.current = true;
+            setError(null);
             setBusyId(p.id);
             try {
               await archiveProfile(p.id);
@@ -103,6 +118,7 @@ export function BusinessProfilesScreen({ navigation }: any) {
             } catch (err) {
               setError(errorMessage(err));
             } finally {
+              profileMutation.current = false;
               setBusyId(null);
             }
           },
@@ -119,13 +135,22 @@ export function BusinessProfilesScreen({ navigation }: any) {
   const archivedPanel = (
     <View style={{ marginTop: space.xl }}>
       {archived === null ? (
-        <Button title="Show archived businesses" variant="ghost" onPress={loadArchived} />
+        <Pressable accessibilityRole="button" accessibilityLabel="Show archived businesses" accessibilityState={{ disabled: busyId !== null || archivedLoading, busy: archivedLoading }} disabled={busyId !== null || archivedLoading} onPress={loadArchived} style={({ pressed }) => ({ minHeight: TAP_FLOOR, flexDirection: "row", alignItems: "center", gap: space.md, backgroundColor: t.surface, borderWidth: 1, borderColor: t.border, borderRadius: radius.lg, padding: space.lg, opacity: pressed ? 0.7 : 1 })}>
+          <SubpageIcon name="archive-outline" />
+          <T style={{ flex: 1, color: t.textSecondary, fontSize: typeScale.body }}>Archived businesses</T>
+          {archivedLoading ? <ActivityIndicator color={t.brandText} /> : <Ionicons name="chevron-forward" size={20} color={t.textMuted} accessible={false} />}
+        </Pressable>
       ) : (
         <Card>
-          <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: space.md }}>
-            <T variant="heading" accessibilityRole="header">Archived businesses</T>
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm, marginBottom: space.md }}>
+            <T variant="heading" accessibilityRole="header" style={{ flex: 1 }}>Archived businesses</T>
             <Pressable
-              onPress={() => setArchived(null)}
+              onPress={() => {
+                archivedRequest.current += 1;
+                archivedPending.current = null;
+                setArchivedLoading(false);
+                setArchived(null);
+              }}
               /*
                * hitSlop rather than height, and the slop is DERIVED from the
                * floor rather than guessed at 10. This is a caption-sized link
@@ -143,7 +168,8 @@ export function BusinessProfilesScreen({ navigation }: any) {
               <T variant="caption">Hide</T>
             </Pressable>
           </View>
-          {archived.length === 0 ? (
+          {archivedLoading ? <ActivityIndicator accessibilityLabel="Loading archived businesses" color={t.brandText} style={{ marginBottom: space.md }} /> : null}
+          {archived.length === 0 && !archivedLoading ? (
             <T variant="caption">You have no archived businesses.</T>
           ) : (
             archived.map((p) => (
@@ -157,14 +183,22 @@ export function BusinessProfilesScreen({ navigation }: any) {
                 </View>
                 <Button
                   title="Restore"
+                  accessibilityLabel={`Restore ${p.name}`}
                   variant="secondary"
+                  disabled={busyId !== null || archivedLoading}
                   loading={busyId === p.id}
                   onPress={async () => {
+                    if (profileMutation.current) return;
+                    profileMutation.current = true;
+                    setError(null);
                     setBusyId(p.id);
                     try {
                       await restoreProfile(p.id);
                       await loadArchived();
+                    } catch (err) {
+                      setError(errorMessage(err));
                     } finally {
+                      profileMutation.current = false;
                       setBusyId(null);
                     }
                   }}
@@ -180,80 +214,146 @@ export function BusinessProfilesScreen({ navigation }: any) {
     </View>
   );
 
+  const currentProfile = profiles.find((p) => p.id === selected?.id);
+  const otherProfiles = profiles.filter((p) => p.id !== selected?.id);
+  const detailsProfile = profiles.find((p) => p.id === detailsId);
+  const editProfile = (p: BusinessProfile) => {
+    setDetailsId(null);
+    navigation.navigate("BusinessProfileForm", { profile: p });
+  };
+
   return (
     <Screen>
-      <ScrollView contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}>
-        <ScreenHeader
-          eyebrow={`${profiles.length} ${profiles.length === 1 ? "profile" : "profiles"}`}
-          title="Your businesses"
-          subtitle="Switch the active business or review its starting details and record coverage."
-        />
+      <SubpageHeader title="Businesses" onBack={() => {
+        if (navigation.canGoBack?.() !== false && navigation.goBack) navigation.goBack();
+        else navigation.navigate("MoreHome");
+      }} />
+      <ContentScrollView contentContainerStyle={{ padding: space.lg, paddingTop: space.xs, paddingBottom: Math.max(insets.bottom, space.lg) + space.lg }}>
+        <T style={{ color: t.textSecondary, fontSize: typeScale.bodySm, marginBottom: space.md }}>Choose which business you’re working on.</T>
         {error ? <ErrorNote>{error}</ErrorNote> : null}
-
-        {loading ? null : profiles.length === 0 ? (
-          <EmptyState
-            title="Let's set up your first business"
-            body="Add a business profile to start tracking its funds, expenses and sales."
-            action={<Button title="Create a business profile" variant="primary" onPress={() => navigation.navigate("BusinessProfileForm", {})} />}
-          />
+        {profilesError ? (
+          <View style={{ gap: space.sm, marginBottom: space.md }}>
+            <ErrorNote>{profilesError}</ErrorNote>
+            <Button title="Retry businesses" variant="secondary" loading={loading} onPress={() => { refresh().catch((err) => setError(errorMessage(err))); }} />
+          </View>
+        ) : null}
+        {loading ? <ActivityIndicator accessibilityLabel="Loading businesses" color={t.brandText} style={{ marginVertical: space.xl }} /> : profiles.length === 0 ? (
+          profilesError ? null : <EmptyState title="Let's set up your first business" body="Add a business profile to start tracking its funds, expenses and sales." action={<Button title="Create a business profile" variant="brand" onPress={() => navigation.navigate("BusinessProfileForm", {})} />} />
         ) : (
-          <>
-            {profiles.map((p) => {
-              const isActive = p.id === selected?.id;
-              return (
-                <Card key={p.id} style={{ marginBottom: space.md, borderColor: isActive ? brand[500] : brand[100], borderWidth: isActive ? 2 : 1 }}>
-                  <View style={{ flexDirection: "row", justifyContent: "space-between", gap: space.sm }}>
-                    <View style={{ flex: 1 }}>
-                      <T style={{ fontFamily: font.sansMedium, fontSize: typeScale.body }}>{p.name}</T>
-                      <T variant="caption">{p.type}</T>
+          <View style={{ gap: space.md }}>
+            {currentProfile ? (
+              <View>
+                <View style={{ backgroundColor: t.brandSolid, borderRadius: radius.lg, padding: space.lg, gap: space.lg }}>
+                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: space.sm }}>
+                    <T style={{ color: t.onBrandSolidMuted, fontFamily: font.sansMedium, fontSize: typeScale.label }}>Current business</T>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.md, paddingVertical: space.sm, borderRadius: radius.full, backgroundColor: t.onBrandSolidMuted }}>
+                      <Ionicons name="checkmark" size={17} color={t.brandSolidPressed} accessible={false} />
+                      <T style={{ color: t.brandSolidPressed, fontFamily: font.sansSemibold, fontSize: typeScale.label }}>Active</T>
                     </View>
-                    {isActive ? (
-                      <View style={{ backgroundColor: brand[100], borderRadius: radius.full, paddingHorizontal: space.sm, minHeight: 22, paddingVertical: 2, justifyContent: "center" }}>
-                        <T style={{ fontSize: typeScale.micro, color: brand[700] }}>Active</T>
+                  </View>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: space.md }}>
+                    <BusinessIdentityImage profile={currentProfile} current />
+                    <View style={{ flex: 1, minWidth: 0, gap: space.xs }}>
+                      <T accessibilityRole="header" style={{ color: t.onBrandSolid, fontFamily: font.sansSemibold, fontSize: typeScale.subpageTitle, lineHeight: 29 }}>{currentProfile.name}</T>
+                      <T style={{ color: t.onBrandSolidMuted, fontSize: typeScale.body, lineHeight: 22 }}>{currentProfile.type}</T>
+                    </View>
+                  </View>
+                  <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: space.sm, paddingTop: space.md, borderTopWidth: 1, borderTopColor: t.onBrandSolidMuted + "50" }}>
+                    <Pressable accessibilityRole="button" accessibilityLabel={`Starting details: ${currentProfile.name}`} onPress={() => setDetailsId(currentProfile.id)} style={({ pressed }) => ({ flexGrow: 1, maxWidth: "100%", minHeight: TAP_FLOOR, flexDirection: "row", alignItems: "center", gap: space.sm, opacity: pressed ? 0.7 : 1 })}>
+                      <Ionicons name="chevron-down" size={20} color={t.onBrandSolid} accessible={false} />
+                      <T style={{ flexShrink: 1, color: t.onBrandSolid, fontFamily: font.sansMedium, fontSize: typeScale.bodySm }}>Starting details</T>
+                    </Pressable>
+                    <Pressable accessibilityRole="button" accessibilityLabel={`Edit ${currentProfile.name}`} disabled={busyId !== null} onPress={() => editProfile(currentProfile)} style={({ pressed }) => ({ maxWidth: "100%", minHeight: TAP_FLOOR, paddingHorizontal: space.md, paddingVertical: space.sm, borderWidth: 1, borderColor: t.onBrandSolidMuted, borderRadius: radius.md, flexDirection: "row", alignItems: "center", gap: space.sm, opacity: busyId !== null ? 0.5 : pressed ? 0.7 : 1 })}>
+                      <Ionicons name="create-outline" size={18} color={t.onBrandSolid} accessible={false} />
+                      <T style={{ flexShrink: 1, color: t.onBrandSolid, fontFamily: font.sansMedium, fontSize: typeScale.bodySm }}>Edit business</T>
+                    </Pressable>
+                  </View>
+                </View>
+              </View>
+            ) : null}
+            {otherProfiles.length > 0 ? (
+              <SubpageCard title="Other businesses" icon="storefront-outline">
+                  {otherProfiles.map((p, index) => (
+                    <View key={p.id} style={{ gap: space.md, paddingTop: index ? space.lg : 0, paddingBottom: space.md, borderTopWidth: index ? 1 : 0, borderTopColor: t.border }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: space.md }}>
+                      <BusinessIdentityImage profile={p} />
+                      <View style={{ flex: 1, gap: space.xs }}>
+                        <T accessibilityRole="header" style={{ color: t.textPrimary, fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg, lineHeight: 23 }}>{p.name}</T>
+                        <T variant="caption">{p.type}</T>
                       </View>
-                    ) : null}
-                  </View>
-
-                  <View style={{ marginTop: space.md, gap: 4 }}>
-                    <RowLine label="Starting funds" value={p.availableFunds} />
-                    <RowLine label="Starting monthly estimate" value={p.expectedMonthlyExpenses} />
-                    <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                      <T variant="caption">Operating days / month</T>
-                      <T style={{ fontSize: typeScale.label }}>{p.operatingDays}</T>
+                      </View>
+                      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
+                      <Pressable accessibilityRole="button" accessibilityLabel={`Switch to ${p.name}`} accessibilityState={{ disabled: busyId !== null }} disabled={busyId !== null} onPress={() => { setError(null); try { selectProfile(p.id); } catch (err) { setError(errorMessage(err)); } }} style={({ pressed }) => ({ flexGrow: 1, flexBasis: 120, minHeight: TAP_FLOOR, minWidth: TAP_FLOOR, paddingHorizontal: space.sm, paddingVertical: space.sm, borderWidth: 1, borderColor: t.brandText, borderRadius: radius.sm, justifyContent: "center", alignItems: "center", opacity: busyId !== null ? 0.5 : pressed ? 0.7 : 1 })}>
+                        <T style={{ color: t.brandText, fontFamily: font.sansMedium, fontSize: typeScale.bodySm }}>Switch</T>
+                      </Pressable>
+                      <Button title="Details" accessibilityLabel={`Details for ${p.name}`} variant="secondary" onPress={() => setDetailsId(p.id)} style={{ flexGrow: 1, flexBasis: 120, borderRadius: radius.sm, borderColor: t.brandText }} />
+                      </View>
                     </View>
-                    <View style={{ flexDirection: "row", justifyContent: "space-between", gap: space.md }}>
-                      <T variant="caption" style={{ flex: 1 }}>Expense records complete through</T>
-                      <T style={{ flexShrink: 1, textAlign: "right", fontSize: typeScale.label }}>
-                        {p.expenseRecordsCompleteThroughMonth
-                          ? formatMonthLabel(p.expenseRecordsCompleteThroughMonth)
-                          : "Not confirmed"}
-                      </T>
-                    </View>
-                  </View>
-
-                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm, marginTop: space.md }}>
-                    {!isActive ? <Button title="Switch to this" variant="secondary" onPress={() => selectProfile(p.id)} /> : null}
-                    <Button title="Edit" variant="ghost" onPress={() => navigation.navigate("BusinessProfileForm", { profile: p })} />
-                    <Button title="Archive" variant="ghost" onPress={() => confirmArchive(p)} loading={busyId === p.id} />
-                  </View>
-                </Card>
-              );
-            })}
-            <Button title="+ Add another business" variant="secondary" onPress={() => navigation.navigate("BusinessProfileForm", {})} />
-          </>
+                  ))}
+              </SubpageCard>
+            ) : null}
+            <Pressable accessibilityRole="button" accessibilityLabel="Add another business" accessibilityState={{ disabled: busyId !== null }} disabled={busyId !== null} onPress={() => navigation.navigate("BusinessProfileForm", {})} style={({ pressed }) => ({ minHeight: TAP_FLOOR, padding: space.md, borderRadius: radius.md, backgroundColor: t.ACCENT.fill, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.sm, opacity: busyId !== null ? 0.5 : pressed ? 0.8 : 1 })}>
+              <Ionicons name="add" size={24} color={t.ACCENT.onFill} accessible={false} /><T style={{ flexShrink: 1, textAlign: "center", color: t.ACCENT.onFill, fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg }}>Add business</T>
+            </Pressable>
+            <T variant="caption">Your records stay separate for each business.</T>
+          </View>
         )}
-
         {archivedPanel}
-      </ScrollView>
+        {archived === null ? <T style={{ color: t.textSecondary, fontSize: typeScale.bodySm, lineHeight: 22, marginTop: space.sm }}>Archived businesses keep their records.</T> : null}
+      </ContentScrollView>
+      <Modal visible={!!detailsProfile} transparent animationType="slide" onRequestClose={() => setDetailsId(null)} statusBarTranslucent>
+        <View style={{ flex: 1, justifyContent: "flex-end", backgroundColor: t.scrim }}>
+          <Pressable accessible={false} importantForAccessibility="no-hide-descendants" onPress={() => setDetailsId(null)} style={{ position: "absolute", top: 0, right: 0, bottom: 0, left: 0 }} />
+          <View accessibilityViewIsModal style={{ width: "100%", maxWidth: 720, alignSelf: "center", maxHeight: "85%", backgroundColor: t.surface, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, paddingBottom: insets.bottom }}>
+            <ScrollView contentContainerStyle={{ padding: space.lg, gap: space.lg }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: space.sm }}>
+                <T accessibilityRole="header" style={{ flex: 1, color: t.brandHeading, fontFamily: font.sansSemibold, fontSize: typeScale.title, lineHeight: 26 }}>Starting details</T>
+                <Pressable accessibilityRole="button" accessibilityLabel="Close business details" onPress={() => setDetailsId(null)} style={{ minHeight: TAP_FLOOR, minWidth: TAP_FLOOR, alignItems: "center", justifyContent: "center" }}><Ionicons name="close" size={22} color={t.textSecondary} accessible={false} /></Pressable>
+              </View>
+              {detailsProfile ? (
+                <>
+                  <View style={{ gap: space.xs }}><T style={{ color: t.textPrimary, fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg }}>{detailsProfile.name}</T><T variant="caption">{detailsProfile.type}</T></View>
+                  <T style={{ color: t.textSecondary, fontSize: typeScale.bodySm, lineHeight: 22 }}>These are your starting figures and record coverage, not current funds or profit.</T>
+                  <View style={{ gap: space.md }}>
+                    <RowLine label="Starting funds" value={detailsProfile.availableFunds} />
+                    <RowLine label="Starting monthly estimate" value={detailsProfile.expectedMonthlyExpenses} />
+                    <View style={{ flexDirection: "row", justifyContent: "space-between", gap: space.md }}><T variant="caption" style={{ flex: 1 }}>Operating days / month</T><T style={{ fontSize: typeScale.label }}>{detailsProfile.operatingDays}</T></View>
+                    <View style={{ flexDirection: "row", justifyContent: "space-between", gap: space.md }}><T variant="caption" style={{ flex: 1 }}>Expense records complete through</T><T style={{ flexShrink: 1, textAlign: "right", fontSize: typeScale.label }}>{detailsProfile.expenseRecordsCompleteThroughMonth ? formatMonthLabel(detailsProfile.expenseRecordsCompleteThroughMonth) : "Not confirmed"}</T></View>
+                  </View>
+                  <Button title="Edit business" accessibilityLabel={`Edit ${detailsProfile.name}`} variant="secondary" disabled={busyId !== null} onPress={() => editProfile(detailsProfile)} />
+                  <Button title="Archive business" accessibilityLabel={`Archive ${detailsProfile.name}`} variant="secondary" disabled={busyId !== null} onPress={() => { setDetailsId(null); confirmArchive(detailsProfile); }} loading={busyId === detailsProfile.id} />
+                </>
+              ) : null}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </Screen>
+  );
+}
+
+function BusinessIdentityImage({ profile, current = false }: { profile: Pick<BusinessProfile, "id" | "name" | "logoUrl">; current?: boolean }) {
+  const t = useTheme();
+  const [failedImage, setFailedImage] = useState<string | null>(null);
+  const [loadedImage, setLoadedImage] = useState<string | null>(null);
+  const uri = profile.logoUrl?.trim();
+  const imageKey = `${profile.id}:${uri}`;
+  const size = current ? 68 : 48;
+  return (
+    <View style={{ width: size, height: size, flexShrink: 0, overflow: "hidden", borderRadius: current ? radius.lg : radius.full, backgroundColor: current ? t.onBrandSolid + "15" : t.brandSurface, alignItems: "center", justifyContent: "center" }}>
+      {!uri || failedImage === imageKey || loadedImage !== imageKey ? <Ionicons name="storefront-outline" size={current ? 32 : 25} color={current ? t.onBrandSolidMuted : t.brandText} accessible={false} /> : null}
+      {uri && failedImage !== imageKey ? (
+        <Image key={imageKey} accessible accessibilityRole="image" accessibilityLabel={`${profile.name} business photo`} source={{ uri }} resizeMode="cover" onLoad={() => setLoadedImage(imageKey)} onError={() => setFailedImage(imageKey)} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }} />
+      ) : null}
+    </View>
   );
 }
 
 function RowLine({ label, value }: { label: string; value: number }) {
   return (
-    <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-      <T variant="caption">{label}</T>
-      <Money value={value} size={13} />
+    <View style={{ flexDirection: "row", justifyContent: "space-between", gap: space.md }}>
+      <T variant="caption" style={{ flex: 1 }}>{label}</T>
+      <Money value={value} decimals size={typeScale.bodySm} style={{ flexShrink: 1, textAlign: "right" }} />
     </View>
   );
 }
@@ -268,21 +368,28 @@ export function BusinessProfileFormScreen({ navigation, route }: any) {
   );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const submitting = useRef(false);
+  const [fieldErrors, setFieldErrors] = useState<BusinessFieldErrors>({});
   // The logo is uploaded on its own, immediately, rather than travelling with
   // the form — so it is held apart from the fields Save writes.
   const [logoUrl, setLogoUrl] = useState<string | null>(existing?.logoUrl ?? null);
   // Through applyFieldUpdate rather than a bare spread: the threshold field
   // carries a touched flag that has to be set with it. See businessProfileDraft.ts.
-  const set = (k: BusinessTextField) => (v: string) => setForm((f) => applyFieldUpdate(f, k, v));
+  const set = (k: BusinessTextField) => (v: string) => {
+    setForm((f) => applyFieldUpdate(f, k, v));
+    setFieldErrors((errors) => ({ ...errors, [k]: undefined }));
+  };
   // One ref per field the return key hands off TO — the first field is never a
   // destination, so it needs none.
   const typeRef = useRef<TextInput>(null);
+  const nameRef = useRef<TextInput>(null);
   const fundsRef = useRef<TextInput>(null);
   const monthlyRef = useRef<TextInput>(null);
   const operatingDaysRef = useRef<TextInput>(null);
   const thresholdRef = useRef<TextInput>(null);
 
   async function submit() {
+    if (submitting.current) return;
     /*
      * The rules live in lib/businessProfileDraft.ts so this screen, the setup
      * wizard and the web's form all reject the same things for the same
@@ -290,11 +397,15 @@ export function BusinessProfileFormScreen({ navigation, route }: any) {
      * same figure comes to be accepted on a phone and refused on a laptop.
      */
     const errors = validateDraft(form);
+    setFieldErrors(errors);
     if (hasErrors(errors)) {
+      const firstField = errors.name ? nameRef : errors.type ? typeRef : errors.availableFunds ? fundsRef : errors.expectedMonthlyExpenses ? monthlyRef : errors.operatingDays ? operatingDaysRef : thresholdRef;
+      firstField.current?.focus();
       return setError(Object.values(errors).find(Boolean) ?? "Please check the fields above.");
     }
     const payload = toBusinessProfileInput(form);
 
+    submitting.current = true;
     setError(null);
     setBusy(true);
     try {
@@ -307,21 +418,13 @@ export function BusinessProfileFormScreen({ navigation, route }: any) {
     } catch (err) {
       setError(errorMessage(err));
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }
 
   return (
-    <Screen>
-      {/*
-        Six chained fields on one screen: without this, the return key can hand
-        focus to a field the keyboard is already covering, which is worse than
-        no chaining. `padding` is iOS-only — Android resizes the window itself
-        via windowSoftInputMode, and adding padding on top of that double-counts
-        the keyboard.
-      */}
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}>
+    <FormScreen>
           <Card>
             <T variant="title" style={{ marginBottom: space.md }}>
               {existing ? "Edit business" : "Add a business"}
@@ -338,7 +441,10 @@ export function BusinessProfileFormScreen({ navigation, route }: any) {
                 endpoint={`/business-profiles/${existing.id}/logo`}
                 label="Business logo"
                 shape="square"
-                onUploaded={(updated) => setLogoUrl((updated as BusinessProfile).logoUrl)}
+                onUploaded={(updated) => {
+                  setLogoUrl((updated as BusinessProfile).logoUrl);
+                  refresh().catch((err) => setError(errorMessage(err)));
+                }}
               />
             ) : null}
             {/*
@@ -349,7 +455,10 @@ export function BusinessProfileFormScreen({ navigation, route }: any) {
               the owner taps the next field. Android's number pads do carry one.
             */}
             <Field
+              ref={nameRef}
               label="Business name"
+              error={fieldErrors.name}
+              editable={!busy}
               value={form.name}
               maxLength={FIELD_LIMITS.businessName}
               onChangeText={set("name")}
@@ -360,6 +469,8 @@ export function BusinessProfileFormScreen({ navigation, route }: any) {
             />
             <Field
               ref={typeRef}
+              error={fieldErrors.type}
+              editable={!busy}
               label="Type"
               value={form.type}
               maxLength={FIELD_LIMITS.businessType}
@@ -370,6 +481,8 @@ export function BusinessProfileFormScreen({ navigation, route }: any) {
             />
             <Field
               ref={fundsRef}
+              error={fieldErrors.availableFunds}
+              editable={!busy}
               label="Starting available funds (PHP)"
               value={form.availableFunds}
               onChangeText={set("availableFunds")}
@@ -385,6 +498,8 @@ export function BusinessProfileFormScreen({ navigation, route }: any) {
             </T>
             <Field
               ref={monthlyRef}
+              error={fieldErrors.expectedMonthlyExpenses}
+              editable={!busy}
               label="Starting monthly expense estimate (PHP)"
               value={form.expectedMonthlyExpenses}
               onChangeText={set("expectedMonthlyExpenses")}
@@ -398,6 +513,8 @@ export function BusinessProfileFormScreen({ navigation, route }: any) {
             </T>
             <Field
               ref={operatingDaysRef}
+              error={fieldErrors.operatingDays}
+              editable={!busy}
               label="Operating days per month"
               value={form.operatingDays}
               onChangeText={set("operatingDays")}
@@ -415,6 +532,8 @@ export function BusinessProfileFormScreen({ navigation, route }: any) {
             */}
             <Field
               ref={thresholdRef}
+              error={fieldErrors.largeExpenseThresholdPesos}
+              editable={!busy}
               label="Flag single expenses over (PHP), optional"
               value={thresholdDisplayValue(form)}
               onChangeText={set("largeExpenseThresholdPesos")}
@@ -457,13 +576,11 @@ export function BusinessProfileFormScreen({ navigation, route }: any) {
               <Button
                 title="Edit operating schedule"
                 variant="secondary"
-                onPress={() => navigation.navigate("OperatingSchedule")}
+                onPress={() => navigation.navigate("OperatingSchedule", { businessProfileId: existing.id, from: undefined })}
               />
             </Card>
           ) : null}
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </Screen>
+    </FormScreen>
   );
 }
 
@@ -504,6 +621,7 @@ function FinancialPositionCard({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedMessage, setSavedMessage] = useState<string | null>(null);
   const active = useRef(true);
+  const savingRequest = useRef(false);
 
   useEffect(() => () => {
     active.current = false;
@@ -525,7 +643,8 @@ function FinancialPositionCard({
   }, [businessProfileId, completeThrough, maxMonth, position]);
 
   async function saveCompleteness() {
-    if (!action || !position) return;
+    if (!action || !position || savingRequest.current) return;
+    savingRequest.current = true;
     const nextMonth = action === "confirm" ? selectedMonth : null;
     setSaving(true);
     setSaveError(null);
@@ -554,6 +673,7 @@ function FinancialPositionCard({
       setSaveError(errorMessage(err));
       haptics.failed();
     } finally {
+      savingRequest.current = false;
       if (active.current) setSaving(false);
     }
   }
@@ -712,323 +832,4 @@ function FinancialPositionCard({
   );
 }
 
-// ---------------------------------------------------------------- Profile / account
-
-export function ProfileScreen() {
-  const t = useTheme();
-  const { brand, ink } = t;
-  const { profile, updateProfile, logout, changePassword, setProfileFromServer } = useAuth();
-  const [passwordChanged, setPasswordChanged] = useState(false);
-  const [signOutOpen, setSignOutOpen] = useState(false);
-  const [signOutEverywhereOpen, setSignOutEverywhereOpen] = useState(false);
-  const [form, setForm] = useState({
-    firstName: profile?.firstName ?? "",
-    lastName: profile?.lastName ?? "",
-    phoneNumber: profile?.phoneNumber ?? "",
-  });
-  const [pw, setPw] = useState({ current: "", next: "", confirm: "" });
-  const [pwErrors, setPwErrors] = useState<FieldErrors<ChangePasswordField>>({});
-
-  /** Updates one password box and clears whatever was flagged on it. */
-  const setPwField = (key: "current" | "next" | "confirm", field: ChangePasswordField) => (v: string) => {
-    setPw((p) => ({ ...p, [key]: v }));
-    setPwErrors((prev) => (prev[field] ? { ...prev, [field]: undefined } : prev));
-  };
-  const [deletePassword, setDeletePassword] = useState("");
-  const [msg, setMsg] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  /*
-   * Two separate chains, because this screen holds two independent forms with
-   * two submit handlers. The profile card's last field must NOT hand focus to
-   * the security card — jumping from a phone number into "Current password"
-   * would suggest the two are saved together, and they are not.
-   */
-  const lastNameRef = useRef<TextInput>(null);
-  const phoneRef = useRef<TextInput>(null);
-  const nextPwRef = useRef<TextInput>(null);
-  const confirmPwRef = useRef<TextInput>(null);
-
-  if (!profile) return null;
-
-  async function saveProfile() {
-    setBusy(true);
-    setError(null);
-    setMsg(null);
-    try {
-      await updateProfile({
-        firstName: form.firstName.trim(),
-        lastName: form.lastName.trim(),
-        phoneNumber: form.phoneNumber.trim() || null,
-      });
-      setMsg("Changes saved.");
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function submitPassword() {
-    setError(null);
-    setMsg(null);
-
-    /*
-      Through `validateChangePassword` rather than the two `if`s that used to
-      sit here.
-
-      Those returned one sentence at the bottom of a three-box form, so "these
-      do not match" appeared nowhere near the box that did not match — and
-      they duplicated rules the server already owns, which is how the two end
-      up disagreeing. The shared validator is checked against the real server
-      schema in backend/tests/contract/authValidation.test.ts.
-    */
-    const invalid = validateChangePassword({
-      currentPassword: pw.current,
-      newPassword: pw.next,
-      confirmPassword: pw.confirm,
-    });
-    if (!isValid(invalid)) {
-      setPwErrors(invalid);
-      haptics.failed();
-      return;
-    }
-    setPwErrors({});
-
-    setBusy(true);
-    try {
-      await changePassword(pw.current, pw.next);
-      /*
-       * This phone STAYS SIGNED IN; every other refresh session is revoked.
-       *
-       * It used to sign out here, on the belief that Supabase invalidates
-       * sessions when the password is rotated. It does not — so the effect was
-       * the reverse of the intention: the other devices stayed signed in and
-       * the only session ended was the one belonging to the person who had just
-       * proved they knew the current password. The server now revokes the
-       * others explicitly, and web says and does the same thing.
-       */
-      setPw({ current: "", next: "", confirm: "" });
-      setPasswordChanged(true);
-    } catch (err) {
-      // A wrong current password comes back as a message rather than a field
-      // error — the server does not say which box it meant, so neither does
-      // this.
-      const fromServer = getFieldErrors(err);
-      setPwErrors(fromServer);
-      setError(isValid(fromServer) ? errorMessage(err) : null);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function confirmAccountDeletion() {
-    if (!deletePassword) return setError("Enter your current password before deleting the account.");
-    RNAlert.alert(
-      "Permanently delete account?",
-      "Every business, record, receipt image, and import will be removed. This cannot be undone.",
-      [
-        { text: "Keep account", style: "cancel" },
-        {
-          text: "Delete everything",
-          style: "destructive",
-          onPress: async () => {
-            setBusy(true);
-            setError(null);
-            try {
-              await api.delete("/auth/me", { currentPassword: deletePassword });
-              await logout();
-            } catch (err) {
-              setError(errorMessage(err));
-            } finally {
-              setBusy(false);
-            }
-          },
-        },
-      ],
-    );
-  }
-
-  return (
-    <Screen>
-      {/*
-        Both cards on this screen are forms, so the keyboard is avoided for
-        the whole scroll view rather than per card. `padding` is iOS-only;
-        Android already resizes the window for the keyboard on its own.
-      */}
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2, gap: space.lg }}>
-          <Card>
-            <T variant="title" style={{ marginBottom: space.md }}>My profile</T>
-            {/*
-              The upload endpoint existed long before mobile had any way to
-              reach it, so a phone could display a photo set on the web app but
-              never set one — the wrong way round, since the phone is where the
-              camera and the photo library are.
-            */}
-            <PhotoUpload
-              url={profile.avatarUrl}
-              endpoint="/auth/me/avatar"
-              label="Profile photo"
-              onUploaded={(updated) => setProfileFromServer(updated as Profile)}
-            />
-            <Field
-              label="First name"
-              value={form.firstName}
-              onChangeText={(v) => setForm((f) => ({ ...f, firstName: v }))}
-              autoComplete="given-name"
-              returnKeyType="next"
-              submitBehavior="submit"
-              onSubmitEditing={() => lastNameRef.current?.focus()}
-            />
-            <Field
-              ref={lastNameRef}
-              label="Last name"
-              value={form.lastName}
-              onChangeText={(v) => setForm((f) => ({ ...f, lastName: v }))}
-              autoComplete="family-name"
-              returnKeyType="next"
-              submitBehavior="submit"
-              onSubmitEditing={() => phoneRef.current?.focus()}
-            />
-            {/*
-              The chain ends here rather than continuing into the security card
-              below. A phone pad also has no return key on iOS, so this one is
-              reached by tap there and the button is the only way out.
-            */}
-            <Field
-              ref={phoneRef}
-              label="Phone number"
-              value={form.phoneNumber}
-              onChangeText={(v) => setForm((f) => ({ ...f, phoneNumber: digitsOnly(v) }))}
-              keyboardType="phone-pad"
-              autoComplete="tel"
-              returnKeyType="done"
-              onSubmitEditing={() => {
-                if (!busy) saveProfile();
-              }}
-            />
-            <View style={{ marginBottom: space.md }}>
-              <T variant="label" style={{ marginBottom: 4 }}>Email</T>
-              <T style={{ fontSize: typeScale.bodySm, color: ink[500] }}>{profile.email}</T>
-            </View>
-            {msg ? <T style={{ color: brand[700], fontSize: typeScale.bodySm, marginBottom: space.sm }}>{msg}</T> : null}
-            <Button title="Save changes" variant="primary" onPress={saveProfile} loading={busy} />
-          </Card>
-
-          <Card>
-            <T variant="title" style={{ marginBottom: 4 }}>Security</T>
-            <T variant="caption" style={{ marginBottom: space.md }}>
-              Changing your password keeps you signed in on this phone. Other devices must sign in again after their current access expires.
-            </T>
-            <Field
-              label="Current password"
-              value={pw.current}
-              onChangeText={setPwField("current", "currentPassword")}
-              error={pwErrors.currentPassword}
-              secureTextEntry
-              autoComplete="password"
-              returnKeyType="next"
-              submitBehavior="submit"
-              onSubmitEditing={() => nextPwRef.current?.focus()}
-            />
-            <Field
-              ref={nextPwRef}
-              label="New password"
-              value={pw.next}
-              onChangeText={setPwField("next", "newPassword")}
-              error={pwErrors.newPassword}
-              secureTextEntry
-              autoComplete="new-password"
-              returnKeyType="next"
-              submitBehavior="submit"
-              onSubmitEditing={() => confirmPwRef.current?.focus()}
-            />
-            <Field
-              ref={confirmPwRef}
-              label="Confirm new password"
-              value={pw.confirm}
-              onChangeText={setPwField("confirm", "confirmPassword")}
-              error={pwErrors.confirmPassword}
-              secureTextEntry
-              autoComplete="new-password"
-              returnKeyType="done"
-              onSubmitEditing={() => {
-                if (!busy) submitPassword();
-              }}
-            />
-            {error ? <ErrorNote>{error}</ErrorNote> : null}
-            {/*
-              States the session policy, because the owner cannot otherwise tell
-              what just happened to their other devices — and the policy is the
-              same on web, so the wording is too.
-            */}
-            {passwordChanged ? (
-              <Callout>
-                Password changed. You're still signed in here. Other devices will need to sign in again after their current access expires.
-              </Callout>
-            ) : null}
-            <Button title="Change password" onPress={submitPassword} loading={busy} style={{ marginTop: space.sm }} />
-          </Card>
-
-          {/*
-            "Log out everywhere", as its own deliberate action.
-
-            It used to be the ONLY behaviour: every ordinary log-out was global,
-            so tapping "Log out" on this phone silently ended the session on the
-            shop's tablet too. Ordinary log-out is now local, and the sweeping
-            version lives here — where someone who has just realised a phone was
-            stolen can find it, and where there is room to say what it does.
-          */}
-          <Card>
-            <T variant="title" style={{ marginBottom: 4 }}>Devices</T>
-            <T variant="caption" style={{ marginBottom: space.md }}>
-              Logging out normally signs out this phone only. If you've lost a device, or used one you don't trust,
-              sign out everywhere instead.
-            </T>
-            <Button
-              title="Log out on all devices"
-              variant="secondary"
-              loading={busy}
-              onPress={() => setSignOutEverywhereOpen(true)}
-            />
-          </Card>
-
-          <Card>
-            {/* `statusText.critical`, not the one-off #b42318 this carried — a second
-                independent red beside the token the app already has for
-                "critical" is exactly the drift the design system forbids. */}
-            <T variant="title" style={{ marginBottom: 4, color: t.statusText.critical }}>Delete account</T>
-            <T variant="caption" style={{ marginBottom: space.md }}>
-              Permanently removes every business, record, receipt image, import, and sign-in credential.
-            </T>
-            <Field
-              label="Current password"
-              value={deletePassword}
-              onChangeText={setDeletePassword}
-              secureTextEntry
-              autoComplete="password"
-            />
-            <Button title="Delete my account" variant="danger" onPress={confirmAccountDeletion} loading={busy} />
-          </Card>
-
-          {/*
-            OPENS THE SHARED CONFIRMATION — it does not sign out on the tap.
-            It used to (`onPress={logout}`), which made this the one sign-out
-            in the app with no confirmation, no progress state and no guard
-            against a second tap, while More's row had all three. The sheet
-            they now share is components/SignOutSheet.tsx.
-          */}
-          <Button title="Sign out" variant="danger" onPress={() => setSignOutOpen(true)} />
-        </ScrollView>
-      </KeyboardAvoidingView>
-
-      <SignOutSheet visible={signOutOpen} onClose={() => setSignOutOpen(false)} />
-      <SignOutSheet
-        visible={signOutEverywhereOpen}
-        scope="all"
-        onClose={() => setSignOutEverywhereOpen(false)}
-      />
-    </Screen>
-  );
-}
+export { ProfileScreen } from "./AccountScreens";

@@ -1,0 +1,43 @@
+diff --git a/node_modules/react-native-screens/lib/commonjs/components/Screen.web.js b/node_modules/react-native-screens/lib/commonjs/components/Screen.web.js
+index d151153..c703ff8 100644
+--- a/node_modules/react-native-screens/lib/commonjs/components/Screen.web.js
++++ b/node_modules/react-native-screens/lib/commonjs/components/Screen.web.js
+@@ -37,7 +37,9 @@ class NativeScreen extends _react.default.Component {
+         }]
+       }, rest));
+     }
+-    return /*#__PURE__*/_react.default.createElement(_reactNative.View, rest);
++    return /*#__PURE__*/_react.default.createElement(_reactNative.View, _extends({
++      style: style
++    }, rest));
+   }
+ }
+ exports.NativeScreen = NativeScreen;
+diff --git a/node_modules/react-native-screens/lib/module/components/Screen.web.js b/node_modules/react-native-screens/lib/module/components/Screen.web.js
+index 37f4306..6034ab5 100644
+--- a/node_modules/react-native-screens/lib/module/components/Screen.web.js
++++ b/node_modules/react-native-screens/lib/module/components/Screen.web.js
+@@ -31,7 +31,9 @@ export class NativeScreen extends React.Component {
+         }]
+       }, rest));
+     }
+-    return /*#__PURE__*/React.createElement(View, rest);
++    return /*#__PURE__*/React.createElement(View, _extends({
++      style: style
++    }, rest));
+   }
+ }
+ const Screen = Animated.createAnimatedComponent(NativeScreen);
+diff --git a/node_modules/react-native-screens/src/components/Screen.web.tsx b/node_modules/react-native-screens/src/components/Screen.web.tsx
+index 91d66d6..bacce91 100644
+--- a/node_modules/react-native-screens/src/components/Screen.web.tsx
++++ b/node_modules/react-native-screens/src/components/Screen.web.tsx
+@@ -35,7 +35,7 @@ export class NativeScreen extends React.Component<ScreenProps> {
+       );
+     }
+ 
+-    return <View {...rest} />;
++    return <View style={style} {...rest} />;
+   }
+ }
+ 

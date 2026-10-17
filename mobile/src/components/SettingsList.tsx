@@ -1,5 +1,6 @@
-import { Pressable, Switch, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { useState } from "react";
+import { Platform, Pressable, Switch, View, type ViewStyle } from "react-native";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { Card, T } from "./ui";
 import { useTheme } from "../context/ThemeContext";
 import { TAP, font, space, typeScale } from "../theme/tokens";
@@ -17,17 +18,24 @@ import { TAP, font, space, typeScale } from "../theme/tokens";
 
 /** A group of rows, under a heading that says what they have in common. */
 export function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  const { brand } = useTheme();
+  const { textMuted } = useTheme();
   return (
     <View>
       <T
-        variant="heading"
         accessibilityRole="header"
-        style={{ color: brand[900], marginBottom: space.sm }}
+        style={{
+          color: textMuted,
+          fontSize: typeScale.caption,
+          fontFamily: font.sansSemibold,
+          textTransform: "uppercase",
+          letterSpacing: 0.6,
+          marginBottom: space.sm,
+          marginLeft: space.xs,
+        }}
       >
         {title}
       </T>
-      <Card>{children}</Card>
+      <Card style={{ paddingVertical: space.xs }}>{children}</Card>
     </View>
   );
 }
@@ -48,7 +56,7 @@ export function Row({
    * replaced by a Switch and the row announces itself as a switch.
    *
    * WHY THE SWITCH IS NOT THE CONTROL. It is rendered inside a
-   * `pointerEvents="none"` wrapper, so the whole row — icon, label,
+   * Non-interactive wrapper, so the whole row — icon, label,
    * explanation and switch — is one 52-point target driven by the row's own
    * `onPress`. Letting the Switch handle its own touches as well would mean
    * two things to tap that do the same job, with a real risk of the press
@@ -62,6 +70,8 @@ export function Row({
   toggle,
   expandedDetail = false,
   disabled = false,
+  tone = "brand",
+  focusRingColor,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
@@ -73,9 +83,24 @@ export function Row({
   /** Give settings explanations their own full-width, wrapping line. */
   expandedDetail?: boolean;
   disabled?: boolean;
+  /** The icon's colour family, so a list of places is told apart at a glance. */
+  tone?: "brand" | "accent" | "info" | "neutral";
+  focusRingColor?: string;
 }) {
-  const { brand, ink, paper, statusText, statusSurface, brandSurface } = useTheme();
-  const tint = destructive ? statusText.critical : brand[700];
+  const [focused, setFocused] = useState(false);
+  const focusStyle: ViewStyle = Platform.OS === "web" && focusRingColor && focused
+    ? { outlineColor: focusRingColor, outlineWidth: 2, outlineStyle: "solid", outlineOffset: -2 }
+    : {};
+  const { brand, ink, paper, statusText, statusSurface, brandSurface, ACCENT, surfaceMuted, textSecondary } = useTheme();
+  const tint = destructive
+    ? statusText.critical
+    : tone === "accent"
+      ? ACCENT.text
+      : tone === "info"
+        ? statusText.warning
+        : tone === "neutral"
+          ? textSecondary
+          : brand[700];
   /*
    * THE DESTRUCTIVE MEDALLION'S WASH, from the palette rather than a literal.
    *
@@ -85,11 +110,21 @@ export function Row({
    * because a hard-coded hex cannot invert. It is the same wash the app uses
    * behind every other critical thing, and now it says so.
    */
-  const surface = destructive ? statusSurface.critical : brandSurface;
+  const surface = destructive
+    ? statusSurface.critical
+    : tone === "accent"
+      ? ACCENT.surface
+      : tone === "info"
+        ? statusSurface.warning
+        : tone === "neutral"
+          ? surfaceMuted
+          : brandSurface;
 
   return (
     <Pressable
       onPress={onPress}
+      onFocus={focusRingColor ? () => setFocused(true) : undefined}
+      onBlur={focusRingColor ? () => setFocused(false) : undefined}
       disabled={disabled}
       accessibilityRole={toggle ? "switch" : "button"}
       accessibilityState={toggle ? { checked: toggle.value, disabled } : { disabled }}
@@ -106,6 +141,7 @@ export function Row({
         borderTopColor: paper[200],
         backgroundColor: pressed ? paper[100] : "transparent",
         opacity: disabled ? 0.6 : 1,
+        ...focusStyle,
       })}
     >
       {/*
@@ -123,9 +159,9 @@ export function Row({
           justifyContent: "center",
         }}
       >
-        <Ionicons name={icon} size={19} color={tint} />
+        <Ionicons name={icon} size={20} color={tint} />
       </View>
-      <View style={{ flex: 1 }}>
+      <View style={{ flex: 1, minWidth: 0 }}>
         <T
           style={{
             fontSize: typeScale.body,
@@ -141,13 +177,13 @@ export function Row({
           truncating them at one line cut most of them mid-sentence.
         */}
         {detail && !expandedDetail ? (
-          <T variant="caption" numberOfLines={2} style={{ marginTop: 1, lineHeight: 16 }}>
+          <T variant="caption" style={{ marginTop: 1 }}>
             {detail}
           </T>
         ) : null}
       </View>
       {toggle ? (
-        <View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+        <View style={{ pointerEvents: "none" }} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
           <Switch
             accessible={false}
             value={toggle.value}

@@ -638,7 +638,9 @@ describe('Reset password — the emailed code', () => {
     expect(
       await queries.findByText(/password is active, but FinSight couldn't confirm that other refresh sessions were revoked/i),
     ).toBeTruthy();
-    expect(queries.getByText(/My account.*Security.*Log out on all devices/i)).toBeTruthy();
+    expect(queries.getByText(/open More, then My account\s*>\s*Change password.*Update your password again to retry signing out other devices/i)).toBeTruthy();
+    expect(queries.queryByText(/open More.*Sign out on all devices/i)).toBeNull();
+    expect(queries.queryByText(/My account.*Security.*Log out on all devices/i)).toBeNull();
     expect(queries.getByRole('button', { name: 'Log in' })).toBeTruthy();
   });
 

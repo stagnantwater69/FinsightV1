@@ -11,6 +11,7 @@ import type { BusinessProfile, BusinessProfileInput, ExpenseCategory, ExpenseCos
  * `profiles`, so the switcher never accidentally offers one.
  */
 interface Value {
+  accountId?: number | null;
   profiles: BusinessProfile[];
   selected: BusinessProfile | null;
   categories: ExpenseCategory[];
@@ -68,10 +69,16 @@ interface CategoryState {
 
 export function BusinessProfileProvider({ children }: { children: ReactNode }) {
   const { profile: user, takeBootstrapProfiles } = useAuth();
+  const userId = user?.id ?? null;
   const [profiles, setProfiles] = useState<BusinessProfile[]>([]);
+  const [profilesUserId, setProfilesUserId] = useState(userId);
+  const profileRequest = useRef(0);
+  const latestUserId = useRef(userId);
+  latestUserId.current = userId;
+  const currentProfiles = profilesUserId === userId ? profiles : [];
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [categoryStates, setCategoryStates] = useState<Record<string, CategoryState>>({});
-  const categoryScope = user && selectedId ? `${user.id}:${selectedId}` : null;
+  const categoryScope = user && selectedId && profilesUserId === userId ? `${user.id}:${selectedId}` : null;
   const latestCategoryScope = useRef(categoryScope);
   latestCategoryScope.current = categoryScope;
   const categoryRequest = useRef(0);
@@ -94,9 +101,13 @@ export function BusinessProfileProvider({ children }: { children: ReactNode }) {
    * would, so the failure path is unchanged either way.
    */
   const load = useCallback(async (pending?: Promise<BusinessProfile[]> | null) => {
+    const request = ++profileRequest.current;
+    const requestedUserId = latestUserId.current;
+    const current = () => profileRequest.current === request && latestUserId.current === requestedUserId;
     setLoading(true);
     try {
       const data = await (pending ?? api.get<BusinessProfile[]>("/business-profiles"));
+      if (!current()) return;
       setProfiles(data);
       setSelectedId((current) => (current && data.some((p) => p.id === current) ? current : data[0]?.id ?? null));
       setError(null);
@@ -104,10 +115,10 @@ export function BusinessProfileProvider({ children }: { children: ReactNode }) {
       // Recorded for the screens AND rethrown: `archiveProfile` and
       // `restoreProfile` await `refresh()` and surface their own failure, so
       // swallowing here would leave them reporting success on a failed reload.
-      setError(errorMessage(err));
+      if (current()) setError(errorMessage(err));
       throw err;
     } finally {
-      setLoading(false);
+      if (current()) setLoading(false);
     }
   }, []);
 
@@ -116,22 +127,28 @@ export function BusinessProfileProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(() => load(), [load]);
 
   useEffect(() => {
-    if (!user) {
+    profileRequest.current += 1;
+    setProfilesUserId(userId);
+    setProfiles([]);
+    setSelectedId(null);
+    setError(null);
+    categoryRequest.current += 1;
+    categoryMutationVersion.current += 1;
+    createdCategoryVersions.current.clear();
+    setCategoryStates({});
+    if (userId === null) {
       setProfiles([]);
       setSelectedId(null);
-      categoryRequest.current += 1;
-      categoryMutationVersion.current += 1;
-      createdCategoryVersions.current.clear();
-      setCategoryStates({});
       setError(null);
       setLoading(false);
-      return;
+      return () => { profileRequest.current += 1; };
     }
     // The reason is already in `error` by the time this settles; the catch is
     // here so a failed load is a message on screen rather than an unhandled
     // rejection in the console.
     load(takeBootstrapProfiles()).catch(() => undefined);
-  }, [user, load, takeBootstrapProfiles]);
+    return () => { profileRequest.current += 1; };
+  }, [userId, load, takeBootstrapProfiles]);
 
   const refreshCategories = useCallback(async () => {
     if (!selectedId || !categoryScope) return;
@@ -188,18 +205,19 @@ export function BusinessProfileProvider({ children }: { children: ReactNode }) {
     refreshCategories().catch(() => undefined);
   }, [refreshCategories]);
 
-  const selected = profiles.find((p) => p.id === selectedId) ?? null;
+  const selected = currentProfiles.find((p) => p.id === selectedId) ?? null;
 
   return (
     <Ctx.Provider
       value={{
-        profiles,
+        accountId: user?.id ?? null,
+        profiles: currentProfiles,
         selected,
         categories,
         categoriesLoading,
         categoriesError,
-        loading,
-        error,
+        loading: profilesUserId !== userId || loading,
+        error: profilesUserId === userId ? error : null,
         selectProfile: setSelectedId,
         refresh,
         refreshCategories,
@@ -269,8 +287,11 @@ export function BusinessProfileProvider({ children }: { children: ReactNode }) {
   );
 }
 
-export function useBusinessProfiles() {
+export function useBusinessProfiles(optional: true): Value | undefined;
+export function useBusinessProfiles(optional?: false): Value;
+export function useBusinessProfiles(optional = false): Value | undefined {
   const ctx = useContext(Ctx);
+  if (optional) return ctx;
   if (!ctx) throw new Error("useBusinessProfiles must be used within BusinessProfileProvider");
   return ctx;
 }

@@ -2,11 +2,12 @@
   "name": "mobile",
   "version": "1.0.0",
   "main": "index.ts",
-  "engines": { "node": ">=22 <23" },
+  "engines": {
+    "node": ">=22 <23"
+  },
   "dependencies": {
     "@expo-google-fonts/ibm-plex-mono": "^0.4.1",
-    "@expo-google-fonts/inter": "^0.4.2",
-    "@expo-google-fonts/sora": "^0.4.2",
+    "@expo-google-fonts/ibm-plex-sans": "^0.4.1",
     "@expo/metro-runtime": "~57.0.7",
     "@expo/vector-icons": "^15.0.2",
     "@react-native-community/datetimepicker": "9.1.0",
@@ -17,6 +18,7 @@
     "expo": "~57.0.25",
     "expo-camera": "~57.0.5",
     "expo-constants": "~57.0.7",
+    "expo-crypto": "~57.0.3",
     "expo-document-picker": "~57.0.2",
     "expo-document-scanner": "0.2.8",
     "expo-file-system": "~57.0.2",
@@ -27,6 +29,7 @@
     "expo-secure-store": "~57.0.4",
     "expo-splash-screen": "~57.0.9",
     "expo-status-bar": "~57.0.1",
+    "expo-web-browser": "~57.0.3",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.86.3",
@@ -51,6 +54,7 @@
     "vitest": "^4.1.11"
   },
   "scripts": {
+    "postinstall": "node scripts/apply-dependency-patches.mjs",
     "start": "expo start",
     "android": "node scripts/run-android.mjs",
     "android:apk": "node scripts/build-android-apk.mjs",

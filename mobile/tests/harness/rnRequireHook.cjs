@@ -318,8 +318,11 @@ function redirectFor(request) {
   if (shouldBypass(request)) return null;
   const direct = MODULE_REDIRECTS.get(request);
   if (direct) return direct;
-  // @expo/vector-icons has many sub-entrypoints (`/Ionicons`, `/Feather`…);
-  // one stub answers for all of them.
+  if (request === '@expo/vector-icons/Ionicons') {
+    return harnessStub('ionicons.js');
+  }
+  // The barrel exposes named families; Ionicons' sub-entrypoint exports a
+  // component as its default, so its redirect above preserves that contract.
   if (request === '@expo/vector-icons' || request.startsWith('@expo/vector-icons/')) {
     return harnessStub('vector-icons.js');
   }

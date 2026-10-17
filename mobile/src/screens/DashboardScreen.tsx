@@ -1,16 +1,17 @@
-import { useCallback, useRef, useState } from "react";
-import { Dimensions, Modal, Pressable, RefreshControl, ScrollView, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
-import { Button, Callout, Card, EmptyState, ErrorNote, Money, Screen, SetupProgress, T } from "../components/ui";
+import { ContentScrollView } from "../components/ContentScrollView";
+import { useCallback, useState } from "react";
+import { RefreshControl, useWindowDimensions, View } from "react-native";
+import { Button, Callout, Card, EmptyState, ErrorNote, Screen, SetupProgress, T } from "../components/ui";
 import { HomeHeader } from "../components/HomeHeader";
-import { CashflowChart } from "../components/charts";
+import { RecentRecords, UpcomingExpenses } from "../components/DashboardFeeds";
+import { MoneyFlowPanel, SpendingSplitCard, TodayGoalSummary } from "../components/HomeVisuals";
+import { IconRow, SectionTitle } from "../components/CoachKit";
 import { GreetingHero } from "../components/GreetingHero";
+import { openFlaggedRecords } from "../lib/flaggedRecordsNavigation";
 import { AskFinSightFab, FAB_CLEARANCE } from "../components/AskFinSightFab";
 import { AskFinSight } from "../components/AskFinSight";
-import { SpendingBreakdownCard } from "../components/SpendingBreakdownCard";
-import { TopReductionOpportunityCard } from "../components/TopReductionOpportunityCard";
-import { SkeletonBox, SkeletonDashboard } from "../components/Skeleton";
-import { PeriodSelector } from "../components/PeriodSelector";
+import { SkeletonDashboard } from "../components/Skeleton";
+import { PeriodPill, PeriodStatus } from "../components/PeriodSelector";
 import { mascotSource } from "../components/MascotState";
 import { useAuth } from "../context/AuthContext";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
@@ -19,257 +20,19 @@ import { useTourScrollView, useTourTarget } from "../components/tour/targets";
 import { ConnectionNotice, FreshnessStatus } from "../components/ConnectionNotice";
 import { describeLoadFailure, toLoadFailure } from "../lib/connectionState";
 import type { DashboardExpenseOverview } from "../lib/expenseOverview";
-import { ALL_TIME, periodLabel as describePeriod, periodParams, periodPhrase } from "../lib/reportingPeriod";
+import { ALL_TIME, periodParams, periodPhrase } from "../lib/reportingPeriod";
+import { previousRangeShort, summaryDelta } from "../lib/dashboardFigures";
 import { useInsight } from "../lib/useInsight";
 import { ReportingPeriodScope, useReportingPeriod } from "../context/ReportingPeriodContext";
-import { formatMoney } from "../lib/money";
 import { availableFundsProvenance, monthlyExpenseBasisProvenance } from "../lib/financialPosition";
-import { font, radius, space, typeScale } from "../theme/tokens";
-import { TAP_FLOOR } from "../components/touchTarget";
+import { font, space, typeScale } from "../theme/tokens";
 import { useTheme } from "../context/ThemeContext";
-import type {
-  CashflowGranularity,
-  DashboardCashflow,
-  DashboardSummary,
-} from "../lib/types";
+import type { DashboardSummary } from "../lib/types";
 
-const GRANULARITY_OPTIONS: { label: string; value: CashflowGranularity }[] = [
-  { label: "Daily", value: "daily" },
-  { label: "Monthly", value: "monthly" },
-];
-
-/**
- * A money-in or money-out figure, sitting in the reference layout's twin-card
- * slot. Colour carries the direction — brand tint for money coming in, a
- * warm/rose tint for money going out — same tint vocabulary `Alert` already
- * uses for its surfaces, so this isn't a new colour idea, just a new place it
- * appears.
- */
-function FlowCard({
-  label,
-  value,
-  sublabel,
-  direction,
-}: {
-  label: string;
-  value: number;
-  sublabel: string;
-  direction: "in" | "out";
-}) {
-  const t = useTheme();
-  const { brand, statusText, statusSurface, statusBorder } = t;
-  const isIn = direction === "in";
-  return (
-    <Card
-      style={{
-        flex: 1,
-        minWidth: 150,
-        // Outflow uses the themed critical wash/hairline pair — the same
-        // opaque `statusSurface`/`statusBorder` tokens ConnectionNotice and
-        // ExpenseAlertsSection use for a status panel, rather than an
-        // alpha-suffixed hex on top of `statusText`. An alpha-transparent
-        // backgroundColor combined with this card's `elevation` renders a
-        // stray opaque box under the shadow on Android — statusSurface is
-        // already opaque, so the card paints as one surface.
-        backgroundColor: isIn ? brand[50] : statusSurface.critical,
-        borderColor: isIn ? brand[200] : statusBorder.critical,
-      }}
-    >
-      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-        <T
-          variant="label"
-          style={{ textTransform: "uppercase", letterSpacing: 0.4, color: isIn ? brand[700] : statusText.critical }}
-        >
-          {label}
-        </T>
-        <Ionicons
-          name={isIn ? "arrow-down-circle" : "arrow-up-circle"}
-          size={16}
-          color={isIn ? brand[600] : statusText.critical}
-        />
-      </View>
-      <Money value={value} size={20} weight="semibold" color={isIn ? brand[900] : statusText.critical} style={{ marginTop: 4 }} />
-      <T variant="caption" style={{ marginTop: 2 }}>
-        {sublabel}
-      </T>
-    </Card>
-  );
-}
-
-function DashboardLinkRow({
-  icon,
-  title,
-  detail,
-  onPress,
-}: {
-  icon: keyof typeof Ionicons.glyphMap;
-  title: string;
-  detail: string;
-  onPress?: () => void;
-}) {
-  const t = useTheme();
-  const content = (
-    <>
-      <View
-        style={{
-          width: 38,
-          height: 38,
-          borderRadius: radius.md,
-          alignItems: "center",
-          justifyContent: "center",
-          backgroundColor: t.brandSurface,
-        }}
-      >
-        <Ionicons name={icon} size={19} color={t.brandText} />
-      </View>
-      <View style={{ flex: 1 }}>
-        <T style={{ fontFamily: font.sansSemibold, color: t.textPrimary }}>{title}</T>
-        <T variant="caption" style={{ marginTop: 2 }}>{detail}</T>
-      </View>
-      {onPress ? <Ionicons name="chevron-forward" size={18} color={t.textMuted} /> : null}
-    </>
-  );
-
-  if (!onPress) {
-    return <View style={{ flexDirection: "row", alignItems: "center", gap: space.md }}>{content}</View>;
-  }
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`${title}. ${detail}`}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        minHeight: TAP_FLOOR,
-        flexDirection: "row",
-        alignItems: "center",
-        gap: space.md,
-        opacity: pressed ? 0.7 : 1,
-      })}
-    >
-      {content}
-    </Pressable>
-  );
-}
-
-/**
- * The cashflow chart's own range control — a small "Daily ⌄" chip that opens
- * a two-option picker, rather than a full picker screen. Lives next to the
- * chart's title (via `ChartFrame`'s `action` slot) rather than in the
- * screen's own header, because it belongs to this one chart and nothing else
- * on Home reads differently for it.
- *
- * Anchored, not centred: the menu is measured off the chip itself with
- * `measureInWindow` and appears directly under it, and the backdrop carries
- * no dim tint. `Modal` is used only for the layer it renders on and the
- * outside-tap-to-close it gives for free — visually this reads as a regular
- * dropdown attached to its trigger, not a dialog.
- */
-function GranularityDropdown({
-  value,
-  onChange,
-}: {
-  value: CashflowGranularity;
-  onChange: (v: CashflowGranularity) => void;
-}) {
-  const t = useTheme();
-  const { brand, ink, paper } = t;
-  const [open, setOpen] = useState(false);
-  const [anchor, setAnchor] = useState<{ top: number; right: number } | null>(null);
-  const anchorRef = useRef<View>(null);
-  const current = GRANULARITY_OPTIONS.find((o) => o.value === value)!;
-
-  return (
-    <View ref={anchorRef} collapsable={false}>
-      <Pressable
-        onPress={() => {
-          anchorRef.current?.measureInWindow((x, y, width, height) => {
-            setAnchor({ top: y + height + 4, right: Math.max(Dimensions.get("window").width - (x + width), 0) });
-            setOpen(true);
-          });
-        }}
-        accessibilityRole="button"
-        accessibilityLabel={`${current.label} view. Change cashflow range.`}
-        style={({ pressed }) => ({
-          flexDirection: "row",
-          alignItems: "center",
-          gap: 4,
-          paddingHorizontal: space.sm,
-          paddingVertical: 6,
-          borderRadius: radius.full,
-          borderWidth: 1,
-          borderColor: ink[200],
-          opacity: pressed ? 0.7 : 1,
-        })}
-      >
-        <T style={{ fontSize: typeScale.caption, color: ink[700] }}>{current.label}</T>
-        <Ionicons name="chevron-down" size={14} color={ink[500]} />
-      </Pressable>
-
-      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
-        <View style={{ flex: 1 }}>
-          <Pressable
-            style={{ flex: 1 }}
-            onPress={() => setOpen(false)}
-            accessibilityRole="button"
-            accessibilityLabel="Close"
-          />
-          {anchor ? (
-            <View
-              style={{
-                position: "absolute",
-                top: anchor.top,
-                right: anchor.right,
-                backgroundColor: paper.DEFAULT,
-                borderRadius: radius.md,
-                borderWidth: 1,
-                borderColor: paper[200],
-                overflow: "hidden",
-                minWidth: 130,
-                shadowColor: ink[900],
-                shadowOffset: { width: 0, height: 2 },
-                shadowOpacity: 0.12,
-                shadowRadius: 8,
-                elevation: 6,
-              }}
-            >
-              {GRANULARITY_OPTIONS.map((o) => (
-                <Pressable
-                  key={o.value}
-                  onPress={() => {
-                    onChange(o.value);
-                    setOpen(false);
-                  }}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: o.value === value }}
-                  style={({ pressed }) => ({
-                    flexDirection: "row",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: space.md,
-                    paddingHorizontal: space.md,
-                    // Full height, not a hitSlop: these rows stack vertically
-                    // in a popup that is sized by its contents, so slop on one
-                    // row would reach into the row above it and the two-option
-                    // menu simply grows eight points instead.
-                    minHeight: TAP_FLOOR,
-                    backgroundColor: pressed ? paper[100] : "transparent",
-                  })}
-                >
-                  <T style={{ fontSize: typeScale.bodySm, color: ink[900] }}>{o.label}</T>
-                  {o.value === value ? <Ionicons name="checkmark" size={16} color={brand[600]} /> : null}
-                </Pressable>
-              ))}
-            </View>
-          ) : null}
-        </View>
-      </Modal>
-    </View>
-  );
-}
 
 export function DashboardScreen(props: any) {
   return (
-    <ReportingPeriodScope>
+    <ReportingPeriodScope scope="dashboard">
       <DashboardContent {...props} />
     </ReportingPeriodScope>
   );
@@ -277,6 +40,8 @@ export function DashboardScreen(props: any) {
 
 function DashboardContent({ navigation }: any) {
   const t = useTheme();
+  const { width, fontScale } = useWindowDimensions();
+  const stackedActions = width < 390 || fontScale > 1.2;
   const { brand } = t;
   const { preferences } = useAuth();
   const { selected, profiles, categories, error: profilesError, refresh: refreshProfiles, selectProfile } =
@@ -288,20 +53,12 @@ function DashboardContent({ navigation }: any) {
    */
   const { selection, setSelection, ready: periodReady } = useReportingPeriod();
   const periodKeyValue = JSON.stringify(selection);
-  const [cashflowGranularity, setCashflowGranularity] = useState<CashflowGranularity>("daily");
-  const [showDetails, setShowDetails] = useState(false);
 
   const summaryState = useInsight<DashboardSummary>(
     "/dashboard/summary",
     { businessProfileId: selected?.id, ...periodParams(selection) },
     [selected?.id, periodKeyValue, periodReady],
     { enabled: Boolean(selected && periodReady) },
-  );
-  const cashflowState = useInsight<DashboardCashflow>(
-    "/dashboard/cashflow",
-    { businessProfileId: selected?.id, granularity: cashflowGranularity },
-    [selected?.id, cashflowGranularity, showDetails],
-    { enabled: Boolean(selected && showDetails) },
   );
   const overviewState = useInsight<DashboardExpenseOverview>(
     "/insights/expense-overview",
@@ -311,17 +68,14 @@ function DashboardContent({ navigation }: any) {
   );
 
   const summary = summaryState.data;
-  const cashflow = cashflowState.data;
   const topOpportunity =
     overviewState.data?.topOpportunity.status === "available"
       ? overviewState.data.topOpportunity.data
       : null;
   const loading = summaryState.loading;
-  const cashflowLoading = cashflowState.loading;
   const [refreshing, setRefreshing] = useState(false);
   const failure = summaryState.rawError ? toLoadFailure(summaryState.rawError) : null;
   const overviewFailure = overviewState.rawError ? toLoadFailure(overviewState.rawError) : null;
-  const cashflowFailure = cashflowState.rawError ? toLoadFailure(cashflowState.rawError) : null;
   const clock = Date.now();
   const [askOpen, setAskOpen] = useState(false);
 
@@ -342,16 +96,15 @@ function DashboardContent({ navigation }: any) {
   const tourScroll = useTourScrollView();
 
   const refreshSummary = summaryState.load;
-  const refreshCashflow = cashflowState.load;
   const refreshOverview = overviewState.load;
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      await Promise.all([refreshSummary(), refreshCashflow(), refreshOverview()]);
+      await Promise.all([refreshSummary(), refreshOverview()]);
     } finally {
       setRefreshing(false);
     }
-  }, [refreshCashflow, refreshOverview, refreshSummary]);
+  }, [refreshOverview, refreshSummary]);
 
   if (!selected) {
     return (
@@ -418,9 +171,9 @@ function DashboardContent({ navigation }: any) {
    * over a 22 Jul-20 Aug window is a figure an owner cannot reconcile against
    * their own August books, and nothing on the card says why.
    */
-  const periodLabel = describePeriod(selection);
-  const topCategory = summary?.expenseCategoryBreakdown?.length
-    ? [...summary.expenseCategoryBreakdown].sort((a, b) => b.total - a.total)[0]
+  const allTime = selection.kind === "all";
+  const recentRange = summary && !allTime
+    ? { dateFrom: summary.periodStart.slice(0, 10), dateTo: summary.periodEnd.slice(0, 10) }
     : null;
   const recoveryStatus = summary?.recoveryStatus;
   const recoveryNeedsSetup = recoveryStatus
@@ -445,7 +198,9 @@ function DashboardContent({ navigation }: any) {
                 : "Behind pace";
   const recoveryIsPositive = ["Target reached", "Ahead of pace", "On track"].includes(recoveryLabel);
   const recoveryIsCritical = recoveryLabel === "Behind pace";
-  const recoveryCoverage = Math.max(0, Math.min(100, recoveryStatus?.monthCoveragePercent ?? 0));
+  const largestCategory = summary
+    ? [...summary.expenseCategoryBreakdown].sort((a, b) => b.total - a.total)[0] ?? null
+    : null;
   const openRecoveryAction = () => {
     if (!summary) return;
     if (recoveryNeedsSetup) {
@@ -454,7 +209,7 @@ function DashboardContent({ navigation }: any) {
         params: { profile: selected },
       });
     } else if (summary.recoveryStatus.status === "data_incomplete" || summary.recordsNeedingReview > 0) {
-      navigation.navigate("Records", { screen: "FlaggedRecords" });
+      openFlaggedRecords(navigation, "Dashboard");
     } else if (summary.recoveryStatus.status === "no_current_month_data") {
       navigation.navigate("Records", { screen: "AddSales" });
     } else {
@@ -490,16 +245,10 @@ function DashboardContent({ navigation }: any) {
     now: clock,
     subject: "expense opportunities",
   });
-  const cashflowNotice = describeLoadFailure(cashflowFailure, {
-    hasData: cashflow !== null,
-    lastUpdatedAt: cashflowState.lastUpdatedAt,
-    now: clock,
-    subject: "cashflow details",
-  });
 
   return (
     <Screen safeTop>
-      <ScrollView
+      <ContentScrollView
         // Lets the product tour bring a step's target into view before the
         // step is shown — Home is taller than the phone, and half the tour was
         // describing things that were off screen.
@@ -552,7 +301,7 @@ function DashboardContent({ navigation }: any) {
           />
         ) : null}
 
-        <PeriodSelector />
+        <PeriodStatus />
 
         {/*
           One line above the panels rather than a "no data" note inside each of
@@ -591,9 +340,9 @@ function DashboardContent({ navigation }: any) {
         ) : null}
 
         <ConnectionNotice
-          notice={loadNotice ?? overviewNotice ?? cashflowNotice}
+          notice={loadNotice ?? overviewNotice}
           onRetry={onRefresh}
-          busy={refreshing || summaryState.refreshing || overviewState.refreshing || cashflowState.refreshing}
+          busy={refreshing || summaryState.refreshing || overviewState.refreshing}
         />
 
         {/*
@@ -625,209 +374,119 @@ function DashboardContent({ navigation }: any) {
           null
         ) : (
           <>
-            <View {...summaryTourTarget} style={{ gap: space.lg }}>
-              <Card style={{ backgroundColor: t.brandSurface, borderColor: t.brandBorder }}>
-                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm }}>
-                  <T variant="heading" accessibilityRole="header" style={{ color: t.brandHeading }}>
-                    Your recovery position
-                  </T>
-                  <View
-                    style={{
-                      borderRadius: radius.full,
-                      paddingHorizontal: space.sm,
-                      paddingVertical: 5,
-                      backgroundColor: recoveryIsPositive
-                        ? t.statusSurface.good
-                        : recoveryIsCritical
-                          ? t.statusSurface.critical
-                          : t.statusSurface.warning,
-                    }}
-                  >
-                    <T
-                      variant="caption"
-                      style={{
-                        color: recoveryIsPositive
-                          ? t.statusText.good
-                          : recoveryIsCritical
-                            ? t.statusText.critical
-                            : t.statusText.warning,
-                        fontFamily: font.sansSemibold,
-                      }}
-                    >
-                      {recoveryLabel}
-                    </T>
-                  </View>
-                </View>
-
-                <T variant="caption" style={{ marginTop: space.md }}>
-                  Recorded available funds
-                </T>
-                <Money
-                  value={summary.overview.availableFunds}
-                  size={28}
-                  weight="semibold"
-                  style={{ marginTop: 2 }}
-                />
-                {summary.overview.availableFundsCalculation ? (
-                  <T variant="caption" style={{ marginTop: 4, lineHeight: 18 }}>
-                    {availableFundsProvenance(summary.overview.availableFundsCalculation)}
-                  </T>
-                ) : null}
-
-                {!recoveryNeedsSetup ? (
-                  <View style={{ marginTop: space.xl }}>
-                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "baseline" }}>
-                      <T variant="caption">Monthly expense coverage</T>
-                      <T style={{ fontFamily: font.sansSemibold, color: t.textPrimary }}>
-                        {recoveryCoverage.toFixed(0)}%
-                      </T>
-                    </View>
-                    {summary.recoveryStatus.monthlyExpenseBasis ? (
-                      <T variant="caption" style={{ marginTop: 4, lineHeight: 18 }}>
-                        {monthlyExpenseBasisProvenance(summary.recoveryStatus.monthlyExpenseBasis)}
-                      </T>
-                    ) : null}
-                    <View
-                      accessible
-                      accessibilityRole="progressbar"
-                      accessibilityLabel="Monthly expense coverage"
-                      accessibilityValue={{ min: 0, max: 100, now: Math.round(recoveryCoverage) }}
-                      style={{
-                        height: 10,
-                        marginTop: space.sm,
-                        borderRadius: radius.full,
-                        overflow: "hidden",
-                        backgroundColor: t.surfaceStrong,
-                      }}
-                    >
-                      <View
-                        style={{
-                          width: `${recoveryCoverage}%`,
-                          height: "100%",
-                          borderRadius: radius.full,
-                          backgroundColor: recoveryIsCritical ? t.status.critical : t.status.good,
-                        }}
-                      />
-                    </View>
-                    <View style={{ flexDirection: "row", justifyContent: "space-between", marginTop: space.md }}>
-                      <View>
-                        <T variant="caption">Recorded sales</T>
-                        <Money value={summary.recoveryStatus.salesThisMonth} size={typeScale.bodySm} style={{ marginTop: 2 }} />
-                      </View>
-                      <View style={{ alignItems: "flex-end" }}>
-                        <T variant="caption">Still needed</T>
-                        <Money value={summary.recoveryStatus.remainingTarget} size={typeScale.bodySm} style={{ marginTop: 2 }} />
-                      </View>
-                    </View>
-                  </View>
-                ) : (
-                  <T variant="caption" style={{ marginTop: space.lg }}>
-                    Add a starting monthly expense estimate to calculate a daily sales target and recovery pace.
-                  </T>
-                )}
-                <Button
-                  title={recoveryActionLabel}
-                  variant="primary"
-                  onPress={openRecoveryAction}
-                  style={{ marginTop: space.lg }}
-                />
-              </Card>
-
-              <View style={{ flexDirection: "row", gap: space.md }}>
-                <FlowCard label="Sales" value={summary.overview.totalSalesReference} sublabel={periodLabel} direction="in" />
-                <FlowCard label="Expenses" value={summary.overview.totalExpenses} sublabel={periodLabel} direction="out" />
-              </View>
+            <View {...summaryTourTarget}>
+              <MoneyFlowPanel
+                sales={summary.overview.totalSalesReference}
+                expenses={summary.overview.totalExpenses}
+                funds={summary.overview.availableFunds}
+                periodPhrase={periodPhrase(selection)}
+                provenance={
+                  summary.overview.availableFundsCalculation
+                    ? availableFundsProvenance(summary.overview.availableFundsCalculation)
+                    : null
+                }
+                salesDelta={summaryDelta(summary.periodComparison, "sales")}
+                expensesDelta={summaryDelta(summary.periodComparison, "expenses")}
+                netDelta={summaryDelta(summary.periodComparison, "net")}
+                against={summary.periodComparison ? previousRangeShort(summary.periodComparison) : null}
+                periodControl={<PeriodPill />}
+              />
             </View>
 
+            {recoveryNeedsSetup ? (
+              <Card>
+                <SectionTitle question="Monthly target" icon="flag-outline" tone="accent" />
+                <T variant="caption" style={{ marginTop: space.sm }}>Add your monthly expenses to get a daily sales target.</T>
+                <Button title={recoveryActionLabel} variant="primary" onPress={openRecoveryAction} style={{ marginTop: space.md }} />
+              </Card>
+            ) : (
+              <TodayGoalSummary
+                recovery={summary.recoveryStatus}
+                statusLabel={recoveryLabel}
+                tone={recoveryIsPositive ? "good" : recoveryIsCritical ? "critical" : "warning"}
+                basisNote={
+                  summary.recoveryStatus.monthlyExpenseBasis
+                    ? monthlyExpenseBasisProvenance(summary.recoveryStatus.monthlyExpenseBasis)
+                    : null
+                }
+                onOpenRecovery={() => navigation.navigate("Insights", { screen: "RecoveryTarget" })}
+                action={<Button title={recoveryActionLabel} variant="primary" onPress={openRecoveryAction} />}
+              />
+            )}
+
             <Card>
-              <T variant="heading" accessibilityRole="header" style={{ marginBottom: space.lg }}>
-                {periodLabel}
-              </T>
-              <DashboardLinkRow
-                icon="pie-chart-outline"
-                title="Largest expense"
-                detail={
-                  topCategory
-                    ? `${topCategory.categoryName} · ${formatMoney(topCategory.total)}`
-                    : "No expenses recorded in this period"
-                }
-                onPress={topCategory ? () => setAskOpen(true) : undefined}
-              />
-              <View style={{ height: 1, backgroundColor: t.border, marginVertical: space.lg }} />
-              <DashboardLinkRow
-                icon={summary.recordsNeedingReview > 0 ? "alert-circle-outline" : "checkmark-circle-outline"}
-                title="Things to review"
-                detail={
-                  summary.recordsNeedingReview > 0
-                    ? `${summary.recordsNeedingReview} flagged item${summary.recordsNeedingReview === 1 ? "" : "s"}`
-                    : "Everything is clear"
-                }
-                onPress={
-                  summary.recordsNeedingReview > 0
-                    ? () => navigation.navigate("Records", { screen: "FlaggedRecords" })
-                    : undefined
-                }
-              />
-              {topCategory ? (
-                <Button
-                  title="Ask FinSight about this period"
-                  variant="ghost"
-                  onPress={() => setAskOpen(true)}
-                  style={{ marginTop: space.md }}
+              <SectionTitle question="What needs my attention?" icon="notifications-outline" tone="accent" />
+              <View style={{ marginTop: space.sm }}>
+                <IconRow
+                  first
+                  icon="flag-outline"
+                  tone="critical"
+                  title="Records to review"
+                  detail={summary.recordsNeedingReview > 0 ? "Flagged or pending review" : "All clear"}
+                  right={<T style={{ fontFamily: font.monoSemibold, fontSize: typeScale.bodyLg, color: t.textPrimary }}>{summary.recordsNeedingReview}</T>}
+                  onPress={summary.recordsNeedingReview > 0 ? () => openFlaggedRecords(navigation, "Dashboard") : undefined}
+                  accessibilityLabel={`${summary.recordsNeedingReview} to review`}
                 />
-              ) : null}
+                {topOpportunity ? (
+                  <IconRow
+                    icon="bulb-outline"
+                    title={topOpportunity.categoryName}
+                    detail="Worth a look: a possible saving"
+                    onPress={() => navigation.navigate("Insights", { screen: "ExpenseBehavior" })}
+                    accessibilityLabel={`Save on ${topOpportunity.categoryName}`}
+                  />
+                ) : null}
+                {largestCategory ? (
+                  <IconRow
+                    icon="pie-chart-outline"
+                    tone="info"
+                    title="Largest expense"
+                    detail={largestCategory.categoryName}
+                    right={<T style={{ fontFamily: font.monoSemibold, fontSize: typeScale.bodyLg, color: t.textPrimary }}>{`${Math.round(largestCategory.percent)}%`}</T>}
+                    onPress={() => navigation.navigate("Insights", { screen: "ExpenseBehavior" })}
+                  />
+                ) : null}
+              </View>
+              <View style={{ flexDirection: stackedActions ? "column" : "row", gap: space.sm, marginTop: space.md }}>
+                <Button title="Ask FinSight" variant="secondary" onPress={() => setAskOpen(true)} style={{ flex: 1 }} />
+                <Button
+                  title="Plan a purchase"
+                  variant="secondary"
+                  onPress={() => navigation.navigate("Insights", { screen: "SpendingImpact" })}
+                  style={{ flex: 1 }}
+                />
+              </View>
             </Card>
 
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={showDetails ? "Hide detailed charts" : "View detailed charts"}
-              accessibilityState={{ expanded: showDetails }}
-              onPress={() => setShowDetails((value) => !value)}
-              style={({ pressed }) => ({
-                minHeight: TAP_FLOOR,
-                borderRadius: radius.md,
-                borderWidth: 1,
-                borderColor: t.borderStrong,
-                backgroundColor: pressed ? t.surfaceMuted : t.surface,
-                paddingHorizontal: space.md,
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "space-between",
-              })}
-            >
-              <T style={{ fontFamily: font.sansSemibold, color: t.textSecondary }}>
-                {showDetails ? "Hide detailed charts" : "View detailed charts"}
-              </T>
-              <Ionicons
-                name={showDetails ? "chevron-up" : "chevron-down"}
-                size={18}
-                color={t.textMuted}
+            {/*
+              One picture of where the money went, and the way to the trends.
+              It replaced "More charts", which hid three charts behind an
+              expander most owners never opened — see SpendingSplitCard.
+            */}
+            {hasRecords ? (
+              <SpendingSplitCard
+                rows={summary.expenseCategoryBreakdown}
+                onTrends={() => navigation.navigate("Insights", { screen: "ExpenseBehavior" })}
+                onMoneyFlow={() => navigation.navigate("MoneyFlow")}
               />
-            </Pressable>
-
-            {showDetails ? (
-              <>
-                <Card>
-                  {cashflowLoading && !cashflow ? (
-                    <SkeletonBox height={200} />
-                  ) : (
-                    <CashflowChart
-                      data={cashflow?.points ?? []}
-                      granularity={cashflowGranularity}
-                      subtitle={cashflowGranularity === "monthly" ? "Last 6 months" : "Last 7 days"}
-                      action={<GranularityDropdown value={cashflowGranularity} onChange={setCashflowGranularity} />}
-                    />
-                  )}
-                </Card>
-
-                <SpendingBreakdownCard data={summary.expenseCategoryBreakdown} />
-              </>
             ) : null}
 
-            {topOpportunity ? (
-              <TopReductionOpportunityCard
-                opportunity={topOpportunity}
-                onPress={() => navigation.navigate("Insights", { screen: "ExpenseBehavior" })}
+            <UpcomingExpenses
+              businessProfileId={selected.id}
+              onOpen={(schedule) =>
+                navigation.navigate("Insights", { screen: "RecurringSchedule", params: { scheduleId: schedule.id } })}
+              onManage={() => navigation.navigate("Insights", { screen: "ExpenseBehavior" })}
+              onAdd={() => navigation.navigate("Insights", { screen: "RecurringSchedule", params: {} })}
+            />
+
+            {hasRecords ? (
+              <RecentRecords
+                businessProfileId={selected.id}
+                range={recentRange}
+                periodText={periodPhrase(selection)}
+                categories={categories}
+                onOpen={(record) => navigation.navigate("Records", { screen: "EditRecord", params: { record } })}
+                onViewAll={() => navigation.navigate("Records", { screen: "RecordsList" })}
               />
             ) : null}
 
@@ -847,7 +506,7 @@ function DashboardContent({ navigation }: any) {
             ) : null}
           </>
         )}
-      </ScrollView>
+      </ContentScrollView>
 
       {/*
         Outside the ScrollView so it stays put while the page moves under it.

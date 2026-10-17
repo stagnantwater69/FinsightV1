@@ -170,10 +170,10 @@ const CELL_LIMITS = {
 /** Decimal(12,2): ten integer digits, two fraction digits. */
 const MAX_AMOUNT_EXCLUSIVE = 1e10;
 
-export type CorrectableField = "date" | "description" | "amount" | "category";
+export type CorrectableField = "date" | "description" | "amount" | "category" | "vendor";
 
-/** The four cells a correction may replace — the server's `corrections` schema. */
-export const CORRECTABLE_FIELDS: CorrectableField[] = ["date", "description", "amount", "category"];
+/** Editable cells accepted by the server's corrections schema. */
+export const CORRECTABLE_FIELDS: CorrectableField[] = ["date", "description", "amount", "category", "vendor"];
 
 export interface RowProblem {
   /** Which cell to put the correction field against. */
@@ -189,6 +189,14 @@ export interface RowRules {
   mixedStrategy: MixedStrategy;
   /** The convention dates are read under — the owner's answer, or the file's. */
   dateFormat: CsvDateFormat;
+}
+
+export interface ImportRowCategory {
+  row: number;
+  name: string;
+  source: "file" | "history" | "suggested" | "none";
+  isNew: boolean;
+  confidence: "high" | "medium" | "low";
 }
 
 /**
@@ -281,10 +289,12 @@ export interface AnalysedRow {
   values: RowValues;
   problem: RowProblem | null;
   rowType: RowRecordType | null;
+  excluded: boolean;
 }
 
 export type RowCorrection = Partial<Record<CorrectableField, string>> & {
   includedInAvailableFundsBaseline?: boolean;
+  exclude?: boolean;
 };
 
 export type Corrections = Record<number, RowCorrection>;
@@ -298,9 +308,10 @@ export function analyseRows(
   mapping: ColumnMapping,
   corrections: Corrections,
   rules: RowRules,
+  rowNumbers?: number[],
 ): AnalysedRow[] {
   return previewRows.map((row, i) => {
-    const rowNumber = i + 2;
+    const rowNumber = rowNumbers?.[i] ?? i + 2;
     const fix = corrections[rowNumber];
     const read = (field: MappedField): string => {
       const corrected = CORRECTABLE_FIELDS.includes(field as CorrectableField)
@@ -318,7 +329,7 @@ export function analyseRows(
       vendor: read("vendor"),
       recordType: read("recordType"),
     };
-    return { rowNumber, values, problem: rowProblem(values, rules), rowType: resolveRowType(values, rules) };
+    return { rowNumber, values, problem: rowProblem(values, rules), rowType: resolveRowType(values, rules), excluded: fix?.exclude === true };
   });
 }
 
@@ -331,15 +342,15 @@ export function analyseRows(
  * the import, not reported after it.
  */
 export function problemsFirst(rows: AnalysedRow[]): AnalysedRow[] {
-  return [...rows.filter((r) => r.problem !== null), ...rows.filter((r) => r.problem === null)];
+  return [...rows.filter((r) => r.problem !== null && !r.excluded), ...rows.filter((r) => r.problem === null || r.excluded)];
 }
 
 /** How many rows on screen are still broken, and how many were fixed. */
 export function reviewCounts(rows: AnalysedRow[], corrections: Corrections) {
   return {
     total: rows.length,
-    problems: rows.filter((r) => r.problem !== null).length,
-    corrected: Object.keys(corrections).length,
+    problems: rows.filter((r) => r.problem !== null && !r.excluded).length,
+    corrected: Object.values(corrections).filter((fix) => Object.keys(fix).some((field) => field !== "exclude")).length,
   };
 }
 
@@ -356,8 +367,8 @@ export function reviewCounts(rows: AnalysedRow[], corrections: Corrections) {
 export function newCategoryNames(rows: AnalysedRow[], existingNames: string[]): string[] {
   const existing = new Set(existingNames.map((n) => n.trim().toLowerCase()));
   const seen = new Map<string, string>();
-  for (const { values, rowType } of rows) {
-    if (rowType === "sales") continue;
+  for (const { values, rowType, excluded } of rows) {
+    if (rowType === "sales" || excluded) continue;
     const raw = values.category.trim();
     if (!raw) continue;
     const key = raw.toLowerCase();
@@ -376,18 +387,10 @@ export function newCategoryNames(rows: AnalysedRow[], existingNames: string[]): 
  * app, or anything from a phone's Downloads folder — 400'd the whole import
  * with a validation error that named a field the screen never showed. The
  * extension goes because "expenses.csv" is a file name, not what an owner
- * calls a month of records, and the truncation is on a word boundary where
- * one is available so the result reads as a name rather than as a cut string.
+ * calls a month of records. Keep the same title and limit as the web importer.
  */
 export function defaultImportTitle(fileName: string, limit: number = FIELD_LIMITS.importTitle): string {
-  const base = fileName.replace(/\.csv$/i, "").trim();
-  if (!base) return "Imported records";
-  if (base.length <= limit) return base;
-  const cut = base.slice(0, limit);
-  const lastSpace = cut.lastIndexOf(" ");
-  // Only break on a word if that keeps most of the allowance — otherwise a
-  // name with one early space would be cut down to almost nothing.
-  return (lastSpace > limit * 0.6 ? cut.slice(0, lastSpace) : cut).trim();
+  return (fileName.replace(/\.csv$/i, "").trim() || "CSV import").slice(0, limit);
 }
 
 /**
@@ -429,6 +432,17 @@ export function correctionsPayload(corrections: Corrections): Record<string, Rec
   return out;
 }
 
+/** Express accepts at most 100 KiB of JSON, including multi-byte descriptions. */
+export function csvReviewBodyError(body: Record<string, unknown>): string | null {
+  let bytes = 0;
+  for (const character of JSON.stringify(body)) {
+    const point = character.codePointAt(0)!;
+    bytes += point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4;
+    if (bytes > 100 * 1024) return "There are too many large edits to send at once. Your changes are kept. Make these edits in the CSV, then choose the updated file.";
+  }
+  return null;
+}
+
 /**
  * The `columnMapping` multipart field.
  *
@@ -455,19 +469,13 @@ export function columnMappingPayload(
   return payload;
 }
 
-/**
- * How far a large import has got, as a fraction of its rows.
- *
- * Returns null when the server has not said how many rows there are — an
- * honest "still working" beats a bar that moves on a number nobody measured.
- * ADR-4's rule: never fake determinate progress.
- */
+/** Determinate progress requires both row counts from the server. */
 export function importProgress(status: {
   totalRows?: number | null;
   processedRows?: number | null;
 }): { done: number; total: number; fraction: number } | null {
   const total = status.totalRows ?? 0;
-  const done = status.processedRows ?? 0;
-  if (!Number.isFinite(total) || total <= 0) return null;
+  const done = status.processedRows;
+  if (!Number.isFinite(total) || total <= 0 || done == null || !Number.isFinite(done) || done < 0) return null;
   return { done, total, fraction: Math.max(0, Math.min(1, done / total)) };
 }

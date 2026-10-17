@@ -1,0 +1,101 @@
+[
+  {
+    "packageName": "@react-navigation/bottom-tabs",
+    "version": "7.18.14",
+    "patchFile": "@react-navigation+bottom-tabs+7.18.14.patch",
+    "patchSha256": "707236c52e4c34ef75537349b5bf961d0e832da55b9985bebf467d2692dfface",
+    "files": [
+      {
+        "path": "node_modules/@react-navigation/bottom-tabs/lib/module/views/BottomTabBar.js",
+        "beforeSha256": "e81011d7ad62dd90b17afcf02708e5162f8db3ac0ba2d8cad1043b43c87370a9",
+        "afterSha256": "2eea093188312010b1c5b396146cf80fa2307ccb4a51f0f723225cf410be4642"
+      },
+      {
+        "path": "node_modules/@react-navigation/bottom-tabs/lib/module/views/BottomTabView.js",
+        "beforeSha256": "59f87a33cac9c02c531aea4a4bd1ee49faea4267223b56a2377fdee494fa85e4",
+        "afterSha256": "c543effb53e092c37a4422115a0862ca770b3073a7269a4c67861b7d7b5ab3a8"
+      },
+      {
+        "path": "node_modules/@react-navigation/bottom-tabs/src/views/BottomTabBar.tsx",
+        "beforeSha256": "c986ac5525ab26e61aed2f4a2f2257286b3905a3b7a87b9d2ac6382abe64b13d",
+        "afterSha256": "d3e96b1279eaaf5639a456fe55f93554a6cd1cdca242d5685a6e4ccff4933824"
+      },
+      {
+        "path": "node_modules/@react-navigation/bottom-tabs/src/views/BottomTabView.tsx",
+        "beforeSha256": "9b58c681255f7163dca51fb2ddd06958dbe876504d28fbee00ef43cfb14f5747",
+        "afterSha256": "2fef592bda194a5d7950d994e3403ee4e8b775c9e89b9ab84beb5c359df7f98b"
+      }
+    ]
+  },
+  {
+    "packageName": "@react-navigation/elements",
+    "version": "2.9.43",
+    "patchFile": "@react-navigation+elements+2.9.43.patch",
+    "patchSha256": "bdcc030065386a057b41ccfeff1103641342ec0c88bcd9519fb0bb07f5f26286",
+    "files": [
+      {
+        "path": "node_modules/@react-navigation/elements/lib/module/Header/Header.js",
+        "beforeSha256": "58d9ad3b08c38dd3c072c747bac40bccaa860bcd4344d7197aaefeb5f8592918",
+        "afterSha256": "0984e9ea086b825dd0b5e67ba3055f239aa63aa4eea322b59389316ed82258a7"
+      },
+      {
+        "path": "node_modules/@react-navigation/elements/lib/module/Header/HeaderSearchBar.js",
+        "beforeSha256": "730dff144926312042e96ac7b9122ebd6f619b7424280123288c2099e7e381d4",
+        "afterSha256": "161efcdc8feca51dd1c302d185fc5409f5a58841d1d2d6dd89b426682ac3deca"
+      },
+      {
+        "path": "node_modules/@react-navigation/elements/lib/module/ResourceSavingView.js",
+        "beforeSha256": "817732d08f8e3bb18607b5bddc4f56d8d67a2f50f426e459e505628e741ca18b",
+        "afterSha256": "34515a67383bb8e7b0de23ba2d36d98d1d6e68ff7b5bb714ff5e9fc5e9197074"
+      },
+      {
+        "path": "node_modules/@react-navigation/elements/lib/module/Screen.js",
+        "beforeSha256": "70344ad973c1814509aee9593eb1e0ccefa222c7868422eef0a5e77ee0275d2d",
+        "afterSha256": "95cbf5319852b9164d701abe9fb668f99c467f737faac5a4dc2220955b1a9570"
+      },
+      {
+        "path": "node_modules/@react-navigation/elements/src/Header/Header.tsx",
+        "beforeSha256": "218c8d477b69f1fd29a593acd8f9f4337b7167c5d9aa05a9692f5ee49fbfe38c",
+        "afterSha256": "2f041f5ba54f2b3fb5cbbd45d0266d87617bb553550a69389c96222656853733"
+      },
+      {
+        "path": "node_modules/@react-navigation/elements/src/Header/HeaderSearchBar.tsx",
+        "beforeSha256": "28fc28419dff14084d853f7d02111507a8ed66370572684dfad6b9675a434ff0",
+        "afterSha256": "6117d180529878387d8b56bcf89dae1d74dfabcd2c618a202ec1b04b0c8c5bc3"
+      },
+      {
+        "path": "node_modules/@react-navigation/elements/src/ResourceSavingView.tsx",
+        "beforeSha256": "d670e8bbacb4a0fccadc3409c19358a0336da898a73c4310de6028e0ba4a8707",
+        "afterSha256": "4a0603026f2a599b3fcd087dd0ce1af07753a63abb6d7b55fb525d31495cedf3"
+      },
+      {
+        "path": "node_modules/@react-navigation/elements/src/Screen.tsx",
+        "beforeSha256": "7135111e062c668193a851ef5ccfd0f4db2655d7fdb986d6510efa307e487354",
+        "afterSha256": "887829819c3adca331d30d99e56da3696cb5520ac892fe23f052cacdb2f8c532"
+      }
+    ]
+  },
+  {
+    "packageName": "react-native-screens",
+    "version": "4.26.2",
+    "patchFile": "react-native-screens+4.26.2.patch",
+    "patchSha256": "1942729afbc53c7c8442d5296df9763a1ca2d415b6496b73db1b76c063a08bbb",
+    "files": [
+      {
+        "path": "node_modules/react-native-screens/lib/commonjs/components/Screen.web.js",
+        "beforeSha256": "cb0b61e52a8444f7d411600ba6cf7ea2c494438fbb7e70f9f3c5061605840678",
+        "afterSha256": "5b5c0cdc25a514967b30aed247e78efe021e062e4578b942ebc623a81eb104b7"
+      },
+      {
+        "path": "node_modules/react-native-screens/lib/module/components/Screen.web.js",
+        "beforeSha256": "5acf86f614b799cd74d5cc5ac82526bb341898d76d6947b209ceec7872060a2d",
+        "afterSha256": "a804036c38e58f056b5a50491c365b44f1150a5691a11d8dc51539d056929feb"
+      },
+      {
+        "path": "node_modules/react-native-screens/src/components/Screen.web.tsx",
+        "beforeSha256": "76b63d6e1d22ef0289ede87ccc877a5372c887e8b1e76445f64d12638163a6a0",
+        "afterSha256": "a5e3c018e2bfa5173851cc346911e591bc04372f610c4c61eaedfaaeef2a2663"
+      }
+    ]
+  }
+]

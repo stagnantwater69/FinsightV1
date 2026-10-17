@@ -1,13 +1,14 @@
 /**
- * Design tokens, mirrored from the web app.
+ * Mobile design tokens. Shared roles follow the web app; font delivery and
+ * platform typefaces are defined independently in DESIGN.md.
  *
  * Deliberately a hand-kept mirror of web/tailwind.config.js and
  * web/src/lib/chartPalette.ts rather than a shared package: the two apps have
  * no build-time relationship, and introducing a workspace just to share ~80
  * lines of constants would couple their release cycles for very little.
  *
- * The tradeoff is that these must be updated in both places. Anything that can
- * drift silently and matters is called out where it appears.
+ * Shared role changes need review in both apps. Mobile typography uses IBM
+ * Plex Sans with Plex Mono for fixed-width financial data.
  *
  * WHAT IS AND IS NOT IN HERE
  * --------------------------
@@ -23,25 +24,16 @@
  */
 
 /**
- * Font families. Same three typefaces as web (Inter / Sora / IBM Plex Mono),
- * but delivered via @expo-google-fonts rather than @fontsource.
- *
- * DEVIATION, flagged: @fontsource ships only .woff/.woff2 and expo-font needs
- * .ttf/.otf, so the web font FILES cannot be reused directly. Same typefaces,
- * different packages — visually identical, different delivery mechanism. Both
- * Sora packages carry the same upstream (sora-xor/sora-font, OFL), so this is
- * the same face web renders, not a lookalike.
- *
- * `display` was IBM Plex Sans until web replaced it with Sora and mobile did
- * not follow; this closes that gap. Sora is only ever used at 18 and above —
- * see TEXT_VARIANTS in components/ui.tsx for why.
+ * Plex Sans unifies mobile titles, controls and explanations. Plex Mono keeps
+ * financial columns aligned on Android and iOS. App.tsx loads only these
+ * named weights through individual @expo-google-fonts entrypoints.
  */
 export const font = {
-  sans: "Inter_400Regular",
-  sansMedium: "Inter_500Medium",
-  sansSemibold: "Inter_600SemiBold",
-  display: "Sora_600SemiBold",
-  displayBold: "Sora_700Bold",
+  sans: "IBMPlexSans_400Regular",
+  sansMedium: "IBMPlexSans_500Medium",
+  sansSemibold: "IBMPlexSans_600SemiBold",
+  display: "IBMPlexSans_600SemiBold",
+  displayBold: "IBMPlexSans_700Bold",
   mono: "IBMPlexMono_400Regular",
   monoMedium: "IBMPlexMono_500Medium",
   monoSemibold: "IBMPlexMono_600SemiBold",
@@ -76,7 +68,9 @@ export const typeScale = {
   body: 15,
   bodyLg: 16,
   title: 18,
+  subpageTitle: 22,
   titleLg: 26,
+  display: 34, // the one hero figure on Home; nothing else is this size
 } as const;
 
 export const radius = { sm: 8, md: 12, lg: 16, xl: 20, full: 999 } as const;

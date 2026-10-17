@@ -6,7 +6,8 @@ import * as fixtures from "./support/fixtures";
 
 const get = vi.fn();
 const post = vi.fn();
-const user = { id: 1 };
+const recordLoading = vi.fn();
+let user = { id: 1, firstName: "Nena", avatarUrl: null as string | null };
 const takeBootstrapProfiles = () => null;
 vi.mock("../../src/lib/api", () => ({ api: { get, post }, errorMessage: (error: Error) => error.message }));
 vi.mock("../../src/context/AuthContext", () => ({ useAuth: () => ({ profile: user, takeBootstrapProfiles }) }));
@@ -17,6 +18,8 @@ const { CategoryPicker } = await import("../../src/screens/records/shared");
 let business!: ReturnType<typeof useBusinessProfiles>;
 function Probe({ choose, created }: { choose?: (id: number) => void; created?: () => void }) {
   business = useBusinessProfiles();
+  const loading = business.loading;
+  React.useEffect(() => { recordLoading(loading); }, [loading]);
   return <>
     <Text>{business.categories.map((category) => category.name).join(", ") || "No active categories"}</Text>
     <Text>{business.categoriesLoading ? "Categories loading" : "Categories ready"}</Text>
@@ -27,10 +30,98 @@ function Probe({ choose, created }: { choose?: (id: number) => void; created?: (
 const wrap = (node: React.ReactNode) => <ThemeProvider initialMode="light"><BusinessProfileProvider>{node}</BusinessProfileProvider></ThemeProvider>;
 
 beforeEach(() => {
-  get.mockReset(); post.mockReset();
+  user = { id: 1, firstName: "Nena", avatarUrl: null };
+  get.mockReset(); post.mockReset(); recordLoading.mockReset();
   get.mockImplementation(async (path: string, query?: { businessProfileId: number }) => path === "/business-profiles"
     ? [fixtures.businessProfile, { ...fixtures.businessProfile, id: 2, name: "Second business" }]
     : query?.businessProfileId === 1 ? [{ id: 10, name: "First business stock" }] : [{ id: 20, name: "Second business rent" }]);
+});
+
+describe("business bootstrap after account profile changes", () => {
+  it("does not restore an archived business when an older overlapping refresh finishes last", async () => {
+    await render(wrap(<Probe />));
+    await waitFor(() => expect(business.selected?.id).toBe(1));
+    let finishOld!: (value: unknown) => void;
+    let finishNew!: (value: unknown) => void;
+    get.mockReturnValueOnce(new Promise((resolve) => { finishOld = resolve; }))
+      .mockReturnValueOnce(new Promise((resolve) => { finishNew = resolve; }));
+    let older!: Promise<void>;
+    let newer!: Promise<void>;
+    await act(() => { older = business.refresh(); newer = business.refresh(); });
+    const remaining = { ...fixtures.businessProfile, id: 2, name: "Remaining active business" };
+    await act(async () => { finishNew([remaining]); await newer; });
+    expect(business.profiles).toEqual([remaining]);
+    expect(business.selected?.id).toBe(2);
+    await act(async () => { finishOld([fixtures.businessProfile, remaining]); await older; });
+    expect(business.profiles).toEqual([remaining]);
+    expect(business.selected?.id).toBe(2);
+    expect(business.loading).toBe(false);
+    expect(business.error).toBeNull();
+  });
+
+  it("does not replace a newer business-list success with an older failure", async () => {
+    await render(wrap(<Probe />));
+    await waitFor(() => expect(business.selected?.id).toBe(1));
+    let failOld!: (error: Error) => void;
+    get.mockReturnValueOnce(new Promise((_resolve, reject) => { failOld = reject; }))
+      .mockResolvedValueOnce([fixtures.businessProfile]);
+    let older!: Promise<void>;
+    await act(() => { older = business.refresh(); });
+    older.catch(() => undefined);
+    await act(async () => { await business.refresh(); });
+    await act(async () => { failOld(new Error("Old list connection failed")); await older.catch(() => undefined); });
+    expect(business.profiles).toEqual([fixtures.businessProfile]);
+    expect(business.error).toBeNull();
+    expect(business.loading).toBe(false);
+  });
+
+  it("keeps the selected business and categories loaded when the same owner saves a name or avatar", async () => {
+    const q = await render(wrap(<Probe />));
+    await waitFor(() => expect(q.getByText("First business stock")).toBeTruthy());
+    await act(() => business.selectProfile(2));
+    await waitFor(() => expect(q.getByText("Second business rent")).toBeTruthy());
+    const selected = business.selected;
+    const profiles = business.profiles;
+    const categories = business.categories;
+    get.mockClear(); recordLoading.mockClear();
+
+    user = { ...user, firstName: "Updated owner", avatarUrl: "https://images.example.test/new-avatar.jpg" };
+    await q.rerender(wrap(<Probe />));
+
+    expect(get).not.toHaveBeenCalled();
+    expect(recordLoading).not.toHaveBeenCalledWith(true);
+    expect(business.loading).toBe(false);
+    expect(business.profiles).toBe(profiles);
+    expect(business.selected).toBe(selected);
+    expect(business.categories).toBe(categories);
+    expect(q.getByText("Second business rent")).toBeTruthy();
+  });
+
+  it("reloads businesses and replaces scoped categories when a different owner becomes active", async () => {
+    const q = await render(wrap(<Probe />));
+    await waitFor(() => expect(q.getByText("First business stock")).toBeTruthy());
+    let finish!: (value: unknown) => void;
+    const pending = new Promise((resolve) => { finish = resolve; });
+    get.mockClear(); recordLoading.mockClear();
+    get.mockImplementation((path: string, query?: { businessProfileId: number }) => path === "/business-profiles"
+      ? pending : Promise.resolve(query?.businessProfileId === 3 ? [{ id: 30, name: "Other owner's rent" }] : []));
+    user = { id: 2, firstName: "Other owner", avatarUrl: null };
+
+    await q.rerender(wrap(<Probe />));
+    expect(get.mock.calls.filter(([path]) => path === "/business-profiles")).toHaveLength(1);
+    expect(recordLoading).toHaveBeenCalledWith(true);
+    expect(business.loading).toBe(true);
+    expect(q.queryByText("First business stock")).toBeNull();
+
+    const otherBusiness = { ...fixtures.businessProfile, id: 3, name: "Other owner's business" };
+    await act(() => finish([otherBusiness]));
+    await waitFor(() => expect(q.getByText("Other owner's rent")).toBeTruthy());
+    expect(business.loading).toBe(false);
+    expect(business.profiles).toEqual([otherBusiness]);
+    expect(business.selected?.id).toBe(3);
+    expect(business.categories.map((category) => category.id)).toEqual([30]);
+    expect(q.queryByText("First business stock")).toBeNull();
+  });
 });
 
 describe("category isolation during business switching", () => {

@@ -152,6 +152,8 @@ const COVERED: Record<string, string> = {
    */
   "/auth/reset-password": "ResetPassword",
   "/auth/confirm": "ConfirmEmail",
+  /* The same ConfirmEmail page under the link older confirmation emails carry. */
+  "/verify-email": "ConfirmEmail",
   /*
    * Web's account-settings page and the app's Settings screen (More →
    * Settings) carry the same groups: the guided tour, the daily mascot
@@ -175,6 +177,7 @@ const COVERED: Record<string, string> = {
 const WEB_ONLY: Record<string, string> = {
   "/": "The marketing landing page. The app opens to a login or the dashboard — there is no equivalent surface, and an installed app has already done the job a landing page exists to do.",
   "/blogs": "Marketing content for visitors deciding whether to sign up. A signed-in owner opening the app is past that decision, and the app is not where they would look for it.",
+  "/auth/google/callback": "Web needs a page for Google to return to. The app finishes Google sign-in inside the system auth sheet, which closes on finsight://auth/google/callback and hands the code straight back (lib/googleSignIn.ts), so there is no screen to land on.",
 };
 
 describe("web feature parity", () => {
@@ -545,6 +548,8 @@ describe("finding feedback matches web", () => {
  * mapping are imported and driven, the same way the confidence bands are.
  */
 const WEB_SPENDING_IMPACT = join(__dirname, "..", "..", "web", "src", "pages", "SpendingImpact.tsx");
+/** Where web keeps each band's colour since the impact visuals moved out of the page. */
+const WEB_IMPACT_BAND = join(__dirname, "..", "..", "web", "src", "pages", "spendingImpact", "impactBand.ts");
 const MOBILE_SPENDING_IMPACT = join(__dirname, "..", "src", "screens", "SpendingImpactScreen.tsx");
 
 const WEB_PERIOD = join(__dirname, "..", "..", "web", "src", "lib", "reportingPeriod.ts");
@@ -559,19 +564,21 @@ function webQuickAmounts(): number[] {
     .filter((n) => Number.isFinite(n));
 }
 
-/** Web's band -> Pill tone mapping, as pairs. */
+/** Web's band -> status tone mapping, as pairs, read off `BAND_COLOR`'s `--tone-*` variables. */
 function webBandTones(): Record<string, string> {
-  const src = readFileSync(WEB_SPENDING_IMPACT, "utf8");
-  const block = /const BAND_TONE[^=]*=\s*\{([\s\S]*?)\};/.exec(src)?.[1] ?? "";
-  return Object.fromEntries([...block.matchAll(/"([^"]+)":\s*"([^"]+)"/g)].map((m) => [m[1]!, m[2]!]));
+  const src = readFileSync(WEB_IMPACT_BAND, "utf8");
+  const block = /const BAND_COLOR[^=]*=\s*\{([\s\S]*?)\};/.exec(src)?.[1] ?? "";
+  return Object.fromEntries(
+    [...block.matchAll(/"([^"]+)":\s*"[^"]*--tone-([a-z]+)[^"]*"/g)].map((m) => [m[1]!, m[2]!]),
+  );
 }
 
 /**
- * Web's Pill tones and the app's status families are the same three severities
+ * Web's band tones and the app's status families are the same three severities
  * under two vocabularies. Named here so a fourth tone on either side fails
  * rather than silently mapping to nothing.
  */
-const WEB_TONE_TO_MOBILE: Record<string, string> = { ok: "good", warn: "warning", danger: "critical" };
+const WEB_TONE_TO_MOBILE: Record<string, string> = { brand: "good", accent: "warning", danger: "critical" };
 
 describe.skipIf(!existsSync(WEB_SPENDING_IMPACT))("Spending Impact capability parity", () => {
   it("finds both implementations at all", () => {

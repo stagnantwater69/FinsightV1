@@ -1,6 +1,7 @@
 import React from 'react';
+import { Modal, Pressable } from 'react-native';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, fireEvent, waitFor } from '@testing-library/react-native';
+import { act, cleanup, render, fireEvent, waitFor } from '@testing-library/react-native';
 
 /**
  * Rendered tests for the sign-out confirmation (plan ticket §9.12).
@@ -38,6 +39,34 @@ function renderSheet(visible = true, scope: "local" | "all" = "local") {
     </ThemeProvider>,
   );
   return { result, onClose };
+}
+
+function findFiber(node: { unstable_fiber?: any }, type: unknown, matches: (props: any) => boolean = () => true) {
+  let root = node.unstable_fiber;
+  while (root?.return) root = root.return;
+  const pending = root ? [root] : [];
+  while (pending.length > 0) {
+    const fiber = pending.pop();
+    if ((fiber?.type === type || fiber?.elementType === type) && matches(fiber.memoizedProps)) return fiber;
+    if (fiber?.sibling) pending.push(fiber.sibling);
+    if (fiber?.child) pending.push(fiber.child);
+  }
+  return null;
+}
+
+function pressHandler(node: { unstable_fiber?: any }): () => unknown {
+  const button = findPressable(node);
+  expect(button?.memoizedProps.onPress).toEqual(expect.any(Function));
+  return button.memoizedProps.onPress;
+}
+
+function findPressable(node: { unstable_fiber?: any }) {
+  let fiber = node.unstable_fiber;
+  while (fiber) {
+    if (fiber.type === Pressable || fiber.elementType === Pressable) return fiber;
+    fiber = fiber.return;
+  }
+  return null;
 }
 
 beforeEach(() => {
@@ -109,6 +138,38 @@ describe('SignOutSheet', () => {
 
     finish();
     await pressing;
+  });
+
+  it('blocks captured cancel, backdrop and system-back handlers in the same frame as confirmation', async () => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    logout.mockReturnValueOnce(pending);
+    const { result, onClose } = renderSheet();
+    const queries = await result;
+    const confirm = pressHandler(queries.getByRole('button', { name: 'Sign out' }));
+    const cancel = pressHandler(queries.getByRole('button', { name: 'Cancel' }));
+    const root = queries.root;
+    if (root === null) throw new Error('Sign-out confirmation did not render.');
+    const modal = findFiber(root, Modal);
+    const backdrop = findFiber(root, Pressable, (props) => props.accessible === false && props.importantForAccessibility === 'no-hide-descendants');
+    expect(modal?.memoizedProps.onRequestClose).toEqual(expect.any(Function));
+    expect(backdrop?.memoizedProps.onPress).toEqual(expect.any(Function));
+    const systemBack = modal.memoizedProps.onRequestClose;
+    const dismissBackdrop = backdrop.memoizedProps.onPress;
+
+    await act(() => {
+      void confirm();
+      cancel();
+      systemBack();
+      dismissBackdrop();
+    });
+
+    expect(logout).toHaveBeenCalledTimes(1);
+    expect(logoutEverywhere).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(queries.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    expect(queries.getByRole('button', { name: 'Sign out' })).toBeDisabled();
+    await act(async () => { finish(); await pending; });
   });
 
   it('shows a failed sign-out inside the sheet instead of closing over a live session', async () => {

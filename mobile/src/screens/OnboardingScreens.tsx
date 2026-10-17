@@ -1,3 +1,4 @@
+import { ContentScrollView } from "../components/ContentScrollView";
 /**
  * The three-step business setup a new owner lands in after their first login.
  *
@@ -18,8 +19,8 @@
  * rather than a dropdown, a bottom sheet rather than a dialog.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AppState, BackHandler, KeyboardAvoidingView, Platform, ScrollView, TextInput, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { AppState, BackHandler, KeyboardAvoidingView, Platform, TextInput, View } from "react-native";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import {
   Button,
   Callout,
@@ -151,7 +152,7 @@ function ReadyLine({ label, value }: { label: string; value: string }) {
   return (
     <View style={{ flexDirection: "row", alignItems: "flex-start", gap: space.sm }}>
       <Ionicons
-        name="checkmark-circle"
+        name="checkmark-circle-outline"
         size={18}
         color={t.statusText.good}
         // Decorative: every line here is a completed one, and the heading above
@@ -231,6 +232,7 @@ export function OnboardingScreen({
   const [fieldErrors, setFieldErrors] = useState<BusinessFieldErrors>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const creating = useRef(false);
   const [confirmingSkip, setConfirmingSkip] = useState(false);
   /** Set once step 2 succeeds, so step 3 knows the business exists. */
   const [created, setCreated] = useState(false);
@@ -308,10 +310,12 @@ export function OnboardingScreen({
   }
 
   async function create() {
+    if (creating.current) return;
     const errors = validateNumbers(draft);
     if (hasErrors(errors)) return setFieldErrors(errors);
 
     setError(null);
+    creating.current = true;
     setBusy(true);
     try {
       await createProfile(toBusinessProfileInput(draft));
@@ -321,11 +325,13 @@ export function OnboardingScreen({
     } catch (err) {
       setError(errorMessage(err));
     } finally {
+      creating.current = false;
       setBusy(false);
     }
   }
 
   async function skip() {
+    if (creating.current) return;
     setConfirmingSkip(false);
     if (userId) await dismissOnboarding(userId);
     onDone();
@@ -348,6 +354,7 @@ export function OnboardingScreen({
    * exists by then and the step is optional, so back may leave.
    */
   const onBack = useCallback(() => {
+    if (creating.current) return true;
     if (confirmingSkip) {
       setConfirmingSkip(false);
       return true;
@@ -384,7 +391,7 @@ export function OnboardingScreen({
   return (
     <Screen safeTop>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
-        <ScrollView
+        <ContentScrollView
           contentContainerStyle={{ padding: space.lg, paddingBottom: space.xxl * 2 }}
           keyboardShouldPersistTaps="handled"
         >
@@ -400,7 +407,7 @@ export function OnboardingScreen({
             */
             action={
               step < 3 ? (
-                <Button title="Skip for now" variant="ghost" onPress={() => setConfirmingSkip(true)} />
+                <Button title="Skip for now" variant="ghost" disabled={busy} onPress={() => setConfirmingSkip(true)} />
               ) : undefined
             }
           />
@@ -713,7 +720,7 @@ export function OnboardingScreen({
               Nothing here is required. Everything above is already saved.
             </T>
           ) : null}
-        </ScrollView>
+        </ContentScrollView>
       </KeyboardAvoidingView>
 
       {/*

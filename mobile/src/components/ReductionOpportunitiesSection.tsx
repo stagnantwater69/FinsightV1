@@ -1,13 +1,16 @@
 import { useState } from "react";
+import { SectionTitle } from "./CoachKit";
 import { ActivityIndicator, Pressable, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import * as haptics from "../lib/haptics";
 import { Button, Callout, Card, ErrorNote, SelectChip, T } from "./ui";
 import { TAP_FLOOR } from "./touchTarget";
+import { ExpenseActionButton } from "./ExpenseActionButton";
 import { api, errorMessage } from "../lib/api";
-import { font, space, typeScale } from "../theme/tokens";
+import { font, radius, space, typeScale } from "../theme/tokens";
 import { useTheme } from "../context/ThemeContext";
 import { formatMoney } from "../lib/money";
+import { ChartPlotPressArea, ChartValueReadout, useChartSelection, type ChartDatum } from "./ChartInteraction";
 import type {
   ReductionOpportunity,
   ReductionOpportunityFeedbackRating,
@@ -44,51 +47,11 @@ const CONFIDENCE_LABEL: Record<ReductionOpportunity["confidence"], string> = {
   limited: "Limited confidence",
 };
 
-/**
- * The category's owner-controlled cost-behavior classification, as a small
- * badge — plan §5.2/§15 Phase 5. Only shown for "fixed" and "mixed": those
- * are the two behaviors the backend's suggested-check catalogue actually adds
- * copy for (`COST_BEHAVIOR_SUGGESTED_CHECK_CATALOGUE` in
- * reductionOpportunity.service.ts appends nothing for "variable" or
- * "unclassified"), so this badge is the only extra signal needed — the
- * checklist below the card already carries the rest.
- */
 const COST_BEHAVIOR_BADGE: Partial<Record<ReductionOpportunity["costBehavior"], string>> = {
   fixed: "Fixed cost",
   mixed: "Mixed cost",
+  variable: "Variable cost",
 };
-
-/**
- * Two or three evidence figures per card (plan §10.2), chosen by type so each
- * card leads with the numbers that actually explain why it appeared rather
- * than a generic slice of the evidence object.
- */
-function evidenceFigures(o: ReductionOpportunity): { label: string; value: string }[] {
-  const e = o.evidence;
-  switch (o.type) {
-    case "FREQUENT_PURCHASE_ACCUMULATION":
-      return [
-        { label: "Records this period", value: `${e.recordCount}` },
-        { label: "Category total", value: formatMoney(e.currentAmount) },
-        { label: "Share of expenses", value: `${e.expenseSharePercent.toFixed(0)}%` },
-      ];
-    case "RECORD_REVIEW_FIRST":
-      return [
-        { label: "Possible duplicates", value: `${e.possibleDuplicateCount}` },
-        { label: "Unusual records", value: `${e.unusualRecordCount}` },
-        { label: "Category total", value: formatMoney(e.currentAmount) },
-      ];
-    case "CATEGORY_PRESSURE":
-    default:
-      return [
-        { label: "This period", value: formatMoney(e.currentAmount) },
-        { label: "Share of expenses", value: `${e.expenseSharePercent.toFixed(0)}%` },
-        e.changePercent === null
-          ? { label: "Change", value: "New this period" }
-          : { label: "Change", value: `${e.changePercent >= 0 ? "+" : ""}${e.changePercent.toFixed(0)}%` },
-      ];
-  }
-}
 
 /**
  * "Was this helpful?" — plan §15 Phase 5. `POST
@@ -160,7 +123,7 @@ function OpportunityFeedback({
             accessibilityLiveRegion="polite"
             style={{ color: t.statusText.good }}
           >
-            Thanks — noted.
+            Feedback saved.
           </T>
         ) : null}
       </View>
@@ -187,206 +150,137 @@ function OpportunityCard({
   onSimulate: (opportunity: ReductionOpportunity) => void;
 }) {
   const t = useTheme();
-  const { brand, ink, paper } = t;
   const priority = PRIORITY_COPY[opportunity.priority];
-  const figures = evidenceFigures(opportunity);
+  const [showDetails, setShowDetails] = useState(false);
+  const evidence = opportunity.evidence;
+  const previous = evidence.previousAmount;
+  const maximum = Math.max(evidence.currentAmount, previous ?? 0, 1);
+  const change = previous === null ? null : evidence.currentAmount - previous;
+  const changeLabel = previous === null || evidence.changePercent === null
+    ? "No earlier comparison"
+    : change === 0 ? "0% · unchanged" : `${Math.abs(evidence.changePercent).toFixed(1)}% ${change! > 0 ? "higher" : "lower"}`;
+  const comparisonData: ChartDatum[] = [{ key: String(opportunity.id), label: `${opportunity.categoryName} spending comparison`, values: [{ label: "This period", value: evidence.currentAmount, color: t.brandFill }, { label: "Previous period", value: previous, color: t.textMuted, unavailableLabel: "No earlier comparison" }, { label: "Share of expenses", value: evidence.expenseSharePercent, display: `${evidence.expenseSharePercent.toFixed(1)}%` }], note: changeLabel }];
+  const comparisonSelection = useChartSelection(comparisonData, businessProfileId);
+  const action = (label: string, spoken: string, icon: keyof typeof Ionicons.glyphMap, onPress: () => void, primary = false) => (
+    <Pressable
+      onPress={() => { haptics.tapped(); onPress(); }}
+      accessibilityRole="button"
+      accessibilityLabel={spoken}
+      style={({ pressed }) => ({
+        minHeight: TAP_FLOOR,
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: space.sm,
+        borderWidth: 1,
+        borderColor: primary ? t.brandText : t.brandBorder,
+        borderRadius: radius.md,
+        backgroundColor: primary ? t.brandSurface : t.surface,
+        paddingHorizontal: space.md,
+        paddingVertical: space.sm,
+        opacity: pressed ? 0.7 : 1,
+        ...(primary ? {} : { flex: 1, minWidth: 130 }),
+      })}
+    >
+      <Ionicons name={icon} size={20} color={t.brandText} />
+      <T style={{ color: t.brandText, fontFamily: font.sansSemibold, fontSize: typeScale.bodySm, flexShrink: 1, textAlign: "center" }}>{label}</T>
+    </Pressable>
+  );
 
   return (
-    <Card>
-      {/*
-        Not collapsed into one accessible node: unlike SpendingBreakdownCard's
-        flip, this card carries a real interactive control below ("View
-        related records") that has to stay individually reachable, so the
-        priority/confidence/category read as their own labelled elements
-        instead.
-      */}
-      <View style={{ flexDirection: "row", gap: space.sm, flexWrap: "wrap" }}>
-        <View
-          style={{
-            paddingHorizontal: space.sm,
-            paddingVertical: 2,
-            borderRadius: 11,
-            backgroundColor: t.statusSurface[priority.tone],
-          }}
-        >
-          <T style={{ fontSize: typeScale.micro, fontFamily: font.sansSemibold, color: t.statusText[priority.tone] }}>
-            {priority.label}
-          </T>
-        </View>
-        <View
-          style={{
-            paddingHorizontal: space.sm,
-            paddingVertical: 2,
-            borderRadius: 11,
-            backgroundColor: paper[200],
-          }}
-        >
-          <T style={{ fontSize: typeScale.micro, fontFamily: font.sansSemibold, color: ink[600] }}>
-            {CONFIDENCE_LABEL[opportunity.confidence]}
-          </T>
-        </View>
-        {COST_BEHAVIOR_BADGE[opportunity.costBehavior] ? (
-          <View
-            style={{
-              paddingHorizontal: space.sm,
-              paddingVertical: 2,
-              borderRadius: 11,
-              borderWidth: 1,
-              borderColor: brand[200],
-              backgroundColor: brand[50],
-            }}
-          >
-            <T style={{ fontSize: typeScale.micro, fontFamily: font.sansSemibold, color: brand[700] }}>
-              {COST_BEHAVIOR_BADGE[opportunity.costBehavior]}
-            </T>
+    <View style={{ borderWidth: 1, borderColor: t.border, borderRadius: radius.md, backgroundColor: t.surface, padding: space.lg, gap: space.lg }}>
+      <View style={{ gap: space.sm }}>
+        <T variant="caption" style={{ color: t.textMuted }}>Reduction opportunity</T>
+        <T accessibilityRole="header" style={{ fontSize: typeScale.display, fontFamily: font.sansSemibold, color: t.brandHeading }}>{opportunity.categoryName}</T>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs, maxWidth: "100%" }}>
+            <Ionicons name="alert-circle" size={20} color={t.statusText[priority.tone]} />
+            <T style={{ color: t.statusText[priority.tone], fontSize: typeScale.bodySm, fontFamily: font.sansMedium, flexShrink: 1 }}>{priority.label}</T>
           </View>
-        ) : null}
-      </View>
-
-      <T style={{ marginTop: space.sm, fontSize: typeScale.bodySm, fontFamily: font.sansSemibold, color: ink[900] }}>
-        {opportunity.categoryName}
-      </T>
-      <T variant="caption" style={{ marginTop: 2 }}>
-        {opportunity.observation}
-      </T>
-
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.lg, marginTop: space.md }}>
-        {figures.map((f) => (
-          <View key={f.label} accessible accessibilityLabel={`${f.label}: ${f.value}`}>
-            <T variant="label" style={{ color: ink[500] }}>
-              {f.label}
-            </T>
-            <T style={{ fontFamily: font.monoMedium, fontSize: typeScale.bodySm, color: ink[900], marginTop: 2 }}>
-              {f.value}
-            </T>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: space.xs, maxWidth: "100%" }}>
+            <Ionicons name="cellular-outline" size={18} color={t.textSecondary} />
+            <T style={{ color: t.textSecondary, fontSize: typeScale.bodySm, flexShrink: 1 }}>{CONFIDENCE_LABEL[opportunity.confidence]}</T>
           </View>
-        ))}
+        </View>
       </View>
-
-      <T variant="caption" style={{ marginTop: space.md, fontFamily: font.sansSemibold, color: ink[700] }}>
-        Why this appeared
-      </T>
-      <T variant="caption" style={{ marginTop: 2 }}>
-        {opportunity.rationale}
-      </T>
-
-      {opportunity.suggestedChecks.length > 0 ? (
-        <View style={{ marginTop: space.md }}>
-          <T variant="caption" style={{ fontFamily: font.sansSemibold, color: ink[700] }}>
-            Suggested checks
-          </T>
-          {opportunity.suggestedChecks.map((check) => (
-            <T key={check} variant="caption" style={{ marginTop: 2 }}>
-              • {check}
-            </T>
+      <View style={{ gap: space.sm }}>
+        <T style={{ color: t.textSecondary, fontSize: typeScale.bodySm }}>This period</T>
+        <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.display, color: t.brandHeading, fontVariant: ["tabular-nums"] }}>{formatMoney(evidence.currentAmount, { decimals: true })}</T>
+        <T style={{ color: t.textSecondary }}>{opportunity.observation}</T>
+      </View>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.md, borderTopWidth: 1, borderBottomWidth: 1, borderColor: t.border, paddingVertical: space.md }}>
+        <View style={{ flex: 1, minWidth: 115, gap: space.xs }}>
+          <T variant="caption">Share of expenses</T>
+          <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.title, color: t.brandHeading }}>{evidence.expenseSharePercent.toFixed(1)}%</T>
+        </View>
+        <View style={{ flex: 1, minWidth: 115, gap: space.xs }}>
+          <T variant="caption">Change</T>
+          <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg, color: t.brandHeading }}>{changeLabel}</T>
+        </View>
+      </View>
+      {opportunity.type === "FREQUENT_PURCHASE_ACCUMULATION" ? <T style={{ color: t.textSecondary }}>{evidence.recordCount} records this period</T> : opportunity.type === "RECORD_REVIEW_FIRST" ? <T style={{ color: t.textSecondary }}>{evidence.possibleDuplicateCount} possible duplicates · {evidence.unusualRecordCount} unusual records</T> : null}
+      {previous !== null ? (
+        <View style={{ gap: space.md }}>
+          <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodyLg, color: t.brandHeading }}>Compared with last period</T>
+          {[
+            { label: "Previous period", amount: previous, color: t.textMuted },
+            { label: "This period", amount: evidence.currentAmount, color: t.brandFill },
+          ].map((row) => (
+            <View key={row.label} accessible accessibilityLabel={`${row.label}, ${formatMoney(row.amount, { decimals: true })}`} style={{ gap: space.sm }}>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", gap: space.xs }}>
+                <T style={{ color: t.textSecondary, fontSize: typeScale.bodySm }}>{row.label}</T>
+                <T style={{ fontFamily: font.sansSemibold, fontSize: typeScale.bodySm, fontVariant: ["tabular-nums"] }}>{formatMoney(row.amount, { decimals: true })}</T>
+              </View>
+              <ChartPlotPressArea selection={comparisonSelection} count={1} chartLabel={`${opportunity.categoryName} opportunity comparison`}>
+              <View accessible={false} style={{ height: 8, borderRadius: radius.sm, backgroundColor: t.surfaceMuted }}>
+                <View style={{ height: 8, borderRadius: radius.sm, width: `${Math.max(0, Math.min(100, row.amount / maximum * 100))}%`, backgroundColor: row.color }} />
+              </View>
+              </ChartPlotPressArea>
+            </View>
           ))}
+          <ChartValueReadout data={comparisonData} selection={comparisonSelection} chartLabel={`${opportunity.categoryName} opportunity comparison`} />
+          <T variant="caption">{change === 0 ? `${opportunity.categoryName} stayed the same.` : `${opportunity.categoryName} was ${formatMoney(Math.abs(change!), { decimals: true })} ${change! > 0 ? "higher" : "lower"} than the previous period.`}</T>
         </View>
       ) : null}
-
-      {opportunity.limitations.length > 0 ? (
-        <View style={{ marginTop: space.md }}>
-          <T variant="caption" style={{ fontFamily: font.sansSemibold, color: ink[700] }}>
-            Limitations
-          </T>
-          {opportunity.limitations.map((limitation) => (
-            <T key={limitation} variant="caption" style={{ marginTop: 2 }}>
-              • {limitation}
-            </T>
-          ))}
+      <View style={{ gap: space.sm }}>
+        {action("Simulate a reduction", `Simulate a reduction for ${opportunity.categoryName}`, "calculator-outline", () => onSimulate(opportunity), true)}
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
+          {action("View records", `View related records for ${opportunity.categoryName}`, "document-text-outline", () => onViewRecords(opportunity.categoryId))}
+          {action("Ask FinSight", `Ask FinSight about this ${opportunity.categoryName} opportunity`, "chatbubble-outline", () => onAskAboutThis(opportunity))}
+        </View>
+      </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded: showDetails }}
+        accessibilityLabel={showDetails ? `Hide details for ${opportunity.categoryName}` : `Details for ${opportunity.categoryName}`}
+        onPress={() => setShowDetails((value) => !value)}
+        style={{ minHeight: TAP_FLOOR, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm, borderTopWidth: 1, borderTopColor: t.border, paddingTop: space.md }}
+      >
+        <T style={{ color: t.brandText, flex: 1, fontFamily: font.sansSemibold }}>{showDetails ? "Hide details" : "Why this was highlighted"}</T>
+        <Ionicons name={showDetails ? "chevron-up" : "chevron-down"} size={18} color={t.brandText} />
+      </Pressable>
+      {showDetails ? (
+        <View style={{ gap: space.md }}>
+          <T style={{ color: t.textSecondary }}>{opportunity.rationale}</T>
+          {COST_BEHAVIOR_BADGE[opportunity.costBehavior] ? <T variant="caption">{COST_BEHAVIOR_BADGE[opportunity.costBehavior]}</T> : null}
+          {opportunity.costBehavior === "fixed" ? <T style={{ color: t.textSecondary }}>Fixed cost: check the contract or whether it is still needed.</T> : opportunity.costBehavior === "mixed" ? <T style={{ color: t.textSecondary }}>Mixed cost: part stays flat, part changes with activity.</T> : null}
+          {opportunity.suggestedChecks.length > 0 ? (
+            <View style={{ gap: space.sm }}>
+              <T style={{ fontFamily: font.sansSemibold }}>Suggested checks</T>
+              {opportunity.suggestedChecks.map((check, index) => <T key={index} style={{ color: t.textSecondary }}>{check}</T>)}
+            </View>
+          ) : null}
+          {opportunity.limitations.length > 0 ? (
+            <View style={{ gap: space.sm }}>
+              <T style={{ fontFamily: font.sansSemibold }}>Limitations</T>
+              {opportunity.limitations.map((limitation, index) => <T key={index} style={{ color: t.textSecondary }}>{limitation}</T>)}
+            </View>
+          ) : null}
+          <OpportunityFeedback opportunityId={opportunity.id} businessProfileId={businessProfileId} categoryName={opportunity.categoryName} />
         </View>
       ) : null}
-
-      <OpportunityFeedback
-        opportunityId={opportunity.id}
-        businessProfileId={businessProfileId}
-        categoryName={opportunity.categoryName}
-      />
-
-      {/* All three actions §10.2 lists, in its own order. */}
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.lg }}>
-        <Pressable
-          onPress={() => {
-            haptics.tapped();
-            onViewRecords(opportunity.categoryId);
-          }}
-          accessibilityRole="button"
-          accessibilityLabel={`View related records for ${opportunity.categoryName}`}
-          style={({ pressed }) => ({
-            marginTop: space.md,
-            minHeight: TAP_FLOOR,
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 4,
-            opacity: pressed ? 0.7 : 1,
-          })}
-        >
-          <T style={{ color: brand[700], fontFamily: font.sansSemibold, fontSize: typeScale.bodySm }}>
-            View related records
-          </T>
-          <Ionicons name="chevron-forward" size={16} color={brand[700]} />
-        </Pressable>
-
-        {/*
-          Opens Ask FinSight with the question already in the composer — see
-          lib/reductionOpportunityAsk.ts. Nothing is sent here: the sheet's
-          own Send button is the owner's, same gate SpendingImpactScreen's
-          "Talk this through" card uses. A separate quoted-preview card was
-          not added per card the way that screen's single scenario gets one —
-          up to three of these on screen at once would mean up to three quote
-          boxes repeating text the composer is about to show anyway — but the
-          composer opens already carrying the exact words, editable or
-          deletable before anything reaches the AI.
-        */}
-        <Pressable
-          onPress={() => {
-            haptics.tapped();
-            onAskAboutThis(opportunity);
-          }}
-          accessibilityRole="button"
-          accessibilityLabel={`Ask FinSight about this ${opportunity.categoryName} opportunity`}
-          style={({ pressed }) => ({
-            marginTop: space.md,
-            minHeight: TAP_FLOOR,
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 4,
-            opacity: pressed ? 0.7 : 1,
-          })}
-        >
-          <Ionicons name="sparkles-outline" size={15} color={brand[700]} />
-          <T style={{ color: brand[700], fontFamily: font.sansSemibold, fontSize: typeScale.bodySm }}>
-            Ask FinSight about this
-          </T>
-        </Pressable>
-
-        {/*
-          Phase 4 — plan §12.4: a modal launched from the card, scoped to its
-          own category. See ReductionSimulationSheet.tsx for why it never
-          shows availableFunds and why it does not reuse Spending Impact's UI.
-        */}
-        <Pressable
-          onPress={() => {
-            haptics.tapped();
-            onSimulate(opportunity);
-          }}
-          accessibilityRole="button"
-          accessibilityLabel={`Simulate a reduction for ${opportunity.categoryName}`}
-          style={({ pressed }) => ({
-            marginTop: space.md,
-            minHeight: TAP_FLOOR,
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 4,
-            opacity: pressed ? 0.7 : 1,
-          })}
-        >
-          <Ionicons name="calculator-outline" size={15} color={brand[700]} />
-          <T style={{ color: brand[700], fontFamily: font.sansSemibold, fontSize: typeScale.bodySm }}>
-            Simulate reduction
-          </T>
-        </Pressable>
-      </View>
-    </Card>
+      <T variant="caption">Based on your recorded expenses</T>
+    </View>
   );
 }
 
@@ -429,14 +323,14 @@ export function ReductionOpportunitiesSection({
   historical: boolean;
 }) {
   const t = useTheme();
-  const { brand } = t;
   const { data, loading, error } = state;
+  const [showAll, setShowAll] = useState(false);
 
   return (
     <View>
-      <T variant="heading" accessibilityRole="header" style={{ marginBottom: space.sm, color: brand[900] }}>
-        Reduction opportunities
-      </T>
+      <View style={{ marginBottom: space.sm }}>
+        <SectionTitle eyebrow="Reduction opportunities" question="Where can I save?" icon="bulb-outline" />
+      </View>
 
       {error ? (
         <Card>
@@ -455,10 +349,10 @@ export function ReductionOpportunitiesSection({
         </Card>
       ) : (
         <View style={{ gap: space.sm }}>
+          {data.dataQuality.message ? <T style={{ color: t.textSecondary, marginBottom: space.sm }}>{data.dataQuality.message}</T> : null}
           {historical && data.period.start ? (
             <Callout tone="info">
-              Showing {data.period.start.slice(0, 10)} to {data.period.end.slice(0, 10)} — a historical window, not
-              the current period.
+              Historical period: {data.period.start.slice(0, 10)} to {data.period.end.slice(0, 10)}.
             </Callout>
           ) : null}
           {data.opportunities.length === 0 ? (
@@ -467,11 +361,12 @@ export function ReductionOpportunitiesSection({
                 No material opportunities found
               </T>
               <T variant="caption" style={{ marginTop: 2 }}>
-                Nothing crossed the review thresholds for this period. That is a good sign, not a gap in the check.
+                No expense patterns crossed the review thresholds for this period.
               </T>
             </Card>
           ) : (
-            data.opportunities.slice(0, MAX_CARDS).map((opportunity) => (
+            <View style={{ gap: space.lg }}>
+              {data.opportunities.slice(0, showAll ? undefined : MAX_CARDS).map((opportunity) => (
               <OpportunityCard
                 key={opportunity.id}
                 opportunity={opportunity}
@@ -480,7 +375,11 @@ export function ReductionOpportunitiesSection({
                 onAskAboutThis={onAskAboutThis}
                 onSimulate={onSimulate}
               />
-            ))
+              ))}
+              {data.opportunities.length > MAX_CARDS ? (
+                <ExpenseActionButton title={showAll ? "Show fewer opportunities" : `Show all ${data.opportunities.length} opportunities`} variant="secondary" onPress={() => setShowAll(!showAll)} />
+              ) : null}
+            </View>
           )}
         </View>
       )}

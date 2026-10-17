@@ -133,6 +133,11 @@ export interface CardPlacement {
   overlaps: boolean;
 }
 
+/** The card can scroll within the safe area when the owner's text size grows. */
+export function cardViewportHeight(size: Size, insets: { top: number; bottom: number }, gap: number): number {
+  return Math.max(0, size.height - insets.top - insets.bottom - gap * 2);
+}
+
 /**
  * Where the card sits relative to the hole.
  *

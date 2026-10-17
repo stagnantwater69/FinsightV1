@@ -66,16 +66,17 @@ const opportunity = (over: Partial<ReductionOpportunity> = {}): ReductionOpportu
   ...over,
 });
 
-const sendResponse = (conv: Conversation, question: string, answer: string): ChatSendResponse => ({
+const sendResponse = (conv: Conversation, question: string, answer: string, turn = 0): ChatSendResponse => ({
   conversation: conv,
-  userMessage: message(conv.id * 100 + 1, "user", question),
-  assistantMessage: message(conv.id * 100 + 2, "assistant", answer),
+  userMessage: message(conv.id * 100 + turn * 2 + 1, "user", question),
+  assistantMessage: message(conv.id * 100 + turn * 2 + 2, "assistant", answer),
   provider: "gemini",
   detectedAmount: null,
 });
 
 /** A transport whose every method is a spy, so "was anything persisted?" is answerable. */
 function fakeTransport(over: Partial<ChatTransport> = {}) {
+  let appendedTurns = 0;
   return {
     listConversations: vi.fn(async () => [] as Conversation[]),
     getConversation: vi.fn(async (id: number) => ({
@@ -86,7 +87,7 @@ function fakeTransport(over: Partial<ChatTransport> = {}) {
       sendResponse(conversation(7, { title: question.slice(0, 20) }), question, "created answer"),
     ),
     sendMessage: vi.fn(async (id: number, question: string) =>
-      sendResponse(conversation(id), question, "follow-up answer"),
+      sendResponse(conversation(id), question, "follow-up answer", ++appendedTurns),
     ),
     renameConversation: vi.fn(async () => undefined),
     deleteConversation: vi.fn(async () => undefined),
@@ -139,7 +140,9 @@ describe("lazy creation", () => {
 
     await store.send("And in June?");
     expect(transport.createConversation).toHaveBeenCalledTimes(1);
-    expect(transport.sendMessage).toHaveBeenCalledWith(7, "And in June?");
+    expect(transport.sendMessage).toHaveBeenCalledWith(7, "And in June?", undefined, undefined, {
+      businessProfileId: 1, idempotencyKey: expect.stringMatching(/^[A-Za-z0-9_-]{8,100}$/),
+    });
     expect(store.getState().messages).toHaveLength(4);
   });
 
@@ -156,6 +159,7 @@ describe("lazy creation", () => {
       businessProfileId: 1,
       originModule: "Dashboard",
       question: "Summarise this month for me",
+      idempotencyKey: expect.stringMatching(/^[A-Za-z0-9_-]{8,100}$/),
     });
   });
 
@@ -169,7 +173,8 @@ describe("lazy creation", () => {
 
     await store.send("What needs my attention?");
     expect(store.getState().input).toBe("What needs my attention?");
-    expect(store.getState().error).toBe("Couldn't reach FinSight.");
+    expect(store.getState().error).toBe("FinSight did not confirm whether this question finished. Check its status before retrying; your original question is kept.");
+    expect(store.getState().pendingSend?.body.question).toBe("What needs my attention?");
     expect(store.getState().activeId).toBeNull();
   });
 });
@@ -393,16 +398,19 @@ describe("a queued reduction opportunity", () => {
       businessProfileId: 1,
       originModule: "Dashboard",
       question: "Why was this selected?",
+      idempotencyKey: expect.stringMatching(/^[A-Za-z0-9_-]{8,100}$/),
       reductionOpportunity: target,
     });
     expect(store.getState().pendingReductionOpportunity).toBeNull();
 
     // The next send is an ordinary follow-up — no stale opportunity is replayed.
     await store.send("And what about last month?");
-    expect(transport.sendMessage).toHaveBeenCalledWith(7, "And what about last month?");
+    expect(transport.sendMessage).toHaveBeenCalledWith(7, "And what about last month?", undefined, undefined, {
+      businessProfileId: 1, idempotencyKey: expect.stringMatching(/^[A-Za-z0-9_-]{8,100}$/),
+    });
   });
 
-  it("carries the queued opportunity onto an already-open conversation as a 3-argument call", async () => {
+  it("carries the queued opportunity onto an already-open conversation with its durable send key", async () => {
     const transport = fakeTransport();
     const store = ready(transport);
     await store.send("first question"); // opens conversation 7
@@ -411,7 +419,9 @@ describe("a queued reduction opportunity", () => {
     store.prepareQuestion("Why was this selected?", target);
     await store.send(store.getState().input);
 
-    expect(transport.sendMessage).toHaveBeenLastCalledWith(7, "Why was this selected?", target);
+    expect(transport.sendMessage).toHaveBeenLastCalledWith(7, "Why was this selected?", target, undefined, {
+      businessProfileId: 1, idempotencyKey: expect.stringMatching(/^[A-Za-z0-9_-]{8,100}$/),
+    });
   });
 
   it("restores the queued opportunity alongside the question if the send fails", async () => {
@@ -488,7 +498,9 @@ describe("Explain this flag — the focus", () => {
 
     // The server holds the focus from here; the client does not resend it.
     await store.send("Is that normal?");
-    expect(transport.sendMessage).toHaveBeenLastCalledWith(7, "Is that normal?");
+    expect(transport.sendMessage).toHaveBeenLastCalledWith(7, "Is that normal?", undefined, undefined, {
+      businessProfileId: 1, idempotencyKey: expect.stringMatching(/^[A-Za-z0-9_-]{8,100}$/),
+    });
   });
 
   it("keeps the focus with the question when the send fails, so a retry is still about that flag", async () => {

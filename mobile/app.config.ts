@@ -94,9 +94,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   userInterfaceStyle: "automatic",
 
   /*
-   * Native launch art. These files are still derived from the legacy
-   * `finsightlogo.png`; the web and mobile in-app marks plus the Expo web
-   * favicon use the current transparent `newmascotlogo.png` instead.
+   * Native launch art. The app icons are still derived from the legacy
+   * `finsightlogo.png`; the splash, the web and mobile
+   * in-app marks and the Expo web favicon use the current `newmascotlogo.png`.
    *
    * `icon` is the iOS/store icon: opaque (iOS rejects alpha), the badge at
    * 78% of the canvas so no launcher mask clips the ring.
@@ -110,9 +110,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       // zone every launcher mask is guaranteed to show, so a circle, a
       // squircle and a teardrop all crop only the transparent margin.
       foregroundImage: "./assets/android-icon-foreground.png",
-      // Same plate as the splash below, because on Android 12+ the system
-      // splash IS this icon on that background — two different darks would
-      // show as a visible square around the mark.
+      // The launcher icon's plate. The splash below is white; on Android 12+
+      // the system splash draws the splash image (not this icon) on that
+      // white, so the two no longer need to match.
       backgroundColor: "#052624",
     },
     // Camera is requested at runtime by expo-camera (the receipt scanner) and
@@ -178,30 +178,33 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     [
       "expo-splash-screen",
       {
-        image: "./assets/splash-icon.png",
+        // The FinSight logo on white. The in-app LaunchScreen draws the same
+        // file at the same width, then animates from it (the logo steps aside
+        // and the name types out), so the handover has no jump.
+        image: "./assets/mascot/newmascotlogo.png",
         resizeMode: "contain",
-        imageWidth: 160,
+        imageWidth: 200,
         /*
-         * ONE FIXED BRAND SURFACE IN BOTH THEMES, deliberately, rather than a
-         * light plate and a dark plate.
+         * ONE FIXED SURFACE IN BOTH THEMES: the native splash is painted by
+         * the OS before any JavaScript runs, so it cannot know which palette
+         * the owner chose (the preference lives in SecureStore and is read
+         * asynchronously).
          *
-         * The native splash is painted by the OS before any JavaScript runs,
-         * so it cannot know which palette the owner chose — the preference
-         * lives in SecureStore and is read asynchronously. A light splash
-         * would therefore flash white at every Dark-mode owner on every cold
-         * start. brand-950 is dark enough that the handover into either
-         * palette is a change of shade, not a flash, and it is the same plate
-         * as the adaptive icon above so Android 12+'s icon-on-background
-         * splash has no seam.
+         * WHITE, BY PRODUCT DECISION, and with a known cost: an owner using
+         * Dark mode sees a white splash on every cold start before the app
+         * switches to their palette. The plate used to be brand-950 for
+         * exactly that reason; the brighter splash was chosen over it.
          *
-         * No `dark` variant for the same reason: two splashes keyed to the
-         * SYSTEM scheme would disagree with an owner who picked Light on a
-         * dark phone.
+         * No `dark` variant: two splashes keyed to the SYSTEM scheme would
+         * disagree with an owner who picked Light on a dark phone.
          */
-        backgroundColor: "#052624", // brand-950
+        backgroundColor: "#ffffff",
       },
     ],
     "expo-secure-store",
+    // Google sign-in opens Google in the system auth sheet (Custom Tabs /
+    // ASWebAuthenticationSession), which returns to finsight://auth/google/callback.
+    "expo-web-browser",
     "expo-font",
     [
       "expo-image-picker",

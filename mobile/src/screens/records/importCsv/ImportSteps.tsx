@@ -14,7 +14,7 @@ import { useTheme } from "../../../context/ThemeContext";
 export function ImportSteps({ current }: { current: 0 | 1 | 2 }) {
   const t = useTheme();
   const { brand } = t;
-  const labels = ["Choose file", "Map columns", "Review rows"];
+  const labels = ["Choose file", "Review", "Import"];
   return (
     <View style={{ marginBottom: space.md }}>
       <View style={{ flexDirection: "row", gap: 6 }}>

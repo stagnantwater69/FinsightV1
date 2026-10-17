@@ -64,6 +64,9 @@ vi.mock('../../src/context/BusinessProfileContext', () => ({
   BusinessProfileProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 
+vi.mock('../../src/context/AiChatContext', () => ({
+  useAiChat: () => ({ prepareQuestion: vi.fn() }),
+}));
 vi.mock('../../src/components/AskFinSight', () => ({
   AskFinSight: () => null,
 }));
@@ -143,6 +146,7 @@ async function renderScreen() {
     // §7.5 saved-plan lookup, fetched alongside the main load — absent by
     // default in these tests, none of which are about it.
     if (path.endsWith('/recovery-plans')) return Promise.resolve([]);
+    if (path === '/records/months') return Promise.resolve({ months: [] });
     return Promise.reject(new Error(`unexpected path ${path}`));
   });
   const { RecoveryTargetScreen } = await import('../../src/screens/RecoveryTargetScreen');
@@ -166,7 +170,7 @@ beforeEach(() => {
 describe('Recovery Target — hypothetical scenario', () => {
   it('leaves the real target on screen untouched while the sheet is closed', async () => {
     const queries = await renderScreen();
-    expect(await queries.findByText('See a hypothetical scenario')).toBeTruthy();
+    expect(await queries.findByRole('button', { name: 'Type amount' })).toBeTruthy();
     // The real, unchanged figure is on screen before any scenario is entered.
     expect(queries.queryByText('Hypothetical result. Your real target and profile are unchanged.')).toBeNull();
   });
@@ -175,7 +179,7 @@ describe('Recovery Target — hypothetical scenario', () => {
     apiPost.mockResolvedValue(scenario());
     const queries = await renderScreen();
 
-    await fireEvent.press(await queries.findByRole('button', { name: 'See a hypothetical scenario' }));
+    await fireEvent.press(await queries.findByRole('button', { name: 'Type amount' }));
     await queries.findByText('Hypothetical recovery target');
 
     await fireEvent.changeText(
@@ -201,7 +205,7 @@ describe('Recovery Target — hypothetical scenario', () => {
     apiPost.mockResolvedValue(scenario());
     const queries = await renderScreen();
 
-    await fireEvent.press(await queries.findByRole('button', { name: 'See a hypothetical scenario' }));
+    await fireEvent.press(await queries.findByRole('button', { name: 'Type amount' }));
     await fireEvent.changeText(
       queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
       '20000',
@@ -219,7 +223,7 @@ describe('Recovery Target — hypothetical scenario', () => {
   it('rejects a negative assumption before ever calling the server', async () => {
     const queries = await renderScreen();
 
-    await fireEvent.press(await queries.findByRole('button', { name: 'See a hypothetical scenario' }));
+    await fireEvent.press(await queries.findByRole('button', { name: 'Type amount' }));
     await fireEvent.changeText(
       queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
       '-5',
@@ -234,7 +238,7 @@ describe('Recovery Target — hypothetical scenario', () => {
     apiPost.mockResolvedValue(scenario());
     const queries = await renderScreen();
 
-    await fireEvent.press(await queries.findByRole('button', { name: 'See a hypothetical scenario' }));
+    await fireEvent.press(await queries.findByRole('button', { name: 'Type amount' }));
     await fireEvent.changeText(
       queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
       '20000',
@@ -268,7 +272,7 @@ describe('Recovery Target — hypothetical scenario', () => {
     );
     const queries = await renderScreen();
 
-    await fireEvent.press(await queries.findByRole('button', { name: 'See a hypothetical scenario' }));
+    await fireEvent.press(await queries.findByRole('button', { name: 'Type amount' }));
     await fireEvent.changeText(
       queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
       '20000',
@@ -296,7 +300,7 @@ describe('Recovery Target — hypothetical scenario', () => {
     );
     const queries = await renderScreen();
 
-    await fireEvent.press(await queries.findByRole('button', { name: 'See a hypothetical scenario' }));
+    await fireEvent.press(await queries.findByRole('button', { name: 'Type amount' }));
     await fireEvent.changeText(
       queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
       '20000',
@@ -313,7 +317,7 @@ describe('Recovery Target — hypothetical scenario', () => {
   it('closes without calling the server when dismissed', async () => {
     const queries = await renderScreen();
 
-    await fireEvent.press(await queries.findByRole('button', { name: 'See a hypothetical scenario' }));
+    await fireEvent.press(await queries.findByRole('button', { name: 'Type amount' }));
     await queries.findByText('Hypothetical recovery target');
 
     await fireEvent.press(queries.getByLabelText('Close hypothetical recovery scenario'));
@@ -325,10 +329,69 @@ describe('Recovery Target — hypothetical scenario', () => {
 
 // ---------------------------------------------------------------- §7.5/§10.7 "Save this as a plan"
 
+describe('Recovery Target — inline what-if card', () => {
+  it('runs a preset inline at 10% below the real basis and shows the per-day answer, without touching the real figures', async () => {
+    apiPost.mockResolvedValue(scenario({ assumedExpectedMonthlyExpenses: 27000 }));
+    const queries = await renderScreen();
+
+    await fireEvent.press(await queries.findByRole('button', { name: 'Try −10% of your monthly expense basis' }));
+
+    await waitFor(() =>
+      expect(apiPost).toHaveBeenCalledWith('/insights/recovery-scenario', {
+        businessProfileId: fixtures.businessProfile.id,
+        assumedExpectedMonthlyExpenses: 27000,
+      }, expect.objectContaining({ signal: expect.any(AbortSignal) })),
+    );
+    expect(await queries.findByText('PHP 833')).toBeTruthy();
+    expect(queries.getByText('▼ PHP 833 less')).toBeTruthy();
+    expect(queries.getByText('PHP 27,000')).toBeTruthy();
+    // Inline: the full sheet stays closed, and nothing is written.
+    expect(queries.queryByText('Hypothetical recovery target')).toBeNull();
+    expect(apiPut).not.toHaveBeenCalled();
+    expect(apiPatch).not.toHaveBeenCalled();
+  });
+
+  it('steps the slider by 5% for a screen reader', async () => {
+    apiPost.mockResolvedValue(scenario({ assumedExpectedMonthlyExpenses: 28500 }));
+    const queries = await renderScreen();
+    const slider = await queries.findByRole('adjustable', { name: 'Monthly expenses to try' });
+
+    await fireEvent(slider, 'accessibilityAction', { nativeEvent: { actionName: 'decrement' } });
+
+    await waitFor(() =>
+      expect(apiPost).toHaveBeenCalledWith('/insights/recovery-scenario', {
+        businessProfileId: fixtures.businessProfile.id,
+        assumedExpectedMonthlyExpenses: 28500,
+      }, expect.objectContaining({ signal: expect.any(AbortSignal) })),
+    );
+  });
+
+  it('only offers "Save as my plan" once there is a result, and saves the assumed figure as a reference note', async () => {
+    apiPost.mockResolvedValue(scenario({ assumedExpectedMonthlyExpenses: 24000 }));
+    apiPut.mockResolvedValue({ month: '2026-08', ownerTargetAmount: 24000, deadline: null, bufferPercent: null });
+    const queries = await renderScreen();
+    await queries.findByRole('button', { name: 'Type amount' });
+    expect(queries.queryByRole('button', { name: 'Save as my plan' })).toBeNull();
+
+    await fireEvent.press(queries.getByRole('button', { name: 'Try −20% of your monthly expense basis' }));
+    await fireEvent.press(await queries.findByRole('button', { name: 'Save as my plan' }));
+
+    await waitFor(() =>
+      expect(apiPut).toHaveBeenCalledWith(
+        expect.stringMatching(new RegExp(`^/business-profiles/${fixtures.businessProfile.id}/recovery-plans/\\d{4}-\\d{2}$`)),
+        { ownerTargetAmount: 24000, deadline: null, bufferPercent: null },
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      ),
+    );
+    expect(await queries.findByText('Saved. Your real target and sales stay the same.')).toBeTruthy();
+    expect(apiPatch).not.toHaveBeenCalled();
+  });
+});
+
 describe('Recovery Target — "Save this as a plan"', () => {
   it('is absent until a hypothetical result exists', async () => {
     const queries = await renderScreen();
-    await fireEvent.press(await queries.findByRole('button', { name: 'See a hypothetical scenario' }));
+    await fireEvent.press(await queries.findByRole('button', { name: 'Type amount' }));
     await queries.findByText('Hypothetical recovery target');
     expect(queries.queryByText('Save this as a plan')).toBeNull();
   });
@@ -345,7 +408,7 @@ describe('Recovery Target — "Save this as a plan"', () => {
     });
     const queries = await renderScreen();
 
-    await fireEvent.press(await queries.findByRole('button', { name: 'See a hypothetical scenario' }));
+    await fireEvent.press(await queries.findByRole('button', { name: 'Type amount' }));
     await fireEvent.changeText(
       queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
       '20000',
@@ -393,7 +456,7 @@ describe('Recovery Target — "Save this as a plan"', () => {
     });
     const queries = await renderScreen();
 
-    await fireEvent.press(await queries.findByRole('button', { name: 'See a hypothetical scenario' }));
+    await fireEvent.press(await queries.findByRole('button', { name: 'Type amount' }));
     await fireEvent.changeText(
       queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
       '20000',
@@ -415,7 +478,7 @@ describe('Recovery Target — "Save this as a plan"', () => {
     apiPost.mockResolvedValue(scenario());
     const queries = await renderScreen();
 
-    await fireEvent.press(await queries.findByRole('button', { name: 'See a hypothetical scenario' }));
+    await fireEvent.press(await queries.findByRole('button', { name: 'Type amount' }));
     await fireEvent.changeText(
       queries.getByLabelText('Assumed monthly expense basis, in Philippine pesos'),
       '20000',
@@ -448,6 +511,7 @@ describe('RecoveryTargetScreen — "This month\'s saved plan"', () => {
     apiGet.mockImplementation((path: string) => {
       if (path === '/insights/recovery') return Promise.resolve(recoveryInsight);
       if (path.endsWith('/recovery-plans')) return Promise.resolve(plan ? [plan] : []);
+      if (path === '/records/months') return Promise.resolve({ months: [] });
       return Promise.reject(new Error(`unexpected path ${path}`));
     });
     const { RecoveryTargetScreen } = await import('../../src/screens/RecoveryTargetScreen');
@@ -461,14 +525,15 @@ describe('RecoveryTargetScreen — "This month\'s saved plan"', () => {
 
   it('renders nothing when no plan is saved for the current month', async () => {
     const queries = await renderScreenWithPlan(null);
-    await queries.findByText('See a hypothetical scenario');
-    expect(queries.queryByText("This month's saved plan")).toBeNull();
+    await queries.findByRole('button', { name: 'Type amount' });
+    expect(queries.queryByText("My saved plan · for reference only")).toBeNull();
   });
 
   it('shows an honest retry when the first plan fetch fails without blocking the main recovery figures', async () => {
     apiGet.mockImplementation((path: string) => {
       if (path === '/insights/recovery') return Promise.resolve(recoveryInsight);
       if (path.endsWith('/recovery-plans')) return Promise.reject(new Error('boom'));
+      if (path === '/records/months') return Promise.resolve({ months: [] });
       return Promise.reject(new Error(`unexpected path ${path}`));
     });
     const { RecoveryTargetScreen } = await import('../../src/screens/RecoveryTargetScreen');
@@ -478,8 +543,8 @@ describe('RecoveryTargetScreen — "This month\'s saved plan"', () => {
         <RecoveryTargetScreen navigation={navigation} />
       </ThemeProvider>,
     );
-    expect(await queries.findByText('See a hypothetical scenario')).toBeTruthy();
-    expect(queries.queryByText("This month's saved plan")).toBeNull();
+    expect(await queries.findByRole('button', { name: 'Type amount' })).toBeTruthy();
+    expect(queries.queryByText("My saved plan · for reference only")).toBeNull();
     expect(await queries.findByText("Couldn't load this")).toBeTruthy();
     expect(queries.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
@@ -491,6 +556,7 @@ describe('RecoveryTargetScreen — "This month\'s saved plan"', () => {
       if (path.endsWith('/recovery-plans')) {
         return failPlan ? Promise.reject(new Error('Could not refresh saved plan.')) : Promise.resolve([savedPlan]);
       }
+      if (path === '/records/months') return Promise.resolve({ months: [] });
       return Promise.reject(new Error(`unexpected path ${path}`));
     });
     const { RecoveryTargetScreen } = await import('../../src/screens/RecoveryTargetScreen');
@@ -500,7 +566,7 @@ describe('RecoveryTargetScreen — "This month\'s saved plan"', () => {
         <RecoveryTargetScreen navigation={navigation} />
       </ThemeProvider>,
     );
-    expect(await queries.findByText("This month's saved plan")).toBeTruthy();
+    expect(await queries.findByText("My saved plan · for reference only")).toBeTruthy();
 
     failPlan = true;
     await act(async () => {
@@ -509,17 +575,16 @@ describe('RecoveryTargetScreen — "This month\'s saved plan"', () => {
 
     expect(await queries.findByText("Couldn't refresh")).toBeTruthy();
     expect(queries.getByText(/Could not refresh saved plan\./)).toBeTruthy();
-    expect(queries.getByText("This month's saved plan")).toBeTruthy();
+    expect(queries.getByText("My saved plan · for reference only")).toBeTruthy();
     expect(queries.getByText('Updated just now')).toBeTruthy();
     expect(queries.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 
   it('shows the saved amount, deadline and buffer, clearly separate from the real target figures', async () => {
     const queries = await renderScreenWithPlan(savedPlan);
-    expect(await queries.findByText("This month's saved plan")).toBeTruthy();
-    expect(queries.getByText("Your own reference note — it doesn't change your business profile or recorded sales.")).toBeTruthy();
-    expect(queries.getByText('2026-08-31')).toBeTruthy();
-    expect(queries.getByText('10%')).toBeTruthy();
+    expect(await queries.findByText("My saved plan · for reference only")).toBeTruthy();
+    expect(queries.getByText('PHP 22,000')).toBeTruthy();
+    expect(queries.getByText(/by Aug 31 · 10% buffer/)).toBeTruthy();
   });
 
   it('deletes the saved plan and removes it from screen', async () => {
@@ -529,14 +594,18 @@ describe('RecoveryTargetScreen — "This month\'s saved plan"', () => {
     });
 
     const queries = await renderScreenWithPlan(savedPlan);
-    await queries.findByText("This month's saved plan");
+    await queries.findByText("My saved plan · for reference only");
 
+    // Delete lives in the edit view, away from the one-line summary.
+    await fireEvent.press(queries.getByRole('button', { name: 'Edit' }));
     await fireEvent.press(queries.getByRole('button', { name: 'Delete' }));
 
     await waitFor(() => expect(apiDelete).toHaveBeenCalledWith(
       `/business-profiles/${fixtures.businessProfile.id}/recovery-plans/2026-08`,
+      undefined,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     ));
-    await waitFor(() => expect(queries.queryByText("This month's saved plan")).toBeNull());
+    await waitFor(() => expect(queries.queryByText("My saved plan · for reference only")).toBeNull());
   });
 
   it('ignores a saved-plan delete alert after its business subtree unmounts', async () => {
@@ -545,7 +614,9 @@ describe('RecoveryTargetScreen — "This month\'s saved plan"', () => {
       delayedRemove = buttons?.find((button) => button.style === 'destructive')?.onPress;
     });
     const queries = await renderScreenWithPlan(savedPlan);
-    await queries.findByText("This month's saved plan");
+    await queries.findByText("My saved plan · for reference only");
+    // Delete lives in the edit view, away from the one-line summary.
+    await fireEvent.press(queries.getByRole('button', { name: 'Edit' }));
     await fireEvent.press(queries.getByRole('button', { name: 'Delete' }));
 
     await queries.unmount();
@@ -560,7 +631,9 @@ describe('RecoveryTargetScreen — "This month\'s saved plan"', () => {
   it('edits the saved plan via PUT and shows the updated figures', async () => {
     apiPut.mockResolvedValue({ ...savedPlan, ownerTargetAmount: 30000 });
     const queries = await renderScreenWithPlan(savedPlan);
-    await queries.findByText("This month's saved plan");
+    await queries.findByText("My saved plan · for reference only");
+    // The what-if card already shows the real PHP 30,000 basis; the edit adds one more.
+    const before = queries.queryAllByText('PHP 30,000').length;
 
     await fireEvent.press(queries.getByRole('button', { name: 'Edit' }));
     await fireEvent.changeText(queries.getByLabelText('Owner target amount (optional)'), '30000');
@@ -569,10 +642,8 @@ describe('RecoveryTargetScreen — "This month\'s saved plan"', () => {
     await waitFor(() => expect(apiPut).toHaveBeenCalledWith(
       `/business-profiles/${fixtures.businessProfile.id}/recovery-plans/2026-08`,
       expect.objectContaining({ ownerTargetAmount: 30000 }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     ));
-    // Coincidentally the same figure as `recoveryInsight.expectedMonthlyExpenses`
-    // above it on screen — at least one instance confirms the edit rendered,
-    // without asserting away the real target's own unrelated figure.
-    await waitFor(() => expect(queries.getAllByText('PHP 30,000').length).toBeGreaterThanOrEqual(2));
+    await waitFor(() => expect(queries.getAllByText('PHP 30,000').length).toBe(before + 1));
   });
 });

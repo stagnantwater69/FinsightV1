@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
 import { describe, expect, it } from "vitest";
+import ts from "typescript";
 
 /**
  * Everything tappable says that it is tappable.
@@ -18,14 +19,6 @@ import { describe, expect, it } from "vitest";
 const ROOT = join(__dirname, "..");
 
 /**
- * How far past `<Pressable` to look. Opening tags here run to about eight
- * lines with a style object inline; fourteen covers the longest without
- * reaching into the children, where a nested control's own role could
- * otherwise be miscredited to its parent.
- */
-const TAG_WINDOW = 14;
-
-/**
  * Every .tsx file under a directory, at any depth, named relative to it.
  *
  * Recursive because both screens and components now nest feature
@@ -41,26 +34,71 @@ function tsxFilesUnder(dir: string, prefix = ""): { name: string; full: string }
   });
 }
 
-function sourceFiles(): { name: string; lines: string[] }[] {
+function sourceFiles(): { name: string; src: string }[] {
   const dirs = [join(ROOT, "src", "screens"), join(ROOT, "src", "components")];
   return dirs.flatMap((dir) =>
-    tsxFilesUnder(dir).map(({ name, full }) => ({ name, lines: readFileSync(full, "utf8").split("\n") })),
+    tsxFilesUnder(dir).map(({ name, full }) => ({ name, src: readFileSync(full, "utf8") })),
   );
 }
 
-function pressables(): { where: string; hasRole: boolean }[] {
+function scanPressables(name: string, src: string): { where: string; hasRole: boolean }[] {
   const found: { where: string; hasRole: boolean }[] = [];
-  for (const { name, lines } of sourceFiles()) {
-    lines.forEach((line, i) => {
-      if (!line.includes("<Pressable")) return;
-      const tag = lines.slice(i, i + TAG_WINDOW).join("\n");
-      found.push({ where: `${name}:${i + 1}`, hasRole: tag.includes("accessibilityRole") });
-    });
-  }
+  // A line window truncates long tags and can borrow a nested child's role.
+  const source = ts.createSourceFile(name, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const visit = (node: ts.Node) => {
+    if ((ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) && node.tagName.getText(source) === "Pressable") {
+      const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+      const attributes = node.attributes.properties.filter(ts.isJsxAttribute);
+      const hidden = attributes.some((attribute) =>
+        attribute.name.getText(source) === "accessible" && attribute.initializer &&
+        ts.isJsxExpression(attribute.initializer) && attribute.initializer.expression?.kind === ts.SyntaxKind.FalseKeyword,
+      ) && attributes.some((attribute) =>
+        attribute.name.getText(source) === "importantForAccessibility" && attribute.initializer &&
+        ts.isStringLiteral(attribute.initializer) && attribute.initializer.text === "no-hide-descendants",
+      );
+      // Hidden modal backdrops have an accessible close button elsewhere.
+      if (hidden) return;
+      const hasRole = attributes.some((attribute) =>
+        ts.isJsxAttribute(attribute) && attribute.name.getText(source) === "accessibilityRole",
+      );
+      found.push({ where: `${name}:${line}`, hasRole });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
   return found;
 }
 
+function pressables(): { where: string; hasRole: boolean }[] {
+  return sourceFiles().flatMap(({ name, src }) => scanPressables(name, src));
+}
+
 describe("pressable roles", () => {
+  it("reads the complete opening tag when comments precede its role", () => {
+    const comments = Array.from({ length: 20 }, (_, i) => `// comment ${i}`).join("\n");
+    expect(scanPressables("fixture.tsx", `<Pressable\n${comments}\naccessibilityRole="button">Label</Pressable>`))
+      .toEqual([{ where: "fixture.tsx:1", hasRole: true }]);
+  });
+
+  it("does not borrow a nested child's role or a role mentioned in a comment", () => {
+    expect(scanPressables("fixture.tsx", '<Pressable /* accessibilityRole="button" */>\n<Pressable accessibilityRole="button" />\n</Pressable>'))
+      .toEqual([{ where: "fixture.tsx:1", hasRole: false }, { where: "fixture.tsx:2", hasRole: true }]);
+  });
+
+  it("finds separate self-closing tags and requires the exact role attribute", () => {
+    expect(scanPressables("fixture.tsx", '<><Pressable accessibilityRole="button" /><Pressable accessibilityRoleHint="button" /></>'))
+      .toEqual([{ where: "fixture.tsx:1", hasRole: true }, { where: "fixture.tsx:1", hasRole: false }]);
+  });
+
+  it("excludes only Pressables explicitly hidden from both platforms", () => {
+    expect(scanPressables("fixture.tsx", '<>\n<Pressable accessible={false} importantForAccessibility="no-hide-descendants" />\n<Pressable accessible={false} />\n<Pressable importantForAccessibility="no-hide-descendants" />\n<Pressable accessible={true} importantForAccessibility="no-hide-descendants" />\n</>'))
+      .toEqual([
+        { where: "fixture.tsx:3", hasRole: false },
+        { where: "fixture.tsx:4", hasRole: false },
+        { where: "fixture.tsx:5", hasRole: false },
+      ]);
+  });
+
   it("finds the pressables at all", () => {
     // Guards the test itself: an empty scan would pass the assertion below
     // while proving nothing.

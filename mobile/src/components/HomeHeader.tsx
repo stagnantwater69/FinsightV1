@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Image, Modal, Pressable, ScrollView, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { T } from "./ui";
 import { useTourTarget } from "./tour/targets";
 import { TAP, font, radius, space, typeScale } from "../theme/tokens";

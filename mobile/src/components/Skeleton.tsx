@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Animated, View, ViewStyle } from "react-native";
+import { Animated, Platform, View, ViewStyle } from "react-native";
 import { useReducedMotion } from "../lib/useReducedMotion";
 import { radius, space } from "../theme/tokens";
 import { useTheme } from "../context/ThemeContext";
@@ -48,12 +48,12 @@ export function SkeletonBox({
         Animated.timing(opacity, {
           toValue: BRIGHT,
           duration: 750,
-          useNativeDriver: true,
+          useNativeDriver: Platform.OS !== "web",
         }),
         Animated.timing(opacity, {
           toValue: DIM,
           duration: 750,
-          useNativeDriver: true,
+          useNativeDriver: Platform.OS !== "web",
         }),
       ])
     );

@@ -1,13 +1,21 @@
 import { useState } from "react";
-import { Pressable, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
-import { Button, Card, Field, T } from "../../components/ui";
+import { View } from "react-native";
+import { Button, Field, T } from "../../components/ui";
+import { SubpageCard } from "../../components/SubpageKit";
+import { TAP_FLOOR } from "../../components/touchTarget";
 import { useTheme } from "../../context/ThemeContext";
 import { FAQS, FAQ_TOPICS, TUTORIALS } from "../../lib/helpContent";
-import { font, radius, space } from "../../theme/tokens";
-import { HelpPage } from "./HelpPage";
+import { font, space, typeScale } from "../../theme/tokens";
+import { HelpDisclosure, HelpGroup, HelpIcon, HelpLink, HelpPage, type HelpNavigation } from "./HelpPage";
 
-export function FaqsScreen() {
+const TOPIC_ICONS = {
+  "Getting started": "compass-outline",
+  "Using FinSight": "help-circle-outline",
+  "Your data": "shield-checkmark-outline",
+  "Cost and limits": "information-circle-outline",
+} as const;
+
+export function FaqsScreen({ navigation }: { navigation?: HelpNavigation } = {}) {
   const t = useTheme();
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState<string | null>(null);
@@ -15,11 +23,17 @@ export function FaqsScreen() {
   const matches = FAQS.filter((faq) => `${faq.topic} ${faq.q} ${faq.a}`.toLocaleLowerCase().includes(search));
 
   return (
-    <HelpPage intro="Find answers about using FinSight, your records, and what to expect.">
-      <View>
+    <HelpPage title="Questions & answers" navigation={navigation}>
+      <SubpageCard tone="mint">
+        <View style={{ flexDirection: "row", alignItems: "center", gap: space.md, marginBottom: space.md }}>
+          <HelpIcon name="search-outline" />
+          <View style={{ flex: 1, minWidth: 0, gap: space.xs }}>
+            <T variant="title" accessibilityRole="header">Find an answer</T>
+            <T>Help with your everyday tasks.</T>
+          </View>
+        </View>
         <Field
           label="Search questions"
-          icon="search-outline"
           value={query}
           onChangeText={setQuery}
           placeholder="Try receipt, offline, or data"
@@ -29,98 +43,72 @@ export function FaqsScreen() {
         />
         {search ? (
           <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: space.sm }}>
-            <T accessibilityLiveRegion="polite" style={{ flexGrow: 1, color: t.textSecondary }}>
+            <T accessibilityLiveRegion="polite" style={{ flexGrow: 1, color: t.textSecondary, fontSize: typeScale.bodySm }}>
               {matches.length} {matches.length === 1 ? "answer" : "answers"} found
             </T>
-            <Button title="Clear search" variant="ghost" style={{ minHeight: 48 }} onPress={() => setQuery("")} />
+            <Button title="Clear search" variant="ghost" style={{ minHeight: TAP_FLOOR }} onPress={() => setQuery("")} />
           </View>
         ) : null}
-      </View>
+      </SubpageCard>
 
       {matches.length === 0 ? (
-        <View style={{ gap: space.sm }}>
-          <T variant="title" accessibilityRole="header">No matching questions</T>
+        <SubpageCard title="No matching questions" icon="search-outline">
           <T style={{ color: t.textSecondary }}>Try a shorter phrase or browse all questions by clearing your search.</T>
-        </View>
+        </SubpageCard>
       ) : FAQ_TOPICS.map((topic) => {
         const questions = matches.filter((faq) => faq.topic === topic);
         if (questions.length === 0) return null;
         return (
-          <View key={topic} style={{ gap: space.md }}>
-            <T variant="title" accessibilityRole="header">{topic}</T>
-            <Card style={{ padding: 0, overflow: "hidden" }}>
-              {questions.map((faq, index) => {
-                const expanded = open === faq.q;
-                return (
-                  <View key={faq.q} style={{ borderTopWidth: index === 0 ? 0 : 1, borderTopColor: t.border }}>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={faq.q}
-                      accessibilityState={{ expanded }}
-                      accessibilityHint={expanded ? "Hides the answer" : "Shows the answer"}
-                      onPress={() => setOpen(expanded ? null : faq.q)}
-                      style={({ pressed }) => ({
-                        minHeight: 56,
-                        padding: space.lg,
-                        flexDirection: "row",
-                        alignItems: "center",
-                        gap: space.md,
-                        backgroundColor: pressed || expanded ? t.brandSurface : t.surface,
-                      })}
-                    >
-                      <T style={{ flex: 1, minWidth: 0, fontFamily: font.sansSemibold, color: expanded ? t.brandText : t.textPrimary }}>
-                        {faq.q}
-                      </T>
-                      <Ionicons name={expanded ? "remove-outline" : "add-outline"} size={20} color={t.brandText} accessibilityElementsHidden importantForAccessibility="no" />
-                    </Pressable>
-                    {expanded ? (
-                      <T selectable style={{ padding: space.lg, color: t.textSecondary, lineHeight: 24 }}>
-                        {faq.a}
-                      </T>
-                    ) : null}
-                  </View>
-                );
-              })}
-            </Card>
-          </View>
+          <HelpGroup key={topic} title={topic} icon={TOPIC_ICONS[topic]}>
+            {questions.map((faq, index) => {
+              const expanded = open === faq.q;
+              return (
+                <HelpDisclosure key={faq.q} title={faq.q} kind="answer" expanded={expanded} first={index === 0} onPress={() => setOpen(expanded ? null : faq.q)}>
+                  <T selectable style={{ color: t.textSecondary, lineHeight: 24 }}>{faq.a}</T>
+                </HelpDisclosure>
+              );
+            })}
+          </HelpGroup>
         );
       })}
+      {navigation ? (
+        <SubpageCard style={{ paddingVertical: space.xs }}>
+          <HelpLink first icon="book-outline" title="Browse written tutorials" detail="Follow a guide at your own pace."
+            onPress={() => navigation.navigate("Tutorials")} />
+        </SubpageCard>
+      ) : null}
     </HelpPage>
   );
 }
 
 const GUIDE_GROUPS = [
-  { title: "Start with the essentials", steps: [1, 2] },
-  { title: "Bring in your records", steps: [3, 4] },
-  { title: "Understand your business", steps: [5, 6] },
-];
+  { title: "Start with the essentials", steps: [1, 2], icon: "storefront-outline" },
+  { title: "Bring in your records", steps: [3, 4], icon: "receipt-outline" },
+  { title: "Understand your business", steps: [5, 6], icon: "bar-chart-outline" },
+] as const;
 
-export function TutorialsScreen() {
+export function TutorialsScreen({ navigation }: { navigation?: HelpNavigation } = {}) {
   const t = useTheme();
+  const [open, setOpen] = useState<number | null>(null);
   return (
-    <HelpPage intro="Six short guides to help you get started. Follow them in order, or go straight to the topic you need.">
+    <HelpPage title="Tutorials" navigation={navigation} intro="Six short guides for everyday tasks.">
       {GUIDE_GROUPS.map((group) => (
-        <View key={group.title} style={{ gap: space.lg }}>
-          <T variant="title" accessibilityRole="header">{group.title}</T>
-          {TUTORIALS.filter((tutorial) => group.steps.includes(tutorial.n)).map((tutorial) => (
-            <View key={tutorial.n} style={{ flexDirection: "row", alignItems: "flex-start", gap: space.md }}>
-              <View style={{ minWidth: 32, minHeight: 32, padding: space.xs, borderRadius: radius.sm, backgroundColor: t.brandSurface, alignItems: "center", justifyContent: "center" }}>
-                <T accessibilityElementsHidden importantForAccessibility="no" style={{ color: t.brandText, fontFamily: font.sansSemibold }}>{tutorial.n}</T>
-              </View>
-              <View style={{ flex: 1, minWidth: 0, gap: space.sm }}>
-                <T accessibilityRole="header" accessibilityLabel={`Step ${tutorial.n}: ${tutorial.title}`} style={{ fontFamily: font.sansSemibold }}>
-                  {tutorial.title}
-                </T>
-                <T selectable style={{ color: t.textSecondary, lineHeight: 24 }}>{tutorial.body}</T>
-              </View>
-            </View>
+        <HelpGroup key={group.title} title={group.title} icon={group.icon}>
+          {TUTORIALS.filter((tutorial) => (group.steps as readonly number[]).includes(tutorial.n)).map((tutorial, index) => (
+            <HelpDisclosure key={tutorial.n} title={tutorial.title} label={`Step ${tutorial.n}: ${tutorial.title}`} number={tutorial.n}
+              kind="guide" expanded={open === tutorial.n} first={index === 0} onPress={() => setOpen(open === tutorial.n ? null : tutorial.n)}>
+              <T selectable style={{ color: t.textSecondary, lineHeight: 24 }}>{tutorial.body}</T>
+            </HelpDisclosure>
           ))}
-        </View>
+        </HelpGroup>
       ))}
-      <View style={{ borderTopWidth: 1, borderTopColor: t.border, paddingTop: space.lg, gap: space.xs }}>
-        <T style={{ fontFamily: font.sansMedium }}>Video walkthroughs coming soon</T>
-        <T style={{ color: t.textSecondary }}>You can use the written guides above today.</T>
-      </View>
+      <SubpageCard tone="mint" style={{ flexDirection: "row", alignItems: "center", gap: space.md }}>
+        <HelpIcon name="videocam-outline" />
+        <View style={{ flex: 1, minWidth: 0, gap: space.xs }}>
+          <T style={{ color: t.textPrimary, fontFamily: font.sansMedium }}>Video walkthroughs coming soon</T>
+          <T style={{ color: t.textSecondary, fontSize: typeScale.bodySm }}>You can use the written guides above today.</T>
+        </View>
+      </SubpageCard>
     </HelpPage>
   );
 }

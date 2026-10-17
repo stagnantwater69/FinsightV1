@@ -1,4 +1,7 @@
 import React from 'react';
+vi.mock('@react-navigation/native', () => ({
+  useFocusEffect: (effect: () => void | (() => void)) => React.useEffect(effect, [effect]),
+}));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, fireEvent, waitFor } from '@testing-library/react-native';
 
@@ -60,10 +63,21 @@ beforeEach(() => {
 });
 
 describe('Category create form — cost-behavior classification', () => {
+  it('mounts at most ten of 70 categories initially and searches the complete loaded collection', async () => {
+    categories = Array.from({ length: 70 }, (_, index) => ({ ...fixtures.categories[0]!, id: index + 1, name: `Synthetic category ${String(index).padStart(2, '0')}` }));
+    const screen = await renderScreen();
+    const rows = screen.getAllByText(/^Synthetic category \d{2}$/);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.length).toBeLessThanOrEqual(10);
+    expect(screen.queryByText('Synthetic category 69')).toBeNull();
+    await fireEvent.changeText(screen.getByLabelText('Search categories'), 'category 69');
+    expect(screen.getByText('Synthetic category 69')).toBeTruthy();
+    expect(screen.queryByText('Synthetic category 00')).toBeNull();
+  });
   it('offers Fixed/Variable/Mixed chips and sends nothing extra when left unset', async () => {
     const queries = await renderScreen();
 
-    await fireEvent.press(queries.getByRole('button', { name: '+ New category' }));
+    await fireEvent.press(queries.getByRole('button', { name: 'New category' }));
 
     expect(queries.getByText("How this cost behaves (optional)")).toBeTruthy();
     expect(queries.getByRole('button', { name: 'Fixed cost' })).toBeTruthy();
@@ -84,7 +98,7 @@ describe('Category create form — cost-behavior classification', () => {
   it('sends the chosen classification when the owner picks one', async () => {
     const queries = await renderScreen();
 
-    await fireEvent.press(queries.getByRole('button', { name: '+ New category' }));
+    await fireEvent.press(queries.getByRole('button', { name: 'New category' }));
     await fireEvent.changeText(queries.getByLabelText('Name'), 'Rent');
     await fireEvent.press(queries.getByRole('button', { name: 'Fixed cost' }));
     await fireEvent.press(queries.getByRole('button', { name: 'Save category' }));
@@ -100,7 +114,7 @@ describe('Category create form — cost-behavior classification', () => {
   it('deselects on a second tap of the same chip, back to unclassified', async () => {
     const queries = await renderScreen();
 
-    await fireEvent.press(queries.getByRole('button', { name: '+ New category' }));
+    await fireEvent.press(queries.getByRole('button', { name: 'New category' }));
     const fixedChip = queries.getByRole('button', { name: 'Fixed cost' });
     await fireEvent.press(fixedChip);
     expect(fixedChip.props.accessibilityState?.selected).toBe(true);

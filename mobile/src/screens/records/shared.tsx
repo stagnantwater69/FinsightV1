@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { TextInput, View } from "react-native";
 import { AlertBadge, Button, CategorySelect, ErrorNote, T } from "../../components/ui";
 import { saveFailureMessage } from "../../lib/connectionState";
 import { FIELD_LIMITS } from "../../lib/fieldLimits";
 import { useBusinessProfiles } from "../../context/BusinessProfileContext";
 import { useImportOperation } from "../../lib/useImportOperation";
-import { TAP, radius, space, typeScale } from "../../theme/tokens";
+import { font, radius, space, typeScale } from "../../theme/tokens";
+import { TAP_FLOOR } from "../../components/touchTarget";
 import { useTheme } from "../../context/ThemeContext";
 import type { ExpenseCategory, RecordItem } from "../../lib/types";
 
@@ -50,11 +51,13 @@ export function CategoryPicker({
   value,
   onChange,
   onCreated,
+  disabled = false,
 }: {
   categories: ExpenseCategory[];
   value: number | null;
   onChange: (id: number) => void;
   onCreated: () => void;
+  disabled?: boolean;
 }) {
   const t = useTheme();
   const { brand, ink } = t;
@@ -65,6 +68,8 @@ export function CategoryPicker({
   const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(false);
   const operation = useImportOperation(selected?.id);
+  const disabledRef = useRef(disabled);
+  disabledRef.current = disabled;
   const [error, setError] = useState<string | null>(null);
   /** Raw TextInput, so the focus border `Field` gives every other input is
    *  wired here by hand rather than inherited. */
@@ -72,7 +77,7 @@ export function CategoryPicker({
   useEffect(() => { setNewName(""); setBusy(false); setError(null); }, [selected?.id]);
 
   async function create() {
-    if (!newName.trim()) return;
+    if (disabledRef.current || !newName.trim()) return;
     const task = operation.begin();
     if (!task) return;
     setBusy(true);
@@ -82,7 +87,7 @@ export function CategoryPicker({
       if (!operation.current(task)) return;
       setNewName("");
       onCreated();
-      onChange(c.id);
+      if (!disabledRef.current) onChange(c.id);
     } catch (err) {
       if (operation.current(task)) setError(saveFailureMessage(err, "Create category"));
     } finally {
@@ -101,7 +106,7 @@ export function CategoryPicker({
           screen is the kind of difference that reads as a bug.
         */
         <View style={{ marginBottom: space.sm }}>
-          <CategorySelect options={categories} value={value} onChange={onChange} />
+          <CategorySelect options={categories} value={value} onChange={(id) => { if (!disabledRef.current) onChange(id); }} disabled={disabled} />
         </View>
       ) : (
         // Create-on-the-fly when the list is empty, same as web — a brand-new
@@ -110,12 +115,14 @@ export function CategoryPicker({
           No categories yet. Add your first one below (e.g. Inventory, Utilities, Rent).
         </T>
       )}
-      <View style={{ flexDirection: "row", gap: space.sm }}>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm }}>
         <TextInput
+          editable={!disabled}
+          accessibilityState={{ disabled }}
           value={newName}
           accessibilityLabel="New category name"
           maxLength={FIELD_LIMITS.categoryName}
-          onChangeText={setNewName}
+          onChangeText={(value) => { if (!disabledRef.current) setNewName(value); }}
           placeholder="New category name"
           placeholderTextColor={ink[400]}
           // Deliberately NOT part of the surrounding form's next-field chain.
@@ -131,17 +138,21 @@ export function CategoryPicker({
           onFocus={() => setNameFocused(true)}
           onBlur={() => setNameFocused(false)}
           style={{
-            flex: 1,
-            minHeight: TAP,
+            flexGrow: 1,
+            flexShrink: 1,
+            flexBasis: 160,
+            minWidth: 0,
+            minHeight: TAP_FLOOR,
             borderWidth: 1,
             borderColor: nameFocused ? brand[600] : ink[200],
             borderRadius: radius.md,
             paddingHorizontal: space.md,
+            fontFamily: font.sans,
             fontSize: typeScale.body,
             color: ink[900],
           }}
         />
-        <Button title="Add" variant="secondary" onPress={create} loading={busy} disabled={!newName.trim()} />
+        <Button title="Add" variant="secondary" onPress={create} loading={busy} disabled={disabled || !newName.trim()} style={{ maxWidth: "100%" }} />
       </View>
       {error ? <ErrorNote>{error}</ErrorNote> : null}
     </View>

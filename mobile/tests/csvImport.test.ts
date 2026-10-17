@@ -5,6 +5,7 @@ import {
   checkMapping,
   columnMappingPayload,
   correctionsPayload,
+  csvReviewBodyError,
   defaultImportTitle,
   guessColumn,
   guessMapping,
@@ -12,6 +13,7 @@ import {
   newCategoryNames,
   newIdempotencyKey,
   problemsFirst,
+  reviewCounts,
   rowProblem,
   type ColumnMapping,
   type RowRules,
@@ -248,6 +250,24 @@ describe("row review", () => {
     expect(analysed.map((r) => r.rowNumber)).toEqual([2, 3, 4]);
   });
 
+  it("preserves actual spreadsheet identity when later issues are added to the preview", () => {
+    const analysed = analyseRows(rows, mapping, { 427: { amount: "250", vendor: "New supplier" } }, RULES, [2, 427, 1_204]);
+    expect(analysed.map((row) => row.rowNumber)).toEqual([2, 427, 1_204]);
+    expect(analysed[1]!.values.amount).toBe("250");
+    expect(analysed[1]!.values.vendor).toBe("New supplier");
+    expect(analysed[0]!.values.amount).not.toBe("250");
+  });
+
+  it("keeps excluded rows editable in corrections but omits them from problem and new-category counts", () => {
+    const correction = { 3: { exclude: true, category: "Typo category", amount: "300" } };
+    const analysed = analyseRows(rows, mapping, correction, RULES);
+    expect(analysed[1]!.excluded).toBe(true);
+    expect(analysed[1]!.values.category).toBe("Typo category");
+    expect(reviewCounts(analysed, correction).problems).toBe(0);
+    expect(newCategoryNames(analysed, ["Inventory"])).not.toContain("Typo category");
+    expect(problemsFirst(analysed).map((row) => row.rowNumber)).toEqual([2, 3, 4]);
+  });
+
   it("applies a typed correction over the file's own cell", () => {
     const analysed = analyseRows(rows, mapping, { 3: { date: "2026-01-06" } }, RULES);
     expect(analysed[1]!.problem).toBeNull();
@@ -317,6 +337,38 @@ describe("payloads the server parses", () => {
   it("keeps a deliberately cleared cell, which is a real correction", () => {
     expect(correctionsPayload({ 4: { category: "" } })).toEqual({ "4": { category: "" } });
   });
+
+  it("sends bulk exclusions and vendor edits without losing row-specific balance overrides", () => {
+    expect(correctionsPayload({
+      2: { amount: "170", vendor: "", includedInAvailableFundsBaseline: false, exclude: true },
+      427: { exclude: false },
+    })).toEqual({
+      "2": { amount: "170", vendor: "", includedInAvailableFundsBaseline: false, exclude: true },
+      "427": { exclude: false },
+    });
+  });
+
+  it("keeps bounded bulk exclusions within the API's 100 KiB JSON limit", () => {
+    const corrections = Object.fromEntries(Array.from({ length: 250 }, (_, index) => [index + 2, { exclude: true }]));
+    const body = { businessProfileId: 1, stagedUploadId: "12345678-1234-4123-8123-123456789abc", corrections };
+    expect(Buffer.byteLength(JSON.stringify(body), "utf8")).toBeLessThan(100 * 1024);
+    expect(csvReviewBodyError(body)).toBeNull();
+  });
+
+  it("accepts exactly 100 KiB and blocks a request one byte over the server limit", () => {
+    const body = { note: "a".repeat(100 * 1024 - Buffer.byteLength(JSON.stringify({ note: "" }), "utf8")) };
+    expect(Buffer.byteLength(JSON.stringify(body), "utf8")).toBe(100 * 1024);
+    expect(csvReviewBodyError(body)).toBeNull();
+    expect(csvReviewBodyError({ note: `${body.note}a` })).toMatch(/too many large edits/);
+  });
+
+  it("counts UTF-8 bytes instead of JavaScript character length for international descriptions", () => {
+    const body = { description: "é".repeat(60_000) };
+    expect(JSON.stringify(body).length).toBeLessThan(100 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(body), "utf8")).toBeGreaterThan(100 * 1024);
+    expect(csvReviewBodyError(body)).toMatch(/Your changes are kept/);
+    expect(csvReviewBodyError({ description: "🦉".repeat(30_000) })).toMatch(/too many large edits/);
+  });
 });
 
 describe("batch title", () => {
@@ -335,15 +387,14 @@ describe("batch title", () => {
     expect(defaultImportTitle(long).length).toBeLessThanOrEqual(FIELD_LIMITS.importTitle);
   });
 
-  it("breaks on a word where that still keeps most of the allowance", () => {
-    const title = defaultImportTitle(`${"word ".repeat(60)}.csv`);
-    expect(title.length).toBeLessThanOrEqual(FIELD_LIMITS.importTitle);
-    expect(title.endsWith("word")).toBe(true);
+  it("uses the same filename truncation as web", () => {
+    const name = `${"word ".repeat(60)}.csv`;
+    expect(defaultImportTitle(name)).toBe(name.replace(/\.csv$/i, "").trim().slice(0, FIELD_LIMITS.importTitle));
   });
 
   it("never returns an empty title, which the server rejects", () => {
-    expect(defaultImportTitle(".csv")).toBe("Imported records");
-    expect(defaultImportTitle("")).toBe("Imported records");
+    expect(defaultImportTitle(".csv")).toBe("CSV import");
+    expect(defaultImportTitle("")).toBe("CSV import");
   });
 });
 
@@ -361,6 +412,18 @@ describe("idempotency key", () => {
 });
 
 describe("import progress", () => {
+  it.each([undefined, null, NaN, Infinity, -1])("does not fabricate progress from an unreported or invalid processed count %s", (processedRows) => {
+    expect(importProgress({ totalRows: 1_000, processedRows })).toBeNull();
+  });
+
+  it("shows zero only when the server explicitly reported zero processed rows", () => {
+    expect(importProgress({ totalRows: 1_000, processedRows: 0 })).toEqual({ done: 0, total: 1_000, fraction: 0 });
+  });
+
+  it.each([NaN, Infinity, -1])("does not draw progress against an invalid total %s", (totalRows) => {
+    expect(importProgress({ totalRows, processedRows: 20 })).toBeNull();
+  });
+
   it("reports real counts once the server knows how many rows there are", () => {
     expect(importProgress({ totalRows: 200, processedRows: 50 })).toEqual({ done: 50, total: 200, fraction: 0.25 });
   });

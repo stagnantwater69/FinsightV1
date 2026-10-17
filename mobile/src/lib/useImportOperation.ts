@@ -16,7 +16,7 @@ export function useImportOperation(businessId: number | undefined) {
   }, [businessId]);
   return useMemo(() => ({
     begin() {
-      if (active.current || !mounted.current) return null;
+      if (active.current || !mounted.current || scope.current !== businessId) return null;
       const operation = { controller: new AbortController(), businessId };
       active.current = operation;
       return operation;
