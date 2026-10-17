@@ -173,7 +173,7 @@ describe("creating and continuing a conversation", () => {
       .send({ question: "Which category moved the most?" })
       .expect(201);
 
-    const input = askSpy.mock.calls[0][0];
+    const input = askSpy.mock.calls[0]![0];
     expect(input.priorTurns).toEqual([
       { question: "Why were my expenses higher this month?", answer: "Your Inventory spending rose." },
     ]);
@@ -193,7 +193,7 @@ describe("creating and continuing a conversation", () => {
         .expect(201);
     }
 
-    const lastCall = askSpy.mock.calls[askSpy.mock.calls.length - 1][0];
+    const lastCall = askSpy.mock.calls[askSpy.mock.calls.length - 1]![0];
     expect(lastCall.priorTurns).toHaveLength(6);
     expect(lastCall.priorTurns[5].question).toBe("Turn 7?");
   });

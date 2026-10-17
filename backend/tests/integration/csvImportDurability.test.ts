@@ -303,7 +303,7 @@ describe("idempotent confirmation", () => {
           data: { workerId: "another-worker", attemptCount: batch.attemptCount + 1 },
         });
         return batch;
-      }) as typeof prisma.cSVImportBatch.findUniqueOrThrow);
+      }) as unknown as typeof prisma.cSVImportBatch.findUniqueOrThrow);
 
     try {
       const result = await confirmImport(ctx.user.id, confirmArgs(buffer, { idempotencyKey: "lease-lost" }));

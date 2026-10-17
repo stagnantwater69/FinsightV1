@@ -87,7 +87,7 @@ async function run(entry: Entry) {
 }
 
 (async () => {
-  const results = [];
+  const results: Awaited<ReturnType<typeof run>>[] = [];
   for (const entry of manifest) results.push(await run(entry));
   const eligible = results.filter((result) => result.releaseGateEligible);
   const receipts = eligible.filter((result) => result.kind === "receipt");

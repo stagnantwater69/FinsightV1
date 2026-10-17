@@ -188,7 +188,7 @@ describe("Round 3: itemised confirmation with nothing itemised", () => {
         description: "Rice purchase",
         amount: 1250,
         itemAssignments: [],
-        reconciliation: { mode: "category", categoryId: owner.categories.Utilities },
+        reconciliation: { mode: "category", categoryId: owner.categories.Utilities! },
       });
     expect(response.status).toBe(400);
     expect(response.body.error).toMatch(/at least one/i);
@@ -252,7 +252,7 @@ describe("Round 3: candidate persistence racing an owner delete", () => {
     const expense = await prisma.expenseRecord.create({
       data: {
         businessProfileId: owner.profile.id,
-        categoryId: owner.categories.Inventory,
+        categoryId: owner.categories.Inventory!,
         date: new Date("2026-09-13T00:00:00.000Z"),
         description: "Rice purchase",
         vendor: "Owner Store",

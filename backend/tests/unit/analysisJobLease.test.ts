@@ -14,20 +14,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  */
 
 const analysisJobUpdate = vi.fn();
-const analysisJobUpdateMany = vi.fn(async () => ({ count: 1 }));
+const analysisJobUpdateMany = vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ count: 1 }));
 const queryRaw = vi.fn();
 const transactionQueryRaw = vi.fn();
 const transaction = vi.fn();
-const businessProfileFindUnique = vi.fn(async () => ({ userId: 7 }));
-const refreshOwnedCategoryStatistics = vi.fn(async () => []);
-const refreshRecurringPatterns = vi.fn(async () => []);
-const refreshTrendFindings = vi.fn(async () => []);
-const refreshIsolationForestFindings = vi.fn(async () => []);
-const detectAmountOutlierForExpense = vi.fn(async () => null);
-const detectBehavioralNoveltyForExpense = vi.fn(async () => null);
-const detectNearDuplicateForExpense = vi.fn(async () => null);
-const detectVelocityForExpense = vi.fn(async () => null);
-const notificationFindFirst = vi.fn(async () => null);
+const businessProfileFindUnique = vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ userId: 7 }));
+const refreshOwnedCategoryStatistics = vi.fn(async (..._args: unknown[]): Promise<unknown> => []);
+const refreshRecurringPatterns = vi.fn(async (..._args: unknown[]): Promise<unknown> => []);
+const refreshTrendFindings = vi.fn(async (..._args: unknown[]): Promise<unknown> => []);
+const refreshIsolationForestFindings = vi.fn(async (..._args: unknown[]): Promise<unknown> => []);
+const detectAmountOutlierForExpense = vi.fn(async (..._args: unknown[]): Promise<unknown> => null);
+const detectBehavioralNoveltyForExpense = vi.fn(async (..._args: unknown[]): Promise<unknown> => null);
+const detectNearDuplicateForExpense = vi.fn(async (..._args: unknown[]): Promise<unknown> => null);
+const detectVelocityForExpense = vi.fn(async (..._args: unknown[]): Promise<unknown> => null);
+const notificationFindFirst = vi.fn(async (..._args: unknown[]): Promise<unknown> => null);
 const notificationCreate = vi.fn();
 const warn = vi.fn();
 

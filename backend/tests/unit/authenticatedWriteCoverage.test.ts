@@ -123,12 +123,12 @@ describe("paid-operation quotas and browser retry contract", () => {
 
   it("exposes retry timing and rate headers to the allowed browser origin", async () => {
     prime();
-    const origin = env.CORS_ORIGIN.split(",")[0].trim();
+    const origin = env.CORS_ORIGIN.split(",")[0]!.trim();
     const result = await request(application).post("/api/v1/records/expenses")
       .set("x-test-user", "1").set("Origin", origin).send({});
     expect(result.status).toBe(429);
     expect(result.headers["access-control-allow-origin"]).toBe(origin);
-    const exposed = result.headers["access-control-expose-headers"].split(",").map((header: string) => header.trim().toLowerCase());
+    const exposed = result.headers["access-control-expose-headers"]!.split(",").map((header: string) => header.trim().toLowerCase());
     expect(exposed).toEqual(expect.arrayContaining([
       "retry-after", "ratelimit-limit", "ratelimit-remaining", "ratelimit-reset", "server-timing",
     ]));

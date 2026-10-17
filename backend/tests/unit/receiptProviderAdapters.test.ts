@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { localExtraction, providerRequest } from "../helpers/receiptProviderFixtures";
+// Adapters return `unknown` because provider output is untrusted until the
+// contract parses it; these tests read the outcome the adapter built.
+import type { ReceiptProviderOutcome } from "../../src/services/receiptProviderContract";
 
 const extractReceiptWithVision = vi.fn();
 const verifyVisionReceipt = vi.fn();
@@ -52,7 +55,7 @@ describe("provider adapter item evidence", () => {
     verifyVisionReceipt.mockResolvedValue({ verdict: { accept: true, rejectedFields: [] }, failure: null });
 
     const request = providerRequest();
-    const outcome = await createGeminiReceiptAdapter().extract(request);
+    const outcome = (await createGeminiReceiptAdapter().extract(request)) as ReceiptProviderOutcome;
 
     expect(outcome.status).toBe("SUCCEEDED");
     expect(outcome.extraction?.itemsEvidence).toMatchObject({
@@ -67,7 +70,7 @@ describe("provider adapter item evidence", () => {
     extractReceiptWithVision.mockResolvedValue({ receipt: reconciledReceipt });
     verifyVisionReceipt.mockResolvedValue({ verdict: { accept: true, rejectedFields: [] }, failure: null });
 
-    const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
+    const outcome = (await createGeminiReceiptAdapter().extract(providerRequest())) as ReceiptProviderOutcome;
 
     expect(outcome.extraction?.itemsEvidence).toMatchObject({ validationState: "VALIDATED" });
     expect(outcome.extraction?.itemsEvidence?.validationCodes).toContain("ARITHMETIC_VALID");
@@ -76,7 +79,7 @@ describe("provider adapter item evidence", () => {
   it("keeps unreconciled Veryfi items unvalidated too", async () => {
     extractReceiptWithVeryfi.mockResolvedValue({ receipt: unreconciledReceipt });
 
-    const outcome = await createVeryfiReceiptAdapter().extract(providerRequest({ provider: "veryfi" }));
+    const outcome = (await createVeryfiReceiptAdapter().extract(providerRequest({ provider: "veryfi" }))) as ReceiptProviderOutcome;
 
     expect(outcome.extraction?.itemsEvidence).toMatchObject({ validationState: "UNVALIDATED" });
   });
@@ -95,7 +98,7 @@ describe("provider adapter item evidence", () => {
         calibration: { state: "CALIBRATED", version: "routing-v1" },
       },
     });
-    const outcome = await createGeminiReceiptAdapter().extract(request);
+    const outcome = (await createGeminiReceiptAdapter().extract(request)) as ReceiptProviderOutcome;
     const merged = mergeReceiptProviderOutcome(localExtraction(), request, outcome);
 
     expect(merged.appliedFields).toContain("items");
@@ -115,7 +118,7 @@ describe("verifier reachability", () => {
   it("records an unconfigured verifier as an authentication failure billed for the extraction only", async () => {
     verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "not_attempted" });
 
-    const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
+    const outcome = (await createGeminiReceiptAdapter().extract(providerRequest())) as ReceiptProviderOutcome;
 
     expect(outcome.status).toBe("FAILED");
     expect(outcome.outcomeCode).toBe("AUTH_ERROR");
@@ -126,7 +129,7 @@ describe("verifier reachability", () => {
   it("keeps an authentication rejection distinct from a generic HTTP failure", async () => {
     verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "auth", httpStatus: 403 });
 
-    const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
+    const outcome = (await createGeminiReceiptAdapter().extract(providerRequest())) as ReceiptProviderOutcome;
 
     expect(outcome.status).toBe("FAILED");
     expect(outcome.outcomeCode).toBe("AUTH_ERROR");
@@ -141,7 +144,7 @@ describe("verifier reachability", () => {
       retryAfterMs: 45_000,
     });
 
-    const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
+    const outcome = (await createGeminiReceiptAdapter().extract(providerRequest())) as ReceiptProviderOutcome;
 
     expect(outcome.status).toBe("FAILED");
     expect(outcome.outcomeCode).toBe("RATE_LIMITED");
@@ -156,7 +159,7 @@ describe("verifier reachability", () => {
       retryAfterMs: 45_000,
     });
 
-    const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
+    const outcome = (await createGeminiReceiptAdapter().extract(providerRequest())) as ReceiptProviderOutcome;
 
     expect(outcome.status).toBe("FAILED");
     expect(outcome.outcomeCode).toBe("PROVIDER_SERVER_ERROR");
@@ -166,7 +169,7 @@ describe("verifier reachability", () => {
   it("records a dropped connection as billing-ambiguous while preserving its code", async () => {
     verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "transport" });
 
-    const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
+    const outcome = (await createGeminiReceiptAdapter().extract(providerRequest())) as ReceiptProviderOutcome;
 
     expect(outcome.status).toBe("AMBIGUOUS");
     expect(outcome.outcomeCode).toBe("TRANSPORT_ERROR");
@@ -176,7 +179,7 @@ describe("verifier reachability", () => {
   it("still records a real timeout as ambiguous, because the charge is genuinely unknown", async () => {
     verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "timeout" });
 
-    const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
+    const outcome = (await createGeminiReceiptAdapter().extract(providerRequest())) as ReceiptProviderOutcome;
 
     expect(outcome.status).toBe("AMBIGUOUS");
     expect(outcome.outcomeCode).toBe("TIMEOUT_AFTER_SUBMISSION");
@@ -186,7 +189,7 @@ describe("verifier reachability", () => {
   it("keeps cancellation distinct from timeout", async () => {
     verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "cancelled" });
 
-    const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
+    const outcome = (await createGeminiReceiptAdapter().extract(providerRequest())) as ReceiptProviderOutcome;
 
     expect(outcome.status).toBe("AMBIGUOUS");
     expect(outcome.outcomeCode).toBe("REQUEST_CANCELLED");
@@ -196,7 +199,7 @@ describe("verifier reachability", () => {
   it("bills both calls when the verifier answered with something that is not a verdict", async () => {
     verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "unusable" });
 
-    const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
+    const outcome = (await createGeminiReceiptAdapter().extract(providerRequest())) as ReceiptProviderOutcome;
 
     expect(outcome.status).toBe("FAILED");
     expect(outcome.outcomeCode).toBe("INVALID_RESULT");
@@ -206,7 +209,7 @@ describe("verifier reachability", () => {
   it("leaves an accepted verdict succeeding as before", async () => {
     verifyVisionReceipt.mockResolvedValue({ verdict: { accept: true, rejectedFields: [] }, failure: null });
 
-    const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
+    const outcome = (await createGeminiReceiptAdapter().extract(providerRequest())) as ReceiptProviderOutcome;
 
     expect(outcome.status).toBe("SUCCEEDED");
     expect(outcome.finalBillableUnits).toBe(2);
@@ -232,7 +235,7 @@ describe("extraction failure taxonomy", () => {
       requestMs: 17,
     });
 
-    const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
+    const outcome = (await createGeminiReceiptAdapter().extract(providerRequest())) as ReceiptProviderOutcome;
 
     expect(outcome).toMatchObject({ status, outcomeCode, stageTimings: { extractionMs: 17, verificationMs: 0 } });
     expect(verifyVisionReceipt).not.toHaveBeenCalled();
@@ -246,7 +249,7 @@ describe("extraction failure taxonomy", () => {
       requestMs: 12,
     });
 
-    const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
+    const outcome = (await createGeminiReceiptAdapter().extract(providerRequest())) as ReceiptProviderOutcome;
 
     expect(outcome).toMatchObject({
       status: "FAILED",
@@ -263,7 +266,7 @@ describe("extraction failure taxonomy", () => {
       requestMs: 12,
     });
 
-    const outcome = await createGeminiReceiptAdapter().extract(providerRequest());
+    const outcome = (await createGeminiReceiptAdapter().extract(providerRequest())) as ReceiptProviderOutcome;
 
     expect(outcome).toMatchObject({
       status: "FAILED",
@@ -287,7 +290,7 @@ describe("provider currency", () => {
   it("carries a Veryfi currency through with evidence, unvalidated", async () => {
     extractReceiptWithVeryfi.mockResolvedValue({ receipt: { ...reconciledReceipt, currency: "USD" } });
 
-    const outcome = await createVeryfiReceiptAdapter().extract(providerRequest({ provider: "veryfi" }));
+    const outcome = (await createVeryfiReceiptAdapter().extract(providerRequest({ provider: "veryfi" }))) as ReceiptProviderOutcome;
 
     expect(outcome.extraction?.currency.value).toBe("USD");
     expect(outcome.extraction?.currency.evidence).toMatchObject({
@@ -302,7 +305,7 @@ describe("provider currency", () => {
     extractReceiptWithVeryfi.mockResolvedValue({ receipt: { ...reconciledReceipt, currency: "USD" } });
 
     const request = providerRequest({ provider: "veryfi" });
-    const outcome = await createVeryfiReceiptAdapter().extract(request);
+    const outcome = (await createVeryfiReceiptAdapter().extract(request)) as ReceiptProviderOutcome;
     const merged = mergeReceiptProviderOutcome(localExtraction(), request, outcome);
 
     expect(merged.providerCurrency).toBe("USD");
@@ -314,7 +317,7 @@ describe("provider currency", () => {
     extractReceiptWithVeryfi.mockResolvedValue({ receipt: { ...reconciledReceipt, currency: "USD" } });
 
     const request = providerRequest({ provider: "veryfi" });
-    const outcome = await createVeryfiReceiptAdapter().extract(request);
+    const outcome = (await createVeryfiReceiptAdapter().extract(request)) as ReceiptProviderOutcome;
     const merged = mergeReceiptProviderOutcome(
       localExtraction({ currency: { value: null, evidence: null } }),
       request,
@@ -329,7 +332,7 @@ describe("provider currency", () => {
     extractReceiptWithVeryfi.mockResolvedValue({ receipt: reconciledReceipt });
 
     const request = providerRequest({ provider: "veryfi" });
-    const outcome = await createVeryfiReceiptAdapter().extract(request);
+    const outcome = (await createVeryfiReceiptAdapter().extract(request)) as ReceiptProviderOutcome;
 
     expect(outcome.extraction?.currency).toEqual({ value: null, evidence: null });
     expect(mergeReceiptProviderOutcome(localExtraction(), request, outcome).providerCurrency).toBeNull();

@@ -66,7 +66,7 @@ describe("local test database bootstrap safety", () => {
   it("creates missing NOLOGIN client roles before migration deployment and disconnects its client", async () => {
     await globalSetup();
     expect(mocks.construct).toHaveBeenCalledWith({ datasources: { db: { url: local } } });
-    const sql = (mocks.execute.mock.calls[0][0] as readonly string[]).join("");
+    const sql = (mocks.execute.mock.calls[0]![0] as readonly string[]).join("");
     expect(sql).toContain("CREATE ROLE anon NOLOGIN");
     expect(sql).toContain("CREATE ROLE authenticated NOLOGIN");
     expect(sql).toContain("CREATE ROLE postgres NOLOGIN");

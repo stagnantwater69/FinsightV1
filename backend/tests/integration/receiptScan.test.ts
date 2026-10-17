@@ -97,7 +97,7 @@ let ctx: Awaited<ReturnType<typeof makeOwnerWithProfile>>;
  * fields default to null exactly as a model that did not report them would
  * leave them.
  */
-function visionReply(receipt: Partial<VisionReceipt> & { items?: Partial<VisionReceipt["items"][number]>[] }) {
+function visionReply(receipt: Omit<Partial<VisionReceipt>, "items"> & { items?: Partial<VisionReceipt["items"][number]>[] }) {
   return {
     receipt: {
       date: receipt.date ?? null,
@@ -535,7 +535,7 @@ describe("vendor corrected from confirmed history", () => {
       description: `Purchase from ${vendor}`,
       vendor,
       amount: 1400,
-      itemAssignments: scan.items.map((i) => ({ itemId: i.id, categoryId: ctx.categories.Inventory })),
+      itemAssignments: scan.items.map((i) => ({ itemId: i.id, categoryId: ctx.categories.Inventory! })),
     });
   }
 
@@ -773,7 +773,7 @@ describe("local confirmed-category history", () => {
       date: "2026-07-20",
       description: "Groceries",
       amount: 1400,
-      itemAssignments: first.items.map((i) => ({ itemId: i.id, categoryId: ctx.categories.Inventory })),
+      itemAssignments: first.items.map((i) => ({ itemId: i.id, categoryId: ctx.categories.Inventory! })),
     });
 
     const repeated = await upload();
@@ -831,7 +831,7 @@ describe("local confirmed-category history", () => {
       date: "2026-07-20",
       description: "Groceries",
       amount: 1400,
-      itemAssignments: first.items.map((i) => ({ itemId: i.id, categoryId: ctx.categories.Inventory })),
+      itemAssignments: first.items.map((i) => ({ itemId: i.id, categoryId: ctx.categories.Inventory! })),
     });
 
     const other = await makeOwnerWithProfile();
@@ -887,7 +887,7 @@ describe("removing a line that was not a purchase", () => {
       date: "2026-07-20",
       description: "Groceries",
       amount: 1400,
-      itemAssignments: updated.items.map((i) => ({ itemId: i.id, categoryId: ctx.categories.Inventory })),
+      itemAssignments: updated.items.map((i) => ({ itemId: i.id, categoryId: ctx.categories.Inventory! })),
       reconciliation: { mode: "proportional" },
     });
     expect(records).toHaveLength(1);
@@ -920,7 +920,7 @@ describe("removing a line that was not a purchase", () => {
       date: "2026-07-20",
       description: "Groceries",
       amount: 1400,
-      itemAssignments: scan.items.map((i) => ({ itemId: i.id, categoryId: ctx.categories.Inventory })),
+      itemAssignments: scan.items.map((i) => ({ itemId: i.id, categoryId: ctx.categories.Inventory! })),
     });
     await expect(deleteScanItem(ctx.user.id, scan.id, scan.items[0]!.id)).rejects.toMatchObject({
       status: 400,
@@ -1362,10 +1362,10 @@ describe("confirm", () => {
       splits: [{ categoryId: ctx.categories.Inventory!, amount: 1400 }],
     });
 
-    expect(record.source).toBe("RECEIPT_SCAN");
-    expect(record.receiptScanId).toBe(scan.id);
-    expect(record.amount).toBe(1400);
-    expect(record.description).toBe("Rice and cooking oil");
+    expect(record!.source).toBe("RECEIPT_SCAN");
+    expect(record!.receiptScanId).toBe(scan.id);
+    expect(record!.amount).toBe(1400);
+    expect(record!.description).toBe("Rice and cooking oil");
   });
 
   it("marks the scan Confirmed", async () => {
@@ -1390,7 +1390,7 @@ describe("confirm", () => {
       amount: 1220,
       splits: [{ categoryId: ctx.categories.Inventory!, amount: 1220 }],
     });
-    expect(record.amount).toBe(1220);
+    expect(record!.amount).toBe(1220);
     expect(scan.extractedAmount).toBe(1400);
   });
 
@@ -1417,8 +1417,8 @@ describe("confirm", () => {
       amount: 20000,
       splits: [{ categoryId: ctx.categories.Inventory!, amount: 20000 }], // over 25% of 60,000
     });
-    expect(record.largeExpenseFlag).toBe(true);
-    expect(record.reviewStatus).toBe("Needs Review");
+    expect(record!.largeExpenseFlag).toBe(true);
+    expect(record!.reviewStatus).toBe("Needs Review");
   });
 
   it("applies duplicate detection to a confirmed receipt", async () => {
@@ -1455,7 +1455,7 @@ describe("confirm", () => {
         candidateSetHash: review!.responseDetails.candidateSetHash,
       },
     });
-    expect(dup.duplicateStatus).toBe("Flagged");
+    expect(dup!.duplicateStatus).toBe("Flagged");
   });
 
   /*

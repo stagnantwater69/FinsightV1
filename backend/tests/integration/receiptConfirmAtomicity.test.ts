@@ -239,7 +239,7 @@ describe("two confirms of the same receipt at once", () => {
           date: "2026-07-20",
           description: "Purchase from ABC Store",
           amount: 1220,
-          splits: [{ categoryId: ctx.categories.Inventory, amount: 1220 }],
+          splits: [{ categoryId: ctx.categories.Inventory!, amount: 1220 }],
         })
         // supertest only dispatches once the request is awaited, and this test
         // needs both in flight at the same time.
@@ -277,7 +277,7 @@ describe("two confirms of the same receipt at once", () => {
       date: "2026-07-20",
       description: "Purchase from ABC Store",
       amount: 500,
-      splits: [{ categoryId: ctx.categories.Inventory, amount: 500 }],
+      splits: [{ categoryId: ctx.categories.Inventory!, amount: 500 }],
     };
 
     const first = await request(app).post(`/api/v1/records/receipts/${scan.id}/confirm`).set(...AUTH).send(body);
@@ -312,8 +312,8 @@ describe("a confirm that fails part-way through", () => {
         description: "Purchase from ABC Store",
         amount: 1220,
         itemAssignments: [
-          { itemId: rice!.id, categoryId: ctx.categories.Inventory },
-          { itemId: electricity!.id, categoryId: ctx.categories.Utilities },
+          { itemId: rice!.id, categoryId: ctx.categories.Inventory! },
+          { itemId: electricity!.id, categoryId: ctx.categories.Utilities! },
         ],
       });
 
@@ -339,8 +339,8 @@ describe("a confirm that fails part-way through", () => {
         description: "Purchase from ABC Store",
         amount: 1220,
         itemAssignments: [
-          { itemId: rice!.id, categoryId: ctx.categories.Inventory },
-          { itemId: electricity!.id, categoryId: ctx.categories.Utilities },
+          { itemId: rice!.id, categoryId: ctx.categories.Inventory! },
+          { itemId: electricity!.id, categoryId: ctx.categories.Utilities! },
         ],
       });
     expect(retry.status).toBe(201);
@@ -573,7 +573,7 @@ describe("owner-added lines on a rejected or failed confirm", () => {
   it("leaves the original items untouched when the total does not reconcile, and the retry succeeds exactly once", async () => {
     const scan = await makeReadScan([{ name: "Rice 25kg", amount: 1000 }]);
     const rice = scan.items[0]!;
-    const assignments = [{ itemId: rice.id, categoryId: ctx.categories.Inventory }];
+    const assignments = [{ itemId: rice.id, categoryId: ctx.categories.Inventory! }];
 
     // Items come to 1050; the owner typed 1200 and chose no way to close the gap.
     const rejected = await confirm(scan.id, { amount: 1200, itemAssignments: assignments, additionalItems: [softdrinks()] });
@@ -624,8 +624,8 @@ describe("owner-added lines on a rejected or failed confirm", () => {
     const body = {
       amount: 1270,
       itemAssignments: [
-        { itemId: rice!.id, categoryId: ctx.categories.Inventory },
-        { itemId: electricity!.id, categoryId: ctx.categories.Utilities },
+        { itemId: rice!.id, categoryId: ctx.categories.Inventory! },
+        { itemId: electricity!.id, categoryId: ctx.categories.Utilities! },
       ],
       additionalItems: [softdrinks()],
     };
@@ -658,7 +658,7 @@ describe("owner-added lines on a rejected or failed confirm", () => {
     const rice = scan.items[0]!;
     const body = {
       amount: 1050,
-      itemAssignments: [{ itemId: rice.id, categoryId: ctx.categories.Inventory }],
+      itemAssignments: [{ itemId: rice.id, categoryId: ctx.categories.Inventory! }],
       additionalItems: [softdrinks()],
     };
 
@@ -721,7 +721,7 @@ describe("the item -> record link written on confirm", () => {
       amount: 600,
       splits: [
         {
-          categoryId: ctx.categories.Inventory,
+          categoryId: ctx.categories.Inventory!,
           amount: 600,
           itemIds: [mine.items[0]!.id, theirs.items[0]!.id],
         },

@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
+import type { listCsvFilesForProfile } from "../../src/services/storage.service";
 
 /*
  * Storage is the external system here, so it is mocked — but the DELETE calls
@@ -9,7 +10,7 @@ import request from "supertest";
 const { deleteReceiptImageMock, deleteCsvFileMock, listCsvFilesForProfileMock } = vi.hoisted(() => ({
   deleteReceiptImageMock: vi.fn(async () => true),
   deleteCsvFileMock: vi.fn(async () => true),
-  listCsvFilesForProfileMock: vi.fn(async () => ({ objects: [], truncated: false })),
+  listCsvFilesForProfileMock: vi.fn<typeof listCsvFilesForProfile>(async () => ({ objects: [], truncated: false })),
 }));
 vi.mock("../../src/services/storage.service", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/services/storage.service")>();
