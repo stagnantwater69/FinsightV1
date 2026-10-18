@@ -21,7 +21,7 @@ function evidence(
   source: "gemini" | "veryfi",
   sourceVersion: string,
   validationState: "VALIDATED" | "UNVALIDATED",
-  validationCodes: ("FORMAT_VALID" | "ARITHMETIC_VALID" | "REGION_UNAVAILABLE" | "OWNER_REVIEW_REQUIRED")[],
+  validationCodes: ("FORMAT_VALID" | "ARITHMETIC_VALID" | "LOCAL_MATCH" | "REGION_UNAVAILABLE" | "OWNER_REVIEW_REQUIRED")[],
   pageNumber: number | null = null,
 ): NormalizedEvidence {
   return {
@@ -37,6 +37,37 @@ function evidence(
   };
 }
 
+function itemsAddUp(receipt: { amount: number | null; items: { amount: number }[] }): boolean {
+  const itemSum = receipt.items.reduce((sum, item) => sum + Math.round(item.amount * 100), 0);
+  const totalCents = receipt.amount === null ? null : Math.round(receipt.amount * 100);
+  return receipt.items.length > 0 && totalCents !== null && itemSum === totalCents;
+}
+
+/*
+ * WHEN THE SECOND GEMINI CALL IS SKIPPED. The verifier exists because one
+ * model's reading of a photograph is not evidence on its own. When the local
+ * read already corroborated the date and the total on the paper (the request
+ * carries them only then), Gemini read the same date and the same total, and
+ * Gemini's own lines add up to that total, three independent checks agree and
+ * a second model adds a few seconds and a billed unit but no information about
+ * those fields. Any disagreement, or lines that miss the total, and the
+ * verifier runs as before.
+ *
+ * The store name is the one field this leaves unchecked by a second reader.
+ * Its evidence stays OWNER_REVIEW_REQUIRED, as every provider vendor's does,
+ * and the owner sees and can edit it on the review screen before saving.
+ */
+function agreesWithLocalRead(
+  request: ReceiptProviderRequest,
+  receipt: { date: string | null; amount: number | null; items: { amount: number }[] },
+): boolean {
+  const local = request.localCorroboration;
+  if (!local || receipt.date === null || receipt.amount === null) return false;
+  return receipt.date === local.date
+    && Math.round(receipt.amount * 100) === Math.round(local.total * 100)
+    && itemsAddUp(receipt);
+}
+
 function normalized(
   request: ReceiptProviderRequest,
   receipt: {
@@ -47,6 +78,7 @@ function normalized(
     items: { name: string; quantity: number | null; amount: number; pageNumber?: number | null }[];
   },
   verifierAccepted: boolean,
+  localMatch = false,
 ): NormalizedReceiptExtraction {
   const source = request.provider as "gemini" | "veryfi";
   const formatEvidence = evidence(
@@ -55,9 +87,15 @@ function normalized(
     "VALIDATED",
     ["FORMAT_VALID", "REGION_UNAVAILABLE", "OWNER_REVIEW_REQUIRED"],
   );
-  const itemSum = receipt.items.reduce((sum, item) => sum + Math.round(item.amount * 100), 0);
-  const totalCents = receipt.amount === null ? null : Math.round(receipt.amount * 100);
-  const itemsReconcile = receipt.items.length > 0 && totalCents !== null && itemSum === totalCents;
+  // The local read checked this date and total against the paper and the
+  // provider read the same values: say so, rather than claim a verifier ran.
+  const localMatchEvidence = evidence(
+    source,
+    request.providerVersion,
+    "VALIDATED",
+    ["FORMAT_VALID", "LOCAL_MATCH", "REGION_UNAVAILABLE", "OWNER_REVIEW_REQUIRED"],
+  );
+  const itemsReconcile = itemsAddUp(receipt);
   // Only the arithmetic may validate the collection. A verifier pass is a second
   // model agreeing with the first, so it supports the claim but never replaces it:
   // 100 + 100 + 100 against a printed 350 must reach the owner marked for review.
@@ -98,10 +136,10 @@ function normalized(
     schemaVersion: request.normalizedSchemaVersion,
     source,
     sourceVersion: request.providerVersion,
-    date: { value: receipt.date, evidence: receipt.date === null ? null : formatEvidence },
+    date: { value: receipt.date, evidence: receipt.date === null ? null : localMatch ? localMatchEvidence : formatEvidence },
     vendor: { value: receipt.vendor, evidence: receipt.vendor === null ? null : formatEvidence },
     currency: { value: currency, evidence: currency === null ? null : currencyEvidence },
-    total: { value: receipt.amount, evidence: receipt.amount === null ? null : formatEvidence },
+    total: { value: receipt.amount, evidence: receipt.amount === null ? null : localMatch ? localMatchEvidence : formatEvidence },
     items,
     itemsEvidence: items.length > 0 ? collectionEvidence : null,
   };
@@ -267,6 +305,17 @@ export function createGeminiReceiptAdapter(): ReceiptProviderAdapter & { readonl
         return extractionUnavailable(request, Date.now() - started, extraction.failure, extractionStages);
       }
       if (extraction.receipt === null) return invalid(request, Date.now() - started, 1, extractionStages);
+
+      if (agreesWithLocalRead(request, extraction.receipt)) {
+        return {
+          ...metadata(request, Date.now() - started, null, extractionStages),
+          status: "SUCCEEDED",
+          timeoutOutcome: "NOT_TIMED_OUT",
+          outcomeCode: "OK",
+          finalBillableUnits: 1,
+          extraction: normalized(request, extraction.receipt, false, true),
+        } satisfies ReceiptProviderOutcome;
+      }
 
       const verification = await verifyVisionReceipt(pages, extraction.receipt, {
         timeoutMs: request.timeoutMs,

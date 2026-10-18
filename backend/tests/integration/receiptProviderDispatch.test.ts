@@ -572,6 +572,43 @@ describe("mocked receipt provider dispatch gate", () => {
     }
   });
 
+  it("hands the adapter the local date and total it checked, and settles a one-unit answer at one unit", async () => {
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const scan = await scanFor(owner.profile.id, "verifier-skipped");
+    // An answer the adapter accepted without its second call bills one of the two reserved units.
+    const mockedAdapter = adapter(async (request) => successfulOutcome(request, { finalBillableUnits: 1 }));
+
+    const result = await dispatchReceiptProviderRescue(dispatchInput(owner.profile.id, scan.id), {
+      adapter: mockedAdapter,
+      configuration: getReceiptProviderConfiguration(),
+    });
+
+    expect(result).toMatchObject({ code: "PROVIDER_OK", dispatched: true });
+    expect(mockedAdapter.extract.mock.calls[0]![0].localCorroboration).toEqual({ date: "2026-09-13", total: 100 });
+    expect(await prisma.externalProviderDispatch.findFirstOrThrow()).toMatchObject({ finalBillableUnits: 1 });
+    for (const budget of await prisma.externalProviderBudget.findMany()) {
+      expect(budget.usedUnits).toBe(1);
+      expect(budget.reservedUnits).toBe(0);
+    }
+  });
+
+  it("sends no local values when the local read did not check them", async () => {
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const scan = await scanFor(owner.profile.id, "verifier-required");
+    const mockedAdapter = adapter();
+    const base = localExtraction();
+    const unchecked = { ...base.total.evidence!, validationState: "UNVALIDATED" as const, confidenceBand: "LOW" as const };
+
+    await dispatchReceiptProviderRescue(
+      dispatchInput(owner.profile.id, scan.id, { localExtraction: localExtraction({ total: { value: 100, evidence: unchecked } }) }),
+      { adapter: mockedAdapter, configuration: getReceiptProviderConfiguration() },
+    );
+
+    expect(mockedAdapter.extract.mock.calls[0]![0].localCorroboration).toBeNull();
+  });
+
   it("does not resubmit an already attempted reservation key", async () => {
     const owner = await makeOwnerWithProfile();
     await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());

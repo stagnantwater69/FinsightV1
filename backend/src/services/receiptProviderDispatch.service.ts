@@ -10,6 +10,7 @@ import {
   RECEIPT_PROVIDER_CONTRACT_VERSION,
   RECEIPT_PROVIDER_MAX_RETRY_AFTER_MS,
   isRetryableProviderOutcomeCode,
+  localCorroborationFrom,
   mergeReceiptProviderOutcome,
   parseReceiptProviderRequest,
   validateReceiptProviderOutcome,
@@ -1293,6 +1294,7 @@ export async function dispatchReceiptProviderRescue(
         reservedUnits: reservation.reservedUnits,
       },
       rescueDecision: input.rescueDecision,
+      localCorroboration: localCorroborationFrom(localExtraction),
       pages,
     });
   } catch {

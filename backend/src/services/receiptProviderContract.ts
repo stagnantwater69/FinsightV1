@@ -57,6 +57,21 @@ export const reservedProviderUnitsSchema = z
   .strict();
 export type ReservedProviderUnits = z.infer<typeof reservedProviderUnitsSchema>;
 
+/*
+ * The local read's date and total, sent only when the receipt itself
+ * corroborated both: a date that is not locale-ambiguous and a total the
+ * line items add up to. An adapter may treat a provider answer that matches
+ * them as checked, instead of paying a second model to check it. Absent
+ * whenever either local field is unchecked.
+ */
+export const localCorroborationSchema = z
+  .object({
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    total: moneyAmountSchema,
+  })
+  .strict();
+export type LocalCorroboration = z.infer<typeof localCorroborationSchema>;
+
 const providerPageSchema = z
   .object({
     pageNumber: z.number().int().min(1).max(8),
@@ -79,6 +94,7 @@ export const receiptProviderRequestSchema = z
     consent: currentProviderConsentReferenceSchema,
     reservation: reservedProviderUnitsSchema,
     rescueDecision: rescueDecisionSchema,
+    localCorroboration: localCorroborationSchema.nullable().optional(),
     pages: z.array(providerPageSchema).min(1).max(8),
   })
   .strict()
@@ -278,6 +294,19 @@ export const normalizedReceiptExtractionSchema = z
     }
   });
 export type NormalizedReceiptExtraction = z.infer<typeof normalizedReceiptExtractionSchema>;
+
+/**
+ * The local date and total, when the receipt corroborated both (see
+ * localCorroborationSchema). Only local-tesseract evidence counts: a merged
+ * reading has already absorbed provider values.
+ */
+export function localCorroborationFrom(local: NormalizedReceiptExtraction): LocalCorroboration | null {
+  const checked = (evidence: NormalizedEvidence | null) =>
+    evidence !== null && evidence.source === "local-tesseract" && evidence.validationState === "VALIDATED";
+  if (local.date.value === null || local.total.value === null) return null;
+  if (!checked(local.date.evidence) || !checked(local.total.evidence)) return null;
+  return { date: local.date.value, total: local.total.value };
+}
 
 const outcomeMetadataShape = {
   contractVersion: z.literal(RECEIPT_PROVIDER_CONTRACT_VERSION),
