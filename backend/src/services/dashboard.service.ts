@@ -1,6 +1,6 @@
 import { prisma } from "../config/prisma";
 import type { Prisma } from "@prisma/client";
-import { listNotifications } from "./notification.service";
+import { countUnreadNotifications, listNotifications } from "./notification.service";
 import { loadRecoveryTargets } from "./insights.service";
 import { resolveBusinessToday, utcAddDays, utcDateKey, utcEndOfDay, utcMonthKey } from "../lib/dates";
 import {
@@ -123,7 +123,7 @@ export async function getDashboardSummary(
     ? { businessProfileId: profile.id, date: windowDateFilter(previousWindow, today) }
     : null;
 
-  const [expenseTotals, salesAgg, reviewCounts, alerts, recoveryStatus, lifetime, availableFundsCalculation, previousTotals] = await Promise.all([
+  const [expenseTotals, salesAgg, reviewCounts, alerts, unreadAlertCount, recoveryStatus, lifetime, availableFundsCalculation, previousTotals] = await Promise.all([
     /*
      * GROUPED IN POSTGRES, not read into memory and reduced here.
      *
@@ -151,6 +151,7 @@ export async function getDashboardSummary(
       }),
     ]),
     listNotifications(userId, businessProfileId, 10),
+    countUnreadNotifications(userId, businessProfileId),
     // Recovery is deliberately NOT scoped to the dashboard's period
     // selector — it's a month-to-date tracker, so it reads the same
     // whether the user is looking at Today, This week, or This month.
@@ -248,6 +249,8 @@ export async function getDashboardSummary(
     recoveryStatus,
     recordsNeedingReview,
     alerts: alerts.slice(0, 10),
+    /** Every unread alert for this business, not just the ten in `alerts`. */
+    unreadAlertCount,
     /** Outside the period on purpose — see the note on activitySpan. */
     lifetime,
   };

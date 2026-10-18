@@ -164,7 +164,13 @@ function DashboardContent({ navigation }: any) {
     hasRecords &&
     summary.overview.totalExpenses === 0 &&
     summary.overview.totalSalesReference === 0;
-  const unreadCount = summary ? summary.alerts.filter((a) => !a.readStatus).length : 0;
+  // The server's total, not the ten alerts it sends; a summary from before
+  // that field existed still counts its rows.
+  const unreadCount = !summary
+    ? 0
+    : typeof summary.unreadAlertCount === "number"
+      ? summary.unreadAlertCount
+      : summary.alerts.filter((a) => !a.readStatus).length;
   /*
    * Named from the window the SERVER actually returns — a rolling lookback
    * ending today — not from a calendar month it does not compute. "This month"

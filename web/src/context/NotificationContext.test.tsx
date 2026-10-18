@@ -213,3 +213,47 @@ describe("notification mutation failures", () => {
     expect(screen.getByText(/Second business alert — unread/)).toBeVisible();
   });
 });
+
+describe("unread badge total", () => {
+  // The list stops at 500 rows; the server sends the real total in a header.
+  const withTotal = (rows: Notification[], total: number) => ({ data: rows, headers: { "x-unread-count": String(total) } });
+
+  it("counts unread alerts the list does not include", async () => {
+    get.mockResolvedValue(withTotal([row], 520));
+    render(<NotificationProvider><Probe /></NotificationProvider>);
+
+    await waitFor(() => expect(screen.getByTestId("unread")).toHaveTextContent("520"));
+  });
+
+  it("drops by one when a listed alert is marked read", async () => {
+    get.mockResolvedValue(withTotal([row], 520));
+    patch.mockResolvedValue({ data: { ...row, readStatus: true } });
+    render(<NotificationProvider><Probe /></NotificationProvider>);
+    await waitFor(() => expect(screen.getByTestId("unread")).toHaveTextContent("520"));
+
+    await act(async () => screen.getByRole("button", { name: "Mark first read" }).click());
+
+    expect(screen.getByTestId("unread")).toHaveTextContent("519");
+  });
+
+  it("reaches zero on mark-all-read and comes back if the request fails", async () => {
+    get.mockResolvedValue(withTotal([row], 520));
+    const action = deferred<void>();
+    patch.mockReturnValue(action.promise);
+    render(<NotificationProvider><Probe /></NotificationProvider>);
+    await waitFor(() => expect(screen.getByTestId("unread")).toHaveTextContent("520"));
+
+    act(() => screen.getByRole("button", { name: "Mark all read" }).click());
+    expect(screen.getByTestId("unread")).toHaveTextContent("0");
+
+    await act(async () => action.reject(new Error("Network down")));
+    expect(screen.getByTestId("unread")).toHaveTextContent("520");
+  });
+
+  it("falls back to counting rows when the header is missing", async () => {
+    get.mockResolvedValue({ data: [row, { ...row, id: 8 }] });
+    render(<NotificationProvider><Probe /></NotificationProvider>);
+
+    await waitFor(() => expect(screen.getByTestId("unread")).toHaveTextContent("2"));
+  });
+});

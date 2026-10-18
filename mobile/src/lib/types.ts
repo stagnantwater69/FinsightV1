@@ -448,6 +448,8 @@ export interface DashboardSummary {
   recoveryStatus: RecoveryTargets;
   recordsNeedingReview: number;
   alerts: Notification[];
+  /** Every unread alert for the business; `alerts` holds only the newest ten. */
+  unreadAlertCount: number;
   /**
    * What this business has EVER recorded, outside the period selector.
    *

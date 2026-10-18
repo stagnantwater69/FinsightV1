@@ -252,6 +252,15 @@ describe("notifications", () => {
     await expect(notifications.listNotifications(bob.user.id, 999999)).rejects.toMatchObject(notFound);
   });
 
+  it("cannot count another owner's unread notifications", async () => {
+    await notifications.createNotification(alice.user.id, alice.profile.id, "Needs Review", "Alice private alert");
+    expect(await notifications.countUnreadNotifications(alice.user.id, alice.profile.id)).toBe(1);
+
+    await expect(notifications.countUnreadNotifications(bob.user.id, alice.profile.id)).rejects.toMatchObject(notFound);
+    await expect(notifications.countUnreadNotifications(bob.user.id, 999999)).rejects.toMatchObject(notFound);
+    expect(await notifications.countUnreadNotifications(bob.user.id)).toBe(0);
+  });
+
   it("still lists a user's own notifications across all their profiles when no profile is named", async () => {
     // The profile filter is optional; omitting it must not require ownership of
     // anything, and must still only ever return the caller's own rows.

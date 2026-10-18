@@ -13,8 +13,16 @@
  * Deliberately not part of `npm test`: it is billed, it needs provider keys
  * (read from backend/.env through config/env), and model output varies run to
  * run. Run it before and after any change to SYSTEM_PROMPT and compare.
+ *
+ * Every run prints what produced it: the code revision, both models, and
+ * hashes of the system prompt and of this fixture, so two runs are only
+ * compared when the thing that changed is the thing being tested. Pass
+ * `-- --json <file>` to also save the run; nothing is written otherwise.
  */
-import { askFinSight } from "../../src/services/ai.service";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { writeFileSync } from "node:fs";
+import { askFinSight, askFinSightIdentity } from "../../src/services/ai.service";
 import { groundAnswer, recordTag, type RecordReference } from "../../src/services/aiAnswer.service";
 
 const fries: RecordReference = { kind: "record", recordType: "expense", id: 343, label: "Frozen fries x5", amount: 550, date: "2022-01-10" };
@@ -79,7 +87,37 @@ const JARGON = /\b(z-?score|iqr|outlier|baseline|standard deviation)\b/i;
 const FILLER = /^(great question|certainly|sure thing|absolutely)/i;
 const FILIPINO_MARKERS = /\b(ang|ng|mo|ito|iyong|yung|kasi|dahil|sa|na|ay|mas|lang|po)\b/i;
 
+function gitRevision(): { commit: string; dirty: boolean } {
+  try {
+    const commit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    const dirty = execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" }).trim().length > 0;
+    return { commit, dirty };
+  } catch {
+    return { commit: "unknown", dirty: true };
+  }
+}
+
+function provenance() {
+  return {
+    ranAt: new Date().toISOString(),
+    revision: gitRevision(),
+    ...askFinSightIdentity(),
+    fixtureSha256: createHash("sha256").update(JSON.stringify({ CONTEXT, CASES })).digest("hex"),
+  };
+}
+
+function jsonOutputPath(): string | null {
+  const index = process.argv.indexOf("--json");
+  return index >= 0 ? process.argv[index + 1] ?? null : null;
+}
+
 async function main() {
+  const run = provenance();
+  console.log(`revision ${run.revision.commit}${run.revision.dirty ? " (uncommitted changes)" : ""}`);
+  console.log(`models   ${run.primaryModel}, fallback ${run.fallbackModel}`);
+  console.log(`prompt   ${run.systemPromptSha256.slice(0, 12)}  fixture ${run.fixtureSha256.slice(0, 12)}`);
+
+  const results: { name: string; provider: string; passed: boolean; problems: string[] }[] = [];
   let failures = 0;
   for (const testCase of CASES) {
     const result = await groundAnswer(askFinSight, { context: CONTEXT, question: testCase.question, references });
@@ -102,6 +140,7 @@ async function main() {
     if (testCase.expectFilipino && !FILIPINO_MARKERS.test(result.answer)) problems.push("did not reply in Filipino/Taglish");
 
     failures += problems.length > 0 ? 1 : 0;
+    results.push({ name: testCase.name, provider: result.provider, passed: problems.length === 0, problems });
     console.log(`\n${problems.length === 0 ? "PASS" : "FAIL"}  ${testCase.name}  [${result.provider}]`);
     console.log(`  Q: ${testCase.question}`);
     console.log(`  A: ${result.answer.replace(/\n/g, "\n     ")}`);
@@ -110,6 +149,11 @@ async function main() {
     for (const problem of problems) console.log(`  ! ${problem}`);
   }
   console.log(`\n${CASES.length - failures}/${CASES.length} cases passed`);
+  const output = jsonOutputPath();
+  if (output) {
+    writeFileSync(output, `${JSON.stringify({ ...run, passed: CASES.length - failures, total: CASES.length, results }, null, 2)}\n`);
+    console.log(`saved ${output}`);
+  }
   process.exitCode = failures > 0 ? 1 : 0;
 }
 
