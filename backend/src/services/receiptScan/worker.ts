@@ -35,6 +35,7 @@ import {
 import type { ReceiptCaptureMetadata, ReceiptItemEvidenceInput, RescuedFields } from "./types";
 import { selectOcrCandidate } from "./ocrCandidateSelection";
 import { readReceiptPagesWithinOcrBudget } from "./ocrPageScheduling";
+import { LOCAL_PREVIEW_KEY, localPreviewFrom, type ReceiptLocalPreview } from "./localPreview";
 import { assessReceiptLikelihood } from "../../lib/receiptLikelihood";
 import { parseReceiptDetails, providerReportedCurrency } from "../../lib/receiptDetails";
 import { validateReceiptUpload } from "../../lib/receiptUploadValidation";
@@ -124,7 +125,12 @@ type StoredPage = {
   processed: StoredEvidence | null;
   metadata?: ReceiptCaptureMetadata;
 };
-type StoredInput = { businessProfileId: number; pages: StoredPage[] };
+type StoredInput = {
+  businessProfileId: number;
+  pages: StoredPage[];
+  /** As stored when the attempt began; the local preview is merged into it. */
+  extractorVersions: Prisma.JsonValue | null;
+};
 
 export interface ReceiptProcessingLease {
   workerId: string;
@@ -651,7 +657,10 @@ async function processScan(
       routing: providerConfig.operational ? providerConfig.routing : "rescue",
     });
     const localExtraction = localNormalizedExtraction(parsed, deterministicItems, currency, reconciliation.reconciled);
-    const adapter = providerConfig.provider === "veryfi" ? createVeryfiReceiptAdapter() : createGeminiReceiptAdapter();
+    // The provider takes seconds more; let the owner see what is already read.
+    const preview = providerConfig.operational && rescueDecision.providerRescueRequested ? localPreviewFrom(parsed) : null;
+    if (preview) await publishLocalPreview(scanId, attempt, input.extractorVersions, preview);
+    const adapter =providerConfig.provider === "veryfi" ? createVeryfiReceiptAdapter() : createGeminiReceiptAdapter();
     const gate = await clock.measure("provider", () => dispatchReceiptProviderRescue(
       {
         businessProfileId: input.businessProfileId,
@@ -915,6 +924,38 @@ async function recordProcessingFailure(scanId: number, attempt: number, failure:
   });
 }
 
+/**
+ * Records the local read's headline fields for the owner to see while the
+ * provider is still reading — see localPreview.ts. Guarded exactly like a
+ * heartbeat, which it also is: only the worker holding this attempt's lease
+ * can write it, and a lost lease stops the scan here as it would there.
+ */
+async function publishLocalPreview(
+  scanId: number,
+  attempt: number,
+  previous: Prisma.JsonValue | null,
+  preview: ReceiptLocalPreview,
+): Promise<void> {
+  const base = previous && typeof previous === "object" && !Array.isArray(previous) ? previous : {};
+  const updated = await prisma.receiptScan.updateMany({
+    where: {
+      id: scanId,
+      processingStatus: "Processing",
+      confirmationStatus: "Pending",
+      evidenceDeletionRequestedAt: null,
+      purgeJobs: { none: { mode: ReceiptPurgeMode.DELETE_SCAN } },
+      processingWorkerId: RECEIPT_WORKER_ID,
+      processingAttemptCount: attempt,
+    },
+    data: {
+      processingHeartbeatAt: new Date(),
+      lastActivityAt: new Date(),
+      extractorVersions: { ...base, [LOCAL_PREVIEW_KEY]: preview } as Prisma.InputJsonValue,
+    },
+  });
+  if (updated.count !== 1) throw new ReceiptLeaseLostError(`Receipt scan ${scanId} lease was reclaimed`);
+}
+
 async function heartbeatScan(scanId: number, attempt: number): Promise<void> {
   const updated = await prisma.receiptScan.updateMany({
     where: {
@@ -1013,7 +1054,7 @@ async function storedInput(scanId: number, attempt: number): Promise<StoredInput
   }
   // One heartbeat for the whole restore now that the inspections overlap.
   await heartbeatScan(scanId, attempt);
-  return { businessProfileId: scan.businessProfileId, pages };
+  return { businessProfileId: scan.businessProfileId, pages, extractorVersions: scan.extractorVersions };
 }
 
 /** Atomically lease one eligible scan. The conditional update is the race guard. */
