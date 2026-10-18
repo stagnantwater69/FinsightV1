@@ -1,3 +1,4 @@
+import { testScreen } from "./support/screen";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, waitFor } from "@testing-library/react-native";
@@ -86,11 +87,14 @@ vi.mock("../../src/components/DateField", async () => {
   return { DateField: ({ label, value, onChange }: any) => <Field label={label} value={value} onChangeText={onChange} /> };
 });
 const { ThemeProvider } = await import("../../src/context/ThemeContext");
-const { ScanReceiptScreen } = await import("../../src/screens/records/ScanReceiptScreen");
+const { ScanReceiptScreen: TypedScanReceiptScreen } = await import("../../src/screens/records/ScanReceiptScreen");
+const ScanReceiptScreen = testScreen(TypedScanReceiptScreen);
 const { ReceiptReadFailure } = await import("../../src/screens/records/scanReceipt/helpers");
 const { takeFlash } = await import("../../src/lib/flash");
-const { ImportCsvScreen } = await import("../../src/screens/records/ImportCsvScreen");
-const { AddExpenseScreen } = await import("../../src/screens/records/AddExpenseScreen");
+const { ImportCsvScreen: TypedImportCsvScreen } = await import("../../src/screens/records/ImportCsvScreen");
+const ImportCsvScreen = testScreen(TypedImportCsvScreen);
+const { AddExpenseScreen: TypedAddExpenseScreen } = await import("../../src/screens/records/AddExpenseScreen");
+const AddExpenseScreen = testScreen(TypedAddExpenseScreen);
 const {
   beginServerStateSession,
   clearServerStateCache,

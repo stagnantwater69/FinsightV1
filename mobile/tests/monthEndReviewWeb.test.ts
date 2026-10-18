@@ -37,7 +37,9 @@ vi.mock('../src/lib/useInsight', () => ({
   useInsight: () => ({ data: review, loading: false, refreshing: false, rawError: null, lastUpdatedAt: 0, load: vi.fn() }),
 }));
 
-import { MonthEndReviewScreen } from '../src/screens/MonthEndReviewScreen';
+import { MonthEndReviewScreen as TypedMonthEndReviewScreen } from '../src/screens/MonthEndReviewScreen';
+import { testScreen } from './render/support/screen';
+const MonthEndReviewScreen = testScreen(TypedMonthEndReviewScreen);
 
 const review: RecoveryMonthEndReview = {
   status: 'reviewable', month: '2026-09', coveragePercent: 92.4, surplusOrShortfall: -3800,

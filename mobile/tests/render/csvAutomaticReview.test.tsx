@@ -1,3 +1,4 @@
+import { testScreen } from "./support/screen";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, waitFor } from "@testing-library/react-native";
@@ -20,7 +21,8 @@ vi.mock("../../src/context/BusinessProfileContext", () => ({
 }));
 
 const { ThemeProvider } = await import("../../src/context/ThemeContext");
-const { ImportCsvScreen } = await import("../../src/screens/records/ImportCsvScreen");
+const { ImportCsvScreen: TypedImportCsvScreen } = await import("../../src/screens/records/ImportCsvScreen");
+const ImportCsvScreen = testScreen(TypedImportCsvScreen);
 const navigation = { navigate: vi.fn(), goBack: vi.fn() };
 const mapping = { date: "date", description: "description", amount: "amount", category: "category", vendor: "vendor" };
 const row = { date: "2026-09-01", description: "Coffee beans", amount: "250", category: "Stock", vendor: "Local supplier" };

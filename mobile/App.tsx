@@ -12,6 +12,7 @@ import {
 } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import type { DashboardStackParamList, InsightsStackParamList, MoreStackParamList, RecordsStackParamList, RootTabParamList } from "./src/navigation/types";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import * as Font from "expo-font";
@@ -121,8 +122,13 @@ const navigationRef = createNavigationContainerRef();
  */
 SplashScreen.preventAutoHideAsync().catch(() => undefined);
 
-const Tab = createBottomTabNavigator();
+const Tab = createBottomTabNavigator<RootTabParamList>();
+/** Signed-out screens. Not yet given a param list. */
 const Stack = createNativeStackNavigator();
+const DashboardNav = createNativeStackNavigator<DashboardStackParamList>();
+const RecordsNav = createNativeStackNavigator<RecordsStackParamList>();
+const InsightsNav = createNativeStackNavigator<InsightsStackParamList>();
+const MoreNav = createNativeStackNavigator<MoreStackParamList>();
 
 /**
  * React Navigation's own colours, built from the palette.
@@ -176,20 +182,20 @@ function useScreenOptions() {
 function DashboardStack() {
   const screenOptions = useScreenOptions();
   return (
-    <Stack.Navigator screenOptions={screenOptions}>
+    <DashboardNav.Navigator screenOptions={screenOptions}>
       {/*
         headerShown: false — DashboardScreen (now Home) builds its own header
         with an avatar, a business switcher and a bell, which replaces both
         this native title bar and the eyebrow/title ScreenHeader every other
         screen uses. Same pattern MoreStack already uses for MoreHome.
       */}
-      <Stack.Screen name="DashboardHome" component={DashboardScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="Notifications" component={NotificationsScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="MoneyFlow" component={MoneyFlowScreen} options={{ title: "Money in and out" }} />
+      <DashboardNav.Screen name="DashboardHome" component={DashboardScreen} options={{ headerShown: false }} />
+      <DashboardNav.Screen name="Notifications" component={NotificationsScreen} options={{ headerShown: false }} />
+      <DashboardNav.Screen name="MoneyFlow" component={MoneyFlowScreen} options={{ title: "Money in and out" }} />
       {/* How someone who chose "Skip for now" gets back into setup — the
           wizard draws its own header, so this one is hidden. */}
-      <Stack.Screen name="Onboarding" component={OnboardingResumeScreen} options={{ headerShown: false }} />
-    </Stack.Navigator>
+      <DashboardNav.Screen name="Onboarding" component={OnboardingResumeScreen} options={{ headerShown: false }} />
+    </DashboardNav.Navigator>
   );
 }
 
@@ -205,7 +211,7 @@ function goBackOr(navigation: { canGoBack(): boolean; goBack(): void; navigate(n
 function RecordsStack() {
   const screenOptions = useScreenOptions();
   return (
-    <Stack.Navigator screenOptions={screenOptions}>
+    <RecordsNav.Navigator screenOptions={screenOptions}>
       {/*
         headerShown: false, like Home, Insights and More.
 
@@ -215,15 +221,15 @@ function RecordsStack() {
         had no back arrow to justify itself. Every screen PUSHED from here
         keeps its header, because those do have somewhere to go back to.
       */}
-      <Stack.Screen name="RecordsList" component={RecordsScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="AddExpense" component={AddExpenseScreen} options={{ title: "Add expense" }} />
-      <Stack.Screen name="AddSales" component={AddSalesScreen} options={{ title: "Add sales" }} />
+      <RecordsNav.Screen name="RecordsList" component={RecordsScreen} options={{ headerShown: false }} />
+      <RecordsNav.Screen name="AddExpense" component={AddExpenseScreen} options={{ title: "Add expense" }} />
+      <RecordsNav.Screen name="AddSales" component={AddSalesScreen} options={{ title: "Add sales" }} />
       {/*
         Tapping a record on the list navigates here. This was missing: the
         list has always called navigate("EditRecord"), so every tap resolved
         to nothing and a saved record could not be corrected on mobile at all.
       */}
-      <Stack.Screen name="EditRecord" component={EditRecordScreen} options={{ title: "Edit record" }} />
+      <RecordsNav.Screen name="EditRecord" component={EditRecordScreen} options={{ title: "Edit record" }} />
       {/*
         Quick-add opens this as the FIRST route on the Records stack when the
         owner hasn't visited Records yet, and the native header only draws a
@@ -231,7 +237,7 @@ function RecordsStack() {
         out but the hardware button. Always draw one; with nothing to pop it
         lands on the Records list.
       */}
-      <Stack.Screen
+      <RecordsNav.Screen
         name="ScanReceipt"
         component={ScanReceiptScreen}
         options={({ navigation }) => ({
@@ -242,7 +248,7 @@ function RecordsStack() {
           ),
         })}
       />
-      <Stack.Screen name="ImportCsv" component={ImportCsvScreen} options={({ navigation }) => ({
+      <RecordsNav.Screen name="ImportCsv" component={ImportCsvScreen} options={({ navigation }) => ({
         title: "Import CSV",
         headerBackVisible: false,
         headerLeft: ({ tintColor }) => <HeaderBackButton tintColor={tintColor} onPress={() => {
@@ -250,7 +256,7 @@ function RecordsStack() {
           else navigation.replace("RecordsList");
         }} />,
       })} />
-      <Stack.Screen
+      <RecordsNav.Screen
         name="FlaggedRecords"
         component={FlaggedRecordsScreen}
         options={({ navigation, route }: any) => ({
@@ -266,8 +272,8 @@ function RecordsStack() {
         records concept — the screen's own "view records" route goes straight
         back to RecordsList, which only works without a stack hop from here.
       */}
-      <Stack.Screen name="Categories" component={CategoriesScreen} options={{ title: "Categories" }} />
-    </Stack.Navigator>
+      <RecordsNav.Screen name="Categories" component={CategoriesScreen} options={{ title: "Categories" }} />
+    </RecordsNav.Navigator>
   );
 }
 
@@ -284,22 +290,22 @@ function InsightsStack() {
       ("Insights") that the tab bar was already showing. Each screen draws its
       own heading instead, the same way Home and More do.
     */
-    <Stack.Navigator screenOptions={{ ...screenOptions, headerShown: false }}>
-      <Stack.Screen name="ExpenseBehavior" component={ExpenseBehaviorScreen} />
-      <Stack.Screen name="SpendingImpact" component={SpendingImpactScreen} />
-      <Stack.Screen name="RecoveryTarget" component={RecoveryTargetScreen} />
+    <InsightsNav.Navigator screenOptions={{ ...screenOptions, headerShown: false }}>
+      <InsightsNav.Screen name="ExpenseBehavior" component={ExpenseBehaviorScreen} />
+      <InsightsNav.Screen name="SpendingImpact" component={SpendingImpactScreen} />
+      <InsightsNav.Screen name="RecoveryTarget" component={RecoveryTargetScreen} />
       {/*
         The one screen in this stack that IS pushed onto something, so it is
         the one that keeps a header: it has a parent to go back to (the
         Recurring tab of Expense insight), and without the native header the
         only way out would be the hardware back button.
       */}
-      <Stack.Screen
+      <InsightsNav.Screen
         name="RecurringSchedule"
         component={RecurringScheduleScreen}
         options={{ headerShown: true, title: "Repeating payment" }}
       />
-    </Stack.Navigator>
+    </InsightsNav.Navigator>
   );
 }
 
@@ -314,21 +320,21 @@ function InsightsStack() {
 function MoreStack() {
   const screenOptions = useScreenOptions();
   return (
-    <Stack.Navigator screenOptions={screenOptions}>
-      <Stack.Screen name="MoreHome" component={MoreScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="Profile" component={ProfileScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="EditProfile" component={EditProfileScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="ChangePassword" component={ChangePasswordScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="DeleteAccount" component={DeleteAccountScreen} options={{ headerShown: false }} />
+    <MoreNav.Navigator screenOptions={screenOptions}>
+      <MoreNav.Screen name="MoreHome" component={MoreScreen} options={{ headerShown: false }} />
+      <MoreNav.Screen name="Profile" component={ProfileScreen} options={{ headerShown: false }} />
+      <MoreNav.Screen name="EditProfile" component={EditProfileScreen} options={{ headerShown: false }} />
+      <MoreNav.Screen name="ChangePassword" component={ChangePasswordScreen} options={{ headerShown: false }} />
+      <MoreNav.Screen name="DeleteAccount" component={DeleteAccountScreen} options={{ headerShown: false }} />
       {/*
         How the app behaves for this owner: the guided tour, Fin's daily
         message on Home, and light or dark. It replaces the "Preferences" card
         that used to sit on the More screen itself — see SettingsScreen.tsx.
       */}
-      <Stack.Screen name="Settings" component={SettingsScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="BusinessProfiles" component={BusinessProfilesScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="BusinessProfileForm" component={BusinessProfileFormScreen} options={{ title: "Business profile" }} />
-      <Stack.Screen
+      <MoreNav.Screen name="Settings" component={SettingsScreen} options={{ headerShown: false }} />
+      <MoreNav.Screen name="BusinessProfiles" component={BusinessProfilesScreen} options={{ headerShown: false }} />
+      <MoreNav.Screen name="BusinessProfileForm" component={BusinessProfileFormScreen} options={{ title: "Business profile" }} />
+      <MoreNav.Screen
         name="OperatingSchedule"
         component={OperatingScheduleScreen}
         options={({ navigation, route }: any) => ({
@@ -342,7 +348,7 @@ function MoreStack() {
           ),
         })}
       />
-      <Stack.Screen
+      <MoreNav.Screen
         name="RecoveryNotificationPreferences"
         component={RecoveryNotificationPreferencesScreen}
         options={({ navigation }) => ({
@@ -353,7 +359,7 @@ function MoreStack() {
           ),
         })}
       />
-      <Stack.Screen
+      <MoreNav.Screen
         name="MonthEndReview"
         component={MonthEndReviewScreen}
         options={({ navigation, route }: any) => ({
@@ -367,19 +373,19 @@ function MoreStack() {
           ),
         })}
       />
-      <Stack.Screen name="Notifications" component={NotificationsScreen} options={{ headerShown: false }} />
+      <MoreNav.Screen name="Notifications" component={NotificationsScreen} options={{ headerShown: false }} />
       {/*
         Help and legal live IN the app, not behind a link to the website.
         Most owners have a phone and no computer, so for them this is the only
         place these documents will ever be read — and Privacy and Terms are
         not optional reading to route someone off-device for.
       */}
-      <Stack.Screen name="Faqs" component={FaqsScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="Tutorials" component={TutorialsScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="Contact" component={ContactScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="Privacy" component={PrivacyScreen} options={{ headerShown: false }} />
-      <Stack.Screen name="Terms" component={TermsScreen} options={{ headerShown: false }} />
-    </Stack.Navigator>
+      <MoreNav.Screen name="Faqs" component={FaqsScreen} options={{ headerShown: false }} />
+      <MoreNav.Screen name="Tutorials" component={TutorialsScreen} options={{ headerShown: false }} />
+      <MoreNav.Screen name="Contact" component={ContactScreen} options={{ headerShown: false }} />
+      <MoreNav.Screen name="Privacy" component={PrivacyScreen} options={{ headerShown: false }} />
+      <MoreNav.Screen name="Terms" component={TermsScreen} options={{ headerShown: false }} />
+    </MoreNav.Navigator>
   );
 }
 

@@ -1,3 +1,4 @@
+import { testScreen } from "./support/screen";
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, waitFor } from "@testing-library/react-native";
@@ -31,7 +32,8 @@ vi.mock("../../src/context/BusinessProfileContext", () => ({
 }));
 
 const { ThemeProvider } = await import("../../src/context/ThemeContext");
-const { ImportCsvScreen } = await import("../../src/screens/records/ImportCsvScreen");
+const { ImportCsvScreen: TypedImportCsvScreen } = await import("../../src/screens/records/ImportCsvScreen");
+const ImportCsvScreen = testScreen(TypedImportCsvScreen);
 const navigation = {
   navigate: vi.fn(), goBack: vi.fn(), canGoBack: vi.fn(() => false), setOptions: vi.fn(),
   addListener: vi.fn((_event: string, _listener: (event: { preventDefault: () => void }) => void) => vi.fn()),

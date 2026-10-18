@@ -1,3 +1,4 @@
+import { testScreen } from './support/screen';
 import React from 'react';
 import { Dimensions, Pressable, Text } from 'react-native';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -114,9 +115,8 @@ vi.mock('../../src/context/AiChatContext', () => ({
   AiChatProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 
-const { ExpenseBehaviorScreen } = await import(
-  '../../src/screens/ExpenseBehaviorScreen'
-);
+const { ExpenseBehaviorScreen: TypedExpenseBehaviorScreen } = await import('../../src/screens/ExpenseBehaviorScreen');
+const ExpenseBehaviorScreen = testScreen(TypedExpenseBehaviorScreen);
 const { ThemeProvider } = await import('../../src/context/ThemeContext');
 const { PeriodSelector } = await import('../../src/components/PeriodSelector');
 const { ReportingPeriodScope, useReportingPeriod } = await import('../../src/context/ReportingPeriodContext');
@@ -1690,7 +1690,7 @@ describe('Expense insight overview — repeating payments', () => {
 });
 
 it('binds the expense-insight view to its own reporting period scope', () => {
-  const wrapper = ExpenseBehaviorScreen({});
+  const wrapper = TypedExpenseBehaviorScreen({} as never);
   expect(wrapper.props.scope).toBe('expense-insight');
   expect(typeof wrapper.props.children.type).toBe('function');
 });

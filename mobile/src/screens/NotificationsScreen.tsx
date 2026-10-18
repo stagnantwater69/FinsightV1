@@ -30,6 +30,7 @@ import { recordPath } from "../lib/chatLinks";
 import { font, radius, space, typeScale } from "../theme/tokens";
 import { useTheme } from "../context/ThemeContext";
 import type { Notification, RecordItem } from "../lib/types";
+import type { NotificationsScreenProps } from "../navigation/types";
 
 /** GET /notifications returns at most this many rows (NOTIFICATION_LIST_LIMIT on the server). */
 const NOTIFICATION_LIST_CAP = 500;
@@ -207,7 +208,7 @@ function AlertsNotice({ title, body, onRetry, retryLabel, busy = false, assertiv
  * spinner for it would be worse than the rare case of it failing — which is
  * reported and rolled back below.
  */
-export function NotificationsScreen({ navigation }: any) {
+export function NotificationsScreen({ navigation }: NotificationsScreenProps) {
   const [filter, setFilter] = useState<"all" | "unread">("all");
   const t = useTheme();
   const insets = useSafeAreaInsets();

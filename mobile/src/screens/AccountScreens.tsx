@@ -17,6 +17,7 @@ import { setFlash, takeFlash } from "../lib/flash";
 import * as haptics from "../lib/haptics";
 import type { Profile } from "../lib/types";
 import { font, radius, space, typeScale } from "../theme/tokens";
+import type { MoreScreenProps } from "../navigation/types";
 
 type ProfileField = "firstName" | "lastName" | "phoneNumber";
 type ProfileDraft = Record<ProfileField, string>;
@@ -98,7 +99,7 @@ function AccountAction({ icon, label, detail, onPress, destructive = false }: {
   );
 }
 
-export function ProfileScreen({ navigation }: any) {
+export function ProfileScreen({ navigation }: MoreScreenProps<"Profile">) {
   const t = useTheme();
   const { profile } = useAuth();
   const insets = useSafeAreaInsets();
@@ -198,7 +199,7 @@ function useCurrentAccount() {
   return () => mounted.current && ownerId.current !== undefined && currentId.current === ownerId.current;
 }
 
-export function EditProfileScreen({ navigation }: any) {
+export function EditProfileScreen({ navigation }: MoreScreenProps<"EditProfile">) {
   const t = useTheme();
   const { profile, updateProfile, setProfileFromServer } = useAuth();
   const [form, setForm] = useState<ProfileDraft>({ firstName: profile?.firstName ?? "", lastName: profile?.lastName ?? "", phoneNumber: profile?.phoneNumber ?? "" });
@@ -285,7 +286,7 @@ export function EditProfileScreen({ navigation }: any) {
   );
 }
 
-export function ChangePasswordScreen({ navigation }: any) {
+export function ChangePasswordScreen({ navigation }: MoreScreenProps<"ChangePassword">) {
   const t = useTheme();
   const { profile, changePassword } = useAuth();
   const [form, setForm] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
@@ -352,7 +353,7 @@ export function ChangePasswordScreen({ navigation }: any) {
   );
 }
 
-export function DeleteAccountScreen({ navigation }: any) {
+export function DeleteAccountScreen({ navigation }: MoreScreenProps<"DeleteAccount">) {
   const t = useTheme();
   const { profile, logout } = useAuth();
   const [password, setPassword] = useState("");

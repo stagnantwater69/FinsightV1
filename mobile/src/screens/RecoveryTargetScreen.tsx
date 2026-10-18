@@ -60,10 +60,11 @@ import type {
   RecoveryPlan,
   RecoveryStatus,
 } from "../lib/types";
+import type { InsightsScreenProps } from "../navigation/types";
 
 // ---------------------------------------------------------------- Recovery target
 
-export function RecoveryTargetScreen(props: any) {
+export function RecoveryTargetScreen(props: InsightsScreenProps<"RecoveryTarget">) {
   return (
     <ReportingPeriodScope scope="recovery-target">
       <RecoveryTargetContent {...props} />
@@ -71,7 +72,7 @@ export function RecoveryTargetScreen(props: any) {
   );
 }
 
-function RecoveryTargetContent({ navigation }: any) {
+function RecoveryTargetContent({ navigation }: InsightsScreenProps<"RecoveryTarget">) {
   const t = useTheme();
   const { selected } = useBusinessProfiles();
   const chat = useAiChat();

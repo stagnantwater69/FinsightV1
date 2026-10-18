@@ -1,3 +1,4 @@
+import { testScreen } from './support/screen';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react-native';
@@ -35,7 +36,9 @@ vi.mock('../../src/context/BusinessProfileContext', () => ({
 vi.mock('../../src/context/AuthContext', () => ({ useAuth: () => ({ profile: null }) }));
 vi.mock('../../src/components/PhotoUpload', () => ({ PhotoUpload: (props: UploadProps) => { uploadProps = props; return null; } }));
 vi.mock('../../src/lib/api', () => ({ api: { get: (...args: unknown[]) => apiGet(...args) }, errorMessage: (error: unknown) => error instanceof Error ? error.message : 'Could not finish.' }));
-const { BusinessProfilesScreen, BusinessProfileFormScreen } = await import('../../src/screens/BusinessScreens');
+const { BusinessProfilesScreen: TypedBusinessProfilesScreen, BusinessProfileFormScreen: TypedBusinessProfileFormScreen } = await import('../../src/screens/BusinessScreens');
+const BusinessProfilesScreen = testScreen(TypedBusinessProfilesScreen);
+const BusinessProfileFormScreen = testScreen(TypedBusinessProfileFormScreen);
 const tree = () => <ThemeProvider initialMode="light"><BusinessProfilesScreen navigation={{ navigate, goBack }} /></ThemeProvider>;
 
 beforeEach(() => {

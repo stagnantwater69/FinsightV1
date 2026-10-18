@@ -1,3 +1,4 @@
+import { testScreen } from './support/screen';
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render } from '@testing-library/react-native';
@@ -28,7 +29,8 @@ vi.mock('../../src/context/TourContext', () => ({
   useTourOptional: () => hasTour ? { alwaysShow: false, setAlwaysShow, restart } : null,
 }));
 
-const { SettingsScreen } = await import('../../src/screens/SettingsScreen');
+const { SettingsScreen: TypedSettingsScreen } = await import('../../src/screens/SettingsScreen');
+const SettingsScreen = testScreen(TypedSettingsScreen);
 
 async function renderScreen() {
   const navigate = vi.fn();

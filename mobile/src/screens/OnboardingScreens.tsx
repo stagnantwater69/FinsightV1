@@ -61,6 +61,7 @@ import {
   readOnboarding,
   saveOnboardingDraft,
 } from "../lib/onboardingDraft";
+import type { DashboardScreenProps } from "../navigation/types";
 
 /**
  * The steps, named.
@@ -193,14 +194,14 @@ function pesos(raw: string): string {
  * Every one of these is a screen in the Records stack — see App.tsx's
  * `<Stack.Screen name=…>` list, which tests/navigationTargets.test.ts pins.
  */
-export const ONBOARDING_NEXT_SCREENS: Record<OnboardingNext, string> = {
+export const ONBOARDING_NEXT_SCREENS: Record<OnboardingNext, "AddSales" | "AddExpense" | "ScanReceipt" | "ImportCsv"> = {
   sale: "AddSales",
   expense: "AddExpense",
   scan: "ScanReceipt",
   import: "ImportCsv",
 };
 
-export function OnboardingResumeScreen({ navigation }: any) {
+export function OnboardingResumeScreen({ navigation }: DashboardScreenProps<"Onboarding">) {
   return (
     <OnboardingScreen
       onDone={(next) => {

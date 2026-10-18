@@ -49,11 +49,11 @@ function navigationTargets(): Set<string> {
   return targets;
 }
 
-/** Names registered as a Stack.Screen or Tab.Screen in App.tsx. */
+/** Names registered on any navigator in App.tsx: Stack, Tab, or a per-stack one such as RecordsNav. */
 function registeredScreens(): Set<string> {
   const app = readFileSync(join(ROOT, "App.tsx"), "utf8");
   const names = new Set<string>();
-  for (const m of app.matchAll(/<(?:Stack|Tab)\.Screen\s+name=["']([A-Za-z0-9_]+)["']/g)) {
+  for (const m of app.matchAll(/<(?:Stack|Tab|[A-Z][A-Za-z]*Nav)\.Screen\s+name=["']([A-Za-z0-9_]+)["']/g)) {
     names.add(m[1]!);
   }
   return names;

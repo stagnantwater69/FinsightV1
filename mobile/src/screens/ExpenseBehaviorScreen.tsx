@@ -54,6 +54,7 @@ import type {
   RecurringPattern,
   RecurringSchedule,
 } from "../lib/types";
+import type { InsightsScreenProps } from "../navigation/types";
 
 const EMPTY_EXPENSE_BEHAVIOR: ExpenseBehavior = {
   periodDays: 0,
@@ -97,7 +98,7 @@ function ExpenseInsightSkeleton() {
   );
 }
 
-export function ExpenseBehaviorScreen(props: any) {
+export function ExpenseBehaviorScreen(props: InsightsScreenProps<"ExpenseBehavior">) {
   return (
     <ReportingPeriodScope scope="expense-insight">
       <ExpenseBehaviorGate {...props} />
@@ -119,7 +120,7 @@ function ExpenseBehaviorGate(props: any) {
   );
 }
 
-function ExpenseBehaviorContent({ navigation }: any) {
+function ExpenseBehaviorContent({ navigation }: InsightsScreenProps<"ExpenseBehavior">) {
   const t = useTheme();
   const { fontScale } = useWindowDimensions();
   const { brand } = t;

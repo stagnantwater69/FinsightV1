@@ -17,6 +17,7 @@ import { useTheme } from "../context/ThemeContext";
 import type { BusinessProfile, RecoveryMonthEndReview } from "../lib/types";
 import { ChartPlotPressArea, ChartValueReadout, useChartSelection, type ChartDatum } from "../components/ChartInteraction";
 import { KpiWatermark } from "../components/KpiWatermark";
+import type { MoreScreenProps } from "../navigation/types";
 
 /**
  * Month-end review — Recovery Target Improvement Plan §10.9/§11 Phase 7.
@@ -36,7 +37,7 @@ import { KpiWatermark } from "../components/KpiWatermark";
  * call-to-action ("Edit business profile") is a plain navigation link to the
  * existing, manual edit screen.
  */
-export function MonthEndReviewScreen({ navigation }: any) {
+export function MonthEndReviewScreen({ navigation }: MoreScreenProps<"MonthEndReview">) {
   const { selected } = useBusinessProfiles();
   const [month, setMonth] = useState(() => lastMonthKey());
 

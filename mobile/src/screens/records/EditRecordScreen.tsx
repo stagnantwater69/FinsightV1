@@ -22,8 +22,9 @@ import { FIELD_LIMITS } from "../../lib/fieldLimits";
 import { setFlash } from "../../lib/flash";
 import { badges, CategoryPicker } from "./shared";
 import { AvailableFundsBaselineChoice, useAvailableFundsBaselineChoice } from "../../components/AvailableFundsBaselineChoice";
+import type { RecordsScreenProps } from "../../navigation/types";
 
-export function EditRecordScreen({ route, navigation }: any) {
+export function EditRecordScreen({ route, navigation }: RecordsScreenProps<"EditRecord">) {
   const { selected, categories, refreshCategories } = useBusinessProfiles();
   const record: RecordItem = route.params.record;
   const selectedBusinessProfileId = selected?.id ?? null;

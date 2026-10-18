@@ -31,6 +31,7 @@ import {
   type BusinessFieldErrors,
   type BusinessTextField,
 } from "../lib/businessProfileDraft";
+import type { MoreScreenProps } from "../navigation/types";
 
 /**
  * The archived-panel "Hide" link: what it looks like, and the slop that makes
@@ -44,7 +45,7 @@ const HIDE_LINK_SLOP = Math.ceil((TAP_FLOOR - HIDE_LINK_HEIGHT) / 2);
 
 // ---------------------------------------------------------------- List / switcher
 
-export function BusinessProfilesScreen({ navigation }: any) {
+export function BusinessProfilesScreen({ navigation }: MoreScreenProps<"BusinessProfiles">) {
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const [detailsId, setDetailsId] = useState<number | null>(null);
@@ -360,7 +361,7 @@ function RowLine({ label, value }: { label: string; value: number }) {
 
 // ---------------------------------------------------------------- Create / edit
 
-export function BusinessProfileFormScreen({ navigation, route }: any) {
+export function BusinessProfileFormScreen({ navigation, route }: MoreScreenProps<"BusinessProfileForm">) {
   const existing: BusinessProfile | undefined = route.params?.profile;
   const { createProfile, updateProfile, refresh } = useBusinessProfiles();
   const [form, setForm] = useState<BusinessProfileDraft>(() =>

@@ -1,3 +1,4 @@
+import { testScreen } from './support/screen';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AccessibilityInfo, Pressable, RefreshControl, SectionList } from 'react-native';
@@ -67,7 +68,8 @@ const unreadAlert = (id: number) => ({
   dateCreated: '2026-09-15T01:00:00.000Z',
 });
 
-const { NotificationsScreen } = await import('../../src/screens/NotificationsScreen');
+const { NotificationsScreen: TypedNotificationsScreen } = await import('../../src/screens/NotificationsScreen');
+const NotificationsScreen = testScreen(TypedNotificationsScreen);
 const { ThemeProvider } = await import('../../src/context/ThemeContext');
 type TestNavigation = { navigate: ReturnType<typeof vi.fn>; goBack?: ReturnType<typeof vi.fn>; canGoBack?: () => boolean };
 function screenTree(navigation?: TestNavigation, mode: 'light' | 'dark' = 'light') {

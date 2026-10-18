@@ -63,10 +63,11 @@ import type {
   PurchaseReview,
   SpendingImpact,
 } from "../lib/types";
+import type { InsightsScreenProps } from "../navigation/types";
 
 // ---------------------------------------------------------------- Spending impact
 
-export function SpendingImpactScreen(props: any) {
+export function SpendingImpactScreen(props: InsightsScreenProps<"SpendingImpact">) {
   return (
     <ReportingPeriodScope scope="spending-impact">
       <SpendingImpactContent {...props} />
@@ -74,7 +75,7 @@ export function SpendingImpactScreen(props: any) {
   );
 }
 
-function SpendingImpactContent({ navigation, route }: any) {
+function SpendingImpactContent({ navigation, route }: InsightsScreenProps<"SpendingImpact">) {
   const t = useTheme();
   const { ACCENT, brand, ink, paper, statusText } = t;
   const { selected, categories } = useBusinessProfiles();

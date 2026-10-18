@@ -123,6 +123,7 @@ import type {
   ReceiptScanResult,
   ReviewNotice,
 } from "./scanReceipt/types";
+import type { RecordsScreenProps } from "../../navigation/types";
 
 const MIB = 1024 * 1024;
 
@@ -141,7 +142,7 @@ const MIB = 1024 * 1024;
  * Its own supporting types, poll helper and capture-session conversions live
  * in ./scanReceipt/ — this file is the screen itself.
  */
-export function ScanReceiptScreen({ navigation }: any) {
+export function ScanReceiptScreen({ navigation }: RecordsScreenProps<"ScanReceipt">) {
   const { width, fontScale } = useWindowDimensions();
   const stackedFigures = width < 390 || fontScale > 1.2;
   const t = useTheme();

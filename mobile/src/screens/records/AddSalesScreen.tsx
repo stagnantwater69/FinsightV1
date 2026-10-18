@@ -18,8 +18,9 @@ import { useImportOperation } from "../../lib/useImportOperation";
 import { useManualRecordRecovery } from "../../lib/useManualRecordRecovery";
 import { isDefiniteManualRecordRejection, verifiedManualRecordResult, type ManualRecordIntent } from "../../lib/manualRecordRecovery";
 import { ManualRecordRecoveryNotice } from "../../components/ManualRecordRecoveryNotice";
+import type { RecordsScreenProps } from "../../navigation/types";
 
-export function AddSalesScreen({ navigation }: any) {
+export function AddSalesScreen({ navigation }: RecordsScreenProps<"AddSales">) {
   const { selected } = useBusinessProfiles();
   const { profile: owner } = useAuth();
   const [date, setDate] = useState(() => businessToday(selected?.timezone));

@@ -1,3 +1,4 @@
+import { testScreen } from "./support/screen";
 import React from "react";
 import { createRequire } from "node:module";
 import { File } from "node:buffer";
@@ -31,7 +32,8 @@ vi.mock("../../src/components/DateField", async () => {
 });
 
 const { ThemeProvider } = await import("../../src/context/ThemeContext");
-const { ImportCsvScreen } = await import("../../src/screens/records/ImportCsvScreen");
+const { ImportCsvScreen: TypedImportCsvScreen } = await import("../../src/screens/records/ImportCsvScreen");
+const ImportCsvScreen = testScreen(TypedImportCsvScreen);
 const { ApiError } = await import("../../src/lib/api");
 const { csvUploadForm } = await import("../../src/lib/csvUploadForm");
 const NativeFormData = createRequire(import.meta.url)("react-native/Libraries/Network/FormData").default;

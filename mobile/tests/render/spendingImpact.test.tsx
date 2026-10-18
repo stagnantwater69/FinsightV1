@@ -1,3 +1,4 @@
+import { testScreen } from './support/screen';
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, fireEvent, waitFor } from '@testing-library/react-native';
@@ -76,9 +77,8 @@ vi.mock('../../src/components/AskFinSightFab', () => ({
   FAB_CLEARANCE: 0,
 }));
 
-const { SpendingImpactScreen } = await import(
-  '../../src/screens/SpendingImpactScreen'
-);
+const { SpendingImpactScreen: TypedSpendingImpactScreen } = await import('../../src/screens/SpendingImpactScreen');
+const SpendingImpactScreen = testScreen(TypedSpendingImpactScreen);
 const { ThemeProvider } = await import('../../src/context/ThemeContext');
 
 const navigation = { navigate: vi.fn(), goBack: vi.fn(), setOptions: vi.fn() };
@@ -382,7 +382,7 @@ describe('Spending Impact — the period control', () => {
 });
 
 it('binds the spending-impact view to its own reporting period scope', () => {
-  const wrapper = SpendingImpactScreen({});
+  const wrapper = TypedSpendingImpactScreen({} as never);
   expect(wrapper.props.scope).toBe('spending-impact');
   expect(typeof wrapper.props.children.type).toBe('function');
 });

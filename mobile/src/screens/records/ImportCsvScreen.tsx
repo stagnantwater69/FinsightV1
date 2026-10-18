@@ -56,6 +56,7 @@ import { AvailableFundsBaselineChoice, useAvailableFundsBaselineChoice } from ".
 import { TAP_FLOOR } from "../../components/touchTarget";
 import { HeaderBackButton } from "../../components/HeaderBackButton";
 import { CsvKeyboardFrame } from "./importCsv/CsvKeyboardFrame";
+import type { RecordsScreenProps } from "../../navigation/types";
 
 const EMPTY_CORRECTION: RowCorrection = {};
 type ReviewFilter = "preview" | "problems" | "duplicates" | "excluded" | "edited";
@@ -127,7 +128,7 @@ function withoutBaselineOverrides(corrections: Corrections): Corrections {
   return changed ? next : corrections;
 }
 
-export function ImportCsvScreen({ navigation }: any) {
+export function ImportCsvScreen({ navigation }: RecordsScreenProps<"ImportCsv">) {
   const t = useTheme();
   const { brand, ink, paper, statusText } = t;
   const { selected, categories } = useBusinessProfiles();

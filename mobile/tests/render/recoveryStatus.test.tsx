@@ -1,3 +1,4 @@
+import { testScreen } from './support/screen';
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, fireEvent, waitFor } from '@testing-library/react-native';
@@ -155,7 +156,8 @@ async function renderScreen(insight: RecoveryInsight) {
     if (path === '/records/months') return Promise.resolve({ months: [] });
     return Promise.reject(new Error(`unexpected path ${path}`));
   });
-  const { RecoveryTargetScreen } = await import('../../src/screens/RecoveryTargetScreen');
+  const { RecoveryTargetScreen: TypedRecoveryTargetScreen } = await import('../../src/screens/RecoveryTargetScreen');
+  const RecoveryTargetScreen = testScreen(TypedRecoveryTargetScreen);
   return render(
     <ThemeProvider initialMode="light">
       <RecoveryTargetScreen navigation={navigation} />
@@ -567,8 +569,9 @@ describe('RecoveryTargetScreen — reporting period', () => {
 });
 
 it('binds the recovery-target view to its own reporting period scope', async () => {
-  const { RecoveryTargetScreen } = await import('../../src/screens/RecoveryTargetScreen');
-  const wrapper = RecoveryTargetScreen({});
+  const { RecoveryTargetScreen: TypedRecoveryTargetScreen } = await import('../../src/screens/RecoveryTargetScreen');
+  const RecoveryTargetScreen = testScreen(TypedRecoveryTargetScreen);
+  const wrapper = TypedRecoveryTargetScreen({} as never);
   expect(wrapper.props.scope).toBe('recovery-target');
   expect(typeof wrapper.props.children.type).toBe('function');
 });

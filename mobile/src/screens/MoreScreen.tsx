@@ -16,6 +16,7 @@ import { font, radius, space, typeScale } from "../theme/tokens";
 import { HERO } from "../theme/hero";
 import { TealPanel } from "../components/CoachKit";
 import { useTheme } from "../context/ThemeContext";
+import type { MoreScreenProps } from "../navigation/types";
 
 /**
  * Everything that is not a daily task.
@@ -38,7 +39,7 @@ function initialsOf(first: string, last: string): string {
   return `${first.trim().charAt(0)}${last.trim().charAt(0)}`.toUpperCase() || "?";
 }
 
-export function MoreScreen({ navigation }: any) {
+export function MoreScreen({ navigation }: MoreScreenProps<"MoreHome">) {
   const t = useTheme();
   const { profile } = useAuth();
   const { selected, profiles } = useBusinessProfiles();
