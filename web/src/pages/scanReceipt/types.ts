@@ -10,8 +10,17 @@ import type { FieldEvidence, ReceiptWarning } from "../../lib/receiptWarnings";
  */
 type ReceiptConfirmationStatus = "Pending" | "Confirmed" | "Deletion Pending";
 
+/** The local read's headline fields while the provider is still reading. Display only. */
+export interface ReceiptLocalPreview {
+  date: string | null;
+  vendor: string | null;
+  amount: number | null;
+}
+
 export interface ReceiptScanResult {
   id: number;
+  /** Present only while the scan is still processing; may change when it finishes. */
+  localPreview?: ReceiptLocalPreview | null;
   confirmationStatus?: ReceiptConfirmationStatus;
   receiptBatchId?: number | null;
   receiptOrdinal?: number | null;
