@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { checkQueues, type Readiness } from "../../scripts/doctor";
+import { checkQueues, describeMigrationDrift, developmentTargets, type Readiness } from "../../scripts/doctor";
+import type { MigrationDrift } from "../../src/config/migrationGuard";
 
 /*
  * The queue line is the one that catches a stopped worker, which is the
@@ -52,5 +53,55 @@ describe("doctor: queue line", () => {
     const withheld = checkQueues({ status: "ready" });
     expect(withheld.state).toBe("SKIP");
     expect(withheld.hint).toMatch(/HEALTH_DETAIL_TOKEN/);
+  });
+});
+
+describe("doctor: migration line", () => {
+  const clean: MigrationDrift = { status: "ok", pending: [], failed: [], checksumMismatches: [], schemaIssues: [] };
+
+  it("passes only on the startup gate's own ok", () => {
+    expect(describeMigrationDrift(clean).state).toBe("OK");
+  });
+
+  it("fails on a changed checksum, which a count of applied rows cannot see", () => {
+    const check = describeMigrationDrift({
+      ...clean,
+      status: "drift",
+      checksumMismatches: [{ migration: "20261011154302_manual_record_create_retry_protection", expectedChecksum: "a", actualChecksum: "b" }],
+    });
+
+    expect(check.state).toBe("FAIL");
+    expect(check.summary).toBe("1 changed since applied");
+    expect(check.hint).toContain("20261011154302_manual_record_create_retry_protection");
+  });
+
+  it("fails on a missing security control with every migration applied", () => {
+    const check = describeMigrationDrift({ ...clean, status: "drift", schemaIssues: ["security.chat_send_request_rls"] });
+
+    expect(check.state).toBe("FAIL");
+    expect(check.hint).toContain("security.chat_send_request_rls");
+  });
+
+  it("warns rather than passing when the gate could not reach a verdict", () => {
+    const check = describeMigrationDrift({ status: "unknown", pending: [], failed: [], verificationFailure: "schema_shape_unverifiable" });
+
+    expect(check.state).toBe("WARN");
+    expect(check.summary).toContain("schema_shape_unverifiable");
+  });
+});
+
+describe("doctor: mobile target", () => {
+  it("follows this machine's LAN address, as a dev build does, keeping port and path", () => {
+    expect(developmentTargets("http://192.168.1.20:4000/api/v1", ["192.168.1.57", "8.8.8.8"]))
+      .toEqual(["http://192.168.1.57:4000/api/v1"]);
+  });
+
+  it("follows from a loopback configuration too", () => {
+    expect(developmentTargets("http://localhost:4000/api/v1", ["100.101.1.2"])).toEqual(["http://100.101.1.2:4000/api/v1"]);
+  });
+
+  it("leaves an HTTPS or public address alone, as the app does", () => {
+    expect(developmentTargets("https://api.example.com/api/v1", ["192.168.1.57"])).toEqual([]);
+    expect(developmentTargets("http://203.0.113.5:4000/api/v1", ["192.168.1.57"])).toEqual([]);
   });
 });

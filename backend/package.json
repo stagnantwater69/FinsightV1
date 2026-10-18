@@ -52,7 +52,8 @@
     "test:receipt-scanner:development": "vitest --config tests/receipt-scanner-evaluation/vitest.development.config.mts run",
     "typecheck:receipt-scanner:local": "tsc -p tests/receipt-scanner-evaluation/tsconfig.local-quality.json",
     "typecheck:receipt-scanner:policy-v1": "tsc -p tests/receipt-scanner-evaluation/tsconfig.policy-v1.json",
-    "test:db:up": "docker run -d --name finsight-test-db -e POSTGRES_PASSWORD=testpass -e POSTGRES_USER=testuser -e POSTGRES_DB=finsight_test -p 55432:5432 postgres:16-alpine",
+    "test:isolated": "tsx scripts/test-db-run.ts",
+    "test:db:up": "docker run -d --name finsight-test-db -e POSTGRES_PASSWORD=testpass -e POSTGRES_USER=testuser -e POSTGRES_DB=finsight_test -p 127.0.0.1:55432:5432 postgres:16-alpine",
     "test:db:down": "docker rm -f finsight-test-db",
     "test:db:reset": "npm run test:db:down --silent || true && npm run test:db:up"
   },
