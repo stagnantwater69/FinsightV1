@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { isAxiosError } from "axios";
 import { cachedApiGet, peekCachedApiData } from "../../lib/serverStateApi";
 import { useServerStateRefresh } from "../../lib/useServerStateRefresh";
+import { useRevalidateOnReturn } from "../../lib/useRevalidateOnReturn";
 import { getErrorMessage } from "../../lib/errors";
 import type { PeriodSelection } from "../../lib/reportingPeriod";
 import type { RecordItem, RecurringSchedule } from "../../lib/types";
@@ -113,6 +114,9 @@ export function useCachedFeed<T>(
     [{ resource: url, businessProfileId, tags, ...(period ? { period } : {}) }],
     (signal) => void load(signal, true),
   );
+  // Not forced: only a read past its cache window is fetched again, and the
+  // key, so the owner's period and filters, stays as it was.
+  useRevalidateOnReturn((signal) => void load(signal));
 
   const sameScope = key !== null && result.key === key;
   return {
