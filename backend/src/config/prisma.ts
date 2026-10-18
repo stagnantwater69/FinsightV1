@@ -1,5 +1,6 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import { logger } from "./logger";
+import { recordDbOperation } from "../lib/requestTiming";
 
 /** A single query slower than this is logged; most are a pooler round-trip (tens of ms). */
 const SLOW_QUERY_MS = 300;
@@ -177,6 +178,8 @@ export const prisma = baseClient.$extends({
       const internal = (rest as { __internalParams?: { transaction?: unknown } }).__internalParams;
       const inTransaction = internal?.transaction !== undefined;
       for (let attempt = 0; ; attempt++) {
+        // Per attempt: a retried query is another round trip.
+        recordDbOperation();
         try {
           return await query(args);
         } catch (err) {
