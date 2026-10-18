@@ -26,7 +26,7 @@
  * Writes veryfi-spike-results.json and VERYFI-SPIKE-REPORT.md next to this.
  */
 import { readFileSync, writeFileSync } from "node:fs";
-import { join, extname } from "node:path";
+import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { env } from "../../src/config/env";
 import {
@@ -73,8 +73,6 @@ interface SpikeResult {
   raw: unknown;
 }
 
-const MIME: Record<string, string> = { ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp" };
-
 /**
  * Coerces Veryfi's document response into the same shape the deterministic
  * parser emits, so scoring.ts can compare them without caring which produced
@@ -114,7 +112,6 @@ const DELAY_MS = Number(process.env.VERYFI_DELAY_MS ?? 1200);
 const MAX_ATTEMPTS = 3;
 
 async function extractWithVeryfi(buffer: Buffer, file: string): Promise<Record<string, unknown>> {
-  const mimeType = MIME[extname(file).toLowerCase()] ?? "image/jpeg";
   for (let attempt = 1; ; attempt++) {
     const res = await fetch(ENDPOINT, {
       method: "POST",

@@ -76,7 +76,7 @@ describe("a range built from these helpers spans exactly the intended days", () 
     const from = utcAddDays(today, -29);
     const to = utcEndOfDay(today);
     expect(utcDateKey(from)).toBe("2026-06-26");
-    expect(from >= from && from <= to).toBe(true);
+    expect(from <= today && from <= to).toBe(true);
     expect(today <= to).toBe(true);
   });
 });
