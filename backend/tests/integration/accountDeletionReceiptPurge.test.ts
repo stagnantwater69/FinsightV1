@@ -245,3 +245,45 @@ describe("account deletion leaves no receipt data behind", () => {
     });
   });
 });
+
+/*
+ * The storage plan is read in pages of 1,000 rows per table. An account with
+ * more scans and pages than one page holds must still have every photograph
+ * deleted, and nothing of another business's.
+ */
+describe("account deletion across more files than one read page holds", () => {
+  it("deletes every scan's photographs past the first page, and no one else's", async () => {
+    const SCANS = 1_200;
+    await prisma.receiptScan.createMany({
+      data: Array.from({ length: SCANS }, (_, index) => ({
+        businessProfileId: ctx.profile.id,
+        imageFile: `receipts/bulk-${index}-source.jpg`,
+        processingStatus: "Complete" as const,
+        confirmationStatus: "Confirmed" as const,
+      })),
+    });
+    const scans = await prisma.receiptScan.findMany({ where: { businessProfileId: ctx.profile.id }, select: { id: true }, orderBy: { id: "asc" } });
+    await prisma.receiptScanPage.createMany({
+      data: scans.map((scan, index) => ({
+        receiptScanId: scan.id,
+        pageNumber: 1,
+        imageFile: `receipts/bulk-${index}-page.jpg`,
+        processedImageFile: `receipts/bulk-${index}-processed.jpg`,
+      })),
+    });
+    const other = await makeOwnerWithProfile({ name: "Other Store" }, ["Inventory"]);
+    await makeScanWithChildren(other.profile.id, other.categories.Inventory!, "theirs");
+
+    await drainDeletion(ctx.user.id);
+
+    const deleted = new Set(storageDeleted);
+    for (let index = 0; index < SCANS; index++) {
+      for (const suffix of ["source", "page", "processed"]) {
+        expect(deleted.has(`receipts/bulk-${index}-${suffix}.jpg`), `bulk-${index}-${suffix}`).toBe(true);
+      }
+    }
+    expect(deleted.has("receipts/theirs-1.jpg")).toBe(false);
+    expect(await prisma.receiptScan.count({ where: { businessProfileId: other.profile.id } })).toBe(1);
+    expect(await prisma.user.findUnique({ where: { id: ctx.user.id } })).toBeNull();
+  });
+});

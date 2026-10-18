@@ -645,6 +645,58 @@ function validateMapping(headers: string[], options: PreviewOptions): void {
   }
 }
 
+/** Rows of existing records read per duplicate-candidate query. */
+const DUPLICATE_CANDIDATE_PAGE = 1_000;
+/** Dates or amounts per query, which bounds its parameter count. */
+const DUPLICATE_FILTER_CHUNK = 500;
+
+function chunked<T>(values: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let offset = 0; offset < values.length; offset += size) chunks.push(values.slice(offset, offset + size));
+  return chunks;
+}
+
+/*
+ * WHICH EXISTING RECORDS CAN MATCH AN UPLOADED ROW. Every duplicate key, for
+ * expenses and sales alike, starts with the date and the amount, so a record
+ * that differs in either can never match. Filtering on dates alone loaded
+ * every record of a busy day to compare against a handful of rows; adding the
+ * amounts keeps exactly the records a key could match.
+ *
+ * Each amount is rounded the way its key rounds it (centavos for expenses,
+ * toFixed(2) for sales), so the filter cannot miss a record the key would
+ * have found. Dates and amounts are chunked to bound parameters; the filters
+ * for one date chunk cover every amount uploaded on those dates.
+ */
+function duplicateCandidateFilters(
+  businessProfileId: number,
+  kind: "expense" | "sales",
+  outcomes: RowOutcome[],
+): { businessProfileId: number; date: { in: Date[] }; amount: { in: Prisma.Decimal[] } }[] {
+  const amountsByDate = new Map<string, Set<string>>();
+  for (const outcome of outcomes) {
+    if (outcome.kind !== kind) continue;
+    const amount = kind === "expense"
+      ? new Prisma.Decimal(outcome.data.amount).mul(100).round().div(100).toFixed(2)
+      : Number(outcome.data.amount).toFixed(2);
+    const amounts = amountsByDate.get(outcome.data.date) ?? new Set<string>();
+    amounts.add(amount);
+    amountsByDate.set(outcome.data.date, amounts);
+  }
+  const filters = [];
+  for (const dates of chunked([...amountsByDate.keys()], DUPLICATE_FILTER_CHUNK)) {
+    const amounts = [...new Set(dates.flatMap((date) => [...amountsByDate.get(date)!]))];
+    for (const amountChunk of chunked(amounts, DUPLICATE_FILTER_CHUNK)) {
+      filters.push({
+        businessProfileId,
+        date: { in: dates.map((date) => new Date(date)) },
+        amount: { in: amountChunk.map((amount) => new Prisma.Decimal(amount)) },
+      });
+    }
+  }
+  return filters;
+}
+
 function summarisePreviewDuplicates(outcomes: RowOutcome[], existingKeys: Set<string> = new Set()) {
   const seen = new Set(existingKeys);
   const duplicateRows: number[] = [];
@@ -802,26 +854,30 @@ async function previewParsedCsvForProfile(
 
   const existingKeys = new Set<string>();
   for (const kind of ["expense", "sales"] as const) {
-    const dates = [...new Set(outcomes.flatMap((outcome) => outcome.kind === kind ? [outcome.data.date] : []))]
-      .map((date) => new Date(date));
-    // Bound query parameters even for files spanning many calendar days.
-    for (let offset = 0; offset < dates.length; offset += 500) {
-      const where = { businessProfileId, date: { in: dates.slice(offset, offset + 500) } };
-      if (kind === "expense") {
-        const candidates = await prisma.expenseRecord.findMany({
-          where,
-          select: { date: true, amount: true, description: true, vendor: true },
-        });
-        for (const candidate of candidates) {
-          for (const key of expenseDuplicateKeysOf(candidate)) existingKeys.add(`expense:${key}`);
-        }
-      } else {
-        const candidates = await prisma.salesReferenceRecord.findMany({
-          where,
-          select: { date: true, amount: true, description: true },
-        });
-        for (const candidate of candidates) {
-          existingKeys.add(`sales:${duplicateKeyOf(candidate.date, candidate.amount, candidate.description)}`);
+    for (const where of duplicateCandidateFilters(businessProfileId, kind, outcomes)) {
+      // Paged by id so a dense ledger is never held in memory at once.
+      for (let after = 0; ;) {
+        const page = { where: { ...where, id: { gt: after } }, orderBy: { id: "asc" as const }, take: DUPLICATE_CANDIDATE_PAGE };
+        if (kind === "expense") {
+          const candidates = await prisma.expenseRecord.findMany({
+            ...page,
+            select: { id: true, date: true, amount: true, description: true, vendor: true },
+          });
+          for (const candidate of candidates) {
+            for (const key of expenseDuplicateKeysOf(candidate)) existingKeys.add(`expense:${key}`);
+          }
+          if (candidates.length < DUPLICATE_CANDIDATE_PAGE) break;
+          after = candidates[candidates.length - 1]!.id;
+        } else {
+          const candidates = await prisma.salesReferenceRecord.findMany({
+            ...page,
+            select: { id: true, date: true, amount: true, description: true },
+          });
+          for (const candidate of candidates) {
+            existingKeys.add(`sales:${duplicateKeyOf(candidate.date, candidate.amount, candidate.description)}`);
+          }
+          if (candidates.length < DUPLICATE_CANDIDATE_PAGE) break;
+          after = candidates[candidates.length - 1]!.id;
         }
       }
     }
