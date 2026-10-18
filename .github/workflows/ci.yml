@@ -115,7 +115,10 @@ jobs:
           DATABASE_URL: postgresql://testuser:testpass@localhost:55432/finsight_test
       - run: npm test --prefix backend
         env:
+          # Both, or DIRECT_URL falls back to .env.test's 127.0.0.1 and the
+          # test guard refuses two URLs that name different hosts.
           DATABASE_URL: postgresql://testuser:testpass@localhost:55432/finsight_test
+          DIRECT_URL: postgresql://testuser:testpass@localhost:55432/finsight_test
       # npm reports Prisma's optional CLI peer even with --omit=dev; the Docker
       # job proves it is absent at runtime. Any other moderate+ advisory blocks.
       - name: Enforce backend production dependency allowlist
