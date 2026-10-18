@@ -6,9 +6,13 @@ import { confirmSchema } from "../../src/controllers/receiptScan.controller";
 import {
   buildItemisedConfirmPayload,
   buildReceiptConfirmPayload,
+  type ItemisedConfirmInput,
 } from "../../../mobile/src/lib/receiptConfirm";
 // Web's real builder too, for the same reason — not a copy of it.
-import { buildReceiptConfirmPayload as buildWebConfirmPayload } from "../../../web/src/lib/receiptConfirm";
+import {
+  buildReceiptConfirmPayload as buildWebConfirmPayload,
+  type ReceiptConfirmInput as WebConfirmInput,
+} from "../../../web/src/lib/receiptConfirm";
 
 /**
  * Client/server contract tests.
@@ -99,7 +103,7 @@ describe("mobile -> POST /records/receipts/:id/confirm", () => {
  * this is the shape most likely to drift, because it has the most parts.
  */
 describe("mobile -> POST /records/receipts/:id/confirm (itemised)", () => {
-  const base = {
+  const base: ItemisedConfirmInput = {
     date: "2026-07-31",
     description: "Grocery run",
     vendor: "Savemore",
@@ -110,7 +114,7 @@ describe("mobile -> POST /records/receipts/:id/confirm (itemised)", () => {
       { itemId: 2, categoryId: 8 },
     ],
     plan: null,
-  } as const;
+  };
 
   it("builds a payload the server accepts when the items reconcile", () => {
     const result = confirmSchema.safeParse(buildItemisedConfirmPayload({ ...base }));
@@ -175,9 +179,9 @@ describe("web -> POST /records/receipts/:id/confirm", () => {
     additionalItems: [],
     gapCategoryId: null,
     gapPlan: null,
-  } as const;
+  };
 
-  const manual = {
+  const manual: WebConfirmInput = {
     ...common,
     isItemised: false,
     itemAssignments: [],
@@ -185,7 +189,7 @@ describe("web -> POST /records/receipts/:id/confirm", () => {
     splits: [{ categoryId: 7, amount: 1400 }],
   };
 
-  const itemised = {
+  const itemised: WebConfirmInput = {
     ...common,
     isItemised: true,
     itemsTotal: 1400,

@@ -34,7 +34,7 @@ const providerUser = {
 };
 const profile = {
   id: 7, authId: "auth-google", email: "owner@shop.ph", firstName: "Ana", middleName: null,
-  lastName: "Reyes", phoneNumber: null, status: AccountStatus.ACTIVE, avatarUrl: null,
+  lastName: "Reyes", phoneNumber: null, status: AccountStatus.ACTIVE as AccountStatus, avatarUrl: null,
   createdAt: new Date("2026-01-01"),
 };
 
@@ -54,7 +54,7 @@ describe("Google identity exchange", () => {
   it("verifies the bearer with Supabase before reading any application profile", async () => {
     const result = await loginWithGoogle("google-bearer");
     expect(mocks.getUser).toHaveBeenCalledWith("google-bearer");
-    expect(mocks.getUser.mock.invocationCallOrder[0]).toBeLessThan(mocks.findUnique.mock.invocationCallOrder[0]);
+    expect(mocks.getUser.mock.invocationCallOrder[0]!).toBeLessThan(mocks.findUnique.mock.invocationCallOrder[0]!);
     expect(mocks.findUnique).toHaveBeenCalledWith({ where: { authId: "auth-google" } });
     expect(result.profile.id).toBe(7);
     expect(mocks.create).not.toHaveBeenCalled();

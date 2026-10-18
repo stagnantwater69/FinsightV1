@@ -89,7 +89,7 @@ const CLEAN_RECEIPT = [
   "Thank you!",
 ].join("\n");
 
-function visionReply(receipt: Partial<VisionReceipt> & { items?: Partial<VisionReceipt["items"][number]>[] }) {
+function visionReply(receipt: Omit<Partial<VisionReceipt>, "items"> & { items?: Partial<VisionReceipt["items"][number]>[] }) {
   return {
     receipt: {
       date: receipt.date ?? null,

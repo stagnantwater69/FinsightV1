@@ -38,7 +38,7 @@ describe("humanRetryAfter", () => {
       const text = humanRetryAfter(s);
       const [n, unit] = text.split(" ");
       const promisedSeconds =
-        unit.startsWith("second") ? Number(n) : unit.startsWith("minute") ? Number(n) * 60 : Number(n) * 3600;
+        unit!.startsWith("second") ? Number(n) : unit!.startsWith("minute") ? Number(n) * 60 : Number(n) * 3600;
       expect(promisedSeconds, `${s}s rendered as "${text}"`).toBeGreaterThanOrEqual(s);
     }
   });

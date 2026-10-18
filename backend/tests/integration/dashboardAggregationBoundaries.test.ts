@@ -23,7 +23,7 @@ async function seed(rows: Array<{ date: string; sales?: number; expense?: number
     description: "Synthetic cashflow sales", amount: row.sales!, source: "MANUAL_ENTRY" as const,
   }));
   const expenses = rows.filter((row) => row.expense !== undefined).map((row) => ({
-    businessProfileId: context.profile.id, categoryId: context.categories.Inventory,
+    businessProfileId: context.profile.id, categoryId: context.categories.Inventory!,
     date: new Date(`${row.date}T00:00:00Z`), description: "Synthetic cashflow expense",
     amount: row.expense!, source: "MANUAL_ENTRY" as const,
   }));

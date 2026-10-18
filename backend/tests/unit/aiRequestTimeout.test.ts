@@ -78,7 +78,6 @@ describe("AI request deadlines", () => {
     const result = await askFinSight({
       question: "Why did my expenses rise?",
       context: "Expenses rose 20% this month.",
-      module: "EXPENSE_INSIGHT",
     });
 
     expectBothLegsBounded(seen);
@@ -123,7 +122,6 @@ describe("AI request deadlines", () => {
     const result = await askFinSight({
       question: "Why did my expenses rise?",
       context: "Expenses rose 20% this month.",
-      module: "EXPENSE_INSIGHT",
     });
 
     expect(result.provider).toBe("unavailable");

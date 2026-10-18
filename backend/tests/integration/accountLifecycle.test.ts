@@ -488,11 +488,11 @@ describe("registration proves the address before the account works", () => {
     const claimEntered = new Promise<void>((resolve) => { enteredClaim = resolve; });
     const claimReleased = new Promise<void>((resolve) => { releaseClaim = resolve; });
     const updateMany = prisma.user.updateMany.bind(prisma.user);
-    const claim = vi.spyOn(prisma.user, "updateMany").mockImplementationOnce(async (args) => {
+    const claim = vi.spyOn(prisma.user, "updateMany").mockImplementationOnce((async (args: Parameters<typeof updateMany>[0]) => {
       enteredClaim();
       await claimReleased;
       return updateMany(args);
-    });
+    }) as unknown as typeof prisma.user.updateMany);
 
     try {
       const purge = purgeUnverifiedRegistrations();
@@ -527,12 +527,12 @@ describe("registration proves the address before the account works", () => {
     const claimCompleted = new Promise<void>((resolve) => { claimed = resolve; });
     const claimReleased = new Promise<void>((resolve) => { releaseClaim = resolve; });
     const updateMany = prisma.user.updateMany.bind(prisma.user);
-    const claim = vi.spyOn(prisma.user, "updateMany").mockImplementationOnce(async (args) => {
+    const claim = vi.spyOn(prisma.user, "updateMany").mockImplementationOnce((async (args: Parameters<typeof updateMany>[0]) => {
       const result = await updateMany(args);
       claimed();
       await claimReleased;
       return result;
-    });
+    }) as unknown as typeof prisma.user.updateMany);
 
     try {
       const purge = purgeUnverifiedRegistrations();

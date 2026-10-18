@@ -50,7 +50,7 @@ vi.mock("../../src/services/storage.service", async (importOriginal) => {
   };
 });
 
-import request from "supertest";
+import request, { type Response } from "supertest";
 import sharp from "sharp";
 import { app } from "../../src/app";
 import { checkMigrationDrift } from "../../src/config/migrationGuard";
@@ -692,7 +692,7 @@ describe("Phase 2 resumable receipt history", () => {
     const seen: number[] = [];
     let cursor: string | null = null;
     do {
-      const response = await request(app)
+      const response: Response = await request(app)
         .get(RECEIPTS)
         .query({
           businessProfileId: owner.profile.id,
@@ -790,7 +790,7 @@ describe("Phase 2 item correction revision guard", () => {
           date: "2026-09-13",
           description: "Rice purchase",
           amount: 100,
-          splits: [{ categoryId: owner.categories.Inventory, amount: 100 }],
+          splits: [{ categoryId: owner.categories.Inventory!, amount: 100 }],
         }),
     ]);
 
@@ -879,7 +879,7 @@ describe("Phase 2 worker and whole-scan retry", () => {
           vendor: "First Merchant",
           description: "First receipt",
           amount: 100,
-          splits: [{ categoryId: owner.categories.Inventory, amount: 100 }],
+          splits: [{ categoryId: owner.categories.Inventory!, amount: 100 }],
         }),
       request(app)
         .post(`${RECEIPTS}/${second.id}/confirm`)
@@ -890,7 +890,7 @@ describe("Phase 2 worker and whole-scan retry", () => {
           vendor: "Second Merchant",
           description: "Second receipt",
           amount: 200,
-          splits: [{ categoryId: owner.categories.Inventory, amount: 200 }],
+          splits: [{ categoryId: owner.categories.Inventory!, amount: 200 }],
         }),
     ]);
 
@@ -1410,7 +1410,7 @@ describe("Phase 2 durable receipt purge", () => {
     const record = await prisma.expenseRecord.create({
       data: {
         businessProfileId: owner.profile.id,
-        categoryId: owner.categories.Inventory,
+        categoryId: owner.categories.Inventory!,
         receiptScanId: scan.id,
         date: new Date("2026-09-13T00:00:00.000Z"),
         description: "Owner-confirmed rice",
@@ -1421,7 +1421,7 @@ describe("Phase 2 durable receipt purge", () => {
     });
     await prisma.receiptScanItem.update({
       where: { id: scan.items[0]!.id },
-      data: { expenseRecordId: record.id, categoryId: owner.categories.Inventory },
+      data: { expenseRecordId: record.id, categoryId: owner.categories.Inventory! },
     });
     await prisma.receiptFieldCorrection.create({
       data: {
@@ -1943,7 +1943,7 @@ describe("Phase 2 pre-save duplicate review", () => {
       vendor: "Final Merchant",
       description,
       amount: 100,
-      splits: [{ categoryId: owner.categories.Inventory, amount: 100 }],
+      splits: [{ categoryId: owner.categories.Inventory!, amount: 100 }],
     };
   }
 
@@ -1965,7 +1965,7 @@ describe("Phase 2 pre-save duplicate review", () => {
       await prisma.expenseRecord.create({
         data: {
           businessProfileId: owner.profile.id,
-          categoryId: owner.categories.Inventory,
+          categoryId: owner.categories.Inventory!,
           receiptScanId: prior.id,
           date: new Date("2026-09-13T00:00:00.000Z"),
           description,
@@ -1984,7 +1984,7 @@ describe("Phase 2 pre-save duplicate review", () => {
     await prisma.expenseRecord.create({
       data: {
         businessProfileId: other.profile.id,
-        categoryId: other.categories.Inventory,
+        categoryId: other.categories.Inventory!,
         receiptScanId: foreignPrior.id,
         date: new Date("2026-09-13T00:00:00.000Z"),
         description: "Foreign record",
@@ -2050,7 +2050,7 @@ describe("Phase 2 pre-save duplicate review", () => {
     const manual = await prisma.expenseRecord.create({
       data: {
         businessProfileId: owner.profile.id,
-        categoryId: owner.categories.Inventory,
+        categoryId: owner.categories.Inventory!,
         date: new Date("2026-09-13T00:00:00.000Z"),
         description: "Manual duplicate",
         vendor: "Final Merchant",
@@ -2113,7 +2113,7 @@ describe("Phase 2 pre-save duplicate review", () => {
     await prisma.expenseRecord.createMany({
       data: Array.from({ length: 25 }, (_, index) => ({
         businessProfileId: owner.profile.id,
-        categoryId: owner.categories.Inventory,
+        categoryId: owner.categories.Inventory!,
         date: new Date("2026-09-13T00:00:00.000Z"),
         description: `Prior manual expense ${index + 1}`,
         vendor: "Cap Merchant",
@@ -2128,7 +2128,7 @@ describe("Phase 2 pre-save duplicate review", () => {
       vendor: "Cap Merchant",
       description: "Capped duplicate review",
       amount: 333,
-      splits: [{ categoryId: owner.categories.Inventory, amount: 333 }],
+      splits: [{ categoryId: owner.categories.Inventory!, amount: 333 }],
     };
 
     const review = await request(app)
@@ -2195,7 +2195,7 @@ describe("Phase 2 pre-save duplicate review", () => {
       date: "2026-09-13",
       vendor: "Race Merchant",
       amount: 100,
-      splits: [{ categoryId: owner.categories.Inventory, amount: 100 }],
+      splits: [{ categoryId: owner.categories.Inventory!, amount: 100 }],
     };
 
     const [left, right] = await Promise.all([
@@ -2273,7 +2273,7 @@ describe("Phase 2 pre-save duplicate review", () => {
       ...confirmBody("Manual race expense"),
       vendor: "Manual Race Merchant",
       amount: 451,
-      splits: [{ categoryId: owner.categories.Inventory, amount: 451 }],
+      splits: [{ categoryId: owner.categories.Inventory!, amount: 451 }],
     };
     await holdWriterUntilReceiptWaits(
       async (tx) => {
@@ -2281,7 +2281,7 @@ describe("Phase 2 pre-save duplicate review", () => {
           owner.user.id,
           {
             businessProfileId: owner.profile.id,
-            categoryId: owner.categories.Inventory,
+            categoryId: owner.categories.Inventory!,
             date: manualBody.date,
             description: manualBody.description,
             vendor: manualBody.vendor,
@@ -2308,7 +2308,7 @@ describe("Phase 2 pre-save duplicate review", () => {
       ...confirmBody("CSV race expense"),
       vendor: "CSV Race Merchant",
       amount: 452,
-      splits: [{ categoryId: owner.categories.Inventory, amount: 452 }],
+      splits: [{ categoryId: owner.categories.Inventory!, amount: 452 }],
     };
     await holdWriterUntilReceiptWaits(
       async (tx) => {
@@ -2317,7 +2317,7 @@ describe("Phase 2 pre-save duplicate review", () => {
           owner.profile,
           importBatch.id,
           [{
-            categoryId: owner.categories.Inventory,
+            categoryId: owner.categories.Inventory!,
             date: csvBody.date,
             description: csvBody.description,
             vendor: csvBody.vendor,
@@ -2386,14 +2386,14 @@ describe("Phase 2 pre-save duplicate review", () => {
       ...confirmBody("Receipt-side description"),
       vendor: "Shared Manual Vendor",
       amount: 611,
-      splits: [{ categoryId: owner.categories.Inventory, amount: 611 }],
+      splits: [{ categoryId: owner.categories.Inventory!, amount: 611 }],
     };
     await runReceiptFirst(
       manualSource,
       manualReceipt,
       () => createExpenseRecord(owner.user.id, {
         businessProfileId: owner.profile.id,
-        categoryId: owner.categories.Inventory,
+        categoryId: owner.categories.Inventory!,
         date: manualReceipt.date,
         description: "Different manual description",
         vendor: manualReceipt.vendor,
@@ -2413,7 +2413,7 @@ describe("Phase 2 pre-save duplicate review", () => {
       ...confirmBody("Receipt-side CSV description"),
       vendor: "Shared CSV Vendor",
       amount: 612,
-      splits: [{ categoryId: owner.categories.Inventory, amount: 612 }],
+      splits: [{ categoryId: owner.categories.Inventory!, amount: 612 }],
     };
     await runReceiptFirst(
       csvSource,
@@ -2424,7 +2424,7 @@ describe("Phase 2 pre-save duplicate review", () => {
           owner.profile,
           importBatch.id,
           [{
-            categoryId: owner.categories.Inventory,
+            categoryId: owner.categories.Inventory!,
             date: csvReceipt.date,
             description: "Different CSV description",
             vendor: csvReceipt.vendor,
@@ -2438,7 +2438,7 @@ describe("Phase 2 pre-save duplicate review", () => {
 
     const editedRecord = await createExpenseRecord(owner.user.id, {
       businessProfileId: owner.profile.id,
-      categoryId: owner.categories.Inventory,
+      categoryId: owner.categories.Inventory!,
       date: "2026-09-12",
       description: "Original edit description",
       vendor: "Original edit vendor",
@@ -2449,7 +2449,7 @@ describe("Phase 2 pre-save duplicate review", () => {
       ...confirmBody("Receipt-side edit description"),
       vendor: "Shared Edit Vendor",
       amount: 613,
-      splits: [{ categoryId: owner.categories.Inventory, amount: 613 }],
+      splits: [{ categoryId: owner.categories.Inventory!, amount: 613 }],
     };
     await runReceiptFirst(
       editSource,
@@ -2475,7 +2475,7 @@ describe("Phase 2 pre-save duplicate review", () => {
     await prisma.expenseRecord.create({
       data: {
         businessProfileId: owner.profile.id,
-        categoryId: owner.categories.Inventory,
+        categoryId: owner.categories.Inventory!,
         receiptScanId: candidateWithoutVendor.id,
         date: new Date("2026-09-13T00:00:00.000Z"),
         description: "Shared identity one",
@@ -2494,7 +2494,7 @@ describe("Phase 2 pre-save duplicate review", () => {
         vendor: "Present Merchant",
         description: "Shared identity one",
         amount: 111,
-        splits: [{ categoryId: owner.categories.Inventory, amount: 111 }],
+        splits: [{ categoryId: owner.categories.Inventory!, amount: 111 }],
       });
     expect(presentToBlank.status).toBe(409);
     expect(presentToBlank.body).toMatchObject({
@@ -2516,7 +2516,7 @@ describe("Phase 2 pre-save duplicate review", () => {
     await prisma.expenseRecord.create({
       data: {
         businessProfileId: owner.profile.id,
-        categoryId: owner.categories.Inventory,
+        categoryId: owner.categories.Inventory!,
         receiptScanId: candidateWithVendor.id,
         date: new Date("2026-09-13T00:00:00.000Z"),
         description: "Shared identity two",
@@ -2534,7 +2534,7 @@ describe("Phase 2 pre-save duplicate review", () => {
         date: "2026-09-13",
         description: "Shared identity two",
         amount: 222,
-        splits: [{ categoryId: owner.categories.Inventory, amount: 222 }],
+        splits: [{ categoryId: owner.categories.Inventory!, amount: 222 }],
       });
     expect(blankToPresent.status).toBe(409);
     expect(blankToPresent.body).toMatchObject({
@@ -2593,7 +2593,7 @@ describe("Phase 2 pre-save duplicate review", () => {
           vendor: "Alpha Merchant",
           description: "Alpha purchase",
           amount: 100,
-          splits: [{ categoryId: owner.categories.Inventory, amount: 100 }],
+          splits: [{ categoryId: owner.categories.Inventory!, amount: 100 }],
         }),
       request(app)
         .post(`${RECEIPTS}/${second.id}/confirm`)
@@ -2604,7 +2604,7 @@ describe("Phase 2 pre-save duplicate review", () => {
           vendor: "Beta Merchant",
           description: "Beta purchase",
           amount: 200,
-          splits: [{ categoryId: owner.categories.Inventory, amount: 200 }],
+          splits: [{ categoryId: owner.categories.Inventory!, amount: 200 }],
         }),
     ]);
 

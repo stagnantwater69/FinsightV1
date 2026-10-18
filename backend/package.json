@@ -15,7 +15,7 @@
     "prestart": "npm run build",
     "start": "node dist/server.js",
     "worker": "node dist/worker.js",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json && tsc -p tsconfig.tests.json",
     "typecheck:tests": "tsc -p tsconfig.tests.json",
     "lint": "oxlint",
     "prisma:generate": "prisma generate",

@@ -32,7 +32,14 @@ interface Entry {
 (async () => {
   const all: Entry[] = JSON.parse(readFileSync(join(HERE, "ground-truth.json"), "utf8"));
   const corpus = all.filter((e) => !e.needs_review);
-  const rows = [];
+  const rows: {
+    id: string;
+    kind: Entry["kind"];
+    conditions: Entry["conditions"];
+    sharpness: number | null;
+    brightness: number | null;
+    anyError: boolean;
+  }[] = [];
 
   for (const entry of corpus) {
     process.stdout.write(`  ${entry.id.padEnd(34)} `);
@@ -59,14 +66,12 @@ interface Entry {
       conditions: entry.conditions,
       sharpness: quality?.sharpness ?? null,
       brightness: quality?.brightness ?? null,
-      glare: quality?.glare ?? null,
       anyError,
     };
     rows.push(row);
     console.log(
       `sharp=${(row.sharpness ?? 0).toFixed(0).padStart(6)}  ` +
         `bright=${(row.brightness ?? 0).toFixed(0).padStart(3)}  ` +
-        `glare=${((row.glare ?? 0) * 100).toFixed(1).padStart(5)}%  ` +
         (anyError ? "HAS ERROR" : "clean"),
     );
   }

@@ -53,7 +53,7 @@ let token = "";
 let sparseToken = "";
 
 async function api(method: string, path: string, body?: unknown, query?: Record<string, string | number>, tok = token) {
-  const qs = query ? "?" + new URLSearchParams(Object.entries(query).map(([k, v]) => [k, String(v)])).toString() : "";
+  const qs = query ? "?" + new URLSearchParams(Object.entries(query).map(([k, v]): [string, string] => [k, String(v)])).toString() : "";
   const res = await fetch(`${BASE}${path}${qs}`, {
     method,
     headers: { "Content-Type": "application/json", ...(tok ? { Authorization: `Bearer ${tok}` } : {}) },
@@ -202,6 +202,7 @@ function figuresIn(answer: string): number[] {
       unusualRecordCount: 1,
       possibleDuplicateCount: 2,
     },
+    costBehavior: "unclassified",
     suggestedChecks: [...SUGGESTED_CHECK_CATALOGUE.RECORD_REVIEW_FIRST],
     relatedRecordIds: [201, 202, 203],
     limitations: ["Flagged records may still be legitimate — check before assuming an error."],
@@ -226,6 +227,7 @@ function figuresIn(answer: string): number[] {
       unusualRecordCount: 0,
       possibleDuplicateCount: 0,
     },
+    costBehavior: "unclassified",
     suggestedChecks: [...SUGGESTED_CHECK_CATALOGUE.CATEGORY_PRESSURE],
     relatedRecordIds: [301],
     limitations: ["Based on limited history — confidence will improve as more records are recorded for this category."],

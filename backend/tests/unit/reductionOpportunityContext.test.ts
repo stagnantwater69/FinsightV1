@@ -32,6 +32,7 @@ function baseOpportunity(overrides: Partial<ReductionOpportunity> = {}): Reducti
       unusualRecordCount: 1,
       possibleDuplicateCount: 0,
     },
+    costBehavior: "unclassified",
     suggestedChecks: [...SUGGESTED_CHECK_CATALOGUE.CATEGORY_PRESSURE],
     relatedRecordIds: [101, 102, 103],
     limitations: ["A large or growing category can still be necessary for the business."],
