@@ -90,6 +90,13 @@ function maySeeHealthDetail(req: express.Request): boolean {
 app.get(["/api/v1/health", "/api/v1/health/ready"], async (req, res) => {
   try {
     await prisma.$queryRaw`SELECT 1`;
+    // The counters below are about twenty queries and only feed the detail.
+    // A caller who may not see it (every unauthenticated production probe)
+    // gets the same verdict from the one query above.
+    if (!maySeeHealthDetail(req)) {
+      res.status(200).json({ status: "ready", database: "ok" });
+      return;
+    }
     const readinessNow = new Date();
     const [
       queuedScans,
@@ -181,30 +188,26 @@ app.get(["/api/v1/health", "/api/v1/health/ready"], async (req, res) => {
     res.status(200).json({
       status: "ready",
       database: "ok",
-      ...(maySeeHealthDetail(req)
-        ? {
-            queuedReceiptScans: queuedScans,
-            oldestQueuedReceiptScanAgeSeconds: ageSeconds(oldestQueuedScan),
-            queuedCsvImports,
-            oldestQueuedCsvImportAgeSeconds: ageSeconds(oldestQueuedCsvImport),
-            pendingCsvImports,
-            oldestPendingCsvImportAgeSeconds: ageSeconds(oldestPendingCsvImport),
-            processingCsvImports,
-            oldestProcessingCsvImportAgeSeconds: ageSeconds(oldestProcessingCsvImport),
-            queuedAnalysisJobs,
-            oldestQueuedAnalysisJobAgeSeconds: ageSeconds(oldestQueuedAnalysisJob),
-            failedAnalysisJobs,
-            queuedReceiptPurges,
-            oldestQueuedReceiptPurgeAgeSeconds: requestedAgeSeconds(oldestQueuedReceiptPurge),
-            failedReceiptPurges,
-            queuedCsvSourcePurges,
-            oldestQueuedCsvSourcePurgeAgeSeconds: requestedAgeSeconds(oldestQueuedCsvSourcePurge),
-            failedCsvSourcePurges,
-            stagedCsvUploads,
-            oldestStagedCsvUploadAgeSeconds: ageSeconds(oldestStagedCsvUpload),
-            stalledAccountDeletions,
-          }
-        : {}),
+      queuedReceiptScans: queuedScans,
+      oldestQueuedReceiptScanAgeSeconds: ageSeconds(oldestQueuedScan),
+      queuedCsvImports,
+      oldestQueuedCsvImportAgeSeconds: ageSeconds(oldestQueuedCsvImport),
+      pendingCsvImports,
+      oldestPendingCsvImportAgeSeconds: ageSeconds(oldestPendingCsvImport),
+      processingCsvImports,
+      oldestProcessingCsvImportAgeSeconds: ageSeconds(oldestProcessingCsvImport),
+      queuedAnalysisJobs,
+      oldestQueuedAnalysisJobAgeSeconds: ageSeconds(oldestQueuedAnalysisJob),
+      failedAnalysisJobs,
+      queuedReceiptPurges,
+      oldestQueuedReceiptPurgeAgeSeconds: requestedAgeSeconds(oldestQueuedReceiptPurge),
+      failedReceiptPurges,
+      queuedCsvSourcePurges,
+      oldestQueuedCsvSourcePurgeAgeSeconds: requestedAgeSeconds(oldestQueuedCsvSourcePurge),
+      failedCsvSourcePurges,
+      stagedCsvUploads,
+      oldestStagedCsvUploadAgeSeconds: ageSeconds(oldestStagedCsvUpload),
+      stalledAccountDeletions,
     });
   } catch (error) {
     logger.error({ err: error }, "readiness check failed");
