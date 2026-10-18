@@ -17,7 +17,7 @@
     "worker": "node dist/worker.js",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json && tsc -p tsconfig.tests.json",
     "typecheck:tests": "tsc -p tsconfig.tests.json",
-    "lint": "oxlint",
+    "lint": "oxlint --deny-warnings",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "db:check": "tsx scripts/dev-database.ts check",

@@ -162,7 +162,6 @@ describe("resolveOperatingCalendar/resolveExactOperatingCounts — configured we
 describe("getRecoveryInsight — configured schedule excludes closed days from missed-target status", () => {
   it("marks closed days as 'closed' in dailyCoverage rather than 'below'", async () => {
     await seedWeekdaysOnlySchedule(ctx.profile.id);
-    const today = utcDay(0);
 
     // Find the most recent Sunday on or before today, so the coverage window
     // (which always ends at today) is guaranteed to include at least one

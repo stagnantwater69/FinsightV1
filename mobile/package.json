@@ -63,7 +63,7 @@
     "web": "expo start --web",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "lint": "oxlint && node scripts/check-type-tokens.mjs"
+    "lint": "oxlint --max-warnings=19 && node scripts/check-type-tokens.mjs"
   },
   "overrides": {
     "react-devtools-core": {

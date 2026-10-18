@@ -39,7 +39,6 @@ import * as businessProfile from "../../src/services/businessProfile.service";
 import { disconnectDb, makeOwnerWithProfile, resetDb, utcDayString } from "../setup/testDb";
 
 import {
-  changeReasonSchema,
   changeSincePreviousDaySchema,
   confidenceSchema,
   monthlyExpenseBasisSchema,
