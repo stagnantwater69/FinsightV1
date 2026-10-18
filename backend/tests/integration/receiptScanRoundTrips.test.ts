@@ -44,7 +44,8 @@ import { runReceiptWorkerOnce } from "../../src/services/receiptScan/worker";
 import { disconnectDb, makeOwnerWithProfile, resetDb } from "../setup/testDb";
 
 /** Counts measured on 2026-10-18. Adding round trips fails; removing them should lower these. */
-const BUDGET: Record<number, number> = { 1: 49, 3: 55 };
+// 1 page: 49, plus the one write that publishes the local preview while the provider reads.
+const BUDGET: Record<number, number> = { 1: 50, 3: 55 };
 
 let owner: Awaited<ReturnType<typeof makeOwnerWithProfile>>;
 const measured: string[] = [];

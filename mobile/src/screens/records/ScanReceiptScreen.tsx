@@ -118,6 +118,7 @@ import type {
   CapturedPage,
   ReceiptCaptureBatch,
   ReceiptHistoryItem,
+  ReceiptLocalPreview,
   ReceiptPurgeJob,
   ReceiptScanResult,
   ReviewNotice,
@@ -150,6 +151,12 @@ export function ScanReceiptScreen({ navigation }: any) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState("Uploading receipt…");
+  /** What the photo already gave up while the second check runs; display only. */
+  const [earlyReading, setEarlyReading] = useState<ReceiptLocalPreview | null>(null);
+  /** Shows a still-processing response's preview, but only for this scan in this business. */
+  const showEarlyReading = (scanId: number) => (next: ReceiptScanResult) => {
+    if (next.id === scanId && next.businessProfileId === selected?.id) setEarlyReading(next.localPreview ?? null);
+  };
   const [picking, setPicking] = useState(false);
   const operation = useImportOperation(selected?.id);
   const uploadAttempt = useRef<{ signature: string; key: string; accepted: ReceiptScanResult | null } | null>(null);
@@ -796,10 +803,13 @@ export function ScanReceiptScreen({ navigation }: any) {
       }
       setScanRecoveryAction("review");
       setPhase("Reading receipt…");
+      setEarlyReading(null);
       // The upload returns as soon as the photos are stored; the read itself
       // finishes behind it. See pollUntilRead.
+      const read = await pollUntilRead(accepted, task.controller.signal, showEarlyReading(accepted.id));
+      setEarlyReading(null);
       const result = verifiedReceiptScan(
-        await pollUntilRead(accepted, task.controller.signal),
+        read,
         accepted.id,
         selected!.id,
         batchChild,
@@ -898,8 +908,11 @@ export function ScanReceiptScreen({ navigation }: any) {
       }
 
       setPhase("Reading receipt…");
+      setEarlyReading(null);
+      const read = await pollUntilRead(accepted, task.controller.signal, showEarlyReading(accepted.id));
+      setEarlyReading(null);
       const result = verifiedReceiptScan(
-        await pollUntilRead(accepted, task.controller.signal),
+        read,
         accepted.id,
         selected!.id,
         expectedStoredBatch,
@@ -1735,6 +1748,7 @@ export function ScanReceiptScreen({ navigation }: any) {
                 <ScanProgress
                   phase={phase}
                   thumbnailUri={pages[0]?.uri}
+                  earlyReading={earlyReading}
                   onStop={() => {
                     operation.cancel();
                     setBusy(false);
