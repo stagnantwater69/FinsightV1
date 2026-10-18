@@ -735,6 +735,8 @@ describe("CSV compact ledger review", () => {
     expect(remove.mock.calls[0][2]).toEqual({ cacheScope: { businessProfileId: 1 } });
     if (reason === "file replacement") {
       await waitFor(() => expect(q.getByRole("button", { name: "Check & continue" })).toBeEnabled());
+      // The button can enable before the review request is sent; wait for the request itself.
+      await waitFor(() => expect(post).toHaveBeenCalled());
       expect(post.mock.calls[0][1]).toMatchObject({ stagedUploadId: replacementStage, businessProfileId: 1 });
       await q.unmount();
       expect(remove.mock.calls.map(([path]) => path)).toEqual([
@@ -767,6 +769,7 @@ describe("CSV compact ledger review", () => {
     expect(remove).not.toHaveBeenCalled();
     expect(document).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(q.getByRole("button", { name: "Check & continue" })).toBeEnabled());
+    await waitFor(() => expect(post).toHaveBeenCalled());
     expect(post.mock.calls[0][1]).toMatchObject({ stagedUploadId: stage.stagedUploadId, businessProfileId: 1 });
     await q.unmount();
     expect(remove.mock.calls.map(([path]) => path)).toEqual([`/records/csv-imports/stages/${stage.stagedUploadId}`]);

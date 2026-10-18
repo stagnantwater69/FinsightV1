@@ -72,7 +72,10 @@ afterEach(() => {
   for (const path of cleanups.splice(0)) rmSync(path, { recursive: true, force: true });
 });
 
-describe('Dependency compatibility patch install runner', () => {
+// Each case spawns the runner, which may take up to its own 10s timeout, and
+// some spawn it twice. Vitest's 5s default cut those off on a busy machine and
+// reported a timeout as a failure of the runner.
+describe('Dependency compatibility patch install runner', { timeout: 30_000 }, () => {
   it('applies all exact outputs and safely repeats without changing them', () => {
     const { root } = makeFixture();
     const result = run(root);
