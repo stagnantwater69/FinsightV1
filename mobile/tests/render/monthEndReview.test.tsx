@@ -1,3 +1,4 @@
+import { testScreen } from './support/screen';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, fireEvent, waitFor } from '@testing-library/react-native';
@@ -109,7 +110,8 @@ describe('Month-end ring values', () => {
 });
 
 async function renderScreen(navigation: any = { navigate: vi.fn() }) {
-  const { MonthEndReviewScreen } = await import('../../src/screens/MonthEndReviewScreen');
+  const { MonthEndReviewScreen: TypedMonthEndReviewScreen } = await import('../../src/screens/MonthEndReviewScreen');
+  const MonthEndReviewScreen = testScreen(TypedMonthEndReviewScreen);
   return render(withTheme(<MonthEndReviewScreen navigation={navigation} />));
 }
 

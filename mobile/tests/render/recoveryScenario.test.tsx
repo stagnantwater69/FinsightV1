@@ -1,3 +1,4 @@
+import { testScreen } from './support/screen';
 import React from 'react';
 import { Alert } from 'react-native';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -149,7 +150,8 @@ async function renderScreen() {
     if (path === '/records/months') return Promise.resolve({ months: [] });
     return Promise.reject(new Error(`unexpected path ${path}`));
   });
-  const { RecoveryTargetScreen } = await import('../../src/screens/RecoveryTargetScreen');
+  const { RecoveryTargetScreen: TypedRecoveryTargetScreen } = await import('../../src/screens/RecoveryTargetScreen');
+  const RecoveryTargetScreen = testScreen(TypedRecoveryTargetScreen);
   const { ThemeProvider } = await import('../../src/context/ThemeContext');
   return render(
     <ThemeProvider initialMode="light">
@@ -514,7 +516,8 @@ describe('RecoveryTargetScreen — "This month\'s saved plan"', () => {
       if (path === '/records/months') return Promise.resolve({ months: [] });
       return Promise.reject(new Error(`unexpected path ${path}`));
     });
-    const { RecoveryTargetScreen } = await import('../../src/screens/RecoveryTargetScreen');
+    const { RecoveryTargetScreen: TypedRecoveryTargetScreen } = await import('../../src/screens/RecoveryTargetScreen');
+    const RecoveryTargetScreen = testScreen(TypedRecoveryTargetScreen);
     const { ThemeProvider } = await import('../../src/context/ThemeContext');
     return render(
       <ThemeProvider initialMode="light">
@@ -536,7 +539,8 @@ describe('RecoveryTargetScreen — "This month\'s saved plan"', () => {
       if (path === '/records/months') return Promise.resolve({ months: [] });
       return Promise.reject(new Error(`unexpected path ${path}`));
     });
-    const { RecoveryTargetScreen } = await import('../../src/screens/RecoveryTargetScreen');
+    const { RecoveryTargetScreen: TypedRecoveryTargetScreen } = await import('../../src/screens/RecoveryTargetScreen');
+    const RecoveryTargetScreen = testScreen(TypedRecoveryTargetScreen);
     const { ThemeProvider } = await import('../../src/context/ThemeContext');
     const queries = await render(
       <ThemeProvider initialMode="light">
@@ -559,7 +563,8 @@ describe('RecoveryTargetScreen — "This month\'s saved plan"', () => {
       if (path === '/records/months') return Promise.resolve({ months: [] });
       return Promise.reject(new Error(`unexpected path ${path}`));
     });
-    const { RecoveryTargetScreen } = await import('../../src/screens/RecoveryTargetScreen');
+    const { RecoveryTargetScreen: TypedRecoveryTargetScreen } = await import('../../src/screens/RecoveryTargetScreen');
+    const RecoveryTargetScreen = testScreen(TypedRecoveryTargetScreen);
     const { ThemeProvider } = await import('../../src/context/ThemeContext');
     const queries = await render(
       <ThemeProvider initialMode="light">

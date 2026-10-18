@@ -10,9 +10,10 @@ import { useAuth, errorMessage } from "../context/AuthContext";
 import { useTheme, useThemeControl } from "../context/ThemeContext";
 import { useTourOptional } from "../context/TourContext";
 import { space, typeScale } from "../theme/tokens";
+import type { MoreScreenProps } from "../navigation/types";
 
 /** Appearance is device-local; account switches save immediately. */
-export function SettingsScreen({ navigation }: any) {
+export function SettingsScreen({ navigation }: MoreScreenProps<"Settings">) {
   const { preferences, updatePreferences } = useAuth();
   const { mode, preference, setPreference } = useThemeControl();
   const { textSecondary, textMuted, brandText } = useTheme();

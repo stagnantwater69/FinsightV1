@@ -28,9 +28,10 @@ import { availableFundsProvenance, monthlyExpenseBasisProvenance } from "../lib/
 import { font, space, typeScale } from "../theme/tokens";
 import { useTheme } from "../context/ThemeContext";
 import type { DashboardSummary } from "../lib/types";
+import type { DashboardScreenProps } from "../navigation/types";
 
 
-export function DashboardScreen(props: any) {
+export function DashboardScreen(props: DashboardScreenProps<"DashboardHome">) {
   return (
     <ReportingPeriodScope scope="dashboard">
       <DashboardContent {...props} />
@@ -38,7 +39,7 @@ export function DashboardScreen(props: any) {
   );
 }
 
-function DashboardContent({ navigation }: any) {
+function DashboardContent({ navigation }: DashboardScreenProps<"DashboardHome">) {
   const t = useTheme();
   const { width, fontScale } = useWindowDimensions();
   const stackedActions = width < 390 || fontScale > 1.2;

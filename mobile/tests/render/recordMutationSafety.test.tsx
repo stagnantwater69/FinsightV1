@@ -1,3 +1,4 @@
+import { testScreen } from './support/screen';
 import React from 'react';
 import { Alert } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
@@ -35,8 +36,10 @@ vi.mock('../../src/lib/api', () => ({
 vi.mock('../../src/lib/flash', () => ({ setFlash: (...args: unknown[]) => flash(...args) }));
 vi.mock('../../src/components/DateField', () => ({ DateField: () => null }));
 
-const { AddSalesScreen } = await import('../../src/screens/records/AddSalesScreen');
-const { EditRecordScreen } = await import('../../src/screens/records/EditRecordScreen');
+const { AddSalesScreen: TypedAddSalesScreen } = await import('../../src/screens/records/AddSalesScreen');
+const AddSalesScreen = testScreen(TypedAddSalesScreen);
+const { EditRecordScreen: TypedEditRecordScreen } = await import('../../src/screens/records/EditRecordScreen');
+const EditRecordScreen = testScreen(TypedEditRecordScreen);
 const record = {
   id: 7, type: 'sales', businessProfileId: 1, date: '2026-10-01',
   description: 'Synthetic daily sales', amount: 1234.56, source: 'Manual',

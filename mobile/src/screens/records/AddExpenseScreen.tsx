@@ -20,8 +20,9 @@ import { AvailableFundsBaselineChoice, useAvailableFundsBaselineChoice } from ".
 import { useManualRecordRecovery } from "../../lib/useManualRecordRecovery";
 import { isDefiniteManualRecordRejection, verifiedManualRecordResult, type ManualRecordIntent } from "../../lib/manualRecordRecovery";
 import { ManualRecordRecoveryNotice } from "../../components/ManualRecordRecoveryNotice";
+import type { RecordsScreenProps } from "../../navigation/types";
 
-export function AddExpenseScreen({ navigation }: any) {
+export function AddExpenseScreen({ navigation }: RecordsScreenProps<"AddExpense">) {
   const { selected, categories, refreshCategories } = useBusinessProfiles();
   const { profile: owner } = useAuth();
   const [categoryId, setCategoryId] = useState<number | null>(null);

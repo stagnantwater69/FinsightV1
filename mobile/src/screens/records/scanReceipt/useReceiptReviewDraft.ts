@@ -9,11 +9,12 @@ import {
 } from "../../../lib/receiptReviewDraft";
 import { hasUnsavedReviewEdits, restorableReviewEdits } from "./reviewDraft";
 import type { ReceiptScanResult } from "./types";
+import type { NavigationAction } from "@react-navigation/native";
 
-interface RemovalEvent { preventDefault: () => void; data: { action: unknown } }
+interface RemovalEvent { preventDefault: () => void; data: { action: NavigationAction } }
 interface GuardedNavigation {
   addListener?: (event: "beforeRemove", listener: (event: RemovalEvent) => void) => () => void;
-  dispatch?: (action: unknown) => void;
+  dispatch?: (action: NavigationAction) => void;
 }
 
 /**

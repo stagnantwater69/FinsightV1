@@ -1,3 +1,4 @@
+import { testScreen } from "./support/screen";
 import React from "react";
 import { Alert } from "react-native";
 import * as SecureStore from "expo-secure-store";
@@ -24,8 +25,10 @@ vi.mock("../../src/lib/api", () => ({
 }));
 vi.mock("../../src/components/DateField", () => ({ DateField: () => null }));
 const { ThemeProvider } = await import("../../src/context/ThemeContext");
-const { AddExpenseScreen } = await import("../../src/screens/records/AddExpenseScreen");
-const { AddSalesScreen } = await import("../../src/screens/records/AddSalesScreen");
+const { AddExpenseScreen: TypedAddExpenseScreen } = await import("../../src/screens/records/AddExpenseScreen");
+const AddExpenseScreen = testScreen(TypedAddExpenseScreen);
+const { AddSalesScreen: TypedAddSalesScreen } = await import("../../src/screens/records/AddSalesScreen");
+const AddSalesScreen = testScreen(TypedAddSalesScreen);
 const { prepareManualRecordIntent } = await import("../../src/lib/manualRecordRecovery");
 
 const cases = [["expense", AddExpenseScreen, "Save expense"], ["sales", AddSalesScreen, "Save sales record"]] as const;

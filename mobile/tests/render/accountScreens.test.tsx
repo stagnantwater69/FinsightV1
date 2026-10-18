@@ -1,3 +1,4 @@
+import { testScreen } from './support/screen';
 import React from 'react';
 import { Alert } from 'react-native';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -48,9 +49,13 @@ vi.mock('../../src/lib/api', () => ({
   getFieldErrors: (error: unknown) => (error as { fieldErrors?: Record<string, string> })?.fieldErrors ?? {},
 }));
 
-const { ProfileScreen, EditProfileScreen, ChangePasswordScreen, DeleteAccountScreen } =
-  await import('../../src/screens/AccountScreens');
-const { MoreScreen } = await import('../../src/screens/MoreScreen');
+const { ProfileScreen: TypedProfileScreen, EditProfileScreen: TypedEditProfileScreen, ChangePasswordScreen: TypedChangePasswordScreen, DeleteAccountScreen: TypedDeleteAccountScreen } = await import('../../src/screens/AccountScreens');
+const ProfileScreen = testScreen(TypedProfileScreen);
+const EditProfileScreen = testScreen(TypedEditProfileScreen);
+const ChangePasswordScreen = testScreen(TypedChangePasswordScreen);
+const DeleteAccountScreen = testScreen(TypedDeleteAccountScreen);
+const { MoreScreen: TypedMoreScreen } = await import('../../src/screens/MoreScreen');
+const MoreScreen = testScreen(TypedMoreScreen);
 type AccountComponent = typeof ProfileScreen;
 const tree = (Component: AccountComponent, mode: 'light' | 'dark' = 'light') =>
   <ThemeProvider initialMode={mode}><Component navigation={{ navigate, goBack, dispatch, canGoBack: () => true }} /></ThemeProvider>;

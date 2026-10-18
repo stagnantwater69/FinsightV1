@@ -51,10 +51,10 @@ function webRoutes(): string[] {
   return [...src.matchAll(/<Route\s+path="([^"]+)"/g)].map((m) => m[1]!).filter((p) => p !== "*");
 }
 
-/** Every `<Stack.Screen name="...">` / `<Tab.Screen name="...">` in the app. */
+/** Every screen registered on a navigator in the app (`<Stack.Screen>`, `<Tab.Screen>`, `<RecordsNav.Screen>`, ...). */
 function mobileScreens(): Set<string> {
   const src = readFileSync(MOBILE_APP, "utf8");
-  const registered = [...src.matchAll(/<(?:Stack|Tab)\.Screen\s+name="([^"]+)"/g)].map((m) => m[1]!);
+  const registered = [...src.matchAll(/<(?:Stack|Tab|[A-Z][A-Za-z]*Nav)\.Screen\s+name="([^"]+)"/g)].map((m) => m[1]!);
 
   /*
    * Screens the app renders DIRECTLY rather than registering on a navigator.

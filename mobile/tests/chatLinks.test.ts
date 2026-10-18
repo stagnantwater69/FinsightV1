@@ -13,7 +13,7 @@ function registered(): { tabs: Set<string>; screens: Set<string> } {
   const tabs = new Set<string>();
   const screens = new Set<string>();
   for (const m of app.matchAll(/<Tab\.Screen\s+name=["']([A-Za-z0-9_]+)["']/g)) tabs.add(m[1]!);
-  for (const m of app.matchAll(/<Stack\.Screen\s+name=["']([A-Za-z0-9_]+)["']/g)) screens.add(m[1]!);
+  for (const m of app.matchAll(/<(?:Stack|[A-Z][A-Za-z]*Nav)\.Screen\s+name=["']([A-Za-z0-9_]+)["']/g)) screens.add(m[1]!);
   return { tabs, screens };
 }
 

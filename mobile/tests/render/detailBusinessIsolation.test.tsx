@@ -1,3 +1,4 @@
+import { testScreen } from './support/screen';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render } from '@testing-library/react-native';
@@ -52,8 +53,10 @@ vi.mock('../../src/context/BusinessProfileContext', () => ({
   BusinessProfileProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 
-const { EditRecordScreen } = await import('../../src/screens/records/EditRecordScreen');
-const { RecurringScheduleScreen } = await import('../../src/screens/RecurringScheduleScreen');
+const { EditRecordScreen: TypedEditRecordScreen } = await import('../../src/screens/records/EditRecordScreen');
+const EditRecordScreen = testScreen(TypedEditRecordScreen);
+const { RecurringScheduleScreen: TypedRecurringScheduleScreen } = await import('../../src/screens/RecurringScheduleScreen');
+const RecurringScheduleScreen = testScreen(TypedRecurringScheduleScreen);
 const { ThemeProvider } = await import('../../src/context/ThemeContext');
 
 const recordA: RecordItem = {

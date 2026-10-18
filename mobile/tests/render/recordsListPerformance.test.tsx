@@ -1,3 +1,4 @@
+import { testScreen } from './support/screen';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react-native';
@@ -71,7 +72,8 @@ vi.mock('../../src/context/BusinessProfileContext', () => ({
   BusinessProfileProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 
-const { RecordsScreen } = await import('../../src/screens/records/RecordsListScreen');
+const { RecordsScreen: TypedRecordsScreen } = await import('../../src/screens/records/RecordsListScreen');
+const RecordsScreen = testScreen(TypedRecordsScreen);
 const { ThemeProvider } = await import('../../src/context/ThemeContext');
 const { beginServerStateSession, clearServerStateCache, invalidateServerState } = await import('../../src/lib/serverStateCache');
 

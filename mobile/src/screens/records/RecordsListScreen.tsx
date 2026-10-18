@@ -49,6 +49,7 @@ import {
   peekServerState,
   subscribeToServerState,
 } from "../../lib/serverStateCache";
+import type { RecordsScreenProps } from "../../navigation/types";
 
 
 /**
@@ -88,7 +89,7 @@ function dayHeading(date: string): string {
   return iso === today ? `Today · ${label}` : label;
 }
 
-export function RecordsScreen({ navigation, route }: any) {
+export function RecordsScreen({ navigation, route }: RecordsScreenProps<"RecordsList">) {
   const t = useTheme();
   const { width, fontScale } = useWindowDimensions();
   const stackedFilters = width < 360 || fontScale > 1.2;
@@ -428,7 +429,7 @@ export function RecordsScreen({ navigation, route }: any) {
   useFocusEffect(
     useCallback(() => {
       const incomingBatch = route?.params?.importBatchId;
-      if (Number.isSafeInteger(incomingBatch) && incomingBatch > 0) {
+      if (typeof incomingBatch === "number" && Number.isSafeInteger(incomingBatch) && incomingBatch > 0) {
         setSource("CSV_UPLOAD");
         setImportBatchId(incomingBatch);
         setShowFilters(true);

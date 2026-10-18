@@ -1,3 +1,4 @@
+import { testScreen } from './support/screen';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render } from '@testing-library/react-native';
@@ -69,7 +70,8 @@ vi.mock('../../src/components/charts', () => ({
   CategoryComparison: () => null,
 }));
 
-const { DashboardScreen } = await import('../../src/screens/DashboardScreen');
+const { DashboardScreen: TypedDashboardScreen } = await import('../../src/screens/DashboardScreen');
+const DashboardScreen = testScreen(TypedDashboardScreen);
 const { ThemeProvider } = await import('../../src/context/ThemeContext');
 const {
   beginServerStateSession,
@@ -349,7 +351,7 @@ describe('Dashboard record-derived financial figures', () => {
 });
 
 it('binds the dashboard view to its own reporting period scope', () => {
-  const wrapper = DashboardScreen({});
+  const wrapper = TypedDashboardScreen({} as never);
   expect(wrapper.props.scope).toBe('dashboard');
   expect(typeof wrapper.props.children.type).toBe('function');
 });

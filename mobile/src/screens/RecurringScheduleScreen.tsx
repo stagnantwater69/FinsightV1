@@ -13,6 +13,7 @@ import { space } from "../theme/tokens";
 import { useTheme } from "../context/ThemeContext";
 import type { RecurringSchedule } from "../lib/types";
 import { FormScreen } from "../components/FormScreen";
+import type { InsightsScreenProps } from "../navigation/types";
 
 /**
  * Declaring a repeating payment, and editing one.
@@ -35,7 +36,7 @@ import { FormScreen } from "../components/FormScreen";
  * way to calibrate. The server's default covers it, and the finding it drives
  * is advisory either way.
  */
-export function RecurringScheduleScreen({ navigation, route }: any) {
+export function RecurringScheduleScreen({ navigation, route }: InsightsScreenProps<"RecurringSchedule">) {
   const t = useTheme();
   const { brand } = t;
   const { selected, categories } = useBusinessProfiles();
