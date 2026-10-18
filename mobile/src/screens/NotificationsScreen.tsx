@@ -31,6 +31,9 @@ import { font, radius, space, typeScale } from "../theme/tokens";
 import { useTheme } from "../context/ThemeContext";
 import type { Notification, RecordItem } from "../lib/types";
 
+/** GET /notifications returns at most this many rows (NOTIFICATION_LIST_LIMIT on the server). */
+const NOTIFICATION_LIST_CAP = 500;
+
 function presentationFor(type: string): { title: string; icon: keyof typeof Ionicons.glyphMap } {
   const kind = alertKindFromType(type);
   if (kind === "duplicate") return { title: "Possible duplicate", icon: "copy-outline" };
@@ -462,6 +465,10 @@ export function NotificationsScreen({ navigation }: any) {
   const currentNotifications = selected && loadedBusinessId === selected.id ? notifications : [];
   const hasLoaded = selected !== null && loadedBusinessId === selected.id;
   const unread = currentNotifications.filter((notification) => !notification.readStatus).length;
+  // At the server's list cap, older alerts may exist beyond it, so both counts
+  // become "at least" rather than exact.
+  const capped = currentNotifications.length >= NOTIFICATION_LIST_CAP;
+  const atLeast = (count: number) => (capped ? `${count}+` : String(count));
   const visible = filter === "unread" ? currentNotifications.filter((notification) => !notification.readStatus) : currentNotifications;
   const groups = groupByDay(visible, clock);
   const notice = describeLoadFailure(loadFailure, {
@@ -508,14 +515,14 @@ export function NotificationsScreen({ navigation }: any) {
               <SubpageIcon name="storefront-outline" />
               <View style={{ flex: 1, minWidth: 0, gap: space.xs }}>
                 <T style={{ color: t.textPrimary, fontFamily: font.sansSemibold }}>{selected.name}</T>
-                <T variant="caption" accessibilityLiveRegion="polite">{hasLoaded ? `${unread} unread` : loadFailure ? "Alerts unavailable" : "Checking alerts"}</T>
+                <T variant="caption" accessibilityLiveRegion="polite">{hasLoaded ? `${atLeast(unread)} unread` : loadFailure ? "Alerts unavailable" : "Checking alerts"}</T>
               </View>
             </SubpageCard>
             {hasLoaded ? (
               <View style={{ flexDirection: "row", flexWrap: "wrap", gap: space.sm, marginBottom: space.sm }}>
                 {[
-                    { label: `All (${currentNotifications.length})`, value: "all" },
-                    { label: `Unread (${unread})`, value: "unread" },
+                    { label: `All (${atLeast(currentNotifications.length)})`, value: "all" },
+                    { label: `Unread (${atLeast(unread)})`, value: "unread" },
                   ].map(({ label, value }) => {
                     const active = filter === value;
                     return (

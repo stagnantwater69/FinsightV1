@@ -17,7 +17,13 @@ function parseId(raw: string): number {
 
 export async function list(req: Request, res: Response) {
   const query = listQuerySchema.parse(req.query);
-  const notifications = await notificationService.listNotifications(req.user!.id, query.businessProfileId);
+  const { notifications, unreadCount } = await notificationService.listNotificationsWithUnreadCount(
+    req.user!.id,
+    query.businessProfileId,
+  );
+  // The list stops at 500; the badge needs the full total. A header rather
+  // than a wrapping object, so clients that read the bare array keep working.
+  res.setHeader("X-Unread-Count", String(unreadCount));
   res.status(200).json(notifications);
 }
 
