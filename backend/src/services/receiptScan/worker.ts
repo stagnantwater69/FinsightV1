@@ -185,6 +185,17 @@ async function readStoredCandidate(evidence: StoredEvidence, withQuality: boolea
   return { ocr, ocrError, digest, quality };
 }
 
+/**
+ * Starts reading `evidence` now and returns the loader the gate will call. A
+ * failure surfaces when the gate awaits it, exactly as an on-demand read would;
+ * until then it is caught so an unused download cannot crash the process.
+ */
+function startedDownload(evidence: StoredEvidence): () => Promise<Buffer> {
+  const download = downloadReceiptImageBounded(evidence.path, RECEIPT_UPLOAD_MAX_OBJECT_BYTES, evidence.info);
+  download.catch(() => undefined);
+  return () => download;
+}
+
 /** What an unreadable page contributes to the text: nothing, and no confidence to average. */
 const UNREAD_PAGE: OcrResult = { text: "", confidence: 0, lines: [] };
 
@@ -505,6 +516,17 @@ async function processScan(
       inputSha256: string;
       loadBytes: () => Promise<Buffer>;
     }[] = [];
+    /*
+     * Under always-routing the gate is about to ask for every selected page,
+     * so its download starts here and overlaps the gate's cooldown lookup and
+     * reservation (and the other pages' downloads), instead of starting there,
+     * one page after another. It is still a fresh read of the stored object,
+     * so the gate's re-hash keeps its meaning; the bytes are held only from
+     * this point to dispatch. Rescue routing, where most scans never call a
+     * provider, downloads on demand as before.
+     */
+    const readConfig = getReceiptProviderConfiguration();
+    const prefetchProviderEvidence = readConfig.operational && readConfig.routing === "always";
     const pageReads = await clock.measure("ocr", () =>
       readReceiptPagesWithinOcrBudget(input.pages, async (page) => {
         const [original, processed] = await Promise.all([
@@ -572,8 +594,9 @@ async function processScan(
          * scan was parsed from refuses the dispatch, which is the behaviour
          * that guard exists for.
          */
-        loadBytes: () =>
-          downloadReceiptImageBounded(chosenEvidence.path, RECEIPT_UPLOAD_MAX_OBJECT_BYTES, chosenEvidence.info),
+        loadBytes: prefetchProviderEvidence
+          ? startedDownload(chosenEvidence)
+          : () => downloadReceiptImageBounded(chosenEvidence.path, RECEIPT_UPLOAD_MAX_OBJECT_BYTES, chosenEvidence.info),
       });
       await heartbeatScan(scanId, attempt);
     }
@@ -955,11 +978,26 @@ async function storedInput(scanId: number, attempt: number): Promise<StoredInput
   ) {
     throw new ReceiptProcessingFailure("RECEIPT_EVIDENCE_INVALID", "Stored receipt evidence could not be validated.");
   }
+  /*
+   * Every image is inspected at once: each inspection is a storage round trip
+   * (0.2-1.1 s measured from a laptop), and one after another they cost a
+   * 3-page scan six of them before any reading began. The checks below still
+   * run in page order over the settled results, so the first failing image
+   * and the aggregate limit decide the outcome exactly as the sequential
+   * version did.
+   */
+  const inspections = await Promise.all(scan.pages.map((page) => Promise.allSettled([
+    inspectStoredEvidence(page.imageFile),
+    page.processedImageFile ? inspectStoredEvidence(page.processedImageFile) : Promise.resolve(null),
+  ] as const)));
   const pages: StoredPage[] = [];
   let aggregateBytes = 0;
-  for (const page of scan.pages) {
-    const original = await inspectStoredEvidence(page.imageFile);
-    const processed = page.processedImageFile ? await inspectStoredEvidence(page.processedImageFile) : null;
+  for (const [index, page] of scan.pages.entries()) {
+    const [originalResult, processedResult] = inspections[index]!;
+    if (originalResult.status === "rejected") throw originalResult.reason;
+    const original = originalResult.value;
+    if (processedResult.status === "rejected") throw processedResult.reason;
+    const processed = processedResult.value;
     aggregateBytes += original.info.sizeBytes + (processed?.info.sizeBytes ?? 0);
     if (aggregateBytes > RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES) {
       throw new ReceiptProcessingFailure("RECEIPT_EVIDENCE_INVALID", "Stored receipt evidence could not be validated.");
@@ -972,8 +1010,9 @@ async function storedInput(scanId: number, attempt: number): Promise<StoredInput
         ? { metadata: page.captureMetadata as ReceiptCaptureMetadata }
         : {}),
     });
-    await heartbeatScan(scanId, attempt);
   }
+  // One heartbeat for the whole restore now that the inspections overlap.
+  await heartbeatScan(scanId, attempt);
   return { businessProfileId: scan.businessProfileId, pages };
 }
 
