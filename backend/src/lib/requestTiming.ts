@@ -41,6 +41,17 @@ export function recordDbOperation(): void {
   if (store) store.dbOperations += 1;
 }
 
+/**
+ * Runs `work` as if it were a request of its own and reports how many database
+ * operations it made. For background jobs and benchmarks, which no HTTP
+ * request wraps.
+ */
+export async function countDbOperations<T>(work: () => Promise<T>): Promise<{ result: T; dbOperations: number }> {
+  const store: TimingStore = { startedAt: performance.now(), spans: new Map(), dbOperations: 0 };
+  const result = await storage.run(store, work);
+  return { result, dbOperations: store.dbOperations };
+}
+
 /** Runs `work` and charges its wall time to `name`, whether it resolves or throws. */
 export async function timeSpan<T>(name: string, work: () => Promise<T>): Promise<T> {
   const startedAt = performance.now();
