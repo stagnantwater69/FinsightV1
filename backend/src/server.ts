@@ -5,6 +5,7 @@ import { prisma } from "./config/prisma";
 import { logger } from "./config/logger";
 import { assertMigrationsApplied } from "./config/migrationGuard";
 import { registerProcessFaultHandlers } from "./lib/processFaults";
+import { startDbKeepWarm } from "./lib/dbKeepWarm";
 
 /*
  * API process only. The background queue consumers (receipt scans, CSV
@@ -17,6 +18,7 @@ import { registerProcessFaultHandlers } from "./lib/processFaults";
 
 /** Undefined until the startup checks below pass and the port actually opens. */
 let server: Server | undefined;
+let stopKeepWarm: () => void = () => {};
 
 let shuttingDown = false;
 /**
@@ -28,6 +30,7 @@ async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   logger.info({ signal }, "graceful shutdown started");
+  stopKeepWarm();
   const forceTimer = setTimeout(() => {
     logger.fatal("graceful shutdown timed out");
     process.exit(1);
@@ -78,4 +81,6 @@ void (async () => {
   server = app.listen(env.PORT, () => {
     logger.info({ port: env.PORT }, "FinSight backend listening");
   });
+  // The worker polls the database every second and stays warm on its own.
+  stopKeepWarm = startDbKeepWarm(prisma);
 })();

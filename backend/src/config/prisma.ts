@@ -1,5 +1,6 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import { logger } from "./logger";
+import { recordDbOperation } from "../lib/requestTiming";
 
 /** A single query slower than this is logged; most are a pooler round-trip (tens of ms). */
 const SLOW_QUERY_MS = 300;
@@ -163,6 +164,16 @@ baseClient.$on("query", (e) => {
 });
 
 /*
+ * Benchmarks only: adds this many milliseconds before every operation, so a
+ * local database behaves like the hosted one seen from a laptop (about 60 ms)
+ * and timings show which round trips wait on each other. Ignored in
+ * production whatever the variable says.
+ */
+const SIMULATED_ROUND_TRIP_MS = process.env.NODE_ENV === "production"
+  ? 0
+  : Math.max(0, Number(process.env.PERF_SIMULATED_ROUND_TRIP_MS) || 0);
+
+/*
  * Typed as the plain client on purpose. A query-only extension adds no
  * methods, but its generated types are not assignable to
  * `Prisma.TransactionClient`, which dozens of helpers accept.
@@ -177,6 +188,9 @@ export const prisma = baseClient.$extends({
       const internal = (rest as { __internalParams?: { transaction?: unknown } }).__internalParams;
       const inTransaction = internal?.transaction !== undefined;
       for (let attempt = 0; ; attempt++) {
+        // Per attempt: a retried query is another round trip.
+        recordDbOperation();
+        if (SIMULATED_ROUND_TRIP_MS > 0) await new Promise((resolve) => setTimeout(resolve, SIMULATED_ROUND_TRIP_MS));
         try {
           return await query(args);
         } catch (err) {

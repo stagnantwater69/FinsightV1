@@ -1,7 +1,7 @@
 import express from "express";
 import request from "supertest";
 import { describe, expect, it } from "vitest";
-import { recordSpan, requestTiming, timeSpan } from "../../src/lib/requestTiming";
+import { recordDbOperation, recordSpan, requestTiming, timeSpan } from "../../src/lib/requestTiming";
 
 describe("requestTiming", () => {
   it("reports recorded spans and the total in Server-Timing", async () => {
@@ -25,6 +25,22 @@ describe("requestTiming", () => {
 
   it("ignores spans recorded outside a request", () => {
     expect(() => recordSpan("auth", 1)).not.toThrow();
+  });
+
+  it("counts the database operations a request made", async () => {
+    const app = express();
+    app.use(requestTiming);
+    app.get("/reads", async (_req, res) => {
+      recordDbOperation();
+      await Promise.resolve();
+      recordDbOperation();
+      res.json({ ok: true });
+    });
+
+    const res = await request(app).get("/reads").expect(200);
+
+    expect(res.headers["server-timing"]).toContain('db;desc="2 operations"');
+    expect(() => recordDbOperation()).not.toThrow();
   });
 });
 
