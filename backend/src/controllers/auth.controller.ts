@@ -103,9 +103,9 @@ export const registerSchema = z.object({
    */
   email: emailField,
   password: passwordField,
-  firstName: z.string().min(1).max(100),
+  firstName: z.string().trim().min(1).max(100),
   middleName: z.string().max(100).optional(),
-  lastName: z.string().min(1).max(100),
+  lastName: z.string().trim().min(1).max(100),
   phoneNumber: phoneNumberField.optional(),
   platform: platformField,
 });
@@ -143,10 +143,10 @@ const deleteAccountSchema = z.object({ currentPassword: z.string().min(1) }).str
 const handoffIssueSchema = z.object({ refreshToken: z.string().min(1) }).strict();
 const handoffExchangeSchema = z.object({ code: z.string().min(1).max(200) }).strict();
 
-const updateProfileSchema = z.object({
-  firstName: z.string().min(1).max(100).optional(),
+export const updateProfileSchema = z.object({
+  firstName: z.string().trim().min(1).max(100).optional(),
   middleName: z.string().max(100).nullable().optional(),
-  lastName: z.string().min(1).max(100).optional(),
+  lastName: z.string().trim().min(1).max(100).optional(),
   phoneNumber: phoneNumberField.nullable().optional(),
 });
 

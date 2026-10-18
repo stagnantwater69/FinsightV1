@@ -22,8 +22,8 @@ const timezoneSchema = z
   .refine((tz) => IANA_TIME_ZONES.has(tz), { message: "Invalid IANA timezone identifier" });
 
 export const createSchema = z.object({
-  name: z.string().min(1).max(150),
-  type: z.string().min(1).max(100),
+  name: z.string().trim().min(1).max(150),
+  type: z.string().trim().min(1).max(100),
   availableFunds: nonnegativeMoneyAmountSchema,
   expectedMonthlyExpenses: nonnegativeMoneyAmountSchema,
   operatingDays: z.number().int().min(1).max(31),
@@ -34,7 +34,7 @@ export const createSchema = z.object({
   timezone: timezoneSchema.optional(),
 });
 
-const updateSchema = createSchema.partial();
+export const updateSchema = createSchema.partial();
 
 function parseId(raw: string): number {
   const id = Number(raw);

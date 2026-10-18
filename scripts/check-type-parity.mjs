@@ -11,12 +11,7 @@ export const GROUPS = [
     name: "shared API types",
     web: ["web/src/lib/types.ts"],
     mobile: ["mobile/src/lib/types.ts"],
-    exempt: {
-      // Only mobile calls the cashflow endpoint.
-      CashflowGranularity: "mobile-only: web never calls GET /dashboard/cashflow",
-      CashflowPoint: "mobile-only: web never calls GET /dashboard/cashflow",
-      DashboardCashflow: "mobile-only: web never calls GET /dashboard/cashflow",
-    },
+    exempt: {},
     knownDrift: {},
   },
   {

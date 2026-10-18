@@ -75,7 +75,7 @@ export const confirmSchema = z.object({
   recordType: z.enum(["expense", "sales", "mixed"]),
   /** How a "mixed" file says which row is which. See lib/recordTypeDetection.ts. */
   mixedStrategy: z.enum(["column", "sign"]).optional(),
-  title: z.string().min(1).max(150),
+  title: z.string().trim().min(1).max(150),
   columnMapping: jsonField("columnMapping", columnMappingSchema),
   corrections: jsonField("corrections", correctionsSchema).optional(),
   /**
@@ -121,8 +121,8 @@ const stagedReviewSchema = z.object({
   availableFundsBaselineAt: z.string().datetime().optional(),
 });
 
-const stagedConfirmSchema = stagedReviewSchema.extend({
-  title: z.string().min(1).max(150),
+export const stagedConfirmSchema = stagedReviewSchema.extend({
+  title: z.string().trim().min(1).max(150),
   idempotencyKey: z.string().min(8).max(100).optional(),
 });
 

@@ -16,17 +16,17 @@ export const createSchema = z.object({
   businessProfileId: z.number().int().positive().max(2147483647),
   categoryId: z.number().int().positive().max(2147483647),
   date: z.string().date(),
-  description: z.string().min(1).max(255),
+  description: z.string().trim().min(1).max(255),
   vendor: z.string().max(150).optional(),
   amount: moneyAmountSchema,
   includedInAvailableFundsBaseline: z.boolean().optional(),
   availableFundsBaselineAt: z.string().datetime().optional(),
 });
 
-const updateSchema = z.object({
+export const updateSchema = z.object({
   categoryId: z.number().int().positive().max(2147483647).optional(),
   date: z.string().date().optional(),
-  description: z.string().min(1).max(255).optional(),
+  description: z.string().trim().min(1).max(255).optional(),
   vendor: z.string().max(150).nullable().optional(),
   amount: moneyAmountSchema.optional(),
   reviewStatus: z.enum(["Reviewed", "Needs Review"]).optional(),

@@ -97,6 +97,7 @@ import { FloatingTabBar } from "./src/components/FloatingTabBar";
 import { MoneyFlowScreen } from "./src/screens/MoneyFlowScreen";
 import { BAR_HEIGHT } from "./src/components/floatingTabBarLayout";
 import { BusinessNavigationBoundary } from "./src/components/BusinessNavigationBoundary";
+import { AppErrorBoundary } from "./src/components/AppErrorBoundary";
 
 /**
  * Used to reach the navigator from the tab bar's camera modal, which sits
@@ -1110,7 +1111,9 @@ export default function App() {
       */}
       <ThemeProvider>
         <SafeAreaProvider>
-          <Themed fontsReady={fontsReady} />
+          <AppErrorBoundary>
+            <Themed fontsReady={fontsReady} />
+          </AppErrorBoundary>
         </SafeAreaProvider>
       </ThemeProvider>
     </GestureHandlerRootView>

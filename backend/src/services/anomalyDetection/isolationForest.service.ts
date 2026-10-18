@@ -65,12 +65,15 @@ export async function refreshIsolationForestFindings(
   if (!owned) return null;
 
   const now = new Date();
-  const rows = await prisma.expenseRecord.findMany({
+  // Past MAX_RECORDS, keep the most recent rows: those are the ones a shadow
+  // finding is worth having for. Fetched newest-first, then put back in
+  // chronological order because each row's features read the rows before it.
+  const rows = (await prisma.expenseRecord.findMany({
     where: { businessProfileId, date: { gte: utcAddDays(now, -HISTORY_DAYS), lte: now } },
     select: { id: true, categoryId: true, vendor: true, description: true, amount: true, date: true, source: true },
-    orderBy: [{ date: "asc" }, { id: "asc" }],
+    orderBy: [{ date: "desc" }, { id: "desc" }],
     take: MAX_RECORDS,
-  });
+  })).reverse();
   if (rows.length < MINIMUM_HISTORY) return null;
 
   const records: IsolationForestRecord[] = rows.map((row) => ({ ...row, amount: Number(row.amount) }));
