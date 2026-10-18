@@ -56,6 +56,7 @@ function summary(overrides: Partial<DashboardSummary> = {}): DashboardSummary {
     recoveryStatus: RECOVERY,
     recordsNeedingReview: 0,
     alerts: [],
+    unreadAlertCount: 0,
     ...overrides,
   };
 }

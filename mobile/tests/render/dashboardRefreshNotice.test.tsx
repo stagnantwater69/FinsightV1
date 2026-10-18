@@ -50,7 +50,9 @@ vi.mock('../../src/components/tour/targets', () => ({
   useTourScrollView: () => ({}),
   useTourTarget: () => ({}),
 }));
-vi.mock('../../src/components/HomeHeader', () => ({ HomeHeader: () => null }));
+vi.mock('../../src/components/HomeHeader', () => ({
+  HomeHeader: ({ unreadCount }: { unreadCount: number }) => <Text>{`Unread alerts: ${unreadCount}`}</Text>,
+}));
 vi.mock('../../src/components/GreetingHero', () => ({ GreetingHero: () => null }));
 vi.mock('../../src/components/PeriodSelector', () => ({ PeriodSelector: () => null, PeriodPill: () => null, PeriodStatus: () => null }));
 // RecordCard (Recent records on Home) swipes; the harness has no native gesture module.
@@ -106,6 +108,7 @@ const summary: DashboardSummary = {
   },
   recordsNeedingReview: 0,
   alerts: [],
+  unreadAlertCount: 0,
   lifetime: { recordCount: 2, latestRecordDate: '2026-08-20' },
 };
 
@@ -194,6 +197,41 @@ beforeEach(() => {
 afterEach(async () => {
   await cleanup();
   clearServerStateCache();
+});
+
+describe('Dashboard unread badge', () => {
+  const alert = (id: number) => ({
+    id, businessProfileId: 1, expenseRecordId: null, type: 'Needs Review',
+    message: `Alert ${id}`, dateCreated: '2026-08-20T00:00:00.000Z', readStatus: false,
+  });
+
+  function serve(dashboard: unknown) {
+    apiGet.mockImplementation((path: string) => {
+      if (path === '/dashboard/summary') return Promise.resolve(dashboard);
+      if (path === '/insights/expense-overview') return Promise.resolve(overview);
+      return Promise.reject(new Error(`unexpected path ${path}`));
+    });
+  }
+
+  it("shows the server's unread total, not the ten alerts it sent", async () => {
+    // The ten newest are read; four older unread alerts sit outside the list.
+    serve({ ...summary, alerts: Array.from({ length: 10 }, (_, i) => ({ ...alert(i + 1), readStatus: true })), unreadAlertCount: 4 });
+    const queries = await render(
+      <ThemeProvider initialMode="light"><DashboardScreen navigation={navigation} /></ThemeProvider>,
+    );
+
+    expect(await queries.findByText('Unread alerts: 4')).toBeTruthy();
+  });
+
+  it('counts the alert rows when a cached summary has no total', async () => {
+    const { unreadAlertCount: _omitted, ...older } = summary;
+    serve({ ...older, alerts: [alert(1), alert(2)] });
+    const queries = await render(
+      <ThemeProvider initialMode="light"><DashboardScreen navigation={navigation} /></ThemeProvider>,
+    );
+
+    expect(await queries.findByText('Unread alerts: 2')).toBeTruthy();
+  });
 });
 
 describe('Dashboard cached overview refresh', () => {

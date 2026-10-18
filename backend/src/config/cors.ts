@@ -29,6 +29,6 @@ export function createCorsOptions(
         || (nodeEnv === "development" && isLocalExpoOrigin(origin, getInterfaces())));
     },
     credentials: true,
-    exposedHeaders: ["Server-Timing", "Retry-After", "RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset", "X-Next-Cursor"],
+    exposedHeaders: ["Server-Timing", "Retry-After", "RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset", "X-Next-Cursor", "X-Unread-Count"],
   };
 }

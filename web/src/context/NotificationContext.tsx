@@ -50,6 +50,9 @@ interface NotificationRefresh {
 export function NotificationProvider({ children }: { children: ReactNode }) {
   const { selected } = useBusinessProfiles();
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  // Unread alerts older than the list the server returns (it stops at 500).
+  // Kept apart from the rows so a row marked read still moves the badge at once.
+  const [hiddenUnread, setHiddenUnread] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const refreshSequence = useRef(0);
@@ -71,12 +74,16 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const runRefresh = useCallback(async (request: NotificationRefresh) => {
     const requestId = refreshSequence.current;
     try {
-      const { data } = await api.get<Notification[]>("/notifications", {
+      const { data, headers } = await api.get<Notification[]>("/notifications", {
         signal: request.signal,
         params: { businessProfileId: request.businessProfileId },
       });
       if (request.signal?.aborted || requestId !== refreshSequence.current) return;
+      // The server's total rides on a header; without it the badge counts the rows.
+      const total = Number(headers?.["x-unread-count"]);
+      const listedUnread = data.filter((item) => !item.readStatus).length;
       setNotifications(data);
+      setHiddenUnread(Number.isInteger(total) ? Math.max(0, total - listedUnread) : 0);
       setError(null);
     } catch (err) {
       if (request.signal?.aborted || requestId !== refreshSequence.current) return;
@@ -97,6 +104,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       refreshSequence.current += 1;
       queuedRefresh.current = null;
       setNotifications([]);
+      setHiddenUnread(0);
       setError(null);
       setLoading(false);
       return Promise.resolve();
@@ -221,6 +229,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     const affectedIds = new Set(previousReadStatus.keys());
     for (const id of affectedIds) rowActionVersions.current.set(id, action);
     refreshSequence.current += 1;
+    // read-all clears the alerts the list does not show as well.
+    const previousHiddenUnread = hiddenUnread;
+    setHiddenUnread(0);
     setNotifications((prev) => prev.map((n) => (
       affectedIds.has(n.id) ? { ...n, readStatus: true } : n
     )));
@@ -240,6 +251,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       for (const id of ownedIds) rowActionVersions.current.delete(id);
       if (notificationActionSequence.current === action) setError(null);
     } catch (err) {
+      if (notificationActionSequence.current === action) setHiddenUnread(previousHiddenUnread);
       const ownedIds = new Set([...affectedIds].filter(
         (id) => rowActionVersions.current.get(id) === action,
       ));
@@ -253,9 +265,9 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       for (const id of ownedIds) rowActionVersions.current.delete(id);
       if (notificationActionSequence.current === action) setError(getErrorMessage(err));
     }
-  }, [businessProfileId, notifications]);
+  }, [businessProfileId, hiddenUnread, notifications]);
 
-  const unreadCount = notifications.reduce((n, item) => (item.readStatus ? n : n + 1), 0);
+  const unreadCount = notifications.reduce((n, item) => (item.readStatus ? n : n + 1), hiddenUnread);
 
   return (
     <NotificationContext.Provider

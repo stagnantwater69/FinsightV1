@@ -21,7 +21,7 @@ function summary(availableFunds: number): DashboardSummary {
   return {
     periodDays: 30, periodStart: "2026-09-01", periodEnd: "2026-09-30",
     overview: { availableFunds, totalExpenses: 100, totalSalesReference: 200 },
-    expenseCategoryBreakdown: [], recordsNeedingReview: 0, alerts: [],
+    expenseCategoryBreakdown: [], recordsNeedingReview: 0, alerts: [], unreadAlertCount: 0,
     recoveryStatus: {
       expectedMonthlyExpenses: 100, operatingDays: 26, dailyNeededTarget: 4,
       salesThisMonth: 200, remainingTarget: 0, daysInMonth: 30, calendarDaysLeftInMonth: 10,
