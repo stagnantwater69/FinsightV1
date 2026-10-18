@@ -12,7 +12,7 @@ vi.mock("../../src/config/logger", () => ({
 }));
 
 import { createGeminiReceiptAdapter } from "../../src/services/receiptScan/providerAdapters";
-import { mergeReceiptProviderOutcome } from "../../src/services/receiptProviderContract";
+import { mergeReceiptProviderOutcome, type ReceiptProviderOutcome } from "../../src/services/receiptProviderContract";
 import { localExtraction, providerRequest } from "../helpers/receiptProviderFixtures";
 
 afterEach(() => {
@@ -27,7 +27,7 @@ describe("Gemini receipt provider fetch boundary", () => {
     [400, "HTTP_ERROR", "FAILED"],
     [403, "AUTH_ERROR", "FAILED"],
   ] as const)("classifies HTTP %i without retrying the submitted extraction", async (status, outcomeCode, outcomeStatus) => {
-    const fetchMock = vi.fn(async () => new Response("provider refused", {
+    const fetchMock = vi.fn(async (..._args: Parameters<typeof fetch>) => new Response("provider refused", {
       status,
       headers: status === 429 || status === 503 ? { "retry-after": "45" } : undefined,
     }));
@@ -35,7 +35,7 @@ describe("Gemini receipt provider fetch boundary", () => {
     const request = providerRequest();
     const local = localExtraction();
 
-    const outcome = await createGeminiReceiptAdapter().extract(request);
+    const outcome = (await createGeminiReceiptAdapter().extract(request)) as ReceiptProviderOutcome;
     const merged = mergeReceiptProviderOutcome(local, request, outcome);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -58,7 +58,7 @@ describe("Gemini receipt provider fetch boundary", () => {
     const request = providerRequest();
     const local = localExtraction();
 
-    const outcome = await createGeminiReceiptAdapter().extract(request);
+    const outcome = (await createGeminiReceiptAdapter().extract(request)) as ReceiptProviderOutcome;
     const merged = mergeReceiptProviderOutcome(local, request, outcome);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);

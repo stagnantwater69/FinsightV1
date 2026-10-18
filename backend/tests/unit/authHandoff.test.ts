@@ -58,7 +58,7 @@ describe("sealing a refresh token", () => {
     const sealed = seal(TOKEN);
     const [iv, tag, body] = sealed.split(".");
 
-    expect(open(`${iv}.${tag}.${body.slice(0, -4)}AAAA`)).toBeNull();
+    expect(open(`${iv}.${tag}.${body!.slice(0, -4)}AAAA`)).toBeNull();
     expect(open(`${iv}.AAAAAAAAAAAAAAAAAAAAAA.${body}`)).toBeNull();
     expect(open("not-a-sealed-value")).toBeNull();
     expect(open("")).toBeNull();

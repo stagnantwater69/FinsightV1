@@ -221,17 +221,19 @@ describe("manual available-funds baseline classification", () => {
         date: new Date(`${BASELINE_DATE}T00:00:00.000Z`),
         description: "Half-classified expense",
         amount: 10,
+        source: "MANUAL_ENTRY",
         includedInAvailableFundsBaseline: false,
       },
-    })).rejects.toBeDefined();
+    })).rejects.toThrow(/ExpenseRecord_available_funds_baseline_pair_check/);
     await expect(prisma.salesReferenceRecord.create({
       data: {
         businessProfileId: ctx.profile.id,
         date: new Date(`${BASELINE_DATE}T00:00:00.000Z`),
         description: "Half-classified sale",
         amount: 10,
+        source: "MANUAL_ENTRY",
         availableFundsDeltaBaselineAt: BASELINE_AT,
       },
-    })).rejects.toBeDefined();
+    })).rejects.toThrow(/SalesReferenceRecord_available_funds_baseline_pair_check/);
   });
 });

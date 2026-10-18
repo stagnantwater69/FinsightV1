@@ -15,7 +15,7 @@ vi.mock("../../src/services/storage.service", async (importOriginal) => {
 });
 
 import { prisma } from "../../src/config/prisma";
-import { confirmImport, previewCsv } from "../../src/services/csvImport.service";
+import { confirmImport, previewCsv, type ColumnMapping } from "../../src/services/csvImport.service";
 import { CSV_MAX_FILE_BYTES } from "../../src/lib/csvUploadValidation";
 import { disconnectDb, makeOwnerWithProfile, resetDb, utcDayString } from "../setup/testDb";
 
@@ -563,7 +563,7 @@ describe("mixed sales-and-expense imports", () => {
     return Buffer.from(["Date,Particulars,Amount,Class,Type", ...rows].join("\n") + "\n");
   }
 
-  function importMixed(buffer: Buffer, mapping = MIXED_MAPPING, strategy: "column" | "sign" = "column") {
+  function importMixed(buffer: Buffer, mapping: ColumnMapping = MIXED_MAPPING, strategy: "column" | "sign" = "column") {
     return confirmImport(ctx.user.id, {
       businessProfileId: ctx.profile.id,
       recordType: "mixed",

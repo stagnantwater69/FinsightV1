@@ -9,7 +9,7 @@ import {
 } from "../load/csv-performance-budget.mjs";
 
 function summaries(sampleCount = 5, p95For = (scenario: string, phase: string) => (
-  DEFAULT_CSV_PERFORMANCE_BUDGET.scenarios[scenario][phase]
+  DEFAULT_CSV_PERFORMANCE_BUDGET.scenarios[scenario]![phase]!
 )) {
   return Object.fromEntries(CSV_SCENARIOS.map((scenario: string) => [
     scenario,
@@ -24,8 +24,8 @@ describe("CSV performance budget", () => {
   it("derives local regression defaults from the recorded reference with three-times headroom", () => {
     for (const scenario of CSV_SCENARIOS) {
       for (const phase of CSV_PHASES) {
-        expect(DEFAULT_CSV_PERFORMANCE_BUDGET.scenarios[scenario][phase]).toBe(
-          Math.max(100, LOCAL_REFERENCE_P95_MS[scenario][phase] * 3),
+        expect(DEFAULT_CSV_PERFORMANCE_BUDGET.scenarios[scenario]![phase]).toBe(
+          Math.max(100, LOCAL_REFERENCE_P95_MS[scenario]![phase]! * 3),
         );
       }
     }
@@ -38,10 +38,10 @@ describe("CSV performance budget", () => {
     });
 
     expect(config.minimumSamples).toBe(7);
-    expect(config.scenarios.small.stageMs).toBe(125);
-    expect(config.scenarios.small.reviewMs).toBe(DEFAULT_CSV_PERFORMANCE_BUDGET.scenarios.small.reviewMs);
-    expect(config.scenarios["30k-rows"].terminalMs).toBe(
-      DEFAULT_CSV_PERFORMANCE_BUDGET.scenarios["30k-rows"].terminalMs,
+    expect(config.scenarios.small!.stageMs).toBe(125);
+    expect(config.scenarios.small!.reviewMs).toBe(DEFAULT_CSV_PERFORMANCE_BUDGET.scenarios.small!.reviewMs);
+    expect(config.scenarios["30k-rows"]!.terminalMs).toBe(
+      DEFAULT_CSV_PERFORMANCE_BUDGET.scenarios["30k-rows"]!.terminalMs,
     );
   });
 
@@ -73,8 +73,8 @@ describe("CSV performance budget", () => {
     const config = parseCsvPerformanceBudget();
     const report = summaries(5, (scenario, phase) => (
       scenario === "wide" && phase === "reviewMs"
-        ? config.scenarios.wide.reviewMs + 1
-        : config.scenarios[scenario][phase]
+        ? config.scenarios.wide!.reviewMs! + 1
+        : config.scenarios[scenario]![phase]!
     ));
     const evaluation = evaluateCsvPerformanceBudget(report, config);
 
@@ -90,7 +90,7 @@ describe("CSV performance budget", () => {
   it("reports an under-sampled phase instead of treating its low p95 as a pass", () => {
     const config = parseCsvPerformanceBudget();
     const report = summaries(5);
-    report.small.stageMs = { count: 4, p95: 1 };
+    report.small!.stageMs = { count: 4, p95: 1 };
     const evaluation = evaluateCsvPerformanceBudget(report, config);
 
     expect(evaluation.status).toBe("insufficient_samples");
@@ -107,7 +107,7 @@ describe("CSV performance budget", () => {
   it("reports a missing phase as having no samples", () => {
     const config = parseCsvPerformanceBudget();
     const report = summaries(5);
-    delete report.invalid.confirmMs;
+    delete report.invalid!.confirmMs;
     const evaluation = evaluateCsvPerformanceBudget(report, config);
 
     expect(evaluation.checks).toContainEqual(expect.objectContaining({

@@ -15,6 +15,7 @@
 // something on the local allowlist (defined in urlSafety.ts).
 
 import { execFileSync } from "node:child_process";
+import { prismaCommand } from "./installedCli";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
@@ -127,17 +128,7 @@ export async function runAuthorWorkflow(argsInput: string[]): Promise<{ migratio
     let diffSql: string;
     try {
       diffSql = execFileSync(
-        "npx",
-        [
-          "prisma",
-          "migrate",
-          "diff",
-          "--from-url",
-          sourceUrl,
-          "--to-schema-datamodel",
-          SCHEMA_PATH,
-          "--script",
-        ],
+        ...prismaCommand("migrate", "diff", "--from-url", sourceUrl, "--to-schema-datamodel", SCHEMA_PATH, "--script"),
         { cwd: REPO_ROOT, encoding: "utf8" }
       );
     } catch (err) {

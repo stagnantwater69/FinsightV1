@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { prismaCommand, tsxCommand } from "./installedCli";
 import { readdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import path from "node:path";
@@ -405,7 +406,7 @@ function expectMigrationFailure(
 function expectDeployFailure(url: string, expectedMessage: string): void {
   let output = "";
   try {
-    output = execFileSync("npx", ["prisma", "migrate", "deploy"], {
+    output = execFileSync(...prismaCommand("migrate", "deploy"), {
       cwd: BACKEND_ROOT,
       encoding: "utf8",
       stdio: "pipe",
@@ -471,9 +472,7 @@ function databaseUrl(port: number, database: string): string {
 
 function verifyPrismaDiff(url: string): void {
   execFileSync(
-    "npx",
-    [
-      "prisma",
+    ...prismaCommand(
       "migrate",
       "diff",
       "--from-url",
@@ -481,7 +480,7 @@ function verifyPrismaDiff(url: string): void {
       "--to-schema-datamodel",
       path.join(BACKEND_ROOT, "prisma", "schema.prisma"),
       "--exit-code",
-    ],
+    ),
     {
       cwd: BACKEND_ROOT,
       stdio: "inherit",
@@ -500,7 +499,7 @@ function verifyStartupGuard(url: string): void {
     "  await prisma.$disconnect();",
     "})();",
   ].join("\n");
-  execFileSync("npx", ["tsx", "-e", program], {
+  execFileSync(...tsxCommand("-e", program), {
     cwd: BACKEND_ROOT,
     stdio: "inherit",
     env: { ...process.env, DATABASE_URL: url, DIRECT_URL: url },

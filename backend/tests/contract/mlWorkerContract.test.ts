@@ -21,6 +21,22 @@ function request(rows: number, overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** The /score success body the contract defines; error replies are checked by status alone. */
+interface ScoreReply {
+  contractVersion: string;
+  trainedRows: number;
+  durationMs: number;
+  scores: { id: number; normalizedScore: number; decisionValue: number }[];
+}
+
+interface HealthReply {
+  status: string;
+  contractVersion: string;
+  modelVersion: string;
+  sklearnVersion: string;
+  numpyVersion: string;
+}
+
 async function post(body: unknown) {
   const response = await fetch(`${base}/score`, {
     method: "POST",
@@ -28,7 +44,7 @@ async function post(body: unknown) {
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(10_000),
   });
-  return { status: response.status, json: await response.json() };
+  return { status: response.status, json: (await response.json()) as ScoreReply };
 }
 
 describe.skipIf(skipMissing)("ml worker contract (if-contract-v1)", () => {
@@ -48,7 +64,7 @@ describe.skipIf(skipMissing)("ml worker contract (if-contract-v1)", () => {
   });
 
   it("reports its versions on /health", async () => {
-    const health = await (await fetch(`${base}/health`, { signal: AbortSignal.timeout(5_000) })).json();
+    const health = (await (await fetch(`${base}/health`, { signal: AbortSignal.timeout(5_000) })).json()) as HealthReply;
     expect(health).toMatchObject({ status: "ok", contractVersion: "if-contract-v1", modelVersion: "iforest-v1" });
     const versions = checkWorkerPrerequisites(environment);
     expect(health.sklearnVersion).toBe(versions.sklearn);
@@ -85,8 +101,8 @@ describe.skipIf(skipMissing)("ml worker contract (if-contract-v1)", () => {
     body.rows[0] = { id: 1, features: [80, -80, 80] };
     const { json } = await post(body);
     const planted = json.scores.find((entry: { id: number }) => entry.id === 1);
-    expect(planted.normalizedScore).toBe(1);
-    expect(planted.decisionValue).toBeLessThan(0);
+    expect(planted!.normalizedScore).toBe(1);
+    expect(planted!.decisionValue).toBeLessThan(0);
   });
 
   it("rejects malformed and undersized requests with 4xx, never 500", async () => {

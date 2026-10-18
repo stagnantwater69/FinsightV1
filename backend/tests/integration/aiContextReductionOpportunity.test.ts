@@ -35,6 +35,7 @@ function fixtureOpportunity(categoryId: number): ReductionOpportunity {
       unusualRecordCount: 0,
       possibleDuplicateCount: 0,
     },
+    costBehavior: "unclassified",
     suggestedChecks: [...SUGGESTED_CHECK_CATALOGUE.CATEGORY_PRESSURE],
     relatedRecordIds: [1, 2, 3],
     limitations: ["A large or growing category can still be necessary for the business."],
