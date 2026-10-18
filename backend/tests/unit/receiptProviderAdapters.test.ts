@@ -338,3 +338,71 @@ describe("provider currency", () => {
     expect(mergeReceiptProviderOutcome(localExtraction(), request, outcome).providerCurrency).toBeNull();
   });
 });
+
+/*
+ * The verifier is skipped only when the local read corroborated the date and
+ * the total on the paper, Gemini read the same two values, and Gemini's lines
+ * add up. Every other case still pays for, and waits for, the second check.
+ */
+describe("skipping the verifier when the local read agrees", () => {
+  const agreeing = { localCorroboration: { date: "2026-09-14", total: 350 } };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    verifyVisionReceipt.mockResolvedValue({ verdict: { accept: true, rejectedFields: [] }, failure: null });
+  });
+
+  it("accepts without a second call, bills one unit and records the local match", async () => {
+    extractReceiptWithVision.mockResolvedValue({ receipt: reconciledReceipt, requestMs: 2_800 });
+
+    const request = providerRequest(agreeing);
+    const outcome = (await createGeminiReceiptAdapter().extract(request)) as ReceiptProviderOutcome;
+
+    expect(verifyVisionReceipt).not.toHaveBeenCalled();
+    expect(outcome.status).toBe("SUCCEEDED");
+    expect(outcome.finalBillableUnits).toBe(1);
+    expect(outcome.stageTimings).toEqual({ extractionMs: 2_800, verificationMs: 0 });
+    expect(outcome.extraction?.date.evidence?.validationCodes).toContain("LOCAL_MATCH");
+    expect(outcome.extraction?.total.evidence?.validationCodes).toContain("LOCAL_MATCH");
+    // Nothing checked the store name, and its evidence does not pretend otherwise.
+    expect(outcome.extraction?.vendor.evidence?.validationCodes).not.toContain("LOCAL_MATCH");
+    expect(outcome.extraction?.vendor.evidence?.validationCodes).toContain("OWNER_REVIEW_REQUIRED");
+  });
+
+  it.each([
+    ["a different total", { date: "2026-09-14", total: 305 }, reconciledReceipt],
+    ["a different date", { date: "2026-09-15", total: 350 }, reconciledReceipt],
+    ["lines that miss the total", { date: "2026-09-14", total: 350 }, unreconciledReceipt],
+  ])("still verifies on %s", async (_label, localCorroboration, receipt) => {
+    extractReceiptWithVision.mockResolvedValue({ receipt });
+
+    const outcome = (await createGeminiReceiptAdapter().extract(
+      providerRequest({ localCorroboration }),
+    )) as ReceiptProviderOutcome;
+
+    expect(verifyVisionReceipt).toHaveBeenCalledTimes(1);
+    expect(outcome.finalBillableUnits).toBe(2);
+    expect(outcome.extraction?.total.evidence?.validationCodes).not.toContain("LOCAL_MATCH");
+  });
+
+  it("still verifies when the local read sent nothing to compare", async () => {
+    extractReceiptWithVision.mockResolvedValue({ receipt: reconciledReceipt });
+
+    await createGeminiReceiptAdapter().extract(providerRequest({ localCorroboration: null }));
+    await createGeminiReceiptAdapter().extract(providerRequest());
+
+    expect(verifyVisionReceipt).toHaveBeenCalledTimes(2);
+  });
+
+  it("still rejects when the verifier does run and rejects", async () => {
+    extractReceiptWithVision.mockResolvedValue({ receipt: reconciledReceipt });
+    verifyVisionReceipt.mockResolvedValue({ verdict: { accept: false, rejectedFields: ["amount"] }, failure: null });
+
+    const outcome = (await createGeminiReceiptAdapter().extract(
+      providerRequest({ localCorroboration: { date: "2026-09-14", total: 999 } }),
+    )) as ReceiptProviderOutcome;
+
+    expect(outcome.status).toBe("FAILED");
+    expect(outcome.outcomeCode).toBe("INVALID_RESULT");
+  });
+});
