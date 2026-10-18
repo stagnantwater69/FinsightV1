@@ -105,6 +105,28 @@ function storageManifestHash(tasks: StorageDeletionTask[]): string {
   return hash.digest("hex");
 }
 
+/** Rows per query while listing an account's stored files. */
+const STORAGE_PLAN_PAGE = 1_000;
+
+/** Reads every row `read` returns, `STORAGE_PLAN_PAGE` at a time in id order. */
+async function readAllById<T extends { id: number }>(read: (afterId: number, take: number) => Promise<T[]>): Promise<T[]> {
+  const rows: T[] = [];
+  for (let afterId = 0; ;) {
+    const page = await read(afterId, STORAGE_PLAN_PAGE);
+    rows.push(...page);
+    if (page.length < STORAGE_PLAN_PAGE) return rows;
+    afterId = page[page.length - 1]!.id;
+  }
+}
+
+/*
+ * The plan is still the complete, sorted list of storage keys: its hash and
+ * the index checkpoint are what let an interrupted deletion resume, so they
+ * must not change shape. What is bounded is how it is read. One nested query
+ * used to materialise every profile's scans, pages and import batches as a
+ * single object graph; each table is now read in id-ordered pages of its own,
+ * keeping only the columns the plan needs.
+ */
 async function loadStoragePlan(userId: number) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
@@ -112,30 +134,34 @@ async function loadStoragePlan(userId: number) {
       avatarUrl: true,
       deletionStorageManifestHash: true,
       deletionStorageCheckpoint: true,
-      businessProfiles: {
-        select: {
-          id: true,
-          logoUrl: true,
-          receiptScans: {
-            select: {
-              imageFile: true,
-              pages: { select: { imageFile: true, processedImageFile: true } },
-            },
-          },
-          csvImportBatches: {
-            select: {
-              fileReference: true,
-              processingStatus: true,
-              heartbeatAt: true,
-              createdAt: true,
-            },
-          },
-        },
-      },
+      businessProfiles: { select: { id: true, logoUrl: true } },
     },
   });
   if (!user) throw new AccountDeletionLeaseLostError(userId);
   const profileIds = user.businessProfiles.map((profile) => profile.id);
+  const ownScans = { businessProfileId: { in: profileIds } };
+  const [scans, pages, csvBatches] = profileIds.length === 0
+    ? [[], [], []]
+    : await Promise.all([
+        readAllById((afterId, take) => prisma.receiptScan.findMany({
+          where: { ...ownScans, id: { gt: afterId } },
+          orderBy: { id: "asc" },
+          take,
+          select: { id: true, imageFile: true },
+        })),
+        readAllById((afterId, take) => prisma.receiptScanPage.findMany({
+          where: { receiptScan: ownScans, id: { gt: afterId } },
+          orderBy: { id: "asc" },
+          take,
+          select: { id: true, imageFile: true, processedImageFile: true },
+        })),
+        readAllById((afterId, take) => prisma.cSVImportBatch.findMany({
+          where: { ...ownScans, id: { gt: afterId } },
+          orderBy: { id: "asc" },
+          take,
+          select: { id: true, fileReference: true, processingStatus: true, heartbeatAt: true, createdAt: true },
+        })),
+      ]);
   const queuedCsvPurges = profileIds.length > 0
     ? await prisma.cSVSourcePurgeJob.findMany({
         where: { businessProfileId: { in: profileIds } },
@@ -164,36 +190,36 @@ async function loadStoragePlan(userId: number) {
     const persistedLogoPath = profile.logoUrl ? publicImagePathFromUrl(profile.logoUrl) : null;
     if (persistedLogoPath) publicPaths.add(persistedLogoPath);
     for (const path of await listPublicImagePaths(prefix)) publicPaths.add(path);
-    for (const scan of profile.receiptScans) {
-      add("receipt", scan.imageFile, () => deleteReceiptImage(scan.imageFile!));
-      for (const page of scan.pages) {
-        add("receipt", page.imageFile, () => deleteReceiptImage(page.imageFile));
-        add("receipt", page.processedImageFile, () => deleteReceiptImage(page.processedImageFile!));
+  }
+  for (const scan of scans) {
+    add("receipt", scan.imageFile, () => deleteReceiptImage(scan.imageFile!));
+  }
+  for (const page of pages) {
+    add("receipt", page.imageFile, () => deleteReceiptImage(page.imageFile));
+    add("receipt", page.processedImageFile, () => deleteReceiptImage(page.processedImageFile!));
+  }
+  for (const batch of csvBatches) {
+    if (
+      batch.processingStatus === CsvImportProcessingStatus.STAGING ||
+      batch.processingStatus === CsvImportProcessingStatus.PROCESSING
+    ) {
+      if (batch.heartbeatAt !== null && batch.heartbeatAt.getTime() > liveUploadCutoff) {
+        hasLiveCsvUpload = true;
       }
-    }
-    for (const batch of profile.csvImportBatches) {
+      const lastReservationActivity = batch.heartbeatAt ?? batch.createdAt;
+      const notBefore = new Date(
+        lastReservationActivity.getTime() +
+        STAGING_UPLOAD_LEASE_MS +
+        CSV_AMBIGUOUS_UPLOAD_TOMBSTONE_GRACE_MS,
+      );
       if (
-        batch.processingStatus === CsvImportProcessingStatus.STAGING ||
-        batch.processingStatus === CsvImportProcessingStatus.PROCESSING
+        notBefore.getTime() > Date.now() &&
+        (csvUploadNotBefore === null || notBefore > csvUploadNotBefore)
       ) {
-        if (batch.heartbeatAt !== null && batch.heartbeatAt.getTime() > liveUploadCutoff) {
-          hasLiveCsvUpload = true;
-        }
-        const lastReservationActivity = batch.heartbeatAt ?? batch.createdAt;
-        const notBefore = new Date(
-          lastReservationActivity.getTime() +
-          STAGING_UPLOAD_LEASE_MS +
-          CSV_AMBIGUOUS_UPLOAD_TOMBSTONE_GRACE_MS,
-        );
-        if (
-          notBefore.getTime() > Date.now() &&
-          (csvUploadNotBefore === null || notBefore > csvUploadNotBefore)
-        ) {
-          csvUploadNotBefore = notBefore;
-        }
+        csvUploadNotBefore = notBefore;
       }
-      add("csv", batch.fileReference, () => deleteCsvFile(batch.fileReference!));
     }
+    add("csv", batch.fileReference, () => deleteCsvFile(batch.fileReference!));
   }
   for (const job of queuedCsvPurges) {
     add("csv", job.fileReference, () => deleteCsvFile(job.fileReference!));
