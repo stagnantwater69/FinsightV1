@@ -154,6 +154,15 @@ describe('Alerts — marking everything read', () => {
     expect(screen.getByRole('button', { name: 'Mark all read' })).toBeTruthy();
   });
 
+  it('says "at least" once the list reaches the server cap, since older alerts may lie beyond it', async () => {
+    apiGet.mockResolvedValue(Array.from({ length: 500 }, (_, index) => ({ ...unreadAlert(index + 1), readStatus: index % 2 === 0 })));
+    const screen = await renderScreen();
+
+    expect(await screen.findByText('250+ unread')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Filter alerts, All (500+)' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Filter alerts, Unread (250+)' })).toBeTruthy();
+  });
+
   it('locks repeated mark-all actions before a pending request completes', async () => {
     let finish!: () => void;
     const pending = new Promise<void>((resolve) => { finish = resolve; });
