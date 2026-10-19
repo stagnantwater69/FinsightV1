@@ -1,5 +1,6 @@
 import { useEffect, useRef, type FormEvent } from "react";
 import { Button } from "../../components/Button";
+import { PageTip } from "../../components/PageTip";
 import { FileInput, FormError } from "../../components/Field";
 import { SkeletonLine } from "../../components/Skeleton";
 import { Card, PageHead } from "../../components/ui";
@@ -40,6 +41,11 @@ export function FileSelectStage({
 
       <div className="mx-auto w-full max-w-5xl space-y-5 2xl:max-w-6xl">
         <CsvImportStepper current={1} />
+
+        <PageTip id="csv-import" title="You see every row before it is saved">
+          FinSight reads your column headings and works out which is the date, description and amount. The next step
+          shows each row so you can fix or leave out anything before importing.
+        </PageTip>
 
         <Card as="form" onSubmit={onSubmit} className="p-4 sm:p-5">
           <FileInput

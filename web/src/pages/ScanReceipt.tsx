@@ -23,6 +23,7 @@ import { everyLineIsReady, groupByCategory, sumCentavos, toReviewLines } from ".
 import { BAND_COPY, scanConfidenceBand } from "../lib/confidenceBands";
 import { Callout, Card, PageHead, Pill } from "../components/ui";
 import { Button } from "../components/Button";
+import { PageTip } from "../components/PageTip";
 import { Field, FormError, MoneyInput, TextInput } from "../components/Field";
 import { useToast } from "../components/Toast";
 import { GapOption } from "./scanReceipt/GapOption";
@@ -1760,6 +1761,9 @@ function ScanReceiptForm() {
         subtitle="Check the details FinSight found and correct anything before saving."
       />
       <ReceiptWorkflowProgress current={confirming ? "save" : "review"} />
+      <PageTip id="receipt-review" title="Check it against the photo">
+        Compare each field with the receipt and fix anything FinSight read wrong. Nothing is saved until you confirm.
+      </PageTip>
       {restoredDraftFor === scan.id ? (
         <RestoredDraftNotice confirming={confirming} discardRestoredDraft={discardRestoredDraft} />
       ) : null}

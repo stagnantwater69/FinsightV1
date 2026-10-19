@@ -53,6 +53,7 @@ import { monthToneAndCopy } from "../lib/recoveryMonthState";
 import { PeriodFilter } from "../components/PeriodFilter";
 import { DataTable, type Column } from "../components/DataTable";
 import { Button, ButtonLink, classesFor } from "../components/Button";
+import { PageTip } from "../components/PageTip";
 import { Field, FormError, MoneyInput } from "../components/Field";
 import {
   STATUS_COLORS,
@@ -2729,6 +2730,11 @@ function RecoveryInsightContent() {
       />
 
       <InsightsTabs />
+
+      <PageTip id="recovery-target" title="What the recovery target is">
+        It is the sales you need this month to cover your expected monthly expenses. FinSight spreads what is left
+        over your remaining operating days, so the daily target changes as you record sales.
+      </PageTip>
 
       {error && !data ? (
         <div className="mb-5">

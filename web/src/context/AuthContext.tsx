@@ -427,6 +427,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 }
 
+/** Null outside the provider, for page chrome that renders in isolated tests too. */
+export function useAuthOptional() {
+  return useContext(AuthContext) ?? null;
+}
+
 export function useAuth() {
   const ctx = useContext(AuthContext);
   if (!ctx) {

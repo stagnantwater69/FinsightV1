@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type ComponentType, type ReactNode } from 
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
-import { useTourOptional } from "../context/TourContext";
 import { usePersistentState, useDismiss, useFocusTrap, useMenuKeys } from "../lib/hooks";
 import { AddExpenseModal } from "./AddExpenseModal";
 import { AddSalesModal } from "./AddSalesModal";
@@ -278,24 +277,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [quickAddExpenseOpen, setQuickAddExpenseOpen] = useState(false);
   const [quickAddSalesOpen, setQuickAddSalesOpen] = useState(false);
 
-  /*
-   * The product tour's two Quick-add steps highlight items INSIDE this menu,
-   * so while one of them is active the menu is held open by the tour rather
-   * than by the user. Held open this way it must not behave like a menu the
-   * user opened: useDismiss would close it the moment they click the tour's
-   * own Next button (an "outside" click), and useFocusTrap would fight the
-   * tour tooltip's trap for focus — so both stay wired to `addOpen` only.
-   * When the step moves on, `tourHoldsAddMenu` goes false and the menu
-   * disappears again, restoring exactly the state the user had.
-   */
-  const tour = useTourOptional();
-  const tourHoldsAddMenu =
-    tour?.activeStepId === "receipt-scanner" || tour?.activeStepId === "csv-import";
-  const addMenuVisible = addOpen || tourHoldsAddMenu;
 
   const { ref: addRef, triggerRef: addTriggerRef } = useDismiss(addOpen, () => setAddOpen(false));
   const onMenuKeys = useMenuKeys();
-  const addTrapRef = useFocusTrap<HTMLDivElement>(addOpen && !tourHoldsAddMenu);
+  const addTrapRef = useFocusTrap<HTMLDivElement>(addOpen);
 
   // Once the first page has had its turn, warm the other tabs' code so
   // switching to them shows the page (or its skeleton) without a code wait.
@@ -688,7 +673,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                     type="button"
                     data-tour="quick-add"
                     onClick={() => setAddOpen((v) => !v)}
-                    aria-expanded={addMenuVisible}
+                    aria-expanded={addOpen}
                     aria-haspopup="menu"
                     className="tap gap-1.5 rounded-xl bg-brand-700 px-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-800 sm:px-3"
                   >
@@ -696,7 +681,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                     <span className="hidden sm:inline">Quick add</span>
                     <span className="sr-only sm:hidden">Quick add</span>
                   </button>
-                  {addMenuVisible ? (
+                  {addOpen ? (
                     // useDismiss closes this on Escape and outside click, and
                     // useMenuKeys drives the arrow keys — but neither stopped
                     // Tab from leaving the menu while it stayed open over the

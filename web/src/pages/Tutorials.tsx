@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { PublicLayout, PublicPageHead } from "../components/PublicLayout";
+import { useAuth } from "../context/AuthContext";
 import { TUTORIALS } from "../lib/marketingContent";
 
 /**
@@ -13,6 +14,7 @@ import { TUTORIALS } from "../lib/marketingContent";
  */
 
 export function Tutorials() {
+  const { profile } = useAuth();
   return (
     <PublicLayout>
       <PublicPageHead
@@ -42,14 +44,17 @@ export function Tutorials() {
 
         <div className="mt-12 flex flex-col items-center justify-between gap-5 rounded-2xl bg-landing-emerald px-6 py-7 text-center sm:flex-row sm:text-left lg:px-8">
           <p className="max-w-xl text-sm leading-relaxed text-white/85">
-            The quickest way to learn it is to record one week of your own figures.
+            {profile
+              ? "Until the videos are ready, the in-app tour walks through the same screens on your own dashboard."
+              : "The quickest way to learn it is to record one week of your own figures."}
           </p>
           <div className="mt-4">
+            {/* Signed in, an account invitation is no use; the tour is the walkthrough that exists today. */}
             <Link
-              to="/register"
+              to={profile ? "/dashboard?tour=start" : "/register"}
               className="tap inline-flex whitespace-nowrap rounded-full bg-landing-gold px-5 text-sm font-bold text-landing-emerald transition hover:brightness-95"
             >
-              Create a free account
+              {profile ? "Take the in-app tour" : "Create a free account"}
             </Link>
           </div>
         </div>

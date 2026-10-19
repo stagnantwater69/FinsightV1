@@ -9,6 +9,7 @@ import { AskFinSightButton, useAskFinSight } from "../components/AskFinSightButt
 import { SkeletonDashboard } from "../components/Skeleton";
 import { EmptyState, SetupProgress } from "../components/EmptyState";
 import { GreetingHero } from "../components/GreetingHero";
+import { TourInvite } from "../components/tour/TourInvite";
 import { ButtonLink } from "../components/Button";
 import { formatMoney } from "../components/Money";
 import { DonutChart } from "../components/DonutChart";
@@ -279,6 +280,9 @@ function DashboardPage() {
         </p>
       ) : null}
 
+      {/* First so it is seen above the fold on a phone; renders nothing unless offered. */}
+      <TourInvite />
+
       {/* The recovery panel shares this tour marker when the greeting is disabled.
           A business is required because the greeting waits for its summary. */}
       {selected && preferences.showDashboardMascotMessage ? (
@@ -319,6 +323,11 @@ function DashboardPage() {
             { label: "Set up your business profile", done: !!selected, href: "/onboarding" },
             { label: "Add an expense category", done: categories.length > 0, href: selected ? "/categories" : undefined },
             { label: "Record your first expense or sale", done: hasAnyRecords, href: selected ? "/records/expenses/new" : undefined },
+            {
+              label: "Set your expected monthly expenses",
+              done: !recoveryNeedsSetup,
+              href: selected ? `/business-profiles/${selected.id}/edit` : undefined,
+            },
           ]}
         />
       ) : null}

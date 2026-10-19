@@ -1,12 +1,10 @@
 import type { ComponentType } from "react";
 import {
-  IconBell,
-  IconCamera,
   IconDashboard,
   IconInsights,
+  IconPlus,
   IconRecords,
   IconSparkle,
-  IconUpload,
 } from "../icons";
 
 /**
@@ -50,8 +48,6 @@ export interface TourStep {
     /** Prop badge composited onto the pose — the situation-specific part. */
     prop?: TourIcon;
   };
-  /** The AppShell holds its Quick-add menu open while this step is active. */
-  requiresQuickAdd?: boolean;
   /** Completion card renders these instead of Back/Next. */
   finalActions?: { label: string; to?: string }[];
 }
@@ -71,56 +67,46 @@ const POSES = {
 export const TOUR_STEPS: TourStep[] = [
   {
     id: "welcome",
-    title: "Welcome to FinSight!",
-    body: "Let's take a quick tour and see how FinSight helps you understand your business finances.",
+    title: "Welcome to FinSight",
+    body: "A short look at where to record your sales and expenses, and where to read what they add up to. You can leave at any point.",
     mascot: { pose: POSES.greeting },
   },
   {
     id: "business-profile",
-    title: "Your business profile",
-    body: "View or switch between your business profiles. Each business keeps its own records, categories, and financial insights.",
+    title: "Your business",
+    body: "Everything you record belongs to the business shown here. Running more than one? Switch here. Each business keeps its own records and categories.",
     target: '[data-tour="business-profile"]',
     placement: "right",
     mascot: { pose: POSES.clipboard },
   },
   {
     id: "dashboard",
-    title: "Dashboard overview",
-    body: "See your available funds, sales, expenses, recent activity, and important financial changes in one place.",
+    title: "Your dashboard",
+    body: "Once you have recorded some sales and expenses, this shows your available funds, how the month is going, and what changed. It stays mostly empty until then.",
     target: '[data-tour="dashboard-summary"]',
     placement: "bottom",
     mascot: { pose: POSES.pointing, prop: IconDashboard },
   },
   {
+    id: "quick-add",
+    title: "Quick add",
+    body: "Add a sale or an expense, scan a receipt photo, or import records from a CSV file. It is on every page.",
+    target: '[data-tour="quick-add"]',
+    placement: "bottom",
+    mascot: { pose: POSES.clipboard, prop: IconPlus },
+  },
+  {
     id: "records",
     title: "Records",
-    body: "Record and manage your sales and expenses. You can review, edit, delete, and resolve possible duplicate records here.",
+    body: "Every sale and expense ends up here. Edit or delete entries, and check the ones FinSight flags as possible duplicates.",
     target: '[data-tour="records"]',
     placement: "right",
     mascot: { pose: POSES.notepad, prop: IconRecords },
   },
   {
-    id: "receipt-scanner",
-    title: "Receipt scanner",
-    body: "Upload or capture a receipt and let FinSight extract important information such as the vendor, date, and amount.",
-    target: '[data-tour="scan-receipt"]',
-    placement: "left",
-    mascot: { pose: POSES.clipboard, prop: IconCamera },
-    requiresQuickAdd: true,
-  },
-  {
-    id: "csv-import",
-    title: "Import a spreadsheet",
-    body: "Already have records in a spreadsheet? Import them in batches and review the information before saving.",
-    target: '[data-tour="import-csv"]',
-    placement: "left",
-    mascot: { pose: POSES.greeting, prop: IconUpload },
-    requiresQuickAdd: true,
-  },
-  {
     id: "insights",
-    title: "Analytics & recovery insights",
-    body: "Understand your spending patterns, financial performance, and how long it may take your business to recover important expenses.",
+    title: "Insights",
+    body: "See where your money goes by category, catch unusual expenses, and track how far this month's sales are toward covering your expected costs.",
     target: '[data-tour="insights"]',
     placement: "right",
     mascot: { pose: POSES.pointing, prop: IconInsights },
@@ -128,28 +114,22 @@ export const TOUR_STEPS: TourStep[] = [
   {
     id: "ask-finsight",
     title: "Ask FinSight",
-    body: "Ask questions about your finances in plain language and receive explanations based on your business records.",
+    body: "Ask about your numbers in your own words, like \"What did I spend the most on this month?\" Answers come from your own records.",
     target: '[data-tour="ask-finsight"]',
     placement: "top",
     mascot: { pose: POSES.askFin, prop: IconSparkle },
   },
   {
-    id: "notifications",
-    title: "Notifications",
-    body: "FinSight notifies you about possible duplicates, unusual expenses, and records that may need your attention.",
-    target: '[data-tour="notifications"]',
-    placement: "bottom",
-    mascot: { pose: POSES.pointing, prop: IconBell },
-  },
-  {
     id: "complete",
-    title: "You're ready to use FinSight!",
-    body: "Start by adding a transaction, scanning a receipt, or importing your existing records.",
+    title: "That's the tour",
+    body: "Start with something you have on hand, like today's sales or the receipt from a recent purchase.",
     mascot: { pose: POSES.celebrating },
+    // Three, so they fit one row on a phone. A scanned receipt becomes an
+    // expense, and Quick add covers expenses without one.
     finalActions: [
-      { label: "Finish Tour" },
-      { label: "Add a Transaction", to: "/records/expenses/new" },
-      { label: "Scan a Receipt", to: "/records/receipts/new" },
+      { label: "Add a sale", to: "/records/sales/new" },
+      { label: "Scan a receipt", to: "/records/receipts/new" },
+      { label: "Done" },
     ],
   },
 ];

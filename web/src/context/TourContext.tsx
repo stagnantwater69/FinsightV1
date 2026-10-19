@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "./AuthContext";
 import { useBusinessProfiles } from "./BusinessProfileContext";
 import { preferencePatch, readTour, reconcile, writeTour, type StoredTour } from "../lib/tourStorage";
@@ -31,6 +31,14 @@ import { TourOverlay } from "../components/tour/TourOverlay";
  *     fetch settles. Polled briefly; if the dashboard never loads (API
  *     down), the poll gives up silently and the app is NOT blocked.
  *
+ * ASKED FIRST, NOT IMPOSED. An account that has never toured is not dropped
+ * into the overlay straight after the setup wizard; the gate above raises
+ * `offered` instead, and the dashboard shows a small invitation. Accepting
+ * starts at step 0; "Not now" records `skipped`, exactly like skipping the
+ * tour itself. A tour already in progress, a restart from the account menu,
+ * and the "always show" preference all still open the overlay directly:
+ * each of those is the owner having already said yes.
+ *
  * A tour interrupted mid-way (navigation, reload, closed laptop) is stored
  * as in_progress with its step, and resumes from that step on the next
  * dashboard visit. Completed/skipped are terminal until "Restart product
@@ -38,9 +46,15 @@ import { TourOverlay } from "../components/tour/TourOverlay";
  */
 
 export interface TourContextValue {
-  /** id of the active step, or null — the shell reads this. */
+  /** id of the active step, or null. */
   activeStepId: string | null;
   active: boolean;
+  /** The dashboard should show the "take the tour?" invitation. */
+  offered: boolean;
+  /** Accept the invitation: open the tour at step 0. */
+  accept: () => void;
+  /** Decline the invitation. Stored as `skipped`; the menu can still restart it. */
+  decline: () => void;
   /**
    * Whether there is anything worth touring yet.
    *
@@ -79,8 +93,16 @@ export function TourProvider({ children }: { children: ReactNode }) {
   const { profile, preferences, preferencesLoaded, updatePreferences } = useAuth();
   const { selected, loading } = useBusinessProfiles();
   const location = useLocation();
+  const navigate = useNavigate();
 
   const [active, setActive] = useState(false);
+  const [offered, setOffered] = useState(false);
+  /*
+   * Bumped by `restart` so the auto-start effect runs again even when nothing
+   * else it watches changed. The account menu got that for free from its
+   * navigation to /dashboard; the `?tour=start` link is already there.
+   */
+  const [rearm, setRearm] = useState(0);
   const [stepIndex, setStepIndex] = useState(0);
   /*
    * Mirrored into state so the settings toggle re-renders from the same
@@ -149,6 +171,7 @@ export function TourProvider({ children }: { children: ReactNode }) {
     setReconciled(false);
     // A different owner on the same machine has not dismissed anything.
     dismissedThisSession.current = false;
+    setOffered(false);
     setAlwaysShowState(userId == null ? false : readTour(userId).alwaysShow === true);
   }, [userId]);
 
@@ -220,7 +243,7 @@ export function TourProvider({ children }: { children: ReactNode }) {
   // coupling to Dashboard's internals; gives up after ~20s without blocking
   // anything.
   useEffect(() => {
-    if (active || !onDashboard || userId == null || loading || !selected || !reconciled) return;
+    if (active || offered || !onDashboard || userId == null || loading || !selected || !reconciled) return;
     // Dismissed already on this visit — including when `alwaysShow` is on,
     // which is the whole point of the latch.
     if (dismissedThisSession.current) return;
@@ -237,22 +260,39 @@ export function TourProvider({ children }: { children: ReactNode }) {
         return;
       }
       window.clearInterval(timer);
+      // Read again: a restart may have rewritten it while this poll waited.
+      const current = readTour(userId);
+      if (current.status !== "in_progress" && !current.alwaysShow) {
+        setOffered(true);
+        return;
+      }
       setStepIndex(
-        stored.status === "in_progress"
-          ? Math.min(stored.step ?? 0, TOUR_STEPS.length - 1)
+        current.status === "in_progress"
+          ? Math.min(current.step ?? 0, TOUR_STEPS.length - 1)
           : 0,
       );
       setActive(true);
     }, 400);
     return () => window.clearInterval(timer);
-  }, [active, onDashboard, userId, loading, selected, reconciled]);
+  }, [active, offered, onDashboard, userId, loading, selected, reconciled, rearm]);
 
   function stop(status: "completed" | "skipped") {
     if (userId != null) persist({ status, step: stepIndex, alwaysShow });
     // Before the state change, so the auto-start effect sees the latch on the
     // very re-render `setActive(false)` triggers.
     dismissedThisSession.current = true;
+    setOffered(false);
     setActive(false);
+  }
+
+  function accept() {
+    setOffered(false);
+    setStepIndex(0);
+    setActive(true);
+  }
+
+  function decline() {
+    stop("skipped");
   }
 
   function restart() {
@@ -275,6 +315,8 @@ export function TourProvider({ children }: { children: ReactNode }) {
     if (userId != null) persist({ status: "in_progress", step: 0, alwaysShow });
     // Asking for the tour back is the one thing that clears the latch.
     dismissedThisSession.current = false;
+    setOffered(false);
+    setRearm((n) => n + 1);
     setStepIndex(0);
     // On the dashboard the auto-start effect would race the loaded marker;
     // activate directly when it is already there. Elsewhere the caller
@@ -286,9 +328,27 @@ export function TourProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  /*
+   * `/dashboard?tour=start` is the tour's one link-shaped entry point, used by
+   * the public Tutorials page, which sits outside this provider and so cannot
+   * call `restart` itself. It waits for the same readiness `restart` needs,
+   * then drops the parameter so a reload does not start the tour over again.
+   */
+  const restartRef = useRef(restart);
+  restartRef.current = restart;
+  const wantsStart = onDashboard && new URLSearchParams(location.search).get("tour") === "start";
+  useEffect(() => {
+    if (!wantsStart || !reconciled || loading || !selected) return;
+    restartRef.current();
+    navigate("/dashboard", { replace: true });
+  }, [wantsStart, reconciled, loading, selected, navigate]);
+
   const value: TourContextValue = {
     activeStepId: active ? (TOUR_STEPS[stepIndex]?.id ?? null) : null,
     active,
+    offered: offered && !active,
+    accept,
+    decline,
     available: !!selected,
     stepIndex,
     setStepIndex,
