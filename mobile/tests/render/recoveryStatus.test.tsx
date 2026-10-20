@@ -570,7 +570,6 @@ describe('RecoveryTargetScreen — reporting period', () => {
 
 it('binds the recovery-target view to its own reporting period scope', async () => {
   const { RecoveryTargetScreen: TypedRecoveryTargetScreen } = await import('../../src/screens/RecoveryTargetScreen');
-  const RecoveryTargetScreen = testScreen(TypedRecoveryTargetScreen);
   const wrapper = TypedRecoveryTargetScreen({} as never);
   expect(wrapper.props.scope).toBe('recovery-target');
   expect(typeof wrapper.props.children.type).toBe('function');
