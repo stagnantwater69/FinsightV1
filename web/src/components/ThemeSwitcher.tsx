@@ -52,7 +52,7 @@ export function ThemeSwitcher({ compact = false }: { compact?: boolean }) {
           role="menu"
           aria-label="Theme"
           onKeyDown={onMenuKeys}
-          className="absolute right-0 top-full z-50 mt-2 w-60 animate-pop-down rounded-2xl border border-paper-200 bg-paper p-1.5 shadow-lg"
+          className="scroll-slim absolute right-0 top-full z-50 mt-2 max-h-[calc(100dvh-8rem-env(safe-area-inset-bottom))] w-60 max-w-[calc(100vw-1.5rem)] animate-pop-down overflow-y-auto overscroll-contain rounded-2xl border border-paper-200 bg-paper p-1.5 shadow-lg lg:max-h-[calc(100dvh-5rem)]"
         >
           <div className="px-2.5 pb-1.5 pt-2 text-[10.5px] font-bold uppercase tracking-[0.12em] text-ink-500">
             Appearance

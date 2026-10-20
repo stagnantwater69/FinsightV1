@@ -366,5 +366,14 @@ export default {
       },
     },
   },
-  plugins: [],
+  plugins: [
+    // `short:` — a phone turned sideways: wide enough for `sm`/`md` layouts,
+    // but only ~320-430px tall. Sticky bars that are fine in portrait would
+    // take a third of the screen there, so `short:` lets them scroll away.
+    // A variant rather than a `screens` entry on purpose: a raw media query in
+    // `screens` makes Tailwind drop every `max-*` variant (`max-sm:` etc.).
+    ({ addVariant }) => {
+      addVariant("short", "@media (orientation: landscape) and (max-height: 500px)");
+    },
+  ],
 };

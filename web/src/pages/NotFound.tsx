@@ -37,7 +37,7 @@ export function NotFound() {
       // No AppShell: this route sits outside the authenticated layout, so it
       // paints its own page background rather than inheriting one — and
       // supplies its own <main> landmark, which AppShell would otherwise do.
-      className="relative flex min-h-screen flex-col items-center justify-center bg-paper-50 px-4 py-6 text-center sm:px-6"
+      className="relative flex min-h-dvh flex-col items-center justify-center bg-paper-50 px-4 py-6 text-center sm:px-6"
     >
       <span className="flex items-center gap-2.5">
         <img src="/newmascotlogo.png" alt="" aria-hidden className="h-10 w-10 rounded-lg object-contain" />

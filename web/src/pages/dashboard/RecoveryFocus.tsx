@@ -61,7 +61,7 @@ export function RecoveryFocus({ summary, needsSetup, action }: {
       ) : (
         <>
           <div className="mt-5 flex items-center justify-between gap-5">
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0 flex-1 [container-type:inline-size]">
               {incomplete ? (
                 <p className="flex items-start gap-2 text-sm font-medium text-ink-800">
                   <AlertTriangle aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-tone-accent" />
@@ -76,7 +76,7 @@ export function RecoveryFocus({ summary, needsSetup, action }: {
                 <p className="text-lg font-semibold text-ink-900">No target set for today</p>
               ) : todayRemaining > 0 ? (
                 <>
-                  <p className="figure break-all text-[2rem] font-semibold leading-none tracking-[-0.02em] text-ink-900">{formatMoney(todayRemaining)}</p>
+                  <p className="figure text-[clamp(1.375rem,13cqi,2rem)] font-semibold leading-none tracking-[-0.02em] text-ink-900">{formatMoney(todayRemaining)}</p>
                   <p className="mt-1.5 text-sm text-ink-600">more in sales to reach today’s target</p>
                 </>
               ) : (
@@ -98,9 +98,9 @@ export function RecoveryFocus({ summary, needsSetup, action }: {
                     }}
                   />
                 </div>
-                <dl className="mt-2 flex items-start justify-between gap-4">
-                  <div><dt className="text-[11px] text-ink-500">Sales recorded today</dt><dd className="figure mt-0.5 break-all text-sm font-semibold text-ink-900">{formatMoney(recovery.todaysSales)}</dd></div>
-                  <div className="text-right"><dt className="text-[11px] text-ink-500">Today’s sales target</dt><dd className="figure mt-0.5 break-all text-sm font-semibold text-ink-900">{formatMoney(recovery.todaysTarget)}</dd></div>
+                <dl className="mt-2 flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+                  <div><dt className="text-[11px] text-ink-500">Sales recorded today</dt><dd className="figure mt-0.5 whitespace-nowrap text-sm font-semibold text-ink-900">{formatMoney(recovery.todaysSales)}</dd></div>
+                  <div className="text-right"><dt className="text-[11px] text-ink-500">Today’s sales target</dt><dd className="figure mt-0.5 whitespace-nowrap text-sm font-semibold text-ink-900">{formatMoney(recovery.todaysTarget)}</dd></div>
                 </dl>
               </div>
             </div>
@@ -110,16 +110,19 @@ export function RecoveryFocus({ summary, needsSetup, action }: {
             </div> : null}
           </div>
 
-          <dl className="mt-5 grid grid-cols-3 divide-x divide-paper-200 rounded-xl bg-paper-50 py-3 ring-1 ring-paper-200">
-            <div className="min-w-0 px-3">
+          {/* Three across once each cell can hold a full "PHP 100,000"; below
+              that the cells stack as label/value rows instead of truncating
+              the amount to "PHP 42,…". */}
+          <dl className="mt-5 grid grid-cols-1 divide-y divide-paper-200 rounded-xl bg-paper-50 py-1 ring-1 ring-paper-200 min-[440px]:grid-cols-3 min-[440px]:divide-x min-[440px]:divide-y-0 min-[440px]:py-3">
+            <div className="flex min-w-0 items-center justify-between gap-3 px-3 py-2 min-[440px]:block min-[440px]:py-0">
               <dt className="flex items-center gap-1 text-[11px] text-ink-600"><CalendarDays aria-hidden className="h-3 w-3" />This month</dt>
               <dd className="figure mt-0.5 truncate text-sm font-semibold text-ink-900">{formatMoney(recovery.salesThisMonth)}</dd>
             </div>
-            <div className="min-w-0 px-3">
+            <div className="flex min-w-0 items-center justify-between gap-3 px-3 py-2 min-[440px]:block min-[440px]:py-0">
               <dt className="flex items-center gap-1 text-[11px] text-ink-600"><Gauge aria-hidden className="h-3 w-3" />Daily target</dt>
               <dd className="figure mt-0.5 truncate text-sm font-semibold text-tone-accent">{covered ? "Covered" : formatMoney(recovery.adjustedDailyTarget)}</dd>
             </div>
-            <div className="min-w-0 px-3">
+            <div className="flex min-w-0 items-center justify-between gap-3 px-3 py-2 min-[440px]:block min-[440px]:py-0">
               <dt className="flex items-center gap-1 text-[11px] text-ink-600"><Clock aria-hidden className="h-3 w-3" />Days left</dt>
               <dd className="figure mt-0.5 truncate text-sm font-semibold text-ink-900">{recovery.remainingOperatingDaysIsApproximated ? "≈ " : ""}{recovery.remainingOperatingDays ?? "—"}</dd>
             </div>

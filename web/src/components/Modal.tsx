@@ -62,13 +62,18 @@ export function Modal({
       onClick={(e) => {
         if (e.target === dialogRef.current) onClose();
       }}
-      className={`modal-dialog rounded-2xl border border-paper-200 bg-paper p-0 text-ink-900 shadow-lg ${
+      // `open:flex`, never plain `flex`: a display value on the closed dialog
+      // would override the browser's `display: none` and show it. As a column
+      // capped at the dynamic viewport height, the title bar and Close button
+      // stay put while only the body scrolls, which matters on a phone held
+      // sideways where the whole dialog is ~300px tall.
+      className={`modal-dialog max-h-[calc(100dvh-2rem)] flex-col overflow-hidden rounded-2xl border border-paper-200 bg-paper p-0 text-ink-900 shadow-lg open:flex ${
         size === "wide"
           ? "w-[min(48rem,calc(100vw-2rem))]"
           : "w-[min(32rem,calc(100vw-2rem))]"
       }`}
     >
-      <div className="flex items-center justify-between gap-3 border-b border-paper-200 px-5 py-4">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-paper-200 px-5 py-4 short:py-2">
         <h2
           id={titleId}
           className="font-display text-base font-semibold text-ink-900"
@@ -84,15 +89,7 @@ export function Modal({
           ×
         </button>
       </div>
-      <div
-        className={
-          size === "wide"
-            ? "p-5"
-            : "scroll-slim max-h-[75vh] overflow-y-auto p-5"
-        }
-      >
-        {children}
-      </div>
+      <div className="scroll-slim min-h-0 flex-1 overflow-y-auto p-5">{children}</div>
     </dialog>
   );
 }

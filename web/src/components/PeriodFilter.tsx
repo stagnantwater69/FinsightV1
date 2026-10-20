@@ -175,7 +175,7 @@ export function PeriodFilter({
           role="listbox"
           aria-label="Months with records"
           onKeyDown={onGridKeys}
-          className="scroll-slim absolute right-0 top-full z-50 mt-2 max-h-[22rem] w-[19rem] max-w-[calc(100vw-2rem)] animate-pop-down overflow-y-auto rounded-2xl border border-paper-200 bg-paper p-2 shadow-lg"
+          className="scroll-slim absolute right-0 top-full z-50 mt-2 max-h-[min(22rem,calc(100dvh-9rem))] w-[19rem] max-w-[calc(100vw-2rem)] animate-pop-down overflow-y-auto rounded-2xl border border-paper-200 bg-paper p-2 shadow-lg"
         >
           {years.map((year, yearIndex) => (
             <div key={year} role="group" aria-label={year} className="pb-1">

@@ -71,6 +71,10 @@ const KPI_WASH: Record<KpiTone, string> = {
   danger: "from-tint-danger/70",
   neutral: "from-tint-neutral/70",
 };
+// The headline amount scales with its own cell (the cell is an inline-size
+// container), so "+PHP 1,128,300" fits a 2-up phone tile without breaking the
+// number apart. It can still wrap at the space after "PHP", never mid-digits.
+const KPI_FIGURE = "figure mt-1 text-[clamp(1rem,12cqi,1.75rem)] font-semibold leading-tight tracking-[-0.02em]";
 const KPI_MARK: Record<KpiTone, string> = {
   brand: "text-tone-brand",
   info: "text-tone-info",
@@ -109,7 +113,7 @@ function KpiCell({
     changeLabel = `${magnitude} ${up ? "increase" : "decrease"}`;
   }
   return (
-    <div className={`relative isolate min-w-0 overflow-hidden bg-gradient-to-b ${KPI_WASH[tone]} to-paper to-70% p-4 sm:p-5 ${className}`}>
+    <div className={`relative isolate min-w-0 overflow-hidden bg-gradient-to-b ${KPI_WASH[tone]} to-paper to-70% p-4 [container-type:inline-size] sm:p-5 ${className}`}>
       <Icon
         aria-hidden="true"
         focusable="false"
@@ -121,7 +125,7 @@ function KpiCell({
         <IconTile icon={Icon} size="sm" />
       </div>
       <p
-        className={`figure mt-1 break-all text-xl font-semibold leading-tight tracking-[-0.02em] sm:text-[1.75rem] ${
+        className={`${KPI_FIGURE} ${
           valueTone === "danger" ? "text-tone-danger" : valueTone === "brand" ? "text-tone-brand" : "text-ink-900"
         }`}
       >
@@ -416,7 +420,7 @@ function DashboardPage() {
             className="grid grid-cols-1 overflow-hidden rounded-xl border border-paper-200 bg-paper min-[360px]:grid-cols-2 xl:grid-cols-4"
           >
             <h2 className="sr-only">Key figures</h2>
-            <div className="relative isolate min-w-0 overflow-hidden border-b border-paper-200 bg-gradient-to-b from-tint-brand/70 to-paper to-70% p-4 min-[360px]:border-r sm:p-5 xl:border-b-0">
+            <div className="relative isolate min-w-0 overflow-hidden border-b border-paper-200 bg-gradient-to-b from-tint-brand/70 to-paper to-70% p-4 [container-type:inline-size] min-[360px]:border-r sm:p-5 xl:border-b-0">
               <Wallet
                 aria-hidden="true"
                 focusable="false"
@@ -429,7 +433,7 @@ function DashboardPage() {
                 </p>
                 <IconTile icon={Wallet} size="sm" />
               </div>
-              <p className="figure mt-1 break-all text-xl font-semibold leading-tight tracking-[-0.02em] text-ink-900 sm:text-[1.75rem]">
+              <p className={`${KPI_FIGURE} text-ink-900`}>
                 {formatMoney(summary.overview.availableFunds)}
               </p>
               <p className="mt-1.5 text-xs leading-relaxed text-ink-500">{fundsCalculation ? "Starting balance + confirmed records" : "From your business profile"}</p>
@@ -582,9 +586,9 @@ function DashboardPage() {
                 <table className="w-full table-fixed border-collapse text-left text-sm">
                   <caption className="sr-only">Most recent records, {periodCaption}.</caption>
                   <colgroup>
-                    <col className="w-[4rem] sm:w-24" />
+                    <col className="w-[3.5rem] sm:w-24" />
                     <col />
-                    <col className="w-[6rem] sm:w-36" />
+                    <col className="w-[7rem] sm:w-36" />
                   </colgroup>
                   <thead>
                     <tr className="border-y border-paper-200 bg-paper-50 text-[11px] uppercase tracking-[0.06em] text-ink-500">
@@ -602,7 +606,7 @@ function DashboardPage() {
                         <td className="px-2 py-2 sm:px-3">
                           <div className="flex min-w-0 items-center gap-2.5">
                             <IconTile size="sm" icon={r.type === "sales" ? ArrowDownLeft : Receipt} />
-                            <Link to={`/records/${r.type === "sales" ? "sales" : "expenses"}/${r.id}/edit`} className="tap-inline break-words link-action">{r.description}</Link>
+                            <Link to={`/records/${r.type === "sales" ? "sales" : "expenses"}/${r.id}/edit`} className="tap-inline link-action [overflow-wrap:anywhere]">{r.description}</Link>
                           </div>
                           <p className="truncate pl-[2.375rem] text-xs text-ink-500">
                             {r.type === "sales"
@@ -616,7 +620,7 @@ function DashboardPage() {
                             </div>
                           ) : null}
                         </td>
-                        <td className={`figure break-all px-3 py-2.5 text-right text-xs font-semibold sm:px-5 sm:text-sm ${r.type === "sales" ? "text-tone-brand" : "text-ink-900"}`}>
+                        <td className={`figure whitespace-nowrap px-3 py-2.5 text-right text-xs font-semibold sm:px-5 sm:text-sm ${r.type === "sales" ? "text-tone-brand" : "text-ink-900"}`}>
                           <span className="sr-only">{r.type === "sales" ? "Sale of " : "Expense of "}</span>
                           {r.type === "sales" ? "+" : "−"}
                           {formatMoney(r.amount)}

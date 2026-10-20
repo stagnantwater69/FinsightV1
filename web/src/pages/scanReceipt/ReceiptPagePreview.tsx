@@ -480,7 +480,7 @@ export function ReceiptPagePreview({
             role="region"
             tabIndex={0}
             aria-label={`Scrollable ${variantLabel.toLowerCase()}, receipt ${pageLabel.toLowerCase()}`}
-            className="scroll-slim max-h-[70vh] min-h-52 w-full touch-auto overflow-auto rounded-xl border border-paper-200 bg-paper-100 p-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
+            className="scroll-slim max-h-[70dvh] min-h-52 w-full touch-auto overflow-auto rounded-xl border border-paper-200 bg-paper-100 p-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
           >
             <ReceiptImageCanvas
               url={selectedUrl}
@@ -546,7 +546,7 @@ export function ReceiptPagePreview({
           onClick={(event) => {
             if (event.target === event.currentTarget) zoomRef.current?.close();
           }}
-          className="confirm-dialog max-h-[92vh] w-[min(60rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-paper-200 bg-paper p-3"
+          className="confirm-dialog max-h-[92dvh] w-[min(60rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-paper-200 bg-paper p-3"
           aria-label={`Enlarged ${variantLabel.toLowerCase()}, receipt ${pageLabel.toLowerCase()}`}
         >
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -591,7 +591,7 @@ export function ReceiptPagePreview({
             role="region"
             tabIndex={0}
             aria-label={`Scrollable enlarged ${variantLabel.toLowerCase()}, receipt ${pageLabel.toLowerCase()}`}
-            className="scroll-slim max-h-[calc(92vh-5.5rem)] min-h-52 touch-auto overflow-auto rounded-xl bg-paper-100 p-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
+            className="scroll-slim max-h-[calc(92dvh-5.5rem)] min-h-52 touch-auto overflow-auto rounded-xl bg-paper-100 p-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
           >
             <ReceiptImageCanvas
               url={selectedUrl}

@@ -1877,7 +1877,7 @@ function RecoveryHero({
       </div>
 
       {!period.isComplete && period.status !== "needs_setup" ? (
-        <dl className="relative mt-6 grid grid-cols-3 divide-x divide-white/10 rounded-xl bg-white/[0.06] py-3 ring-1 ring-white/10">
+        <dl className="relative mt-6 grid grid-cols-1 divide-y divide-white/10 rounded-xl bg-white/[0.06] py-1 ring-1 ring-white/10 min-[440px]:grid-cols-3 min-[440px]:divide-x min-[440px]:divide-y-0 min-[440px]:py-3">
           {[
             { label: "Recorded", value: formatMoney(period.sales) },
             { label: "Still needed", value: formatMoney(period.remainingTarget) },
@@ -1889,7 +1889,7 @@ function RecoveryHero({
               ),
             },
           ].map((item) => (
-            <div key={item.label} className="min-w-0 px-3 sm:px-4">
+            <div key={item.label} className="flex min-w-0 items-center justify-between gap-3 px-3 py-2 min-[440px]:block min-[440px]:py-0 sm:px-4">
               <dt className="text-[11px] font-medium text-brand-200">{item.label}</dt>
               <dd className="figure mt-0.5 truncate text-sm font-semibold text-white sm:text-base">
                 {item.value}
