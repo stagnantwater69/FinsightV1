@@ -92,6 +92,10 @@ export function useTourOptional() {
 export function TourProvider({ children }: { children: ReactNode }) {
   const { profile, preferences, preferencesLoaded, updatePreferences } = useAuth();
   const { selected, loading } = useBusinessProfiles();
+  // The effects below only ask whether a business is selected. Depending on
+  // the object would re-run them whenever its identity changes, and the
+  // `?tour=start` one restarts the tour each time it runs.
+  const hasSelected = !!selected;
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -243,7 +247,7 @@ export function TourProvider({ children }: { children: ReactNode }) {
   // coupling to Dashboard's internals; gives up after ~20s without blocking
   // anything.
   useEffect(() => {
-    if (active || offered || !onDashboard || userId == null || loading || !selected || !reconciled) return;
+    if (active || offered || !onDashboard || userId == null || loading || !hasSelected || !reconciled) return;
     // Dismissed already on this visit — including when `alwaysShow` is on,
     // which is the whole point of the latch.
     if (dismissedThisSession.current) return;
@@ -274,7 +278,7 @@ export function TourProvider({ children }: { children: ReactNode }) {
       setActive(true);
     }, 400);
     return () => window.clearInterval(timer);
-  }, [active, offered, onDashboard, userId, loading, selected, reconciled, rearm]);
+  }, [active, offered, onDashboard, userId, loading, hasSelected, reconciled, rearm]);
 
   function stop(status: "completed" | "skipped") {
     if (userId != null) persist({ status, step: stepIndex, alwaysShow });
@@ -338,10 +342,10 @@ export function TourProvider({ children }: { children: ReactNode }) {
   restartRef.current = restart;
   const wantsStart = onDashboard && new URLSearchParams(location.search).get("tour") === "start";
   useEffect(() => {
-    if (!wantsStart || !reconciled || loading || !selected) return;
+    if (!wantsStart || !reconciled || loading || !hasSelected) return;
     restartRef.current();
     navigate("/dashboard", { replace: true });
-  }, [wantsStart, reconciled, loading, selected, navigate]);
+  }, [wantsStart, reconciled, loading, hasSelected, navigate]);
 
   const value: TourContextValue = {
     activeStepId: active ? (TOUR_STEPS[stepIndex]?.id ?? null) : null,
