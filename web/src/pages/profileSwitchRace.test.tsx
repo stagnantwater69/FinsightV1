@@ -100,7 +100,6 @@ vi.mock("../context/BusinessProfileContext", () => ({
   useBusinessProfiles: () => ({ selected: selectedProfile, profiles: [profileA, profileB], loading: false }),
 }));
 vi.mock("../context/AuthContext", () => ({
-  useAuthOptional: () => null,
   useAuth: () => ({ profile: { id: 1, firstName: "Ken" }, preferences: {
     showDashboardMascotMessage: false, tourStatus: null, tourStep: null, tourAlwaysShow: false,
   } }),

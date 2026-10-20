@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { useAuthOptional } from "../context/AuthContext";
+import { useAuthOptional } from "../context/authContextCore";
 import { dismissTip, isNewAccount, readDismissedTips, type PageTipId } from "../lib/pageTips";
 import { Button } from "./Button";
 import { TourMascot } from "./tour/TourMascot";

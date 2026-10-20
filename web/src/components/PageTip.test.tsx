@@ -6,7 +6,7 @@ import { readDismissedTips } from "../lib/pageTips";
 
 let createdAt = new Date().toISOString();
 
-vi.mock("../context/AuthContext", () => ({
+vi.mock("../context/authContextCore", () => ({
   useAuthOptional: () => ({ profile: { id: 7, createdAt } }),
 }));
 

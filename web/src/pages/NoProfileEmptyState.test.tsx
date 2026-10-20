@@ -62,7 +62,6 @@ vi.mock("../context/ExpenseCategoryContext", () => ({
 }));
 
 vi.mock("../context/AuthContext", () => ({
-  useAuthOptional: () => null,
   useAuth: () => ({
     profile: { id: 1, firstName: "Ana" },
     preferences: { showDashboardMascotMessage: true },
