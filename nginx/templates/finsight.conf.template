@@ -1,0 +1,113 @@
+# ---------------------------------------------------------------------------
+# Production edge for a single VM (docker-compose.prod.yml). TLS terminates
+# here with a Let's Encrypt certificate; port 80 serves only the ACME
+# challenge and a redirect.
+#
+# The nginx image renders this into /etc/nginx/conf.d/ at start, replacing
+# ${DOMAIN} and ${HSTS_MAX_AGE} from the container environment. Only variables
+# that are set are replaced, so nginx's own $host, $uri and friends pass
+# through untouched. It is included inside the stock http block, which is why
+# there is no http or events wrapper here.
+#
+# The upload limits and timeouts mirror nginx/nginx.conf; see the comments
+# there for how they are derived. CI checks that the two agree.
+# ---------------------------------------------------------------------------
+
+client_max_body_size 81m;
+proxy_request_buffering off;
+proxy_connect_timeout 10s;
+proxy_send_timeout    300s;
+proxy_read_timeout    300s;
+client_body_timeout   300s;
+
+gzip on;
+gzip_types application/json application/javascript text/css text/plain image/svg+xml;
+gzip_min_length 1024;
+
+server_tokens off;
+
+# The API sets its own Content-Security-Policy through helmet. nginx's own
+# error pages (a 413, a 502 while the backend restarts) get a deny-all one.
+map $upstream_http_content_security_policy $finsight_error_csp {
+  default "";
+  "" "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'";
+}
+
+upstream finsight_backend {
+  server backend:4000;
+  keepalive 16;
+}
+
+server {
+  listen 80;
+  server_name ${DOMAIN};
+
+  location /.well-known/acme-challenge/ {
+    root /var/www/certbot;
+  }
+
+  location / {
+    return 301 https://$host$request_uri;
+  }
+}
+
+server {
+  listen 443 ssl;
+  http2 on;
+  server_name ${DOMAIN};
+
+  ssl_certificate     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
+
+  # TLS 1.2 stays because Android below 10 does not negotiate 1.3.
+  ssl_protocols TLSv1.2 TLSv1.3;
+  ssl_prefer_server_ciphers off;
+  ssl_session_cache shared:SSL:10m;
+  ssl_session_timeout 1d;
+
+  # Browsers remember this for as long as they were last told, so it starts
+  # at a day (HSTS_MAX_AGE in the root .env). Raise it to 63072000 once HTTPS
+  # has been working for a while.
+  add_header Strict-Transport-Security "max-age=${HSTS_MAX_AGE}" always;
+  add_header X-Content-Type-Options nosniff always;
+  add_header X-Frame-Options DENY always;
+  add_header Referrer-Policy no-referrer always;
+
+  root /usr/share/nginx/html;
+
+  location /api/ {
+    proxy_pass http://finsight_backend;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    # add_header here replaces the server-level set rather than adding to
+    # it, so all of them are restated alongside the CSP.
+    add_header Strict-Transport-Security "max-age=${HSTS_MAX_AGE}" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy no-referrer always;
+    add_header Content-Security-Policy $finsight_error_csp always;
+  }
+
+  # Vite fingerprints everything under /assets/, so a file there never
+  # changes under the same name. `expires` sets Cache-Control without an
+  # add_header, so the security headers above still apply.
+  location /assets/ {
+    expires 1y;
+    try_files $uri =404;
+  }
+
+  # index.html names the current asset files, so it must never be cached.
+  location = /index.html {
+    expires -1;
+  }
+
+  # A single-page app: unknown paths such as /records load index.html.
+  location / {
+    try_files $uri $uri/ /index.html;
+  }
+}
