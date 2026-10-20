@@ -146,7 +146,7 @@ export function SectionHead({
  * contrast.
  */
 export const CTA_PRIMARY =
-  "inline-flex min-h-tap items-center justify-center gap-2 rounded-full bg-landing-gold px-6 py-3 font-landing-sans text-[15px] font-bold text-landing-charcoal shadow-sm transition duration-150 ease-shell hover:-translate-y-0.5 hover:bg-accent-300 hover:shadow-md active:translate-y-0 active:bg-accent-500";
+  "inline-flex min-h-tap items-center justify-center gap-2 rounded-full bg-landing-gold px-6 py-3 font-landing-sans text-[15px] font-bold text-landing-emerald shadow-sm transition duration-150 ease-shell hover:-translate-y-0.5 hover:bg-accent-300 hover:shadow-md active:translate-y-0 active:bg-accent-500";
 
 export const CTA_SECONDARY =
   "inline-flex min-h-tap items-center justify-center gap-2 rounded-full border border-landing-mint-light bg-landing-surface px-6 py-3 font-landing-sans text-[15px] font-semibold text-landing-charcoal transition duration-150 ease-shell hover:-translate-y-0.5 hover:border-landing-green hover:bg-landing-mint-pale active:translate-y-0 active:bg-landing-mint-light";

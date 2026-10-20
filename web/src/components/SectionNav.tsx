@@ -43,7 +43,7 @@ export function SectionNav({
       // frosted background DataTable's own sticky header already uses, so
       // scrolled content passes cleanly underneath instead of showing
       // through.
-      className="scroll-slim sticky top-[var(--topbar-h)] z-10 -mx-2 overflow-x-auto bg-paper/95 px-2 py-2 backdrop-blur"
+      className="scroll-slim sticky top-[var(--topbar-h)] z-10 short:top-0 -mx-2 overflow-x-auto bg-paper/95 px-2 py-2 backdrop-blur"
     >
       <div className="inline-flex min-w-max items-center rounded-2xl bg-paper p-1 ring-1 ring-paper-200">
         <span className="flex h-9 shrink-0 items-center gap-2 px-3 text-xs font-semibold text-ink-600">

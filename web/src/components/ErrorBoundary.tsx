@@ -45,7 +45,7 @@ export class ErrorBoundary extends Component<Props, State> {
     if (!error) return this.props.children;
 
     return (
-      <div className="flex min-h-screen items-center justify-center bg-paper-50 p-6">
+      <div className="flex min-h-dvh items-center justify-center bg-paper-50 p-6">
         <div className="w-full max-w-lg rounded-2xl border border-paper-200 bg-paper p-6">
           <h1 className="text-lg font-semibold text-ink-900">Something broke on this page</h1>
           <p className="mt-2 text-sm text-ink-600">

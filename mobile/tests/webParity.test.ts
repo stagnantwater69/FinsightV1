@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import { BAND_COPY, confidenceBand, findingSignalStrength, scanConfidenceBand } from "../src/lib/confidenceBands";
 import { feedbackActions } from "../src/lib/findingFeedback";
 import { groupConversations } from "../src/lib/conversationGroups";
-import { TOUR_STEPS } from "../src/components/tour/steps";
 import { shouldStartTour } from "../src/lib/tourGating";
 import {
   BAND_TONE,
@@ -303,73 +302,15 @@ describe("receipt confidence bands match web", () => {
 });
 
 /**
- * The product tour must teach the same app on both clients.
+ * The product tour's start gate must match web's.
  *
- * WHY THIS BELONGS IN THE PARITY FILE: the tour is the one surface that makes
- * promises ABOUT the product, in sentences, to someone who has just arrived.
- * Two clients describing the same feature differently — or one client quietly
- * dropping a step because the phone build lacks the feature — is the same
- * class of defect this file was written for, and it is invisible until
- * somebody reads both tours side by side.
- *
- * The step CONTENT is compared literally; the TARGETS deliberately are not.
- * Web points at CSS selectors in a sidebar, the app points at registry keys on
- * a tab bar — the same feature reached differently, which is exactly the kind
- * of difference COVERED above already allows for routes.
+ * The tours themselves differ by design: each client has its own steps, order
+ * and wording, so their content is not compared. What must stay the same is
+ * when a tour is allowed to start.
  */
-const WEB_TOUR_STEPS = join(__dirname, "..", "..", "web", "src", "components", "tour", "steps.tsx");
 const WEB_TOUR_CONTEXT = join(__dirname, "..", "..", "web", "src", "context", "TourContext.tsx");
 
-/**
- * THE SECOND DELIBERATE DIVERGENCE (the first is the always-show preference,
- * pinned at the bottom of this file).
- *
- * The phone teaches two actions inside the "+" menu that web's sidebar
- * Quick-add does not need explained: web's menu is a labelled list on a screen
- * an owner can read at leisure, the phone's is a ring of unlabelled circles
- * that appears and disappears with the step. Recording money by hand is also
- * the only route in for an owner with no receipt and no spreadsheet.
- *
- * Listed here rather than allowed as "any extra step", so a step that drifts
- * onto one client by accident still fails this file.
- */
-const MOBILE_ONLY_STEPS = ["manual-entry", "sales-reference"];
-
-describe("product tour matches web", () => {
-  it.skipIf(!existsSync(WEB_TOUR_STEPS))("walks web's steps in web's order", async () => {
-    const web = (await import(WEB_TOUR_STEPS)) as typeof import("../../web/src/components/tour/steps");
-    const shared = TOUR_STEPS.map((s) => s.id).filter((id) => !MOBILE_ONLY_STEPS.includes(id));
-    expect(
-      shared,
-      "Every one of web's ten steps names a feature the app has too — see steps.ts for how each target was re-pointed",
-    ).toEqual(web.TOUR_STEPS.map((s) => s.id));
-  });
-
-  it.skipIf(!existsSync(WEB_TOUR_STEPS))("adds only the quick-add steps on top of them", async () => {
-    const web = (await import(WEB_TOUR_STEPS)) as typeof import("../../web/src/components/tour/steps");
-    const webIds = new Set(web.TOUR_STEPS.map((s) => s.id));
-    const extra = TOUR_STEPS.map((s) => s.id).filter((id) => !webIds.has(id));
-    expect(extra, "A step exists on the phone that web has never heard of").toEqual(
-      MOBILE_ONLY_STEPS,
-    );
-    // And they are taught where the divergence is justified: inside the menu.
-    for (const id of MOBILE_ONLY_STEPS) {
-      expect(TOUR_STEPS.find((s) => s.id === id)?.requiresQuickAdd).toBe(true);
-    }
-  });
-
-  it.skipIf(!existsSync(WEB_TOUR_STEPS))("says the same thing on every step", async () => {
-    const web = (await import(WEB_TOUR_STEPS)) as typeof import("../../web/src/components/tour/steps");
-    const drift: string[] = [];
-    for (const step of TOUR_STEPS) {
-      const theirs = web.TOUR_STEPS.find((s) => s.id === step.id);
-      if (!theirs) continue;
-      if (theirs.title !== step.title) drift.push(`${step.id} title: "${step.title}" vs "${theirs.title}"`);
-      if (theirs.body !== step.body) drift.push(`${step.id} body: "${step.body}" vs "${theirs.body}"`);
-    }
-    expect(drift, `The two tours describe the same feature differently:\n${drift.join("\n")}`).toEqual([]);
-  });
-
+describe("product tour start gate matches web", () => {
   /**
    * The gate, compared against web's conditions rather than against its code:
    * web decides inside a React effect that cannot be imported here, so its

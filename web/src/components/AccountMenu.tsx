@@ -97,7 +97,7 @@ export function AccountMenu() {
           </span>
         </span>
         <IconChevronDown
-          className={`h-4 w-4 shrink-0 text-ink-400 transition-transform ${open ? "rotate-180" : ""}`}
+          className={`h-4 w-4 shrink-0 text-ink-400 transition-transform max-[359px]:hidden ${open ? "rotate-180" : ""}`}
         />
         <span className="sr-only">Account menu</span>
       </button>
@@ -106,7 +106,11 @@ export function AccountMenu() {
         <div
           role="dialog"
           aria-label="Account"
-          className="absolute right-0 top-full z-50 mt-2 w-64 max-w-[calc(100vw-1.5rem)] animate-pop-down rounded-2xl border border-paper-200 bg-paper p-1.5 shadow-lg"
+          // Capped to the space between the topbar and the mobile bottom nav,
+          // scrolling inside itself: on a 568px-tall phone (or any phone held
+          // sideways) the full menu is taller than that space, and Log out
+          // ended up hidden behind the bottom nav.
+          className="scroll-slim absolute right-0 top-full z-50 mt-2 max-h-[calc(100dvh-8rem-env(safe-area-inset-bottom))] w-64 max-w-[calc(100vw-1.5rem)] animate-pop-down overflow-y-auto overscroll-contain rounded-2xl border border-paper-200 bg-paper p-1.5 shadow-lg lg:max-h-[calc(100dvh-5rem)]"
         >
           {/* Identity header — confirms WHICH account, which matters as soon
               as someone has a personal and a work login. */}

@@ -139,17 +139,23 @@ afterEach(() => {
 });
 
 describe("ConfirmEmail", () => {
-  it("verifies a signup code before backend approval and session installation", async () => {
+  it.each([
+    ["08 2450", "082450"],
+    ["7532-4744", "75324744"],
+    ["01234 56789", "0123456789"],
+  ])("verifies signup code %s before backend approval and session installation", async (raw, token) => {
     setLinkUrl("");
     apiPost.mockResolvedValue({ data: { message: "Your email is confirmed.", profile: PROFILE, needsOnboarding: true } });
     const user = userEvent.setup();
-    renderConfirm({ email: PROFILE.email, codeSent: true });
-    expect(await screen.findByLabelText(/^email/i)).toHaveValue(PROFILE.email);
+    renderConfirm({ email: ` ${PROFILE.email} `, codeSent: true });
+    expect(await screen.findByText(PROFILE.email)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^email/i)).toBeNull();
     expect(screen.getByRole("button", { name: /resend code in/i })).toBeDisabled();
-    await user.type(screen.getByLabelText(/confirmation code/i), "7532-4744");
+    await user.type(screen.getByLabelText(/confirmation code/i), raw);
+    expect(verifyOtp).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Confirm email" }));
     await waitFor(() => expect(setSession).toHaveBeenCalled());
-    expect(verifyOtp).toHaveBeenCalledWith({ email: PROFILE.email, token: "75324744", type: "email" });
+    expect(verifyOtp).toHaveBeenCalledWith({ email: PROFILE.email, token, type: "email" });
     expect(apiPost).toHaveBeenCalledWith("/auth/confirm-email", null, { headers: { Authorization: `Bearer ${ACCESS_TOKEN}` } });
     expect(apiPost.mock.invocationCallOrder[0]).toBeLessThan(setSession.mock.invocationCallOrder[0]);
     await waitFor(() => expect(disposeIsolatedAuthClient).toHaveBeenCalled());
@@ -267,13 +273,67 @@ describe("ConfirmEmail", () => {
     expect(apiPost).not.toHaveBeenCalled();
   });
 
-  it("shows the verification-code form for a bare visit with no session", async () => {
+  it.each([undefined, { email: "not-an-email" }])("collects email separately when there is no usable recipient: %j", async (state) => {
     setLinkUrl("");
 
-    renderConfirm();
+    renderConfirm(state);
 
-    expect(await screen.findByLabelText(/confirmation code/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/^email/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/confirmation code/i)).toBeNull();
+    expect(screen.getByRole("button", { name: "Send confirmation code" })).toBeInTheDocument();
     expect(setSession).not.toHaveBeenCalled();
+  });
+
+  it("enters the PIN step only after a successful email delivery request", async () => {
+    setLinkUrl("");
+    apiPost.mockResolvedValue({ data: { message: "If eligible, a code is on its way." } });
+    const user = userEvent.setup();
+    renderConfirm();
+    await user.type(await screen.findByLabelText(/^email/i), PROFILE.email);
+    await user.click(screen.getByRole("button", { name: "Send confirmation code" }));
+    expect(await screen.findByLabelText(/confirmation code/i)).toHaveValue("");
+    expect(screen.queryByLabelText(/^email/i)).toBeNull();
+    expect(screen.getByText(PROFILE.email)).toBeInTheDocument();
+    expect(apiPost).toHaveBeenCalledWith("/auth/resend-verification", { email: PROFILE.email, platform: "web" });
+    expect(screen.getByRole("button", { name: /resend code in/i })).toBeDisabled();
+    expect(verifyOtp).not.toHaveBeenCalled();
+  });
+
+  it("keeps failed email delivery on the editable email step", async () => {
+    setLinkUrl("");
+    apiPost.mockRejectedValue(new Error("Try again later."));
+    const user = userEvent.setup();
+    renderConfirm();
+    await user.type(await screen.findByLabelText(/^email/i), PROFILE.email);
+    await user.click(screen.getByRole("button", { name: "Send confirmation code" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Try again later.");
+    expect(screen.getByLabelText(/^email/i)).toHaveValue(PROFILE.email);
+    expect(screen.queryByLabelText(/confirmation code/i)).toBeNull();
+    expect(screen.getByRole("button", { name: "Send confirmation code" })).toBeEnabled();
+    expect(verifyOtp).not.toHaveBeenCalled();
+  });
+
+  it("changes the recipient separately and never reuses the previous code", async () => {
+    setLinkUrl("");
+    apiPost.mockResolvedValue({ data: { message: "If eligible, a code is on its way." } });
+    const user = userEvent.setup();
+    renderConfirm({ email: PROFILE.email });
+    await user.type(await screen.findByLabelText(/confirmation code/i), "082450");
+    await user.click(screen.getByRole("button", { name: "Change email" }));
+    const email = await screen.findByLabelText(/^email/i);
+    expect(email).toHaveValue(PROFILE.email);
+    expect(screen.queryByLabelText(/confirmation code/i)).toBeNull();
+    await user.clear(email);
+    await user.type(email, "next@shop.ph");
+    await user.click(screen.getByRole("button", { name: "Send confirmation code" }));
+    expect(await screen.findByLabelText(/confirmation code/i)).toHaveValue("");
+    expect(screen.getByText("next@shop.ph")).toBeInTheDocument();
+    expect(apiPost).toHaveBeenCalledWith("/auth/resend-verification", { email: "next@shop.ph", platform: "web" });
+    expect(verifyOtp).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Change email" }));
+    expect(screen.getByRole("button", { name: /resend code in/i })).toBeDisabled();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByLabelText(/confirmation code/i)).toBeNull();
   });
 
   it("hands off to the app with an opaque code, never the refresh token", async () => {

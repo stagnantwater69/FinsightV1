@@ -41,10 +41,10 @@ export function UpcomingExpenses({ businessProfileId }: { businessProfileId: num
                   />
                   <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-                    <Link to={`/insights/recurring-schedules/${schedule.id}/edit`} className="tap-inline break-words text-sm link-action">
+                    <Link to={`/insights/recurring-schedules/${schedule.id}/edit`} className="tap-inline text-sm link-action [overflow-wrap:anywhere]">
                       {schedule.label}
                     </Link>
-                    <span className="figure break-all text-sm font-semibold text-ink-900">{formatMoney(schedule.expectedAmount)}</span>
+                    <span className="figure whitespace-nowrap text-sm font-semibold text-ink-900">{formatMoney(schedule.expectedAmount)}</span>
                   </div>
                   <p className={`text-xs ${schedule.dueState === "OVERDUE" ? "text-tone-danger" : "text-ink-500"}`}>
                     {schedule.dueState === "OVERDUE" ? "Past due date" : schedule.dueState === "DUE_SOON" ? "Due soon" : "Scheduled"}

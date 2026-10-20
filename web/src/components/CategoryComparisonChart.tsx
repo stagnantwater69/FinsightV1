@@ -104,7 +104,7 @@ export function CategoryComparisonChart({
               </span>
 
               <span className="flex min-w-0 flex-wrap items-center justify-between gap-2 sm:justify-end">
-                <span className="figure break-all text-[12.5px] font-semibold text-ink-900">{formatMoney(t.current)}</span>
+                <span className="figure whitespace-nowrap text-[12.5px] font-semibold text-ink-900">{formatMoney(t.current)}</span>
                 <span
                   className={`figure inline-flex min-w-[3.25rem] justify-center rounded-md px-1.5 py-0.5 text-[11px] font-semibold ${
                     isUp ? "bg-tint-danger text-tone-danger" : isDown ? "bg-tint-brand text-tone-brand" : "bg-tint-neutral text-tone-neutral"

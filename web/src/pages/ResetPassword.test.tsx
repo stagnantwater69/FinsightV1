@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 
 /**
  * Resetting a password, which is now done by CODE and by nothing else.
@@ -52,14 +52,24 @@ const { apiPost } = vi.hoisted(() => ({ apiPost: vi.fn() }));
 vi.mock("../lib/api", () => ({ api: { post: apiPost }, setSessionExpiredHandler: vi.fn() }));
 
 const { ResetPassword } = await import("./ResetPassword");
+const { RecoverPassword } = await import("./RecoverPassword");
 
 const EMAIL = "owner@example.com";
 const NEW_PASSWORD = "a-long-enough-password";
 
-function renderPage(state?: { email?: string }) {
+function LocationProbe() {
+  const location = useLocation();
+  return <span data-testid="route">{location.pathname}{location.search}</span>;
+}
+
+function renderPage(state: { email?: string; codeSent?: boolean } = { email: EMAIL }) {
   return render(
     <MemoryRouter initialEntries={[{ pathname: "/auth/reset-password", state }]}>
-      <ResetPassword />
+      <Routes>
+        <Route path="/auth/reset-password" element={<ResetPassword />} />
+        <Route path="/recover-password" element={<RecoverPassword />} />
+      </Routes>
+      <LocationProbe />
     </MemoryRouter>
   );
 }
@@ -123,10 +133,11 @@ describe("arriving with nothing in the URL", () => {
    * email." and stop. With no link in the email at all, that would now be a
    * dead end for every single person who reaches this screen.
    */
-  it("is simply the code form", async () => {
+  it("shows only the code field and the recipient on the PIN step", async () => {
     renderPage();
     expect(await screen.findByLabelText(/recovery code/i)).toBeTruthy();
-    expect(screen.getByLabelText(/^email/i)).toBeTruthy();
+    expect(screen.queryByLabelText(/^email/i)).toBeNull();
+    expect(screen.getByText(EMAIL)).toBeInTheDocument();
   });
 
   it("verifies the code and lands on the password form", async () => {
@@ -134,7 +145,6 @@ describe("arriving with nothing in the URL", () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.type(await screen.findByLabelText(/^email/i), EMAIL);
     await user.type(screen.getByLabelText(/recovery code/i), "75324744");
     await user.click(screen.getByRole("button", { name: /continue/i }));
 
@@ -146,17 +156,46 @@ describe("arriving with nothing in the URL", () => {
   });
 
   /** People paste the code as it is grouped in the email. */
-  it("strips spaces and dashes before sending", async () => {
+  it.each([
+    ["08 2450", "082450"],
+    ["0753-2474", "07532474"],
+    ["01234 56789", "0123456789"],
+  ])("submits the complete code %s only after Continue is pressed", async (raw, token) => {
     verifyOtp.mockResolvedValue(sessionResult());
     const user = userEvent.setup();
     renderPage();
 
-    await user.type(await screen.findByLabelText(/^email/i), EMAIL);
-    await user.type(screen.getByLabelText(/recovery code/i), "7532-4744");
+    await user.click(screen.getByLabelText(/recovery code/i));
+    await user.paste(raw);
+    expect(verifyOtp).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: /continue/i }));
 
     await waitFor(() => expect(verifyOtp).toHaveBeenCalled());
-    expect(verifyOtp.mock.calls[0][0].token).toBe("75324744");
+    expect(verifyOtp).toHaveBeenCalledWith({ email: EMAIL, token, type: "recovery" });
+  });
+
+  it("preserves invalid letters so validation cannot silently accept a different code", async () => {
+    const user = userEvent.setup();
+    renderPage({ email: EMAIL });
+    const input = await screen.findByLabelText(/recovery code/i);
+    await user.type(input, "082a450");
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    expect(input).toHaveValue("082a450");
+    expect(input).toHaveAttribute("aria-invalid", "true");
+    expect(input).toHaveAccessibleDescription(/The code is digits only/);
+    expect(verifyOtp).not.toHaveBeenCalled();
+  });
+
+  it("requests another recovery code and disables repeat delivery during the cooldown", async () => {
+    const user = userEvent.setup();
+    renderPage({ email: EMAIL });
+    await user.click(await screen.findByRole("button", { name: "Get another code" }));
+    expect(apiPost).toHaveBeenCalledWith("/auth/recover-password", { email: EMAIL, platform: "web" });
+    const resend = await screen.findByRole("button", { name: /resend code in/i });
+    expect(resend).toBeDisabled();
+    await user.click(resend);
+    expect(apiPost).toHaveBeenCalledTimes(1);
+    expect(verifyOtp).not.toHaveBeenCalled();
   });
 
   /**
@@ -170,7 +209,6 @@ describe("arriving with nothing in the URL", () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.type(await screen.findByLabelText(/^email/i), EMAIL);
     await user.type(screen.getByLabelText(/recovery code/i), "75324744");
     await user.click(screen.getByRole("button", { name: /continue/i }));
 
@@ -180,8 +218,7 @@ describe("arriving with nothing in the URL", () => {
     expect(screen.queryByLabelText(/^new password/i)).toBeNull();
     expect(setSession).not.toHaveBeenCalled();
     expect(updateUser).not.toHaveBeenCalled();
-    // Nothing about the failure names the email address.
-    expect(screen.queryByText(new RegExp(EMAIL, "i"))).toBeNull();
+    expect(screen.getByRole("alert")).not.toHaveTextContent(EMAIL);
   });
 
   /**
@@ -194,7 +231,6 @@ describe("arriving with nothing in the URL", () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.type(await screen.findByLabelText(/^email/i), EMAIL);
     await user.type(screen.getByLabelText(/recovery code/i), "75324744");
     await user.click(screen.getByRole("button", { name: /continue/i }));
 
@@ -224,7 +260,6 @@ describe("arriving with nothing in the URL", () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.type(await screen.findByLabelText(/^email/i), EMAIL);
     await user.type(screen.getByLabelText(/recovery code/i), "75324744");
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.type(await screen.findByLabelText(/^new password/i), NEW_PASSWORD);
@@ -245,7 +280,6 @@ describe("arriving with nothing in the URL", () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.type(await screen.findByLabelText(/^email/i), EMAIL);
     await user.type(screen.getByLabelText(/recovery code/i), "75324744");
     await user.click(screen.getByRole("button", { name: /continue/i }));
     await user.type(await screen.findByLabelText(/^new password/i), NEW_PASSWORD);
@@ -266,16 +300,52 @@ describe("the handover from the request screen", () => {
    * query string, because an address in a URL ends up in history and in the
    * `Referer` of the next request.
    */
-  it("prefills the address it was handed, without putting it in the URL", async () => {
-    renderPage({ email: EMAIL });
+  it("keeps the trimmed recipient read-only and out of the URL", async () => {
+    renderPage({ email: ` ${EMAIL} ` });
 
-    expect(await screen.findByLabelText(/^email/i)).toHaveValue(EMAIL);
+    expect(await screen.findByText(EMAIL)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^email/i)).toBeNull();
+    expect(screen.getByTestId("route")).toHaveTextContent(/^\/auth\/reset-password$/);
     expect(window.location.search).toBe("");
   });
 
-  it("still works when reached directly, with nothing handed over", async () => {
+  it.each([{}, { email: "" }, { email: "not-an-email" }])("collects an address separately when recipient context is missing or invalid: %j", async (state) => {
+    renderPage(state);
+    expect(await screen.findByLabelText(/^email/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/recovery code/i)).toBeNull();
+    expect(screen.getByTestId("route")).toHaveTextContent(/^\/recover-password$/);
+    expect(verifyOtp).not.toHaveBeenCalled();
+  });
+
+  it("changes recipient through the email step and clears the previous code", async () => {
+    const user = userEvent.setup();
     renderPage();
-    expect(await screen.findByLabelText(/^email/i)).toHaveValue("");
+    await user.type(await screen.findByLabelText(/recovery code/i), "082450");
+    await user.click(screen.getByRole("button", { name: "Change email" }));
+    const email = await screen.findByLabelText(/^email/i);
+    expect(email).toHaveValue(EMAIL);
+    expect(screen.queryByLabelText(/recovery code/i)).toBeNull();
+    await user.clear(email);
+    await user.type(email, "next@shop.ph");
+    await user.click(screen.getByRole("button", { name: "Send recovery code" }));
+    await user.click(await screen.findByRole("button", { name: "Enter the code" }));
+    expect(await screen.findByLabelText(/recovery code/i)).toHaveValue("");
+    expect(screen.queryByLabelText(/^email/i)).toBeNull();
+    expect(screen.getByText("next@shop.ph")).toBeInTheDocument();
+    expect(apiPost).toHaveBeenCalledWith("/auth/recover-password", { email: "next@shop.ph", platform: "web" });
+    expect(screen.getByRole("button", { name: /resend code in/i })).toBeDisabled();
+    expect(verifyOtp).not.toHaveBeenCalled();
+  });
+
+  it("keeps the email step available after a failed delivery request", async () => {
+    apiPost.mockRejectedValue(new Error("Try again later."));
+    const user = userEvent.setup();
+    renderPage({});
+    await user.type(await screen.findByLabelText(/^email/i), EMAIL);
+    await user.click(screen.getByRole("button", { name: "Send recovery code" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Try again later.");
+    expect(screen.getByLabelText(/^email/i)).toHaveValue(EMAIL);
+    expect(screen.queryByLabelText(/recovery code/i)).toBeNull();
   });
 });
 
@@ -292,7 +362,6 @@ describe("a code that dies between the two steps", () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.type(await screen.findByLabelText(/^email/i), EMAIL);
     await user.type(screen.getByLabelText(/recovery code/i), "75324744");
     await user.click(screen.getByRole("button", { name: /continue/i }));
 
@@ -302,6 +371,8 @@ describe("a code that dies between the two steps", () => {
 
     expect(await screen.findByText(/that code has expired/i)).toBeTruthy();
     expect(screen.getByLabelText(/recovery code/i)).toBeTruthy();
+    expect(screen.getByText(EMAIL)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^email/i)).toBeNull();
     expect(updateUser).not.toHaveBeenCalled();
   });
 });

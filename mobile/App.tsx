@@ -798,11 +798,11 @@ function AuthStack() {
       <Stack.Screen name="ResetPassword">
         {({ route, navigation }) => (
           <ResetPasswordScreen
-            // Empty when someone reaches this screen directly — the form asks
-            // for the address in that case rather than refusing to open.
+            key={(route.params as { email?: string } | undefined)?.email ?? ""}
             email={(route.params as { email?: string } | undefined)?.email ?? ""}
             onDone={() => navigation.navigate("Login")}
-            onNewCode={() => navigation.navigate("RecoverPassword")}
+            onNewCode={(email) => navigation.popTo("RecoverPassword", { email })}
+            onChangeEmail={(email) => navigation.popTo("RecoverPassword", { email, editEmail: true })}
           />
         )}
       </Stack.Screen>

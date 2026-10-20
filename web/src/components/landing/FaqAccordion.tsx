@@ -1,18 +1,19 @@
 import { useId, useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, ChevronDown } from "lucide-react";
-import { FAQS, LANDING_FAQ_COUNT } from "../../lib/marketingContent";
-import { Card, MEASURE, Rise, SectionHead } from "./grid";
+import { FAQS } from "../../lib/marketingContent";
+import { Card, Eyebrow, MEASURE, Rise } from "./grid";
 
-/**
- * The FAQ: card accordions in two columns on desktop, one open at a time.
- *
- * Height animates via the grid-rows 0fr→1fr trick — pure CSS, no measuring,
- * no layout jump, and with JS animation disabled the content still simply
- * appears (the transition is decoration on top of a working toggle). Each
- * trigger is a real button with aria-expanded/aria-controls, and the answer
- * region points back with aria-labelledby.
- */
+const LANDING_QUESTIONS = [
+  "What is FinSight and who is it for?",
+  "Do I need to know accounting to use it?",
+  "Can I bring in records I already keep in a spreadsheet?",
+  "What if it reads my receipt wrong?",
+  "Is FinSight available on mobile and desktop?",
+  "Does the AI assistant see my records?",
+];
+
+const SHOWN_FAQS = LANDING_QUESTIONS.flatMap((question) => FAQS.filter((faq) => faq.q === question));
 function FaqItem({
   q,
   a,
@@ -40,12 +41,12 @@ function FaqItem({
             aria-expanded={open}
             aria-controls={panelId}
             onClick={onToggle}
-            className="flex min-h-tap w-full items-center justify-between gap-4 px-5 py-4 text-left transition-colors duration-150 hover:bg-landing-mint-pale/50"
+            className="flex min-h-tap w-full items-center justify-between gap-4 px-5 py-3.5 text-left transition-colors duration-150 hover:bg-landing-mint-pale/50 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-4 focus-visible:outline-landing-green"
           >
-            <span className="font-landing-display text-[15px] font-bold leading-snug text-landing-charcoal">{q}</span>
+            <span className="text-[13px] font-bold leading-relaxed text-landing-charcoal">{q}</span>
             <ChevronDown
               aria-hidden
-              className={`h-4 w-4 shrink-0 text-landing-green transition-transform duration-250 ease-shell ${
+              className={`h-4 w-4 shrink-0 text-landing-green transition-transform duration-200 ease-shell motion-reduce:transition-none ${
                 open ? "rotate-180" : ""
               }`}
             />
@@ -55,12 +56,10 @@ function FaqItem({
           id={panelId}
           role="region"
           aria-labelledby={buttonId}
-          className={`grid transition-[grid-template-rows,opacity] duration-250 ease-shell ${
-            open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
-          }`}
+          hidden={!open}
         >
           <div className="overflow-hidden">
-            <p className="px-5 pb-5 text-[14px] leading-relaxed text-landing-muted">{a}</p>
+            <p className="px-5 pb-4 text-sm leading-relaxed text-landing-muted">{a}</p>
           </div>
         </div>
       </Card>
@@ -69,26 +68,22 @@ function FaqItem({
 }
 
 export function FaqAccordion() {
-  const [openQuestion, setOpenQuestion] = useState<string | null>(null);
-  const shown = FAQS.slice(0, LANDING_FAQ_COUNT);
-  // Two source-ordered columns (not CSS columns), so reading order survives.
-  const mid = Math.ceil(shown.length / 2);
-  const columns = [shown.slice(0, mid), shown.slice(mid)];
+  const [openQuestion, setOpenQuestion] = useState<string | null>(SHOWN_FAQS[0]?.q ?? null);
+  const mid = Math.ceil(SHOWN_FAQS.length / 2);
+  const columns = [SHOWN_FAQS.slice(0, mid), SHOWN_FAQS.slice(mid)];
 
   return (
     <section
       id="faq"
       aria-labelledby="faq-title"
-      className="landing-section-gradient-base landing-section-gradient-faq scroll-mt-20 bg-landing-cream"
+      className="scroll-mt-20 bg-landing-cream"
     >
-      <div className={`${MEASURE} py-16 sm:py-24`}>
-        <div className="flex flex-wrap items-end justify-between gap-6">
-          <SectionHead
-            eyebrow="FAQ"
-            id="faq-title"
-            title="Frequently Asked Questions"
-            lede="What FinSight does, what it does not do, and what happens to your records."
-          />
+      <div className={`${MEASURE} pb-8 pt-12 sm:pb-10 sm:pt-14`}>
+        <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
+          <Rise>
+            <Eyebrow>FAQ</Eyebrow>
+            <h2 id="faq-title" className="mt-2 font-landing-display text-[clamp(1.5rem,2.8vw,2rem)] font-extrabold leading-tight tracking-[-0.025em] text-landing-charcoal">Frequently Asked Questions</h2>
+          </Rise>
           <Rise delay={100}>
             <Link
               to="/faqs"
@@ -100,9 +95,9 @@ export function FaqAccordion() {
           </Rise>
         </div>
 
-        <div className="mt-10 grid gap-4 md:grid-cols-2 md:items-start">
+        <div className="mt-5 grid gap-2.5 md:grid-cols-2 md:items-start md:gap-6">
           {columns.map((col, ci) => (
-            <div key={ci} className="grid gap-4">
+            <div key={ci} className="grid gap-2.5">
               {col.map((faq, i) => (
                 <FaqItem
                   key={faq.q}

@@ -24,11 +24,15 @@ import { TourMascot } from "./TourMascot";
  * it moves.
  *
  * MISSING TARGETS NEVER STRAND THE TOUR. A step's target is polled briefly
- * (the two Quick-add steps mount their targets a beat after the shell opens
- * the menu); if it never appears — hidden at this viewport, feature not
+ * (it may mount a beat after the step starts); if it never appears — hidden at this viewport, feature not
  * rendered, markup changed — the step is skipped in the direction of travel.
  * The step counter counts only the steps eligible right now, so a phone user
- * sees "3 of 8", not gaps in "3 of 10".
+ * sees "3 of 6", not gaps in "3 of 8".
+ *
+ * ON PHONES the card is a sheet pinned to a screen edge. The bottom nav and
+ * the Ask FinSight button are themselves pinned to the bottom, so a sheet
+ * there would cover the very thing the spotlight points at. The sheet goes to
+ * the top whenever the target's centre is in the lower half of the screen.
  */
 
 /** First element matching `selector` that actually takes up space. */
@@ -45,10 +49,7 @@ function findVisible(selector: string): HTMLElement | null {
 /** Can this step be shown at the current viewport / DOM state? */
 function isEligible(step: TourStep): boolean {
   if (!step.target) return true; // centered cards
-  // Quick-add items exist only while the menu is open; the shell opens it on
-  // demand, so eligibility is "the trigger exists", not "the item exists".
-  const probe = step.requiresQuickAdd ? '[data-tour="quick-add"]' : step.target;
-  return findVisible(probe) !== null;
+  return findVisible(step.target) !== null;
 }
 
 function eligibleIndexes(): number[] {
@@ -249,9 +250,13 @@ export function TourOverlay() {
   const titleId = "tour-step-title";
   const bodyId = "tour-step-body";
 
-  const tooltipBox = isMobile
-    ? "fixed inset-x-0 bottom-0 rounded-t-2xl border-t border-paper-200 pb-[calc(1rem+env(safe-area-inset-bottom))]"
-    : "w-[21rem] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-paper-200";
+  // Centered cards have no target to avoid, so they keep the bottom sheet.
+  const sheetAtTop = isMobile && !centered && rect !== null && rect.top + rect.height / 2 > window.innerHeight / 2;
+  const tooltipBox = !isMobile
+    ? "w-[21rem] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-paper-200"
+    : sheetAtTop
+      ? "fixed inset-x-0 top-0 rounded-b-2xl border-b border-paper-200 pt-[calc(1rem+env(safe-area-inset-top))]"
+      : "fixed inset-x-0 bottom-0 rounded-t-2xl border-t border-paper-200 pb-[calc(1rem+env(safe-area-inset-bottom))]";
 
   return createPortal(
     <div className="fixed inset-0 z-[200]">
@@ -330,7 +335,7 @@ export function TourOverlay() {
             <div className="mt-3 rounded-xl border border-paper-200 bg-paper-50 p-3">
               <p className="text-[13px] font-semibold text-ink-800">Leave the tour?</p>
               <p className="mt-0.5 text-[12px] text-ink-500">
-                You can replay it anytime from the account menu.
+                You can start it again from the account menu.
               </p>
               <div className="mt-2.5 flex gap-2">
                 <Button size="sm" variant="brand" onClick={() => setConfirmOpen(false)}>
@@ -373,7 +378,7 @@ export function TourOverlay() {
                 onClick={() => tour.stop("skipped")}
                 className="tap-inline ml-1 rounded text-[12px] font-medium text-ink-500 underline-offset-2 transition hover:text-ink-700 hover:underline"
               >
-                Skip Tour
+                Skip tour
               </button>
               <span className="ml-auto flex gap-2">
                 <Button size="sm" variant="secondary" onClick={goBack} disabled={position <= 1}>

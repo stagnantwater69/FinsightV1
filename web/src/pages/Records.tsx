@@ -1174,7 +1174,7 @@ export function Records() {
                       <span aria-hidden>·</span>
                       <Tag kind={r.type === "expense" ? "expense" : "sales"} />
                       {r.type === "expense" ? <span>· {categoryName(r.categoryId)}</span> : null}
-                      {r.vendor ? <span>· {r.vendor}</span> : null}
+                      {r.vendor ? <span className="min-w-0 [overflow-wrap:anywhere]">· {r.vendor}</span> : null}
                     </p>
                   </div>
                   <p

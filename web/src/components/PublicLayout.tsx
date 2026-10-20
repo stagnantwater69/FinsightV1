@@ -273,7 +273,7 @@ export function PublicLayout({ children }: { children: ReactNode }) {
   return (
     <div
       data-theme="classic"
-      className="landing-page-surface flex min-h-screen flex-col bg-landing-cream font-landing-sans text-landing-charcoal antialiased"
+      className="landing-page-surface flex min-h-dvh flex-col bg-landing-cream font-landing-sans text-landing-charcoal antialiased"
     >
       <a
         href="#main-content"
@@ -293,7 +293,7 @@ export function PublicLayout({ children }: { children: ReactNode }) {
         owners are using. Below md the bar is near-opaque instead.
       */}
       <header
-        className={`sticky top-0 z-50 border-b transition-colors duration-200 md:backdrop-blur-md ${
+        className={`sticky top-0 z-50 border-b transition-colors duration-200 md:backdrop-blur-md short:relative ${
           atLandingTop
             ? "landing-header-at-hero border-transparent shadow-none"
             : scrolled
@@ -381,7 +381,7 @@ export function PublicLayout({ children }: { children: ReactNode }) {
         {mobileMenuOpen && (
           <nav
             aria-label="Mobile"
-            className="max-h-[calc(100vh-4rem)] space-y-1 overflow-y-auto border-b border-landing-mint-light bg-landing-cream p-4 shadow-lg md:hidden"
+            className="max-h-[calc(100dvh-4.5rem)] space-y-1 overflow-y-auto border-b border-landing-mint-light bg-landing-cream p-4 shadow-lg md:hidden"
           >
             <Link
               to="/"
@@ -437,22 +437,21 @@ export function PublicLayout({ children }: { children: ReactNode }) {
         {children}
       </main>
 
-      <footer className="landing-section-gradient-raised border-t border-landing-mint-light/70 bg-landing-surface py-12 lg:py-16">
-        <div className="mx-auto max-w-[1240px] px-4 lg:px-6">
-          <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="lg:col-span-2">
-              <Brand size="md" />
-              <p className="mt-4 max-w-sm text-sm leading-relaxed text-landing-muted">
-                FinSight is a financial monitoring and decision-support platform built for small business owners.
-                Turn daily sales and supplier receipts into real-time profit clarity.
+      <footer className="border-t border-landing-mint-light/70 bg-landing-surface py-8">
+        <div className="mx-auto max-w-[1240px] px-5 sm:px-8">
+          <div className="grid gap-x-10 gap-y-7 sm:grid-cols-2 lg:grid-cols-[1.4fr_1fr_1fr]">
+            <div className="sm:col-span-2 lg:col-span-1">
+              <Brand size="sm" />
+              <p className="mt-2 max-w-sm text-sm leading-relaxed text-landing-muted">
+                A clearer view of your business records.
               </p>
             </div>
 
             <div>
-              <h3 className="font-landing-display text-sm font-bold uppercase tracking-wider text-landing-charcoal">
+              <h3 className="text-xs font-bold uppercase tracking-wide text-landing-charcoal">
                 Product & Help
               </h3>
-              <ul className="mt-2 text-sm font-medium">
+              <ul className="mt-1 text-[13px] font-medium">
                 <li>
                   <a
                     href="/#features"
@@ -481,10 +480,10 @@ export function PublicLayout({ children }: { children: ReactNode }) {
             </div>
 
             <div>
-              <h3 className="font-landing-display text-sm font-bold uppercase tracking-wider text-landing-charcoal">
+              <h3 className="text-xs font-bold uppercase tracking-wide text-landing-charcoal">
                 Company & Legal
               </h3>
-              <ul className="mt-2 text-sm font-medium">
+              <ul className="mt-1 text-[13px] font-medium">
                 <li>
                   <Link to="/contact" className="inline-flex min-h-tap items-center rounded text-landing-muted transition-colors hover:text-landing-green">
                     Contact Us
@@ -504,7 +503,7 @@ export function PublicLayout({ children }: { children: ReactNode }) {
             </div>
           </div>
 
-          <div className="mt-12 border-t border-landing-mint-light/70 pt-6 text-center sm:flex sm:items-center sm:justify-between sm:text-left">
+          <div className="mt-6 border-t border-landing-mint-light/70 pt-4 text-center sm:flex sm:items-center sm:justify-between sm:gap-6 sm:text-left">
             <p className="text-xs text-landing-muted">
               © {new Date().getFullYear()} FinSight. A decision support tool — not a substitute for certified
               accounting advice.

@@ -525,10 +525,65 @@ describe('Reset password — the emailed code', () => {
     onNewCode.mockReset();
   });
 
-  it('opens on the code form with the address already filled in', async () => {
-    const queries = await renderReset();
-    expect(queries.getByLabelText('Email')).toHaveProp('value', 'nena@example.com');
+  it('shows the trimmed recipient as text without an email input on the code step', async () => {
+    const queries = await renderReset(' nena@example.com ');
+    expect(queries.getByText('nena@example.com')).toBeTruthy();
+    expect(queries.queryByLabelText('Email')).toBeNull();
     expect(queries.getByLabelText('Recovery code')).toHaveProp('value', '');
+    expect(queries.getByLabelText('Recovery code')).toHaveProp('keyboardType', 'number-pad');
+    expect(queries.getByLabelText('Recovery code')).toHaveProp('textContentType', 'oneTimeCode');
+  });
+
+  it.each(['', 'not-an-email'])('collects email separately when recipient context is %j', async (email) => {
+    const queries = await renderReset(email);
+    expect(queries.getByLabelText('Email')).toHaveProp('value', email);
+    expect(queries.queryByLabelText('Recovery code')).toBeNull();
+    expect(queries.getByRole('button', { name: 'Send code' })).toBeTruthy();
+    expect(verifyOtp).not.toHaveBeenCalled();
+  });
+
+  it('changes the recipient through the email form and clears the old code before verification', async () => {
+    apiPost.mockResolvedValue({});
+    verifyOtp.mockResolvedValueOnce({ data: { session }, error: null });
+    const queries = await renderReset();
+    await fireEvent.changeText(queries.getByLabelText('Recovery code'), '082450');
+    await fireEvent.press(queries.getByRole('button', { name: 'Change email' }));
+    expect(queries.getByLabelText('Email')).toHaveProp('value', 'nena@example.com');
+    expect(queries.queryByLabelText('Recovery code')).toBeNull();
+    await fireEvent.changeText(queries.getByLabelText('Email'), 'next@shop.ph');
+    await fireEvent.press(queries.getByRole('button', { name: 'Send code' }));
+    expect(await queries.findByLabelText('Recovery code')).toHaveProp('value', '');
+    expect(queries.queryByLabelText('Email')).toBeNull();
+    expect(queries.getByText('next@shop.ph')).toBeTruthy();
+    expect(apiPost).toHaveBeenCalledWith('/auth/recover-password', { email: 'next@shop.ph', platform: 'mobile' });
+    expect(verifyOtp).not.toHaveBeenCalled();
+    await fireEvent.changeText(queries.getByLabelText('Recovery code'), '0753-2474');
+    await fireEvent.press(queries.getByRole('button', { name: 'Continue' }));
+    expect(verifyOtp).toHaveBeenCalledWith({ email: 'next@shop.ph', token: '07532474', type: 'recovery' });
+  });
+
+  it('keeps the separate email step available when delivery fails', async () => {
+    apiPost.mockRejectedValue(new Error('Try again later.'));
+    const queries = await renderReset('');
+    await fireEvent.changeText(queries.getByLabelText('Email'), 'nena@example.com');
+    await fireEvent.press(queries.getByRole('button', { name: 'Send code' }));
+    expect(await queries.findByText('Try again later.')).toBeTruthy();
+    expect(queries.getByLabelText('Email')).toHaveProp('value', 'nena@example.com');
+    expect(queries.queryByLabelText('Recovery code')).toBeNull();
+  });
+
+  it('hands the trimmed recipient back to navigation and clears the old code on Change email', async () => {
+    const onChangeEmail = vi.fn();
+    const queries = await render(
+      <ThemeProvider initialMode="light">
+        <ResetPasswordScreen email=" nena@example.com " onDone={onDone} onChangeEmail={onChangeEmail} />
+      </ThemeProvider>,
+    );
+    await fireEvent.changeText(queries.getByLabelText('Recovery code'), '082450');
+    await fireEvent.press(queries.getByRole('button', { name: 'Change email' }));
+    expect(onChangeEmail).toHaveBeenCalledWith('nena@example.com');
+    expect(queries.getByLabelText('Recovery code')).toHaveProp('value', '');
+    expect(verifyOtp).not.toHaveBeenCalled();
   });
 
   it('checks the code\'s shape before spending a round trip on it', async () => {
@@ -537,18 +592,25 @@ describe('Reset password — the emailed code', () => {
     await fireEvent.press(queries.getByRole('button', { name: 'Continue' }));
 
     expect(queries.getByLabelText('Recovery code, The code is digits only.')).toBeTruthy();
+    expect(queries.getByLabelText('Recovery code, The code is digits only.')).toHaveProp('value', '12ab');
     expect(verifyOtp).not.toHaveBeenCalled();
   });
 
-  it('sends the code with the spaces and dashes stripped', async () => {
+  it.each([
+    ['08 2450', '082450'],
+    ['0753-2474', '07532474'],
+    ['01234 56789', '0123456789'],
+  ])('submits the complete code %s only after Continue is pressed', async (raw, token) => {
     verifyOtp.mockResolvedValueOnce({ data: { session }, error: null });
-    const queries = await renderReset();
-    await fireEvent.changeText(queries.getByLabelText('Recovery code'), '7532 4744');
+    const queries = await renderReset(' nena@example.com ');
+    await fireEvent.changeText(queries.getByLabelText('Recovery code'), raw);
+    expect(queries.getByLabelText('Recovery code')).toHaveProp('value', raw);
+    expect(verifyOtp).not.toHaveBeenCalled();
     await fireEvent.press(queries.getByRole('button', { name: 'Continue' }));
 
     expect(verifyOtp).toHaveBeenCalledWith({
       email: 'nena@example.com',
-      token: '75324744',
+      token,
       type: 'recovery',
     });
   });
@@ -678,13 +740,18 @@ describe('Reset password — the emailed code', () => {
     await fireEvent.press(queries.getByRole('button', { name: 'Save new password' }));
 
     expect(await queries.findByLabelText('Recovery code')).toBeTruthy();
+    expect(queries.getByText('nena@example.com')).toBeTruthy();
+    expect(queries.queryByLabelText('Email')).toBeNull();
+    expect(queries.getByLabelText('Recovery code')).toHaveProp('value', '');
     expect(updateUser).not.toHaveBeenCalled();
   });
 
   it('offers a way back to ask for a new code, and to the log-in screen', async () => {
-    const queries = await renderReset();
-    await fireEvent.press(queries.getByRole('button', { name: 'Send a new code' }));
-    expect(onNewCode).toHaveBeenCalled();
+    const queries = await renderReset(' nena@example.com ');
+    await fireEvent.changeText(queries.getByLabelText('Recovery code'), '082450');
+    await fireEvent.press(queries.getByRole('button', { name: 'Get another code' }));
+    expect(onNewCode).toHaveBeenCalledWith('nena@example.com');
+    expect(queries.getByLabelText('Recovery code')).toHaveProp('value', '');
     await fireEvent.press(queries.getByRole('button', { name: 'Back to log in' }));
     expect(onDone).toHaveBeenCalled();
   });

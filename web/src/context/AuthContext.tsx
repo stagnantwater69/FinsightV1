@@ -1,12 +1,13 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { api, setSessionExpiredHandler } from "../lib/api";
 import { beginServerStateSession, endServerStateSession } from "../lib/serverStateCache";
 import { clearChatSendRecovery } from "../lib/chatSendRecovery";
 import { clearReceiptReviewDrafts } from "../lib/receiptReviewDraft";
 import type { LoginInput, Profile, RegisterInput, UpdateProfileInput, UserPreferences } from "../lib/types";
+import { AuthContext } from "./authContextCore";
 
-interface AuthContextValue {
+export interface AuthContextValue {
   profile: Profile | null;
   loading: boolean;
   /** True when the session ended on its own rather than by the user logging out. */
@@ -73,8 +74,6 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   tourStep: null,
   tourAlwaysShow: false,
 };
-
-const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 interface AccountSessionGuard {
   generation: number;

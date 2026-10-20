@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type ComponentType, type ReactNode } from 
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
-import { useTourOptional } from "../context/TourContext";
 import { usePersistentState, useDismiss, useFocusTrap, useMenuKeys } from "../lib/hooks";
 import { AddExpenseModal } from "./AddExpenseModal";
 import { AddSalesModal } from "./AddSalesModal";
@@ -278,24 +277,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [quickAddExpenseOpen, setQuickAddExpenseOpen] = useState(false);
   const [quickAddSalesOpen, setQuickAddSalesOpen] = useState(false);
 
-  /*
-   * The product tour's two Quick-add steps highlight items INSIDE this menu,
-   * so while one of them is active the menu is held open by the tour rather
-   * than by the user. Held open this way it must not behave like a menu the
-   * user opened: useDismiss would close it the moment they click the tour's
-   * own Next button (an "outside" click), and useFocusTrap would fight the
-   * tour tooltip's trap for focus — so both stay wired to `addOpen` only.
-   * When the step moves on, `tourHoldsAddMenu` goes false and the menu
-   * disappears again, restoring exactly the state the user had.
-   */
-  const tour = useTourOptional();
-  const tourHoldsAddMenu =
-    tour?.activeStepId === "receipt-scanner" || tour?.activeStepId === "csv-import";
-  const addMenuVisible = addOpen || tourHoldsAddMenu;
 
   const { ref: addRef, triggerRef: addTriggerRef } = useDismiss(addOpen, () => setAddOpen(false));
   const onMenuKeys = useMenuKeys();
-  const addTrapRef = useFocusTrap<HTMLDivElement>(addOpen && !tourHoldsAddMenu);
+  const addTrapRef = useFocusTrap<HTMLDivElement>(addOpen);
 
   // Once the first page has had its turn, warm the other tabs' code so
   // switching to them shows the page (or its skeleton) without a code wait.
@@ -353,7 +338,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div
-      className="app-canvas min-h-screen bg-paper-50 transition-[grid-template-columns] duration-250 ease-shell lg:grid"
+      className="app-canvas min-h-dvh bg-paper-50 transition-[grid-template-columns] duration-250 ease-shell lg:grid"
       style={{
         // Inline rather than a class pair, because this is the property being
         // transitioned and Tailwind would have to emit two arbitrary values
@@ -635,7 +620,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       {/* ============================= MAIN ============================== */}
       <div className="flex min-w-0 flex-col">
         {/* ---------------------------- TOPBAR ---------------------------- */}
-        <header className="sticky top-0 z-30 border-b border-paper-200 bg-paper/85 backdrop-blur">
+        <header className="sticky top-0 z-30 border-b border-paper-200 bg-paper/85 backdrop-blur short:static">
           {/* Wraps rather than overflows. At a 200px CSS viewport (400px at
               200% browser zoom) the mark, search and action cluster cannot
               share one line, and a fixed height forced the page to scroll
@@ -688,7 +673,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                     type="button"
                     data-tour="quick-add"
                     onClick={() => setAddOpen((v) => !v)}
-                    aria-expanded={addMenuVisible}
+                    aria-expanded={addOpen}
                     aria-haspopup="menu"
                     className="tap gap-1.5 rounded-xl bg-brand-700 px-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-800 sm:px-3"
                   >
@@ -696,7 +681,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                     <span className="hidden sm:inline">Quick add</span>
                     <span className="sr-only sm:hidden">Quick add</span>
                   </button>
-                  {addMenuVisible ? (
+                  {addOpen ? (
                     // useDismiss closes this on Escape and outside click, and
                     // useMenuKeys drives the arrow keys — but neither stopped
                     // Tab from leaving the menu while it stayed open over the
@@ -707,7 +692,11 @@ export function AppShell({ children }: { children: ReactNode }) {
                       role="menu"
                       aria-label="Add a record"
                       onKeyDown={onMenuKeys}
-                      className="absolute right-0 top-full z-50 mt-2 w-[17rem] max-w-[calc(100vw-1.5rem)] animate-pop-down rounded-2xl border border-paper-200 bg-paper p-2 shadow-lg"
+                      // Below `sm` the trigger sits mid-row, so a menu hung
+                      // from its right edge ran off the left of the screen.
+                      // There it spans the viewport under the topbar instead,
+                      // like NotificationBell's panel.
+                      className="scroll-slim absolute right-0 top-full z-50 mt-2 max-h-[calc(100dvh-8rem-env(safe-area-inset-bottom))] w-[17rem] max-w-[calc(100vw-1.5rem)] animate-pop-down max-sm:fixed max-sm:inset-x-3 max-sm:top-[calc(var(--topbar-h)+0.25rem)] max-sm:mt-0 max-sm:w-auto max-sm:max-w-none overflow-y-auto overscroll-contain rounded-2xl border border-paper-200 bg-paper p-2 shadow-lg lg:max-h-[calc(100dvh-5rem)]"
                     >
                       <div className="px-2.5 pb-1.5 pt-2 text-[10.5px] font-bold uppercase tracking-[0.12em] text-ink-500">
                         Add a record
@@ -808,7 +797,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                   to={item.to}
                   data-tour={item.tour}
                   aria-current={active ? "page" : undefined}
-                  className={`flex min-h-tap flex-col items-center justify-center gap-0.5 py-1.5 text-[11px] font-medium transition-colors ${
+                  className={`flex min-h-tap flex-col items-center justify-center gap-0.5 py-1.5 text-[11px] font-medium transition-colors short:flex-row short:gap-1.5 short:py-0 short:text-xs ${
                     active ? "text-brand-700" : "text-ink-500"
                   }`}
                 >

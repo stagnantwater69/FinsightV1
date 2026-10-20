@@ -345,7 +345,7 @@ export function GlobalSearch({ className = "" }: { className?: string }) {
               id={listboxId}
               role="listbox"
               aria-label="Search results"
-              className="scroll-slim max-h-[24rem] overflow-y-auto p-1.5"
+              className="scroll-slim max-h-[min(24rem,calc(100dvh-8rem))] overflow-y-auto p-1.5"
             >
               {results.map((result, index) => {
                 const showSection = index === 0 || results[index - 1]!.section !== result.section;

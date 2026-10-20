@@ -7,8 +7,8 @@ import { POSE_FALLBACK, TOUR_STEPS } from "./steps";
  * of mistake that otherwise only shows up as a tour silently skipping steps.
  */
 describe("tour step configuration", () => {
-  it("has the full ten-step arc, welcome first and completion last", () => {
-    expect(TOUR_STEPS.length).toBe(10);
+  it("has the eight-step arc, welcome first and completion last", () => {
+    expect(TOUR_STEPS.length).toBe(8);
     expect(TOUR_STEPS[0]!.id).toBe("welcome");
     expect(TOUR_STEPS[0]!.target).toBeUndefined();
     expect(TOUR_STEPS.at(-1)!.id).toBe("complete");
@@ -31,11 +31,8 @@ describe("tour step configuration", () => {
     expect(POSE_FALLBACK).toMatch(/^\/mascot\/.+\.webp$/);
   });
 
-  it("marks only targeted steps as needing the Quick-add menu", () => {
-    for (const step of TOUR_STEPS) {
-      if (step.requiresQuickAdd) expect(step.target).toBeTruthy();
-    }
-    const quickAddIds = TOUR_STEPS.filter((s) => s.requiresQuickAdd).map((s) => s.id);
-    expect(quickAddIds).toEqual(["receipt-scanner", "csv-import"]);
+  it("ends with a way to add each kind of first record", () => {
+    const targets = TOUR_STEPS.at(-1)!.finalActions!.map((a) => a.to).filter(Boolean);
+    expect(targets).toEqual(["/records/sales/new", "/records/receipts/new"]);
   });
 });
