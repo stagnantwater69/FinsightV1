@@ -1,0 +1,30 @@
+.landing-mobile-dashboard-preview {
+  display: block;
+  width: 100%;
+  max-width: 390px;
+  padding: 4px;
+  border: 1px solid #71857f;
+  border-radius: 12% / 5.5%;
+  background: #142a23;
+  box-shadow: inset 0 0 0 2px #293d35, 0 14px 28px rgb(4 35 25 / 18%);
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.landing-mobile-dashboard-preview__screen {
+  width: 100%;
+  border-radius: 10.5% / 4.8%;
+  background: #fbfdfc;
+  overflow: hidden;
+}
+
+.landing-mobile-dashboard-preview__screen img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.landing-mobile-dashboard-preview--compact {
+  padding: 2px;
+  box-shadow: inset 0 0 0 1px #293d35, 0 8px 18px rgb(4 35 25 / 16%);
+}

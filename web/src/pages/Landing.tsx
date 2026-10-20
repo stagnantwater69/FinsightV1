@@ -10,26 +10,7 @@ import { SafeguardsGrid } from "../components/landing/SafeguardsGrid";
 import { FaqAccordion } from "../components/landing/FaqAccordion";
 import { ClosingCta } from "../components/landing/ClosingCta";
 
-/**
- * The public landing page — the 2026 redesign: the same emerald/mint/cream
- * card language, now with pill-shaped nav/CTAs, DM Sans/Plus Jakarta Sans
- * type (see `font-landing-sans`/`font-landing-display` in grid.tsx), and an
- * interactive hero demo in place of the old static dashboard mockup.
- *
- * EVERY CLAIM ON THIS PAGE HAS TO BE TRUE. That is not a style note — it is
- * the constraint the section list is built around. Two things have already
- * been deleted from earlier versions of this page for violating it:
- *
- *   - a statistics strip with invented usage numbers ("500+ Local Merchants",
- *     "99.4% OCR Recognition" — contradicted by the project's own tests)
- *   - testimonials from shop owners who were never interviewed
- *
- * The redesign's reference mockup showed "20,000+ small businesses" and
- * "5M+ receipts processed"; those numbers do not exist, so TrustMetrics
- * carries truthful statements in the same layout instead (see the comment
- * there). Product mockups on this page are labelled as example figures, and
- * the privacy section's claims each describe something the code enforces.
- */
+// Marketing previews use illustrative figures, never customer data or usage claims.
 export function Landing() {
   const { hash } = useLocation();
 
@@ -45,28 +26,13 @@ export function Landing() {
 
   return (
     <PublicLayout>
-      {/* Hero: pitch + layered dashboard preview */}
       <HeroSection />
-
-      {/* Trust strip — truthful statements, no invented counts */}
       <TrustMetrics />
-
-      {/* Receipt workflow: snap → extract → recorded */}
       <ProductShowcase />
-
-      {/* Bento feature grid */}
       <BentoGridFeatures />
-
-      {/* Three-step how-it-works with the Financial Trail */}
       <ProcessTimeline />
-
-      {/* Privacy & security safeguards — deep emerald */}
       <SafeguardsGrid />
-
-      {/* FAQ accordion */}
       <FaqAccordion />
-
-      {/* Closing conversion banner */}
       <ClosingCta />
     </PublicLayout>
   );

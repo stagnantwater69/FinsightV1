@@ -1,21 +1,15 @@
 import { Link } from "react-router-dom";
 import { ArrowRight, Check } from "lucide-react";
 import { CTA_PRIMARY, MEASURE, Rise } from "./grid";
+import "./landing-preview.css";
 
-/**
- * The closing conversion banner — the visual end of the Financial Trail.
- * Deep emerald, one gold CTA, and a small phone-and-receipts vignette with a
- * rising chart whose top node is gold. Reassurances stay inside what the
- * product actually promises.
- */
-const REASSURANCES = ["No credit card required", "Works on phone & laptop", "Private storage, expiring links"];
+const REASSURANCES = ["No credit card required", "Works on phone & web"];
 
 export function ClosingCta() {
   return (
-    <section aria-labelledby="cta-title" className={`${MEASURE} pb-16 pt-4 sm:pb-24`}>
+    <section aria-labelledby="cta-title" className={`${MEASURE} pb-12 pt-1 sm:pb-14`}>
       <Rise>
-        <div className="relative overflow-hidden rounded-3xl border border-landing-mint-light bg-landing-mint-pale px-6 py-10 shadow-sm sm:px-10 sm:py-14">
-          {/* faint rising chart across the banner's foot */}
+        <div className="lp-closing-surface relative overflow-hidden rounded-2xl border border-landing-mint-light">
           <svg
             aria-hidden
             viewBox="0 0 400 80"
@@ -23,46 +17,43 @@ export function ClosingCta() {
             className="pointer-events-none absolute inset-x-0 bottom-0 h-20 w-full text-landing-green opacity-[0.14]"
           >
             <path d="M0 70 L60 62 L120 66 L180 48 L240 54 L300 30 L360 36 L400 14" fill="none" stroke="currentColor" strokeWidth="2" />
-            <circle cx="300" cy="30" r="4" fill="#F5AD19" />
-            <circle cx="400" cy="14" r="4" fill="#F5AD19" />
+            <circle cx="300" cy="30" r="3" fill="currentColor" />
+            <circle cx="400" cy="14" r="3" fill="currentColor" />
           </svg>
 
-          <div className="relative grid items-center gap-x-10 gap-y-10 md:grid-cols-12">
-            <div className="hidden md:col-span-3 md:block">
-              {/* Generated on a near-#063F35 ground; the rounded frame makes
-                  the remaining shade difference read as a photo panel. */}
+          <div className="lp-closing-layout relative grid items-center gap-x-6 gap-y-5 md:grid-cols-[0.85fr_1.3fr] lg:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_minmax(15.5rem,0.92fr)] lg:gap-x-16">
+            <figure className="lp-closing-art self-stretch md:row-span-2 lg:row-span-1">
               <img
-                src="/landing/cta-phone.webp"
-                alt=""
-                width={832}
-                height={640}
+                src="/landing/cta-woman-phone.webp"
+                alt="A woman holding a phone displaying the FinSight mobile dashboard."
+                width={1254}
+                height={1254}
                 loading="lazy"
-                className="mx-auto w-full max-w-56 rounded-2xl shadow-lg"
+                decoding="async"
               />
-            </div>
+            </figure>
 
-            <div className="md:col-span-5">
+            <div className="px-6 pt-1 md:col-start-2 md:px-0 md:pr-6 md:pt-7 lg:py-7 lg:pr-0">
               <h2
                 id="cta-title"
-                className="max-w-[20ch] font-landing-display text-[clamp(1.6rem,3.4vw,2.3rem)] font-extrabold leading-[1.12] tracking-[-0.02em] text-landing-charcoal"
+                className="max-w-[29ch] font-landing-display text-[clamp(1.5rem,2.6vw,1.9rem)] font-extrabold leading-[1.13] tracking-[-0.025em] text-landing-charcoal"
               >
                 Start with just one week of sales &amp; receipt records.
               </h2>
-              <p className="mt-4 max-w-[46ch] text-[14.5px] leading-relaxed text-landing-muted">
-                That's usually enough for the recovery meter and AI assistant to start telling you something you
-                didn't already know about your shop's profitability.
+              <p className="mt-3 max-w-[35ch] text-sm leading-relaxed text-landing-muted">
+                Build a clearer picture from the records you already have.
               </p>
             </div>
 
-            <div className="md:col-span-4">
-              <Link to="/register" className={`${CTA_PRIMARY} group w-full sm:w-auto`}>
+            <div className="px-6 pb-7 md:col-start-2 md:pl-0 lg:col-start-3 lg:py-7 lg:pr-6">
+              <Link to="/register" className={`${CTA_PRIMARY} group w-full sm:w-auto lg:whitespace-nowrap`}>
                 Start Tracking Free
                 <ArrowRight className="h-4 w-4 transition-transform duration-150 ease-shell group-hover:translate-x-0.5" aria-hidden />
               </Link>
-              <ul className="mt-6 space-y-2.5">
+              <ul className="mt-4 space-y-2">
                 {REASSURANCES.map((r) => (
                   <li key={r} className="flex items-center gap-2.5 text-[13.5px] font-medium text-landing-muted">
-                    <Check className="h-4 w-4 shrink-0 text-landing-gold" aria-hidden />
+                    <Check className="h-4 w-4 shrink-0 text-landing-green" aria-hidden />
                     {r}
                   </li>
                 ))}
