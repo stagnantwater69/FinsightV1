@@ -36,5 +36,10 @@ export function useCodeResend(endpoint: "/auth/resend-verification" | "/auth/rec
       setSending(false);
     }
   }
-  return { resend, sending, remaining, message, error };
+  function clearFeedback() {
+    setMessage(null);
+    setError(null);
+  }
+
+  return { resend, sending, remaining, message, error, clearFeedback };
 }

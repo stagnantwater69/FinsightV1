@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { AuthLayout } from "../components/AuthLayout";
 import { Button } from "../components/Button";
+import { CodeInput, CodeResend } from "../components/CodeInput";
 import { Field, FormError, TextInput } from "../components/Field";
 import { useAuth } from "../context/AuthContext";
 import { createRecoveryClient, disposeIsolatedAuthClient } from "../lib/supabaseClient";
@@ -9,11 +10,12 @@ import { useCodeResend } from "../hooks/useCodeResend";
 import { api } from "../lib/api";
 import { consumeAuthLink, describeAuthLinkError, type AuthLinkTokens } from "../lib/authLinkTokens";
 import { getErrorMessage } from "../lib/errors";
-import { isValid, validateRecoveryCode, normaliseRecoveryCode, MAX_RECOVERY_CODE_LENGTH, type FieldErrors, type RecoveryCodeField } from "../lib/authValidation";
+import { isPlausibleEmail, isValid, validateRecoverPassword, validateRecoveryCode, normaliseRecoveryCode, type FieldErrors, type RecoveryCodeField } from "../lib/authValidation";
+import { focusFirstInvalidField } from "../lib/formFocus";
 import { isMobileBrowser } from "../lib/mobileBrowser";
 import type { Profile } from "../lib/types";
 
-type State = "checking" | "code" | "confirmed" | "failed";
+type State = "checking" | "email" | "code" | "confirmed" | "failed";
 
 /** Long enough for "you're confirmed" to be read, short enough not to be a wait. */
 const HANDOFF_TO_APP_DELAY_MS = 900;
@@ -26,7 +28,8 @@ export function ConfirmEmail() {
   const { adoptSession, profile, loading } = useAuth();
   const [state, setState] = useState<State>("checking");
   const [message, setMessage] = useState<string>("");
-  const [email, setEmail] = useState(routeState?.email ?? "");
+  const [email, setEmail] = useState(typeof routeState?.email === "string" ? routeState.email.trim() : "");
+  const emailFormRef = useRef<HTMLFormElement>(null);
   const [code, setCode] = useState("");
   const [verifying, setVerifying] = useState(false);
   const [codeError, setCodeError] = useState<string | null>(null);
@@ -76,7 +79,7 @@ export function ConfirmEmail() {
         navigate("/dashboard", { replace: true });
         return;
       }
-      setState("code");
+      setState(isPlausibleEmail(email) ? "code" : "email");
       return;
     }
 
@@ -153,8 +156,29 @@ export function ConfirmEmail() {
     }
   }
 
-  async function resend() {
-    if (await codeDelivery.resend(email)) setState("code");
+  async function sendCode(event: FormEvent) {
+    event.preventDefault();
+    if (codeDelivery.sending || codeDelivery.remaining > 0) return;
+    const invalid = validateRecoverPassword({ email });
+    setCodeFieldErrors(invalid);
+    if (!isValid(invalid)) {
+      focusFirstInvalidField(emailFormRef.current);
+      return;
+    }
+    if (await codeDelivery.resend(email)) {
+      setEmail(email.trim());
+      setCode("");
+      setCodeError(null);
+      setState("code");
+    }
+  }
+
+  function changeEmail() {
+    setCode("");
+    setCodeFieldErrors({});
+    setCodeError(null);
+    codeDelivery.clearFeedback();
+    setState("email");
   }
 
   async function verifyCode(event: FormEvent) {
@@ -200,30 +224,32 @@ export function ConfirmEmail() {
       <AuthLayout title="Confirm your email" subtitle="Enter the code from your FinSight email."
         heroTitle="One more step." heroBody="Confirm that this inbox belongs to you before accessing your business records.">
         <form onSubmit={verifyCode} className="space-y-4" noValidate>
-          <Field label="Email" htmlFor="confirmationEmail" required error={codeFieldErrors.email}>
-            <TextInput id="confirmationEmail" type="email" autoComplete="email" value={email} disabled={verifying}
-              onChange={(event) => { setEmail(event.target.value); setCodeFieldErrors((previous) => ({ ...previous, email: undefined })); setCodeError(null); }} />
-          </Field>
-          <Field label="Confirmation code" htmlFor="confirmationCode" required error={codeFieldErrors.code}
-            hint="Paste or type the numbered code in your email. Each code can be used once.">
-            <TextInput id="confirmationCode" type="text" inputMode="numeric" autoComplete="one-time-code"
-              maxLength={MAX_RECOVERY_CODE_LENGTH + 4} value={code} disabled={verifying}
-              onChange={(event) => { setCode(event.target.value); setCodeFieldErrors((previous) => ({ ...previous, code: undefined })); setCodeError(null); }} />
-          </Field>
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
+            <p className="min-w-0 text-sm text-ink-600">
+              Code for <span className="block break-all font-medium text-ink-900">{email}</span>
+            </p>
+            <button type="button" disabled={verifying || codeDelivery.sending} onClick={changeEmail}
+              className="min-h-tap max-w-full rounded text-sm font-medium text-tone-brand underline underline-offset-2 disabled:cursor-not-allowed disabled:opacity-60">
+              Change email
+            </button>
+          </div>
+          <div>
+            <Field label="Confirmation code" htmlFor="confirmationCode" required error={codeFieldErrors.code}
+              hint="Paste or type the numbered code in your email. Each code can be used once.">
+              <CodeInput id="confirmationCode" value={code} disabled={verifying || codeDelivery.sending}
+                onChange={(event) => { setCode(event.target.value); setCodeFieldErrors((previous) => ({ ...previous, code: undefined })); setCodeError(null); }} />
+            </Field>
+            <CodeResend remaining={codeDelivery.remaining} sending={codeDelivery.sending} disabled={verifying}
+              onResend={() => void codeDelivery.resend(email)} />
+            {codeDelivery.message ? <p className="text-sm text-ink-600" role="status">{codeDelivery.message}</p> : null}
+            {codeDelivery.error ? <FormError>{codeDelivery.error}</FormError> : null}
+          </div>
           {codeError ? <FormError>{codeError}</FormError> : null}
           <Button type="submit" variant="primary" fullWidth disabled={verifying || codeDelivery.sending}>
             {verifying ? "Checking…" : "Confirm email"}
           </Button>
         </form>
-        <div className="mt-4 space-y-3">
-          <Button variant="secondary" fullWidth disabled={verifying || codeDelivery.sending || codeDelivery.remaining > 0}
-            onClick={() => void codeDelivery.resend(email)}>
-            {codeDelivery.sending ? "Sending…" : codeDelivery.remaining > 0 ? `Resend code in ${codeDelivery.remaining}s` : "Send another code"}
-          </Button>
-          {codeDelivery.message ? <p className="text-sm text-ink-600" role="status">{codeDelivery.message}</p> : null}
-          {codeDelivery.error ? <FormError>{codeDelivery.error}</FormError> : null}
-          <p className="text-sm text-ink-500">Use the newest code. If it hasn't arrived, check your spam folder.</p>
-        </div>
+        <p className="mt-4 text-sm text-ink-500">Use the newest code. If it hasn't arrived, check your spam folder.</p>
         <p className="mt-6 text-center text-sm"><Link to="/login" className="tap-inline link-action">Back to log in</Link></p>
       </AuthLayout>
     );
@@ -272,22 +298,26 @@ export function ConfirmEmail() {
 
   return (
     <AuthLayout
-      title="That link didn't work"
-      subtitle="Confirmation links expire, and each one works only once."
-      heroTitle="Let's send another code."
-      heroBody="Confirmation links are short-lived on purpose. Enter the address you registered with and we'll send a code."
+      title={state === "failed" ? "That link didn't work" : "Confirm your email"}
+      subtitle={state === "failed" ? "Confirmation links expire, and each one works only once." : "Enter the email you used to register."}
+      heroTitle="Check your inbox."
+      heroBody="We'll send a confirmation code to the address you registered with. You'll enter the code on the next screen."
     >
-      <p className="text-center text-sm text-ink-600">{message}</p>
-      <div className="mt-6 space-y-4">
-        <Field label="Email" htmlFor="email" required>
-          <TextInput id="email" type="email" autoComplete="email" value={email}
-            onChange={(event) => setEmail(event.target.value)} />
+      {state === "failed" ? <p className="mb-6 text-center text-sm text-ink-600">{message}</p> : null}
+      <form ref={emailFormRef} onSubmit={sendCode} className="space-y-4" noValidate>
+        <Field label="Email" htmlFor="confirmationEmail" required error={codeFieldErrors.email}>
+          <TextInput id="confirmationEmail" type="email" autoComplete="email" value={email} disabled={codeDelivery.sending}
+            onChange={(event) => {
+              setEmail(event.target.value);
+              setCodeFieldErrors({});
+              codeDelivery.clearFeedback();
+            }} />
         </Field>
         {codeDelivery.error ? <FormError>{codeDelivery.error}</FormError> : null}
-        <Button variant="primary" fullWidth disabled={codeDelivery.sending || codeDelivery.remaining > 0} onClick={() => void resend()}>
-          {codeDelivery.sending ? "Sending…" : codeDelivery.remaining > 0 ? `Resend code in ${codeDelivery.remaining}s` : "Send a new code"}
+        <Button type="submit" variant="primary" fullWidth disabled={codeDelivery.sending || codeDelivery.remaining > 0}>
+          {codeDelivery.sending ? "Sending…" : codeDelivery.remaining > 0 ? `Resend code in ${codeDelivery.remaining}s` : state === "failed" ? "Send a new code" : "Send confirmation code"}
         </Button>
-      </div>
+      </form>
       <p className="mt-6 text-center text-sm text-ink-500">
         <Link to="/login" className="tap-inline link-action">
           Back to log in

@@ -4,6 +4,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { StatusBar } from "expo-status-bar";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Button, Callout, Checkbox, ErrorNote, Field, Screen, T } from "../components/ui";
+import { CodeInput } from "../components/CodeInput";
 import { Mascot, type MascotState } from "../components/MascotState";
 import { GoogleSignInButton } from "../components/GoogleSignInButton";
 import { useAuth } from "../context/AuthContext";
@@ -794,11 +795,20 @@ export function RegisterScreen({ navigation }: any) {
   );
 }
 
-export function RecoverPasswordScreen({ navigation }: any) {
+export function RecoverPasswordScreen({ navigation, route, initialEmail = "", onCodeSent, onBack }: {
+  navigation?: {
+    navigate: (name: string, params?: { email: string }) => void;
+    setParams?: (params: { editEmail?: boolean }) => void;
+  };
+  route?: { params?: { email?: string; editEmail?: boolean } };
+  initialEmail?: string;
+  onCodeSent?: (email: string) => void;
+  onBack?: () => void;
+}) {
   const t = useTheme();
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(initialEmail || route?.params?.email || "");
   const [sent, setSent] = useState(false);
-  /** The address the link actually went to, frozen at send time. */
+  /** The destination is frozen at send time, independently of email edits. */
   const [sentTo, setSentTo] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [emailError, setEmailError] = useState<string | null>(null);
@@ -807,6 +817,16 @@ export function RecoverPasswordScreen({ navigation }: any) {
   const emailRef = useRef<TextInput>(null);
   const cooldown = useResendCooldown();
   const focusEmailOnReturn = useRef(false);
+  useEffect(() => {
+    if (!route?.params?.editEmail) return;
+    if (route.params.email !== undefined) setEmail(route.params.email);
+    setEmailError(null);
+    setError(null);
+    focusEmailOnReturn.current = true;
+    setSent(false);
+    emailRef.current?.focus();
+    navigation?.setParams?.({ editEmail: undefined });
+  }, [route?.params?.editEmail, route?.params?.email, navigation]);
   useEffect(() => {
     if (!sent && focusEmailOnReturn.current) {
       focusEmailOnReturn.current = false;
@@ -848,17 +868,10 @@ export function RecoverPasswordScreen({ navigation }: any) {
       setSentTo(email.trim());
       setSent(true);
       cooldown.start();
-      /*
-       * Straight into the code form, with the address already filled in.
-       *
-       * The email carries a CODE and nothing else now — the button that used to
-       * open `finsight://auth/reset-password` has been taken out of the
-       * template, so there is no link left to come back on and "check your
-       * inbox" would be the end of the road rather than the middle of it. The
-       * `sent` state below is still rendered underneath, so backing out of the
-       * code form lands on the resend rather than on an empty form.
-       */
-      navigation.navigate("ResetPassword", { email: email.trim() });
+      // Keep the sent state behind the PIN screen so returning preserves
+      // the resend cooldown; editing the address explicitly reopens the form.
+      if (onCodeSent) onCodeSent(email.trim());
+      else navigation?.navigate("ResetPassword", { email: email.trim() });
     } catch (err) {
       const fromServer = getFieldErrors(err);
       setEmailError(fromServer.email ?? null);
@@ -874,7 +887,7 @@ export function RecoverPasswordScreen({ navigation }: any) {
     <AuthShell
       title={sent ? "Check your email" : "Reset your password"}
       subtitle={sent ? "The code is on its way." : "We'll email you a code to set a new one."}
-      onBack={() => navigation.navigate("Login")}
+      onBack={onBack ?? (() => navigation?.navigate("Login"))}
       showMascot={false}
     >
       {sent ? (
@@ -905,7 +918,10 @@ export function RecoverPasswordScreen({ navigation }: any) {
           <Button
             title="Enter the code"
             variant="primary"
-            onPress={() => navigation.navigate("ResetPassword", { email: sentTo })}
+            onPress={() => {
+              if (onCodeSent) onCodeSent(sentTo);
+              else navigation?.navigate("ResetPassword", { email: sentTo });
+            }}
             style={{ marginTop: space.md }}
           />
           <Button
@@ -984,12 +1000,14 @@ export function ResetPasswordScreen({
   email: sentTo = "",
   onDone,
   onNewCode,
+  onChangeEmail,
 }: {
   /** The address the code was sent to, when we know it. May be empty. */
   email?: string;
   onDone: () => void;
   /** Back to the "email me a code" form. Absent when there is nowhere to go. */
-  onNewCode?: () => void;
+  onNewCode?: (email: string) => void;
+  onChangeEmail?: (email: string) => void;
 }) {
   const t = useTheme();
   /*
@@ -1004,10 +1022,12 @@ export function ResetPasswordScreen({
    * never on screen together, and sharing one `error` would let a failed
    * verification's message survive onto the password step.
    */
-  const [codeForm, setCodeForm] = useState({ email: sentTo, code: "" });
+  const [codeForm, setCodeForm] = useState({ email: sentTo.trim(), code: "" });
+  const [choosingEmail, setChoosingEmail] = useState(false);
   const [codeFieldErrors, setCodeFieldErrors] = useState<FieldErrors<RecoveryCodeField>>({});
   const [codeError, setCodeError] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
+  const [newCodeFocused, setNewCodeFocused] = useState(false);
   const verificationInFlight = useRef(false);
   /** What the verified code bought: the pair the link used to carry. */
   const [tokens, setTokens] = useState<{ accessToken: string; refreshToken: string } | null>(null);
@@ -1020,10 +1040,8 @@ export function ResetPasswordScreen({
   const [done, setDone] = useState(false);
   const [refreshRevocationConfirmed, setRefreshRevocationConfirmed] = useState(true);
 
-  const codeEmailRef = useRef<TextInput>(null);
   const codeRef = useRef<TextInput>(null);
   const codeFieldOrder = [
-    ["email", codeEmailRef],
     ["code", codeRef],
   ] as const satisfies readonly (readonly [RecoveryCodeField, React.RefObject<TextInput | null>])[];
 
@@ -1043,6 +1061,19 @@ export function ResetPasswordScreen({
     setCodeForm((f) => ({ ...f, [k]: v }));
     setCodeFieldErrors((prev) => (prev[k as RecoveryCodeField] ? { ...prev, [k]: undefined } : prev));
   };
+
+  function leaveCodeStep(changeEmail: boolean) {
+    if (verificationInFlight.current) return;
+    setCodeForm((current) => ({ ...current, code: "" }));
+    setCodeFieldErrors({});
+    setCodeError(null);
+    setForm({ newPassword: "", confirmPassword: "" });
+    setFieldErrors({});
+    setError(null);
+    if (changeEmail && onChangeEmail) onChangeEmail(codeForm.email);
+    else if (!changeEmail && onNewCode) onNewCode(codeForm.email);
+    else setChoosingEmail(true);
+  }
 
   /**
    * Exchanges the emailed code for the token pair a link used to hand over.
@@ -1219,6 +1250,21 @@ export function ResetPasswordScreen({
    * with, whether the owner has just arrived or a verified pair has since
    * expired under them.
    */
+  if (!tokens && (choosingEmail || !isValid(validateRecoverPassword({ email: codeForm.email })))) {
+    return (
+      <RecoverPasswordScreen
+        initialEmail={codeForm.email}
+        onBack={onDone}
+        onCodeSent={(email) => {
+          setCodeForm({ email, code: "" });
+          setCodeFieldErrors({});
+          setCodeError(null);
+          setChoosingEmail(false);
+        }}
+      />
+    );
+  }
+
   if (!tokens) {
     return (
       <AuthShell
@@ -1226,25 +1272,13 @@ export function ResetPasswordScreen({
         subtitle="Use the code from your password-reset email."
         showMascot={false}
       >
-        <T style={{ color: t.textSecondary, marginBottom: space.lg }}>
-          {sentTo
-            ? `Your password-reset email — the one on its way to ${sentTo} — has a numbered code in it. Type it here and you can set a new password without leaving the app.`
-            : "Your password-reset email has a numbered code in it. Type it here and you can set a new password without leaving the app."}
-        </T>
-        <Field
-          ref={codeEmailRef}
-          icon="mail-outline"
-          label="Email"
-          value={codeForm.email}
-          onChangeText={setCode("email")}
-          error={codeFieldErrors.email}
-          autoCapitalize="none"
-          keyboardType="email-address"
-          autoComplete="email"
-          returnKeyType="next"
-          submitBehavior="submit"
-          onSubmitEditing={() => codeRef.current?.focus()}
-        />
+        <View style={{ marginBottom: space.lg }}>
+          <T variant="caption" style={{ textAlign: "center" }}>Recovery email</T>
+          <T selectable style={{ textAlign: "center", color: t.textPrimary, fontFamily: font.sansSemibold }}>
+            {codeForm.email}
+          </T>
+          <Button title="Change email" variant="ghost" disabled={verifying} onPress={() => leaveCodeStep(true)} focusRingColor={t.brandText} />
+        </View>
         {/*
           A NUMBER PAD, and the OS's own one-time-code offer.
 
@@ -1262,9 +1296,8 @@ export function ResetPasswordScreen({
           separators are stripped, because the real length is a server setting
           (`MAILER_OTP_LENGTH`) this app does not get to see.
         */}
-        <Field
+        <CodeInput
           ref={codeRef}
-          icon="keypad-outline"
           label="Recovery code"
           value={codeForm.code}
           onChangeText={setCode("code")}
@@ -1280,6 +1313,31 @@ export function ResetPasswordScreen({
             if (!verifying) verify();
           }}
         />
+        <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "center", alignItems: "center", columnGap: space.xs }}>
+          <T variant="caption">Didn't receive it?</T>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Get another code"
+            onPress={() => leaveCodeStep(false)}
+            disabled={verifying}
+            accessibilityState={{ disabled: verifying }}
+            onFocus={() => setNewCodeFocused(true)}
+            onBlur={() => setNewCodeFocused(false)}
+            style={({ pressed }) => ({
+              minHeight: 48,
+              justifyContent: "center",
+              paddingHorizontal: space.xs,
+              borderWidth: 1,
+              borderColor: newCodeFocused ? t.brandText : "transparent",
+              borderRadius: radius.sm,
+              opacity: verifying ? 0.6 : pressed ? 0.65 : 1,
+            })}
+          >
+            <T variant="caption" style={{ color: t.brandText, fontFamily: font.sansSemibold, textDecorationLine: "underline" }}>
+              Get another code
+            </T>
+          </Pressable>
+        </View>
         {codeError ? <ErrorNote>{codeError}</ErrorNote> : null}
         <Button
           title="Continue"
@@ -1288,7 +1346,6 @@ export function ResetPasswordScreen({
           loading={verifying}
           style={{ marginTop: space.md }}
         />
-        {onNewCode ? <Button title="Send a new code" variant="ghost" onPress={onNewCode} /> : null}
         <Button title="Back to log in" variant="ghost" onPress={onDone} />
       </AuthShell>
     );

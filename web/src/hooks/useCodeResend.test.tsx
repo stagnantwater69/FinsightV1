@@ -37,6 +37,18 @@ describe("email code resend", () => {
     expect(result.current.remaining).toBe(0);
   });
 
+  it("clears delivery feedback on a recipient change without bypassing the cooldown", async () => {
+    const { result } = renderHook(() => useCodeResend("/auth/resend-verification"));
+    await act(async () => { await result.current.resend("owner@shop.ph"); });
+    expect(result.current.message).not.toBeNull();
+    act(() => result.current.clearFeedback());
+    expect(result.current.message).toBeNull();
+    expect(result.current.error).toBeNull();
+    expect(result.current.remaining).toBe(60);
+    await act(async () => { await result.current.resend("next@shop.ph"); });
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
   it("re-enables retry after a failed request without claiming a code was sent", async () => {
     post.mockRejectedValueOnce(new Error("Too many requests. Try again later."));
     const { result } = renderHook(() => useCodeResend("/auth/recover-password"));

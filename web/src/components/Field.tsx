@@ -198,7 +198,7 @@ export function Field({
 // The controls
 // ============================================================
 
-export function TextInput({ className = "", ...rest }: InputHTMLAttributes<HTMLInputElement>) {
+export function TextInput({ className = "", ...rest }: InputHTMLAttributes<HTMLInputElement> & { ref?: Ref<HTMLInputElement> }) {
   const { id, describedBy, invalid } = useFieldWiring(rest);
   return (
     <input

@@ -1,18 +1,19 @@
 import { useState, type FormEvent } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { AuthLayout } from "../components/AuthLayout";
 import { Button } from "../components/Button";
-import { Field, FormError, PasswordInput, TextInput } from "../components/Field";
+import { CodeInput, CodeResend } from "../components/CodeInput";
+import { Field, FormError, PasswordInput } from "../components/Field";
 import { api } from "../lib/api";
 import { useCodeResend } from "../hooks/useCodeResend";
 import { createRecoveryClient, disposeIsolatedAuthClient } from "../lib/supabaseClient";
 import { getErrorMessage } from "../lib/errors";
 import {
   isValid,
+  isPlausibleEmail,
   normaliseRecoveryCode,
   validateRecoveryCode,
   validateResetPassword,
-  MAX_RECOVERY_CODE_LENGTH,
   MIN_PASSWORD_LENGTH,
   type FieldErrors,
   type RecoveryCodeField,
@@ -49,7 +50,7 @@ export function ResetPassword() {
    * up in history and in the `Referer` of the next request — and it is empty
    * whenever this screen is reached directly, which is a normal way in.
    */
-  const [codeForm, setCodeForm] = useState({ email: state?.email ?? "", code: "" });
+  const [codeForm, setCodeForm] = useState({ email: typeof state?.email === "string" ? state.email.trim() : "", code: "" });
   const [codeFieldErrors, setCodeFieldErrors] = useState<FieldErrors<RecoveryCodeField>>({});
   const [codeError, setCodeError] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
@@ -120,7 +121,7 @@ export function ResetPassword() {
       });
       // Nothing keeps the typed code around: it is spent, and the token pair
       // in state is what the next step uses.
-      setCodeForm({ email: "", code: "" });
+      setCodeForm((previous) => ({ ...previous, code: "" }));
     } catch {
       // Deliberately not `getErrorMessage(err)`: a transport failure here must
       // not become a channel for the distinction the branch above refuses to
@@ -202,6 +203,7 @@ export function ResetPassword() {
    * for why the last one did not work.
    */
   if (!tokens && !completion) {
+    if (!isPlausibleEmail(codeForm.email)) return <Navigate to="/recover-password" replace />;
     return (
       <AuthLayout
         title="Enter your recovery code"
@@ -211,59 +213,41 @@ export function ResetPassword() {
       >
         {expired ? <p className="mb-6 text-center text-sm text-ink-600">{expired}</p> : null}
         <form onSubmit={handleVerifyCode} className="space-y-4" noValidate>
-          <Field label="Email" htmlFor="recoveryEmail" required error={codeFieldErrors.email}>
-            <TextInput
-              id="recoveryEmail"
-              disabled={verifying || codeDelivery.sending}
-              type="email"
-              autoComplete="email"
-              value={codeForm.email}
-              onChange={(e) => updateCode("email", e.target.value)}
-            />
-          </Field>
-          <Field
-            label="Recovery code"
-            htmlFor="recoveryCode"
-            required
-            hint="The numbered code in your password-reset email."
-            error={codeFieldErrors.code}
-          >
-            <TextInput
-              id="recoveryCode"
-              disabled={verifying || codeDelivery.sending}
-              /*
-               * `text` rather than `number`: a code is a string of digits, not
-               * a quantity, and `number` brings spinners, scroll-to-change and
-               * a browser that will happily eat a leading zero. `inputMode`
-               * gets the numeric keypad on a phone without any of that, and
-               * `one-time-code` lets the OS offer the code it just saw arrive.
-               *
-               * `maxLength` is the top of GoTrue's configurable range plus the
-               * separators people paste — it exists to stop a runaway paste,
-               * not to enforce a length, which `validateRecoveryCode` does
-               * after the separators are stripped.
-               */
-              type="text"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              maxLength={MAX_RECOVERY_CODE_LENGTH + 4}
-              value={codeForm.code}
-              onChange={(e) => updateCode("code", e.target.value)}
-            />
-          </Field>
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
+            <p className="min-w-0 text-sm text-ink-600">
+              Code for <span className="block break-all font-medium text-ink-900">{codeForm.email}</span>
+            </p>
+            <button type="button" disabled={verifying || codeDelivery.sending}
+              onClick={() => navigate("/recover-password", { replace: true, state: { email: codeForm.email } })}
+              className="min-h-tap max-w-full rounded text-sm font-medium text-tone-brand underline underline-offset-2 disabled:cursor-not-allowed disabled:opacity-60">
+              Change email
+            </button>
+          </div>
+          <div>
+            <Field
+              label="Recovery code"
+              htmlFor="recoveryCode"
+              required
+              hint="The numbered code in your password-reset email."
+              error={codeFieldErrors.code}
+            >
+              <CodeInput
+                id="recoveryCode"
+                disabled={verifying || codeDelivery.sending}
+                value={codeForm.code}
+                onChange={(e) => updateCode("code", e.target.value)}
+              />
+            </Field>
+            <CodeResend remaining={codeDelivery.remaining} sending={codeDelivery.sending} disabled={verifying}
+              onResend={() => void codeDelivery.resend(codeForm.email)} />
+            {codeDelivery.message ? <p className="text-sm text-ink-600" role="status">{codeDelivery.message}</p> : null}
+            {codeDelivery.error ? <FormError>{codeDelivery.error}</FormError> : null}
+          </div>
           {codeError ? <FormError>{codeError}</FormError> : null}
           <Button type="submit" variant="primary" fullWidth disabled={verifying || codeDelivery.sending}>
             {verifying ? "Checking…" : "Continue"}
           </Button>
         </form>
-        <div className="mt-4">
-          <Button variant="secondary" fullWidth disabled={verifying || codeDelivery.sending || codeDelivery.remaining > 0}
-            onClick={() => void codeDelivery.resend(codeForm.email)}>
-            {codeDelivery.sending ? "Sending…" : codeDelivery.remaining > 0 ? `Resend code in ${codeDelivery.remaining}s` : "Send another code"}
-          </Button>
-          {codeDelivery.message ? <p className="mt-3 text-sm text-ink-600" role="status">{codeDelivery.message}</p> : null}
-          {codeDelivery.error ? <FormError>{codeDelivery.error}</FormError> : null}
-        </div>
         <p className="mt-6 text-center text-sm text-ink-500">
           <Link to="/login" className="tap-inline link-action">
             Back to log in

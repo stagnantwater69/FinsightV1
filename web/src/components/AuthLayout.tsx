@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { IconChevronLeft } from "./icons";
 import { Wordmark } from "./Wordmark";
 
@@ -89,10 +89,10 @@ function PanelArt() {
 
 function Brand() {
   return (
-    <span className="flex min-w-0 items-center gap-2 min-[240px]:gap-2.5">
+    <Link to="/" aria-label="FinSight home" className="flex min-h-tap w-fit min-w-tap items-center gap-2 rounded-lg min-[240px]:gap-2.5">
       <img src="/newmascotlogo.png" alt="" aria-hidden className="h-8 w-8 shrink-0 rounded-lg object-contain min-[240px]:h-10 min-[240px]:w-10" />
       <Wordmark className="min-w-0 text-[15px] text-tone-brand min-[240px]:text-lg" />
-    </span>
+    </Link>
   );
 }
 
@@ -134,7 +134,7 @@ export function AuthLayout({
     // stored choice survives for the app itself.
     <div
       data-theme="classic"
-      className="relative flex min-h-screen items-center justify-center overflow-hidden bg-paper-50 px-4 py-6 sm:px-6 sm:py-10"
+      className="relative flex min-h-dvh items-center justify-center overflow-hidden bg-paper-50 px-4 py-6 sm:px-6 sm:py-10 short:py-3"
     >
       {/* A soft brand-tinted glow behind the card — the one decorative touch
           borrowed from the landing page's layered backgrounds, kept to brand
@@ -173,13 +173,13 @@ export function AuthLayout({
             share and push the card into a horizontal scroll. */}
         <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           {/* ------------------------------ form ------------------------------ */}
-          <div className="px-5 py-8 sm:px-9 sm:py-10">
+          <div className="px-5 py-8 sm:px-9 sm:py-10 short:py-5">
             {showBack ? (
               <button
                 type="button"
                 onClick={() => navigate("/")}
                 aria-label="Back to home"
-                className={`${backButtonClass} mb-5 flex xl:hidden`}
+                className={`${backButtonClass} mb-5 flex xl:hidden short:mb-3`}
               >
                 <IconChevronLeft className="h-4 w-4" />
               </button>
@@ -190,7 +190,7 @@ export function AuthLayout({
                 (eyebrow, then heading, then body) — each element already sits
                 above the fold, so this is a plain staggered delay rather than
                 a scroll-triggered reveal. */}
-            <div className="mt-7 animate-rise [animation-delay:80ms]">
+            <div className="mt-7 animate-rise [animation-delay:80ms] short:mt-4">
               {eyebrow ? (
                 <span className="block font-display text-[11px] font-bold uppercase tracking-[0.16em] text-brand-600">
                   {eyebrow}
@@ -200,7 +200,7 @@ export function AuthLayout({
               {subtitle ? <p className="mt-1.5 text-sm text-ink-500">{subtitle}</p> : null}
             </div>
 
-            <div className="mt-6 animate-rise [animation-delay:160ms]">{children}</div>
+            <div className="mt-6 animate-rise [animation-delay:160ms] short:mt-4">{children}</div>
           </div>
 
           {/* --------------------------- context panel --------------------------- */}

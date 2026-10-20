@@ -1,5 +1,5 @@
 import { useRef, useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { AuthLayout } from "../components/AuthLayout";
 import { suggestEmail } from "../lib/emailSuggestion";
 import { Button } from "../components/Button";
@@ -11,8 +11,9 @@ import { focusFirstInvalidField } from "../lib/formFocus";
 
 export function RecoverPassword() {
   const navigate = useNavigate();
+  const routeState = useLocation().state as { email?: string } | null;
   const formRef = useRef<HTMLFormElement>(null);
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(typeof routeState?.email === "string" ? routeState.email : "");
   const [error, setError] = useState<string | null>(null);
   const [emailError, setEmailError] = useState<string | null>(null);
   /** A likely domain typo, offered under the field. Never blocks submission. */
