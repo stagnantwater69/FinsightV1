@@ -3,6 +3,7 @@ dist/
 build/
 .env
 .env.local
+.env.production
 .mcp.json
 *.log
 .DS_Store

@@ -1,0 +1,49 @@
+# Production overrides for a single VM. Always used together with the base
+# file, which deploy/deploy.sh does for you:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Compose reads DOMAIN (and optionally HSTS_MAX_AGE) from a .env file next to
+# this one. That file is gitignored and created on the server.
+services:
+  nginx:
+    # The SPA and the proxy in one image; see web/Dockerfile.
+    image: finsight-edge
+    build:
+      context: ./web
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in the .env file next to docker-compose.yml}
+      HSTS_MAX_AGE: ${HSTS_MAX_AGE:-86400}
+    ports: !override
+      - "80:80"
+      - "443:443"
+    volumes: !override
+      - ./nginx/templates:/etc/nginx/templates:ro
+      - letsencrypt:/etc/letsencrypt:ro
+      - certbot-www:/var/www/certbot:ro
+
+  # One-off tools, started only by name (`--profile tools`), never by `up`.
+  certbot:
+    image: certbot/certbot:v3.0.1
+    profiles: ["tools"]
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - certbot-www:/var/www/certbot
+
+  # Migrations run as a separate step, never on container start, so two
+  # replicas can never race each other. The build stage is the image that
+  # still has the Prisma CLI; the runtime image deliberately does not.
+  # `migrate deploy` uses DIRECT_URL, so backend/.env must hold production
+  # values for both DATABASE_URL and DIRECT_URL.
+  migrate:
+    build:
+      context: ./backend
+      target: build
+    profiles: ["tools"]
+    env_file: ./backend/.env
+    command: ["npx", "prisma", "migrate", "deploy"]
+    restart: "no"
+
+volumes:
+  letsencrypt:
+  certbot-www:

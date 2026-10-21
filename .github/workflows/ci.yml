@@ -283,6 +283,10 @@ jobs:
             -v "$(pwd)/nginx/nginx.conf:/etc/nginx/nginx.conf:ro" \
             nginx:1.27-alpine nginx -t
       - run: bash nginx/verify-upload-envelope.sh
+      # The single-VM production overrides parse, and the TLS edge template
+      # renders and passes `nginx -t` with a throwaway certificate.
+      - run: DOMAIN=ci.finsight.test docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet
+      - run: bash nginx/verify-prod-template.sh
       - run: bash backend/docker/verify-receipt-upload-orphan-sweep.sh
       - run: bash backend/docker/verify-api-entrypoint-signal.sh
       - run: bash backend/docker/verify-receipt-worker-readiness.sh
