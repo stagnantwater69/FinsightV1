@@ -319,8 +319,11 @@ describe("CSV automatic review matches web", () => {
     await fireEvent.press(q.getByRole("button", { name: "Save changes" }));
     await fireEvent.press(q.getByRole("button", { name: "Change file" }));
     upload.mockResolvedValueOnce({ ...stage, stagedUploadId: "22345678-1234-4123-8123-123456789abc", columnDetection: { suggestedRecordType: "sales" } });
-    await fireEvent.press(q.getByRole("button", { name: "Choose a CSV file" }));
-    await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+    // A second upload, review and check in a row; on a loaded CI runner that
+    // outlasts waitFor's 1s default, so wait for each step as choose() does.
+    await fireEvent.press(await q.findByRole("button", { name: "Choose a CSV file" }));
+    await waitFor(() => expect(q.getByText("Review your records")).toBeTruthy(), { timeout: 5000 });
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(2), { timeout: 5000 });
     expect(post.mock.calls[1][1]).toMatchObject({ stagedUploadId: "22345678-1234-4123-8123-123456789abc", recordType: "sales", corrections: {} });
     expect(post.mock.calls[1][1].dateFormat).toBeUndefined();
     expect(post.mock.calls[1][1].mixedStrategy).toBeUndefined();
