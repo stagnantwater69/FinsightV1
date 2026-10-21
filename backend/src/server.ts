@@ -3,6 +3,7 @@ import { app } from "./app";
 import { env } from "./config/env";
 import { prisma } from "./config/prisma";
 import { logger } from "./config/logger";
+import { flushErrorReporting, reportError, startErrorReporting } from "./config/errorReporting";
 import { assertMigrationsApplied } from "./config/migrationGuard";
 import { registerProcessFaultHandlers } from "./lib/processFaults";
 import { startDbKeepWarm } from "./lib/dbKeepWarm";
@@ -15,6 +16,8 @@ import { startDbKeepWarm } from "./lib/dbKeepWarm";
  * throughput, and an API restart/deploy no longer interrupts in-flight
  * background jobs (and vice versa).
  */
+
+startErrorReporting("api");
 
 /** Undefined until the startup checks below pass and the port actually opens. */
 let server: Server | undefined;
@@ -40,12 +43,14 @@ async function shutdown(signal: string): Promise<void> {
   // port opened — has no server to close and no connections to drain.
   if (!server) {
     await prisma.$disconnect();
+    await flushErrorReporting();
     logger.info("graceful shutdown complete");
     return process.exit(exitCode);
   }
   server.close(async (error) => {
     await prisma.$disconnect();
     if (error) logger.error({ err: error }, "HTTP server close failed");
+    await flushErrorReporting();
     logger.info("graceful shutdown complete");
     process.exit(error ? 1 : exitCode);
   });
@@ -60,7 +65,8 @@ process.on("SIGINT", () => void shutdown("SIGINT"));
 registerProcessFaultHandlers({
   process,
   logger,
-  onFatal: (kind) => {
+  onFatal: (kind, error) => {
+    reportError(error, { level: "fatal", fault: kind });
     exitCode = 1;
     void shutdown(kind);
   },

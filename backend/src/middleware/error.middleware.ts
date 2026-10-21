@@ -3,6 +3,7 @@ import { ZodError } from "zod";
 import { MulterError } from "multer";
 import { Prisma } from "@prisma/client";
 import { logger } from "../config/logger";
+import { reportError } from "../config/errorReporting";
 import { refundRateLimitsForError } from "./rateLimit.middleware";
 
 /*
@@ -112,6 +113,16 @@ function requestIdOf(req: Request): string | undefined {
   return typeof id === "string" ? id : undefined;
 }
 
+/** The matched route pattern, so a report names /records/:id rather than a record. */
+function routeOf(req: Request): string {
+  const pattern = (req.route as { path?: unknown } | undefined)?.path;
+  return typeof pattern === "string" ? `${req.baseUrl}${pattern}` : `${req.baseUrl}(unmatched)`;
+}
+
+function reportContext(req: Request) {
+  return { requestId: requestIdOf(req), method: req.method, route: routeOf(req) };
+}
+
 export function notFoundHandler(req: Request, res: Response) {
   res.status(404).json({ error: `No route for ${req.method} ${req.path}` });
 }
@@ -212,6 +223,7 @@ export function errorHandler(err: unknown, req: Request, res: Response, next: Ne
       { err, requestId: requestIdOf(req), method: req.method, path: req.path },
       "database unreachable",
     );
+    reportError(err, { ...reportContext(req), level: "warning" });
     res.setHeader("Retry-After", "5");
     return res.status(503).json({
       error:
@@ -242,6 +254,7 @@ export function errorHandler(err: unknown, req: Request, res: Response, next: Ne
       { err, requestId: requestIdOf(req), method: req.method, path: req.path, code: err.code },
       "database schema is behind this build — a migration has not been applied",
     );
+    reportError(err, { ...reportContext(req), level: "fatal" });
     return res.status(503).json({
       error:
         "FinSight is briefly out of step with its database and can't complete that right now. " +
@@ -292,5 +305,6 @@ export function errorHandler(err: unknown, req: Request, res: Response, next: Ne
     { err, requestId: requestIdOf(req), method: req.method, path: req.path },
     "unhandled error",
   );
+  reportError(err, reportContext(req));
   return res.status(500).json({ error: "Internal server error" });
 }

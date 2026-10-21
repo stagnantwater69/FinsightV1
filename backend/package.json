@@ -60,6 +60,7 @@
   },
   "dependencies": {
     "@prisma/client": "^6.1.0",
+    "@sentry/node": "^11.5.0",
     "@supabase/supabase-js": "^2.47.10",
     "cors": "^2.8.5",
     "csv-parse": "^7.0.1",

@@ -47,6 +47,8 @@ const envSchema = z.object({
    * probe nobody uses while developing.
    */
   HEALTH_DETAIL_TOKEN: z.string().optional(),
+  /** Sentry project DSN. Empty means no error reports are sent anywhere. */
+  SENTRY_DSN: z.string().optional().default(""),
   /** Where the web client is served, for auth email redirect links. */
   WEB_APP_URL: z.string().url().default("http://localhost:5173"),
   /** The mobile app's deep-link scheme root, for auth email redirect links. */

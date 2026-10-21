@@ -6,6 +6,7 @@
 import { env } from "./config/env";
 import { prisma } from "./config/prisma";
 import { logger } from "./config/logger";
+import { flushErrorReporting, reportError, startErrorReporting } from "./config/errorReporting";
 import { assertMigrationsApplied } from "./config/migrationGuard";
 import { hasWorkerLane, type WorkerLane } from "./config/workerLanes";
 import { runReceiptWorkerOnce } from "./services/receiptScan/worker";
@@ -32,6 +33,7 @@ import { runCsvSourcePurgeWorkerOnce, sweepRetainedCsvSources } from "./services
 const SELECTED_LANES = env.WORKER_LANES;
 
 logger.info({ pid: process.pid, lanes: SELECTED_LANES }, "FinSight worker starting");
+startErrorReporting("worker");
 
 let shuttingDown = false;
 /**
@@ -258,7 +260,10 @@ function start(): void {
     lanes: SELECTED_LANES,
     idlePollMs: IDLE_POLL_MS,
     runLane,
-    onError: (lane, error) => logger.error({ err: error, lane }, "worker lane pass failed"),
+    onError: (lane, error) => {
+      logger.error({ err: error, lane }, "worker lane pass failed");
+      reportError(error, { lane });
+    },
   });
   laneScheduler.start();
 
@@ -306,6 +311,7 @@ async function shutdown(signal: string): Promise<void> {
     await shutdownOcr().catch((error) => logger.error({ err: error }, "OCR shutdown failed"));
   }
   await prisma.$disconnect();
+  await flushErrorReporting();
   clearTimeout(forceTimer);
   logger.info("worker graceful shutdown complete");
   process.exit(exitCode);
@@ -321,7 +327,8 @@ process.on("SIGINT", () => void shutdown("SIGINT"));
 registerProcessFaultHandlers({
   process,
   logger,
-  onFatal: (kind) => {
+  onFatal: (kind, error) => {
+    reportError(error, { level: "fatal", fault: kind });
     exitCode = 1;
     void shutdown(kind);
   },
