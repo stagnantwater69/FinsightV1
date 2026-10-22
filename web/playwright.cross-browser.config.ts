@@ -21,6 +21,10 @@ export default defineConfig({
   // WebKit takes up to ~29s for the longest CSV journey on a CI-sized machine,
   // against Playwright's default 30s.
   timeout: 60_000,
+  // With two engines on two workers, WebKit occasionally needed more than the
+  // default 5s for an assertion to settle (1 in 78 runs without retries, a
+  // different journey each time). Not used to paper over a real wait.
+  expect: { timeout: 10_000 },
   use: { ...base.use, baseURL: "http://127.0.0.1:4175" },
   webServer: {
     command: "npm run build && npx vite preview --host 127.0.0.1 --port 4175 --strictPort",
