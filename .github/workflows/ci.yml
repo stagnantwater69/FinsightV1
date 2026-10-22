@@ -17,9 +17,17 @@ on:
     - cron: "17 19 * * *"
   workflow_dispatch:
 
+# A new push to the same branch or PR makes the older run's answer moot, so it
+# is cancelled instead of queueing behind it. Runs on main are never cancelled:
+# each commit there keeps its own result.
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   backend:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
 
     # The suite truncates between files and needs a real Postgres — the same
     # arrangement backend/package.json's test:db:up creates locally.
@@ -42,6 +50,13 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
+          # Caches npm's download cache (not node_modules); npm ci still installs
+          # exactly the lockfile, only without fetching every tarball again.
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            mobile/package-lock.json
+            web/package-lock.json
 
       # The contract tests import the mobile and web payload builders across
       # project boundaries, so those installs are not optional here.
@@ -191,11 +206,15 @@ jobs:
 
   web:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
       - run: npm ci --prefix web
       - run: npm run typecheck --prefix web
       - run: npm run lint --prefix web
@@ -231,14 +250,62 @@ jobs:
           VITE_SUPABASE_URL: "https://example.supabase.co"
           VITE_SUPABASE_ANON_KEY: "ci-placeholder-anon-key"
           VITE_API_BASE_URL: "http://localhost:4000/api/v1"
+      # The same journeys' riskiest parts against the production build (lazy
+      # chunks, deep-link reloads, minified code) rather than the dev server.
+      - run: npm run test:e2e:built --prefix web
+        env:
+          VITE_SUPABASE_URL: "https://example.supabase.co"
+          VITE_SUPABASE_ANON_KEY: "ci-placeholder-anon-key"
+          VITE_API_BASE_URL: "http://localhost:4000/api/v1"
       # The deployed web artifact has no production dependency advisories in
       # the current lockfile. Keep that true: development-tool findings remain
       # visible to local/all-dependency audits without weakening this release
       # gate for packages that can reach the shipped application.
       - run: npm audit --omit=dev --audit-level=moderate --prefix web
+      # When a browser test fails, keep what Playwright recorded (trace,
+      # screenshot, error context) for a week instead of losing it with the
+      # runner. Every spec mocks the API with synthetic data, so nothing real
+      # is in it.
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-e2e-failure
+          path: web/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  web-cross-browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # The journeys most likely to differ by engine (sign-in, file upload, a
+    # financial write, navigation, recovery) in Firefox and WebKit, against
+    # the production build. The full suite stays on Chromium in the web job;
+    # see web/playwright.cross-browser.config.ts.
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --prefix web
+      - run: npx --prefix web playwright install --with-deps firefox webkit
+      - run: npm run test:e2e:cross-browser --prefix web
+        env:
+          VITE_SUPABASE_URL: "https://example.supabase.co"
+          VITE_SUPABASE_ANON_KEY: "ci-placeholder-anon-key"
+          VITE_API_BASE_URL: "http://localhost:4000/api/v1"
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-cross-browser-failure
+          path: web/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
 
   docker:
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     # Verifies the two things docs/DEPLOYMENT-HARDENING-PLAN.md's own
     # Verification section requires and that, until now, only ran by hand:
     # `docker compose config` parses, and nginx/nginx.conf passes `nginx -t`
@@ -294,6 +361,9 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
       # The runtime image ships no `prisma` CLI on purpose (see the Dockerfile
       # comment on the deps stage) — only the generated client. Migrations
       # against the throwaway DB have to run from outside the image, the same
@@ -530,6 +600,10 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            web/package-lock.json
       - run: npm ci --prefix backend
       - run: npm ci --prefix web
       - run: npm exec --prefix web -- playwright install --with-deps chromium
@@ -542,6 +616,18 @@ jobs:
           DATABASE_URL: postgresql://testuser:testpass@127.0.0.1:55434/finsight_test
           DIRECT_URL: postgresql://testuser:testpass@127.0.0.1:55434/finsight_test
           FINSIGHT_VERIFICATION_OUTPUT: ${{ runner.temp }}
+      # The suite's browser output, log and results, kept for a week when it
+      # fails. Its fixture.json (the throwaway test session) is left out.
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-local-api-failure
+          path: |
+            ${{ runner.temp }}/finsight-local-api-*/browser
+            ${{ runner.temp }}/finsight-local-api-*/browser.log
+            ${{ runner.temp }}/finsight-local-api-*/browser-results.json
+          retention-days: 7
+          if-no-files-found: ignore
 
   ml-contract:
     runs-on: ubuntu-24.04
@@ -551,6 +637,9 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
       - uses: actions/setup-python@v6
         with:
           python-version: "3.14"
@@ -566,6 +655,7 @@ jobs:
 
   ml:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     # ml/ is the Python side of the Isolation Forest shadow detector (see
     # ml/README.md). Nothing here previously ran its tests or checked its
     # pinned dependencies actually install together.
@@ -582,11 +672,16 @@ jobs:
 
   mobile:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            mobile/package-lock.json
+            web/package-lock.json
       - run: npm ci --prefix mobile
       # webParity.test.ts and helpContent.test.ts import straight from
       # web/src for parity checks, so tsc needs web's own deps (react) on
@@ -610,6 +705,18 @@ jobs:
       - run: npx expo config --type prebuild
         working-directory: mobile
       - run: npm test --prefix mobile
+      # Bundles the app the way a release build does: Metro resolves every
+      # import and asset, and Hermes compiles the result to bytecode. The tests
+      # above mock native modules and never bundle, so a missing asset, an
+      # unresolvable import or syntax Hermes rejects would otherwise first show
+      # up when someone builds an APK. Placeholder values only; nothing here
+      # runs the app.
+      - run: npx expo export --platform android --output-dir "$RUNNER_TEMP/expo-export"
+        working-directory: mobile
+        env:
+          EXPO_PUBLIC_API_BASE_URL: "https://example.invalid/api/v1"
+          EXPO_PUBLIC_SUPABASE_URL: "https://example.supabase.co"
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: "ci-placeholder-anon-key"
       # Critical production advisories are always a release blocker, even
       # while the lower-severity Expo migration below remains scheduled work.
       - run: npm audit --omit=dev --audit-level=critical --prefix mobile

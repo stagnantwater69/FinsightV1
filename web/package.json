@@ -12,6 +12,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "test:e2e:built": "playwright test --config playwright.built.config.ts",
+    "test:e2e:cross-browser": "playwright test --config playwright.cross-browser.config.ts",
     "typecheck": "tsc -b --noEmit"
   },
   "dependencies": {
@@ -22,6 +24,7 @@
     "@fontsource/inter": "^5.3.0",
     "@fontsource/plus-jakarta-sans": "^5.3.0",
     "@fontsource/sora": "^5.3.0",
+    "@sentry/browser": "^11.5.0",
     "@supabase/supabase-js": "^2.110.8",
     "axios": "^1.18.1",
     "lucide-react": "^1.28.0",

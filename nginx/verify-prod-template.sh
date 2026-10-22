@@ -17,7 +17,9 @@ fi
 
 scratch=$(mktemp -d)
 trap 'rm -rf -- "$scratch"' EXIT
-mkdir -p "$scratch/live/$DOMAIN"
+mkdir -p "$scratch/live/$DOMAIN" "$scratch/snippets"
+# web/Dockerfile generates the real one from the build; any valid policy will do.
+echo "set \$finsight_csp \"default-src 'self'\";" > "$scratch/snippets/finsight-csp.conf"
 openssl req -x509 -nodes -newkey rsa:2048 -days 1 -subj "/CN=$DOMAIN" \
   -keyout "$scratch/live/$DOMAIN/privkey.pem" -out "$scratch/live/$DOMAIN/fullchain.pem" 2>/dev/null
 
@@ -26,6 +28,7 @@ output=$(docker run --rm --add-host backend:127.0.0.1 \
   -e DOMAIN="$DOMAIN" -e HSTS_MAX_AGE=86400 \
   -v "$SCRIPT_DIR/templates:/etc/nginx/templates:ro" \
   -v "$scratch:/etc/letsencrypt:ro" \
+  -v "$scratch/snippets:/etc/nginx/snippets:ro" \
   nginx:1.27-alpine nginx -t 2>&1) || { echo "$output" >&2; exit 1; }
 echo "$output" | tail -n 2
 

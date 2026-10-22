@@ -33,6 +33,16 @@ map $upstream_http_content_security_policy $finsight_error_csp {
   "" "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'";
 }
 
+# A cheap per-address limit in front of the app's own. The app's limiter is
+# the real one (durable, per account) but it costs a database write per
+# request, so a flood would load Postgres before being refused; this turns
+# most of a flood away without reaching Node at all. Sized far above the app's
+# limits, because carrier NAT puts many owners behind one address here.
+limit_req_zone $binary_remote_addr zone=finsight_api:10m rate=30r/s;
+limit_req_zone $binary_remote_addr zone=finsight_auth:10m rate=30r/m;
+limit_req_status 429;
+limit_req_log_level warn;
+
 upstream finsight_backend {
   server backend:4000;
   keepalive 16;
@@ -73,6 +83,12 @@ server {
   add_header X-Frame-Options DENY always;
   add_header Referrer-Policy no-referrer always;
 
+  # The web app's policy, built from the production build itself (sets
+  # $finsight_csp; see web/scripts/csp.mjs). The session lives in
+  # localStorage, so this is what keeps an injected script from reading it.
+  include /etc/nginx/snippets/finsight-csp.conf;
+  add_header Content-Security-Policy $finsight_csp always;
+
   root /usr/share/nginx/html;
 
   location /api/ {
@@ -91,6 +107,27 @@ server {
     add_header X-Frame-Options DENY always;
     add_header Referrer-Policy no-referrer always;
     add_header Content-Security-Policy $finsight_error_csp always;
+
+    limit_req zone=finsight_api burst=300 nodelay;
+    error_page 429 = @finsight_rate_limited;
+
+    # The unauthenticated routes, where a flood is password guessing or
+    # account farming. Inherits the headers above; proxy_pass is not inherited.
+    location /api/v1/auth/ {
+      limit_req zone=finsight_auth burst=30 nodelay;
+      proxy_pass http://finsight_backend;
+    }
+  }
+
+  # The clients show a 429's `error` text, so answer in the app's JSON shape
+  # rather than with nginx's HTML page.
+  location @finsight_rate_limited {
+    default_type application/json;
+    add_header Retry-After 60 always;
+    add_header Strict-Transport-Security "max-age=${HSTS_MAX_AGE}" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Content-Security-Policy "default-src 'none'; frame-ancestors 'none'" always;
+    return 429 '{"code":"RATE_LIMITED","retryAfterSeconds":60,"error":"Too many requests in a short time. Please wait about 1 minute and try again."}';
   }
 
   # Vite fingerprints everything under /assets/, so a file there never

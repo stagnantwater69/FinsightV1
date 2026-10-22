@@ -269,4 +269,70 @@ describe("rateLimit", () => {
       expect(email.limit, email.name).toBeLessThanOrEqual(ip.limit);
     }
   });
+
+  /*
+   * The hourly caps reset 24 times a day, so without a daily cap one account
+   * could spend 24 hours' worth of them. Each daily cap has to be tighter than
+   * that, and still above a single full hour.
+   */
+  it("caps each billed call per day below 24 hours of its hourly cap", () => {
+    const pairs = [
+      [LIMITS.SCAN_RECEIPT_HOURLY, LIMITS.SCAN_RECEIPT_DAILY],
+      [LIMITS.ASK_HOURLY, LIMITS.ASK_DAILY],
+      [LIMITS.SUGGEST_CATEGORY_HOURLY, LIMITS.SUGGEST_CATEGORY_DAILY],
+      [LIMITS.PURCHASE_REVIEW_HOURLY, LIMITS.PURCHASE_REVIEW_DAILY],
+    ] as const;
+    for (const [hourly, daily] of pairs) {
+      expect(daily.windowMs, daily.name).toBe(24 * 60 * 60_000);
+      expect(daily.limit, daily.name).toBeLessThan(hourly.limit * 24);
+      expect(daily.limit, daily.name).toBeGreaterThan(hourly.limit);
+    }
+  });
+
+  describe("shared budget", () => {
+    const budget = () =>
+      rateLimit({
+        name: "shared",
+        limit: 2,
+        windowMs: 60_000,
+        identify: () => "all",
+        refusal: { code: "DAILY_CAPACITY_REACHED", message: (wait) => `Closed for about ${wait}.` },
+      });
+
+    it("counts every owner against one bucket", () => {
+      const mw = budget();
+      expect(call(mw, fakeReq(1)).allowed).toBe(true);
+      expect(call(mw, fakeReq(2)).allowed).toBe(true);
+      // A third owner who has sent nothing yet is still refused.
+      expect(call(mw, fakeReq(3)).allowed).toBe(false);
+    });
+
+    it("refuses with its own code and words, not 'too many requests'", () => {
+      const mw = budget();
+      call(mw, fakeReq(1));
+      call(mw, fakeReq(2));
+      const refused = call(mw, fakeReq(3));
+      expect(refused.res.statusCode).toBe(429);
+      expect(refused.res.body).toEqual({
+        code: "DAILY_CAPACITY_REACHED",
+        retryAfterSeconds: 60,
+        error: "Closed for about 1 minute.",
+      });
+    });
+
+    it("is not spent by a request an owner's own cap already refused", () => {
+      const own = rateLimit({ name: "own", limit: 1, windowMs: 60_000 });
+      const shared = budget();
+      // Chained the way the routes mount them: owner cap first.
+      const both = (req: Request) => {
+        const first = call(own, req);
+        return first.allowed ? call(shared, req).allowed : false;
+      };
+      expect(both(fakeReq(1))).toBe(true);
+      expect(both(fakeReq(1))).toBe(false);
+      expect(both(fakeReq(1))).toBe(false);
+      // Owner 1's refused retries did not use up the shared budget.
+      expect(both(fakeReq(2))).toBe(true);
+    });
+  });
 });

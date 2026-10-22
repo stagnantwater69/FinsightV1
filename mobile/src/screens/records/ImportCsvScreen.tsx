@@ -57,6 +57,21 @@ import { TAP_FLOOR } from "../../components/touchTarget";
 import { HeaderBackButton } from "../../components/HeaderBackButton";
 import { CsvKeyboardFrame } from "./importCsv/CsvKeyboardFrame";
 import type { RecordsScreenProps } from "../../navigation/types";
+import type { CsvImportStatus, CsvProcessingStatus } from "../../lib/types";
+import type { ImportResult } from "./importCsv/types";
+
+/** What the progress view needs from a large import still running on the worker. */
+interface ImportProgressState {
+  processingStatus: CsvProcessingStatus;
+  totalRows?: number | null;
+  processedRows?: number | null;
+  importedRows?: number;
+  skippedRows?: number;
+}
+
+/** The import summary as shown: counts the server may leave out are filled in with 0. */
+type ShownImportResult = ImportResult &
+  Required<Pick<ImportResult, "importedExpenses" | "importedSales" | "uncategorised" | "skippedCount">>;
 
 const EMPTY_CORRECTION: RowCorrection = {};
 type ReviewFilter = "preview" | "problems" | "duplicates" | "excluded" | "edited";
@@ -203,9 +218,9 @@ export function ImportCsvScreen({ navigation }: RecordsScreenProps<"ImportCsv">)
   const [dateFormat, setDateFormat] = useState<Exclude<ChosenDateFormat, "iso"> | null>(null);
   const [dateSheetOpen, setDateSheetOpen] = useState(false);
   const [corrections, setCorrections] = useState<Corrections>({});
-  const [result, setResult] = useState<any | null>(null);
+  const [result, setResult] = useState<ShownImportResult | null>(null);
   /** The polled status of a large import the server took off the request. */
-  const [batchStatus, setBatchStatus] = useState<any | null>(null);
+  const [batchStatus, setBatchStatus] = useState<ImportProgressState | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -569,7 +584,7 @@ export function ImportCsvScreen({ navigation }: RecordsScreenProps<"ImportCsv">)
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, IMPORT_POLL_INTERVAL_MS));
       if (!operation.current(task)) return;
-      const status = await api.get<any>(`/records/csv-imports/batches/${batchId}/status`, undefined, task.controller.signal);
+      const status = await api.get<CsvImportStatus>(`/records/csv-imports/batches/${batchId}/status`, undefined, task.controller.signal);
       if (!operation.current(task)) return;
       setBatchStatus(status);
       if (status.processingStatus === "COMPLETE") {
@@ -578,6 +593,7 @@ export function ImportCsvScreen({ navigation }: RecordsScreenProps<"ImportCsv">)
         setResult({
           batchId,
           title,
+          status: status.status,
           totalRows: status.totalRows,
           imported: status.importedRows,
           skipped: summary.skipped ?? [],
@@ -639,7 +655,7 @@ export function ImportCsvScreen({ navigation }: RecordsScreenProps<"ImportCsv">)
       stageLifecycle.current.confirmationAttempted = true;
       attemptedStages.current.add(stagedUploadId);
       confirming.current = task;
-      const confirmed = await api.post<any>("/records/csv-imports/confirm", body, {
+      const confirmed = await api.post<ImportResult>("/records/csv-imports/confirm", body, {
         signal: task.controller.signal,
         cacheScope: { businessProfileId: selected!.id },
       });
@@ -649,14 +665,20 @@ export function ImportCsvScreen({ navigation }: RecordsScreenProps<"ImportCsv">)
       setConfirmRecovery(false);
       if (confirmed.processingStatus === "PENDING" || confirmed.processingStatus === "PROCESSING") {
         // Confirmation replays may already have saved rows; wait for the status counter.
-        setBatchStatus(confirmed);
+        setBatchStatus({ ...confirmed, processingStatus: confirmed.processingStatus });
         polling.current = task;
         await pollBatch(confirmed.batchId, task);
       } else if (confirmed.processingStatus === "FAILED") {
-        setBatchStatus({ ...confirmed, importedRows: confirmed.imported, skippedRows: confirmed.skippedCount ?? confirmed.skipped?.length ?? 0 });
+        setBatchStatus({ ...confirmed, processingStatus: confirmed.processingStatus, importedRows: confirmed.imported, skippedRows: confirmed.skippedCount ?? confirmed.skipped?.length ?? 0 });
         setError("Review saved records before importing the remaining rows.");
       } else {
-        setResult({ ...confirmed, skippedCount: confirmed.skippedCount ?? confirmed.skipped?.length ?? 0 });
+        setResult({
+          ...confirmed,
+          importedExpenses: confirmed.importedExpenses ?? 0,
+          importedSales: confirmed.importedSales ?? 0,
+          uncategorised: confirmed.uncategorised ?? 0,
+          skippedCount: confirmed.skippedCount ?? confirmed.skipped?.length ?? 0,
+        });
       }
     } catch (err) {
       if (!operation.current(task)) return;

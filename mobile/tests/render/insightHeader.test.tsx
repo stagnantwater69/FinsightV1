@@ -1,10 +1,10 @@
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render } from '@testing-library/react-native';
-import { InsightHeader } from '../../src/components/InsightsShared';
+import { InsightHeader, type InsightScreenId } from '../../src/components/InsightsShared';
 import { ThemeProvider } from '../../src/context/ThemeContext';
 
-function mount(active: string, title: string) {
+function mount(active: InsightScreenId, title: string) {
   const navigation = { navigate: vi.fn() };
   const queries = render(
     <ThemeProvider initialMode="light">

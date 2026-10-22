@@ -4,8 +4,10 @@ import { LucideProvider } from 'lucide-react'
 import './index.css'
 import App from './App.tsx'
 import { installNavigationGuardPopstateHandler } from './lib/navigationGuards.ts'
+import { startErrorReporting } from './lib/errorReporting.ts'
 
 installNavigationGuardPopstateHandler()
+startErrorReporting()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

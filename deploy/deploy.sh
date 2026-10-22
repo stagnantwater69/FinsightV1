@@ -64,6 +64,17 @@ check_env() {
   if [ -z "$(env_value $b HEALTH_DETAIL_TOKEN)" ]; then
     echo "deploy: note: HEALTH_DETAIL_TOKEN is empty, so /health/ready returns no queue counts"
   fi
+  if [ -z "$(env_value $b SENTRY_DSN)" ]; then
+    echo "deploy: note: SENTRY_DSN is empty, so crashes are only in the container logs"
+  fi
+  if [ -z "$(env_value .env BACKUP_S3_BUCKET)" ]; then
+    echo "deploy: note: BACKUP_S3_BUCKET is empty, so database backups stay on this VM only"
+  elif [ -z "$(env_value .env BACKUP_AGE_RECIPIENT)" ]; then
+    fail ".env: BACKUP_S3_BUCKET is set without BACKUP_AGE_RECIPIENT, so every nightly backup would refuse to upload (see deploy/backup-db.sh)"
+  fi
+  if [ -n "$(env_value .env BACKUP_AGE_RECIPIENT)" ] && ! command -v age >/dev/null; then
+    fail "BACKUP_AGE_RECIPIENT is set but age is not installed: sudo apt-get install age"
+  fi
   if [ "$(env_value $b RECEIPT_PROVIDER_DISPATCH_ENABLED)" = true ] && [ "${ALLOW_RECEIPT_PROVIDER:-}" != 1 ]; then
     fail "backend/.env: RECEIPT_PROVIDER_DISPATCH_ENABLED=true sends receipts to an outside provider. Launch is local-first; set it to false, or rerun with ALLOW_RECEIPT_PROVIDER=1 once its consent and data-terms gate is approved"
   fi
@@ -86,12 +97,13 @@ issue_certificate() {
     -d "$DOMAIN" --email "$LETSENCRYPT_EMAIL" --agree-tos --no-eff-email --non-interactive
 }
 
-install_renewal() {
-  local line
-  line="17 3 * * * cd $(pwd) && bash deploy/renew-certs.sh >> \$HOME/finsight-renew.log 2>&1"
-  if ! crontab -l 2>/dev/null | grep -qF "deploy/renew-certs.sh"; then
+# Adds a crontab line once, keyed by the script it runs.
+install_cron() {
+  local schedule=$1 script=$2 log=$3 what=$4 line
+  line="$schedule cd $(pwd) && bash $script >> \$HOME/$log 2>&1"
+  if ! crontab -l 2>/dev/null | grep -qF "$script"; then
     { crontab -l 2>/dev/null || true; echo "$line"; } | crontab -
-    echo "deploy: installed a daily certificate renewal check (crontab -l to see it)"
+    echo "deploy: installed $what (crontab -l to see it)"
   fi
 }
 
@@ -115,7 +127,8 @@ if ! "${COMPOSE[@]}" run --rm migrate npx prisma migrate status; then
 fi
 
 has_certificate || issue_certificate
-install_renewal
+install_cron "17 3 * * *" deploy/renew-certs.sh finsight-renew.log "a daily certificate renewal check"
+install_cron "30 2 * * *" deploy/backup-db.sh finsight-backup.log "a daily database backup"
 
 echo "deploy: starting services"
 "${COMPOSE[@]}" up -d --remove-orphans

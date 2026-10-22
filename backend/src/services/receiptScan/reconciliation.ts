@@ -672,7 +672,8 @@ async function persistOwnerAddedItems(
  * to the items, silently under-reports the expense, which is the one thing a
  * spending monitor must not do.
  */
-function reconcileSplits(
+// Exported for the generated-input tests (tests/unit/financialInvariants.test.ts).
+export function reconcileSplits(
   splits: ReceiptSplit[],
   totalCentavos: number,
   reconciliation: ReconciliationMode,

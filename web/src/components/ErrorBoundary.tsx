@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { reportError } from "../lib/errorReporting";
 
 interface Props {
   children: ReactNode;
@@ -38,6 +39,7 @@ export class ErrorBoundary extends Component<Props, State> {
     // Kept alongside React's own logging: the component stack is the part that
     // actually identifies WHERE it broke, and it is not in error.stack.
     console.error("Unhandled render error:", error, info.componentStack);
+    reportError(error, { boundary: "app" });
   }
 
   render() {

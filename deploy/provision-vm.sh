@@ -26,7 +26,8 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get -y upgrade
-apt-get -y install ca-certificates curl git ufw fail2ban unattended-upgrades
+# age encrypts the nightly database backups (deploy/backup-db.sh).
+apt-get -y install ca-certificates curl git ufw fail2ban unattended-upgrades age
 
 # --- user ------------------------------------------------------------------
 if ! id "$APP_USER" >/dev/null 2>&1; then

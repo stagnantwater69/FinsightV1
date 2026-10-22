@@ -20,8 +20,11 @@ RUN npm ci
 COPY . .
 RUN test -f .env.production || { echo "web/.env.production is missing" >&2; exit 1; }
 RUN npm run build
+# The CSP is computed from this exact build: see scripts/csp.mjs.
+RUN node scripts/write-csp.mjs > /app/finsight-csp.conf
 
 FROM nginx:1.27-alpine
 # The stock server answers every unmatched host with the nginx welcome page.
 RUN rm /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
+COPY --from=build /app/finsight-csp.conf /etc/nginx/snippets/finsight-csp.conf
