@@ -85,10 +85,17 @@ test.beforeEach(async ({ page }) => {
 test("keeps the uploaded file and edited mapping through review and confirms only after explicit import", async ({ page }, testInfo) => {
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
+  // Only errors raised on the import screen count. The test navigates here
+  // from the profile picker that beforeEach left open, and leaving it cancels
+  // that page's in-flight requests; WebKit and Firefox report each cancelled
+  // load as an error, which says nothing about the import.
+  const onImportScreen = () => new URL(page.url()).pathname.startsWith("/records/csv-imports");
   page.on("console", (message) => {
-    if (message.type() === "error") consoleErrors.push(message.text());
+    if (message.type() === "error" && onImportScreen()) consoleErrors.push(message.text());
   });
-  page.on("pageerror", (error) => pageErrors.push(error.message));
+  page.on("pageerror", (error) => {
+    if (onImportScreen()) pageErrors.push(error.message);
+  });
 
   let previewRequests = 0;
   let fileUploadRequests = 0;
