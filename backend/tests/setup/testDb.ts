@@ -39,6 +39,7 @@ const TABLES = [
   "RecoveryNotificationPreference",
   "BusinessOperatingDayOverride",
   "BusinessOperatingDay",
+  "AvailableFundsDailyTotal",
   "BusinessProfile",
   "User",
 ];

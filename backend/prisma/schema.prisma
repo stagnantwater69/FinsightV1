@@ -604,6 +604,7 @@ model BusinessProfile {
   expenseRecords                    ExpenseRecord[]
   salesReferenceRecords             SalesReferenceRecord[]
   manualRecordCreateRequests        ManualRecordCreateRequest[]
+  availableFundsDailyTotals         AvailableFundsDailyTotal[]
   receiptScans                      ReceiptScan[]
   csvImportBatches                  CSVImportBatch[]
   aiInteractions                    AIInteraction[]
@@ -926,6 +927,30 @@ model SalesReferenceRecord {
   // Same reason as ExpenseRecord_description_trgm_idx.
   @@index([description(ops: raw("gin_trgm_ops"))], type: Gin, map: "SalesReferenceRecord_description_trgm_idx")
   @@map("SalesReferenceRecord")
+}
+
+/// Per business per day, the sales and expenses that count toward available
+/// funds: reviewed, not a duplicate, and from a final source (manual entry, a
+/// COMPLETE CSV batch, a Confirmed receipt). financialPosition.service reads
+/// these instead of summing every record since the baseline.
+///
+/// WRITTEN ONLY BY DATABASE TRIGGERS (migration
+/// 20261022105708_available_funds_daily_totals). Any change to a record, a
+/// batch crossing COMPLETE, or a receipt crossing Confirmed recomputes the
+/// affected days from the records themselves, so every write path is covered,
+/// raw SQL included. Never write to it from application code.
+model AvailableFundsDailyTotal {
+  businessProfileId Int      @map("BusinessProfile_ID")
+  date              DateTime @map("AvailableFundsDailyTotal_Date") @db.Date
+  salesAmount       Decimal  @map("AvailableFundsDailyTotal_SalesAmount") @db.Decimal(18, 2)
+  salesCount        Int      @map("AvailableFundsDailyTotal_SalesCount")
+  expenseAmount     Decimal  @map("AvailableFundsDailyTotal_ExpenseAmount") @db.Decimal(18, 2)
+  expenseCount      Int      @map("AvailableFundsDailyTotal_ExpenseCount")
+
+  businessProfile BusinessProfile @relation(fields: [businessProfileId], references: [id], onDelete: Cascade)
+
+  @@id([businessProfileId, date])
+  @@map("AvailableFundsDailyTotal")
 }
 
 /// Deleted records leave their hashed request identity so an old retry cannot recreate them.

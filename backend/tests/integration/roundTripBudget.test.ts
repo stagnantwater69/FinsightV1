@@ -25,7 +25,11 @@ import { disconnectDb, makeOwnerWithProfile, resetDb, utcDayString } from "../se
  * COMMIT are not included, and operations run in parallel still each count.
  */
 const BUDGET: Record<string, number> = {
-  "dashboard summary": 24,
+  // 24 -> 25 on 2026-10-22: available funds reads the daily totals plus the
+  // baseline day's sales and expenses (three aggregates, run in parallel)
+  // instead of two whole-ledger sums. Same wall-clock round trip; at 500,000
+  // records the calculation went from ~240 ms to ~8 ms.
+  "dashboard summary": 25,
   "dashboard cashflow": 3,
   "records list": 5,
   notifications: 5,
