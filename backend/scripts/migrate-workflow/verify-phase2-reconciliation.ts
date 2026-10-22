@@ -260,7 +260,20 @@ function phase2CatalogSnapshot(containerName: string, database: string): string 
           'attributes', index_metadata.indnatts,
           'key_attributes', index_metadata.indnkeyatts,
           'collations', index_metadata.indcollation::text,
-          'operator_classes', index_metadata.indclass::text,
+          -- By schema-qualified name, not raw indclass OIDs: an extension's
+          -- operator class (pg_trgm's gin_trgm_ops) gets a different OID in
+          -- each database depending on what was created before it, so two
+          -- identical indexes compared as different.
+          'operator_classes', (
+            SELECT array_agg(
+              class_namespace.nspname || '.' || operator_class.opcname
+              ORDER BY operator_position.ordinality
+            )
+            FROM unnest(index_metadata.indclass::oid[])
+              WITH ORDINALITY operator_position(operator_class_oid, ordinality)
+            JOIN pg_opclass operator_class ON operator_class.oid = operator_position.operator_class_oid
+            JOIN pg_namespace class_namespace ON class_namespace.oid = operator_class.opcnamespace
+          )::text,
           'options', index_metadata.indoption::text,
           'predicate', pg_get_expr(index_metadata.indpred, index_metadata.indrelid, false),
           'definition', pg_get_indexdef(index_metadata.indexrelid, 0, false)
