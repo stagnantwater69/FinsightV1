@@ -718,6 +718,10 @@ model ExpenseRecord {
   // INVESTIGATION.md #4). Naming them here closes the drift without a rename
   // migration against deployed databases.
   @@index([businessProfileId, date, id], map: "ExpenseRecord_BusinessProfile_ID_ExpenseRecord_Date_ExpenseR_id")
+  // The records list sorted by amount (recordOrderBy): without it, a page is a
+  // scan and sort of the business's whole ledger. Measured in
+  // tests/load/query-plans.ts.
+  @@index([businessProfileId, amount, id], map: "ExpenseRecord_profile_amount_id_idx")
   @@map("ExpenseRecord")
 }
 
@@ -912,6 +916,8 @@ model SalesReferenceRecord {
   @@index([importBatchId])
   @@index([duplicateOfRecordId])
   @@index([businessProfileId, date, id])
+  // Same reason as ExpenseRecord_profile_amount_id_idx.
+  @@index([businessProfileId, amount, id], map: "SalesReferenceRecord_profile_amount_id_idx")
   @@map("SalesReferenceRecord")
 }
 
