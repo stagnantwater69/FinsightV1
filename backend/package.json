@@ -37,6 +37,7 @@
     "ops:csv-import:readiness": "tsx scripts/csv-import-readiness.ts",
     "audit:record-integrity": "tsx scripts/record-integrity-audit.ts",
     "ops:csv-storage:reconcile": "tsx scripts/reconcile-csv-storage.ts",
+    "ops:available-funds:check": "tsx scripts/check-available-funds.ts",
     "benchmark:csv": "node tests/load/benchmark-csv.mjs",
     "test": "vitest --config vitest.config.mts run",
     "test:watch": "vitest --config vitest.config.mts",
