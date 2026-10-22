@@ -722,6 +722,11 @@ model ExpenseRecord {
   // scan and sort of the business's whole ledger. Measured in
   // tests/load/query-plans.ts.
   @@index([businessProfileId, amount, id], map: "ExpenseRecord_profile_amount_id_idx")
+  // Keyword search is `description ILIKE '%term%'`, which no b-tree can serve.
+  // pg_trgm's operator class lives in whichever schema the migration installed
+  // the extension into (Supabase: extensions); see migration
+  // 20261022095133_records_description_trigram_index.
+  @@index([description(ops: raw("gin_trgm_ops"))], type: Gin, map: "ExpenseRecord_description_trgm_idx")
   @@map("ExpenseRecord")
 }
 
@@ -918,6 +923,8 @@ model SalesReferenceRecord {
   @@index([businessProfileId, date, id])
   // Same reason as ExpenseRecord_profile_amount_id_idx.
   @@index([businessProfileId, amount, id], map: "SalesReferenceRecord_profile_amount_id_idx")
+  // Same reason as ExpenseRecord_description_trgm_idx.
+  @@index([description(ops: raw("gin_trgm_ops"))], type: Gin, map: "SalesReferenceRecord_description_trgm_idx")
   @@map("SalesReferenceRecord")
 }
 
