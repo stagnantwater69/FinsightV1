@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import { prisma } from "../config/prisma";
 import { logger } from "../config/logger";
+import { env } from "../config/env";
+import { reportError } from "../config/errorReporting";
 import { requestContext, securityEvent } from "../lib/securityLog";
 import { timeSpan } from "../lib/requestTiming";
 
@@ -86,6 +88,34 @@ export interface RateLimitOptions {
   identify?: (req: Request) => string | undefined;
   /** Error codes that prove the guarded operation never received a verdict. */
   refundOnErrorCodes?: readonly string[];
+  /**
+   * The 429 body, when "you sent too many requests" is the wrong thing to say.
+   * A shared budget refuses people who sent one request, so it needs its own
+   * code and words.
+   */
+  refusal?: { code: string; message: (retryAfter: string) => string };
+  /**
+   * Report the first refusal of each window to the logs and Sentry. For the
+   * shared budgets, where running out means the product stopped working for
+   * everyone and somebody should find out before the owners tell them.
+   */
+  alertWhenExhausted?: boolean;
+}
+
+function refusalBody(refusal: RateLimitOptions["refusal"], resetSeconds: number) {
+  const retryAfter = humanRetryAfter(resetSeconds);
+  return {
+    code: refusal?.code ?? "RATE_LIMITED",
+    retryAfterSeconds: resetSeconds,
+    error: refusal
+      ? refusal.message(retryAfter)
+      : `Too many requests in a short time. Please wait about ${retryAfter} and try again.`,
+  };
+}
+
+function alertExhausted(name: string, limit: number) {
+  logger.error({ limiter: name, limit }, "shared rate-limit budget exhausted");
+  reportError(new Error(`Shared rate-limit budget "${name}" exhausted at ${limit}`), { level: "warning" });
 }
 
 interface RateLimitRefund {
@@ -194,7 +224,15 @@ export function humanRetryAfter(seconds: number): string {
   return `${hours} hour${hours === 1 ? "" : "s"}`;
 }
 
-export function rateLimit({ name, limit, windowMs, identify, refundOnErrorCodes }: RateLimitOptions) {
+export function rateLimit({
+  name,
+  limit,
+  windowMs,
+  identify,
+  refundOnErrorCodes,
+  refusal,
+  alertWhenExhausted,
+}: RateLimitOptions) {
   // Unit tests deliberately exercise the deterministic clock-based backend.
   // Deployed processes use Postgres below, making the same limit survive
   // restarts and apply once across every replica.
@@ -238,13 +276,8 @@ export function rateLimit({ name, limit, windowMs, identify, refundOnErrorCodes 
         if (bucket.count > limit) {
           res.setHeader("Retry-After", String(resetSeconds));
           securityEvent("ratelimit.exhausted", { ...requestContext(req), limiter: name });
-          return res.status(429).json({
-            code: "RATE_LIMITED",
-            retryAfterSeconds: resetSeconds,
-            error: `Too many requests in a short time. Please wait about ${humanRetryAfter(
-              resetSeconds,
-            )} and try again.`,
-          });
+          if (alertWhenExhausted && bucket.count === limit + 1) alertExhausted(name, limit);
+          return res.status(429).json(refusalBody(refusal, resetSeconds));
         }
         registerRefund(res, refundOnErrorCodes, async () => {
           const affected = await prisma.$executeRaw`
@@ -296,13 +329,8 @@ export function rateLimit({ name, limit, windowMs, identify, refundOnErrorCodes 
        * did nothing wrong and there is nothing for them to fix; the honest
        * message is "wait a moment and it will work".
        */
-      return res.status(429).json({
-        code: "RATE_LIMITED",
-        retryAfterSeconds: resetSeconds,
-        error: `Too many requests in a short time. Please wait about ${humanRetryAfter(
-          resetSeconds,
-        )} and try again.`,
-      });
+      if (alertWhenExhausted && bucket.count === limit + 1) alertExhausted(name, limit);
+      return res.status(429).json(refusalBody(refusal, resetSeconds));
     }
 
     registerRefund(res, refundOnErrorCodes, async () => {
@@ -333,6 +361,8 @@ export function rateLimit({ name, limit, windowMs, identify, refundOnErrorCodes 
  * run all day; the hour window bounds that without punishing a genuine burst,
  * because someone entering a month of receipts in one sitting still fits.
  */
+const DAY_MS = 24 * 60 * 60_000;
+
 export const LIMITS = {
   // Shared across authenticated writes; allows tour advances and bulk review without an unbounded retry loop.
   AUTHENTICATED_WRITE: { name: "authenticated-write", limit: 120, windowMs: 60_000 },
@@ -390,6 +420,16 @@ export const LIMITS = {
   ASK_HOURLY: { name: "ai-ask-hourly", limit: 200, windowMs: 60 * 60_000 },
   SUGGEST_CATEGORY: { name: "ai-suggest-category", limit: 60, windowMs: 60_000 },
   SUGGEST_CATEGORY_HOURLY: { name: "ai-suggest-category-hourly", limit: 1_000, windowMs: 60 * 60_000 },
+  /*
+   * Daily caps per owner on every billed call. The hourly caps reset 24 times
+   * a day, so on their own one account could run 4,800 questions and 4,800
+   * scans a day. These sit well above a heavy day of real use (a month of
+   * backlog receipts entered in one sitting still fits) and far below that.
+   */
+  SCAN_RECEIPT_DAILY: { name: "scan-receipt-daily", limit: 500, windowMs: DAY_MS },
+  ASK_DAILY: { name: "ai-ask-daily", limit: 600, windowMs: DAY_MS },
+  SUGGEST_CATEGORY_DAILY: { name: "ai-suggest-category-daily", limit: 4_000, windowMs: DAY_MS },
+  PURCHASE_REVIEW_DAILY: { name: "ai-purchase-review-daily", limit: 400, windowMs: DAY_MS },
   /*
    * PURCHASE_REVIEW: Spending Impact's "what is this thing, and what should I
    * be asking about it" call. Pressed deliberately, one item at a time, and
@@ -490,6 +530,45 @@ export const LIMITS = {
   AUTH_HANDOFF_ISSUE: { name: "auth-handoff-issue", limit: 10, windowMs: 15 * 60_000 },
   AUTH_HANDOFF_EXCHANGE: { name: "auth-handoff-exchange", limit: 10, windowMs: 15 * 60_000 },
 } as const;
+
+/*
+ * THE SPEND CEILING: one bucket for all owners together, per kind of billed
+ * call. The per-owner caps above bound one account; they do nothing about many
+ * accounts, and Google sign-in makes an account out of any verified Gmail. So
+ * the provider bill has a hard daily maximum here, set in env.ts, and reaching
+ * it is reported to Sentry.
+ *
+ * Mount these AFTER the per-owner limiters on the same route. Every limiter
+ * counts before it checks, so a request one owner's own cap already refused
+ * never spends the shared budget.
+ */
+const sharedBudget = (name: string, limit: number, message: (retryAfter: string) => string) =>
+  rateLimit({
+    name,
+    limit,
+    windowMs: DAY_MS,
+    identify: () => "all",
+    refusal: { code: "DAILY_CAPACITY_REACHED", message },
+    alertWhenExhausted: true,
+  });
+
+export const SHARED_BUDGETS = {
+  AI_ANSWERS: sharedBudget(
+    "shared-ai-answers-daily",
+    env.SHARED_DAILY_AI_ANSWERS,
+    (wait) => `FinSight AI has reached its limit for today. Your records are safe. Try again in about ${wait}.`,
+  ),
+  CATEGORY_SUGGESTIONS: sharedBudget(
+    "shared-category-suggestions-daily",
+    env.SHARED_DAILY_CATEGORY_SUGGESTIONS,
+    (wait) => `Category suggestions are paused for today. Choose a category yourself, or try again in about ${wait}.`,
+  ),
+  RECEIPT_SCANS: sharedBudget(
+    "shared-receipt-scans-daily",
+    env.SHARED_DAILY_RECEIPT_SCANS,
+    (wait) => `Receipt scanning has reached its limit for today. You can still add the expense by hand, or try again in about ${wait}.`,
+  ),
+};
 
 const authenticatedWriteLimiter = rateLimit(LIMITS.AUTHENTICATED_WRITE);
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);

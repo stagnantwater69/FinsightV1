@@ -47,6 +47,15 @@ const envSchema = z.object({
    * probe nobody uses while developing.
    */
   HEALTH_DETAIL_TOKEN: z.string().optional(),
+  /**
+   * Daily ceilings on billed calls across ALL owners together; see
+   * SHARED_BUDGETS in rateLimit.middleware.ts. Size them from what you are
+   * willing to spend in a day, not from expected use. There is no "off": a
+   * ceiling you forgot to set should still be a ceiling.
+   */
+  SHARED_DAILY_AI_ANSWERS: z.coerce.number().int().min(1).default(5_000),
+  SHARED_DAILY_CATEGORY_SUGGESTIONS: z.coerce.number().int().min(1).default(30_000),
+  SHARED_DAILY_RECEIPT_SCANS: z.coerce.number().int().min(1).default(3_000),
   /** Sentry project DSN. Empty means no error reports are sent anywhere. */
   SENTRY_DSN: z.string().optional().default(""),
   /** Where the web client is served, for auth email redirect links. */

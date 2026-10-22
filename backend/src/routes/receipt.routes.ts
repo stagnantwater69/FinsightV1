@@ -6,7 +6,7 @@ import {
   uploadReceiptEvidence,
   uploadReceiptImage,
 } from "../middleware/upload.middleware";
-import { LIMITS, limitAuthenticatedWrites, rateLimit } from "../middleware/rateLimit.middleware";
+import { LIMITS, limitAuthenticatedWrites, rateLimit, SHARED_BUDGETS } from "../middleware/rateLimit.middleware";
 import { asyncHandler } from "../lib/asyncHandler";
 import { RECEIPT_UPLOAD_MAX_LOGICAL_PAGES } from "../lib/receiptUploadContract";
 import * as receiptProviderConsentController from "../controllers/receiptProviderConsent.controller";
@@ -47,6 +47,8 @@ receiptRouter.post(
   "/",
   rateLimit(LIMITS.SCAN_RECEIPT_BURST),
   rateLimit(LIMITS.SCAN_RECEIPT_HOURLY),
+  rateLimit(LIMITS.SCAN_RECEIPT_DAILY),
+  SHARED_BUDGETS.RECEIPT_SCANS,
   prepareReceiptUploadTemporaryFiles,
   uploadReceiptEvidence.fields([
     { name: "files", maxCount: RECEIPT_UPLOAD_MAX_LOGICAL_PAGES },
@@ -111,6 +113,8 @@ receiptRouter.post(
   "/:id/retry",
   rateLimit(LIMITS.SCAN_RECEIPT_BURST),
   rateLimit(LIMITS.SCAN_RECEIPT_HOURLY),
+  rateLimit(LIMITS.SCAN_RECEIPT_DAILY),
+  SHARED_BUDGETS.RECEIPT_SCANS,
   asyncHandler(receiptScanController.retry),
 );
 receiptRouter.patch("/:id/items/:itemId", asyncHandler(receiptScanController.updateItem));

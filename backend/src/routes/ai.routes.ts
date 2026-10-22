@@ -1,7 +1,7 @@
 import { Router } from "express";
 import * as aiController from "../controllers/ai.controller";
 import { requireAuth } from "../middleware/auth.middleware";
-import { LIMITS, limitAuthenticatedWrites, rateLimit } from "../middleware/rateLimit.middleware";
+import { LIMITS, limitAuthenticatedWrites, rateLimit, SHARED_BUDGETS } from "../middleware/rateLimit.middleware";
 import { asyncHandler } from "../lib/asyncHandler";
 
 export const aiRouter = Router();
@@ -18,6 +18,8 @@ aiRouter.post(
   "/ask",
   rateLimit(LIMITS.ASK_BURST),
   rateLimit(LIMITS.ASK_HOURLY),
+  rateLimit(LIMITS.ASK_DAILY),
+  SHARED_BUDGETS.AI_ANSWERS,
   asyncHandler(aiController.ask),
 );
 aiRouter.get("/history", asyncHandler(aiController.history));
@@ -30,12 +32,16 @@ aiRouter.post(
   "/purchase-review",
   rateLimit(LIMITS.PURCHASE_REVIEW_BURST),
   rateLimit(LIMITS.PURCHASE_REVIEW_HOURLY),
+  rateLimit(LIMITS.PURCHASE_REVIEW_DAILY),
+  SHARED_BUDGETS.AI_ANSWERS,
   asyncHandler(aiController.purchaseReview),
 );
 aiRouter.post(
   "/suggest-category",
   rateLimit(LIMITS.SUGGEST_CATEGORY),
   rateLimit(LIMITS.SUGGEST_CATEGORY_HOURLY),
+  rateLimit(LIMITS.SUGGEST_CATEGORY_DAILY),
+  SHARED_BUDGETS.CATEGORY_SUGGESTIONS,
   asyncHandler(aiController.suggestCategory),
 );
 
@@ -54,6 +60,8 @@ aiRouter.post(
   "/conversations",
   rateLimit(LIMITS.ASK_BURST),
   rateLimit(LIMITS.ASK_HOURLY),
+  rateLimit(LIMITS.ASK_DAILY),
+  SHARED_BUDGETS.AI_ANSWERS,
   asyncHandler(aiController.createConversation),
 );
 aiRouter.get("/conversations/:id", asyncHandler(aiController.getConversation));
@@ -68,5 +76,7 @@ aiRouter.post(
   "/conversations/:id/messages",
   rateLimit(LIMITS.ASK_BURST),
   rateLimit(LIMITS.ASK_HOURLY),
+  rateLimit(LIMITS.ASK_DAILY),
+  SHARED_BUDGETS.AI_ANSWERS,
   asyncHandler(aiController.sendConversationMessage),
 );
