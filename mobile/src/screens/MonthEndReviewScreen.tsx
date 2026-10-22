@@ -137,7 +137,7 @@ function ReviewContent({
   businessProfile,
 }: {
   data: Extract<RecoveryMonthEndReview, { status: "reviewable" }>;
-  navigation: any;
+  navigation: MoreScreenProps<"MonthEndReview">["navigation"];
   businessProfile: BusinessProfile;
 }) {
   const t = useTheme();

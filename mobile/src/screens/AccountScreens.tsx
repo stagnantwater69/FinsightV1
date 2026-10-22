@@ -26,7 +26,9 @@ function initialsOf(profile: Profile) {
   return `${profile.firstName.trim().charAt(0)}${profile.lastName.trim().charAt(0)}`.toUpperCase() || "?";
 }
 
-function returnToAccount(navigation: any) {
+type AccountNavigation = MoreScreenProps<"EditProfile">["navigation"];
+
+function returnToAccount(navigation: Pick<AccountNavigation, "canGoBack" | "goBack" | "navigate">) {
   if (navigation.canGoBack()) navigation.goBack();
   else navigation.navigate("Profile");
 }
@@ -176,7 +178,7 @@ function AccountForm({ title, onBack, busy, cancel, children, footer }: {
   );
 }
 
-function useAccountGuard(navigation: any, busy: boolean, dirty: boolean) {
+function useAccountGuard(navigation: Pick<AccountNavigation, "dispatch">, busy: boolean, dirty: boolean) {
   const saved = useRef(false);
   usePreventRemove(busy || dirty, ({ data }) => {
     if (saved.current) { navigation.dispatch(data.action); return; }

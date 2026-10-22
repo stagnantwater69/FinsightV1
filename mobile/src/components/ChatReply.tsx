@@ -12,6 +12,7 @@ import { formatDueDate } from "../lib/recurringAgenda";
 import { useTheme } from "../context/ThemeContext";
 import { font, radius, space, typeScale } from "../theme/tokens";
 import type { ChatAction, ChatAnswerMetadata, RecordItem } from "../lib/types";
+import { navigateToTabScreen, type TabNavigation } from "../navigation/types";
 
 /**
  * Fin's reply text, in the small Markdown slice it writes. Rendered as nested
@@ -86,7 +87,7 @@ export function ChatReplyExtras({
 }) {
   const t = useTheme();
   const { brand, ink } = t;
-  const navigation = useNavigation<any>();
+  const navigation = useNavigation<TabNavigation>();
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [opening, setOpening] = useState<string | null>(null);
   const openingRef = useRef<string | null>(null);
@@ -134,7 +135,7 @@ export function ChatReplyExtras({
     haptics.tapped();
     const target = CHAT_PAGE_TARGETS[key];
     onLeave();
-    navigation.navigate(target.tab, { screen: target.screen, ...(params ? { params } : {}) });
+    navigateToTabScreen(navigation, target, params);
   }
 
   const chip = {

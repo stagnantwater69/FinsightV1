@@ -44,6 +44,27 @@ export const GROUPS = [
     knownDrift: {},
   },
   {
+    name: "CSV import contract",
+    web: ["web/src/pages/importCsv/types.ts"],
+    mobile: ["mobile/src/screens/records/importCsv/types.ts"],
+    exempt: {
+      // Web's review-screen state. Mobile keeps its own in lib/csvImport.ts,
+      // keyed by lower-case field names; none of it crosses the API as-is.
+      PreviewResult: "web-only: preview response as the web review screen stores it",
+      StagedPreviewResult: "web-only: PreviewResult plus the staged upload id",
+      ImportRecordType: "web-only here: mobile declares it in lib/csvImport.ts",
+      MixedStrategy: "web-only here: mobile declares it in lib/csvImport.ts",
+      ExtraField: "web-only: optional columns the web mapping step offers",
+      RowCategorySource: "web-only: badge state on a review row",
+      RowCategory: "web-only: per-row category shown on the review table",
+      RowProblem: "web-only: review-table problem keyed by display field names",
+      MappedField: "web-only: display field names; mobile uses lower-case keys",
+      RowCorrection: "web-only: corrections keyed by display field names",
+      ColumnChoice: "web-only: column mapping form state",
+    },
+    knownDrift: {},
+  },
+  {
     name: "receipt provider consent",
     web: ["web/src/lib/receiptProviderConsent.ts"],
     mobile: ["mobile/src/lib/receiptProviderConsent.ts"],

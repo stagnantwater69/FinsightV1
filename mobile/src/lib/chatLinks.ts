@@ -1,4 +1,5 @@
 import type { ChatPageKey } from "./types";
+import type { TabScreenTarget } from "../navigation/types";
 
 /**
  * Where Ask FinSight's page buttons go on mobile: a tab and the screen inside
@@ -9,7 +10,7 @@ import type { ChatPageKey } from "./types";
  * can never steer the app anywhere this table does not list.
  * tests/chatLinks.test.ts checks every target is a registered screen.
  */
-export const CHAT_PAGE_TARGETS: Record<ChatPageKey, { tab: string; screen: string }> = {
+export const CHAT_PAGE_TARGETS: Record<ChatPageKey, TabScreenTarget> = {
   dashboard: { tab: "Dashboard", screen: "DashboardHome" },
   records: { tab: "Records", screen: "RecordsList" },
   "review-queue": { tab: "Records", screen: "FlaggedRecords" },

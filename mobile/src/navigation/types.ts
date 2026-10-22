@@ -1,5 +1,5 @@
 import type { BottomTabScreenProps } from "@react-navigation/bottom-tabs";
-import type { CompositeScreenProps, NavigatorScreenParams, ParamListBase } from "@react-navigation/native";
+import type { CompositeScreenProps, NavigationProp, NavigatorScreenParams, ParamListBase } from "@react-navigation/native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { BusinessProfile, RecordItem } from "../lib/types";
 
@@ -71,6 +71,31 @@ export type RootTabParamList = {
   Insights: NavigatorScreenParams<InsightsStackParamList> | undefined;
   More: NavigatorScreenParams<MoreStackParamList> | undefined;
 };
+
+type TabStacks = {
+  Dashboard: DashboardStackParamList;
+  Records: RecordsStackParamList;
+  Insights: InsightsStackParamList;
+  More: MoreStackParamList;
+};
+
+/** A tab and a screen that really is in that tab's stack: the `navigate(tab, { screen })` pair. */
+export type TabScreenTarget = { [Tab in keyof TabStacks]: { tab: Tab; screen: keyof TabStacks[Tab] & string } }[keyof TabStacks];
+
+/** For components outside a screen's props that move between tabs (`useNavigation`). */
+export type TabNavigation = NavigationProp<RootTabParamList>;
+
+/**
+ * Opens a screen in another tab from a table of targets.
+ *
+ * TypeScript cannot pair a union of tabs with the matching union of screens in
+ * a single navigate() call, so the call is widened here, once. The pairing is
+ * still checked: `target` can only be a screen that exists in its tab.
+ */
+export function navigateToTabScreen(navigation: TabNavigation, target: TabScreenTarget, params?: object): void {
+  const navigate = navigation.navigate as (tab: string, nested: { screen: string; params?: object }) => void;
+  navigate(target.tab, { screen: target.screen, ...(params ? { params } : {}) });
+}
 
 type InTab<Stack extends ParamListBase, Route extends keyof Stack & string> = CompositeScreenProps<
   NativeStackScreenProps<Stack, Route>,

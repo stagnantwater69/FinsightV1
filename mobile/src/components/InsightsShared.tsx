@@ -13,6 +13,7 @@ import { TAP_FLOOR } from "./touchTarget";
 import type { Palette } from "../theme/palette";
 import { useTheme } from "../context/ThemeContext";
 import type { RecurringSchedule } from "../lib/types";
+import type { InsightsScreenProps } from "../navigation/types";
 
 /*
  * The soft surfaces a status pill sits on used to be four literals declared
@@ -28,8 +29,11 @@ import type { RecurringSchedule } from "../lib/types";
  * sheet shows under each name: plain words for an owner who does not know
  * what "spending impact" means yet.
  */
+/** The insight views the header switches between: screens in the Insights stack. */
+export type InsightScreenId = "ExpenseBehavior" | "SpendingImpact" | "RecoveryTarget";
+
 const INSIGHT_SCREENS: readonly {
-  id: string;
+  id: InsightScreenId;
   name: string;
   detail: string;
   icon: keyof typeof Ionicons.glyphMap;
@@ -53,8 +57,8 @@ function InsightSwitcherSheet({
   onClose,
 }: {
   visible: boolean;
-  active: string;
-  onChoose: (id: string) => void;
+  active: InsightScreenId;
+  onChoose: (id: InsightScreenId) => void;
   onClose: () => void;
 }) {
   const t = useTheme();
@@ -146,8 +150,8 @@ export function InsightHeader({
   titleAccessory,
   right,
 }: {
-  navigation: any;
-  active: string;
+  navigation: Pick<InsightsScreenProps<InsightScreenId>["navigation"], "navigate">;
+  active: InsightScreenId;
   title: string;
   /** Sits right after the view's name, e.g. an "about this" button. */
   titleAccessory?: ReactNode;

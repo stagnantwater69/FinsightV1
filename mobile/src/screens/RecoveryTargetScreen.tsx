@@ -53,6 +53,7 @@ import { useTheme } from "../context/ThemeContext";
 import { openOperatingScheduleFromRecovery } from "../lib/operatingScheduleNavigation";
 import { openMonthEndReviewFromRecovery } from "../lib/monthEndReviewNavigation";
 import type {
+  BusinessProfile,
   RecoveryChangeSincePreviousDay,
   RecoveryCheckpoint,
   RecoveryCheckpointStatus,
@@ -504,8 +505,8 @@ function RecoveryPrimaryAction({
   onReviewMonth,
 }: {
   status: RecoveryStatus | undefined;
-  navigation: any;
-  businessProfile: { id: number } | null;
+  navigation: InsightsScreenProps<"RecoveryTarget">["navigation"];
+  businessProfile: BusinessProfile | null;
   onViewPlan: () => void;
   onReviewMonth: () => void;
 }) {
@@ -520,7 +521,7 @@ function RecoveryPrimaryAction({
           title="Complete setup"
           variant="primary"
           onPress={() =>
-            navigation.navigate("More", { screen: "BusinessProfileForm", params: { profile: businessProfile } })
+            navigation.navigate("More", { screen: "BusinessProfileForm", params: { profile: businessProfile ?? undefined } })
           }
         />
       );
