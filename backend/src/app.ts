@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import pinoHttp from "pino-http";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { env } from "./config/env";
 import { createCorsOptions } from "./config/cors";
 import { prisma } from "./config/prisma";
@@ -84,7 +84,11 @@ app.get("/api/v1/health/live", (_req, res) => {
 function maySeeHealthDetail(req: express.Request): boolean {
   if (env.NODE_ENV !== "production") return true;
   const supplied = req.headers["x-health-token"];
-  return Boolean(env.HEALTH_DETAIL_TOKEN) && supplied === env.HEALTH_DETAIL_TOKEN;
+  if (!env.HEALTH_DETAIL_TOKEN || typeof supplied !== "string") return false;
+  // Compared as fixed-length digests in constant time, so response timing
+  // says nothing about how much of a guess was right.
+  const digest = (value: string) => createHash("sha256").update(value).digest();
+  return timingSafeEqual(digest(supplied), digest(env.HEALTH_DETAIL_TOKEN));
 }
 
 app.get(["/api/v1/health", "/api/v1/health/ready"], async (req, res) => {
