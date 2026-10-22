@@ -14,6 +14,15 @@
 #   BACKUP_S3_SECRET_ACCESS_KEY
 #   BACKUP_KEEP_DAYS              local copies to keep, default 7
 #   BACKUP_SCHEMAS                default "public auth"
+#   BACKUP_AGE_RECIPIENT          an age public key (age1...); each dump is
+#                                 encrypted to it before it is kept or copied
+#
+# Encryption: with BACKUP_AGE_RECIPIENT set, only the encrypted .dump.age is
+# kept or uploaded, and the plaintext is deleted. The private key belongs off
+# this VM (a password manager), so neither a leaked bucket key nor a stolen VM
+# disk can read old backups. Create the pair anywhere with `age-keygen`.
+# Uploading without it is refused: the bucket would then be the only thing
+# between the internet and every owner's records.
 #
 # What is in a dump: the application tables (public) and Supabase Auth's
 # users (auth), so a restore keeps everyone's login. Storage objects (receipt
@@ -43,6 +52,14 @@ DIRECT_URL=$(env_value backend/.env DIRECT_URL)
 BUCKET=$(env_value .env BACKUP_S3_BUCKET)
 KEEP_DAYS=$(env_value .env BACKUP_KEEP_DAYS); KEEP_DAYS=${KEEP_DAYS:-7}
 SCHEMAS=$(env_value .env BACKUP_SCHEMAS); SCHEMAS=${SCHEMAS:-public auth}
+RECIPIENT=$(env_value .env BACKUP_AGE_RECIPIENT)
+
+if [ -n "$RECIPIENT" ]; then
+  command -v age >/dev/null || fail "BACKUP_AGE_RECIPIENT is set but age is not installed (sudo apt-get install age)"
+  case "$RECIPIENT" in age1*) ;; *) fail "BACKUP_AGE_RECIPIENT must be an age public key (age1...)" ;; esac
+elif [ -n "$BUCKET" ]; then
+  fail "BACKUP_S3_BUCKET is set but BACKUP_AGE_RECIPIENT is not; refusing to upload an unencrypted dump. Run age-keygen on your own machine, keep the private key off this VM, and set BACKUP_AGE_RECIPIENT to the public key"
+fi
 
 mkdir -p "$BACKUP_DIR"
 chmod 700 "$BACKUP_DIR"
@@ -68,6 +85,17 @@ fi
 docker run --rm -i "$PG_IMAGE" pg_restore --list < "$file.partial" > /dev/null \
   || fail "the dump is unreadable; kept as $file.partial for inspection"
 mv "$file.partial" "$file"
+
+if [ -n "$RECIPIENT" ]; then
+  age --encrypt --recipient "$RECIPIENT" --output "$file.age.partial" "$file" \
+    || { rm -f "$file.age.partial"; fail "encryption failed; the plaintext dump was kept at $file"; }
+  mv "$file.age.partial" "$file.age"
+  rm -f "$file"
+  name="$name.age"
+  file="$file.age"
+else
+  echo "backup: note: BACKUP_AGE_RECIPIENT is empty, so this dump is not encrypted"
+fi
 echo "backup: wrote $(du -h "$file" | cut -f1)"
 
 if [ -n "$BUCKET" ]; then
@@ -87,5 +115,5 @@ else
   echo "backup: note: BACKUP_S3_BUCKET is empty, so this copy exists only on this VM"
 fi
 
-find "$BACKUP_DIR" -name 'finsight-*.dump' -mtime +"$KEEP_DAYS" -delete
+find "$BACKUP_DIR" \( -name 'finsight-*.dump' -o -name 'finsight-*.dump.age' \) -mtime +"$KEEP_DAYS" -delete
 echo "backup: done"

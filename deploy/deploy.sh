@@ -69,6 +69,11 @@ check_env() {
   fi
   if [ -z "$(env_value .env BACKUP_S3_BUCKET)" ]; then
     echo "deploy: note: BACKUP_S3_BUCKET is empty, so database backups stay on this VM only"
+  elif [ -z "$(env_value .env BACKUP_AGE_RECIPIENT)" ]; then
+    fail ".env: BACKUP_S3_BUCKET is set without BACKUP_AGE_RECIPIENT, so every nightly backup would refuse to upload (see deploy/backup-db.sh)"
+  fi
+  if [ -n "$(env_value .env BACKUP_AGE_RECIPIENT)" ] && ! command -v age >/dev/null; then
+    fail "BACKUP_AGE_RECIPIENT is set but age is not installed: sudo apt-get install age"
   fi
   if [ "$(env_value $b RECEIPT_PROVIDER_DISPATCH_ENABLED)" = true ] && [ "${ALLOW_RECEIPT_PROVIDER:-}" != 1 ]; then
     fail "backend/.env: RECEIPT_PROVIDER_DISPATCH_ENABLED=true sends receipts to an outside provider. Launch is local-first; set it to false, or rerun with ALLOW_RECEIPT_PROVIDER=1 once its consent and data-terms gate is approved"

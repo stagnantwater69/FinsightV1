@@ -6,6 +6,11 @@
 #   bash deploy/restore-drill.sh                      # the newest local dump
 #   bash deploy/restore-drill.sh path/to/file.dump
 #
+# Encrypted dumps (.dump.age) need the private key: point BACKUP_AGE_IDENTITY
+# at the key file. Bring it to the VM only for the drill and delete it after.
+#
+#   BACKUP_AGE_IDENTITY=~/drill-key.txt bash deploy/restore-drill.sh
+#
 # Compare the counts with the live app (or the previous drill). Restoring the
 # auth schema into plain Postgres reports errors for Supabase-only roles and
 # extensions; the application tables are what this checks.
@@ -17,9 +22,28 @@ readonly CONTAINER="finsight-restore-drill-$$"
 
 dump=${1:-}
 if [ -z "$dump" ]; then
-  dump=$(ls -1t "$BACKUP_DIR"/finsight-*.dump 2>/dev/null | head -n1 || true)
+  dump=$(ls -1t "$BACKUP_DIR"/finsight-*.dump "$BACKUP_DIR"/finsight-*.dump.age 2>/dev/null | head -n1 || true)
 fi
 [ -n "$dump" ] && [ -f "$dump" ] || { echo "restore-drill: no dump found (looked in $BACKUP_DIR)" >&2; exit 1; }
+
+case "$dump" in
+  *.age)
+    command -v age >/dev/null || { echo "restore-drill: age is not installed (sudo apt-get install age)" >&2; exit 1; }
+    [ -n "${BACKUP_AGE_IDENTITY:-}" ] && [ -f "$BACKUP_AGE_IDENTITY" ] \
+      || { echo "restore-drill: $dump is encrypted; set BACKUP_AGE_IDENTITY to the private key file" >&2; exit 1; }
+    # Fails here, before any container starts, on a wrong key or a damaged file.
+    age --decrypt --identity "$BACKUP_AGE_IDENTITY" "$dump" > /dev/null \
+      || { echo "restore-drill: could not decrypt $dump with that key" >&2; exit 1; }
+    ;;
+esac
+
+# Decrypted on the fly into pg_restore, so the plaintext never lands on disk.
+read_dump() {
+  case "$dump" in
+    *.age) age --decrypt --identity "$BACKUP_AGE_IDENTITY" "$dump" ;;
+    *) cat "$dump" ;;
+  esac
+}
 
 cleanup() { docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
@@ -34,7 +58,7 @@ done
 started=$(date +%s)
 # Errors from the auth schema's Supabase-specific parts are expected; the
 # counts below are the verdict.
-docker exec -i "$CONTAINER" pg_restore --no-owner --no-privileges -U postgres -d drill < "$dump" \
+read_dump | docker exec -i "$CONTAINER" pg_restore --no-owner --no-privileges -U postgres -d drill \
   2> /tmp/finsight-restore-drill.log || true
 echo "restore-drill: restored in $(( $(date +%s) - started ))s"
 
