@@ -75,6 +75,43 @@ describe("months with records", () => {
     expect(await listRecordMonths(ctx.user.id, ctx.profile.id)).toEqual(["2026-09", "2026-08", "2026-03", "2025-12"]);
   });
 
+  /*
+   * The query walks month to month through the date index rather than reading
+   * every record. This pins it to the plain grouped query it replaced, over a
+   * ledger with multi-month gaps, sales-only and expense-only months, the
+   * first and last day of months, records dated after today, and a
+   * neighbouring business's records in months this one does not have.
+   */
+  it("finds exactly the months a full grouped pass finds", async () => {
+    const today = resolveBusinessToday(ctx.profile.timezone);
+    const other = await makeOwnerWithProfile({}, ["Inventory"]);
+    const dayOffsets = [0, -1, -27, -31, -32, -95, -96, -200, -201, -420, -760, -761, -1100, 3, 45];
+    for (const [i, offset] of dayOffsets.entries()) {
+      const date = utcDateKey(utcAddDays(today, offset));
+      if (i % 3 === 0) await sale(ctx, date, 100 + i);
+      else await expense(ctx, date, 100 + i);
+    }
+    // Dated after today on both sides, so neither table may put a future month in.
+    await sale(ctx, utcDateKey(utcAddDays(today, 70)), 10);
+    // Month boundaries in a year with no other records.
+    await expense(ctx, utcDateKey(utcAddDays(today, -1500)).slice(0, 8) + "01", 10);
+    await sale(ctx, utcDateKey(utcAddDays(today, -1600)).slice(0, 8) + "28", 10);
+    for (const offset of [-60, -300, -900]) await expense(other, utcDateKey(utcAddDays(today, offset)), 10);
+
+    const todayKey = utcDateKey(today);
+    const reference = await prisma.$queryRaw<{ month: string }[]>`
+      SELECT to_char("ExpenseRecord_Date", 'YYYY-MM') AS month FROM "ExpenseRecord"
+      WHERE "BusinessProfile_ID" = ${ctx.profile.id} AND "ExpenseRecord_Date" <= ${todayKey}::date
+      UNION
+      SELECT to_char("SalesReferenceRecord_Date", 'YYYY-MM') AS month FROM "SalesReferenceRecord"
+      WHERE "BusinessProfile_ID" = ${ctx.profile.id} AND "SalesReferenceRecord_Date" <= ${todayKey}::date
+      ORDER BY month DESC`;
+
+    const months = await listRecordMonths(ctx.user.id, ctx.profile.id);
+    expect(months.length).toBeGreaterThan(8);
+    expect(months).toEqual(reference.map((row) => row.month));
+  });
+
   it("is empty for a business with no records", async () => {
     expect(await listRecordMonths(ctx.user.id, ctx.profile.id)).toEqual([]);
   });
