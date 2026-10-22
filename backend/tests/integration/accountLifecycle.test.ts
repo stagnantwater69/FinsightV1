@@ -20,8 +20,15 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
  * changing a password revoked OTHER sessions and not this one, that a rolled
  * back registration deleted the auth user it had just created.
  */
-const { authUserId, supabaseCalls, supabaseFailures, signInConfirmed } = vi.hoisted(() => ({
+const { authUserId, supabaseCalls, supabaseFailures, signInConfirmed, revokedTokens, issuedTokens } = vi.hoisted(() => ({
   authUserId: { value: "" },
+  /**
+   * Access tokens whose session a global sign-out ended. GoTrue then answers
+   * /user for them with `session_not_found`, which is what the fake does too.
+   */
+  revokedTokens: new Set<string>(),
+  /** JWT-shaped tokens a test issued, accepted alongside "valid-token". */
+  issuedTokens: new Set<string>(),
   supabaseCalls: [] as { method: string; args: unknown[] }[],
   /** Set a method name here to make the next call to it fail, for the crash tests. */
   supabaseFailures: new Set<string>(),
@@ -52,7 +59,10 @@ vi.mock("../../src/config/supabase", async (importOriginal) => {
   const admin = {
     async getUser(token: string) {
       supabaseCalls.push({ method: "getUser", args: [token] });
-      return token === "valid-token"
+      if (revokedTokens.has(token)) {
+        return { data: { user: null }, error: { message: "Session from session_id claim in JWT does not exist", code: "session_not_found", status: 403 } };
+      }
+      return token === "valid-token" || issuedTokens.has(token)
         ? { data: { user: { id: authUserId.value, email_confirmed_at: new Date().toISOString() } }, error: null }
         : { data: { user: null }, error: { message: "bad token" } };
     },
@@ -63,7 +73,9 @@ vi.mock("../../src/config/supabase", async (importOriginal) => {
       return record("deleteUser", id, soft) ?? { data: {}, error: null };
     },
     async signOut(token: string, scope: string) {
-      return record("signOut", token, scope) ?? { data: {}, error: null };
+      const failure = record("signOut", token, scope);
+      if (!failure && scope !== "others") revokedTokens.add(token);
+      return failure ?? { data: {}, error: null };
     },
   };
   return {
@@ -267,6 +279,8 @@ beforeEach(async () => {
   resetRateLimits();
   supabaseCalls.length = 0;
   supabaseFailures.clear();
+  revokedTokens.clear();
+  issuedTokens.clear();
   storageDeleted.length = 0;
   storageFails.value = false;
   loggedEvents.length = 0;
@@ -703,6 +717,25 @@ describe("changing a password keeps this session and ends the others", () => {
     expect(callsTo("signOut").map((c) => c.args[1])).toEqual(["global"]);
     expect(loggedEvents).toContain("sessions.revoked");
     expect(loggedEvents).not.toContain("sessions.revoke_failed");
+  });
+
+  it("refuses the same token on the very next request after signing out everywhere", async () => {
+    // JWT-shaped with an expiry, so the verified-token cache really holds it:
+    // without eviction it would keep honouring the token for up to 30 seconds.
+    const claims = { sub: authUserId.value, exp: Math.floor(Date.now() / 1000) + 3600 };
+    const token = `eyJhbGciOiJIUzI1NiJ9.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.signature`;
+    issuedTokens.add(token);
+    const auth = ["Authorization", `Bearer ${token}`] as const;
+
+    expect((await request(app).get("/api/v1/auth/me").set(...auth)).status).toBe(200);
+    expect((await request(app).get("/api/v1/auth/me").set(...auth)).status).toBe(200);
+    expect(callsTo("getUser")).toHaveLength(1);
+
+    expect((await request(app).post("/api/v1/auth/logout-all").set(...auth)).status).toBe(204);
+
+    const after = await request(app).get("/api/v1/auth/me").set(...auth);
+    expect(after.status).toBe(401);
+    expect(callsTo("getUser")).toHaveLength(2);
   });
 
   it("returns a retryable failure when global revocation is refused upstream", async () => {
