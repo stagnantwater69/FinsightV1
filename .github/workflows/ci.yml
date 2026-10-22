@@ -281,6 +281,16 @@ jobs:
     # financial write, navigation, recovery) in Firefox and WebKit, against
     # the production build. The full suite stays on Chromium in the web job;
     # see web/playwright.cross-browser.config.ts.
+    #
+    # Inside Playwright's own image, which ships Firefox, WebKit and their
+    # system libraries. Installing those with `playwright install --with-deps`
+    # took 19 minutes on one run (a slow Ubuntu mirror) and the job timed out
+    # before a test ran. The tag must match @playwright/test in
+    # web/package.json; a mismatch fails fast with "browser not found".
+    # --user 1001 is Playwright's guidance for Firefox on GitHub Actions.
+    container:
+      image: mcr.microsoft.com/playwright:v1.62.1-noble
+      options: --user 1001
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -289,13 +299,15 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci --prefix web
-      - run: npx --prefix web playwright install --with-deps firefox webkit
+      # Its own limit, so a hang fails this step (and keeps its traces) rather
+      # than cancelling the whole job.
       - run: npm run test:e2e:cross-browser --prefix web
+        timeout-minutes: 10
         env:
           VITE_SUPABASE_URL: "https://example.supabase.co"
           VITE_SUPABASE_ANON_KEY: "ci-placeholder-anon-key"
           VITE_API_BASE_URL: "http://localhost:4000/api/v1"
-      - if: failure()
+      - if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
           name: web-cross-browser-failure
