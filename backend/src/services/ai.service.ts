@@ -10,6 +10,7 @@ import { logger } from "../config/logger";
 import type { ReductionOpportunity } from "./reductionOpportunity.service";
 import { categoryFromHistory, loadConfirmedCategoryHistory } from "../lib/categoryHistory";
 import { groundAnswer, type ChatAction, type RecordReference } from "./aiAnswer.service";
+import { providerHttpError } from "../lib/aiProviderError";
 
 // Keep the model names as named constants — Google and OpenRouter rename
 // or deprecate models often. If a call starts failing with a 404/"model
@@ -167,7 +168,7 @@ async function callGemini(input: AskInput): Promise<string> {
   });
 
   if (!res.ok) {
-    throw new Error(`Gemini responded ${res.status}: ${await res.text()}`);
+    throw await providerHttpError("gemini", res);
   }
 
   const data = (await res.json()) as {
@@ -204,7 +205,7 @@ async function callOpenRouter(input: AskInput): Promise<string> {
   });
 
   if (!res.ok) {
-    throw new Error(`OpenRouter responded ${res.status}: ${await res.text()}`);
+    throw await providerHttpError("openrouter", res);
   }
 
   const data = (await res.json()) as {
@@ -429,7 +430,7 @@ async function classifyWithGemini(description: string, categoryNames: string[]):
   });
 
   if (!res.ok) {
-    throw new Error(`Gemini responded ${res.status}: ${await res.text()}`);
+    throw await providerHttpError("gemini", res);
   }
 
   const data = (await res.json()) as {
@@ -462,7 +463,7 @@ async function classifyWithOpenRouter(description: string, categoryNames: string
   });
 
   if (!res.ok) {
-    throw new Error(`OpenRouter responded ${res.status}: ${await res.text()}`);
+    throw await providerHttpError("openrouter", res);
   }
 
   const data = (await res.json()) as {
@@ -643,7 +644,7 @@ async function classifyItemsWithGemini(
     }),
     signal: AbortSignal.timeout(AI_BULK_TIMEOUT_MS),
   });
-  if (!res.ok) throw new Error(`Gemini responded ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw await providerHttpError("gemini", res);
   const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error("Gemini returned no text content");
@@ -669,7 +670,7 @@ async function classifyItemsWithOpenRouter(
     }),
     signal: AbortSignal.timeout(AI_BULK_TIMEOUT_MS),
   });
-  if (!res.ok) throw new Error(`OpenRouter responded ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw await providerHttpError("openrouter", res);
   const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
   const text = data.choices?.[0]?.message?.content;
   if (!text) throw new Error("OpenRouter returned no text content");
@@ -934,7 +935,7 @@ async function reviewPurchaseWithGemini(item: string, amount: number | null, bus
     }),
     signal: AbortSignal.timeout(AI_TIMEOUT_MS),
   });
-  if (!res.ok) throw new Error(`Gemini responded ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw await providerHttpError("gemini", res);
   const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error("Gemini returned no text content");
@@ -956,7 +957,7 @@ async function reviewPurchaseWithOpenRouter(item: string, amount: number | null,
     }),
     signal: AbortSignal.timeout(AI_TIMEOUT_MS),
   });
-  if (!res.ok) throw new Error(`OpenRouter responded ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw await providerHttpError("openrouter", res);
   const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
   const text = data.choices?.[0]?.message?.content;
   if (!text) throw new Error("OpenRouter returned no text content");
