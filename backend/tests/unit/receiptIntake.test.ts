@@ -166,6 +166,12 @@ describe("published receipt intake", () => {
       transcription: [transcription("Ana", "r001.jpg"), transcription("Ben", "r002.jpg")],
     }))).toThrow(/same reviewer/);
     expect(() => buildPublicManifest(publicInput({
+      transcription: [transcription("", "r001.jpg"), transcription("", "r002.jpg")],
+    }))).toThrow(/no reviewer yet/);
+    expect(() => buildPublicManifest(publicInput({
+      transcription: [transcription("Ana", "r001.jpg"), transcription("", "r002.jpg")],
+    }))).toThrow(/1 row\(s\) have no reviewer/);
+    expect(() => buildPublicManifest(publicInput({
       transcription: [transcription("Ana", "r001.jpg", { vendor: "", date: "", total: "", items: "" })],
     }))).toThrow(/nothing typed/);
     expect(() => buildPublicManifest(publicInput({ readImage: () => Buffer.from("same bytes") }))).toThrow(/same image bytes/);

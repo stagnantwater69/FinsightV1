@@ -290,6 +290,9 @@ export interface PublicIntakeInput {
 export function buildPublicManifest({ transcription, attribution, readImage }: PublicIntakeInput): LocalCorpusEntry[] {
   if (attribution.trim() === "") throw new IntakeError("ATTRIBUTION.txt must name the dataset, its author and its licence");
   const names = new Set(transcription.map((row) => row.reviewer?.trim().toLowerCase()).filter(Boolean));
+  const unsigned = transcription.filter((row) => !row.reviewer?.trim()).length;
+  if (names.size === 0) throw new IntakeError("transcription.csv: no reviewer yet; type the values and put your initials in the reviewer column of every row");
+  if (unsigned > 0) throw new IntakeError(`transcription.csv: ${unsigned} row(s) have no reviewer; finish or remove them`);
   if (names.size !== 1) throw new IntakeError("transcription.csv: every row needs the same reviewer name");
 
   const entries: LocalCorpusEntry[] = [];
