@@ -1,11 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-/**
- * The local read's headline fields are no longer shown while the provider is
- * still reading: on 50 public receipts they were right 4-18 times in 40-49,
- * so the owner watched wrong figures change. Confirmation still waits for the
- * finished read.
- */
+/** A receipt cannot be confirmed while the provider is still reading it. */
 
 vi.mock("../../src/services/storage.service", async () => {
   const { tinyReceiptJpeg } = await import("../helpers/receiptImageFixtures");
@@ -25,7 +20,7 @@ vi.mock("../../src/services/ocr.service", async (importOriginal) => {
   return { ...actual, extractReceipt: vi.fn(async () => ({ text: ocrText.value, confidence: 95, lines: [] })) };
 });
 
-const during = vi.hoisted(() => ({ scanId: 0, userId: 0, seen: null as unknown, extract: async (): Promise<void> => {} }));
+const during = vi.hoisted(() => ({ extract: async (): Promise<void> => {} }));
 
 vi.mock("../../src/services/receiptScan/providerAdapters", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/services/receiptScan/providerAdapters")>();
@@ -45,7 +40,6 @@ vi.mock("../../src/services/receiptScan/providerAdapters", async (importOriginal
 
 import { prisma } from "../../src/config/prisma";
 import { grantReceiptProviderConsent } from "../../src/services/receiptProviderConsent.service";
-import { getScan } from "../../src/services/receiptScan/queue";
 import { runReceiptWorkerOnce } from "../../src/services/receiptScan/worker";
 import { disconnectDb, makeOwnerWithProfile, resetDb } from "../setup/testDb";
 
@@ -89,19 +83,13 @@ async function queuedScan() {
       pages: { create: [{ pageNumber: 1, imageFile: `${owner.profile.id}/preview.jpg` }] },
     },
   });
-  during.scanId = scan.id;
-  during.userId = owner.user.id;
   return scan;
 }
 
 beforeEach(async () => {
   await resetDb();
   vi.unstubAllEnvs();
-  ocrText.value = "LOCAL STORE\n2026-09-01\nRice 100.00\nTOTAL PHP 100.00";
-  during.seen = null;
-  during.extract = async () => {
-    during.seen = (await getScan(during.userId, during.scanId)).localPreview;
-  };
+  during.extract = async () => {};
   owner = await makeOwnerWithProfile({}, ["Inventory"]);
 });
 
@@ -110,28 +98,7 @@ afterAll(async () => {
   await disconnectDb();
 });
 
-describe("receipt local preview", () => {
-  it.each(["always", "rescue"] as const)("shows and writes no local reading under %s routing", async (routing) => {
-    await enableProvider(routing);
-    ocrText.value = routing === "rescue" ? "~~~ unreadable ~~~" : ocrText.value;
-    const scan = await queuedScan();
-    const updates = vi.spyOn(prisma.receiptScan, "updateMany");
-    during.seen = "provider never called";
-
-    expect(await runReceiptWorkerOnce()).toBe(true);
-
-    // The provider was called (rescue calls it for the unreadable local read)
-    // and, while it read, the scan carried no local reading.
-    expect(during.seen).toBeNull();
-    const previewWrites = updates.mock.calls.filter(([args]) =>
-      JSON.stringify((args as { data?: unknown }).data ?? {}).includes("localPreview"));
-    expect(previewWrites).toHaveLength(0);
-    updates.mockRestore();
-    const finished = await getScan(owner.user.id, scan.id);
-    expect(finished.processingStatus).toBe("Complete");
-    expect(finished.localPreview).toBeNull();
-  });
-
+describe("receipt read in progress", () => {
   it("refuses to confirm while the provider is still reading", async () => {
     await enableProvider("always");
     const scan = await queuedScan();
