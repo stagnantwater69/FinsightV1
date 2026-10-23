@@ -61,6 +61,8 @@ export interface ReceiptProviderDispatchInput {
   pages: ReceiptProviderEvidenceReference[];
   preprocessingVersion: string;
   normalizedSchemaVersion: string;
+  /** The day the receipt was uploaded (YYYY-MM-DD, Philippine time); see lib/receiptDates. */
+  referenceDate?: string | null;
 }
 
 export const RECEIPT_PROCESSING_LEASE_MS = 2 * 60 * 1000;
@@ -86,6 +88,36 @@ export interface ReceiptProviderDispatchResult {
   latencyMs: number | null;
   merge: ProviderMergeResult;
   telemetry?: ReceiptProviderDispatchTelemetry;
+  /**
+   * Set when the provider gave no answer for a reason that passes: a cooldown
+   * after rate limiting, or a rate-limit / server refusal that billed nothing.
+   * A later attempt from this time on can dispatch again (see
+   * `reservationRearmable`), so the worker may wait for the answer instead of
+   * keeping the local read.
+   */
+  retryAt?: Date | null;
+  /**
+   * The same merge against a different local read. Present only when the
+   * provider answered (or a stored answer replayed); see
+   * `rebaseReceiptProviderMerge`.
+   */
+  mergeWith?: (local: NormalizedReceiptExtraction) => ProviderMergeResult;
+}
+
+/**
+ * The gate's merge, recomputed against a local read that was not ready when
+ * the gate ran: an always-routed scan is dispatched while its OCR is still
+ * running (see the worker), so the gate merged against a placeholder. The
+ * provider outcome, its validation and the merge rules are unchanged; only
+ * the fallback the provider's answer is laid over is the real one. With no
+ * provider answer the result is the local read, as `skipped` returns it.
+ */
+export function rebaseReceiptProviderMerge(
+  result: ReceiptProviderDispatchResult,
+  local: NormalizedReceiptExtraction,
+): ProviderMergeResult {
+  const parsed = normalizedReceiptExtractionSchema.parse(local);
+  return result.mergeWith ? result.mergeWith(parsed) : skipped(parsed, result.code).merge;
 }
 
 export interface ReceiptProviderDispatchTelemetry {
@@ -799,6 +831,31 @@ function reservationNeverSubmitted(existing: { status: Reservation["status"]; fi
   return existing.status === "CANCELLED" && existing.finalBillableUnits === 0;
 }
 
+/**
+ * A refusal the provider answered definitively — rate limited, or a server
+ * error with an HTTP response — and billed nothing for. It returned no reading,
+ * so there is nothing to replay and asking again cannot charge twice for one
+ * answer. Measured: this key's quota refuses with 429 after about 16 calls a
+ * minute, so a burst of scans otherwise kept the weak local read for good.
+ */
+function unbilledProviderRefusal(existing: {
+  status: Reservation["status"];
+  finalBillableUnits: number | null;
+  outcomeCode: string | null;
+}): boolean {
+  return existing.status === "FAILED"
+    && existing.finalBillableUnits === 0
+    && (existing.outcomeCode === "RATE_LIMITED" || existing.outcomeCode === "PROVIDER_SERVER_ERROR");
+}
+
+function reservationRearmable(existing: {
+  status: Reservation["status"];
+  finalBillableUnits: number | null;
+  outcomeCode: string | null;
+}): boolean {
+  return reservationNeverSubmitted(existing) || unbilledProviderRefusal(existing);
+}
+
 async function reserve(
   input: ReceiptProviderDispatchInput,
   config: ReceiptProviderConfiguration & {
@@ -814,7 +871,7 @@ async function reserve(
   now: Date,
 ): Promise<ReserveResult> {
   const existing = await prisma.externalProviderDispatch.findUnique({ where: { reservationKeyHash } });
-  let rearm: { id: number } | null = null;
+  let rearm: { id: number; status: Reservation["status"] } | null = null;
   if (existing) {
     if (
       existing.businessProfileId !== input.businessProfileId ||
@@ -845,10 +902,11 @@ async function reserve(
       return { kind: "replay", reservation: existing as Reservation, outcome };
     }
     // A reservation the stale reconciler (or a pre-submission check) cancelled
-    // sent nothing and billed nothing, so it is not an attempt. The key is
-    // unique, so the row is re-armed in place rather than duplicated.
-    if (!reservationNeverSubmitted(existing)) throw new GateRefusal("PROVIDER_DISPATCH_ALREADY_ATTEMPTED");
-    rearm = { id: existing.id };
+    // sent nothing and billed nothing, so it is not an attempt; nor is an
+    // unbilled rate-limit or server refusal, which returned no reading. The key
+    // is unique, so the row is re-armed in place rather than duplicated.
+    if (!reservationRearmable(existing)) throw new GateRefusal("PROVIDER_DISPATCH_ALREADY_ATTEMPTED");
+    rearm = { id: existing.id, status: existing.status };
   }
 
   const { start, end } = cycleAt(now);
@@ -925,7 +983,7 @@ async function reserve(
             // createdAt is what the reconciler reads as the reservation time,
             // so it moves with the re-arm or the row is cancelled again at once.
             const rearmed = await tx.externalProviderDispatch.updateMany({
-              where: { id: rearm.id, reservationKeyHash, status: "CANCELLED", finalBillableUnits: 0 },
+              where: { id: rearm.id, reservationKeyHash, status: rearm.status, finalBillableUnits: 0 },
               data: {
                 ...data,
                 finalBillableUnits: null,
@@ -1177,6 +1235,7 @@ export async function dispatchReceiptProviderRescue(
     return {
       ...skipped(localExtraction, "PROVIDER_COOLDOWN_ACTIVE"),
       provider: config.provider,
+      retryAt: cooldown.retryAt,
       telemetry: dispatchTelemetry(null, cooldown, {
         cooldownLookupMs,
         reservationMs,
@@ -1295,6 +1354,7 @@ export async function dispatchReceiptProviderRescue(
       },
       rescueDecision: input.rescueDecision,
       localCorroboration: localCorroborationFrom(localExtraction),
+      referenceDate: input.referenceDate ?? null,
       pages,
     });
   } catch {
@@ -1310,13 +1370,15 @@ export async function dispatchReceiptProviderRescue(
     if (!validation.ok || validation.outcome.status !== "SUCCEEDED") {
       return skipped(localExtraction, "PROVIDER_DISPATCH_ALREADY_ATTEMPTED");
     }
+    const replayed = validation.outcome;
     return {
       code: "PROVIDER_OK",
       dispatched: true,
       dispatchStatus: "SUCCEEDED",
       provider: config.provider,
-      latencyMs: validation.outcome.latencyMs,
-      merge: mergeReceiptProviderOutcome(localExtraction, request, validation.outcome),
+      latencyMs: replayed.latencyMs,
+      merge: mergeReceiptProviderOutcome(localExtraction, request, replayed),
+      mergeWith: (local) => mergeReceiptProviderOutcome(local, request, replayed),
       telemetry: dispatchTelemetry(validation.outcome, null, {
         cooldownLookupMs,
         reservationMs,
@@ -1452,7 +1514,15 @@ export async function dispatchReceiptProviderRescue(
   settlementMs = Date.now() - settlementStartedAt;
 
   const merge = mergeReceiptProviderOutcome(localExtraction, request, outcome);
+  const refusedWithoutCharge = outcome.status === "FAILED" && unbilledProviderRefusal({
+    status: outcome.status,
+    finalBillableUnits: outcome.finalBillableUnits,
+    outcomeCode: outcome.outcomeCode,
+  });
   return {
+    retryAt: refusedWithoutCharge
+      ? new Date(clock().getTime() + (outcome.retryAfterMs ?? RECEIPT_PROVIDER_COOLDOWN_MS))
+      : null,
     code: outcome.status === "SUCCEEDED"
       ? "PROVIDER_OK"
       : outcome.outcomeCode === "TIMEOUT_AFTER_SUBMISSION"
@@ -1463,6 +1533,7 @@ export async function dispatchReceiptProviderRescue(
     provider: config.provider,
     latencyMs: outcome.latencyMs,
     merge,
+    mergeWith: (local) => mergeReceiptProviderOutcome(local, request, outcome),
     telemetry: dispatchTelemetry(outcome, null, {
       cooldownLookupMs,
       reservationMs,

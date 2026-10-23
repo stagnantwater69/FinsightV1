@@ -156,6 +156,29 @@ export interface RescueDecisionOptions {
 }
 
 /**
+ * The decision for an always-routed scan dispatched BEFORE the local read
+ * finishes. Routing policy alone requests the provider, and nothing about the
+ * local read is claimed: no validation, missing or conflicting field, since
+ * none has been assessed yet. Every attempt of a scan builds the same
+ * decision, so its reservation key is stable and a retried scan replays
+ * rather than pays twice.
+ */
+export function decideAlwaysRoutingBeforeLocalRead(calibration: ReceiptCalibration): RescueDecision {
+  const reasons: RescueReasonCode[] = ["HANDWRITING_UNASSESSED", "DAMAGE_UNASSESSED", "PROVIDER_ROUTING_ALWAYS"];
+  if (calibration.state === "UNCALIBRATED") reasons.push("CALIBRATION_UNAVAILABLE");
+  else if (calibration.state === "OUT_OF_SCOPE") reasons.push("CALIBRATION_OUT_OF_SCOPE");
+  const providerRescueRequested = calibration.state === "CALIBRATED";
+  return rescueDecisionSchema.parse({
+    version: RESCUE_DECISION_VERSION,
+    providerRescueRequested,
+    reviewLevel: "FOCUSED",
+    localResultDisposition: providerRescueRequested ? "KEEP_AS_FALLBACK" : "PREFILL_FOR_REVIEW",
+    reasons,
+    calibration,
+  });
+}
+
+/**
  * Produces routing metadata only; raw OCR confidence and receipt content are
  * not inputs. `routing: "always"` adds a policy reason so a clean local read
  * still requests the provider, but calibration keeps the final say.

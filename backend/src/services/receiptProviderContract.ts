@@ -95,6 +95,9 @@ export const receiptProviderRequestSchema = z
     reservation: reservedProviderUnitsSchema,
     rescueDecision: rescueDecisionSchema,
     localCorroboration: localCorroborationSchema.nullable().optional(),
+    // The day the receipt was uploaded (Philippine time); settles a printed date
+    // whose day and month could be either way round (lib/receiptDates).
+    referenceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
     pages: z.array(providerPageSchema).min(1).max(8),
   })
   .strict()
@@ -168,6 +171,8 @@ export const evidenceValidationCodeSchema = z.enum([
   "LOCAL_CONFLICT",
   "REGION_UNAVAILABLE",
   "OWNER_REVIEW_REQUIRED",
+  // The printed date's day and month could be either way round; the order was inferred.
+  "DATE_ORDER_INFERRED",
 ]);
 export type EvidenceConfidenceBand = z.infer<typeof evidenceConfidenceBandSchema>;
 export type EvidenceCalibrationState = z.infer<typeof evidenceCalibrationStateSchema>;

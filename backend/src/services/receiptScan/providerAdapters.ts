@@ -11,17 +11,46 @@ import {
   verifyVisionReceipt,
   VISION_MODEL,
   type VisionProviderFailure,
+  type VisionReceipt,
   type VisionVerifierFailure,
 } from "../visionOcr.service";
 import { extractReceiptWithVeryfi } from "../veryfiOcr.service";
+import { isoIfValid, readNumericDate } from "../../lib/receiptDates";
 
 export const VERYFI_RECEIPT_API_VERSION = "receipt-api-v8" as const;
+
+/*
+ * The prompt tells Gemini to read an open day/month order day-first, which
+ * swaps the month-first dates most Metro Manila registers print (11 of 15 date
+ * misses on 50 public receipts). Its copy of the printed characters is re-read
+ * with the parser's rule instead (lib/receiptDates), so both readers settle the
+ * same paper the same way. Applied only when Gemini's own date is one of the
+ * two readings of those characters: printed text that disagrees with the
+ * model's date is not trusted to overrule it.
+ */
+export function settleDateOrder(
+  receipt: VisionReceipt,
+  referenceDate: string | null,
+): { receipt: VisionReceipt; dateOrderInferred: boolean } {
+  const printedText = receipt.dateText
+    ?? (receipt.warnings ?? []).find((warning) => warning.code === "AMBIGUOUS_DATE")?.detail
+    ?? null;
+  if (receipt.date === null || printedText === null) return { receipt, dateOrderInferred: false };
+  const printed = readNumericDate(printedText, referenceDate);
+  if (!printed) return { receipt, dateOrderInferred: false };
+  const readings = [
+    isoIfValid(printed.year, printed.second, printed.first),
+    isoIfValid(printed.year, printed.first, printed.second),
+  ];
+  if (!readings.includes(receipt.date)) return { receipt, dateOrderInferred: false };
+  return { receipt: { ...receipt, date: printed.iso }, dateOrderInferred: printed.ambiguous };
+}
 
 function evidence(
   source: "gemini" | "veryfi",
   sourceVersion: string,
   validationState: "VALIDATED" | "UNVALIDATED",
-  validationCodes: ("FORMAT_VALID" | "ARITHMETIC_VALID" | "LOCAL_MATCH" | "REGION_UNAVAILABLE" | "OWNER_REVIEW_REQUIRED")[],
+  validationCodes: ("FORMAT_VALID" | "ARITHMETIC_VALID" | "LOCAL_MATCH" | "REGION_UNAVAILABLE" | "OWNER_REVIEW_REQUIRED" | "DATE_ORDER_INFERRED")[],
   pageNumber: number | null = null,
 ): NormalizedEvidence {
   return {
@@ -79,6 +108,7 @@ function normalized(
   },
   verifierAccepted: boolean,
   localMatch = false,
+  dateOrderInferred = false,
 ): NormalizedReceiptExtraction {
   const source = request.provider as "gemini" | "veryfi";
   const formatEvidence = evidence(
@@ -86,6 +116,12 @@ function normalized(
     request.providerVersion,
     "VALIDATED",
     ["FORMAT_VALID", "REGION_UNAVAILABLE", "OWNER_REVIEW_REQUIRED"],
+  );
+  const inferredDateEvidence = evidence(
+    source,
+    request.providerVersion,
+    "VALIDATED",
+    ["FORMAT_VALID", "DATE_ORDER_INFERRED", "REGION_UNAVAILABLE", "OWNER_REVIEW_REQUIRED"],
   );
   // The local read checked this date and total against the paper and the
   // provider read the same values: say so, rather than claim a verifier ran.
@@ -136,7 +172,12 @@ function normalized(
     schemaVersion: request.normalizedSchemaVersion,
     source,
     sourceVersion: request.providerVersion,
-    date: { value: receipt.date, evidence: receipt.date === null ? null : localMatch ? localMatchEvidence : formatEvidence },
+    date: {
+      value: receipt.date,
+      evidence: receipt.date === null
+        ? null
+        : dateOrderInferred ? inferredDateEvidence : localMatch ? localMatchEvidence : formatEvidence,
+    },
     vendor: { value: receipt.vendor, evidence: receipt.vendor === null ? null : formatEvidence },
     currency: { value: currency, evidence: currency === null ? null : currencyEvidence },
     total: { value: receipt.amount, evidence: receipt.amount === null ? null : localMatch ? localMatchEvidence : formatEvidence },
@@ -305,19 +346,20 @@ export function createGeminiReceiptAdapter(): ReceiptProviderAdapter & { readonl
         return extractionUnavailable(request, Date.now() - started, extraction.failure, extractionStages);
       }
       if (extraction.receipt === null) return invalid(request, Date.now() - started, 1, extractionStages);
+      const { receipt, dateOrderInferred } = settleDateOrder(extraction.receipt, request.referenceDate ?? null);
 
-      if (agreesWithLocalRead(request, extraction.receipt)) {
+      if (agreesWithLocalRead(request, receipt)) {
         return {
           ...metadata(request, Date.now() - started, null, extractionStages),
           status: "SUCCEEDED",
           timeoutOutcome: "NOT_TIMED_OUT",
           outcomeCode: "OK",
           finalBillableUnits: 1,
-          extraction: normalized(request, extraction.receipt, false, true),
+          extraction: normalized(request, receipt, false, true, dateOrderInferred),
         } satisfies ReceiptProviderOutcome;
       }
 
-      const verification = await verifyVisionReceipt(pages, extraction.receipt, {
+      const verification = await verifyVisionReceipt(pages, receipt, {
         timeoutMs: request.timeoutMs,
       });
       const stageTimings = {
@@ -340,7 +382,7 @@ export function createGeminiReceiptAdapter(): ReceiptProviderAdapter & { readonl
         timeoutOutcome: "NOT_TIMED_OUT",
         outcomeCode: "OK",
         finalBillableUnits: 2,
-        extraction: normalized(request, extraction.receipt, true),
+        extraction: normalized(request, receipt, true, false, dateOrderInferred),
       } satisfies ReceiptProviderOutcome;
     },
   };

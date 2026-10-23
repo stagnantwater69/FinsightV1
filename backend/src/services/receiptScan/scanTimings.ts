@@ -6,7 +6,7 @@ import { performance } from "node:perf_hooks";
  */
 export type ReceiptScanStage = "restore" | "ocr" | "provider" | "finalize" | "persist";
 
-export type ReceiptScanOutcome = "complete" | "retrying" | "failed" | "lease-lost";
+export type ReceiptScanOutcome = "complete" | "retrying" | "waiting-for-provider" | "failed" | "lease-lost";
 
 export interface ReceiptScanTimings {
   attempt: number;

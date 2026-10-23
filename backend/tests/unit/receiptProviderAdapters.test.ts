@@ -344,6 +344,47 @@ describe("provider currency", () => {
  * the total on the paper, Gemini read the same two values, and Gemini's lines
  * add up. Every other case still pays for, and waits for, the second check.
  */
+describe("settling Gemini's day/month order", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    verifyVisionReceipt.mockResolvedValue({ verdict: { accept: true, rejectedFields: [] }, failure: null });
+  });
+
+  const extractWith = async (receipt: Record<string, unknown>, referenceDate: string | null) => {
+    extractReceiptWithVision.mockResolvedValue({ receipt: { ...reconciledReceipt, warnings: [], ...receipt } });
+    return (await createGeminiReceiptAdapter().extract(providerRequest({ referenceDate }))) as ReceiptProviderOutcome;
+  };
+
+  it("re-reads the printed date with the upload-date rule and marks the order inferred", async () => {
+    const outcome = await extractWith({ date: "2024-06-07", dateText: "07/06/2024" }, "2024-07-06");
+    expect(outcome.extraction?.date.value).toBe("2024-07-06");
+    expect(outcome.extraction?.date.evidence?.validationCodes).toContain("DATE_ORDER_INFERRED");
+    // The verifier checks the settled date, not the model's day-first one.
+    expect(verifyVisionReceipt.mock.calls[0]![1]).toMatchObject({ date: "2024-07-06" });
+  });
+
+  it("falls back to the ambiguity warning's text when no printed date came back", async () => {
+    const outcome = await extractWith({
+      date: "2024-06-07",
+      dateText: null,
+      warnings: [{ code: "AMBIGUOUS_DATE", field: "date", detail: "07/06/2024" }],
+    }, "2024-07-06");
+    expect(outcome.extraction?.date.value).toBe("2024-07-06");
+  });
+
+  it("does not flag a date the paper or the upload date settles", async () => {
+    const outcome = await extractWith({ date: "2024-06-18", dateText: "06/18/2024" }, "2024-07-06");
+    expect(outcome.extraction?.date.value).toBe("2024-06-18");
+    expect(outcome.extraction?.date.evidence?.validationCodes).not.toContain("DATE_ORDER_INFERRED");
+  });
+
+  it("keeps the model's date when its printed text reads as a different date", async () => {
+    const outcome = await extractWith({ date: "2024-06-07", dateText: "07/08/2024" }, "2024-07-06");
+    expect(outcome.extraction?.date.value).toBe("2024-06-07");
+    expect(outcome.extraction?.date.evidence?.validationCodes).not.toContain("DATE_ORDER_INFERRED");
+  });
+});
+
 describe("skipping the verifier when the local read agrees", () => {
   const agreeing = { localCorroboration: { date: "2026-09-14", total: 350 } };
 

@@ -35,8 +35,8 @@ import {
 import type { ReceiptCaptureMetadata, ReceiptItemEvidenceInput, RescuedFields } from "./types";
 import { selectOcrCandidate } from "./ocrCandidateSelection";
 import { readReceiptPagesWithinOcrBudget } from "./ocrPageScheduling";
-import { LOCAL_PREVIEW_KEY, localPreviewFrom, type ReceiptLocalPreview } from "./localPreview";
 import { assessReceiptLikelihood } from "../../lib/receiptLikelihood";
+import { philippineDate } from "../../lib/receiptDates";
 import { parseReceiptDetails, providerReportedCurrency } from "../../lib/receiptDetails";
 import { validateReceiptUpload } from "../../lib/receiptUploadValidation";
 import {
@@ -44,7 +44,11 @@ import {
   RECEIPT_UPLOAD_MAX_LOGICAL_PAGES,
   RECEIPT_UPLOAD_MAX_OBJECT_BYTES,
 } from "../../lib/receiptUploadContract";
-import { decideReceiptRescue, RESCUE_DECISION_VERSION } from "../receiptRescueDecision";
+import {
+  decideAlwaysRoutingBeforeLocalRead,
+  decideReceiptRescue,
+  RESCUE_DECISION_VERSION,
+} from "../receiptRescueDecision";
 import {
   RECEIPT_PROVIDER_CONTRACT_VERSION,
   type NormalizedEvidence,
@@ -54,7 +58,9 @@ import { OVERLAP_RESOLVER_VERSION } from "../../lib/receiptOverlapItems";
 import { readLocalItems } from "./localItems";
 import {
   dispatchReceiptProviderRescue,
+  rebaseReceiptProviderMerge,
   RECEIPT_PROCESSING_LEASE_MS,
+  type ReceiptProviderDispatchResult,
 } from "../receiptProviderDispatch.service";
 import { getReceiptProviderConfiguration } from "../../config/receiptProvider";
 import { createGeminiReceiptAdapter, createVeryfiReceiptAdapter } from "./providerAdapters";
@@ -130,6 +136,8 @@ type StoredInput = {
   pages: StoredPage[];
   /** As stored when the attempt began; the local preview is merged into it. */
   extractorVersions: Prisma.JsonValue | null;
+  /** The upload day (YYYY-MM-DD, Philippine time) that settles an open day/month order. */
+  referenceDate: string;
 };
 
 export interface ReceiptProcessingLease {
@@ -167,8 +175,10 @@ function sha256(buffer: Buffer): string {
   return createHash("sha256").update(buffer).digest("hex");
 }
 
-async function readStoredCandidate(evidence: StoredEvidence, withQuality: boolean) {
-  const buffer = await downloadReceiptImageBounded(evidence.path, RECEIPT_UPLOAD_MAX_OBJECT_BYTES, evidence.info);
+/** `download` is a read of the same object already under way, shared rather than repeated. */
+async function readStoredCandidate(evidence: StoredEvidence, withQuality: boolean, download?: Promise<Buffer>) {
+  const buffer = await (download
+    ?? downloadReceiptImageBounded(evidence.path, RECEIPT_UPLOAD_MAX_OBJECT_BYTES, evidence.info));
   await validateReceiptUpload({ buffer, mimetype: evidence.info.mimetype });
   const digest = sha256(buffer);
   const quality = withQuality ? await assessImageQuality(buffer) : null;
@@ -301,10 +311,12 @@ function mergeIntoRescuedFields(
    * as unvalidated, so its answer normally replaces it. The one answer that
    * settles nothing is the same digits read the other way round: measured
    * across repeat runs the model resolves that case inconsistently, whereas
-   * the parser applies the DD/MM convention every time. Then the parser's
-   * reading stands and stays flagged for the owner; a provider date that is
-   * not the swap is a different reading of the paper and wins as any other
-   * field does.
+   * the parser applies the upload-date rule (lib/receiptDates) every time.
+   * Then the parser's reading stands and stays flagged for the owner; a
+   * provider date that is not the swap is a different reading of the paper
+   * and wins as any other field does. The adapter settles the provider's own
+   * open day/month order with the same rule, and says so with
+   * DATE_ORDER_INFERRED, which keeps the owner's "check the day and month".
    */
   const providerDateIsSwap =
     applied.has("date")
@@ -313,13 +325,15 @@ function mergeIntoRescuedFields(
     && receipt.date.value !== null
     && isDayMonthSwap(parsed.date, receipt.date.value);
   const dateApplied = applied.has("date") && !providerDateIsSwap;
+  const providerDateOrderInferred =
+    receipt.date.evidence?.validationCodes.includes("DATE_ORDER_INFERRED") ?? false;
   return {
     date: dateApplied ? receipt.date.value : parsed.date,
     vendor: receipt.vendor.value,
     description: receipt.vendor.value ? `Purchase from ${receipt.vendor.value}` : "Receipt purchase",
     amount: receipt.total.value,
     items: providerItems ? items : localItems,
-    dateAmbiguous: dateApplied ? false : parsed.dateAmbiguous,
+    dateAmbiguous: dateApplied ? providerDateOrderInferred : parsed.dateAmbiguous,
     dateSourceText: dateApplied ? null : parsed.dateSourceText,
     visionAssisted: applied.size > 0,
     itemsFromVision: providerItems,
@@ -507,6 +521,7 @@ async function processScan(
   heartbeatTimer.unref();
   let logProviderGate: ((persisted: boolean) => void) | null = null;
   let stopFinalize: (() => void) | null = null;
+  let earlyGate: Promise<ReceiptProviderDispatchResult> | null = null;
   try {
     const ocrResults: OcrResult[] = [];
     const originalOcrResults: (OcrResult | null)[] = [];
@@ -523,20 +538,32 @@ async function processScan(
       loadBytes: () => Promise<Buffer>;
     }[] = [];
     /*
-     * Under always-routing the gate is about to ask for every selected page,
-     * so its download starts here and overlaps the gate's cooldown lookup and
-     * reservation (and the other pages' downloads), instead of starting there,
-     * one page after another. It is still a fresh read of the stored object,
-     * so the gate's re-hash keeps its meaning; the bytes are held only from
-     * this point to dispatch. Rescue routing, where most scans never call a
-     * provider, downloads on demand as before.
+     * Under always-routing the provider is the reader, so it no longer waits
+     * for the local one: it is dispatched now, on the original photographs,
+     * and OCR runs alongside. The local read only fills fields the provider
+     * left empty (and, measured on 50 public receipts, got the total right 18
+     * times to the provider's 49), so waiting for it cost every scan its OCR
+     * time. The gate's merge is redone against the finished local read below.
+     * Rescue routing still needs the local read to decide whether to call.
      */
     const readConfig = getReceiptProviderConfiguration();
-    const prefetchProviderEvidence = readConfig.operational && readConfig.routing === "always";
+    // One download of each original serves both the early dispatch's digest and OCR.
+    const originalDownloads = new Map<number, Promise<Buffer>>();
+    if (readConfig.operational && readConfig.routing === "always") {
+      for (const page of input.pages) {
+        const download = downloadReceiptImageBounded(page.original.path, RECEIPT_UPLOAD_MAX_OBJECT_BYTES, page.original.info);
+        download.catch(() => undefined);
+        originalDownloads.set(page.pageNumber, download);
+      }
+      earlyGate = clock.measure("provider", () =>
+        dispatchBeforeLocalRead(scanId, input, attempt, readConfig, originalDownloads));
+      // Awaited below or in the catch; never left to reject unobserved.
+      earlyGate.catch(() => undefined);
+    }
     const pageReads = await clock.measure("ocr", () =>
       readReceiptPagesWithinOcrBudget(input.pages, async (page) => {
         const [original, processed] = await Promise.all([
-          readStoredCandidate(page.original, true),
+          readStoredCandidate(page.original, true, originalDownloads.get(page.pageNumber)),
           page.processed ? readStoredCandidate(page.processed, false) : Promise.resolve(null),
         ]);
         return { page, original, processed };
@@ -600,9 +627,7 @@ async function processScan(
          * scan was parsed from refuses the dispatch, which is the behaviour
          * that guard exists for.
          */
-        loadBytes: prefetchProviderEvidence
-          ? startedDownload(chosenEvidence)
-          : () => downloadReceiptImageBounded(chosenEvidence.path, RECEIPT_UPLOAD_MAX_OBJECT_BYTES, chosenEvidence.info),
+        loadBytes: () => downloadReceiptImageBounded(chosenEvidence.path, RECEIPT_UPLOAD_MAX_OBJECT_BYTES, chosenEvidence.info),
       });
       await heartbeatScan(scanId, attempt);
     }
@@ -616,7 +641,7 @@ async function processScan(
     const pageTexts = ocrResults.map((r) => r.text);
     const combinedText = pageTexts.join("\n");
     const combinedLines = ocrResults.flatMap((r) => r.lines);
-    const parsed = parseReceiptFields(combinedText);
+    const parsed = parseReceiptFields(combinedText, { referenceDate: input.referenceDate });
     const localItems = readLocalItems(pageTexts, parsed.amount);
     const deterministicItems = localItems.items;
     const seamFreeText = localItems.seamFreeText;
@@ -657,23 +682,27 @@ async function processScan(
       routing: providerConfig.operational ? providerConfig.routing : "rescue",
     });
     const localExtraction = localNormalizedExtraction(parsed, deterministicItems, currency, reconciliation.reconciled);
-    // The provider takes seconds more; let the owner see what is already read.
-    const preview = providerConfig.operational && rescueDecision.providerRescueRequested ? localPreviewFrom(parsed) : null;
-    if (preview) await publishLocalPreview(scanId, attempt, input.extractorVersions, preview);
-    const adapter =providerConfig.provider === "veryfi" ? createVeryfiReceiptAdapter() : createGeminiReceiptAdapter();
-    const gate = await clock.measure("provider", () => dispatchReceiptProviderRescue(
-      {
-        businessProfileId: input.businessProfileId,
-        receiptScanId: scanId,
-        processingLease: { workerId: RECEIPT_WORKER_ID, attempt },
-        rescueDecision,
-        localExtraction,
-        pages: selectedEvidence,
-        preprocessingVersion: PREPROCESS_VERSION,
-        normalizedSchemaVersion: RECEIPT_PROVIDER_CONTRACT_VERSION,
-      },
-      { adapter, loadConfiguration: getReceiptProviderConfiguration },
-    ));
+    /*
+     * No local preview is published while the provider reads. It showed the
+     * local date, store and total, which on 50 public receipts were right 4,
+     * 13 and 18 times in 40-49: the owner watched wrong figures change.
+     */
+    const gate = earlyGate
+      ? await settledEarlyGate(earlyGate, localExtraction)
+      : await clock.measure("provider", () => dispatchReceiptProviderRescue(
+        {
+          businessProfileId: input.businessProfileId,
+          receiptScanId: scanId,
+          processingLease: { workerId: RECEIPT_WORKER_ID, attempt },
+          rescueDecision,
+          localExtraction,
+          pages: selectedEvidence,
+          preprocessingVersion: PREPROCESS_VERSION,
+          normalizedSchemaVersion: RECEIPT_PROVIDER_CONTRACT_VERSION,
+          referenceDate: input.referenceDate,
+        },
+        { adapter: providerAdapter(providerConfig), loadConfiguration: getReceiptProviderConfiguration },
+      ));
     stopFinalize = clock.start("finalize");
     // Operators need to see why a rescue did or did not run without opening
     // the scan row; ids, gate code, and stage timings only. Emitted after
@@ -704,6 +733,23 @@ async function processScan(
         "receipt provider gate",
       );
     };
+    /*
+     * The provider was rate limited or refused without charging, and can be
+     * asked again from gate.retryAt. Keeping the local read now would settle
+     * the scan on the weaker reading (on 50 public receipts the local total was
+     * right 18 times, the provider's 49), so the scan goes back in the queue
+     * until then. Each wait uses one attempt, so the last attempt still
+     * finishes with the local read rather than waiting forever.
+     */
+    if (gate.retryAt && attempt < MAX_PROCESSING_ATTEMPTS) {
+      stopFinalize();
+      stopFinalize = null;
+      if (leaseLost) throw new ReceiptLeaseLostError(`Receipt scan ${scanId} lease was reclaimed`);
+      const deferred = await deferUntilProviderReady(scanId, attempt, gate.retryAt);
+      logProviderGate(false);
+      logScanTimings(scanId, deferred ? "waiting-for-provider" : "lease-lost", clock);
+      return;
+    }
     const trigger = determineRescueTrigger(deterministicItems, parsed, combinedText, worstPageConfidence);
     const rescued = mergeIntoRescuedFields(parsed, deterministicItems, gate, trigger, providerConfig.providerVersion);
     const vendor = await snapVendorToHistory(input.businessProfileId, combinedText, rescued.vendor);
@@ -845,6 +891,10 @@ async function processScan(
     logScanTimings(scanId, "complete", clock);
   } catch (err) {
     stopFinalize?.();
+    // An early dispatch still in flight settles before this attempt lets go of
+    // the scan, so the next attempt finds it finished (and replays a stored
+    // answer) instead of racing it for the same reservation.
+    if (earlyGate) await earlyGate.catch(() => undefined);
     logProviderGate?.(false);
     // A newer worker owns the row now. The stale worker must not overwrite its
     // state with either a success or failure from an expired lease.
@@ -925,22 +975,16 @@ async function recordProcessingFailure(scanId: number, attempt: number, failure:
 }
 
 /**
- * Records the local read's headline fields for the owner to see while the
- * provider is still reading — see localPreview.ts. Guarded exactly like a
- * heartbeat, which it also is: only the worker holding this attempt's lease
- * can write it, and a lost lease stops the scan here as it would there.
+ * Puts the scan back in the queue until the provider can be asked again,
+ * leaving it Processing with no error: nothing failed, the answer is late.
+ * Guarded by the lease like every other write. False when this attempt no
+ * longer owned the scan.
  */
-async function publishLocalPreview(
-  scanId: number,
-  attempt: number,
-  previous: Prisma.JsonValue | null,
-  preview: ReceiptLocalPreview,
-): Promise<void> {
-  const base = previous && typeof previous === "object" && !Array.isArray(previous) ? previous : {};
+async function deferUntilProviderReady(scanId: number, attempt: number, retryAt: Date): Promise<boolean> {
+  const now = new Date();
   const updated = await prisma.receiptScan.updateMany({
     where: {
       id: scanId,
-      processingStatus: "Processing",
       confirmationStatus: "Pending",
       evidenceDeletionRequestedAt: null,
       purgeJobs: { none: { mode: ReceiptPurgeMode.DELETE_SCAN } },
@@ -948,12 +992,84 @@ async function publishLocalPreview(
       processingAttemptCount: attempt,
     },
     data: {
-      processingHeartbeatAt: new Date(),
-      lastActivityAt: new Date(),
-      extractorVersions: { ...base, [LOCAL_PREVIEW_KEY]: preview } as Prisma.InputJsonValue,
+      processingWorkerId: null,
+      processingHeartbeatAt: null,
+      nextProcessingAttemptAt: retryAt.getTime() > now.getTime() ? retryAt : now,
+      lastActivityAt: now,
     },
   });
-  if (updated.count !== 1) throw new ReceiptLeaseLostError(`Receipt scan ${scanId} lease was reclaimed`);
+  return updated.count === 1;
+}
+
+function providerAdapter(config: ReturnType<typeof getReceiptProviderConfiguration>) {
+  return config.provider === "veryfi" ? createVeryfiReceiptAdapter() : createGeminiReceiptAdapter();
+}
+
+/** A local read with nothing in it, for a dispatch that starts before OCR. Replaced by `settledEarlyGate`. */
+const LOCAL_READ_PENDING = localNormalizedExtraction(
+  { date: null, vendor: null, description: null, amount: null, dateAmbiguous: false, dateSourceText: null },
+  [],
+  null,
+  false,
+);
+
+/**
+ * The always-routed dispatch, started before OCR. Each original photograph's
+ * download (shared with OCR) is validated and hashed to know its digest; the
+ * gate then reads it again itself, so its re-hash against that digest still
+ * checks the stored object. The originals are what the provider reads here, not the copy the
+ * OCR comparison would have picked: that choice needs OCR to finish first, and
+ * on 50 public receipts the originals gave the provider 49 of 49 totals.
+ *
+ * Without a local read there is no local corroboration to offer, so the
+ * verifier runs on every scan dispatched this way; it was skipped on 4 of
+ * those 50 receipts.
+ */
+async function dispatchBeforeLocalRead(
+  scanId: number,
+  input: StoredInput,
+  attempt: number,
+  config: ReturnType<typeof getReceiptProviderConfiguration>,
+  originalDownloads: ReadonlyMap<number, Promise<Buffer>>,
+): Promise<ReceiptProviderDispatchResult> {
+  const pages = await Promise.all(input.pages.map(async (page) => {
+    const bytes = await originalDownloads.get(page.pageNumber)!;
+    await validateReceiptUpload({ buffer: bytes, mimetype: page.original.info.mimetype });
+    return {
+      pageNumber: page.pageNumber,
+      dataClass: "RECEIPT_IMAGE" as const,
+      mediaType: page.original.info.mimetype,
+      inputSha256: sha256(bytes),
+      loadBytes: startedDownload(page.original),
+    };
+  }));
+  return dispatchReceiptProviderRescue(
+    {
+      businessProfileId: input.businessProfileId,
+      receiptScanId: scanId,
+      processingLease: { workerId: RECEIPT_WORKER_ID, attempt },
+      rescueDecision: decideAlwaysRoutingBeforeLocalRead(
+        config.routingCalibrated && config.calibrationVersion
+          ? { state: "CALIBRATED", version: config.calibrationVersion }
+          : { state: "UNCALIBRATED", version: null },
+      ),
+      localExtraction: LOCAL_READ_PENDING,
+      pages,
+      preprocessingVersion: PREPROCESS_VERSION,
+      normalizedSchemaVersion: RECEIPT_PROVIDER_CONTRACT_VERSION,
+      referenceDate: input.referenceDate,
+    },
+    { adapter: providerAdapter(config), loadConfiguration: getReceiptProviderConfiguration },
+  );
+}
+
+/** The early dispatch's result, merged against the local read that has now finished. */
+async function settledEarlyGate(
+  early: Promise<ReceiptProviderDispatchResult>,
+  localExtraction: NormalizedReceiptExtraction,
+): Promise<ReceiptProviderDispatchResult> {
+  const gate = await early;
+  return { ...gate, merge: rebaseReceiptProviderMerge(gate, localExtraction) };
 }
 
 async function heartbeatScan(scanId: number, attempt: number): Promise<void> {
@@ -1054,7 +1170,12 @@ async function storedInput(scanId: number, attempt: number): Promise<StoredInput
   }
   // One heartbeat for the whole restore now that the inspections overlap.
   await heartbeatScan(scanId, attempt);
-  return { businessProfileId: scan.businessProfileId, pages, extractorVersions: scan.extractorVersions };
+  return {
+    businessProfileId: scan.businessProfileId,
+    pages,
+    extractorVersions: scan.extractorVersions,
+    referenceDate: philippineDate(scan.createdAt),
+  };
 }
 
 /** Atomically lease one eligible scan. The conditional update is the race guard. */
