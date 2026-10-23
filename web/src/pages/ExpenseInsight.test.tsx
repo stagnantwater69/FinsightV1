@@ -18,7 +18,7 @@ import type {
 } from "../lib/types";
 import type { DetailExpenseOverview } from "../lib/expenseOverview";
 import { beginServerStateSession, endServerStateSession, invalidateServerState } from "../lib/serverStateCache";
-import { routeDataRequests } from "../lib/routeDataPrefetch";
+import { routeDataRequests } from "../lib/routeDataRequests";
 import { cachedApiGet } from "../lib/serverStateApi";
 
 /**

@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { Records } from "./Records";
 import type { BusinessProfile, RecordItem } from "../lib/types";
-import { routeDataRequests } from "../lib/routeDataPrefetch";
+import { routeDataRequests } from "../lib/routeDataRequests";
 import { cachedApiGet } from "../lib/serverStateApi";
 import { beginServerStateSession, endServerStateSession } from "../lib/serverStateCache";
 vi.mock("../context/AuthContext", () => ({ useAuth: () => ({ profile: { id: 17 } }) }));

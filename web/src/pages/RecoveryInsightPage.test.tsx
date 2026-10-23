@@ -4,7 +4,7 @@ import { render, screen, fireEvent, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { RecoveryInsightPage } from "./RecoveryInsightPage";
-import { routeDataRequests } from "../lib/routeDataPrefetch";
+import { routeDataRequests } from "../lib/routeDataRequests";
 import { cachedApiGet } from "../lib/serverStateApi";
 import { beginServerStateSession, endServerStateSession } from "../lib/serverStateCache";
 import type {

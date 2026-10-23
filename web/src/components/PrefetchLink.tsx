@@ -1,7 +1,7 @@
 import type { FocusEvent, PointerEvent } from "react";
 import { Link, type LinkProps } from "react-router-dom";
 import { prefetchRoute } from "../lib/routeLoaders";
-import { useRouteDataPrefetch } from "../lib/routeDataPrefetch";
+import { useRouteDataPrefetch } from "../lib/routeDataRequests";
 
 function destinationPath(to: LinkProps["to"]): string {
   return typeof to === "string" ? to : to.pathname ?? "";
