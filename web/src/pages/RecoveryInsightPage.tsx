@@ -43,6 +43,7 @@ import {
 } from "../context/ReportingPeriodContext";
 import { api } from "../lib/api";
 import { cachedApiGet, peekCachedApiData } from "../lib/serverStateApi";
+import { recoveryInsightRequest } from "../lib/screenRequests";
 import { getErrorMessage } from "../lib/errors";
 import { InsightsTabs } from "../components/AppShell";
 import {
@@ -105,7 +106,6 @@ import {
   THIS_WEEK,
   monthLabel,
   periodKey,
-  periodParams,
   type PeriodSelection,
 } from "../lib/reportingPeriod";
 
@@ -2569,22 +2569,8 @@ function RecoveryInsightContent() {
       setLoading(true);
       return;
     }
-    const businessProfileId = selected.id;
-    const params = {
-      businessProfileId,
-      coverageDays: 31,
-      ...periodParams(selection),
-    };
-    const scope = {
-      businessProfileId,
-      period: selection,
-      tags: ["recovery", "financial"],
-    };
-    const cached = peekCachedApiData<RecoveryInsight>(
-      "/insights/recovery",
-      { params },
-      scope,
-    );
+    const { url, params, scope } = recoveryInsightRequest(selected.id, selection);
+    const cached = peekCachedApiData<RecoveryInsight>(url, { params }, scope);
 
     setLoading(!cached || cached.stale || force);
     setErrorResult({ scopeKey: requestScopeKey, message: null });
@@ -2598,18 +2584,7 @@ function RecoveryInsightContent() {
       setRecoveryResult({ scopeKey: requestScopeKey, data: null, updatedAt: null });
     }
     try {
-      const { data: nextData } = await cachedApiGet<RecoveryInsight>(
-        "/insights/recovery",
-        {
-          signal,
-          // The server bounds this to the selected interval through its as-of
-          // date. Asking for the 31-day ceiling keeps every calendar month
-          // available to the daily table without hiding older rows.
-          params,
-        },
-        scope,
-        { force },
-      );
+      const { data: nextData } = await cachedApiGet<RecoveryInsight>(url, { signal, params }, scope, { force });
       if (
         signal?.aborted ||
         thisRequestId !== requestId.current ||

@@ -1,4 +1,4 @@
-import type { RecordSource } from "../../lib/types";
+import type { RecordSort, RecordSource } from "../../lib/types";
 
 export interface Filters {
   type: "all" | "expense" | "sales";
@@ -48,3 +48,51 @@ export function filtersAreActive(f: Filters) {
 export function activeAdvancedCount(f: Filters) {
   return [f.categoryId, f.dateFrom, f.dateTo, f.source, f.importBatchId].filter(Boolean).length;
 }
+
+/**
+ * The records list request, as the page makes it and as the nav warms it.
+ * One builder for both: a warm-up that differs from the page in any field the
+ * cache keys on fetches something the page never reads.
+ */
+export function recordsListRequest(
+  businessProfileId: number,
+  filters: Filters,
+  sort: RecordSort,
+  cursor?: string,
+) {
+  return {
+    url: "/records/search",
+    params: {
+      businessProfileId,
+      type: filters.type,
+      categoryId: filters.categoryId || undefined,
+      dateFrom: filters.dateFrom || undefined,
+      dateTo: filters.dateTo || undefined,
+      keyword: filters.keyword || undefined,
+      source: filters.source || undefined,
+      importBatchId: filters.importBatchId || undefined,
+      limit: 100,
+      sort,
+      cursor,
+    },
+    scope: {
+      businessProfileId,
+      filters,
+      sort,
+      pagination: { cursor: cursor ?? null, limit: 100 },
+      tags: ["records", "financial"],
+    },
+  };
+}
+
+/** The flagged-records badge count on the records page. */
+export function flaggedCountRequest(businessProfileId: number) {
+  return {
+    url: "/records/flagged/count",
+    params: { businessProfileId },
+    scope: { businessProfileId, tags: ["records", "financial"] },
+  };
+}
+
+/** What the table starts on, and what the server returns when `sort` is omitted. */
+export const DEFAULT_RECORD_SORT: RecordSort = "date_desc";

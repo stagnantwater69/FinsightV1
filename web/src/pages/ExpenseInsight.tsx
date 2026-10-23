@@ -24,6 +24,7 @@ import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { useExpenseCategories } from "../context/ExpenseCategoryContext";
 import { api } from "../lib/api";
 import { cachedApiGet, peekCachedApiData } from "../lib/serverStateApi";
+import { expenseOverviewDetailRequest } from "../lib/screenRequests";
 import { getErrorMessage } from "../lib/errors";
 import { InsightsTabs } from "../components/AppShell";
 import {
@@ -57,7 +58,6 @@ import { ReportingPeriodScope, useReportingPeriod } from "../context/ReportingPe
 import {
   THIS_WEEK,
   periodLabel as periodCaptionOf,
-  periodParams,
   periodPhrase,
   previousLabel as previousLabelOf,
   formatDayRange,
@@ -882,21 +882,8 @@ function ExpenseInsightPage() {
     const requestScopeKey = expenseScopeKey;
     if (activeExpenseScopeRef.current !== requestScopeKey) return;
     if (!selected || !periodReady) return;
-    const params = {
-      businessProfileId: selected.id,
-      ...periodParams(selection),
-      view: "detail" as const,
-    };
-    const scope = {
-      businessProfileId: selected.id,
-      period: selection,
-      tags: ["expense-insight", "financial", "expense-overview"],
-    };
-    const cached = peekCachedApiData<DetailExpenseOverview>(
-      "/insights/expense-overview",
-      { params },
-      scope,
-    );
+    const { url, params, scope } = expenseOverviewDetailRequest(selected.id, selection);
+    const cached = peekCachedApiData<DetailExpenseOverview>(url, { params }, scope);
 
     if (cached) {
       applyExpenseOverview(cached.data);
@@ -912,7 +899,7 @@ function ExpenseInsightPage() {
 
     try {
       const { data: overview } = await cachedApiGet<DetailExpenseOverview>(
-        "/insights/expense-overview",
+        url,
         { signal, params },
         scope,
         { force },

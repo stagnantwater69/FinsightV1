@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { RecoveryInsightPage } from "./RecoveryInsightPage";
+import { routeDataRequests } from "../lib/routeDataPrefetch";
+import { cachedApiGet } from "../lib/serverStateApi";
+import { beginServerStateSession, endServerStateSession } from "../lib/serverStateCache";
 import type {
   BusinessProfile,
   RecoveryCheckpoint,
@@ -102,11 +105,15 @@ let postHandler: (body: unknown) => unknown;
 // Lets individual tests swap in a different recovery payload (e.g. a
 // different `status`) without redefining the whole mock module.
 let currentRecovery: RecoveryInsight = recovery;
+let recoveryGets = 0;
 
 vi.mock("../lib/api", () => ({
   api: {
     get: async (url: string) => {
-      if (url === "/insights/recovery") return { data: currentRecovery };
+      if (url === "/insights/recovery") {
+        recoveryGets += 1;
+        return { data: currentRecovery };
+      }
       throw new Error(`unmocked GET ${url}`);
     },
     post: async (url: string, body: unknown) => {
@@ -1035,4 +1042,25 @@ describe("Recovery Target — weekly checkpoints (plan §10.4, Phase 4)", () => 
     await screen.findByText("Month-to-date pace");
     expect(screen.queryByText("Weekly checkpoints")).not.toBeInTheDocument();
   });
+});
+
+describe("Recovery Target opening on the navigation's warm-up", () => {
+  afterEach(() => endServerStateSession());
+
+  it("reads the insight the nav link started, instead of asking again", async () => {
+    beginServerStateSession(17);
+    recoveryGets = 0;
+    // This harness answers no month list, so the page settles on its default period.
+    const warmed = routeDataRequests("/insights/recovery", profile.id, [], "error");
+    expect(warmed.map((request) => request.url)).toEqual(["/insights/recovery"]);
+    await Promise.all(warmed.map((request) => cachedApiGet(request.url, { params: request.params }, request.scope)));
+    expect(recoveryGets).toBe(1);
+
+    renderPage();
+
+    expect(await screen.findAllByText(/Recovery/, undefined, { timeout: 10_000 })).not.toHaveLength(0);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    // A key that differed in any field would have sent a second request here.
+    expect(recoveryGets).toBe(1);
+  }, 20_000);
 });

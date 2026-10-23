@@ -68,6 +68,31 @@ function defaultFor(months: string[]): PeriodSelection {
   return months[0] ? { kind: "month", month: months[0] } : THIS_WEEK;
 }
 
+/**
+ * The selection a page opens with, from its stored choice and the month list.
+ * Shared by the page hook below and the route data warm-up, which has to ask
+ * for exactly the period the page will ask for or its request is wasted.
+ */
+export function settlePeriodSelection(
+  stored: PeriodSelection | null,
+  months: string[],
+  monthsState: ReportingPeriodValue["monthsState"],
+): { selection: PeriodSelection; ready: boolean } {
+  const settled = monthsState !== "loading";
+  // Removed months fall back to the default; failed refreshes preserve the choice.
+  const storedStillValid =
+    stored && (stored.kind !== "month" || (settled && (months.includes(stored.month) || monthsState === "error")));
+  return {
+    selection: storedStillValid ? stored : defaultFor(months),
+    ready: settled || (stored !== null && stored.kind !== "month"),
+  };
+}
+
+/** The choice a page last stored for this business, or null. */
+export function storedPeriodSelection(businessId: number, scope?: ReportingPeriodScopeName): PeriodSelection | null {
+  return readStored(businessId, scope);
+}
+
 function usePeriodSelection(
   months: string[],
   monthsState: ReportingPeriodValue["monthsState"],
@@ -83,11 +108,7 @@ function usePeriodSelection(
   const stored = chosen && chosen.businessId === businessId && chosen.scope === scope
     ? chosen.selection
     : businessId !== null ? readStored(businessId, scope) : null;
-  const settled = monthsState !== "loading";
-  // Removed months fall back to the default; failed refreshes preserve the choice.
-  const storedStillValid =
-    stored && (stored.kind !== "month" || (settled && (months.includes(stored.month) || monthsState === "error")));
-  const selection = storedStillValid ? stored : defaultFor(months);
+  const { selection, ready } = settlePeriodSelection(stored, months, monthsState);
 
   const setSelection = useCallback(
     (next: PeriodSelection) => {
@@ -97,7 +118,7 @@ function usePeriodSelection(
     [businessId, scope],
   );
 
-  return { selection, setSelection, ready: settled || (stored !== null && stored.kind !== "month") };
+  return { selection, setSelection, ready };
 }
 
 function useReportingPeriodState(scope?: ReportingPeriodScopeName): ReportingPeriodValue {

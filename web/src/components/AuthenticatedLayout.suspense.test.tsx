@@ -32,6 +32,9 @@ vi.mock("../context/AiChatContext", () => ({
 vi.mock("../context/FutureDatedRecordsContext", () => ({
   FutureDatedRecordsProvider: ({ children }: { children: ReactNode }) => children,
 }));
+vi.mock("../lib/routeDataPrefetch", () => ({
+  RouteDataPrefetchProvider: ({ children }: { children: ReactNode }) => children,
+}));
 vi.mock("./FutureDateGate", () => ({
   FutureDateGate: ({ children }: { children: ReactNode }) => children,
 }));

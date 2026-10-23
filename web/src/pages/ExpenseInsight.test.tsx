@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -17,7 +17,9 @@ import type {
   RecurringSchedule,
 } from "../lib/types";
 import type { DetailExpenseOverview } from "../lib/expenseOverview";
-import { invalidateServerState } from "../lib/serverStateCache";
+import { beginServerStateSession, endServerStateSession, invalidateServerState } from "../lib/serverStateCache";
+import { routeDataRequests } from "../lib/routeDataPrefetch";
+import { cachedApiGet } from "../lib/serverStateApi";
 
 /**
  * THE REGRESSION THIS FILE EXISTS FOR.
@@ -1824,4 +1826,26 @@ it('binds the expense-insight view to its own reporting period scope', () => {
   const wrapper = ExpenseInsight();
   expect(wrapper.props.scope).toBe('expense-insight');
   expect(typeof wrapper.props.children.type).toBe('function');
+});
+
+describe("ExpenseInsight opening on the navigation's warm-up", () => {
+  afterEach(() => endServerStateSession());
+
+  it("reads the overview the nav link started, instead of asking again", async () => {
+    beginServerStateSession(17);
+    const warmed = routeDataRequests("/insights/expense-behavior", profile.id, ["2026-09", "2026-08"], "ready");
+    expect(warmed.map((request) => request.url)).toEqual(["/insights/expense-overview"]);
+    await Promise.all(warmed.map((request) => cachedApiGet(request.url, { params: request.params }, request.scope)));
+
+    renderPage();
+
+    await screen.findByText("Share of recorded available funds", undefined, { timeout: 10_000 });
+    await waitFor(() => expect(getCalls.some((call) => call.url === "/records/flagged")).toBe(true));
+    // A key that differed in any field would have sent a second overview here.
+    expect(getCalls.filter((call) => call.url === "/insights/expense-overview")).toHaveLength(1);
+  }, 20_000);
+
+  it("waits for the month list before guessing a month", () => {
+    expect(routeDataRequests("/insights/expense-behavior", profile.id, [], "loading")).toEqual([]);
+  });
 });

@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { RecoveryMonthEndReviewPage } from "./RecoveryMonthEndReview";
 import type { BusinessProfile, RecoveryMonthEndReview } from "../lib/types";
+import { beginServerStateSession, endServerStateSession } from "../lib/serverStateCache";
 
 /**
  * Plan §10.9/§11 Phase 7 — month-end review. The non-negotiable invariant
@@ -19,6 +20,7 @@ let currentResponse: RecoveryMonthEndReview;
 let getCalls: { url: string; params: Record<string, unknown> }[] = [];
 let failNextCall = false;
 let monthsResponse: string[] | Error = [];
+let hangReview = false;
 
 function monthKey(offset: number): string {
   const now = new Date();
@@ -35,6 +37,7 @@ vi.mock("../lib/api", () => ({
       }
       getCalls.push({ url, params: config?.params ?? {} });
       if (url === "/insights/recovery/month-end-review") {
+        if (hangReview) return new Promise(() => {});
         if (failNextCall) {
           failNextCall = false;
           throw new Error("network down");
@@ -239,5 +242,30 @@ describe("Recovery Target — month-end review (plan §10.9)", () => {
     fireEvent.click(screen.getByRole("button", { name: /retry/i }));
     await screen.findByText(/questions to consider/i);
     expect(screen.queryByText(/review couldn.t load/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("returning to a reviewed month", () => {
+  afterEach(() => {
+    hangReview = false;
+    vi.restoreAllMocks();
+    endServerStateSession();
+  });
+
+  it("shows the recap it left at once, while the refresh is still on its way", async () => {
+    beginServerStateSession(17);
+    monthsResponse = [monthKey(-1)];
+    currentResponse = reviewable({ month: monthKey(-1) });
+    const first = renderPage();
+    expect(await screen.findByText("Strongest")).toBeInTheDocument();
+    first.unmount();
+
+    // Past the 30-second freshness window, so the return visit refreshes; the
+    // refresh never answers, so the recap on screen came from the saved copy.
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 31_000);
+    hangReview = true;
+    renderPage();
+
+    expect(await screen.findByText("Strongest")).toBeInTheDocument();
   });
 });

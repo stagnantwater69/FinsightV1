@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { Records } from "./Records";
 import type { BusinessProfile, RecordItem } from "../lib/types";
+import { routeDataRequests } from "../lib/routeDataPrefetch";
+import { cachedApiGet } from "../lib/serverStateApi";
+import { beginServerStateSession, endServerStateSession } from "../lib/serverStateCache";
 vi.mock("../context/AuthContext", () => ({ useAuth: () => ({ profile: { id: 17 } }) }));
 
 /**
@@ -287,5 +290,27 @@ describe("Records sorting", () => {
     releaseExpense({ data: { items: [record(8, "Expense-old", 800, "2025-01-02")], nextCursor: null } });
     await waitFor(() => expect(screen.queryByText("Expense-old")).not.toBeInTheDocument());
     expect(screen.getAllByText("Sales-new").length).toBeGreaterThan(0);
+  });
+});
+
+describe("opening on the navigation's warm-up", () => {
+  afterEach(() => endServerStateSession());
+
+  it("reads the list the nav link started, instead of asking again", async () => {
+    beginServerStateSession(17);
+    const warmed = routeDataRequests("/records", profile.id, [], "ready");
+    expect(warmed.map((request) => request.url)).toEqual(["/records/search", "/records/flagged/count"]);
+    await Promise.all(warmed.map((request) => cachedApiGet(request.url, { params: request.params }, request.scope)));
+    expect(searchCalls).toHaveLength(1);
+
+    renderPage();
+
+    await waitFor(() => expect(renderedDescriptions()).toEqual(["Rice sack", "Generator", "Load card"]));
+    // A key that differed in any field would have sent a second search here.
+    expect(searchCalls).toHaveLength(1);
+  });
+
+  it("warms nothing for a filtered link, which the bare request would not match", () => {
+    expect(routeDataRequests("/records?type=expense", profile.id, [], "ready")).toEqual([]);
   });
 });

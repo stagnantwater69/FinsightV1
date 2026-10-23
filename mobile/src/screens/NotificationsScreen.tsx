@@ -18,6 +18,7 @@ import { SubpageCard, SubpageHeader, SubpageIcon } from "../components/SubpageKi
 import { groupByDay, relativeTime } from "../lib/notificationGroups";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { api } from "../lib/api";
+import { fetchServerState, peekServerState } from "../lib/serverStateCache";
 import { LastUpdated } from "../components/ConnectionNotice";
 import {
   describeActionFailure,
@@ -266,28 +267,45 @@ export function NotificationsScreen({ navigation }: NotificationsScreenProps) {
       if (loadingBusinessProfileIdRef.current === requestBusinessProfileId) return;
       loadingBusinessProfileIdRef.current = requestBusinessProfileId;
       const requestVersion = ++requestVersionRef.current;
+      const query = { businessProfileId: requestBusinessProfileId };
+      // Reads still in flight stay read, whichever copy of the list arrives.
+      const show = (list: Notification[], at: number) => {
+        const pendingReadIds = actionTokenByNotificationRef.current;
+        setNotifications(list.map((notification) => pendingReadIds.has(notification.id)
+          ? { ...notification, readStatus: true }
+          : notification));
+        setLoadedAt(at);
+        setLoadedBusinessId(requestBusinessProfileId);
+        setLoadFailure(null);
+      };
+      /*
+       * A return visit shows the list it left at once and refreshes behind it.
+       * The saved copy is cleared by any notification, recurring-schedule or
+       * record change (lib/serverStateCache.ts), so it never shows a read
+       * notification as unread. Pulling to refresh always asks the server.
+       */
+      const cached = isRefresh ? null : peekServerState<Notification[]>("/notifications", query);
       if (isRefresh) {
         setRefreshing(true);
+      } else if (cached) {
+        show(cached.data, cached.updatedAt);
       } else {
         setLoading(true);
       }
       setError(null);
       setClock(Date.now());
       try {
-        const next = await api.get<Notification[]>("/notifications", {
-          businessProfileId: requestBusinessProfileId,
+        const snapshot = await fetchServerState<Notification[]>({
+          path: "/notifications",
+          query,
+          fetcher: () => api.get<Notification[]>("/notifications", query),
+          force: isRefresh,
         });
         if (
           requestVersionRef.current !== requestVersion ||
           selectedBusinessProfileIdRef.current !== requestBusinessProfileId
         ) return;
-        const pendingReadIds = actionTokenByNotificationRef.current;
-        setNotifications(next.map((notification) => pendingReadIds.has(notification.id)
-          ? { ...notification, readStatus: true }
-          : notification));
-        setLoadedAt(Date.now());
-        setLoadedBusinessId(requestBusinessProfileId);
-        setLoadFailure(null);
+        show(snapshot.data, snapshot.updatedAt);
       } catch (err) {
         if (
           requestVersionRef.current !== requestVersion ||
