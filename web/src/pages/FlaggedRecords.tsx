@@ -253,15 +253,16 @@ export function FlaggedRecords() {
       { params: findingsRequest.params },
       findingsRequest.scope,
     );
-    if (cachedFlagged) {
+    // Only the two together: the queue's "Nothing needs review" verdict reads
+    // both, and a saved flag list beside findings still unknown would say it.
+    const savedQueue = cachedFlagged && cachedFindings;
+    if (savedQueue) {
       setRecords(cachedFlagged.data.items);
       setFlaggedCursor(cachedFlagged.data.nextCursor);
-      if (cachedFindings) {
-        setFindings(cachedFindings.data.items);
-        setFindingsCursor(cachedFindings.data.nextCursor);
-      }
+      setFindings(cachedFindings.data.items);
+      setFindingsCursor(cachedFindings.data.nextCursor);
     }
-    setLoading(!cachedFlagged);
+    setLoading(!savedQueue);
     setError(null);
     try {
       /*

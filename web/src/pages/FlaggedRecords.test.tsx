@@ -468,4 +468,19 @@ describe("returning to the queue", () => {
     expect(screen.getByText(/Rice sack/)).toBeInTheDocument();
     vi.restoreAllMocks();
   });
+
+  it("never calls the queue clear from a saved flag list beside findings it could not load", async () => {
+    beginServerStateSession(17);
+    // Findings fail, so only the (empty) flag list is saved.
+    getHandlers["/insights/findings"] = () => { throw new Error("Findings unavailable"); };
+    const first = renderPage();
+    expect(await screen.findByText("Review checks are incomplete")).toBeInTheDocument();
+    first.unmount();
+
+    getHandlers["/records/flagged"] = () => new Promise(() => {});
+    getHandlers["/insights/findings"] = () => new Promise(() => {});
+    renderPage();
+
+    expect(screen.queryByText("Nothing needs review")).not.toBeInTheDocument();
+  });
 });
