@@ -45,7 +45,6 @@ import type {
   ReceiptPurgeJob,
   ReceiptHistoryItem,
   ScannedItem,
-  ReceiptLocalPreview,
   ReceiptScanResult,
   ScanStage,
   Split,
@@ -123,8 +122,6 @@ function ScanReceiptForm() {
    * "never fake determinate progress" rule forbids.
    */
   const [scanStage, setScanStage] = useState<ScanStage>("uploading");
-  /** What the photo already gave up while the second check runs; display only. */
-  const [earlyReading, setEarlyReading] = useState<ReceiptLocalPreview | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
   const [scan, setScan] = useState<ReceiptScanResult | null>(null);
   const [pausedScan, setPausedScan] = useState<ReceiptScanResult | null>(null);
@@ -503,7 +500,6 @@ function ScanReceiptForm() {
     signal = requests.current.signal,
   ): Promise<ReceiptScanResult> {
     signal.throwIfAborted();
-    setEarlyReading(null);
     if (initial.processingStatus && initial.processingStatus !== "Processing") {
       return initial;
     }
@@ -514,10 +510,8 @@ function ScanReceiptForm() {
       signal.throwIfAborted();
       const { data } = await api.get<ReceiptScanResult>(`/records/receipts/${initial.id}`, { signal });
       if (data.processingStatus === "Failed" || data.processingStatus === "Complete") {
-        setEarlyReading(null);
         return data;
       }
-      setEarlyReading(data.localPreview ?? null);
     }
     /*
      * A scan that never finishes is a real possibility, not a hypothetical:
@@ -1678,7 +1672,7 @@ function ScanReceiptForm() {
                   event — see ScanProgress — and there is no percentage anywhere,
                   because the server reports none.
                 */}
-                {scanning ? <ScanProgress stage={scanStage} earlyReading={earlyReading} /> : null}
+                {scanning ? <ScanProgress stage={scanStage} /> : null}
 
                 {scanning ? (
                   <Button type="button" variant="secondary" fullWidth onClick={handleStopWaiting}>

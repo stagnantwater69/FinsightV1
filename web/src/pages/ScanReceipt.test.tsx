@@ -465,37 +465,6 @@ describe("receipt upload and review", () => {
     });
   });
 
-  it("shows the photo's early reading while the scan is still processing, then the review", async () => {
-    const user = userEvent.setup();
-    mocks.post.mockResolvedValueOnce({ data: { ...receipt, processingStatus: "Processing" } });
-    let release!: () => void;
-    const finished = new Promise<void>((resolve) => { release = resolve; });
-    let pollCount = 0;
-    mocks.get.mockImplementation(async (url: string) => {
-      if (url === "/records/receipts") return { data: { items: [], nextCursor: null } };
-      if (url.startsWith("/records/receipts/provider-consent/")) {
-        return { data: { available: false, provider: null, consent: null, activeConsents: [] } };
-      }
-      pollCount += 1;
-      if (pollCount === 1) {
-        return { data: { ...receipt, processingStatus: "Processing", localPreview: { date: "2026-09-01", vendor: "LOCAL STORE", amount: 100 } } };
-      }
-      await finished;
-      return { data: receipt };
-    });
-    render(page());
-    await user.upload(screen.getByLabelText(/Receipt photo/), photo());
-    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
-
-    const early = await screen.findByRole("region", { name: "Early reading" }, { timeout: 3000 });
-    expect(early).toHaveTextContent("LOCAL STORE");
-    expect(screen.queryByRole("heading", { name: "Review receipt" })).toBeNull();
-
-    release();
-    await screen.findByRole("heading", { name: "Review receipt" }, { timeout: 3000 });
-    expect(screen.queryByRole("region", { name: "Early reading" })).toBeNull();
-  });
-
   it("resumes an accepted scan after a failed poll without uploading again", async () => {
     const user = userEvent.setup();
     mocks.post.mockResolvedValueOnce({ data: { ...receipt, processingStatus: "Processing" } });

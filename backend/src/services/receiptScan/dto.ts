@@ -10,7 +10,6 @@ import {
 import { MIN_READABLE_EDGE } from "../../lib/imageQuality";
 import { receiptPageEvidence } from "./pageEvidence";
 import type { ItemCategorisation } from "./categorisation";
-import { readLocalPreview } from "./localPreview";
 
 export function toDTO(
   scan: ReceiptScan,
@@ -126,12 +125,6 @@ export function toDTO(
     processingErrorCode: scan.processingErrorCode,
     processingAttemptCount: scan.processingAttemptCount,
     nextProcessingAttemptAt: scan.processingStatus === "Processing" ? scan.nextProcessingAttemptAt : null,
-    /**
-     * The local read's headline fields while the provider is still reading:
-     * early, liable to change, and never confirmable. Null once the scan has
-     * finished or failed, and on any scan that never called a provider.
-     */
-    localPreview: scan.processingStatus === "Processing" ? readLocalPreview(scan.extractorVersions) : null,
     createdAt: scan.createdAt,
     /**
      * Every page's own readability, in page order — page 1 included.

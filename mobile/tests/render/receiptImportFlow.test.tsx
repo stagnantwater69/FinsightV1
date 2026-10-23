@@ -618,8 +618,6 @@ describe("receipt scan review workflow", () => {
     expect(poll).toHaveBeenCalledWith(
       expect.objectContaining({ id: 83, processingStatus: "Processing", processingError: null, scanRevision: 4 }),
       expect.anything(),
-      // Hears each still-processing response, for the early reading.
-      expect.any(Function),
     );
     expect(q.queryByText(/already being read/)).toBeNull();
   });

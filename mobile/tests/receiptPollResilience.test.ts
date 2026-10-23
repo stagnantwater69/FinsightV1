@@ -231,25 +231,3 @@ describe("an aborted poll stops immediately and leaves no timer running", () => 
     expect(vi.getTimerCount()).toBe(0);
   });
 });
-
-describe("pollUntilRead reports a scan still being read", () => {
-  const originalFetch = globalThis.fetch;
-  beforeEach(() => { vi.useFakeTimers(); });
-  afterEach(() => { vi.useRealTimers(); globalThis.fetch = originalFetch; });
-
-  it("hands each still-processing response to the caller, then returns the finished scan", async () => {
-    const preview = { date: "2026-09-01", vendor: "LOCAL STORE", amount: 100 };
-    replies([
-      answer(200, scan({ localPreview: preview })),
-      answer(200, scan({ processingStatus: "Complete" })),
-    ]);
-    const seen: (ReceiptScanResult["localPreview"])[] = [];
-
-    const watched = watch(pollUntilRead(scan(), undefined, (next) => seen.push(next.localPreview)));
-    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 3);
-    await watched.done;
-
-    expect(seen).toEqual([preview]);
-    expect((watched.state.value as ReceiptScanResult).processingStatus).toBe("Complete");
-  });
-});

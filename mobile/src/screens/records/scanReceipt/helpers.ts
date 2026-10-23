@@ -81,11 +81,9 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
  * leaves the owner on the capture screen with their photos intact, which is
  * the same outcome any other failed scan has always had.
  */
-/** `onProcessing` hears each response that is still processing, e.g. to show its local preview. */
 export async function pollUntilRead(
   initial: ReceiptScanResult,
   signal?: AbortSignal,
-  onProcessing?: (scan: ReceiptScanResult) => void,
 ): Promise<ReceiptScanResult> {
   const checkActive = () => {
     if (signal?.aborted) throw new Error("Receipt processing paused.");
@@ -127,7 +125,6 @@ export async function pollUntilRead(
       );
     }
     if (next.processingStatus === "Complete") return next;
-    onProcessing?.(next);
   }
   throw new ReceiptReadFailure(
     "timeout",
