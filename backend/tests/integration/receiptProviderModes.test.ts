@@ -30,7 +30,7 @@ vi.mock("../../src/services/ocr.service", async (importOriginal) => {
 
 const { adapterExtract, adapterMode, adapterExtraction } = vi.hoisted(() => ({
   adapterExtract: { current: vi.fn() },
-  adapterMode: { value: "succeed" as "succeed" | "throw" },
+  adapterMode: { value: "succeed" as "succeed" | "throw" | "rate-limited" },
   /** Field overrides applied to the provider's normalized extraction. */
   adapterExtraction: { value: {} as Record<string, unknown> },
 }));
@@ -45,6 +45,15 @@ vi.mock("../../src/services/receiptScan/providerAdapters", async (importOriginal
       providerVersion: "gemini-3.5-flash-lite",
       extract: adapterExtract.current.mockImplementation(async (request) => {
         if (adapterMode.value === "throw") throw new Error("mocked provider outage");
+        if (adapterMode.value === "rate-limited") {
+          return successfulOutcome(request, {
+            status: "FAILED",
+            outcomeCode: "RATE_LIMITED",
+            finalBillableUnits: 0,
+            retryAfterMs: null,
+            extraction: null,
+          });
+        }
         const outcome = successfulOutcome(request);
         return { ...outcome, extraction: { ...outcome.extraction, ...adapterExtraction.value } };
       }),
@@ -168,6 +177,17 @@ function directAdapter() {
   };
 }
 
+/** Moves every dispatch past the one-minute cooldown, keeping its timestamps in order. */
+async function ageDispatchesPastCooldown() {
+  await prisma.$executeRaw`
+    UPDATE "ExternalProviderDispatch" SET
+      "ExternalProviderDispatch_CreatedAt" = "ExternalProviderDispatch_CreatedAt" - interval '61 seconds',
+      "ExternalProviderDispatch_SubmittedAt" = "ExternalProviderDispatch_SubmittedAt" - interval '61 seconds',
+      "ExternalProviderDispatch_CompletedAt" = "ExternalProviderDispatch_CompletedAt" - interval '61 seconds',
+      "ExternalProviderDispatch_ProviderRetryAt" = "ExternalProviderDispatch_ProviderRetryAt" - interval '61 seconds'
+  `;
+}
+
 async function extractorVersions(scanId: number) {
   const scan = await prisma.receiptScan.findUniqueOrThrow({ where: { id: scanId } });
   return {
@@ -260,6 +280,125 @@ describe("RECEIPT_PROVIDER_ROUTING", () => {
     const stored = await extractorVersions(scan.id);
     expect(stored).toMatchObject({ processingStatus: "Complete", vendor: "LOCAL STORE" });
     expect(stored.versions.providerGateCode).not.toBe("PROVIDER_OK");
+  });
+
+  it("asks the provider while OCR is still reading, and still fills empty fields from the local read", async () => {
+    enableMockedGeminiProvider({ RECEIPT_PROVIDER_ROUTING: "always" });
+    // The provider reads no store name; the local read has one.
+    adapterExtraction.value = { vendor: { value: null, evidence: null } };
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const scan = await queuedScan(owner.profile.id, "always-overlap");
+    const { extractReceipt } = await import("../../src/services/ocr.service");
+    let providerCalledDuringOcr = false;
+    vi.mocked(extractReceipt).mockImplementationOnce(async () => {
+      // A sequential worker would only call the provider after this returns.
+      const deadline = Date.now() + 5_000;
+      while (adapterExtract.current.mock.calls.length === 0 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      providerCalledDuringOcr = adapterExtract.current.mock.calls.length > 0;
+      return { text: ocrText.value, confidence: 95, lines: [] };
+    });
+
+    expect(await runReceiptWorkerOnce()).toBe(true);
+
+    expect(providerCalledDuringOcr).toBe(true);
+    const stored = await storedFields(scan.id);
+    expect(stored.vendor).toBe("LOCAL STORE");
+    expect(stored.sources.vendor).toBe("ocr");
+    expect((await extractorVersions(scan.id)).versions.providerGateCode).toBe("PROVIDER_OK");
+  });
+
+  it("waits out a rate limit and then reads with the provider, without a second charge", async () => {
+    enableMockedGeminiProvider({ RECEIPT_PROVIDER_ROUTING: "always" });
+    adapterMode.value = "rate-limited";
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const scan = await queuedScan(owner.profile.id, "always-rate-limited");
+
+    const before = Date.now();
+    expect(await runReceiptWorkerOnce()).toBe(true);
+
+    // Not finished on the local read, not failed: back in the queue for the quota.
+    const waiting = await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } });
+    expect(waiting).toMatchObject({
+      processingStatus: "Processing",
+      processingErrorCode: null,
+      processingWorkerId: null,
+      processingAttemptCount: 1,
+      extractedVendor: null,
+    });
+    expect(waiting.nextProcessingAttemptAt.getTime()).toBeGreaterThanOrEqual(before + 59_000);
+    expect(await prisma.externalProviderDispatch.findFirstOrThrow()).toMatchObject({
+      status: "FAILED",
+      outcomeCode: "RATE_LIMITED",
+      finalBillableUnits: 0,
+    });
+
+    // A minute later the quota has room again.
+    await ageDispatchesPastCooldown();
+    await prisma.receiptScan.update({ where: { id: scan.id }, data: { nextProcessingAttemptAt: new Date() } });
+    adapterMode.value = "succeed";
+    expect(await runReceiptWorkerOnce()).toBe(true);
+
+    expect(adapterExtract.current).toHaveBeenCalledTimes(2);
+    const stored = await extractorVersions(scan.id);
+    expect(stored).toMatchObject({ processingStatus: "Complete", processingErrorCode: null });
+    expect(stored.versions.providerGateCode).toBe("PROVIDER_OK");
+    // The same row was re-armed, not duplicated, and only the answer is billed.
+    expect(await prisma.externalProviderDispatch.count()).toBe(1);
+    expect(await prisma.externalProviderDispatch.findFirstOrThrow()).toMatchObject({
+      status: "SUCCEEDED",
+      finalBillableUnits: 2,
+    });
+    const budgets = await prisma.externalProviderBudget.findMany();
+    expect(budgets.every((budget) => budget.reservedUnits === 0 && budget.usedUnits === 2)).toBe(true);
+  });
+
+  it("keeps the local read on the last attempt rather than waiting again", async () => {
+    enableMockedGeminiProvider({ RECEIPT_PROVIDER_ROUTING: "always" });
+    adapterMode.value = "rate-limited";
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const scan = await queuedScan(owner.profile.id, "always-rate-limited-last");
+    await prisma.receiptScan.update({ where: { id: scan.id }, data: { processingAttemptCount: 2 } });
+
+    expect(await runReceiptWorkerOnce()).toBe(true);
+
+    const stored = await extractorVersions(scan.id);
+    expect(stored).toMatchObject({ processingStatus: "Complete", vendor: "LOCAL STORE" });
+    expect(stored.versions.providerGateCode).not.toBe("PROVIDER_OK");
+  });
+
+  it("never re-sends a refusal that was billed", async () => {
+    enableMockedGeminiProvider({ RECEIPT_PROVIDER_ROUTING: "always" });
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const scan = await leasedScan(owner.profile.id, "always-billed-refusal");
+    // The extraction answered and was billed; the verifier was then rate limited.
+    const adapter = {
+      provider: "gemini" as const,
+      providerVersion: "gemini-3.5-flash-lite",
+      extract: vi.fn(async (request) => successfulOutcome(request, {
+        status: "FAILED",
+        outcomeCode: "RATE_LIMITED",
+        finalBillableUnits: 1,
+        retryAfterMs: null,
+        extraction: null,
+      })),
+    };
+    const input = dispatchInput(owner.profile.id, scan.id, {
+      rescueDecision: rescueDecision({ reasons: ["PROVIDER_ROUTING_ALWAYS"] }),
+    });
+
+    const first = await dispatchReceiptProviderRescue(input, { adapter, configuration: getReceiptProviderConfiguration() });
+    await ageDispatchesPastCooldown();
+    const second = await dispatchReceiptProviderRescue(input, { adapter, configuration: getReceiptProviderConfiguration() });
+
+    expect(first.retryAt).toBeNull();
+    expect(second.code).toBe("PROVIDER_DISPATCH_ALREADY_ATTEMPTED");
+    expect(adapter.extract).toHaveBeenCalledTimes(1);
   });
 
   it("does not request the provider under always routing while the configuration is not operational", async () => {

@@ -232,7 +232,7 @@ export function buildScanWarnings(args: {
   /** 1-indexed pages neither image of which could be read. */
   unreadPages?: number[];
 }): ReceiptWarning[] {
-  const { pageQualities, pageTexts, combinedText, seamFreeText, parsed, rescued, worstPageConfidence } = args;
+  const { pageQualities, pageTexts, combinedText, seamFreeText, rescued, worstPageConfidence } = args;
   const warnings: ReceiptWarning[] = [];
 
   pageQualities.forEach((q, i) => {
@@ -296,9 +296,10 @@ export function buildScanWarnings(args: {
 
   if (rescued.visionAssisted) warnings.push({ code: "VISION_INTERPRETED" });
 
-  // The parser's own admission that a convention, not the paper, chose the
-  // day/month order — carrying the visible text so the owner can re-read it.
-  if (rescued.dateAmbiguous && rescued.date !== null && parsed.date !== null) {
+  // A reader's admission that an inference, not the paper, chose the day/month
+  // order — the parser's or the provider's — carrying the parser's visible text
+  // when it has one so the owner can re-read it.
+  if (rescued.dateAmbiguous && rescued.date !== null) {
     warnings.push({
       code: "AMBIGUOUS_DATE",
       field: "date",

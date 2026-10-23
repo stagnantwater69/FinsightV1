@@ -1,8 +1,9 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * The local read's headline fields are visible while the provider is still
- * reading, and only then. They are display-only: confirmation waits for the
+ * The local read's headline fields are no longer shown while the provider is
+ * still reading: on 50 public receipts they were right 4-18 times in 40-49,
+ * so the owner watched wrong figures change. Confirmation still waits for the
  * finished read.
  */
 
@@ -110,68 +111,33 @@ afterAll(async () => {
 });
 
 describe("receipt local preview", () => {
-  it("shows the local read while the provider reads, and clears it once the scan completes", async () => {
-    await enableProvider("always");
-    const scan = await queuedScan();
-
-    expect(await runReceiptWorkerOnce()).toBe(true);
-
-    expect(during.seen).toEqual({ date: "2026-09-01", vendor: "LOCAL STORE", amount: 100 });
-    const finished = await getScan(owner.user.id, scan.id);
-    expect(finished.processingStatus).toBe("Complete");
-    expect(finished.localPreview).toBeNull();
-    const stored = await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } });
-    expect(stored.extractorVersions).not.toHaveProperty("localPreview");
-  });
-
-  it("writes nothing when no provider is called, because the local read is already final", async () => {
-    await enableProvider("rescue");
+  it.each(["always", "rescue"] as const)("shows and writes no local reading under %s routing", async (routing) => {
+    await enableProvider(routing);
+    ocrText.value = routing === "rescue" ? "~~~ unreadable ~~~" : ocrText.value;
     const scan = await queuedScan();
     const updates = vi.spyOn(prisma.receiptScan, "updateMany");
+    during.seen = "provider never called";
 
     expect(await runReceiptWorkerOnce()).toBe(true);
 
+    // The provider was called (rescue calls it for the unreadable local read)
+    // and, while it read, the scan carried no local reading.
+    expect(during.seen).toBeNull();
     const previewWrites = updates.mock.calls.filter(([args]) =>
       JSON.stringify((args as { data?: unknown }).data ?? {}).includes("localPreview"));
     expect(previewWrites).toHaveLength(0);
-    expect((await getScan(owner.user.id, scan.id)).localPreview).toBeNull();
     updates.mockRestore();
+    const finished = await getScan(owner.user.id, scan.id);
+    expect(finished.processingStatus).toBe("Complete");
+    expect(finished.localPreview).toBeNull();
   });
 
-  it("writes nothing when the local read found neither a date nor a total", async () => {
-    await enableProvider("always");
-    ocrText.value = "~~~ unreadable ~~~";
-    await queuedScan();
-
-    expect(await runReceiptWorkerOnce()).toBe(true);
-
-    expect(during.seen).toBeNull();
-  });
-
-  it("writes no preview from a worker whose lease was taken over during the read", async () => {
-    await enableProvider("always");
-    const scan = await queuedScan();
-    const { extractReceipt } = await import("../../src/services/ocr.service");
-    vi.mocked(extractReceipt).mockImplementationOnce(async () => {
-      // Another worker reclaims the scan while this one is still reading.
-      await prisma.receiptScan.update({ where: { id: scan.id }, data: { processingWorkerId: "another-worker", processingAttemptCount: 9 } });
-      return { text: ocrText.value, confidence: 95, lines: [] };
-    });
-
-    await runReceiptWorkerOnce();
-
-    expect(during.seen).toBeNull();
-    const stored = await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } });
-    expect(stored.extractorVersions ?? {}).not.toHaveProperty("localPreview");
-  });
-
-  it("refuses to confirm while the provider is still reading, preview or not", async () => {
+  it("refuses to confirm while the provider is still reading", async () => {
     await enableProvider("always");
     const scan = await queuedScan();
     const { confirmReceipt } = await import("../../src/services/receiptScan/reconciliation");
     let refusal: unknown = null;
     during.extract = async () => {
-      expect((await getScan(during.userId, during.scanId)).localPreview).not.toBeNull();
       refusal = await confirmReceipt(owner.user.id, scan.id, {
         date: "2026-09-01",
         description: "Purchase from LOCAL STORE",

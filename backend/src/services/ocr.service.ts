@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import sharp from "sharp";
 import { env } from "../config/env";
 import { logger } from "../config/logger";
+import { isoIfValid, readNumericDate } from "../lib/receiptDates";
 import { reconcileItems } from "../lib/receiptTextSignals";
 export {
   findPageSeams,
@@ -30,7 +31,9 @@ export type { PageSeam, Reconciliation, ReconciliationReason } from "../lib/rece
 // totals and structural vendor filters; neither version changes provider dispatch.
 // v5 reads two-line item rows (figures on one line, name on the other) and the
 // "T" VAT flag, so long supermarket receipts in those layouts return items.
-export const PARSER_VERSION = "ocr-parser-v5";
+// v6 settles a date whose day and month could be either way round against the
+// scan's upload date instead of always reading it day-first (lib/receiptDates).
+export const PARSER_VERSION = "ocr-parser-v6";
 /**
  * v2: the downscale cap follows the SHORT edge on an elongated LANDSCAPE image
  * (a long receipt lying along the frame's long axis) instead of always the
@@ -588,11 +591,11 @@ export interface ParsedReceiptFields {
   amount: number | null;
   /**
    * True when the date was a numeric one BOTH of whose components could be
-   * the month (05/03/2026) — resolved DD/MM by convention, not by reading.
-   * The convention is right for this market and still applied; this flag is
-   * what lets the confirm screen say "check the day and month" on exactly
-   * the receipts where the convention, not the paper, chose the answer.
-   * Always false when `date` is null or was unambiguous.
+   * the month (05/03/2026) — resolved by the upload-date rule in
+   * lib/receiptDates, not by reading. This flag is what lets the confirm
+   * screen say "check the day and month" on exactly the receipts where an
+   * inference, not the paper, chose the answer. Always false when `date` is
+   * null, was unambiguous, or the upload date ruled one reading out.
    */
   dateAmbiguous: boolean;
   /** The visible text the date was read from ("05/03/2026"), or null when no date was found. */
@@ -610,22 +613,15 @@ const MONTHS: Record<string, string> = {
 // a 20-image corpus, including the failure patterns that shaped the rules
 // below.
 
-/**
- * Returns the date only if it is a real calendar date.
- *
- * This guard exists because of a real defect: a DD/MM/YYYY receipt dated after
- * the 12th (e.g. "25/07/2026") was emitted as "2026-25-07" — month 25. That
- * string becomes an Invalid Date, which Prisma rejects with a validation error,
- * so the ENTIRE receipt upload failed with a 500 instead of saving a scan the
- * owner could correct by hand. Never emit a date that cannot exist.
+/*
+ * isoIfValid (lib/receiptDates) returns a date only if it is a real calendar
+ * date. That guard exists because of a real defect: a DD/MM/YYYY receipt
+ * dated after the 12th (e.g. "25/07/2026") was emitted as "2026-25-07" —
+ * month 25. That string becomes an Invalid Date, which Prisma rejects with a
+ * validation error, so the ENTIRE receipt upload failed with a 500 instead of
+ * saving a scan the owner could correct by hand. Never emit a date that
+ * cannot exist.
  */
-function isoIfValid(year: number, month: number, day: number): string | null {
-  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
-  const d = new Date(Date.UTC(year, month - 1, day));
-  // Round-trip check catches e.g. 31 February, which Date silently rolls over.
-  if (d.getUTCFullYear() !== year || d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day) return null;
-  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-}
 
 // Lines carrying dates that are NOT the transaction date. Philippine POS
 // receipts print several of these (BIR permit issue dates, accreditation
@@ -654,7 +650,7 @@ interface FoundDate {
   sourceText: string;
 }
 
-function findDateInText(text: string): FoundDate | null {
+function findDateInText(text: string, referenceDate: string | null): FoundDate | null {
   const isoMatch = text.match(/\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/);
   if (isoMatch) {
     const [, y, m, d] = isoMatch;
@@ -671,41 +667,21 @@ function findDateInText(text: string): FoundDate | null {
     if (iso) return { iso, ambiguous: false, sourceText: monthNameMatch[0] };
   }
 
-  // Numeric slash/dash dates are locale-ambiguous. Resolve by validity first,
-  // then by locale:
-  //   - second > 12 -> the second component can only be the day, so MM/DD
-  //   - first > 12  -> the first can only be the day, so DD/MM
-  //   - both <= 12  -> genuinely ambiguous; assume DD/MM, and SAY SO
-  //
-  // DD/MM is the Philippine convention and this app's target market. The
-  // previous MM/DD default was measured getting a real Cebu receipt exactly
-  // wrong: "11/07/2026" (11 July) was read as 7 November. The cost of this
-  // choice is that a US-format receipt is now misread instead — unavoidable
-  // without a locale setting, and the wrong way round for these users. The
-  // confirm screen is where the owner corrects either case — which is exactly
-  // why the genuinely ambiguous case (both components <= 12 and different) is
-  // flagged rather than silently resolved: the answer came from a convention,
-  // and the owner deserves to be pointed at it. 05/05/2026 is NOT flagged —
-  // both readings agree, so there is nothing to check.
-  const slashMatch = text.match(/\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b/);
-  if (slashMatch) {
-    const [, aRaw, bRaw, yRaw] = slashMatch;
-    const a = Number(aRaw);
-    const b = Number(bRaw);
-    const year = yRaw!.length === 2 ? Number(`20${yRaw}`) : Number(yRaw);
-    const iso = b > 12 ? isoIfValid(year, a, b) : isoIfValid(year, b, a);
-    if (iso === null) return null;
-    return { iso, ambiguous: a <= 12 && b <= 12 && a !== b, sourceText: slashMatch[0] };
-  }
-
-  return null;
+  // Numeric slash/dash dates may be printed either way round. A component
+  // above 12 settles the order; when both could be the month, the scan's
+  // upload date decides (lib/receiptDates explains the rule and the receipts
+  // it was measured on). That case stays flagged unless the upload date ruled
+  // one reading out: the answer came from an inference, and the owner deserves
+  // to be pointed at it. 05/05/2026 is NOT flagged — both readings agree.
+  const numeric = readNumericDate(text, referenceDate);
+  return numeric ? { iso: numeric.iso, ambiguous: numeric.ambiguous, sourceText: numeric.sourceText } : null;
 }
 
-function parseDate(text: string): FoundDate | null {
+function parseDate(text: string, referenceDate: string | null): FoundDate | null {
   // Prefer a date from the receipt's own transaction lines; only fall back to
   // the full text (administrative lines included) if that finds nothing, since
   // a wrong-but-plausible date still beats no date for the owner to correct.
-  return findDateInText(transactionLines(text).join("\n")) ?? findDateInText(text);
+  return findDateInText(transactionLines(text).join("\n"), referenceDate) ?? findDateInText(text, referenceDate);
 }
 
 /**
@@ -1603,9 +1579,14 @@ export function parseLocatedLineItems(text: string): LocatedLineItem[] {
   return items;
 }
 
-export function parseReceiptFields(text: string): ParsedReceiptFields {
+/**
+ * `referenceDate` is the day the receipt was uploaded (YYYY-MM-DD, Philippine
+ * time). It settles a date printed with both parts 12 or under; without it,
+ * such a date is read day-first.
+ */
+export function parseReceiptFields(text: string, options: { referenceDate?: string | null } = {}): ParsedReceiptFields {
   const vendor = parseVendor(text);
-  const date = parseDate(text);
+  const date = parseDate(text, options.referenceDate ?? null);
   return {
     date: date?.iso ?? null,
     vendor,

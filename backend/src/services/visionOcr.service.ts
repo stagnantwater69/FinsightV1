@@ -55,8 +55,10 @@ import { RECEIPT_PROVIDER_MAX_RETRY_AFTER_MS } from "./receiptProviderContract";
  * the correction metrics must be attributable to the exact prompt and schema
  * that produced it, not to "the vision model".
  */
-export const PROMPT_VERSION = "vision-prompt-v2";
-export const SCHEMA_VERSION = "vision-schema-v2";
+// v3 also asks for the date exactly as printed ("dateText"), so the adapter can
+// settle a day/month order the paper leaves open with the same rule as the parser.
+export const PROMPT_VERSION = "vision-prompt-v3";
+export const SCHEMA_VERSION = "vision-schema-v3";
 
 /**
  * The model actually being called, PARSED from the endpoint rather than
@@ -201,6 +203,8 @@ export interface VisionWarning {
 
 export interface VisionReceipt {
   date: string | null;
+  /** The date's printed characters, unreordered; the adapter settles their order. */
+  dateText: string | null;
   vendor: string | null;
   amount: number | null;
   items: VisionReceiptItem[];
@@ -229,6 +233,7 @@ Perform EXACT TRANSCRIPTION, not interpretation. Treat every financial value
 as untrusted until visibly supported by the document. Return only JSON valid
 against the response schema:
 {"date": "YYYY-MM-DD" or null,
+ "dateText": the transaction date exactly as printed (e.g. "07/06/2024"), or null,
  "vendor": "the shop's name" or null,
  "total": the final total as a number, or null,
  "items": [{"name": "...", "quantity": number or null, "amount": number,
@@ -259,6 +264,8 @@ RULES — these matter more than completeness:
   still apply DAY/MONTH but ALSO add a warning
   {"code":"AMBIGUOUS_DATE","field":"date","detail":"<the visible text, e.g. 05/03/2026>"} —
   preserve the visible text and flag the ambiguity rather than hiding it.
+- Copy the transaction date's printed characters into "dateText" unchanged,
+  separators included. Do not reorder or reformat them.
 - Ignore BIR permit, PTU, accreditation and "valid until" dates — they are not
   the transaction date.
 - Return an empty items array if no individual items are legible.`;
@@ -275,6 +282,7 @@ const RESPONSE_SCHEMA = {
   type: "OBJECT",
   properties: {
     date: { type: "STRING", nullable: true },
+    dateText: { type: "STRING", nullable: true },
     vendor: { type: "STRING", nullable: true },
     total: { type: "NUMBER", nullable: true },
     items: {
@@ -413,6 +421,7 @@ const visionWarningsSchema = z.unknown().transform((value): VisionWarning[] => {
 const visionReceiptSchema = z
   .object({
     date: z.unknown().optional(),
+    dateText: z.unknown().optional(),
     vendor: z.unknown().optional(),
     total: z.unknown().optional(),
     items: visionItemsSchema.optional(),
@@ -427,6 +436,7 @@ const visionReceiptSchema = z
         typeof o.date === "string" && isIsoCalendarDate(o.date)
           ? o.date
           : null,
+      dateText: typeof o.dateText === "string" && o.dateText.trim() ? o.dateText.trim().slice(0, 40) : null,
       vendor: typeof o.vendor === "string" && o.vendor.trim() ? o.vendor.trim().slice(0, 150) : null,
       amount,
       items: o.items ?? [],
