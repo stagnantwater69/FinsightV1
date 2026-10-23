@@ -313,6 +313,11 @@ describe("CSV automatic review matches web", () => {
     const q = await choose();
     await fireEvent.press(q.getByRole("button", { name: "Choose how the dates in this file should be read" }));
     await fireEvent.press(q.getByRole("button", { name: /Day first/ }));
+    // The automatic check starts on a timer, and the button is enabled before
+    // it fires. Opening the editor cancels it, so wait for the first file's
+    // check or the later Change file can discard it unchecked.
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+    expect(post.mock.calls[0][1].dateFormat).toBeDefined();
     await waitFor(() => expect(q.getByRole("button", { name: "Check & continue" })).toBeEnabled());
     await fireEvent.press(q.getByRole("button", { name: /^Row 2, Coffee beans\. Edit this row\./ }));
     await fireEvent.changeText(q.getByLabelText("Amount"), "-300");
