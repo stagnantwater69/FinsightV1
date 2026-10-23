@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   buildManifest,
+  buildPublicManifest,
   disagreements,
   IntakeError,
   parseCsv,
@@ -10,6 +11,7 @@ import {
 } from "../receipt-scanner-evaluation/receipt-intake";
 import { localCorpusEntrySchema } from "../receipt-scanner-evaluation/local-corpus-contract";
 import { validateDevelopmentCohort } from "../receipt-scanner-evaluation/development-cohort";
+import { representativeExclusion } from "../receipt-scanner-evaluation/cohort-readiness";
 
 const IMAGES: Record<string, Buffer> = {
   "r001.jpg": Buffer.from("redacted receipt one"),
@@ -127,5 +129,51 @@ describe("receipt intake", () => {
     expect(parseItems("Service charge |  | 25", "x")).toEqual([{ name: "Service charge", quantity: null, amount: 25 }]);
     expect(parseItems("", "x")).toBeNull();
     expect(() => parseItems("Rice 320", "x")).toThrow(/name \| quantity \| amount/);
+  });
+});
+
+describe("published receipt intake", () => {
+  const publicInput = (overrides: Partial<Parameters<typeof buildPublicManifest>[0]> = {}) => ({
+    transcription: [transcription("Ana", "r001.jpg"), transcription("Ana", "r002.jpg", { items: "" })],
+    attribution: "Receipts dataset, Roboflow Universe, CC BY 4.0",
+    readImage: (file: string) => IMAGES[file]!,
+    ...overrides,
+  });
+
+  it("labels them public single-review so readiness keeps excluding them", () => {
+    const entries = buildPublicManifest(publicInput());
+    expect(entries).toHaveLength(2);
+    for (const entry of entries) {
+      expect(localCorpusEntrySchema.safeParse(entry).success).toBe(true);
+      expect(entry.provenance).toEqual({
+        label: "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+        sourceAttributionRecorded: true,
+        licenseAttributionRecorded: true,
+        groundTruthReviewerCount: 1,
+      });
+      expect(entry.developmentCohort).toBeUndefined();
+      expect(representativeExclusion(entry)).toBe("PUBLIC_SINGLE_REVIEW");
+    }
+    expect(() => validateDevelopmentCohort(entries)).not.toThrow();
+    expect(entries[0]!.expected).toMatchObject({ vendor: "Aling Nena Store", date: "2026-10-01", amount: 1250.5 });
+    expect(entries[1]!.expected.items).toBeNull();
+    expect(JSON.stringify(entries)).not.toContain("Ana");
+  });
+
+  it("refuses missing attribution, mixed reviewers, empty readings and repeated images", () => {
+    expect(() => buildPublicManifest(publicInput({ attribution: "  " }))).toThrow(/ATTRIBUTION/);
+    expect(() => buildPublicManifest(publicInput({
+      transcription: [transcription("Ana", "r001.jpg"), transcription("Ben", "r002.jpg")],
+    }))).toThrow(/same reviewer/);
+    expect(() => buildPublicManifest(publicInput({
+      transcription: [transcription("", "r001.jpg"), transcription("", "r002.jpg")],
+    }))).toThrow(/no reviewer yet/);
+    expect(() => buildPublicManifest(publicInput({
+      transcription: [transcription("Ana", "r001.jpg"), transcription("", "r002.jpg")],
+    }))).toThrow(/1 row\(s\) have no reviewer/);
+    expect(() => buildPublicManifest(publicInput({
+      transcription: [transcription("Ana", "r001.jpg", { vendor: "", date: "", total: "", items: "" })],
+    }))).toThrow(/nothing typed/);
+    expect(() => buildPublicManifest(publicInput({ readImage: () => Buffer.from("same bytes") }))).toThrow(/same image bytes/);
   });
 });

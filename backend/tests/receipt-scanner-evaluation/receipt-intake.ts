@@ -28,6 +28,7 @@ export const RECEIPT_COLUMNS = [
 ] as const;
 
 export const TRANSCRIPTION_COLUMNS = ["file", "reviewer", "vendor", "date", "total", "items"] as const;
+export const PUBLIC_TRANSCRIPTION_COLUMNS = [...TRANSCRIPTION_COLUMNS, "notes"] as const;
 
 /** RFC 4180 CSV: quoted fields, doubled quotes, commas and newlines inside quotes. */
 export function parseCsv(text: string): Record<string, string>[] {
@@ -269,4 +270,67 @@ export function buildManifest({ receipts, first, second, readImage }: IntakeInpu
     if (!receipts.some((row) => row.file === file)) throw new IntakeError(`${file} is transcribed but not listed in receipts.csv`);
   }
   return { entries, disagreements: conflicts };
+}
+
+export interface PublicIntakeInput {
+  /** One person's reading of each image; the sheet also lists the images. */
+  transcription: Record<string, string>[];
+  /** Where the images come from and under which licence, as the licence requires. */
+  attribution: string;
+  readImage: (file: string) => Buffer;
+}
+
+/*
+ * Real receipts from a published, licensed dataset rather than from owners
+ * who agreed to this test. They are labelled PUBLIC_LICENSED_REAL_SINGLE_REVIEW
+ * and carry no development cohort, so the evaluator scores them separately
+ * and the readiness check keeps excluding them: only consented,
+ * double-reviewed receipts can support a representative claim.
+ */
+export function buildPublicManifest({ transcription, attribution, readImage }: PublicIntakeInput): LocalCorpusEntry[] {
+  if (attribution.trim() === "") throw new IntakeError("ATTRIBUTION.txt must name the dataset, its author and its licence");
+  const names = new Set(transcription.map((row) => row.reviewer?.trim().toLowerCase()).filter(Boolean));
+  const unsigned = transcription.filter((row) => !row.reviewer?.trim()).length;
+  if (names.size === 0) throw new IntakeError("transcription.csv: no reviewer yet; type the values and put your initials in the reviewer column of every row");
+  if (unsigned > 0) throw new IntakeError(`transcription.csv: ${unsigned} row(s) have no reviewer; finish or remove them`);
+  if (names.size !== 1) throw new IntakeError("transcription.csv: every row needs the same reviewer name");
+
+  const entries: LocalCorpusEntry[] = [];
+  const seenFiles = new Set<string>();
+  const seenHashes = new Map<string, string>();
+  for (const row of transcription) {
+    const file = row.file ?? "";
+    const where = `transcription.csv, ${file}`;
+    if (!file) throw new IntakeError("transcription.csv: a row has no file");
+    if (seenFiles.has(file)) throw new IntakeError(`transcription.csv: ${file} appears twice`);
+    seenFiles.add(file);
+    const reading = parseTranscription(row, where);
+    if (reading.vendor === null && reading.date === null && reading.total === null) {
+      throw new IntakeError(`${where}: nothing typed; remove the row or fill in what the receipt shows`);
+    }
+
+    const bytes = readImage(file);
+    const sha = createHash("sha256").update(bytes).digest("hex");
+    const duplicate = seenHashes.get(sha);
+    if (duplicate) throw new IntakeError(`${where}: same image bytes as ${duplicate}`);
+    seenHashes.set(sha, file);
+
+    const parsed = localCorpusEntrySchema.safeParse({
+      id: `public_${sha.slice(0, 24)}`,
+      file,
+      kind: "real",
+      conditions: row.notes ?? "",
+      needs_review: false,
+      provenance: {
+        label: "PUBLIC_LICENSED_REAL_SINGLE_REVIEW",
+        sourceAttributionRecorded: true,
+        licenseAttributionRecorded: true,
+        groundTruthReviewerCount: 1,
+      },
+      expected: { vendor: reading.vendor, date: reading.date, amount: reading.total, items: reading.items },
+    });
+    if (!parsed.success) throw new IntakeError(`${where}: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
+    entries.push(parsed.data);
+  }
+  return entries;
 }
