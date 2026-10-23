@@ -723,6 +723,10 @@ model ExpenseRecord {
   // scan and sort of the business's whole ledger. Measured in
   // tests/load/query-plans.ts.
   @@index([businessProfileId, amount, id], map: "ExpenseRecord_profile_amount_id_idx")
+  // Each category's newest records for the unusual-expense baseline
+  // (loadBoundedCategoryHistoryRows): read per category instead of sorting the
+  // whole year. Measured in that function's comment.
+  @@index([businessProfileId, categoryId, date, id], map: "ExpenseRecord_profile_category_date_id_idx")
   // Keyword search is `description ILIKE '%term%'`, which no b-tree can serve.
   // pg_trgm's operator class lives in whichever schema the migration installed
   // the extension into (Supabase: extensions); see migration

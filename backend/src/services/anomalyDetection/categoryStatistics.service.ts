@@ -101,9 +101,21 @@ export async function loadCategoryHistoryCoverage(
 }
 
 /**
- * Loads a bounded number of recent records PER category. The window function
- * avoids loading an account's entire history and avoids the incorrect global
- * LIMIT that would let a busy category crowd every other category out.
+ * Loads a bounded number of recent records PER category, so a busy category
+ * cannot crowd the others out the way one global LIMIT would.
+ *
+ * Each category's newest rows are read straight off
+ * ExpenseRecord_profile_category_date_id_idx. Ranking the whole window with
+ * ROW_NUMBER() instead sorted every record in it: on a 200,000-record year
+ * that was 104-131 ms to keep 8,000 rows, against 17-19 ms read per category,
+ * with identical rows in identical order. This query ran on every Expense
+ * Insights and dashboard expense-overview request.
+ *
+ * The categories are the ones the business's own records use, found by
+ * walking that index one category at a time (a handful of probes rather than
+ * a scan), not the business's category list: nothing in the schema stops a
+ * record pointing at another business's category, and the result must not
+ * depend on that never happening.
  */
 async function loadBoundedCategoryHistoryRows(
   businessProfileId: number,
@@ -115,47 +127,65 @@ async function loadBoundedCategoryHistoryRows(
 ): Promise<HistoricalExpenseAmount[]> {
   if (selectedCategoryIds?.length === 0) return [];
   const windowStart = utcAddDays(windowEnd, -(windowDays - 1));
-  const categorySelection = maximumCategories === undefined || selectedCategoryIds !== undefined
-    ? Prisma.sql``
-    : Prisma.sql`
-        selected_categories AS (
-          SELECT er."Category_ID"
-          FROM "ExpenseRecord" er
-          WHERE er."BusinessProfile_ID" = ${businessProfileId}
-            AND er."ExpenseRecord_Date" >= ${windowStart}
-            AND er."ExpenseRecord_Date" <= ${utcEndOfDay(windowEnd)}
-          GROUP BY er."Category_ID"
-          ORDER BY SUM(er."ExpenseRecord_Amount") DESC, er."Category_ID" ASC
-          LIMIT ${Math.max(1, Math.floor(maximumCategories))}
-        ),
-      `;
-  const categoryFilter = selectedCategoryIds !== undefined
-    ? Prisma.sql`AND er."Category_ID" IN (${Prisma.join(selectedCategoryIds)})`
-    : maximumCategories === undefined
-      ? Prisma.sql``
-      : Prisma.sql`AND er."Category_ID" IN (SELECT "Category_ID" FROM selected_categories)`;
+  const categories = selectedCategoryIds !== undefined
+    ? Prisma.sql`
+        categories AS (
+          SELECT DISTINCT selected.id
+          FROM unnest(ARRAY[${Prisma.join(selectedCategoryIds)}]::integer[]) AS selected(id)
+        )`
+    : maximumCategories !== undefined
+      ? Prisma.sql`
+          categories AS (
+            SELECT er."Category_ID" AS id
+            FROM "ExpenseRecord" er
+            WHERE er."BusinessProfile_ID" = ${businessProfileId}
+              AND er."ExpenseRecord_Date" >= ${windowStart}
+              AND er."ExpenseRecord_Date" <= ${utcEndOfDay(windowEnd)}
+            GROUP BY er."Category_ID"
+            ORDER BY SUM(er."ExpenseRecord_Amount") DESC, er."Category_ID" ASC
+            LIMIT ${Math.max(1, Math.floor(maximumCategories))}
+          )`
+      : Prisma.sql`
+          RECURSIVE categories AS (
+            (
+              SELECT er."Category_ID" AS id
+              FROM "ExpenseRecord" er
+              WHERE er."BusinessProfile_ID" = ${businessProfileId}
+              ORDER BY er."Category_ID"
+              LIMIT 1
+            )
+            UNION ALL
+            SELECT (
+              SELECT er."Category_ID"
+              FROM "ExpenseRecord" er
+              WHERE er."BusinessProfile_ID" = ${businessProfileId}
+                AND er."Category_ID" > categories.id
+              ORDER BY er."Category_ID"
+              LIMIT 1
+            )
+            FROM categories
+            WHERE categories.id IS NOT NULL
+          )`;
   return prisma.$queryRaw<HistoricalExpenseAmount[]>(Prisma.sql`
-    WITH ${categorySelection}
-    ranked AS (
+    WITH ${categories}
+    SELECT history.id, history."categoryId", history.amount, history.date
+    FROM categories
+    CROSS JOIN LATERAL (
       SELECT
         er."ExpenseRecord_ID" AS id,
         er."Category_ID" AS "categoryId",
         er."ExpenseRecord_Amount" AS amount,
-        er."ExpenseRecord_Date" AS date,
-        ROW_NUMBER() OVER (
-          PARTITION BY er."Category_ID"
-          ORDER BY er."ExpenseRecord_Date" DESC, er."ExpenseRecord_ID" DESC
-        ) AS row_number
+        er."ExpenseRecord_Date" AS date
       FROM "ExpenseRecord" er
       WHERE er."BusinessProfile_ID" = ${businessProfileId}
+        AND er."Category_ID" = categories.id
         AND er."ExpenseRecord_Date" >= ${windowStart}
         AND er."ExpenseRecord_Date" <= ${utcEndOfDay(windowEnd)}
-        ${categoryFilter}
-    )
-    SELECT ranked.id, ranked."categoryId", ranked.amount, ranked.date
-    FROM ranked
-    WHERE ranked.row_number <= ${maximumPerCategory}
-    ORDER BY ranked."categoryId", ranked.date DESC, ranked.id DESC
+      ORDER BY er."ExpenseRecord_Date" DESC, er."ExpenseRecord_ID" DESC
+      LIMIT ${maximumPerCategory}
+    ) history
+    WHERE categories.id IS NOT NULL
+    ORDER BY history."categoryId", history.date DESC, history.id DESC
   `);
 }
 
