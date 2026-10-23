@@ -401,6 +401,70 @@ describe("RECEIPT_PROVIDER_ROUTING", () => {
     expect(adapter.extract).toHaveBeenCalledTimes(1);
   });
 
+  /*
+   * The apps watch a scan for three minutes and the worker waits at most
+   * twice, so only a short wait is worth holding the scan for.
+   */
+  function refusingAdapter(outcomeCode: "RATE_LIMITED" | "AUTH_ERROR", retryAfterMs: number | null) {
+    return {
+      provider: "gemini" as const,
+      providerVersion: "gemini-3.5-flash-lite",
+      extract: vi.fn(async (request) => successfulOutcome(request, {
+        status: "FAILED",
+        outcomeCode,
+        finalBillableUnits: 0,
+        retryAfterMs,
+        extraction: null,
+      })),
+    };
+  }
+
+  it("waits a rate limit's minute, but not an hour-long Retry-After", async () => {
+    enableMockedGeminiProvider({ RECEIPT_PROVIDER_ROUTING: "always" });
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const decision = rescueDecision({ reasons: ["PROVIDER_ROUTING_ALWAYS"] });
+    const config = getReceiptProviderConfiguration();
+
+    const shortScan = await leasedScan(owner.profile.id, "rate-limit-minute");
+    const minute = await dispatchReceiptProviderRescue(
+      dispatchInput(owner.profile.id, shortScan.id, { rescueDecision: decision }),
+      { adapter: refusingAdapter("RATE_LIMITED", null), configuration: config },
+    );
+    expect(minute.retryAt).not.toBeNull();
+
+    await ageDispatchesPastCooldown();
+    const longScan = await leasedScan(owner.profile.id, "rate-limit-hour");
+    const hour = await dispatchReceiptProviderRescue(
+      dispatchInput(owner.profile.id, longScan.id, { rescueDecision: decision }),
+      { adapter: refusingAdapter("RATE_LIMITED", 60 * 60 * 1000), configuration: config },
+    );
+    expect(hour.dispatchStatus).toBe("FAILED");
+    expect(hour.retryAt).toBeNull();
+  });
+
+  it("does not hold scans for an authentication refusal, which waiting cannot fix", async () => {
+    enableMockedGeminiProvider({ RECEIPT_PROVIDER_ROUTING: "always" });
+    const owner = await makeOwnerWithProfile();
+    await grantReceiptProviderConsent(owner.user.id, owner.profile.id, consentTerms());
+    const decision = rescueDecision({ reasons: ["PROVIDER_ROUTING_ALWAYS"] });
+    const config = getReceiptProviderConfiguration();
+    const refused = await leasedScan(owner.profile.id, "auth-refused");
+    await dispatchReceiptProviderRescue(
+      dispatchInput(owner.profile.id, refused.id, { rescueDecision: decision }),
+      { adapter: refusingAdapter("AUTH_ERROR", null), configuration: config },
+    );
+
+    // The next scan meets the five-minute authentication cooldown.
+    const next = await leasedScan(owner.profile.id, "auth-cooldown");
+    const gate = await dispatchReceiptProviderRescue(
+      dispatchInput(owner.profile.id, next.id, { rescueDecision: decision }),
+      { adapter: refusingAdapter("AUTH_ERROR", null), configuration: config },
+    );
+    expect(gate.code).toBe("PROVIDER_COOLDOWN_ACTIVE");
+    expect(gate.retryAt).toBeNull();
+  });
+
   it("does not request the provider under always routing while the configuration is not operational", async () => {
     enableMockedGeminiProvider({ RECEIPT_PROVIDER_ROUTING: "always", RECEIPT_PROVIDER_KILL_SWITCH: "true" });
     const owner = await makeOwnerWithProfile();

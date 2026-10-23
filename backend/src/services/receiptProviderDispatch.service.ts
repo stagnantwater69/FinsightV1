@@ -848,6 +848,18 @@ function unbilledProviderRefusal(existing: {
     && (existing.outcomeCode === "RATE_LIMITED" || existing.outcomeCode === "PROVIDER_SERVER_ERROR");
 }
 
+/**
+ * How long a scan may be held back for the provider. The apps watch a scan for
+ * three minutes and the worker waits at most twice, so a longer wait would
+ * outlast the screen; the scan finishes on the local read instead, as it did
+ * before waiting existed. A provider Retry-After can be up to a day.
+ */
+const PROVIDER_WAIT_LIMIT_MS = 75_000;
+
+function waitableRetryAt(retryAt: Date, now: Date): Date | null {
+  return retryAt.getTime() - now.getTime() <= PROVIDER_WAIT_LIMIT_MS ? retryAt : null;
+}
+
 function reservationRearmable(existing: {
   status: Reservation["status"];
   finalBillableUnits: number | null;
@@ -1235,7 +1247,9 @@ export async function dispatchReceiptProviderRescue(
     return {
       ...skipped(localExtraction, "PROVIDER_COOLDOWN_ACTIVE"),
       provider: config.provider,
-      retryAt: cooldown.retryAt,
+      // An authentication refusal lasts until someone fixes the key, so waiting
+      // for it only delays the scan.
+      retryAt: cooldown.reasonCode === "AUTH_ERROR" ? null : waitableRetryAt(cooldown.retryAt, clock()),
       telemetry: dispatchTelemetry(null, cooldown, {
         cooldownLookupMs,
         reservationMs,
@@ -1521,7 +1535,7 @@ export async function dispatchReceiptProviderRescue(
   });
   return {
     retryAt: refusedWithoutCharge
-      ? new Date(clock().getTime() + (outcome.retryAfterMs ?? RECEIPT_PROVIDER_COOLDOWN_MS))
+      ? waitableRetryAt(new Date(clock().getTime() + (outcome.retryAfterMs ?? RECEIPT_PROVIDER_COOLDOWN_MS)), clock())
       : null,
     code: outcome.status === "SUCCEEDED"
       ? "PROVIDER_OK"
