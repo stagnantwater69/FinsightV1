@@ -79,6 +79,22 @@ function sourceForScan(scan: Pick<ReceiptScan, "visionAssisted">): CorrectionSou
 }
 
 /**
+ * Who produced one receipt-level field, from the per-field evidence the worker
+ * persisted. `visionAssisted` is true whenever the provider supplied ANY field,
+ * so a provider vendor next to a local date would otherwise blame the model
+ * for the parser's date. Scans read before fieldEvidence existed, and fields
+ * nothing read, have no entry and fall back to the scan-level flag.
+ */
+function sourceForField(
+  scan: Pick<ReceiptScan, "visionAssisted" | "fieldEvidence">,
+  field: "date" | "vendor" | "amount",
+): CorrectionSource {
+  const evidence = scan.fieldEvidence as Record<string, { source?: unknown } | undefined> | null;
+  const source = evidence?.[field]?.source;
+  return source === "ocr" || source === "vision" ? source : sourceForScan(scan);
+}
+
+/**
  * The categoriser's pick for each extracted line, read BEFORE confirmation
  * overwrites it.
  *
@@ -160,7 +176,7 @@ async function buildConfirmationCorrections(input: ConfirmationFeedbackInput): P
   if (readDate !== null || confirmed.date) {
     rows.push({
       field: "date",
-      source: scanSource,
+      source: sourceForField(scan, "date"),
       originalValue: readDate,
       finalValue: confirmed.date,
       // The scan-level figure, not a per-field one: tesseract reports
@@ -176,7 +192,7 @@ async function buildConfirmationCorrections(input: ConfirmationFeedbackInput): P
   if (scan.extractedVendor !== null || finalVendor !== null) {
     rows.push({
       field: "vendor",
-      source: scanSource,
+      source: sourceForField(scan, "vendor"),
       originalValue: scan.extractedVendor,
       finalValue: finalVendor,
       confidence: scan.vendorConfidence,
@@ -187,7 +203,7 @@ async function buildConfirmationCorrections(input: ConfirmationFeedbackInput): P
   const readAmount = scan.extractedAmount === null ? null : Number(scan.extractedAmount);
   rows.push({
     field: "amount",
-    source: scanSource,
+    source: sourceForField(scan, "amount"),
     originalValue: readAmount === null ? null : readAmount.toFixed(2),
     finalValue: confirmed.amount.toFixed(2),
     confidence: scan.amountConfidence,
