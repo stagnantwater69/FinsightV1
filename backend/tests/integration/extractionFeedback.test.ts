@@ -44,6 +44,7 @@ vi.mock("../../src/services/visionOcr.service", async (importOriginal) => {
   return { ...actual, extractReceiptWithVision: visionMock };
 });
 
+import { Prisma } from "@prisma/client";
 import { prisma } from "../../src/config/prisma";
 import { confirmReceipt, deleteScanItem, getScan, uploadAndScan } from "../../src/services/receiptScan.service";
 import { disconnectDb, makeOwnerWithProfile, resetDb, runReceiptWorkerAndWait } from "../setup/testDb";
@@ -465,5 +466,40 @@ describe("per-field confidence", () => {
     expect(scan.extractedAmount).toBeNull();
     expect(scan.items).toEqual([]);
     expect(visionMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("which reader a correction is charged to", () => {
+  /**
+   * visionAssisted is set when the provider supplied ANY field. A provider
+   * vendor beside the parser's own date and total must not blame the model
+   * for the date the parser read.
+   */
+  it("follows each field's own evidence on a partly provider-read scan", async () => {
+    const scan = await upload();
+    const evidence = (await prisma.receiptScan.findUniqueOrThrow({ where: { id: scan.id } })).fieldEvidence as Record<string, object>;
+    await prisma.receiptScan.update({
+      where: { id: scan.id },
+      data: { visionAssisted: true, fieldEvidence: { ...evidence, vendor: { pageNumber: null, sourceText: null, source: "vision" } } },
+    });
+    await confirmAsRead(scan.id, scan.items);
+
+    const byField = new Map((await corrections()).map((r) => [r.field, r.source]));
+    expect(byField.get("vendor")).toBe("vision");
+    expect(byField.get("date")).toBe("ocr");
+    expect(byField.get("amount")).toBe("ocr");
+  });
+
+  it("falls back to the scan-level flag for a scan read before field evidence existed", async () => {
+    const scan = await upload();
+    await prisma.receiptScan.update({ where: { id: scan.id }, data: { visionAssisted: true, fieldEvidence: Prisma.DbNull } });
+    await confirmAsRead(scan.id, scan.items);
+
+    const rows = await corrections();
+    expect(rows.filter((r) => ["date", "vendor", "amount"].includes(r.field)).map((r) => r.source)).toEqual([
+      "vision",
+      "vision",
+      "vision",
+    ]);
   });
 });
