@@ -37,7 +37,7 @@ import { selectOcrCandidate } from "./ocrCandidateSelection";
 import { readReceiptPagesWithinOcrBudget } from "./ocrPageScheduling";
 import { assessReceiptLikelihood } from "../../lib/receiptLikelihood";
 import { philippineDate } from "../../lib/receiptDates";
-import { parseReceiptDetails, providerReportedCurrency } from "../../lib/receiptDetails";
+import { parseReceiptDetails } from "../../lib/receiptDetails";
 import { validateReceiptUpload } from "../../lib/receiptUploadValidation";
 import {
   RECEIPT_UPLOAD_MAX_AGGREGATE_BYTES,
@@ -162,13 +162,6 @@ export interface ReceiptProcessingOutput {
   scan: Prisma.ReceiptScanUpdateManyMutationInput;
   pages: ReceiptPageProcessingOutput[];
   items: ReceiptItemProcessingOutput;
-  /**
-   * Whether the provider actually read the paper on this pass. False carries an
-   * earlier pass's currency forward, so a re-scan that never reached the
-   * provider cannot clear a refusal a pass that did reach it had earned. A pass
-   * that did read replaces it, null included: that is a re-reading, not silence.
-   */
-  providerRead: boolean;
 }
 
 function sha256(buffer: Buffer): string {
@@ -362,19 +355,6 @@ function mergeIntoRescuedFields(
   };
 }
 
-/**
- * Puts a carried-forward currency back into the versions blob this pass built.
- * An absent blob is left absent: the column would otherwise be overwritten
- * with a fragment, losing the very record being preserved.
- */
-function withProviderCurrency(
-  versions: Prisma.ReceiptScanUpdateManyMutationInput["extractorVersions"],
-  currency: string,
-): Prisma.InputJsonValue | undefined {
-  if (typeof versions !== "object" || versions === null || Array.isArray(versions)) return undefined;
-  return { ...(versions as Record<string, unknown>), providerCurrency: currency } as Prisma.InputJsonValue;
-}
-
 /** Commit every derived receipt value only while this attempt still owns the lease. */
 export async function persistReceiptProcessingOutput(
   scanId: number,
@@ -394,12 +374,9 @@ export async function persistReceiptProcessingOutput(
         processingWorkerId: lease.workerId,
         processingAttemptCount: lease.attempt,
       },
-      select: { captureBatchId: true, extractorVersions: true },
+      select: { captureBatchId: true },
     });
     if (!batchLink) throw new ReceiptLeaseLostError(`Receipt scan ${scanId} lease was reclaimed`);
-    // Read under the same lease predicate as the write below, so the value
-    // carried forward is the one this attempt is still entitled to overwrite.
-    const carriedCurrency = output.providerRead ? null : providerReportedCurrency(batchLink.extractorVersions);
     if (
       batchLink.captureBatchId !== null
       && !(await lockReceiptCaptureBatchForMutation(tx, batchLink.captureBatchId))
@@ -422,7 +399,6 @@ export async function persistReceiptProcessingOutput(
       },
       data: {
         ...output.scan,
-        ...(carriedCurrency === null ? {} : { extractorVersions: withProviderCurrency(output.scan.extractorVersions, carriedCurrency) }),
         processingStatus: "Processing",
         processingCompletedAt: null,
         processingWorkerId: lease.workerId,
@@ -791,9 +767,8 @@ async function processScan(
       rescueDecisionVersion: RESCUE_DECISION_VERSION,
       rescueReasonCodes: rescueDecision.reasons,
       providerContractVersion: RECEIPT_PROVIDER_CONTRACT_VERSION,
-      // Read back at confirm time by requiresManualCurrencyConversion: the merge
-      // cannot adopt it, but it still has to block a peso booking. Superseded by
-      // the prior pass's value when this one never read the paper (`providerRead`).
+      // What the provider read, kept for the audit trail only: every receipt
+      // is booked in PHP (see receiptDetails.ts).
       providerCurrency: gate.merge.providerCurrency,
       ocrCandidateSources: ocrSources,
       overlapResolverVersion: OVERLAP_RESOLVER_VERSION,
@@ -881,10 +856,6 @@ async function processScan(
           // located in the page text. Unverifiable items remain evidence-less.
           itemEvidence,
         },
-        // A skipped, failed, cancelled or timed-out dispatch produced no
-        // reading of the paper, so it may not overwrite what an earlier pass
-        // read. Only SUCCEEDED means the provider answered and was accepted.
-        providerRead: gate.dispatchStatus === "SUCCEEDED",
       },
     ));
     logProviderGate?.(true);

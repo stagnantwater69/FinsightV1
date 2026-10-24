@@ -1,6 +1,6 @@
 import type { ReceiptFieldCorrection, ReceiptScan, ReceiptScanItem, ReceiptScanPage } from "@prisma/client";
 import { WARNING_GUIDANCE, type ReceiptWarning } from "../../lib/receiptWarnings";
-import { parseReceiptDetails, providerReportedCurrency, requiresManualCurrencyConversion } from "../../lib/receiptDetails";
+import { parseReceiptDetails } from "../../lib/receiptDetails";
 import {
   findPageSeams,
   looksLikeDuplicatePage,
@@ -106,10 +106,6 @@ export function toDTO(
     extractedDescription: scan.extractedDescription,
     extractedAmount: scan.extractedAmount ? Number(scan.extractedAmount) : null,
     receiptDetails: parseReceiptDetails(scan.rawText),
-    requiresManualCurrencyConversion: requiresManualCurrencyConversion(
-      scan.rawText,
-      providerReportedCurrency(scan.extractorVersions),
-    ),
     confirmationStatus: scan.confirmationStatus,
     /**
      * How far the READ has got: "Processing" | "Complete" | "Failed".

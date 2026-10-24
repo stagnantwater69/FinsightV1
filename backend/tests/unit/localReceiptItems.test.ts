@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { parseReceiptFields, reconcileItems } from "../../src/services/ocr.service";
 import { linePageNumbers, readLocalItems } from "../../src/services/receiptScan/localItems";
 import { itemNameSimilarity } from "../../src/lib/receiptOverlapItems";
-import { requiresManualCurrencyConversion } from "../../src/lib/receiptDetails";
 import { GAISANO_SCREENSHOT_OCR } from "../helpers/gaisanoScreenshotOcr";
 import {
   asPhotographed,
@@ -198,12 +197,6 @@ describe("tesseract's own reading of the owner's receipt", () => {
 
   it("does not read the CHANGE line or a garbled figures row as a purchase", () => {
     expect(reading.items.some((item) => cents(item.amount) === 275 || cents(item.amount) === 29951)).toBe(false);
-  });
-
-  it("does not treat the pen stroke read as a yen sign as a foreign currency", () => {
-    const text = pages.join("\n");
-    expect(text).toMatch(/¥ 1 80\.00/);
-    expect(requiresManualCurrencyConversion(text)).toBe(false);
   });
 
   it("leaves the rows it could not read to the owner, with the gap showing against the total", () => {

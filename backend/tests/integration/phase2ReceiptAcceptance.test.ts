@@ -850,7 +850,6 @@ describe("Phase 2 worker and whole-scan retry", () => {
           amountConfidences: [],
           itemEvidence: [],
         },
-        providerRead: true,
       },
     )));
 
@@ -933,7 +932,6 @@ describe("Phase 2 worker and whole-scan retry", () => {
           amountConfidences: [],
           itemEvidence: [],
         },
-        providerRead: true,
       },
     );
 

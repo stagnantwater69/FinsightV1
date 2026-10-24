@@ -20,7 +20,6 @@ export interface ReceiptScanResult {
   extractedVendor: string | null;
   extractedDescription: string | null;
   extractedAmount: number | null;
-  requiresManualCurrencyConversion?: boolean;
   receiptDetails?: {
     currency: string | null;
     transactionTime: string | null;

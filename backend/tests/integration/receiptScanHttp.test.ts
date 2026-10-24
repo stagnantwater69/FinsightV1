@@ -610,7 +610,7 @@ describe("GET /api/v1/records/receipts/:id", () => {
     expect(signedReceiptImageUrl).not.toHaveBeenCalled();
   });
 
-  it("returns printed details and blocks foreign-currency confirmation at the HTTP boundary", async () => {
+  it("returns printed details and books a receipt printing another currency as PHP", async () => {
     const scan = await prisma.receiptScan.create({ data: {
       businessProfileId: ctx.profile.id, imageFile: "1/foreign.jpg", processingStatus: "Complete",
       rawText: "Receipt No: INV-1\nSubtotal USD 100.00\nTax 12.00\nTOTAL USD 112.00\nPayment: Visa **** 1234",
@@ -618,15 +618,15 @@ describe("GET /api/v1/records/receipts/:id", () => {
     const response = await request(app).get(`/api/v1/records/receipts/${scan.id}`).set(...AUTH);
     expect(response.status).toBe(200);
     expect(response.headers["cache-control"]).toBe("no-store");
-    expect(response.body).toMatchObject({ requiresManualCurrencyConversion: true,
-      receiptDetails: { currency: "USD", subtotal: 100, tax: 12, paymentMethod: "Visa", receiptNumber: "INV-1" } });
+    expect(response.body).toMatchObject({
+      receiptDetails: { currency: "PHP", subtotal: 100, tax: 12, paymentMethod: "Visa", receiptNumber: "INV-1" } });
     expect(response.body).not.toHaveProperty("uploadKey");
     expect(response.body).not.toHaveProperty("uploadHash");
+    expect(response.body).not.toHaveProperty("requiresManualCurrencyConversion");
     const confirm = await request(app).post(`/api/v1/records/receipts/${scan.id}/confirm`).set(...AUTH)
       .send({ date: "2026-09-01", description: "Stock", amount: 112, splits: [{ categoryId: ctx.categories.Inventory, amount: 112 }] });
-    expect(confirm.status).toBe(400);
-    expect(confirm.body.error).toMatch(/foreign currency/i);
-    expect(await prisma.expenseRecord.count()).toBe(0);
+    expect(confirm.status).toBe(201);
+    expect(await prisma.expenseRecord.count()).toBe(1);
   });
 
   it("reports Processing while the read is in flight, then Complete with the figures", async () => {

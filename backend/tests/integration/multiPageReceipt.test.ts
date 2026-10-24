@@ -701,7 +701,6 @@ describe("a long receipt printed as two-line rows", () => {
 
     expect(scan.processingStatus).toBe("Complete");
     expect(scan.extractedAmount).toBe(GAISANO_TOTAL);
-    expect(scan.requiresManualCurrencyConversion).toBe(false);
     const items = await prisma.receiptScanItem.findMany({ where: { receiptScanId: scan.id }, orderBy: { lineNumber: "asc" } });
     expect(items.map((item) => item.name)).toEqual(GAISANO_ROWS.map((row) => row[4]));
     expect(items.map((item) => Number(item.amount))).toEqual(GAISANO_ROWS.map((row) => Number(row[3])));

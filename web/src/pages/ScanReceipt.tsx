@@ -88,7 +88,7 @@ import { ReceiptWorkflowProgress } from "./scanReceipt/ReceiptWorkflowProgress";
 import { ReceiptReviewTabs, type ReceiptReviewMode } from "./scanReceipt/ReceiptReviewTabs";
 import { ReceiptPhotoTips } from "./scanReceipt/ReceiptPhotoTips";
 import { KeptDraftNotice, RestoredDraftNotice } from "./scanReceipt/ReceiptDraftNotices";
-import { FailedReceiptScan, ForeignCurrencyReceipt } from "./scanReceipt/UnreviewableReceipt";
+import { FailedReceiptScan } from "./scanReceipt/UnreviewableReceipt";
 import { BatchProgressList } from "./scanReceipt/BatchProgressList";
 import { ScannedItemsTable } from "./scanReceipt/ScannedItemsTable";
 import { ItemReconciliation } from "./scanReceipt/ItemReconciliation";
@@ -973,7 +973,7 @@ function ScanReceiptForm() {
 
   async function handleConfirm(e: FormEvent) {
     e.preventDefault();
-    if (!scan || savePending.current || foreignCurrency) return;
+    if (!scan || savePending.current) return;
     const invalidField = !date.trim() || futureDateError(date, todayIso(selected?.timezone))
       ? "date"
       : !description.trim()
@@ -1320,8 +1320,6 @@ function ScanReceiptForm() {
    * list of problems would make it read as one.
    */
   const allWarnings = scan?.warnings ?? [];
-  const foreignCurrency = scan?.receiptDetails?.currency && scan.receiptDetails.currency !== "PHP"
-    ? scan.receiptDetails.currency : scan?.requiresManualCurrencyConversion ? "another currency" : null;
 
   /**
    * Items grouped by the category the owner currently has them in, with a
@@ -1388,7 +1386,6 @@ function ScanReceiptForm() {
   const saveIsBlocked = confirming
     || dateError !== null
     || !readyToConfirm
-    || Boolean(foreignCurrency)
     || duplicateCheckStatus !== "success"
     || (duplicateReview !== null && (!duplicateListComplete || !duplicateAcknowledged));
   const assignedCategoryNames = [...new Set(
@@ -1721,20 +1718,6 @@ function ScanReceiptForm() {
         scanStage={scanStage}
         retryProcessing={retryProcessing}
         handleStopWaiting={handleStopWaiting}
-        handleRescan={handleRescan}
-        deleteUnconfirmedScan={deleteUnconfirmedScan}
-        deletingScanId={deletingScanId}
-      />
-    );
-  }
-
-  if (foreignCurrency) {
-    return (
-      <ForeignCurrencyReceipt
-        scan={scan}
-        foreignCurrency={foreignCurrency}
-        receiptPreview={receiptPreview}
-        scanError={scanError}
         handleRescan={handleRescan}
         deleteUnconfirmedScan={deleteUnconfirmedScan}
         deletingScanId={deletingScanId}
