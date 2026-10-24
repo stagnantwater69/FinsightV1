@@ -175,7 +175,9 @@ export const uploadReceiptEvidence = multer({
     fileSize: RECEIPT_UPLOAD_MAX_OBJECT_BYTES,
     files: RECEIPT_UPLOAD_MAX_MULTIPART_OBJECTS,
     fields: 8,
-    parts: RECEIPT_UPLOAD_MAX_MULTIPART_OBJECTS + 8,
+    // multer >=2.5 passes busboy one more than parts/fieldSize/fileSize, so a
+    // limit here is the largest count or size accepted.
+    parts: RECEIPT_UPLOAD_MAX_MULTIPART_OBJECTS + 7,
     fieldNameSize: 100,
     fieldSize: 64 * 1024,
   },
@@ -194,11 +196,9 @@ export const uploadReceiptImage = multer({
     fileSize: RECEIPT_UPLOAD_MAX_OBJECT_BYTES,
     files: 1,
     fields: 1,
-    // Busboy counts the closing boundary when checking its parts limit.
-    parts: 3,
+    parts: 2,
     fieldNameSize: 100,
-    // Busboy marks equality as truncated, so this accepts at most 2,000 bytes.
-    fieldSize: 2_001,
+    fieldSize: 2_000,
   },
   fileFilter: (_req, file, cb) => {
     if (!receiptMimeTypes.has(file.mimetype)) {
@@ -215,7 +215,7 @@ export const uploadCsv = multer({
     fileSize: CSV_UPLOAD_MAX_FILE_BYTES,
     files: 1,
     fields: CSV_UPLOAD_MAX_FIELDS,
-    parts: CSV_UPLOAD_MAX_PARTS,
+    parts: CSV_UPLOAD_MAX_PARTS - 1,
     fieldNameSize: CSV_UPLOAD_MAX_FIELD_NAME_BYTES,
     fieldSize: CSV_UPLOAD_MAX_FIELD_BYTES,
   },
@@ -235,7 +235,7 @@ export const uploadPhoto = multer({
     fileSize: 5 * 1024 * 1024,
     files: 1,
     fields: 0,
-    parts: 1,
+    parts: 0,
     fieldNameSize: 100,
   },
   fileFilter: (_req, file, cb) => {

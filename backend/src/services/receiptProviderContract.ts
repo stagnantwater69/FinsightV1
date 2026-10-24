@@ -232,12 +232,13 @@ const realDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) =>
   return date.getUTCFullYear() === year && date.getUTCMonth() === month! - 1 && date.getUTCDate() === day;
 });
 
-function nullableFieldSchema<T extends z.ZodTypeAny>(valueSchema: T) {
+function nullableFieldSchema<T extends z.ZodType>(valueSchema: T) {
   return z
     .object({ value: valueSchema.nullable(), evidence: normalizedEvidenceSchema.nullable() })
     .strict()
     .superRefine((field, context) => {
-      if (field.value !== null && field.evidence === null) {
+      const { value, evidence } = field as { value: unknown; evidence: unknown };
+      if (value !== null && evidence === null) {
         context.addIssue({ code: z.ZodIssueCode.custom, path: ["evidence"], message: "non-null value needs evidence" });
       }
     });
@@ -245,7 +246,7 @@ function nullableFieldSchema<T extends z.ZodTypeAny>(valueSchema: T) {
 
 export const MAX_RECEIPT_QUANTITY = 99_999_999.99;
 export const receiptQuantitySchema = z
-  .number({ invalid_type_error: "Quantity must be a number" })
+  .number({ error: (issue) => (issue.input === undefined ? "Required" : "Quantity must be a number") })
   .finite({ message: "Quantity must be a number" })
   .positive({ message: "Quantity must be greater than zero" })
   .max(MAX_RECEIPT_QUANTITY, { message: `Quantity must be ${MAX_RECEIPT_QUANTITY.toLocaleString("en-PH")} or less` })

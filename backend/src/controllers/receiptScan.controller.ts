@@ -236,13 +236,13 @@ export const confirmSchema = z.object({
    * `itemIds` names rows directly and must not be accepted and then ignored.
    */
   .strict()
-  .superRefine((input, context): input is ConfirmInput => {
-    const issues = confirmationModeIssues(input);
-    for (const issue of issues) {
+  .superRefine((input, context) => {
+    for (const issue of confirmationModeIssues(input)) {
       context.addIssue({ code: "custom", path: issue.path, message: issue.message });
     }
-    return issues.length === 0;
-  });
+  })
+  // The refinement above is what makes this narrowing true; zod 4's superRefine cannot narrow.
+  .transform((input) => input as ConfirmInput);
 
 export const itemUpdateSchema = z.object({
   name: z.string().trim().min(1).max(255),
