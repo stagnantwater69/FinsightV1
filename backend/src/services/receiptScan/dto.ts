@@ -312,11 +312,14 @@ function itemCategorisation(evidence: unknown): ItemCategorisation | null {
   if (typeof value !== "object" || value === null) return null;
   const { confidence, source, kind, reason, newCategory } = value as Record<string, unknown>;
   if (confidence !== "medium" && confidence !== "low") return null;
+  const known = source === "history" || source === "item" || source === "shop" ? source : "none";
   return {
     confidence,
-    source: source === "history" || source === "item" || source === "shop" ? source : "none",
+    source: known,
     kind: kind === "business" || kind === "personal" ? kind : null,
-    reason: typeof reason === "string" ? reason : null,
+    // Older scans stored "FinSight couldn't tell what this is" on items no
+    // rule matched; that note is no longer shown.
+    reason: known !== "none" && typeof reason === "string" ? reason : null,
     newCategory: newCategory === true,
   };
 }
