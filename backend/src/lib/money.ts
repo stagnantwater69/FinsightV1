@@ -47,12 +47,17 @@ function decimalPlacesOf(value: number): number {
   return point === -1 ? 0 : text.length - point - 1;
 }
 
+/** A missing amount reads "Required", a wrong type the owner-facing message (zod 3's split). */
+function numberMessage(message: string) {
+  return { error: (issue: { input?: unknown }) => (issue.input === undefined ? "Required" : message) };
+}
+
 /**
  * The messages are written for the owner, not for us: this is a 400 the
  * clients surface verbatim next to the amount field.
  */
 export const moneyAmountSchema = z
-  .number({ invalid_type_error: "Amount must be a number" })
+  .number(numberMessage("Amount must be a number"))
   .finite({ message: "Amount must be a number" })
   .positive({ message: "Amount must be greater than zero" })
   .max(MAX_MONEY_AMOUNT, { message: `Amount must be ${MAX_MONEY_AMOUNT.toLocaleString("en-PH")} or less` })
@@ -62,7 +67,7 @@ export const moneyAmountSchema = z
 
 /** The same database-aligned money domain, with zero allowed for simulations. */
 export const nonnegativeMoneyAmountSchema = z
-  .number({ invalid_type_error: "Amount must be a number" })
+  .number(numberMessage("Amount must be a number"))
   .finite({ message: "Amount must be a number" })
   .nonnegative({ message: "Amount must be zero or greater" })
   .max(MAX_MONEY_AMOUNT, { message: `Amount must be ${MAX_MONEY_AMOUNT.toLocaleString("en-PH")} or less` })
