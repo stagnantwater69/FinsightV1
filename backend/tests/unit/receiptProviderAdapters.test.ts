@@ -108,105 +108,49 @@ describe("provider adapter item evidence", () => {
   });
 });
 
-/* A missing response after submission cannot prove whether the verifier was billed. */
-describe("verifier reachability", () => {
+/*
+ * When the check cannot answer, the reading stands unchecked instead of being
+ * discarded for the local read. Lines that miss the total are used here so the
+ * check runs at all; billing counts the check whenever it may have been charged.
+ */
+describe("a check that cannot answer", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    extractReceiptWithVision.mockResolvedValue({ receipt: reconciledReceipt });
+    extractReceiptWithVision.mockResolvedValue({ receipt: unreconciledReceipt });
   });
 
-  it("records an unconfigured verifier as an authentication failure billed for the extraction only", async () => {
-    verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "not_attempted" });
+  it.each([
+    ["not_attempted", 1],
+    ["auth", 1],
+    ["http", 1],
+    ["rate_limited", 1],
+    ["server", 1],
+    ["timeout", 2],
+    ["cancelled", 2],
+    ["transport", 2],
+    ["unusable", 2],
+  ] as const)("keeps the reading for review when the check fails with %s, billing %i", async (failure, units) => {
+    verifyVisionReceipt.mockResolvedValue({ verdict: null, failure });
 
     const outcome = (await createGeminiReceiptAdapter().extract(providerRequest())) as ReceiptProviderOutcome;
 
-    expect(outcome.status).toBe("FAILED");
-    expect(outcome.outcomeCode).toBe("AUTH_ERROR");
-    expect(outcome.timeoutOutcome).toBe("NOT_TIMED_OUT");
-    expect(outcome.finalBillableUnits).toBe(1);
+    expect(outcome.status).toBe("SUCCEEDED");
+    expect(outcome.finalBillableUnits).toBe(units);
+    expect(outcome.extraction?.total.value).toBe(350);
+    expect(outcome.extraction?.vendor.evidence?.validationCodes).toContain("OWNER_REVIEW_REQUIRED");
+    // Unchecked lines that miss the total are offered for review, never validated.
+    expect(outcome.extraction?.itemsEvidence?.validationState).toBe("UNVALIDATED");
   });
 
-  it("keeps an authentication rejection distinct from a generic HTTP failure", async () => {
-    verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "auth", httpStatus: 403 });
+  it("keeps a refusal's Retry-After on the outcome", async () => {
+    verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "rate_limited", httpStatus: 429, retryAfterMs: 45_000 });
 
     const outcome = (await createGeminiReceiptAdapter().extract(providerRequest())) as ReceiptProviderOutcome;
 
-    expect(outcome.status).toBe("FAILED");
-    expect(outcome.outcomeCode).toBe("AUTH_ERROR");
-    expect(outcome.finalBillableUnits).toBe(1);
-  });
-
-  it("preserves a verifier rate limit and Retry-After", async () => {
-    verifyVisionReceipt.mockResolvedValue({
-      verdict: null,
-      failure: "rate_limited",
-      httpStatus: 429,
-      retryAfterMs: 45_000,
-    });
-
-    const outcome = (await createGeminiReceiptAdapter().extract(providerRequest())) as ReceiptProviderOutcome;
-
-    expect(outcome.status).toBe("FAILED");
-    expect(outcome.outcomeCode).toBe("RATE_LIMITED");
     expect(outcome.retryAfterMs).toBe(45_000);
   });
 
-  it("keeps provider 5xx failures distinct and preserves Retry-After", async () => {
-    verifyVisionReceipt.mockResolvedValue({
-      verdict: null,
-      failure: "server",
-      httpStatus: 503,
-      retryAfterMs: 45_000,
-    });
-
-    const outcome = (await createGeminiReceiptAdapter().extract(providerRequest())) as ReceiptProviderOutcome;
-
-    expect(outcome.status).toBe("FAILED");
-    expect(outcome.outcomeCode).toBe("PROVIDER_SERVER_ERROR");
-    expect(outcome.retryAfterMs).toBe(45_000);
-  });
-
-  it("records a dropped connection as billing-ambiguous while preserving its code", async () => {
-    verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "transport" });
-
-    const outcome = (await createGeminiReceiptAdapter().extract(providerRequest())) as ReceiptProviderOutcome;
-
-    expect(outcome.status).toBe("AMBIGUOUS");
-    expect(outcome.outcomeCode).toBe("TRANSPORT_ERROR");
-    expect(outcome.finalBillableUnits).toBeNull();
-  });
-
-  it("still records a real timeout as ambiguous, because the charge is genuinely unknown", async () => {
-    verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "timeout" });
-
-    const outcome = (await createGeminiReceiptAdapter().extract(providerRequest())) as ReceiptProviderOutcome;
-
-    expect(outcome.status).toBe("AMBIGUOUS");
-    expect(outcome.outcomeCode).toBe("TIMEOUT_AFTER_SUBMISSION");
-    expect(outcome.finalBillableUnits).toBeNull();
-  });
-
-  it("keeps cancellation distinct from timeout", async () => {
-    verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "cancelled" });
-
-    const outcome = (await createGeminiReceiptAdapter().extract(providerRequest())) as ReceiptProviderOutcome;
-
-    expect(outcome.status).toBe("AMBIGUOUS");
-    expect(outcome.outcomeCode).toBe("REQUEST_CANCELLED");
-    expect(outcome.finalBillableUnits).toBeNull();
-  });
-
-  it("bills both calls when the verifier answered with something that is not a verdict", async () => {
-    verifyVisionReceipt.mockResolvedValue({ verdict: null, failure: "unusable" });
-
-    const outcome = (await createGeminiReceiptAdapter().extract(providerRequest())) as ReceiptProviderOutcome;
-
-    expect(outcome.status).toBe("FAILED");
-    expect(outcome.outcomeCode).toBe("INVALID_RESULT");
-    expect(outcome.finalBillableUnits).toBe(2);
-  });
-
-  it("leaves an accepted verdict succeeding as before", async () => {
+  it("leaves an accepted verdict succeeding and billing both calls", async () => {
     verifyVisionReceipt.mockResolvedValue({ verdict: { accept: true, rejectedFields: [] }, failure: null });
 
     const outcome = (await createGeminiReceiptAdapter().extract(providerRequest())) as ReceiptProviderOutcome;
@@ -351,7 +295,8 @@ describe("settling Gemini's day/month order", () => {
   });
 
   const extractWith = async (receipt: Record<string, unknown>, referenceDate: string | null) => {
-    extractReceiptWithVision.mockResolvedValue({ receipt: { ...reconciledReceipt, warnings: [], ...receipt } });
+    // Lines that miss the total, so the check runs and its input can be inspected.
+    extractReceiptWithVision.mockResolvedValue({ receipt: { ...unreconciledReceipt, warnings: [], ...receipt } });
     return (await createGeminiReceiptAdapter().extract(providerRequest({ referenceDate }))) as ReceiptProviderOutcome;
   };
 
@@ -411,8 +356,25 @@ describe("skipping the verifier when the local read agrees", () => {
   });
 
   it.each([
-    ["a different total", { date: "2026-09-14", total: 305 }, reconciledReceipt],
-    ["a different date", { date: "2026-09-15", total: 350 }, reconciledReceipt],
+    ["a different total", { date: "2026-09-14", total: 305 }],
+    ["a different date", { date: "2026-09-15", total: 350 }],
+  ])("skips the check on lines that add up, even beside a local read with %s", async (_label, localCorroboration) => {
+    extractReceiptWithVision.mockResolvedValue({ receipt: reconciledReceipt });
+
+    const outcome = (await createGeminiReceiptAdapter().extract(
+      providerRequest({ localCorroboration }),
+    )) as ReceiptProviderOutcome;
+
+    expect(verifyVisionReceipt).not.toHaveBeenCalled();
+    expect(outcome.status).toBe("SUCCEEDED");
+    expect(outcome.finalBillableUnits).toBe(1);
+    // Corroborated by its own arithmetic, not by the local read.
+    expect(outcome.extraction?.itemsEvidence?.validationCodes).toContain("ARITHMETIC_VALID");
+    expect(outcome.extraction?.total.evidence?.validationCodes).not.toContain("LOCAL_MATCH");
+    expect(outcome.extraction?.vendor.evidence?.validationCodes).toContain("OWNER_REVIEW_REQUIRED");
+  });
+
+  it.each([
     ["lines that miss the total", { date: "2026-09-14", total: 350 }, unreconciledReceipt],
   ])("still verifies on %s", async (_label, localCorroboration, receipt) => {
     extractReceiptWithVision.mockResolvedValue({ receipt });
@@ -426,8 +388,8 @@ describe("skipping the verifier when the local read agrees", () => {
     expect(outcome.extraction?.total.evidence?.validationCodes).not.toContain("LOCAL_MATCH");
   });
 
-  it("still verifies when the local read sent nothing to compare", async () => {
-    extractReceiptWithVision.mockResolvedValue({ receipt: reconciledReceipt });
+  it("still verifies lines that miss the total when the local read sent nothing to compare", async () => {
+    extractReceiptWithVision.mockResolvedValue({ receipt: unreconciledReceipt });
 
     await createGeminiReceiptAdapter().extract(providerRequest({ localCorroboration: null }));
     await createGeminiReceiptAdapter().extract(providerRequest());
@@ -435,8 +397,8 @@ describe("skipping the verifier when the local read agrees", () => {
     expect(verifyVisionReceipt).toHaveBeenCalledTimes(2);
   });
 
-  it("still rejects when the verifier does run and rejects", async () => {
-    extractReceiptWithVision.mockResolvedValue({ receipt: reconciledReceipt });
+  it("still falls back when the verifier does run and rejects", async () => {
+    extractReceiptWithVision.mockResolvedValue({ receipt: unreconciledReceipt });
     verifyVisionReceipt.mockResolvedValue({ verdict: { accept: false, rejectedFields: ["amount"] }, failure: null });
 
     const outcome = (await createGeminiReceiptAdapter().extract(
