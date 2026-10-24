@@ -74,17 +74,24 @@ function itemsAddUp(receipt: { amount: number | null; items: { amount: number }[
 
 /*
  * WHEN THE SECOND GEMINI CALL IS SKIPPED. The verifier exists because one
- * model's reading of a photograph is not evidence on its own. When the local
- * read already corroborated the date and the total on the paper (the request
- * carries them only then), Gemini read the same date and the same total, and
- * Gemini's own lines add up to that total, three independent checks agree and
- * a second model adds a few seconds and a billed unit but no information about
- * those fields. Any disagreement, or lines that miss the total, and the
- * verifier runs as before.
+ * model's reading of a photograph is not evidence on its own. It is skipped
+ * when the reading is already checked another way:
  *
- * The store name is the one field this leaves unchecked by a second reader.
- * Its evidence stays OWNER_REVIEW_REQUIRED, as every provider vendor's does,
- * and the owner sees and can edit it on the review screen before saving.
+ *   - the local read corroborated the date and the total on the paper (the
+ *     request carries them only then), Gemini read the same date and total,
+ *     and Gemini's own lines add up to that total; or
+ *   - Gemini's own lines add up exactly to the total it read. The total is
+ *     then corroborated by arithmetic over figures printed on the paper.
+ *
+ * The second case was approved by the owner on 24 October 2026 after timing
+ * real scans: the check cost 3.5-4.6 s on every scan, and the local read,
+ * right on 18 of 49 totals, almost never corroborated anything, so the first
+ * case alone rarely applied. Any lines that miss the total, and the verifier
+ * runs as before.
+ *
+ * The store name and date are left unchecked by a second reader. Their
+ * evidence stays OWNER_REVIEW_REQUIRED, as every provider field's does, and
+ * the owner sees and can edit them on the review screen before saving.
  */
 function agreesWithLocalRead(
   request: ReceiptProviderRequest,
@@ -287,38 +294,26 @@ function extractionUnavailable(
 }
 
 /**
- * How an absent verifier verdict is recorded.
+ * The units billed when the extraction answered but its check did not.
  *
- * AMBIGUOUS is a billing claim, not just a timeout label: the verifier request
- * may have reached the provider, but no response proved whether it was billed.
- * Authentication and HTTP responses are definitive; transport loss,
- * cancellation and timeout after submission are not.
+ * The extraction is one. Authentication and HTTP refusals of the check are
+ * definitive, so it cost nothing more. Transport loss, cancellation and a
+ * timeout after submission may have reached the provider, and an unusable
+ * answer did: those count the check too, so the budget never under-counts.
  */
-function verifierUnavailable(
-  request: ReceiptProviderRequest,
-  latencyMs: number,
-  failure: VisionVerifierFailure,
-  retryAfterMs: number | null,
-  stageTimings: ProviderStageTimings,
-): ReceiptProviderOutcome {
+function uncheckedReadingUnits(failure: VisionVerifierFailure): 1 | 2 {
   switch (failure) {
-    case "timeout":
-      return ambiguous(request, latencyMs, "TIMEOUT_AFTER_SUBMISSION", stageTimings);
-    case "cancelled":
-      return ambiguous(request, latencyMs, "REQUEST_CANCELLED", stageTimings);
     case "not_attempted":
     case "auth":
-      return failed(request, latencyMs, 1, "AUTH_ERROR", null, stageTimings);
     case "rate_limited":
-      return failed(request, latencyMs, 1, "RATE_LIMITED", retryAfterMs, stageTimings);
     case "server":
-      return failed(request, latencyMs, 1, "PROVIDER_SERVER_ERROR", retryAfterMs, stageTimings);
-    case "transport":
-      return ambiguous(request, latencyMs, "TRANSPORT_ERROR", stageTimings);
     case "http":
-      return failed(request, latencyMs, 1, "HTTP_ERROR", null, stageTimings);
+      return 1;
+    case "timeout":
+    case "cancelled":
+    case "transport":
     case "unusable":
-      return failed(request, latencyMs, 2, "INVALID_RESULT", null, stageTimings);
+      return 2;
   }
 }
 
@@ -359,6 +354,18 @@ export function createGeminiReceiptAdapter(): ReceiptProviderAdapter & { readonl
         } satisfies ReceiptProviderOutcome;
       }
 
+      // Lines that add up to the printed total: see "WHEN THE SECOND GEMINI CALL IS SKIPPED".
+      if (itemsAddUp(receipt)) {
+        return {
+          ...metadata(request, Date.now() - started, null, extractionStages),
+          status: "SUCCEEDED",
+          timeoutOutcome: "NOT_TIMED_OUT",
+          outcomeCode: "OK",
+          finalBillableUnits: 1,
+          extraction: normalized(request, receipt, false, false, dateOrderInferred),
+        } satisfies ReceiptProviderOutcome;
+      }
+
       const verification = await verifyVisionReceipt(pages, receipt, {
         timeoutMs: request.timeoutMs,
       });
@@ -367,13 +374,23 @@ export function createGeminiReceiptAdapter(): ReceiptProviderAdapter & { readonl
         verificationMs: verification.requestMs ?? Math.max(0, Date.now() - started - extractionMs),
       };
       if (verification.failure !== null) {
-        return verifierUnavailable(
-          request,
-          Date.now() - started,
-          verification.failure,
-          verification.retryAfterMs ?? null,
-          stageTimings,
-        );
+        /*
+         * The check never answered, so the reading stands unchecked rather
+         * than being thrown away for the local read, which on 50 public
+         * receipts was right far less often (totals 18/49 against 49/49). A
+         * scan whose check timed out kept "FENPOUBS LEVEL 3 GATEWAY Moll FOOD"
+         * as its store this way. Its fields stay OWNER_REVIEW_REQUIRED, as
+         * every provider field's do, and its lines are validated only if they
+         * add up. A check that answers and REJECTS still falls back (below).
+         */
+        return {
+          ...metadata(request, Date.now() - started, verification.retryAfterMs ?? null, stageTimings),
+          status: "SUCCEEDED",
+          timeoutOutcome: "NOT_TIMED_OUT",
+          outcomeCode: "OK",
+          finalBillableUnits: uncheckedReadingUnits(verification.failure),
+          extraction: normalized(request, receipt, false, false, dateOrderInferred),
+        } satisfies ReceiptProviderOutcome;
       }
       if (!verification.verdict.accept) return invalid(request, Date.now() - started, 2, stageTimings);
       return {
