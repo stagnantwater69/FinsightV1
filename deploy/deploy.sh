@@ -75,8 +75,10 @@ check_env() {
   if [ -n "$(env_value .env BACKUP_AGE_RECIPIENT)" ] && ! command -v age >/dev/null; then
     fail "BACKUP_AGE_RECIPIENT is set but age is not installed: sudo apt-get install age"
   fi
+  # A deliberate yes on every deploy that sends receipt photos to an outside
+  # provider. With RECEIPT_PROVIDER_ROUTING=always that is every receipt.
   if [ "$(env_value $b RECEIPT_PROVIDER_DISPATCH_ENABLED)" = true ] && [ "${ALLOW_RECEIPT_PROVIDER:-}" != 1 ]; then
-    fail "backend/.env: RECEIPT_PROVIDER_DISPATCH_ENABLED=true sends receipts to an outside provider. Launch is local-first; set it to false, or rerun with ALLOW_RECEIPT_PROVIDER=1 once its consent and data-terms gate is approved"
+    fail "backend/.env: RECEIPT_PROVIDER_DISPATCH_ENABLED=true sends receipt photos to $(env_value $b RECEIPT_PROVIDER) (routing: $(env_value $b RECEIPT_PROVIDER_ROUTING)). If that is intended and its consent and data terms are approved, rerun with ALLOW_RECEIPT_PROVIDER=1; otherwise set it to false"
   fi
 
   [ "$(env_value web/.env.production VITE_API_BASE_URL)" = /api/v1 ] \
