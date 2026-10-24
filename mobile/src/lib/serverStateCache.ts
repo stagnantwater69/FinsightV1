@@ -231,7 +231,9 @@ export function invalidateRecordDerivedServerState(
     : `/business-profiles/${encodeURIComponent(String(businessProfileId))}/financial-position`;
   invalidateServerState({
     businessProfileId,
-    pathPrefixes: ["/records", "/dashboard", "/insights", financialPositionPrefix],
+    // A record can raise a notification (a large expense, a possible
+    // duplicate), so the list is cleared with the records, as web does.
+    pathPrefixes: ["/records", "/dashboard", "/insights", "/notifications", financialPositionPrefix],
   });
 }
 

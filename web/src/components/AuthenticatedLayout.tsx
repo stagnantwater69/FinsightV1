@@ -7,6 +7,7 @@ import { NotificationProvider } from "../context/NotificationContext";
 import { TourProvider } from "../context/TourContext";
 import { AiChatProvider } from "../context/AiChatContext";
 import { ReportingPeriodProvider } from "../context/ReportingPeriodContext";
+import { RouteDataPrefetchProvider } from "../lib/routeDataPrefetch";
 import { FutureDatedRecordsProvider } from "../context/FutureDatedRecordsContext";
 import { FutureDateGate } from "./FutureDateGate";
 import { AppShell } from "./AppShell";
@@ -49,13 +50,16 @@ export function AuthenticatedLayout() {
                     {/* Records dated after today lock the record and insight
                         pages behind a correction screen until they are fixed. */}
                     <FutureDatedRecordsProvider>
-                      <AppShell>
-                        <FutureDateGate>
-                          <Suspense fallback={<RouteContentFallback />}>
-                            <RequireBusinessProfile />
-                          </Suspense>
-                        </FutureDateGate>
-                      </AppShell>
+                      {/* Lets nav links start a screen's main read on intent. */}
+                      <RouteDataPrefetchProvider>
+                        <AppShell>
+                          <FutureDateGate>
+                            <Suspense fallback={<RouteContentFallback />}>
+                              <RequireBusinessProfile />
+                            </Suspense>
+                          </FutureDateGate>
+                        </AppShell>
+                      </RouteDataPrefetchProvider>
                     </FutureDatedRecordsProvider>
                     {/* One instance for the whole authenticated app, not one per
                         page: the drawer portals to <body> anyway, and four copies

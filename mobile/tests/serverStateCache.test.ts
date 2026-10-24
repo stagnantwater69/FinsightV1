@@ -170,6 +170,8 @@ describe("server state mutation invalidation", () => {
       seed("/dashboard/summary", 1),
       seed("/insights/expense-overview", 1),
       seed("/records/search", 2),
+      seed("/notifications", 1),
+      seed("/notifications", 2),
       fetchServerState({
         path: "/business-profiles/1/financial-position",
         fetcher: async () => ({ calculatedAmount: 90 }),
@@ -207,6 +209,9 @@ describe("server state mutation invalidation", () => {
         month: "2026-08",
       }),
     ).toBeNull();
+    // A record can raise a notification, so the list goes with the records.
+    expect(peekServerState("/notifications", { businessProfileId: 1, month: "2026-08" })).toBeNull();
+    expect(peekServerState("/notifications", { businessProfileId: 2, month: "2026-08" })).not.toBeNull();
     expect(
       peekServerState("/records/search", {
         businessProfileId: 2,

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight } from "lucide-react";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
-import { api } from "../lib/api";
+import { cachedApiGet, peekCachedApiData } from "../lib/serverStateApi";
 import { getErrorMessage } from "../lib/errors";
 import { InsightsTabs } from "../components/AppShell";
 import { Button, ButtonLink } from "../components/Button";
@@ -111,12 +111,17 @@ function MonthEndReview() {
     }
     if (!monthsReady) return;
     const thisRequestId = ++requestId.current;
-    setLoading(true);
+    // Through the shared read cache, tagged like the Recovery Target page so a
+    // ledger or business change clears it: a return visit shows the recap at once.
+    const url = "/insights/recovery/month-end-review";
+    const params = { businessProfileId: selected.id, month };
+    const scope = { businessProfileId: selected.id, period: { kind: "month", month }, tags: ["recovery", "financial"] };
+    const cached = peekCachedApiData<RecoveryMonthEndReviewData>(url, { params }, scope);
+    if (cached) setData(cached.data);
+    setLoading(!cached);
     setError(null);
     try {
-      const { data } = await api.get<RecoveryMonthEndReviewData>("/insights/recovery/month-end-review", {
-        params: { businessProfileId: selected.id, month },
-      });
+      const { data } = await cachedApiGet<RecoveryMonthEndReviewData>(url, { params }, scope);
       if (thisRequestId !== requestId.current) return;
       setData(data);
     } catch (err) {

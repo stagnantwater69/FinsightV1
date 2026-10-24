@@ -82,7 +82,7 @@ export function connectionAllowsRoutePrefetch(connection?: ConnectionHint | null
   return connection.effectiveType !== "slow-2g" && connection.effectiveType !== "2g";
 }
 
-function currentConnection(): ConnectionHint | undefined {
+export function currentConnection(): ConnectionHint | undefined {
   if (typeof navigator === "undefined") return undefined;
   return (navigator as Navigator & { connection?: ConnectionHint }).connection;
 }

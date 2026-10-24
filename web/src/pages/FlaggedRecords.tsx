@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from "react";
 import { Link } from "react-router-dom";
 import { useBusinessProfiles } from "../context/BusinessProfileContext";
 import { api } from "../lib/api";
+import { cachedApiGet, peekCachedApiData } from "../lib/serverStateApi";
 import { apiPage } from "../lib/apiPage";
 import { getErrorMessage } from "../lib/errors";
 import type {
@@ -216,7 +217,52 @@ export function FlaggedRecords() {
       setLoading(false);
       return;
     }
-    setLoading(true);
+    /*
+     * The first page of each queue comes through the shared read cache, keyed
+     * and tagged like the Expense Insights flagged panel, so a ledger change
+     * or a finding decision anywhere clears it (lib/api.ts). A return visit
+     * shows the queue it left at once and refreshes behind it.
+     */
+    const flaggedRequest = {
+      url: "/records/flagged",
+      params: { businessProfileId: selected.id, limit: FLAGGED_PAGE_SIZE },
+      scope: {
+        businessProfileId: selected.id,
+        filters: { flagged: true, type: "all" },
+        pagination: { cursor: null, limit: FLAGGED_PAGE_SIZE },
+        tags: ["records", "financial"],
+      },
+    };
+    const findingsRequest = {
+      url: "/insights/findings",
+      params: { businessProfileId: selected.id, status: "OPEN", take: FINDINGS_PAGE_SIZE },
+      scope: {
+        businessProfileId: selected.id,
+        filters: { status: "OPEN" },
+        pagination: { cursor: null, limit: FINDINGS_PAGE_SIZE },
+        tags: ["insights-findings", "financial"],
+      },
+    };
+    const cachedFlagged = peekCachedApiData<FlaggedRecordPage>(
+      flaggedRequest.url,
+      { params: flaggedRequest.params },
+      flaggedRequest.scope,
+    );
+    const cachedFindings = peekCachedApiData<AnomalyFindingPage>(
+      findingsRequest.url,
+      { params: findingsRequest.params },
+      findingsRequest.scope,
+    );
+    // Only the two together: the queue's "Nothing needs review" verdict reads
+    // both, and a saved flag list beside findings still unknown would say it.
+    const savedQueue = cachedFlagged && cachedFindings;
+    if (savedQueue) {
+      setRecords(cachedFlagged.data.items);
+      setFlaggedCursor(cachedFlagged.data.nextCursor);
+      setFindings(cachedFindings.data.items);
+      setFindingsCursor(cachedFindings.data.nextCursor);
+    }
+    setLoading(!savedQueue);
     setError(null);
     try {
       /*
@@ -227,15 +273,16 @@ export function FlaggedRecords() {
        * from is still the screen the owner opened.
        */
       const [flagged, findingPage, importBatches] = await Promise.all([
-        api.get<FlaggedRecordPage>("/records/flagged", {
-          signal,
-          params: { businessProfileId: selected.id, limit: FLAGGED_PAGE_SIZE },
-        }),
-        api
-          .get<AnomalyFindingPage>("/insights/findings", {
-            signal,
-            params: { businessProfileId: selected.id, status: "OPEN", take: FINDINGS_PAGE_SIZE },
-          })
+        cachedApiGet<FlaggedRecordPage>(
+          flaggedRequest.url,
+          { signal, params: flaggedRequest.params },
+          flaggedRequest.scope,
+        ),
+        cachedApiGet<AnomalyFindingPage>(
+          findingsRequest.url,
+          { signal, params: findingsRequest.params },
+          findingsRequest.scope,
+        )
           .then((response) => ({ ...response, failed: false }))
           .catch(() => ({ data: { items: [], nextCursor: null } as AnomalyFindingPage, failed: true })),
         api

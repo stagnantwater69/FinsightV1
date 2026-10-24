@@ -2,7 +2,13 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { api } from "../lib/api";
 import { subscribeToServerState } from "../lib/serverStateCache";
 import { useBusinessProfiles } from "./BusinessProfileContext";
-import { THIS_WEEK, type PeriodSelection } from "../lib/reportingPeriod";
+import type { PeriodSelection } from "../lib/reportingPeriod";
+import {
+  settlePeriodSelection,
+  storePeriodSelection,
+  storedPeriodSelection,
+  type ReportingPeriodScopeName,
+} from "../lib/periodSelection";
 
 /**
  * Pages keep independent selections while sharing the business's month list.
@@ -35,38 +41,7 @@ export interface ReportingPeriodValue {
 
 const ReportingPeriodContext = createContext<ReportingPeriodValue | null>(null);
 
-const STORAGE_KEY = "finsight.reportingPeriod";
-
-export type ReportingPeriodScopeName = "dashboard" | "expense-insight" | "recovery-target" | "spending-impact";
-
-function storageKey(businessId: number, scope?: ReportingPeriodScopeName): string {
-  return `${STORAGE_KEY}.${businessId}${scope ? `.${scope}` : ""}`;
-}
-
-function readStored(businessId: number, scope?: ReportingPeriodScopeName): PeriodSelection | null {
-  try {
-    const raw = window.sessionStorage.getItem(storageKey(businessId, scope));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as PeriodSelection;
-    if (parsed.kind === "week" || parsed.kind === "all") return parsed;
-    if (parsed.kind === "month" && typeof parsed.month === "string" && /^\d{4}-\d{2}$/.test(parsed.month)) return parsed;
-  } catch {
-    // Unavailable or corrupt storage just means the default applies.
-  }
-  return null;
-}
-
-function writeStored(businessId: number, selection: PeriodSelection, scope?: ReportingPeriodScopeName) {
-  try {
-    window.sessionStorage.setItem(storageKey(businessId, scope), JSON.stringify(selection));
-  } catch {
-    // A private window can refuse storage; the selection still holds for this visit.
-  }
-}
-
-function defaultFor(months: string[]): PeriodSelection {
-  return months[0] ? { kind: "month", month: months[0] } : THIS_WEEK;
-}
+export type { ReportingPeriodScopeName } from "../lib/periodSelection";
 
 function usePeriodSelection(
   months: string[],
@@ -82,22 +57,18 @@ function usePeriodSelection(
   } | null>(null);
   const stored = chosen && chosen.businessId === businessId && chosen.scope === scope
     ? chosen.selection
-    : businessId !== null ? readStored(businessId, scope) : null;
-  const settled = monthsState !== "loading";
-  // Removed months fall back to the default; failed refreshes preserve the choice.
-  const storedStillValid =
-    stored && (stored.kind !== "month" || (settled && (months.includes(stored.month) || monthsState === "error")));
-  const selection = storedStillValid ? stored : defaultFor(months);
+    : businessId !== null ? storedPeriodSelection(businessId, scope) : null;
+  const { selection, ready } = settlePeriodSelection(stored, months, monthsState);
 
   const setSelection = useCallback(
     (next: PeriodSelection) => {
       setChosen({ businessId, scope, selection: next });
-      if (businessId !== null) writeStored(businessId, next, scope);
+      if (businessId !== null) storePeriodSelection(businessId, next, scope);
     },
     [businessId, scope],
   );
 
-  return { selection, setSelection, ready: settled || (stored !== null && stored.kind !== "month") };
+  return { selection, setSelection, ready };
 }
 
 function useReportingPeriodState(scope?: ReportingPeriodScopeName): ReportingPeriodValue {

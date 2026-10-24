@@ -36,6 +36,8 @@ import {
   activeAdvancedCount,
   emptyFilters,
   filtersAreActive,
+  flaggedCountRequest,
+  recordsListRequest,
   type Filters,
 } from "./records/filters";
 
@@ -286,30 +288,11 @@ export function Records() {
       markSnapshot(true);
       return;
     }
-    const params = {
-      businessProfileId: selected.id,
-      type: appliedFilters.type,
-      categoryId: appliedFilters.categoryId || undefined,
-      dateFrom: appliedFilters.dateFrom || undefined,
-      dateTo: appliedFilters.dateTo || undefined,
-      keyword: appliedFilters.keyword || undefined,
-      source: appliedFilters.source || undefined,
-      importBatchId: appliedFilters.importBatchId || undefined,
-      limit: 100,
-      sort: toRecordSort(sort),
-      cursor,
-    };
-    const scope = {
-      businessProfileId: selected.id,
-      filters: appliedFilters,
-      sort: toRecordSort(sort),
-      pagination: { cursor: cursor ?? null, limit: 100 },
-      tags: ["records", "financial"],
-    };
+    const { url, params, scope } = recordsListRequest(selected.id, appliedFilters, toRecordSort(sort), cursor);
     const cached = cursor
       ? null
       : peekCachedApiData<{ items: RecordItem[]; nextCursor: string | null }>(
-          "/records/search",
+          url,
           { params },
           scope,
         );
@@ -333,7 +316,7 @@ export function Records() {
     setErrorKind(null);
     try {
       const { data } = await cachedApiGet<{ items: RecordItem[]; nextCursor: string | null }>(
-        "/records/search",
+        url,
         { signal, params },
         scope,
         { force },
@@ -376,10 +359,9 @@ export function Records() {
       setFlaggedCount(0);
       return;
     }
-    const params = { businessProfileId: selected.id };
-    const scope = { businessProfileId: selected.id, tags: ["records", "financial"] };
+    const { url, params, scope } = flaggedCountRequest(selected.id);
     const cached = peekCachedApiData<FlaggedRecordCounts>(
-      "/records/flagged/count",
+      url,
       { params },
       scope,
     );
@@ -387,7 +369,7 @@ export function Records() {
     else if (!force) setFlaggedCount(0);
     try {
       const { data } = await cachedApiGet<FlaggedRecordCounts>(
-        "/records/flagged/count",
+        url,
         { signal, params },
         scope,
         { force },

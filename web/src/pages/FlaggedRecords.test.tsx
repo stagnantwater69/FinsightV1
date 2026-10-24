@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { FlaggedRecords } from "./FlaggedRecords";
+import { beginServerStateSession, endServerStateSession } from "../lib/serverStateCache";
 import type { AnomalyFinding, BusinessProfile, RecordItem } from "../lib/types";
 
 /**
@@ -445,5 +446,41 @@ describe("the flagged list is paged, not truncated", () => {
     for (const call of posted) {
       expect((call.body as { expenseIds: number[] }).expenseIds.length).toBeLessThanOrEqual(500);
     }
+  });
+});
+
+describe("returning to the queue", () => {
+  afterEach(() => endServerStateSession());
+
+  it("shows the queue it left at once, while the refresh is still on its way", async () => {
+    beginServerStateSession(17);
+    getHandlers["/records/flagged"] = ok(flaggedPage([record({ largeExpenseFlag: true })]));
+    const first = renderPage();
+    expect(await screen.findByText(/Rice sack/)).toBeInTheDocument();
+    first.unmount();
+
+    // Past the 30-second freshness window, so the return visit refreshes; the
+    // refresh never answers, so anything shown came from the saved copy.
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 31_000);
+    getHandlers["/records/flagged"] = () => new Promise(() => {});
+    renderPage();
+
+    expect(screen.getByText(/Rice sack/)).toBeInTheDocument();
+    vi.restoreAllMocks();
+  });
+
+  it("never calls the queue clear from a saved flag list beside findings it could not load", async () => {
+    beginServerStateSession(17);
+    // Findings fail, so only the (empty) flag list is saved.
+    getHandlers["/insights/findings"] = () => { throw new Error("Findings unavailable"); };
+    const first = renderPage();
+    expect(await screen.findByText("Review checks are incomplete")).toBeInTheDocument();
+    first.unmount();
+
+    getHandlers["/records/flagged"] = () => new Promise(() => {});
+    getHandlers["/insights/findings"] = () => new Promise(() => {});
+    renderPage();
+
+    expect(screen.queryByText("Nothing needs review")).not.toBeInTheDocument();
   });
 });
