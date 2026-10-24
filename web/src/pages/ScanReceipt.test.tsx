@@ -1596,33 +1596,6 @@ describe("receipt upload and review", () => {
 
     expect(screen.getByLabelText(/^Date/)).not.toHaveFocus();
   });
-
-  it("keeps foreign receipt amounts out of the peso confirmation form", async () => {
-    const user = userEvent.setup();
-    mocks.post.mockResolvedValueOnce({ data: { ...receipt, receiptDetails: {
-      currency: "USD", transactionTime: "12:30", subtotal: 450, tax: 50, tip: null,
-      discount: null, paymentMethod: "Cash", receiptNumber: "A123",
-    } } });
-    render(page());
-    await user.upload(screen.getByLabelText(/Receipt photo/), photo());
-    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
-    await screen.findByRole("link", { name: "Enter the PHP amount manually" });
-    expect(screen.queryByRole("button", { name: /Confirm & save/ })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(/^Amount/)).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Show more" }));
-    expect(screen.getByText("USD 450.00")).toBeVisible();
-    await waitFor(() => expect(mocks.post.mock.calls.filter(([url]) => url.endsWith("/confirm"))).toHaveLength(0));
-  });
-
-  it("blocks a receipt with conflicting printed currencies even without a currency code", async () => {
-    const user = userEvent.setup();
-    mocks.post.mockResolvedValueOnce({ data: { ...receipt, requiresManualCurrencyConversion: true } });
-    render(page());
-    await user.upload(screen.getByLabelText(/Receipt photo/), photo());
-    await user.click(screen.getByRole("button", { name: "Scan receipt" }));
-    await screen.findByRole("link", { name: "Enter the PHP amount manually" });
-    expect(screen.queryByRole("button", { name: /Confirm & save/ })).not.toBeInTheDocument();
-  });
 });
 
 describe("receipt dates after today", () => {

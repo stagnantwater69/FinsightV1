@@ -244,7 +244,8 @@ export async function persistCategorisedItems(
         confidence: "low",
         source: "none",
         kind: null,
-        reason: "FinSight couldn't tell what this is. Choose a category.",
+        // No note: the Uncategorized picker already says a category is needed.
+        reason: null,
         newCategory: false,
       };
       // Provenance only when something can actually be pointed at. An entry

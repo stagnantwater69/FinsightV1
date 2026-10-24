@@ -1582,19 +1582,6 @@ describe("receipt scan review workflow", () => {
     expect(post).not.toHaveBeenCalled();
   });
 
-  it("blocks foreign-currency confirmation and offers manual PHP entry", async () => {
-    poll.mockResolvedValue({ ...complete, receiptDetails: { currency: "USD", subtotal: 250, transactionTime: null, tax: null, tip: null, discount: null, paymentMethod: null, receiptNumber: null } });
-    const q = await readyReceipt();
-    await fireEvent.press(q.getByRole("button", { name: "Scan this receipt" }));
-    await waitFor(() => expect(q.getByText(/This receipt is in USD/)).toBeTruthy());
-    expect(q.queryByRole("button", { name: "Save this expense" })).toBeNull();
-    expect(q.queryByLabelText("Amount (PHP)")).toBeNull();
-    expect(q.getByText("As printed on the receipt")).toBeTruthy();
-    await fireEvent.press(q.getByRole("button", { name: "Enter expense manually" }));
-    expect(navigation.navigate).toHaveBeenCalledWith("AddExpense");
-    expect(post).not.toHaveBeenCalled();
-  });
-
   it("keeps mocked oversized gallery evidence available for review or removal and never uploads it", async () => {
     localFileByteSize.mockResolvedValue(RECEIPT_UPLOAD_MAX_OBJECT_BYTES + 1);
     const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
@@ -1829,107 +1816,6 @@ describe("receipt scan review workflow", () => {
     });
   });
 
-  it("blocks mixed printed currencies even when the extracted currency is unknown", async () => {
-    poll.mockResolvedValue({ ...complete, requiresManualCurrencyConversion: true, receiptDetails: { currency: null } });
-    const q = await readyReceipt();
-    await fireEvent.press(q.getByRole("button", { name: "Scan this receipt" }));
-    await waitFor(() => expect(q.getByText("Enter this receipt manually with the amount paid in PHP.")).toBeTruthy());
-    expect(q.queryByRole("button", { name: "Save this expense" })).toBeNull();
-    expect(q.queryByLabelText("Amount (PHP)")).toBeNull();
-  });
-
-  it("starts a fresh single-receipt upload after rejecting a foreign-currency result", async () => {
-    poll
-      .mockImplementationOnce(async (initial: typeof accepted) => ({
-        ...complete,
-        id: initial.id,
-        requiresManualCurrencyConversion: true,
-        receiptDetails: { currency: "USD" },
-      }))
-      .mockImplementationOnce(async (initial: typeof accepted) => ({ ...complete, id: initial.id }));
-    const q = await readyReceipt();
-
-    await fireEvent.press(q.getByRole("button", { name: "Scan this receipt" }));
-    await waitFor(() => expect(q.getByRole("button", { name: "Choose another receipt" })).toBeEnabled());
-    const firstUpload = upload.mock.calls.find(([path]) => path === "/records/receipts")!;
-
-    await fireEvent.press(q.getByRole("button", { name: "Choose another receipt" }));
-    gallery.mockResolvedValueOnce({
-      canceled: false,
-      assets: [{ uri: "file:///replacement.jpg", width: 600, height: 1000, fileName: "replacement.jpg", mimeType: "image/jpeg", fileSize: 2048 }],
-    });
-    await fireEvent.press(q.getByRole("button", { name: "Choose a photo from your gallery" }));
-    await waitFor(() => expect(q.getByRole("button", { name: "Scan this receipt" })).toBeEnabled());
-    await fireEvent.press(q.getByRole("button", { name: "Scan this receipt" }));
-    await waitFor(() => expect(q.getByRole("button", { name: "Save this expense" })).toBeEnabled());
-
-    const receiptUploads = upload.mock.calls.filter(([path]) => path === "/records/receipts");
-    expect(receiptUploads).toHaveLength(2);
-    expect(receiptUploads[1]![1].get("idempotencyKey")).not.toBe(firstUpload[1].get("idempotencyKey"));
-    expect(receiptUploads[1]![1].get("receiptBatchId")).toBeNull();
-    expect(receiptUploads[1]![1].get("receiptOrdinal")).toBeNull();
-  });
-
-  it("clears batch replay state before replacing a batched foreign-currency result", async () => {
-    cameraSections = [{
-      localId: "receipt-two",
-      originalUri: "file:///receipt-two.jpg",
-      originalMimeType: "image/jpeg",
-      processedUri: "file:///receipt-two.jpg",
-      processedMimeType: "image/jpeg",
-      width: 600,
-      height: 1000,
-      quality: null,
-      captureSource: "manual-camera",
-      captureMode: "standard",
-      processingMode: "original",
-    }];
-    post.mockImplementation(async (path: string, body?: any) => path === "/records/receipt-batches" ? {
-      id: 70,
-      businessProfileId: 1,
-      expectedReceiptCount: body.expectedReceiptCount,
-      status: "COLLECTING",
-      uploadedReceiptCount: 0,
-      createdAt: "2026-09-13T10:00:00.000Z",
-      finishedAt: null,
-      receipts: [],
-    } : {});
-    poll.mockImplementation(async (initial: typeof accepted) => initial.receiptBatchId === 70 ? {
-      ...complete,
-      id: initial.id,
-      receiptBatchId: initial.receiptBatchId,
-      receiptOrdinal: initial.receiptOrdinal,
-      requiresManualCurrencyConversion: true,
-      receiptDetails: { currency: "USD" },
-    } : { ...complete, id: initial.id });
-    const q = await readyReceipt();
-
-    await fireEvent.press(q.getByRole("button", { name: "Capture a separate receipt" }));
-    await fireEvent.press(q.getByRole("button", { name: "Finish mocked camera with unsupported evidence" }));
-    await fireEvent.press(q.getByRole("button", { name: "Scan 2 separate receipts" }));
-    await waitFor(() => expect(q.getByRole("button", { name: "Choose another receipt" })).toBeEnabled());
-    const batchUploads = upload.mock.calls.filter(([path]) => path === "/records/receipts");
-    expect(batchUploads).toHaveLength(2);
-
-    await fireEvent.press(q.getByRole("button", { name: "Choose another receipt" }));
-    gallery.mockResolvedValueOnce({
-      canceled: false,
-      assets: [{ uri: "file:///replacement-after-batch.jpg", width: 600, height: 1000, fileName: "replacement-after-batch.jpg", mimeType: "image/jpeg", fileSize: 2048 }],
-    });
-    await fireEvent.press(q.getByRole("button", { name: "Choose a photo from your gallery" }));
-    await waitFor(() => expect(q.getByRole("button", { name: "Scan this receipt" })).toBeEnabled());
-    await fireEvent.press(q.getByRole("button", { name: "Scan this receipt" }));
-    await waitFor(() => expect(q.getByRole("button", { name: "Save this expense" })).toBeEnabled());
-
-    const receiptUploads = upload.mock.calls.filter(([path]) => path === "/records/receipts");
-    expect(receiptUploads).toHaveLength(3);
-    expect(receiptUploads[2]![1].get("receiptBatchId")).toBeNull();
-    expect(receiptUploads[2]![1].get("receiptOrdinal")).toBeNull();
-    expect(receiptUploads.slice(0, 2).map(([, form]) => form.get("idempotencyKey")))
-      .not.toContain(receiptUploads[2]![1].get("idempotencyKey"));
-    expect(post.mock.calls.filter(([path]) => path === "/records/receipt-batches")).toHaveLength(1);
-  });
-
   it("clears a resumed receipt's stored batch binding before a new capture", async () => {
     const storedSummary = {
       id: 84,
@@ -1942,38 +1828,36 @@ describe("receipt scan review workflow", () => {
       processingError: null,
       processingErrorCode: null,
       extractedDate: "2026-09-01",
-      extractedVendor: "Foreign Supplier",
-      extractedDescription: "Imported stock",
+      extractedVendor: "Stored Supplier",
+      extractedDescription: "Office supplies",
       extractedAmount: 90,
       createdAt: "2026-09-13T10:00:00.000Z",
       pageCount: 1,
       allowedActions: { retryProcessing: false, reviewResult: true },
     };
-    const storedForeignResult = {
+    const storedResult = {
       ...complete,
       id: 84,
       receiptBatchId: 70,
       receiptOrdinal: 2,
-      extractedVendor: "Foreign Supplier",
-      requiresManualCurrencyConversion: true,
-      receiptDetails: { currency: "USD" },
+      extractedVendor: "Stored Supplier",
     };
     get.mockImplementation(async (path: string) => {
       if (path.includes("provider-consent")) return unavailableConsent;
       if (path === "/records/receipts") return { items: [storedSummary], nextCursor: null };
-      if (path === "/records/receipts/84") return storedForeignResult;
+      if (path === "/records/receipts/84") return storedResult;
       throw new Error(`Unexpected GET ${path}`);
     });
     poll.mockImplementation(async (initial: typeof accepted) => initial.id === 84
-      ? storedForeignResult
+      ? storedResult
       : { ...complete, id: initial.id });
     const q = await render(wrap(<ScanReceiptScreen navigation={navigation} />));
 
-    await waitFor(() => expect(q.getByRole("button", { name: /^Review result for Foreign Supplier/ })).toBeEnabled());
-    await fireEvent.press(q.getByRole("button", { name: /^Review result for Foreign Supplier/ }));
-    await waitFor(() => expect(q.getByRole("button", { name: "Choose another receipt" })).toBeEnabled());
+    await waitFor(() => expect(q.getByRole("button", { name: /^Review result for Stored Supplier/ })).toBeEnabled());
+    await fireEvent.press(q.getByRole("button", { name: /^Review result for Stored Supplier/ }));
+    await waitFor(() => expect(q.getByRole("button", { name: "Retake photo" })).toBeEnabled());
 
-    await fireEvent.press(q.getByRole("button", { name: "Choose another receipt" }));
+    await fireEvent.press(q.getByRole("button", { name: "Retake photo" }));
     await fireEvent.press(q.getByRole("button", { name: "Choose a photo from your gallery" }));
     await waitFor(() => expect(q.getByRole("button", { name: "Scan this receipt" })).toBeEnabled());
     await fireEvent.press(q.getByRole("button", { name: "Scan this receipt" }));

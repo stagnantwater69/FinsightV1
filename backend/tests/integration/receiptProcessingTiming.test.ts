@@ -53,7 +53,6 @@ describe("receipt processing timing", () => {
         amountConfidences: [],
         itemEvidence: [],
       },
-      providerRead: false,
     };
 
     await expect(
@@ -231,7 +230,6 @@ describe("receipt processing timing", () => {
       },
       pages: [{ pageNumber: 1, data: { rawText: "TOTAL 10.00" } }],
       items: { parsedItems: [], vendor: null, extractedByVision: false, amountConfidences: [], itemEvidence: [] },
-      providerRead: false,
     });
 
     // The earlier attempt of the same worker, and a different worker on the current attempt.

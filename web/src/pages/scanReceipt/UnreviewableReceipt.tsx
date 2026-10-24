@@ -3,7 +3,6 @@ import { Link } from "react-router-dom";
 import { Button } from "../../components/Button";
 import { FormError } from "../../components/Field";
 import { Callout, FormPage } from "../../components/ui";
-import { PrintedReceiptDetails } from "./PrintedReceiptDetails";
 import { ScanProgress } from "./ScanProgress";
 import type { ReceiptHistoryItem, ReceiptScanResult, ScanStage } from "./types";
 
@@ -62,54 +61,6 @@ export function FailedReceiptScan({
             variant="danger"
             onClick={() => void deleteUnconfirmedScan(scan)}
             disabled={scanning || deletingScanId !== null}
-          >
-            {deletingScanId === scan.id ? "Deleting…" : "Delete scan"}
-          </Button>
-        </div>
-      </div>
-    </FormPage>
-  );
-}
-
-export function ForeignCurrencyReceipt({
-  scan,
-  foreignCurrency,
-  receiptPreview,
-  scanError,
-  handleRescan,
-  deleteUnconfirmedScan,
-  deletingScanId,
-}: {
-  scan: ReceiptScanResult;
-  foreignCurrency: string;
-  receiptPreview: ReactNode;
-  scanError: string | null;
-  handleRescan: () => Promise<void>;
-  deleteUnconfirmedScan: (target: Pick<ReceiptHistoryItem, "id" | "extractedVendor" | "extractedDescription">) => Promise<void>;
-  deletingScanId: number | null;
-}) {
-  return (
-    <FormPage title="Review receipt">
-      <div className="space-y-4">
-        <Callout tone="warn">
-          <p className="font-semibold">This receipt uses {foreignCurrency}. FinSight records expenses in PHP.</p>
-          <Link to="/records/expenses/new" className="tap-inline font-semibold underline underline-offset-2">
-            Enter the PHP amount manually
-          </Link>
-        </Callout>
-        {scan.extractedAmount !== null && scan.receiptDetails?.currency ? (
-          <p className="text-sm text-ink-700">Printed total: <strong className="figure">{foreignCurrency} {new Intl.NumberFormat("en-PH", { minimumFractionDigits: 2 }).format(scan.extractedAmount)}</strong></p>
-        ) : null}
-        <PrintedReceiptDetails details={scan.receiptDetails} />
-        {receiptPreview}
-        {scanError ? <FormError>{scanError}</FormError> : null}
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="secondary" onClick={handleRescan}>Choose another receipt</Button>
-          <Button
-            type="button"
-            variant="danger"
-            onClick={() => void deleteUnconfirmedScan(scan)}
-            disabled={deletingScanId !== null}
           >
             {deletingScanId === scan.id ? "Deleting…" : "Delete scan"}
           </Button>

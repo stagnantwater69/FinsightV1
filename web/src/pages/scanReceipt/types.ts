@@ -112,7 +112,6 @@ export interface ReceiptScanResult {
     paymentMethod: string | null;
     receiptNumber: string | null;
   };
-  requiresManualCurrencyConversion?: boolean;
 }
 
 export interface ReceiptPageProcessing {

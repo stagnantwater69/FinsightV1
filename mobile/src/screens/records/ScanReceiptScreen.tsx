@@ -1119,8 +1119,6 @@ export function ScanReceiptScreen({ navigation }: RecordsScreenProps<"ScanReceip
    * a decision the category picker already makes.
    */
   const items = scan?.items ?? [];
-  const foreignCurrency = scan?.receiptDetails?.currency && scan.receiptDetails.currency !== "PHP" ? scan.receiptDetails.currency : null;
-  const requiresManualCurrencyConversion = Boolean(scan?.requiresManualCurrencyConversion || foreignCurrency);
   const isItemised = items.length > 1;
   /** An added line only counts once it is actually usable. */
   const usableAddedItems = addedItems.filter(
@@ -1178,7 +1176,6 @@ export function ScanReceiptScreen({ navigation }: RecordsScreenProps<"ScanReceip
   }
 
   async function confirm(duplicateDecision?: ReceiptDuplicateDecision) {
-    if (requiresManualCurrencyConversion) return setError("Enter this receipt manually in PHP.");
     const value = Number(amount);
     if (!Number.isFinite(value) || value <= 0) return setError("Enter an amount greater than zero.");
     if (isItemised) {
@@ -1891,14 +1888,6 @@ export function ScanReceiptScreen({ navigation }: RecordsScreenProps<"ScanReceip
 
               <PrintedDetails details={scan.receiptDetails} />
 
-              {requiresManualCurrencyConversion ? (
-                <View style={{ gap: space.sm }}>
-                  <ErrorNote>{foreignCurrency ? `This receipt is in ${foreignCurrency}. Enter the converted PHP amount manually before saving.` : "Enter this receipt manually with the amount paid in PHP."}</ErrorNote>
-                  <Button title="Enter expense manually" variant="primary" onPress={() => navigation.navigate("AddExpense")} />
-                  <Button title="Choose another receipt" variant="ghost" onPress={() => reviewDraft.confirmDiscard(resetForAnotherReceipt)} />
-                </View>
-              ) : <>
-
               <ReviewSection
                 title={isItemised ? "Receipt totals" : "This expense"}
                 caption={
@@ -2130,7 +2119,6 @@ export function ScanReceiptScreen({ navigation }: RecordsScreenProps<"ScanReceip
                   onPress={() => confirmDeleteStoredScan(scan.id)}
                 />
               </View>
-              </>}
             </>
           )}
         </ContentScrollView>

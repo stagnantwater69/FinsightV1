@@ -1,6 +1,6 @@
 import type { ReceiptFieldCorrection, ReceiptScan, ReceiptScanItem, ReceiptScanPage } from "@prisma/client";
 import { WARNING_GUIDANCE, type ReceiptWarning } from "../../lib/receiptWarnings";
-import { parseReceiptDetails, providerReportedCurrency, requiresManualCurrencyConversion } from "../../lib/receiptDetails";
+import { parseReceiptDetails } from "../../lib/receiptDetails";
 import {
   findPageSeams,
   looksLikeDuplicatePage,
@@ -106,10 +106,6 @@ export function toDTO(
     extractedDescription: scan.extractedDescription,
     extractedAmount: scan.extractedAmount ? Number(scan.extractedAmount) : null,
     receiptDetails: parseReceiptDetails(scan.rawText),
-    requiresManualCurrencyConversion: requiresManualCurrencyConversion(
-      scan.rawText,
-      providerReportedCurrency(scan.extractorVersions),
-    ),
     confirmationStatus: scan.confirmationStatus,
     /**
      * How far the READ has got: "Processing" | "Complete" | "Failed".
@@ -316,11 +312,14 @@ function itemCategorisation(evidence: unknown): ItemCategorisation | null {
   if (typeof value !== "object" || value === null) return null;
   const { confidence, source, kind, reason, newCategory } = value as Record<string, unknown>;
   if (confidence !== "medium" && confidence !== "low") return null;
+  const known = source === "history" || source === "item" || source === "shop" ? source : "none";
   return {
     confidence,
-    source: source === "history" || source === "item" || source === "shop" ? source : "none",
+    source: known,
     kind: kind === "business" || kind === "personal" ? kind : null,
-    reason: typeof reason === "string" ? reason : null,
+    // Older scans stored "FinSight couldn't tell what this is" on items no
+    // rule matched; that note is no longer shown.
+    reason: known !== "none" && typeof reason === "string" ? reason : null,
     newCategory: newCategory === true,
   };
 }
