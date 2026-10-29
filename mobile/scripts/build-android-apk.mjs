@@ -43,12 +43,17 @@ if (!javaHome || !androidHome) {
 }
 
 const androidDir = join(projectRoot, "android");
-const gradle = process.platform === "win32" ? "gradlew.bat" : "./gradlew";
+// A full path: cmd.exe skips the current directory when
+// NoDefaultCurrentDirectoryInExePath is set.
+const gradle = process.platform === "win32" ? join(androidDir, "gradlew.bat") : "./gradlew";
 const npx = process.platform === "win32" ? "npx.cmd" : "npx";
+// Node refuses to spawn .cmd/.bat files on Windows without a shell.
+const shell = process.platform === "win32";
 const configResult = spawnSync(npx, ["expo", "config", "--type", "public", "--json"], {
   cwd: projectRoot,
   env,
   encoding: "utf8",
+  shell,
 });
 if (configResult.error) throw configResult.error;
 if (configResult.status !== 0) {
@@ -76,6 +81,7 @@ const prebuild = spawnSync(npx, ["expo", "prebuild", "--platform", "android", "-
   cwd: projectRoot,
   env,
   stdio: "inherit",
+  shell,
 });
 if (prebuild.error) throw prebuild.error;
 if (prebuild.status !== 0) process.exit(prebuild.status ?? 1);
@@ -93,6 +99,7 @@ const result = spawnSync(gradle, [
   cwd: androidDir,
   env,
   stdio: "inherit",
+  shell,
 });
 
 if (result.error) throw result.error;

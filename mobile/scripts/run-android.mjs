@@ -45,6 +45,8 @@ const npx = process.platform === "win32" ? "npx.cmd" : "npx";
 const result = spawnSync(npx, ["expo", "run:android", ...process.argv.slice(2)], {
   env,
   stdio: "inherit",
+  // Node refuses to spawn .cmd files on Windows without a shell.
+  shell: process.platform === "win32",
 });
 
 if (result.error) throw result.error;

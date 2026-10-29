@@ -177,6 +177,16 @@ describe("unsaved receipt review changes", () => {
     await waitFor(() => expect(memory.values.has(draftKey())).toBe(false));
   });
 
+  it("starts empty on the next visit when leaving after a confirm keeps the screen mounted", async () => {
+    // From the plus button the screen can be alone on the Records stack, and
+    // goBack then switches tabs without unmounting it.
+    const { q, navigation } = await openReview();
+    await fireEvent.press(q.getByRole("button", { name: "Save this expense" }));
+    await waitFor(() => expect(navigation.goBack).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(q.queryByRole("button", { name: "Save this expense" })).toBeNull());
+    expect(q.getByRole("button", { name: "Choose a photo from your gallery" })).toBeTruthy();
+  });
+
   it("asks before Retake photo throws edits away, and keeps them on Keep editing", async () => {
     const { q } = await openReview();
     await fireEvent.changeText(q.getByLabelText("Description"), "Coffee beans, 2 bags");
