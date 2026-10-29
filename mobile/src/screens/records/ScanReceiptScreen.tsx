@@ -1171,6 +1171,24 @@ export function ScanReceiptScreen({ navigation }: RecordsScreenProps<"ScanReceip
       await scanSingleReceipt(storedPages, { batchChild: next.batchChild });
       return;
     }
+    // Opened from the plus button, this can be the only screen on the Records
+    // stack. goBack then switches tabs and leaves it mounted, so the next
+    // "Scan a receipt" would reopen the receipt just confirmed.
+    uploadAttempt.current = null;
+    receiptBatchAttempt.current = null;
+    batchChildAttempts.current.clear();
+    batchGroupsForAcceptance.current = null;
+    setScan(null);
+    setPages([]);
+    setActiveBatchChild(null);
+    setScanRecoveryAction(null);
+    setScanStarted(false);
+    setUploadIssuePageKeys({});
+    setEvidencePage(null);
+    setCameraIntent({ kind: "replace-all" });
+    setPhase("Uploading receipt…");
+    clearReview();
+    setError(null);
     setFlash("Receipt saved to your records.");
     navigation.goBack();
   }
