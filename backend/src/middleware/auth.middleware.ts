@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
-import { supabaseAdmin } from "../config/supabase";
+import { verifyAccessToken } from "../lib/accessToken";
 import { prisma } from "../config/prisma";
 import { asyncHandler } from "../lib/asyncHandler";
 import { isUsable, statusRefusal } from "../services/accountLifecycle.service";
@@ -42,7 +42,7 @@ async function authenticate(req: Request, res: Response, next: NextFunction) {
   // it accepts in exchange.
   let verifiedOwner = getVerifiedTokenOwner(token);
   if (!verifiedOwner) {
-    const { data, error } = await timeSpan("auth", () => supabaseAdmin.auth.getUser(token));
+    const { authUserId, error } = await timeSpan("auth", () => verifyAccessToken(token));
     /*
      * 503, NOT 401, when Auth could not be reached. Both clients answer a 401
      * by deleting the stored session, so a few seconds of Supabase being
@@ -57,10 +57,10 @@ async function authenticate(req: Request, res: Response, next: NextFunction) {
         code: "AUTH_UNAVAILABLE",
       });
     }
-    if (error || !data.user) {
+    if (error || !authUserId) {
       return res.status(401).json({ error: "Invalid or expired session" });
     }
-    verifiedOwner = data.user.id;
+    verifiedOwner = authUserId;
     rememberVerifiedToken(token, verifiedOwner);
   }
   const authUserId = verifiedOwner;
