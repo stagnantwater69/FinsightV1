@@ -191,12 +191,10 @@ export async function createOverride(userId: number, businessProfileId: number, 
 export async function deleteOverride(userId: number, businessProfileId: number, id: number) {
   await requireOwnedBusinessProfile(userId, businessProfileId);
 
-  const existing = await prisma.businessOperatingDayOverride.findFirst({
+  const { count } = await prisma.businessOperatingDayOverride.deleteMany({
     where: { id, businessProfileId },
   });
-  if (!existing) {
+  if (count === 0) {
     throw new ApiError(404, "Operating day override not found");
   }
-
-  await prisma.businessOperatingDayOverride.delete({ where: { id } });
 }

@@ -299,23 +299,10 @@ async function askInConversation(
   originModule: InteractionModule,
   question: string,
   priorTurns: ConversationTurn[],
-  contextOverride?: string,
   reductionOpportunity?: ReductionOpportunity,
   focus?: { value: ChatFocus; strict: boolean } | null,
 ) {
   const profile = await requireOwnedBusinessProfile(userId, businessProfileId);
-
-  if (contextOverride) {
-    // An override carries no tagged records, so it can link to nothing — but
-    // its figures are still checked against the text the client sent.
-    const { answer, provider, metadata } = await groundAnswer(askFinSight, {
-      context: contextOverride,
-      question,
-      priorTurns,
-      references: new Map(),
-    });
-    return { answer, provider, metadata, detectedAmount: null as number | null };
-  }
 
   // reductionOpportunity only ever renders on the Expense Insights module —
   // enforced here (not just by the controller schema) so this function
@@ -359,13 +346,14 @@ export async function createConversationWithFirstMessage(
   originModule: InteractionModule,
   question: string,
   title?: string,
-  context?: string,
   reductionOpportunity?: ReductionOpportunity,
   focus?: ChatFocus,
   idempotencyKey?: string,
 ): Promise<ChatSendResult> {
   const identity = idempotencyKey === undefined ? undefined : chatSendIdentity(userId, businessProfileId, idempotencyKey, [
-    "create", businessProfileId, originModule, question, title ?? null, context ?? null, reductionOpportunity ?? null, focus ?? null,
+    // The null is where a client-supplied context used to sit. Kept so a send
+    // key stored before it was removed still fingerprints the same.
+    "create", businessProfileId, originModule, question, title ?? null, null, reductionOpportunity ?? null, focus ?? null,
   ]);
   if (identity) {
     await requireOwnedBusinessProfile(userId, businessProfileId);
@@ -383,7 +371,6 @@ export async function createConversationWithFirstMessage(
       originModule,
       question,
       [],
-      context,
       reductionOpportunity,
       focus ? { value: focus, strict: true } : null,
     );
@@ -431,7 +418,6 @@ export async function appendMessage(
   userId: number,
   conversationId: number,
   question: string,
-  context?: string,
   reductionOpportunity?: ReductionOpportunity,
   focus?: ChatFocus,
   idempotencyKey?: string,
@@ -441,7 +427,8 @@ export async function appendMessage(
   if (idempotencyKey !== undefined && businessProfileId !== undefined) {
     await requireOwnedBusinessProfile(userId, businessProfileId);
     identity = chatSendIdentity(userId, businessProfileId, idempotencyKey, [
-      "append", businessProfileId, conversationId, question, context ?? null, reductionOpportunity ?? null, focus ?? null,
+      // null: the removed client context, as in createConversationWithFirstMessage.
+      "append", businessProfileId, conversationId, question, null, reductionOpportunity ?? null, focus ?? null,
     ]);
     const previous = await findChatSendRequest(identity);
     if (previous) return replayChatSend(previous, identity);
@@ -452,7 +439,7 @@ export async function appendMessage(
   }
   if (idempotencyKey !== undefined) {
     identity ??= chatSendIdentity(userId, conversation.businessProfileId, idempotencyKey, [
-      "append", conversation.businessProfileId, conversationId, question, context ?? null, reductionOpportunity ?? null, focus ?? null,
+      "append", conversation.businessProfileId, conversationId, question, null, reductionOpportunity ?? null, focus ?? null,
     ]);
     const concurrent = await claimChatSendRequest(identity, conversationId);
     if (concurrent) return replayChatSend(concurrent, identity);
@@ -484,7 +471,6 @@ export async function appendMessage(
       conversation.originModule as InteractionModule,
       question,
       priorTurns,
-      context,
       reductionOpportunity,
       activeFocus,
     );

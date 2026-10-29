@@ -1,7 +1,7 @@
 import { prisma } from "../config/prisma";
 import { ApiError } from "../middleware/error.middleware";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
-import type { Notification } from "@prisma/client";
+import { Prisma, type Notification } from "@prisma/client";
 
 /** Anything with the same `.notification.create(...)` shape — the default global client, or a `$transaction` callback's `tx`. */
 type NotificationWriteClient = Pick<typeof prisma, "notification">;
@@ -121,11 +121,16 @@ export async function listNotificationsWithUnreadCount(userId: number, businessP
 }
 
 export async function markNotificationRead(userId: number, id: number) {
-  const existing = await prisma.notification.findFirst({ where: { id, userId } });
-  if (!existing) {
-    throw new ApiError(404, "Notification not found");
-  }
-  const notification = await prisma.notification.update({ where: { id }, data: { readStatus: true } });
+  // The owner filter sits in the update itself: one round trip, and no gap
+  // between checking whose notification it is and writing to it.
+  const notification = await prisma.notification
+    .update({ where: { id, userId }, data: { readStatus: true } })
+    .catch((error: unknown) => {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
+        throw new ApiError(404, "Notification not found");
+      }
+      throw error;
+    });
   return toDTO(notification);
 }
 

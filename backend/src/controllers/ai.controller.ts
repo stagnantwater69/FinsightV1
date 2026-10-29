@@ -62,15 +62,10 @@ export const askSchema = z.object({
   businessProfileId: z.number().int().positive().max(2147483647),
   module: z.enum(aiService.INTERACTION_MODULES),
   question: z.string().min(1).max(1000),
-  // Omitted by the Ask FinSight drawer on purpose — with no override the
-  // server builds the context from data queried at this moment, which is
-  // what keeps a follow-up answer current.
-  // The Insights screens' "Explain this" action sends the exact numbers
-  // currently on screen here — trusted verbatim since it only steers the
-  // AI's answer content, it grants no data access the caller (the
-  // authenticated owner, on their own business profile) didn't already
-  // have via requireOwnedBusinessProfile.
-  context: z.string().max(3000).optional(),
+  // There is deliberately no `context` field. The server builds the context
+  // from data queried at this moment, which keeps a follow-up answer current
+  // and leaves no client-written text in the prompt that could pose as the
+  // owner's records. A client that still sends one has it stripped by Zod.
   // The selected Reduction Opportunity card, when this ask originated there.
   // Ignored server-side unless module is "Expense Insights" — see the note
   // above reductionOpportunitySchema.
@@ -84,7 +79,6 @@ export async function ask(req: Request, res: Response) {
     input.businessProfileId,
     input.module,
     input.question,
-    input.context,
     input.reductionOpportunity
   );
   res.status(201).json(result);
@@ -198,8 +192,7 @@ export const createConversationSchema = z.object({
   // Optional: derived server-side from `question` when omitted, so the stored
   // title can never be empty regardless of client. 120 matches the column.
   title: z.string().min(1).max(conversationService.TITLE_MAX_LENGTH).optional(),
-  // Same meaning and same trust argument as `askSchema.context`.
-  context: z.string().max(3000).optional(),
+  // No `context` field, for the reason given on `askSchema`.
   // Same meaning as `askSchema.reductionOpportunity`.
   reductionOpportunity: reductionOpportunitySchema.optional(),
   focus: chatFocusSchema.optional(),
@@ -209,7 +202,6 @@ export const appendMessageSchema = z.object({
   idempotencyKey: chatSendIdempotencyKeySchema.optional(),
   businessProfileId: z.number().int().positive().max(2147483647).optional(),
   question: z.string().min(1).max(1000),
-  context: z.string().max(3000).optional(),
   reductionOpportunity: reductionOpportunitySchema.optional(),
   focus: chatFocusSchema.optional(),
 }).refine((input) => input.idempotencyKey === undefined || input.businessProfileId !== undefined, {
@@ -261,7 +253,6 @@ export async function createConversation(req: Request, res: Response) {
     input.originModule,
     input.question,
     input.title,
-    input.context,
     input.reductionOpportunity,
     input.focus,
     input.idempotencyKey,
@@ -276,7 +267,6 @@ export async function sendConversationMessage(req: Request, res: Response) {
     req.user!.id,
     id,
     input.question,
-    input.context,
     input.reductionOpportunity,
     input.focus,
     input.idempotencyKey,

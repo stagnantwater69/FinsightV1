@@ -4,12 +4,11 @@ import { prisma } from "../config/prisma";
 import { ApiError } from "../middleware/error.middleware";
 import { requireOwnedBusinessProfile } from "../lib/ownership";
 import { buildModuleContext, type InteractionModule } from "./aiContext.service";
-import type { ExtractedScenario } from "../lib/scenario";
 import type { AIInteraction } from "@prisma/client";
 import { logger } from "../config/logger";
 import type { ReductionOpportunity } from "./reductionOpportunity.service";
 import { categoryFromHistory, loadConfirmedCategoryHistory } from "../lib/categoryHistory";
-import { groundAnswer, type ChatAction, type RecordReference } from "./aiAnswer.service";
+import { groundAnswer } from "./aiAnswer.service";
 import { providerHttpError } from "../lib/aiProviderError";
 
 // Keep the model names as named constants — Google and OpenRouter rename
@@ -284,7 +283,6 @@ export async function askAndRecord(
   businessProfileId: number,
   module: InteractionModule,
   question: string,
-  contextOverride?: string,
   reductionOpportunity?: ReductionOpportunity
 ) {
   const profile = await prisma.businessProfile.findFirst({
@@ -294,50 +292,27 @@ export async function askAndRecord(
     throw new ApiError(404, "Business profile not found");
   }
 
-  // Two callers, one AI path.
+  // The context is built here, server-side, from data queried at this
+  // moment. That's what makes a follow-up see an expense the owner recorded
+  // 20 seconds ago.
   //
-  // "Explain this" on an Insights screen passes contextOverride — the exact
-  // numbers already rendered on screen — and is a deliberate one-shot: no
-  // conversation thread, so no prior turns.
-  //
-  // The Ask FinSight drawer passes no context. The context is built here,
-  // server-side, from data queried at this moment. That's what makes a
-  // follow-up see an expense the owner recorded 20 seconds ago.
-  //
-  // reductionOpportunity is a third, narrower case: the owner opened the
+  // reductionOpportunity is the one narrower case: the owner opened the
   // drawer from a Reduction Opportunity card (plan §11). It is ignored
-  // whenever contextOverride is also given (an override already carries the
-  // final context text) and whenever module isn't "Expense Insights" — that
-  // module scoping is enforced here, not just in the controller, so this
-  // function can't be called into rendering the block somewhere it doesn't
-  // belong.
-  let context: string;
-  let priorTurns: ConversationTurn[] = [];
-  let scenario: ExtractedScenario | undefined;
-  let references: ReadonlyMap<string, RecordReference> = new Map();
-  let actions: ChatAction[] = [];
-  let period: string | null = null;
-
-  if (contextOverride) {
-    context = contextOverride;
-  } else {
-    const [built, recent] = await Promise.all([
-      buildModuleContext(
-        userId,
-        profile,
-        module,
-        question,
-        module === "Expense Insights" ? reductionOpportunity : undefined
-      ),
-      getHistory(userId, businessProfileId, module, HISTORY_TURNS_FOR_CONTEXT),
-    ]);
-    context = built.context;
-    scenario = built.scenario;
-    references = built.references;
-    actions = built.actions;
-    period = built.period;
-    priorTurns = recent.map((turn) => ({ question: turn.question, answer: turn.answer }));
-  }
+  // whenever module isn't "Expense Insights" — that module scoping is
+  // enforced here, not just in the controller, so this function can't be
+  // called into rendering the block somewhere it doesn't belong.
+  const [built, recent] = await Promise.all([
+    buildModuleContext(
+      userId,
+      profile,
+      module,
+      question,
+      module === "Expense Insights" ? reductionOpportunity : undefined
+    ),
+    getHistory(userId, businessProfileId, module, HISTORY_TURNS_FOR_CONTEXT),
+  ]);
+  const { context, scenario, references, actions, period } = built;
+  const priorTurns: ConversationTurn[] = recent.map((turn) => ({ question: turn.question, answer: turn.answer }));
 
   const { answer, provider, metadata } = await groundAnswer(askFinSight, {
     context,

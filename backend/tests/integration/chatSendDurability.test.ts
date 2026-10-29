@@ -33,10 +33,10 @@ function deferred<T>() {
 }
 function create(key: string, question = "What should I review?") {
   return createConversationWithFirstMessage(owner.user.id, owner.profile.id, "Dashboard", question,
-    undefined, "Synthetic context with no monetary figures.", undefined, undefined, key);
+    undefined, undefined, undefined, key);
 }
 function append(id: number, key: string, question = "Which record next?") {
-  return appendMessage(owner.user.id, id, question, "Synthetic context with no monetary figures.", undefined, undefined, key, owner.profile.id);
+  return appendMessage(owner.user.id, id, question, undefined, undefined, key, owner.profile.id);
 }
 const status = (key: string) => getChatSendStatus(owner.user.id, owner.profile.id, key);
 const errorCode = (code: string) => expect.objectContaining({ code });
@@ -222,8 +222,7 @@ describe("durable chat sends", () => {
   });
 
   it("redacts an append completed while deletion is waiting for its conversation lock", async () => {
-    const saved = await createConversationWithFirstMessage(owner.user.id, owner.profile.id, "Dashboard", "Legacy question?",
-      undefined, "Synthetic context with no monetary figures.");
+    const saved = await createConversationWithFirstMessage(owner.user.id, owner.profile.id, "Dashboard", "Legacy question?");
     const key = randomUUID();
     const entered = deferred<void>();
     const release = deferred<void>();
