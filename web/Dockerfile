@@ -20,6 +20,7 @@ RUN npm ci
 COPY . .
 RUN test -f .env.production || { echo "web/.env.production is missing" >&2; exit 1; }
 RUN npm run build
+RUN node scripts/precompress.mjs dist
 # The CSP is computed from this exact build: see scripts/csp.mjs.
 RUN node scripts/write-csp.mjs > /app/finsight-csp.conf
 

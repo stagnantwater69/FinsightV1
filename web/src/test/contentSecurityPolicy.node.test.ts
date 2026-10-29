@@ -46,6 +46,12 @@ describe("production CSP", () => {
     expect(directive(csp, "object-src")).toEqual(["'none'"]);
   });
 
+  it("refuses plain strings at HTML sinks and lets no Trusted Types policy be created", () => {
+    const csp = buildCsp({ html: indexHtml, supabaseUrl: SUPABASE });
+    expect(directive(csp, "require-trusted-types-for")).toEqual(["'script'"]);
+    expect(directive(csp, "trusted-types")).toEqual(["'none'"]);
+  });
+
   it("adds Sentry's ingest host only when a DSN is configured", () => {
     const csp = buildCsp({
       html: indexHtml,
