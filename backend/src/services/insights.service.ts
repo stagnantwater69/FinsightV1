@@ -1494,6 +1494,14 @@ async function resolveRecoveryReportingPeriod(
 }
 
 /**
+ * Daily sales totals keyed by date. Sales dates are date-only columns, so a
+ * group on the column is already one group per calendar day.
+ */
+function salesTotalsByDay(rows: { date: Date; _sum: { amount: Prisma.Decimal | null } }[]): Map<string, number> {
+  return new Map(rows.map((row) => [utcDateKey(row.date), Number(row._sum.amount ?? 0)]));
+}
+
+/**
  * Weekly Recovery Target checkpoints for the CURRENT month (plan §10.4,
  * Phase 4). Does the one bounded read this needs — the month's sales grouped
  * by day — and hands it to `deriveRecoveryCheckpoints` (analysis.service.ts)
@@ -1522,16 +1530,12 @@ export async function computeWeeklyCheckpoints(
   const monthStart = utcStartOfMonth(today);
   const endOfToday = utcEndOfDay(today);
 
-  const records = await prisma.salesReferenceRecord.findMany({
+  const dailySales = await prisma.salesReferenceRecord.groupBy({
+    by: ["date"],
     where: { businessProfileId, date: { gte: monthStart, lte: endOfToday } },
-    select: { date: true, amount: true },
+    _sum: { amount: true },
   });
-
-  const salesByDay = new Map<string, number>();
-  for (const r of records) {
-    const key = utcDateKey(r.date);
-    salesByDay.set(key, (salesByDay.get(key) ?? 0) + Number(r.amount));
-  }
+  const salesByDay = salesTotalsByDay(dailySales);
 
   return deriveRecoveryCheckpoints({
     today,
@@ -1590,10 +1594,12 @@ export async function getRecoveryInsight(
   const coverageEnd = utcEndOfDay(periodAsOf);
 
   // Independent reads: issued together so they cost one round trip, not three.
-  const [coverageRecords, latestSale, weeklyCheckpoints] = await Promise.all([
-    prisma.salesReferenceRecord.findMany({
+  const [dailyCoverageSales, latestSale, weeklyCheckpoints] = await Promise.all([
+    // Summed per day in the database: only the daily totals are read below.
+    prisma.salesReferenceRecord.groupBy({
+      by: ["date"],
       where: { businessProfileId, date: { gte: coverageStart, lte: coverageEnd } },
-      select: { date: true, amount: true },
+      _sum: { amount: true },
     }),
     prisma.salesReferenceRecord.findFirst({
       where: { businessProfileId, date: { lte: utcEndOfDay(businessToday) } },
@@ -1611,11 +1617,7 @@ export async function getRecoveryInsight(
       : [],
   ]);
 
-  const salesByDay = new Map<string, number>();
-  for (const r of coverageRecords) {
-    const key = utcDateKey(r.date);
-    salesByDay.set(key, (salesByDay.get(key) ?? 0) + Number(r.amount));
-  }
+  const salesByDay = salesTotalsByDay(dailyCoverageSales);
 
   const dailyCoverage: {
     date: string;

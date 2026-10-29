@@ -2,7 +2,7 @@ import { Router, type RequestHandler } from "express";
 import * as csvImportController from "../controllers/csvImport.controller";
 import { requireAuth } from "../middleware/auth.middleware";
 import { uploadCsv } from "../middleware/upload.middleware";
-import { LIMITS, limitAuthenticatedWrites, rateLimit } from "../middleware/rateLimit.middleware";
+import { LIMITS, limitAuthenticatedWrites, rateLimit, rateLimits } from "../middleware/rateLimit.middleware";
 import { handleCsvHttpWork, limitCsvHttpWork } from "../middleware/csvHttpWorkLimit.middleware";
 import { asyncHandler } from "../lib/asyncHandler";
 
@@ -35,8 +35,7 @@ csvImportRouter.post(
 );
 csvImportRouter.post(
   "/confirm",
-  rateLimit(LIMITS.CSV_CONFIRM_BURST),
-  rateLimit(LIMITS.CSV_CONFIRM_HOURLY),
+  rateLimits(LIMITS.CSV_CONFIRM_BURST, LIMITS.CSV_CONFIRM_HOURLY),
   limitCsvHttpWork,
   uploadCsv.single("file"),
   handleCsvHttpWork(csvImportController.confirm),

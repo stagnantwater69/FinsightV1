@@ -197,10 +197,10 @@ export default {
         // Sora is the mockup's display face and replaced IBM Plex Sans here.
         // It has noticeably more character at heading sizes and a tighter
         // default tracking, which is what makes the mockup's headings read as
-        // designed rather than as default UI text. Plex Sans stays in the
-        // stack as the metric-compatible fallback while Sora loads.
+        // designed rather than as default UI text. Inter is the fallback while
+        // Sora loads: it is already on every app page, so it costs no download.
         sans: ["Inter", "system-ui", "-apple-system", "Segoe UI", "sans-serif"],
-        display: ["Sora", "IBM Plex Sans", "Inter", "system-ui", "sans-serif"],
+        display: ["Sora", "Inter", "system-ui", "sans-serif"],
         mono: ["IBM Plex Mono", "ui-monospace", "SFMono-Regular", "monospace"],
         // Landing-page-only faces (2026 redesign) — scoped so the rest of the
         // app keeps Inter/Sora. Never reference these outside

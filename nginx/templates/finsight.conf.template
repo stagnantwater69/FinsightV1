@@ -46,6 +46,8 @@ limit_req_log_level warn;
 upstream finsight_backend {
   server backend:4000;
   keepalive 16;
+  # Must stay below the backend's keepAliveTimeout (65s, backend/src/lib/keepAlive.ts).
+  keepalive_timeout 60s;
 }
 
 server {
@@ -135,6 +137,9 @@ server {
   # add_header, so the security headers above still apply.
   location /assets/ {
     expires 1y;
+    # Serves the .gz web/scripts/precompress.mjs wrote at build time, compressed
+    # once at maximum level instead of on every request.
+    gzip_static on;
     try_files $uri =404;
   }
 

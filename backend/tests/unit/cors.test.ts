@@ -36,7 +36,7 @@ describe("browser CORS origins", () => {
       .set("Access-Control-Request-Headers", "content-type,authorization");
     expect(response.status).toBe(204);
     expect(response.headers["access-control-allow-origin"]).toBe(origin);
-    expect(response.headers["access-control-allow-credentials"]).toBe("true");
+    expect(response.headers["access-control-allow-credentials"]).toBeUndefined();
     expect(response.headers["access-control-allow-headers"]).toBe("content-type,authorization");
   });
 

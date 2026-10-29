@@ -51,6 +51,15 @@ export function buildCsp({ html, supabaseUrl, sentryDsn }) {
     ["base-uri", "'self'"],
     ["form-action", "'self'"],
     ["frame-ancestors", "'none'"],
+    // The session token lives in localStorage, so an injected script would
+    // read it. This makes every HTML-to-DOM sink (innerHTML, document.write)
+    // refuse a plain string; the app has none, and React only reaches one for
+    // dangerouslySetInnerHTML, which FinSight does not use. Browsers without
+    // Trusted Types ignore it.
+    ["require-trusted-types-for", "'script'"],
+    // No code here creates a policy, so none may be created: an attacker
+    // cannot mint one to launder a string through the sinks above.
+    ["trusted-types", "'none'"],
   ];
   // A blocked script is either an attack or a deploy that broke the app, and
   // both should reach someone rather than fail silently in a visitor's console.

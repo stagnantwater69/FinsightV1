@@ -92,16 +92,49 @@ function maySeeHealthDetail(req: express.Request): boolean {
   return timingSafeEqual(digest(supplied), digest(env.HEALTH_DETAIL_TOKEN));
 }
 
+/*
+ * The bare verdict, shared for a moment. This route is public and needs no
+ * token, so without this every request to it — a monitor, a load balancer, or
+ * anyone looping on it — is a database round trip. Within the window, callers
+ * share one check (and one in flight), so the database sees at most one probe
+ * every READY_VERDICT_TTL_MS however hard the route is hit. A failure is shared
+ * the same way, which keeps a struggling database from being probed harder.
+ */
+const READY_VERDICT_TTL_MS = 2_000;
+let readyVerdict: { checkedAt: number; ready: Promise<boolean> } | undefined;
+
+export function resetReadyVerdictCache(): void {
+  readyVerdict = undefined;
+}
+
+function databaseReady(): Promise<boolean> {
+  const now = Date.now();
+  if (readyVerdict && now - readyVerdict.checkedAt < READY_VERDICT_TTL_MS) return readyVerdict.ready;
+  const ready = prisma.$queryRaw`SELECT 1`.then(
+    () => true,
+    (error: unknown) => {
+      logger.error({ err: error }, "readiness check failed");
+      return false;
+    },
+  );
+  readyVerdict = { checkedAt: now, ready };
+  return ready;
+}
+
 app.get(["/api/v1/health", "/api/v1/health/ready"], async (req, res) => {
+  // The counters below are about twenty queries and only feed the detail.
+  // A caller who may not see it (every unauthenticated production probe)
+  // gets the verdict alone, from the shared check above.
+  if (!maySeeHealthDetail(req)) {
+    if (await databaseReady()) {
+      res.status(200).json({ status: "ready", database: "ok" });
+    } else {
+      res.status(503).json({ status: "not-ready", database: "unavailable" });
+    }
+    return;
+  }
   try {
     await prisma.$queryRaw`SELECT 1`;
-    // The counters below are about twenty queries and only feed the detail.
-    // A caller who may not see it (every unauthenticated production probe)
-    // gets the same verdict from the one query above.
-    if (!maySeeHealthDetail(req)) {
-      res.status(200).json({ status: "ready", database: "ok" });
-      return;
-    }
     const readinessNow = new Date();
     const [
       queuedScans,

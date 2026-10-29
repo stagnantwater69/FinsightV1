@@ -705,7 +705,6 @@ model ExpenseRecord {
   manualCreateRequest        ManualRecordCreateRequest?
 
   @@unique([id, businessProfileId], map: "ExpenseRecord_ID_BusinessProfile_ID_key")
-  @@index([businessProfileId])
   @@index([categoryId])
   @@index([importBatchId])
   @@index([receiptScanId])
@@ -922,7 +921,6 @@ model SalesReferenceRecord {
   manualCreateRequest ManualRecordCreateRequest?
 
   @@unique([id, businessProfileId], map: "SalesReferenceRecord_ID_BusinessProfile_ID_key")
-  @@index([businessProfileId])
   @@index([importBatchId])
   @@index([duplicateOfRecordId])
   @@index([businessProfileId, date, id])

@@ -3,8 +3,10 @@ import type { Request, Response } from "express";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../src/config/prisma";
 import {
+  byEmail,
   LIMITS,
   rateLimit,
+  rateLimits,
   refundRateLimitsForError,
   resetRateLimits,
   type RateLimitOptions,
@@ -28,8 +30,17 @@ function durableLimiter(nameOrOptions: string | RateLimitOptions, limit?: number
   }
 }
 
-async function call(middleware: ReturnType<typeof rateLimit>) {
-  const req = { ip: "203.0.113.7", headers: {}, method: "POST", path: "/api/v1/auth/login" } as Request;
+function durableChain(...limiters: RateLimitOptions[]): ReturnType<typeof rateLimits> {
+  vi.stubEnv("NODE_ENV", "production");
+  try {
+    return rateLimits(...limiters);
+  } finally {
+    vi.unstubAllEnvs();
+  }
+}
+
+async function call(middleware: ReturnType<typeof rateLimit>, body?: unknown) {
+  const req = { ip: "203.0.113.7", headers: {}, method: "POST", path: "/api/v1/auth/login", body } as Request;
   const res = {
     statusCode: 0,
     body: undefined as unknown,
@@ -129,5 +140,64 @@ describe("deployed login rate-limit storage", () => {
     const afterRefund = await prisma.apiRateLimit.findFirstOrThrow();
     expect(afterRefund.count).toBe(1);
     expect(afterRefund.expiresAt.getTime()).toBe(rolled.expiresAt.getTime());
+  });
+
+  describe("several limiters counted in one statement", () => {
+    const burst = { name: "qa-chain-burst", limit: 2, windowMs: 60_000 };
+    const hourly = { name: "qa-chain-hourly", limit: 10, windowMs: 3_600_000 };
+    const shared = { name: "qa-chain-shared", limit: 100, windowMs: 86_400_000, identify: () => "all" };
+    const counts = async () => Object.fromEntries(
+      (await prisma.apiRateLimit.findMany()).map((row) => [row.key.split(":")[0], row.count]),
+    );
+
+    it("counts every limiter in a single round trip while each one passes", async () => {
+      const queryRaw = vi.spyOn(prisma, "$queryRaw");
+      const passed = await call(durableChain(burst, hourly, shared));
+
+      expect(passed.next).toHaveBeenCalledWith();
+      expect(queryRaw).toHaveBeenCalledTimes(1);
+      expect(await counts()).toEqual({ "qa-chain-burst": 1, "qa-chain-hourly": 1, "qa-chain-shared": 1 });
+      // Headers describe the last limiter consulted, as the old middleware chain left them.
+      expect(passed.res.headers["RateLimit-Limit"]).toBe("100");
+    });
+
+    it("does not count the limiters after the one that refused, so a shared budget is never spent on a refusal", async () => {
+      const chain = durableChain(burst, hourly, shared);
+      await call(chain);
+      await call(chain);
+      const refused = await call(chain);
+
+      expect(refused.res.statusCode).toBe(429);
+      expect(refused.next).not.toHaveBeenCalled();
+      expect(refused.res.headers["RateLimit-Limit"]).toBe("2");
+      expect(await counts()).toEqual({ "qa-chain-burst": 3, "qa-chain-hourly": 2, "qa-chain-shared": 2 });
+    });
+
+    it("answers with the refusing limiter's own code when a later limiter is the one exhausted", async () => {
+      const chain = durableChain(burst, { ...shared, limit: 1, refusal: { code: "DAILY_CAPACITY_REACHED", message: () => "paused" } });
+      await call(chain);
+      const refused = await call(chain);
+
+      expect(refused.res.statusCode).toBe(429);
+      expect(refused.res.body).toMatchObject({ code: "DAILY_CAPACITY_REACHED" });
+      expect(await counts()).toEqual({ "qa-chain-burst": 2, "qa-chain-shared": 2 });
+    });
+
+    it("skips a limiter whose identity is absent and still counts the rest", async () => {
+      const chain = durableChain({ ...burst, identify: byEmail }, hourly);
+      expect((await call(chain)).next).toHaveBeenCalledWith();
+      expect(await counts()).toEqual({ "qa-chain-hourly": 1 });
+
+      expect((await call(chain, { email: "Owner@Shop.ph" })).next).toHaveBeenCalledWith();
+      expect(await counts()).toEqual({ "qa-chain-burst": 1, "qa-chain-hourly": 2 });
+    });
+
+    it("keeps an exact quota under concurrent requests", async () => {
+      const chain = durableChain(burst, shared);
+      const attempts = await Promise.all(Array.from({ length: 8 }, () => call(chain)));
+
+      expect(attempts.filter(({ next }) => next.mock.calls.length === 1)).toHaveLength(2);
+      expect(await counts()).toEqual({ "qa-chain-burst": 8, "qa-chain-shared": 2 });
+    });
   });
 });

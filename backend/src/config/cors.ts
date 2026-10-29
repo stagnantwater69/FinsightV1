@@ -28,7 +28,9 @@ export function createCorsOptions(
       callback(null, !origin || allowedOrigins.has(origin)
         || (nodeEnv === "development" && isLocalExpoOrigin(origin, getInterfaces())));
     },
-    credentials: true,
+    // No `credentials`: both clients authenticate with a bearer header and
+    // nothing here sets a cookie. Allowing credentialed requests would only
+    // matter the day a cookie appears — and then it would expose it.
     exposedHeaders: ["Server-Timing", "Retry-After", "RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset", "X-Next-Cursor", "X-Unread-Count"],
   };
 }
