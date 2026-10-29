@@ -101,6 +101,13 @@ export interface RateLimitOptions {
    * everyone and somebody should find out before the owners tell them.
    */
   alertWhenExhausted?: boolean;
+  /**
+   * Report the first refusal of each window per owner. For the per-owner daily
+   * caps: one owner reaching a whole day's allowance is either the heaviest
+   * real day anyone has had or a script, and either is worth a look. Only
+   * meaningful on a limiter keyed per signed-in user.
+   */
+  reportOwnerWhenExhausted?: boolean;
 }
 
 function refusalBody(refusal: RateLimitOptions["refusal"], resetSeconds: number) {
@@ -114,9 +121,48 @@ function refusalBody(refusal: RateLimitOptions["refusal"], resetSeconds: number)
   };
 }
 
-function alertExhausted(name: string, limit: number) {
-  logger.error({ limiter: name, limit }, "shared rate-limit budget exhausted");
-  reportError(new Error(`Shared rate-limit budget "${name}" exhausted at ${limit}`), { level: "warning" });
+/**
+ * Reports a limiter crossing a line worth knowing about. Called with every
+ * count a limiter returns; each line is crossed exactly once per window
+ * because counts only ever rise by one, so this needs no state of its own.
+ *
+ *   - A shared budget at USAGE_ALERT_SHARE of its ceiling: a warning while
+ *     there is still time to raise it, rather than only once it has stopped
+ *     the product for everyone.
+ *   - A shared budget exhausted.
+ *   - One owner exhausting a daily cap. The numeric user id is the only thing
+ *     about them that leaves the process.
+ */
+export function reportUsageMilestones(options: RateLimitOptions, identity: string, count: number): void {
+  const { name, limit } = options;
+  if (options.alertWhenExhausted) {
+    if (count === Math.ceil(limit * env.USAGE_ALERT_SHARE) && count <= limit) {
+      logger.warn({ limiter: name, limit, count }, "shared rate-limit budget nearing its ceiling");
+      reportError(new Error(`Shared rate-limit budget "${name}" reached ${count} of ${limit}`), {
+        level: "warning",
+        limiter: name,
+        fingerprint: ["shared-budget-nearing", name],
+      });
+    }
+    if (count === limit + 1) {
+      logger.error({ limiter: name, limit }, "shared rate-limit budget exhausted");
+      reportError(new Error(`Shared rate-limit budget "${name}" exhausted at ${limit}`), {
+        level: "warning",
+        limiter: name,
+        fingerprint: ["shared-budget-exhausted", name],
+      });
+    }
+  }
+  const ownerId = /^u(\d+)$/.exec(identity)?.[1];
+  if (options.reportOwnerWhenExhausted && ownerId && count === limit + 1) {
+    logger.warn({ limiter: name, limit, ownerId }, "owner reached a daily cap");
+    reportError(new Error(`Owner reached daily cap "${name}" (${limit})`), {
+      level: "warning",
+      limiter: name,
+      ownerId,
+      fingerprint: ["owner-daily-cap", name, ownerId],
+    });
+  }
 }
 
 interface RateLimitRefund {
@@ -227,6 +273,7 @@ export function humanRetryAfter(seconds: number): string {
 
 interface ActiveLimiter {
   options: RateLimitOptions;
+  identity: string;
   key: string;
 }
 
@@ -235,7 +282,7 @@ function activeLimiters(req: Request, limiters: readonly RateLimitOptions[]): Ac
   const active: ActiveLimiter[] = [];
   for (const options of limiters) {
     const identity = identityFor(req, options.identify);
-    if (identity !== undefined) active.push({ options, key: `${options.name}:${identity}` });
+    if (identity !== undefined) active.push({ options, identity, key: `${options.name}:${identity}` });
   }
   return active;
 }
@@ -323,13 +370,13 @@ export function rateLimits(...limiters: RateLimitOptions[]) {
       try {
         const rows = await timeSpan("ratelimit", () => prisma.$queryRaw<DurableBucket[]>(durableCountStatement(active)));
         for (const [index, bucket] of rows.entries()) {
-          const { options, key } = active[index]!;
+          const { options, identity, key } = active[index]!;
           const resetSeconds = Math.max(1, Math.ceil((bucket.expiresAt.getTime() - Date.now()) / 1000));
           setRateLimitHeaders(res, options.limit, bucket.count, resetSeconds);
+          reportUsageMilestones(options, identity, bucket.count);
           if (bucket.count > options.limit) {
             res.setHeader("Retry-After", String(resetSeconds));
             securityEvent("ratelimit.exhausted", { ...requestContext(req), limiter: options.name });
-            if (options.alertWhenExhausted && bucket.count === options.limit + 1) alertExhausted(options.name, options.limit);
             return res.status(429).json(refusalBody(options.refusal, resetSeconds));
           }
           registerRefund(res, options.refundOnErrorCodes, async () => {
@@ -356,7 +403,7 @@ export function rateLimits(...limiters: RateLimitOptions[]) {
   }
 
   return function rateLimitMiddleware(req: Request, res: Response, next: NextFunction) {
-    for (const { options, key } of activeLimiters(req, limiters)) {
+    for (const { options, identity, key } of activeLimiters(req, limiters)) {
       const now = Date.now();
       let bucket = buckets.get(key);
       if (!bucket || bucket.resetAt <= now) {
@@ -368,6 +415,7 @@ export function rateLimits(...limiters: RateLimitOptions[]) {
 
       const resetSeconds = Math.ceil((bucket.resetAt - now) / 1000);
       setRateLimitHeaders(res, options.limit, bucket.count, resetSeconds);
+      reportUsageMilestones(options, identity, bucket.count);
 
       if (bucket.count > options.limit) {
         res.setHeader("Retry-After", String(resetSeconds));
@@ -377,7 +425,6 @@ export function rateLimits(...limiters: RateLimitOptions[]) {
          * did nothing wrong and there is nothing for them to fix; the honest
          * message is "wait a moment and it will work".
          */
-        if (options.alertWhenExhausted && bucket.count === options.limit + 1) alertExhausted(options.name, options.limit);
         return res.status(429).json(refusalBody(options.refusal, resetSeconds));
       }
 
@@ -480,10 +527,20 @@ export const LIMITS = {
    * scans a day. These sit well above a heavy day of real use (a month of
    * backlog receipts entered in one sitting still fits) and far below that.
    */
-  SCAN_RECEIPT_DAILY: { name: "scan-receipt-daily", limit: 500, windowMs: DAY_MS },
-  ASK_DAILY: { name: "ai-ask-daily", limit: 600, windowMs: DAY_MS },
-  SUGGEST_CATEGORY_DAILY: { name: "ai-suggest-category-daily", limit: 4_000, windowMs: DAY_MS },
-  PURCHASE_REVIEW_DAILY: { name: "ai-purchase-review-daily", limit: 400, windowMs: DAY_MS },
+  SCAN_RECEIPT_DAILY: { name: "scan-receipt-daily", limit: 500, windowMs: DAY_MS, reportOwnerWhenExhausted: true },
+  ASK_DAILY: { name: "ai-ask-daily", limit: 600, windowMs: DAY_MS, reportOwnerWhenExhausted: true },
+  SUGGEST_CATEGORY_DAILY: {
+    name: "ai-suggest-category-daily",
+    limit: 4_000,
+    windowMs: DAY_MS,
+    reportOwnerWhenExhausted: true,
+  },
+  PURCHASE_REVIEW_DAILY: {
+    name: "ai-purchase-review-daily",
+    limit: 400,
+    windowMs: DAY_MS,
+    reportOwnerWhenExhausted: true,
+  },
   /*
    * PURCHASE_REVIEW: Spending Impact's "what is this thing, and what should I
    * be asking about it" call. Pressed deliberately, one item at a time, and
@@ -584,6 +641,11 @@ export const LIMITS = {
   AUTH_HANDOFF_ISSUE: { name: "auth-handoff-issue", limit: 10, windowMs: 15 * 60_000 },
   AUTH_HANDOFF_EXCHANGE: { name: "auth-handoff-exchange", limit: 10, windowMs: 15 * 60_000 },
 } as const;
+
+/** The per-owner daily caps on billed calls — what the sustained-usage sweep watches. */
+export const OWNER_DAILY_CAPS: readonly RateLimitOptions[] = Object.values(LIMITS).filter(
+  (limiter: RateLimitOptions) => limiter.reportOwnerWhenExhausted === true,
+);
 
 /*
  * THE SPEND CEILING: one bucket for all owners together, per kind of billed

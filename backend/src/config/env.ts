@@ -56,6 +56,15 @@ const envSchema = z.object({
   SHARED_DAILY_AI_ANSWERS: z.coerce.number().int().min(1).default(5_000),
   SHARED_DAILY_CATEGORY_SUGGESTIONS: z.coerce.number().int().min(1).default(30_000),
   SHARED_DAILY_RECEIPT_SCANS: z.coerce.number().int().min(1).default(3_000),
+  /**
+   * When usage is worth a warning, as a share of a daily cap. A shared budget
+   * reaching it warns once per day, before the product stops for everyone; an
+   * owner reaching it on USAGE_ALERT_DAYS separate days within one day more
+   * than that is reported as sustained use (services/usageAlerts.service.ts).
+   * Reports only — nothing is ever refused because of these two.
+   */
+  USAGE_ALERT_SHARE: z.coerce.number().gt(0).lt(1).default(0.8),
+  USAGE_ALERT_DAYS: z.coerce.number().int().min(2).max(14).default(3),
   /** Sentry project DSN. Empty means no error reports are sent anywhere. */
   SENTRY_DSN: z.string().optional().default(""),
   /** Where the web client is served, for auth email redirect links. */
