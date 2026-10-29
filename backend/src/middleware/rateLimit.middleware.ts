@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { logger } from "../config/logger";
 import { env } from "../config/env";
@@ -224,76 +225,129 @@ export function humanRetryAfter(seconds: number): string {
   return `${hours} hour${hours === 1 ? "" : "s"}`;
 }
 
-export function rateLimit({
-  name,
-  limit,
-  windowMs,
-  identify,
-  refundOnErrorCodes,
-  refusal,
-  alertWhenExhausted,
-}: RateLimitOptions) {
+interface ActiveLimiter {
+  options: RateLimitOptions;
+  key: string;
+}
+
+/** The limiters that apply to this request, in mount order, with their bucket keys. */
+function activeLimiters(req: Request, limiters: readonly RateLimitOptions[]): ActiveLimiter[] {
+  const active: ActiveLimiter[] = [];
+  for (const options of limiters) {
+    const identity = identityFor(req, options.identify);
+    if (identity !== undefined) active.push({ options, key: `${options.name}:${identity}` });
+  }
+  return active;
+}
+
+function setRateLimitHeaders(res: Response, limit: number, count: number, resetSeconds: number) {
+  res.setHeader("RateLimit-Limit", String(limit));
+  res.setHeader("RateLimit-Remaining", String(Math.max(0, limit - count)));
+  res.setHeader("RateLimit-Reset", String(resetSeconds));
+}
+
+interface DurableBucket {
+  count: number;
+  expiresAt: Date;
+  windowToken: string;
+}
+
+/*
+ * EVERY LIMITER ON A ROUTE, COUNTED IN ONE STATEMENT.
+ *
+ * The billed routes carry four limiters (burst, hourly, daily, shared). As
+ * separate middleware that was four sequential round trips to a database that
+ * sits an ocean away from the owners, on exactly the requests they wait on.
+ *
+ * Each limiter is one data-modifying CTE, and each CTE after the first only
+ * inserts when the one before it came back within its limit. That keeps the
+ * old chain's rule: a request one limiter refuses never counts against the
+ * limiters after it — above all, never against a shared daily budget.
+ *
+ * Mount order is therefore also row-lock order. Keep shared budgets (one row
+ * for every owner) LAST, and keep the relative order of any two limiters the
+ * same on every route, so two statements never wait on each other's rows.
+ */
+function durableCountStatement(active: readonly ActiveLimiter[]): Prisma.Sql {
+  const ctes = active.map(({ options, key }, index) => {
+    const expiresAt = Prisma.sql`CURRENT_TIMESTAMP + (${options.windowMs} * INTERVAL '1 millisecond')`;
+    const previous = Prisma.raw(`l${index - 1}`);
+    const source = index === 0
+      ? Prisma.sql`VALUES (${key}, CURRENT_TIMESTAMP, 1, ${expiresAt})`
+      // The WHERE is also what lets Postgres parse ON CONFLICT after a SELECT.
+      : Prisma.sql`SELECT ${key}, CURRENT_TIMESTAMP, 1, ${expiresAt}
+          FROM ${previous} WHERE ${previous}.count <= ${active[index - 1]!.options.limit}`;
+    return Prisma.sql`${Prisma.raw(`l${index}`)} AS (
+      INSERT INTO "ApiRateLimit" (
+        "ApiRateLimit_Key", "ApiRateLimit_WindowStart", "ApiRateLimit_Count", "ApiRateLimit_ExpiresAt"
+      ) ${source}
+      ON CONFLICT ("ApiRateLimit_Key") DO UPDATE SET
+        "ApiRateLimit_WindowStart" = CASE
+          WHEN "ApiRateLimit"."ApiRateLimit_ExpiresAt" <= CURRENT_TIMESTAMP THEN CURRENT_TIMESTAMP
+          ELSE "ApiRateLimit"."ApiRateLimit_WindowStart" END,
+        "ApiRateLimit_Count" = CASE
+          WHEN "ApiRateLimit"."ApiRateLimit_ExpiresAt" <= CURRENT_TIMESTAMP THEN 1
+          ELSE "ApiRateLimit"."ApiRateLimit_Count" + 1 END,
+        "ApiRateLimit_ExpiresAt" = CASE
+          WHEN "ApiRateLimit"."ApiRateLimit_ExpiresAt" <= CURRENT_TIMESTAMP THEN ${expiresAt}
+          ELSE "ApiRateLimit"."ApiRateLimit_ExpiresAt" END
+      RETURNING
+        "ApiRateLimit_Count" AS count,
+        "ApiRateLimit_ExpiresAt" AS "expiresAt",
+        (EXTRACT(EPOCH FROM "ApiRateLimit_ExpiresAt") * 1000)::bigint::text AS "windowToken"
+    )`;
+  });
+  const results = active.map((_, index) => Prisma.sql`
+    SELECT ${Prisma.raw(String(index))} AS ordinal, count, "expiresAt", "windowToken" FROM ${Prisma.raw(`l${index}`)}
+  `);
+  return Prisma.sql`WITH ${Prisma.join(ctes, ", ")} ${Prisma.join(results, " UNION ALL ")} ORDER BY ordinal`;
+}
+
+/**
+ * Several limiters as one middleware, checked in the order given; the first to
+ * refuse answers 429 and the ones after it are not counted.
+ */
+export function rateLimits(...limiters: RateLimitOptions[]) {
+  if (limiters.length === 0) throw new Error("rateLimits needs at least one limiter");
+  if (new Set(limiters.map((limiter) => limiter.name)).size !== limiters.length) {
+    throw new Error("rateLimits was given the same limiter twice");
+  }
+
   // Unit tests deliberately exercise the deterministic clock-based backend.
   // Deployed processes use Postgres below, making the same limit survive
   // restarts and apply once across every replica.
   if (process.env.NODE_ENV !== "test") {
     return async function durableRateLimitMiddleware(req: Request, res: Response, next: NextFunction) {
-      const identity = identityFor(req, identify);
-      if (identity === undefined) return next();
-      const key = `${name}:${identity}`;
+      const active = activeLimiters(req, limiters);
+      if (active.length === 0) return next();
       try {
-        const rows = await timeSpan("ratelimit", () => prisma.$queryRaw<Array<{
-          count: number;
-          expiresAt: Date;
-          windowToken: string;
-        }>>`
-          INSERT INTO "ApiRateLimit" (
-            "ApiRateLimit_Key", "ApiRateLimit_WindowStart", "ApiRateLimit_Count", "ApiRateLimit_ExpiresAt"
-          ) VALUES (
-            ${key}, CURRENT_TIMESTAMP, 1, CURRENT_TIMESTAMP + (${windowMs} * INTERVAL '1 millisecond')
-          )
-          ON CONFLICT ("ApiRateLimit_Key") DO UPDATE SET
-            "ApiRateLimit_WindowStart" = CASE
-              WHEN "ApiRateLimit"."ApiRateLimit_ExpiresAt" <= CURRENT_TIMESTAMP THEN CURRENT_TIMESTAMP
-              ELSE "ApiRateLimit"."ApiRateLimit_WindowStart" END,
-            "ApiRateLimit_Count" = CASE
-              WHEN "ApiRateLimit"."ApiRateLimit_ExpiresAt" <= CURRENT_TIMESTAMP THEN 1
-              ELSE "ApiRateLimit"."ApiRateLimit_Count" + 1 END,
-            "ApiRateLimit_ExpiresAt" = CASE
-              WHEN "ApiRateLimit"."ApiRateLimit_ExpiresAt" <= CURRENT_TIMESTAMP
-                THEN CURRENT_TIMESTAMP + (${windowMs} * INTERVAL '1 millisecond')
-              ELSE "ApiRateLimit"."ApiRateLimit_ExpiresAt" END
-          RETURNING
-            "ApiRateLimit_Count" AS count,
-            "ApiRateLimit_ExpiresAt" AS "expiresAt",
-            (EXTRACT(EPOCH FROM "ApiRateLimit_ExpiresAt") * 1000)::bigint::text AS "windowToken"
-        `);
-        const bucket = rows[0]!;
-        const resetSeconds = Math.max(1, Math.ceil((bucket.expiresAt.getTime() - Date.now()) / 1000));
-        res.setHeader("RateLimit-Limit", String(limit));
-        res.setHeader("RateLimit-Remaining", String(Math.max(0, limit - bucket.count)));
-        res.setHeader("RateLimit-Reset", String(resetSeconds));
-        if (bucket.count > limit) {
-          res.setHeader("Retry-After", String(resetSeconds));
-          securityEvent("ratelimit.exhausted", { ...requestContext(req), limiter: name });
-          if (alertWhenExhausted && bucket.count === limit + 1) alertExhausted(name, limit);
-          return res.status(429).json(refusalBody(refusal, resetSeconds));
-        }
-        registerRefund(res, refundOnErrorCodes, async () => {
-          const affected = await prisma.$executeRaw`
-            UPDATE "ApiRateLimit"
-            SET "ApiRateLimit_Count" = GREATEST("ApiRateLimit_Count" - 1, 0)
-            WHERE "ApiRateLimit_Key" = ${key}
-              AND (EXTRACT(EPOCH FROM "ApiRateLimit_ExpiresAt") * 1000)::bigint::text = ${bucket.windowToken}
-              AND "ApiRateLimit_Count" > 0
-          `;
-          if (affected !== 1) {
-            logger.info(
-              { limiter: name, affected },
-              "rate-limit refund skipped because the original window is no longer active",
-            );
+        const rows = await timeSpan("ratelimit", () => prisma.$queryRaw<DurableBucket[]>(durableCountStatement(active)));
+        for (const [index, bucket] of rows.entries()) {
+          const { options, key } = active[index]!;
+          const resetSeconds = Math.max(1, Math.ceil((bucket.expiresAt.getTime() - Date.now()) / 1000));
+          setRateLimitHeaders(res, options.limit, bucket.count, resetSeconds);
+          if (bucket.count > options.limit) {
+            res.setHeader("Retry-After", String(resetSeconds));
+            securityEvent("ratelimit.exhausted", { ...requestContext(req), limiter: options.name });
+            if (options.alertWhenExhausted && bucket.count === options.limit + 1) alertExhausted(options.name, options.limit);
+            return res.status(429).json(refusalBody(options.refusal, resetSeconds));
           }
-        });
+          registerRefund(res, options.refundOnErrorCodes, async () => {
+            const affected = await prisma.$executeRaw`
+              UPDATE "ApiRateLimit"
+              SET "ApiRateLimit_Count" = GREATEST("ApiRateLimit_Count" - 1, 0)
+              WHERE "ApiRateLimit_Key" = ${key}
+                AND (EXTRACT(EPOCH FROM "ApiRateLimit_ExpiresAt") * 1000)::bigint::text = ${bucket.windowToken}
+                AND "ApiRateLimit_Count" > 0
+            `;
+            if (affected !== 1) {
+              logger.info(
+                { limiter: options.name, affected },
+                "rate-limit refund skipped because the original window is no longer active",
+              );
+            }
+          });
+        }
         return next();
       } catch (error) {
         return next(error);
@@ -302,44 +356,44 @@ export function rateLimit({
   }
 
   return function rateLimitMiddleware(req: Request, res: Response, next: NextFunction) {
-    const identity = identityFor(req, identify);
-    if (identity === undefined) return next();
-    const key = `${name}:${identity}`;
-    const now = Date.now();
+    for (const { options, key } of activeLimiters(req, limiters)) {
+      const now = Date.now();
+      let bucket = buckets.get(key);
+      if (!bucket || bucket.resetAt <= now) {
+        bucket = { count: 0, resetAt: now + options.windowMs };
+        buckets.set(key, bucket);
+      }
 
-    let bucket = buckets.get(key);
-    if (!bucket || bucket.resetAt <= now) {
-      bucket = { count: 0, resetAt: now + windowMs };
-      buckets.set(key, bucket);
+      bucket.count++;
+
+      const resetSeconds = Math.ceil((bucket.resetAt - now) / 1000);
+      setRateLimitHeaders(res, options.limit, bucket.count, resetSeconds);
+
+      if (bucket.count > options.limit) {
+        res.setHeader("Retry-After", String(resetSeconds));
+        /*
+         * Answered here rather than by throwing ApiError, so the response can
+         * carry Retry-After — and worded for the owner, not the developer. They
+         * did nothing wrong and there is nothing for them to fix; the honest
+         * message is "wait a moment and it will work".
+         */
+        if (options.alertWhenExhausted && bucket.count === options.limit + 1) alertExhausted(options.name, options.limit);
+        return res.status(429).json(refusalBody(options.refusal, resetSeconds));
+      }
+
+      const counted = bucket;
+      registerRefund(res, options.refundOnErrorCodes, async () => {
+        const current = buckets.get(key);
+        if (current === counted && current.count > 0) current.count -= 1;
+      });
     }
-
-    bucket.count++;
-
-    const remaining = Math.max(0, limit - bucket.count);
-    const resetSeconds = Math.ceil((bucket.resetAt - now) / 1000);
-    res.setHeader("RateLimit-Limit", String(limit));
-    res.setHeader("RateLimit-Remaining", String(remaining));
-    res.setHeader("RateLimit-Reset", String(resetSeconds));
-
-    if (bucket.count > limit) {
-      res.setHeader("Retry-After", String(resetSeconds));
-      /*
-       * Answered here rather than by throwing ApiError, so the response can
-       * carry Retry-After — and worded for the owner, not the developer. They
-       * did nothing wrong and there is nothing for them to fix; the honest
-       * message is "wait a moment and it will work".
-       */
-      if (alertWhenExhausted && bucket.count === limit + 1) alertExhausted(name, limit);
-      return res.status(429).json(refusalBody(refusal, resetSeconds));
-    }
-
-    registerRefund(res, refundOnErrorCodes, async () => {
-      const current = buckets.get(key);
-      if (current === bucket && current.count > 0) current.count -= 1;
-    });
 
     return next();
   };
+}
+
+export function rateLimit(options: RateLimitOptions) {
+  return rateLimits(options);
 }
 
 /**
@@ -538,19 +592,18 @@ export const LIMITS = {
  * the provider bill has a hard daily maximum here, set in env.ts, and reaching
  * it is reported to Sentry.
  *
- * Mount these AFTER the per-owner limiters on the same route. Every limiter
- * counts before it checks, so a request one owner's own cap already refused
- * never spends the shared budget.
+ * Pass these LAST to rateLimits(), after the per-owner limiters. A request one
+ * owner's own cap already refused never spends the shared budget, and the one
+ * row every owner shares is locked last and for the shortest time.
  */
-const sharedBudget = (name: string, limit: number, message: (retryAfter: string) => string) =>
-  rateLimit({
-    name,
-    limit,
-    windowMs: DAY_MS,
-    identify: () => "all",
-    refusal: { code: "DAILY_CAPACITY_REACHED", message },
-    alertWhenExhausted: true,
-  });
+const sharedBudget = (name: string, limit: number, message: (retryAfter: string) => string): RateLimitOptions => ({
+  name,
+  limit,
+  windowMs: DAY_MS,
+  identify: () => "all",
+  refusal: { code: "DAILY_CAPACITY_REACHED", message },
+  alertWhenExhausted: true,
+});
 
 export const SHARED_BUDGETS = {
   AI_ANSWERS: sharedBudget(

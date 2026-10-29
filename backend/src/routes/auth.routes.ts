@@ -3,7 +3,7 @@ import * as authController from "../controllers/auth.controller";
 import { requireAuth } from "../middleware/auth.middleware";
 import { uploadPhoto } from "../middleware/upload.middleware";
 import { asyncHandler } from "../lib/asyncHandler";
-import { LIMITS, limitAuthenticatedWrites, rateLimit } from "../middleware/rateLimit.middleware";
+import { LIMITS, limitAuthenticatedWrites, rateLimit, rateLimits } from "../middleware/rateLimit.middleware";
 
 export const authRouter = Router();
 
@@ -19,14 +19,12 @@ export const authRouter = Router();
  */
 authRouter.post(
   "/register",
-  rateLimit(LIMITS.AUTH_REGISTER),
-  rateLimit(LIMITS.AUTH_REGISTER_EMAIL),
+  rateLimits(LIMITS.AUTH_REGISTER, LIMITS.AUTH_REGISTER_EMAIL),
   asyncHandler(authController.register),
 );
 authRouter.post(
   "/resend-verification",
-  rateLimit(LIMITS.AUTH_RECOVERY),
-  rateLimit(LIMITS.AUTH_RESEND_VERIFICATION),
+  rateLimits(LIMITS.AUTH_RECOVERY, LIMITS.AUTH_RESEND_VERIFICATION),
   asyncHandler(authController.resendVerification),
 );
 // Authenticated by the token in the confirmation link itself, which is why
@@ -52,8 +50,7 @@ authRouter.post(
 
 authRouter.post(
   "/login",
-  rateLimit(LIMITS.AUTH_LOGIN),
-  rateLimit(LIMITS.AUTH_LOGIN_EMAIL),
+  rateLimits(LIMITS.AUTH_LOGIN, LIMITS.AUTH_LOGIN_EMAIL),
   asyncHandler(authController.login),
 );
 authRouter.post("/logout", rateLimit(LIMITS.AUTH_LOGOUT), asyncHandler(authController.logout));
@@ -61,8 +58,7 @@ authRouter.post("/logout-all", requireAuth, limitAuthenticatedWrites, asyncHandl
 
 authRouter.post(
   "/recover-password",
-  rateLimit(LIMITS.AUTH_RECOVERY),
-  rateLimit(LIMITS.AUTH_RECOVERY_EMAIL),
+  rateLimits(LIMITS.AUTH_RECOVERY, LIMITS.AUTH_RECOVERY_EMAIL),
   asyncHandler(authController.recoverPassword),
 );
 // Same reasoning as /confirm-email: the recovery token is the credential.

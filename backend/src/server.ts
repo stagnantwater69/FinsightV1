@@ -7,6 +7,7 @@ import { flushErrorReporting, reportError, startErrorReporting } from "./config/
 import { assertMigrationsApplied } from "./config/migrationGuard";
 import { registerProcessFaultHandlers } from "./lib/processFaults";
 import { startDbKeepWarm } from "./lib/dbKeepWarm";
+import { applyKeepAliveTimeouts } from "./lib/keepAlive";
 
 /*
  * API process only. The background queue consumers (receipt scans, CSV
@@ -87,6 +88,7 @@ void (async () => {
   server = app.listen(env.PORT, () => {
     logger.info({ port: env.PORT }, "FinSight backend listening");
   });
+  applyKeepAliveTimeouts(server);
   // The worker polls the database every second and stays warm on its own.
   stopKeepWarm = startDbKeepWarm(prisma);
 })();

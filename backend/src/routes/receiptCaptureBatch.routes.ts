@@ -2,7 +2,7 @@ import { Router } from "express";
 import * as controller from "../controllers/receiptCaptureBatch.controller";
 import { requireAuth } from "../middleware/auth.middleware";
 import { asyncHandler } from "../lib/asyncHandler";
-import { LIMITS, limitAuthenticatedWrites, rateLimit } from "../middleware/rateLimit.middleware";
+import { LIMITS, limitAuthenticatedWrites, rateLimits } from "../middleware/rateLimit.middleware";
 
 export const receiptCaptureBatchRouter = Router();
 
@@ -15,8 +15,7 @@ receiptCaptureBatchRouter.use((_req, res, next) => {
 
 receiptCaptureBatchRouter.post(
   "/",
-  rateLimit(LIMITS.SCAN_RECEIPT_BURST),
-  rateLimit(LIMITS.SCAN_RECEIPT_HOURLY),
+  rateLimits(LIMITS.SCAN_RECEIPT_BURST, LIMITS.SCAN_RECEIPT_HOURLY),
   asyncHandler(controller.create),
 );
 receiptCaptureBatchRouter.get("/:id", asyncHandler(controller.show));
