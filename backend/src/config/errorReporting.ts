@@ -55,13 +55,23 @@ export interface ErrorContext {
   route?: string;
   lane?: string;
   fault?: string;
+  /** A rate limiter's name, for usage reports. */
+  limiter?: string;
+  /** The numeric FinSight user id — never an email or any other identifier. */
+  ownerId?: string;
+  /**
+   * Groups reports into one Sentry issue by these values rather than by stack
+   * trace, so one owner's repeated cap hits read as one issue with a count.
+   */
+  fingerprint?: string[];
 }
 
 export function reportError(error: unknown, context: ErrorContext = {}): void {
   if (!enabled) return;
-  const { level = "error", ...tags } = context;
+  const { level = "error", fingerprint, ...tags } = context;
   Sentry.withScope((scope) => {
     scope.setLevel(level);
+    if (fingerprint) scope.setFingerprint(fingerprint);
     for (const [key, value] of Object.entries(tags)) {
       if (value !== undefined) scope.setTag(key, value);
     }

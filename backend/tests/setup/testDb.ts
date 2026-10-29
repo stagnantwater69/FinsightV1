@@ -8,6 +8,7 @@ import { resolveBusinessToday } from "../../src/lib/dates";
 // on predictable ids and never leak state into the next file.
 const TABLES = [
   "ApiRateLimit",
+  "SustainedUsageWindow",
   "ReceiptDuplicateCandidate",
   "ReceiptPurgeJob",
   "ExternalProviderDispatchOutcome",

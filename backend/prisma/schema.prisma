@@ -1267,6 +1267,23 @@ model ApiRateLimit {
   @@map("ApiRateLimit")
 }
 
+/// One owner's daily-cap window in which their use reached USAGE_ALERT_SHARE
+/// of the cap. Written by the worker's hourly sweep; several windows for one
+/// key within a few days is what gets reported as sustained use
+/// (services/usageAlerts.service.ts). The key is the ApiRateLimit key, so it
+/// names the limiter and the numeric user id and nothing else. Pruned after
+/// 30 days.
+model SustainedUsageWindow {
+  key             String   @map("SustainedUsageWindow_Key") @db.VarChar(255)
+  windowExpiresAt DateTime @map("SustainedUsageWindow_WindowExpiresAt")
+  count           Int      @map("SustainedUsageWindow_Count")
+  recordedAt      DateTime @default(now()) @map("SustainedUsageWindow_RecordedAt")
+
+  @@id([key, windowExpiresAt])
+  @@index([windowExpiresAt])
+  @@map("SustainedUsageWindow")
+}
+
 /// [ADDED] see schema header note 16. One row per field the owner reviewed on
 /// the confirm screen, recording what FinSight read and what the owner settled
 /// on — whether or not those differ.

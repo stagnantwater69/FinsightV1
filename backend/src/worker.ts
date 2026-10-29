@@ -20,6 +20,7 @@ import {
   sweepStalledCsvImports,
 } from "./services/csvImport.service";
 import { cleanUpExpiredRateLimits } from "./middleware/rateLimit.middleware";
+import { sweepSustainedUsage } from "./services/usageAlerts.service";
 import { enqueueDailyProfileAnalyses, runAnalysisWorkerOnce } from "./services/anomalyDetection/job.service";
 import { purgeUnverifiedRegistrations, runAccountDeletionWorkerOnce } from "./services/accountDeletion.service";
 import {
@@ -126,6 +127,7 @@ async function runLane(lane: WorkerLane): Promise<boolean> {
 let laneScheduler: WorkerLaneScheduler<WorkerLane> | undefined;
 let livenessTimer: NodeJS.Timeout | undefined;
 let rateLimitCleanupTimer: NodeJS.Timeout | undefined;
+let sustainedUsageTimer: NodeJS.Timeout | undefined;
 let csvSweepTimer: NodeJS.Timeout | undefined;
 let csvStageSweepTimer: NodeJS.Timeout | undefined;
 let dailyAnalysisTimer: NodeJS.Timeout | undefined;
@@ -201,6 +203,21 @@ function startMaintenanceSchedules(): void {
     void cleanUpExpiredRateLimits().catch((error) => logger.error({ err: error }, "rate-limit cleanup failed"));
   }, 60 * 60_000);
   void cleanUpExpiredRateLimits().catch((error) => logger.error({ err: error }, "initial rate-limit cleanup failed"));
+
+  // Hourly is often enough: it reads daily windows, and a window crosses the
+  // threshold once. Logged only when it found something.
+  const runSustainedUsageSweep = () => {
+    void sweepSustainedUsage()
+      .then((swept) => {
+        if (swept.recorded > 0 || swept.reported > 0) logger.info(swept, "sustained-usage sweep");
+      })
+      .catch((error) => logger.error({ err: error }, "sustained-usage sweep failed"));
+  };
+  sustainedUsageTimer = setInterval(() => {
+    if (shuttingDown) return;
+    runSustainedUsageSweep();
+  }, 60 * 60_000);
+  runSustainedUsageSweep();
 
   /*
    * Unconfirmed registrations expire.
@@ -284,6 +301,7 @@ async function shutdown(signal: string): Promise<void> {
   // if the drain runs long.
   clearInterval(livenessTimer);
   clearInterval(rateLimitCleanupTimer);
+  clearInterval(sustainedUsageTimer);
   clearInterval(csvSweepTimer);
   clearInterval(csvStageSweepTimer);
   clearInterval(dailyAnalysisTimer);
